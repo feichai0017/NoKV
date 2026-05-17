@@ -3,7 +3,7 @@
 
 package specdsl
 
-// OpSpec is the handwritten semantic description consumed by peras-opgen.
+// OpSpec is the handwritten semantic description consumed by fsmeta-opgen.
 // Each fsmeta operation carries its own spec so generated compiler code can
 // evolve toward per-op specialization without hiding semantics behind helpers.
 type OpSpec struct {

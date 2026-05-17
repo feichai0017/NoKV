@@ -16,7 +16,6 @@ import (
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
 	"github.com/feichai0017/NoKV/raftstore/peer"
-	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 	"github.com/feichai0017/NoKV/txn/latch"
 	"github.com/feichai0017/NoKV/txn/mvcc"
 	"github.com/feichai0017/NoKV/txn/percolator"
@@ -28,14 +27,23 @@ const defaultLatchSlots = 512
 
 type ApplyOption func(*applyConfig)
 
-type applyConfig struct {
-	perasAuthorityFence rsperas.AuthorityFence
-	now                 func() time.Time
+type WriteFenceDecision struct {
+	Fenced bool
+	Reason string
 }
 
-func WithPerasAuthorityFence(authorityFence rsperas.AuthorityFence) ApplyOption {
+type WriteFence interface {
+	FenceKey([]byte, time.Time) (WriteFenceDecision, error)
+}
+
+type applyConfig struct {
+	writeFence WriteFence
+	now        func() time.Time
+}
+
+func WithWriteFence(fence WriteFence) ApplyOption {
 	return func(cfg *applyConfig) {
-		cfg.perasAuthorityFence = authorityFence
+		cfg.writeFence = fence
 	}
 }
 
@@ -145,21 +153,21 @@ func Apply(db txnstore.Store, latches *latch.Manager, req *raftcmdpb.RaftCmdRequ
 				return nil, err
 			}
 			resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_MvccMaintenance{MvccMaintenance: result}})
-		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT)
-			batch := []*kvrpcpb.PerasInstallSegmentRequest{r.GetPerasInstallSegment()}
+		case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+			end := collectCommandRun(req.Requests, i, raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC)
+			batch := []*kvrpcpb.InstallPreparedMVCCEntriesRequest{r.GetInstallPreparedMvcc()}
 			for j := i + 1; j < end; j++ {
-				batch = append(batch, req.Requests[j].GetPerasInstallSegment())
+				batch = append(batch, req.Requests[j].GetInstallPreparedMvcc())
 			}
-			results, err := applyPerasInstallSegmentBatch(db, batch)
+			results, err := applyInstallPreparedMVCCEntriesBatch(db, batch)
 			if err != nil {
 				return nil, err
 			}
 			if len(results) != len(batch) {
-				return nil, fmt.Errorf("kv: peras install batch result mismatch: got %d want %d", len(results), len(batch))
+				return nil, fmt.Errorf("kv: prepared mvcc install batch result mismatch: got %d want %d", len(results), len(batch))
 			}
 			for _, result := range results {
-				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result}})
+				resp.Responses = append(resp.Responses, &raftcmdpb.Response{Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: result}})
 			}
 			i = end - 1
 		case raftcmdpb.CmdType_CMD_SCAN:
@@ -227,7 +235,7 @@ func singleBatchableCommand(req *raftcmdpb.RaftCmdRequest) (raftcmdpb.CmdType, b
 		raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
 		raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
 		raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
-		raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
+		raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
 		return r.GetCmdType(), true
 	default:
 		return 0, false
@@ -324,23 +332,23 @@ func applyBatchRun(
 				}},
 			}
 		}
-	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-		batch := make([]*kvrpcpb.PerasInstallSegmentRequest, 0, len(reqs))
+	case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+		batch := make([]*kvrpcpb.InstallPreparedMVCCEntriesRequest, 0, len(reqs))
 		for _, req := range reqs {
-			batch = append(batch, req.GetRequests()[0].GetPerasInstallSegment())
+			batch = append(batch, req.GetRequests()[0].GetInstallPreparedMvcc())
 		}
-		results, err := applyPerasInstallSegmentBatch(db, batch)
+		results, err := applyInstallPreparedMVCCEntriesBatch(db, batch)
 		if err != nil {
 			return err
 		}
 		if len(results) != len(batch) {
-			return fmt.Errorf("kv: peras install batch result mismatch: got %d want %d", len(results), len(batch))
+			return fmt.Errorf("kv: prepared mvcc install batch result mismatch: got %d want %d", len(results), len(batch))
 		}
 		for i, result := range results {
 			resps[i] = &raftcmdpb.RaftCmdResponse{
 				Header: reqs[i].GetHeader(),
 				Responses: []*raftcmdpb.Response{{
-					Cmd: &raftcmdpb.Response_PerasInstallSegment{PerasInstallSegment: result},
+					Cmd: &raftcmdpb.Response_InstallPreparedMvcc{InstallPreparedMvcc: result},
 				}},
 			}
 		}
@@ -447,7 +455,7 @@ func NewApplier(db txnstore.Store, latches *latch.Manager, opts ...ApplyOption) 
 	}
 	cfg := newApplyConfig(opts)
 	return func(req *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error) {
-		if resp, fenced := rejectPerasFencedRequest(cfg, req); fenced {
+		if resp, fenced := rejectWriteFencedRequest(cfg, req); fenced {
 			return resp, nil
 		}
 		return Apply(db, latches, req)

@@ -31,17 +31,17 @@ func CloneEvent(in Event) Event {
 		cp := *in.GrantInheritance
 		out.GrantInheritance = &cp
 	}
-	if in.PerasGrant != nil {
-		cp := rootproto.ClonePerasAuthorityGrant(*in.PerasGrant)
-		out.PerasGrant = &cp
+	if in.VisibleGrant != nil {
+		cp := rootproto.CloneVisibleAuthorityGrant(*in.VisibleGrant)
+		out.VisibleGrant = &cp
 	}
-	if in.PerasSeal != nil {
-		cp := rootproto.ClonePerasAuthoritySeal(*in.PerasSeal)
-		out.PerasSeal = &cp
+	if in.VisibleSeal != nil {
+		cp := rootproto.CloneVisibleAuthoritySeal(*in.VisibleSeal)
+		out.VisibleSeal = &cp
 	}
 	if in.SnapshotEpoch != nil {
 		cp := *in.SnapshotEpoch
-		cp.PerasSegmentRefs = rootproto.ClonePerasSnapshotSegmentRefs(in.SnapshotEpoch.PerasSegmentRefs)
+		cp.RuntimeEvidence = rootproto.CloneSnapshotEvidenceRefs(in.SnapshotEpoch.RuntimeEvidence)
 		out.SnapshotEpoch = &cp
 	}
 	if in.Mount != nil {

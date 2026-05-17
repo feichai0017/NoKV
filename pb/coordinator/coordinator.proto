@@ -174,26 +174,26 @@ message ListQuotaFencesResponse {
   repeated QuotaFenceInfo fences = 1;
 }
 
-message ListPerasAuthorityGrantsRequest {}
+message ListVisibleAuthorityGrantsRequest {}
 
-message ListPerasAuthorityGrantsResponse {
-  repeated nokv.meta.v1.RootPerasAuthorityGrant grants = 1;
+message ListVisibleAuthorityGrantsResponse {
+  repeated nokv.meta.v1.RootVisibleAuthorityGrant grants = 1;
 }
 
-message ListPerasAuthoritySealsRequest {}
+message ListVisibleAuthoritySealsRequest {}
 
-message ListPerasAuthoritySealsResponse {
-  repeated nokv.meta.v1.RootPerasAuthoritySeal seals = 1;
+message ListVisibleAuthoritySealsResponse {
+  repeated nokv.meta.v1.RootVisibleAuthoritySeal seals = 1;
 }
 
-message ApplyPerasAuthorityRequest {
-  nokv.meta.v1.RootPerasAuthorityCommand command = 1;
+message ApplyVisibleAuthorityRequest {
+  nokv.meta.v1.RootVisibleAuthorityCommand command = 1;
 }
 
-message ApplyPerasAuthorityResponse {
-  nokv.meta.v1.RootPerasAuthorityGrant grant = 1;
-  nokv.meta.v1.RootPerasAuthorityApplyStatus status = 2;
-  repeated nokv.meta.v1.RootPerasAuthorityGrant active_grants = 3;
+message ApplyVisibleAuthorityResponse {
+  nokv.meta.v1.RootVisibleAuthorityGrant grant = 1;
+  nokv.meta.v1.RootVisibleAuthorityApplyStatus status = 2;
+  repeated nokv.meta.v1.RootVisibleAuthorityGrant active_grants = 3;
 }
 
 message WatchRootEventsRequest {
@@ -492,9 +492,9 @@ service Coordinator {
   rpc ListSubtreeAuthorities(ListSubtreeAuthoritiesRequest) returns (ListSubtreeAuthoritiesResponse);
   rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
   rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
-  rpc ListPerasAuthorityGrants(ListPerasAuthorityGrantsRequest) returns (ListPerasAuthorityGrantsResponse);
-  rpc ListPerasAuthoritySeals(ListPerasAuthoritySealsRequest) returns (ListPerasAuthoritySealsResponse);
-  rpc ApplyPerasAuthority(ApplyPerasAuthorityRequest) returns (ApplyPerasAuthorityResponse);
+  rpc ListVisibleAuthorityGrants(ListVisibleAuthorityGrantsRequest) returns (ListVisibleAuthorityGrantsResponse);
+  rpc ListVisibleAuthoritySeals(ListVisibleAuthoritySealsRequest) returns (ListVisibleAuthoritySealsResponse);
+  rpc ApplyVisibleAuthority(ApplyVisibleAuthorityRequest) returns (ApplyVisibleAuthorityResponse);
   rpc WatchRootEvents(WatchRootEventsRequest) returns (stream WatchRootEventsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);

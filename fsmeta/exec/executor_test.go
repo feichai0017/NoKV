@@ -10,9 +10,9 @@ import (
 	"fmt"
 	"github.com/feichai0017/NoKV/engine/slab/dirpage"
 	nokverrors "github.com/feichai0017/NoKV/errors"
+	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	"github.com/feichai0017/NoKV/fsmeta/proof"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
@@ -106,60 +106,60 @@ func requireAtomicStatUint(t *testing.T, stats map[string]any, kind fsmeta.Opera
 	require.Equal(t, want, opStats[key])
 }
 
-func requirePerasStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+func requireVisibleStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
 	t.Helper()
-	raw, ok := stats["peras_admission"]
-	require.True(t, ok, "missing peras_admission stats")
-	perasStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "peras_admission has type %T", raw)
-	got, ok := perasStats[key].(uint64)
-	require.Truef(t, ok, "peras_admission[%s] has type %T", key, perasStats[key])
+	raw, ok := stats["visible_admission"]
+	require.True(t, ok, "missing visible_admission stats")
+	visibleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "visible_admission has type %T", raw)
+	got, ok := visibleStats[key].(uint64)
+	require.Truef(t, ok, "visible_admission[%s] has type %T", key, visibleStats[key])
 	require.Equal(t, want, got)
 }
 
-func requirePerasSlowReasonStatUint(t *testing.T, stats map[string]any, reason compile.SlowReason, want uint64) {
+func requireVisibleSlowReasonStatUint(t *testing.T, stats map[string]any, reason compile.SlowReason, want uint64) {
 	t.Helper()
-	raw, ok := stats["peras_admission"]
-	require.True(t, ok, "missing peras_admission stats")
-	perasStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "peras_admission has type %T", raw)
-	rawReasons, ok := perasStats["slow_by_reason"]
-	require.True(t, ok, "missing peras slow reason stats")
+	raw, ok := stats["visible_admission"]
+	require.True(t, ok, "missing visible_admission stats")
+	visibleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "visible_admission has type %T", raw)
+	rawReasons, ok := visibleStats["slow_by_reason"]
+	require.True(t, ok, "missing visible slow reason stats")
 	reasons, ok := rawReasons.(map[string]uint64)
-	require.Truef(t, ok, "peras slow_by_reason has type %T", rawReasons)
+	require.Truef(t, ok, "overlay slow_by_reason has type %T", rawReasons)
 	require.Equal(t, want, reasons[string(reason)])
 }
 
-func requirePerasStatBool(t *testing.T, stats map[string]any, key string, want bool) {
+func requireVisibleStatBool(t *testing.T, stats map[string]any, key string, want bool) {
 	t.Helper()
-	raw, ok := stats["peras_admission"]
-	require.True(t, ok, "missing peras_admission stats")
-	perasStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "peras_admission has type %T", raw)
-	got, ok := perasStats[key].(bool)
-	require.Truef(t, ok, "peras_admission[%s] has type %T", key, perasStats[key])
+	raw, ok := stats["visible_admission"]
+	require.True(t, ok, "missing visible_admission stats")
+	visibleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "visible_admission has type %T", raw)
+	got, ok := visibleStats[key].(bool)
+	require.Truef(t, ok, "visible_admission[%s] has type %T", key, visibleStats[key])
 	require.Equal(t, want, got)
 }
 
-func requirePerasVisibleStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
+func requireVisibleCommitStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
 	t.Helper()
-	raw, ok := stats["peras_visible_commit"]
-	require.True(t, ok, "missing peras_visible_commit stats")
-	perasStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "peras_visible_commit has type %T", raw)
-	got, ok := perasStats[key].(uint64)
-	require.Truef(t, ok, "peras_visible_commit[%s] has type %T", key, perasStats[key])
+	raw, ok := stats["visible_commit"]
+	require.True(t, ok, "missing visible_commit stats")
+	visibleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "visible_commit has type %T", raw)
+	got, ok := visibleStats[key].(uint64)
+	require.Truef(t, ok, "visible_commit[%s] has type %T", key, visibleStats[key])
 	require.Equal(t, want, got)
 }
 
-func requirePerasVisibleStatBool(t *testing.T, stats map[string]any, key string, want bool) {
+func requireVisibleCommitStatBool(t *testing.T, stats map[string]any, key string, want bool) {
 	t.Helper()
-	raw, ok := stats["peras_visible_commit"]
-	require.True(t, ok, "missing peras_visible_commit stats")
-	perasStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "peras_visible_commit has type %T", raw)
-	got, ok := perasStats[key].(bool)
-	require.Truef(t, ok, "peras_visible_commit[%s] has type %T", key, perasStats[key])
+	raw, ok := stats["visible_commit"]
+	require.True(t, ok, "missing visible_commit stats")
+	visibleStats, ok := raw.(map[string]any)
+	require.Truef(t, ok, "visible_commit has type %T", raw)
+	got, ok := visibleStats[key].(bool)
+	require.Truef(t, ok, "visible_commit[%s] has type %T", key, visibleStats[key])
 	require.Equal(t, want, got)
 }
 
@@ -190,18 +190,18 @@ type fakeAuthorityResolver struct {
 	calls int
 }
 
-type fakePerasAdmitter struct {
+type fakeVisibleAdmitter struct {
 	owned  bool
 	err    error
 	calls  int
 	scopes []compile.AuthorityScope
 }
 
-type fakePerasCommitter struct {
+type fakeVisibleCommitter struct {
 	err             error
 	beforeAdmission func()
 	calls           int
-	ids             []fsperas.OperationID
+	ids             []VisibleOperationID
 	deltas          []compile.SemanticDelta
 }
 
@@ -209,7 +209,7 @@ type testVersionAllocator interface {
 	ReserveTimestamp(context.Context, uint64) (uint64, error)
 }
 
-type testPerasCommitter struct {
+type testVisibleCommitter struct {
 	holder    *fsperas.Holder
 	versions  testVersionAllocator
 	view      *fsperas.OverlayView
@@ -219,33 +219,33 @@ type testPerasCommitter struct {
 	commitTotal uint64
 }
 
-type fakePerasAuthorityFlusher struct {
-	fakePerasCommitter
+type fakeVisibleAuthorityFlusher struct {
+	fakeVisibleCommitter
 	flushCalls  int
 	flushScopes []compile.AuthorityScope
 }
 
-type fakePerasVisibleSnapshotCapturer struct {
-	fakePerasAuthorityFlusher
+type fakeVisibleSnapshotCapturer struct {
+	fakeVisibleAuthorityFlusher
 	capture         bool
-	segmentRefs     []fsmeta.PerasSnapshotSegmentRef
+	segmentRefs     []fsmeta.SnapshotEvidenceRef
 	err             error
 	captureVersions []uint64
 	captureScopes   []compile.AuthorityScope
 }
 
-type noopPerasCommitter struct{}
+type noopVisibleCommitter struct{}
 
-type ownedPerasAdmitter struct{}
+type ownedVisibleAdmitter struct{}
 
 type scanOverlayCommitter struct {
-	noopPerasCommitter
-	rows             []fsperas.OverlayKV
-	values           map[string]fsperas.OverlayKV
+	noopVisibleCommitter
+	rows             []VisibleOverlayKV
+	values           map[string]VisibleOverlayKV
 	directoryPresent bool
 }
 
-var _ PerasOverlayReader = scanOverlayCommitter{}
+var _ VisibleOverlayReader = scanOverlayCommitter{}
 
 type fakeSubtreePublisher struct {
 	starts      []subtreePublishCall
@@ -256,11 +256,11 @@ type fakeSubtreePublisher struct {
 }
 
 type fakeQuotaResolver struct {
-	err               error
-	changes           [][]QuotaChange
-	mutation          *kvrpcpb.Mutation
-	allowPerasVisible bool
-	perasChecks       [][]QuotaChange
+	err                error
+	changes            [][]QuotaChange
+	mutation           *kvrpcpb.Mutation
+	allowVisibleCommit bool
+	perasChecks        [][]QuotaChange
 }
 
 type fakeInodeAllocator struct {
@@ -343,12 +343,12 @@ func (q *fakeQuotaResolver) ReserveQuota(_ context.Context, _ TxnRunner, changes
 	return nil, nil
 }
 
-func (q *fakeQuotaResolver) AllowPerasVisibleQuota(_ context.Context, changes []QuotaChange) (bool, error) {
+func (q *fakeQuotaResolver) AllowVisibleQuota(_ context.Context, changes []QuotaChange) (bool, error) {
 	q.perasChecks = append(q.perasChecks, append([]QuotaChange(nil), changes...))
 	if q.err != nil {
 		return false, q.err
 	}
-	return q.allowPerasVisible, nil
+	return q.allowVisibleCommit, nil
 }
 
 func (p *fakeSubtreePublisher) StartSubtreeHandoff(_ context.Context, mount fsmeta.MountID, root fsmeta.InodeID, frontier uint64) error {
@@ -393,7 +393,7 @@ func (r *fakeAuthorityResolver) SameAuthority(context.Context, fsmeta.MountID, f
 	return r.same, nil
 }
 
-func (a *fakePerasAdmitter) AcquirePerasAuthority(_ context.Context, scope compile.AuthorityScope) (bool, error) {
+func (a *fakeVisibleAdmitter) AcquireVisibleAuthority(_ context.Context, scope compile.AuthorityScope) (bool, error) {
 	a.calls++
 	a.scopes = append(a.scopes, compile.AuthorityScope{
 		Mount:      scope.Mount,
@@ -408,58 +408,58 @@ func (a *fakePerasAdmitter) AcquirePerasAuthority(_ context.Context, scope compi
 	return a.owned, nil
 }
 
-func (c *fakePerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.MaterializedOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (c *fakeVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOperationID, op compile.MaterializedOp, admission VisibleAdmissionFunc) (VisibleAck, error) {
 	if c.beforeAdmission != nil {
 		c.beforeAdmission()
 	}
-	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission, fsperas.AdmissionContext{
+	admitted, err := fsperas.AdmitAndSeal(ctx, op, visibleAdmissionFuncForTest(admission), fsperas.AdmissionContext{
 		ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: id.Seq},
 	})
 	if err != nil {
-		return fsperas.VisibleAck{}, err
+		return VisibleAck{}, visibleErrorForTest(err)
 	}
 	op = admitted
 	c.calls++
 	c.ids = append(c.ids, id)
 	c.deltas = append(c.deltas, op.Delta)
 	if c.err != nil {
-		return fsperas.VisibleAck{}, c.err
+		return VisibleAck{}, c.err
 	}
-	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
+	return VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 
-func (c *testPerasCommitter) SubmitVisible(ctx context.Context, id fsperas.OperationID, op compile.MaterializedOp, admission fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
+func (c *testVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOperationID, op compile.MaterializedOp, admission VisibleAdmissionFunc) (VisibleAck, error) {
 	if c == nil || c.holder == nil || c.view == nil {
-		return fsperas.VisibleAck{}, fsperas.ErrHolderConfigInvalid
+		return VisibleAck{}, fsperas.ErrHolderConfigInvalid
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	admitted, err := fsperas.AdmitAndSeal(ctx, op, admission, fsperas.AdmissionContext{
+	admitted, err := fsperas.AdmitAndSeal(ctx, op, visibleAdmissionFuncForTest(admission), fsperas.AdmissionContext{
 		ProofFrontier: proof.ProofFrontier{EpochID: c.holder.EpochID(), Sequence: id.Seq},
 	})
 	if err != nil {
-		return fsperas.VisibleAck{}, err
+		return VisibleAck{}, visibleErrorForTest(err)
 	}
 	op = admitted
 	if c.submitErr != nil {
-		return fsperas.VisibleAck{}, c.submitErr
+		return VisibleAck{}, c.submitErr
 	}
-	ack, _, err := c.holder.Submit(ctx, id, op)
+	ack, _, err := c.holder.Submit(ctx, perasOperationIDForTest(id), op)
 	if err != nil {
-		return fsperas.VisibleAck{}, err
+		return VisibleAck{}, err
 	}
-	if err := c.view.Add(id, op); err != nil {
-		return fsperas.VisibleAck{}, err
+	if err := c.view.Add(perasOperationIDForTest(id), op); err != nil {
+		return VisibleAck{}, err
 	}
 	c.commitTotal++
-	return ack, nil
+	return visibleAckForTest(ack), nil
 }
 
-func (c *testPerasCommitter) Flush(ctx context.Context) error {
+func (c *testVisibleCommitter) Flush(ctx context.Context) error {
 	return c.FlushDurable(ctx)
 }
 
-func (c *testPerasCommitter) FlushDurable(ctx context.Context) error {
+func (c *testVisibleCommitter) FlushDurable(ctx context.Context) error {
 	if c == nil || c.holder == nil || c.versions == nil || c.view == nil {
 		return fsperas.ErrHolderConfigInvalid
 	}
@@ -487,112 +487,112 @@ func (c *testPerasCommitter) FlushDurable(ctx context.Context) error {
 	return nil
 }
 
-func (c *testPerasCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
+func (c *testVisibleCommitter) GetVisibleOverlay(key []byte) ([]byte, bool, bool) {
 	if c == nil || c.view == nil {
 		return nil, false, false
 	}
 	return c.view.Get(key)
 }
 
-func (c *testPerasCommitter) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
+func (c *testVisibleCommitter) GetVisibleOverlayView(key []byte) ([]byte, bool, bool) {
 	if c == nil || c.view == nil {
 		return nil, false, false
 	}
 	return c.view.GetView(key)
 }
 
-func (c *testPerasCommitter) CapturePerasOverlayRead() (uint64, uint64) {
+func (c *testVisibleCommitter) CaptureVisibleOverlayRead() (uint64, uint64) {
 	if c == nil || c.view == nil {
 		return 0, 0
 	}
 	return c.view.Generation(), 0
 }
 
-func (c *testPerasCommitter) GetPerasOverlayViewAt(overlayGeneration, _ uint64, key []byte) ([]byte, bool, bool) {
+func (c *testVisibleCommitter) GetVisibleOverlayViewAt(overlayGeneration, _ uint64, key []byte) ([]byte, bool, bool) {
 	if c == nil || c.view == nil {
 		return nil, false, false
 	}
 	return c.view.GetViewAt(overlayGeneration, key)
 }
 
-func (c *testPerasCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
+func (c *testVisibleCommitter) ScanVisibleOverlay(start []byte, limit uint32) []VisibleOverlayKV {
 	if c == nil || c.view == nil {
 		return nil
 	}
-	return c.view.Scan(start, limit)
+	return visibleRowsForTest(c.view.Scan(start, limit))
 }
 
-func (c *testPerasCommitter) ScanPerasDirectoryAt(overlayGeneration, _ uint64, prefix, start []byte, limit uint32) []fsperas.OverlayKV {
+func (c *testVisibleCommitter) ScanVisibleDirectoryAt(overlayGeneration, _ uint64, prefix, start []byte, limit uint32) []VisibleOverlayKV {
 	if c == nil || c.view == nil {
 		return nil
 	}
-	return c.view.ScanDirectoryAt(overlayGeneration, prefix, start, limit)
+	return visibleRowsForTest(c.view.ScanDirectoryAt(overlayGeneration, prefix, start, limit))
 }
 
-func (c *testPerasCommitter) HasPerasDirectory(prefix []byte) bool {
+func (c *testVisibleCommitter) HasVisibleDirectoryOverlay(prefix []byte) bool {
 	if c == nil || c.view == nil {
 		return false
 	}
 	return c.view.HasDirectory(prefix)
 }
 
-func (c *testPerasCommitter) KeyState(key []byte) (bool, bool) {
+func (c *testVisibleCommitter) KeyState(key []byte) (bool, bool) {
 	if c == nil || c.view == nil {
 		return false, false
 	}
 	return c.view.KeyState(key)
 }
 
-func (c *testPerasCommitter) DirectoryEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+func (c *testVisibleCommitter) DirectoryEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
 	if c == nil || c.view == nil {
 		return false
 	}
 	return c.view.DirectoryEmpty(mount, inode)
 }
 
-func (c *testPerasCommitter) DirectoryBaseEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+func (c *testVisibleCommitter) DirectoryBaseEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
 	if c == nil || c.view == nil {
 		return false
 	}
 	return c.view.DirectoryBaseEmpty(mount, inode)
 }
 
-func (c *testPerasCommitter) SessionNamespaceEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
+func (c *testVisibleCommitter) SessionNamespaceEmpty(mount fsmeta.MountIdentity, inode fsmeta.InodeID) bool {
 	if c == nil || c.view == nil {
 		return false
 	}
 	return c.view.SessionNamespaceEmpty(mount, inode)
 }
 
-func (c *testPerasCommitter) RememberKey(key []byte, present bool) {
+func (c *testVisibleCommitter) RememberKey(key []byte, present bool) {
 	if c == nil || c.view == nil {
 		return
 	}
 	c.view.RememberKey(key, present)
 }
 
-func (c *testPerasCommitter) RememberEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+func (c *testVisibleCommitter) RememberEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
 	if c == nil || c.view == nil {
 		return
 	}
 	c.view.RememberEmptyDirectory(mount, inode)
 }
 
-func (c *testPerasCommitter) ForgetEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+func (c *testVisibleCommitter) ForgetEmptyDirectory(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
 	if c == nil || c.view == nil {
 		return
 	}
 	c.view.ForgetEmptyDirectory(mount, inode)
 }
 
-func (c *testPerasCommitter) RememberEmptySessionNamespace(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
+func (c *testVisibleCommitter) RememberEmptySessionNamespace(mount fsmeta.MountIdentity, inode fsmeta.InodeID) {
 	if c == nil || c.view == nil {
 		return
 	}
 	c.view.RememberEmptySessionNamespace(mount, inode)
 }
 
-func (c *testPerasCommitter) Stats() map[string]any {
+func (c *testVisibleCommitter) Stats() map[string]any {
 	if c == nil {
 		return map[string]any{"commit_total": uint64(0)}
 	}
@@ -601,7 +601,7 @@ func (c *testPerasCommitter) Stats() map[string]any {
 	return map[string]any{"commit_total": c.commitTotal}
 }
 
-func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope compile.AuthorityScope) error {
+func (f *fakeVisibleAuthorityFlusher) FlushAuthority(_ context.Context, scope compile.AuthorityScope) error {
 	f.flushCalls++
 	f.flushScopes = append(f.flushScopes, compile.AuthorityScope{
 		Mount:      scope.Mount,
@@ -613,13 +613,13 @@ func (f *fakePerasAuthorityFlusher) FlushAuthority(_ context.Context, scope comp
 	return nil
 }
 
-func (f *fakePerasVisibleSnapshotCapturer) CapturePerasVisibleSnapshot(_ context.Context, version uint64, scope compile.AuthorityScope) (fsmeta.PerasVisibleSnapshotCapture, bool, error) {
+func (f *fakeVisibleSnapshotCapturer) CaptureVisibleSnapshot(_ context.Context, version uint64, scope compile.AuthorityScope) (fsmeta.VisibleSnapshotCapture, bool, error) {
 	f.captureVersions = append(f.captureVersions, version)
 	f.captureScopes = append(f.captureScopes, cloneTestAuthorityScope(scope))
 	if f.err != nil {
-		return fsmeta.PerasVisibleSnapshotCapture{}, false, f.err
+		return fsmeta.VisibleSnapshotCapture{}, false, f.err
 	}
-	return fsmeta.PerasVisibleSnapshotCapture{SegmentRefs: append([]fsmeta.PerasSnapshotSegmentRef(nil), f.segmentRefs...)}, f.capture, nil
+	return fsmeta.VisibleSnapshotCapture{Evidence: append([]fsmeta.SnapshotEvidenceRef(nil), f.segmentRefs...)}, f.capture, nil
 }
 
 func cloneTestAuthorityScope(scope compile.AuthorityScope) compile.AuthorityScope {
@@ -630,19 +630,19 @@ func cloneTestAuthorityScope(scope compile.AuthorityScope) compile.AuthorityScop
 	return out
 }
 
-func (noopPerasCommitter) SubmitVisible(_ context.Context, id fsperas.OperationID, _ compile.MaterializedOp, _ fsperas.AdmissionFunc) (fsperas.VisibleAck, error) {
-	return fsperas.VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
+func (noopVisibleCommitter) SubmitVisible(_ context.Context, id VisibleOperationID, _ compile.MaterializedOp, _ VisibleAdmissionFunc) (VisibleAck, error) {
+	return VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 
-func (c scanOverlayCommitter) GetPerasOverlay(key []byte) ([]byte, bool, bool) {
-	value, deleted, ok := c.GetPerasOverlayView(key)
+func (c scanOverlayCommitter) GetVisibleOverlay(key []byte) ([]byte, bool, bool) {
+	value, deleted, ok := c.GetVisibleOverlayView(key)
 	if !ok {
 		return nil, false, false
 	}
 	return append([]byte(nil), value...), deleted, true
 }
 
-func (c scanOverlayCommitter) GetPerasOverlayView(key []byte) ([]byte, bool, bool) {
+func (c scanOverlayCommitter) GetVisibleOverlayView(key []byte) ([]byte, bool, bool) {
 	if c.values == nil {
 		return nil, false, false
 	}
@@ -653,22 +653,22 @@ func (c scanOverlayCommitter) GetPerasOverlayView(key []byte) ([]byte, bool, boo
 	return row.Value, row.Delete, true
 }
 
-func overlayValueForTest(key, value []byte) fsperas.OverlayKV {
-	return fsperas.OverlayKV{
+func overlayValueForTest(key, value []byte) VisibleOverlayKV {
+	return VisibleOverlayKV{
 		Key:   append([]byte(nil), key...),
 		Value: append([]byte(nil), value...),
 	}
 }
 
-func overlayDeleteForTest(key []byte) fsperas.OverlayKV {
-	return fsperas.OverlayKV{
+func overlayDeleteForTest(key []byte) VisibleOverlayKV {
+	return VisibleOverlayKV{
 		Key:    append([]byte(nil), key...),
 		Delete: true,
 	}
 }
 
-func overlayMapForTest(rows ...fsperas.OverlayKV) map[string]fsperas.OverlayKV {
-	out := make(map[string]fsperas.OverlayKV, len(rows))
+func overlayMapForTest(rows ...VisibleOverlayKV) map[string]VisibleOverlayKV {
+	out := make(map[string]VisibleOverlayKV, len(rows))
 	for _, row := range rows {
 		out[string(row.Key)] = row
 	}
@@ -708,8 +708,8 @@ func inodeKeyForTest(t *testing.T, mount fsmeta.MountID, inode fsmeta.InodeID) [
 	return key
 }
 
-func (c scanOverlayCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsperas.OverlayKV {
-	out := make([]fsperas.OverlayKV, 0, len(c.rows))
+func (c scanOverlayCommitter) ScanVisibleOverlay(start []byte, limit uint32) []VisibleOverlayKV {
+	out := make([]VisibleOverlayKV, 0, len(c.rows))
 	for _, row := range c.rows {
 		if bytes.Compare(row.Key, start) < 0 {
 			continue
@@ -722,8 +722,8 @@ func (c scanOverlayCommitter) ScanPerasOverlay(start []byte, limit uint32) []fsp
 	return out
 }
 
-func (c scanOverlayCommitter) ScanPerasDirectory(prefix, start []byte, limit uint32) []fsperas.OverlayKV {
-	out := make([]fsperas.OverlayKV, 0, len(c.rows))
+func (c scanOverlayCommitter) ScanVisibleDirectory(prefix, start []byte, limit uint32) []VisibleOverlayKV {
+	out := make([]VisibleOverlayKV, 0, len(c.rows))
 	for _, row := range c.rows {
 		if !bytes.HasPrefix(row.Key, prefix) || bytes.Compare(row.Key, start) < 0 {
 			continue
@@ -736,7 +736,7 @@ func (c scanOverlayCommitter) ScanPerasDirectory(prefix, start []byte, limit uin
 	return out
 }
 
-func (c scanOverlayCommitter) HasPerasDirectory(prefix []byte) bool {
+func (c scanOverlayCommitter) HasVisibleDirectoryOverlay(prefix []byte) bool {
 	if c.directoryPresent {
 		return true
 	}
@@ -748,8 +748,68 @@ func (c scanOverlayCommitter) HasPerasDirectory(prefix []byte) bool {
 	return false
 }
 
-func (ownedPerasAdmitter) AcquirePerasAuthority(context.Context, compile.AuthorityScope) (bool, error) {
+func (ownedVisibleAdmitter) AcquireVisibleAuthority(context.Context, compile.AuthorityScope) (bool, error) {
 	return true, nil
+}
+
+func perasOperationIDForTest(id VisibleOperationID) fsperas.OperationID {
+	return fsperas.OperationID{ClientID: id.ClientID, Seq: id.Seq}
+}
+
+func visibleOperationIDForTest(id fsperas.OperationID) VisibleOperationID {
+	return VisibleOperationID{ClientID: id.ClientID, Seq: id.Seq}
+}
+
+func visibleAckForTest(ack fsperas.VisibleAck) VisibleAck {
+	return VisibleAck{
+		EpochID:  ack.EpochID,
+		OpID:     visibleOperationIDForTest(ack.OpID),
+		HolderID: ack.HolderID,
+	}
+}
+
+func visibleAdmissionFuncForTest(fn VisibleAdmissionFunc) fsperas.AdmissionFunc {
+	if fn == nil {
+		return nil
+	}
+	return func(ctx context.Context, op compile.MaterializedOp, admissionCtx fsperas.AdmissionContext) (fsperas.AdmissionResult, bool, error) {
+		result, ok, err := fn(ctx, op, VisibleAdmissionContext{ProofFrontier: admissionCtx.ProofFrontier})
+		if err != nil || !ok {
+			return fsperas.AdmissionResult{}, ok, err
+		}
+		return fsperas.AdmissionResult{
+			PredicateProofs: result.PredicateProofs,
+			GuardProofs:     result.GuardProofs,
+		}, true, nil
+	}
+}
+
+func visibleRowsForTest(rows []fsperas.OverlayKV) []VisibleOverlayKV {
+	if len(rows) == 0 {
+		return nil
+	}
+	out := make([]VisibleOverlayKV, len(rows))
+	for i, row := range rows {
+		out[i] = VisibleOverlayKV{
+			Key:    row.Key,
+			Value:  row.Value,
+			Delete: row.Delete,
+		}
+	}
+	return out
+}
+
+func visibleErrorForTest(err error) error {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, fsperas.ErrAdmissionRejected):
+		return errors.Join(ErrVisibleAdmissionRejected, err)
+	case errors.Is(err, fsperas.ErrIneligibleOperation):
+		return errors.Join(ErrVisibleIneligibleOperation, err)
+	default:
+		return err
+	}
 }
 
 func newFakeRunner() *fakeRunner {
@@ -1054,14 +1114,14 @@ func (e fakeTxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
 	return e.errors
 }
 
-func newTestPerasCommitter(t testing.TB, versions testVersionAllocator) *testPerasCommitter {
+func newTestVisibleCommitter(t testing.TB, versions testVersionAllocator) *testVisibleCommitter {
 	t.Helper()
 	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
 		EpochID:  1,
 		HolderID: "holder-a",
 	})
 	require.NoError(t, err)
-	return &testPerasCommitter{
+	return &testVisibleCommitter{
 		holder:   holder,
 		versions: versions,
 		view:     fsperas.NewOverlayView(),

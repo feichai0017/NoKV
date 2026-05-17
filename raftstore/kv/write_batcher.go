@@ -19,8 +19,8 @@ import (
 const (
 	defaultWriteCommandBatchMaxSize  = 64
 	defaultWriteCommandBatchMaxWait  = 200 * time.Microsecond
-	perasInstallSegmentBatchMaxSize  = 16
-	perasInstallSegmentBatchMaxBytes = 8 << 20
+	preparedMVCCInstallBatchMaxSize  = 16
+	preparedMVCCInstallBatchMaxBytes = 8 << 20
 )
 
 var batchedWriteCommandTypes = []raftcmdpb.CmdType{
@@ -29,7 +29,7 @@ var batchedWriteCommandTypes = []raftcmdpb.CmdType{
 	raftcmdpb.CmdType_CMD_BATCH_ROLLBACK,
 	raftcmdpb.CmdType_CMD_RESOLVE_LOCK,
 	raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
-	raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
+	raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
 }
 
 type writeCommandProposer func(context.Context, *raftcmdpb.RaftCmdRequest) (*raftcmdpb.RaftCmdResponse, error)
@@ -173,11 +173,11 @@ func (b *writeCommandBatcher) submit(ctx context.Context, header *raftcmdpb.CmdH
 }
 
 func writeCommandBatchLimits(cmdType raftcmdpb.CmdType, fallback int) (int, int) {
-	if cmdType == raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT {
-		if fallback > perasInstallSegmentBatchMaxSize {
-			fallback = perasInstallSegmentBatchMaxSize
+	if cmdType == raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC {
+		if fallback > preparedMVCCInstallBatchMaxSize {
+			fallback = preparedMVCCInstallBatchMaxSize
 		}
-		return fallback, perasInstallSegmentBatchMaxBytes
+		return fallback, preparedMVCCInstallBatchMaxBytes
 	}
 	return fallback, 0
 }
@@ -186,7 +186,7 @@ func writeCommandRequestBytes(cmdType raftcmdpb.CmdType, request *raftcmdpb.Requ
 	if request == nil {
 		return 0
 	}
-	if cmdType != raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT {
+	if cmdType != raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC {
 		return 0
 	}
 	size := proto.Size(request)
@@ -371,8 +371,8 @@ func writeCommandName(cmdType raftcmdpb.CmdType) string {
 		return "resolve_lock"
 	case raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE:
 		return "atomic_mutate"
-	case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-		return "peras_install_segment"
+	case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+		return "install_prepared_mvcc"
 	default:
 		return "unknown"
 	}

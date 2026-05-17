@@ -106,16 +106,16 @@ func (f *fakeCoordinatorClient) ListQuotaFences(context.Context, *coordpb.ListQu
 	return &coordpb.ListQuotaFencesResponse{}, nil
 }
 
-func (f *fakeCoordinatorClient) ListPerasAuthorityGrants(context.Context, *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
-	return &coordpb.ListPerasAuthorityGrantsResponse{}, nil
+func (f *fakeCoordinatorClient) ListVisibleAuthorityGrants(context.Context, *coordpb.ListVisibleAuthorityGrantsRequest) (*coordpb.ListVisibleAuthorityGrantsResponse, error) {
+	return &coordpb.ListVisibleAuthorityGrantsResponse{}, nil
 }
 
-func (f *fakeCoordinatorClient) ListPerasAuthoritySeals(context.Context, *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error) {
-	return &coordpb.ListPerasAuthoritySealsResponse{}, nil
+func (f *fakeCoordinatorClient) ListVisibleAuthoritySeals(context.Context, *coordpb.ListVisibleAuthoritySealsRequest) (*coordpb.ListVisibleAuthoritySealsResponse, error) {
+	return &coordpb.ListVisibleAuthoritySealsResponse{}, nil
 }
 
-func (f *fakeCoordinatorClient) ApplyPerasAuthority(context.Context, *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error) {
-	return &coordpb.ApplyPerasAuthorityResponse{}, nil
+func (f *fakeCoordinatorClient) ApplyVisibleAuthority(context.Context, *coordpb.ApplyVisibleAuthorityRequest) (*coordpb.ApplyVisibleAuthorityResponse, error) {
+	return &coordpb.ApplyVisibleAuthorityResponse{}, nil
 }
 
 func (f *fakeCoordinatorClient) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {

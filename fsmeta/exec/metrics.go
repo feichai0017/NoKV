@@ -27,7 +27,7 @@ func recordUint64Max(max *atomic.Uint64, value uint64) {
 }
 
 // recordSlow attributes one slow-path admission to its slow reason bucket.
-func (s *perasAdmissionCounters) recordSlow(reason compile.SlowReason) {
+func (s *visibleAdmissionCounters) recordSlow(reason compile.SlowReason) {
 	s.slowTotal.Add(1)
 	switch reason {
 	case compile.SlowReasonReadOnly:

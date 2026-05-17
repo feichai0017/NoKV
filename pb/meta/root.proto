@@ -43,9 +43,9 @@ enum RootEventKind {
   ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED = 29;
   ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED = 30;
   ROOT_EVENT_KIND_GRANT_INHERITED = 31;
-  ROOT_EVENT_KIND_PERAS_AUTHORITY_GRANTED = 32;
-  ROOT_EVENT_KIND_PERAS_AUTHORITY_RETIRED = 33;
-  ROOT_EVENT_KIND_PERAS_AUTHORITY_SEALED = 34;
+  ROOT_EVENT_KIND_VISIBLE_AUTHORITY_GRANTED = 32;
+  ROOT_EVENT_KIND_VISIBLE_AUTHORITY_RETIRED = 33;
+  ROOT_EVENT_KIND_VISIBLE_AUTHORITY_SEALED = 34;
 }
 
 message RootCursor {
@@ -64,9 +64,9 @@ message RootState {
   repeated RootGrantInheritance grant_inheritances = 9;
   reserved 10;
   reserved "retired_era_floor";
-  repeated RootPerasAuthorityGrant active_peras_grants = 11;
-  uint64 peras_authority_epoch = 12;
-  repeated RootPerasAuthoritySeal peras_authority_seals = 13;
+  repeated RootVisibleAuthorityGrant active_visible_grants = 11;
+  uint64 visible_authority_epoch = 12;
+  repeated RootVisibleAuthoritySeal visible_authority_seals = 13;
   // Scoped finality floors keyed by coordinator duty and duty scope.
   repeated RootAuthorityRetiredEraFloor retired_era_floors = 14;
 }
@@ -108,13 +108,13 @@ message RootSnapshotEpoch {
   uint64 read_version = 4;
   RootCursor published_at = 5;
   uint64 mount_key_id = 6;
-  repeated RootPerasSnapshotSegmentRef peras_segment_refs = 7;
+  repeated RootSnapshotEvidenceRef runtime_evidence = 7;
 }
 
-message RootPerasSnapshotSegmentRef {
+message RootSnapshotEvidenceRef {
   uint64 epoch_id = 1;
-  bytes segment_root = 2;
-  bytes segment_payload_digest = 3;
+  bytes evidence_root = 2;
+  bytes payload_digest = 3;
 }
 
 enum RootMountState {
@@ -264,7 +264,7 @@ message RootAuthorityRetiredEraFloor {
   uint64 retired_era_floor = 3;
 }
 
-message RootPerasAuthorityScope {
+message RootVisibleAuthorityScope {
   string mount_id = 1;
   uint64 mount_key_id = 2;
   repeated uint32 buckets = 3;
@@ -272,11 +272,11 @@ message RootPerasAuthorityScope {
   repeated uint64 inodes = 5;
 }
 
-message RootPerasAuthorityGrant {
+message RootVisibleAuthorityGrant {
   string grant_id = 1;
   uint64 epoch_id = 2;
   string holder_id = 3;
-  RootPerasAuthorityScope scope = 4;
+  RootVisibleAuthorityScope scope = 4;
   int64 expires_unix_nano = 5;
   bytes predecessor_digest = 6;
   int64 quota_credit_bytes = 7;
@@ -285,11 +285,11 @@ message RootPerasAuthorityGrant {
   RootTailToken issued_root_token = 10;
 }
 
-message RootPerasAuthoritySeal {
+message RootVisibleAuthoritySeal {
   string grant_id = 1;
   uint64 epoch_id = 2;
   string holder_id = 3;
-  RootPerasAuthorityScope scope = 4;
+  RootVisibleAuthorityScope scope = 4;
   bytes segment_root = 5;
   bytes segment_payload_digest = 6;
   uint64 operation_count = 7;
@@ -301,18 +301,18 @@ message RootPerasAuthoritySeal {
   uint64 install_version = 13;
 }
 
-enum RootPerasAuthorityAct {
-  ROOT_PERAS_AUTHORITY_ACT_UNSPECIFIED = 0;
-  ROOT_PERAS_AUTHORITY_ACT_ACQUIRE = 1;
-  ROOT_PERAS_AUTHORITY_ACT_RETIRE = 2;
-  ROOT_PERAS_AUTHORITY_ACT_SEAL = 3;
+enum RootVisibleAuthorityAct {
+  ROOT_VISIBLE_AUTHORITY_ACT_UNSPECIFIED = 0;
+  ROOT_VISIBLE_AUTHORITY_ACT_ACQUIRE = 1;
+  ROOT_VISIBLE_AUTHORITY_ACT_RETIRE = 2;
+  ROOT_VISIBLE_AUTHORITY_ACT_SEAL = 3;
 }
 
-message RootPerasAuthorityCommand {
-  RootPerasAuthorityAct kind = 1;
+message RootVisibleAuthorityCommand {
+  RootVisibleAuthorityAct kind = 1;
   string holder_id = 2;
   string grant_id = 3;
-  RootPerasAuthorityScope scope = 4;
+  RootVisibleAuthorityScope scope = 4;
   int64 expires_unix_nano = 5;
   int64 now_unix_nano = 6;
   bytes predecessor_digest = 7;
@@ -328,12 +328,12 @@ message RootPerasAuthorityCommand {
   uint64 install_version = 17;
 }
 
-enum RootPerasAuthorityApplyStatus {
-  ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED = 0;
-  ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED = 1;
-  ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD = 2;
-  ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED = 3;
-  ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED = 4;
+enum RootVisibleAuthorityApplyStatus {
+  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_UNSPECIFIED = 0;
+  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED = 1;
+  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD = 2;
+  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED = 3;
+  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_SEALED = 4;
 }
 
 message RootGrantCertificate {
@@ -459,8 +459,8 @@ message RootEvent {
     RootMount mount = 13;
     RootSubtreeAuthority subtree_authority = 14;
     RootQuotaFence quota_fence = 15;
-    RootPerasAuthorityGrant peras_authority_grant = 16;
-    RootPerasAuthoritySeal peras_authority_seal = 17;
+    RootVisibleAuthorityGrant visible_authority_grant = 16;
+    RootVisibleAuthoritySeal visible_authority_seal = 17;
   }
 }
 
@@ -547,14 +547,14 @@ message MetadataRootApplyGrantResponse {
   RootGrantCertificate certificate = 3;
 }
 
-message MetadataRootApplyPerasAuthorityRequest {
-  RootPerasAuthorityCommand command = 1;
+message MetadataRootApplyVisibleAuthorityRequest {
+  RootVisibleAuthorityCommand command = 1;
 }
 
-message MetadataRootApplyPerasAuthorityResponse {
+message MetadataRootApplyVisibleAuthorityResponse {
   RootState state = 1;
-  RootPerasAuthorityApplyStatus status = 2;
-  RootPerasAuthorityGrant grant = 3;
+  RootVisibleAuthorityApplyStatus status = 2;
+  RootVisibleAuthorityGrant grant = 3;
 }
 
 message RootTailToken {
@@ -612,7 +612,7 @@ service MetadataRoot {
   rpc FenceAllocator(MetadataRootFenceAllocatorRequest) returns (MetadataRootFenceAllocatorResponse);
   rpc Status(MetadataRootStatusRequest) returns (MetadataRootStatusResponse);
   rpc ApplyGrant(MetadataRootApplyGrantRequest) returns (MetadataRootApplyGrantResponse);
-  rpc ApplyPerasAuthority(MetadataRootApplyPerasAuthorityRequest) returns (MetadataRootApplyPerasAuthorityResponse);
+  rpc ApplyVisibleAuthority(MetadataRootApplyVisibleAuthorityRequest) returns (MetadataRootApplyVisibleAuthorityResponse);
   rpc ObserveCommitted(MetadataRootObserveCommittedRequest) returns (MetadataRootObserveCommittedResponse);
   rpc ObserveTail(MetadataRootObserveTailRequest) returns (MetadataRootObserveTailResponse);
   rpc WaitTail(MetadataRootWaitTailRequest) returns (MetadataRootWaitTailResponse);

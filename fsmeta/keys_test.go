@@ -37,45 +37,45 @@ func TestUsageKeyAllowsMountWideScope(t *testing.T) {
 	require.Equal(t, KeyKindUsage, kind)
 }
 
-func TestPerasSegmentCatalogIndexKeyUsesRootedMountAndBucket(t *testing.T) {
+func TestSegmentCatalogIndexKeyUsesRootedMountAndBucket(t *testing.T) {
 	var root [32]byte
 	root[0] = 7
-	key, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 3, root)
+	key, err := EncodeSegmentCatalogIndexKey(testMount.MountKeyID, 3, root)
 	require.NoError(t, err)
 
 	kind, err := KeyKindOf(key)
 	require.NoError(t, err)
-	require.Equal(t, KeyKindPeras, kind)
-	require.Equal(t, "peras", kind.String())
+	require.Equal(t, KeyKindSegment, kind)
+	require.Equal(t, "segment", kind.String())
 
 	parts, ok := InspectKey(key)
 	require.True(t, ok)
 	require.Equal(t, testMount.MountKeyID, parts.MountKeyID)
 	require.Equal(t, AffinityBucket(3), parts.Bucket)
-	require.Equal(t, PerasSegmentRecordIndex, parts.PerasRecord)
-	require.Equal(t, root, parts.PerasRoot)
+	require.Equal(t, SegmentRecordIndex, parts.SegmentRecord)
+	require.Equal(t, root, parts.SegmentRoot)
 
-	object, err := EncodePerasSegmentObjectKey(testMount.MountKeyID, 3, root)
+	object, err := EncodeSegmentObjectKey(testMount.MountKeyID, 3, root)
 	require.NoError(t, err)
 	parts, ok = InspectKey(object)
 	require.True(t, ok)
-	require.Equal(t, PerasSegmentRecordObject, parts.PerasRecord)
-	require.Equal(t, root, parts.PerasRoot)
+	require.Equal(t, SegmentRecordObject, parts.SegmentRecord)
+	require.Equal(t, root, parts.SegmentRoot)
 }
 
-func TestPerasSegmentCatalogIndexPrefixCoversCatalogKeys(t *testing.T) {
+func TestSegmentCatalogIndexPrefixCoversCatalogKeys(t *testing.T) {
 	var root [32]byte
 	root[0] = 7
-	key, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 3, root)
+	key, err := EncodeSegmentCatalogIndexKey(testMount.MountKeyID, 3, root)
 	require.NoError(t, err)
-	prefix, err := EncodePerasSegmentCatalogIndexPrefix(testMount.MountKeyID, 3)
+	prefix, err := EncodeSegmentCatalogIndexPrefix(testMount.MountKeyID, 3)
 	require.NoError(t, err)
 
 	require.True(t, bytes.HasPrefix(key, prefix))
-	object, err := EncodePerasSegmentObjectKey(testMount.MountKeyID, 3, root)
+	object, err := EncodeSegmentObjectKey(testMount.MountKeyID, 3, root)
 	require.NoError(t, err)
 	require.False(t, bytes.HasPrefix(object, prefix))
-	otherBucketPrefix, err := EncodePerasSegmentCatalogIndexPrefix(testMount.MountKeyID, 4)
+	otherBucketPrefix, err := EncodeSegmentCatalogIndexPrefix(testMount.MountKeyID, 4)
 	require.NoError(t, err)
 	require.False(t, bytes.HasPrefix(key, otherBucketPrefix))
 }
@@ -255,15 +255,15 @@ func TestShardForUserKeyKeepsWorkspaceMutationsLocal(t *testing.T) {
 	require.Equal(t, ShardForUserKey(createInode, shards), ShardForUserKey(childB, shards))
 }
 
-func TestShardForUserKeyKeepsPerasCatalogSegmentAtomic(t *testing.T) {
+func TestShardForUserKeyKeepsSegmentCatalogAtomic(t *testing.T) {
 	const shards = 4
 	var root [32]byte
 	copy(root[:], []byte("segment-root"))
-	object, err := EncodePerasSegmentObjectKey(testMount.MountKeyID, 1, root)
+	object, err := EncodeSegmentObjectKey(testMount.MountKeyID, 1, root)
 	require.NoError(t, err)
-	indexA, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 1, root)
+	indexA, err := EncodeSegmentCatalogIndexKey(testMount.MountKeyID, 1, root)
 	require.NoError(t, err)
-	indexB, err := EncodePerasSegmentCatalogIndexKey(testMount.MountKeyID, 7, root)
+	indexB, err := EncodeSegmentCatalogIndexKey(testMount.MountKeyID, 7, root)
 	require.NoError(t, err)
 
 	target := ShardForUserKey(object, shards)

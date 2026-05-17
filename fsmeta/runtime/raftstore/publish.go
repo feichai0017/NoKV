@@ -21,12 +21,12 @@ type rootPublisher struct {
 }
 
 func (p rootPublisher) PublishSnapshotSubtree(ctx context.Context, t fsmeta.SnapshotSubtreeToken) error {
-	return p.send(ctx, rootevent.SnapshotEpochPublishedWithPerasRefs(
+	return p.send(ctx, rootevent.SnapshotEpochPublishedWithRuntimeEvidence(
 		string(t.Mount),
 		uint64(t.MountKeyID),
 		uint64(t.RootInode),
 		t.ReadVersion,
-		rootPerasSnapshotSegmentRefsFromToken(t.PerasSegmentRefs),
+		rootSnapshotEvidenceRefsFromToken(t.RuntimeEvidence),
 	))
 }
 
@@ -58,16 +58,16 @@ func (p rootPublisher) send(ctx context.Context, event rootevent.Event) error {
 	return nil
 }
 
-func rootPerasSnapshotSegmentRefsFromToken(refs []fsmeta.PerasSnapshotSegmentRef) []rootproto.PerasSnapshotSegmentRef {
+func rootSnapshotEvidenceRefsFromToken(refs []fsmeta.SnapshotEvidenceRef) []rootproto.SnapshotEvidenceRef {
 	if len(refs) == 0 {
 		return nil
 	}
-	out := make([]rootproto.PerasSnapshotSegmentRef, 0, len(refs))
+	out := make([]rootproto.SnapshotEvidenceRef, 0, len(refs))
 	for _, ref := range refs {
-		out = append(out, rootproto.PerasSnapshotSegmentRef{
-			EpochID:              ref.EpochID,
-			SegmentRoot:          ref.SegmentRoot,
-			SegmentPayloadDigest: ref.SegmentPayloadDigest,
+		out = append(out, rootproto.SnapshotEvidenceRef{
+			EpochID:       ref.EpochID,
+			EvidenceRoot:  ref.EvidenceRoot,
+			PayloadDigest: ref.PayloadDigest,
 		})
 	}
 	return out

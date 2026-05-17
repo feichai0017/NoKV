@@ -47,25 +47,25 @@ func (s CatchUpState) String() string {
 // Snapshot is the reconstructed Coordinator bootstrap catalog derived from durable
 // metadata-root truth.
 type Snapshot struct {
-	ClusterEpoch        uint64
-	RootToken           rootstorage.TailToken
-	CatchUpState        CatchUpState
-	Stores              map[uint64]rootstate.StoreMembership
-	SnapshotEpochs      map[string]rootstate.SnapshotEpoch
-	Mounts              map[string]rootstate.MountRecord
-	Subtrees            map[string]rootstate.SubtreeAuthority
-	Quotas              map[string]rootstate.QuotaFence
-	Descriptors         map[uint64]topology.Descriptor
-	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
-	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
-	Allocator           AllocatorState
-	ActiveGrants        []rootproto.AuthorityGrant
-	RetiredGrants       []rootproto.GrantRetirement
-	GrantInheritances   []rootproto.GrantInheritance
-	RetiredEraFloors    []rootproto.AuthorityRetiredEraFloor
-	ActivePerasGrants   []rootproto.PerasAuthorityGrant
-	PerasAuthorityEpoch uint64
-	PerasAuthoritySeals []rootproto.PerasAuthoritySeal
+	ClusterEpoch          uint64
+	RootToken             rootstorage.TailToken
+	CatchUpState          CatchUpState
+	Stores                map[uint64]rootstate.StoreMembership
+	SnapshotEpochs        map[string]rootstate.SnapshotEpoch
+	Mounts                map[string]rootstate.MountRecord
+	Subtrees              map[string]rootstate.SubtreeAuthority
+	Quotas                map[string]rootstate.QuotaFence
+	Descriptors           map[uint64]topology.Descriptor
+	PendingPeerChanges    map[uint64]rootstate.PendingPeerChange
+	PendingRangeChanges   map[uint64]rootstate.PendingRangeChange
+	Allocator             AllocatorState
+	ActiveGrants          []rootproto.AuthorityGrant
+	RetiredGrants         []rootproto.GrantRetirement
+	GrantInheritances     []rootproto.GrantInheritance
+	RetiredEraFloors      []rootproto.AuthorityRetiredEraFloor
+	ActiveVisibleGrants   []rootproto.VisibleAuthorityGrant
+	VisibleAuthorityEpoch uint64
+	VisibleAuthoritySeals []rootproto.VisibleAuthoritySeal
 }
 
 func (s Snapshot) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
@@ -92,45 +92,45 @@ func (s Snapshot) RetiredEraFloorFor(duty rootproto.DutyID, scope rootproto.Duty
 	return rootproto.AuthorityRetiredEraFloorFor(s.RetiredEraFloors, duty, scope)
 }
 
-func (s Snapshot) ActivePerasGrantFor(scope rootproto.PerasAuthorityScope, nowUnixNano int64) (rootproto.PerasAuthorityGrant, bool) {
-	for _, grant := range s.ActivePerasGrants {
+func (s Snapshot) ActiveVisibleGrantFor(scope rootproto.VisibleAuthorityScope, nowUnixNano int64) (rootproto.VisibleAuthorityGrant, bool) {
+	for _, grant := range s.ActiveVisibleGrants {
 		if grant.Covers(scope, nowUnixNano) {
-			return rootproto.ClonePerasAuthorityGrant(grant), true
+			return rootproto.CloneVisibleAuthorityGrant(grant), true
 		}
 	}
-	return rootproto.PerasAuthorityGrant{}, false
+	return rootproto.VisibleAuthorityGrant{}, false
 }
 
-func (s Snapshot) ActivePerasGrantByID(grantID string) (rootproto.PerasAuthorityGrant, bool) {
-	for _, grant := range s.ActivePerasGrants {
+func (s Snapshot) ActiveVisibleGrantByID(grantID string) (rootproto.VisibleAuthorityGrant, bool) {
+	for _, grant := range s.ActiveVisibleGrants {
 		if grant.GrantID == grantID {
-			return rootproto.ClonePerasAuthorityGrant(grant), true
+			return rootproto.CloneVisibleAuthorityGrant(grant), true
 		}
 	}
-	return rootproto.PerasAuthorityGrant{}, false
+	return rootproto.VisibleAuthorityGrant{}, false
 }
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	return Snapshot{
-		ClusterEpoch:        snapshot.ClusterEpoch,
-		RootToken:           snapshot.RootToken,
-		CatchUpState:        snapshot.CatchUpState,
-		Stores:              rootstate.CloneStoreMemberships(snapshot.Stores),
-		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(snapshot.SnapshotEpochs),
-		Mounts:              rootstate.CloneMounts(snapshot.Mounts),
-		Subtrees:            rootstate.CloneSubtreeAuthorities(snapshot.Subtrees),
-		Quotas:              rootstate.CloneQuotaFences(snapshot.Quotas),
-		Descriptors:         rootstate.CloneDescriptors(snapshot.Descriptors),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
-		Allocator:           snapshot.Allocator,
-		ActiveGrants:        cloneAuthorityGrants(snapshot.ActiveGrants),
-		RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
-		GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
-		RetiredEraFloors:    rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors),
-		ActivePerasGrants:   clonePerasAuthorityGrants(snapshot.ActivePerasGrants),
-		PerasAuthorityEpoch: snapshot.PerasAuthorityEpoch,
-		PerasAuthoritySeals: clonePerasAuthoritySeals(snapshot.PerasAuthoritySeals),
+		ClusterEpoch:          snapshot.ClusterEpoch,
+		RootToken:             snapshot.RootToken,
+		CatchUpState:          snapshot.CatchUpState,
+		Stores:                rootstate.CloneStoreMemberships(snapshot.Stores),
+		SnapshotEpochs:        rootstate.CloneSnapshotEpochs(snapshot.SnapshotEpochs),
+		Mounts:                rootstate.CloneMounts(snapshot.Mounts),
+		Subtrees:              rootstate.CloneSubtreeAuthorities(snapshot.Subtrees),
+		Quotas:                rootstate.CloneQuotaFences(snapshot.Quotas),
+		Descriptors:           rootstate.CloneDescriptors(snapshot.Descriptors),
+		PendingPeerChanges:    rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges),
+		PendingRangeChanges:   rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges),
+		Allocator:             snapshot.Allocator,
+		ActiveGrants:          cloneAuthorityGrants(snapshot.ActiveGrants),
+		RetiredGrants:         append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
+		GrantInheritances:     append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
+		RetiredEraFloors:      rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors),
+		ActiveVisibleGrants:   cloneVisibleAuthorityGrants(snapshot.ActiveVisibleGrants),
+		VisibleAuthorityEpoch: snapshot.VisibleAuthorityEpoch,
+		VisibleAuthoritySeals: cloneVisibleAuthoritySeals(snapshot.VisibleAuthoritySeals),
 	}
 }
 
@@ -155,11 +155,11 @@ func PreserveNewerAuthorityState(observed, current Snapshot) Snapshot {
 	}
 	out.RetiredGrants = mergeGrantRetirements(out.RetiredGrants, current.RetiredGrants)
 	out.GrantInheritances = mergeGrantInheritances(out.GrantInheritances, current.GrantInheritances)
-	if current.PerasAuthorityEpoch > out.PerasAuthorityEpoch {
-		out.ActivePerasGrants = clonePerasAuthorityGrants(current.ActivePerasGrants)
-		out.PerasAuthorityEpoch = current.PerasAuthorityEpoch
+	if current.VisibleAuthorityEpoch > out.VisibleAuthorityEpoch {
+		out.ActiveVisibleGrants = cloneVisibleAuthorityGrants(current.ActiveVisibleGrants)
+		out.VisibleAuthorityEpoch = current.VisibleAuthorityEpoch
 	}
-	out.PerasAuthoritySeals = mergePerasAuthoritySeals(out.PerasAuthoritySeals, current.PerasAuthoritySeals)
+	out.VisibleAuthoritySeals = mergeVisibleAuthoritySeals(out.VisibleAuthoritySeals, current.VisibleAuthoritySeals)
 	return out
 }
 
@@ -302,30 +302,30 @@ func SnapshotFromRoot(snapshot rootstate.Snapshot) Snapshot {
 			IDCurrent: snapshot.State.IDFence,
 			TSCurrent: snapshot.State.TSOFence,
 		},
-		ActiveGrants:        cloneAuthorityGrants(snapshot.State.ActiveGrants),
-		RetiredGrants:       append([]rootproto.GrantRetirement(nil), snapshot.State.RetiredGrants...),
-		GrantInheritances:   append([]rootproto.GrantInheritance(nil), snapshot.State.GrantInheritances...),
-		RetiredEraFloors:    rootproto.CloneAuthorityRetiredEraFloors(snapshot.State.RetiredEraFloors),
-		ActivePerasGrants:   clonePerasAuthorityGrants(snapshot.State.ActivePerasGrants),
-		PerasAuthorityEpoch: snapshot.State.PerasAuthorityEpoch,
-		PerasAuthoritySeals: clonePerasAuthoritySeals(snapshot.State.PerasAuthoritySeals),
+		ActiveGrants:          cloneAuthorityGrants(snapshot.State.ActiveGrants),
+		RetiredGrants:         append([]rootproto.GrantRetirement(nil), snapshot.State.RetiredGrants...),
+		GrantInheritances:     append([]rootproto.GrantInheritance(nil), snapshot.State.GrantInheritances...),
+		RetiredEraFloors:      rootproto.CloneAuthorityRetiredEraFloors(snapshot.State.RetiredEraFloors),
+		ActiveVisibleGrants:   cloneVisibleAuthorityGrants(snapshot.State.ActiveVisibleGrants),
+		VisibleAuthorityEpoch: snapshot.State.VisibleAuthorityEpoch,
+		VisibleAuthoritySeals: cloneVisibleAuthoritySeals(snapshot.State.VisibleAuthoritySeals),
 	}
 }
 
 func (s Snapshot) RootSnapshot() rootstate.Snapshot {
 	return rootstate.Snapshot{
 		State: rootstate.State{
-			ClusterEpoch:        s.ClusterEpoch,
-			LastCommitted:       s.RootToken.Cursor,
-			IDFence:             s.Allocator.IDCurrent,
-			TSOFence:            s.Allocator.TSCurrent,
-			ActiveGrants:        cloneAuthorityGrants(s.ActiveGrants),
-			RetiredGrants:       append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
-			GrantInheritances:   append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
-			RetiredEraFloors:    rootproto.CloneAuthorityRetiredEraFloors(s.RetiredEraFloors),
-			ActivePerasGrants:   clonePerasAuthorityGrants(s.ActivePerasGrants),
-			PerasAuthorityEpoch: s.PerasAuthorityEpoch,
-			PerasAuthoritySeals: clonePerasAuthoritySeals(s.PerasAuthoritySeals),
+			ClusterEpoch:          s.ClusterEpoch,
+			LastCommitted:         s.RootToken.Cursor,
+			IDFence:               s.Allocator.IDCurrent,
+			TSOFence:              s.Allocator.TSCurrent,
+			ActiveGrants:          cloneAuthorityGrants(s.ActiveGrants),
+			RetiredGrants:         append([]rootproto.GrantRetirement(nil), s.RetiredGrants...),
+			GrantInheritances:     append([]rootproto.GrantInheritance(nil), s.GrantInheritances...),
+			RetiredEraFloors:      rootproto.CloneAuthorityRetiredEraFloors(s.RetiredEraFloors),
+			ActiveVisibleGrants:   cloneVisibleAuthorityGrants(s.ActiveVisibleGrants),
+			VisibleAuthorityEpoch: s.VisibleAuthorityEpoch,
+			VisibleAuthoritySeals: cloneVisibleAuthoritySeals(s.VisibleAuthoritySeals),
 		},
 		Stores:              rootstate.CloneStoreMemberships(s.Stores),
 		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.SnapshotEpochs),
@@ -357,30 +357,30 @@ func cloneAuthorityGrant(grant rootproto.AuthorityGrant) rootproto.AuthorityGran
 	return grant
 }
 
-func clonePerasAuthorityGrants(grants []rootproto.PerasAuthorityGrant) []rootproto.PerasAuthorityGrant {
+func cloneVisibleAuthorityGrants(grants []rootproto.VisibleAuthorityGrant) []rootproto.VisibleAuthorityGrant {
 	if len(grants) == 0 {
 		return nil
 	}
-	out := make([]rootproto.PerasAuthorityGrant, len(grants))
+	out := make([]rootproto.VisibleAuthorityGrant, len(grants))
 	for i, grant := range grants {
-		out[i] = rootproto.ClonePerasAuthorityGrant(grant)
+		out[i] = rootproto.CloneVisibleAuthorityGrant(grant)
 	}
 	return out
 }
 
-func clonePerasAuthoritySeals(seals []rootproto.PerasAuthoritySeal) []rootproto.PerasAuthoritySeal {
+func cloneVisibleAuthoritySeals(seals []rootproto.VisibleAuthoritySeal) []rootproto.VisibleAuthoritySeal {
 	if len(seals) == 0 {
 		return nil
 	}
-	out := make([]rootproto.PerasAuthoritySeal, len(seals))
+	out := make([]rootproto.VisibleAuthoritySeal, len(seals))
 	for i, seal := range seals {
-		out[i] = rootproto.ClonePerasAuthoritySeal(seal)
+		out[i] = rootproto.CloneVisibleAuthoritySeal(seal)
 	}
 	return out
 }
 
-func mergePerasAuthoritySeals(base, incoming []rootproto.PerasAuthoritySeal) []rootproto.PerasAuthoritySeal {
-	out := clonePerasAuthoritySeals(base)
+func mergeVisibleAuthoritySeals(base, incoming []rootproto.VisibleAuthoritySeal) []rootproto.VisibleAuthoritySeal {
+	out := cloneVisibleAuthoritySeals(base)
 	for _, seal := range incoming {
 		if !seal.Valid() {
 			continue
@@ -389,14 +389,14 @@ func mergePerasAuthoritySeals(base, incoming []rootproto.PerasAuthoritySeal) []r
 		for i, current := range out {
 			if current.GrantID == seal.GrantID {
 				if seal.SealedUnixNano >= current.SealedUnixNano {
-					out[i] = rootproto.ClonePerasAuthoritySeal(seal)
+					out[i] = rootproto.CloneVisibleAuthoritySeal(seal)
 				}
 				replaced = true
 				break
 			}
 		}
 		if !replaced {
-			out = append(out, rootproto.ClonePerasAuthoritySeal(seal))
+			out = append(out, rootproto.CloneVisibleAuthoritySeal(seal))
 		}
 	}
 	return out

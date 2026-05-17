@@ -12,21 +12,21 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestSnapshotPreservesPerasAuthorities(t *testing.T) {
-	grant := testRootviewPerasGrant("peras-1", 1)
+func TestSnapshotPreservesVisibleAuthorityAuthorities(t *testing.T) {
+	grant := testRootviewVisibleGrant("visible-1", 1)
 	rooted := rootstate.Snapshot{
 		State: rootstate.State{
-			LastCommitted:       rootstate.Cursor{Term: 1, Index: 3},
-			ActivePerasGrants:   []rootproto.PerasAuthorityGrant{grant},
-			PerasAuthorityEpoch: grant.EpochID,
+			LastCommitted:         rootstate.Cursor{Term: 1, Index: 3},
+			ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{grant},
+			VisibleAuthorityEpoch: grant.EpochID,
 		},
 	}
 
 	snapshot := SnapshotFromRoot(rooted)
-	found, ok := snapshot.ActivePerasGrantByID(grant.GrantID)
+	found, ok := snapshot.ActiveVisibleGrantByID(grant.GrantID)
 	require.True(t, ok)
 	require.Equal(t, grant, found)
-	covered, ok := snapshot.ActivePerasGrantFor(rootproto.PerasAuthorityScope{
+	covered, ok := snapshot.ActiveVisibleGrantFor(rootproto.VisibleAuthorityScope{
 		MountID:    "vol",
 		MountKeyID: 7,
 		Buckets:    []uint16{1},
@@ -35,52 +35,52 @@ func TestSnapshotPreservesPerasAuthorities(t *testing.T) {
 	require.Equal(t, grant.GrantID, covered.GrantID)
 
 	clone := CloneSnapshot(snapshot)
-	clone.ActivePerasGrants[0].Scope.Buckets[0] = 9
-	require.Equal(t, []uint16{1}, snapshot.ActivePerasGrants[0].Scope.Buckets)
+	clone.ActiveVisibleGrants[0].Scope.Buckets[0] = 9
+	require.Equal(t, []uint16{1}, snapshot.ActiveVisibleGrants[0].Scope.Buckets)
 
 	roundTrip := snapshot.RootSnapshot()
-	require.Equal(t, []rootproto.PerasAuthorityGrant{grant}, roundTrip.State.ActivePerasGrants)
-	require.Equal(t, grant.EpochID, roundTrip.State.PerasAuthorityEpoch)
+	require.Equal(t, []rootproto.VisibleAuthorityGrant{grant}, roundTrip.State.ActiveVisibleGrants)
+	require.Equal(t, grant.EpochID, roundTrip.State.VisibleAuthorityEpoch)
 }
 
-func TestPreserveNewerAuthorityStateKeepsNewerPerasEpoch(t *testing.T) {
-	older := Snapshot{PerasAuthorityEpoch: 1}
-	newerGrant := testRootviewPerasGrant("peras-2", 2)
+func TestPreserveNewerAuthorityStateKeepsNewerVisibleAuthorityEpoch(t *testing.T) {
+	older := Snapshot{VisibleAuthorityEpoch: 1}
+	newerGrant := testRootviewVisibleGrant("visible-2", 2)
 	newerGrant.EpochID = 2
 	current := Snapshot{
-		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{newerGrant},
-		PerasAuthorityEpoch: newerGrant.EpochID,
+		ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{newerGrant},
+		VisibleAuthorityEpoch: newerGrant.EpochID,
 	}
 
 	merged := PreserveNewerAuthorityState(older, current)
-	require.Equal(t, current.ActivePerasGrants, merged.ActivePerasGrants)
-	require.Equal(t, current.PerasAuthorityEpoch, merged.PerasAuthorityEpoch)
+	require.Equal(t, current.ActiveVisibleGrants, merged.ActiveVisibleGrants)
+	require.Equal(t, current.VisibleAuthorityEpoch, merged.VisibleAuthorityEpoch)
 }
 
-func BenchmarkSnapshotActivePerasGrantFor(b *testing.B) {
+func BenchmarkSnapshotActiveVisibleGrantFor(b *testing.B) {
 	b.ReportAllocs()
-	grants := make([]rootproto.PerasAuthorityGrant, 0, 16)
+	grants := make([]rootproto.VisibleAuthorityGrant, 0, 16)
 	for bucket := range 16 {
-		grants = append(grants, testRootviewPerasGrant("peras-"+string(rune('a'+bucket)), uint16(bucket)))
+		grants = append(grants, testRootviewVisibleGrant("visible-"+string(rune('a'+bucket)), uint16(bucket)))
 	}
-	snapshot := Snapshot{ActivePerasGrants: grants}
-	scope := rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{11}}
+	snapshot := Snapshot{ActiveVisibleGrants: grants}
+	scope := rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{11}}
 	now := time.Now().UnixNano()
 
 	for b.Loop() {
-		grant, ok := snapshot.ActivePerasGrantFor(scope, now)
+		grant, ok := snapshot.ActiveVisibleGrantFor(scope, now)
 		if !ok || grant.GrantID == "" {
-			b.Fatal("missing peras grant")
+			b.Fatal("missing visible authority grant")
 		}
 	}
 }
 
-func testRootviewPerasGrant(grantID string, bucket uint16) rootproto.PerasAuthorityGrant {
-	return rootproto.PerasAuthorityGrant{
+func testRootviewVisibleGrant(grantID string, bucket uint16) rootproto.VisibleAuthorityGrant {
+	return rootproto.VisibleAuthorityGrant{
 		GrantID:  grantID,
 		EpochID:  1,
 		HolderID: "holder-a",
-		Scope: rootproto.PerasAuthorityScope{
+		Scope: rootproto.VisibleAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 7,
 			Buckets:    []uint16{bucket},

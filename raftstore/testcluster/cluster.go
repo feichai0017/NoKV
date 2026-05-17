@@ -273,10 +273,10 @@ func (s *coordinatorRootStorage) ApplyGrant(_ context.Context, cmd rootproto.Gra
 	}
 }
 
-func (s *coordinatorRootStorage) ApplyPerasAuthority(_ context.Context, _ rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+func (s *coordinatorRootStorage) ApplyVisibleAuthority(_ context.Context, _ rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+	return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 }
 
 func (s *coordinatorRootStorage) Refresh() error            { return nil }

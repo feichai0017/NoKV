@@ -87,7 +87,7 @@ func (c *quotaCache) ReserveQuota(ctx context.Context, runner fsmetaexec.TxnRunn
 	return mutations, nil
 }
 
-func (c *quotaCache) AllowPerasVisibleQuota(ctx context.Context, changes []fsmetaexec.QuotaChange) (bool, error) {
+func (c *quotaCache) AllowVisibleQuota(ctx context.Context, changes []fsmetaexec.QuotaChange) (bool, error) {
 	if c == nil || c.coord == nil || len(changes) == 0 {
 		return true, nil
 	}
@@ -98,12 +98,12 @@ func (c *quotaCache) AllowPerasVisibleQuota(ctx context.Context, changes []fsmet
 		if change.Bytes == 0 && change.Inodes == 0 {
 			continue
 		}
-		ok, err := c.allowPerasVisibleQuotaSubject(ctx, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID})
+		ok, err := c.allowVisibleQuotaSubject(ctx, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID})
 		if err != nil || !ok {
 			return ok, err
 		}
 		if change.Scope != 0 {
-			ok, err = c.allowPerasVisibleQuotaSubject(ctx, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID, scope: change.Scope})
+			ok, err = c.allowVisibleQuotaSubject(ctx, quotaSubject{mount: change.Mount, mountKeyID: change.MountKeyID, scope: change.Scope})
 			if err != nil || !ok {
 				return ok, err
 			}
@@ -112,7 +112,7 @@ func (c *quotaCache) AllowPerasVisibleQuota(ctx context.Context, changes []fsmet
 	return true, nil
 }
 
-func (c *quotaCache) allowPerasVisibleQuotaSubject(ctx context.Context, subject quotaSubject) (bool, error) {
+func (c *quotaCache) allowVisibleQuotaSubject(ctx context.Context, subject quotaSubject) (bool, error) {
 	_, ok, err := c.resolve(ctx, subject)
 	if err != nil {
 		return false, err

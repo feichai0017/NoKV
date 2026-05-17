@@ -38,16 +38,16 @@ func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 8, Bytes: 4096, Inodes: 1}}}, quota.changes)
 }
 
-func TestExecutorLinkPerasVisibleCommitServesOverlay(t *testing.T) {
+func TestExecutorLinkVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 8)
 	seedDentry(t, runner, "vol", 7, "file", inode)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: inode, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -127,12 +127,12 @@ func BenchmarkExecutorLinkDefaultPath(b *testing.B) {
 	benchmarkExecutorLink(b, runner, executor)
 }
 
-func BenchmarkExecutorLinkPerasVisibleCommit(b *testing.B) {
+func BenchmarkExecutorLinkVisibleCommit(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(noopPerasCommitter{}),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {
 		b.Fatal(err)

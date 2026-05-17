@@ -73,12 +73,12 @@ Examples:
   `StoreNotMatch`, `RegionNotFound`, `KeyNotInRegion`, ...)
 - `engine/wal/errors.go`: WAL encode/decode and segment errors
 - `coordinator/catalog/errors.go`: Coordinator metadata and range validation errors
-- `fsmeta/exec/peras/errors.go`: Peras admission, segment, replay, and witness
+- `experimental/peras/exec/errors.go`: Peras admission, segment, replay, and witness
   sentinels used by holder/runtime control flow
-- `fsmeta/runtime/peras/errors.go` and `fsmeta/runtime/peras/authority.go`:
+- `experimental/peras/runtime/errors.go` and `experimental/peras/runtime/authority.go`:
   authority acquisition, active-authority view, and runtime lifecycle sentinels
-- `raftstore/peras/*.go`: Peras segment install and witness authority
-  protocol sentinels
+- `experimental/peras/adapters/raftstore/*.go`: Peras segment install and
+  witness authority protocol sentinels
 
 ---
 

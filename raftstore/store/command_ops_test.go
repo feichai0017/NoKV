@@ -10,8 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	local "github.com/feichai0017/NoKV/local"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
@@ -1199,10 +1197,10 @@ func TestValidateRequestKeysAcrossCommandKinds(t *testing.T) {
 			kind: func(err *errorpb.RegionError) any { return err.GetKeyNotInRegion() },
 		},
 		{
-			name: "peras install routing key out of range",
+			name: "prepared mvcc install routing key out of range",
 			req: &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
-				CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-				Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
+				CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+				Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
 					RoutingKey: []byte("a"),
 				}},
 			}}},
@@ -1226,52 +1224,21 @@ func TestValidateRequestKeysAcrossCommandKinds(t *testing.T) {
 	}
 }
 
-func TestValidateRequestKeysRejectsPerasSegmentEntriesOutsideRegion(t *testing.T) {
+func TestValidateRequestKeysRejectsPreparedMVCCEntriesOutsideRegion(t *testing.T) {
 	meta := localmeta.RegionMeta{
 		ID:       12,
 		StartKey: []byte("b"),
 		EndKey:   []byte("m"),
 	}
-	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
-		EpochID: 1,
-		Operations: []fsperas.ReplayOperation{{
-			OpID: fsperas.OperationID{
-				ClientID: "client",
-				Seq:      1,
-			},
-			Kind: fsmeta.OperationCreate,
-			Mutations: []fsperas.ReplayMutation{
-				{Key: []byte("c"), Value: []byte("in-region")},
-				{Key: []byte("z"), Value: []byte("out-of-region")},
-			},
-		}},
-	})
-	require.NoError(t, err)
-	payload, err := fsperas.EncodePerasSegment(segment)
-	require.NoError(t, err)
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-	require.NoError(t, err)
-	readHeader := segment.ReadHeaderView()
 	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
-		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-			RoutingKey:            []byte("c"),
-			SegmentRoot:           append([]byte(nil), segment.Root[:]...),
-			SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
-			SegmentPayload:        payload,
-			InstallVersion:        10,
-			MaterializeMvcc:       true,
-			SegmentEpochId:        segment.EpochID,
-			SegmentOperationCount: segment.Stats().OperationCount,
-			SegmentEntryCount:     segment.Stats().EntryCount,
-			SegmentPayloadSize:    uint64(len(payload)),
-			ReadFirstKey:          readHeader.FirstKey,
-			ReadLastKey:           readHeader.LastKey,
-			ReadDentryCount:       readHeader.DentryCount,
-			ReadInodeCount:        readHeader.InodeCount,
-			ReadSessionCount:      readHeader.SessionCount,
-			ReadTombstoneCount:    readHeader.TombstoneCount,
-			ReadDirectoryCount:    readHeader.DirectoryCount,
+		CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+		Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+			RoutingKey:    []byte("c"),
+			CommitVersion: 10,
+			Entries: []*kvrpcpb.PreparedMVCCEntry{
+				{ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT, Key: []byte("c"), Version: 10, Value: []byte("in-region"), HasValue: true},
+				{ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT, Key: []byte("z"), Version: 10, Value: []byte("out-of-region"), HasValue: true},
+			},
 		}},
 	}}}
 
@@ -1281,54 +1248,18 @@ func TestValidateRequestKeysRejectsPerasSegmentEntriesOutsideRegion(t *testing.T
 	require.Equal(t, []byte("z"), regionErr.GetKeyNotInRegion().GetKey())
 }
 
-func TestValidateRequestKeysRejectsPerasHeaderThatHidesOutOfRegionPayload(t *testing.T) {
+func TestValidateRequestKeysRejectsPreparedMVCCDependencyOutsideRegion(t *testing.T) {
 	meta := localmeta.RegionMeta{
 		ID:       12,
 		StartKey: []byte("b"),
 		EndKey:   []byte("m"),
 	}
-	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
-		EpochID: 1,
-		Operations: []fsperas.ReplayOperation{{
-			OpID: fsperas.OperationID{
-				ClientID: "client",
-				Seq:      1,
-			},
-			Kind: fsmeta.OperationCreate,
-			Mutations: []fsperas.ReplayMutation{
-				{Key: []byte("c"), Value: []byte("in-region")},
-				{Key: []byte("z"), Value: []byte("out-of-region")},
-			},
-		}},
-	})
-	require.NoError(t, err)
-	payload, err := fsperas.EncodePerasSegment(segment)
-	require.NoError(t, err)
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-	require.NoError(t, err)
-	readHeader := segment.ReadHeaderView()
 	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
-		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-			RoutingKey:            []byte("c"),
-			SegmentRoot:           append([]byte(nil), segment.Root[:]...),
-			SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
-			SegmentPayload:        payload,
-			InstallVersion:        10,
-			MaterializeMvcc:       true,
-			SegmentEntryCount:     2,
-			MaterializedKeys:      [][]byte{[]byte("c"), []byte("d")},
-			DependencyKeys:        [][]byte{[]byte("c"), []byte("d")},
-			SegmentEpochId:        1,
-			SegmentOperationCount: 1,
-			SegmentPayloadSize:    uint64(len(payload)),
-			ReadFirstKey:          readHeader.FirstKey,
-			ReadLastKey:           readHeader.LastKey,
-			ReadDentryCount:       readHeader.DentryCount,
-			ReadInodeCount:        readHeader.InodeCount,
-			ReadSessionCount:      readHeader.SessionCount,
-			ReadTombstoneCount:    readHeader.TombstoneCount,
-			ReadDirectoryCount:    readHeader.DirectoryCount,
+		CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+		Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+			RoutingKey:     []byte("c"),
+			CommitVersion:  10,
+			DependencyKeys: [][]byte{[]byte("c"), []byte("z")},
 		}},
 	}}}
 
@@ -1338,54 +1269,18 @@ func TestValidateRequestKeysRejectsPerasHeaderThatHidesOutOfRegionPayload(t *tes
 	require.Equal(t, []byte("z"), regionErr.GetKeyNotInRegion().GetKey())
 }
 
-func TestValidateRequestKeysRejectsPerasMaterializedHeaderMismatch(t *testing.T) {
+func TestValidateRequestKeysRejectsMalformedPreparedMVCCInstall(t *testing.T) {
 	meta := localmeta.RegionMeta{
 		ID:       12,
 		StartKey: []byte("b"),
 		EndKey:   []byte("m"),
 	}
-	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
-		EpochID: 1,
-		Operations: []fsperas.ReplayOperation{{
-			OpID: fsperas.OperationID{
-				ClientID: "client",
-				Seq:      1,
-			},
-			Kind: fsmeta.OperationCreate,
-			Mutations: []fsperas.ReplayMutation{
-				{Key: []byte("c"), Value: []byte("left")},
-				{Key: []byte("d"), Value: []byte("right")},
-			},
-		}},
-	})
-	require.NoError(t, err)
-	payload, err := fsperas.EncodePerasSegment(segment)
-	require.NoError(t, err)
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-	require.NoError(t, err)
-	readHeader := segment.ReadHeaderView()
 	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
-		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-			RoutingKey:            []byte("c"),
-			SegmentRoot:           append([]byte(nil), segment.Root[:]...),
-			SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
-			SegmentPayload:        payload,
-			InstallVersion:        10,
-			MaterializeMvcc:       true,
-			SegmentEntryCount:     2,
-			MaterializedKeys:      [][]byte{[]byte("c"), []byte("e")},
-			DependencyKeys:        [][]byte{[]byte("c"), []byte("e")},
-			SegmentEpochId:        1,
-			SegmentOperationCount: 1,
-			SegmentPayloadSize:    uint64(len(payload)),
-			ReadFirstKey:          readHeader.FirstKey,
-			ReadLastKey:           readHeader.LastKey,
-			ReadDentryCount:       readHeader.DentryCount,
-			ReadInodeCount:        readHeader.InodeCount,
-			ReadSessionCount:      readHeader.SessionCount,
-			ReadTombstoneCount:    readHeader.TombstoneCount,
-			ReadDirectoryCount:    readHeader.DirectoryCount,
+		CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+		Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+			RoutingKey:    []byte("c"),
+			CommitVersion: 10,
+			Entries:       []*kvrpcpb.PreparedMVCCEntry{nil},
 		}},
 	}}}
 
@@ -1395,28 +1290,14 @@ func TestValidateRequestKeysRejectsPerasMaterializedHeaderMismatch(t *testing.T)
 	require.NotNil(t, regionErr.GetEpochNotMatch())
 }
 
-func TestValidateRequestKeysAcceptsPayloadlessPerasCatalogIndexRoute(t *testing.T) {
-	meta := localmeta.RegionMeta{ID: 12}
-	root := [32]byte{1}
-	digest := [32]byte{2}
-	canonicalKey, err := fsmeta.EncodePerasSegmentObjectKey(1, 1, root)
-	require.NoError(t, err)
-	routeKey, err := fsmeta.EncodePerasSegmentObjectKey(1, 2, root)
-	require.NoError(t, err)
+func TestValidateRequestKeysAcceptsPreparedMVCCInstallWatchKeysOutsideRegion(t *testing.T) {
+	meta := localmeta.RegionMeta{ID: 12, StartKey: []byte("b"), EndKey: []byte("m")}
 	req := &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
-		CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-		Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: &kvrpcpb.PerasInstallSegmentRequest{
-			RoutingKey:            routeKey,
-			SegmentRoot:           append([]byte(nil), root[:]...),
-			SegmentPayloadDigest:  append([]byte(nil), digest[:]...),
-			InstallVersion:        10,
-			SegmentEpochId:        1,
-			SegmentOperationCount: 1,
-			SegmentEntryCount:     1,
-			SegmentPayloadSize:    128,
-			CanonicalObjectKey:    canonicalKey,
-			ReadFirstKey:          []byte("k"),
-			ReadLastKey:           []byte("k"),
+		CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+		Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+			RoutingKey:    []byte("c"),
+			CommitVersion: 10,
+			WatchKeys:     [][]byte{[]byte("z")},
 		}},
 	}}}
 

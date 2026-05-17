@@ -43,7 +43,7 @@ const (
 	CmdType_CMD_MVCC_MAINTENANCE      CmdType = 8
 	CmdType_CMD_TXN_HEART_BEAT        CmdType = 9
 	CmdType_CMD_TRY_ATOMIC_MUTATE     CmdType = 10
-	CmdType_CMD_PERAS_INSTALL_SEGMENT CmdType = 11
+	CmdType_CMD_INSTALL_PREPARED_MVCC CmdType = 12
 )
 
 // Enum value maps for CmdType.
@@ -60,7 +60,7 @@ var (
 		8:  "CMD_MVCC_MAINTENANCE",
 		9:  "CMD_TXN_HEART_BEAT",
 		10: "CMD_TRY_ATOMIC_MUTATE",
-		11: "CMD_PERAS_INSTALL_SEGMENT",
+		12: "CMD_INSTALL_PREPARED_MVCC",
 	}
 	CmdType_value = map[string]int32{
 		"CMD_INVALID":               0,
@@ -74,7 +74,7 @@ var (
 		"CMD_MVCC_MAINTENANCE":      8,
 		"CMD_TXN_HEART_BEAT":        9,
 		"CMD_TRY_ATOMIC_MUTATE":     10,
-		"CMD_PERAS_INSTALL_SEGMENT": 11,
+		"CMD_INSTALL_PREPARED_MVCC": 12,
 	}
 )
 
@@ -458,7 +458,7 @@ type Request struct {
 	//	*Request_MvccMaintenance
 	//	*Request_TxnHeartBeat
 	//	*Request_TryAtomicMutate
-	//	*Request_PerasInstallSegment
+	//	*Request_InstallPreparedMvcc
 	Cmd           isRequest_Cmd `protobuf_oneof:"cmd"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -598,10 +598,10 @@ func (x *Request) GetTryAtomicMutate() *kv.TryAtomicMutateRequest {
 	return nil
 }
 
-func (x *Request) GetPerasInstallSegment() *kv.PerasInstallSegmentRequest {
+func (x *Request) GetInstallPreparedMvcc() *kv.InstallPreparedMVCCEntriesRequest {
 	if x != nil {
-		if x, ok := x.Cmd.(*Request_PerasInstallSegment); ok {
-			return x.PerasInstallSegment
+		if x, ok := x.Cmd.(*Request_InstallPreparedMvcc); ok {
+			return x.InstallPreparedMvcc
 		}
 	}
 	return nil
@@ -651,8 +651,8 @@ type Request_TryAtomicMutate struct {
 	TryAtomicMutate *kv.TryAtomicMutateRequest `protobuf:"bytes,11,opt,name=try_atomic_mutate,json=tryAtomicMutate,proto3,oneof"`
 }
 
-type Request_PerasInstallSegment struct {
-	PerasInstallSegment *kv.PerasInstallSegmentRequest `protobuf:"bytes,12,opt,name=peras_install_segment,json=perasInstallSegment,proto3,oneof"`
+type Request_InstallPreparedMvcc struct {
+	InstallPreparedMvcc *kv.InstallPreparedMVCCEntriesRequest `protobuf:"bytes,13,opt,name=install_prepared_mvcc,json=installPreparedMvcc,proto3,oneof"`
 }
 
 func (*Request_Get) isRequest_Cmd() {}
@@ -675,7 +675,7 @@ func (*Request_TxnHeartBeat) isRequest_Cmd() {}
 
 func (*Request_TryAtomicMutate) isRequest_Cmd() {}
 
-func (*Request_PerasInstallSegment) isRequest_Cmd() {}
+func (*Request_InstallPreparedMvcc) isRequest_Cmd() {}
 
 type Response struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -691,7 +691,7 @@ type Response struct {
 	//	*Response_MvccMaintenance
 	//	*Response_TxnHeartBeat
 	//	*Response_TryAtomicMutate
-	//	*Response_PerasInstallSegment
+	//	*Response_InstallPreparedMvcc
 	Cmd           isResponse_Cmd `protobuf_oneof:"cmd"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -824,10 +824,10 @@ func (x *Response) GetTryAtomicMutate() *kv.TryAtomicMutateResponse {
 	return nil
 }
 
-func (x *Response) GetPerasInstallSegment() *kv.PerasInstallSegmentResponse {
+func (x *Response) GetInstallPreparedMvcc() *kv.InstallPreparedMVCCEntriesResponse {
 	if x != nil {
-		if x, ok := x.Cmd.(*Response_PerasInstallSegment); ok {
-			return x.PerasInstallSegment
+		if x, ok := x.Cmd.(*Response_InstallPreparedMvcc); ok {
+			return x.InstallPreparedMvcc
 		}
 	}
 	return nil
@@ -877,8 +877,8 @@ type Response_TryAtomicMutate struct {
 	TryAtomicMutate *kv.TryAtomicMutateResponse `protobuf:"bytes,10,opt,name=try_atomic_mutate,json=tryAtomicMutate,proto3,oneof"`
 }
 
-type Response_PerasInstallSegment struct {
-	PerasInstallSegment *kv.PerasInstallSegmentResponse `protobuf:"bytes,11,opt,name=peras_install_segment,json=perasInstallSegment,proto3,oneof"`
+type Response_InstallPreparedMvcc struct {
+	InstallPreparedMvcc *kv.InstallPreparedMVCCEntriesResponse `protobuf:"bytes,12,opt,name=install_prepared_mvcc,json=installPreparedMvcc,proto3,oneof"`
 }
 
 func (*Response_Get) isResponse_Cmd() {}
@@ -901,7 +901,7 @@ func (*Response_TxnHeartBeat) isResponse_Cmd() {}
 
 func (*Response_TryAtomicMutate) isResponse_Cmd() {}
 
-func (*Response_PerasInstallSegment) isResponse_Cmd() {}
+func (*Response_InstallPreparedMvcc) isResponse_Cmd() {}
 
 type RaftCmdRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
@@ -1048,7 +1048,7 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x14max_stale_read_index\x18\b \x01(\x04R\x11maxStaleReadIndex\x12)\n" +
 	"\x11max_stale_read_ms\x18\t \x01(\x04R\x0emaxStaleReadMs\x12\x19\n" +
 	"\bstore_id\x18\n" +
-	" \x01(\x04R\astoreId\"\xb6\x06\n" +
+	" \x01(\x04R\astoreId\"\xbd\x06\n" +
 	"\aRequest\x120\n" +
 	"\bcmd_type\x18\x01 \x01(\x0e2\x15.nokv.raft.v1.CmdTypeR\acmdType\x12*\n" +
 	"\x03get\x18\x02 \x01(\v2\x16.nokv.kv.v1.GetRequestH\x00R\x03get\x12-\n" +
@@ -1061,9 +1061,9 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x10mvcc_maintenance\x18\t \x01(\v2\".nokv.kv.v1.MVCCMaintenanceRequestH\x00R\x0fmvccMaintenance\x12G\n" +
 	"\x0etxn_heart_beat\x18\n" +
 	" \x01(\v2\x1f.nokv.kv.v1.TxnHeartBeatRequestH\x00R\ftxnHeartBeat\x12P\n" +
-	"\x11try_atomic_mutate\x18\v \x01(\v2\".nokv.kv.v1.TryAtomicMutateRequestH\x00R\x0ftryAtomicMutate\x12\\\n" +
-	"\x15peras_install_segment\x18\f \x01(\v2&.nokv.kv.v1.PerasInstallSegmentRequestH\x00R\x13perasInstallSegmentB\x05\n" +
-	"\x03cmd\"\x90\x06\n" +
+	"\x11try_atomic_mutate\x18\v \x01(\v2\".nokv.kv.v1.TryAtomicMutateRequestH\x00R\x0ftryAtomicMutate\x12c\n" +
+	"\x15install_prepared_mvcc\x18\r \x01(\v2-.nokv.kv.v1.InstallPreparedMVCCEntriesRequestH\x00R\x13installPreparedMvccB\x05\n" +
+	"\x03cmd\"\x97\x06\n" +
 	"\bResponse\x12+\n" +
 	"\x03get\x18\x01 \x01(\v2\x17.nokv.kv.v1.GetResponseH\x00R\x03get\x12.\n" +
 	"\x04scan\x18\x02 \x01(\v2\x18.nokv.kv.v1.ScanResponseH\x00R\x04scan\x12:\n" +
@@ -1075,8 +1075,8 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x10mvcc_maintenance\x18\b \x01(\v2#.nokv.kv.v1.MVCCMaintenanceResponseH\x00R\x0fmvccMaintenance\x12H\n" +
 	"\x0etxn_heart_beat\x18\t \x01(\v2 .nokv.kv.v1.TxnHeartBeatResponseH\x00R\ftxnHeartBeat\x12Q\n" +
 	"\x11try_atomic_mutate\x18\n" +
-	" \x01(\v2#.nokv.kv.v1.TryAtomicMutateResponseH\x00R\x0ftryAtomicMutate\x12]\n" +
-	"\x15peras_install_segment\x18\v \x01(\v2'.nokv.kv.v1.PerasInstallSegmentResponseH\x00R\x13perasInstallSegmentB\x05\n" +
+	" \x01(\v2#.nokv.kv.v1.TryAtomicMutateResponseH\x00R\x0ftryAtomicMutate\x12d\n" +
+	"\x15install_prepared_mvcc\x18\f \x01(\v2..nokv.kv.v1.InstallPreparedMVCCEntriesResponseH\x00R\x13installPreparedMvccB\x05\n" +
 	"\x03cmd\"t\n" +
 	"\x0eRaftCmdRequest\x12/\n" +
 	"\x06header\x18\x01 \x01(\v2\x17.nokv.raft.v1.CmdHeaderR\x06header\x121\n" +
@@ -1099,7 +1099,7 @@ const file_raft_cmd_proto_rawDesc = "" +
 	"\x12CMD_TXN_HEART_BEAT\x10\t\x12\x19\n" +
 	"\x15CMD_TRY_ATOMIC_MUTATE\x10\n" +
 	"\x12\x1d\n" +
-	"\x19CMD_PERAS_INSTALL_SEGMENT\x10\vB/Z-github.com/feichai0017/NoKV/pb/raft;raftcmdpbb\x06proto3"
+	"\x19CMD_INSTALL_PREPARED_MVCC\x10\fB/Z-github.com/feichai0017/NoKV/pb/raft;raftcmdpbb\x06proto3"
 
 var (
 	file_raft_cmd_proto_rawDescOnce sync.Once
@@ -1116,43 +1116,43 @@ func file_raft_cmd_proto_rawDescGZIP() []byte {
 var file_raft_cmd_proto_enumTypes = make([]protoimpl.EnumInfo, 2)
 var file_raft_cmd_proto_msgTypes = make([]protoimpl.MessageInfo, 8)
 var file_raft_cmd_proto_goTypes = []any{
-	(CmdType)(0),                           // 0: nokv.raft.v1.CmdType
-	(AdminCommand_Type)(0),                 // 1: nokv.raft.v1.AdminCommand.Type
-	(*SplitCommand)(nil),                   // 2: nokv.raft.v1.SplitCommand
-	(*MergeCommand)(nil),                   // 3: nokv.raft.v1.MergeCommand
-	(*AdminCommand)(nil),                   // 4: nokv.raft.v1.AdminCommand
-	(*CmdHeader)(nil),                      // 5: nokv.raft.v1.CmdHeader
-	(*Request)(nil),                        // 6: nokv.raft.v1.Request
-	(*Response)(nil),                       // 7: nokv.raft.v1.Response
-	(*RaftCmdRequest)(nil),                 // 8: nokv.raft.v1.RaftCmdRequest
-	(*RaftCmdResponse)(nil),                // 9: nokv.raft.v1.RaftCmdResponse
-	(*meta.RegionDescriptor)(nil),          // 10: nokv.meta.v1.RegionDescriptor
-	(*meta.RegionEpoch)(nil),               // 11: nokv.meta.v1.RegionEpoch
-	(kv.ReadConsistency)(0),                // 12: nokv.kv.v1.ReadConsistency
-	(kv.ReadPreference)(0),                 // 13: nokv.kv.v1.ReadPreference
-	(*kv.GetRequest)(nil),                  // 14: nokv.kv.v1.GetRequest
-	(*kv.ScanRequest)(nil),                 // 15: nokv.kv.v1.ScanRequest
-	(*kv.PrewriteRequest)(nil),             // 16: nokv.kv.v1.PrewriteRequest
-	(*kv.CommitRequest)(nil),               // 17: nokv.kv.v1.CommitRequest
-	(*kv.BatchRollbackRequest)(nil),        // 18: nokv.kv.v1.BatchRollbackRequest
-	(*kv.ResolveLockRequest)(nil),          // 19: nokv.kv.v1.ResolveLockRequest
-	(*kv.CheckTxnStatusRequest)(nil),       // 20: nokv.kv.v1.CheckTxnStatusRequest
-	(*kv.MVCCMaintenanceRequest)(nil),      // 21: nokv.kv.v1.MVCCMaintenanceRequest
-	(*kv.TxnHeartBeatRequest)(nil),         // 22: nokv.kv.v1.TxnHeartBeatRequest
-	(*kv.TryAtomicMutateRequest)(nil),      // 23: nokv.kv.v1.TryAtomicMutateRequest
-	(*kv.PerasInstallSegmentRequest)(nil),  // 24: nokv.kv.v1.PerasInstallSegmentRequest
-	(*kv.GetResponse)(nil),                 // 25: nokv.kv.v1.GetResponse
-	(*kv.ScanResponse)(nil),                // 26: nokv.kv.v1.ScanResponse
-	(*kv.PrewriteResponse)(nil),            // 27: nokv.kv.v1.PrewriteResponse
-	(*kv.CommitResponse)(nil),              // 28: nokv.kv.v1.CommitResponse
-	(*kv.BatchRollbackResponse)(nil),       // 29: nokv.kv.v1.BatchRollbackResponse
-	(*kv.ResolveLockResponse)(nil),         // 30: nokv.kv.v1.ResolveLockResponse
-	(*kv.CheckTxnStatusResponse)(nil),      // 31: nokv.kv.v1.CheckTxnStatusResponse
-	(*kv.MVCCMaintenanceResponse)(nil),     // 32: nokv.kv.v1.MVCCMaintenanceResponse
-	(*kv.TxnHeartBeatResponse)(nil),        // 33: nokv.kv.v1.TxnHeartBeatResponse
-	(*kv.TryAtomicMutateResponse)(nil),     // 34: nokv.kv.v1.TryAtomicMutateResponse
-	(*kv.PerasInstallSegmentResponse)(nil), // 35: nokv.kv.v1.PerasInstallSegmentResponse
-	(*error1.RegionError)(nil),             // 36: nokv.error.v1.RegionError
+	(CmdType)(0),                                  // 0: nokv.raft.v1.CmdType
+	(AdminCommand_Type)(0),                        // 1: nokv.raft.v1.AdminCommand.Type
+	(*SplitCommand)(nil),                          // 2: nokv.raft.v1.SplitCommand
+	(*MergeCommand)(nil),                          // 3: nokv.raft.v1.MergeCommand
+	(*AdminCommand)(nil),                          // 4: nokv.raft.v1.AdminCommand
+	(*CmdHeader)(nil),                             // 5: nokv.raft.v1.CmdHeader
+	(*Request)(nil),                               // 6: nokv.raft.v1.Request
+	(*Response)(nil),                              // 7: nokv.raft.v1.Response
+	(*RaftCmdRequest)(nil),                        // 8: nokv.raft.v1.RaftCmdRequest
+	(*RaftCmdResponse)(nil),                       // 9: nokv.raft.v1.RaftCmdResponse
+	(*meta.RegionDescriptor)(nil),                 // 10: nokv.meta.v1.RegionDescriptor
+	(*meta.RegionEpoch)(nil),                      // 11: nokv.meta.v1.RegionEpoch
+	(kv.ReadConsistency)(0),                       // 12: nokv.kv.v1.ReadConsistency
+	(kv.ReadPreference)(0),                        // 13: nokv.kv.v1.ReadPreference
+	(*kv.GetRequest)(nil),                         // 14: nokv.kv.v1.GetRequest
+	(*kv.ScanRequest)(nil),                        // 15: nokv.kv.v1.ScanRequest
+	(*kv.PrewriteRequest)(nil),                    // 16: nokv.kv.v1.PrewriteRequest
+	(*kv.CommitRequest)(nil),                      // 17: nokv.kv.v1.CommitRequest
+	(*kv.BatchRollbackRequest)(nil),               // 18: nokv.kv.v1.BatchRollbackRequest
+	(*kv.ResolveLockRequest)(nil),                 // 19: nokv.kv.v1.ResolveLockRequest
+	(*kv.CheckTxnStatusRequest)(nil),              // 20: nokv.kv.v1.CheckTxnStatusRequest
+	(*kv.MVCCMaintenanceRequest)(nil),             // 21: nokv.kv.v1.MVCCMaintenanceRequest
+	(*kv.TxnHeartBeatRequest)(nil),                // 22: nokv.kv.v1.TxnHeartBeatRequest
+	(*kv.TryAtomicMutateRequest)(nil),             // 23: nokv.kv.v1.TryAtomicMutateRequest
+	(*kv.InstallPreparedMVCCEntriesRequest)(nil),  // 24: nokv.kv.v1.InstallPreparedMVCCEntriesRequest
+	(*kv.GetResponse)(nil),                        // 25: nokv.kv.v1.GetResponse
+	(*kv.ScanResponse)(nil),                       // 26: nokv.kv.v1.ScanResponse
+	(*kv.PrewriteResponse)(nil),                   // 27: nokv.kv.v1.PrewriteResponse
+	(*kv.CommitResponse)(nil),                     // 28: nokv.kv.v1.CommitResponse
+	(*kv.BatchRollbackResponse)(nil),              // 29: nokv.kv.v1.BatchRollbackResponse
+	(*kv.ResolveLockResponse)(nil),                // 30: nokv.kv.v1.ResolveLockResponse
+	(*kv.CheckTxnStatusResponse)(nil),             // 31: nokv.kv.v1.CheckTxnStatusResponse
+	(*kv.MVCCMaintenanceResponse)(nil),            // 32: nokv.kv.v1.MVCCMaintenanceResponse
+	(*kv.TxnHeartBeatResponse)(nil),               // 33: nokv.kv.v1.TxnHeartBeatResponse
+	(*kv.TryAtomicMutateResponse)(nil),            // 34: nokv.kv.v1.TryAtomicMutateResponse
+	(*kv.InstallPreparedMVCCEntriesResponse)(nil), // 35: nokv.kv.v1.InstallPreparedMVCCEntriesResponse
+	(*error1.RegionError)(nil),                    // 36: nokv.error.v1.RegionError
 }
 var file_raft_cmd_proto_depIdxs = []int32{
 	10, // 0: nokv.raft.v1.SplitCommand.child:type_name -> nokv.meta.v1.RegionDescriptor
@@ -1173,7 +1173,7 @@ var file_raft_cmd_proto_depIdxs = []int32{
 	21, // 15: nokv.raft.v1.Request.mvcc_maintenance:type_name -> nokv.kv.v1.MVCCMaintenanceRequest
 	22, // 16: nokv.raft.v1.Request.txn_heart_beat:type_name -> nokv.kv.v1.TxnHeartBeatRequest
 	23, // 17: nokv.raft.v1.Request.try_atomic_mutate:type_name -> nokv.kv.v1.TryAtomicMutateRequest
-	24, // 18: nokv.raft.v1.Request.peras_install_segment:type_name -> nokv.kv.v1.PerasInstallSegmentRequest
+	24, // 18: nokv.raft.v1.Request.install_prepared_mvcc:type_name -> nokv.kv.v1.InstallPreparedMVCCEntriesRequest
 	25, // 19: nokv.raft.v1.Response.get:type_name -> nokv.kv.v1.GetResponse
 	26, // 20: nokv.raft.v1.Response.scan:type_name -> nokv.kv.v1.ScanResponse
 	27, // 21: nokv.raft.v1.Response.prewrite:type_name -> nokv.kv.v1.PrewriteResponse
@@ -1184,7 +1184,7 @@ var file_raft_cmd_proto_depIdxs = []int32{
 	32, // 26: nokv.raft.v1.Response.mvcc_maintenance:type_name -> nokv.kv.v1.MVCCMaintenanceResponse
 	33, // 27: nokv.raft.v1.Response.txn_heart_beat:type_name -> nokv.kv.v1.TxnHeartBeatResponse
 	34, // 28: nokv.raft.v1.Response.try_atomic_mutate:type_name -> nokv.kv.v1.TryAtomicMutateResponse
-	35, // 29: nokv.raft.v1.Response.peras_install_segment:type_name -> nokv.kv.v1.PerasInstallSegmentResponse
+	35, // 29: nokv.raft.v1.Response.install_prepared_mvcc:type_name -> nokv.kv.v1.InstallPreparedMVCCEntriesResponse
 	5,  // 30: nokv.raft.v1.RaftCmdRequest.header:type_name -> nokv.raft.v1.CmdHeader
 	6,  // 31: nokv.raft.v1.RaftCmdRequest.requests:type_name -> nokv.raft.v1.Request
 	5,  // 32: nokv.raft.v1.RaftCmdResponse.header:type_name -> nokv.raft.v1.CmdHeader
@@ -1213,7 +1213,7 @@ func file_raft_cmd_proto_init() {
 		(*Request_MvccMaintenance)(nil),
 		(*Request_TxnHeartBeat)(nil),
 		(*Request_TryAtomicMutate)(nil),
-		(*Request_PerasInstallSegment)(nil),
+		(*Request_InstallPreparedMvcc)(nil),
 	}
 	file_raft_cmd_proto_msgTypes[5].OneofWrappers = []any{
 		(*Response_Get)(nil),
@@ -1226,7 +1226,7 @@ func file_raft_cmd_proto_init() {
 		(*Response_MvccMaintenance)(nil),
 		(*Response_TxnHeartBeat)(nil),
 		(*Response_TryAtomicMutate)(nil),
-		(*Response_PerasInstallSegment)(nil),
+		(*Response_InstallPreparedMvcc)(nil),
 	}
 	type x struct{}
 	out := protoimpl.TypeBuilder{

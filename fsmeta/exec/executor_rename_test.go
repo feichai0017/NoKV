@@ -6,21 +6,20 @@ package exec
 import (
 	"context"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 	"testing"
 )
 
-func TestExecutorCreatePerasVisibleCommitAcceptsCrossBucketCatalogInstall(t *testing.T) {
+func TestExecutorCreateVisibleCommitAcceptsCrossBucketCatalogInstall(t *testing.T) {
 	runner := newFakeRunner()
-	committer := &fakePerasCommitter{}
+	committer := &fakeVisibleCommitter{}
 	inode := testInodeForDifferentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -35,7 +34,7 @@ func TestExecutorCreatePerasVisibleCommitAcceptsCrossBucketCatalogInstall(t *tes
 	require.Empty(t, runner.mutations)
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "success_total", 1)
+	requireVisibleCommitStatUint(t, stats, "success_total", 1)
 }
 
 func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
@@ -76,14 +75,14 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: fsmeta.RootInode, frontier: 2}}, publisher.completes)
 }
 
-func TestExecutorRenamePerasVisibleCommitServesOverlay(t *testing.T) {
+func TestExecutorRenameVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -108,21 +107,21 @@ func TestExecutorRenamePerasVisibleCommitServesOverlay(t *testing.T) {
 	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "new"})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.DentryRecord{Parent: 7, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
-	require.Empty(t, runner.mutations, "same-parent rename should stay inside Peras overlay")
+	require.Empty(t, runner.mutations, "same-parent rename should stay inside visible overlay")
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 2)
-	requirePerasVisibleStatUint(t, stats, "success_total", 2)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 2)
+	requireVisibleCommitStatUint(t, stats, "success_total", 2)
 }
 
-func TestExecutorRenameDoesNotFallbackAfterPerasOverlayReadAdmissionMiss(t *testing.T) {
+func TestExecutorRenameDoesNotFallbackAfterVisibleOverlayReadAdmissionMiss(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -135,7 +134,7 @@ func TestExecutorRenameDoesNotFallbackAfterPerasOverlayReadAdmissionMiss(t *test
 	require.NoError(t, err)
 	require.Empty(t, runner.mutations)
 
-	committer.submitErr = fsperas.ErrAdmissionRejected
+	committer.submitErr = ErrVisibleAdmissionRejected
 	err = executor.Rename(context.Background(), fsmeta.RenameRequest{
 		Mount:      "vol",
 		FromParent: 7,
@@ -143,7 +142,7 @@ func TestExecutorRenameDoesNotFallbackAfterPerasOverlayReadAdmissionMiss(t *test
 		ToParent:   7,
 		ToName:     "eta",
 	})
-	require.ErrorIs(t, err, errPerasOverlayFallbackUnsafe)
+	require.ErrorIs(t, err, errVisibleOverlayFallbackUnsafe)
 	require.Empty(t, runner.mutations, "overlay-backed rename must not fall back to base mutation after admission changes")
 
 	_, err = executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: 7, Name: "theta"})
@@ -155,11 +154,11 @@ func TestExecutorRenameDoesNotFallbackAfterPerasOverlayReadAdmissionMiss(t *test
 func TestExecutorRenameBaseSourceUsesDurablePath(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "old", 22)
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -175,19 +174,19 @@ func TestExecutorRenameBaseSourceUsesDurablePath(t *testing.T) {
 	require.Equal(t, uint64(0), committer.Stats()["commit_total"])
 }
 
-func TestExecutorCrossParentSameBucketRenameUsesPerasVisibleCommit(t *testing.T) {
+func TestExecutorCrossParentSameBucketRenameUsesVisibleCommit(t *testing.T) {
 	runner := newFakeRunner()
 	fromParent := fsmeta.InodeID(7)
 	toParent := testInodeForParentBucket(t, fromParent, fromParent)
 	require.NotEqual(t, fromParent, toParent)
 	require.Equal(t, fsmeta.BucketForInodeID(fromParent), fsmeta.BucketForInodeID(toParent))
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
 		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -212,21 +211,21 @@ func TestExecutorCrossParentSameBucketRenameUsesPerasVisibleCommit(t *testing.T)
 	record, err := executor.Lookup(context.Background(), fsmeta.LookupRequest{Mount: "vol", Parent: toParent, Name: "new"})
 	require.NoError(t, err)
 	require.Equal(t, fsmeta.DentryRecord{Parent: toParent, Name: "new", Inode: 22, Type: fsmeta.InodeTypeFile}, record)
-	require.Empty(t, runner.mutations, "bucket-local cross-parent rename should stay inside Peras overlay")
+	require.Empty(t, runner.mutations, "bucket-local cross-parent rename should stay inside visible overlay")
 	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
 }
 
-func TestExecutorRenamePerasUsesEmptyDirectoryFactForDestination(t *testing.T) {
+func TestExecutorRenameVisibleUsesEmptyDirectoryFactForDestination(t *testing.T) {
 	runner := newFakeRunner()
 	fromParent := fsmeta.InodeID(7)
 	toParent := testInodeForParentBucket(t, fromParent, fromParent)
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{22}}),
 		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 	_, err = executor.Create(context.Background(), fsmeta.CreateRequest{
@@ -248,7 +247,7 @@ func TestExecutorRenamePerasUsesEmptyDirectoryFactForDestination(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Equal(t, 0, runner.getCalls, "rename should use Peras overlay source values and the destination directory fact without base probes")
+	require.Equal(t, 0, runner.getCalls, "rename should use visible overlay source values and the destination directory fact without base probes")
 	require.Empty(t, runner.mutations)
 }
 
@@ -260,12 +259,12 @@ func TestExecutorCrossBucketRenameUsesDurablePath(t *testing.T) {
 	require.NotEqual(t, fsmeta.BucketForInodeID(fromParent), fsmeta.BucketForInodeID(toParent))
 	seedDentry(t, runner, "vol", fromParent, "old", 22)
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -358,12 +357,12 @@ func BenchmarkExecutorRenameDefaultPath(b *testing.B) {
 	benchmarkExecutorRename(b, runner, executor)
 }
 
-func BenchmarkExecutorRenamePerasVisibleCommit(b *testing.B) {
+func BenchmarkExecutorRenameVisibleCommit(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(
 		runner,
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(noopPerasCommitter{}),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {
 		b.Fatal(err)

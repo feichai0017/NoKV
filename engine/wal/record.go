@@ -28,10 +28,10 @@ const (
 	RecordTypeRaftSnapshot
 	// RecordTypeEntryBatch encodes a batch of LSM mutations in one WAL record.
 	RecordTypeEntryBatch
-	// RecordTypePerasWitness encodes fsmeta Peras witness evidence.
-	RecordTypePerasWitness
-	// RecordTypePerasVisible encodes fsmeta Peras holder-local visible acks.
-	RecordTypePerasVisible
+	// RecordTypeWitnessEvidence encodes subsystem witness evidence.
+	RecordTypeWitnessEvidence
+	// RecordTypeVisibleCommit encodes holder-local visible acknowledgements.
+	RecordTypeVisibleCommit
 )
 
 // Record describes a typed WAL payload.

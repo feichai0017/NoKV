@@ -11,9 +11,8 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/index"
 	"github.com/feichai0017/NoKV/engine/lsm"
+	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
-	fsperas "github.com/feichai0017/NoKV/fsmeta/exec/peras"
-	runtimeperas "github.com/feichai0017/NoKV/fsmeta/runtime/peras"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
@@ -148,388 +147,134 @@ func TestApplyMVCCMaintenanceAppliesInternalEntries(t *testing.T) {
 	require.NotZero(t, gotWrite.Meta&entrykv.BitDelete)
 }
 
-func TestApplyPerasInstallSegmentInstallsSegmentCatalog(t *testing.T) {
+func TestApplyInstallPreparedMVCCEntriesAppliesInternalEntries(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
-	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 7)
-	require.NoError(t, err)
-	plan := fsperas.ReplayPlan{
-		EpochID: 1,
-		Operations: []fsperas.ReplayOperation{
-			{
-				OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
-				Kind: fsmeta.OperationCreate,
-				Mutations: []fsperas.ReplayMutation{
-					{Key: dentryKey, Value: []byte("old")},
-				},
-			},
-			{
-				OpID: fsperas.OperationID{ClientID: "client", Seq: 2},
-				Kind: fsmeta.OperationUpdateInode,
-				Mutations: []fsperas.ReplayMutation{
-					{Key: dentryKey, Value: []byte("new")},
-					{Key: inodeKey, Value: []byte("attrs")},
-				},
-			},
-		},
-	}
-	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(plan)
-	require.NoError(t, err)
-	payload, err := fsperas.EncodePerasSegment(segment)
-	require.NoError(t, err)
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-	require.NoError(t, err)
-	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
-	require.NoError(t, err)
-
+	version := uint64(33)
+	writeValue := mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: version})
 	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
-				RoutingKey:           objectKey,
-				SegmentRoot:          segment.Root[:],
-				SegmentPayloadDigest: digest[:],
-				SegmentPayload:       payload,
-				InstallVersion:       99,
-			}, segment, payload)},
+			CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+			Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+				RoutingKey:    []byte("prepared-value"),
+				CommitVersion: version,
+				Entries: []*kvrpcpb.PreparedMVCCEntry{
+					{
+						ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+						Key:          []byte("prepared-value"),
+						Version:      version,
+						Value:        []byte("value"),
+						HasValue:     true,
+					},
+					{
+						ColumnFamily: kvrpcpb.PreparedMVCCEntry_WRITE,
+						Key:          []byte("prepared-value"),
+						Version:      version,
+						Value:        writeValue,
+						HasValue:     true,
+					},
+				},
+			}},
 		}},
 	})
 	require.NoError(t, err)
 	require.Len(t, resp.GetResponses(), 1)
-	installResp := resp.GetResponses()[0].GetPerasInstallSegment()
+	installResp := resp.GetResponses()[0].GetInstallPreparedMvcc()
 	require.Nil(t, installResp.GetError())
-	require.Equal(t, uint64(2), installResp.GetOperationCount())
-	require.Equal(t, uint64(2), installResp.GetEntryCount())
 	require.Equal(t, uint64(2), installResp.GetAppliedEntries())
+	require.Equal(t, version, installResp.GetCommitVersion())
 
-	records, err := LoadPerasSegmentCatalogs(db)
+	gotDefault, err := db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-value"), version)
 	require.NoError(t, err)
-	require.Len(t, records, 1)
-	require.Equal(t, segment.Root, records[0].Root)
-	require.Equal(t, digest, records[0].SegmentPayloadDigest)
-	require.Equal(t, uint64(len(payload)), records[0].SegmentPayloadSize)
-	installed, err := fsperas.VerifyPerasSegmentPayload(records[0].SegmentPayload, segment.Root, digest)
+	defer gotDefault.DecrRef()
+	require.Equal(t, []byte("value"), gotDefault.Value)
+
+	gotWrite, err := db.GetInternalEntry(entrykv.CFWrite, []byte("prepared-value"), version)
 	require.NoError(t, err)
-	value, deleted, ok := installed.Get(dentryKey)
-	require.True(t, ok)
-	require.False(t, deleted)
-	require.Equal(t, []byte("new"), value)
-	value, deleted, ok = installed.Get(inodeKey)
-	require.True(t, ok)
-	require.False(t, deleted)
-	require.Equal(t, []byte("attrs"), value)
+	defer gotWrite.DecrRef()
+	require.Equal(t, writeValue, gotWrite.Value)
 }
 
-func TestApplyPerasInstallSegmentInstallsGroupedCatalogRoutes(t *testing.T) {
+func TestApplyInstallPreparedMVCCEntriesRejectsMalformedBatch(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
-
-	segment := fsmetaMultiBucketSegmentForTest(t)
-	payload, err := fsperas.EncodePerasSegment(segment)
-	require.NoError(t, err)
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-	require.NoError(t, err)
-	objectKeys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(objectKeys), 2)
 
 	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
-				RoutingKey:           objectKeys[0],
-				RoutingKeys:          objectKeys,
-				SegmentRoot:          segment.Root[:],
-				SegmentPayloadDigest: digest[:],
-				SegmentPayload:       payload,
-				InstallVersion:       99,
-			}, segment, payload)},
+			CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+			Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+				RoutingKey:    []byte("prepared-a"),
+				CommitVersion: 44,
+				Entries: []*kvrpcpb.PreparedMVCCEntry{
+					{
+						ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+						Key:          []byte("prepared-a"),
+						Version:      44,
+						Value:        []byte("value"),
+						HasValue:     true,
+					},
+					{
+						ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+						Key:          []byte("prepared-b"),
+						Version:      45,
+						Value:        []byte("must-not-apply"),
+						HasValue:     true,
+					},
+				},
+			}},
 		}},
 	})
 	require.NoError(t, err)
-	installResp := resp.GetResponses()[0].GetPerasInstallSegment()
-	require.Nil(t, installResp.GetError())
-	require.Equal(t, uint64(len(objectKeys)+1), installResp.GetAppliedEntries())
-
-	canonicalObjectKey, err := fsperas.PerasSegmentObjectKey(segment)
-	require.NoError(t, err)
-	for _, objectKey := range objectKeys {
-		installed, err := LoadPerasSegmentCatalogInstallForObjectKey(db, segment, objectKey)
-		require.NoError(t, err)
-		require.True(t, installed)
-	}
-	records, err := LoadPerasSegmentCatalogs(db)
-	require.NoError(t, err)
-	require.Len(t, records, 1)
-	require.Equal(t, canonicalObjectKey, objectKeys[0])
+	require.Len(t, resp.GetResponses(), 1)
+	keyErr := resp.GetResponses()[0].GetInstallPreparedMvcc().GetError()
+	require.NotNil(t, keyErr)
+	require.Contains(t, keyErr.GetAbort(), "version")
+	_, err = db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-a"), 44)
+	require.Error(t, err)
+	_, err = db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-b"), 45)
+	require.Error(t, err)
 }
 
-func TestApplyBatchHandlesPerasInstallSegmentRequests(t *testing.T) {
+func TestApplyBatchHandlesInstallPreparedMVCCEntriesRequests(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	db, err := local.Open(opt)
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = db.Close() })
 
-	segment := fsmetaSegmentForTest(t)
-	payload, err := fsperas.EncodePerasSegment(segment)
-	require.NoError(t, err)
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-	require.NoError(t, err)
-	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
-	require.NoError(t, err)
-
-	request := func(version uint64) *raftcmdpb.RaftCmdRequest {
-		return &raftcmdpb.RaftCmdRequest{Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
-				RoutingKey:           objectKey,
-				SegmentRoot:          segment.Root[:],
-				SegmentPayloadDigest: digest[:],
-				SegmentPayload:       payload,
-				InstallVersion:       version,
-			}, segment, payload)},
-		}}}
+	reqs := []*raftcmdpb.RaftCmdRequest{
+		installPreparedMVCCRequestForApplyTest(51, []byte("prepared-batch-a"), []byte("va")),
+		installPreparedMVCCRequestForApplyTest(52, []byte("prepared-batch-b"), []byte("vb")),
 	}
-
-	store := &countingAtomicApplyStore{base: db}
-	resps, err := ApplyBatch(store, nil, []*raftcmdpb.RaftCmdRequest{request(101), request(102)})
+	resps, err := ApplyBatch(db, nil, reqs)
 	require.NoError(t, err)
 	require.Len(t, resps, 2)
-	for _, resp := range resps {
-		install := resp.GetResponses()[0].GetPerasInstallSegment()
-		require.NotNil(t, install)
-		require.Nil(t, install.GetError())
-		require.Equal(t, segment.Root[:], install.GetSegmentRoot())
-	}
-	require.Equal(t, 1, store.applyCalls)
-	require.Len(t, store.appliedEntryCounts, 1)
-	records, err := LoadPerasSegmentCatalogs(db)
-	require.NoError(t, err)
-	require.Len(t, records, 1)
-}
-
-func TestApplyPerasInstallSegmentCanMaterializeMVCC(t *testing.T) {
-	opt := local.NewDefaultOptions()
-	opt.WorkDir = t.TempDir()
-	db, err := local.Open(opt)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
-	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 7)
-	require.NoError(t, err)
-	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
-		EpochID: 1,
-		Operations: []fsperas.ReplayOperation{{
-			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
-			Kind: fsmeta.OperationCreate,
-			Mutations: []fsperas.ReplayMutation{
-				{Key: dentryKey, Value: []byte("inode=7")},
-				{Key: inodeKey, Value: []byte("attrs")},
-			},
-		}},
-	})
-	require.NoError(t, err)
-	payload, err := fsperas.EncodePerasSegment(segment)
-	require.NoError(t, err)
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-	require.NoError(t, err)
-
-	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
-		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
-				RoutingKey:           dentryKey,
-				SegmentRoot:          segment.Root[:],
-				SegmentPayloadDigest: digest[:],
-				SegmentPayload:       payload,
-				InstallVersion:       99,
-				MaterializeMvcc:      true,
-			}, segment, payload)},
-		}},
-	})
-	require.NoError(t, err)
-	require.Len(t, resp.GetResponses(), 1)
-	installResp := resp.GetResponses()[0].GetPerasInstallSegment()
-	require.Nil(t, installResp.GetError())
-	require.Equal(t, uint64(4), installResp.GetAppliedEntries())
-
-	reader := percolator.NewReader(db)
-	value, _, err := reader.GetValue(dentryKey, 100)
-	require.NoError(t, err)
-	require.Equal(t, []byte("inode=7"), value)
-	value, _, err = reader.GetValue(inodeKey, 100)
-	require.NoError(t, err)
-	require.Equal(t, []byte("attrs"), value)
-
-	records, err := LoadPerasSegmentCatalogs(db)
-	require.NoError(t, err)
-	require.Len(t, records, 1)
-	require.Equal(t, segment.Root, records[0].Root)
-}
-
-func TestApplyPerasInstallSegmentIsIdempotentAfterCatalogInstall(t *testing.T) {
-	opt := local.NewDefaultOptions()
-	opt.WorkDir = t.TempDir()
-	db, err := local.Open(opt)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
-	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 7)
-	require.NoError(t, err)
-	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
-		EpochID: 1,
-		Operations: []fsperas.ReplayOperation{{
-			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
-			Kind: fsmeta.OperationCreate,
-			Mutations: []fsperas.ReplayMutation{
-				{Key: dentryKey, Value: []byte("inode=7")},
-				{Key: inodeKey, Value: []byte("attrs")},
-			},
-		}},
-	})
-	require.NoError(t, err)
-	payload, err := fsperas.EncodePerasSegment(segment)
-	require.NoError(t, err)
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-	require.NoError(t, err)
-	objectKey, err := fsperas.PerasSegmentObjectKey(segment)
-	require.NoError(t, err)
-
-	install := func(version uint64) *kvrpcpb.PerasInstallSegmentResponse {
-		t.Helper()
-		resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
-			Requests: []*raftcmdpb.Request{{
-				CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-				Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
-					RoutingKey:           objectKey,
-					SegmentRoot:          segment.Root[:],
-					SegmentPayloadDigest: digest[:],
-					SegmentPayload:       payload,
-					InstallVersion:       version,
-				}, segment, payload)},
-			}},
-		})
-		require.NoError(t, err)
-		require.Len(t, resp.GetResponses(), 1)
-		out := resp.GetResponses()[0].GetPerasInstallSegment()
-		require.NotNil(t, out)
-		require.Nil(t, out.GetError())
-		require.Equal(t, segment.Stats().OperationCount, out.GetOperationCount())
-		require.Equal(t, segment.Stats().EntryCount, out.GetEntryCount())
-		require.NotZero(t, out.GetAppliedEntries())
-		return out
+	for idx, resp := range resps {
+		installResp := resp.GetResponses()[0].GetInstallPreparedMvcc()
+		require.Nil(t, installResp.GetError())
+		require.Equal(t, uint64(1), installResp.GetAppliedEntries())
+		require.Equal(t, uint64(51+idx), installResp.GetCommitVersion())
 	}
 
-	install(99)
-	install(150)
+	gotA, err := db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-batch-a"), 51)
+	require.NoError(t, err)
+	defer gotA.DecrRef()
+	require.Equal(t, []byte("va"), gotA.Value)
 
-	records, err := LoadPerasSegmentCatalogs(db)
+	gotB, err := db.GetInternalEntry(entrykv.CFDefault, []byte("prepared-batch-b"), 52)
 	require.NoError(t, err)
-	require.Len(t, records, 1)
-	require.Equal(t, segment.Root, records[0].Root)
-	require.Equal(t, uint64(99), records[0].InstallVersion)
-	require.Equal(t, digest, records[0].SegmentPayloadDigest)
-	installed, err := fsperas.VerifyPerasSegmentPayload(records[0].SegmentPayload, segment.Root, digest)
-	require.NoError(t, err)
-	value, deleted, ok := installed.Get(dentryKey)
-	require.True(t, ok)
-	require.False(t, deleted)
-	require.Equal(t, []byte("inode=7"), value)
-	value, deleted, ok = installed.Get(inodeKey)
-	require.True(t, ok)
-	require.False(t, deleted)
-	require.Equal(t, []byte("attrs"), value)
+	defer gotB.DecrRef()
+	require.Equal(t, []byte("vb"), gotB.Value)
 }
 
-func TestApplyPerasInstallSegmentInstallsPayloadlessCatalogIndexRoute(t *testing.T) {
-	opt := local.NewDefaultOptions()
-	opt.WorkDir = t.TempDir()
-	db, err := local.Open(opt)
-	require.NoError(t, err)
-	t.Cleanup(func() { _ = db.Close() })
-
-	segment := fsmetaMultiBucketSegmentForTest(t)
-	payload, err := fsperas.EncodePerasSegment(segment)
-	require.NoError(t, err)
-	digest, err := fsperas.PerasSegmentPayloadDigest(payload)
-	require.NoError(t, err)
-	objectKeys, err := fsperas.PerasSegmentCatalogObjectKeys(segment)
-	require.NoError(t, err)
-	require.GreaterOrEqual(t, len(objectKeys), 2)
-	canonicalObjectKey, err := fsperas.PerasSegmentObjectKey(segment)
-	require.NoError(t, err)
-	require.Equal(t, objectKeys[0], canonicalObjectKey)
-	routeKey := objectKeys[1]
-	stats := segment.Stats()
-
-	resp, err := Apply(db, nil, &raftcmdpb.RaftCmdRequest{
-		Requests: []*raftcmdpb.Request{{
-			CmdType: raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT,
-			Cmd: &raftcmdpb.Request_PerasInstallSegment{PerasInstallSegment: testApplyPerasInstallRequestWithHeader(&kvrpcpb.PerasInstallSegmentRequest{
-				RoutingKey:            routeKey,
-				SegmentRoot:           segment.Root[:],
-				SegmentPayloadDigest:  digest[:],
-				InstallVersion:        99,
-				SegmentEpochId:        segment.EpochID,
-				SegmentOperationCount: stats.OperationCount,
-				SegmentEntryCount:     stats.EntryCount,
-				SegmentPayloadSize:    uint64(len(payload)),
-				CanonicalObjectKey:    canonicalObjectKey,
-			}, segment, payload)},
-		}},
-	})
-	require.NoError(t, err)
-	require.Len(t, resp.GetResponses(), 1)
-	out := resp.GetResponses()[0].GetPerasInstallSegment()
-	require.NotNil(t, out)
-	require.Nil(t, out.GetError())
-	require.Equal(t, stats.OperationCount, out.GetOperationCount())
-	require.Equal(t, stats.EntryCount, out.GetEntryCount())
-	require.Equal(t, uint64(1), out.GetAppliedEntries())
-
-	installed, err := LoadPerasSegmentCatalogIndexInstall(db, segment.Root, routeKey, canonicalObjectKey)
-	require.NoError(t, err)
-	require.True(t, installed)
-	records, err := LoadPerasSegmentCatalogs(db)
-	require.NoError(t, err)
-	require.Empty(t, records)
-}
-
-func testApplyPerasInstallRequestWithHeader(req *kvrpcpb.PerasInstallSegmentRequest, segment fsperas.PerasSegment, payload []byte) *kvrpcpb.PerasInstallSegmentRequest {
-	stats := segment.Stats()
-	header := segment.ReadHeaderView()
-	req.SegmentEpochId = segment.EpochID
-	req.SegmentOperationCount = stats.OperationCount
-	req.SegmentEntryCount = stats.EntryCount
-	req.SegmentPayloadSize = uint64(len(payload))
-	req.ReadFirstKey = header.FirstKey
-	req.ReadLastKey = header.LastKey
-	req.ReadDentryCount = header.DentryCount
-	req.ReadInodeCount = header.InodeCount
-	req.ReadSessionCount = header.SessionCount
-	req.ReadTombstoneCount = header.TombstoneCount
-	req.ReadDirectoryCount = header.DirectoryCount
-	return req
-}
-
-func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
+func TestNewApplierRejectsFencedVisibleAuthorityWrites(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	db, err := local.Open(opt)
@@ -540,7 +285,7 @@ func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
 	key, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
 	require.NoError(t, err)
 
-	applier := NewApplier(db, nil, WithPerasAuthorityFence(perasFenceTableForApplyTest(t, mount)))
+	applier := NewApplier(db, nil, WithWriteFence(perasFenceForApplyTest{perasFenceTableForApplyTest(t, mount)}))
 	resp, err := applier(&raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
@@ -551,14 +296,14 @@ func TestNewApplierRejectsFencedPerasAuthorityWrites(t *testing.T) {
 	require.Len(t, resp.GetResponses(), 1)
 	atomicResp := resp.GetResponses()[0].GetTryAtomicMutate()
 	require.NotNil(t, atomicResp)
-	require.Contains(t, atomicResp.GetError().GetRetryable(), "peras authority fence")
+	require.Contains(t, atomicResp.GetError().GetRetryable(), "write fence")
 
 	reader := percolator.NewReader(db)
 	_, _, err = reader.GetValue(key, 12)
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
-func TestNewApplierRejectsFsmetaWritesWhenPerasAuthorityViewIsStale(t *testing.T) {
+func TestNewApplierRejectsFsmetaWritesWhenVisibleAuthorityViewIsStale(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	db, err := local.Open(opt)
@@ -569,7 +314,7 @@ func TestNewApplierRejectsFsmetaWritesWhenPerasAuthorityViewIsStale(t *testing.T
 	key, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
 	require.NoError(t, err)
 
-	applier := NewApplier(db, nil, WithPerasAuthorityFence(runtimeperas.NewActiveAuthorities()))
+	applier := NewApplier(db, nil, WithWriteFence(perasFenceForApplyTest{runtimeperas.NewActiveAuthorities()}))
 	resp, err := applier(&raftcmdpb.RaftCmdRequest{
 		Requests: []*raftcmdpb.Request{{
 			CmdType: raftcmdpb.CmdType_CMD_TRY_ATOMIC_MUTATE,
@@ -587,7 +332,7 @@ func TestNewApplierRejectsFsmetaWritesWhenPerasAuthorityViewIsStale(t *testing.T
 	require.ErrorIs(t, err, utils.ErrKeyNotFound)
 }
 
-func TestNewBatchApplierSplitsAroundFencedPerasAuthorityWrite(t *testing.T) {
+func TestNewBatchApplierSplitsAroundFencedVisibleAuthorityWrite(t *testing.T) {
 	opt := local.NewDefaultOptions()
 	opt.WorkDir = t.TempDir()
 	opt.LSMShardCount = 1
@@ -599,7 +344,7 @@ func TestNewBatchApplierSplitsAroundFencedPerasAuthorityWrite(t *testing.T) {
 	fencedKey, err := fsmeta.EncodeDentryKey(mount, 42, "artifact")
 	require.NoError(t, err)
 
-	applier := NewBatchApplier(db, nil, WithPerasAuthorityFence(perasFenceTableForApplyTest(t, mount)))
+	applier := NewBatchApplier(db, nil, WithWriteFence(perasFenceForApplyTest{perasFenceTableForApplyTest(t, mount)}))
 	resps, err := applier([]*raftcmdpb.RaftCmdRequest{
 		{
 			Requests: []*raftcmdpb.Request{{
@@ -623,7 +368,7 @@ func TestNewBatchApplierSplitsAroundFencedPerasAuthorityWrite(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, resps, 3)
 	require.Nil(t, resps[0].GetResponses()[0].GetTryAtomicMutate().GetError())
-	require.Contains(t, resps[1].GetResponses()[0].GetTryAtomicMutate().GetError().GetRetryable(), "peras authority fence")
+	require.Contains(t, resps[1].GetResponses()[0].GetTryAtomicMutate().GetError().GetRetryable(), "write fence")
 	require.Nil(t, resps[2].GetResponses()[0].GetTryAtomicMutate().GetError())
 
 	reader := percolator.NewReader(db)
@@ -848,6 +593,25 @@ func atomicPutForApplyTest(startVersion, commitVersion uint64, key, value []byte
 	}
 }
 
+func installPreparedMVCCRequestForApplyTest(version uint64, key, value []byte) *raftcmdpb.RaftCmdRequest {
+	return &raftcmdpb.RaftCmdRequest{
+		Requests: []*raftcmdpb.Request{{
+			CmdType: raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC,
+			Cmd: &raftcmdpb.Request_InstallPreparedMvcc{InstallPreparedMvcc: &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+				RoutingKey:    entrykv.SafeCopy(nil, key),
+				CommitVersion: version,
+				Entries: []*kvrpcpb.PreparedMVCCEntry{{
+					ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+					Key:          entrykv.SafeCopy(nil, key),
+					Version:      version,
+					Value:        entrykv.SafeCopy(nil, value),
+					HasValue:     true,
+				}},
+			}},
+		}},
+	}
+}
+
 func prewriteForApplyTest(startVersion uint64, key, value []byte) *kvrpcpb.PrewriteRequest {
 	return &kvrpcpb.PrewriteRequest{
 		Mutations: []*kvrpcpb.Mutation{
@@ -907,14 +671,26 @@ func keysWithDifferentDefaultShardsForApplyTest(t *testing.T, shardCount int, ve
 func perasFenceTableForApplyTest(t *testing.T, mount fsmeta.MountIdentity) *runtimeperas.ActiveAuthorities {
 	t.Helper()
 	table := runtimeperas.NewActiveAuthorities()
-	require.NoError(t, table.Replace([]rootproto.PerasAuthorityGrant{{
+	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{{
 		GrantID:         "grant-apply-test",
 		EpochID:         1,
 		HolderID:        "holder-a",
-		Scope:           rootproto.PerasAuthorityScope{MountID: string(mount.MountID), MountKeyID: uint64(mount.MountKeyID)},
+		Scope:           rootproto.VisibleAuthorityScope{MountID: string(mount.MountID), MountKeyID: uint64(mount.MountKeyID)},
 		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 	}}))
 	return table
+}
+
+type perasFenceForApplyTest struct {
+	authorities *runtimeperas.ActiveAuthorities
+}
+
+func (f perasFenceForApplyTest) FenceKey(key []byte, now time.Time) (WriteFenceDecision, error) {
+	grant, ok, err := f.authorities.FencesKey(key, now)
+	if err != nil || !ok {
+		return WriteFenceDecision{}, err
+	}
+	return WriteFenceDecision{Fenced: true, Reason: grant.GrantID}, nil
 }
 
 func TestApplyMVCCMaintenanceRejectsMalformedBatch(t *testing.T) {

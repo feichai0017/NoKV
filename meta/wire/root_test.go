@@ -71,22 +71,22 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		SuccessorGrantID:   "grant-1",
 		InheritedAt:        rootproto.Cursor{Term: 2, Index: 10},
 	}
-	perasGrant := testWirePerasAuthorityGrant()
-	perasSeal := testWirePerasAuthoritySeal(perasGrant)
+	visibleGrant := testWireVisibleAuthorityGrant()
+	visibleSeal := testWireVisibleAuthoritySeal(visibleGrant)
 	grant.PredecessorRetirements = []rootproto.GrantRetirement{retirement}
 	state := rootstate.State{
-		ClusterEpoch:        7,
-		MembershipEpoch:     3,
-		LastCommitted:       rootproto.Cursor{Term: 2, Index: 9},
-		IDFence:             100,
-		TSOFence:            200,
-		ActiveGrants:        []rootproto.AuthorityGrant{grant},
-		RetiredGrants:       []rootproto.GrantRetirement{retirement},
-		GrantInheritances:   []rootproto.GrantInheritance{inheritance},
-		RetiredEraFloors:    []rootproto.AuthorityRetiredEraFloor{{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, RetiredEraFloor: 4}},
-		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{perasGrant},
-		PerasAuthorityEpoch: perasGrant.EpochID,
-		PerasAuthoritySeals: []rootproto.PerasAuthoritySeal{perasSeal},
+		ClusterEpoch:          7,
+		MembershipEpoch:       3,
+		LastCommitted:         rootproto.Cursor{Term: 2, Index: 9},
+		IDFence:               100,
+		TSOFence:              200,
+		ActiveGrants:          []rootproto.AuthorityGrant{grant},
+		RetiredGrants:         []rootproto.GrantRetirement{retirement},
+		GrantInheritances:     []rootproto.GrantInheritance{inheritance},
+		RetiredEraFloors:      []rootproto.AuthorityRetiredEraFloor{{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, RetiredEraFloor: 4}},
+		ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{visibleGrant},
+		VisibleAuthorityEpoch: visibleGrant.EpochID,
+		VisibleAuthoritySeals: []rootproto.VisibleAuthoritySeal{visibleSeal},
 	}
 
 	require.Equal(t, state.LastCommitted, RootCursorFromProto(RootCursorToProto(state.LastCommitted)))
@@ -100,10 +100,10 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, retirement, RootGrantRetirementFromProto(RootGrantRetirementToProto(retirement)))
 	require.Nil(t, RootGrantInheritanceToProto(rootproto.GrantInheritance{}))
 	require.Equal(t, inheritance, RootGrantInheritanceFromProto(RootGrantInheritanceToProto(inheritance)))
-	require.Nil(t, RootPerasAuthorityGrantToProto(rootproto.PerasAuthorityGrant{}))
-	require.Equal(t, perasGrant, RootPerasAuthorityGrantFromProto(RootPerasAuthorityGrantToProto(perasGrant)))
-	require.Nil(t, RootPerasAuthoritySealToProto(rootproto.PerasAuthoritySeal{}))
-	require.Equal(t, perasSeal, RootPerasAuthoritySealFromProto(RootPerasAuthoritySealToProto(perasSeal)))
+	require.Nil(t, RootVisibleAuthorityGrantToProto(rootproto.VisibleAuthorityGrant{}))
+	require.Equal(t, visibleGrant, RootVisibleAuthorityGrantFromProto(RootVisibleAuthorityGrantToProto(visibleGrant)))
+	require.Nil(t, RootVisibleAuthoritySealToProto(rootproto.VisibleAuthoritySeal{}))
+	require.Equal(t, visibleSeal, RootVisibleAuthoritySealFromProto(RootVisibleAuthoritySealToProto(visibleSeal)))
 
 	protocolState := rootstate.EunomiaState{
 		ActiveGrants:      state.ActiveGrants,
@@ -126,23 +126,23 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, grantCmd, RootGrantCommandFromProto(RootGrantCommandToProto(grantCmd)))
 	require.Equal(t, rootproto.GrantCommand{}, RootGrantCommandFromProto(nil))
 
-	perasCmd := rootproto.PerasAuthorityCommand{
-		Kind:                 rootproto.PerasAuthorityActAcquire,
-		HolderID:             perasGrant.HolderID,
-		GrantID:              perasGrant.GrantID,
-		Scope:                perasGrant.Scope,
-		ExpiresUnixNano:      perasGrant.ExpiresUnixNano,
+	visibleAuthorityCmd := rootproto.VisibleAuthorityCommand{
+		Kind:                 rootproto.VisibleAuthorityActAcquire,
+		HolderID:             visibleGrant.HolderID,
+		GrantID:              visibleGrant.GrantID,
+		Scope:                visibleGrant.Scope,
+		ExpiresUnixNano:      visibleGrant.ExpiresUnixNano,
 		NowUnixNano:          321,
 		PredecessorDigest:    [32]byte{1, 2, 3},
 		QuotaCreditBytes:     4096,
 		QuotaCreditInodes:    128,
-		SegmentRoot:          perasSeal.SegmentRoot,
-		SegmentPayloadDigest: perasSeal.SegmentPayloadDigest,
-		OperationCount:       perasSeal.OperationCount,
-		EntryCount:           perasSeal.EntryCount,
+		SegmentRoot:          visibleSeal.SegmentRoot,
+		SegmentPayloadDigest: visibleSeal.SegmentPayloadDigest,
+		OperationCount:       visibleSeal.OperationCount,
+		EntryCount:           visibleSeal.EntryCount,
 	}
-	require.Equal(t, perasCmd, RootPerasAuthorityCommandFromProto(RootPerasAuthorityCommandToProto(perasCmd)))
-	require.Equal(t, rootproto.PerasAuthorityCommand{}, RootPerasAuthorityCommandFromProto(nil))
+	require.Equal(t, visibleAuthorityCmd, RootVisibleAuthorityCommandFromProto(RootVisibleAuthorityCommandToProto(visibleAuthorityCmd)))
+	require.Equal(t, rootproto.VisibleAuthorityCommand{}, RootVisibleAuthorityCommandFromProto(nil))
 
 	cert := rootproto.GrantCertificate{
 		Grant:       grant,
@@ -190,12 +190,12 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 		},
 		SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
 			"vol/42/99": {
-				SnapshotID:       "vol/42/99",
-				Mount:            "vol",
-				RootInode:        42,
-				ReadVersion:      99,
-				PublishedAt:      rootproto.Cursor{Term: 2, Index: 9},
-				PerasSegmentRefs: []rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(8, 0x70)},
+				SnapshotID:      "vol/42/99",
+				Mount:           "vol",
+				RootInode:       42,
+				ReadVersion:     99,
+				PublishedAt:     rootproto.Cursor{Term: 2, Index: 9},
+				RuntimeEvidence: []rootproto.SnapshotEvidenceRef{testWireSnapshotEvidenceRef(8, 0x70)},
 			},
 		},
 		Mounts: map[string]rootstate.MountRecord{
@@ -300,21 +300,21 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 	require.Equal(t, rootstate.AllocatorKindUnknown, kind)
 }
 
-func TestRootPerasSnapshotSegmentRefsFromProtoSkipsInvalidRefs(t *testing.T) {
-	valid := testWirePerasSnapshotSegmentRef(8, 0x70)
-	validProto := RootPerasSnapshotSegmentRefsToProto([]rootproto.PerasSnapshotSegmentRef{valid})[0]
-	shortRoot := RootPerasSnapshotSegmentRefsToProto([]rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(9, 0x80)})[0]
-	shortRoot.SegmentRoot = shortRoot.SegmentRoot[:31]
-	zeroEpoch := RootPerasSnapshotSegmentRefsToProto([]rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(10, 0x90)})[0]
+func TestRootSnapshotEvidenceRefsFromProtoSkipsInvalidRefs(t *testing.T) {
+	valid := testWireSnapshotEvidenceRef(8, 0x70)
+	validProto := RootSnapshotEvidenceRefsToProto([]rootproto.SnapshotEvidenceRef{valid})[0]
+	shortRoot := RootSnapshotEvidenceRefsToProto([]rootproto.SnapshotEvidenceRef{testWireSnapshotEvidenceRef(9, 0x80)})[0]
+	shortRoot.EvidenceRoot = shortRoot.EvidenceRoot[:31]
+	zeroEpoch := RootSnapshotEvidenceRefsToProto([]rootproto.SnapshotEvidenceRef{testWireSnapshotEvidenceRef(10, 0x90)})[0]
 	zeroEpoch.EpochId = 0
 
-	require.Equal(t, []rootproto.PerasSnapshotSegmentRef{valid}, RootPerasSnapshotSegmentRefsFromProto([]*metapb.RootPerasSnapshotSegmentRef{
+	require.Equal(t, []rootproto.SnapshotEvidenceRef{valid}, RootSnapshotEvidenceRefsFromProto([]*metapb.RootSnapshotEvidenceRef{
 		nil,
 		shortRoot,
 		zeroEpoch,
 		validProto,
 	}))
-	require.Nil(t, RootPerasSnapshotSegmentRefsFromProto([]*metapb.RootPerasSnapshotSegmentRef{nil, shortRoot, zeroEpoch}))
+	require.Nil(t, RootSnapshotEvidenceRefsFromProto([]*metapb.RootSnapshotEvidenceRef{nil, shortRoot, zeroEpoch}))
 }
 
 func TestRootEventRoundTripAndKindMappings(t *testing.T) {
@@ -344,10 +344,10 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.GrantIssued(grant),
 		rootevent.GrantSealed(retirement),
 		rootevent.GrantInherited(rootproto.GrantInheritance{PredecessorGrantID: "grant-0", SuccessorGrantID: "grant-1"}),
-		rootevent.PerasAuthorityGranted(testWirePerasAuthorityGrant()),
-		rootevent.PerasAuthoritySealed(testWirePerasAuthoritySeal(testWirePerasAuthorityGrant())),
-		rootevent.PerasAuthorityRetired(testWirePerasAuthorityGrant()),
-		rootevent.SnapshotEpochPublishedWithPerasRefs("vol", 1, 42, 99, []rootproto.PerasSnapshotSegmentRef{testWirePerasSnapshotSegmentRef(9, 0x80)}),
+		rootevent.VisibleAuthorityGranted(testWireVisibleAuthorityGrant()),
+		rootevent.VisibleAuthoritySealed(testWireVisibleAuthoritySeal(testWireVisibleAuthorityGrant())),
+		rootevent.VisibleAuthorityRetired(testWireVisibleAuthorityGrant()),
+		rootevent.SnapshotEpochPublishedWithRuntimeEvidence("vol", 1, 42, 99, []rootproto.SnapshotEvidenceRef{testWireSnapshotEvidenceRef(9, 0x80)}),
 		rootevent.SnapshotEpochRetired("vol", 1, 42, 99),
 		rootevent.MountRegistered("vol", 1, 1, 1),
 		rootevent.MountRetired("vol"),
@@ -410,9 +410,9 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindGrantSealed,
 		rootevent.KindGrantRetired,
 		rootevent.KindGrantInherited,
-		rootevent.KindPerasAuthorityGranted,
-		rootevent.KindPerasAuthoritySealed,
-		rootevent.KindPerasAuthorityRetired,
+		rootevent.KindVisibleAuthorityGranted,
+		rootevent.KindVisibleAuthoritySealed,
+		rootevent.KindVisibleAuthorityRetired,
 		rootevent.KindSnapshotEpochPublished,
 		rootevent.KindSnapshotEpochRetired,
 		rootevent.KindMountRegistered,
@@ -434,14 +434,14 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	require.Equal(t, rootstate.PendingRangeChangeUnknown, rootPendingRangeChangeKindFromProto(metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED))
 }
 
-func testWirePerasAuthorityGrant() rootproto.PerasAuthorityGrant {
+func testWireVisibleAuthorityGrant() rootproto.VisibleAuthorityGrant {
 	var predecessor [32]byte
 	predecessor[0] = 7
-	return rootproto.PerasAuthorityGrant{
-		GrantID:  "peras-1",
+	return rootproto.VisibleAuthorityGrant{
+		GrantID:  "visible-1",
 		EpochID:  11,
 		HolderID: "fsmeta-holder-a",
-		Scope: rootproto.PerasAuthorityScope{
+		Scope: rootproto.VisibleAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 42,
 			Buckets:    []uint16{1, 2},
@@ -457,12 +457,12 @@ func testWirePerasAuthorityGrant() rootproto.PerasAuthorityGrant {
 	}
 }
 
-func testWirePerasAuthoritySeal(grant rootproto.PerasAuthorityGrant) rootproto.PerasAuthoritySeal {
+func testWireVisibleAuthoritySeal(grant rootproto.VisibleAuthorityGrant) rootproto.VisibleAuthoritySeal {
 	var root [32]byte
 	var digest [32]byte
 	root[0] = 9
 	digest[0] = 8
-	return rootproto.PerasAuthoritySeal{
+	return rootproto.VisibleAuthoritySeal{
 		GrantID:              grant.GrantID,
 		EpochID:              grant.EpochID,
 		HolderID:             grant.HolderID,
@@ -479,12 +479,12 @@ func testWirePerasAuthoritySeal(grant rootproto.PerasAuthorityGrant) rootproto.P
 	}
 }
 
-func testWirePerasSnapshotSegmentRef(epoch uint64, seed byte) rootproto.PerasSnapshotSegmentRef {
+func testWireSnapshotEvidenceRef(epoch uint64, seed byte) rootproto.SnapshotEvidenceRef {
 	var root [32]byte
 	var digest [32]byte
 	root[0] = seed
 	digest[0] = seed + 1
-	return rootproto.PerasSnapshotSegmentRef{EpochID: epoch, SegmentRoot: root, SegmentPayloadDigest: digest}
+	return rootproto.SnapshotEvidenceRef{EpochID: epoch, EvidenceRoot: root, PayloadDigest: digest}
 }
 
 func testWireDescriptor(id uint64, start, end []byte) topology.Descriptor {

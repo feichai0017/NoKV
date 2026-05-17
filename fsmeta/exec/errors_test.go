@@ -14,5 +14,5 @@ func TestExecErrorsExposeStableKinds(t *testing.T) {
 	require.Equal(t, nokverrors.KindInvalidArgument, nokverrors.KindOf(errRunnerRequired))
 	require.Equal(t, nokverrors.KindInvalidArgument, nokverrors.KindOf(errAuditorRunnerRequired))
 	require.Equal(t, nokverrors.KindProtocolViolation, nokverrors.KindOf(errSubtreeHandoffWithoutFrontier))
-	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(errPerasAuthorityNotHeld))
+	require.Equal(t, nokverrors.KindNotLeader, nokverrors.KindOf(errVisibleAuthorityNotHeld))
 }

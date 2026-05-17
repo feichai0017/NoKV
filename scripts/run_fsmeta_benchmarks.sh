@@ -127,7 +127,7 @@ with urllib.request.urlopen(url, timeout=2) as response:
 peras = data.get("nokv_fsmeta_peras")
 if not isinstance(peras, dict):
 	executor = data.get("nokv_fsmeta_executor", {})
-	peras = executor.get("peras_committer", {})
+	peras = executor.get("visible_committer", {})
 
 def number(name):
 	value = peras.get(name, 0)

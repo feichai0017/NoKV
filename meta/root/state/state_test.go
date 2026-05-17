@@ -142,8 +142,8 @@ func TestApplyStoreMembershipEventsToSnapshot(t *testing.T) {
 func TestApplySnapshotEpochPublishedToSnapshot(t *testing.T) {
 	var snapshot rootstate.Snapshot
 	cursor := rootstate.Cursor{Term: 2, Index: 7}
-	ref := testStatePerasSnapshotSegmentRef(4, 0x40)
-	event := rootevent.SnapshotEpochPublishedWithPerasRefs("vol", 1, 42, 100, []rootproto.PerasSnapshotSegmentRef{ref})
+	ref := testStateSnapshotEvidenceRef(4, 0x40)
+	event := rootevent.SnapshotEpochPublishedWithRuntimeEvidence("vol", 1, 42, 100, []rootproto.SnapshotEvidenceRef{ref})
 
 	rootstate.ApplyEventToSnapshot(&snapshot, cursor, event)
 
@@ -156,7 +156,7 @@ func TestApplySnapshotEpochPublishedToSnapshot(t *testing.T) {
 		RootInode:   42,
 		ReadVersion: 100,
 		PublishedAt: cursor,
-		PerasSegmentRefs: []rootproto.PerasSnapshotSegmentRef{
+		RuntimeEvidence: []rootproto.SnapshotEvidenceRef{
 			ref,
 		},
 	}, snapshot.SnapshotEpochs[id])
@@ -185,28 +185,28 @@ func TestCloneStoreMembershipsDetachesMap(t *testing.T) {
 func TestCloneSnapshotEpochsDetachesMap(t *testing.T) {
 	in := map[string]rootstate.SnapshotEpoch{
 		"vol/7/9": {
-			SnapshotID:       "vol/7/9",
-			Mount:            "vol",
-			RootInode:        7,
-			ReadVersion:      9,
-			PerasSegmentRefs: []rootproto.PerasSnapshotSegmentRef{testStatePerasSnapshotSegmentRef(5, 0x50)},
+			SnapshotID:      "vol/7/9",
+			Mount:           "vol",
+			RootInode:       7,
+			ReadVersion:     9,
+			RuntimeEvidence: []rootproto.SnapshotEvidenceRef{testStateSnapshotEvidenceRef(5, 0x50)},
 		},
 	}
 
 	out := rootstate.CloneSnapshotEpochs(in)
-	in["vol/7/9"].PerasSegmentRefs[0].EpochID = 99
+	in["vol/7/9"].RuntimeEvidence[0].EpochID = 99
 	in["vol/7/9"] = rootstate.SnapshotEpoch{SnapshotID: "mutated"}
 
 	require.Equal(t, uint64(9), out["vol/7/9"].ReadVersion)
-	require.Equal(t, uint64(5), out["vol/7/9"].PerasSegmentRefs[0].EpochID)
+	require.Equal(t, uint64(5), out["vol/7/9"].RuntimeEvidence[0].EpochID)
 }
 
-func testStatePerasSnapshotSegmentRef(epoch uint64, seed byte) rootproto.PerasSnapshotSegmentRef {
+func testStateSnapshotEvidenceRef(epoch uint64, seed byte) rootproto.SnapshotEvidenceRef {
 	var root [32]byte
 	var digest [32]byte
 	root[0] = seed
 	digest[0] = seed + 1
-	return rootproto.PerasSnapshotSegmentRef{EpochID: epoch, SegmentRoot: root, SegmentPayloadDigest: digest}
+	return rootproto.SnapshotEvidenceRef{EpochID: epoch, EvidenceRoot: root, PayloadDigest: digest}
 }
 
 func TestSnapshotRetentionFloor(t *testing.T) {

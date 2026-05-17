@@ -18,8 +18,8 @@ import (
 
 	"github.com/feichai0017/NoKV/engine/lsm"
 	"github.com/feichai0017/NoKV/engine/wal"
+	"github.com/feichai0017/NoKV/experimental/thermos"
 	"github.com/feichai0017/NoKV/metrics"
-	"github.com/feichai0017/NoKV/thermos"
 	"github.com/feichai0017/NoKV/utils"
 )
 

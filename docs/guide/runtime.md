@@ -85,13 +85,19 @@ directly.
 
 ## 4. Distributed Write Path
 
-Raftstore, Percolator, and Peras segment install ultimately reuse the same embedded write path:
+Raftstore and Percolator ultimately reuse the same embedded write path. The
+prepared-MVCC install command also uses this path. Experimental Peras adapters
+lower segment payloads into prepared MVCC entries before crossing the stable
+raftstore boundary.
 
-1. `raftstore/client` issues `Mutate` / `TwoPhaseCommit` or `InstallPerasSegment` by region.
+1. `raftstore/client` issues `Mutate` / `TwoPhaseCommit` / `InstallPreparedMVCCEntries` by region.
 2. `kv.Service` routes the command through `Store.ProposeCommand`.
 3. Raft replication commits the command.
-4. The apply path calls `percolator.Prewrite`, `Commit`, rollback, resolve, or the Peras install handler.
-5. Percolator and materialized Peras install build MVCC entries with `kv.NewInternalEntry`; catalog-only Peras install writes segment/index records.
+4. The apply path calls `percolator.Prewrite`, `Commit`, rollback, resolve, or
+   `InstallPreparedMVCCEntries`.
+5. Percolator and Peras adapters build MVCC entries with `kv.NewInternalEntry`;
+   raftstore's stable install branch only validates and persists prepared
+   entries.
 6. `DB.ApplyInternalEntries` persists them through the commit queue, WAL, and
    memtable.
 
@@ -101,9 +107,9 @@ sequenceDiagram
     participant SVC as kv.Service
     participant ST as Store.ProposeCommand
     participant RF as Raft replicate/apply
-    participant TXN as percolator / Peras install
+    participant TXN as percolator / experimental install
     participant DB as DB.ApplyInternalEntries
-    CL->>SVC: Prewrite / Commit / ... / PerasInstallSegment
+    CL->>SVC: Prewrite / Commit / ...
     SVC->>ST: ProposeCommand
     ST->>RF: replicate and apply
     RF->>TXN: execute MVCC mutation

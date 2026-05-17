@@ -108,13 +108,13 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.Len(t, listMountsResp.GetMounts(), 1)
 
 	now := time.Now()
-	perasResp, err := cli.ApplyPerasAuthority(context.Background(), &coordpb.ApplyPerasAuthorityRequest{
-		Command: metawire.RootPerasAuthorityCommandToProto(rootproto.PerasAuthorityCommand{
-			Kind:            rootproto.PerasAuthorityActAcquire,
+	visibleAuthorityResp, err := cli.ApplyVisibleAuthority(context.Background(), &coordpb.ApplyVisibleAuthorityRequest{
+		Command: metawire.RootVisibleAuthorityCommandToProto(rootproto.VisibleAuthorityCommand{
+			Kind:            rootproto.VisibleAuthorityActAcquire,
 			HolderID:        "fsmeta-holder",
 			NowUnixNano:     now.UnixNano(),
 			ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
-			Scope: rootproto.PerasAuthorityScope{
+			Scope: rootproto.VisibleAuthorityScope{
 				MountID:    "vol",
 				MountKeyID: 1,
 				Buckets:    []uint16{1},
@@ -122,9 +122,9 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 		}),
 	})
 	require.NoError(t, err)
-	require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED, perasResp.GetStatus())
-	require.Equal(t, "fsmeta-holder/1", perasResp.GetGrant().GetGrantId())
-	require.Len(t, perasResp.GetActiveGrants(), 1)
+	require.Equal(t, metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED, visibleAuthorityResp.GetStatus())
+	require.Equal(t, "fsmeta-holder/1", visibleAuthorityResp.GetGrant().GetGrantId())
+	require.Len(t, visibleAuthorityResp.GetActiveGrants(), 1)
 
 	storeResp, err := cli.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:   1,
@@ -261,8 +261,8 @@ func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) er
 func (f *followerStorage) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
-func (f *followerStorage) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
-	return rootstate.State{}, rootproto.PerasAuthorityGrant{}, nil
+func (f *followerStorage) ApplyVisibleAuthority(context.Context, rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
+	return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, nil
 }
 func (f *followerStorage) Refresh() error            { return nil }
 func (f *followerStorage) Close() error              { return nil }
@@ -397,50 +397,50 @@ func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCom
 	}
 }
 
-func (s *clientRootStorage) ApplyPerasAuthority(_ context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+func (s *clientRootStorage) ApplyVisibleAuthority(_ context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	holderID := strings.TrimSpace(cmd.HolderID)
 	switch cmd.Kind {
-	case rootproto.PerasAuthorityActAcquire:
+	case rootproto.VisibleAuthorityActAcquire:
 		if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
-			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 		}
-		if active, ok := s.snapshot.RootSnapshot().State.ActivePerasGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
+		if active, ok := s.snapshot.RootSnapshot().State.ActiveVisibleGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
 			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
 				return rootstate.CloneState(s.snapshot.RootSnapshot().State), active, nil
 			}
-			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
 		}
-		epoch := s.snapshot.PerasAuthorityEpoch + 1
+		epoch := s.snapshot.VisibleAuthorityEpoch + 1
 		grantID := strings.TrimSpace(cmd.GrantID)
 		if grantID == "" {
 			grantID = fmt.Sprintf("%s/%d", holderID, epoch)
 		}
-		grant := rootproto.PerasAuthorityGrant{
+		grant := rootproto.VisibleAuthorityGrant{
 			GrantID:           grantID,
 			EpochID:           epoch,
 			HolderID:          holderID,
-			Scope:             rootproto.ClonePerasAuthorityScope(cmd.Scope),
+			Scope:             rootproto.CloneVisibleAuthorityScope(cmd.Scope),
 			ExpiresUnixNano:   cmd.ExpiresUnixNano,
 			PredecessorDigest: cmd.PredecessorDigest,
 			QuotaCreditBytes:  cmd.QuotaCreditBytes,
 			QuotaCreditInodes: cmd.QuotaCreditInodes,
 		}
-		s.applyEventLocked(rootevent.PerasAuthorityGranted(grant))
+		s.applyEventLocked(rootevent.VisibleAuthorityGranted(grant))
 		return rootstate.CloneState(s.snapshot.RootSnapshot().State), grant, nil
-	case rootproto.PerasAuthorityActRetire:
-		active, ok := s.snapshot.ActivePerasGrantByID(strings.TrimSpace(cmd.GrantID))
+	case rootproto.VisibleAuthorityActRetire:
+		active, ok := s.snapshot.ActiveVisibleGrantByID(strings.TrimSpace(cmd.GrantID))
 		if !ok {
-			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, nil
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, nil
 		}
 		if active.HolderID != holderID {
-			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
 		}
-		s.applyEventLocked(rootevent.PerasAuthorityRetired(active))
-		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, nil
+		s.applyEventLocked(rootevent.VisibleAuthorityRetired(active))
+		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, nil
 	default:
-		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
 }
 
@@ -543,33 +543,33 @@ func TestCoordinatorClientErrorHelpers(t *testing.T) {
 	require.False(t, ok)
 }
 
-func TestValidateListPerasAuthorityGrantsResponse(t *testing.T) {
-	grant := rootproto.PerasAuthorityGrant{
-		GrantID:         "peras-1",
+func TestValidateListVisibleAuthorityGrantsResponse(t *testing.T) {
+	grant := rootproto.VisibleAuthorityGrant{
+		GrantID:         "visible-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
-		Scope:           rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7},
+		Scope:           rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7},
 		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 	}
-	require.NoError(t, validateListPerasAuthorityGrantsResponse(&coordpb.ListPerasAuthorityGrantsResponse{
-		Grants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grant)},
+	require.NoError(t, validateListVisibleAuthorityGrantsResponse(&coordpb.ListVisibleAuthorityGrantsResponse{
+		Grants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(grant)},
 	}))
 
-	require.Error(t, validateListPerasAuthorityGrantsResponse(nil))
-	require.Error(t, validateListPerasAuthorityGrantsResponse(&coordpb.ListPerasAuthorityGrantsResponse{
-		Grants: []*metapb.RootPerasAuthorityGrant{
-			metawire.RootPerasAuthorityGrantToProto(grant),
-			metawire.RootPerasAuthorityGrantToProto(grant),
+	require.Error(t, validateListVisibleAuthorityGrantsResponse(nil))
+	require.Error(t, validateListVisibleAuthorityGrantsResponse(&coordpb.ListVisibleAuthorityGrantsResponse{
+		Grants: []*metapb.RootVisibleAuthorityGrant{
+			metawire.RootVisibleAuthorityGrantToProto(grant),
+			metawire.RootVisibleAuthorityGrantToProto(grant),
 		},
 	}))
 }
 
-func TestValidateListPerasAuthoritySealsResponse(t *testing.T) {
-	seal := rootproto.PerasAuthoritySeal{
-		GrantID:              "peras-1",
+func TestValidateListVisibleAuthoritySealsResponse(t *testing.T) {
+	seal := rootproto.VisibleAuthoritySeal{
+		GrantID:              "visible-1",
 		EpochID:              1,
 		HolderID:             "holder-a",
-		Scope:                rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7},
+		Scope:                rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7},
 		SegmentRoot:          [32]byte{1},
 		SegmentPayloadDigest: [32]byte{2},
 		OperationCount:       3,
@@ -580,50 +580,50 @@ func TestValidateListPerasAuthoritySealsResponse(t *testing.T) {
 		InstallIndex:         7,
 		InstallVersion:       8,
 	}
-	require.NoError(t, validateListPerasAuthoritySealsResponse(&coordpb.ListPerasAuthoritySealsResponse{
-		Seals: []*metapb.RootPerasAuthoritySeal{metawire.RootPerasAuthoritySealToProto(seal)},
+	require.NoError(t, validateListVisibleAuthoritySealsResponse(&coordpb.ListVisibleAuthoritySealsResponse{
+		Seals: []*metapb.RootVisibleAuthoritySeal{metawire.RootVisibleAuthoritySealToProto(seal)},
 	}))
 
-	require.Error(t, validateListPerasAuthoritySealsResponse(nil))
-	require.Error(t, validateListPerasAuthoritySealsResponse(&coordpb.ListPerasAuthoritySealsResponse{
-		Seals: []*metapb.RootPerasAuthoritySeal{
-			metawire.RootPerasAuthoritySealToProto(seal),
-			metawire.RootPerasAuthoritySealToProto(seal),
+	require.Error(t, validateListVisibleAuthoritySealsResponse(nil))
+	require.Error(t, validateListVisibleAuthoritySealsResponse(&coordpb.ListVisibleAuthoritySealsResponse{
+		Seals: []*metapb.RootVisibleAuthoritySeal{
+			metawire.RootVisibleAuthoritySealToProto(seal),
+			metawire.RootVisibleAuthoritySealToProto(seal),
 		},
 	}))
 }
 
-func TestValidateApplyPerasAuthorityResponse(t *testing.T) {
-	grant := rootproto.PerasAuthorityGrant{
-		GrantID:         "peras-1",
+func TestValidateApplyVisibleAuthorityResponse(t *testing.T) {
+	grant := rootproto.VisibleAuthorityGrant{
+		GrantID:         "visible-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
-		Scope:           rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7},
+		Scope:           rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7},
 		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
 	}
-	require.NoError(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
-		Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED,
-		Grant:        metawire.RootPerasAuthorityGrantToProto(grant),
-		ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grant)},
+	require.NoError(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
+		Status:       metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED,
+		Grant:        metawire.RootVisibleAuthorityGrantToProto(grant),
+		ActiveGrants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(grant)},
 	}))
-	require.NoError(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
-		Status:       metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD,
-		ActiveGrants: []*metapb.RootPerasAuthorityGrant{metawire.RootPerasAuthorityGrantToProto(grant)},
+	require.NoError(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
+		Status:       metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD,
+		ActiveGrants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(grant)},
 	}))
-	require.NoError(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
-		Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED,
+	require.NoError(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
+		Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED,
 	}))
 
-	require.Error(t, validateApplyPerasAuthorityResponse(nil))
-	require.Error(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
-		Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED,
+	require.Error(t, validateApplyVisibleAuthorityResponse(nil))
+	require.Error(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
+		Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED,
 	}))
-	require.Error(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
-		Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD,
-		Grant:  metawire.RootPerasAuthorityGrantToProto(grant),
+	require.Error(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
+		Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD,
+		Grant:  metawire.RootVisibleAuthorityGrantToProto(grant),
 	}))
-	require.Error(t, validateApplyPerasAuthorityResponse(&coordpb.ApplyPerasAuthorityResponse{
-		Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_UNSPECIFIED,
+	require.Error(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
+		Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_UNSPECIFIED,
 	}))
 }
 

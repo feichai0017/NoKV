@@ -92,16 +92,16 @@ func TestUsageValueRoundTrip(t *testing.T) {
 }
 
 func TestSnapshotValueRoundTrip(t *testing.T) {
-	var ref PerasSnapshotSegmentRef
+	var ref SnapshotEvidenceRef
 	ref.EpochID = 7
-	ref.SegmentRoot[0] = 1
-	ref.SegmentPayloadDigest[0] = 2
+	ref.EvidenceRoot[0] = 1
+	ref.PayloadDigest[0] = 2
 	token := SnapshotSubtreeToken{
-		Mount:            "vol",
-		MountKeyID:       9,
-		RootInode:        RootInode,
-		ReadVersion:      42,
-		PerasSegmentRefs: []PerasSnapshotSegmentRef{ref},
+		Mount:           "vol",
+		MountKeyID:      9,
+		RootInode:       RootInode,
+		ReadVersion:     42,
+		RuntimeEvidence: []SnapshotEvidenceRef{ref},
 	}
 	value, err := EncodeSnapshotValue(token)
 	require.NoError(t, err)

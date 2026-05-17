@@ -224,21 +224,21 @@ func (c *Client) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (ro
 	return protocolState, cert, nil
 }
 
-func (c *Client) ApplyPerasAuthority(ctx context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
-	if !validPerasAuthorityAct(cmd.Kind) {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+func (c *Client) ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
+	if !validVisibleAuthorityAct(cmd.Kind) {
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
-	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
-		return rpc.ApplyPerasAuthority(ctx, &metapb.MetadataRootApplyPerasAuthorityRequest{
-			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
+		return rpc.ApplyVisibleAuthority(ctx, &metapb.MetadataRootApplyVisibleAuthorityRequest{
+			Command: metawire.RootVisibleAuthorityCommandToProto(cmd),
 		})
 	})
 	if err != nil {
-		return rootstate.State{}, rootproto.PerasAuthorityGrant{}, err
+		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
 	}
 	state := metawire.RootStateFromProto(resp.GetState())
-	grant := metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant())
-	if resp.GetStatus() == metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD {
+	grant := metawire.RootVisibleAuthorityGrantFromProto(resp.GetGrant())
+	if resp.GetStatus() == metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD {
 		return state, grant, rootstate.ErrPrimacy
 	}
 	return state, grant, nil
@@ -436,11 +436,11 @@ func validGrantAct(kind rootproto.GrantAct) bool {
 	}
 }
 
-func validPerasAuthorityAct(kind rootproto.PerasAuthorityAct) bool {
+func validVisibleAuthorityAct(kind rootproto.VisibleAuthorityAct) bool {
 	switch kind {
-	case rootproto.PerasAuthorityActAcquire,
-		rootproto.PerasAuthorityActRetire,
-		rootproto.PerasAuthorityActSeal:
+	case rootproto.VisibleAuthorityActAcquire,
+		rootproto.VisibleAuthorityActRetire,
+		rootproto.VisibleAuthorityActSeal:
 		return true
 	default:
 		return false

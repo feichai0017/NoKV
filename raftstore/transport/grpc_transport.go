@@ -25,7 +25,7 @@ const (
 	raftServiceName    = "nokv.raft.Transport"
 	raftStepMethod     = "Step"
 	raftStepFullMethod = "/" + raftServiceName + "/" + raftStepMethod
-	// StoreKV shares the raftstore transport. Peras segment install and
+	// StoreKV shares the raftstore transport. Segment install and
 	// witness recovery carry sealed segment payloads, so the transport message
 	// limit must be sized for data-plane segment records rather than tiny
 	// control-plane RPCs.

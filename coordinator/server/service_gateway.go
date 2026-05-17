@@ -183,44 +183,44 @@ func (s *Service) ListQuotaFences(ctx context.Context, _ *coordpb.ListQuotaFence
 	return &coordpb.ListQuotaFencesResponse{Fences: out}, nil
 }
 
-func (s *Service) ListPerasAuthorityGrants(ctx context.Context, _ *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
+func (s *Service) ListVisibleAuthorityGrants(ctx context.Context, _ *coordpb.ListVisibleAuthorityGrantsRequest) (*coordpb.ListVisibleAuthorityGrantsResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, statusContext(err)
 	}
 	if s == nil || s.storage == nil {
-		return &coordpb.ListPerasAuthorityGrantsResponse{}, nil
+		return &coordpb.ListVisibleAuthorityGrantsResponse{}, nil
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
 		return nil, statusInternalf("load rooted snapshot: %v", err)
 	}
-	out := make([]*metapb.RootPerasAuthorityGrant, 0, len(snapshot.ActivePerasGrants))
-	for _, grant := range snapshot.ActivePerasGrants {
-		if pbGrant := metawire.RootPerasAuthorityGrantToProto(grant); pbGrant != nil {
+	out := make([]*metapb.RootVisibleAuthorityGrant, 0, len(snapshot.ActiveVisibleGrants))
+	for _, grant := range snapshot.ActiveVisibleGrants {
+		if pbGrant := metawire.RootVisibleAuthorityGrantToProto(grant); pbGrant != nil {
 			out = append(out, pbGrant)
 		}
 	}
-	return &coordpb.ListPerasAuthorityGrantsResponse{Grants: out}, nil
+	return &coordpb.ListVisibleAuthorityGrantsResponse{Grants: out}, nil
 }
 
-func (s *Service) ListPerasAuthoritySeals(ctx context.Context, _ *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error) {
+func (s *Service) ListVisibleAuthoritySeals(ctx context.Context, _ *coordpb.ListVisibleAuthoritySealsRequest) (*coordpb.ListVisibleAuthoritySealsResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, statusContext(err)
 	}
 	if s == nil || s.storage == nil {
-		return &coordpb.ListPerasAuthoritySealsResponse{}, nil
+		return &coordpb.ListVisibleAuthoritySealsResponse{}, nil
 	}
 	snapshot, err := s.storage.Load()
 	if err != nil {
 		return nil, statusInternalf("load rooted snapshot: %v", err)
 	}
-	out := make([]*metapb.RootPerasAuthoritySeal, 0, len(snapshot.PerasAuthoritySeals))
-	for _, seal := range snapshot.PerasAuthoritySeals {
-		if pbSeal := metawire.RootPerasAuthoritySealToProto(seal); pbSeal != nil {
+	out := make([]*metapb.RootVisibleAuthoritySeal, 0, len(snapshot.VisibleAuthoritySeals))
+	for _, seal := range snapshot.VisibleAuthoritySeals {
+		if pbSeal := metawire.RootVisibleAuthoritySealToProto(seal); pbSeal != nil {
 			out = append(out, pbSeal)
 		}
 	}
-	return &coordpb.ListPerasAuthoritySealsResponse{Seals: out}, nil
+	return &coordpb.ListVisibleAuthoritySealsResponse{Seals: out}, nil
 }
 
 func (s *Service) WatchRootEvents(req *coordpb.WatchRootEventsRequest, stream coordpb.Coordinator_WatchRootEventsServer) error {

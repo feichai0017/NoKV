@@ -12,28 +12,28 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
-func (e *Executor) tryPerasVisibleRename(ctx context.Context, compiled compile.CompiledOp, move renameMove) (bool, error) {
+func (e *Executor) tryVisibleRename(ctx context.Context, compiled compile.CompiledOp, move renameMove) (bool, error) {
 	delta := compiled.Delta
 	plan := delta.Plan
-	if e == nil || e.perasCommitter == nil || e.perasAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
-	view := e.newPerasReadView(ctx)
+	view := e.newVisibleReadView(ctx)
 	record, err := view.readDentry(plan.ReadKeys[0])
 	if err != nil {
 		return false, err
 	}
-	sourceFromPeras := view.observedKeyFromPerasOverlay(plan.ReadKeys[0])
-	if !e.perasNotExistsKnown(delta.Authority, plan.ReadKeys[1], e.perasPredicateIndex()) {
+	sourceFromVisible := view.observedKeyFromVisibleOverlay(plan.ReadKeys[0])
+	if !e.visibleNotExistsKnown(delta.Authority, plan.ReadKeys[1], e.visiblePredicateIndex()) {
 		if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
 			return false, fsmeta.ErrExists
 		} else if !errors.Is(err, fsmeta.ErrNotFound) {
 			return false, err
 		}
 	}
-	if !sourceFromPeras {
-		if view.observedPerasOverlay() {
-			return false, errPerasOverlayFallbackUnsafe
+	if !sourceFromVisible {
+		if view.observedVisibleOverlay() {
+			return false, errVisibleOverlayFallbackUnsafe
 		}
 		return false, nil
 	}
@@ -41,7 +41,7 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, compiled compile.C
 		if inode, ok, err := view.readInode(move.identity, record.Inode); err != nil {
 			return false, err
 		} else if ok {
-			quotaOK, err := e.perasQuotaAllowsVisibleCommit(ctx, []QuotaChange{
+			quotaOK, err := e.visibleQuotaAllowsCommit(ctx, []QuotaChange{
 				{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.fromParent, Bytes: -inodeSizeDelta(inode.Size), Inodes: -1},
 				{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.toParent, Bytes: inodeSizeDelta(inode.Size), Inodes: 1},
 			})
@@ -59,14 +59,14 @@ func (e *Executor) tryPerasVisibleRename(ctx context.Context, compiled compile.C
 	if err != nil {
 		return false, err
 	}
-	concrete, err := view.materializePerasCompiledOp(compiled, []compile.WriteEffect{
-		perasDeleteEffect(plan.MutateKeys[0]),
-		perasPutEffect(plan.MutateKeys[1], value),
+	concrete, err := view.materializeVisibleCompiledOp(compiled, []compile.WriteEffect{
+		visibleDeleteEffect(plan.MutateKeys[0]),
+		visiblePutEffect(plan.MutateKeys[1], value),
 	})
 	if err != nil {
 		return false, err
 	}
-	return e.tryPerasVisibleCommitAfterRead(ctx, view, concrete)
+	return e.tryVisibleCommitAfterRead(ctx, view, concrete)
 }
 
 type renameMove struct {
@@ -117,18 +117,18 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 	if err := e.requireSameAuthority(ctx, req.Mount, req.FromParent, req.ToParent); err != nil {
 		return err
 	}
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
 	move := renameMoveFromRename(req, mount)
 	var movedSize uint64
 	var movedInode bool
-	if committed, err := e.tryPerasVisibleRename(ctx, program.Compiled, move); committed || err != nil {
+	if committed, err := e.tryVisibleRename(ctx, program.Compiled, move); committed || err != nil {
 		if err != nil {
 			return err
 		}
-		e.forgetPerasEmptyDirectory(mount, req.ToParent)
+		e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 		e.invalidateNegative(plan.ReadKeys...)
 		e.invalidateNegative(plan.MutateKeys...)
 		e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)
@@ -147,7 +147,7 @@ func (e *Executor) Rename(ctx context.Context, req fsmeta.RenameRequest) error {
 	}, delta.Authority); err != nil {
 		return err
 	}
-	e.forgetPerasEmptyDirectory(mount, req.ToParent)
+	e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 	e.invalidateNegative(plan.ReadKeys...)
 	e.invalidateNegative(plan.MutateKeys...)
 	e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)
@@ -167,7 +167,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 		return err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return err
 	}
 	plan := delta.Plan
@@ -220,7 +220,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req fsmeta.RenameSubtreeRe
 	// Invalidate both old and new dentry keys plus the two parent directory
 	// epochs so negative and materialized directory-page caches cannot serve the
 	// pre-rename view.
-	e.forgetPerasEmptyDirectory(mount, req.ToParent)
+	e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 	e.invalidateNegative(plan.ReadKeys...)
 	e.invalidateNegative(plan.MutateKeys...)
 	e.invalidateDirPages(req.Mount, req.FromParent, req.ToParent)

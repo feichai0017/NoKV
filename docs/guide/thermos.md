@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Thermos
 
-`thermos` is NoKV's optional internal hotspot detector. The package lives in [`thermos/`](https://github.com/feichai0017/NoKV/blob/main/thermos) and is no longer part of the default read path or LSM compaction planning.
+`experimental/thermos` is NoKV's optional internal hotspot detector. It is no longer part of the default read path or LSM compaction planning.
 
 ## Current Role
 
@@ -71,7 +71,7 @@ The CLI surfaces the same data under `nokv stats`.
 
 Thermos should be understood as:
 
-- an optional internal detector
+- an experimental internal detector
 - an optional write throttling tool
 - not a required performance feature
 - not a default read-path optimization

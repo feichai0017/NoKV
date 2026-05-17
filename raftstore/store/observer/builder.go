@@ -8,7 +8,6 @@ import (
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
-	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
 
 // EventsFromCommand inspects one applied raft command (entry + paired
@@ -80,16 +79,12 @@ func EventsFromCommand(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, resp *
 				Keys:          cloneMutationKeys(atomicMutate.GetMutations()),
 				AtomicMutate:  true,
 			})
-		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-			install := request.GetPerasInstallSegment()
-			if install == nil || install.GetInstallVersion() == 0 || response == nil || response.GetPerasInstallSegment() == nil {
+		case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+			install := request.GetInstallPreparedMvcc()
+			if install == nil || install.GetCommitVersion() == 0 || len(install.GetWatchKeys()) == 0 || response == nil || response.GetInstallPreparedMvcc() == nil {
 				continue
 			}
-			if response.GetPerasInstallSegment().GetError() != nil {
-				continue
-			}
-			keys := perasSegmentKeys(install)
-			if len(keys) == 0 {
+			if response.GetInstallPreparedMvcc().GetError() != nil {
 				continue
 			}
 			out = append(out, Event{
@@ -97,8 +92,8 @@ func EventsFromCommand(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, resp *
 				Term:          entry.Term,
 				Index:         entry.Index,
 				Source:        SourceCommit,
-				CommitVersion: install.GetInstallVersion(),
-				Keys:          keys,
+				CommitVersion: install.GetCommitVersion(),
+				Keys:          cloneKeys(install.GetWatchKeys()),
 			})
 		}
 	}
@@ -114,24 +109,24 @@ func AttachCommandCursor(entry myraft.Entry, req *raftcmdpb.RaftCmdRequest, resp
 	regionID := req.GetHeader().GetRegionId()
 	responses := resp.GetResponses()
 	for i, request := range req.GetRequests() {
-		if request == nil || request.GetCmdType() != raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT {
+		if request == nil || request.GetCmdType() != raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC {
 			continue
 		}
-		install := request.GetPerasInstallSegment()
+		install := request.GetInstallPreparedMvcc()
 		if install == nil {
 			continue
 		}
 		if i >= len(responses) || responses[i] == nil {
 			continue
 		}
-		peras := responses[i].GetPerasInstallSegment()
-		if peras == nil || peras.GetError() != nil {
+		prepared := responses[i].GetInstallPreparedMvcc()
+		if prepared == nil || prepared.GetError() != nil {
 			continue
 		}
-		peras.RegionId = regionID
-		peras.Term = entry.Term
-		peras.Index = entry.Index
-		peras.CommitVersion = install.GetInstallVersion()
+		prepared.RegionId = regionID
+		prepared.Term = entry.Term
+		prepared.Index = entry.Index
+		prepared.CommitVersion = install.GetCommitVersion()
 	}
 }
 
@@ -162,12 +157,4 @@ func cloneMutationKeys(mutations []*kvrpcpb.Mutation) [][]byte {
 		out = append(out, kv.SafeCopy(nil, mut.GetKey()))
 	}
 	return out
-}
-
-func perasSegmentKeys(req *kvrpcpb.PerasInstallSegmentRequest) [][]byte {
-	keys := rsperas.WatchKeys(req)
-	for idx := range keys {
-		keys[idx] = kv.SafeCopy(nil, keys[idx])
-	}
-	return keys
 }

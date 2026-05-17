@@ -41,9 +41,9 @@ type Client interface {
 	ListSubtreeAuthorities(ctx context.Context, req *coordpb.ListSubtreeAuthoritiesRequest) (*coordpb.ListSubtreeAuthoritiesResponse, error)
 	GetQuotaFence(ctx context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error)
 	ListQuotaFences(ctx context.Context, req *coordpb.ListQuotaFencesRequest) (*coordpb.ListQuotaFencesResponse, error)
-	ListPerasAuthorityGrants(ctx context.Context, req *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error)
-	ListPerasAuthoritySeals(ctx context.Context, req *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error)
-	ApplyPerasAuthority(ctx context.Context, req *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error)
+	ListVisibleAuthorityGrants(ctx context.Context, req *coordpb.ListVisibleAuthorityGrantsRequest) (*coordpb.ListVisibleAuthorityGrantsResponse, error)
+	ListVisibleAuthoritySeals(ctx context.Context, req *coordpb.ListVisibleAuthoritySealsRequest) (*coordpb.ListVisibleAuthoritySealsResponse, error)
+	ApplyVisibleAuthority(ctx context.Context, req *coordpb.ApplyVisibleAuthorityRequest) (*coordpb.ApplyVisibleAuthorityResponse, error)
 	WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error)
 }
 
@@ -314,22 +314,22 @@ func (c *GRPCClient) ListQuotaFences(ctx context.Context, req *coordpb.ListQuota
 	}, validateListQuotaFencesResponse)
 }
 
-func (c *GRPCClient) ListPerasAuthorityGrants(ctx context.Context, req *coordpb.ListPerasAuthorityGrantsRequest) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
-	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListPerasAuthorityGrantsResponse, error) {
-		return coord.ListPerasAuthorityGrants(ctx, req)
-	}, validateListPerasAuthorityGrantsResponse)
+func (c *GRPCClient) ListVisibleAuthorityGrants(ctx context.Context, req *coordpb.ListVisibleAuthorityGrantsRequest) (*coordpb.ListVisibleAuthorityGrantsResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListVisibleAuthorityGrantsResponse, error) {
+		return coord.ListVisibleAuthorityGrants(ctx, req)
+	}, validateListVisibleAuthorityGrantsResponse)
 }
 
-func (c *GRPCClient) ListPerasAuthoritySeals(ctx context.Context, req *coordpb.ListPerasAuthoritySealsRequest) (*coordpb.ListPerasAuthoritySealsResponse, error) {
-	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListPerasAuthoritySealsResponse, error) {
-		return coord.ListPerasAuthoritySeals(ctx, req)
-	}, validateListPerasAuthoritySealsResponse)
+func (c *GRPCClient) ListVisibleAuthoritySeals(ctx context.Context, req *coordpb.ListVisibleAuthoritySealsRequest) (*coordpb.ListVisibleAuthoritySealsResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableRead, func(coord coordpb.CoordinatorClient) (*coordpb.ListVisibleAuthoritySealsResponse, error) {
+		return coord.ListVisibleAuthoritySeals(ctx, req)
+	}, validateListVisibleAuthoritySealsResponse)
 }
 
-func (c *GRPCClient) ApplyPerasAuthority(ctx context.Context, req *coordpb.ApplyPerasAuthorityRequest) (*coordpb.ApplyPerasAuthorityResponse, error) {
-	return invokeRPCValidated(ctx, c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.ApplyPerasAuthorityResponse, error) {
-		return coord.ApplyPerasAuthority(ctx, req)
-	}, validateApplyPerasAuthorityResponse)
+func (c *GRPCClient) ApplyVisibleAuthority(ctx context.Context, req *coordpb.ApplyVisibleAuthorityRequest) (*coordpb.ApplyVisibleAuthorityResponse, error) {
+	return invokeRPCValidated(ctx, c, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.ApplyVisibleAuthorityResponse, error) {
+		return coord.ApplyVisibleAuthority(ctx, req)
+	}, validateApplyVisibleAuthorityResponse)
 }
 
 func (c *GRPCClient) WatchRootEvents(ctx context.Context, req *coordpb.WatchRootEventsRequest, opts ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
@@ -847,72 +847,72 @@ func validateListQuotaFencesResponse(resp *coordpb.ListQuotaFencesResponse) erro
 	return nil
 }
 
-func validateListPerasAuthorityGrantsResponse(resp *coordpb.ListPerasAuthorityGrantsResponse) error {
+func validateListVisibleAuthorityGrantsResponse(resp *coordpb.ListVisibleAuthorityGrantsResponse) error {
 	if resp == nil {
-		return fmt.Errorf("%w: list_peras_authority_grants response is nil", errInvalidWitness)
+		return fmt.Errorf("%w: list_visible_authority_grants response is nil", errInvalidWitness)
 	}
 	seen := make(map[string]struct{}, len(resp.GetGrants()))
 	for _, grant := range resp.GetGrants() {
-		parsed := metawire.RootPerasAuthorityGrantFromProto(grant)
+		parsed := metawire.RootVisibleAuthorityGrantFromProto(grant)
 		if !parsed.Valid() {
-			return fmt.Errorf("%w: list_peras_authority_grants contains invalid grant", errInvalidWitness)
+			return fmt.Errorf("%w: list_visible_authority_grants contains invalid grant", errInvalidWitness)
 		}
 		if _, ok := seen[parsed.GrantID]; ok {
-			return fmt.Errorf("%w: list_peras_authority_grants duplicate grant_id=%s", errInvalidWitness, parsed.GrantID)
+			return fmt.Errorf("%w: list_visible_authority_grants duplicate grant_id=%s", errInvalidWitness, parsed.GrantID)
 		}
 		seen[parsed.GrantID] = struct{}{}
 	}
 	return nil
 }
 
-func validateListPerasAuthoritySealsResponse(resp *coordpb.ListPerasAuthoritySealsResponse) error {
+func validateListVisibleAuthoritySealsResponse(resp *coordpb.ListVisibleAuthoritySealsResponse) error {
 	if resp == nil {
-		return fmt.Errorf("%w: list_peras_authority_seals response is nil", errInvalidWitness)
+		return fmt.Errorf("%w: list_visible_authority_seals response is nil", errInvalidWitness)
 	}
 	seen := make(map[string]struct{}, len(resp.GetSeals()))
 	for _, seal := range resp.GetSeals() {
-		parsed := metawire.RootPerasAuthoritySealFromProto(seal)
+		parsed := metawire.RootVisibleAuthoritySealFromProto(seal)
 		if !parsed.Valid() {
-			return fmt.Errorf("%w: list_peras_authority_seals contains invalid seal", errInvalidWitness)
+			return fmt.Errorf("%w: list_visible_authority_seals contains invalid seal", errInvalidWitness)
 		}
 		key := fmt.Sprintf("%s/%d", parsed.GrantID, parsed.EpochID)
 		if _, ok := seen[key]; ok {
-			return fmt.Errorf("%w: list_peras_authority_seals duplicate seal=%s", errInvalidWitness, key)
+			return fmt.Errorf("%w: list_visible_authority_seals duplicate seal=%s", errInvalidWitness, key)
 		}
 		seen[key] = struct{}{}
 	}
 	return nil
 }
 
-func validateApplyPerasAuthorityResponse(resp *coordpb.ApplyPerasAuthorityResponse) error {
+func validateApplyVisibleAuthorityResponse(resp *coordpb.ApplyVisibleAuthorityResponse) error {
 	if resp == nil {
-		return fmt.Errorf("%w: apply_peras_authority response is nil", errInvalidWitness)
+		return fmt.Errorf("%w: apply_visible_authority response is nil", errInvalidWitness)
 	}
 	status := resp.GetStatus()
 	switch status {
-	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED:
-		if parsed := metawire.RootPerasAuthorityGrantFromProto(resp.GetGrant()); !parsed.Valid() {
-			return fmt.Errorf("%w: apply_peras_authority granted reply missing grant", errInvalidWitness)
+	case metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED:
+		if parsed := metawire.RootVisibleAuthorityGrantFromProto(resp.GetGrant()); !parsed.Valid() {
+			return fmt.Errorf("%w: apply_visible_authority granted reply missing grant", errInvalidWitness)
 		}
-	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD:
+	case metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD:
 		if resp.GetGrant() != nil {
-			return fmt.Errorf("%w: apply_peras_authority held reply carries grant", errInvalidWitness)
+			return fmt.Errorf("%w: apply_visible_authority held reply carries grant", errInvalidWitness)
 		}
 		if len(resp.GetActiveGrants()) == 0 {
-			return fmt.Errorf("%w: apply_peras_authority held reply missing active grants", errInvalidWitness)
+			return fmt.Errorf("%w: apply_visible_authority held reply missing active grants", errInvalidWitness)
 		}
-	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED:
-	case metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_SEALED:
+	case metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED:
+	case metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_SEALED:
 	default:
-		return fmt.Errorf("%w: apply_peras_authority invalid status=%d", errInvalidWitness, status)
+		return fmt.Errorf("%w: apply_visible_authority invalid status=%d", errInvalidWitness, status)
 	}
-	return validatePerasAuthorityGrantList("apply_peras_authority", resp.GetActiveGrants())
+	return validateVisibleAuthorityGrantList("apply_visible_authority", resp.GetActiveGrants())
 }
 
-func validatePerasAuthorityGrantList(kind string, grants []*metapb.RootPerasAuthorityGrant) error {
+func validateVisibleAuthorityGrantList(kind string, grants []*metapb.RootVisibleAuthorityGrant) error {
 	seen := make(map[string]struct{}, len(grants))
 	for _, grant := range grants {
-		parsed := metawire.RootPerasAuthorityGrantFromProto(grant)
+		parsed := metawire.RootVisibleAuthorityGrantFromProto(grant)
 		if !parsed.Valid() {
 			return fmt.Errorf("%w: %s contains invalid grant", errInvalidWitness, kind)
 		}

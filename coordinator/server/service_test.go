@@ -34,27 +34,27 @@ import (
 )
 
 type fakeStorage struct {
-	mu               sync.Mutex
-	eventCalls       int
-	saveCalls        int
-	loadCalls        int
-	campaignCalls    int
-	sealCalls        int
-	reattachCalls    int
-	eventErr         error
-	saveErr          error
-	loadErr          error
-	campaignErr      error
-	sealErr          error
-	applyPerasErr    error
-	lastID           uint64
-	lastTS           uint64
-	leader           bool
-	leaderID         uint64
-	lastEvent        rootevent.Event
-	lastPerasCommand rootproto.PerasAuthorityCommand
-	applyPerasCalls  int
-	snapshot         rootview.Snapshot
+	mu                          sync.Mutex
+	eventCalls                  int
+	saveCalls                   int
+	loadCalls                   int
+	campaignCalls               int
+	sealCalls                   int
+	reattachCalls               int
+	eventErr                    error
+	saveErr                     error
+	loadErr                     error
+	campaignErr                 error
+	sealErr                     error
+	applyVisibleAuthorityErr    error
+	lastID                      uint64
+	lastTS                      uint64
+	leader                      bool
+	leaderID                    uint64
+	lastEvent                   rootevent.Event
+	lastVisibleAuthorityCommand rootproto.VisibleAuthorityCommand
+	applyVisibleAuthorityCalls  int
+	snapshot                    rootview.Snapshot
 }
 
 func TestTranslateGrantErrorsAsGrantNotHeld(t *testing.T) {
@@ -197,17 +197,17 @@ func removeTestGrant(grants []rootproto.AuthorityGrant, grantID string) []rootpr
 	return grants
 }
 
-func upsertTestPerasGrant(grants []rootproto.PerasAuthorityGrant, grant rootproto.PerasAuthorityGrant) []rootproto.PerasAuthorityGrant {
+func upsertTestVisibleGrant(grants []rootproto.VisibleAuthorityGrant, grant rootproto.VisibleAuthorityGrant) []rootproto.VisibleAuthorityGrant {
 	for i := range grants {
 		if grants[i].GrantID == grant.GrantID {
-			grants[i] = rootproto.ClonePerasAuthorityGrant(grant)
+			grants[i] = rootproto.CloneVisibleAuthorityGrant(grant)
 			return grants
 		}
 	}
-	return append(grants, rootproto.ClonePerasAuthorityGrant(grant))
+	return append(grants, rootproto.CloneVisibleAuthorityGrant(grant))
 }
 
-func removeTestPerasGrant(grants []rootproto.PerasAuthorityGrant, grantID string) []rootproto.PerasAuthorityGrant {
+func removeTestVisibleGrant(grants []rootproto.VisibleAuthorityGrant, grantID string) []rootproto.VisibleAuthorityGrant {
 	for i := 0; i < len(grants); i++ {
 		if grants[i].GrantID == grantID {
 			grants = append(grants[:i], grants[i+1:]...)
@@ -439,66 +439,66 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 	}
 }
 
-func (f *fakeStorage) ApplyPerasAuthority(_ context.Context, cmd rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
+func (f *fakeStorage) ApplyVisibleAuthority(_ context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	f.applyPerasCalls++
-	f.lastPerasCommand = cmd
-	if f.applyPerasErr != nil {
-		return f.perasState(), rootproto.PerasAuthorityGrant{}, f.applyPerasErr
+	f.applyVisibleAuthorityCalls++
+	f.lastVisibleAuthorityCommand = cmd
+	if f.applyVisibleAuthorityErr != nil {
+		return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, f.applyVisibleAuthorityErr
 	}
 	switch cmd.Kind {
-	case rootproto.PerasAuthorityActAcquire:
+	case rootproto.VisibleAuthorityActAcquire:
 		holderID := strings.TrimSpace(cmd.HolderID)
 		if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
-			return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+			return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 		}
-		if active, ok := f.perasState().ActivePerasGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
+		if active, ok := f.visibleAuthorityState().ActiveVisibleGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
 			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
-				return f.perasState(), active, nil
+				return f.visibleAuthorityState(), active, nil
 			}
-			return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+			return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
 		}
-		epoch := f.snapshot.PerasAuthorityEpoch + 1
+		epoch := f.snapshot.VisibleAuthorityEpoch + 1
 		grantID := strings.TrimSpace(cmd.GrantID)
 		if grantID == "" {
 			grantID = fmt.Sprintf("%s/%d", holderID, epoch)
 		}
-		grant := rootproto.PerasAuthorityGrant{
+		grant := rootproto.VisibleAuthorityGrant{
 			GrantID:           grantID,
 			EpochID:           epoch,
 			HolderID:          holderID,
-			Scope:             rootproto.ClonePerasAuthorityScope(cmd.Scope),
+			Scope:             rootproto.CloneVisibleAuthorityScope(cmd.Scope),
 			ExpiresUnixNano:   cmd.ExpiresUnixNano,
 			PredecessorDigest: cmd.PredecessorDigest,
 			QuotaCreditBytes:  cmd.QuotaCreditBytes,
 			QuotaCreditInodes: cmd.QuotaCreditInodes,
 		}
-		f.snapshot.ActivePerasGrants = upsertTestPerasGrant(f.snapshot.ActivePerasGrants, grant)
-		if grant.EpochID > f.snapshot.PerasAuthorityEpoch {
-			f.snapshot.PerasAuthorityEpoch = grant.EpochID
+		f.snapshot.ActiveVisibleGrants = upsertTestVisibleGrant(f.snapshot.ActiveVisibleGrants, grant)
+		if grant.EpochID > f.snapshot.VisibleAuthorityEpoch {
+			f.snapshot.VisibleAuthorityEpoch = grant.EpochID
 		}
 		f.advanceRootToken()
-		return f.perasState(), grant, nil
-	case rootproto.PerasAuthorityActRetire:
+		return f.visibleAuthorityState(), grant, nil
+	case rootproto.VisibleAuthorityActRetire:
 		grantID := strings.TrimSpace(cmd.GrantID)
 		holderID := strings.TrimSpace(cmd.HolderID)
-		active, ok := f.snapshot.ActivePerasGrantByID(grantID)
+		active, ok := f.snapshot.ActiveVisibleGrantByID(grantID)
 		if !ok {
-			return f.perasState(), rootproto.PerasAuthorityGrant{}, nil
+			return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, nil
 		}
 		if active.HolderID != holderID {
-			return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrPrimacy
+			return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
 		}
-		f.snapshot.ActivePerasGrants = removeTestPerasGrant(f.snapshot.ActivePerasGrants, grantID)
+		f.snapshot.ActiveVisibleGrants = removeTestVisibleGrant(f.snapshot.ActiveVisibleGrants, grantID)
 		f.advanceRootToken()
-		return f.perasState(), rootproto.PerasAuthorityGrant{}, nil
+		return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, nil
 	default:
-		return f.perasState(), rootproto.PerasAuthorityGrant{}, rootstate.ErrInvalidGrant
+		return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
 	}
 }
 
-func (f *fakeStorage) perasState() rootstate.State {
+func (f *fakeStorage) visibleAuthorityState() rootstate.State {
 	return rootstate.CloneState(f.snapshot.RootSnapshot().State)
 }
 

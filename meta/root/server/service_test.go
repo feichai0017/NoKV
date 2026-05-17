@@ -25,31 +25,31 @@ import (
 )
 
 type fakeServiceBackend struct {
-	snapshot            rootstate.Snapshot
-	snapshotErr         error
-	appendErr           error
-	fenceErr            error
-	observeCommittedErr error
-	observeTailErr      error
-	waitTailErr         error
-	applyGrantErr       error
-	applyPerasErr       error
-	prepareErr          error
-	observed            rootstorage.ObservedCommitted
-	observeAdvance      rootstorage.TailAdvance
-	waitAdvance         rootstorage.TailAdvance
-	applyGrantResult    rootstate.EunomiaState
-	applyGrantCert      rootproto.GrantCertificate
-	applyPerasState     rootstate.State
-	applyPerasGrant     rootproto.PerasAuthorityGrant
-	isLeader            bool
-	leaderID            uint64
-	prepareCalls        int
-	appendCalls         int
-	applyGrantCalls     int
-	applyPerasCalls     int
-	fenceCalls          []rootstate.AllocatorKind
-	appendedEvents      []rootevent.Event
+	snapshot                   rootstate.Snapshot
+	snapshotErr                error
+	appendErr                  error
+	fenceErr                   error
+	observeCommittedErr        error
+	observeTailErr             error
+	waitTailErr                error
+	applyGrantErr              error
+	applyVisibleAuthorityErr   error
+	prepareErr                 error
+	observed                   rootstorage.ObservedCommitted
+	observeAdvance             rootstorage.TailAdvance
+	waitAdvance                rootstorage.TailAdvance
+	applyGrantResult           rootstate.EunomiaState
+	applyGrantCert             rootproto.GrantCertificate
+	applyVisibleAuthorityState rootstate.State
+	applyVisibleGrant          rootproto.VisibleAuthorityGrant
+	isLeader                   bool
+	leaderID                   uint64
+	prepareCalls               int
+	appendCalls                int
+	applyGrantCalls            int
+	applyVisibleAuthorityCalls int
+	fenceCalls                 []rootstate.AllocatorKind
+	appendedEvents             []rootevent.Event
 }
 
 func (f *fakeServiceBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -133,9 +133,9 @@ func (f *fakeServiceBackend) ApplyGrant(context.Context, rootproto.GrantCommand)
 	return f.applyGrantResult, f.applyGrantCert, f.applyGrantErr
 }
 
-func (f *fakeServiceBackend) ApplyPerasAuthority(context.Context, rootproto.PerasAuthorityCommand) (rootstate.State, rootproto.PerasAuthorityGrant, error) {
-	f.applyPerasCalls++
-	return f.applyPerasState, f.applyPerasGrant, f.applyPerasErr
+func (f *fakeServiceBackend) ApplyVisibleAuthority(context.Context, rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
+	f.applyVisibleAuthorityCalls++
+	return f.applyVisibleAuthorityState, f.applyVisibleGrant, f.applyVisibleAuthorityErr
 }
 
 type basicServiceBackend struct {
@@ -565,14 +565,14 @@ func TestServiceApplyGrant(t *testing.T) {
 	})
 }
 
-func TestServiceApplyPerasAuthority(t *testing.T) {
-	grant := testServerPerasAuthorityGrant()
+func TestServiceApplyVisibleAuthority(t *testing.T) {
+	grant := testServerVisibleAuthorityGrant()
 	state := rootstate.State{
-		ActivePerasGrants:   []rootproto.PerasAuthorityGrant{grant},
-		PerasAuthorityEpoch: grant.EpochID,
+		ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{grant},
+		VisibleAuthorityEpoch: grant.EpochID,
 	}
-	cmd := rootproto.PerasAuthorityCommand{
-		Kind:            rootproto.PerasAuthorityActAcquire,
+	cmd := rootproto.VisibleAuthorityCommand{
+		Kind:            rootproto.VisibleAuthorityActAcquire,
 		HolderID:        grant.HolderID,
 		Scope:           grant.Scope,
 		ExpiresUnixNano: grant.ExpiresUnixNano,
@@ -581,30 +581,30 @@ func TestServiceApplyPerasAuthority(t *testing.T) {
 
 	t.Run("nil service", func(t *testing.T) {
 		var svc *Service
-		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{})
+		resp, err := svc.ApplyVisibleAuthority(context.Background(), &metapb.MetadataRootApplyVisibleAuthorityRequest{})
 		require.NoError(t, err)
 		require.NotNil(t, resp)
 	})
 
 	t.Run("unimplemented", func(t *testing.T) {
 		svc := NewService(&basicServiceBackend{snapshot: testServerSnapshot(), isLeader: true})
-		_, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
-			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+		_, err := svc.ApplyVisibleAuthority(context.Background(), &metapb.MetadataRootApplyVisibleAuthorityRequest{
+			Command: metawire.RootVisibleAuthorityCommandToProto(cmd),
 		})
 		require.Equal(t, codes.Unimplemented, status.Code(err))
 	})
 
 	t.Run("held maps to response status", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
-			isLeader:        true,
-			applyPerasState: state,
-			applyPerasErr:   rootstate.ErrPrimacy,
+			isLeader:                   true,
+			applyVisibleAuthorityState: state,
+			applyVisibleAuthorityErr:   rootstate.ErrPrimacy,
 		})
-		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
-			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+		resp, err := svc.ApplyVisibleAuthority(context.Background(), &metapb.MetadataRootApplyVisibleAuthorityRequest{
+			Command: metawire.RootVisibleAuthorityCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD, resp.Status)
+		require.Equal(t, metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD, resp.Status)
 		require.Equal(t, state, metawire.RootStateFromProto(resp.State))
 	})
 
@@ -613,43 +613,43 @@ func TestServiceApplyPerasAuthority(t *testing.T) {
 			isLeader:   true,
 			prepareErr: nokverrors.New(nokverrors.KindUnavailable, "root state not ready"),
 		}
-		_, err := NewService(backend).ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
-			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+		_, err := NewService(backend).ApplyVisibleAuthority(context.Background(), &metapb.MetadataRootApplyVisibleAuthorityRequest{
+			Command: metawire.RootVisibleAuthorityCommandToProto(cmd),
 		})
 		require.Equal(t, codes.Unavailable, status.Code(err))
 		require.Equal(t, 1, backend.prepareCalls)
-		require.Zero(t, backend.applyPerasCalls)
+		require.Zero(t, backend.applyVisibleAuthorityCalls)
 	})
 
 	t.Run("success", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
-			isLeader:        true,
-			applyPerasState: state,
-			applyPerasGrant: grant,
+			isLeader:                   true,
+			applyVisibleAuthorityState: state,
+			applyVisibleGrant:          grant,
 		})
-		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
-			Command: metawire.RootPerasAuthorityCommandToProto(cmd),
+		resp, err := svc.ApplyVisibleAuthority(context.Background(), &metapb.MetadataRootApplyVisibleAuthorityRequest{
+			Command: metawire.RootVisibleAuthorityCommandToProto(cmd),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED, resp.Status)
-		require.Equal(t, grant, metawire.RootPerasAuthorityGrantFromProto(resp.Grant))
+		require.Equal(t, metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED, resp.Status)
+		require.Equal(t, grant, metawire.RootVisibleAuthorityGrantFromProto(resp.Grant))
 		require.Equal(t, state, metawire.RootStateFromProto(resp.State))
 	})
 
 	t.Run("retire status", func(t *testing.T) {
 		svc := NewService(&fakeServiceBackend{
-			isLeader:        true,
-			applyPerasState: rootstate.State{PerasAuthorityEpoch: grant.EpochID},
+			isLeader:                   true,
+			applyVisibleAuthorityState: rootstate.State{VisibleAuthorityEpoch: grant.EpochID},
 		})
-		resp, err := svc.ApplyPerasAuthority(context.Background(), &metapb.MetadataRootApplyPerasAuthorityRequest{
-			Command: metawire.RootPerasAuthorityCommandToProto(rootproto.PerasAuthorityCommand{
-				Kind:     rootproto.PerasAuthorityActRetire,
+		resp, err := svc.ApplyVisibleAuthority(context.Background(), &metapb.MetadataRootApplyVisibleAuthorityRequest{
+			Command: metawire.RootVisibleAuthorityCommandToProto(rootproto.VisibleAuthorityCommand{
+				Kind:     rootproto.VisibleAuthorityActRetire,
 				HolderID: grant.HolderID,
 				GrantID:  grant.GrantID,
 			}),
 		})
 		require.NoError(t, err)
-		require.Equal(t, metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_RETIRED, resp.Status)
+		require.Equal(t, metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED, resp.Status)
 	})
 }
 
@@ -689,12 +689,12 @@ func testServerSnapshot() rootstate.Snapshot {
 	}
 }
 
-func testServerPerasAuthorityGrant() rootproto.PerasAuthorityGrant {
-	return rootproto.PerasAuthorityGrant{
-		GrantID:         "peras-1",
+func testServerVisibleAuthorityGrant() rootproto.VisibleAuthorityGrant {
+	return rootproto.VisibleAuthorityGrant{
+		GrantID:         "visible-1",
 		EpochID:         1,
 		HolderID:        "holder-a",
-		Scope:           rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{1}},
+		Scope:           rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7, Buckets: []uint16{1}},
 		ExpiresUnixNano: 1_000,
 	}
 }

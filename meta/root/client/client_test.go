@@ -121,8 +121,8 @@ func TestRetryableRemoteErrorLeavesGenericInternalFatal(t *testing.T) {
 }
 
 type fakeMetadataRootClient struct {
-	statusFunc              func(context.Context, *metapb.MetadataRootStatusRequest, ...grpc.CallOption) (*metapb.MetadataRootStatusResponse, error)
-	applyPerasAuthorityFunc func(context.Context, *metapb.MetadataRootApplyPerasAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyPerasAuthorityResponse, error)
+	statusFunc                func(context.Context, *metapb.MetadataRootStatusRequest, ...grpc.CallOption) (*metapb.MetadataRootStatusResponse, error)
+	applyVisibleAuthorityFunc func(context.Context, *metapb.MetadataRootApplyVisibleAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error)
 }
 
 func (f *fakeMetadataRootClient) Snapshot(context.Context, *metapb.MetadataRootSnapshotRequest, ...grpc.CallOption) (*metapb.MetadataRootSnapshotResponse, error) {
@@ -148,11 +148,11 @@ func (f *fakeMetadataRootClient) ApplyGrant(context.Context, *metapb.MetadataRoo
 	return nil, status.Error(codes.Unimplemented, "grant")
 }
 
-func (f *fakeMetadataRootClient) ApplyPerasAuthority(ctx context.Context, req *metapb.MetadataRootApplyPerasAuthorityRequest, opts ...grpc.CallOption) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
-	if f.applyPerasAuthorityFunc != nil {
-		return f.applyPerasAuthorityFunc(ctx, req, opts...)
+func (f *fakeMetadataRootClient) ApplyVisibleAuthority(ctx context.Context, req *metapb.MetadataRootApplyVisibleAuthorityRequest, opts ...grpc.CallOption) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
+	if f.applyVisibleAuthorityFunc != nil {
+		return f.applyVisibleAuthorityFunc(ctx, req, opts...)
 	}
-	return nil, status.Error(codes.Unimplemented, "peras authority")
+	return nil, status.Error(codes.Unimplemented, "visible authority")
 }
 
 func (f *fakeMetadataRootClient) ObserveCommitted(context.Context, *metapb.MetadataRootObserveCommittedRequest, ...grpc.CallOption) (*metapb.MetadataRootObserveCommittedResponse, error) {
@@ -199,8 +199,8 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 
 	require.True(t, validGrantAct(1))
 	require.False(t, validGrantAct(99))
-	require.True(t, validPerasAuthorityAct(rootproto.PerasAuthorityActAcquire))
-	require.False(t, validPerasAuthorityAct(rootproto.PerasAuthorityAct(99)))
+	require.True(t, validVisibleAuthorityAct(rootproto.VisibleAuthorityActAcquire))
+	require.False(t, validVisibleAuthorityAct(rootproto.VisibleAuthorityAct(99)))
 
 	leaderID, ok := leaderHint(metadataRootNotLeaderErrorForTest(23))
 	require.True(t, ok)
@@ -213,17 +213,17 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 	require.NoError(t, waitForReady(context.Background(), nil))
 }
 
-func TestClientApplyPerasAuthority(t *testing.T) {
-	state := rootstate.State{PerasAuthorityEpoch: 4}
-	grant := rootproto.PerasAuthorityGrant{
-		GrantID:         "peras-4",
+func TestClientApplyVisibleAuthority(t *testing.T) {
+	state := rootstate.State{VisibleAuthorityEpoch: 4}
+	grant := rootproto.VisibleAuthorityGrant{
+		GrantID:         "visible-4",
 		EpochID:         4,
 		HolderID:        "holder-a",
-		Scope:           rootproto.PerasAuthorityScope{MountID: "vol", MountKeyID: 7},
+		Scope:           rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7},
 		ExpiresUnixNano: 1_000,
 	}
-	cmd := rootproto.PerasAuthorityCommand{
-		Kind:            rootproto.PerasAuthorityActAcquire,
+	cmd := rootproto.VisibleAuthorityCommand{
+		Kind:            rootproto.VisibleAuthorityActAcquire,
 		HolderID:        grant.HolderID,
 		Scope:           grant.Scope,
 		ExpiresUnixNano: grant.ExpiresUnixNano,
@@ -235,11 +235,11 @@ func TestClientApplyPerasAuthority(t *testing.T) {
 			endpoints: []clientEndpoint{{
 				id: 1,
 				rpc: &fakeMetadataRootClient{
-					applyPerasAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyPerasAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
-						return &metapb.MetadataRootApplyPerasAuthorityResponse{
+					applyVisibleAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyVisibleAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
+						return &metapb.MetadataRootApplyVisibleAuthorityResponse{
 							State:  metawire.RootStateToProto(state),
-							Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_GRANTED,
-							Grant:  metawire.RootPerasAuthorityGrantToProto(grant),
+							Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED,
+							Grant:  metawire.RootVisibleAuthorityGrantToProto(grant),
 						}, nil
 					},
 				},
@@ -247,7 +247,7 @@ func TestClientApplyPerasAuthority(t *testing.T) {
 			byID: map[uint64]int{1: 0},
 		}
 
-		gotState, gotGrant, err := c.ApplyPerasAuthority(context.Background(), cmd)
+		gotState, gotGrant, err := c.ApplyVisibleAuthority(context.Background(), cmd)
 		require.NoError(t, err)
 		require.Equal(t, state, gotState)
 		require.Equal(t, grant, gotGrant)
@@ -258,10 +258,10 @@ func TestClientApplyPerasAuthority(t *testing.T) {
 			endpoints: []clientEndpoint{{
 				id: 1,
 				rpc: &fakeMetadataRootClient{
-					applyPerasAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyPerasAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyPerasAuthorityResponse, error) {
-						return &metapb.MetadataRootApplyPerasAuthorityResponse{
+					applyVisibleAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyVisibleAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
+						return &metapb.MetadataRootApplyVisibleAuthorityResponse{
 							State:  metawire.RootStateToProto(state),
-							Status: metapb.RootPerasAuthorityApplyStatus_ROOT_PERAS_AUTHORITY_APPLY_STATUS_HELD,
+							Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD,
 						}, nil
 					},
 				},
@@ -269,8 +269,8 @@ func TestClientApplyPerasAuthority(t *testing.T) {
 			byID: map[uint64]int{1: 0},
 		}
 
-		gotState, _, err := c.ApplyPerasAuthority(context.Background(), rootproto.PerasAuthorityCommand{
-			Kind:     rootproto.PerasAuthorityActRetire,
+		gotState, _, err := c.ApplyVisibleAuthority(context.Background(), rootproto.VisibleAuthorityCommand{
+			Kind:     rootproto.VisibleAuthorityActRetire,
 			HolderID: grant.HolderID,
 			GrantID:  grant.GrantID,
 		})

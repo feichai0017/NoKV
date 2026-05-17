@@ -15,7 +15,6 @@ import (
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
-	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/peer"
@@ -507,8 +506,8 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 					return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 				}
 			}
-		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-			if err, reason := validatePerasSegmentRequestKeys(meta, r.GetPerasInstallSegment()); err != nil {
+		case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+			if err, reason := validatePreparedMVCCInstallRequestKeys(meta, r.GetInstallPreparedMvcc()); err != nil {
 				return err, reason
 			}
 		default:
@@ -518,7 +517,7 @@ func validateRequestKeys(meta localmeta.RegionMeta, req *raftcmdpb.RaftCmdReques
 	return nil, AdmissionReasonUnknown
 }
 
-func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.PerasInstallSegmentRequest) (*errorpb.RegionError, AdmissionReason) {
+func validatePreparedMVCCInstallRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.InstallPreparedMVCCEntriesRequest) (*errorpb.RegionError, AdmissionReason) {
 	if req == nil {
 		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
@@ -526,77 +525,19 @@ func validatePerasSegmentRequestKeys(meta localmeta.RegionMeta, req *kvrpcpb.Per
 	if len(routingKey) == 0 || !keyInRange(meta, routingKey) {
 		return keyNotInRegionError(meta, routingKey), AdmissionReasonKeyNotInRegion
 	}
-	info, err := rsperas.InspectInstallRequest(req)
-	if err != nil {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	if err, reason := validatePerasMaterializedPayloadKeys(meta, req, info); err != nil {
-		return err, reason
-	}
-	keys, err := rsperas.InstallKeys(req)
-	if err != nil {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	if !info.MaterializeMVCC && !info.HasPayload {
-		if err, reason := validatePerasCatalogIndexRoute(meta, info); err != nil {
-			return err, reason
-		}
-	}
-	for _, key := range keys {
+	for _, key := range req.GetDependencyKeys() {
 		if len(key) == 0 || !keyInRange(meta, key) {
 			return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 		}
 	}
-	return nil, AdmissionReasonUnknown
-}
-
-func validatePerasMaterializedPayloadKeys(meta localmeta.RegionMeta, req *kvrpcpb.PerasInstallSegmentRequest, info rsperas.InstallRequestInfo) (*errorpb.RegionError, AdmissionReason) {
-	if !info.MaterializeMVCC {
-		return nil, AdmissionReasonUnknown
-	}
-	if !info.HasPayload {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	segment, _, err := rsperas.DecodeInstallSegmentPayload(req)
-	if err != nil {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	entries := segment.EntriesView()
-	for _, entry := range entries {
-		if len(entry.Key) == 0 || !keyInRange(meta, entry.Key) {
-			return keyNotInRegionError(meta, entry.Key), AdmissionReasonKeyNotInRegion
-		}
-	}
-	if len(info.MaterializedKeys) == 0 {
-		return nil, AdmissionReasonUnknown
-	}
-	if len(info.MaterializedKeys) != len(entries) {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	for i, entry := range entries {
-		if !bytes.Equal(info.MaterializedKeys[i], entry.Key) {
+	for _, entry := range req.GetEntries() {
+		if entry == nil {
 			return epochNotMatchError(&meta), AdmissionReasonInvalid
 		}
-	}
-	return nil, AdmissionReasonUnknown
-}
-
-func validatePerasCatalogIndexRoute(meta localmeta.RegionMeta, info rsperas.InstallRequestInfo) (*errorpb.RegionError, AdmissionReason) {
-	if info.SegmentEpochID == 0 || info.SegmentOperationCount == 0 || info.SegmentEntryCount == 0 ||
-		info.SegmentPayloadSize == 0 || len(info.CanonicalObjectKey) == 0 || bytes.Equal(info.RoutingKey, info.CanonicalObjectKey) {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	routingKeys, err := rsperas.CatalogInstallRoutingKeys(info)
-	if err != nil {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
-	}
-	for _, routingKey := range routingKeys {
-		if bytes.Equal(routingKey, info.CanonicalObjectKey) {
-			return epochNotMatchError(&meta), AdmissionReasonInvalid
+		key := entry.GetKey()
+		if len(key) == 0 || !keyInRange(meta, key) {
+			return keyNotInRegionError(meta, key), AdmissionReasonKeyNotInRegion
 		}
-	}
-	if _, err := rsperas.CatalogRouteInstallKeys(info.Root, info.CanonicalObjectKey); err != nil {
-		return epochNotMatchError(&meta), AdmissionReasonInvalid
 	}
 	return nil, AdmissionReasonUnknown
 }

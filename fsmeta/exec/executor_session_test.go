@@ -14,15 +14,15 @@ import (
 	"time"
 )
 
-func TestExecutorOpenWriteSessionPerasVisibleCommitBypassesRaftCommit(t *testing.T) {
+func TestExecutorOpenWriteSessionVisibleCommitBypassesRaftCommit(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	committer := &fakePerasCommitter{}
+	committer := &fakeVisibleCommitter{}
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
-		WithPerasAuthorityAdmitter(&fakePerasAdmitter{owned: true}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -49,21 +49,21 @@ func TestExecutorOpenWriteSessionPerasVisibleCommitBypassesRaftCommit(t *testing
 	require.Empty(t, runner.mutations, "session visible commit must bypass the current Raft commit")
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 1)
-	requirePerasVisibleStatUint(t, stats, "success_total", 1)
-	requirePerasVisibleStatUint(t, stats, "skip_non_concrete_total", 0)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 1)
+	requireVisibleCommitStatUint(t, stats, "success_total", 1)
+	requireVisibleCommitStatUint(t, stats, "skip_non_concrete_total", 0)
 }
 
-func TestExecutorOpenWriteSessionPerasUsesCreateSessionOwnerFact(t *testing.T) {
+func TestExecutorOpenWriteSessionVisibleUsesCreateSessionOwnerFact(t *testing.T) {
 	runner := newFakeRunner()
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	inode := testInodeForParentBucket(t, fsmeta.RootInode)
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
 		WithInodeAllocator(&fakeInodeAllocator{ids: []fsmeta.InodeID{inode}}),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -90,15 +90,15 @@ func TestExecutorOpenWriteSessionPerasUsesCreateSessionOwnerFact(t *testing.T) {
 	require.Equal(t, uint64(2), committer.Stats()["commit_total"])
 }
 
-func TestExecutorWriteSessionLifecyclePerasVisibleCommitServesOverlay(t *testing.T) {
+func TestExecutorWriteSessionLifecycleVisibleCommitServesOverlay(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", fsmeta.InodeRecord{Inode: 22, Type: fsmeta.InodeTypeFile, LinkCount: 1})
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -136,17 +136,17 @@ func TestExecutorWriteSessionLifecyclePerasVisibleCommitServesOverlay(t *testing
 	})
 	require.NoError(t, err)
 
-	_, deleted, ok := committer.GetPerasOverlay(sessionKey)
+	_, deleted, ok := committer.GetVisibleOverlay(sessionKey)
 	require.True(t, ok)
 	require.True(t, deleted)
-	_, deleted, ok = committer.GetPerasOverlay(ownerKey)
+	_, deleted, ok = committer.GetVisibleOverlay(ownerKey)
 	require.True(t, ok)
 	require.True(t, deleted)
-	require.Empty(t, runner.mutations, "Peras session lifecycle should stay entirely inside Peras overlay")
+	require.Empty(t, runner.mutations, "Visible session lifecycle should stay entirely inside visible overlay")
 
 	stats := executor.Stats()
-	requirePerasVisibleStatUint(t, stats, "attempt_total", 3)
-	requirePerasVisibleStatUint(t, stats, "success_total", 3)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 3)
+	requireVisibleCommitStatUint(t, stats, "success_total", 3)
 }
 
 func TestExecutorWriteSessionLifecycle(t *testing.T) {
@@ -477,15 +477,15 @@ func TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession(t *testing.T)
 	require.Contains(t, runner.data, string(liveOwnerKey))
 }
 
-func TestExecutorExpireWriteSessionsFlushesPerasAuthority(t *testing.T) {
+func TestExecutorExpireWriteSessionsFlushesVisibleAuthority(t *testing.T) {
 	runner := newFakeRunner()
 	expired := fsmeta.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
 	seedSession(t, runner, "vol", expired)
-	flusher := &fakePerasAuthorityFlusher{}
+	flusher := &fakeVisibleAuthorityFlusher{}
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
-		WithPerasCommitter(flusher),
+		WithVisibleCommitter(flusher),
 	)
 	require.NoError(t, err)
 
@@ -497,16 +497,16 @@ func TestExecutorExpireWriteSessionsFlushesPerasAuthority(t *testing.T) {
 	require.Equal(t, fsmeta.MountID("vol"), flusher.flushScopes[0].Mount)
 }
 
-func TestExecutorExpireWriteSessionsUsesPerasVisibleDelete(t *testing.T) {
+func TestExecutorExpireWriteSessionsUsesVisibleCommitDelete(t *testing.T) {
 	runner := newFakeRunner()
 	expired := fsmeta.SessionRecord{Session: "writer-visible-old", Inode: 22, ExpiresUnixNs: 50}
 	seedSession(t, runner, "vol", expired)
-	committer := newTestPerasCommitter(t, runner)
+	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(committer),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
 
@@ -517,12 +517,12 @@ func TestExecutorExpireWriteSessionsUsesPerasVisibleDelete(t *testing.T) {
 
 	sessionKey, err := fsmeta.EncodeSessionKey(testMountIdentity, expired.Inode, expired.Session)
 	require.NoError(t, err)
-	_, deleted, ok := committer.GetPerasOverlay(sessionKey)
+	_, deleted, ok := committer.GetVisibleOverlay(sessionKey)
 	require.True(t, ok)
 	require.True(t, deleted)
 	ownerKey, err := fsmeta.EncodeInodeSessionKey(testMountIdentity, expired.Inode)
 	require.NoError(t, err)
-	_, deleted, ok = committer.GetPerasOverlay(ownerKey)
+	_, deleted, ok = committer.GetVisibleOverlay(ownerKey)
 	require.True(t, ok)
 	require.True(t, deleted)
 }
@@ -536,13 +536,13 @@ func BenchmarkExecutorOpenWriteSessionDefaultPath(b *testing.B) {
 	benchmarkExecutorOpenWriteSession(b, runner, executor)
 }
 
-func BenchmarkExecutorOpenWriteSessionPerasVisibleCommit(b *testing.B) {
+func BenchmarkExecutorOpenWriteSessionVisibleCommit(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
-		WithPerasAuthorityAdmitter(ownedPerasAdmitter{}),
-		WithPerasCommitter(noopPerasCommitter{}),
+		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
+		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {
 		b.Fatal(err)

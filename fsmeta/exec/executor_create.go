@@ -30,12 +30,12 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
-	program, err := compile.CompileCreateProgram(req, mount, inodeID, compile.WithQuotaMode(e.perasQuotaMode()))
+	program, err := compile.CompileCreateProgram(req, mount, inodeID, compile.WithQuotaMode(e.visibleQuotaMode()))
 	if err != nil {
 		return fsmeta.CreateResult{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitPerasAuthority(ctx, delta); err != nil {
+	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
 		return fsmeta.CreateResult{}, err
 	}
 	plan := delta.Plan
@@ -57,21 +57,21 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		Inodes:     1,
 	}}
 	quotaOK := true
-	if e.perasCommitter != nil && e.perasAuthority != nil && delta.Eligibility == compile.EligibilityVisibleCommit {
+	if e.visibleCommitter != nil && e.visibleAuthority != nil && delta.Eligibility == compile.EligibilityVisibleCommit {
 		var err error
-		quotaOK, err = e.perasQuotaAllowsVisibleCommit(ctx, quotaChanges)
+		quotaOK, err = e.visibleQuotaAllowsCommit(ctx, quotaChanges)
 		if err != nil {
 			return fsmeta.CreateResult{}, err
 		}
 	}
 	if quotaOK {
 		materialized := compile.MaterializedOp{CompiledOp: program.Compiled}
-		if committed, err := e.tryPerasVisibleCommit(ctx, materialized); committed || err != nil {
+		if committed, err := e.tryVisibleCommit(ctx, materialized); committed || err != nil {
 			if err != nil {
 				return fsmeta.CreateResult{}, err
 			}
-			e.rememberPerasCreate(mount, plan, inode)
-			e.forgetPerasEmptyDirectory(mount, req.Parent)
+			e.rememberVisibleCreate(mount, plan, inode)
+			e.forgetVisibleEmptyDirectory(mount, req.Parent)
 			e.invalidateNegative(plan.MutateKeys[0])
 			e.invalidateDirPages(req.Mount, req.Parent)
 			return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
@@ -114,11 +114,11 @@ func (e *Executor) Create(ctx context.Context, req fsmeta.CreateRequest) (fsmeta
 		return fsmeta.CreateResult{}, err
 	}
 	// The new dentry replaces a previously-missing key; drop any negative
-	// memo a prior Lookup may have planted, forget any Peras-derived empty
+	// memo a prior Lookup may have planted, forget any visible-derived empty
 	// directory fact, and bump the parent's dirpage epoch so a stale
 	// ReadDirPlus result cannot mask the new entry.
-	e.rememberPerasCreate(mount, plan, inode)
-	e.forgetPerasEmptyDirectory(mount, req.Parent)
+	e.rememberVisibleCreate(mount, plan, inode)
+	e.forgetVisibleEmptyDirectory(mount, req.Parent)
 	e.invalidateNegative(plan.MutateKeys[0])
 	e.invalidateDirPages(req.Mount, req.Parent)
 	return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil

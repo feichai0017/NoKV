@@ -320,7 +320,7 @@ func validateSnapshotToken(token fsmeta.SnapshotSubtreeToken) error {
 	if token.Mount == "" || token.MountKeyID == 0 || token.RootInode == 0 || token.ReadVersion == 0 {
 		return fsmeta.ErrInvalidRequest
 	}
-	for _, ref := range token.PerasSegmentRefs {
+	for _, ref := range token.RuntimeEvidence {
 		if !ref.Valid() {
 			return fsmeta.ErrInvalidRequest
 		}

@@ -20,7 +20,7 @@ const segmentFormatVersion uint16 = 1
 
 // CompiledOp is the segment-installable semantic descriptor for one metadata
 // operation. SemanticDelta is the executor-facing mutation contract; this
-// descriptor is the compiler boundary Peras needs for admission, segment
+// descriptor is the compiler boundary optimized runtimes use for admission,
 // packing, recovery, completion, and watch projection.
 type CompiledOp struct {
 	Delta SemanticDelta
@@ -46,9 +46,9 @@ type CompiledOp struct {
 	Segment      SegmentPlan
 }
 
-// MaterializedOp is the closed Peras IR admitted by the holder. It has the
-// static generated descriptor plus any runtime predicate proofs and concrete
-// effects needed to install the operation inside a segment.
+// MaterializedOp is the closed semantic program admitted by an optimized
+// runtime. It has the static generated descriptor plus any runtime predicate
+// proofs and concrete effects needed to install the operation inside a segment.
 type MaterializedOp struct {
 	CompiledOp
 	PredicateProofs []proof.PredicateProof
@@ -56,7 +56,8 @@ type MaterializedOp struct {
 }
 
 // PredicateEvidence carries runtime reads that turn a generated program with
-// symbolic predicates into the proof-carrying descriptor admitted by Peras.
+// symbolic predicates into the proof-carrying descriptor admitted by an
+// optimized runtime.
 type PredicateEvidence struct {
 	Proofs []proof.PredicateProof
 }
@@ -245,7 +246,7 @@ type SegmentPlan struct {
 }
 
 // InstallPlan is the segment-install command header produced after a compiled
-// replay plan has been sealed into a concrete Peras segment. Routing and apply
+// replay plan has been sealed into a concrete segment. Routing and apply
 // scheduling consume this metadata without decoding the segment payload.
 type InstallPlan struct {
 	Mode               SegmentInstallMode

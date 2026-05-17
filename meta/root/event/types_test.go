@@ -86,33 +86,33 @@ func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
 	require.Equal(t, rootevent.KindGrantInherited, inheritedClone.Kind)
 	require.Equal(t, "c2/2", inheritedClone.GrantInheritance.SuccessorGrantID)
 
-	perasGrant := rootproto.PerasAuthorityGrant{
-		GrantID:  "peras-1",
+	visibleGrant := rootproto.VisibleAuthorityGrant{
+		GrantID:  "visible-1",
 		EpochID:  1,
 		HolderID: "holder-a",
-		Scope: rootproto.PerasAuthorityScope{
+		Scope: rootproto.VisibleAuthorityScope{
 			MountID:    "vol",
 			MountKeyID: 7,
 			Buckets:    []uint16{1},
 		},
 		ExpiresUnixNano: 1_000,
 	}
-	perasIssued := rootevent.PerasAuthorityGranted(perasGrant)
-	perasIssued.PerasGrant.Scope.Buckets[0] = 9
-	require.Equal(t, []uint16{1}, perasGrant.Scope.Buckets)
-	perasRetired := rootevent.PerasAuthorityRetired(perasGrant)
-	require.Equal(t, rootevent.KindPerasAuthorityRetired, perasRetired.Kind)
-	require.Equal(t, perasGrant.GrantID, perasRetired.PerasGrant.GrantID)
+	visibleAuthorityIssued := rootevent.VisibleAuthorityGranted(visibleGrant)
+	visibleAuthorityIssued.VisibleGrant.Scope.Buckets[0] = 9
+	require.Equal(t, []uint16{1}, visibleGrant.Scope.Buckets)
+	visibleAuthorityRetired := rootevent.VisibleAuthorityRetired(visibleGrant)
+	require.Equal(t, rootevent.KindVisibleAuthorityRetired, visibleAuthorityRetired.Kind)
+	require.Equal(t, visibleGrant.GrantID, visibleAuthorityRetired.VisibleGrant.GrantID)
 
 	var root [32]byte
 	var digest [32]byte
 	root[0] = 1
 	digest[0] = 2
-	perasSeal := rootproto.PerasAuthoritySeal{
-		GrantID:              perasGrant.GrantID,
-		EpochID:              perasGrant.EpochID,
-		HolderID:             perasGrant.HolderID,
-		Scope:                perasGrant.Scope,
+	visibleSeal := rootproto.VisibleAuthoritySeal{
+		GrantID:              visibleGrant.GrantID,
+		EpochID:              visibleGrant.EpochID,
+		HolderID:             visibleGrant.HolderID,
+		Scope:                visibleGrant.Scope,
 		SegmentRoot:          root,
 		SegmentPayloadDigest: digest,
 		SealedUnixNano:       10,
@@ -121,11 +121,11 @@ func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
 		InstallIndex:         13,
 		InstallVersion:       14,
 	}
-	perasSealed := rootevent.PerasAuthoritySealed(perasSeal)
-	perasSealedClone := rootevent.CloneEvent(perasSealed)
-	perasSealed.PerasSeal.Scope.Buckets[0] = 10
-	require.Equal(t, rootevent.KindPerasAuthoritySealed, perasSealedClone.Kind)
-	require.Equal(t, []uint16{1}, perasSealedClone.PerasSeal.Scope.Buckets)
+	visibleSealed := rootevent.VisibleAuthoritySealed(visibleSeal)
+	visibleSealedClone := rootevent.CloneEvent(visibleSealed)
+	visibleSealed.VisibleSeal.Scope.Buckets[0] = 10
+	require.Equal(t, rootevent.KindVisibleAuthoritySealed, visibleSealedClone.Kind)
+	require.Equal(t, []uint16{1}, visibleSealedClone.VisibleSeal.Scope.Buckets)
 }
 
 func TestMembershipAndAllocatorConstructors(t *testing.T) {
@@ -133,10 +133,10 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	retired := rootevent.StoreRetired(7)
 	idFence := rootevent.IDAllocatorFenced(11)
 	tsoFence := rootevent.TSOAllocatorFenced(29)
-	ref := testEventPerasSnapshotSegmentRef(7, 0x60)
-	refs := []rootproto.PerasSnapshotSegmentRef{ref}
-	snapshot := rootevent.SnapshotEpochPublishedWithPerasRefs("vol", 1, 42, 99, refs)
-	refs[0].SegmentRoot[0] = 0xff
+	ref := testEventSnapshotEvidenceRef(7, 0x60)
+	refs := []rootproto.SnapshotEvidenceRef{ref}
+	snapshot := rootevent.SnapshotEpochPublishedWithRuntimeEvidence("vol", 1, 42, 99, refs)
+	refs[0].EvidenceRoot[0] = 0xff
 	retiredSnapshot := rootevent.SnapshotEpochRetired("vol", 1, 42, 99)
 	mount := rootevent.MountRegistered("vol", 1, 1, 1)
 	retiredMount := rootevent.MountRetired("vol")
@@ -162,7 +162,7 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	require.Equal(t, uint64(1), snapshot.SnapshotEpoch.MountKeyID)
 	require.Equal(t, uint64(42), snapshot.SnapshotEpoch.RootInode)
 	require.Equal(t, uint64(99), snapshot.SnapshotEpoch.ReadVersion)
-	require.Equal(t, []rootproto.PerasSnapshotSegmentRef{ref}, snapshot.SnapshotEpoch.PerasSegmentRefs)
+	require.Equal(t, []rootproto.SnapshotEvidenceRef{ref}, snapshot.SnapshotEpoch.RuntimeEvidence)
 	require.Equal(t, rootevent.KindSnapshotEpochRetired, retiredSnapshot.Kind)
 	require.Equal(t, snapshot.SnapshotEpoch.SnapshotID, retiredSnapshot.SnapshotEpoch.SnapshotID)
 	require.Equal(t, uint64(1), retiredSnapshot.SnapshotEpoch.MountKeyID)
@@ -191,12 +191,12 @@ func TestMembershipAndAllocatorConstructors(t *testing.T) {
 	require.Equal(t, uint64(99), quota.QuotaFence.Frontier)
 }
 
-func testEventPerasSnapshotSegmentRef(epoch uint64, seed byte) rootproto.PerasSnapshotSegmentRef {
+func testEventSnapshotEvidenceRef(epoch uint64, seed byte) rootproto.SnapshotEvidenceRef {
 	var root [32]byte
 	var digest [32]byte
 	root[0] = seed
 	digest[0] = seed + 1
-	return rootproto.PerasSnapshotSegmentRef{EpochID: epoch, SegmentRoot: root, SegmentPayloadDigest: digest}
+	return rootproto.SnapshotEvidenceRef{EpochID: epoch, EvidenceRoot: root, PayloadDigest: digest}
 }
 
 func TestRegionLifecycleConstructors(t *testing.T) {

@@ -11,7 +11,6 @@ import (
 	raftcmdpb "github.com/feichai0017/NoKV/pb/raft"
 	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/feichai0017/NoKV/raftstore/command"
-	rsperas "github.com/feichai0017/NoKV/raftstore/peras"
 )
 
 type commandApplyPlan struct {
@@ -36,7 +35,6 @@ const (
 	commandApplyDependencyUserKey commandApplyDependencyClass = iota + 1
 	commandApplyDependencyTxnPrimary
 	commandApplyDependencyTxnIntent
-	commandApplyDependencyPerasSegment
 )
 
 type commandApplyDependencyKey struct {
@@ -152,10 +150,10 @@ func commandApplyDependencies(req *raftcmdpb.RaftCmdRequest) ([]commandApplyDepe
 				return nil, true
 			}
 			return nil, true
-		case raftcmdpb.CmdType_CMD_PERAS_INSTALL_SEGMENT:
-			install := r.GetPerasInstallSegment()
+		case raftcmdpb.CmdType_CMD_INSTALL_PREPARED_MVCC:
+			install := r.GetInstallPreparedMvcc()
 			var ok bool
-			deps, ok = appendCommandApplyPerasInstallSegment(deps, install)
+			deps, ok = appendCommandApplyPreparedMVCCInstall(deps, install)
 			if !ok {
 				return nil, true
 			}
@@ -197,18 +195,19 @@ func appendCommandApplyVersionedWrite(dst []commandApplyDependency, class comman
 	return appendCommandApplyDependency(dst, class, key, version, commandApplyDependencyWrite)
 }
 
-func appendCommandApplyPerasInstallSegment(dst []commandApplyDependency, req *kvrpcpb.PerasInstallSegmentRequest) ([]commandApplyDependency, bool) {
-	info, err := rsperas.InspectInstallRequest(req)
-	if err != nil {
+func appendCommandApplyPreparedMVCCInstall(dst []commandApplyDependency, req *kvrpcpb.InstallPreparedMVCCEntriesRequest) ([]commandApplyDependency, bool) {
+	if req == nil || len(req.GetRoutingKey()) == 0 {
 		return nil, false
 	}
-	dst = appendCommandApplyDependency(dst, commandApplyDependencyPerasSegment, info.Root[:], 0, commandApplyDependencyWrite)
-	keys, err := rsperas.InstallKeys(req)
-	if err != nil {
-		return nil, false
-	}
-	for _, key := range keys {
+	dst = appendCommandApplyUserWrite(dst, req.GetRoutingKey())
+	for _, key := range req.GetDependencyKeys() {
 		dst = appendCommandApplyUserWrite(dst, key)
+	}
+	for _, entry := range req.GetEntries() {
+		if entry == nil || len(entry.GetKey()) == 0 {
+			return nil, false
+		}
+		dst = appendCommandApplyUserWrite(dst, entry.GetKey())
 	}
 	return dst, true
 }

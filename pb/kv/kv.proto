@@ -199,6 +199,51 @@ message MVCCMaintenanceResponse {
   uint64 applied_entries = 2;
 }
 
+message PreparedMVCCEntry {
+  enum ColumnFamily {
+    DEFAULT = 0;
+    LOCK = 1;
+    WRITE = 2;
+  }
+
+  ColumnFamily column_family = 1;
+  bytes key = 2;
+  uint64 version = 3;
+  bytes value = 4;
+  uint32 meta = 5;
+  uint64 expires_at = 6;
+  bool has_value = 7;
+}
+
+message InstallPreparedMVCCEntriesRequest {
+  bytes routing_key = 1;
+  uint64 commit_version = 2;
+  repeated PreparedMVCCEntry entries = 3;
+  repeated bytes dependency_keys = 4;
+  bytes idempotency_key = 5;
+  string diagnostic_label = 6;
+  repeated bytes watch_keys = 7;
+}
+
+message InstallPreparedMVCCEntriesResponse {
+  KeyError error = 1;
+  uint64 applied_entries = 2;
+  uint64 commit_version = 3;
+  uint64 region_id = 4;
+  uint64 term = 5;
+  uint64 index = 6;
+}
+
+message KvInstallPreparedMVCCEntriesRequest {
+  Context context = 1;
+  InstallPreparedMVCCEntriesRequest request = 2;
+}
+
+message KvInstallPreparedMVCCEntriesResponse {
+  InstallPreparedMVCCEntriesResponse response = 1;
+  nokv.error.v1.RegionError region_error = 2;
+}
+
 enum AtomicPredicateKind {
   ATOMIC_PREDICATE_KIND_NOT_EXISTS = 0;
   ATOMIC_PREDICATE_KIND_EXISTS = 1;
@@ -223,43 +268,6 @@ message TryAtomicMutateResponse {
   KeyError error = 1;
   uint64 applied_keys = 2;
   bool fallback_to_two_phase_commit = 3;
-}
-
-message PerasInstallSegmentRequest {
-  bytes routing_key = 1;
-  bytes segment_root = 2;
-  bytes segment_payload_digest = 3;
-  bytes segment_payload = 4;
-  uint64 install_version = 5;
-  bool materialize_mvcc = 6;
-  uint64 segment_epoch_id = 7;
-  uint64 segment_operation_count = 8;
-  uint64 segment_entry_count = 9;
-  uint64 segment_payload_size = 10;
-  bytes canonical_object_key = 11;
-  repeated bytes routing_keys = 12;
-  repeated bytes dependency_keys = 13;
-  repeated bytes catalog_keys = 14;
-  repeated bytes materialized_keys = 15;
-  bytes read_first_key = 16;
-  bytes read_last_key = 17;
-  uint64 read_dentry_count = 18;
-  uint64 read_inode_count = 19;
-  uint64 read_session_count = 20;
-  uint64 read_tombstone_count = 21;
-  uint64 read_directory_count = 22;
-}
-
-message PerasInstallSegmentResponse {
-  KeyError error = 1;
-  bytes segment_root = 2;
-  uint64 operation_count = 3;
-  uint64 entry_count = 4;
-  uint64 applied_entries = 5;
-  uint64 region_id = 6;
-  uint64 term = 7;
-  uint64 index = 8;
-  uint64 commit_version = 9;
 }
 
 message Context {
@@ -373,16 +381,6 @@ message KvTryAtomicMutateResponse {
   nokv.error.v1.RegionError region_error = 2;
 }
 
-message KvPerasInstallSegmentRequest {
-  Context context = 1;
-  PerasInstallSegmentRequest request = 2;
-}
-
-message KvPerasInstallSegmentResponse {
-  PerasInstallSegmentResponse response = 1;
-  nokv.error.v1.RegionError region_error = 2;
-}
-
 enum ApplyWatchEventSource {
   APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED = 0;
   APPLY_WATCH_EVENT_SOURCE_COMMIT = 1;
@@ -408,7 +406,7 @@ message ApplyWatchResponse {
   uint64 dropped_events = 2;
 }
 
-message PerasAuthorityScope {
+message VisibleAuthorityScope {
   string mount = 1;
   uint64 mount_key_id = 2;
   repeated uint32 buckets = 3;
@@ -416,7 +414,7 @@ message PerasAuthorityScope {
   repeated uint64 inodes = 5;
 }
 
-message PerasSegmentWitnessRecord {
+message SegmentWitnessRecord {
   uint64 epoch_id = 1;
   bytes segment_root = 2;
   uint64 operation_count = 3;
@@ -430,14 +428,14 @@ message PerasSegmentWitnessRecord {
   bytes predecessor_digest = 11;
 }
 
-message PerasWitnessSegmentsRequest {
-  PerasAuthorityScope scope = 1;
-  repeated PerasSegmentWitnessRecord records = 2;
+message AppendSegmentWitnessRequest {
+  VisibleAuthorityScope scope = 1;
+  repeated SegmentWitnessRecord records = 2;
 }
 
-message PerasWitnessSegmentsResponse {}
+message AppendSegmentWitnessResponse {}
 
-message PerasWitnessProbeRequest {
+message ProbeSegmentWitnessRequest {
   uint64 epoch_id = 1;
   bytes segment_root = 2;
   bytes segment_payload_digest = 3;
@@ -446,8 +444,8 @@ message PerasWitnessProbeRequest {
   bytes after_segment_payload_digest = 6;
 }
 
-message PerasWitnessProbeResponse {
-  repeated PerasSegmentWitnessRecord segments = 1;
+message ProbeSegmentWitnessResponse {
+  repeated SegmentWitnessRecord segments = 1;
   bytes next_segment_root = 2;
   bytes next_segment_payload_digest = 3;
   bool more = 4;
@@ -464,10 +462,13 @@ service StoreKV {
   rpc CheckTxnStatus(KvCheckTxnStatusRequest) returns (KvCheckTxnStatusResponse);
   rpc TxnHeartBeat(KvTxnHeartBeatRequest) returns (KvTxnHeartBeatResponse);
   rpc TryAtomicMutate(KvTryAtomicMutateRequest) returns (KvTryAtomicMutateResponse);
-  rpc PerasInstallSegment(KvPerasInstallSegmentRequest) returns (KvPerasInstallSegmentResponse);
+  rpc InstallPreparedMVCCEntries(KvInstallPreparedMVCCEntriesRequest) returns (KvInstallPreparedMVCCEntriesResponse);
   rpc WatchApply(ApplyWatchRequest) returns (stream ApplyWatchResponse);
-  rpc PerasWitnessSegments(PerasWitnessSegmentsRequest) returns (PerasWitnessSegmentsResponse);
-  rpc PerasWitnessProbe(PerasWitnessProbeRequest) returns (PerasWitnessProbeResponse);
+}
+
+service SegmentWitness {
+  rpc AppendSegmentWitness(AppendSegmentWitnessRequest) returns (AppendSegmentWitnessResponse);
+  rpc ProbeSegmentWitness(ProbeSegmentWitnessRequest) returns (ProbeSegmentWitnessResponse);
 }
 
 message KeyError {
