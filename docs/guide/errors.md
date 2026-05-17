@@ -77,8 +77,8 @@ Examples:
   sentinels used by holder/runtime control flow
 - `experimental/peras/runtime/errors.go` and `experimental/peras/runtime/authority.go`:
   authority acquisition, active-authority view, and runtime lifecycle sentinels
-- `experimental/peras/raftstore/*.go`: Peras segment install and witness authority
-  protocol sentinels
+- `experimental/peras/adapters/raftstore/*.go`: Peras segment install and
+  witness authority protocol sentinels
 
 ---
 

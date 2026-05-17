@@ -272,7 +272,7 @@ Exit criteria:
 Current migration state:
 
 - Peras implementation packages have moved to `experimental/peras/exec`,
-  `experimental/peras/runtime`, and `experimental/peras/raftstore`.
+  `experimental/peras/runtime`, and `experimental/peras/adapters/raftstore`.
 - Stable packages still have explicit Peras adapter files. These imports are
   temporary migration edges and should shrink as later phases remove the
   old StoreKV/raft command surface.
@@ -284,8 +284,8 @@ StoreKV RPC surface.
 
 Actions:
 
-- Move witness node and witness WAL code from `experimental/peras/raftstore` into
-  `experimental/peras/witness`.
+- Move witness node and witness WAL code from
+  `experimental/peras/adapters/raftstore` into `experimental/peras/witness`.
 - Define an experimental witness service if remote witness RPC is still needed.
 - Remove `PerasWitnessSegments` and `PerasWitnessProbe` from the stable StoreKV
   service after Peras uses the experimental service.
