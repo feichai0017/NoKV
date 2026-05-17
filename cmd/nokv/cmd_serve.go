@@ -19,7 +19,7 @@ import (
 	"github.com/feichai0017/NoKV/config"
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/coordinator/storecontrol"
-	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
+	perasraftstore "github.com/feichai0017/NoKV/experimental/peras/adapters/raftstore"
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta"
 	local "github.com/feichai0017/NoKV/local"
@@ -237,7 +237,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		_ = db.Close()
 	}()
 
-	var perasWitness *rsperas.WitnessNode
+	var perasWitness *perasraftstore.WitnessNode
 	var perasAuthorityTable *runtimeperas.ActiveAuthorities
 	var perasAuthorityFeed *runtimeperas.RootAuthorityFeed
 	perasWitness, perasAuthorityTable, perasAuthorityFeed, err = startServePerasWitness(context.Background(), *storeID, coordCli, db, perasDurability)
@@ -335,7 +335,7 @@ func runServeCmd(w io.Writer, args []string) error {
 		WriteFence:    perasWriteFence{authorities: perasAuthorityTable},
 		ExtraServices: []func(grpc.ServiceRegistrar){
 			func(reg grpc.ServiceRegistrar) {
-				kvrpcpb.RegisterPerasWitnessServer(reg, rsperas.NewWitnessService(perasWitness))
+				kvrpcpb.RegisterPerasWitnessServer(reg, perasraftstore.NewWitnessService(perasWitness))
 			},
 		},
 	})

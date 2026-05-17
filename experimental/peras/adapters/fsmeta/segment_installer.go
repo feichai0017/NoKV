@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package fsmetaraftstore
+package fsmeta
 
 import (
 	"bytes"
@@ -11,10 +11,10 @@ import (
 	"sync"
 	"sync/atomic"
 
+	perasraftstore "github.com/feichai0017/NoKV/experimental/peras/adapters/raftstore"
 	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
-	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
-	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetamodel "github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	stable "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
@@ -36,7 +36,7 @@ type segmentCatalogScanRunner interface {
 }
 
 type fsmetaWatchRouter interface {
-	Publish(fsmeta.WatchEvent)
+	Publish(fsmetamodel.WatchEvent)
 }
 
 type raftstoreSegmentInstaller struct {
@@ -191,7 +191,7 @@ func (i *raftstoreSegmentInstaller) installSegmentRouteGroup(
 	if err != nil {
 		return perasRouteInstallResult{}, err
 	}
-	installReq, err := rsperas.BuildSegmentPreparedInstallRequest(rsperas.SegmentPreparedInstallRequest{
+	installReq, err := perasraftstore.BuildSegmentPreparedInstallRequest(perasraftstore.SegmentPreparedInstallRequest{
 		RoutingKey:         runtimeCloneBytes(routingKey),
 		RoutingKeys:        cloneRuntimeKeySet(routingKeys),
 		DependencyKeys:     dependencyKeys,
@@ -325,7 +325,7 @@ func (i *raftstoreSegmentInstaller) publishInstalledSegment(segment fsperas.Pera
 	if commitVersion == 0 {
 		return
 	}
-	cursor := fsmeta.WatchCursor{
+	cursor := fsmetamodel.WatchCursor{
 		RegionID: resp.GetRegionId(),
 		Term:     resp.GetTerm(),
 		Index:    resp.GetIndex(),
@@ -334,10 +334,10 @@ func (i *raftstoreSegmentInstaller) publishInstalledSegment(segment fsperas.Pera
 		if len(entry.Key) == 0 {
 			continue
 		}
-		i.router.Publish(fsmeta.WatchEvent{
+		i.router.Publish(fsmetamodel.WatchEvent{
 			Cursor:        cursor,
 			CommitVersion: commitVersion,
-			Source:        fsmeta.WatchEventSourceCommit,
+			Source:        fsmetamodel.WatchEventSourceCommit,
 			Key:           entry.Key,
 		})
 	}

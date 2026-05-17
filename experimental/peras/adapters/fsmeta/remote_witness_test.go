@@ -1,17 +1,17 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package fsmetaraftstore
+package fsmeta
 
 import (
 	"context"
 	"net"
 	"testing"
 
+	perasraftstore "github.com/feichai0017/NoKV/experimental/peras/adapters/raftstore"
 	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
-	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
-	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetamodel "github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
@@ -59,11 +59,11 @@ func (s *remotePerasWitnessStub) ProbeSegment(_ context.Context, ref fsperas.Wit
 
 func TestRemotePerasWitnessSingleRecordBatchRoundTrip(t *testing.T) {
 	scope := compile.AuthorityScope{
-		Mount:      fsmeta.MountID("m1"),
+		Mount:      fsmetamodel.MountID("m1"),
 		MountKeyID: 8,
-		Buckets:    []fsmeta.AffinityBucket{2},
-		Parents:    []fsmeta.InodeID{100},
-		Inodes:     []fsmeta.InodeID{200},
+		Buckets:    []fsmetamodel.AffinityBucket{2},
+		Parents:    []fsmetamodel.InodeID{100},
+		Inodes:     []fsmetamodel.InodeID{200},
 	}
 	record := remotePerasSegmentRecord()
 
@@ -84,11 +84,11 @@ func TestRemotePerasWitnessSingleRecordBatchRoundTrip(t *testing.T) {
 
 func TestRemotePerasWitnessBatchRoundTrip(t *testing.T) {
 	scope := compile.AuthorityScope{
-		Mount:      fsmeta.MountID("m1"),
+		Mount:      fsmetamodel.MountID("m1"),
 		MountKeyID: 8,
-		Buckets:    []fsmeta.AffinityBucket{2},
-		Parents:    []fsmeta.InodeID{100},
-		Inodes:     []fsmeta.InodeID{200},
+		Buckets:    []fsmetamodel.AffinityBucket{2},
+		Parents:    []fsmetamodel.InodeID{100},
+		Inodes:     []fsmetamodel.InodeID{200},
 	}
 	first := remotePerasSegmentRecordWithRoot(5)
 	second := remotePerasSegmentRecordWithRoot(7)
@@ -149,11 +149,11 @@ func TestRemotePerasWitnessProbeReadsPages(t *testing.T) {
 
 func BenchmarkRemotePerasWitnessAppendSegmentsSingleRecord(b *testing.B) {
 	scope := compile.AuthorityScope{
-		Mount:      fsmeta.MountID("m1"),
+		Mount:      fsmetamodel.MountID("m1"),
 		MountKeyID: 8,
-		Buckets:    []fsmeta.AffinityBucket{2},
-		Parents:    []fsmeta.InodeID{100},
-		Inodes:     []fsmeta.InodeID{200},
+		Buckets:    []fsmetamodel.AffinityBucket{2},
+		Parents:    []fsmetamodel.InodeID{100},
+		Inodes:     []fsmetamodel.InodeID{200},
 	}
 	record := remotePerasSegmentRecord()
 	stub := &remotePerasWitnessStub{}
@@ -174,10 +174,10 @@ func TestRemotePerasWitnessRequiresClient(t *testing.T) {
 	require.ErrorIs(t, err, runtimeperas.ErrRuntimeInvalid)
 }
 
-func startPerasWitnessServer(tb testing.TB, witness rsperas.Witness) (*grpc.ClientConn, func()) {
+func startPerasWitnessServer(tb testing.TB, witness perasraftstore.Witness) (*grpc.ClientConn, func()) {
 	tb.Helper()
 	srv := grpc.NewServer()
-	kvrpcpb.RegisterPerasWitnessServer(srv, rsperas.NewWitnessService(witness))
+	kvrpcpb.RegisterPerasWitnessServer(srv, perasraftstore.NewWitnessService(witness))
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(tb, err)
 	go func() {

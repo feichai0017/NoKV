@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package fsmetaraftstore
+package fsmeta
 
 import (
 	"context"
@@ -9,8 +9,8 @@ import (
 	"slices"
 	"time"
 
+	perasraftstore "github.com/feichai0017/NoKV/experimental/peras/adapters/raftstore"
 	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
-	rsperas "github.com/feichai0017/NoKV/experimental/peras/raftstore"
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -47,8 +47,8 @@ func (w *remotePerasWitness) AppendSegments(ctx context.Context, scope compile.A
 		return nil
 	}
 	_, err := w.client.PerasWitnessSegments(ctx, &kvrpcpb.PerasWitnessSegmentsRequest{
-		Scope:   rsperas.ScopeToProto(scope),
-		Records: rsperas.SegmentWitnessRecordsToProto(records),
+		Scope:   perasraftstore.ScopeToProto(scope),
+		Records: perasraftstore.SegmentWitnessRecordsToProto(records),
 	})
 	return err
 }
@@ -70,7 +70,7 @@ func (w *remotePerasWitness) Probe(ctx context.Context, epochID uint64) (fsperas
 		if err != nil {
 			return fsperas.WitnessSnapshot{}, err
 		}
-		page, err := rsperas.SnapshotFromProto(resp)
+		page, err := perasraftstore.SnapshotFromProto(resp)
 		if err != nil {
 			return fsperas.WitnessSnapshot{}, err
 		}
@@ -108,7 +108,7 @@ func (w *remotePerasWitness) ProbeSegment(ctx context.Context, ref fsperas.Witne
 	if len(resp.GetSegments()) != 1 {
 		return fsperas.SegmentWitnessRecord{}, false, fmt.Errorf("peras witness targeted probe returned %d records: %w", len(resp.GetSegments()), runtimeperas.ErrRuntimeInvalid)
 	}
-	record, err := rsperas.SegmentWitnessRecordFromProto(resp.GetSegments()[0])
+	record, err := perasraftstore.SegmentWitnessRecordFromProto(resp.GetSegments()[0])
 	if err != nil {
 		return fsperas.SegmentWitnessRecord{}, false, err
 	}

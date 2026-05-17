@@ -18,7 +18,7 @@ import (
 	"time"
 
 	"github.com/feichai0017/NoKV/engine/wal"
-	perasfsmeta "github.com/feichai0017/NoKV/experimental/peras/fsmetaraftstore"
+	perasfsmeta "github.com/feichai0017/NoKV/experimental/peras/adapters/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetalocal "github.com/feichai0017/NoKV/fsmeta/runtime/local"
 	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"

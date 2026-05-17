@@ -1,10 +1,11 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package fsmetaraftstore wires experimental Peras into the raftstore-backed
-// fsmeta runtime without making the stable raftstore adapter own Peras protocol
-// state.
-package fsmetaraftstore
+// Package fsmeta wires experimental Peras into the stable fsmeta runtime
+// extension point. It adapts Peras holder, witness, and segment-install
+// protocols to the raftstore-backed fsmeta runtime without making the stable
+// runtime own Peras state.
+package fsmeta
 
 import (
 	"context"
@@ -21,7 +22,7 @@ import (
 )
 
 // Config configures the experimental Peras runtime attached to distributed
-// fsmeta. A zero Config is invalid; callers must opt in with a holder id and a
+// fsmetamodel. A zero Config is invalid; callers must opt in with a holder id and a
 // visible log.
 type Config struct {
 	HolderID     string

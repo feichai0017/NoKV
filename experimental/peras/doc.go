@@ -4,7 +4,7 @@
 // Package peras marks Peras visible-before-durable metadata execution as an
 // explicit experiment.
 //
-// The implementation is split below this package by the stable boundary it
-// currently adapts to. Stable packages may only import those subpackages from
-// explicit Peras adapter files while the migration is in progress.
+// Core protocol code lives in exec and runtime. Optional integration with
+// stable NoKV packages lives under adapters, so stable code only needs neutral
+// extension points and command wiring to attach Peras.
 package peras

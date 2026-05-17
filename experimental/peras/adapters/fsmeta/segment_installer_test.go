@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package fsmetaraftstore
+package fsmeta
 
 import (
 	"context"
@@ -15,7 +15,7 @@ import (
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	runtimeperas "github.com/feichai0017/NoKV/experimental/peras/runtime"
-	"github.com/feichai0017/NoKV/fsmeta"
+	fsmetamodel "github.com/feichai0017/NoKV/fsmeta"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	stable "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -47,10 +47,10 @@ func TestValidatePreparedSegmentInstallResponseChecksVersionAndAppliedCount(t *t
 }
 
 func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	mount := fsmetamodel.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmetamodel.EncodeDentryKey(mount, fsmetamodel.RootInode, "a")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	inodeKey, err := fsmetamodel.EncodeInodeKey(mount, 10)
 	require.NoError(t, err)
 	segment := testRaftstoreInstallSegment(t, [][]byte{dentryKey, inodeKey})
 	payload, digest := encodeRaftstoreInstallSegment(t, segment)
@@ -82,10 +82,10 @@ func TestRaftstoreSegmentInstallerUsesLocalInstallVersion(t *testing.T) {
 }
 
 func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	mount := fsmetamodel.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmetamodel.EncodeDentryKey(mount, fsmetamodel.RootInode, "a")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	inodeKey, err := fsmetamodel.EncodeInodeKey(mount, 10)
 	require.NoError(t, err)
 	segment := testRaftstoreInstallSegment(t, [][]byte{dentryKey, inodeKey})
 	payload, digest := encodeRaftstoreInstallSegment(t, segment)
@@ -98,7 +98,7 @@ func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 	runner, err := stable.NewRunner(kv, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 77, Count: 1}})
 	require.NoError(t, err)
 	router := fsmetawatch.NewRouter()
-	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{
+	sub, err := router.Subscribe(context.Background(), fsmetamodel.WatchRequest{
 		KeyPrefix:          dentryKey,
 		BackPressureWindow: 4,
 	})
@@ -117,7 +117,7 @@ func TestRaftstoreSegmentInstallerPublishesInstalledDentries(t *testing.T) {
 	select {
 	case evt := <-sub.Events():
 		require.Equal(t, dentryKey, evt.Key)
-		require.Equal(t, fsmeta.WatchCursor{RegionID: 7, Term: 3, Index: 99}, evt.Cursor)
+		require.Equal(t, fsmetamodel.WatchCursor{RegionID: 7, Term: 3, Index: 99}, evt.Cursor)
 		require.Equal(t, uint64(1), evt.CommitVersion)
 	case <-time.After(time.Second):
 		t.Fatal("timed out waiting for installed segment watch event")
@@ -128,15 +128,15 @@ func TestRaftstoreSegmentInstallerInstallsCatalogRoutesInParallel(t *testing.T) 
 	oldProcs := runtime.GOMAXPROCS(2)
 	defer runtime.GOMAXPROCS(oldProcs)
 
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	rootKey, err := fsmeta.EncodeInodeKey(mount, fsmeta.RootInode)
+	mount := fsmetamodel.MountIdentity{MountID: "vol", MountKeyID: 1}
+	rootKey, err := fsmetamodel.EncodeInodeKey(mount, fsmetamodel.RootInode)
 	require.NoError(t, err)
 	var otherKey []byte
-	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
-		if fsmeta.BucketForInodeID(inode) == fsmeta.BucketForInodeID(fsmeta.RootInode) {
+	for inode := fsmetamodel.InodeID(2); inode < 100_000; inode++ {
+		if fsmetamodel.BucketForInodeID(inode) == fsmetamodel.BucketForInodeID(fsmetamodel.RootInode) {
 			continue
 		}
-		otherKey, err = fsmeta.EncodeInodeKey(mount, inode)
+		otherKey, err = fsmetamodel.EncodeInodeKey(mount, inode)
 		require.NoError(t, err)
 		break
 	}
@@ -277,10 +277,10 @@ func TestRaftstoreSegmentInstallerReturnsWhenRouteErrorsExceedWorkers(t *testing
 }
 
 func TestRaftstoreSegmentInstallerMarksInstallRetryExhaustedRoutingRetryable(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "a")
+	mount := fsmetamodel.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := fsmetamodel.EncodeDentryKey(mount, fsmetamodel.RootInode, "a")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	inodeKey, err := fsmetamodel.EncodeInodeKey(mount, 10)
 	require.NoError(t, err)
 	segment := testRaftstoreInstallSegment(t, [][]byte{dentryKey, inodeKey})
 	payload, digest := encodeRaftstoreInstallSegment(t, segment)
@@ -317,7 +317,7 @@ func testRaftstoreInstallSegment(t *testing.T, keys [][]byte) fsperas.PerasSegme
 		EpochID: 1,
 		Operations: []fsperas.ReplayOperation{{
 			OpID:      fsperas.OperationID{ClientID: "client", Seq: 1},
-			Kind:      fsmeta.OperationCreate,
+			Kind:      fsmetamodel.OperationCreate,
 			Mutations: mutations,
 		}},
 	})
@@ -327,15 +327,15 @@ func testRaftstoreInstallSegment(t *testing.T, keys [][]byte) fsperas.PerasSegme
 
 func testRaftstoreInstallKeysAcrossBuckets(t *testing.T, count int) [][]byte {
 	t.Helper()
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	seen := make(map[fsmeta.AffinityBucket]struct{}, count)
+	mount := fsmetamodel.MountIdentity{MountID: "vol", MountKeyID: 1}
+	seen := make(map[fsmetamodel.AffinityBucket]struct{}, count)
 	keys := make([][]byte, 0, count)
-	for inode := fsmeta.InodeID(1); len(keys) < count && inode < 1_000_000; inode++ {
-		bucket := fsmeta.BucketForInodeID(inode)
+	for inode := fsmetamodel.InodeID(1); len(keys) < count && inode < 1_000_000; inode++ {
+		bucket := fsmetamodel.BucketForInodeID(inode)
 		if _, ok := seen[bucket]; ok {
 			continue
 		}
-		key, err := fsmeta.EncodeInodeKey(mount, inode)
+		key, err := fsmetamodel.EncodeInodeKey(mount, inode)
 		require.NoError(t, err)
 		seen[bucket] = struct{}{}
 		keys = append(keys, key)
