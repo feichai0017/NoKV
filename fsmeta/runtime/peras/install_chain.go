@@ -12,8 +12,7 @@ import (
 // It is an alias for SegmentInstaller so that today's single-installer
 // callers keep working while future phases can compose multiple durable
 // install layers (MVCC entry write, catalog write, witness sign) with the
-// same contract. See docs/guide/development/peras_install_layers.md for the
-// migration plan.
+// same contract.
 type SegmentInstallLayer = SegmentInstaller
 
 // NewInstallChain composes layers into one SegmentInstaller that runs

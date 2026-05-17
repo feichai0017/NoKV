@@ -284,8 +284,8 @@ func compileCreateSegmentPlan(placement PlacementPlan, footprint KeyFootprint) S
 	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
 		// Multi-bucket catalog op (dentry + inode in different buckets is the
 		// common case). Materialize is safe because installer writes each
-		// entry as a direct MVCC mutation. Local fsmeta opts into this path
-		// via MaterializeSegments=true; distributed leaves it disabled.
+		// entry as a direct MVCC mutation. Local fsmeta consumes this path
+		// when its installer materializes segments; distributed installers do not.
 		segment.CanMaterialize = placement.CanSegment
 		segment.MaterializeInstall = SegmentInstallSingleBucket
 		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}

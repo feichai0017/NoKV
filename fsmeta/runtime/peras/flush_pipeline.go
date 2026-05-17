@@ -55,34 +55,16 @@ func (p flushPipeline) run(ctx context.Context, batches []perasFlushBatch) error
 	if len(batches) > 0 && c.installer == nil {
 		return c.recordError(ErrRuntimeInvalid)
 	}
-	prepared, err := p.prepareBatches(ctx, batches)
-	if err != nil {
-		return err
-	}
-	for _, batch := range prepared {
-		if err := p.commitBatch(ctx, batch); err != nil {
+	for _, batch := range batches {
+		prepared, err := p.prepareBatch(ctx, batch)
+		if err != nil {
+			return err
+		}
+		if err := p.commitBatch(ctx, prepared); err != nil {
 			return err
 		}
 	}
 	return nil
-}
-
-func (p flushPipeline) prepareBatches(ctx context.Context, batches []perasFlushBatch) ([]perasFlushBatch, error) {
-	if len(batches) == 0 {
-		return nil, nil
-	}
-	prepared := make([]perasFlushBatch, len(batches))
-	if err := p.runBatchJobs(ctx, batches, func(ctx context.Context, idx int, batch perasFlushBatch) error {
-		installed, err := p.prepareBatch(ctx, batch)
-		if err != nil {
-			return err
-		}
-		prepared[idx] = installed
-		return nil
-	}); err != nil {
-		return nil, err
-	}
-	return prepared, nil
 }
 
 func (p flushPipeline) prepareBatch(ctx context.Context, batch perasFlushBatch) (perasFlushBatch, error) {
@@ -191,6 +173,22 @@ func (p flushPipeline) installBatch(ctx context.Context, batch perasFlushBatch, 
 	c := p.runtime
 	jobs := make([]perasFlushJob, len(batch.jobs))
 	copy(jobs, batch.jobs)
+	if p.materialize {
+		for idx, job := range jobs {
+			if err := ctx.Err(); err != nil {
+				return nil, err
+			}
+			cursor, err := c.submitInstallJob(ctx, job)
+			if err != nil {
+				return nil, c.recordErrorf("install peras segment: %w", err)
+			}
+			jobs[idx].cursor = cursor
+			if idx >= 0 && idx < len(started) && !started[idx].IsZero() {
+				c.recordFlushLatency(time.Since(started[idx]))
+			}
+		}
+		return jobs, nil
+	}
 	if err := p.runJobs(ctx, jobs, func(ctx context.Context, idx int, job perasFlushJob) error {
 		cursor, err := c.submitInstallJob(ctx, job)
 		if err != nil {
@@ -260,17 +258,6 @@ func (c *Runtime) finalizeSegment(ctx context.Context, job perasFlushJob) error 
 		InstallCursor:   job.cursor,
 		MaterializeMVCC: job.materialize,
 	})
-}
-
-func (p flushPipeline) runBatchJobs(ctx context.Context, batches []perasFlushBatch, run func(context.Context, int, perasFlushBatch) error) error {
-	if len(batches) == 0 {
-		return nil
-	}
-	workers := min(p.runtime.flushN, len(batches))
-	if workers <= 0 {
-		workers = 1
-	}
-	return runPerasConcurrent(ctx, workers, batches, run)
 }
 
 func (p flushPipeline) runJobs(ctx context.Context, jobs []perasFlushJob, run func(context.Context, int, perasFlushJob) error) error {

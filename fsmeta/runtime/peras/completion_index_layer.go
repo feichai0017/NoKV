@@ -8,8 +8,7 @@ import "context"
 // completionIndexLayer records each segment's per-operation completion in the
 // runtime's read state so duplicate-operation submits (SubmitVisible retries)
 // can short-circuit without re-issuing the work. The layer is in-memory only
-// and runs after the segment is safe to observe. See
-// docs/guide/development/peras_install_layers.md.
+// and runs after the segment is safe to observe.
 type completionIndexLayer struct {
 	read *readState
 }

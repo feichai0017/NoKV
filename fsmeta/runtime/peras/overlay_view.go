@@ -60,11 +60,10 @@ func (rs *readState) mergeCompletions(segment fsperas.PerasSegment) {
 // installSegment merges a freshly-installed segment into the runtime's
 // in-memory view: sealed overlay, sealedSegments slice, replay overlay
 // removal, and segments slice. The per-operation completion index is owned by
-// completionIndexLayer in the finalize chain — see Phase 3 of
-// docs/guide/development/peras_install_layers.md. Callers that do not run the
+// completionIndexLayer in the finalize chain. Callers that do not run the
 // finalize chain (catalog-recovery Pattern B in LoadInstalledSegments) must
-// invoke c.read.mergeCompletions(segment) themselves so the SubmitVisible dedup
-// map stays accurate.
+// invoke c.read.mergeCompletions(segment) themselves so the SubmitVisible
+// dedup map stays accurate.
 func (c *Runtime) installSegment(plan fsperas.ReplayPlan, segment fsperas.PerasSegment, materialize bool) error {
 	if c == nil || c.read == nil {
 		return ErrRuntimeInvalid

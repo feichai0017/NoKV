@@ -239,11 +239,12 @@ func (r *Runner) chunkInstallMutations(mutations []*kvrpcpb.Mutation) ([][]*kvrp
 	if maxCount <= 0 && maxSize <= 0 {
 		return [][]*kvrpcpb.Mutation{mutations}, nil
 	}
-	// Reserve headroom: build entries doubles the count (commit + lock-free
-	// version markers can append). Keep the chunk strictly below the DB
-	// limit so the downstream Send() check never trips.
+	// Reserve headroom: one mutation can expand into up to three internal
+	// entries (default tombstone, default value, write marker). Keep the
+	// expanded chunk strictly below the DB limit because the downstream
+	// Send() check rejects count >= MaxBatchCount.
 	if maxCount > 0 {
-		maxCount = max(maxCount/2, 1)
+		maxCount = max((maxCount-1)/3, 1)
 	}
 	if maxSize > 0 {
 		maxSize = max(maxSize-(maxSize/8), 1024)
@@ -358,7 +359,7 @@ func (r *Runner) applyMutationGroup(primary []byte, mutations []*kvrpcpb.Mutatio
 }
 
 // applyInstallMutationGroup is the cross-shard-safe sibling of
-// applyMutationGroup used by segment install. It performs the same
+// applyMutationGroup used by segment install. It performs install-specific
 // validation, latch acquire, and entry build, but routes through
 // db.ApplyInternalEntries without the CanApplyInternalEntriesAtomically
 // guard because install entries are versioned MVCC writes that are
@@ -368,7 +369,7 @@ func (r *Runner) applyInstallMutationGroup(primary []byte, mutations []*kvrpcpb.
 	guard := r.latches.Acquire(mutationLatchKeys(primary, nil, mutations))
 	defer guard.Release()
 	effectiveCommitVersion := r.reserveMutationCommitVersion(commitVersion, false)
-	if err := r.validateMutations(primary, mutations, startVersion, commitVersion); err != nil {
+	if err := r.validateInstallMutations(mutations, startVersion, commitVersion); err != nil {
 		return 0, nil, err
 	}
 	entries, err := buildMutationEntries(mutations, startVersion, effectiveCommitVersion)
@@ -573,6 +574,31 @@ func (r *Runner) validateMutations(primary []byte, mutations []*kvrpcpb.Mutation
 			} else if !ok {
 				return txnKeyError(&kvrpcpb.KeyError{Retryable: utils.ErrKeyNotFound.Error()})
 			}
+		}
+		switch mut.GetOp() {
+		case kvrpcpb.Mutation_Put, kvrpcpb.Mutation_Delete:
+		default:
+			return txnUnsupportedMutation(mut.GetOp())
+		}
+	}
+	return nil
+}
+
+func (r *Runner) validateInstallMutations(mutations []*kvrpcpb.Mutation, startVersion, commitVersion uint64) error {
+	for _, mut := range mutations {
+		if mut == nil {
+			continue
+		}
+		key := mut.GetKey()
+		if len(key) == 0 {
+			return txnAbort(errEmptyMutationKey)
+		}
+		latest, ok, err := r.latestWriteVersion(key)
+		if err != nil {
+			return txnRetryable(err)
+		}
+		if ok && latest > startVersion {
+			return txnCommitExpired(key, commitVersion, latest+1)
 		}
 		switch mut.GetOp() {
 		case kvrpcpb.Mutation_Put, kvrpcpb.Mutation_Delete:

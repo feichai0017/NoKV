@@ -60,19 +60,33 @@ func (c *Runtime) buildFlushBatches(plans []perasFrozenPlan, materialize bool) (
 			}
 			jobs = append(jobs, job)
 		}
-		batchPlan, err := joinReplayPlansForBatch(sized)
-		if err != nil {
-			return nil, c.recordErrorf("build peras batch replay plan: %w", err)
+		batchLimit := c.flushBatchJobLimit(materialize)
+		for start := 0; start < len(jobs); start += batchLimit {
+			end := min(start+batchLimit, len(jobs))
+			batchPlan, err := joinReplayPlansForBatch(sized[start:end])
+			if err != nil {
+				return nil, c.recordErrorf("build peras batch replay plan: %w", err)
+			}
+			batches = append(batches, perasFlushBatch{
+				holder:          frozen.holder,
+				scope:           frozen.scope,
+				plan:            batchPlan,
+				jobs:            append([]perasFlushJob(nil), jobs[start:end]...),
+				witnessUnixNano: c.nextWitnessUnixNano(),
+			})
 		}
-		batches = append(batches, perasFlushBatch{
-			holder:          frozen.holder,
-			scope:           frozen.scope,
-			plan:            batchPlan,
-			jobs:            jobs,
-			witnessUnixNano: c.nextWitnessUnixNano(),
-		})
 	}
 	return batches, nil
+}
+
+func (c *Runtime) flushBatchJobLimit(materialize bool) int {
+	if !materialize {
+		return int(^uint(0) >> 1)
+	}
+	if c == nil || c.installN <= 0 {
+		return 1
+	}
+	return c.installN
 }
 
 func (c *Runtime) flushNeedsSegmentPayload() bool {

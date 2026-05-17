@@ -351,8 +351,8 @@ placementDone:
 		// installer writes each entry as a direct MVCC mutation regardless
 		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
 		// materialize ops batch together in one install. Local fsmeta runtimes
-		// opt into MaterializeSegments=true to consume this path; distributed
-		// runtimes leave MaterializeSegments=false and never enter materialize
+		// consume this path when their installer materializes segments;
+		// distributed runtimes keep catalog install and never enter materialize
 		// in SegmentPlanForInstall.
 		segment.CanMaterialize = placement.CanSegment
 		segment.MaterializeInstall = SegmentInstallSingleBucket
@@ -560,8 +560,8 @@ placementDone:
 		// installer writes each entry as a direct MVCC mutation regardless
 		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
 		// materialize ops batch together in one install. Local fsmeta runtimes
-		// opt into MaterializeSegments=true to consume this path; distributed
-		// runtimes leave MaterializeSegments=false and never enter materialize
+		// consume this path when their installer materializes segments;
+		// distributed runtimes keep catalog install and never enter materialize
 		// in SegmentPlanForInstall.
 		segment.CanMaterialize = placement.CanSegment
 		segment.MaterializeInstall = SegmentInstallSingleBucket

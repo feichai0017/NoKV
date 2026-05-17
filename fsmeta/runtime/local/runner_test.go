@@ -101,6 +101,28 @@ func TestRunnerInstallMutationsAtCommitAcceptsCrossShard(t *testing.T) {
 	require.Equal(t, []byte("b"), got)
 }
 
+func TestRunnerInstallMutationsAtCommitAllowsMissingDeletePrimary(t *testing.T) {
+	db := openTestDB(t, nil)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	key := []byte("install-delete-missing")
+	start, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	commit, err := runner.InstallMutationsAtCommit(ctx, key, []*kvrpcpb.Mutation{{
+		Op:  kvrpcpb.Mutation_Delete,
+		Key: key,
+	}}, start, start+1)
+	require.NoError(t, err, "segment install must accept tombstones for keys already absent")
+	require.Equal(t, start+1, commit)
+
+	_, ok, err := runner.Get(ctx, key, commit)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
 func TestRunnerInstallMutationsAtCommitChunksLargeGroups(t *testing.T) {
 	opts := localdb.NewDefaultOptions()
 	opts.WorkDir = t.TempDir()
@@ -137,6 +159,35 @@ func TestRunnerInstallMutationsAtCommitChunksLargeGroups(t *testing.T) {
 		require.True(t, ok, "key %q must be visible after chunked install", mutation.Key)
 		require.Equal(t, []byte("v"), got)
 	}
+}
+
+func TestRunnerInstallMutationsAtCommitChunksDeleteGroupsBelowStrictLimit(t *testing.T) {
+	opts := localdb.NewDefaultOptions()
+	opts.WorkDir = t.TempDir()
+	opts.LSMShardCount = 1
+	opts.UserKeyShapeExtractor = nil
+	opts.MaxBatchCount = 8
+	opts.MaxBatchSize = 64 << 10
+	db := openTestDB(t, opts)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	start, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	const n = 16
+	mutations := make([]*kvrpcpb.Mutation, 0, n)
+	for i := range n {
+		k := []byte("install-delete-" + string(rune('a'+i)))
+		mutations = append(mutations, &kvrpcpb.Mutation{
+			Op:  kvrpcpb.Mutation_Delete,
+			Key: append([]byte(nil), k...),
+		})
+	}
+	commit, err := runner.InstallMutationsAtCommit(ctx, mutations[0].Key, mutations, start, start+1)
+	require.NoError(t, err, "install chunks must stay strictly below MaxBatchCount=%d after delete expansion", opts.MaxBatchCount)
+	require.Equal(t, start+1, commit)
 }
 
 func TestRunnerInstallMutationsAtCommitRejectsBadCommitVersion(t *testing.T) {
