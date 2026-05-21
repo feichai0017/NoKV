@@ -6,13 +6,14 @@ package proof
 type GuardEvidenceKind uint8
 
 const (
-	GuardEvidenceUnknown GuardEvidenceKind = iota
-	GuardEvidenceSingleLinkInode
-	GuardEvidenceSameAuthority
-	GuardEvidenceNonDirectoryInode
-	GuardEvidenceLiveSession
-	GuardEvidenceExpiredSessionOwner
-	GuardEvidenceQuotaCredit
+	GuardEvidenceUnknown             GuardEvidenceKind = 0
+	GuardEvidenceSingleLinkInode     GuardEvidenceKind = 1
+	GuardEvidenceSameAuthority       GuardEvidenceKind = 2
+	GuardEvidenceNonDirectoryInode   GuardEvidenceKind = 3
+	GuardEvidenceLiveSession         GuardEvidenceKind = 4
+	GuardEvidenceExpiredSessionOwner GuardEvidenceKind = 5
+	GuardEvidenceQuotaCredit         GuardEvidenceKind = 6
+	GuardEvidenceEmptyDirectory      GuardEvidenceKind = 7
 )
 
 type GuardEvidence struct {

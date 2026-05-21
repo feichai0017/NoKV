@@ -225,6 +225,14 @@ func (e *fakeExecutor) Unlink(context.Context, fsmeta.UnlinkRequest) error {
 	return e.err
 }
 
+func (e *fakeExecutor) Remove(context.Context, fsmeta.RemoveRequest) error {
+	return e.err
+}
+
+func (e *fakeExecutor) RemoveDirectory(context.Context, fsmeta.RemoveDirectoryRequest) error {
+	return e.err
+}
+
 func (e *fakeExecutor) OpenWriteSession(_ context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
 	if e.err != nil {
 		return fsmeta.SessionRecord{}, e.err
@@ -354,6 +362,16 @@ func TestTypedClientMutationRPCs(t *testing.T) {
 		Mount:  "vol",
 		Parent: 2,
 		Name:   "alias",
+	}))
+	require.NoError(t, cli.Remove(context.Background(), fsmeta.RemoveRequest{
+		Mount:  "vol",
+		Parent: 2,
+		Name:   "old-file",
+	}))
+	require.NoError(t, cli.RemoveDirectory(context.Background(), fsmeta.RemoveDirectoryRequest{
+		Mount:  "vol",
+		Parent: 2,
+		Name:   "empty-dir",
 	}))
 
 	updated, err := cli.UpdateInode(context.Background(), fsmeta.UpdateInodeRequest{

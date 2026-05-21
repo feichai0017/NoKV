@@ -813,10 +813,17 @@ func visibleErrorForTest(err error) error {
 }
 
 func newFakeRunner() *fakeRunner {
-	return &fakeRunner{
+	runner := &fakeRunner{
 		nextTS: 1,
 		data:   make(map[string][]byte),
 	}
+	seedInodeValue(runner, testMountIdentity.MountID, fsmeta.InodeRecord{
+		Inode:     fsmeta.RootInode,
+		Type:      fsmeta.InodeTypeDirectory,
+		Mode:      0o755,
+		LinkCount: 1,
+	})
+	return runner
 }
 
 func (r *fakeRunner) ReserveTimestamp(_ context.Context, count uint64) (uint64, error) {
@@ -1029,6 +1036,9 @@ func seedDentryType(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, pare
 	t.Helper()
 	key, err := fsmeta.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
 	require.NoError(t, err)
+	if _, exists := runner.data[string(key)]; !exists {
+		incrementSeedParentChildCount(t, runner, mount, parent)
+	}
 	value, err := fsmeta.EncodeDentryValue(fsmeta.DentryRecord{
 		Parent: parent,
 		Name:   name,
@@ -1041,8 +1051,47 @@ func seedDentryType(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, pare
 
 func seedInode(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, record fsmeta.InodeRecord) {
 	t.Helper()
+	seedInodeValue(runner, mount, record)
+}
+
+func seedDirectory(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, inode fsmeta.InodeID) {
+	t.Helper()
+	seedInodeValue(runner, mount, fsmeta.InodeRecord{
+		Inode:     inode,
+		Type:      fsmeta.InodeTypeDirectory,
+		Mode:      0o755,
+		LinkCount: 1,
+	})
+}
+
+func seedInodeValue(runner *fakeRunner, mount fsmeta.MountID, record fsmeta.InodeRecord) {
 	key, err := fsmeta.EncodeInodeKey(testMountIdentityFor(mount), record.Inode)
+	if err != nil {
+		panic(err)
+	}
+	value, err := fsmeta.EncodeInodeValue(record)
+	if err != nil {
+		panic(err)
+	}
+	runner.data[string(key)] = value
+}
+
+func incrementSeedParentChildCount(t *testing.T, runner *fakeRunner, mount fsmeta.MountID, parent fsmeta.InodeID) {
+	t.Helper()
+	key, err := fsmeta.EncodeInodeKey(testMountIdentityFor(mount), parent)
 	require.NoError(t, err)
+	record := fsmeta.InodeRecord{
+		Inode:     parent,
+		Type:      fsmeta.InodeTypeDirectory,
+		Mode:      0o755,
+		LinkCount: 1,
+	}
+	if value, ok := runner.data[string(key)]; ok {
+		record, err = fsmeta.DecodeInodeValue(value)
+		require.NoError(t, err)
+		require.Equal(t, fsmeta.InodeTypeDirectory, record.Type)
+	}
+	record.ChildCount++
 	value, err := fsmeta.EncodeInodeValue(record)
 	require.NoError(t, err)
 	runner.data[string(key)] = value
@@ -1251,6 +1300,7 @@ func benchmarkExecutorOpenWriteSession(b *testing.B, runner *fakeRunner, executo
 
 func benchmarkExecutorLink(b *testing.B, runner *fakeRunner, executor *Executor) {
 	ctx := context.Background()
+	benchmarkSeedDirectory(b, runner, 8)
 	b.ReportAllocs()
 	for i := 0; b.Loop(); i++ {
 		inode := fsmeta.InodeID(i + 1000)
@@ -1290,6 +1340,7 @@ func benchmarkExecutorUnlink(b *testing.B, runner *fakeRunner, executor *Executo
 
 func benchmarkSeedDentry(b *testing.B, runner *fakeRunner, parent fsmeta.InodeID, name string, inode fsmeta.InodeID) {
 	b.Helper()
+	benchmarkIncrementSeedParentChildCount(b, runner, parent)
 	key, err := fsmeta.EncodeDentryKey(testMountIdentity, parent, name)
 	if err != nil {
 		b.Fatal(err)
@@ -1300,6 +1351,45 @@ func benchmarkSeedDentry(b *testing.B, runner *fakeRunner, parent fsmeta.InodeID
 		Inode:  inode,
 		Type:   fsmeta.InodeTypeFile,
 	})
+	if err != nil {
+		b.Fatal(err)
+	}
+	runner.data[string(key)] = value
+}
+
+func benchmarkSeedDirectory(b *testing.B, runner *fakeRunner, inode fsmeta.InodeID) {
+	b.Helper()
+	benchmarkSeedInodeRecord(b, runner, fsmeta.InodeRecord{
+		Inode:     inode,
+		Type:      fsmeta.InodeTypeDirectory,
+		Mode:      0o755,
+		LinkCount: 1,
+	})
+}
+
+func benchmarkIncrementSeedParentChildCount(b *testing.B, runner *fakeRunner, parent fsmeta.InodeID) {
+	b.Helper()
+	key, err := fsmeta.EncodeInodeKey(testMountIdentity, parent)
+	if err != nil {
+		b.Fatal(err)
+	}
+	record := fsmeta.InodeRecord{
+		Inode:     parent,
+		Type:      fsmeta.InodeTypeDirectory,
+		Mode:      0o755,
+		LinkCount: 1,
+	}
+	if value, ok := runner.data[string(key)]; ok {
+		record, err = fsmeta.DecodeInodeValue(value)
+		if err != nil {
+			b.Fatal(err)
+		}
+		if record.Type != fsmeta.InodeTypeDirectory {
+			b.Fatalf("seed parent %d is %s", parent, record.Type)
+		}
+	}
+	record.ChildCount++
+	value, err := fsmeta.EncodeInodeValue(record)
 	if err != nil {
 		b.Fatal(err)
 	}
