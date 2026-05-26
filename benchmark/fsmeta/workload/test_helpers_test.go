@@ -12,48 +12,50 @@ import (
 	"sync"
 	"time"
 
-	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
+	"github.com/feichai0017/NoKV/fsmeta/model"
+	"github.com/feichai0017/NoKV/fsmeta/observe"
 )
 
 type fakeMetadataClient struct {
 	mu        sync.Mutex
-	dentries  map[string]fsmeta.DentryRecord
-	inodes    map[fsmeta.InodeID]fsmeta.InodeRecord
-	sessions  map[fakeSessionKey]fsmeta.SessionRecord
-	snapshots map[uint64]fsmeta.SnapshotSubtreeToken
-	reads     []fsmeta.ReadDirRequest
-	next      fsmeta.InodeID
+	dentries  map[string]model.DentryRecord
+	inodes    map[model.InodeID]model.InodeRecord
+	sessions  map[fakeSessionKey]model.SessionRecord
+	snapshots map[uint64]model.SnapshotSubtreeToken
+	reads     []model.ReadDirRequest
+	next      model.InodeID
 	version   uint64
 	streams   []*fakeWatchStream
 }
 
 type fakeSessionKey struct {
-	inode   fsmeta.InodeID
-	session fsmeta.SessionID
+	inode   model.InodeID
+	session model.SessionID
 }
 
 func newFakeMetadataClient() *fakeMetadataClient {
 	return &fakeMetadataClient{
-		dentries:  make(map[string]fsmeta.DentryRecord),
-		inodes:    make(map[fsmeta.InodeID]fsmeta.InodeRecord),
-		sessions:  make(map[fakeSessionKey]fsmeta.SessionRecord),
-		snapshots: make(map[uint64]fsmeta.SnapshotSubtreeToken),
+		dentries:  make(map[string]model.DentryRecord),
+		inodes:    make(map[model.InodeID]model.InodeRecord),
+		sessions:  make(map[fakeSessionKey]model.SessionRecord),
+		snapshots: make(map[uint64]model.SnapshotSubtreeToken),
 		next:      100,
 		version:   1,
 	}
 }
 
-func (c *fakeMetadataClient) Create(_ context.Context, req fsmeta.CreateRequest) (fsmeta.CreateResult, error) {
+func (c *fakeMetadataClient) Create(_ context.Context, req model.CreateRequest) (model.CreateResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	id := dentryID(req.Parent, req.Name)
 	if _, ok := c.dentries[id]; ok {
-		return fsmeta.CreateResult{}, fsmeta.ErrExists
+		return model.CreateResult{}, model.ErrExists
 	}
 	inode := req.Attrs.InodeRecord(c.next)
 	c.next++
-	dentry := fsmeta.DentryRecord{
+	dentry := model.DentryRecord{
 		Parent: req.Parent,
 		Name:   req.Name,
 		Inode:  inode.Inode,
@@ -62,19 +64,19 @@ func (c *fakeMetadataClient) Create(_ context.Context, req fsmeta.CreateRequest)
 	c.inodes[inode.Inode] = inode
 	c.dentries[id] = dentry
 	c.emitDentryEventLocked(req.Mount, dentry)
-	return fsmeta.CreateResult{Dentry: dentry, Inode: inode}, nil
+	return model.CreateResult{Dentry: dentry, Inode: inode}, nil
 }
 
-func (c *fakeMetadataClient) UpdateInode(_ context.Context, req fsmeta.UpdateInodeRequest) (fsmeta.InodeRecord, error) {
+func (c *fakeMetadataClient) UpdateInode(_ context.Context, req model.UpdateInodeRequest) (model.InodeRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.dentries[dentryID(req.Parent, req.Name)]
 	if !ok || entry.Inode != req.Inode {
-		return fsmeta.InodeRecord{}, fsmeta.ErrNotFound
+		return model.InodeRecord{}, model.ErrNotFound
 	}
 	inode, ok := c.inodes[req.Inode]
 	if !ok {
-		return fsmeta.InodeRecord{}, fsmeta.ErrNotFound
+		return model.InodeRecord{}, model.ErrNotFound
 	}
 	if req.SetSize {
 		inode.Size = req.Size
@@ -92,55 +94,55 @@ func (c *fakeMetadataClient) UpdateInode(_ context.Context, req fsmeta.UpdateIno
 	return inode, nil
 }
 
-func (c *fakeMetadataClient) Lookup(_ context.Context, req fsmeta.LookupRequest) (fsmeta.DentryRecord, error) {
+func (c *fakeMetadataClient) Lookup(_ context.Context, req model.LookupRequest) (model.DentryRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.dentries[dentryID(req.Parent, req.Name)]
 	if !ok {
-		return fsmeta.DentryRecord{}, fsmeta.ErrNotFound
+		return model.DentryRecord{}, model.ErrNotFound
 	}
 	return entry, nil
 }
 
-func (c *fakeMetadataClient) LookupPlus(_ context.Context, req fsmeta.LookupRequest) (fsmeta.DentryAttrPair, error) {
+func (c *fakeMetadataClient) LookupPlus(_ context.Context, req model.LookupRequest) (model.DentryAttrPair, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.dentries[dentryID(req.Parent, req.Name)]
 	if !ok {
-		return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+		return model.DentryAttrPair{}, model.ErrNotFound
 	}
 	inode, ok := c.inodes[entry.Inode]
 	if !ok {
-		return fsmeta.DentryAttrPair{}, fsmeta.ErrNotFound
+		return model.DentryAttrPair{}, model.ErrNotFound
 	}
-	return fsmeta.DentryAttrPair{Dentry: entry, Inode: inode}, nil
+	return model.DentryAttrPair{Dentry: entry, Inode: inode}, nil
 }
 
-func (c *fakeMetadataClient) ReadDir(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryRecord, error) {
+func (c *fakeMetadataClient) ReadDir(_ context.Context, req model.ReadDirRequest) ([]model.DentryRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.reads = append(c.reads, req)
 	return c.readDirLocked(req), nil
 }
 
-func (c *fakeMetadataClient) ReadDirPlus(_ context.Context, req fsmeta.ReadDirRequest) ([]fsmeta.DentryAttrPair, error) {
+func (c *fakeMetadataClient) ReadDirPlus(_ context.Context, req model.ReadDirRequest) ([]model.DentryAttrPair, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.reads = append(c.reads, req)
 	entries := c.readDirLocked(req)
-	out := make([]fsmeta.DentryAttrPair, 0, len(entries))
+	out := make([]model.DentryAttrPair, 0, len(entries))
 	for _, entry := range entries {
 		inode, ok := c.inodes[entry.Inode]
 		if !ok {
-			return nil, fsmeta.ErrNotFound
+			return nil, model.ErrNotFound
 		}
-		out = append(out, fsmeta.DentryAttrPair{Dentry: entry, Inode: inode})
+		out = append(out, model.DentryAttrPair{Dentry: entry, Inode: inode})
 	}
 	return out, nil
 }
 
-func (c *fakeMetadataClient) readDirLocked(req fsmeta.ReadDirRequest) []fsmeta.DentryRecord {
-	out := make([]fsmeta.DentryRecord, 0)
+func (c *fakeMetadataClient) readDirLocked(req model.ReadDirRequest) []model.DentryRecord {
+	out := make([]model.DentryRecord, 0)
 	for _, entry := range c.dentries {
 		if entry.Parent != req.Parent {
 			continue
@@ -157,10 +159,10 @@ func (c *fakeMetadataClient) readDirLocked(req fsmeta.ReadDirRequest) []fsmeta.D
 	return out
 }
 
-func (c *fakeMetadataClient) WatchSubtree(_ context.Context, req fsmeta.WatchRequest) (fsmetaclient.WatchSubscription, error) {
+func (c *fakeMetadataClient) WatchSubtree(_ context.Context, req observe.WatchRequest) (fsmetaclient.WatchSubscription, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	prefix, err := fsmeta.WatchPrefixForMount(req, testMountIdentity(req.Mount))
+	prefix, err := observe.WatchPrefixForMount(req, testMountIdentity(req.Mount))
 	if err != nil {
 		return nil, err
 	}
@@ -174,40 +176,40 @@ func (c *fakeMetadataClient) WatchSubtree(_ context.Context, req fsmeta.WatchReq
 	return stream, nil
 }
 
-func (c *fakeMetadataClient) GetReadVersion(context.Context, fsmeta.ReadVersionRequest) (uint64, error) {
+func (c *fakeMetadataClient) GetReadVersion(context.Context, model.ReadVersionRequest) (uint64, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.version++
 	return c.version, nil
 }
 
-func (c *fakeMetadataClient) SnapshotSubtree(_ context.Context, req fsmeta.SnapshotSubtreeRequest) (fsmeta.SnapshotSubtreeToken, error) {
+func (c *fakeMetadataClient) SnapshotSubtree(_ context.Context, req model.SnapshotSubtreeRequest) (model.SnapshotSubtreeToken, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.version++
-	token := fsmeta.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: c.version}
+	token := model.SnapshotSubtreeToken{Mount: req.Mount, RootInode: req.RootInode, ReadVersion: c.version}
 	c.snapshots[token.ReadVersion] = token
 	return token, nil
 }
 
-func (c *fakeMetadataClient) RetireSnapshotSubtree(_ context.Context, token fsmeta.SnapshotSubtreeToken) error {
+func (c *fakeMetadataClient) RetireSnapshotSubtree(_ context.Context, token model.SnapshotSubtreeToken) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.snapshots, token.ReadVersion)
 	return nil
 }
 
-func (c *fakeMetadataClient) Rename(_ context.Context, req fsmeta.RenameRequest) error {
+func (c *fakeMetadataClient) Rename(_ context.Context, req model.RenameRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	fromID := dentryID(req.FromParent, req.FromName)
 	toID := dentryID(req.ToParent, req.ToName)
 	entry, ok := c.dentries[fromID]
 	if !ok {
-		return fsmeta.ErrNotFound
+		return model.ErrNotFound
 	}
 	if _, exists := c.dentries[toID]; exists {
-		return fsmeta.ErrExists
+		return model.ErrExists
 	}
 	delete(c.dentries, fromID)
 	entry.Parent = req.ToParent
@@ -217,13 +219,13 @@ func (c *fakeMetadataClient) Rename(_ context.Context, req fsmeta.RenameRequest)
 	return nil
 }
 
-func (c *fakeMetadataClient) Unlink(_ context.Context, req fsmeta.UnlinkRequest) error {
+func (c *fakeMetadataClient) Unlink(_ context.Context, req model.UnlinkRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	id := dentryID(req.Parent, req.Name)
 	entry, ok := c.dentries[id]
 	if !ok {
-		return fsmeta.ErrNotFound
+		return model.ErrNotFound
 	}
 	delete(c.dentries, id)
 	inode, ok := c.inodes[entry.Inode]
@@ -239,48 +241,48 @@ func (c *fakeMetadataClient) Unlink(_ context.Context, req fsmeta.UnlinkRequest)
 	return nil
 }
 
-func (c *fakeMetadataClient) OpenWriteSession(_ context.Context, req fsmeta.OpenWriteSessionRequest) (fsmeta.SessionRecord, error) {
+func (c *fakeMetadataClient) OpenWriteSession(_ context.Context, req model.OpenWriteSessionRequest) (model.SessionRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	if _, ok := c.inodes[req.Inode]; !ok {
-		return fsmeta.SessionRecord{}, fsmeta.ErrNotFound
+		return model.SessionRecord{}, model.ErrNotFound
 	}
-	record := fsmeta.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: time.Now().Add(req.TTL).UnixNano()}
+	record := model.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: time.Now().Add(req.TTL).UnixNano()}
 	c.sessions[fakeSessionKey{inode: req.Inode, session: req.Session}] = record
 	return record, nil
 }
 
-func (c *fakeMetadataClient) HeartbeatWriteSession(_ context.Context, req fsmeta.HeartbeatWriteSessionRequest) (fsmeta.SessionRecord, error) {
+func (c *fakeMetadataClient) HeartbeatWriteSession(_ context.Context, req model.HeartbeatWriteSessionRequest) (model.SessionRecord, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key := fakeSessionKey{inode: req.Inode, session: req.Session}
 	record, ok := c.sessions[key]
 	if !ok || record.Inode != req.Inode {
-		return fsmeta.SessionRecord{}, fsmeta.ErrNotFound
+		return model.SessionRecord{}, model.ErrNotFound
 	}
 	record.ExpiresUnixNs = time.Now().Add(req.TTL).UnixNano()
 	c.sessions[key] = record
 	return record, nil
 }
 
-func (c *fakeMetadataClient) CloseWriteSession(_ context.Context, req fsmeta.CloseWriteSessionRequest) error {
+func (c *fakeMetadataClient) CloseWriteSession(_ context.Context, req model.CloseWriteSessionRequest) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	key := fakeSessionKey{inode: req.Inode, session: req.Session}
 	if _, ok := c.sessions[key]; !ok {
-		return fsmeta.ErrNotFound
+		return model.ErrNotFound
 	}
 	delete(c.sessions, key)
 	return nil
 }
 
-func (c *fakeMetadataClient) ExpireWriteSessions(_ context.Context, req fsmeta.ExpireWriteSessionsRequest) (fsmeta.ExpireWriteSessionsResult, error) {
+func (c *fakeMetadataClient) ExpireWriteSessions(_ context.Context, req model.ExpireWriteSessionsRequest) (model.ExpireWriteSessionsResult, error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	now := time.Now().UnixNano()
 	limit := req.Limit
 	if limit == 0 {
-		limit = fsmeta.DefaultSessionExpireLimit
+		limit = model.DefaultSessionExpireLimit
 	}
 	var expired uint64
 	for id, session := range c.sessions {
@@ -292,22 +294,22 @@ func (c *fakeMetadataClient) ExpireWriteSessions(_ context.Context, req fsmeta.E
 			expired++
 		}
 	}
-	return fsmeta.ExpireWriteSessionsResult{Expired: expired}, nil
+	return model.ExpireWriteSessionsResult{Expired: expired}, nil
 }
 
-func (c *fakeMetadataClient) emitDentryEventLocked(mount fsmeta.MountID, entry fsmeta.DentryRecord) {
+func (c *fakeMetadataClient) emitDentryEventLocked(mount model.MountID, entry model.DentryRecord) {
 	if len(c.streams) == 0 {
 		return
 	}
-	key, err := fsmeta.EncodeDentryKey(testMountIdentity(mount), entry.Parent, entry.Name)
+	key, err := layout.EncodeDentryKey(testMountIdentity(mount), entry.Parent, entry.Name)
 	if err != nil {
 		return
 	}
 	c.version++
-	evt := fsmeta.WatchEvent{
-		Cursor:        fsmeta.WatchCursor{RegionID: 1, Term: 1, Index: c.version},
+	evt := observe.WatchEvent{
+		Cursor:        observe.WatchCursor{RegionID: 1, Term: 1, Index: c.version},
 		CommitVersion: c.version,
-		Source:        fsmeta.WatchEventSourceCommit,
+		Source:        observe.WatchEventSourceCommit,
 		Key:           key,
 	}
 	for _, stream := range c.streams {
@@ -322,27 +324,27 @@ func (c *fakeMetadataClient) emitDentryEventLocked(mount fsmeta.MountID, entry f
 type fakeWatchStream struct {
 	mu     sync.Mutex
 	prefix []byte
-	events chan fsmeta.WatchEvent
+	events chan observe.WatchEvent
 	closed bool
 }
 
 func newFakeWatchStream(size int) *fakeWatchStream {
-	return &fakeWatchStream{events: make(chan fsmeta.WatchEvent, size)}
+	return &fakeWatchStream{events: make(chan observe.WatchEvent, size)}
 }
 
-func (s *fakeWatchStream) Recv() (fsmeta.WatchEvent, error) {
+func (s *fakeWatchStream) Recv() (observe.WatchEvent, error) {
 	evt, ok := <-s.events
 	if !ok {
-		return fsmeta.WatchEvent{}, io.EOF
+		return observe.WatchEvent{}, io.EOF
 	}
 	return evt, nil
 }
 
-func (s *fakeWatchStream) ReadyCursor() fsmeta.WatchCursor {
-	return fsmeta.WatchCursor{}
+func (s *fakeWatchStream) ReadyCursor() observe.WatchCursor {
+	return observe.WatchCursor{}
 }
 
-func (s *fakeWatchStream) Ack(fsmeta.WatchCursor) error {
+func (s *fakeWatchStream) Ack(observe.WatchCursor) error {
 	return nil
 }
 
@@ -356,10 +358,10 @@ func (s *fakeWatchStream) Close() error {
 	return nil
 }
 
-func dentryID(parent fsmeta.InodeID, name string) string {
+func dentryID(parent model.InodeID, name string) string {
 	return fmt.Sprintf("%d/%s", parent, name)
 }
 
-func testMountIdentity(mount fsmeta.MountID) fsmeta.MountIdentity {
-	return fsmeta.MountIdentity{MountID: mount, MountKeyID: 1}
+func testMountIdentity(mount model.MountID) model.MountIdentity {
+	return model.MountIdentity{MountID: mount, MountKeyID: 1}
 }

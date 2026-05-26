@@ -8,14 +8,15 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
+	"github.com/feichai0017/NoKV/fsmeta/model"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
 
-var quotaTestMount = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+var quotaTestMount = model.MountIdentity{MountID: "vol", MountKeyID: 1}
 
 type fakeTxnRunner struct {
 	data map[string][]byte
@@ -61,7 +62,7 @@ type fakeQuotaLookup struct {
 func (f *fakeQuotaLookup) GetQuotaFence(_ context.Context, req *coordpb.GetQuotaFenceRequest) (*coordpb.GetQuotaFenceResponse, error) {
 	f.calls++
 	subject := req.GetSubject()
-	key := quotaSubject{mount: fsmeta.MountID(subject.GetMountId()), scope: fsmeta.InodeID(subject.GetSubtreeRoot())}
+	key := quotaSubject{mount: model.MountID(subject.GetMountId()), scope: model.InodeID(subject.GetSubtreeRoot())}
 	if fence := f.fences[key]; fence != nil {
 		return &coordpb.GetQuotaFenceResponse{Fence: fence}, nil
 	}
@@ -82,17 +83,17 @@ func TestQuotaReserveWritesUsageCountersInTransaction(t *testing.T) {
 
 	for _, mut := range mutations {
 		require.Equal(t, kvrpcpb.Mutation_Put, mut.GetOp())
-		usage, err := fsmeta.DecodeUsageValue(mut.GetValue())
+		usage, err := layout.DecodeUsageValue(mut.GetValue())
 		require.NoError(t, err)
-		require.Equal(t, fsmeta.UsageRecord{Bytes: 1024, Inodes: 1}, usage)
+		require.Equal(t, model.UsageRecord{Bytes: 1024, Inodes: 1}, usage)
 	}
 }
 
 func TestQuotaReserveRejectsClusterWideLimit(t *testing.T) {
 	runner := newFakeTxnRunner()
-	key, err := fsmeta.EncodeUsageKey(quotaTestMount, 0)
+	key, err := layout.EncodeUsageKey(quotaTestMount, 0)
 	require.NoError(t, err)
-	value, err := fsmeta.EncodeUsageValue(fsmeta.UsageRecord{Bytes: 900, Inodes: 1})
+	value, err := layout.EncodeUsageValue(model.UsageRecord{Bytes: 900, Inodes: 1})
 	require.NoError(t, err)
 	runner.data[string(key)] = value
 	lookup := &fakeQuotaLookup{fences: map[quotaSubject]*coordpb.QuotaFenceInfo{
@@ -101,7 +102,7 @@ func TestQuotaReserveRejectsClusterWideLimit(t *testing.T) {
 	cache := &quotaCache{coord: lookup, ttl: time.Minute}
 
 	_, err = cache.ReserveQuota(context.Background(), runner, []fsmetaexec.QuotaChange{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 200, Inodes: 1}}, 1)
-	require.ErrorIs(t, err, fsmeta.ErrQuotaExceeded)
+	require.ErrorIs(t, err, model.ErrQuotaExceeded)
 }
 
 func TestQuotaReserveCoalescesRenameTransfer(t *testing.T) {

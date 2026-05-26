@@ -9,7 +9,8 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/model"
+	"github.com/feichai0017/NoKV/fsmeta/observe"
 )
 
 const defaultWindow uint32 = 256
@@ -37,9 +38,9 @@ func NewRouter() *Router {
 }
 
 // Subscribe registers one prefix watch.
-func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta.WatchSubscription, error) {
+func (r *Router) Subscribe(ctx context.Context, req observe.WatchRequest) (observe.WatchSubscription, error) {
 	if r == nil {
-		return nil, fsmeta.ErrInvalidRequest
+		return nil, model.ErrInvalidRequest
 	}
 	var prefix []byte
 	var err error
@@ -49,7 +50,7 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 		// subscribers when root retires a mount.
 		prefix = append([]byte(nil), req.KeyPrefix...)
 	} else {
-		prefix, err = fsmeta.WatchPrefix(req)
+		prefix, err = observe.WatchPrefix(req)
 		if err != nil {
 			return nil, err
 		}
@@ -62,9 +63,9 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 		router:  r,
 		mount:   req.Mount,
 		prefix:  prefix,
-		events:  make(chan fsmeta.WatchEvent, window),
+		events:  make(chan observe.WatchEvent, window),
 		window:  window,
-		pending: make(map[fsmeta.WatchCursor]uint32),
+		pending: make(map[observe.WatchCursor]uint32),
 	}
 	r.mu.Lock()
 	replay, ready, err := r.replayLocked(req.ResumeCursor, prefix)
@@ -77,7 +78,7 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 			r.overflow.Add(1)
 			r.dropped.Add(1)
 			r.mu.Unlock()
-			return nil, fsmeta.ErrWatchOverflow
+			return nil, model.ErrWatchOverflow
 		}
 	}
 	sub.ready = ready
@@ -97,7 +98,7 @@ func (r *Router) Subscribe(ctx context.Context, req fsmeta.WatchRequest) (fsmeta
 // Publish fans one key event out to matching subscribers. Durable storage
 // events are kept for resume replay; visible events are live-only because
 // their replay boundary is the later durable segment frontier.
-func (r *Router) Publish(evt fsmeta.WatchEvent) {
+func (r *Router) Publish(evt observe.WatchEvent) {
 	if r == nil || len(evt.Key) == 0 {
 		return
 	}
@@ -128,21 +129,21 @@ func (r *Router) Publish(evt fsmeta.WatchEvent) {
 	}
 }
 
-func eventIsReplayable(evt fsmeta.WatchEvent) bool {
-	return evt.Source != fsmeta.WatchEventSourceRuntimeVisible
+func eventIsReplayable(evt observe.WatchEvent) bool {
+	return evt.Source != observe.WatchEventSourceRuntimeVisible
 }
 
 // OnApply publishes one storage-apply event after the runtime adapter has
 // converted it into fsmeta's neutral ApplyEvent shape.
-func (r *Router) OnApply(evt fsmeta.ApplyEvent) {
+func (r *Router) OnApply(evt observe.ApplyEvent) {
 	switch evt.Source {
-	case fsmeta.WatchEventSourceCommit, fsmeta.WatchEventSourceResolveLock:
+	case observe.WatchEventSourceCommit, observe.WatchEventSourceResolveLock:
 	default:
 		return
 	}
 	for _, key := range evt.Keys {
-		r.Publish(fsmeta.WatchEvent{
-			Cursor: fsmeta.WatchCursor{
+		r.Publish(observe.WatchEvent{
+			Cursor: observe.WatchCursor{
 				RegionID: evt.RegionID,
 				Term:     evt.Term,
 				Index:    evt.Index,
@@ -204,13 +205,13 @@ func (r *Router) regionLocked(regionID uint64) *regionHistory {
 	return history
 }
 
-func (r *Router) replayLocked(cursor fsmeta.WatchCursor, prefix []byte) ([]fsmeta.WatchEvent, fsmeta.WatchCursor, error) {
+func (r *Router) replayLocked(cursor observe.WatchCursor, prefix []byte) ([]observe.WatchEvent, observe.WatchCursor, error) {
 	if cursor.RegionID == 0 {
-		return nil, fsmeta.WatchCursor{}, nil
+		return nil, observe.WatchCursor{}, nil
 	}
 	history := r.regions[cursor.RegionID]
 	if history == nil || history.len == 0 {
-		return nil, fsmeta.WatchCursor{}, fsmeta.ErrWatchCursorExpired
+		return nil, observe.WatchCursor{}, model.ErrWatchCursorExpired
 	}
 	entries := history.ordered()
 	latest := entries[len(entries)-1].event.Cursor
@@ -225,9 +226,9 @@ func (r *Router) replayLocked(cursor fsmeta.WatchCursor, prefix []byte) ([]fsmet
 		if compareCursor(cursor, latest) > 0 {
 			return nil, latest, nil
 		}
-		return nil, latest, fsmeta.ErrWatchCursorExpired
+		return nil, latest, model.ErrWatchCursorExpired
 	}
-	replay := make([]fsmeta.WatchEvent, 0, len(entries))
+	replay := make([]observe.WatchEvent, 0, len(entries))
 	for _, entry := range entries {
 		if compareCursor(entry.event.Cursor, cursor) > 0 && bytes.HasPrefix(entry.event.Key, prefix) {
 			replay = append(replay, cloneEvent(entry.event))
@@ -237,7 +238,7 @@ func (r *Router) replayLocked(cursor fsmeta.WatchCursor, prefix []byte) ([]fsmet
 }
 
 // RetireMount closes all subscriptions attached to a retired mount.
-func (r *Router) RetireMount(mount fsmeta.MountID) int {
+func (r *Router) RetireMount(mount model.MountID) int {
 	if r == nil || mount == "" {
 		return 0
 	}
@@ -251,7 +252,7 @@ func (r *Router) RetireMount(mount fsmeta.MountID) int {
 	}
 	r.mu.Unlock()
 	for _, sub := range retired {
-		sub.closeWith(fsmeta.ErrMountRetired)
+		sub.closeWith(model.ErrMountRetired)
 	}
 	return len(retired)
 }
@@ -268,21 +269,21 @@ func (r *Router) unregister(id uint64, sub *Subscription) {
 type Subscription struct {
 	router *Router
 	id     uint64
-	mount  fsmeta.MountID
+	mount  model.MountID
 	prefix []byte
-	events chan fsmeta.WatchEvent
+	events chan observe.WatchEvent
 	window uint32
-	ready  fsmeta.WatchCursor
+	ready  observe.WatchCursor
 
 	mu          sync.Mutex
 	outstanding uint32
-	pending     map[fsmeta.WatchCursor]uint32
+	pending     map[observe.WatchCursor]uint32
 	closed      bool
 	err         error
 }
 
 // Events returns the event stream.
-func (s *Subscription) Events() <-chan fsmeta.WatchEvent {
+func (s *Subscription) Events() <-chan observe.WatchEvent {
 	if s == nil {
 		return nil
 	}
@@ -291,15 +292,15 @@ func (s *Subscription) Events() <-chan fsmeta.WatchEvent {
 
 // ReadyCursor returns the router frontier after any catch-up replay queued for
 // this subscription.
-func (s *Subscription) ReadyCursor() fsmeta.WatchCursor {
+func (s *Subscription) ReadyCursor() observe.WatchCursor {
 	if s == nil {
-		return fsmeta.WatchCursor{}
+		return observe.WatchCursor{}
 	}
 	return s.ready
 }
 
 // Ack releases outstanding event budget up to cursor within the same region.
-func (s *Subscription) Ack(cursor fsmeta.WatchCursor) {
+func (s *Subscription) Ack(cursor observe.WatchCursor) {
 	if s == nil {
 		return
 	}
@@ -334,7 +335,7 @@ func (s *Subscription) Close() {
 	s.closeWith(nil)
 }
 
-func (s *Subscription) enqueue(evt fsmeta.WatchEvent) {
+func (s *Subscription) enqueue(evt observe.WatchEvent) {
 	if s == nil {
 		return
 	}
@@ -344,7 +345,7 @@ func (s *Subscription) enqueue(evt fsmeta.WatchEvent) {
 		return
 	}
 	if s.outstanding >= s.window {
-		s.markClosedLocked(fsmeta.ErrWatchOverflow)
+		s.markClosedLocked(model.ErrWatchOverflow)
 		id := s.id
 		router := s.router
 		s.mu.Unlock()
@@ -367,7 +368,7 @@ func (s *Subscription) enqueue(evt fsmeta.WatchEvent) {
 			s.router.delivered.Add(1)
 		}
 	default:
-		s.closeWith(fsmeta.ErrWatchOverflow)
+		s.closeWith(model.ErrWatchOverflow)
 		if s.router != nil {
 			s.router.dropped.Add(1)
 			s.router.overflow.Add(1)
@@ -375,7 +376,7 @@ func (s *Subscription) enqueue(evt fsmeta.WatchEvent) {
 	}
 }
 
-func (s *Subscription) enqueueLive(evt fsmeta.WatchEvent) {
+func (s *Subscription) enqueueLive(evt observe.WatchEvent) {
 	if s == nil {
 		return
 	}
@@ -392,7 +393,7 @@ func (s *Subscription) enqueueLive(evt fsmeta.WatchEvent) {
 			s.router.delivered.Add(1)
 		}
 	default:
-		s.closeWith(fsmeta.ErrWatchOverflow)
+		s.closeWith(model.ErrWatchOverflow)
 		if s.router != nil {
 			s.router.dropped.Add(1)
 			s.router.overflow.Add(1)
@@ -400,7 +401,7 @@ func (s *Subscription) enqueueLive(evt fsmeta.WatchEvent) {
 	}
 }
 
-func (s *Subscription) enqueueReplayLocked(evt fsmeta.WatchEvent) bool {
+func (s *Subscription) enqueueReplayLocked(evt observe.WatchEvent) bool {
 	if s == nil {
 		return false
 	}
@@ -410,7 +411,7 @@ func (s *Subscription) enqueueReplayLocked(evt fsmeta.WatchEvent) bool {
 		return false
 	}
 	if s.outstanding >= s.window {
-		s.markClosedLocked(fsmeta.ErrWatchOverflow)
+		s.markClosedLocked(model.ErrWatchOverflow)
 		return false
 	}
 	s.outstanding++
@@ -422,7 +423,7 @@ func (s *Subscription) enqueueReplayLocked(evt fsmeta.WatchEvent) bool {
 		}
 		return true
 	default:
-		s.markClosedLocked(fsmeta.ErrWatchOverflow)
+		s.markClosedLocked(model.ErrWatchOverflow)
 		return false
 	}
 }
@@ -454,7 +455,7 @@ func (s *Subscription) markClosedLocked(err error) {
 	close(s.events)
 }
 
-func cloneEvent(evt fsmeta.WatchEvent) fsmeta.WatchEvent {
+func cloneEvent(evt observe.WatchEvent) observe.WatchEvent {
 	evt.Key = append([]byte(nil), evt.Key...)
 	return evt
 }
@@ -463,12 +464,12 @@ type eventKey struct {
 	regionID      uint64
 	term          uint64
 	index         uint64
-	source        fsmeta.WatchEventSource
+	source        observe.WatchEventSource
 	commitVersion uint64
 	key           string
 }
 
-func eventID(evt fsmeta.WatchEvent) eventKey {
+func eventID(evt observe.WatchEvent) eventKey {
 	return eventKey{
 		regionID:      evt.Cursor.RegionID,
 		term:          evt.Cursor.Term,
@@ -481,7 +482,7 @@ func eventID(evt fsmeta.WatchEvent) eventKey {
 
 type historyEntry struct {
 	id    eventKey
-	event fsmeta.WatchEvent
+	event observe.WatchEvent
 }
 
 type regionHistory struct {
@@ -496,7 +497,7 @@ func (h *regionHistory) remembered(id eventKey) bool {
 	return ok
 }
 
-func (h *regionHistory) remember(id eventKey, evt fsmeta.WatchEvent) {
+func (h *regionHistory) remember(id eventKey, evt observe.WatchEvent) {
 	h.recent[id] = struct{}{}
 	if h.len < len(h.ring) {
 		h.ring[h.next] = historyEntry{id: id, event: evt}
@@ -525,11 +526,11 @@ func (h *regionHistory) ordered() []historyEntry {
 	return out
 }
 
-func sameCursor(a, b fsmeta.WatchCursor) bool {
+func sameCursor(a, b observe.WatchCursor) bool {
 	return a.RegionID == b.RegionID && a.Term == b.Term && a.Index == b.Index
 }
 
-func compareCursor(a, b fsmeta.WatchCursor) int {
+func compareCursor(a, b observe.WatchCursor) int {
 	if a.RegionID != b.RegionID {
 		if a.RegionID < b.RegionID {
 			return -1
@@ -551,7 +552,7 @@ func compareCursor(a, b fsmeta.WatchCursor) int {
 	return 0
 }
 
-func cursorCovers(pending, ack fsmeta.WatchCursor) bool {
+func cursorCovers(pending, ack observe.WatchCursor) bool {
 	if pending.RegionID != ack.RegionID || ack.RegionID == 0 {
 		return false
 	}

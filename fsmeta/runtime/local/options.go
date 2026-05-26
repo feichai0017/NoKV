@@ -7,7 +7,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
+	"github.com/feichai0017/NoKV/fsmeta/model"
 	localdb "github.com/feichai0017/NoKV/local"
 )
 
@@ -36,10 +37,10 @@ type Options struct {
 	WorkDir string
 
 	// Mount is the single local fsmeta mount admitted by this runtime.
-	Mount fsmeta.MountIdentity
+	Mount model.MountIdentity
 
-	// RootInode is the mount root inode. Zero uses fsmeta.RootInode.
-	RootInode fsmeta.InodeID
+	// RootInode is the mount root inode. Zero uses model.RootInode.
+	RootInode model.InodeID
 
 	// LockTTL overrides fsmeta/exec's lock TTL, in the same units expected by
 	// fsmeta/exec.WithLockTTL. Local MVCC commits are one-phase, but keeping the
@@ -64,11 +65,11 @@ type Options struct {
 	DirPageCacheDir string
 }
 
-func (opts Options) rootInode() fsmeta.InodeID {
+func (opts Options) rootInode() model.InodeID {
 	if opts.RootInode != 0 {
 		return opts.RootInode
 	}
-	return fsmeta.RootInode
+	return model.RootInode
 }
 
 func (opts Options) validate() error {
@@ -148,6 +149,19 @@ func localDBOptions(opts Options) *localdb.Options {
 	if opts.WorkDir != "" {
 		cfg.WorkDir = opts.WorkDir
 	}
-	cfg.UserKeyShapeExtractor = fsmeta.MountAtomicUserKeyShape
+	cfg.UserKeyShapeExtractor = mountAtomicUserKeyShape
 	return cfg
+}
+
+func mountAtomicUserKeyShape(key []byte) localdb.UserKeyShape {
+	return localUserKeyShape(layout.MountAtomicUserKeyShape(key))
+}
+
+func localUserKeyShape(shape layout.KeyShape) localdb.UserKeyShape {
+	return localdb.UserKeyShape{
+		LocalityPrefix: shape.LocalityPrefix,
+		BloomPrefix:    shape.BloomPrefix,
+		ShardKey:       shape.ShardKey,
+		Family:         shape.Family,
+	}
 }

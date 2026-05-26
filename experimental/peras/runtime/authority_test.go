@@ -8,8 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
+	"github.com/feichai0017/NoKV/fsmeta/model"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/stretchr/testify/require"
@@ -17,7 +18,7 @@ import (
 
 var (
 	testNow   = time.Unix(100, 0)
-	testMount = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 7}
+	testMount = model.MountIdentity{MountID: "vol", MountKeyID: 7}
 )
 
 func TestActiveAuthoritiesFindsCoveringGrant(t *testing.T) {
@@ -25,14 +26,14 @@ func TestActiveAuthoritiesFindsCoveringGrant(t *testing.T) {
 	request := compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{2},
-		Parents:    []fsmeta.InodeID{10},
+		Buckets:    []layout.AffinityBucket{2},
+		Parents:    []model.InodeID{10},
 	}
 	grant := testGrant("g1", "holder-a", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1, 2},
-		Parents:    []fsmeta.InodeID{10},
+		Buckets:    []layout.AffinityBucket{1, 2},
+		Parents:    []model.InodeID{10},
 	})
 	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{grant}))
 
@@ -60,14 +61,14 @@ func TestActiveAuthoritiesRejectsExpiredAndWrongMount(t *testing.T) {
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
-			Buckets:    []fsmeta.AffinityBucket{1},
+			Buckets:    []layout.AffinityBucket{1},
 		}),
 	}))
 
 	_, ok, err := table.Find(compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	}, testNow.Add(2*time.Hour))
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -75,7 +76,7 @@ func TestActiveAuthoritiesRejectsExpiredAndWrongMount(t *testing.T) {
 	_, ok, err = table.Find(compile.AuthorityScope{
 		Mount:      "other",
 		MountKeyID: 9,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	}, testNow)
 	require.NoError(t, err)
 	require.False(t, ok)
@@ -93,9 +94,9 @@ func TestActiveAuthoritiesTreatsEmptyGrantDimensionsAsWildcard(t *testing.T) {
 	_, ok, err := table.Find(compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{15},
-		Parents:    []fsmeta.InodeID{100},
-		Inodes:     []fsmeta.InodeID{200},
+		Buckets:    []layout.AffinityBucket{15},
+		Parents:    []model.InodeID{100},
+		Inodes:     []model.InodeID{200},
 	}, testNow)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -107,7 +108,7 @@ func TestActiveAuthoritiesDoesNotLetSpecificBucketCoverMountWideScope(t *testing
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
-			Buckets:    []fsmeta.AffinityBucket{1},
+			Buckets:    []layout.AffinityBucket{1},
 		}),
 	}))
 
@@ -127,7 +128,7 @@ func TestActiveAuthoritiesRejectsInvalidDuplicateAndConflictingGrants(t *testing
 	left := testGrant("g1", "holder-a", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 	duplicate := left
 	require.ErrorIs(t, table.Replace([]rootproto.VisibleAuthorityGrant{left, duplicate}), ErrInvalidGrant)
@@ -135,7 +136,7 @@ func TestActiveAuthoritiesRejectsInvalidDuplicateAndConflictingGrants(t *testing
 	right := testGrant("g2", "holder-b", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 	require.ErrorIs(t, table.Replace([]rootproto.VisibleAuthorityGrant{left, right}), ErrConflictingGrant)
 }
@@ -145,19 +146,19 @@ func TestActiveAuthoritiesAllowsDisjointBuckets(t *testing.T) {
 	left := testGrant("g1", "holder-a", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 	right := testGrant("g2", "holder-b", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{2},
+		Buckets:    []layout.AffinityBucket{2},
 	})
 	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{left, right}))
 
 	found, ok, err := table.Find(compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{2},
+		Buckets:    []layout.AffinityBucket{2},
 	}, testNow)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -170,7 +171,7 @@ func TestActiveAuthoritiesSnapshotIsIsolated(t *testing.T) {
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
-			Buckets:    []fsmeta.AffinityBucket{1},
+			Buckets:    []layout.AffinityBucket{1},
 		}),
 	}))
 
@@ -181,7 +182,7 @@ func TestActiveAuthoritiesSnapshotIsIsolated(t *testing.T) {
 	found, ok, err := table.Find(compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	}, testNow)
 	require.NoError(t, err)
 	require.True(t, ok)
@@ -196,7 +197,7 @@ func TestActiveAuthoritiesDetectsAmbiguousTableState(t *testing.T) {
 	_, ok, err := table.Find(compile.AuthorityScope{
 		Mount:      "vol",
 		MountKeyID: 7,
-		Buckets:    []fsmeta.AffinityBucket{3},
+		Buckets:    []layout.AffinityBucket{3},
 	}, testNow)
 	require.False(t, ok)
 	require.True(t, errors.Is(err, ErrAmbiguousAuthority))
@@ -212,19 +213,19 @@ func TestActiveAuthoritiesFencesMountWideFsmetaKeys(t *testing.T) {
 	}))
 
 	keys := make([][]byte, 0, 5)
-	dentry, err := fsmeta.EncodeDentryKey(testMount, 10, "name")
+	dentry, err := layout.EncodeDentryKey(testMount, 10, "name")
 	require.NoError(t, err)
 	keys = append(keys, dentry)
-	inode, err := fsmeta.EncodeInodeKey(testMount, 20)
+	inode, err := layout.EncodeInodeKey(testMount, 20)
 	require.NoError(t, err)
 	keys = append(keys, inode)
-	session, err := fsmeta.EncodeSessionKey(testMount, 20, "writer")
+	session, err := layout.EncodeSessionKey(testMount, 20, "writer")
 	require.NoError(t, err)
 	keys = append(keys, session)
-	usage, err := fsmeta.EncodeUsageKey(testMount, 30)
+	usage, err := layout.EncodeUsageKey(testMount, 30)
 	require.NoError(t, err)
 	keys = append(keys, usage)
-	mount, err := fsmeta.EncodeMountKey(testMount)
+	mount, err := layout.EncodeMountKey(testMount)
 	require.NoError(t, err)
 	keys = append(keys, mount)
 
@@ -238,7 +239,7 @@ func TestActiveAuthoritiesFencesMountWideFsmetaKeys(t *testing.T) {
 
 func TestActiveAuthoritiesFencesFsmetaKeysFailClosedBeforeSnapshot(t *testing.T) {
 	table := NewActiveAuthorities()
-	key, err := fsmeta.EncodeDentryKey(testMount, fsmeta.RootInode, "artifact")
+	key, err := layout.EncodeDentryKey(testMount, model.RootInode, "artifact")
 	require.NoError(t, err)
 
 	_, _, err = table.FencesKey(key, testNow)
@@ -251,29 +252,29 @@ func TestActiveAuthoritiesFencesFsmetaKeysFailClosedBeforeSnapshot(t *testing.T)
 
 func TestActiveAuthoritiesFencesSpecificParentAndBucket(t *testing.T) {
 	table := NewActiveAuthorities()
-	parent := fsmeta.InodeID(10)
+	parent := model.InodeID(10)
 	require.NoError(t, table.Replace([]rootproto.VisibleAuthorityGrant{
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
-			Buckets:    []fsmeta.AffinityBucket{fsmeta.BucketForInodeID(parent)},
-			Parents:    []fsmeta.InodeID{parent},
+			Buckets:    []layout.AffinityBucket{layout.BucketForInodeID(parent)},
+			Parents:    []model.InodeID{parent},
 		}),
 	}))
 
-	matching, err := fsmeta.EncodeDentryKey(testMount, parent, "name")
+	matching, err := layout.EncodeDentryKey(testMount, parent, "name")
 	require.NoError(t, err)
 	_, ok, err := table.FencesKey(matching, testNow)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	otherParent, err := fsmeta.EncodeDentryKey(testMount, parent+1, "name")
+	otherParent, err := layout.EncodeDentryKey(testMount, parent+1, "name")
 	require.NoError(t, err)
 	_, ok, err = table.FencesKey(otherParent, testNow)
 	require.NoError(t, err)
 	require.False(t, ok)
 
-	otherMount, err := fsmeta.EncodeDentryKey(fsmeta.MountIdentity{MountID: "other", MountKeyID: 9}, parent, "name")
+	otherMount, err := layout.EncodeDentryKey(model.MountIdentity{MountID: "other", MountKeyID: 9}, parent, "name")
 	require.NoError(t, err)
 	_, ok, err = table.FencesKey(otherMount, testNow)
 	require.NoError(t, err)
@@ -290,17 +291,17 @@ func TestActiveAuthoritiesFencesUsageOnlyWhenScopeMatches(t *testing.T) {
 		testGrant("g1", "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
-			Inodes:     []fsmeta.InodeID{20},
+			Inodes:     []model.InodeID{20},
 		}),
 	}))
 
-	matching, err := fsmeta.EncodeUsageKey(testMount, 20)
+	matching, err := layout.EncodeUsageKey(testMount, 20)
 	require.NoError(t, err)
 	_, ok, err := table.FencesKey(matching, testNow)
 	require.NoError(t, err)
 	require.True(t, ok)
 
-	other, err := fsmeta.EncodeUsageKey(testMount, 21)
+	other, err := layout.EncodeUsageKey(testMount, 21)
 	require.NoError(t, err)
 	_, ok, err = table.FencesKey(other, testNow)
 	require.NoError(t, err)
@@ -312,7 +313,7 @@ func TestActiveAuthoritiesAppliesRootEvents(t *testing.T) {
 	grant := testGrant("g1", "holder-a", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 
 	require.NoError(t, table.ApplyRootEvent(rootevent.VisibleAuthorityGranted(grant)))
@@ -333,12 +334,12 @@ func TestActiveAuthoritiesRejectsConflictingRootEvent(t *testing.T) {
 	left := testGrant("g1", "holder-a", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 	right := testGrant("g2", "holder-b", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 
 	require.NoError(t, table.ApplyRootEvent(rootevent.VisibleAuthorityGranted(left)))
@@ -351,12 +352,12 @@ func TestActiveAuthoritiesRootGrantReplacesOlderOverlap(t *testing.T) {
 	old := testGrant("g1", "holder-a", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 	next := testGrant("g2", "holder-b", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 	next.EpochID = old.EpochID + 1
 
@@ -374,13 +375,13 @@ func TestActiveAuthoritiesRootGrantIgnoresOlderOverlap(t *testing.T) {
 	current := testGrant("g2", "holder-b", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 	current.EpochID = 2
 	old := testGrant("g1", "holder-a", compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	})
 
 	require.NoError(t, table.ApplyRootEvent(rootevent.VisibleAuthorityGranted(current)))
@@ -395,9 +396,9 @@ func TestAuthorityScopeFromDeltaConvertsRootTypes(t *testing.T) {
 	scope := AuthorityScopeFromDelta(compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1, 2},
-		Parents:    []fsmeta.InodeID{10},
-		Inodes:     []fsmeta.InodeID{20},
+		Buckets:    []layout.AffinityBucket{1, 2},
+		Parents:    []model.InodeID{10},
+		Inodes:     []model.InodeID{20},
 	})
 
 	require.Equal(t, "vol", scope.MountID)
@@ -415,7 +416,7 @@ func BenchmarkActiveAuthoritiesApplyRootEvent(b *testing.B) {
 		grants = append(grants, testGrant("g"+string(rune('a'+bucket)), "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
-			Buckets:    []fsmeta.AffinityBucket{fsmeta.AffinityBucket(bucket)},
+			Buckets:    []layout.AffinityBucket{layout.AffinityBucket(bucket)},
 		}))
 	}
 	require.NoError(b, table.Replace(grants))
@@ -435,14 +436,14 @@ func BenchmarkActiveAuthoritiesFind(b *testing.B) {
 		grants = append(grants, testGrant("g"+string(rune('a'+bucket)), "holder-a", compile.AuthorityScope{
 			Mount:      testMount.MountID,
 			MountKeyID: testMount.MountKeyID,
-			Buckets:    []fsmeta.AffinityBucket{fsmeta.AffinityBucket(bucket)},
+			Buckets:    []layout.AffinityBucket{layout.AffinityBucket(bucket)},
 		}))
 	}
 	require.NoError(b, table.Replace(grants))
 	scope := compile.AuthorityScope{
 		Mount:      testMount.MountID,
 		MountKeyID: testMount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{11},
+		Buckets:    []layout.AffinityBucket{11},
 	}
 
 	for b.Loop() {

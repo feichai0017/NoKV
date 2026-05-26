@@ -17,8 +17,9 @@ import (
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
-	"github.com/feichai0017/NoKV/fsmeta"
 	fsmetaclient "github.com/feichai0017/NoKV/fsmeta/client"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
+	"github.com/feichai0017/NoKV/fsmeta/model"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 )
@@ -316,7 +317,7 @@ func collectWatchEvents(ctx context.Context, stream fsmetaclient.WatchSubscripti
 			return
 		}
 		_ = stream.Ack(evt.Cursor)
-		name, ok := fsmeta.DentryNameOfKey(evt.Key)
+		name, ok := layout.DentryNameOfKey(evt.Key)
 		if !ok {
 			continue
 		}
@@ -341,7 +342,7 @@ func waitForWatchName(ctx context.Context, stream fsmetaclient.WatchSubscription
 			return err
 		}
 		_ = stream.Ack(evt.Cursor)
-		if name, ok := fsmeta.DentryNameOfKey(evt.Key); ok && name == want {
+		if name, ok := layout.DentryNameOfKey(evt.Key); ok && name == want {
 			return nil
 		}
 		select {
@@ -392,7 +393,7 @@ func hasRecordedErrors(samples []Sample) bool {
 	return false
 }
 
-func defaultMount(mount fsmeta.MountID) fsmeta.MountID {
+func defaultMount(mount model.MountID) model.MountID {
 	if mount == "" {
 		return "fsmeta-workload"
 	}
@@ -431,10 +432,10 @@ func clampReadDirLimit(limit uint32, fallback int) uint32 {
 		limit = uint32(fallback)
 	}
 	if limit == 0 {
-		limit = fsmeta.DefaultReadDirLimit
+		limit = model.DefaultReadDirLimit
 	}
-	if limit > fsmeta.MaxReadDirLimit {
-		return fsmeta.MaxReadDirLimit
+	if limit > model.MaxReadDirLimit {
+		return model.MaxReadDirLimit
 	}
 	return limit
 }

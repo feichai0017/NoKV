@@ -13,7 +13,8 @@ import (
 	"strings"
 
 	"github.com/feichai0017/NoKV/config"
-	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
+	"github.com/feichai0017/NoKV/fsmeta/model"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	localmeta "github.com/feichai0017/NoKV/raftstore/localmeta"
@@ -186,19 +187,19 @@ func effectiveRegions(cfg *config.File) ([]config.Region, error) {
 }
 
 func expandFSMetaBootstrapRegions(cfg *config.File) ([]config.Region, error) {
-	layout := cfg.FSMetaRegionBootstrap
-	mounts := make([]fsmeta.MountIdentity, 0, len(layout.Mounts))
-	for _, mount := range layout.Mounts {
-		mounts = append(mounts, fsmeta.MountIdentity{
-			MountID:    fsmeta.MountID(mount.MountID),
-			MountKeyID: fsmeta.MountKeyID(mount.MountKeyID),
+	bootstrap := cfg.FSMetaRegionBootstrap
+	mounts := make([]model.MountIdentity, 0, len(bootstrap.Mounts))
+	for _, mount := range bootstrap.Mounts {
+		mounts = append(mounts, model.MountIdentity{
+			MountID:    model.MountID(mount.MountID),
+			MountKeyID: model.MountKeyID(mount.MountKeyID),
 		})
 	}
-	ranges, err := fsmeta.PlanBucketPlacement(mounts, layout.BucketCount)
+	ranges, err := layout.PlanBucketPlacement(mounts, bootstrap.BucketCount)
 	if err != nil {
 		return nil, err
 	}
-	leaders := layout.LeaderStoreIDs
+	leaders := bootstrap.LeaderStoreIDs
 	if len(leaders) == 0 {
 		leaders = make([]uint64, 0, len(cfg.Stores))
 		for _, store := range cfg.Stores {
@@ -210,12 +211,12 @@ func expandFSMetaBootstrapRegions(cfg *config.File) ([]config.Region, error) {
 	}
 	regions := make([]config.Region, 0, len(ranges))
 	for i, r := range ranges {
-		regionID := layout.RegionIDBase + uint64(i)
+		regionID := bootstrap.RegionIDBase + uint64(i)
 		peers := make([]config.Peer, 0, len(cfg.Stores))
 		for j, store := range cfg.Stores {
 			peers = append(peers, config.Peer{
 				StoreID: store.StoreID,
-				PeerID:  layout.PeerIDBase + uint64(i*len(cfg.Stores)+j),
+				PeerID:  bootstrap.PeerIDBase + uint64(i*len(cfg.Stores)+j),
 			})
 		}
 		regions = append(regions, config.Region{

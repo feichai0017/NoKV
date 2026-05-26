@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package fsmeta
+package model
 
 import nokverrors "github.com/feichai0017/NoKV/errors"
 
@@ -11,10 +11,7 @@ var (
 	ErrInvalidName          = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid name")
 	ErrInvalidSession       = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid session id")
 	ErrInvalidRequest       = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid request")
-	ErrInvalidKey           = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid key")
-	ErrInvalidKeyKind       = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid key kind")
 	ErrInvalidValue         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid value")
-	ErrInvalidValueKind     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid value kind")
 	ErrInvalidPageSize      = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid page size")
 	ErrExists               = nokverrors.New(nokverrors.KindAlreadyExists, "fsmeta: entry exists")
 	ErrNotFound             = nokverrors.New(nokverrors.KindNotFound, "fsmeta: entry not found")

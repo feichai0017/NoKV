@@ -8,16 +8,17 @@ package compile
 import (
 	"crypto/sha256"
 
-	"github.com/feichai0017/NoKV/fsmeta"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
+	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
 type RemoveProgram struct {
 	Compiled CompiledOp
 }
 
-func CompileRemoveProgram(req fsmeta.RemoveRequest, mount fsmeta.MountIdentity, opts ...Option) (RemoveProgram, error) {
+func CompileRemoveProgram(req model.RemoveRequest, mount model.MountIdentity, opts ...Option) (RemoveProgram, error) {
 	options := collectOptions(opts...)
-	plan, err := fsmeta.PlanRemove(req, mount)
+	plan, err := layout.PlanRemove(req, mount)
 	if err != nil {
 		return RemoveProgram{}, err
 	}
@@ -31,10 +32,10 @@ func CompileRemoveProgram(req fsmeta.RemoveRequest, mount fsmeta.MountIdentity, 
 		{Kind: EffectDerivedPut},
 		{Kind: EffectDerivedPut, Key: plan.MutateKeys[1]},
 	}
-	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []fsmeta.InodeID{req.Parent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
+	delta := SemanticDelta{Kind: plan.Kind, Plan: plan, Authority: scopeFor(mount, []model.InodeID{req.Parent}, nil), ReadPredicates: predicates, WriteEffects: effects, Eligibility: EligibilityVisibleCommit}
 	delta = applyQuotaPolicy(delta, options, GuardQuotaCredit)
 	if !validateRemoveSemanticDelta(delta) {
-		return RemoveProgram{}, fsmeta.ErrInvalidRequest
+		return RemoveProgram{}, model.ErrInvalidRequest
 	}
 	compiled, err := compileRemoveCompiledOp(delta)
 	if err != nil {
@@ -44,7 +45,7 @@ func CompileRemoveProgram(req fsmeta.RemoveRequest, mount fsmeta.MountIdentity, 
 }
 
 func validateRemoveSemanticDelta(delta SemanticDelta) bool {
-	if delta.Kind != fsmeta.OperationRemove {
+	if delta.Kind != model.OperationRemove {
 		return false
 	}
 	switch {
@@ -121,18 +122,18 @@ func validateRemoveSemanticDelta(delta SemanticDelta) bool {
 }
 
 func compileRemoveCompiledOp(delta SemanticDelta) (CompiledOp, error) {
-	if delta.Kind != fsmeta.OperationRemove || len(delta.WriteEffects) != 3 {
-		return CompiledOp{}, fsmeta.ErrInvalidRequest
+	if delta.Kind != model.OperationRemove || len(delta.WriteEffects) != 3 {
+		return CompiledOp{}, model.ErrInvalidRequest
 	}
 	digest := descriptorDigest(delta)
 	durability := DurabilityVisibleOnly
 	placement := PlacementPlan{MountKeyID: delta.Authority.MountKeyID, Buckets: delta.Authority.Buckets, SlowReason: delta.SlowReason}
 	placement.SingleBucket = len(placement.Buckets) == 1
 	if delta.Eligibility == EligibilityVisibleCommit && !delta.DurabilityBarrier && len(delta.WriteEffects) > 0 {
-		var mount fsmeta.MountKeyID
+		var mount model.MountKeyID
 		var fsmetaKeys bool
 		var opaqueKeys bool
-		buckets := make([]fsmeta.AffinityBucket, 0, len(delta.WriteEffects))
+		buckets := make([]layout.AffinityBucket, 0, len(delta.WriteEffects))
 		for _, effect := range delta.WriteEffects {
 			switch effect.Kind {
 			case EffectPut:
@@ -152,7 +153,7 @@ func compileRemoveCompiledOp(delta SemanticDelta) (CompiledOp, error) {
 				placement.SlowReason = SlowReasonDynamicWriteSet
 				goto placementDone
 			}
-			parts, ok := fsmeta.InspectKey(effect.Key)
+			parts, ok := layout.InspectKey(effect.Key)
 			if !ok {
 				if fsmetaKeys {
 					placement.SlowReason = SlowReasonDynamicWriteSet
@@ -238,7 +239,7 @@ placementDone:
 		if len(effect.Value) > 0 {
 			plan.ValueHash = sha256.Sum256(effect.Value)
 		}
-		if parts, ok := fsmeta.InspectKey(effect.Key); ok {
+		if parts, ok := layout.InspectKey(effect.Key); ok {
 			plan.MountKeyID = parts.MountKeyID
 			plan.Bucket = parts.Bucket
 			plan.RecordKind = parts.Kind
@@ -297,13 +298,13 @@ placementDone:
 			if len(effect.Key) == 0 {
 				continue
 			}
-			parts, ok := fsmeta.InspectKey(effect.Key)
-			if !ok || parts.Kind != fsmeta.KeyKindDentry {
+			parts, ok := layout.InspectKey(effect.Key)
+			if !ok || parts.Kind != layout.KeyKindDentry {
 				continue
 			}
 			projection := WatchProjection{EventKind: watchEventKind(delta, effect), Key: effect.Key, Parent: parts.Parent, Name: dentryName(effect.Key), EmitAt: emitAt}
 			if len(effect.Value) > 0 {
-				if dentry, err := fsmeta.DecodeDentryValue(effect.Value); err == nil {
+				if dentry, err := layout.DecodeDentryValue(effect.Value); err == nil {
 					projection.Inode = dentry.Inode
 				}
 			}

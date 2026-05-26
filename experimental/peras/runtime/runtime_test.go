@@ -21,9 +21,11 @@ import (
 	"github.com/feichai0017/NoKV/engine/wal"
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
-	"github.com/feichai0017/NoKV/fsmeta"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
+	"github.com/feichai0017/NoKV/fsmeta/model"
+	"github.com/feichai0017/NoKV/fsmeta/observe"
 	"github.com/feichai0017/NoKV/fsmeta/proof"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	"github.com/stretchr/testify/require"
@@ -74,17 +76,17 @@ func TestRuntimeSubmitVisibleRequiresVisibleLog(t *testing.T) {
 }
 
 func TestRuntimePublishesVisibleWatch(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	parent := fsmeta.InodeID(1)
-	inode := testRuntimeInodeForBucket(t, fsmeta.BucketForInodeID(parent))
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, parent, "visible")
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
+	parent := model.InodeID(1)
+	inode := testRuntimeInodeForBucket(t, layout.BucketForInodeID(parent))
+	dentryKey, err := layout.EncodeDentryKey(mount, parent, "visible")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, inode)
+	inodeKey, err := layout.EncodeInodeKey(mount, inode)
 	require.NoError(t, err)
-	prefix, err := fsmeta.EncodeDentryPrefix(mount, parent)
+	prefix, err := layout.EncodeDentryPrefix(mount, parent)
 	require.NoError(t, err)
 	router := fsmetawatch.NewRouter()
-	sub, err := router.Subscribe(context.Background(), fsmeta.WatchRequest{KeyPrefix: prefix})
+	sub, err := router.Subscribe(context.Background(), observe.WatchRequest{KeyPrefix: prefix})
 	require.NoError(t, err)
 	defer sub.Close()
 
@@ -104,14 +106,14 @@ func TestRuntimePublishesVisibleWatch(t *testing.T) {
 	delta = testRuntimePerasOpWithScope(delta, compile.AuthorityScope{
 		Mount:      delta.Delta.Authority.Mount,
 		MountKeyID: delta.Delta.Authority.MountKeyID,
-		Parents:    []fsmeta.InodeID{parent},
-		Inodes:     []fsmeta.InodeID{inode},
+		Parents:    []model.InodeID{parent},
+		Inodes:     []model.InodeID{inode},
 	})
 	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta, nil)
 	require.NoError(t, err)
 
 	got := <-sub.Events()
-	require.Equal(t, fsmeta.WatchEventSourceRuntimeVisible, got.Source)
+	require.Equal(t, observe.WatchEventSourceRuntimeVisible, got.Source)
 	require.Equal(t, dentryKey, got.Key)
 	require.Zero(t, got.Cursor.RegionID)
 	require.Equal(t, uint64(1), got.Cursor.Term)
@@ -183,16 +185,16 @@ func TestRuntimeDirectoryEmptyFactsDoNotIgnoreSealedRows(t *testing.T) {
 	defer committer.Close()
 
 	ctx := context.Background()
-	committer.RememberEmptyDirectory(testRuntimeMount, fsmeta.RootInode)
-	require.True(t, committer.DirectoryEmpty(testRuntimeMount, fsmeta.RootInode))
-	require.True(t, committer.DirectoryBaseEmpty(testRuntimeMount, fsmeta.RootInode))
+	committer.RememberEmptyDirectory(testRuntimeMount, model.RootInode)
+	require.True(t, committer.DirectoryEmpty(testRuntimeMount, model.RootInode))
+	require.True(t, committer.DirectoryBaseEmpty(testRuntimeMount, model.RootInode))
 
 	require.NoError(t, commitRuntimePeras(ctx, committer, 1, testRuntimeDentryKeyForLabel("sealed"), testRuntimeDentryKeyForLabel("sealed-inode")))
-	committer.ForgetEmptyDirectory(testRuntimeMount, fsmeta.RootInode)
+	committer.ForgetEmptyDirectory(testRuntimeMount, model.RootInode)
 	require.NoError(t, committer.FlushDurable(ctx))
 
-	require.False(t, committer.DirectoryEmpty(testRuntimeMount, fsmeta.RootInode))
-	require.False(t, committer.DirectoryBaseEmpty(testRuntimeMount, fsmeta.RootInode))
+	require.False(t, committer.DirectoryEmpty(testRuntimeMount, model.RootInode))
+	require.False(t, committer.DirectoryBaseEmpty(testRuntimeMount, model.RootInode))
 }
 
 func TestRuntimeWithoutWitnessLayerFlushesVisibleLogToInstall(t *testing.T) {
@@ -322,13 +324,13 @@ func TestRuntimeScanPerasOverlayMergesViewsByLimit(t *testing.T) {
 
 func TestRuntimeScanPerasDirectoryUsesDirectoryIndex(t *testing.T) {
 	committer := &Runtime{read: newReadState()}
-	prefix, err := fsmeta.EncodeDentryPrefix(testRuntimeMount, 9)
+	prefix, err := layout.EncodeDentryPrefix(testRuntimeMount, 9)
 	require.NoError(t, err)
-	keyA, err := fsmeta.EncodeDentryKey(testRuntimeMount, 9, "a")
+	keyA, err := layout.EncodeDentryKey(testRuntimeMount, 9, "a")
 	require.NoError(t, err)
-	keyB, err := fsmeta.EncodeDentryKey(testRuntimeMount, 9, "b")
+	keyB, err := layout.EncodeDentryKey(testRuntimeMount, 9, "b")
 	require.NoError(t, err)
-	other, err := fsmeta.EncodeDentryKey(testRuntimeMount, 10, "a")
+	other, err := layout.EncodeDentryKey(testRuntimeMount, 10, "a")
 	require.NoError(t, err)
 	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(keyB, []byte("sealed-b"))))
 	require.NoError(t, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(other, []byte("other"))))
@@ -371,9 +373,9 @@ func TestRuntimeCapturePerasVisibleSnapshotIncludesPendingOverlay(t *testing.T) 
 	keyA := testRuntimeDentryKeyForLabel("a")
 	keyB := testRuntimeDentryKeyForLabel("b")
 	keyC := testRuntimeDentryKeyForLabel("c")
-	inodeBKey, err := fsmeta.EncodeInodeKey(testRuntimeMount, 42)
+	inodeBKey, err := layout.EncodeInodeKey(testRuntimeMount, 42)
 	require.NoError(t, err)
-	opB := testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "b", 42, nil, nil)
+	opB := testRuntimeCreateOp(testRuntimeMount, model.RootInode, "b", 42, nil, nil)
 	dentryBValue := testRuntimeDentryEffect(opB).Value
 
 	installRuntimeSealedSegment(t, committer, testRuntimePerasSegmentForOverlay(keyA, []byte("sealed-a")))
@@ -381,19 +383,19 @@ func TestRuntimeCapturePerasVisibleSnapshotIncludesPendingOverlay(t *testing.T) 
 	capture, captured, err := committer.CapturePerasVisibleSnapshot(context.Background(), 11, compile.AuthorityScope{
 		Mount:      testRuntimeMount.MountID,
 		MountKeyID: testRuntimeMount.MountKeyID,
-		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+		Parents:    []model.InodeID{model.RootInode},
 	})
 	require.NoError(t, err)
 	require.True(t, captured)
 	require.Empty(t, capture.Evidence)
-	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "c", 43, []byte("visible-c"), nil)))
+	require.NoError(t, committer.read.overlay.Add(fsperas.OperationID{ClientID: "test", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, model.RootInode, "c", 43, []byte("visible-c"), nil)))
 
 	_, _, ok := committer.GetPerasSnapshotOverlayView(11, keyC)
 	require.False(t, ok)
 	value, deleted, ok := committer.GetPerasSnapshotOverlayView(11, inodeBKey)
 	require.True(t, ok)
 	require.False(t, deleted)
-	_, err = fsmeta.DecodeInodeValue(value)
+	_, err = layout.DecodeInodeValue(value)
 	require.NoError(t, err)
 	require.Equal(t, []fsperas.OverlayKV{
 		{Key: keyA, Value: []byte("sealed-a")},
@@ -417,12 +419,12 @@ func TestRuntimeCaptureQuorumVisibleSnapshotWitnessesPendingFrontier(t *testing.
 	defer committer.Close()
 
 	ctx := context.Background()
-	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "a", 41, nil, nil), nil)
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 1}, testRuntimeCreateOp(testRuntimeMount, model.RootInode, "a", 41, nil, nil), nil)
 	require.NoError(t, err)
 	capture, captured, err := committer.CapturePerasVisibleSnapshot(ctx, 12, compile.AuthorityScope{
 		Mount:      testRuntimeMount.MountID,
 		MountKeyID: testRuntimeMount.MountKeyID,
-		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
+		Parents:    []model.InodeID{model.RootInode},
 	})
 	require.NoError(t, err)
 	require.True(t, captured)
@@ -434,7 +436,7 @@ func TestRuntimeCaptureQuorumVisibleSnapshotWitnessesPendingFrontier(t *testing.
 	require.Equal(t, witnessSnapshot.Segments[0].SegmentRoot, capture.Evidence[0].EvidenceRoot)
 	require.Equal(t, witnessSnapshot.Segments[0].SegmentPayloadDigest, capture.Evidence[0].PayloadDigest)
 	require.Greater(t, witness.recordCount(), 0)
-	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, "b", 42, nil, nil), nil)
+	_, err = committer.SubmitVisible(ctx, fsperas.OperationID{ClientID: "client", Seq: 2}, testRuntimeCreateOp(testRuntimeMount, model.RootInode, "b", 42, nil, nil), nil)
 	require.NoError(t, err)
 
 	prefix := testRuntimeRootDentryPrefix()
@@ -461,7 +463,7 @@ func TestRuntimeAppendsVisibleLogBeforeOverlay(t *testing.T) {
 	_, err = committer.SubmitVisible(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, op, nil)
 	require.NoError(t, err)
 	require.Len(t, log.records, 1)
-	require.Equal(t, fsmeta.OperationCreate, log.records[0].Operation.Kind)
+	require.Equal(t, model.OperationCreate, log.records[0].Operation.Kind)
 	require.Equal(t, op.Delta.Authority, log.records[0].Scope)
 	value, deleted, ok := committer.GetPerasOverlay(testRuntimeDentryEffect(op).Key)
 	require.True(t, ok)
@@ -826,9 +828,9 @@ func TestRuntimeCanStopAtDurablePersistence(t *testing.T) {
 }
 
 func TestRuntimeFlushBatchCarriesMultipleSegmentJobs(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
 	keys := make([][2][]byte, 0, 4)
-	for bucket := fsmeta.AffinityBucket(0); len(keys) < cap(keys); bucket++ {
+	for bucket := layout.AffinityBucket(0); len(keys) < cap(keys); bucket++ {
 		first, second := testRuntimeBucketKeys(t, mount, bucket)
 		keys = append(keys, [2][]byte{first, second})
 	}
@@ -1180,7 +1182,7 @@ func TestRuntimeFlushPreservesCatalogSegmentAcrossFSMetaBuckets(t *testing.T) {
 	require.NoError(t, err)
 	defer committer.Close()
 
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
 	leftA, leftB := testRuntimeBucketKeys(t, mount, 1)
 	rightA, rightB := testRuntimeBucketKeys(t, mount, 2)
 	ctx := context.Background()
@@ -1209,7 +1211,7 @@ func TestRuntimeAcceptsCrossBucketCreateForCatalogInstall(t *testing.T) {
 	require.NoError(t, err)
 	defer committer.Close()
 
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
 	leftA, _ := testRuntimeBucketKeys(t, mount, 1)
 	rightA, _ := testRuntimeBucketKeys(t, mount, 2)
 	ctx := context.Background()
@@ -1375,10 +1377,10 @@ func TestRuntimeRecoversWitnessSegment(t *testing.T) {
 }
 
 func TestRuntimeRecoveryPrefersInstalledCatalog(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "restored")
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := layout.EncodeDentryKey(mount, model.RootInode, "restored")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	inodeKey, err := layout.EncodeInodeKey(mount, 10)
 	require.NoError(t, err)
 	witnesses := testRuntimeSegmentWitnesses(t, 3)
 	provider := &fakeRuntimeVisibleGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
@@ -1397,8 +1399,8 @@ func TestRuntimeRecoveryPrefersInstalledCatalog(t *testing.T) {
 	delta = testRuntimePerasOpWithScope(delta, compile.AuthorityScope{
 		Mount:      delta.Delta.Authority.Mount,
 		MountKeyID: delta.Delta.Authority.MountKeyID,
-		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
-		Inodes:     []fsmeta.InodeID{10},
+		Parents:    []model.InodeID{model.RootInode},
+		Inodes:     []model.InodeID{10},
 	})
 	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
@@ -1443,10 +1445,10 @@ func TestRuntimeRecoveryPrefersInstalledCatalog(t *testing.T) {
 }
 
 func TestRuntimeRecoversRootSealedSegmentFromWitnessWhenCatalogMissing(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "rooted")
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := layout.EncodeDentryKey(mount, model.RootInode, "rooted")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 11)
+	inodeKey, err := layout.EncodeInodeKey(mount, 11)
 	require.NoError(t, err)
 	witnesses := testRuntimeSegmentWitnesses(t, 3)
 	provider := &fakeRuntimeVisibleGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
@@ -1465,8 +1467,8 @@ func TestRuntimeRecoversRootSealedSegmentFromWitnessWhenCatalogMissing(t *testin
 	delta = testRuntimePerasOpWithScope(delta, compile.AuthorityScope{
 		Mount:      delta.Delta.Authority.Mount,
 		MountKeyID: delta.Delta.Authority.MountKeyID,
-		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
-		Inodes:     []fsmeta.InodeID{11},
+		Parents:    []model.InodeID{model.RootInode},
+		Inodes:     []model.InodeID{11},
 	})
 	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
@@ -1517,10 +1519,10 @@ func TestRuntimeRecoversRootSealedSegmentFromWitnessWhenCatalogMissing(t *testin
 }
 
 func TestRuntimeRecoversRootSealedSegmentWithWitnessScanFallback(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "scan-fallback")
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := layout.EncodeDentryKey(mount, model.RootInode, "scan-fallback")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 12)
+	inodeKey, err := layout.EncodeInodeKey(mount, 12)
 	require.NoError(t, err)
 	recorders, witnesses := scanOnlyRuntimeSegmentWitnesses(t, 3)
 	provider := &fakeRuntimeVisibleGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
@@ -1540,8 +1542,8 @@ func TestRuntimeRecoversRootSealedSegmentWithWitnessScanFallback(t *testing.T) {
 	delta = testRuntimePerasOpWithScope(delta, compile.AuthorityScope{
 		Mount:      delta.Delta.Authority.Mount,
 		MountKeyID: delta.Delta.Authority.MountKeyID,
-		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
-		Inodes:     []fsmeta.InodeID{12},
+		Parents:    []model.InodeID{model.RootInode},
+		Inodes:     []model.InodeID{12},
 	})
 	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
@@ -1590,10 +1592,10 @@ func TestRuntimeRecoversRootSealedSegmentWithWitnessScanFallback(t *testing.T) {
 }
 
 func TestRuntimeRecoversRootSealedSegmentWhenCatalogScanFails(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "catalog-error")
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := layout.EncodeDentryKey(mount, model.RootInode, "catalog-error")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 13)
+	inodeKey, err := layout.EncodeInodeKey(mount, 13)
 	require.NoError(t, err)
 	witnesses := testRuntimeSegmentWitnesses(t, 3)
 	provider := &fakeRuntimeVisibleGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
@@ -1612,8 +1614,8 @@ func TestRuntimeRecoversRootSealedSegmentWhenCatalogScanFails(t *testing.T) {
 	delta = testRuntimePerasOpWithScope(delta, compile.AuthorityScope{
 		Mount:      delta.Delta.Authority.Mount,
 		MountKeyID: delta.Delta.Authority.MountKeyID,
-		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
-		Inodes:     []fsmeta.InodeID{13},
+		Parents:    []model.InodeID{model.RootInode},
+		Inodes:     []model.InodeID{13},
 	})
 	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
@@ -1661,10 +1663,10 @@ func TestRuntimeRecoversRootSealedSegmentWhenCatalogScanFails(t *testing.T) {
 }
 
 func TestRuntimeRootSealedRecoveryWaitsOutRouteRetryExhaustion(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "route-retry")
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := layout.EncodeDentryKey(mount, model.RootInode, "route-retry")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 14)
+	inodeKey, err := layout.EncodeInodeKey(mount, 14)
 	require.NoError(t, err)
 	witnesses := testRuntimeSegmentWitnesses(t, 3)
 	provider := &fakeRuntimeVisibleGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
@@ -1683,8 +1685,8 @@ func TestRuntimeRootSealedRecoveryWaitsOutRouteRetryExhaustion(t *testing.T) {
 	delta = testRuntimePerasOpWithScope(delta, compile.AuthorityScope{
 		Mount:      delta.Delta.Authority.Mount,
 		MountKeyID: delta.Delta.Authority.MountKeyID,
-		Parents:    []fsmeta.InodeID{fsmeta.RootInode},
-		Inodes:     []fsmeta.InodeID{14},
+		Parents:    []model.InodeID{model.RootInode},
+		Inodes:     []model.InodeID{14},
 	})
 	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, delta)
 	require.NoError(t, err)
@@ -1758,14 +1760,14 @@ func TestRuntimeReturnsUnrecoverableRootSealedCatalogScanError(t *testing.T) {
 }
 
 func TestRuntimeRecoversBroadRootSealForNarrowRecoveryScope(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryA, err := fsmeta.EncodeDentryKey(mount, 1, "a")
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryA, err := layout.EncodeDentryKey(mount, 1, "a")
 	require.NoError(t, err)
-	inodeA, err := fsmeta.EncodeInodeKey(mount, 11)
+	inodeA, err := layout.EncodeInodeKey(mount, 11)
 	require.NoError(t, err)
-	dentryB, err := fsmeta.EncodeDentryKey(mount, 2, "b")
+	dentryB, err := layout.EncodeDentryKey(mount, 2, "b")
 	require.NoError(t, err)
-	inodeB, err := fsmeta.EncodeInodeKey(mount, 12)
+	inodeB, err := layout.EncodeInodeKey(mount, 12)
 	require.NoError(t, err)
 	witnesses := testRuntimeSegmentWitnesses(t, 3)
 	provider := &fakeRuntimeVisibleGrantProvider{holderID: "holder-a", grant: testRuntimeCommitterGrant()}
@@ -1783,14 +1785,14 @@ func TestRuntimeRecoversBroadRootSealForNarrowRecoveryScope(t *testing.T) {
 	first := testRuntimePerasOpWithScope(testRuntimePerasOp(dentryA, inodeA), compile.AuthorityScope{
 		Mount:      mount.MountID,
 		MountKeyID: mount.MountKeyID,
-		Parents:    []fsmeta.InodeID{1},
-		Inodes:     []fsmeta.InodeID{11},
+		Parents:    []model.InodeID{1},
+		Inodes:     []model.InodeID{11},
 	})
 	second := testRuntimePerasOpWithScope(testRuntimePerasOp(dentryB, inodeB), compile.AuthorityScope{
 		Mount:      mount.MountID,
 		MountKeyID: mount.MountKeyID,
-		Parents:    []fsmeta.InodeID{2},
-		Inodes:     []fsmeta.InodeID{12},
+		Parents:    []model.InodeID{2},
+		Inodes:     []model.InodeID{12},
 	})
 	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, first)
 	require.NoError(t, err)
@@ -1825,7 +1827,7 @@ func TestRuntimeRecoversBroadRootSealForNarrowRecoveryScope(t *testing.T) {
 	require.NoError(t, err)
 	defer recoverer.Close()
 
-	narrowScope := compile.AuthorityScope{Mount: mount.MountID, MountKeyID: mount.MountKeyID, Parents: []fsmeta.InodeID{1}}
+	narrowScope := compile.AuthorityScope{Mount: mount.MountID, MountKeyID: mount.MountKeyID, Parents: []model.InodeID{1}}
 	require.NoError(t, recoverer.LoadRootSealedSegments(context.Background(), narrowScope))
 	require.Equal(t, 1, installer.calls)
 	valueA, deleted, ok := recoverer.GetPerasOverlay(dentryA)
@@ -1839,16 +1841,16 @@ func TestRuntimeRecoversBroadRootSealForNarrowRecoveryScope(t *testing.T) {
 }
 
 func TestRuntimeLoadsInstalledSegmentCatalog(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
-	dentryKey, err := fsmeta.EncodeDentryKey(mount, fsmeta.RootInode, "restored")
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
+	dentryKey, err := layout.EncodeDentryKey(mount, model.RootInode, "restored")
 	require.NoError(t, err)
-	inodeKey, err := fsmeta.EncodeInodeKey(mount, 10)
+	inodeKey, err := layout.EncodeInodeKey(mount, 10)
 	require.NoError(t, err)
 	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
 		EpochID: 1,
 		Operations: []fsperas.ReplayOperation{{
 			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
-			Kind: fsmeta.OperationCreate,
+			Kind: model.OperationCreate,
 			Mutations: []fsperas.ReplayMutation{
 				{Key: dentryKey, Value: []byte("dentry-value")},
 				{Key: inodeKey, Value: []byte("inode-value")},
@@ -1883,7 +1885,7 @@ func TestRuntimeLoadsInstalledSegmentCatalog(t *testing.T) {
 	require.Equal(t, uint64(1), committer.Stats()["segment_catalog_load_total"])
 	completion, ok := committer.Completion(fsperas.OperationID{ClientID: "client", Seq: 1})
 	require.True(t, ok)
-	require.Equal(t, fsmeta.OperationCreate, completion.Kind)
+	require.Equal(t, model.OperationCreate, completion.Kind)
 
 	require.NoError(t, committer.LoadInstalledSegments(context.Background(), scope))
 	require.Equal(t, uint64(1), committer.Stats()["segment_total"])
@@ -1987,8 +1989,8 @@ func TestRuntimeRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
 	recoveredDelta = testRuntimePerasOpWithScope(recoveredDelta, compile.AuthorityScope{
 		Mount:      "vol",
 		MountKeyID: 1,
-		Parents:    []fsmeta.InodeID{1},
-		Inodes:     []fsmeta.InodeID{2},
+		Parents:    []model.InodeID{1},
+		Inodes:     []model.InodeID{2},
 	})
 	recoveredKey := testRuntimeDentryEffect(recoveredDelta).Key
 	_, _, err = holder.Submit(context.Background(), fsperas.OperationID{ClientID: "client", Seq: 1}, recoveredDelta)
@@ -2034,14 +2036,14 @@ func TestRuntimeRecoversPredecessorBeforeOpeningNewEpoch(t *testing.T) {
 }
 
 func TestPerasSegmentWithinScopeRejectsDifferentBucket(t *testing.T) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
 	leftA, leftB := testRuntimeBucketKeys(t, mount, 1)
 	rightA, _ := testRuntimeBucketKeys(t, mount, 2)
 	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
 		EpochID: 1,
 		Operations: []fsperas.ReplayOperation{{
 			OpID: fsperas.OperationID{ClientID: "client", Seq: 1},
-			Kind: fsmeta.OperationUpdateInode,
+			Kind: model.OperationUpdateInode,
 			Mutations: []fsperas.ReplayMutation{
 				{Key: leftA, Value: []byte("a")},
 				{Key: leftB, Value: []byte("b")},
@@ -2053,12 +2055,12 @@ func TestPerasSegmentWithinScopeRejectsDifferentBucket(t *testing.T) {
 	require.True(t, SegmentWithinScope(segment, compile.AuthorityScope{
 		Mount:      mount.MountID,
 		MountKeyID: mount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{1},
+		Buckets:    []layout.AffinityBucket{1},
 	}))
 	require.False(t, SegmentWithinScope(segment, compile.AuthorityScope{
 		Mount:      mount.MountID,
 		MountKeyID: mount.MountKeyID,
-		Buckets:    []fsmeta.AffinityBucket{2},
+		Buckets:    []layout.AffinityBucket{2},
 	}))
 	require.NotEqual(t, leftA, rightA)
 }
@@ -2080,15 +2082,15 @@ func TestRuntimeFlushAuthorityFlushesOnlyOverlappingPendingOps(t *testing.T) {
 	requestedScopeA := compile.AuthorityScope{
 		Mount:           "vol",
 		MountKeyID:      1,
-		Parents:         []fsmeta.InodeID{1},
-		Inodes:          []fsmeta.InodeID{2},
+		Parents:         []model.InodeID{1},
+		Inodes:          []model.InodeID{2},
 		AllowOpaqueKeys: true,
 	}
 	requestedScopeB := compile.AuthorityScope{
 		Mount:           "vol",
 		MountKeyID:      1,
-		Parents:         []fsmeta.InodeID{2},
-		Inodes:          []fsmeta.InodeID{3},
+		Parents:         []model.InodeID{2},
+		Inodes:          []model.InodeID{3},
 		AllowOpaqueKeys: true,
 	}
 	deltaA := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
@@ -2151,8 +2153,8 @@ func TestRuntimeDrainAuthorityFlushesAndRetires(t *testing.T) {
 	requestedScope := compile.AuthorityScope{
 		Mount:      "vol",
 		MountKeyID: 1,
-		Parents:    []fsmeta.InodeID{1},
-		Inodes:     []fsmeta.InodeID{testRuntimeInodeForBucketValue(fsmeta.BucketForInodeID(1))},
+		Parents:    []model.InodeID{1},
+		Inodes:     []model.InodeID{testRuntimeInodeForBucketValue(layout.BucketForInodeID(1))},
 	}
 	delta := testRuntimePerasOp([]byte("dentry/a"), []byte("inode/a"))
 	delta = testRuntimePerasOpWithScope(delta, requestedScope)
@@ -2160,8 +2162,8 @@ func TestRuntimeDrainAuthorityFlushesAndRetires(t *testing.T) {
 	requestedOtherScope := compile.AuthorityScope{
 		Mount:      "vol",
 		MountKeyID: 1,
-		Parents:    []fsmeta.InodeID{9},
-		Inodes:     []fsmeta.InodeID{10},
+		Parents:    []model.InodeID{9},
+		Inodes:     []model.InodeID{10},
 	}
 	otherDelta := testRuntimePerasOp([]byte("dentry/b"), []byte("inode/b"))
 	otherDelta = testRuntimePerasOpWithScope(otherDelta, requestedOtherScope)
@@ -2482,7 +2484,7 @@ func TestRuntimeDrainAuthorityAllowsDisjointCommitsDuringInstall(t *testing.T) {
 	require.NoError(t, err)
 	defer committer.Close()
 
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
 	leftA, leftB := testRuntimeBucketKeys(t, mount, 1)
 	rightA, rightB := testRuntimeBucketKeys(t, mount, 2)
 	left := testRuntimePerasOpForBucket(leftA, leftB, 1)
@@ -2594,16 +2596,16 @@ func BenchmarkRuntimeScanPerasOverlay(b *testing.B) {
 		read: newReadState(),
 	}
 	for i := range 100_000 {
-		key, err := fsmeta.EncodeDentryKey(testRuntimeMount, fsmeta.RootInode, fmt.Sprintf("%08d", i))
+		key, err := layout.EncodeDentryKey(testRuntimeMount, model.RootInode, fmt.Sprintf("%08d", i))
 		require.NoError(b, err)
 		require.NoError(b, committer.read.sealed.AddSegment(testRuntimePerasSegmentForOverlay(key, []byte("sealed"))))
 	}
 	for i := range 1024 {
 		name := fmt.Sprintf("%08d", i*16)
-		op := testRuntimeCreateOp(testRuntimeMount, fsmeta.RootInode, name, fsmeta.InodeID(200_000+i), []byte("overlay"), []byte("inode-value"))
+		op := testRuntimeCreateOp(testRuntimeMount, model.RootInode, name, model.InodeID(200_000+i), []byte("overlay"), []byte("inode-value"))
 		require.NoError(b, committer.read.overlay.Add(fsperas.OperationID{ClientID: "bench", Seq: uint64(i + 1)}, op))
 	}
-	start, err := fsmeta.EncodeDentryKey(testRuntimeMount, fsmeta.RootInode, "00000000")
+	start, err := layout.EncodeDentryKey(testRuntimeMount, model.RootInode, "00000000")
 	require.NoError(b, err)
 	require.Len(b, committer.ScanPerasOverlay(start, 128), 128)
 
@@ -2618,9 +2620,9 @@ func BenchmarkRuntimeScanPerasOverlay(b *testing.B) {
 }
 
 func BenchmarkRuntimeFlushInstallParallelism(b *testing.B) {
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
 	keys := make([][2][]byte, 0, 16)
-	for bucket := fsmeta.AffinityBucket(0); len(keys) < cap(keys); bucket++ {
+	for bucket := layout.AffinityBucket(0); len(keys) < cap(keys); bucket++ {
 		first, second := testRuntimeBucketKeys(b, mount, bucket)
 		keys = append(keys, [2][]byte{first, second})
 	}
@@ -2664,7 +2666,7 @@ func testRuntimePerasSegmentForOverlay(key, value []byte) fsperas.PerasSegment {
 		EpochID: 1,
 		Operations: []fsperas.ReplayOperation{{
 			OpID: fsperas.OperationID{ClientID: "overlay", Seq: 1},
-			Kind: fsmeta.OperationUpdateInode,
+			Kind: model.OperationUpdateInode,
 			Mutations: []fsperas.ReplayMutation{
 				{Key: key, Value: value},
 			},
@@ -3293,10 +3295,10 @@ func testRuntimeSegmentRootSeal(id, holder string, scope compile.AuthorityScope,
 
 func testRuntimeSegmentRootSegment(t *testing.T) fsperas.PerasSegment {
 	t.Helper()
-	mount := fsmeta.MountIdentity{MountID: "vol", MountKeyID: 7}
-	dentry, err := fsmeta.EncodeDentryKey(mount, 99, "a")
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 7}
+	dentry, err := layout.EncodeDentryKey(mount, 99, "a")
 	require.NoError(t, err)
-	inode, err := fsmeta.EncodeInodeKey(mount, 100)
+	inode, err := layout.EncodeInodeKey(mount, 100)
 	require.NoError(t, err)
 	segment, err := fsperas.BuildPerasSegmentFromReplayPlan(fsperas.ReplayPlan{
 		EpochID: 1,
@@ -3326,26 +3328,26 @@ func testPerasInstallCursor(offset uint64) InstallCursor {
 	}
 }
 
-var testRuntimeMount = fsmeta.MountIdentity{MountID: "vol", MountKeyID: 1}
+var testRuntimeMount = model.MountIdentity{MountID: "vol", MountKeyID: 1}
 
 func testRuntimePerasOp(dentryKey, inodeKey []byte) compile.MaterializedOp {
 	mount, parent, name, inode := testRuntimeCreateArgs(dentryKey, inodeKey)
 	return testRuntimeCreateOp(mount, parent, name, inode, []byte("dentry-value"), []byte("inode-value"))
 }
 
-func testRuntimeCreateOp(mount fsmeta.MountIdentity, parent fsmeta.InodeID, name string, inode fsmeta.InodeID, dentryValue, inodeValue []byte) compile.MaterializedOp {
-	program, err := compile.CompileCreateProgram(fsmeta.CreateRequest{
+func testRuntimeCreateOp(mount model.MountIdentity, parent model.InodeID, name string, inode model.InodeID, dentryValue, inodeValue []byte) compile.MaterializedOp {
+	program, err := compile.CompileCreateProgram(model.CreateRequest{
 		Mount:  mount.MountID,
 		Parent: parent,
 		Name:   name,
-		Attrs:  fsmeta.CreateAttrs{Type: fsmeta.InodeTypeFile, Mode: 0o644},
+		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile, Mode: 0o644},
 	}, mount, inode)
 	if err != nil {
 		panic(err)
 	}
-	parentValue, err := fsmeta.EncodeInodeValue(fsmeta.InodeRecord{
+	parentValue, err := layout.EncodeInodeValue(model.InodeRecord{
 		Inode:      parent,
-		Type:       fsmeta.InodeTypeDirectory,
+		Type:       model.InodeTypeDirectory,
 		LinkCount:  1,
 		ChildCount: 1,
 	})
@@ -3355,7 +3357,7 @@ func testRuntimeCreateOp(mount fsmeta.MountIdentity, parent fsmeta.InodeID, name
 	if dentryValue == nil {
 		dentryValue = program.Compiled.Delta.WriteEffects[1].Value
 	}
-	if _, err := fsmeta.DecodeInodeValue(inodeValue); inodeValue == nil || err != nil {
+	if _, err := layout.DecodeInodeValue(inodeValue); inodeValue == nil || err != nil {
 		inodeValue = program.Compiled.Delta.WriteEffects[2].Value
 	}
 	op, err := compile.MaterializeCreate(program, compile.CreateValues{
@@ -3416,45 +3418,45 @@ func testRuntimeInodeEffect(op compile.MaterializedOp) compile.EffectPlan {
 	return op.Effects[2]
 }
 
-func testRuntimeCreateArgs(dentryKey, inodeKey []byte) (fsmeta.MountIdentity, fsmeta.InodeID, string, fsmeta.InodeID) {
+func testRuntimeCreateArgs(dentryKey, inodeKey []byte) (model.MountIdentity, model.InodeID, string, model.InodeID) {
 	mount := testRuntimeMount
-	parent := fsmeta.RootInode
+	parent := model.RootInode
 	name := testRuntimeNameFromKey(dentryKey)
-	inode := fsmeta.InodeID(0)
+	inode := model.InodeID(0)
 	inodeFromStorageKey := false
-	if parts, ok := fsmeta.InspectKey(dentryKey); ok {
+	if parts, ok := layout.InspectKey(dentryKey); ok {
 		mount.MountKeyID = parts.MountKeyID
 		switch parts.Kind {
-		case fsmeta.KeyKindDentry:
+		case layout.KeyKindDentry:
 			parent = parts.Parent
-			if dentryName, ok := fsmeta.DentryNameOfKey(dentryKey); ok {
+			if dentryName, ok := layout.DentryNameOfKey(dentryKey); ok {
 				name = dentryName
 			}
-		case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
+		case layout.KeyKindInode, layout.KeyKindChunk, layout.KeyKindSession:
 			parent = parts.Inode
 		}
 	}
-	if parts, ok := fsmeta.InspectKey(inodeKey); ok {
+	if parts, ok := layout.InspectKey(inodeKey); ok {
 		if mount.MountKeyID == 0 {
 			mount.MountKeyID = parts.MountKeyID
 		}
 		switch parts.Kind {
-		case fsmeta.KeyKindInode, fsmeta.KeyKindChunk, fsmeta.KeyKindSession:
+		case layout.KeyKindInode, layout.KeyKindChunk, layout.KeyKindSession:
 			inode = parts.Inode
 			inodeFromStorageKey = true
 		}
 	}
 	if !inodeFromStorageKey {
-		inode = testRuntimeInodeForBucketSeed(fsmeta.BucketForInodeID(parent), inodeKey)
+		inode = testRuntimeInodeForBucketSeed(layout.BucketForInodeID(parent), inodeKey)
 	}
 	if inode == 0 || inode == parent {
-		inode = testRuntimeInodeForBucketSeed(fsmeta.BucketForInodeID(parent), append(append([]byte(nil), inodeKey...), '#'))
+		inode = testRuntimeInodeForBucketSeed(layout.BucketForInodeID(parent), append(append([]byte(nil), inodeKey...), '#'))
 	}
 	return mount, parent, name, inode
 }
 
 func testRuntimeNameFromKey(key []byte) string {
-	if name, ok := fsmeta.DentryNameOfKey(key); ok {
+	if name, ok := layout.DentryNameOfKey(key); ok {
 		return name
 	}
 	label := string(key)
@@ -3467,13 +3469,13 @@ func testRuntimeNameFromKey(key []byte) string {
 	return label
 }
 
-func testRuntimeInodeFromKey(key []byte) fsmeta.InodeID {
+func testRuntimeInodeFromKey(key []byte) model.InodeID {
 	var hash uint64 = 1469598103934665603
 	for _, b := range key {
 		hash ^= uint64(b)
 		hash *= 1099511628211
 	}
-	return fsmeta.InodeID(2 + hash%1_000_000)
+	return model.InodeID(2 + hash%1_000_000)
 }
 
 func testRuntimeDentryKeyForLabel(label string) []byte {
@@ -3481,7 +3483,7 @@ func testRuntimeDentryKeyForLabel(label string) []byte {
 }
 
 func testRuntimeRootDentryPrefix() []byte {
-	prefix, err := fsmeta.EncodeDentryPrefix(testRuntimeMount, fsmeta.RootInode)
+	prefix, err := layout.EncodeDentryPrefix(testRuntimeMount, model.RootInode)
 	if err != nil {
 		panic(err)
 	}
@@ -3489,31 +3491,31 @@ func testRuntimeRootDentryPrefix() []byte {
 }
 
 func testRuntimeRenameDentryOp(fromName, toName string, toValue []byte) compile.MaterializedOp {
-	program, err := compile.CompileRenameProgram(fsmeta.RenameRequest{
+	program, err := compile.CompileRenameProgram(model.RenameRequest{
 		Mount:      testRuntimeMount.MountID,
-		FromParent: fsmeta.RootInode,
+		FromParent: model.RootInode,
 		FromName:   fromName,
-		ToParent:   fsmeta.RootInode,
+		ToParent:   model.RootInode,
 		ToName:     toName,
 	}, testRuntimeMount)
 	if err != nil {
 		panic(err)
 	}
-	fromKey, err := fsmeta.EncodeDentryKey(testRuntimeMount, fsmeta.RootInode, fromName)
+	fromKey, err := layout.EncodeDentryKey(testRuntimeMount, model.RootInode, fromName)
 	if err != nil {
 		panic(err)
 	}
-	toKey, err := fsmeta.EncodeDentryKey(testRuntimeMount, fsmeta.RootInode, toName)
+	toKey, err := layout.EncodeDentryKey(testRuntimeMount, model.RootInode, toName)
 	if err != nil {
 		panic(err)
 	}
-	parentKey, err := fsmeta.EncodeInodeKey(testRuntimeMount, fsmeta.RootInode)
+	parentKey, err := layout.EncodeInodeKey(testRuntimeMount, model.RootInode)
 	if err != nil {
 		panic(err)
 	}
-	parentValue, err := fsmeta.EncodeInodeValue(fsmeta.InodeRecord{
-		Inode:      fsmeta.RootInode,
-		Type:       fsmeta.InodeTypeDirectory,
+	parentValue, err := layout.EncodeInodeValue(model.InodeRecord{
+		Inode:      model.RootInode,
+		Type:       model.InodeTypeDirectory,
 		LinkCount:  1,
 		ChildCount: 1,
 	})
@@ -3537,27 +3539,27 @@ func testRuntimeRenameDentryOp(fromName, toName string, toValue []byte) compile.
 	return testRuntimeSealMaterializedOp(op)
 }
 
-func testRuntimePerasOpForBucket(dentryKey, inodeKey []byte, bucket fsmeta.AffinityBucket) compile.MaterializedOp {
+func testRuntimePerasOpForBucket(dentryKey, inodeKey []byte, bucket layout.AffinityBucket) compile.MaterializedOp {
 	parent := testRuntimeInodeForBucketValue(bucket)
-	inode := parent + fsmeta.InodeID(fsmeta.DefaultAffinityBucketCount)
+	inode := parent + model.InodeID(layout.DefaultAffinityBucketCount)
 	name := testRuntimeNameFromKey(dentryKey)
 	return testRuntimeCreateOp(testRuntimeMount, parent, name, inode, []byte("dentry-value"), []byte("inode-value"))
 }
 
-func testRuntimeInodeForBucketValue(bucket fsmeta.AffinityBucket) fsmeta.InodeID {
-	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
-		if fsmeta.BucketForInodeID(inode) == bucket {
+func testRuntimeInodeForBucketValue(bucket layout.AffinityBucket) model.InodeID {
+	for inode := model.InodeID(2); inode < 100_000; inode++ {
+		if layout.BucketForInodeID(inode) == bucket {
 			return inode
 		}
 	}
 	panic(fmt.Sprintf("no inode found for bucket %d", bucket))
 }
 
-func testRuntimeInodeForBucketSeed(bucket fsmeta.AffinityBucket, seed []byte) fsmeta.InodeID {
+func testRuntimeInodeForBucketSeed(bucket layout.AffinityBucket, seed []byte) model.InodeID {
 	start := uint64(testRuntimeInodeFromKey(seed))
 	for offset := range uint64(1_000_000) {
-		inode := fsmeta.InodeID(2 + (start+offset)%1_000_000)
-		if fsmeta.BucketForInodeID(inode) == bucket {
+		inode := model.InodeID(2 + (start+offset)%1_000_000)
+		if layout.BucketForInodeID(inode) == bucket {
 			return inode
 		}
 	}
@@ -3589,14 +3591,14 @@ func appendUvarintKey(prefix string, v uint64) []byte {
 	return binary.AppendUvarint(out, v)
 }
 
-func testRuntimeBucketKeys(tb testing.TB, mount fsmeta.MountIdentity, bucket fsmeta.AffinityBucket) ([]byte, []byte) {
+func testRuntimeBucketKeys(tb testing.TB, mount model.MountIdentity, bucket layout.AffinityBucket) ([]byte, []byte) {
 	tb.Helper()
 	var first, second []byte
-	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
-		if fsmeta.BucketForInodeID(inode) != bucket {
+	for inode := model.InodeID(2); inode < 100_000; inode++ {
+		if layout.BucketForInodeID(inode) != bucket {
 			continue
 		}
-		key, err := fsmeta.EncodeInodeKey(mount, inode)
+		key, err := layout.EncodeInodeKey(mount, inode)
 		require.NoError(tb, err)
 		if first == nil {
 			first = key
@@ -3610,10 +3612,10 @@ func testRuntimeBucketKeys(tb testing.TB, mount fsmeta.MountIdentity, bucket fsm
 	return first, second
 }
 
-func testRuntimeInodeForBucket(tb testing.TB, bucket fsmeta.AffinityBucket) fsmeta.InodeID {
+func testRuntimeInodeForBucket(tb testing.TB, bucket layout.AffinityBucket) model.InodeID {
 	tb.Helper()
-	for inode := fsmeta.InodeID(2); inode < 100_000; inode++ {
-		if fsmeta.BucketForInodeID(inode) == bucket {
+	for inode := model.InodeID(2); inode < 100_000; inode++ {
+		if layout.BucketForInodeID(inode) == bucket {
 			return inode
 		}
 	}
