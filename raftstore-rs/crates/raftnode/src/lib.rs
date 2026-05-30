@@ -16,8 +16,10 @@ use prost::Message;
 use tokio::sync::broadcast;
 
 mod log_codec;
+mod log_store;
 
 pub use log_codec::{decode_log_entry, encode_log_entry};
+pub use log_store::{RaftEntryLog, SegmentedEntryLog};
 
 pub type NodeId = u64;
 pub type RegionId = u64;
@@ -98,6 +100,8 @@ pub enum Error {
     },
     #[error("invalid raft log payload: {0}")]
     InvalidLogPayload(String),
+    #[error("raft log error: {0}")]
+    RaftLog(#[from] nokv_raftlog::Error),
     #[error("raft command encode error: {0}")]
     Encode(#[from] prost::EncodeError),
     #[error("raft command decode error: {0}")]

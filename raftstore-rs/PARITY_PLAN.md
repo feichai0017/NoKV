@@ -62,6 +62,9 @@ The first slices are intentionally narrow:
   entry, snapshot, and runtime types to this NoKV-owned proposal boundary.
   The crate now also encodes OpenRaft entries into `nokv-raftlog` records and
   decodes them back, covering normal command, blank, and membership entries.
+  `SegmentedEntryLog` wraps the low-level WAL with a region-local OpenRaft
+  entry append/recover boundary and rejects mismatched-region batches before any
+  record is appended.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
