@@ -56,7 +56,9 @@ The first slices are intentionally narrow:
 - `nokv-raftnode` exposes a NoKV-owned OpenRaft boundary and a single-region
   `AppliedKvEngine` apply wrapper. It can already execute existing
   `RaftCmdRequest` payloads against the MVCC state machine, which fixes the
-  proposal/apply payload shape before OpenRaft is wired.
+  proposal/apply payload shape before OpenRaft is wired. `Proposal` also
+  round-trips those commands through prost bytes and rejects region/header
+  mismatches.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`

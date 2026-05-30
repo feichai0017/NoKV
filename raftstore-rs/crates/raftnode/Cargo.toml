@@ -10,5 +10,6 @@ authors.workspace = true
 nokv-mvcc.workspace = true
 nokv-proto.workspace = true
 openraft.workspace = true
+prost.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

@@ -983,6 +983,7 @@ dependencies = [
  "nokv-mvcc",
  "nokv-proto",
  "openraft",
+ "prost",
  "thiserror 2.0.18",
  "tokio",
 ]

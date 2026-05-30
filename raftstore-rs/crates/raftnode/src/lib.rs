@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::raft::v1 as raftpb;
+use prost::Message;
 use tokio::sync::broadcast;
 
 pub type NodeId = u64;
@@ -21,6 +22,38 @@ pub type RegionId = u64;
 pub struct Proposal {
     pub region_id: RegionId,
     pub payload: Vec<u8>,
+}
+
+impl Proposal {
+    pub fn from_raft_command(req: &raftpb::RaftCmdRequest) -> Result<Self, Error> {
+        let region_id = req
+            .header
+            .as_ref()
+            .map(|header| header.region_id)
+            .ok_or(Error::MissingRegionHeader)?;
+        if region_id == 0 {
+            return Err(Error::MissingRegionHeader);
+        }
+        let mut payload = Vec::with_capacity(req.encoded_len());
+        req.encode(&mut payload)?;
+        Ok(Self { region_id, payload })
+    }
+
+    pub fn decode_raft_command(&self) -> Result<raftpb::RaftCmdRequest, Error> {
+        let req = raftpb::RaftCmdRequest::decode(self.payload.as_slice())?;
+        let region_id = req
+            .header
+            .as_ref()
+            .map(|header| header.region_id)
+            .ok_or(Error::MissingRegionHeader)?;
+        if region_id != self.region_id {
+            return Err(Error::RegionMismatch {
+                proposal_region_id: self.region_id,
+                command_region_id: region_id,
+            });
+        }
+        Ok(req)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -35,6 +68,17 @@ pub struct AppliedProposal {
 pub enum Error {
     #[error("raft replication is not wired yet")]
     NotReady,
+    #[error("raft command header region id is required")]
+    MissingRegionHeader,
+    #[error("raft proposal region {proposal_region_id} does not match command region {command_region_id}")]
+    RegionMismatch {
+        proposal_region_id: RegionId,
+        command_region_id: RegionId,
+    },
+    #[error("raft command encode error: {0}")]
+    Encode(#[from] prost::EncodeError),
+    #[error("raft command decode error: {0}")]
+    Decode(#[from] prost::DecodeError),
 }
 
 pub trait RegionRaft: Send + Sync {
@@ -409,6 +453,42 @@ mod tests {
             })
             .unwrap_err();
         assert!(matches!(err, Error::NotReady));
+    }
+
+    #[test]
+    fn proposal_round_trips_existing_raft_command_payload() {
+        let command = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 11,
+                request_id: 7,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdGet as i32,
+                cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
+                    key: b"k".to_vec(),
+                    version: 9,
+                })),
+            }],
+        };
+        let proposal = Proposal::from_raft_command(&command).unwrap();
+        assert_eq!(proposal.region_id, 11);
+        assert_eq!(proposal.decode_raft_command().unwrap(), command);
+    }
+
+    #[test]
+    fn proposal_rejects_region_mismatch() {
+        let command = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 11,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let mut proposal = Proposal::from_raft_command(&command).unwrap();
+        proposal.region_id = 12;
+        let err = proposal.decode_raft_command().unwrap_err();
+        assert!(matches!(err, Error::RegionMismatch { .. }));
     }
 
     #[test]

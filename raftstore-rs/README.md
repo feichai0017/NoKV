@@ -27,7 +27,8 @@ migration/SST paths are outside v1.
 The current `raftnode` crate already accepts the existing `RaftCmdRequest`
 payload shape for local apply, and `StoreKV` handlers execute through that
 boundary. The future replicated proposal path can therefore carry the Go
-raftstore command contract unchanged.
+raftstore command contract unchanged; `Proposal` encodes that command payload
+directly and validates that the proposal region matches the command header.
 
 See [PARITY_PLAN.md](PARITY_PLAN.md) for the full Go `raftstore` parity plan and
 the cutover rule: keep the workspace named `raftstore-rs` while the Go
