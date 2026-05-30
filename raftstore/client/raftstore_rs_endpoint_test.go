@@ -207,6 +207,53 @@ func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T
 		}, 5*time.Second, 100*time.Millisecond)
 		require.NoError(t, closePeerAdmin())
 	}
+
+	removePeer3, err := admin.RemovePeer(ctx, &adminpb.RemovePeerRequest{
+		RegionId: 1,
+		PeerId:   3,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(4), removePeer3.GetRegion().GetEpoch().GetConfVersion())
+	require.Equal(t, []*metapb.RegionPeer{
+		{StoreId: 1, PeerId: 1},
+		{StoreId: 2, PeerId: 2},
+	}, removePeer3.GetRegion().GetPeers())
+
+	metaAfterRemove := rustRaftstoreTwoPeerRegion()
+	cliAfterRemove, err := New(Config{
+		RegionResolver: &mockRegionResolver{region: metaAfterRemove},
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addrs[1], State: coordpb.StoreState_STORE_STATE_UP},
+			{StoreID: 2, Addr: addrs[2], State: coordpb.StoreState_STORE_STATE_UP},
+		},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 3},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cliAfterRemove.Close()) })
+
+	handled, err = cliAfterRemove.TryAtomicMutate(ctx, []byte("agent/after-remove"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("agent/after-remove"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 93,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/after-remove"),
+		Value: []byte("kept-quorum"),
+	}}, 94, 95)
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	leaderStatusAfterRemove, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	require.True(t, leaderStatusAfterRemove.GetLeader())
+	peer2Admin, closePeer2Admin, err := adminclient.Dial(ctx, addrs[2])
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		status, err := peer2Admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+		return err == nil && status.GetAppliedIndex() >= leaderStatusAfterRemove.GetAppliedIndex()
+	}, 5*time.Second, 100*time.Millisecond)
+	require.NoError(t, closePeer2Admin())
 }
 
 func TestRustRaftstoreEndpointClientTransactionSurface(t *testing.T) {
@@ -490,6 +537,17 @@ func rustRaftstoreThreePeerRegion() *metapb.RegionDescriptor {
 			{StoreId: 1, PeerId: 1},
 			{StoreId: 2, PeerId: 2},
 			{StoreId: 3, PeerId: 3},
+		},
+	}
+}
+
+func rustRaftstoreTwoPeerRegion() *metapb.RegionDescriptor {
+	return &metapb.RegionDescriptor{
+		RegionId: 1,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 4},
+		Peers: []*metapb.RegionPeer{
+			{StoreId: 1, PeerId: 1},
+			{StoreId: 2, PeerId: 2},
 		},
 	}
 }
