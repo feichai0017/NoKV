@@ -127,14 +127,13 @@ The first slices are intentionally narrow:
   two-voter membership without reseeding a single-node vote, committing again
   after the restarted quorum elects a leader, and removing that voter back out
   of the membership.
-- `RaftAdmin` now wires `AddPeer`, `RemovePeer`, and the currently safe
-  `TransferLeader` subset onto those
-  `OpenRaftRegion` voter-change helpers and returns an updated protobuf region
-  descriptor from the service-local topology. Non-OpenRaft apply engines still
-  return an explicit `Unimplemented` error for membership RPCs. `TransferLeader`
-  accepts idempotent transfer to the current leader, but source-initiated
-  directed transfer to a remote peer remains a gap because OpenRaft 0.9 does
-  not expose that operation through the public boundary.
+- `RaftAdmin` now wires `AddPeer`, `RemovePeer`, and `TransferLeader` onto
+  those `OpenRaftRegion` voter-change helpers and returns an updated protobuf
+  region descriptor from the service-local topology. Non-OpenRaft apply engines
+  still return an explicit `Unimplemented` error for membership RPCs.
+  `TransferLeader` accepts idempotent transfer to the current leader, lets a
+  target peer elect itself, and routes source-initiated directed transfer to the
+  target peer when that peer has a configured admin endpoint.
   `RegionRuntimeStatus` now reports OpenRaft-derived local peer, leader peer,
   and leader/follower state instead of assuming every service endpoint is peer 1.
   `AddPeer` resolves the target peer's OpenRaft `BasicNode.addr` through a
