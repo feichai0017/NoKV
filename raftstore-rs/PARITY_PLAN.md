@@ -150,8 +150,9 @@ Known gaps:
   bootstrap validation for membership-change state and snapshot install before
   it is production-complete.
 - Snapshot catch-up has a first real state-machine snapshot path, but peer
-  catch-up from snapshot, snapshot-triggered log compaction, and corrupt
-  snapshot rejection still need full integration tests.
+  catch-up from snapshot and snapshot-triggered log compaction still need full
+  integration tests. Corrupt snapshot payloads are rejected before state-machine
+  mutation in the current unit coverage.
 - Go fsmeta and raftstore client tests do not yet run against Rust by default.
 
 ## Target Architecture

@@ -673,4 +673,36 @@ mod tests {
             .unwrap_err();
         assert!(err.to_string().contains("stale region snapshot"));
     }
+
+    #[tokio::test]
+    async fn region_state_machine_rejects_corrupt_snapshot_without_mutation() {
+        let source_engine = AppliedKvEngine::new(7, MvccStore::default());
+        let mut source_state_machine = RegionStateMachine::new(source_engine);
+        source_state_machine
+            .apply(vec![normal_entry(7, 1, b"a", b"1")])
+            .await
+            .unwrap();
+        let mut builder = source_state_machine.get_snapshot_builder().await;
+        let snapshot = builder.build_snapshot().await.unwrap();
+
+        let restored = AppliedKvEngine::new(7, MvccStore::default());
+        let mut restored_state_machine = RegionStateMachine::new(restored.clone());
+        let err = restored_state_machine
+            .install_snapshot(
+                &snapshot.meta,
+                Box::new(std::io::Cursor::new(vec![0xde, 0xad, 0xbe, 0xef])),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("failed to decode"));
+        assert_eq!(restored.status().applied_index, 0);
+
+        let missing = restored
+            .get(&kvpb::GetRequest {
+                key: b"a".to_vec(),
+                version: 1,
+            })
+            .unwrap();
+        assert!(missing.not_found);
+    }
 }
