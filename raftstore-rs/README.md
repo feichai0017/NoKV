@@ -18,3 +18,8 @@ already separated from direct state-machine mutation before OpenRaft is wired.
 OpenRaft replication, membership changes, snapshots, and WatchApply delivery are
 staged behind these boundaries. Experimental Peras witness services and legacy
 migration/SST paths are outside v1.
+
+See [PARITY_PLAN.md](PARITY_PLAN.md) for the full Go `raftstore` parity plan and
+the cutover rule: keep the workspace named `raftstore-rs` while the Go
+implementation still exists, then rename it to `raftstore` after the Go package
+is removed.
