@@ -722,7 +722,7 @@ pub async fn serve_with_region_engine<E>(
     engine: E,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: KvEngine + RaftCommandExecutor + ApplyStatusProvider + ApplyWatchProvider,
+    E: RaftCommandExecutor + ApplyStatusProvider + ApplyWatchProvider,
 {
     serve_with_region_engine_and_admission(addr, engine, RegionAdmission::default()).await
 }

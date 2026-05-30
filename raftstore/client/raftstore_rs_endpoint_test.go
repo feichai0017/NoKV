@@ -74,15 +74,22 @@ func TestRustRaftstoreEndpointHoltApplyStatusSurvivesRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, handled)
 	require.NoError(t, cli.Close())
+
+	admin, closeAdmin, err := adminclient.Dial(ctx, addr)
+	require.NoError(t, err)
+	statusBefore, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, statusBefore.GetAppliedIndex(), uint64(2))
+	require.NoError(t, closeAdmin())
 	stop()
 
 	addr, _ = startRustRaftstoreProcess(t, dir)
-	admin, closeAdmin, err := adminclient.Dial(ctx, addr)
+	admin, closeAdmin, err = adminclient.Dial(ctx, addr)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
 	status, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
 	require.NoError(t, err)
-	require.Equal(t, uint64(1), status.GetAppliedIndex())
+	require.Equal(t, statusBefore.GetAppliedIndex(), status.GetAppliedIndex())
 }
 
 func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr string) {
@@ -144,7 +151,7 @@ func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr s
 	require.True(t, status.GetKnown())
 	require.True(t, status.GetHosted())
 	require.True(t, status.GetLeader())
-	require.Equal(t, uint64(1), status.GetAppliedIndex())
+	require.GreaterOrEqual(t, status.GetAppliedIndex(), uint64(2))
 }
 
 func startRustRaftstoreEndpoint(t *testing.T, holt bool) string {

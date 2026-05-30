@@ -82,6 +82,9 @@ The first slices are intentionally narrow:
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`.
+- The standalone Rust raftstore server now boots `OpenRaftRegion` by default
+  for both memory and Holt modes. Holt mode keeps the persistent apply-status
+  sink behind the OpenRaft state machine.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -91,9 +94,8 @@ The first slices are intentionally narrow:
 Known gaps:
 
 - OpenRaft is not wired into proposal, replication, or membership yet.
-- The v2 storage path is mounted behind a single-node OpenRaft node, but the
-  default server startup still uses the direct apply engine while multi-node
-  networking and route integration are built out.
+- The default server startup is mounted behind a single-node OpenRaft node;
+  multi-node networking and route integration are still being built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. The single-region service still bootstraps a default descriptor

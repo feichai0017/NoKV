@@ -14,7 +14,7 @@ use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use openraft::{
-    error::{Fatal, RPCError, RaftError, Unreachable},
+    error::{Fatal, InitializeError, RPCError, RaftError, Unreachable},
     network::{RPCOption, RaftNetwork, RaftNetworkFactory},
     BasicNode, Config, Raft,
 };
@@ -136,6 +136,12 @@ pub trait RaftCommandExecutor: Clone + Send + Sync + 'static {
         &'a self,
         req: &'a raftpb::RaftCmdRequest,
     ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a;
+}
+
+pub trait RegionApplyEngine: ApplyStatusProvider + ApplyWatchProvider {
+    fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    where
+        I: IntoIterator<Item = OpenRaftEntry>;
 }
 
 pub trait ApplyStatusSink: Clone + Send + Sync + 'static {
@@ -592,6 +598,31 @@ where
     }
 }
 
+impl<E> RegionApplyEngine for AppliedKvEngine<E>
+where
+    E: KvEngine,
+{
+    fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    where
+        I: IntoIterator<Item = OpenRaftEntry>,
+    {
+        self.apply_openraft_entries(entries)
+    }
+}
+
+impl<E, S> RegionApplyEngine for PersistentAppliedKvEngine<E, S>
+where
+    E: KvEngine,
+    S: ApplyStatusSink,
+{
+    fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    where
+        I: IntoIterator<Item = OpenRaftEntry>,
+    {
+        self.apply_openraft_entries(entries)
+    }
+}
+
 fn invalid_raft_command(detail: &str) -> nokv_mvcc::Error {
     nokv_mvcc::Error::Backend(format!("invalid raft command: {detail}"))
 }
@@ -736,14 +767,14 @@ where
 }
 
 #[derive(Clone)]
-pub struct OpenRaftRegion<E = MvccStore> {
+pub struct OpenRaftRegion<E = AppliedKvEngine<MvccStore>> {
     raft: Raft<RaftStoreConfig>,
-    apply_engine: AppliedKvEngine<E>,
+    apply_engine: E,
 }
 
 impl<E> OpenRaftRegion<E>
 where
-    E: KvEngine,
+    E: RegionApplyEngine,
 {
     pub async fn bootstrap_single_node(
         node_id: NodeId,
@@ -772,7 +803,11 @@ where
 
         let mut members = BTreeMap::new();
         members.insert(node_id, BasicNode::new(format!("local-{node_id}")));
-        raft.initialize(members).await.map_err(openraft_api_error)?;
+        match raft.initialize(members).await {
+            Ok(()) => {}
+            Err(RaftError::APIError(InitializeError::NotAllowed(_))) => {}
+            Err(err) => return Err(openraft_api_error(err)),
+        }
         raft.trigger().elect().await.map_err(openraft_error)?;
         Ok(OpenRaftRegion { raft, apply_engine })
     }
@@ -789,25 +824,25 @@ where
 
 impl<E> ApplyStatusProvider for OpenRaftRegion<E>
 where
-    E: KvEngine,
+    E: ApplyStatusProvider,
 {
     fn apply_status(&self) -> ApplyStatus {
-        self.apply_engine.status()
+        self.apply_engine.apply_status()
     }
 }
 
 impl<E> ApplyWatchProvider for OpenRaftRegion<E>
 where
-    E: Clone + Send + Sync + 'static,
+    E: ApplyWatchProvider,
 {
     fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
-        self.apply_engine.subscribe()
+        self.apply_engine.subscribe_apply()
     }
 }
 
 impl<E> RaftCommandExecutor for OpenRaftRegion<E>
 where
-    E: KvEngine,
+    E: RegionApplyEngine,
 {
     fn execute_raft_command<'a>(
         &'a self,

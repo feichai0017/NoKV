@@ -1,11 +1,15 @@
 //! Standalone Rust raftstore server entrypoint for local compatibility tests.
 
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use nokv_holtstore::{HoltMvccStore, RegionApplyState};
 use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::meta::v1 as metapb;
-use nokv_raftnode::{AppliedKvEngine, ApplyStatus, ApplyStatusSink, PersistentAppliedKvEngine};
+use nokv_raftnode::{
+    AppliedKvEngine, ApplyStatus, ApplyStatusSink, OpenRaftRegion, PersistentAppliedKvEngine,
+    RegionLogStorage, RegionStateMachine, SegmentedEntryLog,
+};
 use nokv_raftstore_server::RegionAdmission;
 
 #[tokio::main]
@@ -13,8 +17,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = std::env::var("NOKV_RUST_RAFTSTORE_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:23880".to_owned())
         .parse::<SocketAddr>()?;
+    let mut temp_log_dir = None;
     if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_HOLT_DIR") {
         tracing::info!(%addr, %path, "starting rust raftstore server with Holt MVCC");
+        let log_dir = raft_log_dir(Some(PathBuf::from(&path)), &mut temp_log_dir)?;
         let mvcc = HoltMvccStore::open_file(path)?;
         let descriptor = mvcc.load_or_bootstrap_region_descriptor(&default_region_descriptor())?;
         let admission = RegionAdmission::from_descriptor(&descriptor, true)?;
@@ -28,14 +34,55 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         let engine = AppliedKvEngine::with_status(apply_status, mvcc.clone());
         let engine = PersistentAppliedKvEngine::new(engine, HoltApplyStatusSink { store: mvcc });
-        nokv_raftstore_server::serve_with_region_engine_and_admission(addr, engine, admission)
+        let region =
+            bootstrap_openraft_region(admission.peer_id, admission.region_id, log_dir, engine)
+                .await?;
+        nokv_raftstore_server::serve_with_region_engine_and_admission(addr, region, admission)
             .await?;
     } else {
-        tracing::info!(%addr, "starting rust raftstore compatibility server with in-memory MVCC");
+        tracing::info!(%addr, "starting rust raftstore server with in-memory MVCC");
+        let log_dir = raft_log_dir(None, &mut temp_log_dir)?;
         let engine = AppliedKvEngine::new(1, MvccStore::new());
-        nokv_raftstore_server::serve_with_region_engine(addr, engine).await?;
+        let region = bootstrap_openraft_region(1, 1, log_dir, engine).await?;
+        nokv_raftstore_server::serve_with_region_engine(addr, region).await?;
     }
     Ok(())
+}
+
+async fn bootstrap_openraft_region<E>(
+    node_id: u64,
+    region_id: u64,
+    log_dir: PathBuf,
+    engine: E,
+) -> Result<OpenRaftRegion<E>, Box<dyn std::error::Error>>
+where
+    E: nokv_raftnode::RegionApplyEngine,
+{
+    let log = SegmentedEntryLog::open(region_id, log_dir)?;
+    let state_machine = RegionStateMachine::new(engine);
+    Ok(OpenRaftRegion::bootstrap_single_node(
+        node_id,
+        region_id,
+        RegionLogStorage::new(log),
+        state_machine,
+    )
+    .await?)
+}
+
+fn raft_log_dir(
+    persistent_root: Option<PathBuf>,
+    temp_log_dir: &mut Option<tempfile::TempDir>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_LOG_DIR") {
+        return Ok(PathBuf::from(path));
+    }
+    if let Some(root) = persistent_root {
+        return Ok(root.join("raftlog"));
+    }
+    let dir = tempfile::tempdir()?;
+    let path = dir.path().to_path_buf();
+    *temp_log_dir = Some(dir);
+    Ok(path)
 }
 
 #[derive(Clone)]

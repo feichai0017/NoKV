@@ -2,7 +2,6 @@ use std::fmt::Debug;
 use std::io;
 use std::ops::RangeBounds;
 
-use nokv_mvcc::KvEngine;
 use openraft::{
     storage::{LogFlushed, RaftLogStorage, RaftStateMachine},
     AnyError, BasicNode, CommittedLeaderId, ErrorSubject, ErrorVerb, LogId, LogState, OptionalSend,
@@ -11,7 +10,7 @@ use openraft::{
 };
 
 use crate::{
-    AppliedKvEngine, AppliedProposal, NodeId, OpenRaftEntry, RaftEntryLog, RaftStoreConfig,
+    AppliedProposal, NodeId, OpenRaftEntry, RaftEntryLog, RaftStoreConfig, RegionApplyEngine,
     SegmentedEntryLog,
 };
 
@@ -32,19 +31,19 @@ impl RegionLogStorage {
 }
 
 pub struct RegionStateMachine<E> {
-    engine: AppliedKvEngine<E>,
+    engine: E,
     membership: StoredMembership<NodeId, BasicNode>,
 }
 
 impl<E> RegionStateMachine<E> {
-    pub fn new(engine: AppliedKvEngine<E>) -> Self {
+    pub fn new(engine: E) -> Self {
         Self {
             engine,
             membership: StoredMembership::default(),
         }
     }
 
-    pub fn apply_engine(&self) -> &AppliedKvEngine<E> {
+    pub fn apply_engine(&self) -> &E {
         &self.engine
     }
 }
@@ -182,7 +181,7 @@ impl RaftSnapshotBuilder<RaftStoreConfig> for NoopSnapshotBuilder {
 
 impl<E> RaftStateMachine<RaftStoreConfig> for RegionStateMachine<E>
 where
-    E: KvEngine,
+    E: RegionApplyEngine,
 {
     type SnapshotBuilder = NoopSnapshotBuilder;
 
@@ -190,7 +189,7 @@ where
         &mut self,
     ) -> Result<(Option<LogId<NodeId>>, StoredMembership<NodeId, BasicNode>), StorageError<NodeId>>
     {
-        let status = self.engine.status();
+        let status = self.engine.apply_status();
         let last_applied = (status.applied_index != 0).then(|| {
             LogId::new(
                 CommittedLeaderId::new(status.term, NodeId::default()),
