@@ -276,7 +276,9 @@ func stopRemoteStore(watch *remoteStoreWatch) error {
 		watch.cancel()
 	}
 	if watch.conn != nil {
-		return watch.conn.Close()
+		if err := watch.conn.Close(); err != nil && status.Code(err) != codes.Canceled {
+			return err
+		}
 	}
 	return nil
 }

@@ -18,6 +18,7 @@ import (
 	"testing"
 	"time"
 
+	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	fsmetacontract "github.com/feichai0017/NoKV/fsmeta/contract"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/model"
@@ -25,6 +26,7 @@ import (
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/feichai0017/NoKV/raftstore/client"
+	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
@@ -71,6 +73,66 @@ func TestRustRaftstoreEndpointFSMetaContract(t *testing.T) {
 			require.NoError(t, fsmetacontract.Run(ctx, mapped, contractModel, fsmetacontract.GenerateScript(1, steps)))
 		})
 	}
+}
+
+func TestRustRaftstoreEndpointFSMetaRuntimeRoutesThroughCoordinator(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	coord := testcluster.StartCoordinator(t)
+	t.Cleanup(func() { coord.Close(t) })
+	coordAddr := coord.Addr()
+
+	storeAddr := reserveRustEndpointAddr(t)
+	stopStore := startRustRaftstoreEndpointAtWithEnv(t, storeAddr, t.TempDir(), []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stopStore()
+
+	coordRPC, err := coordclient.NewGRPCClient(ctx, coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = coordRPC.Close() })
+
+	require.Eventually(t, func() bool {
+		store, err := coordRPC.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: 1})
+		if err != nil || store.GetNotFound() || store.GetStore().GetState() != coordpb.StoreState_STORE_STATE_UP {
+			return false
+		}
+		region, err := coordRPC.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: []byte("agent/fsmeta-runtime-route")})
+		return err == nil && !region.GetNotFound() && region.GetRegionDescriptor().GetRegionId() == 1 && store.GetStore().GetClientAddr() == storeAddr
+	}, 8*time.Second, 50*time.Millisecond)
+
+	registerMount(t, ctx, coordRPC, "vol")
+
+	seedKV, err := client.New(client.Config{
+		RegionResolver: coordRPC,
+		StoreResolver:  coordRPC,
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          client.RetryPolicy{MaxAttempts: 3},
+	})
+	require.NoError(t, err)
+	seedRunner, err := fsmetaraftstore.NewRunner(seedKV, coordRPC)
+	require.NoError(t, err)
+	seedRootInode(t, ctx, seedRunner, model.MountIdentity{MountID: "vol", MountKeyID: 1})
+	require.NoError(t, seedKV.Close())
+
+	runtime, err := fsmetaraftstore.Open(ctx, fsmetaraftstore.Options{
+		CoordinatorAddr:        coordAddr,
+		DialOptions:            []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		SessionCleanupInterval: -1,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, runtime.Close()) }()
+
+	contractModel := fsmetacontract.NewModel("vol")
+	mapped, err := fsmetacontract.NewInodeMappingExecutor(runtime.Executor)
+	require.NoError(t, err)
+	require.NoError(t, fsmetacontract.Run(ctx, mapped, contractModel, fsmetacontract.GenerateScript(7, 16)))
 }
 
 func TestRustRaftstoreEndpointFSMetaHoltRestartPreservesNamespace(t *testing.T) {
@@ -220,6 +282,11 @@ func startRustRaftstoreEndpoint(t *testing.T, holtDir string) string {
 
 func startRustRaftstoreEndpointAt(t *testing.T, addr, holtDir string) func() {
 	t.Helper()
+	return startRustRaftstoreEndpointAtWithEnv(t, addr, holtDir, nil)
+}
+
+func startRustRaftstoreEndpointAtWithEnv(t *testing.T, addr, holtDir string, extraEnv []string) func() {
+	t.Helper()
 	root := findRustEndpointRepoRoot(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(
@@ -234,6 +301,7 @@ func startRustRaftstoreEndpointAt(t *testing.T, addr, holtDir string) func() {
 	)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "NOKV_RUST_RAFTSTORE_ADDR="+addr)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	if holtDir != "" {
 		cmd.Env = append(cmd.Env, "NOKV_RUST_RAFTSTORE_HOLT_DIR="+holtDir)
 	}

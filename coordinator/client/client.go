@@ -156,13 +156,15 @@ func (c *GRPCClient) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	var firstErr error
-	for _, endpoint := range c.endpoints {
-		if endpoint.conn == nil {
+	for i := range c.endpoints {
+		conn := c.endpoints[i].conn
+		if conn == nil {
 			continue
 		}
-		if err := endpoint.conn.Close(); err != nil && firstErr == nil {
+		if err := conn.Close(); err != nil && firstErr == nil {
 			firstErr = err
 		}
+		c.endpoints[i].conn = nil
 	}
 	return firstErr
 }

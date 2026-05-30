@@ -225,7 +225,11 @@ The first slices are intentionally narrow:
   both the in-memory Rust store and the Holt-backed Rust store. A Holt restart
   regression now creates a namespace entry through fsmeta, stops the Rust
   process, restarts the same Holt-backed store, and verifies `Lookup` plus
-  `ReadDirPlus` still observe the persisted dentry and inode attributes.
+  `ReadDirPlus` still observe the persisted dentry and inode attributes. The
+  integration harness also opens the production `fsmeta/runtime/raftstore`
+  assembly through a real Go coordinator while the Rust store publishes its
+  store/region metadata by heartbeat, then runs fsmeta contract operations
+  through coordinator-backed routing.
 - The tagged Go client harness now also starts a real Go coordinator service,
   publishes rooted store and region metadata, lets the Rust store populate
   `StoreInfo` through heartbeat, and routes `StoreKV` traffic through the

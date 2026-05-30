@@ -59,6 +59,14 @@ func TestNewGRPCClientEmptyAddress(t *testing.T) {
 	require.Nil(t, cli)
 }
 
+func TestGRPCClientCloseIsIdempotent(t *testing.T) {
+	conn, err := grpc.NewClient("passthrough:///127.0.0.1:1", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	cli := &GRPCClient{endpoints: []grpcEndpoint{{conn: conn}}}
+	require.NoError(t, cli.Close())
+	require.NoError(t, cli.Close())
+}
+
 func TestGRPCClientRoundTrip(t *testing.T) {
 	const bufSize = 1 << 20
 	listener := bufconn.Listen(bufSize)

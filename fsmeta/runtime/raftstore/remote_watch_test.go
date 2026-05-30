@@ -74,6 +74,10 @@ func TestSleepBackoffHonorsCancellationAndStatsNil(t *testing.T) {
 	cancel()
 	require.False(t, sleepBackoff(ctx, time.Hour))
 	require.NoError(t, stopRemoteStore(nil))
+	conn, err := grpc.NewClient("passthrough:///127.0.0.1:1", grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	require.NoError(t, conn.Close())
+	require.NoError(t, stopRemoteStore(&remoteStoreWatch{conn: conn}))
 
 	var source *RemoteSource
 	require.Equal(t, map[string]any{
