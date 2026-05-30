@@ -1636,6 +1636,8 @@ where
         _request: Request<adminpb::ExecutionStatusRequest>,
     ) -> Result<Response<adminpb::ExecutionStatusResponse>, Status> {
         let status = self.status.apply_status();
+        let runtime = self.status.raft_runtime_status();
+        let hosted = status.region_id != 0 && runtime.hosted;
         let mut topology = self.execution.topology_snapshot()?;
         for blocked in self.restart_diagnostics.blocked_topology_statuses()? {
             push_missing_topology_status(&mut topology, blocked);
@@ -1646,13 +1648,13 @@ where
         Ok(Response::new(adminpb::ExecutionStatusResponse {
             last_admission: Some(self.execution.snapshot()?),
             restart: Some(adminpb::ExecutionRestartStatus {
-                state: if status.region_id == 0 {
-                    adminpb::ExecutionRestartState::Degraded as i32
-                } else {
+                state: if hosted {
                     adminpb::ExecutionRestartState::Ready as i32
+                } else {
+                    adminpb::ExecutionRestartState::Degraded as i32
                 },
-                region_count: if status.region_id == 0 { 0 } else { 1 },
-                raft_group_count: if status.region_id == 0 { 0 } else { 1 },
+                region_count: u64::from(hosted),
+                raft_group_count: u64::from(hosted),
                 pending_root_event_count: self.restart_diagnostics.pending_root_event_count()?,
                 blocked_root_event_count: self.restart_diagnostics.blocked_root_event_count()?,
                 pending_scheduler_operation_count: self
@@ -3731,6 +3733,48 @@ mod tests {
         assert_eq!(response.leader_peer_id, 0);
         assert!(!response.leader);
         assert!(response.region.is_none());
+    }
+
+    #[tokio::test]
+    async fn admin_execution_status_reports_unhosted_joining_peer_degraded() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
+        let state_machine = nokv_raftnode::RegionStateMachine::new(
+            nokv_raftnode::AppliedKvEngine::new(7, MvccStore::new()),
+        );
+        let region = nokv_raftnode::OpenRaftRegion::open_with_network(
+            2,
+            7,
+            nokv_raftnode::RegionLogStorage::new(log),
+            state_machine,
+            nokv_raftnode::MemoryRaftNetworkRegistry::default().factory(),
+        )
+        .await
+        .unwrap();
+        let service = RaftAdminService::with_admission(
+            region,
+            RegionAdmission {
+                region_id: 7,
+                store_id: 2,
+                peer_id: 2,
+                leader: false,
+                ..Default::default()
+            },
+        );
+
+        let response = service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        let restart = response.restart.unwrap();
+
+        assert_eq!(
+            restart.state,
+            adminpb::ExecutionRestartState::Degraded as i32
+        );
+        assert_eq!(restart.region_count, 0);
+        assert_eq!(restart.raft_group_count, 0);
     }
 
     #[tokio::test]
