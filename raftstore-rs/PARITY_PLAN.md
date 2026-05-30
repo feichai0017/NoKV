@@ -153,6 +153,9 @@ The first slices are intentionally narrow:
   local Rust service is not the leader and follower serving is not wired yet,
   follower-prefer reads return `StaleCommand` so Go clients retry the leader,
   while writes remain leader-only and continue to return `NotLeader`.
+  The server/adapter testkit also covers a Holt-backed peer that installs a
+  leader snapshot, persists its apply-state and MVCC snapshot, restarts from
+  the same Holt/log directories, and applies a later leader commit.
 - The tagged Go integration harness now runs the fsmeta contract executor
   through `fsmeta/runtime/raftstore.Runner` against a Rust StoreKV endpoint,
   proving the upper fsmeta semantic path can use the Rust data plane without
@@ -177,14 +180,14 @@ Known gaps:
 - Restart recovery now covers single-node Holt restart, write-after-restart,
   durable vote/committed metadata, and an in-process multi-node restart after a
   membership change. Production completeness still needs external-transport
-  bootstrap coverage and snapshot-install restart coverage with persistent Holt
-  state.
+  bootstrap coverage.
 - Snapshot catch-up has both state-machine snapshot coverage and an in-process
   OpenRaft peer catch-up test where a joining peer installs a snapshot after the
-  leader purges covered logs. Snapshot-triggered log compaction still needs
-  broader restart and external-transport integration tests. Corrupt snapshot
-  payloads are rejected before state-machine mutation in the current unit
-  coverage.
+  leader purges covered logs. Holt-backed adapter coverage now restarts a
+  snapshot-installed peer from persistent apply-state/MVCC state and verifies it
+  applies a later leader commit. Snapshot-triggered log compaction still needs
+  external-transport integration tests. Corrupt snapshot payloads are rejected
+  before state-machine mutation in the current unit coverage.
 - Go fsmeta and raftstore client Rust-endpoint tests remain behind the
   `rust_raftstore` build tag until the Rust data plane is the default runtime.
 - Rust follower reads are intentionally not served locally yet. The service

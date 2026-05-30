@@ -3,14 +3,14 @@
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-use nokv_holtstore::{HoltMvccStore, RegionApplyState};
+use nokv_holtstore::HoltMvccStore;
 use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::{
-    AppliedKvEngine, ApplyStatus, ApplyStatusSink, OpenRaftRegion, PersistentAppliedKvEngine,
-    RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog,
+    AppliedKvEngine, OpenRaftRegion, PersistentAppliedKvEngine, RegionLogStorage,
+    RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog,
 };
-use nokv_raftstore_server::RegionAdmission;
+use nokv_raftstore_server::{apply_status_from_holt, HoltApplyStatusSink, RegionAdmission};
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -27,13 +27,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let apply_status = mvcc
             .get_region_apply_state(descriptor.region_id)?
             .map(apply_status_from_holt)
-            .unwrap_or(ApplyStatus {
+            .unwrap_or(nokv_raftnode::ApplyStatus {
                 region_id: descriptor.region_id,
                 term: 1,
                 applied_index: 0,
             });
         let engine = AppliedKvEngine::with_status(apply_status, mvcc.clone());
-        let engine = PersistentAppliedKvEngine::new(engine, HoltApplyStatusSink { store: mvcc });
+        let engine = PersistentAppliedKvEngine::new(engine, HoltApplyStatusSink::new(mvcc));
         let region =
             bootstrap_openraft_region(admission.peer_id, admission.region_id, log_dir, engine)
                 .await?;
@@ -83,34 +83,6 @@ fn raft_log_dir(
     let path = dir.path().to_path_buf();
     *temp_log_dir = Some(dir);
     Ok(path)
-}
-
-#[derive(Clone)]
-struct HoltApplyStatusSink {
-    store: HoltMvccStore,
-}
-
-impl ApplyStatusSink for HoltApplyStatusSink {
-    fn save_apply_status(&self, status: &ApplyStatus) -> nokv_mvcc::Result<()> {
-        self.store
-            .put_region_apply_state(&RegionApplyState {
-                region_id: status.region_id,
-                term: status.term,
-                applied_index: status.applied_index,
-                truncated_term: 0,
-                truncated_index: 0,
-            })
-            .and_then(|_| self.store.checkpoint())
-            .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
-    }
-}
-
-fn apply_status_from_holt(state: RegionApplyState) -> ApplyStatus {
-    ApplyStatus {
-        region_id: state.region_id,
-        term: state.term,
-        applied_index: state.applied_index,
-    }
 }
 
 fn default_region_descriptor() -> metapb::RegionDescriptor {

@@ -8,6 +8,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
+use nokv_holtstore::{HoltMvccStore, RegionApplyState};
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
@@ -32,6 +33,41 @@ pub use kvpb::store_kv_server::StoreKvServer;
 const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;
 const DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE: usize = 512;
 const DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE: usize = 512 * 1024;
+
+/// Persists OpenRaft state-machine apply progress into Holt metadata trees.
+#[derive(Clone)]
+pub struct HoltApplyStatusSink {
+    store: HoltMvccStore,
+}
+
+impl HoltApplyStatusSink {
+    pub fn new(store: HoltMvccStore) -> Self {
+        Self { store }
+    }
+}
+
+impl ApplyStatusSink for HoltApplyStatusSink {
+    fn save_apply_status(&self, status: &nokv_raftnode::ApplyStatus) -> nokv_mvcc::Result<()> {
+        self.store
+            .put_region_apply_state(&RegionApplyState {
+                region_id: status.region_id,
+                term: status.term,
+                applied_index: status.applied_index,
+                truncated_term: 0,
+                truncated_index: 0,
+            })
+            .and_then(|_| self.store.checkpoint())
+            .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
+    }
+}
+
+pub fn apply_status_from_holt(state: RegionApplyState) -> nokv_raftnode::ApplyStatus {
+    nokv_raftnode::ApplyStatus {
+        region_id: state.region_id,
+        term: state.term,
+        applied_index: state.applied_index,
+    }
+}
 
 #[derive(Debug, Clone, Default)]
 pub struct StoreKvService<E = MvccStore> {
@@ -1285,6 +1321,8 @@ mod tests {
     use adminpb::raft_admin_server::RaftAdmin;
     use kvpb::store_kv_server::StoreKv;
     use nokv_proto::nokv::meta::v1 as metapb;
+    use std::path::Path;
+    use std::time::Duration;
     use tokio_stream::StreamExt;
 
     fn context(admission: &RegionAdmission) -> kvpb::Context {
@@ -1304,6 +1342,33 @@ mod tests {
 
     fn default_context() -> kvpb::Context {
         context(&RegionAdmission::default())
+    }
+
+    fn open_persistent_holt_engine(
+        path: &Path,
+        region_id: u64,
+    ) -> (
+        nokv_holtstore::HoltMvccStore,
+        nokv_raftnode::PersistentAppliedKvEngine<
+            nokv_holtstore::HoltMvccStore,
+            HoltApplyStatusSink,
+        >,
+    ) {
+        let store = nokv_holtstore::HoltMvccStore::open_file(path).unwrap();
+        let status = store
+            .get_region_apply_state(region_id)
+            .unwrap()
+            .map(apply_status_from_holt)
+            .unwrap_or(nokv_raftnode::ApplyStatus {
+                region_id,
+                term: 1,
+                applied_index: 0,
+            });
+        let engine = nokv_raftnode::AppliedKvEngine::with_status(status, store.clone());
+        (
+            store.clone(),
+            nokv_raftnode::PersistentAppliedKvEngine::new(engine, HoltApplyStatusSink::new(store)),
+        )
     }
 
     #[derive(Debug, Clone)]
@@ -1438,6 +1503,195 @@ mod tests {
 
         assert_eq!(response.response.unwrap().applied_keys, 1);
         assert_eq!(region.apply_status().applied_index, 2);
+    }
+
+    #[tokio::test]
+    async fn holt_snapshot_installed_peer_survives_openraft_restart() {
+        let registry = nokv_raftnode::MemoryRaftNetworkRegistry::default();
+        let leader_log_dir = tempfile::tempdir().unwrap();
+        let leader_log = nokv_raftnode::SegmentedEntryLog::open(7, leader_log_dir.path()).unwrap();
+        let leader_engine = nokv_raftnode::AppliedKvEngine::new(7, MvccStore::new());
+        let leader = nokv_raftnode::OpenRaftRegion::open_with_network(
+            1,
+            7,
+            nokv_raftnode::RegionLogStorage::new(leader_log),
+            nokv_raftnode::RegionStateMachine::new(leader_engine),
+            registry.factory(),
+        )
+        .await
+        .unwrap();
+        registry.register(1, leader.raft_handle());
+        leader
+            .initialize_members(BTreeMap::from([(1, BasicNode::new("node-1"))]))
+            .await
+            .unwrap();
+        leader.wait_for_leader(1).await.unwrap();
+
+        let put_command = |request_id: u64, key: &[u8], value: &[u8], commit_version: u64| {
+            raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    request_id,
+                    ..Default::default()
+                }),
+                requests: vec![raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                        kvpb::TryAtomicMutateRequest {
+                            mutations: vec![kvpb::Mutation {
+                                key: key.to_vec(),
+                                value: value.to_vec(),
+                                op: kvpb::mutation::Op::Put as i32,
+                                ..Default::default()
+                            }],
+                            commit_version,
+                            ..Default::default()
+                        },
+                    )),
+                }],
+            }
+        };
+
+        let mut last_applied = None;
+        for version in 1..=8 {
+            let command = put_command(
+                version,
+                format!("k{version}").as_bytes(),
+                format!("v{version}").as_bytes(),
+                version,
+            );
+            last_applied = Some(
+                leader
+                    .propose(nokv_raftnode::Proposal::from_raft_command(&command).unwrap())
+                    .await
+                    .unwrap(),
+            );
+        }
+        let last_applied = last_applied.unwrap();
+        leader.trigger_snapshot().await.unwrap();
+        leader
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .metrics(
+                |metrics| {
+                    metrics
+                        .snapshot
+                        .map(|snapshot| snapshot.index >= last_applied.index)
+                        .unwrap_or(false)
+                },
+                "leader snapshot before Holt peer catch-up",
+            )
+            .await
+            .unwrap();
+        leader.trigger_log_purge(last_applied.index).await.unwrap();
+        leader
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .metrics(
+                |metrics| {
+                    metrics
+                        .purged
+                        .map(|purged| purged.index >= last_applied.index)
+                        .unwrap_or(false)
+                },
+                "leader purges snapshot-covered logs before Holt peer join",
+            )
+            .await
+            .unwrap();
+
+        let joining_log_dir = tempfile::tempdir().unwrap();
+        let joining_holt_dir = tempfile::tempdir().unwrap();
+        let (joining_store, joining_engine) =
+            open_persistent_holt_engine(joining_holt_dir.path(), 7);
+        let joining = nokv_raftnode::OpenRaftRegion::open_with_network(
+            2,
+            7,
+            nokv_raftnode::RegionLogStorage::new(
+                nokv_raftnode::SegmentedEntryLog::open(7, joining_log_dir.path()).unwrap(),
+            ),
+            nokv_raftnode::RegionStateMachine::new(joining_engine.clone()),
+            registry.factory(),
+        )
+        .await
+        .unwrap();
+        registry.register(2, joining.raft_handle());
+
+        leader.add_voter(2, BasicNode::new("node-2")).await.unwrap();
+        joining
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .applied_index_at_least(Some(last_applied.index), "Holt peer installs snapshot")
+            .await
+            .unwrap();
+        assert!(
+            joining.raft_handle().metrics().borrow().snapshot.is_some(),
+            "joining Holt peer should install a snapshot before replaying new logs"
+        );
+        assert_eq!(
+            joining_store
+                .get(&kvpb::GetRequest {
+                    key: b"k8".to_vec(),
+                    version: 8,
+                })
+                .unwrap()
+                .value,
+            b"v8".to_vec()
+        );
+
+        joining.shutdown().await.unwrap();
+        drop(joining);
+        drop(joining_engine);
+        drop(joining_store);
+
+        let (restarted_store, restarted_engine) =
+            open_persistent_holt_engine(joining_holt_dir.path(), 7);
+        let persisted_apply = restarted_store
+            .get_region_apply_state(7)
+            .unwrap()
+            .expect("snapshot install should persist Holt apply state");
+        assert!(persisted_apply.applied_index >= last_applied.index);
+
+        let restarted_joining = nokv_raftnode::OpenRaftRegion::open_with_network(
+            2,
+            7,
+            nokv_raftnode::RegionLogStorage::new(
+                nokv_raftnode::SegmentedEntryLog::open(7, joining_log_dir.path()).unwrap(),
+            ),
+            nokv_raftnode::RegionStateMachine::new(restarted_engine.clone()),
+            registry.factory(),
+        )
+        .await
+        .unwrap();
+        registry.register(2, restarted_joining.raft_handle());
+        restarted_joining.wait_for_voter(2, true).await.unwrap();
+
+        let after_restart = put_command(9, b"after-snapshot-restart", b"ok", 9);
+        let applied_after_restart = leader
+            .propose(nokv_raftnode::Proposal::from_raft_command(&after_restart).unwrap())
+            .await
+            .unwrap();
+        restarted_joining
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .applied_index_at_least(
+                Some(applied_after_restart.index),
+                "Holt peer applies after restart",
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            restarted_store
+                .get(&kvpb::GetRequest {
+                    key: b"after-snapshot-restart".to_vec(),
+                    version: 9,
+                })
+                .unwrap()
+                .value,
+            b"ok".to_vec()
+        );
+
+        leader.shutdown().await.unwrap();
+        restarted_joining.shutdown().await.unwrap();
     }
 
     #[tokio::test]
