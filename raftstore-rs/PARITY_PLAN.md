@@ -112,7 +112,9 @@ The first slices are intentionally narrow:
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
   handlers now execute through the same `RaftCmdRequest` boundary that OpenRaft
-  proposals will carry.
+  proposals will carry. The tagged Go endpoint harness now covers atomic
+  mutate/get/watch, Holt apply-status restart, 2PC, `BatchGet`, `Scan`, and
+  `InstallPreparedMVCCEntries` against the Rust server.
 
 Known gaps:
 

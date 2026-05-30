@@ -120,6 +120,21 @@ func TestRustRaftstoreEndpointHoltApplyStatusSurvivesRestart(t *testing.T) {
 	require.Equal(t, []byte("v2"), got.GetValue())
 }
 
+func TestRustRaftstoreEndpointClientTransactionSurface(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		holt bool
+	}{
+		{name: "memory"},
+		{name: "holt", holt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			addr := startRustRaftstoreEndpoint(t, tc.holt)
+			testRustRaftstoreEndpointClientTransactionSurface(t, addr)
+		})
+	}
+}
+
 func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr string) {
 	t.Helper()
 	meta := rustRaftstoreSingleRegion()
@@ -180,6 +195,75 @@ func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr s
 	require.True(t, status.GetHosted())
 	require.True(t, status.GetLeader())
 	require.GreaterOrEqual(t, status.GetAppliedIndex(), uint64(2))
+}
+
+func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string) {
+	t.Helper()
+	meta := rustRaftstoreSingleRegion()
+	cli, err := New(Config{
+		RegionResolver: &mockRegionResolver{region: meta},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 1,
+			Addr:    addr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	require.NoError(t, cli.TwoPhaseCommit(ctx, []byte("agent/txn-a"), []*kvrpcpb.Mutation{
+		{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   []byte("agent/txn-a"),
+			Value: []byte("va"),
+		},
+		{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   []byte("agent/txn-b"),
+			Value: []byte("vb"),
+		},
+	}, 20, 30, 60_000))
+
+	got, err := cli.BatchGet(ctx, [][]byte{
+		[]byte("agent/txn-a"),
+		[]byte("agent/txn-b"),
+		[]byte("agent/txn-missing"),
+	}, 30)
+	require.NoError(t, err)
+	require.Equal(t, []byte("va"), got["agent/txn-a"].GetValue())
+	require.Equal(t, []byte("vb"), got["agent/txn-b"].GetValue())
+	require.True(t, got["agent/txn-missing"].GetNotFound())
+
+	scanned, err := cli.Scan(ctx, []byte("agent/txn-"), 10, 30)
+	require.NoError(t, err)
+	require.Len(t, scanned, 2)
+	require.Equal(t, []byte("agent/txn-a"), scanned[0].GetKey())
+	require.Equal(t, []byte("agent/txn-b"), scanned[1].GetKey())
+
+	install, err := cli.InstallPreparedMVCCEntries(ctx, []byte("agent/prepared"), &kvrpcpb.InstallPreparedMVCCEntriesRequest{
+		CommitVersion: 40,
+		Entries: []*kvrpcpb.PreparedMVCCEntry{{
+			ColumnFamily: kvrpcpb.PreparedMVCCEntry_DEFAULT,
+			Key:          []byte("agent/prepared"),
+			Version:      40,
+			Value:        []byte("prepared"),
+			HasValue:     true,
+		}},
+		WatchKeys: [][]byte{[]byte("agent/prepared")},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), install.GetAppliedEntries())
+	require.Equal(t, uint64(40), install.GetCommitVersion())
+
+	prepared, err := cli.Get(ctx, []byte("agent/prepared"), 40)
+	require.NoError(t, err)
+	require.False(t, prepared.GetNotFound())
+	require.Equal(t, []byte("prepared"), prepared.GetValue())
 }
 
 func startRustRaftstoreEndpoint(t *testing.T, holt bool) string {
