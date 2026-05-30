@@ -7,6 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+crc32fast.workspace = true
 nokv-mvcc.workspace = true
 nokv-proto.workspace = true
 nokv-raftlog.workspace = true

@@ -980,6 +980,7 @@ dependencies = [
 name = "nokv-raftnode"
 version = "0.1.0"
 dependencies = [
+ "crc32fast",
  "nokv-mvcc",
  "nokv-proto",
  "nokv-raftlog",

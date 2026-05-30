@@ -1,5 +1,7 @@
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::ops::{Bound, RangeBounds};
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use nokv_raftlog::{LogMarker, SegmentedRaftLog};
 
@@ -20,15 +22,45 @@ pub trait RaftEntryLog {
 
 pub struct SegmentedEntryLog {
     region_id: RegionId,
+    dir: PathBuf,
     inner: SegmentedRaftLog,
 }
 
 impl SegmentedEntryLog {
     pub fn open(region_id: RegionId, dir: impl AsRef<Path>) -> Result<Self, Error> {
+        let dir = dir.as_ref().to_path_buf();
         Ok(Self {
             region_id,
-            inner: SegmentedRaftLog::open(dir)?,
+            inner: SegmentedRaftLog::open(&dir)?,
+            dir,
         })
+    }
+
+    pub fn save_vote(&self, vote: openraft::Vote<NodeId>) -> Result<(), Error> {
+        write_vote(&self.vote_path(), vote)
+    }
+
+    pub fn read_vote(&self) -> Result<Option<openraft::Vote<NodeId>>, Error> {
+        read_vote(&self.vote_path())
+    }
+
+    pub fn save_committed(&self, committed: Option<openraft::LogId<NodeId>>) -> Result<(), Error> {
+        match committed {
+            Some(log_id) => write_log_id(&self.committed_path(), log_id),
+            None => remove_file_if_exists(&self.committed_path()),
+        }
+    }
+
+    pub fn read_committed(&self) -> Result<Option<openraft::LogId<NodeId>>, Error> {
+        read_log_id(&self.committed_path())
+    }
+
+    fn vote_path(&self) -> PathBuf {
+        self.dir.join("vote.meta")
+    }
+
+    fn committed_path(&self) -> PathBuf {
+        self.dir.join("committed.meta")
     }
 }
 
@@ -113,6 +145,139 @@ fn marker_to_log_id(marker: LogMarker) -> openraft::LogId<NodeId> {
         openraft::CommittedLeaderId::new(marker.term, marker.node_id),
         marker.index,
     )
+}
+
+const VOTE_META_MAGIC: u32 = 0x4e4b_5654; // NKVT
+const COMMITTED_META_MAGIC: u32 = 0x4e4b_434d; // NKCM
+const META_VERSION: u16 = 1;
+const VOTE_META_LEN: usize = 4 + 2 + 2 + 8 + 8 + 1 + 1 + 4;
+const LOG_ID_META_LEN: usize = 4 + 2 + 2 + 8 + 8 + 8 + 4;
+
+fn write_vote(path: &Path, vote: openraft::Vote<NodeId>) -> Result<(), Error> {
+    let mut bytes = Vec::with_capacity(VOTE_META_LEN);
+    bytes.extend_from_slice(&VOTE_META_MAGIC.to_le_bytes());
+    bytes.extend_from_slice(&META_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&vote.leader_id.term.to_le_bytes());
+    bytes.extend_from_slice(&vote.leader_id.voted_for().unwrap_or_default().to_le_bytes());
+    bytes.push(u8::from(vote.leader_id.voted_for().is_some()));
+    bytes.push(u8::from(vote.committed));
+    append_crc(&mut bytes);
+    write_meta_file(path, &bytes)
+}
+
+fn read_vote(path: &Path) -> Result<Option<openraft::Vote<NodeId>>, Error> {
+    let Some(bytes) = read_meta_file(path, VOTE_META_LEN)? else {
+        return Ok(None);
+    };
+    validate_meta(&bytes, VOTE_META_MAGIC)?;
+    let term = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    let node_id = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    let committed = bytes[25] != 0;
+    Ok(Some(openraft::Vote {
+        leader_id: openraft::LeaderId::new(term, node_id),
+        committed,
+    }))
+}
+
+fn write_log_id(path: &Path, log_id: openraft::LogId<NodeId>) -> Result<(), Error> {
+    let mut bytes = Vec::with_capacity(LOG_ID_META_LEN);
+    bytes.extend_from_slice(&COMMITTED_META_MAGIC.to_le_bytes());
+    bytes.extend_from_slice(&META_VERSION.to_le_bytes());
+    bytes.extend_from_slice(&0u16.to_le_bytes());
+    bytes.extend_from_slice(&log_id.leader_id.term.to_le_bytes());
+    bytes.extend_from_slice(&log_id.leader_id.node_id.to_le_bytes());
+    bytes.extend_from_slice(&log_id.index.to_le_bytes());
+    append_crc(&mut bytes);
+    write_meta_file(path, &bytes)
+}
+
+fn read_log_id(path: &Path) -> Result<Option<openraft::LogId<NodeId>>, Error> {
+    let Some(bytes) = read_meta_file(path, LOG_ID_META_LEN)? else {
+        return Ok(None);
+    };
+    validate_meta(&bytes, COMMITTED_META_MAGIC)?;
+    let term = u64::from_le_bytes(bytes[8..16].try_into().unwrap());
+    let node_id = u64::from_le_bytes(bytes[16..24].try_into().unwrap());
+    let index = u64::from_le_bytes(bytes[24..32].try_into().unwrap());
+    Ok(Some(openraft::LogId::new(
+        openraft::CommittedLeaderId::new(term, node_id),
+        index,
+    )))
+}
+
+fn append_crc(bytes: &mut Vec<u8>) {
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(bytes);
+    bytes.extend_from_slice(&hasher.finalize().to_le_bytes());
+}
+
+fn validate_meta(bytes: &[u8], magic: u32) -> Result<(), Error> {
+    let observed = u32::from_le_bytes(bytes[bytes.len() - 4..].try_into().unwrap());
+    let mut hasher = crc32fast::Hasher::new();
+    hasher.update(&bytes[..bytes.len() - 4]);
+    if observed != hasher.finalize() {
+        return Err(Error::CorruptMetadata("metadata crc mismatch"));
+    }
+    if u32::from_le_bytes(bytes[0..4].try_into().unwrap()) != magic {
+        return Err(Error::CorruptMetadata("metadata magic mismatch"));
+    }
+    if u16::from_le_bytes(bytes[4..6].try_into().unwrap()) != META_VERSION {
+        return Err(Error::CorruptMetadata("metadata version mismatch"));
+    }
+    Ok(())
+}
+
+fn write_meta_file(path: &Path, bytes: &[u8]) -> Result<(), Error> {
+    let tmp_path = path.with_extension("tmp");
+    {
+        let mut file = OpenOptions::new()
+            .create(true)
+            .write(true)
+            .truncate(true)
+            .open(&tmp_path)?;
+        file.write_all(bytes)?;
+        file.sync_data()?;
+    }
+    std::fs::rename(&tmp_path, path)?;
+    sync_parent(path)?;
+    Ok(())
+}
+
+fn read_meta_file(path: &Path, len: usize) -> Result<Option<Vec<u8>>, Error> {
+    let mut file = match File::open(path) {
+        Ok(file) => file,
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+        Err(err) => return Err(err.into()),
+    };
+    let mut bytes = vec![0u8; len];
+    file.read_exact(&mut bytes)
+        .map_err(|_| Error::CorruptMetadata("metadata length mismatch"))?;
+    let mut trailing = [0u8; 1];
+    match file.read(&mut trailing) {
+        Ok(0) => {}
+        Ok(_) => return Err(Error::CorruptMetadata("metadata trailing bytes")),
+        Err(err) => return Err(err.into()),
+    }
+    Ok(Some(bytes))
+}
+
+fn remove_file_if_exists(path: &Path) -> Result<(), Error> {
+    match std::fs::remove_file(path) {
+        Ok(()) => {
+            sync_parent(path)?;
+            Ok(())
+        }
+        Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(err) => Err(err.into()),
+    }
+}
+
+fn sync_parent(path: &Path) -> Result<(), Error> {
+    if let Some(parent) = path.parent() {
+        File::open(parent)?.sync_all()?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -222,6 +387,29 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec![3]
         );
+    }
+
+    #[test]
+    fn segmented_entry_log_persists_vote_and_committed_log_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        log.save_vote(openraft::Vote::new_committed(11, 2)).unwrap();
+        log.save_committed(Some(log_id(11, 9))).unwrap();
+        drop(log);
+
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        let vote = log.read_vote().unwrap().unwrap();
+        assert_eq!(vote.leader_id.term, 11);
+        assert_eq!(vote.leader_id.voted_for(), Some(2));
+        assert!(vote.committed);
+        let committed = log.read_committed().unwrap().unwrap();
+        assert_eq!(committed.leader_id.term, 11);
+        assert_eq!(committed.index, 9);
+
+        log.save_committed(None).unwrap();
+        drop(log);
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        assert!(log.read_committed().unwrap().is_none());
     }
 
     #[test]

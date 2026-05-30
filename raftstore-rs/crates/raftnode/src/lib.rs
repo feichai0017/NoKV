@@ -112,6 +112,10 @@ pub enum Error {
     InvalidLogPayload(String),
     #[error("raft log error: {0}")]
     RaftLog(#[from] nokv_raftlog::Error),
+    #[error("raft metadata io error: {0}")]
+    MetadataIo(#[from] std::io::Error),
+    #[error("corrupt raft metadata: {0}")]
+    CorruptMetadata(&'static str),
     #[error("raft command encode error: {0}")]
     Encode(#[from] prost::EncodeError),
     #[error("raft command decode error: {0}")]

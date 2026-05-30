@@ -79,7 +79,9 @@ The first slices are intentionally narrow:
   the live region log with append/truncate/purge, because OpenRaft can keep a
   reader across later appends. The implementation is intentionally limited to
   append/read/truncate/purge/apply; purge markers also preserve the full
-  OpenRaft log id. Real snapshots remain an explicit gap.
+  OpenRaft log id. Region vote and committed log-id metadata are persisted next
+  to the segmented log and covered by reopen tests. Real snapshots remain an
+  explicit gap.
 - `OpenRaftRegion` can bootstrap a single-node OpenRaft group with the v2 log
   store and state machine, initialize local membership, wait for leadership,
   and apply an existing `RaftCmdRequest` through `client_write`. On Holt
@@ -131,9 +133,10 @@ Known gaps:
 - Admin `AddPeer`/`RemovePeer` RPCs are wired for `OpenRaftRegion`.
   `TransferLeader` remains explicitly unimplemented until raftnode exposes a
   matching leadership-transfer boundary.
-- Restart recovery now covers single-node Holt restart and write-after-restart.
-  Multi-node restart still needs durable vote, membership-change state, and
-  snapshot install before it is production-complete.
+- Restart recovery now covers single-node Holt restart, write-after-restart,
+  and durable vote/committed metadata. Multi-node restart still needs full
+  bootstrap validation for membership-change state and snapshot install before
+  it is production-complete.
 - Snapshot checkpoint/install is not implemented.
 - Go fsmeta and raftstore client tests do not yet run against Rust by default.
 

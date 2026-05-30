@@ -49,7 +49,9 @@ impl RegionLogStorage {
             log.last_log_id()?.or(log.last_purged_log_id()?)
         };
         if let Some(log_id) = last_log_id {
-            self.vote = Some(Vote::new_committed(log_id.leader_id.term + 1, node_id));
+            let vote = Vote::new_committed(log_id.leader_id.term + 1, node_id);
+            self.lock_log()?.save_vote(vote)?;
+            self.vote = Some(vote);
         }
         Ok(())
     }
@@ -154,11 +156,22 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
     }
 
     async fn save_vote(&mut self, vote: &Vote<NodeId>) -> Result<(), StorageError<NodeId>> {
+        self.lock_storage_log(ErrorVerb::Write)?
+            .save_vote(*vote)
+            .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
         self.vote = Some(*vote);
         Ok(())
     }
 
     async fn read_vote(&mut self) -> Result<Option<Vote<NodeId>>, StorageError<NodeId>> {
+        if self.vote.is_none() {
+            let vote = {
+                self.lock_storage_log(ErrorVerb::Read)?
+                    .read_vote()
+                    .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))?
+            };
+            self.vote = vote;
+        }
         Ok(self.vote)
     }
 
@@ -166,11 +179,22 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
         &mut self,
         committed: Option<LogId<NodeId>>,
     ) -> Result<(), StorageError<NodeId>> {
+        self.lock_storage_log(ErrorVerb::Write)?
+            .save_committed(committed)
+            .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
         self.committed = committed;
         Ok(())
     }
 
     async fn read_committed(&mut self) -> Result<Option<LogId<NodeId>>, StorageError<NodeId>> {
+        if self.committed.is_none() {
+            let committed = {
+                self.lock_storage_log(ErrorVerb::Read)?
+                    .read_committed()
+                    .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))?
+            };
+            self.committed = committed;
+        }
         Ok(self.committed)
     }
 
@@ -499,6 +523,31 @@ mod tests {
             storage.read_vote().await.unwrap().unwrap().leader_id.term,
             4
         );
+        drop(storage);
+
+        let mut storage = RegionLogStorage::new(SegmentedEntryLog::open(7, dir.path()).unwrap());
+        let vote = storage.read_vote().await.unwrap().unwrap();
+        assert_eq!(vote.leader_id.term, 4);
+        assert_eq!(vote.leader_id.voted_for(), Some(1));
+        assert!(vote.committed);
+    }
+
+    #[tokio::test]
+    async fn region_log_storage_persists_committed_log_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut storage = RegionLogStorage::new(SegmentedEntryLog::open(7, dir.path()).unwrap());
+        storage.save_committed(Some(log_id(5, 8))).await.unwrap();
+        drop(storage);
+
+        let mut storage = RegionLogStorage::new(SegmentedEntryLog::open(7, dir.path()).unwrap());
+        let committed = storage.read_committed().await.unwrap().unwrap();
+        assert_eq!(committed.leader_id.term, 5);
+        assert_eq!(committed.index, 8);
+
+        storage.save_committed(None).await.unwrap();
+        drop(storage);
+        let mut storage = RegionLogStorage::new(SegmentedEntryLog::open(7, dir.path()).unwrap());
+        assert!(storage.read_committed().await.unwrap().is_none());
     }
 
     #[tokio::test]
