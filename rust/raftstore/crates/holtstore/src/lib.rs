@@ -1,0 +1,1018 @@
+//! Holt multi-tree adapter for Rust raftstore.
+//!
+//! The adapter fixes the tree layout used by the Rust data plane while keeping
+//! Holt internals out of the raftstore service and MVCC protocol crates.
+
+use std::path::Path;
+use std::sync::{Arc, Mutex};
+
+use holt::{RangeEntry, Tree, TreeConfig, DB};
+use nokv_mvcc as mvcc;
+use nokv_proto::nokv::kv::v1 as kvpb;
+
+pub const DATA_TREE: &str = "data";
+pub const WRITE_TREE: &str = "write";
+pub const LOCK_TREE: &str = "lock";
+pub const REGION_META_TREE: &str = "region_meta";
+pub const APPLY_STATE_TREE: &str = "apply_state";
+pub const WATCH_APPLY_TREE: &str = "watch_apply";
+
+const REQUIRED_TREES: [&str; 6] = [
+    DATA_TREE,
+    WRITE_TREE,
+    LOCK_TREE,
+    REGION_META_TREE,
+    APPLY_STATE_TREE,
+    WATCH_APPLY_TREE,
+];
+
+#[derive(Debug, thiserror::Error)]
+pub enum Error {
+    #[error("holt error: {0}")]
+    Holt(#[from] holt::Error),
+}
+
+pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Clone)]
+pub struct HoltStore {
+    db: DB,
+}
+
+impl HoltStore {
+    pub fn open_memory() -> Result<Self> {
+        Self::open(TreeConfig::memory())
+    }
+
+    pub fn open_file(path: impl AsRef<Path>) -> Result<Self> {
+        Self::open(TreeConfig::new(path.as_ref()))
+    }
+
+    pub fn open(cfg: TreeConfig) -> Result<Self> {
+        let db = DB::open(cfg)?;
+        let store = Self { db };
+        store.ensure_required_trees()?;
+        Ok(store)
+    }
+
+    pub fn checkpoint(&self) -> Result<()> {
+        self.db.checkpoint()?;
+        Ok(())
+    }
+
+    pub fn atomic<F>(&self, build: F) -> Result<bool>
+    where
+        F: FnOnce(&mut holt::DBAtomicBatch),
+    {
+        Ok(self.db.atomic(build)?)
+    }
+
+    pub fn data(&self) -> Result<Tree> {
+        self.tree(DATA_TREE)
+    }
+
+    pub fn write(&self) -> Result<Tree> {
+        self.tree(WRITE_TREE)
+    }
+
+    pub fn lock(&self) -> Result<Tree> {
+        self.tree(LOCK_TREE)
+    }
+
+    pub fn region_meta(&self) -> Result<Tree> {
+        self.tree(REGION_META_TREE)
+    }
+
+    pub fn apply_state(&self) -> Result<Tree> {
+        self.tree(APPLY_STATE_TREE)
+    }
+
+    pub fn watch_apply(&self) -> Result<Tree> {
+        self.tree(WATCH_APPLY_TREE)
+    }
+
+    pub fn put_data(&self, key: &[u8], value: &[u8]) -> Result<()> {
+        self.data()?.put(key, value)?;
+        Ok(())
+    }
+
+    pub fn get_data(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
+        Ok(self.data()?.get(key)?)
+    }
+
+    fn tree(&self, name: &str) -> Result<Tree> {
+        Ok(self.db.open_tree(name)?)
+    }
+
+    fn ensure_required_trees(&self) -> Result<()> {
+        for name in REQUIRED_TREES {
+            self.db.open_or_create_tree(name)?;
+        }
+        Ok(())
+    }
+}
+
+#[derive(Clone)]
+pub struct HoltMvccStore {
+    store: HoltStore,
+    gate: Arc<Mutex<()>>,
+}
+
+impl HoltMvccStore {
+    pub fn open_memory() -> Result<Self> {
+        Ok(Self::new(HoltStore::open_memory()?))
+    }
+
+    pub fn open_file(path: impl AsRef<Path>) -> Result<Self> {
+        Ok(Self::new(HoltStore::open_file(path)?))
+    }
+
+    pub fn new(store: HoltStore) -> Self {
+        Self {
+            store,
+            gate: Arc::new(Mutex::new(())),
+        }
+    }
+
+    pub fn checkpoint(&self) -> Result<()> {
+        self.store.checkpoint()
+    }
+
+    fn lock(&self) -> mvcc::Result<std::sync::MutexGuard<'_, ()>> {
+        self.gate
+            .lock()
+            .map_err(|_| mvcc::Error::Backend("holt mvcc mutex poisoned".to_owned()))
+    }
+
+    fn atomic<F>(&self, build: F) -> mvcc::Result<bool>
+    where
+        F: FnOnce(&mut holt::DBAtomicBatch),
+    {
+        self.store
+            .atomic(build)
+            .map_err(|err| mvcc::Error::Backend(err.to_string()))
+    }
+
+    fn get_lock(&self, key: &[u8]) -> mvcc::Result<Option<mvcc::LockRecord>> {
+        let Some(bytes) = self
+            .store
+            .lock()
+            .map_err(to_backend_error)?
+            .get(key)
+            .map_err(to_backend_error)?
+        else {
+            return Ok(None);
+        };
+        decode_lock(&bytes).map(Some)
+    }
+
+    fn read_committed(
+        &self,
+        key: &[u8],
+        version: u64,
+    ) -> mvcc::Result<Option<(u64, mvcc::VersionedValue)>> {
+        let prefix = write_prefix(key);
+        let mut best = None;
+        for entry in self
+            .store
+            .write()
+            .map_err(to_backend_error)?
+            .range()
+            .prefix(&prefix)
+        {
+            let entry = entry.map_err(to_backend_error)?;
+            let RangeEntry::Key { key, value, .. } = entry else {
+                continue;
+            };
+            let Some((_user_key, commit_ts)) = decode_write_key(&key)? else {
+                continue;
+            };
+            if commit_ts <= version && best.as_ref().is_none_or(|(ts, _)| commit_ts > *ts) {
+                best = Some((commit_ts, decode_value(&value)?));
+            }
+        }
+        Ok(best)
+    }
+
+    fn write_at(&self, key: &[u8], commit_ts: u64) -> mvcc::Result<Option<mvcc::VersionedValue>> {
+        let Some(bytes) = self
+            .store
+            .write()
+            .map_err(to_backend_error)?
+            .get(&write_key(key, commit_ts))
+            .map_err(to_backend_error)?
+        else {
+            return Ok(None);
+        };
+        decode_value(&bytes).map(Some)
+    }
+
+    fn first_write_after(
+        &self,
+        key: &[u8],
+        version: u64,
+    ) -> mvcc::Result<Option<(u64, mvcc::VersionedValue)>> {
+        self.first_write_matching(key, |commit_ts| commit_ts > version)
+    }
+
+    fn first_write_at_or_after(
+        &self,
+        key: &[u8],
+        version: u64,
+    ) -> mvcc::Result<Option<(u64, mvcc::VersionedValue)>> {
+        self.first_write_matching(key, |commit_ts| commit_ts >= version)
+    }
+
+    fn first_write_matching(
+        &self,
+        key: &[u8],
+        matches: impl Fn(u64) -> bool,
+    ) -> mvcc::Result<Option<(u64, mvcc::VersionedValue)>> {
+        let prefix = write_prefix(key);
+        let mut best = None;
+        for entry in self
+            .store
+            .write()
+            .map_err(to_backend_error)?
+            .range()
+            .prefix(&prefix)
+        {
+            let entry = entry.map_err(to_backend_error)?;
+            let RangeEntry::Key { key, value, .. } = entry else {
+                continue;
+            };
+            let Some((_user_key, commit_ts)) = decode_write_key(&key)? else {
+                continue;
+            };
+            if matches(commit_ts) && best.as_ref().is_none_or(|(ts, _)| commit_ts < *ts) {
+                best = Some((commit_ts, decode_value(&value)?));
+            }
+        }
+        Ok(best)
+    }
+
+    fn scan_write_user_keys(&self) -> mvcc::Result<Vec<Vec<u8>>> {
+        let mut keys = std::collections::BTreeSet::new();
+        for entry in self.store.write().map_err(to_backend_error)?.range() {
+            let entry = entry.map_err(to_backend_error)?;
+            let RangeEntry::Key { key, .. } = entry else {
+                continue;
+            };
+            if let Some((user_key, _commit_ts)) = decode_write_key(&key)? {
+                keys.insert(user_key);
+            }
+        }
+        Ok(keys.into_iter().collect())
+    }
+
+    fn scan_locks_by_start(&self, start_version: u64) -> mvcc::Result<Vec<Vec<u8>>> {
+        let mut keys = Vec::new();
+        for entry in self.store.lock().map_err(to_backend_error)?.range() {
+            let entry = entry.map_err(to_backend_error)?;
+            let RangeEntry::Key { key, value, .. } = entry else {
+                continue;
+            };
+            let lock = decode_lock(&value)?;
+            if lock.start_version == start_version {
+                keys.push(key);
+            }
+        }
+        Ok(keys)
+    }
+}
+
+impl mvcc::KvEngine for HoltMvccStore {
+    fn get(&self, req: &kvpb::GetRequest) -> mvcc::Result<kvpb::GetResponse> {
+        let _guard = self.lock()?;
+        if let Some(lock) = self.get_lock(&req.key)? {
+            if lock.start_version <= req.version {
+                return Ok(kvpb::GetResponse {
+                    error: Some(mvcc::locked_error(&req.key, &lock)),
+                    ..Default::default()
+                });
+            }
+        }
+        Ok(match self.read_committed(&req.key, req.version)? {
+            Some((_commit, value)) => {
+                let not_found = value.value.is_none();
+                kvpb::GetResponse {
+                    value: value.value.unwrap_or_default(),
+                    not_found,
+                    expires_at: value.expires_at,
+                    ..Default::default()
+                }
+            }
+            None => kvpb::GetResponse {
+                not_found: true,
+                ..Default::default()
+            },
+        })
+    }
+
+    fn batch_get(&self, req: &kvpb::BatchGetRequest) -> mvcc::Result<kvpb::BatchGetResponse> {
+        let mut responses = Vec::with_capacity(req.requests.len());
+        for get in &req.requests {
+            responses.push(self.get(get)?);
+        }
+        Ok(kvpb::BatchGetResponse { responses })
+    }
+
+    fn scan(&self, req: &kvpb::ScanRequest) -> mvcc::Result<kvpb::ScanResponse> {
+        let _guard = self.lock()?;
+        let mut keys = self.scan_write_user_keys()?;
+        if req.reverse {
+            keys.reverse();
+        }
+        let mut kvs = Vec::new();
+        for key in keys {
+            if !req.reverse
+                && (key.as_slice() < req.start_key.as_slice()
+                    || (!req.include_start && key == req.start_key))
+            {
+                continue;
+            }
+            if req.reverse
+                && (key.as_slice() > req.start_key.as_slice()
+                    || (!req.include_start && key == req.start_key))
+            {
+                continue;
+            }
+            if let Some(lock) = self.get_lock(&key)? {
+                if lock.start_version <= req.version {
+                    return Ok(kvpb::ScanResponse {
+                        error: Some(mvcc::locked_error(&key, &lock)),
+                        ..Default::default()
+                    });
+                }
+            }
+            if let Some((commit_version, value)) = self.read_committed(&key, req.version)? {
+                if let Some(bytes) = value.value {
+                    kvs.push(kvpb::Kv {
+                        key,
+                        value: bytes,
+                        version: commit_version,
+                        expires_at: value.expires_at,
+                        ..Default::default()
+                    });
+                    if req.limit > 0 && kvs.len() >= req.limit as usize {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(kvpb::ScanResponse {
+            kvs,
+            ..Default::default()
+        })
+    }
+
+    fn prewrite(&self, req: &kvpb::PrewriteRequest) -> mvcc::Result<kvpb::PrewriteResponse> {
+        let _guard = self.lock()?;
+        let mut errors = Vec::new();
+        for mutation in &req.mutations {
+            if let Some(existing) = self.get_lock(&mutation.key)? {
+                if existing.start_version != req.start_version {
+                    errors.push(mvcc::locked_error(&mutation.key, &existing));
+                    continue;
+                }
+            }
+            if let Some((commit_ts, _)) =
+                self.first_write_after(&mutation.key, req.start_version)?
+            {
+                errors.push(mvcc::write_conflict_error(
+                    &mutation.key,
+                    &req.primary_lock,
+                    req.start_version,
+                    commit_ts,
+                ));
+                continue;
+            }
+            if mutation.assertion_not_exist
+                && self
+                    .read_committed(&mutation.key, req.start_version)?
+                    .and_then(|(_, value)| value.value)
+                    .is_some()
+            {
+                errors.push(mvcc::already_exists_error(&mutation.key));
+            }
+        }
+        if !errors.is_empty() {
+            return Ok(kvpb::PrewriteResponse { errors });
+        }
+        let locks = req
+            .mutations
+            .iter()
+            .map(|mutation| {
+                let op =
+                    kvpb::mutation::Op::try_from(mutation.op).unwrap_or(kvpb::mutation::Op::Put);
+                let lock = mvcc::LockRecord {
+                    primary: req.primary_lock.clone(),
+                    start_version: req.start_version,
+                    ttl: req.lock_ttl,
+                    min_commit_ts: req.min_commit_ts,
+                    op,
+                    value: mutation.value.clone(),
+                    expires_at: mutation.expires_at,
+                };
+                encode_lock(&lock).map(|encoded| (mutation.key.clone(), encoded))
+            })
+            .collect::<mvcc::Result<Vec<_>>>()?;
+        self.atomic(|batch| {
+            for (key, encoded) in &locks {
+                batch.put(LOCK_TREE, key, encoded);
+            }
+        })?;
+        Ok(kvpb::PrewriteResponse::default())
+    }
+
+    fn commit(&self, req: &kvpb::CommitRequest) -> mvcc::Result<kvpb::CommitResponse> {
+        let _guard = self.lock()?;
+        let mut locks = Vec::new();
+        for key in &req.keys {
+            let Some(lock) = self.get_lock(key)? else {
+                continue;
+            };
+            if lock.start_version != req.start_version {
+                return Ok(kvpb::CommitResponse {
+                    error: Some(mvcc::locked_error(key, &lock)),
+                });
+            }
+            if req.commit_version < lock.min_commit_ts {
+                return Ok(kvpb::CommitResponse {
+                    error: Some(mvcc::commit_ts_expired_error(
+                        key,
+                        req.commit_version,
+                        lock.min_commit_ts,
+                    )),
+                });
+            }
+            locks.push((key.clone(), lock));
+        }
+        self.atomic(|batch| {
+            for (key, lock) in &locks {
+                let value = lock_value(lock);
+                apply_committed(batch, key, req.commit_version, &value);
+                batch.delete(LOCK_TREE, key);
+            }
+        })?;
+        Ok(kvpb::CommitResponse::default())
+    }
+
+    fn batch_rollback(
+        &self,
+        req: &kvpb::BatchRollbackRequest,
+    ) -> mvcc::Result<kvpb::BatchRollbackResponse> {
+        let _guard = self.lock()?;
+        let mut delete_locks = Vec::new();
+        for key in &req.keys {
+            if self.write_at(key, req.start_version)?.is_some() {
+                return Ok(kvpb::BatchRollbackResponse {
+                    error: Some(kvpb::KeyError {
+                        abort: "committed transaction cannot be rolled back".to_owned(),
+                        ..Default::default()
+                    }),
+                });
+            }
+            if self
+                .get_lock(key)?
+                .is_some_and(|lock| lock.start_version == req.start_version)
+            {
+                delete_locks.push(key.clone());
+            }
+        }
+        self.atomic(|batch| {
+            for key in &delete_locks {
+                batch.delete(LOCK_TREE, key);
+            }
+            for key in &req.keys {
+                batch.put(
+                    REGION_META_TREE,
+                    &rollback_key(key, req.start_version),
+                    b"1",
+                );
+            }
+        })?;
+        Ok(kvpb::BatchRollbackResponse::default())
+    }
+
+    fn resolve_lock(
+        &self,
+        req: &kvpb::ResolveLockRequest,
+    ) -> mvcc::Result<kvpb::ResolveLockResponse> {
+        let _guard = self.lock()?;
+        let keys = if req.keys.is_empty() {
+            self.scan_locks_by_start(req.start_version)?
+        } else {
+            req.keys.clone()
+        };
+        let mut locks = Vec::new();
+        for key in keys {
+            let Some(lock) = self.get_lock(&key)? else {
+                continue;
+            };
+            if lock.start_version == req.start_version {
+                locks.push((key, lock));
+            }
+        }
+        let resolved = locks.len() as u64;
+        self.atomic(|batch| {
+            for (key, lock) in &locks {
+                if req.commit_version == 0 {
+                    batch.delete(LOCK_TREE, key);
+                    batch.put(
+                        REGION_META_TREE,
+                        &rollback_key(key, req.start_version),
+                        b"1",
+                    );
+                } else {
+                    let value = lock_value(lock);
+                    apply_committed(batch, key, req.commit_version, &value);
+                    batch.delete(LOCK_TREE, key);
+                }
+            }
+        })?;
+        Ok(kvpb::ResolveLockResponse {
+            resolved_locks: resolved,
+            ..Default::default()
+        })
+    }
+
+    fn check_txn_status(
+        &self,
+        req: &kvpb::CheckTxnStatusRequest,
+    ) -> mvcc::Result<kvpb::CheckTxnStatusResponse> {
+        let _guard = self.lock()?;
+        if let Some((commit_version, _)) =
+            self.first_write_at_or_after(&req.primary_key, req.lock_ts)?
+        {
+            return Ok(kvpb::CheckTxnStatusResponse {
+                commit_version,
+                action: kvpb::CheckTxnStatusAction::CheckTxnStatusNoAction as i32,
+                ..Default::default()
+            });
+        }
+        if let Some(lock) = self.get_lock(&req.primary_key)? {
+            if lock.start_version == req.lock_ts {
+                return Ok(kvpb::CheckTxnStatusResponse {
+                    lock_ttl: lock.ttl,
+                    action: kvpb::CheckTxnStatusAction::CheckTxnStatusNoAction as i32,
+                    ..Default::default()
+                });
+            }
+        }
+        if req.rollback_if_not_exist {
+            self.atomic(|batch| {
+                batch.put(
+                    REGION_META_TREE,
+                    &rollback_key(&req.primary_key, req.lock_ts),
+                    b"1",
+                );
+            })?;
+            return Ok(kvpb::CheckTxnStatusResponse {
+                action: kvpb::CheckTxnStatusAction::CheckTxnStatusLockNotExistRollback as i32,
+                ..Default::default()
+            });
+        }
+        Ok(kvpb::CheckTxnStatusResponse::default())
+    }
+
+    fn txn_heartbeat(
+        &self,
+        req: &kvpb::TxnHeartBeatRequest,
+    ) -> mvcc::Result<kvpb::TxnHeartBeatResponse> {
+        let _guard = self.lock()?;
+        let Some(mut lock) = self.get_lock(&req.primary_key)? else {
+            return Ok(kvpb::TxnHeartBeatResponse {
+                action: kvpb::TxnHeartBeatAction::TxnHeartBeatLockNotExistRollback as i32,
+                ..Default::default()
+            });
+        };
+        if lock.start_version != req.start_version {
+            return Ok(kvpb::TxnHeartBeatResponse {
+                error: Some(mvcc::locked_error(&req.primary_key, &lock)),
+                ..Default::default()
+            });
+        }
+        lock.ttl = lock.ttl.max(req.ttl_extension);
+        let encoded = encode_lock(&lock)?;
+        self.atomic(|batch| {
+            batch.put(LOCK_TREE, &req.primary_key, &encoded);
+        })?;
+        Ok(kvpb::TxnHeartBeatResponse {
+            lock_ttl: lock.ttl,
+            action: kvpb::TxnHeartBeatAction::TxnHeartBeatTtlExtended as i32,
+            ..Default::default()
+        })
+    }
+
+    fn try_atomic_mutate(
+        &self,
+        req: &kvpb::TryAtomicMutateRequest,
+    ) -> mvcc::Result<kvpb::TryAtomicMutateResponse> {
+        let _guard = self.lock()?;
+        for predicate in &req.predicates {
+            if let Some(lock) = self.get_lock(&predicate.key)? {
+                if lock.start_version <= predicate.read_version {
+                    return Ok(kvpb::TryAtomicMutateResponse {
+                        error: Some(mvcc::locked_error(&predicate.key, &lock)),
+                        ..Default::default()
+                    });
+                }
+            }
+            let observed = self
+                .read_committed(&predicate.key, predicate.read_version)?
+                .and_then(|(_, value)| value.value);
+            if !mvcc::predicate_matches(predicate, observed.as_deref()) {
+                return Ok(kvpb::TryAtomicMutateResponse {
+                    error: Some(mvcc::predicate_error(predicate)),
+                    ..Default::default()
+                });
+            }
+        }
+        let values = req
+            .mutations
+            .iter()
+            .map(|mutation| (mutation.key.clone(), mutation_value(mutation)))
+            .collect::<Vec<_>>();
+        self.atomic(|batch| {
+            for (key, value) in &values {
+                apply_committed(batch, key, req.commit_version, value);
+            }
+        })?;
+        Ok(kvpb::TryAtomicMutateResponse {
+            applied_keys: req.mutations.len() as u64,
+            ..Default::default()
+        })
+    }
+
+    fn install_prepared(
+        &self,
+        req: &kvpb::InstallPreparedMvccEntriesRequest,
+    ) -> mvcc::Result<kvpb::InstallPreparedMvccEntriesResponse> {
+        let _guard = self.lock()?;
+        let mut applied = 0;
+        self.atomic(|batch| {
+            for entry in &req.entries {
+                match kvpb::prepared_mvcc_entry::ColumnFamily::try_from(entry.column_family)
+                    .unwrap_or(kvpb::prepared_mvcc_entry::ColumnFamily::Default)
+                {
+                    kvpb::prepared_mvcc_entry::ColumnFamily::Default
+                    | kvpb::prepared_mvcc_entry::ColumnFamily::Write => {
+                        let value = mvcc::VersionedValue {
+                            value: entry.has_value.then(|| entry.value.clone()),
+                            expires_at: entry.expires_at,
+                        };
+                        apply_committed(batch, &entry.key, entry.version, &value);
+                        applied += 1;
+                    }
+                    kvpb::prepared_mvcc_entry::ColumnFamily::Lock => {
+                        batch.delete(LOCK_TREE, &entry.key);
+                        applied += 1;
+                    }
+                }
+            }
+        })?;
+        Ok(kvpb::InstallPreparedMvccEntriesResponse {
+            applied_entries: applied,
+            commit_version: req.commit_version,
+            ..Default::default()
+        })
+    }
+
+    fn mvcc_maintenance(
+        &self,
+        req: &kvpb::MvccMaintenanceRequest,
+    ) -> mvcc::Result<kvpb::MvccMaintenanceResponse> {
+        let _guard = self.lock()?;
+        let mut applied = 0;
+        self.atomic(|batch| {
+            for tombstone in &req.tombstones {
+                match kvpb::internal_entry_tombstone::ColumnFamily::try_from(
+                    tombstone.column_family,
+                )
+                .unwrap_or(kvpb::internal_entry_tombstone::ColumnFamily::Default)
+                {
+                    kvpb::internal_entry_tombstone::ColumnFamily::Default
+                    | kvpb::internal_entry_tombstone::ColumnFamily::Write => {
+                        batch.delete(WRITE_TREE, &write_key(&tombstone.key, tombstone.version));
+                        applied += 1;
+                    }
+                }
+            }
+        })?;
+        Ok(kvpb::MvccMaintenanceResponse {
+            applied_entries: applied,
+            ..Default::default()
+        })
+    }
+}
+
+fn lock_value(lock: &mvcc::LockRecord) -> mvcc::VersionedValue {
+    let value = match lock.op {
+        kvpb::mutation::Op::Put | kvpb::mutation::Op::Lock => Some(lock.value.clone()),
+        kvpb::mutation::Op::Delete | kvpb::mutation::Op::Rollback => None,
+    };
+    mvcc::VersionedValue {
+        value,
+        expires_at: lock.expires_at,
+    }
+}
+
+fn mutation_value(mutation: &kvpb::Mutation) -> mvcc::VersionedValue {
+    let op = kvpb::mutation::Op::try_from(mutation.op).unwrap_or(kvpb::mutation::Op::Put);
+    let value = match op {
+        kvpb::mutation::Op::Put | kvpb::mutation::Op::Lock => Some(mutation.value.clone()),
+        kvpb::mutation::Op::Delete | kvpb::mutation::Op::Rollback => None,
+    };
+    mvcc::VersionedValue {
+        value,
+        expires_at: mutation.expires_at,
+    }
+}
+
+fn apply_committed(
+    batch: &mut holt::DBAtomicBatch,
+    key: &[u8],
+    commit_ts: u64,
+    value: &mvcc::VersionedValue,
+) {
+    let encoded = encode_value(value);
+    batch.put(WRITE_TREE, &write_key(key, commit_ts), &encoded);
+    if let Some(bytes) = &value.value {
+        batch.put(DATA_TREE, key, bytes);
+    } else {
+        batch.delete(DATA_TREE, key);
+    }
+}
+
+fn write_prefix(key: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(4 + key.len());
+    out.extend_from_slice(&(key.len() as u32).to_be_bytes());
+    out.extend_from_slice(key);
+    out
+}
+
+fn write_key(key: &[u8], commit_ts: u64) -> Vec<u8> {
+    let mut out = write_prefix(key);
+    out.extend_from_slice(&(u64::MAX - commit_ts).to_be_bytes());
+    out
+}
+
+fn decode_write_key(key: &[u8]) -> mvcc::Result<Option<(Vec<u8>, u64)>> {
+    if key.len() < 12 {
+        return Ok(None);
+    }
+    let user_len = u32::from_be_bytes(key[0..4].try_into().unwrap()) as usize;
+    if key.len() != 4 + user_len + 8 {
+        return Ok(None);
+    }
+    let user_key = key[4..4 + user_len].to_vec();
+    let inverted = u64::from_be_bytes(key[4 + user_len..].try_into().unwrap());
+    Ok(Some((user_key, u64::MAX - inverted)))
+}
+
+fn rollback_key(key: &[u8], start_ts: u64) -> Vec<u8> {
+    let mut out = b"rollback\0".to_vec();
+    out.extend_from_slice(&write_prefix(key));
+    out.extend_from_slice(&start_ts.to_be_bytes());
+    out
+}
+
+fn encode_value(value: &mvcc::VersionedValue) -> Vec<u8> {
+    let bytes = value.value.as_deref().unwrap_or_default();
+    let mut out = Vec::with_capacity(1 + 8 + 4 + bytes.len());
+    out.push(u8::from(value.value.is_some()));
+    out.extend_from_slice(&value.expires_at.to_be_bytes());
+    out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(bytes);
+    out
+}
+
+fn decode_value(bytes: &[u8]) -> mvcc::Result<mvcc::VersionedValue> {
+    if bytes.len() < 13 {
+        return Err(mvcc::Error::Decode("short mvcc value".to_owned()));
+    }
+    let has_value = bytes[0] != 0;
+    let expires_at = u64::from_be_bytes(bytes[1..9].try_into().unwrap());
+    let len = u32::from_be_bytes(bytes[9..13].try_into().unwrap()) as usize;
+    if bytes.len() != 13 + len {
+        return Err(mvcc::Error::Decode("invalid mvcc value length".to_owned()));
+    }
+    Ok(mvcc::VersionedValue {
+        value: has_value.then(|| bytes[13..].to_vec()),
+        expires_at,
+    })
+}
+
+fn encode_lock(lock: &mvcc::LockRecord) -> mvcc::Result<Vec<u8>> {
+    let mut out = Vec::with_capacity(4 + lock.primary.len() + 8 * 4 + 4 + 4 + lock.value.len());
+    out.extend_from_slice(&(lock.primary.len() as u32).to_be_bytes());
+    out.extend_from_slice(&lock.primary);
+    out.extend_from_slice(&lock.start_version.to_be_bytes());
+    out.extend_from_slice(&lock.ttl.to_be_bytes());
+    out.extend_from_slice(&lock.min_commit_ts.to_be_bytes());
+    out.extend_from_slice(&(lock.op as i32).to_be_bytes());
+    out.extend_from_slice(&lock.expires_at.to_be_bytes());
+    out.extend_from_slice(&(lock.value.len() as u32).to_be_bytes());
+    out.extend_from_slice(&lock.value);
+    Ok(out)
+}
+
+fn decode_lock(bytes: &[u8]) -> mvcc::Result<mvcc::LockRecord> {
+    let mut cursor = Cursor::new(bytes);
+    let primary = cursor.read_vec()?;
+    let start_version = cursor.read_u64()?;
+    let ttl = cursor.read_u64()?;
+    let min_commit_ts = cursor.read_u64()?;
+    let op_raw = cursor.read_i32()?;
+    let expires_at = cursor.read_u64()?;
+    let value = cursor.read_vec()?;
+    if !cursor.done() {
+        return Err(mvcc::Error::Decode("trailing lock bytes".to_owned()));
+    }
+    Ok(mvcc::LockRecord {
+        primary,
+        start_version,
+        ttl,
+        min_commit_ts,
+        op: kvpb::mutation::Op::try_from(op_raw).unwrap_or(kvpb::mutation::Op::Put),
+        value,
+        expires_at,
+    })
+}
+
+fn to_backend_error(err: impl std::fmt::Display) -> mvcc::Error {
+    mvcc::Error::Backend(err.to_string())
+}
+
+struct Cursor<'a> {
+    bytes: &'a [u8],
+    offset: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { bytes, offset: 0 }
+    }
+
+    fn read_vec(&mut self) -> mvcc::Result<Vec<u8>> {
+        let len = self.read_u32()? as usize;
+        if self.bytes.len().saturating_sub(self.offset) < len {
+            return Err(mvcc::Error::Decode("short vector field".to_owned()));
+        }
+        let out = self.bytes[self.offset..self.offset + len].to_vec();
+        self.offset += len;
+        Ok(out)
+    }
+
+    fn read_u32(&mut self) -> mvcc::Result<u32> {
+        if self.bytes.len().saturating_sub(self.offset) < 4 {
+            return Err(mvcc::Error::Decode("short u32 field".to_owned()));
+        }
+        let out = u32::from_be_bytes(self.bytes[self.offset..self.offset + 4].try_into().unwrap());
+        self.offset += 4;
+        Ok(out)
+    }
+
+    fn read_u64(&mut self) -> mvcc::Result<u64> {
+        if self.bytes.len().saturating_sub(self.offset) < 8 {
+            return Err(mvcc::Error::Decode("short u64 field".to_owned()));
+        }
+        let out = u64::from_be_bytes(self.bytes[self.offset..self.offset + 8].try_into().unwrap());
+        self.offset += 8;
+        Ok(out)
+    }
+
+    fn read_i32(&mut self) -> mvcc::Result<i32> {
+        if self.bytes.len().saturating_sub(self.offset) < 4 {
+            return Err(mvcc::Error::Decode("short i32 field".to_owned()));
+        }
+        let out = i32::from_be_bytes(self.bytes[self.offset..self.offset + 4].try_into().unwrap());
+        self.offset += 4;
+        Ok(out)
+    }
+
+    fn done(&self) -> bool {
+        self.offset == self.bytes.len()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mvcc::KvEngine;
+
+    #[test]
+    fn opens_required_multi_tree_layout() {
+        let store = HoltStore::open_memory().unwrap();
+        store.data().unwrap();
+        store.write().unwrap();
+        store.lock().unwrap();
+        store.region_meta().unwrap();
+        store.apply_state().unwrap();
+        store.watch_apply().unwrap();
+    }
+
+    #[test]
+    fn stores_data_tree_values() {
+        let store = HoltStore::open_memory().unwrap();
+        store.put_data(b"/workspace/a", b"meta").unwrap();
+        assert_eq!(store.get_data(b"/workspace/a").unwrap().unwrap(), b"meta");
+    }
+
+    #[test]
+    fn applies_cross_tree_atomic_batch() {
+        let store = HoltStore::open_memory().unwrap();
+        let applied = store
+            .atomic(|batch| {
+                batch.put(DATA_TREE, b"k", b"v");
+                batch.put(LOCK_TREE, b"k", b"lock");
+            })
+            .unwrap();
+        assert!(applied);
+        assert_eq!(store.data().unwrap().get(b"k").unwrap().unwrap(), b"v");
+        assert_eq!(store.lock().unwrap().get(b"k").unwrap().unwrap(), b"lock");
+    }
+
+    #[test]
+    fn holt_mvcc_prewrite_commit_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        {
+            let store = HoltMvccStore::open_file(dir.path()).unwrap();
+            store
+                .prewrite(&kvpb::PrewriteRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"k".to_vec(),
+                        value: b"v1".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    primary_lock: b"k".to_vec(),
+                    start_version: 10,
+                    lock_ttl: 30_000,
+                    ..Default::default()
+                })
+                .unwrap();
+            store
+                .commit(&kvpb::CommitRequest {
+                    keys: vec![b"k".to_vec()],
+                    start_version: 10,
+                    commit_version: 20,
+                })
+                .unwrap();
+            store.checkpoint().unwrap();
+        }
+        let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+        let current = reopened
+            .get(&kvpb::GetRequest {
+                key: b"k".to_vec(),
+                version: 20,
+            })
+            .unwrap();
+        assert_eq!(current.value, b"v1");
+    }
+
+    #[test]
+    fn holt_mvcc_atomic_predicate_rejects_existing_key() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let first = store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                predicates: vec![kvpb::AtomicPredicate {
+                    key: b"k".to_vec(),
+                    kind: kvpb::AtomicPredicateKind::NotExists as i32,
+                    read_version: 1,
+                    ..Default::default()
+                }],
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 2,
+            })
+            .unwrap();
+        assert_eq!(first.applied_keys, 1);
+
+        let second = store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                predicates: vec![kvpb::AtomicPredicate {
+                    key: b"k".to_vec(),
+                    kind: kvpb::AtomicPredicateKind::NotExists as i32,
+                    read_version: 2,
+                    ..Default::default()
+                }],
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v2".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 3,
+                commit_version: 4,
+            })
+            .unwrap();
+        assert!(second.error.unwrap().already_exists.is_some());
+    }
+}

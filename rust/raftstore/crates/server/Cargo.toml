@@ -1,0 +1,16 @@
+[package]
+name = "nokv-raftstore-server"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nokv-holtstore.workspace = true
+nokv-mvcc.workspace = true
+nokv-proto.workspace = true
+tokio.workspace = true
+tokio-stream.workspace = true
+tonic.workspace = true
+tracing.workspace = true

@@ -1,0 +1,16 @@
+[package]
+name = "nokv-proto"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+build = "build.rs"
+
+[dependencies]
+prost.workspace = true
+prost-types.workspace = true
+tonic.workspace = true
+
+[build-dependencies]
+tonic-build.workspace = true

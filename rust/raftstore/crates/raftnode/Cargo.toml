@@ -1,0 +1,11 @@
+[package]
+name = "nokv-raftnode"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+openraft.workspace = true
+thiserror.workspace = true

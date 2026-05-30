@@ -1,0 +1,38 @@
+[workspace]
+members = [
+    "crates/proto",
+    "crates/mvcc",
+    "crates/holtstore",
+    "crates/raftlog",
+    "crates/raftnode",
+    "crates/server",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.82"
+license = "Apache-2.0"
+authors = ["The NoKV Authors"]
+
+[workspace.dependencies]
+async-stream = "0.3"
+bytes = "1"
+crc32fast = "1.4"
+futures-core = "0.3"
+holt = { path = "../../third_party/holt", default-features = false }
+nokv-holtstore = { path = "crates/holtstore" }
+nokv-mvcc = { path = "crates/mvcc" }
+nokv-proto = { path = "crates/proto" }
+nokv-raftlog = { path = "crates/raftlog" }
+nokv-raftnode = { path = "crates/raftnode" }
+openraft = "0.9"
+prost = "0.13"
+prost-types = "0.13"
+tempfile = "3"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "sync"] }
+tokio-stream = "0.1"
+tonic = "0.12"
+tonic-build = "0.12"
+tracing = "0.1"

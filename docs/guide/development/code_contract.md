@@ -64,6 +64,7 @@ Package boundaries follow ownership of truth, not convenience.
 | `fsmeta/exec/` | Semantic execution, compiler, and holder logic over the `fsmeta/backend` contract. | Import protobuf, `raftstore`, `coordinator`, `meta/root`, or concrete backend packages. |
 | `fsmeta/runtime/` | Runtime adapters that bind fsmeta execution to storage backends. | Reinterpret compiler semantics without going through the compiler contract. |
 | `cmd/` | Binary assembly, flags, env, and config wiring. | Contain core protocol or storage logic. |
+| `rust/raftstore/` | Rust replacement track for raftstore's replicated data plane. It may generate Rust bindings from existing protobufs and depend on `third_party/holt` through Rust adapter crates. | Redesign Go protobuf wire contracts, import fsmeta semantic execution, implement Peras witness paths, or revive legacy migration/SST APIs. |
 | `pb/`, `*/wire/` | Proto definitions and conversion glue. | Leak protobuf structs into storage or semantic cores when a domain type exists. |
 | `utils/` | Domain-neutral helpers shared by multiple packages. | Import global error taxonomy or own storage, raft, fsmeta, coordinator, or root semantics. |
 | `third_party/holt/` | Pinned external Holt source checkout for the future Rust-backed storage adapter. | Be imported directly by Go runtime code or become a semantic storage contract. |
@@ -119,6 +120,10 @@ The current responsibility map is:
   concrete storage runtimes.
 - `fsmeta/runtime/*`: concrete runtime bindings from fsmeta execution to
   raftstore or other storage backends.
+- `rust/raftstore/*`: Rust data-plane replacement track for raftstore. It keeps
+  the existing Go protobuf wire contract, isolates OpenRaft behind a NoKV-owned
+  boundary, adapts Holt multi-tree storage behind Rust-only adapter crates, and
+  excludes experimental Peras witness plus legacy migration/SST paths from v1.
 - `experimental/peras/*`: Peras admission, visible-log, witness, segment, and
   recovery experiments.
 - `experimental/thermos/*`: optional Thermos hotspot/admission experiments.

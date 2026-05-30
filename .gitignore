@@ -45,3 +45,6 @@ third_party/*
 _apalache-out/
 
 coverage.out
+
+# Rust workspace build output
+target/
