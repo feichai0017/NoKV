@@ -122,6 +122,93 @@ func TestRustRaftstoreEndpointHoltApplyStatusSurvivesRestart(t *testing.T) {
 	require.Equal(t, []byte("v2"), got.GetValue())
 }
 
+func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T) {
+	addrs := map[uint64]string{
+		1: reserveLocalAddr(t),
+		2: reserveLocalAddr(t),
+		3: reserveLocalAddr(t),
+	}
+	startRustRaftstoreProcessAt(t, addrs[1], "", []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2] + ",3=" + addrs[3],
+	})
+	startRustRaftstoreProcessAt(t, addrs[2], "", []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+	})
+	startRustRaftstoreProcessAt(t, addrs[3], "", []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=3",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=3",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	admin, closeAdmin, err := adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
+
+	addPeer2, err := admin.AddPeer(ctx, &adminpb.AddPeerRequest{
+		RegionId: 1,
+		StoreId:  2,
+		PeerId:   2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), addPeer2.GetRegion().GetEpoch().GetConfVersion())
+	addPeer3, err := admin.AddPeer(ctx, &adminpb.AddPeerRequest{
+		RegionId: 1,
+		StoreId:  3,
+		PeerId:   3,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), addPeer3.GetRegion().GetEpoch().GetConfVersion())
+
+	meta := rustRaftstoreThreePeerRegion()
+	cli, err := New(Config{
+		RegionResolver: &mockRegionResolver{region: meta},
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addrs[1], State: coordpb.StoreState_STORE_STATE_UP},
+			{StoreID: 2, Addr: addrs[2], State: coordpb.StoreState_STORE_STATE_UP},
+			{StoreID: 3, Addr: addrs[3], State: coordpb.StoreState_STORE_STATE_UP},
+		},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 3},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+
+	handled, err := cli.TryAtomicMutate(ctx, []byte("agent/cluster"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("agent/cluster"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 90,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/cluster"),
+		Value: []byte("replicated"),
+	}}, 91, 92)
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	leaderStatus, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	require.True(t, leaderStatus.GetLeader())
+	for peerID := uint64(2); peerID <= 3; peerID++ {
+		peerAdmin, closePeerAdmin, err := adminclient.Dial(ctx, addrs[peerID])
+		require.NoError(t, err)
+		require.Eventually(t, func() bool {
+			status, err := peerAdmin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+			return err == nil && status.GetAppliedIndex() >= leaderStatus.GetAppliedIndex()
+		}, 5*time.Second, 100*time.Millisecond)
+		require.NoError(t, closePeerAdmin())
+	}
+}
+
 func TestRustRaftstoreEndpointClientTransactionSurface(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -343,6 +430,11 @@ func startRustRaftstoreEndpoint(t *testing.T, holt bool) string {
 func startRustRaftstoreProcess(t *testing.T, holtDir string) (string, func()) {
 	t.Helper()
 	addr := reserveLocalAddr(t)
+	return addr, startRustRaftstoreProcessAt(t, addr, holtDir, nil)
+}
+
+func startRustRaftstoreProcessAt(t *testing.T, addr, holtDir string, extraEnv []string) func() {
+	t.Helper()
 	root := findRepoRoot(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(
@@ -357,6 +449,7 @@ func startRustRaftstoreProcess(t *testing.T, holtDir string) (string, func()) {
 	)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "NOKV_RUST_RAFTSTORE_ADDR="+addr)
+	cmd.Env = append(cmd.Env, extraEnv...)
 	if holtDir != "" {
 		cmd.Env = append(cmd.Env, "NOKV_RUST_RAFTSTORE_HOLT_DIR="+holtDir)
 	}
@@ -378,7 +471,7 @@ func startRustRaftstoreProcess(t *testing.T, holtDir string) (string, func()) {
 	go logPipe(t, "raftstore-rs stdout", stdout)
 	go logPipe(t, "raftstore-rs stderr", stderr)
 	waitForTCP(t, addr, 15*time.Second)
-	return addr, stop
+	return stop
 }
 
 func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {
@@ -386,6 +479,18 @@ func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {
 		RegionId: 1,
 		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 1}},
+	}
+}
+
+func rustRaftstoreThreePeerRegion() *metapb.RegionDescriptor {
+	return &metapb.RegionDescriptor{
+		RegionId: 1,
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 3},
+		Peers: []*metapb.RegionPeer{
+			{StoreId: 1, PeerId: 1},
+			{StoreId: 2, PeerId: 2},
+			{StoreId: 3, PeerId: 3},
+		},
 	}
 }
 

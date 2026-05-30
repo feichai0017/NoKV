@@ -193,6 +193,12 @@ The first slices are intentionally narrow:
   through `fsmeta/runtime/raftstore.Runner` against a Rust StoreKV endpoint,
   proving the upper fsmeta semantic path can use the Rust data plane without
   changing fsmeta execution code.
+- The tagged Go raftstore client harness now starts three standalone Rust
+  server processes, uses the existing Go `RaftAdmin` client to add non-bootstrap
+  peers, writes through the existing Go `StoreKV` client, and verifies follower
+  apply progress through admin status. This covers the public wire contract for
+  multi-process AddPeer plus tonic replication rather than only Rust in-process
+  tests.
 
 Known gaps:
 
@@ -202,6 +208,8 @@ Known gaps:
   the `RaftNetwork` boundary, and the first tonic transport service/client can
   replicate between local servers. The standalone Rust server now mounts the
   transport beside StoreKV/RaftAdmin and has server-level replication coverage.
+  The Go tagged harness also covers three standalone Rust processes joining
+  through `RaftAdmin AddPeer` and then replicating a `StoreKV` write.
   Production route integration, coordinator-provided endpoint refresh/lifecycle,
   and remaining `RaftAdmin` RPC wiring are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
