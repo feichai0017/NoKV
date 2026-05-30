@@ -1800,7 +1800,7 @@ mod tests {
                 .block_pending_root_event(
                     sequence,
                     &event,
-                    "peer-change:42:add:9:2",
+                    "peer:42:add:7:9",
                     "catalog precondition",
                 )
                 .unwrap();
@@ -1813,7 +1813,7 @@ mod tests {
         assert_eq!(blocked.len(), 1);
         assert_eq!(blocked[0].sequence, 1);
         assert_eq!(blocked[0].event, event);
-        assert_eq!(blocked[0].transition_id, "peer-change:42:add:9:2");
+        assert_eq!(blocked[0].transition_id, "peer:42:add:7:9");
         assert_eq!(blocked[0].last_error, "catalog precondition");
         assert_eq!(reopened.enqueue_pending_root_event(&event).unwrap(), 2);
     }

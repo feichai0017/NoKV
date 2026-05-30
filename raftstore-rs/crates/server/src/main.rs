@@ -518,23 +518,41 @@ fn root_event_transition_id(event: &metapb::RootEvent) -> String {
             let action = match metapb::RootEventKind::try_from(event.kind)
                 .unwrap_or(metapb::RootEventKind::Unspecified)
             {
-                metapb::RootEventKind::PeerAdded => "add",
-                metapb::RootEventKind::PeerRemoved => "remove",
-                _ => "peer",
+                metapb::RootEventKind::PeerAdditionPlanned
+                | metapb::RootEventKind::PeerAdded
+                | metapb::RootEventKind::PeerAdditionCancelled => "add",
+                metapb::RootEventKind::PeerRemovalPlanned
+                | metapb::RootEventKind::PeerRemoved
+                | metapb::RootEventKind::PeerRemovalCancelled => "remove",
+                _ => "unknown",
             };
-            let conf_version = change
-                .target
-                .as_ref()
-                .and_then(|target| target.epoch.as_ref())
-                .map(|epoch| epoch.conf_version)
-                .unwrap_or_default();
             format!(
-                "peer-change:{}:{action}:{}:{conf_version}",
-                change.region_id, change.peer_id
+                "peer:{}:{action}:{}:{}",
+                change.region_id, change.store_id, change.peer_id
             )
+        }
+        Some(metapb::root_event::Payload::RangeSplit(split)) => {
+            format!(
+                "split:{}:{}",
+                split.parent_region_id,
+                lowercase_hex(&split.split_key)
+            )
+        }
+        Some(metapb::root_event::Payload::RangeMerge(merge)) => {
+            format!("merge:{}:{}", merge.left_region_id, merge.right_region_id)
         }
         _ => format!("root-event:{}", event.kind),
     }
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 fn spawn_pending_topology_retries(
@@ -1124,6 +1142,65 @@ mod tests {
             classify_root_event_publish_status(Status::invalid_argument("bad root event")),
             RootEventPublishError::Permanent(_)
         ));
+    }
+
+    #[test]
+    fn root_event_transition_id_matches_go_peer_shape() {
+        let event = metapb::RootEvent {
+            kind: metapb::RootEventKind::PeerAdditionPlanned as i32,
+            payload: Some(metapb::root_event::Payload::PeerChange(
+                metapb::RootPeerChange {
+                    region_id: 11,
+                    store_id: 2,
+                    peer_id: 201,
+                    ..Default::default()
+                },
+            )),
+        };
+        assert_eq!(root_event_transition_id(&event), "peer:11:add:2:201");
+
+        let event = metapb::RootEvent {
+            kind: metapb::RootEventKind::PeerRemovalCancelled as i32,
+            payload: Some(metapb::root_event::Payload::PeerChange(
+                metapb::RootPeerChange {
+                    region_id: 11,
+                    store_id: 2,
+                    peer_id: 201,
+                    ..Default::default()
+                },
+            )),
+        };
+        assert_eq!(root_event_transition_id(&event), "peer:11:remove:2:201");
+    }
+
+    #[test]
+    fn root_event_transition_id_matches_go_range_split_shape() {
+        let event = metapb::RootEvent {
+            kind: metapb::RootEventKind::RegionSplitPlanned as i32,
+            payload: Some(metapb::root_event::Payload::RangeSplit(
+                metapb::RootRangeSplit {
+                    parent_region_id: 7,
+                    split_key: vec![0x00, 0x0a, 0xff],
+                    ..Default::default()
+                },
+            )),
+        };
+        assert_eq!(root_event_transition_id(&event), "split:7:000aff");
+    }
+
+    #[test]
+    fn root_event_transition_id_matches_go_range_merge_shape() {
+        let event = metapb::RootEvent {
+            kind: metapb::RootEventKind::RegionMergePlanned as i32,
+            payload: Some(metapb::root_event::Payload::RangeMerge(
+                metapb::RootRangeMerge {
+                    left_region_id: 7,
+                    right_region_id: 8,
+                    ..Default::default()
+                },
+            )),
+        };
+        assert_eq!(root_event_transition_id(&event), "merge:7:8");
     }
 
     fn status_with_coordinator_reason(reason: &str) -> Status {

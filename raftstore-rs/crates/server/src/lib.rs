@@ -1452,7 +1452,7 @@ where
         self.execution.record_topology_applied(
             request.region_id,
             request.peer_id,
-            peer_change_transition_id("add", request.region_id, request.peer_id, &region),
+            peer_change_transition_id("add", request.region_id, request.store_id, request.peer_id),
             "peer change",
             publish.publish,
             publish.last_error,
@@ -1497,7 +1497,12 @@ where
         self.execution.record_topology_applied(
             request.region_id,
             request.peer_id,
-            peer_change_transition_id("remove", request.region_id, request.peer_id, &region),
+            peer_change_transition_id(
+                "remove",
+                request.region_id,
+                removed_store_id,
+                request.peer_id,
+            ),
             "peer change",
             publish.publish,
             publish.last_error,
@@ -1603,18 +1608,8 @@ where
     }
 }
 
-fn peer_change_transition_id(
-    action: &str,
-    region_id: u64,
-    peer_id: u64,
-    region: &metapb::RegionDescriptor,
-) -> String {
-    let conf_version = region
-        .epoch
-        .as_ref()
-        .map(|epoch| epoch.conf_version)
-        .unwrap_or_default();
-    format!("peer-change:{region_id}:{action}:{peer_id}:{conf_version}")
+fn peer_change_transition_id(action: &str, region_id: u64, store_id: u64, peer_id: u64) -> String {
+    format!("peer:{region_id}:{action}:{store_id}:{peer_id}")
 }
 
 pub async fn serve(addr: SocketAddr, mvcc: MvccStore) -> Result<(), tonic::transport::Error> {
@@ -3221,7 +3216,7 @@ mod tests {
             .block_pending_root_event(
                 blocked_sequence,
                 &event,
-                "peer-change:1:add:2:2",
+                "peer:1:add:2:2",
                 "catalog precondition",
             )
             .unwrap();
@@ -3251,7 +3246,7 @@ mod tests {
         assert_eq!(restart.blocked_root_event_count, 1);
         assert_eq!(restart.pending_scheduler_operation_count, 1);
         assert_eq!(execution.topology.len(), 1);
-        assert_eq!(execution.topology[0].transition_id, "peer-change:1:add:2:2");
+        assert_eq!(execution.topology[0].transition_id, "peer:1:add:2:2");
         assert_eq!(execution.topology[0].region_id, 1);
         assert_eq!(execution.topology[0].action, "peer change");
         assert_eq!(
