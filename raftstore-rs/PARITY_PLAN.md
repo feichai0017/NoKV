@@ -119,6 +119,8 @@ The first slices are intentionally narrow:
   repository protobufs, and derives target endpoints from OpenRaft
   `BasicNode.addr`. The testkit starts three tonic transport servers, elects a
   leader, commits a real `RaftCmdRequest`, and verifies all peers apply it.
+  The network factory also keeps a per-target tonic channel cache so normal
+  replication does not reconnect on every Raft RPC.
 - `OpenRaftRegion` exposes NoKV-owned voter-change helpers over OpenRaft
   learner and membership APIs. The in-process testkit covers adding a new voter,
   committing a real metadata KV command to the joined peer, restarting the
@@ -190,8 +192,8 @@ Known gaps:
   the `RaftNetwork` boundary, and the first tonic transport service/client can
   replicate between local servers. The standalone Rust server now mounts the
   transport beside StoreKV/RaftAdmin and has server-level replication coverage.
-  Production route integration, transport pooling, endpoint lifecycle, and
-  remaining `RaftAdmin` RPC wiring are still being built out.
+  Production route integration, endpoint refresh/lifecycle, and remaining
+  `RaftAdmin` RPC wiring are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   multi-node membership configuration and route integration are still being
   built out.

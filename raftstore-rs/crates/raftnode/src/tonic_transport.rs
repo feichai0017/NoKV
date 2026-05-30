@@ -9,6 +9,7 @@ use openraft::{
 };
 use prost::Message;
 use tonic::codegen::*;
+use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
 use crate::{
@@ -248,11 +249,21 @@ impl<T> tonic::server::NamedService for RaftTransportServer<T> {
 #[derive(Debug, Clone)]
 pub struct TonicRaftNetworkFactory {
     region_id: RegionId,
+    channels: Arc<Mutex<BTreeMap<NodeId, CachedRaftChannel>>>,
+}
+
+#[derive(Debug, Clone)]
+struct CachedRaftChannel {
+    endpoint: String,
+    channel: Channel,
 }
 
 impl TonicRaftNetworkFactory {
     pub fn new(region_id: RegionId) -> Self {
-        Self { region_id }
+        Self {
+            region_id,
+            channels: Arc::new(Mutex::new(BTreeMap::new())),
+        }
     }
 }
 
@@ -264,6 +275,7 @@ impl RaftNetworkFactory<RaftStoreConfig> for TonicRaftNetworkFactory {
             region_id: self.region_id,
             target,
             endpoint: node.addr.clone(),
+            channels: self.channels.clone(),
         }
     }
 }
@@ -272,6 +284,7 @@ pub struct TonicRaftNetwork {
     region_id: RegionId,
     target: NodeId,
     endpoint: String,
+    channels: Arc<Mutex<BTreeMap<NodeId, CachedRaftChannel>>>,
 }
 
 impl RaftNetwork<RaftStoreConfig> for TonicRaftNetwork {
@@ -329,18 +342,7 @@ impl TonicRaftNetwork {
         method: &'static str,
         payload: Vec<u8>,
     ) -> Result<RaftTransportResponse, TransportCallError> {
-        let endpoint = normalize_endpoint(&self.endpoint);
-        let channel = tonic::transport::Endpoint::from_shared(endpoint)
-            .map_err(|err| TransportCallError::InvalidEndpoint {
-                target: self.target,
-                detail: err.to_string(),
-            })?
-            .connect()
-            .await
-            .map_err(|source| TransportCallError::Transport {
-                target: self.target,
-                source,
-            })?;
+        let channel = self.channel().await?;
         let mut client = tonic::client::Grpc::new(channel);
         client
             .ready()
@@ -365,6 +367,45 @@ impl TonicRaftNetwork {
             .await
             .map_err(TransportCallError::Status)?;
         Ok(response.into_inner())
+    }
+
+    async fn channel(&self) -> Result<Channel, TransportCallError> {
+        let endpoint = normalize_endpoint(&self.endpoint);
+        if let Some(channel) = self.cached_channel(&endpoint)? {
+            return Ok(channel);
+        }
+        let channel = tonic::transport::Endpoint::from_shared(endpoint.clone())
+            .map_err(|err| TransportCallError::InvalidEndpoint {
+                target: self.target,
+                detail: err.to_string(),
+            })?
+            .connect()
+            .await
+            .map_err(|source| TransportCallError::Transport {
+                target: self.target,
+                source,
+            })?;
+        self.store_channel(endpoint, channel.clone())?;
+        Ok(channel)
+    }
+
+    fn cached_channel(&self, endpoint: &str) -> Result<Option<Channel>, TransportCallError> {
+        let channels = self
+            .channels
+            .lock()
+            .map_err(|_| TransportCallError::ChannelCachePoisoned)?;
+        Ok(channels
+            .get(&self.target)
+            .filter(|cached| cached.endpoint == endpoint)
+            .map(|cached| cached.channel.clone()))
+    }
+
+    fn store_channel(&self, endpoint: String, channel: Channel) -> Result<(), TransportCallError> {
+        self.channels
+            .lock()
+            .map_err(|_| TransportCallError::ChannelCachePoisoned)?
+            .insert(self.target, CachedRaftChannel { endpoint, channel });
+        Ok(())
     }
 }
 
@@ -439,6 +480,8 @@ enum TransportCallError {
     Status(tonic::Status),
     #[error("raft transport for node {target} not ready: {detail}")]
     ServiceNotReady { target: NodeId, detail: String },
+    #[error("raft transport channel cache poisoned")]
+    ChannelCachePoisoned,
 }
 
 #[cfg(test)]
