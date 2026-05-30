@@ -2145,6 +2145,18 @@ mod tests {
                 },
             }
         }
+
+        fn unhosted(region_id: u64, local_peer_id: u64) -> Self {
+            Self {
+                inner: nokv_raftnode::AppliedKvEngine::new(region_id, MvccStore::new()),
+                runtime: RaftRuntimeStatus {
+                    local_peer_id,
+                    leader_peer_id: 0,
+                    leader: false,
+                    hosted: false,
+                },
+            }
+        }
     }
 
     impl RaftCommandExecutor for FixedRuntimeEngine {
@@ -3022,6 +3034,7 @@ mod tests {
             start_key: b"a".to_vec(),
             end_key: b"m".to_vec(),
             leader: true,
+            hosted: true,
         };
         let service = StoreKvService::with_admission(
             nokv_raftnode::AppliedKvEngine::new(10, MvccStore::new()),
@@ -3923,6 +3936,64 @@ mod tests {
         assert_eq!(admission.peer_id, 2);
         assert_eq!(admission.detail, "not leader");
         assert!(admission.at_unix_nano > 0);
+    }
+
+    #[tokio::test]
+    async fn store_kv_admission_rejects_unhosted_runtime() {
+        let execution = ExecutionRuntime::default();
+        let admission = RegionAdmission {
+            store_id: 2,
+            peer_id: 2,
+            peers: BTreeMap::from([(2, 2)]),
+            leader_peer_id: 0,
+            leader: false,
+            ..Default::default()
+        };
+        let store_service = StoreKvService::with_admission_and_execution(
+            FixedRuntimeEngine::unhosted(1, 2),
+            admission.clone(),
+            execution.clone(),
+        );
+        let admin_service = RaftAdminService::with_admission_and_execution(
+            nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()),
+            admission.clone(),
+            execution,
+        );
+
+        let response = store_service
+            .prewrite(Request::new(kvpb::KvPrewriteRequest {
+                context: Some(context(&admission)),
+                request: Some(kvpb::PrewriteRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"k".to_vec(),
+                        value: b"v".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    primary_lock: b"k".to_vec(),
+                    start_version: 10,
+                    lock_ttl: 10,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(response.region_error.unwrap().region_not_found.is_some());
+
+        let execution_status = admin_service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        let admission = execution_status.last_admission.unwrap();
+        assert!(admission.observed);
+        assert_eq!(
+            admission.reason,
+            adminpb::ExecutionAdmissionReason::NotHosted as i32
+        );
+        assert!(!admission.accepted);
+        assert_eq!(admission.detail, "region not hosted");
     }
 
     fn reserve_loopback_addr() -> std::net::SocketAddr {

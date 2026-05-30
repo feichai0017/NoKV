@@ -26,6 +26,7 @@ pub struct RegionAdmission {
     pub start_key: Vec<u8>,
     pub end_key: Vec<u8>,
     pub leader: bool,
+    pub hosted: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -60,6 +61,7 @@ impl Default for RegionAdmission {
             start_key: Vec::new(),
             end_key: Vec::new(),
             leader: true,
+            hosted: true,
         }
     }
 }
@@ -98,6 +100,7 @@ impl RegionAdmission {
             start_key: descriptor.start_key.clone(),
             end_key: descriptor.end_key.clone(),
             leader,
+            hosted: leader,
         })
     }
 
@@ -111,6 +114,7 @@ impl RegionAdmission {
         }
         admission.leader = status.leader;
         admission.leader_peer_id = status.leader_peer_id;
+        admission.hosted = status.hosted;
         admission
     }
 
@@ -170,9 +174,6 @@ impl RegionAdmission {
         if !self.epoch_matches(context.region_epoch.as_ref()) {
             return Ok(Some(self.epoch_not_match()));
         }
-        if !self.leader {
-            return Ok(Some(self.non_leader_error(context, role)));
-        }
         for key in keys {
             if skip_empty_keys && key.is_empty() {
                 continue;
@@ -180,6 +181,12 @@ impl RegionAdmission {
             if key.is_empty() || !self.key_in_range(key) {
                 return Ok(Some(self.key_not_in_region(key)));
             }
+        }
+        if !self.hosted {
+            return Ok(Some(self.region_not_found(context.region_id)));
+        }
+        if !self.leader {
+            return Ok(Some(self.non_leader_error(context, role)));
         }
         Ok(None)
     }
@@ -369,5 +376,6 @@ mod tests {
         assert_eq!(admission.start_key, b"a".to_vec());
         assert_eq!(admission.end_key, b"z".to_vec());
         assert!(admission.leader);
+        assert!(admission.hosted);
     }
 }
