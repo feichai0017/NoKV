@@ -1150,6 +1150,12 @@ where
             )
             .await?;
         let region = self.admission.add_peer(request.peer_id, request.store_id)?;
+        self.execution.record_topology_applied(
+            request.region_id,
+            request.peer_id,
+            peer_change_transition_id("add", request.region_id, request.peer_id, &region),
+            "peer change",
+        );
         Ok(Response::new(adminpb::AddPeerResponse {
             region: Some(region),
         }))
@@ -1168,6 +1174,12 @@ where
         self.admission.validate_region(request.region_id)?;
         self.status.remove_voter(request.peer_id).await?;
         let region = self.admission.remove_peer(request.peer_id)?;
+        self.execution.record_topology_applied(
+            request.region_id,
+            request.peer_id,
+            peer_change_transition_id("remove", request.region_id, request.peer_id, &region),
+            "peer change",
+        );
         Ok(Response::new(adminpb::RemovePeerResponse {
             region: Some(region),
         }))
@@ -1239,9 +1251,24 @@ where
                 raft_group_count: if status.region_id == 0 { 0 } else { 1 },
                 ..Default::default()
             }),
+            topology: self.execution.topology_snapshot()?,
             ..Default::default()
         }))
     }
+}
+
+fn peer_change_transition_id(
+    action: &str,
+    region_id: u64,
+    peer_id: u64,
+    region: &metapb::RegionDescriptor,
+) -> String {
+    let conf_version = region
+        .epoch
+        .as_ref()
+        .map(|epoch| epoch.conf_version)
+        .unwrap_or_default();
+    format!("peer-change:{region_id}:{action}:{peer_id}:{conf_version}")
 }
 
 pub async fn serve(addr: SocketAddr, mvcc: MvccStore) -> Result<(), tonic::transport::Error> {
@@ -2630,6 +2657,25 @@ mod tests {
                 },
             ]
         );
+        let execution_after_add = service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            execution_after_add.last_admission.unwrap().class,
+            adminpb::ExecutionAdmissionClass::Topology as i32
+        );
+        assert_eq!(execution_after_add.topology.len(), 1);
+        assert_eq!(execution_after_add.topology[0].action, "peer change");
+        assert_eq!(
+            execution_after_add.topology[0].outcome,
+            adminpb::ExecutionTopologyOutcome::Applied as i32
+        );
+        assert_eq!(
+            execution_after_add.topology[0].publish,
+            adminpb::ExecutionPublishState::NotRequired as i32
+        );
 
         let leader_status = service
             .region_runtime_status(Request::new(adminpb::RegionRuntimeStatusRequest {
@@ -2754,6 +2800,21 @@ mod tests {
                 store_id: 1,
                 peer_id: 1
             }]
+        );
+        let execution_after_remove = service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            execution_after_remove.last_admission.unwrap().class,
+            adminpb::ExecutionAdmissionClass::Topology as i32
+        );
+        assert_eq!(execution_after_remove.topology.len(), 2);
+        assert_eq!(execution_after_remove.topology[1].action, "peer change");
+        assert_eq!(
+            execution_after_remove.topology[1].outcome,
+            adminpb::ExecutionTopologyOutcome::Applied as i32
         );
     }
 

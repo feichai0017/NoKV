@@ -9,6 +9,7 @@ use tonic::Status;
 #[derive(Debug, Clone, Default)]
 pub(crate) struct ExecutionRuntime {
     last_admission: Arc<Mutex<adminpb::ExecutionAdmissionStatus>>,
+    topology: Arc<Mutex<Vec<adminpb::ExecutionTopologyStatus>>>,
 }
 
 impl ExecutionRuntime {
@@ -35,6 +36,43 @@ impl ExecutionRuntime {
         };
         if let Ok(mut last) = self.last_admission.lock() {
             *last = status;
+        }
+    }
+
+    pub(crate) fn record_topology_applied(
+        &self,
+        region_id: u64,
+        peer_id: u64,
+        transition_id: impl Into<String>,
+        action: impl Into<String>,
+    ) {
+        let now = now_unix_nano();
+        if let Ok(mut last) = self.last_admission.lock() {
+            *last = adminpb::ExecutionAdmissionStatus {
+                observed: true,
+                class: adminpb::ExecutionAdmissionClass::Topology as i32,
+                reason: adminpb::ExecutionAdmissionReason::Accepted as i32,
+                accepted: true,
+                region_id,
+                peer_id,
+                detail: "peer change".to_owned(),
+                at_unix_nano: now,
+                ..Default::default()
+            };
+        }
+        if let Ok(mut topology) = self.topology.lock() {
+            topology.push(adminpb::ExecutionTopologyStatus {
+                transition_id: transition_id.into(),
+                region_id,
+                action: action.into(),
+                outcome: adminpb::ExecutionTopologyOutcome::Applied as i32,
+                publish: adminpb::ExecutionPublishState::NotRequired as i32,
+                updated_at_unix_nano: now,
+                ..Default::default()
+            });
+            if topology.len() > EXECUTION_TOPOLOGY_RETENTION {
+                topology.remove(0);
+            }
         }
     }
 
@@ -69,7 +107,18 @@ impl ExecutionRuntime {
             .map_err(|_| Status::internal("execution admission mutex poisoned"))
             .map(|status| status.clone())
     }
+
+    pub(crate) fn topology_snapshot(
+        &self,
+    ) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
+        self.topology
+            .lock()
+            .map_err(|_| Status::internal("execution topology mutex poisoned"))
+            .map(|topology| topology.clone())
+    }
 }
+
+const EXECUTION_TOPOLOGY_RETENTION: usize = 256;
 
 fn classify_admission(
     region_error: Option<&errorpb::RegionError>,

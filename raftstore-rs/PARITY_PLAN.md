@@ -141,6 +141,9 @@ The first slices are intentionally narrow:
   server-side peer endpoint catalog, and the standalone binary can load that
   catalog from `NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS`. This keeps real tonic
   membership changes from recording unreachable placeholder node addresses.
+  Successful Rust admin peer changes now also feed `ExecutionStatus.Topology`
+  with applied peer-change records and publish-not-required state, matching the
+  existing diagnostic contract when no root scheduler publication is involved.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`. Read-only commands stay read-only behind the

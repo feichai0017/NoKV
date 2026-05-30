@@ -218,6 +218,14 @@ func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T
 		{StoreId: 1, PeerId: 1},
 		{StoreId: 2, PeerId: 2},
 	}, removePeer3.GetRegion().GetPeers())
+	executionAfterRemove, err := admin.ExecutionStatus(ctx, &adminpb.ExecutionStatusRequest{})
+	require.NoError(t, err)
+	require.Equal(t, adminpb.ExecutionAdmissionClass_EXECUTION_ADMISSION_CLASS_TOPOLOGY, executionAfterRemove.GetLastAdmission().GetClass())
+	require.Equal(t, adminpb.ExecutionAdmissionReason_EXECUTION_ADMISSION_REASON_ACCEPTED, executionAfterRemove.GetLastAdmission().GetReason())
+	require.Len(t, executionAfterRemove.GetTopology(), 3)
+	require.Equal(t, "peer change", executionAfterRemove.GetTopology()[2].GetAction())
+	require.Equal(t, adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_APPLIED, executionAfterRemove.GetTopology()[2].GetOutcome())
+	require.Equal(t, adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_NOT_REQUIRED, executionAfterRemove.GetTopology()[2].GetPublish())
 
 	metaAfterRemove := rustRaftstoreTwoPeerRegion()
 	cliAfterRemove, err := New(Config{
