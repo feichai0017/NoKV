@@ -5,6 +5,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use nokv_proto::nokv::kv::v1 as kvpb;
 
@@ -22,6 +23,8 @@ pub type Result<T> = std::result::Result<T, Error>;
 
 #[derive(Debug, Clone)]
 pub struct VersionedValue {
+    pub kind: kvpb::mutation::Op,
+    pub start_version: u64,
     pub value: Option<Vec<u8>>,
     pub expires_at: u64,
 }
@@ -30,6 +33,7 @@ pub struct VersionedValue {
 pub struct LockRecord {
     pub primary: Vec<u8>,
     pub start_version: u64,
+    pub start_time: u64,
     pub ttl: u64,
     pub min_commit_ts: u64,
     pub op: kvpb::mutation::Op,
@@ -196,6 +200,7 @@ impl MvccStore {
                 LockRecord {
                     primary: req.primary_lock.clone(),
                     start_version: req.start_version,
+                    start_time: current_physical_time_millis(),
                     ttl: req.lock_ttl,
                     min_commit_ts: req.min_commit_ts,
                     op: kvpb::mutation::Op::try_from(mutation.op)
@@ -210,9 +215,31 @@ impl MvccStore {
 
     pub fn commit(&self, req: &kvpb::CommitRequest) -> Result<kvpb::CommitResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
+        if let Some(err) = validate_commit_version(req.start_version, req.commit_version) {
+            return Ok(kvpb::CommitResponse { error: Some(err) });
+        }
+        let mut locks = Vec::new();
         for key in &req.keys {
             let Some(lock) = inner.locks.get(key).cloned() else {
-                continue;
+                if let Some((_commit_version, value)) =
+                    write_by_start_version(&inner, key, req.start_version)
+                {
+                    if value.kind == kvpb::mutation::Op::Rollback {
+                        return Ok(kvpb::CommitResponse {
+                            error: Some(kvpb::KeyError {
+                                abort: "transaction already rolled back".to_owned(),
+                                ..Default::default()
+                            }),
+                        });
+                    }
+                    continue;
+                }
+                return Ok(kvpb::CommitResponse {
+                    error: Some(kvpb::KeyError {
+                        abort: "transaction lock not found".to_owned(),
+                        ..Default::default()
+                    }),
+                });
             };
             if lock.start_version != req.start_version {
                 return Ok(kvpb::CommitResponse {
@@ -228,7 +255,10 @@ impl MvccStore {
                     )),
                 });
             }
-            apply_lock(&mut inner, key, lock, req.commit_version);
+            locks.push((key.clone(), lock));
+        }
+        for (key, lock) in locks {
+            apply_lock(&mut inner, &key, lock, req.commit_version);
         }
         Ok(kvpb::CommitResponse::default())
     }
@@ -239,17 +269,8 @@ impl MvccStore {
     ) -> Result<kvpb::BatchRollbackResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         for key in &req.keys {
-            if inner
-                .writes
-                .get(key)
-                .is_some_and(|versions| versions.contains_key(&req.start_version))
-            {
-                return Ok(kvpb::BatchRollbackResponse {
-                    error: Some(kvpb::KeyError {
-                        abort: "committed transaction cannot be rolled back".to_owned(),
-                        ..Default::default()
-                    }),
-                });
+            if write_by_start_version(&inner, key, req.start_version).is_some() {
+                continue;
             }
             if inner
                 .locks
@@ -258,7 +279,7 @@ impl MvccStore {
             {
                 inner.locks.remove(key);
             }
-            inner.rollbacks.insert((key.clone(), req.start_version));
+            apply_rollback(&mut inner, key, req.start_version);
         }
         Ok(kvpb::BatchRollbackResponse::default())
     }
@@ -278,7 +299,15 @@ impl MvccStore {
         } else {
             req.keys.clone()
         };
-        let mut resolved = 0;
+        if req.commit_version != 0 {
+            if let Some(err) = validate_commit_version(req.start_version, req.commit_version) {
+                return Ok(kvpb::ResolveLockResponse {
+                    error: Some(err),
+                    ..Default::default()
+                });
+            }
+        }
+        let mut locks = Vec::new();
         for key in keys {
             let Some(lock) = inner.locks.get(&key).cloned() else {
                 continue;
@@ -286,13 +315,26 @@ impl MvccStore {
             if lock.start_version != req.start_version {
                 continue;
             }
+            if req.commit_version != 0 && req.commit_version < lock.min_commit_ts {
+                return Ok(kvpb::ResolveLockResponse {
+                    error: Some(commit_ts_expired_error(
+                        &key,
+                        req.commit_version,
+                        lock.min_commit_ts,
+                    )),
+                    ..Default::default()
+                });
+            }
+            locks.push((key, lock));
+        }
+        let resolved = locks.len() as u64;
+        for (key, lock) in locks {
             if req.commit_version == 0 {
                 inner.locks.remove(&key);
-                inner.rollbacks.insert((key, req.start_version));
+                apply_rollback(&mut inner, &key, req.start_version);
             } else {
                 apply_lock(&mut inner, &key, lock, req.commit_version);
             }
-            resolved += 1;
         }
         Ok(kvpb::ResolveLockResponse {
             resolved_locks: resolved,
@@ -305,30 +347,54 @@ impl MvccStore {
         req: &kvpb::CheckTxnStatusRequest,
     ) -> Result<kvpb::CheckTxnStatusResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
-        if let Some((commit_version, _)) = inner
-            .writes
-            .get(&req.primary_key)
-            .and_then(|versions| versions.range(req.lock_ts..).next())
-        {
-            return Ok(kvpb::CheckTxnStatusResponse {
-                commit_version: *commit_version,
-                action: kvpb::CheckTxnStatusAction::CheckTxnStatusNoAction as i32,
-                ..Default::default()
-            });
-        }
-        if let Some(lock) = inner.locks.get_mut(&req.primary_key) {
+        if let Some(lock) = inner.locks.get(&req.primary_key).cloned() {
             if lock.start_version == req.lock_ts {
+                if is_lock_expired(&lock, req.current_time) {
+                    inner.locks.remove(&req.primary_key);
+                    apply_rollback(&mut inner, &req.primary_key, req.lock_ts);
+                    return Ok(kvpb::CheckTxnStatusResponse {
+                        action: kvpb::CheckTxnStatusAction::CheckTxnStatusTtlExpireRollback as i32,
+                        ..Default::default()
+                    });
+                }
+                let mut action = kvpb::CheckTxnStatusAction::CheckTxnStatusNoAction;
+                let mut lock_ttl = lock.ttl;
+                if req.caller_start_ts > 0 && lock.min_commit_ts < req.caller_start_ts + 1 {
+                    if let Some(stored) = inner.locks.get_mut(&req.primary_key) {
+                        stored.min_commit_ts = req.caller_start_ts + 1;
+                        lock_ttl = stored.ttl;
+                    }
+                    action = kvpb::CheckTxnStatusAction::CheckTxnStatusMinCommitTsPushed;
+                }
                 return Ok(kvpb::CheckTxnStatusResponse {
-                    lock_ttl: lock.ttl,
-                    action: kvpb::CheckTxnStatusAction::CheckTxnStatusNoAction as i32,
+                    lock_ttl,
+                    action: action as i32,
+                    ..Default::default()
+                });
+            } else {
+                return Ok(kvpb::CheckTxnStatusResponse {
+                    error: Some(locked_error(&req.primary_key, &lock)),
                     ..Default::default()
                 });
             }
         }
+        if let Some((commit_version, value)) =
+            write_by_start_version(&inner, &req.primary_key, req.lock_ts)
+        {
+            if value.kind == kvpb::mutation::Op::Rollback {
+                return Ok(kvpb::CheckTxnStatusResponse {
+                    action: kvpb::CheckTxnStatusAction::CheckTxnStatusLockNotExistRollback as i32,
+                    ..Default::default()
+                });
+            }
+            return Ok(kvpb::CheckTxnStatusResponse {
+                commit_version,
+                action: kvpb::CheckTxnStatusAction::CheckTxnStatusNoAction as i32,
+                ..Default::default()
+            });
+        }
         if req.rollback_if_not_exist {
-            inner
-                .rollbacks
-                .insert((req.primary_key.clone(), req.lock_ts));
+            apply_rollback(&mut inner, &req.primary_key, req.lock_ts);
             return Ok(kvpb::CheckTxnStatusResponse {
                 action: kvpb::CheckTxnStatusAction::CheckTxnStatusLockNotExistRollback as i32,
                 ..Default::default()
@@ -342,7 +408,28 @@ impl MvccStore {
         req: &kvpb::TxnHeartBeatRequest,
     ) -> Result<kvpb::TxnHeartBeatResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
-        let Some(lock) = inner.locks.get_mut(&req.primary_key) else {
+        if req.ttl_extension == 0 || req.current_time == 0 {
+            return Ok(kvpb::TxnHeartBeatResponse {
+                error: Some(kvpb::KeyError {
+                    abort: "invalid txn heartbeat request".to_owned(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            });
+        }
+        let Some(lock) = inner.locks.get(&req.primary_key).cloned() else {
+            if let Some((commit_version, value)) =
+                write_by_start_version(&inner, &req.primary_key, req.start_version)
+            {
+                if value.kind != kvpb::mutation::Op::Rollback {
+                    return Ok(kvpb::TxnHeartBeatResponse {
+                        commit_version,
+                        action: kvpb::TxnHeartBeatAction::TxnHeartBeatNoAction as i32,
+                        ..Default::default()
+                    });
+                }
+            }
+            apply_rollback(&mut inner, &req.primary_key, req.start_version);
             return Ok(kvpb::TxnHeartBeatResponse {
                 action: kvpb::TxnHeartBeatAction::TxnHeartBeatLockNotExistRollback as i32,
                 ..Default::default()
@@ -350,14 +437,34 @@ impl MvccStore {
         };
         if lock.start_version != req.start_version {
             return Ok(kvpb::TxnHeartBeatResponse {
-                error: Some(locked_error(&req.primary_key, lock)),
+                error: Some(locked_error(&req.primary_key, &lock)),
                 ..Default::default()
             });
         }
-        lock.ttl = lock.ttl.max(req.ttl_extension);
+        if is_lock_expired(&lock, req.current_time) {
+            inner.locks.remove(&req.primary_key);
+            apply_rollback(&mut inner, &req.primary_key, req.start_version);
+            return Ok(kvpb::TxnHeartBeatResponse {
+                action: kvpb::TxnHeartBeatAction::TxnHeartBeatTtlExpireRollback as i32,
+                ..Default::default()
+            });
+        }
+        let desired_ttl = if req.current_time > lock.start_time {
+            req.current_time - lock.start_time + req.ttl_extension
+        } else {
+            req.ttl_extension
+        };
+        let mut action = kvpb::TxnHeartBeatAction::TxnHeartBeatNoAction;
+        let mut updated = lock.clone();
+        if desired_ttl > lock.ttl {
+            updated.ttl = desired_ttl;
+            inner.locks.insert(req.primary_key.clone(), updated.clone());
+            action = kvpb::TxnHeartBeatAction::TxnHeartBeatTtlExtended;
+        }
         Ok(kvpb::TxnHeartBeatResponse {
-            lock_ttl: lock.ttl,
-            action: kvpb::TxnHeartBeatAction::TxnHeartBeatTtlExtended as i32,
+            lock_ttl: updated.ttl,
+            lock_expire_time: lock_expire_time(&updated),
+            action: action as i32,
             ..Default::default()
         })
     }
@@ -385,7 +492,7 @@ impl MvccStore {
         }
         let applied = req.mutations.len() as u64;
         for mutation in &req.mutations {
-            apply_mutation(&mut inner, mutation, req.commit_version);
+            apply_mutation(&mut inner, mutation, req.start_version, req.commit_version);
         }
         Ok(kvpb::TryAtomicMutateResponse {
             applied_keys: applied,
@@ -408,6 +515,12 @@ impl MvccStore {
                     inner.writes.entry(entry.key.clone()).or_default().insert(
                         entry.version,
                         VersionedValue {
+                            kind: if entry.has_value {
+                                kvpb::mutation::Op::Put
+                            } else {
+                                kvpb::mutation::Op::Delete
+                            },
+                            start_version: entry.version,
                             value: entry.has_value.then(|| entry.value.clone()),
                             expires_at: entry.expires_at,
                         },
@@ -531,7 +644,45 @@ fn read_committed(inner: &Inner, key: &[u8], version: u64) -> Option<VersionedVa
         .writes
         .get(key)
         .and_then(|versions| versions.range(..=version).next_back())
-        .map(|(_, value)| value.clone())
+        .and_then(|(_, value)| {
+            if value.kind == kvpb::mutation::Op::Lock || value.kind == kvpb::mutation::Op::Rollback
+            {
+                return versions_before(inner, key, version, value);
+            }
+            Some(value.clone())
+        })
+}
+
+fn versions_before(
+    inner: &Inner,
+    key: &[u8],
+    version: u64,
+    skipped: &VersionedValue,
+) -> Option<VersionedValue> {
+    inner.writes.get(key).and_then(|versions| {
+        versions.range(..=version).rev().find_map(|(_, value)| {
+            if std::ptr::eq(value, skipped) {
+                return None;
+            }
+            if value.kind == kvpb::mutation::Op::Lock || value.kind == kvpb::mutation::Op::Rollback
+            {
+                return None;
+            }
+            Some(value.clone())
+        })
+    })
+}
+
+fn write_by_start_version(
+    inner: &Inner,
+    key: &[u8],
+    start_version: u64,
+) -> Option<(u64, VersionedValue)> {
+    inner.writes.get(key).and_then(|versions| {
+        versions.iter().find_map(|(commit_version, value)| {
+            (value.start_version == start_version).then(|| (*commit_version, value.clone()))
+        })
+    })
 }
 
 fn apply_lock(inner: &mut Inner, key: &[u8], lock: LockRecord, commit_version: u64) {
@@ -542,11 +693,16 @@ fn apply_lock(inner: &mut Inner, key: &[u8], lock: LockRecord, commit_version: u
         expires_at: lock.expires_at,
         ..Default::default()
     };
-    apply_mutation(inner, &mutation, commit_version);
+    apply_mutation(inner, &mutation, lock.start_version, commit_version);
     inner.locks.remove(key);
 }
 
-fn apply_mutation(inner: &mut Inner, mutation: &kvpb::Mutation, commit_version: u64) {
+fn apply_mutation(
+    inner: &mut Inner,
+    mutation: &kvpb::Mutation,
+    start_version: u64,
+    commit_version: u64,
+) {
     let op = kvpb::mutation::Op::try_from(mutation.op).unwrap_or(kvpb::mutation::Op::Put);
     let value = match op {
         kvpb::mutation::Op::Put | kvpb::mutation::Op::Lock => Some(mutation.value.clone()),
@@ -559,10 +715,54 @@ fn apply_mutation(inner: &mut Inner, mutation: &kvpb::Mutation, commit_version: 
         .insert(
             commit_version,
             VersionedValue {
+                kind: op,
+                start_version,
                 value,
                 expires_at: mutation.expires_at,
             },
         );
+}
+
+fn apply_rollback(inner: &mut Inner, key: &[u8], start_version: u64) {
+    inner.writes.entry(key.to_vec()).or_default().insert(
+        start_version,
+        VersionedValue {
+            kind: kvpb::mutation::Op::Rollback,
+            start_version,
+            value: None,
+            expires_at: 0,
+        },
+    );
+    inner.rollbacks.insert((key.to_vec(), start_version));
+}
+
+fn current_physical_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis() as u64
+}
+
+fn is_lock_expired(lock: &LockRecord, current_time: u64) -> bool {
+    lock.ttl != 0
+        && lock.start_time != 0
+        && current_time != 0
+        && current_time >= lock.start_time
+        && current_time - lock.start_time >= lock.ttl
+}
+
+fn lock_expire_time(lock: &LockRecord) -> u64 {
+    if lock.start_time == 0 || lock.ttl == 0 {
+        return 0;
+    }
+    lock.start_time.saturating_add(lock.ttl)
+}
+
+fn validate_commit_version(start_version: u64, commit_version: u64) -> Option<kvpb::KeyError> {
+    (commit_version <= start_version).then(|| kvpb::KeyError {
+        abort: "commit version must be greater than start version".to_owned(),
+        ..Default::default()
+    })
 }
 
 pub fn predicate_matches(predicate: &kvpb::AtomicPredicate, observed: Option<&[u8]>) -> bool {
@@ -727,5 +927,130 @@ mod tests {
             })
             .unwrap();
         assert!(second.error.unwrap().already_exists.is_some());
+    }
+
+    #[test]
+    fn rollback_marker_does_not_hide_older_visible_put() {
+        let store = MvccStore::new();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .batch_rollback(&kvpb::BatchRollbackRequest {
+                keys: vec![b"k".to_vec()],
+                start_version: 20,
+            })
+            .unwrap();
+
+        let current = store
+            .get(&kvpb::GetRequest {
+                key: b"k".to_vec(),
+                version: 20,
+            })
+            .unwrap();
+        assert!(!current.not_found);
+        assert_eq!(current.value, b"v1");
+    }
+
+    #[test]
+    fn commit_after_rollback_is_rejected() {
+        let store = MvccStore::new();
+        store
+            .batch_rollback(&kvpb::BatchRollbackRequest {
+                keys: vec![b"k".to_vec()],
+                start_version: 10,
+            })
+            .unwrap();
+
+        let committed = store
+            .commit(&kvpb::CommitRequest {
+                keys: vec![b"k".to_vec()],
+                start_version: 10,
+                commit_version: 20,
+            })
+            .unwrap();
+        assert!(committed.error.unwrap().abort.contains("rolled back"));
+    }
+
+    #[test]
+    fn check_txn_status_ttl_expire_rolls_back_primary() {
+        let store = MvccStore::new();
+        store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: b"k".to_vec(),
+                start_version: 10,
+                lock_ttl: 1,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let status = store
+            .check_txn_status(&kvpb::CheckTxnStatusRequest {
+                primary_key: b"k".to_vec(),
+                lock_ts: 10,
+                current_time: u64::MAX,
+                rollback_if_not_exist: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(
+            status.action,
+            kvpb::CheckTxnStatusAction::CheckTxnStatusTtlExpireRollback as i32
+        );
+
+        let committed = store
+            .commit(&kvpb::CommitRequest {
+                keys: vec![b"k".to_vec()],
+                start_version: 10,
+                commit_version: 20,
+            })
+            .unwrap();
+        assert!(committed.error.unwrap().abort.contains("rolled back"));
+    }
+
+    #[test]
+    fn txn_heartbeat_extends_ttl_and_reports_expiry() {
+        let store = MvccStore::new();
+        store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: b"k".to_vec(),
+                start_version: 10,
+                lock_ttl: 10,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let heartbeat = store
+            .txn_heartbeat(&kvpb::TxnHeartBeatRequest {
+                primary_key: b"k".to_vec(),
+                start_version: 10,
+                ttl_extension: 100,
+                current_time: current_physical_time_millis(),
+            })
+            .unwrap();
+        assert!(heartbeat.lock_ttl >= 100);
+        assert!(heartbeat.lock_expire_time > 0);
     }
 }
