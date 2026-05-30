@@ -264,6 +264,112 @@ func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T
 	require.NoError(t, closePeer2Admin())
 }
 
+func TestRustRaftstoreEndpointHoltMembershipSurvivesRestart(t *testing.T) {
+	addrs := map[uint64]string{
+		1: reserveLocalAddr(t),
+		2: reserveLocalAddr(t),
+	}
+	dirs := map[uint64]string{
+		1: t.TempDir(),
+		2: t.TempDir(),
+	}
+	stop1 := startRustRaftstoreProcessAt(t, addrs[1], dirs[1], []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2],
+	})
+	stop2 := startRustRaftstoreProcessAt(t, addrs[2], dirs[2], []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	admin, closeAdmin, err := adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	addPeer2, err := admin.AddPeer(ctx, &adminpb.AddPeerRequest{
+		RegionId: 1,
+		StoreId:  2,
+		PeerId:   2,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), addPeer2.GetRegion().GetEpoch().GetConfVersion())
+
+	meta := rustRaftstoreTwoPeerRegionAtConf(2)
+	cli, err := newRustRaftstoreTwoPeerClient(addrs, meta)
+	require.NoError(t, err)
+	handled, err := cli.TryAtomicMutate(ctx, []byte("agent/before-restart"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("agent/before-restart"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 100,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/before-restart"),
+		Value: []byte("v1"),
+	}}, 101, 102)
+	require.NoError(t, err)
+	require.True(t, handled)
+	leaderStatus, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	waitForRustRaftstoreApply(t, ctx, addrs[2], leaderStatus.GetAppliedIndex())
+	require.NoError(t, cli.Close())
+	require.NoError(t, closeAdmin())
+	stop2()
+	stop1()
+
+	stop2 = startRustRaftstoreProcessAt(t, addrs[2], dirs[2], []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+	})
+	stop1 = startRustRaftstoreProcessAt(t, addrs[1], dirs[1], []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2],
+	})
+	_ = stop1
+	_ = stop2
+
+	admin, closeAdmin, err = adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
+	restartedStatus, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	require.True(t, restartedStatus.GetKnown())
+	require.Equal(t, uint64(2), restartedStatus.GetRegion().GetEpoch().GetConfVersion())
+	_, leaderAddr := waitForRustRaftstoreLeader(t, ctx, addrs)
+
+	cli, err = newRustRaftstoreTwoPeerClient(addrs, meta)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+	require.Eventually(t, func() bool {
+		var mutateErr error
+		handled, mutateErr = cli.TryAtomicMutate(ctx, []byte("agent/after-restart"), nil, []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   []byte("agent/after-restart"),
+			Value: []byte("v2"),
+		}}, 104, 105)
+		return mutateErr == nil && handled
+	}, 5*time.Second, 100*time.Millisecond)
+	got, err := cli.Get(ctx, []byte("agent/after-restart"), 105)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("v2"), got.GetValue())
+	leaderAdmin, closeLeaderAdmin, err := adminclient.Dial(ctx, leaderAddr)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closeLeaderAdmin()) }()
+	leaderStatus, err = leaderAdmin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	waitForRustRaftstoreApply(t, ctx, addrs[2], leaderStatus.GetAppliedIndex())
+}
+
 func TestRustRaftstoreEndpointClientTransactionSurface(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -550,14 +656,64 @@ func rustRaftstoreThreePeerRegion() *metapb.RegionDescriptor {
 }
 
 func rustRaftstoreTwoPeerRegion() *metapb.RegionDescriptor {
+	return rustRaftstoreTwoPeerRegionAtConf(4)
+}
+
+func rustRaftstoreTwoPeerRegionAtConf(confVersion uint64) *metapb.RegionDescriptor {
 	return &metapb.RegionDescriptor{
 		RegionId: 1,
-		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 4},
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: confVersion},
 		Peers: []*metapb.RegionPeer{
 			{StoreId: 1, PeerId: 1},
 			{StoreId: 2, PeerId: 2},
 		},
 	}
+}
+
+func newRustRaftstoreTwoPeerClient(addrs map[uint64]string, meta *metapb.RegionDescriptor) (*Client, error) {
+	return New(Config{
+		RegionResolver: &mockRegionResolver{region: meta},
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addrs[1], State: coordpb.StoreState_STORE_STATE_UP},
+			{StoreID: 2, Addr: addrs[2], State: coordpb.StoreState_STORE_STATE_UP},
+		},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 3},
+	})
+}
+
+func waitForRustRaftstoreApply(t *testing.T, ctx context.Context, addr string, appliedIndex uint64) {
+	t.Helper()
+	admin, closeAdmin, err := adminclient.Dial(ctx, addr)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closeAdmin()) }()
+	require.Eventually(t, func() bool {
+		status, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+		return err == nil && status.GetAppliedIndex() >= appliedIndex
+	}, 5*time.Second, 100*time.Millisecond)
+}
+
+func waitForRustRaftstoreLeader(t *testing.T, ctx context.Context, addrs map[uint64]string) (uint64, string) {
+	t.Helper()
+	var leaderPeerID uint64
+	var leaderAddr string
+	require.Eventually(t, func() bool {
+		for peerID, addr := range addrs {
+			admin, closeAdmin, err := adminclient.Dial(ctx, addr)
+			if err != nil {
+				continue
+			}
+			status, statusErr := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+			_ = closeAdmin()
+			if statusErr == nil && status.GetLeader() {
+				leaderPeerID = peerID
+				leaderAddr = addr
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 100*time.Millisecond)
+	return leaderPeerID, leaderAddr
 }
 
 func reserveLocalAddr(t *testing.T) string {

@@ -157,7 +157,8 @@ The first slices are intentionally narrow:
   factory and mounts the internal `RaftTransport` service beside StoreKV and
   RaftAdmin, so the process boundary can carry OpenRaft replication traffic
   without changing the public Go protobuf services. Holt mode keeps the
-  persistent apply-status sink behind the OpenRaft state machine. The binary
+  persistent apply-status sink behind the OpenRaft state machine and persists
+  updated region descriptors after successful admin peer changes. The binary
   also accepts explicit region/store/peer identity and a non-bootstrap startup
   mode, so additional processes can start as uninitialized joining peers and be
   added through the existing `RaftAdmin AddPeer` wire contract.
@@ -203,6 +204,11 @@ The first slices are intentionally narrow:
   through admin status. This covers the public wire contract for multi-process
   AddPeer/RemovePeer plus tonic replication rather than only Rust in-process
   tests.
+- A tagged Go Holt restart harness now starts two standalone Rust processes,
+  adds a non-bootstrap peer, writes through the existing Go client, restarts
+  both processes from their Holt and raftlog directories, verifies the persisted
+  region descriptor still exposes the two-peer epoch, and writes again after
+  the restarted quorum elects a leader.
 
 Known gaps:
 
@@ -231,8 +237,9 @@ Known gaps:
   `FailedPrecondition` until raftnode owns a full public transfer boundary.
 - Restart recovery now covers single-node Holt restart, write-after-restart,
   durable vote/committed metadata, and an in-process multi-node restart after a
-  membership change. Production completeness still needs external-transport
-  bootstrap coverage.
+  membership change. The Go tagged harness also covers Holt-backed
+  multi-process restart after AddPeer. Production completeness still needs
+  coordinator-managed lifecycle coverage.
 - Snapshot catch-up has both state-machine snapshot coverage and an in-process
   OpenRaft peer catch-up test where a joining peer installs a snapshot after the
   leader purges covered logs. Holt-backed adapter coverage now restarts a

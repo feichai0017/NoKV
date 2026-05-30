@@ -11,7 +11,8 @@ use nokv_raftnode::{
     RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog, TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
-    apply_status_from_holt, HoltApplyStatusSink, PeerEndpointCatalog, RegionAdmission,
+    apply_status_from_holt, HoltApplyStatusSink, HoltRegionDescriptorSink, PeerEndpointCatalog,
+    RegionAdmission,
 };
 
 #[tokio::main]
@@ -38,13 +39,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 applied_index: 0,
             });
         let engine = AppliedKvEngine::with_status(apply_status, mvcc.clone());
-        let engine = PersistentAppliedKvEngine::new(engine, HoltApplyStatusSink::new(mvcc));
+        let engine = PersistentAppliedKvEngine::new(engine, HoltApplyStatusSink::new(mvcc.clone()));
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
-        nokv_raftstore_server::serve_with_openraft_region_admission_and_peer_endpoints(
+        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_and_descriptor_sink(
             addr,
             region,
             admission,
             peer_endpoints,
+            HoltRegionDescriptorSink::new(mvcc),
         )
         .await?;
     } else {

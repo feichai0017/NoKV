@@ -61,6 +61,40 @@ impl ApplyStatusSink for HoltApplyStatusSink {
     }
 }
 
+/// Persists region descriptors after Rust admin membership changes.
+#[derive(Clone)]
+pub struct HoltRegionDescriptorSink {
+    store: HoltMvccStore,
+}
+
+impl HoltRegionDescriptorSink {
+    pub fn new(store: HoltMvccStore) -> Self {
+        Self { store }
+    }
+}
+
+impl RegionDescriptorSink for HoltRegionDescriptorSink {
+    fn save_region_descriptor(&self, descriptor: &metapb::RegionDescriptor) -> Result<(), Status> {
+        self.store
+            .put_region_descriptor(descriptor)
+            .and_then(|_| self.store.checkpoint())
+            .map_err(|err| Status::internal(err.to_string()))
+    }
+}
+
+pub trait RegionDescriptorSink: Clone + Send + Sync + 'static {
+    fn save_region_descriptor(&self, descriptor: &metapb::RegionDescriptor) -> Result<(), Status>;
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EmptyRegionDescriptorSink;
+
+impl RegionDescriptorSink for EmptyRegionDescriptorSink {
+    fn save_region_descriptor(&self, _descriptor: &metapb::RegionDescriptor) -> Result<(), Status> {
+        Ok(())
+    }
+}
+
 pub fn apply_status_from_holt(state: RegionApplyState) -> nokv_raftnode::ApplyStatus {
     nokv_raftnode::ApplyStatus {
         region_id: state.region_id,
@@ -850,14 +884,15 @@ where
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct RaftAdminService<S = EmptyApplyStatus> {
+pub struct RaftAdminService<S = EmptyApplyStatus, D = EmptyRegionDescriptorSink> {
     status: S,
     admission: RegionAdmissionState,
     peer_endpoints: PeerEndpointCatalog,
     execution: ExecutionRuntime,
+    descriptor_sink: D,
 }
 
-impl<S> RaftAdminService<S> {
+impl<S> RaftAdminService<S, EmptyRegionDescriptorSink> {
     pub fn new(status: S) -> Self {
         Self::with_admission(status, RegionAdmission::default())
     }
@@ -890,18 +925,40 @@ impl<S> RaftAdminService<S> {
             PeerEndpointCatalog::default(),
         )
     }
+}
 
+impl<S, D> RaftAdminService<S, D>
+where
+    D: RegionDescriptorSink,
+{
     fn with_admission_state_execution_and_peer_endpoints(
         status: S,
         admission: RegionAdmissionState,
         execution: ExecutionRuntime,
         peer_endpoints: PeerEndpointCatalog,
+    ) -> RaftAdminService<S, EmptyRegionDescriptorSink> {
+        RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
+            status,
+            admission,
+            execution,
+            peer_endpoints,
+            EmptyRegionDescriptorSink,
+        )
+    }
+
+    fn with_admission_state_execution_peer_endpoints_and_descriptor_sink(
+        status: S,
+        admission: RegionAdmissionState,
+        execution: ExecutionRuntime,
+        peer_endpoints: PeerEndpointCatalog,
+        descriptor_sink: D,
     ) -> Self {
         Self {
             status,
             admission,
             peer_endpoints,
             execution,
+            descriptor_sink,
         }
     }
 }
@@ -1127,9 +1184,10 @@ impl ApplyStatusProvider for EmptyApplyStatus {
 }
 
 #[tonic::async_trait]
-impl<S> adminpb::raft_admin_server::RaftAdmin for RaftAdminService<S>
+impl<S, D> adminpb::raft_admin_server::RaftAdmin for RaftAdminService<S, D>
 where
     S: RaftRuntimeStatusProvider + RaftMembershipAdmin,
+    D: RegionDescriptorSink,
 {
     async fn add_peer(
         &self,
@@ -1150,6 +1208,7 @@ where
             )
             .await?;
         let region = self.admission.add_peer(request.peer_id, request.store_id)?;
+        self.descriptor_sink.save_region_descriptor(&region)?;
         self.execution.record_topology_applied(
             request.region_id,
             request.peer_id,
@@ -1174,6 +1233,7 @@ where
         self.admission.validate_region(request.region_id)?;
         self.status.remove_voter(request.peer_id).await?;
         let region = self.admission.remove_peer(request.peer_id)?;
+        self.descriptor_sink.save_region_descriptor(&region)?;
         self.execution.record_topology_applied(
             request.region_id,
             request.peer_id,
@@ -1354,6 +1414,27 @@ pub async fn serve_with_openraft_region_admission_and_peer_endpoints<E>(
 where
     E: RegionSnapshotEngine + RaftCommandExecutor,
 {
+    serve_with_openraft_region_admission_peer_endpoints_and_descriptor_sink(
+        addr,
+        region,
+        admission,
+        peer_endpoints,
+        EmptyRegionDescriptorSink,
+    )
+    .await
+}
+
+pub async fn serve_with_openraft_region_admission_peer_endpoints_and_descriptor_sink<E, D>(
+    addr: SocketAddr,
+    region: nokv_raftnode::OpenRaftRegion<E>,
+    admission: RegionAdmission,
+    peer_endpoints: PeerEndpointCatalog,
+    descriptor_sink: D,
+) -> Result<(), tonic::transport::Error>
+where
+    E: RegionSnapshotEngine + RaftCommandExecutor,
+    D: RegionDescriptorSink,
+{
     let execution = ExecutionRuntime::default();
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
     transport.register(admission.region_id, region.raft_handle());
@@ -1367,11 +1448,12 @@ where
             ),
         ))
         .add_service(RaftAdminServer::new(
-            RaftAdminService::with_admission_state_execution_and_peer_endpoints(
+            RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
                 region,
                 admission,
                 execution,
                 peer_endpoints,
+                descriptor_sink,
             ),
         ))
         .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
@@ -2619,12 +2701,16 @@ mod tests {
         };
         let peer_endpoints = PeerEndpointCatalog::new();
         peer_endpoints.insert_peer(2, "node-2").unwrap();
-        let service = RaftAdminService::with_admission_state_execution_and_peer_endpoints(
-            leader.clone(),
-            RegionAdmissionState::new(admission),
-            ExecutionRuntime::default(),
-            peer_endpoints,
-        );
+        let descriptor_dir = tempfile::tempdir().unwrap();
+        let descriptor_store = HoltMvccStore::open_file(descriptor_dir.path()).unwrap();
+        let service =
+            RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
+                leader.clone(),
+                RegionAdmissionState::new(admission),
+                ExecutionRuntime::default(),
+                peer_endpoints,
+                HoltRegionDescriptorSink::new(descriptor_store.clone()),
+            );
         let store_service = StoreKvService::with_admission_state_and_execution(
             leader.clone(),
             service.admission.clone(),
@@ -2656,6 +2742,16 @@ mod tests {
                     peer_id: 2
                 },
             ]
+        );
+        assert_eq!(
+            descriptor_store
+                .get_region_descriptor(7)
+                .unwrap()
+                .unwrap()
+                .epoch
+                .unwrap()
+                .conf_version,
+            2
         );
         let execution_after_add = service
             .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
@@ -2796,6 +2892,15 @@ mod tests {
         assert_eq!(remove.epoch.unwrap().conf_version, 3);
         assert_eq!(
             remove.peers,
+            vec![metapb::RegionPeer {
+                store_id: 1,
+                peer_id: 1
+            }]
+        );
+        let persisted_after_remove = descriptor_store.get_region_descriptor(7).unwrap().unwrap();
+        assert_eq!(persisted_after_remove.epoch.unwrap().conf_version, 3);
+        assert_eq!(
+            persisted_after_remove.peers,
             vec![metapb::RegionPeer {
                 store_id: 1,
                 peer_id: 1

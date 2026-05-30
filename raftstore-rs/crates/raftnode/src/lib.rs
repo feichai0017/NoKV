@@ -1069,10 +1069,16 @@ where
         members.insert(node_id, BasicNode::new(local_addr.into()));
         if region.initialize_members(members).await? {
             region.wait_for_leader(node_id).await?;
-        } else {
-            region.elect_and_wait(node_id).await?;
+            region.ensure_linearizable().await?;
+            return Ok(region);
         }
-        region.ensure_linearizable().await?;
+
+        let metrics = region.raft_handle().metrics().borrow().clone();
+        let voters = metrics.membership_config.voter_ids().collect::<Vec<_>>();
+        if voters.as_slice() == [node_id] {
+            region.elect_and_wait(node_id).await?;
+            region.ensure_linearizable().await?;
+        }
         Ok(region)
     }
 
@@ -1828,12 +1834,13 @@ mod tests {
 
         let restarted_registry = MemoryRaftNetworkRegistry::default();
         let restarted_leader_engine = AppliedKvEngine::with_status(leader_status, MvccStore::new());
-        let restarted_leader = OpenRaftRegion::open_with_network(
+        let restarted_leader = OpenRaftRegion::bootstrap_single_node_with_network(
             1,
             7,
             RegionLogStorage::new(SegmentedEntryLog::open(7, leader_dir.path()).unwrap()),
             RegionStateMachine::new(restarted_leader_engine.clone()),
             restarted_registry.factory(),
+            "node-1",
         )
         .await
         .unwrap();
