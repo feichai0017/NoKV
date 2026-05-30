@@ -244,6 +244,12 @@ The first slices are intentionally narrow:
   both processes from their Holt and raftlog directories, verifies the persisted
   region descriptor still exposes the two-peer epoch, and writes again after
   the restarted quorum elects a leader.
+- The Go CLI now exposes `nokv raft-admin add-peer`, `remove-peer`,
+  `transfer-leader`, and `region-status` over the existing `RaftAdmin` service.
+  The Docker image also packages `serve-rust-store.sh` and
+  `join-rust-raftstore-peers.sh` so one-region Rust parity runs can derive
+  identity, peer endpoints, and AddPeer calls from the normal NoKV config
+  instead of hand-written environment variables.
 
 Known gaps:
 
@@ -274,8 +280,9 @@ Known gaps:
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. When a coordinator endpoint is configured, startup
   publishes the store membership and bootstrap region descriptor needed for
-  coordinator-backed routing. Automatic process lifecycle wiring is still being
-  built out.
+  coordinator-backed routing. Config-driven one-region process launch and
+  AddPeer joining now have ops scripts; automatic multi-region process
+  lifecycle wiring is still being built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. The single-region service still bootstraps a default descriptor
@@ -305,9 +312,9 @@ Known gaps:
   before state-machine mutation in the current unit coverage.
 - Go fsmeta and raftstore client Rust-endpoint tests remain behind the
   `rust_raftstore` build tag until the Rust data plane is the default runtime.
-- The Docker image can carry the Rust server binary, but compose default
-  cutover is still pending coordinator-managed lifecycle wiring and benchmark
-  validation.
+- The Docker image can carry the Rust server binary and one-region Rust
+  launcher/join scripts, but compose default cutover is still pending
+  coordinator-managed multi-region lifecycle wiring and benchmark validation.
 - Rust follower reads are intentionally not served locally yet. The service
   preserves the Go client fallback shape for follower-prefer reads, but safe
   follower ReadIndex and bounded-stale serving still require the multi-node

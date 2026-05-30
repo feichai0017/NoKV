@@ -18,22 +18,38 @@ import (
 type fakeAdminClient struct {
 	executionResp *adminpb.ExecutionStatusResponse
 	executionErr  error
+	addReq        *adminpb.AddPeerRequest
+	addResp       *adminpb.AddPeerResponse
+	addErr        error
+	removeReq     *adminpb.RemovePeerRequest
+	removeResp    *adminpb.RemovePeerResponse
+	removeErr     error
+	transferReq   *adminpb.TransferLeaderRequest
+	transferResp  *adminpb.TransferLeaderResponse
+	transferErr   error
+	runtimeReq    *adminpb.RegionRuntimeStatusRequest
+	runtimeResp   *adminpb.RegionRuntimeStatusResponse
+	runtimeErr    error
 }
 
-func (f *fakeAdminClient) AddPeer(context.Context, *adminpb.AddPeerRequest) (*adminpb.AddPeerResponse, error) {
-	return nil, nil
+func (f *fakeAdminClient) AddPeer(_ context.Context, req *adminpb.AddPeerRequest) (*adminpb.AddPeerResponse, error) {
+	f.addReq = req
+	return f.addResp, f.addErr
 }
 
-func (f *fakeAdminClient) RemovePeer(context.Context, *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error) {
-	return nil, nil
+func (f *fakeAdminClient) RemovePeer(_ context.Context, req *adminpb.RemovePeerRequest) (*adminpb.RemovePeerResponse, error) {
+	f.removeReq = req
+	return f.removeResp, f.removeErr
 }
 
-func (f *fakeAdminClient) TransferLeader(context.Context, *adminpb.TransferLeaderRequest) (*adminpb.TransferLeaderResponse, error) {
-	return nil, nil
+func (f *fakeAdminClient) TransferLeader(_ context.Context, req *adminpb.TransferLeaderRequest) (*adminpb.TransferLeaderResponse, error) {
+	f.transferReq = req
+	return f.transferResp, f.transferErr
 }
 
-func (f *fakeAdminClient) RegionRuntimeStatus(context.Context, *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error) {
-	return nil, nil
+func (f *fakeAdminClient) RegionRuntimeStatus(_ context.Context, req *adminpb.RegionRuntimeStatusRequest) (*adminpb.RegionRuntimeStatusResponse, error) {
+	f.runtimeReq = req
+	return f.runtimeResp, f.runtimeErr
 }
 
 func (f *fakeAdminClient) ExecutionStatus(context.Context, *adminpb.ExecutionStatusRequest) (*adminpb.ExecutionStatusResponse, error) {

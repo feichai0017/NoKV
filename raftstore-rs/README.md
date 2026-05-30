@@ -25,6 +25,10 @@ The repository Docker image builds the same binary at
 `/usr/local/bin/nokv-raftstore-server`. Docker compose still starts the Go
 store path by default until the Rust data plane passes the compose fsmeta smoke
 and benchmark gates.
+The image also includes `serve-rust-store.sh` and
+`join-rust-raftstore-peers.sh` for one-region Rust parity runs; they translate
+NoKV config files into the current Rust environment variables and drive the
+existing `RaftAdmin AddPeer` wire contract through `nokv raft-admin`.
 
 Standalone multi-process tests can start a seed peer with the default bootstrap
 mode and start joining peers with explicit identity plus bootstrap disabled:
@@ -48,6 +52,26 @@ cargo run --manifest-path raftstore-rs/Cargo.toml -p nokv-raftstore-server
 `NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS` is only needed on nodes that accept
 `RaftAdmin AddPeer`; missing endpoints fail the membership RPC instead of
 recording an unreachable placeholder address.
+
+For config-driven local smoke runs, build the binaries and launch one process
+per store-region:
+
+```bash
+go build -o build/nokv ./cmd/nokv
+go build -o build/nokv-config ./cmd/nokv-config
+cargo build --manifest-path raftstore-rs/Cargo.toml -p nokv-raftstore-server
+PATH="$PWD/build:$PWD/raftstore-rs/target/debug:$PATH" \
+  scripts/ops/serve-rust-store.sh --config raft_config.example.json \
+  --region-id 1000 --store-id 1 --workdir artifacts/rust-store-1
+```
+
+After all peers for that region are serving, run:
+
+```bash
+PATH="$PWD/build:$PATH" \
+  scripts/ops/join-rust-raftstore-peers.sh --config raft_config.example.json \
+  --region-id 1000
+```
 
 When `NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR` is set, the server publishes its
 `StoreJoined` root event during startup. The bootstrap peer also publishes the

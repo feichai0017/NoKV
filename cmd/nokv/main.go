@@ -26,6 +26,8 @@ func main() {
 		err = runStatsCmd(os.Stdout, args)
 	case "execution":
 		err = runExecutionCmd(os.Stdout, args)
+	case "raft-admin":
+		err = runRaftAdminCmd(os.Stdout, args)
 	case "regions":
 		err = runRegionsCmd(os.Stdout, args)
 	case "serve":
@@ -58,6 +60,7 @@ func printUsage(w io.Writer) {
 	Commands:
 	  stats     Dump runtime backlog metrics (requires working directory or expvar endpoint)
 	  execution Query raftstore execution-plane diagnostics from admin RPC
+	  raft-admin Issue raftstore admin peer and region-status RPCs
 	  regions   Show the local peer catalog used for store recovery
 	  serve     Start StoreKV gRPC service backed by a local raftstore
 	  coordinator Start coordinator gRPC service (control plane)
