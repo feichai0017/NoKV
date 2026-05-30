@@ -14,11 +14,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_HOLT_DIR") {
         tracing::info!(%addr, %path, "starting rust raftstore server with Holt MVCC");
         let engine = AppliedKvEngine::new(1, HoltMvccStore::open_file(path)?);
-        nokv_raftstore_server::serve_with_engine(addr, engine).await?;
+        nokv_raftstore_server::serve_with_region_engine(addr, engine).await?;
     } else {
         tracing::info!(%addr, "starting rust raftstore compatibility server with in-memory MVCC");
         let engine = AppliedKvEngine::new(1, MvccStore::new());
-        nokv_raftstore_server::serve_with_engine(addr, engine).await?;
+        nokv_raftstore_server::serve_with_region_engine(addr, engine).await?;
     }
     Ok(())
 }

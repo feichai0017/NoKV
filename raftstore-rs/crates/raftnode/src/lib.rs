@@ -46,6 +46,10 @@ pub struct ApplyStatus {
     pub applied_index: u64,
 }
 
+pub trait ApplyStatusProvider: Clone + Send + Sync + 'static {
+    fn apply_status(&self) -> ApplyStatus;
+}
+
 #[derive(Debug)]
 struct AppliedKvInner<E> {
     region_id: RegionId,
@@ -80,6 +84,15 @@ impl<E> AppliedKvEngine<E> {
             term: self.inner.term,
             applied_index: self.inner.applied_index.load(Ordering::Acquire),
         }
+    }
+}
+
+impl<E> ApplyStatusProvider for AppliedKvEngine<E>
+where
+    E: Clone + Send + Sync + 'static,
+{
+    fn apply_status(&self) -> ApplyStatus {
+        self.status()
     }
 }
 

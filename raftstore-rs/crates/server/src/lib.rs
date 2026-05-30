@@ -9,6 +9,7 @@ use std::net::SocketAddr;
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
+use nokv_raftnode::ApplyStatusProvider;
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
@@ -184,10 +185,34 @@ where
 }
 
 #[derive(Debug, Clone, Default)]
-pub struct RaftAdminService;
+pub struct RaftAdminService<S = EmptyApplyStatus> {
+    status: S,
+}
+
+impl<S> RaftAdminService<S> {
+    pub fn new(status: S) -> Self {
+        Self { status }
+    }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct EmptyApplyStatus;
+
+impl ApplyStatusProvider for EmptyApplyStatus {
+    fn apply_status(&self) -> nokv_raftnode::ApplyStatus {
+        nokv_raftnode::ApplyStatus {
+            region_id: 0,
+            term: 0,
+            applied_index: 0,
+        }
+    }
+}
 
 #[tonic::async_trait]
-impl adminpb::raft_admin_server::RaftAdmin for RaftAdminService {
+impl<S> adminpb::raft_admin_server::RaftAdmin for RaftAdminService<S>
+where
+    S: ApplyStatusProvider,
+{
     async fn add_peer(
         &self,
         _request: Request<adminpb::AddPeerRequest>,
@@ -217,18 +242,45 @@ impl adminpb::raft_admin_server::RaftAdmin for RaftAdminService {
 
     async fn region_runtime_status(
         &self,
-        _request: Request<adminpb::RegionRuntimeStatusRequest>,
+        request: Request<adminpb::RegionRuntimeStatusRequest>,
     ) -> Result<Response<adminpb::RegionRuntimeStatusResponse>, Status> {
-        Ok(Response::new(
-            adminpb::RegionRuntimeStatusResponse::default(),
-        ))
+        let request = request.into_inner();
+        let status = self.status.apply_status();
+        if request.region_id != 0 && request.region_id != status.region_id {
+            return Ok(Response::new(
+                adminpb::RegionRuntimeStatusResponse::default(),
+            ));
+        }
+        Ok(Response::new(adminpb::RegionRuntimeStatusResponse {
+            known: status.region_id != 0,
+            hosted: status.region_id != 0,
+            local_peer_id: 1,
+            leader_peer_id: 1,
+            leader: status.region_id != 0,
+            region: None,
+            applied_index: status.applied_index,
+            applied_term: status.term,
+        }))
     }
 
     async fn execution_status(
         &self,
         _request: Request<adminpb::ExecutionStatusRequest>,
     ) -> Result<Response<adminpb::ExecutionStatusResponse>, Status> {
-        Ok(Response::new(adminpb::ExecutionStatusResponse::default()))
+        let status = self.status.apply_status();
+        Ok(Response::new(adminpb::ExecutionStatusResponse {
+            restart: Some(adminpb::ExecutionRestartStatus {
+                state: if status.region_id == 0 {
+                    adminpb::ExecutionRestartState::Degraded as i32
+                } else {
+                    adminpb::ExecutionRestartState::Ready as i32
+                },
+                region_count: if status.region_id == 0 { 0 } else { 1 },
+                raft_group_count: if status.region_id == 0 { 0 } else { 1 },
+                ..Default::default()
+            }),
+            ..Default::default()
+        }))
     }
 }
 
@@ -243,9 +295,19 @@ pub async fn serve_with_engine<E>(
 where
     E: KvEngine,
 {
+    serve_with_region_engine(addr, nokv_raftnode::AppliedKvEngine::new(1, engine)).await
+}
+
+pub async fn serve_with_region_engine<E>(
+    addr: SocketAddr,
+    engine: E,
+) -> Result<(), tonic::transport::Error>
+where
+    E: KvEngine + ApplyStatusProvider,
+{
     tonic::transport::Server::builder()
-        .add_service(StoreKvServer::new(StoreKvService::new(engine)))
-        .add_service(RaftAdminServer::new(RaftAdminService))
+        .add_service(StoreKvServer::new(StoreKvService::new(engine.clone())))
+        .add_service(RaftAdminServer::new(RaftAdminService::new(engine)))
         .serve(addr)
         .await
 }
@@ -307,7 +369,7 @@ mod tests {
 
     #[tokio::test]
     async fn admin_membership_is_explicitly_not_wired() {
-        let service = RaftAdminService;
+        let service = RaftAdminService::new(EmptyApplyStatus);
         let err = service
             .add_peer(Request::new(adminpb::AddPeerRequest {
                 region_id: 1,
@@ -317,5 +379,33 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn admin_runtime_status_reports_apply_index() {
+        let engine = nokv_raftnode::AppliedKvEngine::new(11, MvccStore::new());
+        engine
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                commit_version: 2,
+                ..Default::default()
+            })
+            .unwrap();
+        let service = RaftAdminService::new(engine);
+        let response = service
+            .region_runtime_status(Request::new(adminpb::RegionRuntimeStatusRequest {
+                region_id: 11,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(response.known);
+        assert_eq!(response.applied_index, 1);
+        assert_eq!(response.applied_term, 1);
     }
 }
