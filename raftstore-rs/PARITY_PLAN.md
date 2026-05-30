@@ -293,7 +293,10 @@ Known gaps:
   outcome with operation identifiers. Holt-backed Rust stores also retain those
   unsupported scheduler operations in a pending catalog keyed by the full
   operation identity, so different split keys or merge sources do not overwrite
-  each other. The pending count is surfaced through
+  each other. Scheduler operations that should be executable but currently fail
+  at the local admin boundary, such as a transient leader-transfer RPC failure,
+  are also persisted into the same pending catalog instead of being dropped
+  after one heartbeat attempt. The pending count is surfaced through
   `ExecutionStatus.Restart.PendingSchedulerOperationCount`, and each pending
   operation also appears in `ExecutionStatus.Topology` with a stable transition
   id. Rust store heartbeat now also matches the Go coordinator client policy:

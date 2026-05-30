@@ -672,41 +672,54 @@ async fn run_coordinator_heartbeat<E>(
         match send_store_heartbeat(&config.endpoints, request).await {
             Ok(operations) => {
                 for operation in operations {
-                    match execute_scheduler_operation(&admin_endpoint, &operation).await {
-                        Ok(SchedulerOperationOutcome::Applied) => {
-                            tracing::debug!("rust raftstore applied coordinator operation");
-                        }
-                        Ok(SchedulerOperationOutcome::Invalid { reason }) => {
-                            tracing::debug!(
-                                %reason,
-                                "rust raftstore ignored invalid coordinator operation"
-                            );
-                        }
-                        Ok(SchedulerOperationOutcome::Unsupported { kind, reason }) => {
-                            record_pending_scheduler_operation(root_events.as_ref(), &operation);
-                            tracing::warn!(
-                                ?kind,
-                                %reason,
-                                region_id = operation.region_id,
-                                source_peer_id = operation.source_peer_id,
-                                target_peer_id = operation.target_peer_id,
-                                source_region_id = operation.source_region_id,
-                                split_key_len = operation.split_key.len(),
-                                "rust raftstore received unsupported coordinator operation"
-                            );
-                        }
-                        Err(err) => {
-                            tracing::debug!(
-                                error = %err,
-                                "rust raftstore coordinator operation failed"
-                            );
-                        }
-                    }
+                    record_scheduler_operation_outcome(
+                        root_events.as_ref(),
+                        &operation,
+                        execute_scheduler_operation(&admin_endpoint, &operation).await,
+                    );
                 }
             }
             Err(err) => {
                 tracing::debug!(error = %err, "rust raftstore coordinator heartbeat failed");
             }
+        }
+    }
+}
+
+fn record_scheduler_operation_outcome(
+    store: Option<&HoltMvccStore>,
+    operation: &coordpb::SchedulerOperation,
+    outcome: Result<SchedulerOperationOutcome, tonic::Status>,
+) {
+    match outcome {
+        Ok(SchedulerOperationOutcome::Applied) => {
+            tracing::debug!("rust raftstore applied coordinator operation");
+        }
+        Ok(SchedulerOperationOutcome::Invalid { reason }) => {
+            tracing::debug!(
+                %reason,
+                "rust raftstore ignored invalid coordinator operation"
+            );
+        }
+        Ok(SchedulerOperationOutcome::Unsupported { kind, reason }) => {
+            record_pending_scheduler_operation(store, operation);
+            tracing::warn!(
+                ?kind,
+                %reason,
+                region_id = operation.region_id,
+                source_peer_id = operation.source_peer_id,
+                target_peer_id = operation.target_peer_id,
+                source_region_id = operation.source_region_id,
+                split_key_len = operation.split_key.len(),
+                "rust raftstore received unsupported coordinator operation"
+            );
+        }
+        Err(err) => {
+            record_pending_scheduler_operation(store, operation);
+            tracing::debug!(
+                error = %err,
+                "rust raftstore coordinator operation failed"
+            );
         }
     }
 }
@@ -1409,6 +1422,28 @@ mod tests {
         };
 
         record_pending_scheduler_operation(Some(&store), &operation);
+
+        let pending = store.pending_scheduler_operations().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].operation, operation);
+    }
+
+    #[test]
+    fn failed_scheduler_operation_records_pending_holt_diagnostic() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let operation = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
+            region_id: 7,
+            source_peer_id: 101,
+            target_peer_id: 202,
+            ..Default::default()
+        };
+
+        record_scheduler_operation_outcome(
+            Some(&store),
+            &operation,
+            Err(tonic::Status::unavailable("admin unavailable")),
+        );
 
         let pending = store.pending_scheduler_operations().unwrap();
         assert_eq!(pending.len(), 1);
