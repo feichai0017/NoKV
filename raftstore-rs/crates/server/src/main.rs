@@ -53,7 +53,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let engine =
             PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
-        spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone());
+        spawn_coordinator_heartbeat(
+            coordinator.clone(),
+            identity,
+            addr,
+            region.clone(),
+            Some(mvcc.clone()),
+        );
         spawn_pending_topology_retries(coordinator.clone(), mvcc.clone());
         let topology_publisher = coordinator_topology_publisher(coordinator, Some(mvcc.clone()));
         nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
@@ -72,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
         engine.set_region_descriptor(default_region_descriptor(identity))?;
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
-        spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone());
+        spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone(), None);
         nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
             addr,
             region,
@@ -571,6 +577,7 @@ fn spawn_coordinator_heartbeat<E>(
     identity: ServerIdentity,
     addr: SocketAddr,
     region: OpenRaftRegion<E>,
+    root_events: Option<HoltMvccStore>,
 ) where
     E: RegionSnapshotEngine + Send + Sync + 'static,
 {
@@ -578,7 +585,7 @@ fn spawn_coordinator_heartbeat<E>(
         return;
     };
     tokio::spawn(async move {
-        run_coordinator_heartbeat(config, identity, addr, region).await;
+        run_coordinator_heartbeat(config, identity, addr, region, root_events).await;
     });
 }
 
@@ -587,6 +594,7 @@ async fn run_coordinator_heartbeat<E>(
     identity: ServerIdentity,
     addr: SocketAddr,
     region: OpenRaftRegion<E>,
+    root_events: Option<HoltMvccStore>,
 ) where
     E: RegionSnapshotEngine + Send + Sync + 'static,
 {
@@ -594,7 +602,7 @@ async fn run_coordinator_heartbeat<E>(
     let admin_endpoint = local_admin_endpoint(addr);
     loop {
         ticker.tick().await;
-        let request = coordinator_heartbeat_request(identity, addr, &region);
+        let request = coordinator_heartbeat_request(identity, addr, &region, root_events.as_ref());
         match coordpb::coordinator_client::CoordinatorClient::connect(config.endpoint.clone()).await
         {
             Ok(mut client) => match client.store_heartbeat(request).await {
@@ -674,6 +682,7 @@ fn coordinator_heartbeat_request<E>(
     identity: ServerIdentity,
     addr: SocketAddr,
     region: &OpenRaftRegion<E>,
+    root_events: Option<&HoltMvccStore>,
 ) -> coordpb::StoreHeartbeatRequest
 where
     E: RegionSnapshotEngine,
@@ -687,6 +696,9 @@ where
         .unwrap_or_default();
     let known = status.region_id != 0;
     let leader = known && leader_peer_id == identity.peer_id;
+    let pending_admin = root_events
+        .map(root_event_catalog_has_unpublished_work)
+        .unwrap_or(false);
     coordpb::StoreHeartbeatRequest {
         store_id: identity.store_id,
         region_num: u64::from(known),
@@ -702,12 +714,25 @@ where
             .then(|| coordpb::RegionRuntimeStats {
                 region_id: status.region_id,
                 leader_store_id: if leader { identity.store_id } else { 0 },
+                pending_admin,
                 ..Default::default()
             })
             .into_iter()
             .collect(),
         ..Default::default()
     }
+}
+
+fn root_event_catalog_has_unpublished_work(store: &HoltMvccStore) -> bool {
+    let pending = store
+        .pending_root_events()
+        .map(|events| !events.is_empty())
+        .unwrap_or(true);
+    let blocked = store
+        .blocked_root_events()
+        .map(|events| !events.is_empty())
+        .unwrap_or(true);
+    pending || blocked
 }
 
 async fn open_openraft_region<E>(
@@ -1028,7 +1053,7 @@ mod tests {
         .await
         .unwrap();
 
-        let req = coordinator_heartbeat_request(identity, addr, &region);
+        let req = coordinator_heartbeat_request(identity, addr, &region, None);
 
         assert_eq!(req.store_id, 11);
         assert_eq!(req.region_num, 1);
@@ -1039,6 +1064,47 @@ mod tests {
         assert_eq!(req.region_stats.len(), 1);
         assert_eq!(req.region_stats[0].region_id, 7);
         assert_eq!(req.region_stats[0].leader_store_id, 11);
+        assert!(!req.region_stats[0].pending_admin);
+    }
+
+    #[tokio::test]
+    async fn coordinator_heartbeat_marks_pending_admin_for_unpublished_root_events() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+        let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .enqueue_pending_root_event(&metapb::RootEvent {
+                kind: metapb::RootEventKind::PeerAdded as i32,
+                payload: Some(metapb::root_event::Payload::PeerChange(
+                    metapb::RootPeerChange {
+                        region_id: identity.region_id,
+                        store_id: 12,
+                        peer_id: 102,
+                        target: Some(default_region_descriptor(identity)),
+                        ..Default::default()
+                    },
+                )),
+            })
+            .unwrap();
+        let region = open_openraft_region(
+            identity,
+            addr,
+            dir.path().to_path_buf(),
+            AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        )
+        .await
+        .unwrap();
+
+        let req = coordinator_heartbeat_request(identity, addr, &region, Some(&store));
+
+        assert_eq!(req.region_stats.len(), 1);
+        assert!(req.region_stats[0].pending_admin);
     }
 
     fn reserve_loopback_addr() -> SocketAddr {

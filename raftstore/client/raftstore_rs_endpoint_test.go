@@ -164,6 +164,7 @@ func TestRustRaftstoreEndpointReportsCoordinatorHeartbeat(t *testing.T) {
 	require.Len(t, heartbeat.GetRegionStats(), 1)
 	require.Equal(t, uint64(1), heartbeat.GetRegionStats()[0].GetRegionId())
 	require.Equal(t, uint64(11), heartbeat.GetRegionStats()[0].GetLeaderStoreId())
+	require.False(t, heartbeat.GetRegionStats()[0].GetPendingAdmin())
 }
 
 func TestRustRaftstoreEndpointRoutesThroughCoordinator(t *testing.T) {
