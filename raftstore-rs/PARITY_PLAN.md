@@ -242,6 +242,12 @@ The first slices are intentionally narrow:
   path: a Rust `RaftAdmin AddPeer` call publishes the updated region descriptor
   through the existing Go coordinator root-event service, and subsequent
   coordinator routing observes the new epoch and peer list.
+- The tagged Go coordinator harness now also covers coordinator-driven
+  scheduler execution for leader transfer: the Go coordinator test double
+  returns a `LeaderTransfer` operation in `StoreHeartbeat`, the Rust store
+  executes it through its local `RaftAdmin` boundary, peer 2 becomes leader,
+  and the existing Go `StoreKV` client continues writing through the updated
+  leader.
 - The tagged Go coordinator harness also covers the durable retry path: Rust
   persists a pending rooted peer-change event in Holt when the coordinator is
   initially unavailable, returns the successful data-plane membership change,
@@ -299,10 +305,12 @@ Known gaps:
   after one heartbeat attempt. The Rust pending topology retry loop now also
   replays pending scheduler operations through the local admin endpoint and
   removes them from Holt after an applied or permanently invalid result. The
-  pending count is surfaced through
-  `ExecutionStatus.Restart.PendingSchedulerOperationCount`, and each pending
-  operation also appears in `ExecutionStatus.Topology` with a stable transition
-  id. Rust store heartbeat now also matches the Go coordinator client policy:
+  Go tagged harness covers the successful coordinator-returned leader-transfer
+  operation across two standalone Rust processes. The pending count is surfaced
+  through `ExecutionStatus.Restart.PendingSchedulerOperationCount`, and each
+  pending operation also appears in `ExecutionStatus.Topology` with a stable
+  transition id. Rust store heartbeat now also matches the Go coordinator
+  client policy:
   it contacts every configured coordinator endpoint and prefers the first
   response that carries scheduler operations over an earlier successful
   no-operation response. Pending root events are also projected into
