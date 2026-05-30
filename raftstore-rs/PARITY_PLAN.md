@@ -98,12 +98,16 @@ The first slices are intentionally narrow:
   learner and membership APIs. The in-process testkit covers adding a new voter,
   committing a real metadata KV command to the joined peer, and removing that
   voter back out of the membership.
-- `RaftAdmin` now wires `AddPeer` and `RemovePeer` onto those
+- `RaftAdmin` now wires `AddPeer`, `RemovePeer`, and the currently safe
+  `TransferLeader` subset onto those
   `OpenRaftRegion` voter-change helpers and returns an updated protobuf region
   descriptor from the service-local topology. Non-OpenRaft apply engines still
-  return an explicit `Unimplemented` error for membership RPCs. `RegionRuntimeStatus`
-  now reports OpenRaft-derived local peer, leader peer, and leader/follower
-  state instead of assuming every service endpoint is peer 1.
+  return an explicit `Unimplemented` error for membership RPCs. `TransferLeader`
+  accepts idempotent transfer to the current leader, but source-initiated
+  directed transfer to a remote peer remains a gap because OpenRaft 0.9 does
+  not expose that operation through the public boundary.
+  `RegionRuntimeStatus` now reports OpenRaft-derived local peer, leader peer,
+  and leader/follower state instead of assuming every service endpoint is peer 1.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`. Service-level tests now exercise the transaction RPC
@@ -134,8 +138,9 @@ Known gaps:
   commands. The single-region service still bootstraps a default descriptor
   until coordinator-provided topology is wired.
 - Admin `AddPeer`/`RemovePeer` RPCs are wired for `OpenRaftRegion`.
-  `TransferLeader` remains explicitly unimplemented until raftnode exposes a
-  matching leadership-transfer boundary.
+  `TransferLeader` is wired for current-leader no-op. Directed transfer from
+  the current leader to a different remote peer still returns
+  `FailedPrecondition` until raftnode owns a full public transfer boundary.
 - Restart recovery now covers single-node Holt restart, write-after-restart,
   and durable vote/committed metadata. Multi-node restart still needs full
   bootstrap validation for membership-change state and snapshot install before

@@ -733,6 +733,7 @@ fn validate_admin_region(
 pub trait RaftMembershipAdmin: Clone + Send + Sync + 'static {
     async fn add_voter(&self, peer_id: u64, node: BasicNode) -> Result<(), Status>;
     async fn remove_voter(&self, peer_id: u64) -> Result<(), Status>;
+    async fn transfer_leader(&self, peer_id: u64) -> Result<(), Status>;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -759,6 +760,12 @@ where
 
     async fn remove_voter(&self, peer_id: u64) -> Result<(), Status> {
         nokv_raftnode::OpenRaftRegion::remove_voter(self, peer_id, false)
+            .await
+            .map_err(|err| Status::failed_precondition(err.to_string()))
+    }
+
+    async fn transfer_leader(&self, peer_id: u64) -> Result<(), Status> {
+        nokv_raftnode::OpenRaftRegion::transfer_leader(self, peer_id)
             .await
             .map_err(|err| Status::failed_precondition(err.to_string()))
     }
@@ -796,6 +803,10 @@ where
     async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
         Err(membership_unimplemented())
     }
+
+    async fn transfer_leader(&self, _peer_id: u64) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
 }
 
 impl<E> RaftRuntimeStatusProvider for AppliedKvEngine<E>
@@ -825,6 +836,10 @@ where
     async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
         Err(membership_unimplemented())
     }
+
+    async fn transfer_leader(&self, _peer_id: u64) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
 }
 
 impl<E, S> RaftRuntimeStatusProvider for PersistentAppliedKvEngine<E, S>
@@ -849,6 +864,10 @@ impl RaftMembershipAdmin for EmptyApplyStatus {
     }
 
     async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
+
+    async fn transfer_leader(&self, _peer_id: u64) -> Result<(), Status> {
         Err(membership_unimplemented())
     }
 }
@@ -937,11 +956,19 @@ where
 
     async fn transfer_leader(
         &self,
-        _request: Request<adminpb::TransferLeaderRequest>,
+        request: Request<adminpb::TransferLeaderRequest>,
     ) -> Result<Response<adminpb::TransferLeaderResponse>, Status> {
-        Err(Status::unimplemented(
-            "rust raft leadership is not wired yet",
-        ))
+        let request = request.into_inner();
+        if request.region_id == 0 || request.peer_id == 0 {
+            return Err(Status::invalid_argument(
+                "region_id and peer_id are required",
+            ));
+        }
+        validate_admin_region(&self.topology, request.region_id)?;
+        self.status.transfer_leader(request.peer_id).await?;
+        Ok(Response::new(adminpb::TransferLeaderResponse {
+            region: Some(admin_region_descriptor(&self.topology)?),
+        }))
     }
 
     async fn region_runtime_status(
@@ -1697,6 +1724,28 @@ mod tests {
         assert_eq!(leader_status.local_peer_id, 1);
         assert_eq!(leader_status.leader_peer_id, 1);
         assert!(leader_status.leader);
+
+        let transfer = service
+            .transfer_leader(Request::new(adminpb::TransferLeaderRequest {
+                region_id: 7,
+                peer_id: 1,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .region
+            .unwrap();
+        assert_eq!(transfer.region_id, 7);
+
+        let err = service
+            .transfer_leader(Request::new(adminpb::TransferLeaderRequest {
+                region_id: 7,
+                peer_id: 2,
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err.message().contains("source-initiated directed transfer"));
 
         let follower_service = RaftAdminService::with_admission(
             regions.get(&2).unwrap().clone(),

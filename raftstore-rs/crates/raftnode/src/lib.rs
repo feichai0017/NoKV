@@ -116,6 +116,17 @@ pub enum Error {
     MetadataIo(#[from] std::io::Error),
     #[error("corrupt raft metadata: {0}")]
     CorruptMetadata(&'static str),
+    #[error("invalid leader transfer target {target}: {reason}")]
+    InvalidLeaderTransferTarget {
+        target: NodeId,
+        reason: &'static str,
+    },
+    #[error("leader transfer to peer {target} is not supported from local peer {local}: {reason}")]
+    UnsupportedLeaderTransfer {
+        local: NodeId,
+        target: NodeId,
+        reason: &'static str,
+    },
     #[error("raft command encode error: {0}")]
     Encode(#[from] prost::EncodeError),
     #[error("raft command decode error: {0}")]
@@ -1030,6 +1041,35 @@ where
             .await
             .map_err(openraft_api_error)?;
         self.wait_for_voter(node_id, false).await
+    }
+
+    pub async fn transfer_leader(&self, node_id: NodeId) -> Result<(), Error> {
+        if node_id == 0 {
+            return Err(Error::InvalidLeaderTransferTarget {
+                target: node_id,
+                reason: "peer id is required",
+            });
+        }
+
+        let metrics = self.raft.metrics().borrow().clone();
+        let is_voter = metrics
+            .membership_config
+            .voter_ids()
+            .any(|voter| voter == node_id);
+        if !is_voter {
+            return Err(Error::InvalidLeaderTransferTarget {
+                target: node_id,
+                reason: "target is not a voter",
+            });
+        }
+        if metrics.current_leader == Some(node_id) {
+            return Ok(());
+        }
+        Err(Error::UnsupportedLeaderTransfer {
+            local: self.node_id,
+            target: node_id,
+            reason: "OpenRaft 0.9 does not expose source-initiated directed transfer",
+        })
     }
 
     pub async fn wait_for_voter(&self, node_id: NodeId, present: bool) -> Result<(), Error> {
