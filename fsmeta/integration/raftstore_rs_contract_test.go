@@ -31,36 +31,46 @@ import (
 )
 
 func TestRustRaftstoreEndpointFSMetaContract(t *testing.T) {
-	steps := envInt("NOKV_RUST_RAFTSTORE_FSMETA_STEPS", 32)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
+	for _, tc := range []struct {
+		name    string
+		holtDir string
+	}{
+		{name: "memory"},
+		{name: "holt", holtDir: t.TempDir()},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			steps := envInt("NOKV_RUST_RAFTSTORE_FSMETA_STEPS", 32)
+			ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
 
-	addr := startRustRaftstoreEndpoint(t)
-	region := rustRaftstoreSingleRegion()
-	kv, err := client.New(client.Config{
-		RegionResolver: &staticRegionResolver{regions: []*metapb.RegionDescriptor{region}},
-		StoreResolver:  rustStoreResolver{addr: addr},
-		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
-		Retry:          client.RetryPolicy{MaxAttempts: 1},
-	})
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, kv.Close()) })
+			addr := startRustRaftstoreEndpoint(t, tc.holtDir)
+			region := rustRaftstoreSingleRegion()
+			kv, err := client.New(client.Config{
+				RegionResolver: &staticRegionResolver{regions: []*metapb.RegionDescriptor{region}},
+				StoreResolver:  rustStoreResolver{addr: addr},
+				DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+				Retry:          client.RetryPolicy{MaxAttempts: 1},
+			})
+			require.NoError(t, err)
+			t.Cleanup(func() { require.NoError(t, kv.Close()) })
 
-	runner, err := fsmetaraftstore.NewRunner(kv, &rustTSO{next: 100})
-	require.NoError(t, err)
-	seedRootInode(t, ctx, runner, model.MountIdentity{MountID: "vol", MountKeyID: 1})
-	contractModel := fsmetacontract.NewModel("vol")
-	executor, err := fsmetaexec.New(
-		runner,
-		fsmetaexec.WithMountResolver(rustMountResolver{}),
-		fsmetaexec.WithInodeAllocator(&rustInodeAllocator{next: 10}),
-		fsmetaexec.WithClock(func() time.Time { return time.Unix(0, contractModel.NowUnixNs) }),
-	)
-	require.NoError(t, err)
-	mapped, err := fsmetacontract.NewInodeMappingExecutor(executor)
-	require.NoError(t, err)
+			runner, err := fsmetaraftstore.NewRunner(kv, &rustTSO{next: 100})
+			require.NoError(t, err)
+			seedRootInode(t, ctx, runner, model.MountIdentity{MountID: "vol", MountKeyID: 1})
+			contractModel := fsmetacontract.NewModel("vol")
+			executor, err := fsmetaexec.New(
+				runner,
+				fsmetaexec.WithMountResolver(rustMountResolver{}),
+				fsmetaexec.WithInodeAllocator(&rustInodeAllocator{next: 10}),
+				fsmetaexec.WithClock(func() time.Time { return time.Unix(0, contractModel.NowUnixNs) }),
+			)
+			require.NoError(t, err)
+			mapped, err := fsmetacontract.NewInodeMappingExecutor(executor)
+			require.NoError(t, err)
 
-	require.NoError(t, fsmetacontract.Run(ctx, mapped, contractModel, fsmetacontract.GenerateScript(1, steps)))
+			require.NoError(t, fsmetacontract.Run(ctx, mapped, contractModel, fsmetacontract.GenerateScript(1, steps)))
+		})
+	}
 }
 
 type rustStoreResolver struct {
@@ -117,7 +127,7 @@ func (a *rustInodeAllocator) AllocateCreateInode(context.Context, model.MountIde
 	return inode, nil
 }
 
-func startRustRaftstoreEndpoint(t *testing.T) string {
+func startRustRaftstoreEndpoint(t *testing.T, holtDir string) string {
 	t.Helper()
 	addr := reserveRustEndpointAddr(t)
 	root := findRustEndpointRepoRoot(t)
@@ -134,6 +144,9 @@ func startRustRaftstoreEndpoint(t *testing.T) string {
 	)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "NOKV_RUST_RAFTSTORE_ADDR="+addr)
+	if holtDir != "" {
+		cmd.Env = append(cmd.Env, "NOKV_RUST_RAFTSTORE_HOLT_DIR="+holtDir)
+	}
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
 	stderr, err := cmd.StderrPipe()

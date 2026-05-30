@@ -221,7 +221,8 @@ The first slices are intentionally narrow:
 - The tagged Go integration harness now runs the fsmeta contract executor
   through `fsmeta/runtime/raftstore.Runner` against a Rust StoreKV endpoint,
   proving the upper fsmeta semantic path can use the Rust data plane without
-  changing fsmeta execution code.
+  changing fsmeta execution code. The same fsmeta contract now runs against
+  both the in-memory Rust store and the Holt-backed Rust store.
 - The tagged Go client harness now also starts a real Go coordinator service,
   publishes rooted store and region metadata, lets the Rust store populate
   `StoreInfo` through heartbeat, and routes `StoreKV` traffic through the
