@@ -497,7 +497,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        AppliedKvEngine, ApplyStatusProvider, OpenRaftRegion, RaftCommandExecutor,
+        AppliedKvEngine, ApplyStatusProvider, OpenRaftRegion, Proposal, RaftCommandExecutor,
         RegionLogStorage, RegionStateMachine, SegmentedEntryLog,
     };
 
@@ -593,6 +593,166 @@ mod tests {
                 .unwrap();
             assert_eq!(response.value, b"replicated".to_vec());
         }
+
+        for handle in handles {
+            handle.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn tonic_raft_network_catches_up_joining_peer_from_snapshot() {
+        let mut handles = Vec::new();
+        let mut transports = BTreeMap::new();
+        let mut node_addrs = BTreeMap::new();
+        for node_id in 1..=2 {
+            let transport = TonicRaftTransportRegistry::default();
+            let (addr, handle) = spawn_transport_server(transport.service()).await;
+            transports.insert(node_id, transport);
+            node_addrs.insert(node_id, addr.to_string());
+            handles.push(handle);
+        }
+
+        let leader_dir = tempfile::tempdir().unwrap();
+        let leader_log = SegmentedEntryLog::open(7, leader_dir.path()).unwrap();
+        let leader_log_store = RegionLogStorage::new(leader_log);
+        let leader_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let leader = OpenRaftRegion::open_with_network_for_test(
+            1,
+            7,
+            leader_log_store,
+            RegionStateMachine::new(leader_engine),
+            TonicRaftNetworkFactory::new(7),
+            |config| {
+                config.snapshot_policy = openraft::SnapshotPolicy::Never;
+                config.replication_lag_threshold = 1;
+                config.max_in_snapshot_log_to_keep = 0;
+            },
+        )
+        .await
+        .unwrap();
+        transports
+            .get(&1)
+            .unwrap()
+            .register(7, leader.raft_handle());
+        leader
+            .initialize_members(BTreeMap::from([(
+                1,
+                BasicNode::new(node_addrs.get(&1).unwrap().clone()),
+            )]))
+            .await
+            .unwrap();
+        leader.wait_for_leader(1).await.unwrap();
+
+        let mut last_applied = None;
+        for version in 1..=8 {
+            let command = raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    request_id: version,
+                    ..Default::default()
+                }),
+                requests: vec![raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                        kvpb::TryAtomicMutateRequest {
+                            mutations: vec![kvpb::Mutation {
+                                key: format!("k{version}").into_bytes(),
+                                value: format!("v{version}").into_bytes(),
+                                op: kvpb::mutation::Op::Put as i32,
+                                ..Default::default()
+                            }],
+                            commit_version: version,
+                            ..Default::default()
+                        },
+                    )),
+                }],
+            };
+            last_applied = Some(
+                leader
+                    .propose(Proposal::from_raft_command(&command).unwrap())
+                    .await
+                    .unwrap(),
+            );
+        }
+        let last_applied = last_applied.unwrap();
+        leader.trigger_snapshot().await.unwrap();
+        leader
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .metrics(
+                |metrics| {
+                    metrics
+                        .snapshot
+                        .map(|snapshot| snapshot.index >= last_applied.index)
+                        .unwrap_or(false)
+                },
+                "tonic leader snapshot before joining peer",
+            )
+            .await
+            .unwrap();
+        leader.trigger_log_purge(last_applied.index).await.unwrap();
+        leader
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .metrics(
+                |metrics| {
+                    metrics
+                        .purged
+                        .map(|purged| purged.index >= last_applied.index)
+                        .unwrap_or(false)
+                },
+                "tonic leader purges snapshot-covered log",
+            )
+            .await
+            .unwrap();
+
+        let joining_dir = tempfile::tempdir().unwrap();
+        let joining_log = SegmentedEntryLog::open(7, joining_dir.path()).unwrap();
+        let joining_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let joining = OpenRaftRegion::open_with_network_for_test(
+            2,
+            7,
+            RegionLogStorage::new(joining_log),
+            RegionStateMachine::new(joining_engine.clone()),
+            TonicRaftNetworkFactory::new(7),
+            |config| {
+                config.snapshot_policy = openraft::SnapshotPolicy::Never;
+                config.replication_lag_threshold = 1;
+                config.max_in_snapshot_log_to_keep = 0;
+            },
+        )
+        .await
+        .unwrap();
+        transports
+            .get(&2)
+            .unwrap()
+            .register(7, joining.raft_handle());
+
+        leader
+            .add_voter(2, BasicNode::new(node_addrs.get(&2).unwrap().clone()))
+            .await
+            .unwrap();
+        joining
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .applied_index_at_least(
+                Some(last_applied.index),
+                "tonic joining peer snapshot catch-up",
+            )
+            .await
+            .unwrap();
+        assert!(
+            joining.raft_handle().metrics().borrow().snapshot.is_some(),
+            "joining peer should install a snapshot over tonic transport"
+        );
+
+        let response = joining_engine
+            .get(&kvpb::GetRequest {
+                key: b"k8".to_vec(),
+                version: 8,
+            })
+            .unwrap();
+        assert_eq!(response.value, b"v8".to_vec());
 
         for handle in handles {
             handle.abort();

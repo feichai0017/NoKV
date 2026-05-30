@@ -334,8 +334,10 @@ Known gaps:
   OpenRaft peer catch-up test where a joining peer installs a snapshot after the
   leader purges covered logs. Holt-backed adapter coverage now restarts a
   snapshot-installed peer from persistent apply-state/MVCC state and verifies it
-  applies a later leader commit. Snapshot-triggered log compaction still needs
-  external-transport integration tests. Corrupt snapshot payloads are rejected
+  applies a later leader commit. The tonic transport testkit now also covers a
+  joining peer installing a snapshot after the leader triggers snapshot creation
+  and purges the covered log prefix, so snapshot catch-up is exercised through
+  the real Rust transport boundary. Corrupt snapshot payloads are rejected
   before state-machine mutation in the current unit coverage.
 - Go fsmeta and raftstore client Rust-endpoint tests remain behind the
   `rust_raftstore` build tag until the Rust data plane is the default runtime.
