@@ -53,6 +53,7 @@ impl ApplyStatusSink for HoltApplyStatusSink {
                 truncated_term: 0,
                 truncated_index: 0,
             })
+            .and_then(|_| self.store.checkpoint())
             .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
     }
 }

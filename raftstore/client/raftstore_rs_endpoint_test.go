@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sync"
 	"testing"
 	"time"
 
@@ -40,6 +41,48 @@ func TestRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T) {
 			testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t, addr)
 		})
 	}
+}
+
+func TestRustRaftstoreEndpointHoltApplyStatusSurvivesRestart(t *testing.T) {
+	dir := t.TempDir()
+	addr, stop := startRustRaftstoreProcess(t, dir)
+
+	meta := rustRaftstoreSingleRegion()
+	cli, err := New(Config{
+		RegionResolver: &mockRegionResolver{region: meta},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 1,
+			Addr:    addr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	handled, err := cli.TryAtomicMutate(ctx, []byte("agent/restart"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("agent/restart"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 9,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/restart"),
+		Value: []byte("v1"),
+	}}, 8, 10)
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.NoError(t, cli.Close())
+	stop()
+
+	addr, _ = startRustRaftstoreProcess(t, dir)
+	admin, closeAdmin, err := adminclient.Dial(ctx, addr)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
+	status, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), status.GetAppliedIndex())
 }
 
 func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr string) {
@@ -106,6 +149,16 @@ func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr s
 
 func startRustRaftstoreEndpoint(t *testing.T, holt bool) string {
 	t.Helper()
+	holtDir := ""
+	if holt {
+		holtDir = t.TempDir()
+	}
+	addr, _ := startRustRaftstoreProcess(t, holtDir)
+	return addr
+}
+
+func startRustRaftstoreProcess(t *testing.T, holtDir string) (string, func()) {
+	t.Helper()
 	addr := reserveLocalAddr(t)
 	root := findRepoRoot(t)
 	ctx, cancel := context.WithCancel(context.Background())
@@ -121,22 +174,28 @@ func startRustRaftstoreEndpoint(t *testing.T, holt bool) string {
 	)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "NOKV_RUST_RAFTSTORE_ADDR="+addr)
-	if holt {
-		cmd.Env = append(cmd.Env, "NOKV_RUST_RAFTSTORE_HOLT_DIR="+t.TempDir())
+	if holtDir != "" {
+		cmd.Env = append(cmd.Env, "NOKV_RUST_RAFTSTORE_HOLT_DIR="+holtDir)
 	}
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
 	stderr, err := cmd.StderrPipe()
 	require.NoError(t, err)
 	require.NoError(t, cmd.Start())
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			cancel()
+			_ = cmd.Wait()
+		})
+	}
 	t.Cleanup(func() {
-		cancel()
-		_ = cmd.Wait()
+		stop()
 	})
 	go logPipe(t, "raftstore-rs stdout", stdout)
 	go logPipe(t, "raftstore-rs stderr", stderr)
 	waitForTCP(t, addr, 15*time.Second)
-	return addr
+	return addr, stop
 }
 
 func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {
