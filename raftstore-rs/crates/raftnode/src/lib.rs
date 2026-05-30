@@ -126,11 +126,22 @@ pub struct AppliedKvEngine<E = MvccStore> {
 
 impl<E> AppliedKvEngine<E> {
     pub fn new(region_id: RegionId, engine: E) -> Self {
-        Self {
-            inner: Arc::new(AppliedKvInner {
+        Self::with_status(
+            ApplyStatus {
                 region_id,
                 term: 1,
-                applied_index: AtomicU64::new(0),
+                applied_index: 0,
+            },
+            engine,
+        )
+    }
+
+    pub fn with_status(status: ApplyStatus, engine: E) -> Self {
+        Self {
+            inner: Arc::new(AppliedKvInner {
+                region_id: status.region_id,
+                term: status.term,
+                applied_index: AtomicU64::new(status.applied_index),
                 engine: Mutex::new(engine),
                 watch: broadcast::channel(1024).0,
             }),
@@ -518,6 +529,39 @@ mod tests {
             })
             .unwrap();
         assert_eq!(engine.status().applied_index, 1);
+    }
+
+    #[test]
+    fn applied_kv_engine_can_start_from_persisted_status() {
+        let engine = AppliedKvEngine::with_status(
+            ApplyStatus {
+                region_id: 7,
+                term: 3,
+                applied_index: 41,
+            },
+            MvccStore::new(),
+        );
+        assert_eq!(
+            engine.status(),
+            ApplyStatus {
+                region_id: 7,
+                term: 3,
+                applied_index: 41,
+            }
+        );
+        engine
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                commit_version: 2,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(engine.status().applied_index, 42);
     }
 
     #[test]

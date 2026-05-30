@@ -2,10 +2,10 @@
 
 use std::net::SocketAddr;
 
-use nokv_holtstore::HoltMvccStore;
+use nokv_holtstore::{HoltMvccStore, RegionApplyState};
 use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::meta::v1 as metapb;
-use nokv_raftnode::AppliedKvEngine;
+use nokv_raftnode::{AppliedKvEngine, ApplyStatus};
 use nokv_raftstore_server::RegionAdmission;
 
 #[tokio::main]
@@ -18,7 +18,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let mvcc = HoltMvccStore::open_file(path)?;
         let descriptor = mvcc.load_or_bootstrap_region_descriptor(&default_region_descriptor())?;
         let admission = RegionAdmission::from_descriptor(&descriptor, true)?;
-        let engine = AppliedKvEngine::new(descriptor.region_id, mvcc);
+        let apply_status = mvcc
+            .get_region_apply_state(descriptor.region_id)?
+            .map(apply_status_from_holt)
+            .unwrap_or(ApplyStatus {
+                region_id: descriptor.region_id,
+                term: 1,
+                applied_index: 0,
+            });
+        let engine = AppliedKvEngine::with_status(apply_status, mvcc);
         nokv_raftstore_server::serve_with_region_engine_and_admission(addr, engine, admission)
             .await?;
     } else {
@@ -27,6 +35,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         nokv_raftstore_server::serve_with_region_engine(addr, engine).await?;
     }
     Ok(())
+}
+
+fn apply_status_from_holt(state: RegionApplyState) -> ApplyStatus {
+    ApplyStatus {
+        region_id: state.region_id,
+        term: state.term,
+        applied_index: state.applied_index,
+    }
 }
 
 fn default_region_descriptor() -> metapb::RegionDescriptor {
