@@ -54,7 +54,9 @@ The first slices are intentionally narrow:
 - `nokv-holtstore` adapts Holt multi-tree storage for persistent MVCC tests.
 - `nokv-raftlog` provides a standalone segmented Raft WAL.
 - `nokv-raftnode` exposes a NoKV-owned OpenRaft boundary and a single-region
-  `AppliedKvEngine` apply wrapper.
+  `AppliedKvEngine` apply wrapper. It can already execute existing
+  `RaftCmdRequest` payloads against the MVCC state machine, which fixes the
+  proposal/apply payload shape before OpenRaft is wired.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors.

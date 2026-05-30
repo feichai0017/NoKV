@@ -24,6 +24,9 @@ durable metadata source before OpenRaft owns topology changes.
 OpenRaft replication, membership changes, snapshots, and WatchApply delivery are
 staged behind these boundaries. Experimental Peras witness services and legacy
 migration/SST paths are outside v1.
+The current `raftnode` crate already accepts the existing `RaftCmdRequest`
+payload shape for local apply, so the future replicated proposal path can carry
+the Go raftstore command contract unchanged.
 
 See [PARITY_PLAN.md](PARITY_PLAN.md) for the full Go `raftstore` parity plan and
 the cutover rule: keep the workspace named `raftstore-rs` while the Go

@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
+use nokv_proto::nokv::raft::v1 as raftpb;
 use tokio::sync::broadcast;
 
 pub type NodeId = u64;
@@ -120,6 +121,72 @@ impl<E> AppliedKvEngine<E>
 where
     E: KvEngine,
 {
+    pub fn execute_raft_command(
+        &self,
+        req: &raftpb::RaftCmdRequest,
+    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
+        let mut responses = Vec::with_capacity(req.requests.len());
+        for request in &req.requests {
+            responses.push(self.execute_raft_request(request)?);
+        }
+        Ok(raftpb::RaftCmdResponse {
+            header: req.header.clone(),
+            responses,
+            region_error: None,
+        })
+    }
+
+    fn execute_raft_request(&self, req: &raftpb::Request) -> nokv_mvcc::Result<raftpb::Response> {
+        use raftpb::request::Cmd as RequestCmd;
+        use raftpb::response::Cmd as ResponseCmd;
+
+        let cmd = raftpb::CmdType::try_from(req.cmd_type).unwrap_or(raftpb::CmdType::CmdInvalid);
+        let response = match (cmd, req.cmd.as_ref()) {
+            (raftpb::CmdType::CmdGet, Some(RequestCmd::Get(inner))) => {
+                ResponseCmd::Get(self.get(inner)?)
+            }
+            (raftpb::CmdType::CmdScan, Some(RequestCmd::Scan(inner))) => {
+                ResponseCmd::Scan(self.scan(inner)?)
+            }
+            (raftpb::CmdType::CmdPrewrite, Some(RequestCmd::Prewrite(inner))) => {
+                ResponseCmd::Prewrite(self.prewrite(inner)?)
+            }
+            (raftpb::CmdType::CmdCommit, Some(RequestCmd::Commit(inner))) => {
+                ResponseCmd::Commit(self.commit(inner)?)
+            }
+            (raftpb::CmdType::CmdBatchRollback, Some(RequestCmd::BatchRollback(inner))) => {
+                ResponseCmd::BatchRollback(self.batch_rollback(inner)?)
+            }
+            (raftpb::CmdType::CmdResolveLock, Some(RequestCmd::ResolveLock(inner))) => {
+                ResponseCmd::ResolveLock(self.resolve_lock(inner)?)
+            }
+            (raftpb::CmdType::CmdCheckTxnStatus, Some(RequestCmd::CheckTxnStatus(inner))) => {
+                ResponseCmd::CheckTxnStatus(self.check_txn_status(inner)?)
+            }
+            (raftpb::CmdType::CmdMvccMaintenance, Some(RequestCmd::MvccMaintenance(inner))) => {
+                ResponseCmd::MvccMaintenance(self.mvcc_maintenance(inner)?)
+            }
+            (raftpb::CmdType::CmdTxnHeartBeat, Some(RequestCmd::TxnHeartBeat(inner))) => {
+                ResponseCmd::TxnHeartBeat(self.txn_heartbeat(inner)?)
+            }
+            (raftpb::CmdType::CmdTryAtomicMutate, Some(RequestCmd::TryAtomicMutate(inner))) => {
+                ResponseCmd::TryAtomicMutate(self.try_atomic_mutate(inner)?)
+            }
+            (
+                raftpb::CmdType::CmdInstallPreparedMvcc,
+                Some(RequestCmd::InstallPreparedMvcc(inner)),
+            ) => ResponseCmd::InstallPreparedMvcc(self.install_prepared(inner)?),
+            _ => {
+                return Err(invalid_raft_command(
+                    "command type and payload do not match",
+                ))
+            }
+        };
+        Ok(raftpb::Response {
+            cmd: Some(response),
+        })
+    }
+
     fn read<T>(&self, f: impl FnOnce(&E) -> nokv_mvcc::Result<T>) -> nokv_mvcc::Result<T> {
         let engine = self
             .inner
@@ -159,6 +226,10 @@ where
             keys,
         });
     }
+}
+
+fn invalid_raft_command(detail: &str) -> nokv_mvcc::Error {
+    nokv_mvcc::Error::Backend(format!("invalid raft command: {detail}"))
 }
 
 impl<E> KvEngine for AppliedKvEngine<E>
@@ -371,5 +442,54 @@ mod tests {
         assert_eq!(event.index, 1);
         assert_eq!(event.commit_version, 2);
         assert_eq!(event.keys, vec![b"k".to_vec()]);
+    }
+
+    #[test]
+    fn applied_kv_engine_executes_existing_raft_command_payload() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        let response = engine
+            .execute_raft_command(&raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    ..Default::default()
+                }),
+                requests: vec![
+                    raftpb::Request {
+                        cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                        cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                            kvpb::TryAtomicMutateRequest {
+                                mutations: vec![kvpb::Mutation {
+                                    key: b"k".to_vec(),
+                                    value: b"v".to_vec(),
+                                    op: kvpb::mutation::Op::Put as i32,
+                                    ..Default::default()
+                                }],
+                                commit_version: 2,
+                                ..Default::default()
+                            },
+                        )),
+                    },
+                    raftpb::Request {
+                        cmd_type: raftpb::CmdType::CmdGet as i32,
+                        cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
+                            key: b"k".to_vec(),
+                            version: 2,
+                        })),
+                    },
+                ],
+            })
+            .unwrap();
+
+        assert_eq!(response.responses.len(), 2);
+        let Some(raftpb::response::Cmd::TryAtomicMutate(out)) = response.responses[0].cmd.as_ref()
+        else {
+            panic!("missing atomic mutate response");
+        };
+        assert_eq!(out.applied_keys, 1);
+        let Some(raftpb::response::Cmd::Get(out)) = response.responses[1].cmd.as_ref() else {
+            panic!("missing get response");
+        };
+        assert_eq!(out.value, b"v".to_vec());
+        assert_eq!(engine.status().applied_index, 1);
     }
 }
