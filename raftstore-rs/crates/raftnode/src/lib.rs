@@ -13,6 +13,7 @@ use std::time::Duration;
 
 use nokv_mvcc::{KvEngine, MvccSnapshotEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
+use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use openraft::{
     error::{Fatal, InitializeError, RPCError, RaftError, Unreachable},
@@ -66,7 +67,13 @@ openraft::declare_raft_types!(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proposal {
     pub region_id: RegionId,
-    pub payload: Vec<u8>,
+    pub payload: ProposalPayload,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProposalPayload {
+    RaftCommand(Vec<u8>),
+    RegionDescriptor(Vec<u8>),
 }
 
 impl Proposal {
@@ -81,11 +88,33 @@ impl Proposal {
         }
         let mut payload = Vec::with_capacity(req.encoded_len());
         req.encode(&mut payload)?;
-        Ok(Self { region_id, payload })
+        Ok(Self {
+            region_id,
+            payload: ProposalPayload::RaftCommand(payload),
+        })
+    }
+
+    pub fn from_region_descriptor(descriptor: &metapb::RegionDescriptor) -> Result<Self, Error> {
+        if descriptor.region_id == 0 {
+            return Err(Error::InvalidRegionDescriptor(
+                "region descriptor id is required".to_owned(),
+            ));
+        }
+        let mut payload = Vec::with_capacity(descriptor.encoded_len());
+        descriptor.encode(&mut payload)?;
+        Ok(Self {
+            region_id: descriptor.region_id,
+            payload: ProposalPayload::RegionDescriptor(payload),
+        })
     }
 
     pub fn decode_raft_command(&self) -> Result<raftpb::RaftCmdRequest, Error> {
-        let req = raftpb::RaftCmdRequest::decode(self.payload.as_slice())?;
+        let ProposalPayload::RaftCommand(payload) = &self.payload else {
+            return Err(Error::InvalidLogPayload(
+                "region descriptor proposal cannot decode as raft command".to_owned(),
+            ));
+        };
+        let req = raftpb::RaftCmdRequest::decode(payload.as_slice())?;
         let region_id = req
             .header
             .as_ref()
@@ -99,6 +128,43 @@ impl Proposal {
         }
         Ok(req)
     }
+
+    pub fn decode_region_descriptor(&self) -> Result<metapb::RegionDescriptor, Error> {
+        let ProposalPayload::RegionDescriptor(payload) = &self.payload else {
+            return Err(Error::InvalidLogPayload(
+                "raft command proposal cannot decode as region descriptor".to_owned(),
+            ));
+        };
+        let descriptor = metapb::RegionDescriptor::decode(payload.as_slice())?;
+        if descriptor.region_id != self.region_id {
+            return Err(Error::RegionMismatch {
+                proposal_region_id: self.region_id,
+                command_region_id: descriptor.region_id,
+            });
+        }
+        Ok(descriptor)
+    }
+
+    pub(crate) fn payload_kind(&self) -> ProposalPayloadKind {
+        match &self.payload {
+            ProposalPayload::RaftCommand(_) => ProposalPayloadKind::RaftCommand,
+            ProposalPayload::RegionDescriptor(_) => ProposalPayloadKind::RegionDescriptor,
+        }
+    }
+
+    pub(crate) fn payload_bytes(&self) -> &[u8] {
+        match &self.payload {
+            ProposalPayload::RaftCommand(payload) | ProposalPayload::RegionDescriptor(payload) => {
+                payload
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ProposalPayloadKind {
+    RaftCommand,
+    RegionDescriptor,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -127,6 +193,8 @@ pub enum Error {
     InvalidLogPayload(String),
     #[error("invalid raft transport payload: {0}")]
     InvalidTransportPayload(String),
+    #[error("invalid region descriptor proposal: {0}")]
+    InvalidRegionDescriptor(String),
     #[error("raft log error: {0}")]
     RaftLog(#[from] nokv_raftlog::Error),
     #[error("raft metadata io error: {0}")]
@@ -185,8 +253,15 @@ pub trait RegionSnapshotEngine: RegionApplyEngine {
     fn install_region_snapshot(&self, snapshot: &[u8]) -> nokv_mvcc::Result<ApplyStatus>;
 }
 
-pub trait ApplyStatusSink: Clone + Send + Sync + 'static {
+pub trait RegionMetadataSink: Clone + Send + Sync + 'static {
     fn save_apply_status(&self, status: &ApplyStatus) -> nokv_mvcc::Result<()>;
+
+    fn save_region_descriptor(
+        &self,
+        _descriptor: &metapb::RegionDescriptor,
+    ) -> nokv_mvcc::Result<()> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -195,6 +270,7 @@ struct AppliedKvInner<E> {
     term: AtomicU64,
     applied_index: AtomicU64,
     engine: Mutex<E>,
+    descriptor: Mutex<Option<metapb::RegionDescriptor>>,
     watch: broadcast::Sender<kvpb::ApplyWatchEvent>,
 }
 
@@ -248,9 +324,52 @@ impl<E> AppliedKvEngine<E> {
                 term: AtomicU64::new(status.term),
                 applied_index: AtomicU64::new(status.applied_index),
                 engine: Mutex::new(engine),
+                descriptor: Mutex::new(None),
                 watch: broadcast::channel(1024).0,
             }),
         }
+    }
+
+    pub fn set_region_descriptor(
+        &self,
+        descriptor: metapb::RegionDescriptor,
+    ) -> nokv_mvcc::Result<()> {
+        self.validate_region_descriptor(&descriptor)?;
+        let mut current = self.inner.descriptor.lock().map_err(|_| {
+            nokv_mvcc::Error::Backend("region descriptor mutex poisoned".to_owned())
+        })?;
+        *current = Some(descriptor);
+        Ok(())
+    }
+
+    pub fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+        self.inner
+            .descriptor
+            .lock()
+            .map_err(|_| nokv_mvcc::Error::Backend("region descriptor mutex poisoned".to_owned()))
+            .map(|descriptor| descriptor.clone())
+    }
+
+    fn validate_region_descriptor(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+    ) -> nokv_mvcc::Result<()> {
+        if descriptor.region_id != self.inner.region_id {
+            return Err(nokv_mvcc::Error::Backend(
+                Error::LogRegionMismatch {
+                    record_region_id: self.inner.region_id,
+                    proposal_region_id: descriptor.region_id,
+                }
+                .to_string(),
+            ));
+        }
+        if descriptor.epoch.is_none() {
+            return Err(nokv_mvcc::Error::Backend(
+                Error::InvalidRegionDescriptor("region descriptor epoch is required".to_owned())
+                    .to_string(),
+            ));
+        }
+        Ok(())
     }
 
     pub fn status(&self) -> ApplyStatus {
@@ -278,7 +397,7 @@ where
 impl<E, S> ApplyStatusProvider for PersistentAppliedKvEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
-    S: ApplyStatusSink,
+    S: RegionMetadataSink,
 {
     fn apply_status(&self) -> ApplyStatus {
         self.engine.status()
@@ -297,7 +416,7 @@ where
 impl<E, S> ApplyWatchProvider for PersistentAppliedKvEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
-    S: ApplyStatusSink,
+    S: RegionMetadataSink,
 {
     fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
         self.engine.subscribe()
@@ -343,16 +462,33 @@ where
                             .to_string(),
                         ));
                     }
-                    let req = proposal
-                        .decode_raft_command()
-                        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
-                    let response = self.execute_raft_command_at(&req, Some((term, index)))?;
-                    applied.push(AppliedProposal {
-                        region_id: proposal.region_id,
-                        index,
-                        term,
-                        payload: encode_raft_response(&response)?,
-                    });
+                    match proposal.payload_kind() {
+                        ProposalPayloadKind::RaftCommand => {
+                            let req = proposal
+                                .decode_raft_command()
+                                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+                            let response =
+                                self.execute_raft_command_at(&req, Some((term, index)))?;
+                            applied.push(AppliedProposal {
+                                region_id: proposal.region_id,
+                                index,
+                                term,
+                                payload: encode_raft_response(&response)?,
+                            });
+                        }
+                        ProposalPayloadKind::RegionDescriptor => {
+                            let descriptor = proposal
+                                .decode_region_descriptor()
+                                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+                            self.apply_region_descriptor_at(term, index, descriptor)?;
+                            applied.push(AppliedProposal {
+                                region_id: proposal.region_id,
+                                index,
+                                term,
+                                payload: Vec::new(),
+                            });
+                        }
+                    }
                 }
             }
         }
@@ -525,6 +661,17 @@ where
         f(&engine)
     }
 
+    fn apply_region_descriptor_at(
+        &self,
+        term: u64,
+        index: u64,
+        descriptor: metapb::RegionDescriptor,
+    ) -> nokv_mvcc::Result<()> {
+        self.set_region_descriptor(descriptor)?;
+        self.record_applied_status(term, index);
+        Ok(())
+    }
+
     fn apply<T>(
         &self,
         f: impl FnOnce(&E) -> nokv_mvcc::Result<T>,
@@ -599,7 +746,7 @@ where
 impl<E, S> RaftCommandExecutor for PersistentAppliedKvEngine<E, S>
 where
     E: KvEngine,
-    S: ApplyStatusSink,
+    S: RegionMetadataSink,
 {
     fn execute_raft_command<'a>(
         &'a self,
@@ -618,7 +765,7 @@ where
 impl<E, S> PersistentAppliedKvEngine<E, S>
 where
     E: KvEngine,
-    S: ApplyStatusSink,
+    S: RegionMetadataSink,
 {
     pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
     where
@@ -633,6 +780,9 @@ where
     fn persist_if_advanced(&self, before: u64) -> nokv_mvcc::Result<()> {
         let status = self.engine.status();
         if status.applied_index != before {
+            if let Some(descriptor) = self.engine.region_descriptor()? {
+                self.sink.save_region_descriptor(&descriptor)?;
+            }
             self.sink.save_apply_status(&status)?;
         }
         Ok(())
@@ -658,6 +808,7 @@ where
             term: status.term,
             applied_index: status.applied_index,
             mvcc_snapshot: nokv_mvcc::encode_mvcc_snapshot(&mvcc_snapshot),
+            region_descriptor: self.region_descriptor()?,
         }
         .encode_to_vec())
     }
@@ -693,6 +844,9 @@ where
             )));
         }
         let mvcc_snapshot = nokv_mvcc::decode_mvcc_snapshot(&payload.mvcc_snapshot)?;
+        if let Some(descriptor) = payload.region_descriptor {
+            self.set_region_descriptor(descriptor)?;
+        }
         {
             let engine =
                 self.inner.engine.lock().map_err(|_| {
@@ -708,7 +862,7 @@ where
 impl<E, S> RegionSnapshotEngine for PersistentAppliedKvEngine<E, S>
 where
     E: KvEngine + MvccSnapshotEngine,
-    S: ApplyStatusSink,
+    S: RegionMetadataSink,
 {
     fn export_region_snapshot(&self) -> nokv_mvcc::Result<Vec<u8>> {
         self.engine.export_region_snapshot()
@@ -716,6 +870,9 @@ where
 
     fn install_region_snapshot(&self, snapshot: &[u8]) -> nokv_mvcc::Result<ApplyStatus> {
         let status = self.engine.install_region_snapshot(snapshot)?;
+        if let Some(descriptor) = self.engine.region_descriptor()? {
+            self.sink.save_region_descriptor(&descriptor)?;
+        }
         self.sink.save_apply_status(&status)?;
         Ok(status)
     }
@@ -736,7 +893,7 @@ where
 impl<E, S> RegionApplyEngine for PersistentAppliedKvEngine<E, S>
 where
     E: KvEngine,
-    S: ApplyStatusSink,
+    S: RegionMetadataSink,
 {
     fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
     where
@@ -794,6 +951,8 @@ struct RegionSnapshotPayload {
     applied_index: u64,
     #[prost(bytes = "vec", tag = "5")]
     mvcc_snapshot: Vec<u8>,
+    #[prost(message, optional, tag = "6")]
+    region_descriptor: Option<metapb::RegionDescriptor>,
 }
 
 impl<E> KvEngine for AppliedKvEngine<E>
@@ -1203,6 +1362,15 @@ where
         Ok(response.data)
     }
 
+    pub async fn propose_region_descriptor(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+    ) -> Result<(), Error> {
+        self.propose(Proposal::from_region_descriptor(descriptor)?)
+            .await
+            .map(|_| ())
+    }
+
     pub async fn trigger_snapshot(&self) -> Result<(), Error> {
         self.raft.trigger().snapshot().await.map_err(openraft_error)
     }
@@ -1376,13 +1544,22 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     #[derive(Clone, Default)]
-    struct RecordingApplyStatusSink {
+    struct RecordingRegionMetadataSink {
         statuses: Arc<Mutex<Vec<ApplyStatus>>>,
+        descriptors: Arc<Mutex<Vec<metapb::RegionDescriptor>>>,
     }
 
-    impl ApplyStatusSink for RecordingApplyStatusSink {
+    impl RegionMetadataSink for RecordingRegionMetadataSink {
         fn save_apply_status(&self, status: &ApplyStatus) -> nokv_mvcc::Result<()> {
             self.statuses.lock().unwrap().push(status.clone());
+            Ok(())
+        }
+
+        fn save_region_descriptor(
+            &self,
+            descriptor: &metapb::RegionDescriptor,
+        ) -> nokv_mvcc::Result<()> {
+            self.descriptors.lock().unwrap().push(descriptor.clone());
             Ok(())
         }
     }
@@ -2323,7 +2500,7 @@ mod tests {
 
     #[tokio::test]
     async fn persistent_applied_engine_saves_status_after_write_command() {
-        let sink = RecordingApplyStatusSink::default();
+        let sink = RecordingRegionMetadataSink::default();
         let statuses = sink.statuses.clone();
         let engine =
             PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);
@@ -2363,9 +2540,59 @@ mod tests {
         );
     }
 
+    #[test]
+    fn persistent_applied_engine_saves_descriptor_after_descriptor_entry() {
+        let sink = RecordingRegionMetadataSink::default();
+        let descriptors = sink.descriptors.clone();
+        let statuses = sink.statuses.clone();
+        let engine =
+            PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);
+        let descriptor = metapb::RegionDescriptor {
+            region_id: 7,
+            epoch: Some(metapb::RegionEpoch {
+                version: 1,
+                conf_version: 2,
+            }),
+            peers: vec![
+                metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 1,
+                },
+                metapb::RegionPeer {
+                    store_id: 2,
+                    peer_id: 2,
+                },
+            ],
+            ..Default::default()
+        };
+
+        engine
+            .apply_openraft_entries([OpenRaftEntry {
+                log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+                payload: openraft::EntryPayload::Normal(
+                    Proposal::from_region_descriptor(&descriptor).unwrap(),
+                ),
+            }])
+            .unwrap();
+
+        assert_eq!(
+            engine.inner().region_descriptor().unwrap(),
+            Some(descriptor.clone())
+        );
+        assert_eq!(descriptors.lock().unwrap().as_slice(), &[descriptor]);
+        assert_eq!(
+            statuses.lock().unwrap().as_slice(),
+            &[ApplyStatus {
+                region_id: 7,
+                term: 5,
+                applied_index: 42,
+            }]
+        );
+    }
+
     #[tokio::test]
     async fn persistent_applied_engine_does_not_save_status_after_read_command() {
-        let sink = RecordingApplyStatusSink::default();
+        let sink = RecordingRegionMetadataSink::default();
         let statuses = sink.statuses.clone();
         let engine =
             PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);

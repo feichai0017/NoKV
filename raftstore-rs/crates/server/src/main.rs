@@ -11,8 +11,7 @@ use nokv_raftnode::{
     RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog, TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
-    apply_status_from_holt, HoltApplyStatusSink, HoltRegionDescriptorSink, PeerEndpointCatalog,
-    RegionAdmission,
+    apply_status_from_holt, HoltRegionMetadataSink, PeerEndpointCatalog, RegionAdmission,
 };
 
 #[tokio::main]
@@ -39,20 +38,23 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 applied_index: 0,
             });
         let engine = AppliedKvEngine::with_status(apply_status, mvcc.clone());
-        let engine = PersistentAppliedKvEngine::new(engine, HoltApplyStatusSink::new(mvcc.clone()));
+        engine.set_region_descriptor(descriptor.clone())?;
+        let engine =
+            PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
         nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_and_descriptor_sink(
             addr,
             region,
             admission,
             peer_endpoints,
-            HoltRegionDescriptorSink::new(mvcc),
+            HoltRegionMetadataSink::new(mvcc),
         )
         .await?;
     } else {
         tracing::info!(%addr, "starting rust raftstore server with in-memory MVCC");
         let log_dir = raft_log_dir(None, &mut temp_log_dir)?;
         let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
+        engine.set_region_descriptor(default_region_descriptor(identity))?;
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
         nokv_raftstore_server::serve_with_openraft_region_admission_and_peer_endpoints(
             addr,

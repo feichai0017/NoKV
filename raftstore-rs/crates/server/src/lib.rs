@@ -16,8 +16,8 @@ use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
-    AppliedKvEngine, ApplyStatusProvider, ApplyStatusSink, ApplyWatchProvider, BasicNode,
-    PersistentAppliedKvEngine, RaftCommandExecutor, RegionSnapshotEngine,
+    AppliedKvEngine, ApplyStatusProvider, ApplyWatchProvider, BasicNode, PersistentAppliedKvEngine,
+    RaftCommandExecutor, RegionMetadataSink, RegionSnapshotEngine,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -34,19 +34,19 @@ const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;
 const DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE: usize = 512;
 const DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE: usize = 512 * 1024;
 
-/// Persists OpenRaft state-machine apply progress into Holt metadata trees.
+/// Persists OpenRaft region metadata into Holt metadata trees.
 #[derive(Clone)]
-pub struct HoltApplyStatusSink {
+pub struct HoltRegionMetadataSink {
     store: HoltMvccStore,
 }
 
-impl HoltApplyStatusSink {
+impl HoltRegionMetadataSink {
     pub fn new(store: HoltMvccStore) -> Self {
         Self { store }
     }
 }
 
-impl ApplyStatusSink for HoltApplyStatusSink {
+impl RegionMetadataSink for HoltRegionMetadataSink {
     fn save_apply_status(&self, status: &nokv_raftnode::ApplyStatus) -> nokv_mvcc::Result<()> {
         self.store
             .put_region_apply_state(&RegionApplyState {
@@ -59,21 +59,19 @@ impl ApplyStatusSink for HoltApplyStatusSink {
             .and_then(|_| self.store.checkpoint())
             .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
     }
-}
 
-/// Persists region descriptors after Rust admin membership changes.
-#[derive(Clone)]
-pub struct HoltRegionDescriptorSink {
-    store: HoltMvccStore,
-}
-
-impl HoltRegionDescriptorSink {
-    pub fn new(store: HoltMvccStore) -> Self {
-        Self { store }
+    fn save_region_descriptor(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+    ) -> nokv_mvcc::Result<()> {
+        self.store
+            .put_region_descriptor(descriptor)
+            .and_then(|_| self.store.checkpoint())
+            .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
     }
 }
 
-impl RegionDescriptorSink for HoltRegionDescriptorSink {
+impl RegionDescriptorSink for HoltRegionMetadataSink {
     fn save_region_descriptor(&self, descriptor: &metapb::RegionDescriptor) -> Result<(), Status> {
         self.store
             .put_region_descriptor(descriptor)
@@ -1026,6 +1024,10 @@ pub trait RaftMembershipAdmin: Clone + Send + Sync + 'static {
     async fn add_voter(&self, peer_id: u64, node: BasicNode) -> Result<(), Status>;
     async fn remove_voter(&self, peer_id: u64) -> Result<(), Status>;
     async fn transfer_leader(&self, peer_id: u64) -> Result<(), Status>;
+    async fn propose_region_descriptor(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+    ) -> Result<(), Status>;
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -1058,6 +1060,15 @@ where
 
     async fn transfer_leader(&self, peer_id: u64) -> Result<(), Status> {
         nokv_raftnode::OpenRaftRegion::transfer_leader(self, peer_id)
+            .await
+            .map_err(|err| Status::failed_precondition(err.to_string()))
+    }
+
+    async fn propose_region_descriptor(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+    ) -> Result<(), Status> {
+        self.propose_region_descriptor(descriptor)
             .await
             .map_err(|err| Status::failed_precondition(err.to_string()))
     }
@@ -1099,6 +1110,13 @@ where
     async fn transfer_leader(&self, _peer_id: u64) -> Result<(), Status> {
         Err(membership_unimplemented())
     }
+
+    async fn propose_region_descriptor(
+        &self,
+        _descriptor: &metapb::RegionDescriptor,
+    ) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
 }
 
 impl<E> RaftRuntimeStatusProvider for AppliedKvEngine<E>
@@ -1119,7 +1137,7 @@ where
 impl<E, S> RaftMembershipAdmin for PersistentAppliedKvEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
-    S: ApplyStatusSink,
+    S: RegionMetadataSink,
 {
     async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
         Err(membership_unimplemented())
@@ -1132,12 +1150,19 @@ where
     async fn transfer_leader(&self, _peer_id: u64) -> Result<(), Status> {
         Err(membership_unimplemented())
     }
+
+    async fn propose_region_descriptor(
+        &self,
+        _descriptor: &metapb::RegionDescriptor,
+    ) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
 }
 
 impl<E, S> RaftRuntimeStatusProvider for PersistentAppliedKvEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
-    S: ApplyStatusSink,
+    S: RegionMetadataSink,
 {
     fn raft_runtime_status(&self) -> RaftRuntimeStatus {
         let known = self.apply_status().region_id != 0;
@@ -1160,6 +1185,13 @@ impl RaftMembershipAdmin for EmptyApplyStatus {
     }
 
     async fn transfer_leader(&self, _peer_id: u64) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
+
+    async fn propose_region_descriptor(
+        &self,
+        _descriptor: &metapb::RegionDescriptor,
+    ) -> Result<(), Status> {
         Err(membership_unimplemented())
     }
 }
@@ -1208,6 +1240,7 @@ where
             )
             .await?;
         let region = self.admission.add_peer(request.peer_id, request.store_id)?;
+        self.status.propose_region_descriptor(&region).await?;
         self.descriptor_sink.save_region_descriptor(&region)?;
         self.execution.record_topology_applied(
             request.region_id,
@@ -1233,6 +1266,7 @@ where
         self.admission.validate_region(request.region_id)?;
         self.status.remove_voter(request.peer_id).await?;
         let region = self.admission.remove_peer(request.peer_id)?;
+        self.status.propose_region_descriptor(&region).await?;
         self.descriptor_sink.save_region_descriptor(&region)?;
         self.execution.record_topology_applied(
             request.region_id,
@@ -1556,7 +1590,7 @@ mod tests {
         nokv_holtstore::HoltMvccStore,
         nokv_raftnode::PersistentAppliedKvEngine<
             nokv_holtstore::HoltMvccStore,
-            HoltApplyStatusSink,
+            HoltRegionMetadataSink,
         >,
     ) {
         let store = nokv_holtstore::HoltMvccStore::open_file(path).unwrap();
@@ -1572,7 +1606,10 @@ mod tests {
         let engine = nokv_raftnode::AppliedKvEngine::with_status(status, store.clone());
         (
             store.clone(),
-            nokv_raftnode::PersistentAppliedKvEngine::new(engine, HoltApplyStatusSink::new(store)),
+            nokv_raftnode::PersistentAppliedKvEngine::new(
+                engine,
+                HoltRegionMetadataSink::new(store),
+            ),
         )
     }
 
@@ -2709,7 +2746,7 @@ mod tests {
                 RegionAdmissionState::new(admission),
                 ExecutionRuntime::default(),
                 peer_endpoints,
-                HoltRegionDescriptorSink::new(descriptor_store.clone()),
+                HoltRegionMetadataSink::new(descriptor_store.clone()),
             );
         let store_service = StoreKvService::with_admission_state_and_execution(
             leader.clone(),

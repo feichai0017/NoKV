@@ -157,11 +157,14 @@ The first slices are intentionally narrow:
   factory and mounts the internal `RaftTransport` service beside StoreKV and
   RaftAdmin, so the process boundary can carry OpenRaft replication traffic
   without changing the public Go protobuf services. Holt mode keeps the
-  persistent apply-status sink behind the OpenRaft state machine and persists
-  updated region descriptors after successful admin peer changes. The binary
-  also accepts explicit region/store/peer identity and a non-bootstrap startup
-  mode, so additional processes can start as uninitialized joining peers and be
-  added through the existing `RaftAdmin AddPeer` wire contract.
+  persistent apply-status sink behind the OpenRaft state machine. Region
+  descriptors are now also replicated as an internal NoKV proposal after
+  membership changes, so every active Holt peer persists the same
+  epoch/peer-list descriptor instead of leaving the update only on the admin
+  leader. The binary also accepts explicit region/store/peer identity and a
+  non-bootstrap startup mode, so additional processes can start as
+  uninitialized joining peers and be added through the existing `RaftAdmin
+  AddPeer` wire contract.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -238,8 +241,9 @@ Known gaps:
 - Restart recovery now covers single-node Holt restart, write-after-restart,
   durable vote/committed metadata, and an in-process multi-node restart after a
   membership change. The Go tagged harness also covers Holt-backed
-  multi-process restart after AddPeer. Production completeness still needs
-  coordinator-managed lifecycle coverage.
+  multi-process restart after AddPeer and verifies writes can continue after
+  the restarted quorum elects any voter as leader. Production completeness
+  still needs coordinator-managed lifecycle coverage.
 - Snapshot catch-up has both state-machine snapshot coverage and an in-process
   OpenRaft peer catch-up test where a joining peer installs a snapshot after the
   leader purges covered logs. Holt-backed adapter coverage now restarts a

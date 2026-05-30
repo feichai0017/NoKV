@@ -4,12 +4,16 @@ use nokv_raftlog::LogEntry;
 use openraft::{BasicNode, CommittedLeaderId, EntryPayload, LogId, Membership};
 use prost::Message;
 
-use crate::{Error, NodeId, OpenRaftEntry, Proposal, RegionId};
+use crate::{
+    Error, NodeId, OpenRaftEntry, Proposal, ProposalPayload, ProposalPayloadKind, RegionId,
+};
 
 const ENTRY_CODEC_VERSION: u32 = 1;
 const PAYLOAD_BLANK: u32 = 1;
 const PAYLOAD_NORMAL: u32 = 2;
 const PAYLOAD_MEMBERSHIP: u32 = 3;
+const NORMAL_RAFT_COMMAND: u32 = 1;
+const NORMAL_REGION_DESCRIPTOR: u32 = 2;
 
 #[derive(Clone, PartialEq, Message)]
 struct PersistedEntry {
@@ -23,6 +27,8 @@ struct PersistedEntry {
     membership: Option<PersistedMembership>,
     #[prost(uint64, tag = "5")]
     leader_node_id: NodeId,
+    #[prost(uint32, tag = "6")]
+    normal_kind: u32,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -55,6 +61,7 @@ pub fn encode_log_entry(region_id: RegionId, entry: &OpenRaftEntry) -> Result<Lo
             normal_payload: Vec::new(),
             membership: None,
             leader_node_id: entry.log_id.leader_id.node_id,
+            normal_kind: 0,
         },
         EntryPayload::Normal(proposal) => {
             if proposal.region_id != region_id {
@@ -66,9 +73,10 @@ pub fn encode_log_entry(region_id: RegionId, entry: &OpenRaftEntry) -> Result<Lo
             PersistedEntry {
                 version: ENTRY_CODEC_VERSION,
                 payload_kind: PAYLOAD_NORMAL,
-                normal_payload: proposal.payload.clone(),
+                normal_payload: proposal.payload_bytes().to_vec(),
                 membership: None,
                 leader_node_id: entry.log_id.leader_id.node_id,
+                normal_kind: encode_normal_kind(proposal.payload_kind()),
             }
         }
         EntryPayload::Membership(membership) => PersistedEntry {
@@ -77,6 +85,7 @@ pub fn encode_log_entry(region_id: RegionId, entry: &OpenRaftEntry) -> Result<Lo
             normal_payload: Vec::new(),
             membership: Some(encode_membership(membership)),
             leader_node_id: entry.log_id.leader_id.node_id,
+            normal_kind: 0,
         },
     };
 
@@ -101,11 +110,29 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
     let payload = match persisted.payload_kind {
         PAYLOAD_BLANK => EntryPayload::Blank,
         PAYLOAD_NORMAL => {
+            let proposal_payload = match persisted.normal_kind {
+                0 | NORMAL_RAFT_COMMAND => ProposalPayload::RaftCommand(persisted.normal_payload),
+                NORMAL_REGION_DESCRIPTOR => {
+                    ProposalPayload::RegionDescriptor(persisted.normal_payload)
+                }
+                other => {
+                    return Err(Error::InvalidLogPayload(format!(
+                        "unsupported normal proposal kind {other}",
+                    )))
+                }
+            };
             let proposal = Proposal {
                 region_id: record.region_id,
-                payload: persisted.normal_payload,
+                payload: proposal_payload,
             };
-            proposal.decode_raft_command()?;
+            match proposal.payload_kind() {
+                ProposalPayloadKind::RaftCommand => {
+                    proposal.decode_raft_command()?;
+                }
+                ProposalPayloadKind::RegionDescriptor => {
+                    proposal.decode_region_descriptor()?;
+                }
+            }
             EntryPayload::Normal(proposal)
         }
         PAYLOAD_MEMBERSHIP => {
@@ -128,6 +155,13 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
         ),
         payload,
     })
+}
+
+fn encode_normal_kind(kind: ProposalPayloadKind) -> u32 {
+    match kind {
+        ProposalPayloadKind::RaftCommand => NORMAL_RAFT_COMMAND,
+        ProposalPayloadKind::RegionDescriptor => NORMAL_REGION_DESCRIPTOR,
+    }
 }
 
 fn encode_membership(membership: &Membership<NodeId, BasicNode>) -> PersistedMembership {
@@ -196,6 +230,7 @@ mod tests {
     use super::*;
     use crate::RaftStoreConfig;
     use nokv_proto::nokv::kv::v1 as kvpb;
+    use nokv_proto::nokv::meta::v1 as metapb;
     use nokv_proto::nokv::raft::v1 as raftpb;
     use nokv_raftlog::SegmentedRaftLog;
 
@@ -237,6 +272,40 @@ mod tests {
         assert_eq!(decoded.log_id.index, 11);
         assert_eq!(decoded.log_id.leader_id.term, 3);
         assert_eq!(decoded.log_id.leader_id.node_id, 1);
+        assert_eq!(
+            decoded.payload,
+            EntryPayload::<RaftStoreConfig>::Normal(proposal)
+        );
+    }
+
+    #[test]
+    fn region_descriptor_entry_round_trips_through_raftlog_record() {
+        let descriptor = metapb::RegionDescriptor {
+            region_id: 7,
+            epoch: Some(metapb::RegionEpoch {
+                version: 1,
+                conf_version: 2,
+            }),
+            peers: vec![
+                metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 1,
+                },
+                metapb::RegionPeer {
+                    store_id: 2,
+                    peer_id: 2,
+                },
+            ],
+            ..Default::default()
+        };
+        let proposal = Proposal::from_region_descriptor(&descriptor).unwrap();
+        let entry = OpenRaftEntry {
+            log_id: log_id(3, 12),
+            payload: EntryPayload::Normal(proposal.clone()),
+        };
+
+        let decoded = decode_log_entry(&encode_log_entry(7, &entry).unwrap()).unwrap();
+        assert_eq!(decoded.log_id.index, 12);
         assert_eq!(
             decoded.payload,
             EntryPayload::<RaftStoreConfig>::Normal(proposal)
