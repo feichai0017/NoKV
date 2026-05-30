@@ -198,6 +198,14 @@ pub struct TopologyPublishOutcome {
 }
 
 impl TopologyPublishOutcome {
+    pub fn publish_state(&self) -> adminpb::ExecutionPublishState {
+        self.publish
+    }
+
+    pub fn last_error(&self) -> &str {
+        &self.last_error
+    }
+
     pub fn not_required() -> Self {
         Self {
             publish: adminpb::ExecutionPublishState::NotRequired,

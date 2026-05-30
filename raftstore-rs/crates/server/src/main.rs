@@ -53,6 +53,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let engine =
             PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
+        spawn_startup_root_publication(
+            coordinator.clone(),
+            identity,
+            descriptor.clone(),
+            Some(mvcc.clone()),
+        );
         spawn_coordinator_heartbeat(
             coordinator.clone(),
             identity,
@@ -76,16 +82,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(%addr, "starting rust raftstore server with in-memory MVCC");
         let log_dir = raft_log_dir(None, &mut temp_log_dir)?;
         let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
-        engine.set_region_descriptor(default_region_descriptor(identity))?;
+        let descriptor = default_region_descriptor(identity);
+        engine.set_region_descriptor(descriptor.clone())?;
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
+        spawn_startup_root_publication(coordinator.clone(), identity, descriptor.clone(), None);
         spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone(), None);
         nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
             addr,
             region,
-            RegionAdmission::from_descriptor(
-                &default_region_descriptor(identity),
-                identity.bootstrap,
-            )?,
+            RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?,
             peer_endpoints,
             EmptyRegionDescriptorSink,
             coordinator_topology_publisher(coordinator, None),
@@ -312,49 +317,52 @@ impl CoordinatorTopologyPublisher {
                 },
             )),
         };
-        let sequence = match self.pending_store.as_ref() {
-            Some(store) => match store.enqueue_pending_root_event(&event) {
-                Ok(sequence) => Some(sequence),
-                Err(err) => {
-                    return TopologyPublishOutcome::terminal_failed(format!(
-                        "persist pending root event: {err}"
-                    ))
-                }
-            },
-            None => None,
-        };
-        match publish_root_event(&self.endpoint, event.clone()).await {
-            Ok(()) => {
-                if let (Some(store), Some(sequence)) = (self.pending_store.as_ref(), sequence) {
-                    if let Err(err) = store.delete_pending_root_event(sequence) {
-                        return TopologyPublishOutcome::terminal_failed(format!(
-                            "delete pending root event {sequence}: {err}"
-                        ));
-                    }
-                }
-                TopologyPublishOutcome::terminal_published()
+        publish_root_event_with_pending(&self.endpoint, self.pending_store.as_ref(), event).await
+    }
+}
+
+async fn publish_root_event_with_pending(
+    endpoint: &str,
+    pending_store: Option<&HoltMvccStore>,
+    event: metapb::RootEvent,
+) -> TopologyPublishOutcome {
+    let sequence = match pending_store {
+        Some(store) => match store.enqueue_pending_root_event(&event) {
+            Ok(sequence) => Some(sequence),
+            Err(err) => {
+                return TopologyPublishOutcome::terminal_failed(format!(
+                    "persist pending root event: {err}"
+                ))
             }
-            Err(err) => match err {
-                RootEventPublishError::Transient(message) => {
-                    TopologyPublishOutcome::terminal_pending(message)
+        },
+        None => None,
+    };
+    match publish_root_event(endpoint, event.clone()).await {
+        Ok(()) => {
+            if let (Some(store), Some(sequence)) = (pending_store, sequence) {
+                if let Err(err) = store.delete_pending_root_event(sequence) {
+                    return TopologyPublishOutcome::terminal_failed(format!(
+                        "delete pending root event {sequence}: {err}"
+                    ));
                 }
-                RootEventPublishError::Permanent(message) => {
-                    if let (Some(store), Some(sequence)) = (self.pending_store.as_ref(), sequence) {
-                        let transition_id = root_event_transition_id(&event);
-                        if let Err(block_err) = store.block_pending_root_event(
-                            sequence,
-                            &event,
-                            &transition_id,
-                            &message,
-                        ) {
-                            return TopologyPublishOutcome::terminal_failed(format!(
-                                "block pending root event {sequence}: {block_err}"
-                            ));
-                        }
-                    }
-                    TopologyPublishOutcome::terminal_blocked(message)
+            }
+            TopologyPublishOutcome::terminal_published()
+        }
+        Err(RootEventPublishError::Transient(message)) => {
+            TopologyPublishOutcome::terminal_pending(message)
+        }
+        Err(RootEventPublishError::Permanent(message)) => {
+            if let (Some(store), Some(sequence)) = (pending_store, sequence) {
+                let transition_id = root_event_transition_id(&event);
+                if let Err(block_err) =
+                    store.block_pending_root_event(sequence, &event, &transition_id, &message)
+                {
+                    return TopologyPublishOutcome::terminal_failed(format!(
+                        "block pending root event {sequence}: {block_err}"
+                    ));
                 }
-            },
+            }
+            TopologyPublishOutcome::terminal_blocked(message)
         }
     }
 }
@@ -506,6 +514,57 @@ fn spawn_pending_topology_retries(
     tokio::spawn(async move {
         run_pending_topology_retries(config, pending_store).await;
     });
+}
+
+fn spawn_startup_root_publication(
+    config: Option<CoordinatorHeartbeatConfig>,
+    identity: ServerIdentity,
+    descriptor: metapb::RegionDescriptor,
+    pending_store: Option<HoltMvccStore>,
+) {
+    let Some(config) = config else {
+        return;
+    };
+    tokio::spawn(async move {
+        for event in startup_root_events(identity, descriptor) {
+            let outcome =
+                publish_root_event_with_pending(&config.endpoint, pending_store.as_ref(), event)
+                    .await;
+            if outcome.publish_state() == adminpb::ExecutionPublishState::TerminalPublished {
+                continue;
+            }
+            tracing::debug!(
+                publish = ?outcome.publish_state(),
+                error = %outcome.last_error(),
+                "rust raftstore startup root publication deferred"
+            );
+        }
+    });
+}
+
+fn startup_root_events(
+    identity: ServerIdentity,
+    descriptor: metapb::RegionDescriptor,
+) -> Vec<metapb::RootEvent> {
+    let mut events = vec![metapb::RootEvent {
+        kind: metapb::RootEventKind::StoreJoined as i32,
+        payload: Some(metapb::root_event::Payload::StoreMembership(
+            metapb::RootStoreMembership {
+                store_id: identity.store_id,
+            },
+        )),
+    }];
+    if identity.bootstrap {
+        events.push(metapb::RootEvent {
+            kind: metapb::RootEventKind::RegionBootstrap as i32,
+            payload: Some(metapb::root_event::Payload::RegionDescriptor(
+                metapb::RootRegionDescriptor {
+                    descriptor: Some(descriptor),
+                },
+            )),
+        });
+    }
+    events
 }
 
 async fn run_pending_topology_retries(
@@ -1105,6 +1164,61 @@ mod tests {
 
         assert_eq!(req.region_stats.len(), 1);
         assert!(req.region_stats[0].pending_admin);
+    }
+
+    #[test]
+    fn startup_root_events_publish_store_and_bootstrap_region() {
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+
+        let events = startup_root_events(identity, default_region_descriptor(identity));
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].kind, metapb::RootEventKind::StoreJoined as i32);
+        match events[0].payload.as_ref().unwrap() {
+            metapb::root_event::Payload::StoreMembership(membership) => {
+                assert_eq!(membership.store_id, 11);
+            }
+            other => panic!("unexpected startup event payload: {other:?}"),
+        }
+        assert_eq!(
+            events[1].kind,
+            metapb::RootEventKind::RegionBootstrap as i32
+        );
+        let descriptor = match events[1].payload.as_ref().unwrap() {
+            metapb::root_event::Payload::RegionDescriptor(record) => {
+                record.descriptor.as_ref().unwrap()
+            }
+            other => panic!("unexpected startup event payload: {other:?}"),
+        };
+        assert_eq!(descriptor.region_id, 7);
+        assert_eq!(descriptor.peers[0].store_id, 11);
+        assert_eq!(descriptor.peers[0].peer_id, 101);
+    }
+
+    #[test]
+    fn startup_root_events_for_joining_peer_only_publish_store_membership() {
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 12,
+            peer_id: 102,
+            bootstrap: false,
+        };
+
+        let events = startup_root_events(identity, default_region_descriptor(identity));
+
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].kind, metapb::RootEventKind::StoreJoined as i32);
+        match events[0].payload.as_ref().unwrap() {
+            metapb::root_event::Payload::StoreMembership(membership) => {
+                assert_eq!(membership.store_id, 12);
+            }
+            other => panic!("unexpected startup event payload: {other:?}"),
+        }
     }
 
     fn reserve_loopback_addr() -> SocketAddr {

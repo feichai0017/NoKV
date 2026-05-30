@@ -169,8 +169,6 @@ func TestRustRaftstoreEndpointReportsCoordinatorHeartbeat(t *testing.T) {
 
 func TestRustRaftstoreEndpointRoutesThroughCoordinator(t *testing.T) {
 	svc := coordserver.NewService(coordcatalog.NewCluster(), coordidalloc.NewIDAllocator(1), coordtso.NewAllocator(1))
-	publishRustRaftstoreRootEvent(t, svc, rootevent.StoreJoined(1))
-	publishRustRaftstoreRootEvent(t, svc, rootevent.RegionBootstrapped(rustRaftstoreTopologyDescriptor()))
 	coordAddr, stopCoord := startRustRaftstoreCoordinatorService(t, svc)
 	defer stopCoord()
 
@@ -286,9 +284,6 @@ func TestRustRaftstoreEndpointAdminPublishesCoordinatorDescriptor(t *testing.T) 
 
 func TestRustRaftstoreEndpointRetriesPendingCoordinatorDescriptor(t *testing.T) {
 	svc := coordserver.NewService(coordcatalog.NewCluster(), coordidalloc.NewIDAllocator(1), coordtso.NewAllocator(1))
-	publishRustRaftstoreRootEvent(t, svc, rootevent.StoreJoined(1))
-	publishRustRaftstoreRootEvent(t, svc, rootevent.StoreJoined(2))
-	publishRustRaftstoreRootEvent(t, svc, rootevent.RegionBootstrapped(rustRaftstoreTopologyDescriptor()))
 	coordAddr := reserveLocalAddr(t)
 
 	addrs := map[uint64]string{
@@ -327,6 +322,18 @@ func TestRustRaftstoreEndpointRetriesPendingCoordinatorDescriptor(t *testing.T) 
 	defer stopCoord()
 
 	require.Eventually(t, func() bool {
+		store, err := svc.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: 1})
+		if err != nil || store.GetNotFound() {
+			return false
+		}
+		region, err := svc.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: []byte("agent/pending-startup-root")})
+		return err == nil &&
+			!region.GetNotFound() &&
+			store.GetStore().GetState() == coordpb.StoreState_STORE_STATE_UP &&
+			store.GetStore().GetClientAddr() == addrs[1]
+	}, 8*time.Second, 50*time.Millisecond)
+
+	require.Eventually(t, func() bool {
 		resp, err := svc.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: []byte("agent/pending-coordinator-add-peer")})
 		if err != nil || resp.GetNotFound() {
 			return false
@@ -340,7 +347,7 @@ func TestRustRaftstoreEndpointRetriesPendingCoordinatorDescriptor(t *testing.T) 
 }
 
 func TestRustRaftstoreEndpointBlocksInvalidCoordinatorDescriptor(t *testing.T) {
-	coordAddr, stopCoord := startRustRaftstoreCoordinatorService(t, rejectingRootEventCoordinator{})
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorService(t, rejectingPeerChangeCoordinator{})
 	defer stopCoord()
 
 	addrs := map[uint64]string{
@@ -1002,12 +1009,15 @@ func startRustRaftstoreCoordinatorServiceOnListener(t *testing.T, lis net.Listen
 	return stop
 }
 
-type rejectingRootEventCoordinator struct {
+type rejectingPeerChangeCoordinator struct {
 	coordpb.UnimplementedCoordinatorServer
 }
 
-func (rejectingRootEventCoordinator) PublishRootEvent(context.Context, *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
-	return nil, status.Error(codes.InvalidArgument, "reject root event")
+func (rejectingPeerChangeCoordinator) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+	if req.GetEvent().GetPeerChange() != nil {
+		return nil, status.Error(codes.InvalidArgument, "reject peer change")
+	}
+	return &coordpb.PublishRootEventResponse{Accepted: true}, nil
 }
 
 func publishRustRaftstoreRootEvent(t *testing.T, svc *coordserver.Service, event rootevent.Event) {

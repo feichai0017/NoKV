@@ -180,6 +180,11 @@ The first slices are intentionally narrow:
   Holt before attempting publication back to the Go coordinator, so a
   temporarily unavailable coordinator does not lose the rooted descriptor
   update after the Rust data plane applies the membership change.
+  Startup now also publishes the store membership root event and, for the
+  bootstrap peer, the initial region bootstrap descriptor through the same
+  coordinator root-event path. Holt mode persists those startup root events in
+  the pending queue before publish, so transient coordinator outages are retried
+  instead of requiring manual test seeding.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -260,14 +265,17 @@ Known gaps:
   Holt-backed blocked-event catalog and surface pending/blocked counts through
   `ExecutionStatus.Restart`. Production route integration now has tagged
   coverage for coordinator-backed store discovery, key routing, admin
-  descriptor publication, pending descriptor retry, and blocked descriptor
-  recovery after Rust process restart; coordinator-owned process lifecycle,
-  operator resolution for blocked events, split/merge scheduler operation
-  execution, and remaining `RaftAdmin` RPC wiring are still being built out.
+  descriptor publication, pending descriptor retry, blocked descriptor
+  recovery after Rust process restart, and startup root publication for
+  coordinator-backed routing; coordinator-owned process lifecycle, operator
+  resolution for blocked events, split/merge scheduler operation execution,
+  and remaining `RaftAdmin` RPC wiring are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
-  `RaftAdmin AddPeer`. Coordinator-owned route integration and automatic
-  process lifecycle wiring are still being built out.
+  `RaftAdmin AddPeer`. When a coordinator endpoint is configured, startup
+  publishes the store membership and bootstrap region descriptor needed for
+  coordinator-backed routing. Automatic process lifecycle wiring is still being
+  built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. The single-region service still bootstraps a default descriptor
