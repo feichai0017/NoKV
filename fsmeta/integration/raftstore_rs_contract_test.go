@@ -23,8 +23,10 @@ import (
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
+	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/feichai0017/NoKV/raftstore/client"
 	"github.com/feichai0017/NoKV/raftstore/testcluster"
 	"github.com/stretchr/testify/require"
@@ -133,6 +135,112 @@ func TestRustRaftstoreEndpointFSMetaRuntimeRoutesThroughCoordinator(t *testing.T
 	mapped, err := fsmetacontract.NewInodeMappingExecutor(runtime.Executor)
 	require.NoError(t, err)
 	require.NoError(t, fsmetacontract.Run(ctx, mapped, contractModel, fsmetacontract.GenerateScript(7, 16)))
+}
+
+func TestRustRaftstoreEndpointFSMetaRuntimeRoutesThroughCoordinatorAfterAddPeer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Second)
+	defer cancel()
+
+	coord := testcluster.StartCoordinator(t)
+	t.Cleanup(func() { coord.Close(t) })
+	coordAddr := coord.Addr()
+
+	addrs := map[uint64]string{
+		1: reserveRustEndpointAddr(t),
+		2: reserveRustEndpointAddr(t),
+	}
+	stopStore1 := startRustRaftstoreEndpointAtWithEnv(t, addrs[1], t.TempDir(), []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2],
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stopStore1()
+	stopStore2 := startRustRaftstoreEndpointAtWithEnv(t, addrs[2], t.TempDir(), []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stopStore2()
+
+	coordRPC, err := coordclient.NewGRPCClient(ctx, coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = coordRPC.Close() })
+	require.Eventually(t, func() bool {
+		for storeID, addr := range addrs {
+			store, err := coordRPC.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: storeID})
+			if err != nil || store.GetNotFound() || store.GetStore().GetState() != coordpb.StoreState_STORE_STATE_UP || store.GetStore().GetClientAddr() != addr {
+				return false
+			}
+		}
+		region, err := coordRPC.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: []byte("agent/fsmeta-rust-add-peer-bootstrap")})
+		return err == nil && !region.GetNotFound() && region.GetRegionDescriptor().GetRegionId() == 1
+	}, 8*time.Second, 50*time.Millisecond)
+
+	admin, closeAdmin, err := adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closeAdmin()) }()
+	addResp, err := admin.AddPeer(ctx, &adminpb.AddPeerRequest{RegionId: 1, StoreId: 2, PeerId: 2})
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), addResp.GetRegion().GetEpoch().GetConfVersion())
+
+	require.Eventually(t, func() bool {
+		region, err := coordRPC.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: []byte("agent/fsmeta-rust-add-peer")})
+		if err != nil || region.GetNotFound() {
+			return false
+		}
+		return rustRegionHasPeer(region.GetRegionDescriptor(), 1, 1) &&
+			rustRegionHasPeer(region.GetRegionDescriptor(), 2, 2) &&
+			region.GetRegionDescriptor().GetEpoch().GetConfVersion() == 2
+	}, 8*time.Second, 50*time.Millisecond)
+
+	peer2Admin, closePeer2Admin, err := adminclient.Dial(ctx, addrs[2])
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closePeer2Admin()) }()
+	require.Eventually(t, func() bool {
+		status, err := peer2Admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+		return err == nil && status.GetKnown() && status.GetHosted() && status.GetLocalPeerId() == 2
+	}, 8*time.Second, 50*time.Millisecond)
+
+	registerMount(t, ctx, coordRPC, "vol")
+	seedKV, err := client.New(client.Config{
+		RegionResolver: coordRPC,
+		StoreResolver:  coordRPC,
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          client.RetryPolicy{MaxAttempts: 3},
+	})
+	require.NoError(t, err)
+	seedRunner, err := fsmetaraftstore.NewRunner(seedKV, coordRPC)
+	require.NoError(t, err)
+	seedRootInode(t, ctx, seedRunner, model.MountIdentity{MountID: "vol", MountKeyID: 1})
+	require.NoError(t, seedKV.Close())
+
+	runtime, err := fsmetaraftstore.Open(ctx, fsmetaraftstore.Options{
+		CoordinatorAddr:        coordAddr,
+		DialOptions:            []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		SessionCleanupInterval: -1,
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, runtime.Close()) }()
+
+	contractModel := fsmetacontract.NewModel("vol")
+	mapped, err := fsmetacontract.NewInodeMappingExecutor(runtime.Executor)
+	require.NoError(t, err)
+	require.NoError(t, fsmetacontract.Run(ctx, mapped, contractModel, fsmetacontract.GenerateScript(11, 16)))
+
+	leaderStatus, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	require.True(t, leaderStatus.GetLeader())
+	require.Eventually(t, func() bool {
+		status, err := peer2Admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+		return err == nil && status.GetAppliedIndex() >= leaderStatus.GetAppliedIndex()
+	}, 8*time.Second, 100*time.Millisecond)
 }
 
 func TestRustRaftstoreEndpointFSMetaHoltRestartPreservesNamespace(t *testing.T) {
@@ -334,6 +442,15 @@ func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {
 		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
 		Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 1}},
 	}
+}
+
+func rustRegionHasPeer(region *metapb.RegionDescriptor, storeID, peerID uint64) bool {
+	for _, peer := range region.GetPeers() {
+		if peer.GetStoreId() == storeID && peer.GetPeerId() == peerID {
+			return true
+		}
+	}
+	return false
 }
 
 func reserveRustEndpointAddr(t *testing.T) string {

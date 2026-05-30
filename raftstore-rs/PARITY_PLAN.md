@@ -229,7 +229,11 @@ The first slices are intentionally narrow:
   integration harness also opens the production `fsmeta/runtime/raftstore`
   assembly through a real Go coordinator while the Rust store publishes its
   store/region metadata by heartbeat, then runs fsmeta contract operations
-  through coordinator-backed routing.
+  through coordinator-backed routing. It also covers the same fsmeta runtime
+  path after adding a second Rust peer through the existing `RaftAdmin`
+  contract: the Go coordinator observes the updated rooted descriptor, fsmeta
+  writes route through the coordinator-backed client, and the added peer catches
+  up to the leader's apply index.
 - The tagged Go client harness now also starts a real Go coordinator service,
   publishes rooted store and region metadata, lets the Rust store populate
   `StoreInfo` through heartbeat, and routes `StoreKV` traffic through the
