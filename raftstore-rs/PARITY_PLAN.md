@@ -174,7 +174,8 @@ The first slices are intentionally narrow:
   region count, leader count, leader region ids, and minimal per-region runtime
   stats. Coordinator-returned leader-transfer operations now execute through
   the local `RaftAdmin.TransferLeader` service path; split and merge operations
-  remain explicit no-ops until Rust owns those admin RPCs. When the same
+  are validated and reported as explicit unsupported scheduler outcomes until
+  Rust owns those admin RPCs. When the same
   coordinator endpoint is configured, successful Rust `AddPeer` and
   `RemovePeer` operations also persist terminal rooted peer-change events in
   Holt before attempting publication back to the Go coordinator, so a
@@ -280,7 +281,10 @@ Known gaps:
   recovery after Rust process restart, and startup root publication for
   coordinator-backed routing; coordinator-owned process lifecycle, operator
   resolution for blocked events, split/merge scheduler operation execution,
-  and remaining `RaftAdmin` RPC wiring are still being built out.
+  and remaining `RaftAdmin` RPC wiring are still being built out. Unsupported
+  split/merge scheduler operations are no longer silently treated as consumed:
+  the server validates their required fields and logs an explicit unsupported
+  outcome with operation identifiers.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. When a coordinator endpoint is configured, startup

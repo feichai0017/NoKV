@@ -698,13 +698,26 @@ async fn run_coordinator_heartbeat<E>(
         match send_store_heartbeat(&config.endpoints, request).await {
             Ok(operations) => {
                 for operation in operations {
-                    match execute_scheduler_operation(&admin_endpoint, operation).await {
-                        Ok(true) => {
+                    match execute_scheduler_operation(&admin_endpoint, &operation).await {
+                        Ok(SchedulerOperationOutcome::Applied) => {
                             tracing::debug!("rust raftstore applied coordinator operation");
                         }
-                        Ok(false) => {
+                        Ok(SchedulerOperationOutcome::Invalid { reason }) => {
                             tracing::debug!(
-                                "rust raftstore ignored unsupported coordinator operation"
+                                %reason,
+                                "rust raftstore ignored invalid coordinator operation"
+                            );
+                        }
+                        Ok(SchedulerOperationOutcome::Unsupported { kind, reason }) => {
+                            tracing::warn!(
+                                ?kind,
+                                %reason,
+                                region_id = operation.region_id,
+                                source_peer_id = operation.source_peer_id,
+                                target_peer_id = operation.target_peer_id,
+                                source_region_id = operation.source_region_id,
+                                split_key_len = operation.split_key.len(),
+                                "rust raftstore received unsupported coordinator operation"
                             );
                         }
                         Err(err) => {
@@ -744,10 +757,22 @@ async fn send_store_heartbeat(
     Err(last_error.unwrap_or_else(|| "coordinator endpoints unavailable".to_owned()))
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum SchedulerOperationOutcome {
+    Applied,
+    Invalid {
+        reason: &'static str,
+    },
+    Unsupported {
+        kind: coordpb::SchedulerOperationType,
+        reason: &'static str,
+    },
+}
+
 async fn execute_scheduler_operation(
     admin_endpoint: &str,
-    operation: coordpb::SchedulerOperation,
-) -> Result<bool, tonic::Status> {
+    operation: &coordpb::SchedulerOperation,
+) -> Result<SchedulerOperationOutcome, tonic::Status> {
     let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
         .unwrap_or(coordpb::SchedulerOperationType::None);
     match kind {
@@ -756,7 +781,9 @@ async fn execute_scheduler_operation(
                 || operation.source_peer_id == 0
                 || operation.target_peer_id == 0
             {
-                return Ok(false);
+                return Ok(SchedulerOperationOutcome::Invalid {
+                    reason: "leader transfer requires region, source peer, and target peer",
+                });
             }
             let mut client =
                 adminpb::raft_admin_client::RaftAdminClient::connect(admin_endpoint.to_owned())
@@ -768,11 +795,39 @@ async fn execute_scheduler_operation(
                     peer_id: operation.target_peer_id,
                 })
                 .await?;
-            Ok(true)
+            Ok(SchedulerOperationOutcome::Applied)
         }
-        coordpb::SchedulerOperationType::SplitRegion
-        | coordpb::SchedulerOperationType::MergeRegion
-        | coordpb::SchedulerOperationType::None => Ok(false),
+        coordpb::SchedulerOperationType::SplitRegion => {
+            if operation.region_id == 0
+                || operation.split_key.is_empty()
+                || operation
+                    .split_child
+                    .as_ref()
+                    .is_none_or(|child| child.region_id == 0)
+            {
+                return Ok(SchedulerOperationOutcome::Invalid {
+                    reason: "split requires region, split key, and child descriptor",
+                });
+            }
+            Ok(SchedulerOperationOutcome::Unsupported {
+                kind,
+                reason: "split execution is not implemented in raftstore-rs yet",
+            })
+        }
+        coordpb::SchedulerOperationType::MergeRegion => {
+            if operation.region_id == 0 || operation.source_region_id == 0 {
+                return Ok(SchedulerOperationOutcome::Invalid {
+                    reason: "merge requires target region and source region",
+                });
+            }
+            Ok(SchedulerOperationOutcome::Unsupported {
+                kind,
+                reason: "merge execution is not implemented in raftstore-rs yet",
+            })
+        }
+        coordpb::SchedulerOperationType::None => Ok(SchedulerOperationOutcome::Invalid {
+            reason: "scheduler operation type is none",
+        }),
     }
 }
 
@@ -1092,9 +1147,9 @@ mod tests {
         });
         wait_for_server(addr).await;
 
-        let applied = execute_scheduler_operation(
+        let outcome = execute_scheduler_operation(
             &local_admin_endpoint(addr),
-            coordpb::SchedulerOperation {
+            &coordpb::SchedulerOperation {
                 r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
                 region_id: 7,
                 source_peer_id: 101,
@@ -1105,7 +1160,7 @@ mod tests {
         .await
         .unwrap();
 
-        assert!(applied);
+        assert_eq!(outcome, SchedulerOperationOutcome::Applied);
         let captured = transfers.lock().unwrap();
         assert_eq!(captured.len(), 1);
         assert_eq!(captured[0].region_id, 7);
@@ -1114,20 +1169,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn scheduler_operation_ignores_unsupported_split_without_dialing_admin() {
-        let applied = execute_scheduler_operation(
+    async fn scheduler_operation_reports_unsupported_split_without_dialing_admin() {
+        let outcome = execute_scheduler_operation(
             "http://127.0.0.1:1",
-            coordpb::SchedulerOperation {
+            &coordpb::SchedulerOperation {
                 r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
                 region_id: 7,
                 split_key: b"k".to_vec(),
+                split_child: Some(metapb::RegionDescriptor {
+                    region_id: 8,
+                    ..Default::default()
+                }),
                 ..Default::default()
             },
         )
         .await
         .unwrap();
 
-        assert!(!applied);
+        assert_eq!(
+            outcome,
+            SchedulerOperationOutcome::Unsupported {
+                kind: coordpb::SchedulerOperationType::SplitRegion,
+                reason: "split execution is not implemented in raftstore-rs yet",
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduler_operation_reports_invalid_split_before_admin_rpc() {
+        let outcome = execute_scheduler_operation(
+            "http://127.0.0.1:1",
+            &coordpb::SchedulerOperation {
+                r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+                region_id: 7,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            outcome,
+            SchedulerOperationOutcome::Invalid {
+                reason: "split requires region, split key, and child descriptor",
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn scheduler_operation_reports_unsupported_merge_without_dialing_admin() {
+        let outcome = execute_scheduler_operation(
+            "http://127.0.0.1:1",
+            &coordpb::SchedulerOperation {
+                r#type: coordpb::SchedulerOperationType::MergeRegion as i32,
+                region_id: 7,
+                source_region_id: 8,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(
+            outcome,
+            SchedulerOperationOutcome::Unsupported {
+                kind: coordpb::SchedulerOperationType::MergeRegion,
+                reason: "merge execution is not implemented in raftstore-rs yet",
+            }
+        );
     }
 
     #[tokio::test]
