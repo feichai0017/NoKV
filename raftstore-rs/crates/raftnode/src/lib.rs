@@ -11,6 +11,7 @@ use std::sync::{Arc, Mutex};
 
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
+use tokio::sync::broadcast;
 
 pub type NodeId = u64;
 pub type RegionId = u64;
@@ -50,12 +51,17 @@ pub trait ApplyStatusProvider: Clone + Send + Sync + 'static {
     fn apply_status(&self) -> ApplyStatus;
 }
 
+pub trait ApplyWatchProvider: Clone + Send + Sync + 'static {
+    fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent>;
+}
+
 #[derive(Debug)]
 struct AppliedKvInner<E> {
     region_id: RegionId,
     term: u64,
     applied_index: AtomicU64,
     engine: Mutex<E>,
+    watch: broadcast::Sender<kvpb::ApplyWatchEvent>,
 }
 
 /// Region-local apply boundary used before the OpenRaft-backed implementation
@@ -74,6 +80,7 @@ impl<E> AppliedKvEngine<E> {
                 term: 1,
                 applied_index: AtomicU64::new(0),
                 engine: Mutex::new(engine),
+                watch: broadcast::channel(1024).0,
             }),
         }
     }
@@ -85,6 +92,10 @@ impl<E> AppliedKvEngine<E> {
             applied_index: self.inner.applied_index.load(Ordering::Acquire),
         }
     }
+
+    pub fn subscribe(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
+        self.inner.watch.subscribe()
+    }
 }
 
 impl<E> ApplyStatusProvider for AppliedKvEngine<E>
@@ -93,6 +104,15 @@ where
 {
     fn apply_status(&self) -> ApplyStatus {
         self.status()
+    }
+}
+
+impl<E> ApplyWatchProvider for AppliedKvEngine<E>
+where
+    E: Clone + Send + Sync + 'static,
+{
+    fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
+        self.subscribe()
     }
 }
 
@@ -109,15 +129,35 @@ where
         f(&engine)
     }
 
-    fn apply<T>(&self, f: impl FnOnce(&E) -> nokv_mvcc::Result<T>) -> nokv_mvcc::Result<T> {
+    fn apply<T>(&self, f: impl FnOnce(&E) -> nokv_mvcc::Result<T>) -> nokv_mvcc::Result<(u64, T)> {
         let engine = self
             .inner
             .engine
             .lock()
             .map_err(|_| nokv_mvcc::Error::Backend("region apply mutex poisoned".to_owned()))?;
         let result = f(&engine)?;
-        self.inner.applied_index.fetch_add(1, Ordering::AcqRel);
-        Ok(result)
+        let index = self.inner.applied_index.fetch_add(1, Ordering::AcqRel) + 1;
+        Ok((index, result))
+    }
+
+    fn publish_apply(
+        &self,
+        index: u64,
+        source: kvpb::ApplyWatchEventSource,
+        commit_version: u64,
+        keys: Vec<Vec<u8>>,
+    ) {
+        if keys.is_empty() {
+            return;
+        }
+        let _ = self.inner.watch.send(kvpb::ApplyWatchEvent {
+            region_id: self.inner.region_id,
+            term: self.inner.term,
+            index,
+            source: source as i32,
+            commit_version,
+            keys,
+        });
     }
 }
 
@@ -139,10 +179,18 @@ where
 
     fn prewrite(&self, req: &kvpb::PrewriteRequest) -> nokv_mvcc::Result<kvpb::PrewriteResponse> {
         self.apply(|engine| engine.prewrite(req))
+            .map(|(_, result)| result)
     }
 
     fn commit(&self, req: &kvpb::CommitRequest) -> nokv_mvcc::Result<kvpb::CommitResponse> {
-        self.apply(|engine| engine.commit(req))
+        let (index, result) = self.apply(|engine| engine.commit(req))?;
+        self.publish_apply(
+            index,
+            kvpb::ApplyWatchEventSource::Commit,
+            req.commit_version,
+            req.keys.clone(),
+        );
+        Ok(result)
     }
 
     fn batch_rollback(
@@ -150,13 +198,23 @@ where
         req: &kvpb::BatchRollbackRequest,
     ) -> nokv_mvcc::Result<kvpb::BatchRollbackResponse> {
         self.apply(|engine| engine.batch_rollback(req))
+            .map(|(_, result)| result)
     }
 
     fn resolve_lock(
         &self,
         req: &kvpb::ResolveLockRequest,
     ) -> nokv_mvcc::Result<kvpb::ResolveLockResponse> {
-        self.apply(|engine| engine.resolve_lock(req))
+        let (index, result) = self.apply(|engine| engine.resolve_lock(req))?;
+        if req.commit_version != 0 {
+            self.publish_apply(
+                index,
+                kvpb::ApplyWatchEventSource::ResolveLock,
+                req.commit_version,
+                req.keys.clone(),
+            );
+        }
+        Ok(result)
     }
 
     fn check_txn_status(
@@ -164,6 +222,7 @@ where
         req: &kvpb::CheckTxnStatusRequest,
     ) -> nokv_mvcc::Result<kvpb::CheckTxnStatusResponse> {
         self.apply(|engine| engine.check_txn_status(req))
+            .map(|(_, result)| result)
     }
 
     fn txn_heartbeat(
@@ -171,20 +230,48 @@ where
         req: &kvpb::TxnHeartBeatRequest,
     ) -> nokv_mvcc::Result<kvpb::TxnHeartBeatResponse> {
         self.apply(|engine| engine.txn_heartbeat(req))
+            .map(|(_, result)| result)
     }
 
     fn try_atomic_mutate(
         &self,
         req: &kvpb::TryAtomicMutateRequest,
     ) -> nokv_mvcc::Result<kvpb::TryAtomicMutateResponse> {
-        self.apply(|engine| engine.try_atomic_mutate(req))
+        let keys = req
+            .mutations
+            .iter()
+            .map(|mutation| mutation.key.clone())
+            .collect::<Vec<_>>();
+        let (index, result) = self.apply(|engine| engine.try_atomic_mutate(req))?;
+        self.publish_apply(
+            index,
+            kvpb::ApplyWatchEventSource::Commit,
+            req.commit_version,
+            keys,
+        );
+        Ok(result)
     }
 
     fn install_prepared(
         &self,
         req: &kvpb::InstallPreparedMvccEntriesRequest,
     ) -> nokv_mvcc::Result<kvpb::InstallPreparedMvccEntriesResponse> {
-        self.apply(|engine| engine.install_prepared(req))
+        let keys = if req.watch_keys.is_empty() {
+            req.entries
+                .iter()
+                .map(|entry| entry.key.clone())
+                .collect::<Vec<_>>()
+        } else {
+            req.watch_keys.clone()
+        };
+        let (index, result) = self.apply(|engine| engine.install_prepared(req))?;
+        self.publish_apply(
+            index,
+            kvpb::ApplyWatchEventSource::Commit,
+            req.commit_version,
+            keys,
+        );
+        Ok(result)
     }
 
     fn mvcc_maintenance(
@@ -192,6 +279,7 @@ where
         req: &kvpb::MvccMaintenanceRequest,
     ) -> nokv_mvcc::Result<kvpb::MvccMaintenanceResponse> {
         self.apply(|engine| engine.mvcc_maintenance(req))
+            .map(|(_, result)| result)
     }
 }
 
@@ -260,5 +348,28 @@ mod tests {
             })
             .unwrap();
         assert_eq!(engine.status().applied_index, 1);
+    }
+
+    #[test]
+    fn applied_kv_engine_publishes_watch_events_for_writes() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        let mut watch = engine.subscribe();
+        engine
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                commit_version: 2,
+                ..Default::default()
+            })
+            .unwrap();
+        let event = watch.try_recv().unwrap();
+        assert_eq!(event.region_id, 7);
+        assert_eq!(event.index, 1);
+        assert_eq!(event.commit_version, 2);
+        assert_eq!(event.keys, vec![b"k".to_vec()]);
     }
 }

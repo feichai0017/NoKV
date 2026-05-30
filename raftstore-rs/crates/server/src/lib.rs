@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
-use nokv_raftnode::ApplyStatusProvider;
+use nokv_raftnode::{ApplyStatusProvider, ApplyWatchProvider};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
@@ -30,7 +30,7 @@ impl<E> StoreKvService<E> {
 #[tonic::async_trait]
 impl<E> kvpb::store_kv_server::StoreKv for StoreKvService<E>
 where
-    E: KvEngine,
+    E: KvEngine + ApplyWatchProvider,
 {
     async fn get(
         &self,
@@ -177,9 +177,41 @@ where
 
     async fn watch_apply(
         &self,
-        _request: Request<kvpb::ApplyWatchRequest>,
+        request: Request<kvpb::ApplyWatchRequest>,
     ) -> Result<Response<Self::WatchApplyStream>, Status> {
-        let (_tx, rx) = tokio::sync::mpsc::channel(1);
+        let request = request.into_inner();
+        let prefix = request.key_prefix;
+        let buffer = request.buffer.max(1) as usize;
+        let mut watch = self.engine.subscribe_apply();
+        let (tx, rx) = tokio::sync::mpsc::channel(buffer);
+        tokio::spawn(async move {
+            loop {
+                match watch.recv().await {
+                    Ok(event) => {
+                        if !event.keys.iter().any(|key| key.starts_with(&prefix)) {
+                            continue;
+                        }
+                        let response = kvpb::ApplyWatchResponse {
+                            event: Some(event),
+                            dropped_events: 0,
+                        };
+                        if tx.send(Ok(response)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(dropped)) => {
+                        let response = kvpb::ApplyWatchResponse {
+                            event: None,
+                            dropped_events: dropped,
+                        };
+                        if tx.send(Ok(response)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+                }
+            }
+        });
         Ok(Response::new(ReceiverStream::new(rx)))
     }
 }
@@ -303,7 +335,7 @@ pub async fn serve_with_region_engine<E>(
     engine: E,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: KvEngine + ApplyStatusProvider,
+    E: KvEngine + ApplyStatusProvider + ApplyWatchProvider,
 {
     tonic::transport::Server::builder()
         .add_service(StoreKvServer::new(StoreKvService::new(engine.clone())))
@@ -321,10 +353,11 @@ mod tests {
     use super::*;
     use adminpb::raft_admin_server::RaftAdmin;
     use kvpb::store_kv_server::StoreKv;
+    use tokio_stream::StreamExt;
 
     #[tokio::test]
     async fn get_returns_not_found_from_empty_store() {
-        let service = StoreKvService::new(MvccStore::new());
+        let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
         let response = service
             .get(Request::new(kvpb::KvGetRequest {
                 request: Some(kvpb::GetRequest {
@@ -365,6 +398,42 @@ mod tests {
             .into_inner();
         assert_eq!(response.response.unwrap().applied_keys, 1);
         assert_eq!(engine.status().applied_index, 1);
+    }
+
+    #[tokio::test]
+    async fn watch_apply_streams_matching_apply_events() {
+        let engine = nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new());
+        let service = StoreKvService::new(engine.clone());
+        let mut stream = service
+            .watch_apply(Request::new(kvpb::ApplyWatchRequest {
+                key_prefix: b"prefix/".to_vec(),
+                buffer: 4,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        service
+            .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
+                request: Some(kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"prefix/k".to_vec(),
+                        value: b"v".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 9,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap();
+
+        let response = stream.next().await.unwrap().unwrap();
+        let event = response.event.unwrap();
+        assert_eq!(event.commit_version, 9);
+        assert_eq!(event.keys, vec![b"prefix/k".to_vec()]);
     }
 
     #[tokio::test]
