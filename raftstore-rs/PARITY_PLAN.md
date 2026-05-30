@@ -305,8 +305,10 @@ Known gaps:
   records, and Holt server mode persists apply status after successful write
   commands. Non-bootstrap Rust peers no longer persist a default descriptor,
   report a hosted region, or expose ready restart counts before OpenRaft
-  membership exists. Bootstrap peers still seed the initial descriptor locally,
-  and full coordinator-provided topology bootstrap is still pending.
+  membership exists; StoreKV admission also rejects those unhosted runtimes as
+  not hosted instead of treating them as ordinary followers. Bootstrap peers
+  still seed the initial descriptor locally, and full coordinator-provided
+  topology bootstrap is still pending.
 - Admin `AddPeer`/`RemovePeer` RPCs are wired for `OpenRaftRegion`.
   `TransferLeader` is wired for current-leader no-op and target-peer
   self-election. When the current leader has a configured target peer endpoint,
