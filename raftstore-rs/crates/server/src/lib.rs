@@ -8,9 +8,12 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use nokv_holtstore::{BlockedRootEvent, HoltMvccStore, RegionApplyState};
+use nokv_holtstore::{
+    BlockedRootEvent, HoltMvccStore, PendingSchedulerOperation, RegionApplyState,
+};
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
+use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
@@ -100,6 +103,10 @@ pub trait RestartDiagnosticsProvider: Send + Sync + 'static {
     fn blocked_topology_statuses(&self) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
         Ok(Vec::new())
     }
+
+    fn pending_topology_statuses(&self) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -132,6 +139,17 @@ impl RestartDiagnosticsProvider for HoltMvccStore {
                 events
                     .iter()
                     .map(blocked_root_event_topology_status)
+                    .collect()
+            })
+            .map_err(|err| Status::internal(err.to_string()))
+    }
+
+    fn pending_topology_statuses(&self) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
+        self.pending_scheduler_operations()
+            .map(|operations| {
+                operations
+                    .iter()
+                    .map(pending_scheduler_operation_topology_status)
                     .collect()
             })
             .map_err(|err| Status::internal(err.to_string()))
@@ -176,6 +194,68 @@ fn root_event_action(event: &metapb::RootEvent) -> &'static str {
         Some(metapb::root_event::Payload::RangeMerge(_)) => "range merge",
         _ => "root event",
     }
+}
+
+fn pending_scheduler_operation_topology_status(
+    pending: &PendingSchedulerOperation,
+) -> adminpb::ExecutionTopologyStatus {
+    adminpb::ExecutionTopologyStatus {
+        transition_id: scheduler_operation_transition_id(&pending.operation),
+        region_id: pending.operation.region_id,
+        action: scheduler_operation_action(&pending.operation).to_owned(),
+        outcome: adminpb::ExecutionTopologyOutcome::Queued as i32,
+        publish: adminpb::ExecutionPublishState::NotRequired as i32,
+        last_error: "scheduler operation pending".to_owned(),
+        ..Default::default()
+    }
+}
+
+fn scheduler_operation_transition_id(operation: &coordpb::SchedulerOperation) -> String {
+    let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
+        .unwrap_or(coordpb::SchedulerOperationType::None);
+    match kind {
+        coordpb::SchedulerOperationType::LeaderTransfer => format!(
+            "leader-transfer:{}:{}:{}",
+            operation.region_id, operation.source_peer_id, operation.target_peer_id
+        ),
+        coordpb::SchedulerOperationType::SplitRegion => {
+            format!(
+                "split:{}:{}",
+                operation.region_id,
+                lowercase_hex(&operation.split_key)
+            )
+        }
+        coordpb::SchedulerOperationType::MergeRegion => {
+            format!(
+                "merge:{}:{}",
+                operation.region_id, operation.source_region_id
+            )
+        }
+        coordpb::SchedulerOperationType::None => {
+            format!("scheduler:{}:{}", operation.r#type, operation.region_id)
+        }
+    }
+}
+
+fn scheduler_operation_action(operation: &coordpb::SchedulerOperation) -> &'static str {
+    let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
+        .unwrap_or(coordpb::SchedulerOperationType::None);
+    match kind {
+        coordpb::SchedulerOperationType::LeaderTransfer => "leader transfer",
+        coordpb::SchedulerOperationType::SplitRegion => "range split",
+        coordpb::SchedulerOperationType::MergeRegion => "range merge",
+        coordpb::SchedulerOperationType::None => "scheduler operation",
+    }
+}
+
+fn lowercase_hex(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
 }
 
 #[tonic::async_trait]
@@ -1577,13 +1657,10 @@ where
         let status = self.status.apply_status();
         let mut topology = self.execution.topology_snapshot()?;
         for blocked in self.restart_diagnostics.blocked_topology_statuses()? {
-            if topology
-                .iter()
-                .any(|status| status.transition_id == blocked.transition_id)
-            {
-                continue;
-            }
-            topology.push(blocked);
+            push_missing_topology_status(&mut topology, blocked);
+        }
+        for pending in self.restart_diagnostics.pending_topology_statuses()? {
+            push_missing_topology_status(&mut topology, pending);
         }
         Ok(Response::new(adminpb::ExecutionStatusResponse {
             last_admission: Some(self.execution.snapshot()?),
@@ -1606,6 +1683,19 @@ where
             ..Default::default()
         }))
     }
+}
+
+fn push_missing_topology_status(
+    topology: &mut Vec<adminpb::ExecutionTopologyStatus>,
+    status: adminpb::ExecutionTopologyStatus,
+) {
+    if topology
+        .iter()
+        .any(|existing| existing.transition_id == status.transition_id)
+    {
+        return;
+    }
+    topology.push(status);
 }
 
 fn peer_change_transition_id(action: &str, region_id: u64, store_id: u64, peer_id: u64) -> String {
@@ -3245,19 +3335,40 @@ mod tests {
         assert_eq!(restart.pending_root_event_count, 1);
         assert_eq!(restart.blocked_root_event_count, 1);
         assert_eq!(restart.pending_scheduler_operation_count, 1);
-        assert_eq!(execution.topology.len(), 1);
-        assert_eq!(execution.topology[0].transition_id, "peer:1:add:2:2");
-        assert_eq!(execution.topology[0].region_id, 1);
-        assert_eq!(execution.topology[0].action, "peer change");
+        assert_eq!(execution.topology.len(), 2);
+        let blocked = execution
+            .topology
+            .iter()
+            .find(|status| status.transition_id == "peer:1:add:2:2")
+            .unwrap();
+        assert_eq!(blocked.region_id, 1);
+        assert_eq!(blocked.action, "peer change");
         assert_eq!(
-            execution.topology[0].outcome,
+            blocked.outcome,
             adminpb::ExecutionTopologyOutcome::Failed as i32
         );
         assert_eq!(
-            execution.topology[0].publish,
+            blocked.publish,
             adminpb::ExecutionPublishState::TerminalBlocked as i32
         );
-        assert_eq!(execution.topology[0].last_error, "catalog precondition");
+        assert_eq!(blocked.last_error, "catalog precondition");
+
+        let pending = execution
+            .topology
+            .iter()
+            .find(|status| status.transition_id == "split:1:6d")
+            .unwrap();
+        assert_eq!(pending.region_id, 1);
+        assert_eq!(pending.action, "range split");
+        assert_eq!(
+            pending.outcome,
+            adminpb::ExecutionTopologyOutcome::Queued as i32
+        );
+        assert_eq!(
+            pending.publish,
+            adminpb::ExecutionPublishState::NotRequired as i32
+        );
+        assert_eq!(pending.last_error, "scheduler operation pending");
     }
 
     #[tokio::test]
