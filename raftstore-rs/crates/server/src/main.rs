@@ -715,19 +715,52 @@ async fn send_store_heartbeat(
     endpoints: &[String],
     request: coordpb::StoreHeartbeatRequest,
 ) -> Result<Vec<coordpb::SchedulerOperation>, String> {
+    send_store_heartbeat_with(endpoints, request, |endpoint, request| async move {
+        match coordpb::coordinator_client::CoordinatorClient::connect(endpoint.clone()).await {
+            Ok(mut client) => client
+                .store_heartbeat(request)
+                .await
+                .map(|response| response.into_inner())
+                .map_err(|err| err.to_string()),
+            Err(err) => Err(err.to_string()),
+        }
+    })
+    .await
+}
+
+async fn send_store_heartbeat_with<F, Fut>(
+    endpoints: &[String],
+    request: coordpb::StoreHeartbeatRequest,
+    mut send: F,
+) -> Result<Vec<coordpb::SchedulerOperation>, String>
+where
+    F: FnMut(String, coordpb::StoreHeartbeatRequest) -> Fut,
+    Fut: std::future::Future<Output = Result<coordpb::StoreHeartbeatResponse, String>>,
+{
+    let mut first_success = None;
+    let mut first_operational_success = None;
     let mut last_error = None;
     for endpoint in endpoints {
-        match coordpb::coordinator_client::CoordinatorClient::connect(endpoint.clone()).await {
-            Ok(mut client) => match client.store_heartbeat(request.clone()).await {
-                Ok(response) => return Ok(response.into_inner().operations),
-                Err(err) => {
-                    last_error = Some(err.to_string());
+        match send(endpoint.clone(), request.clone()).await {
+            Ok(response) => {
+                let operations = response.operations;
+                if first_success.is_none() {
+                    first_success = Some(operations.clone());
                 }
-            },
+                if first_operational_success.is_none() && !operations.is_empty() {
+                    first_operational_success = Some(operations);
+                }
+            }
             Err(err) => {
-                last_error = Some(err.to_string());
+                last_error = Some(err);
             }
         }
+    }
+    if let Some(operations) = first_operational_success {
+        return Ok(operations);
+    }
+    if let Some(operations) = first_success {
+        return Ok(operations);
     }
     Err(last_error.unwrap_or_else(|| "coordinator endpoints unavailable".to_owned()))
 }
@@ -966,6 +999,7 @@ fn startup_region_descriptor(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
     use tonic::{Request, Response, Status};
 
@@ -1229,6 +1263,64 @@ mod tests {
         assert_eq!(captured[0].region_id, 7);
         assert_eq!(captured[0].peer_id, 202);
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn store_heartbeat_queries_all_endpoints_and_prefers_operations() {
+        let endpoints = vec![
+            "http://standby".to_owned(),
+            "http://holder".to_owned(),
+            "http://down".to_owned(),
+        ];
+        let operation = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
+            region_id: 9,
+            source_peer_id: 101,
+            target_peer_id: 201,
+            ..Default::default()
+        };
+        let responses = Arc::new(Mutex::new(BTreeMap::from([
+            (
+                "http://standby".to_owned(),
+                Ok(coordpb::StoreHeartbeatResponse {
+                    accepted: true,
+                    ..Default::default()
+                }),
+            ),
+            (
+                "http://holder".to_owned(),
+                Ok(coordpb::StoreHeartbeatResponse {
+                    accepted: true,
+                    operations: vec![operation.clone()],
+                }),
+            ),
+            ("http://down".to_owned(), Err("unavailable".to_owned())),
+        ])));
+        let calls = Arc::new(Mutex::new(Vec::new()));
+
+        let operations = send_store_heartbeat_with(
+            &endpoints,
+            coordpb::StoreHeartbeatRequest {
+                store_id: 2,
+                region_num: 1,
+                leader_num: 1,
+                leader_region_ids: vec![9],
+                ..Default::default()
+            },
+            |endpoint, _request| {
+                let responses = responses.clone();
+                let calls = calls.clone();
+                async move {
+                    calls.lock().unwrap().push(endpoint.clone());
+                    responses.lock().unwrap().get(&endpoint).unwrap().clone()
+                }
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(operations, vec![operation]);
+        assert_eq!(calls.lock().unwrap().as_slice(), endpoints.as_slice());
     }
 
     #[tokio::test]
