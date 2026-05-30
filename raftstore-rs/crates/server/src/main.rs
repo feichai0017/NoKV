@@ -709,6 +709,7 @@ async fn run_coordinator_heartbeat<E>(
                             );
                         }
                         Ok(SchedulerOperationOutcome::Unsupported { kind, reason }) => {
+                            record_pending_scheduler_operation(root_events.as_ref(), &operation);
                             tracing::warn!(
                                 ?kind,
                                 %reason,
@@ -755,6 +756,23 @@ async fn send_store_heartbeat(
         }
     }
     Err(last_error.unwrap_or_else(|| "coordinator endpoints unavailable".to_owned()))
+}
+
+fn record_pending_scheduler_operation(
+    store: Option<&HoltMvccStore>,
+    operation: &coordpb::SchedulerOperation,
+) {
+    let Some(store) = store else {
+        return;
+    };
+    if let Err(err) = store.record_pending_scheduler_operation(operation) {
+        tracing::warn!(
+            error = %err,
+            region_id = operation.region_id,
+            operation_type = operation.r#type,
+            "rust raftstore failed to persist pending scheduler operation"
+        );
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1237,6 +1255,27 @@ mod tests {
                 reason: "merge execution is not implemented in raftstore-rs yet",
             }
         );
+    }
+
+    #[test]
+    fn unsupported_scheduler_operation_records_pending_holt_diagnostic() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let operation = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+            region_id: 7,
+            split_key: b"k".to_vec(),
+            split_child: Some(metapb::RegionDescriptor {
+                region_id: 8,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+
+        record_pending_scheduler_operation(Some(&store), &operation);
+
+        let pending = store.pending_scheduler_operations().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].operation, operation);
     }
 
     #[tokio::test]

@@ -284,7 +284,9 @@ Known gaps:
   and remaining `RaftAdmin` RPC wiring are still being built out. Unsupported
   split/merge scheduler operations are no longer silently treated as consumed:
   the server validates their required fields and logs an explicit unsupported
-  outcome with operation identifiers.
+  outcome with operation identifiers. Holt-backed Rust stores also retain those
+  unsupported scheduler operations in a pending catalog and surface the count
+  through `ExecutionStatus.Restart.PendingSchedulerOperationCount`.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. When a coordinator endpoint is configured, startup

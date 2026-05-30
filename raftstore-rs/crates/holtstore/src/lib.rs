@@ -9,6 +9,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use holt::{RangeEntry, Tree, TreeConfig, DB};
 use nokv_mvcc as mvcc;
+use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use prost::Message;
@@ -64,6 +65,11 @@ pub struct BlockedRootEvent {
     pub event: metapb::RootEvent,
     pub transition_id: String,
     pub last_error: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingSchedulerOperation {
+    pub operation: coordpb::SchedulerOperation,
 }
 
 #[derive(Clone)]
@@ -263,6 +269,51 @@ impl HoltStore {
         Ok(out)
     }
 
+    pub fn put_pending_scheduler_operation(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<()> {
+        let key = pending_scheduler_operation_key(operation)?;
+        let mut bytes = Vec::with_capacity(operation.encoded_len());
+        operation.encode(&mut bytes)?;
+        self.region_meta()?.put(&key, &bytes)?;
+        Ok(())
+    }
+
+    pub fn delete_pending_scheduler_operation(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<()> {
+        let key = pending_scheduler_operation_key(operation)?;
+        self.region_meta()?.delete(&key)?;
+        Ok(())
+    }
+
+    pub fn pending_scheduler_operations(&self) -> Result<Vec<PendingSchedulerOperation>> {
+        let mut out = Vec::new();
+        for entry in self
+            .region_meta()?
+            .range()
+            .prefix(PENDING_SCHEDULER_OPERATION_PREFIX)
+        {
+            let entry = entry?;
+            let RangeEntry::Key { value, .. } = entry else {
+                continue;
+            };
+            out.push(PendingSchedulerOperation {
+                operation: coordpb::SchedulerOperation::decode(value.as_slice())?,
+            });
+        }
+        out.sort_by_key(|pending| {
+            (
+                pending.operation.region_id,
+                pending.operation.r#type,
+                pending.operation.source_region_id,
+            )
+        });
+        Ok(out)
+    }
+
     pub fn next_pending_root_event_sequence(&self) -> Result<u64> {
         Ok(self
             .pending_root_events()?
@@ -395,6 +446,36 @@ impl HoltMvccStore {
 
     pub fn blocked_root_events(&self) -> Result<Vec<BlockedRootEvent>> {
         self.store.blocked_root_events()
+    }
+
+    pub fn record_pending_scheduler_operation(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<()> {
+        let _guard = self
+            .gate
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
+        self.store
+            .put_pending_scheduler_operation(operation)
+            .and_then(|_| self.store.checkpoint())
+    }
+
+    pub fn delete_pending_scheduler_operation(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<()> {
+        let _guard = self
+            .gate
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
+        self.store
+            .delete_pending_scheduler_operation(operation)
+            .and_then(|_| self.store.checkpoint())
+    }
+
+    pub fn pending_scheduler_operations(&self) -> Result<Vec<PendingSchedulerOperation>> {
+        self.store.pending_scheduler_operations()
     }
 
     fn lock(&self) -> mvcc::Result<std::sync::MutexGuard<'_, ()>> {
@@ -1428,6 +1509,7 @@ fn region_apply_state_key(region_id: u64) -> Vec<u8> {
 
 const PENDING_ROOT_EVENT_PREFIX: &[u8] = b"pending-root-event/";
 const BLOCKED_ROOT_EVENT_PREFIX: &[u8] = b"blocked-root-event/";
+const PENDING_SCHEDULER_OPERATION_PREFIX: &[u8] = b"pending-scheduler-operation/";
 
 fn pending_root_event_key(sequence: u64) -> Vec<u8> {
     region_meta_key(PENDING_ROOT_EVENT_PREFIX, sequence)
@@ -1451,6 +1533,26 @@ fn blocked_root_event_sequence(key: &[u8]) -> Option<u64> {
         return None;
     }
     Some(u64::from_be_bytes(rest.try_into().ok()?))
+}
+
+fn pending_scheduler_operation_key(operation: &coordpb::SchedulerOperation) -> Result<Vec<u8>> {
+    let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
+        .unwrap_or(coordpb::SchedulerOperationType::None);
+    if kind == coordpb::SchedulerOperationType::None {
+        return Err(Error::InvalidMetadata(
+            "scheduler operation type is required".to_owned(),
+        ));
+    }
+    if operation.region_id == 0 {
+        return Err(Error::InvalidMetadata(
+            "scheduler operation region is required".to_owned(),
+        ));
+    }
+    let mut key = Vec::with_capacity(PENDING_SCHEDULER_OPERATION_PREFIX.len() + 4 + 8);
+    key.extend_from_slice(PENDING_SCHEDULER_OPERATION_PREFIX);
+    key.extend_from_slice(&(kind as i32).to_be_bytes());
+    key.extend_from_slice(&operation.region_id.to_be_bytes());
+    Ok(key)
 }
 
 fn region_meta_key(prefix: &[u8], region_id: u64) -> Vec<u8> {
@@ -1714,6 +1816,44 @@ mod tests {
         assert_eq!(blocked[0].transition_id, "peer-change:42:add:9:2");
         assert_eq!(blocked[0].last_error, "catalog precondition");
         assert_eq!(reopened.enqueue_pending_root_event(&event).unwrap(), 2);
+    }
+
+    #[test]
+    fn pending_scheduler_operations_survive_reopen_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let split = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+            region_id: 42,
+            split_key: b"m".to_vec(),
+            split_child: Some(metapb::RegionDescriptor {
+                region_id: 43,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let merge = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::MergeRegion as i32,
+            region_id: 42,
+            source_region_id: 43,
+            ..Default::default()
+        };
+        {
+            let store = HoltMvccStore::open_file(dir.path()).unwrap();
+            store.record_pending_scheduler_operation(&split).unwrap();
+            store.record_pending_scheduler_operation(&merge).unwrap();
+            store.checkpoint().unwrap();
+        }
+
+        let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+        let pending = reopened.pending_scheduler_operations().unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].operation, split);
+        assert_eq!(pending[1].operation, merge);
+
+        reopened.delete_pending_scheduler_operation(&split).unwrap();
+        let pending = reopened.pending_scheduler_operations().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].operation, merge);
     }
 
     #[test]

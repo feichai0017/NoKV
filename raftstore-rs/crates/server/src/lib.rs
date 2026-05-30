@@ -93,6 +93,10 @@ pub trait RestartDiagnosticsProvider: Send + Sync + 'static {
         Ok(0)
     }
 
+    fn pending_scheduler_operation_count(&self) -> Result<u64, Status> {
+        Ok(0)
+    }
+
     fn blocked_topology_statuses(&self) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
         Ok(Vec::new())
     }
@@ -113,6 +117,12 @@ impl RestartDiagnosticsProvider for HoltMvccStore {
     fn blocked_root_event_count(&self) -> Result<u64, Status> {
         self.blocked_root_events()
             .map(|events| events.len() as u64)
+            .map_err(|err| Status::internal(err.to_string()))
+    }
+
+    fn pending_scheduler_operation_count(&self) -> Result<u64, Status> {
+        self.pending_scheduler_operations()
+            .map(|ops| ops.len() as u64)
             .map_err(|err| Status::internal(err.to_string()))
     }
 
@@ -1582,6 +1592,9 @@ where
                 raft_group_count: if status.region_id == 0 { 0 } else { 1 },
                 pending_root_event_count: self.restart_diagnostics.pending_root_event_count()?,
                 blocked_root_event_count: self.restart_diagnostics.blocked_root_event_count()?,
+                pending_scheduler_operation_count: self
+                    .restart_diagnostics
+                    .pending_scheduler_operation_count()?,
                 ..Default::default()
             }),
             topology,
@@ -1881,6 +1894,7 @@ mod tests {
     use super::*;
     use adminpb::raft_admin_server::RaftAdmin;
     use kvpb::store_kv_server::StoreKv;
+    use nokv_proto::nokv::coordinator::v1 as coordpb;
     use nokv_proto::nokv::meta::v1 as metapb;
     use std::collections::BTreeMap;
     use std::path::Path;
@@ -3212,6 +3226,18 @@ mod tests {
             )
             .unwrap();
         store.enqueue_pending_root_event(&event).unwrap();
+        store
+            .record_pending_scheduler_operation(&coordpb::SchedulerOperation {
+                r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+                region_id: 1,
+                split_key: b"m".to_vec(),
+                split_child: Some(metapb::RegionDescriptor {
+                    region_id: 2,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .unwrap();
 
         let service = RaftAdminService::with_admission(NoopAdminStatus, RegionAdmission::default())
             .with_restart_diagnostics(Arc::new(store));
@@ -3223,6 +3249,7 @@ mod tests {
         let restart = execution.restart.unwrap();
         assert_eq!(restart.pending_root_event_count, 1);
         assert_eq!(restart.blocked_root_event_count, 1);
+        assert_eq!(restart.pending_scheduler_operation_count, 1);
         assert_eq!(execution.topology.len(), 1);
         assert_eq!(execution.topology[0].transition_id, "peer-change:1:add:2:2");
         assert_eq!(execution.topology[0].region_id, 1);
