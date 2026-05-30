@@ -144,8 +144,11 @@ The first slices are intentionally narrow:
   `ResolveLock`, `CheckTxnStatus`, `TxnHeartBeat`, and
   `InstallPreparedMVCCEntries`.
 - The standalone Rust raftstore server now boots `OpenRaftRegion` by default
-  for both memory and Holt modes. Holt mode keeps the persistent apply-status
-  sink behind the OpenRaft state machine.
+  for both memory and Holt modes. It uses the internal tonic Raft network
+  factory and mounts the internal `RaftTransport` service beside StoreKV and
+  RaftAdmin, so the process boundary can carry OpenRaft replication traffic
+  without changing the public Go protobuf services. Holt mode keeps the
+  persistent apply-status sink behind the OpenRaft state machine.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -185,11 +188,13 @@ Known gaps:
   raftnode-level voter add/remove helpers, and an internal prost codec for
   OpenRaft RPC payloads. The encoded test network now exercises that codec at
   the `RaftNetwork` boundary, and the first tonic transport service/client can
-  replicate between local servers. Production route integration, transport
-  pooling, endpoint lifecycle, and remaining `RaftAdmin` RPC wiring are still
-  being built out.
+  replicate between local servers. The standalone Rust server now mounts the
+  transport beside StoreKV/RaftAdmin and has server-level replication coverage.
+  Production route integration, transport pooling, endpoint lifecycle, and
+  remaining `RaftAdmin` RPC wiring are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
-  multi-node networking and route integration are still being built out.
+  multi-node membership configuration and route integration are still being
+  built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. The single-region service still bootstraps a default descriptor

@@ -8,7 +8,7 @@ use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::{
     AppliedKvEngine, OpenRaftRegion, PersistentAppliedKvEngine, RegionLogStorage,
-    RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog,
+    RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog, TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{apply_status_from_holt, HoltApplyStatusSink, RegionAdmission};
 
@@ -34,17 +34,27 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             });
         let engine = AppliedKvEngine::with_status(apply_status, mvcc.clone());
         let engine = PersistentAppliedKvEngine::new(engine, HoltApplyStatusSink::new(mvcc));
-        let region =
-            bootstrap_openraft_region(admission.peer_id, admission.region_id, log_dir, engine)
-                .await?;
-        nokv_raftstore_server::serve_with_region_engine_and_admission(addr, region, admission)
+        let region = bootstrap_openraft_region(
+            admission.peer_id,
+            admission.region_id,
+            addr,
+            log_dir,
+            engine,
+        )
+        .await?;
+        nokv_raftstore_server::serve_with_openraft_region_and_admission(addr, region, admission)
             .await?;
     } else {
         tracing::info!(%addr, "starting rust raftstore server with in-memory MVCC");
         let log_dir = raft_log_dir(None, &mut temp_log_dir)?;
         let engine = AppliedKvEngine::new(1, MvccStore::new());
-        let region = bootstrap_openraft_region(1, 1, log_dir, engine).await?;
-        nokv_raftstore_server::serve_with_region_engine(addr, region).await?;
+        let region = bootstrap_openraft_region(1, 1, addr, log_dir, engine).await?;
+        nokv_raftstore_server::serve_with_openraft_region_and_admission(
+            addr,
+            region,
+            RegionAdmission::default(),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -52,6 +62,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 async fn bootstrap_openraft_region<E>(
     node_id: u64,
     region_id: u64,
+    addr: SocketAddr,
     log_dir: PathBuf,
     engine: E,
 ) -> Result<OpenRaftRegion<E>, Box<dyn std::error::Error>>
@@ -60,11 +71,13 @@ where
 {
     let log = SegmentedEntryLog::open(region_id, log_dir)?;
     let state_machine = RegionStateMachine::new(engine);
-    Ok(OpenRaftRegion::bootstrap_single_node(
+    Ok(OpenRaftRegion::bootstrap_single_node_with_network(
         node_id,
         region_id,
         RegionLogStorage::new(log),
         state_machine,
+        TonicRaftNetworkFactory::new(region_id),
+        addr.to_string(),
     )
     .await?)
 }

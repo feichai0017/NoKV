@@ -1257,6 +1257,33 @@ where
         .await
 }
 
+pub async fn serve_with_openraft_region_and_admission<E>(
+    addr: SocketAddr,
+    region: nokv_raftnode::OpenRaftRegion<E>,
+    admission: RegionAdmission,
+) -> Result<(), tonic::transport::Error>
+where
+    E: RegionSnapshotEngine + RaftCommandExecutor,
+{
+    let execution = ExecutionRuntime::default();
+    let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
+    transport.register(admission.region_id, region.raft_handle());
+    tonic::transport::Server::builder()
+        .add_service(StoreKvServer::new(
+            StoreKvService::with_admission_and_execution(
+                region.clone(),
+                admission.clone(),
+                execution.clone(),
+            ),
+        ))
+        .add_service(RaftAdminServer::new(
+            RaftAdminService::with_admission_and_execution(region, admission, execution),
+        ))
+        .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
+        .serve(addr)
+        .await
+}
+
 fn internal_error(err: nokv_mvcc::Error) -> Status {
     Status::internal(err.to_string())
 }
@@ -1503,6 +1530,136 @@ mod tests {
 
         assert_eq!(response.response.unwrap().applied_keys, 1);
         assert_eq!(region.apply_status().applied_index, 2);
+    }
+
+    #[tokio::test]
+    async fn server_mounts_openraft_transport_for_storekv_replication() {
+        let mut handles = Vec::new();
+        let mut dirs = Vec::new();
+        let mut engines = BTreeMap::new();
+        let mut regions = BTreeMap::new();
+        let mut addrs = BTreeMap::new();
+        let peers = BTreeMap::from([(1, 1), (2, 2), (3, 3)]);
+
+        for node_id in 1..=3 {
+            let addr = reserve_loopback_addr();
+            let dir = tempfile::tempdir().unwrap();
+            let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
+            let engine = nokv_raftnode::AppliedKvEngine::new(7, MvccStore::new());
+            let region = nokv_raftnode::OpenRaftRegion::open_with_network(
+                node_id,
+                7,
+                nokv_raftnode::RegionLogStorage::new(log),
+                nokv_raftnode::RegionStateMachine::new(engine.clone()),
+                nokv_raftnode::TonicRaftNetworkFactory::new(7),
+            )
+            .await
+            .unwrap();
+            let admission = RegionAdmission {
+                region_id: 7,
+                store_id: node_id,
+                peer_id: node_id,
+                peers: peers.clone(),
+                leader_peer_id: 1,
+                epoch_conf_version: 1,
+                leader: node_id == 1,
+                ..Default::default()
+            };
+            let handle = tokio::spawn(serve_with_openraft_region_and_admission(
+                addr,
+                region.clone(),
+                admission,
+            ));
+            wait_for_server(addr).await;
+            dirs.push(dir);
+            engines.insert(node_id, engine);
+            regions.insert(node_id, region);
+            addrs.insert(node_id, addr);
+            handles.push(handle);
+        }
+
+        let leader = regions.get(&1).unwrap();
+        leader
+            .initialize_members(BTreeMap::from([(
+                1,
+                BasicNode::new(addrs.get(&1).unwrap().to_string()),
+            )]))
+            .await
+            .unwrap();
+        leader.wait_for_leader(1).await.unwrap();
+        leader.ensure_linearizable().await.unwrap();
+        leader
+            .add_voter(2, BasicNode::new(addrs.get(&2).unwrap().to_string()))
+            .await
+            .unwrap();
+        leader
+            .add_voter(3, BasicNode::new(addrs.get(&3).unwrap().to_string()))
+            .await
+            .unwrap();
+
+        let leader_addr = addrs.get(&1).unwrap();
+        let mut client =
+            kvpb::store_kv_client::StoreKvClient::connect(format!("http://{leader_addr}"))
+                .await
+                .unwrap();
+        let admission = RegionAdmission {
+            region_id: 7,
+            store_id: 1,
+            peer_id: 1,
+            peers,
+            leader_peer_id: 1,
+            epoch_conf_version: 1,
+            leader: true,
+            ..Default::default()
+        };
+        let response = client
+            .try_atomic_mutate(kvpb::KvTryAtomicMutateRequest {
+                context: Some(context(&admission)),
+                request: Some(kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"server-transport".to_vec(),
+                        value: b"replicated".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 42,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(response.response.unwrap().applied_keys, 1);
+        let target_index = leader.apply_status().applied_index;
+
+        for region in regions.values() {
+            region
+                .raft_handle()
+                .wait(Some(Duration::from_secs(5)))
+                .applied_index_at_least(Some(target_index), "server transport replication")
+                .await
+                .unwrap();
+        }
+        for engine in engines.values() {
+            assert_eq!(
+                engine
+                    .get(&kvpb::GetRequest {
+                        key: b"server-transport".to_vec(),
+                        version: 42,
+                    })
+                    .unwrap()
+                    .value,
+                b"replicated".to_vec()
+            );
+        }
+
+        for region in regions.values() {
+            region.shutdown().await.unwrap();
+        }
+        for handle in handles {
+            handle.abort();
+        }
     }
 
     #[tokio::test]
@@ -2550,5 +2707,28 @@ mod tests {
         assert_eq!(admission.peer_id, 2);
         assert_eq!(admission.detail, "not leader");
         assert!(admission.at_unix_nano > 0);
+    }
+
+    fn reserve_loopback_addr() -> std::net::SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        addr
+    }
+
+    async fn wait_for_server(addr: std::net::SocketAddr) {
+        let endpoint = format!("http://{addr}");
+        for _ in 0..50 {
+            if tonic::transport::Endpoint::from_shared(endpoint.clone())
+                .unwrap()
+                .connect()
+                .await
+                .is_ok()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("rust raftstore server at {addr} did not become ready");
     }
 }

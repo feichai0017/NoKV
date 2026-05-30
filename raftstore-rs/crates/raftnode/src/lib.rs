@@ -1041,27 +1041,47 @@ where
         log_store: RegionLogStorage,
         state_machine: RegionStateMachine<E>,
     ) -> Result<OpenRaftRegion<E>, Error> {
-        let region = Self::open_with_network(
+        Self::bootstrap_single_node_with_network(
             node_id,
             region_id,
             log_store,
             state_machine,
             NoopNetworkFactory,
+            format!("local-{node_id}"),
         )
-        .await?;
+        .await
+    }
+
+    pub async fn bootstrap_single_node_with_network<N>(
+        node_id: NodeId,
+        region_id: RegionId,
+        log_store: RegionLogStorage,
+        state_machine: RegionStateMachine<E>,
+        network: N,
+        local_addr: impl Into<String>,
+    ) -> Result<OpenRaftRegion<E>, Error>
+    where
+        N: RaftNetworkFactory<RaftStoreConfig>,
+    {
+        let region =
+            Self::open_with_network(node_id, region_id, log_store, state_machine, network).await?;
         let mut members = BTreeMap::new();
-        members.insert(node_id, BasicNode::new(format!("local-{node_id}")));
+        members.insert(node_id, BasicNode::new(local_addr.into()));
         if region.initialize_members(members).await? {
             region.wait_for_leader(node_id).await?;
         } else {
             region.elect_and_wait(node_id).await?;
         }
-        region
-            .raft
+        region.ensure_linearizable().await?;
+        Ok(region)
+    }
+
+    pub async fn ensure_linearizable(&self) -> Result<(), Error> {
+        self.raft
             .ensure_linearizable()
             .await
-            .map_err(openraft_api_error)?;
-        Ok(region)
+            .map(|_| ())
+            .map_err(openraft_api_error)
     }
 
     pub fn raft_handle(&self) -> Raft<RaftStoreConfig> {
