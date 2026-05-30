@@ -123,7 +123,8 @@ The first slices are intentionally narrow:
   handlers now execute through the same `RaftCmdRequest` boundary that OpenRaft
   proposals will carry. The tagged Go endpoint harness now covers atomic
   mutate/get/watch, Holt apply-status restart, 2PC, `BatchGet`, `Scan`, and
-  `InstallPreparedMVCCEntries` against the Rust server.
+  `InstallPreparedMVCCEntries` against the Rust server. Rust `Scan` now also
+  matches the Go service boundary by rejecting reverse scans as unimplemented.
 
 Known gaps:
 

@@ -183,6 +183,11 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("scan request missing payload"))?;
+        if inner.reverse {
+            return Err(Status::unimplemented(
+                "StoreKV Scan reverse scans are not supported yet",
+            ));
+        }
         if let Some(region_error) = self.admission.admit_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.start_key.as_slice()),
@@ -1628,6 +1633,24 @@ mod tests {
             .into_inner();
         assert!(response.region_error.unwrap().not_leader.is_some());
         assert!(response.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn scan_rejects_reverse_scan() {
+        let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
+        let err = service
+            .scan(Request::new(kvpb::KvScanRequest {
+                context: Some(default_context()),
+                request: Some(kvpb::ScanRequest {
+                    start_key: b"k".to_vec(),
+                    limit: 1,
+                    reverse: true,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
     }
 
     #[tokio::test]

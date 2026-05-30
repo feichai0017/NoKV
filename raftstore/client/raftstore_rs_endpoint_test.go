@@ -20,7 +20,9 @@ import (
 	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -244,6 +246,24 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Len(t, scanned, 2)
 	require.Equal(t, []byte("agent/txn-a"), scanned[0].GetKey())
 	require.Equal(t, []byte("agent/txn-b"), scanned[1].GetKey())
+
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	t.Cleanup(func() { _ = conn.Close() })
+	_, err = kvrpcpb.NewStoreKVClient(conn).Scan(ctx, &kvrpcpb.KvScanRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.ScanRequest{
+			StartKey: []byte("agent/txn-"),
+			Limit:    1,
+			Reverse:  true,
+		},
+	})
+	require.Error(t, err)
+	require.Equal(t, codes.Unimplemented, status.Code(err))
 
 	install, err := cli.InstallPreparedMVCCEntries(ctx, []byte("agent/prepared"), &kvrpcpb.InstallPreparedMVCCEntriesRequest{
 		CommitVersion: 40,
