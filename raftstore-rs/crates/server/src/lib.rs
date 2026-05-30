@@ -26,6 +26,10 @@ pub use adminpb::raft_admin_server::RaftAdminServer;
 pub use admission::RegionAdmission;
 pub use kvpb::store_kv_server::StoreKvServer;
 
+const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;
+const DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE: usize = 512;
+const DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE: usize = 512 * 1024;
+
 #[derive(Debug, Clone, Default)]
 pub struct StoreKvService<E = MvccStore> {
     engine: E,
@@ -579,32 +583,36 @@ where
     ) -> Result<Response<Self::WatchApplyStream>, Status> {
         let request = request.into_inner();
         let prefix = request.key_prefix;
-        let buffer = request.buffer.max(1) as usize;
+        let buffer = if request.buffer == 0 {
+            DEFAULT_APPLY_WATCH_BUFFER
+        } else {
+            request.buffer as usize
+        };
         let mut watch = self.engine.subscribe_apply();
         let (tx, rx) = tokio::sync::mpsc::channel(buffer);
         tokio::spawn(async move {
+            let mut dropped_events = 0;
             loop {
                 match watch.recv().await {
                     Ok(event) => {
-                        if !event.keys.iter().any(|key| key.starts_with(&prefix)) {
+                        let keys = matching_apply_watch_keys(&event.keys, &prefix);
+                        if keys.is_empty() {
                             continue;
                         }
-                        let response = kvpb::ApplyWatchResponse {
-                            event: Some(event),
-                            dropped_events: 0,
-                        };
-                        if tx.send(Ok(response)).await.is_err() {
-                            break;
+                        for chunk in chunk_apply_watch_keys(keys) {
+                            let mut out = event.clone();
+                            out.keys = chunk;
+                            let response = kvpb::ApplyWatchResponse {
+                                event: Some(out),
+                                dropped_events,
+                            };
+                            if tx.send(Ok(response)).await.is_err() {
+                                return;
+                            }
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(dropped)) => {
-                        let response = kvpb::ApplyWatchResponse {
-                            event: None,
-                            dropped_events: dropped,
-                        };
-                        if tx.send(Ok(response)).await.is_err() {
-                            break;
-                        }
+                        dropped_events += dropped;
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
@@ -1105,6 +1113,41 @@ fn raft_payload_error(operation: &str, detail: &str) -> Status {
     Status::internal(format!("{operation} raft payload error: {detail}"))
 }
 
+fn matching_apply_watch_keys(keys: &[Vec<u8>], prefix: &[u8]) -> Vec<Vec<u8>> {
+    keys.iter()
+        .filter(|key| prefix.is_empty() || key.starts_with(prefix))
+        .cloned()
+        .collect()
+}
+
+fn chunk_apply_watch_keys(keys: Vec<Vec<u8>>) -> Vec<Vec<Vec<u8>>> {
+    if keys.is_empty() {
+        return Vec::new();
+    }
+    let mut chunks = Vec::with_capacity(
+        (keys.len() + DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE - 1)
+            / DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE,
+    );
+    let mut current = Vec::with_capacity(keys.len().min(DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE));
+    let mut current_bytes = 0usize;
+    for key in keys {
+        let key_bytes = key.len();
+        if !current.is_empty()
+            && (current.len() >= DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE
+                || current_bytes + key_bytes > DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE)
+        {
+            chunks.push(std::mem::take(&mut current));
+            current_bytes = 0;
+        }
+        current_bytes += key_bytes;
+        current.push(key);
+    }
+    if !current.is_empty() {
+        chunks.push(current);
+    }
+    chunks
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1476,12 +1519,20 @@ mod tests {
             .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
                 context: Some(default_context()),
                 request: Some(kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: b"prefix/k".to_vec(),
-                        value: b"v".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
+                    mutations: vec![
+                        kvpb::Mutation {
+                            key: b"prefix/k".to_vec(),
+                            value: b"v".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        },
+                        kvpb::Mutation {
+                            key: b"other/k".to_vec(),
+                            value: b"ignored".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        },
+                    ],
                     commit_version: 9,
                     ..Default::default()
                 }),
@@ -1494,6 +1545,17 @@ mod tests {
         let event = response.event.unwrap();
         assert_eq!(event.commit_version, 9);
         assert_eq!(event.keys, vec![b"prefix/k".to_vec()]);
+    }
+
+    #[test]
+    fn apply_watch_chunks_large_key_sets() {
+        let keys = (0..(DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE + 7))
+            .map(|idx| format!("prefix/{idx:04}").into_bytes())
+            .collect::<Vec<_>>();
+        let chunks = chunk_apply_watch_keys(keys);
+        assert_eq!(chunks.len(), 2);
+        assert_eq!(chunks[0].len(), DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE);
+        assert_eq!(chunks[1].len(), 7);
     }
 
     #[tokio::test]

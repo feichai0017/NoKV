@@ -188,6 +188,25 @@ func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr s
 	require.Equal(t, uint64(10), event.GetEvent().GetCommitVersion())
 	require.Equal(t, [][]byte{[]byte("agent/k")}, event.GetEvent().GetKeys())
 
+	handled, err = cli.TryAtomicMutate(ctx, []byte("agent/multi"), nil, []*kvrpcpb.Mutation{
+		{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   []byte("agent/multi"),
+			Value: []byte("v2"),
+		},
+		{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   []byte("other/multi"),
+			Value: []byte("ignored"),
+		},
+	}, 11, 12)
+	require.NoError(t, err)
+	require.True(t, handled)
+	event, err = watch.Recv()
+	require.NoError(t, err)
+	require.Equal(t, uint64(12), event.GetEvent().GetCommitVersion())
+	require.Equal(t, [][]byte{[]byte("agent/multi")}, event.GetEvent().GetKeys())
+
 	admin, closeAdmin, err := adminclient.Dial(ctx, addr)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, closeAdmin()) })

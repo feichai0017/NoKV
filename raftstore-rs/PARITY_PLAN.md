@@ -131,6 +131,9 @@ The first slices are intentionally narrow:
   `RegionRuntimeStatus` now rejects missing region ids like the Go admin
   service, and `ExecutionStatus` returns the default admission object plus
   restart counts for the hosted single-region runtime.
+  `WatchApply` now mirrors Go's prefix projection more closely: buffer 0 maps
+  to the default watch buffer, emitted events contain only matching keys, and
+  large key sets are split into bounded messages.
 
 Known gaps:
 
