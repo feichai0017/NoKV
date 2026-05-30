@@ -185,7 +185,9 @@ The first slices are intentionally narrow:
   bootstrap peer, the initial region bootstrap descriptor through the same
   coordinator root-event path. Holt mode persists those startup root events in
   the pending queue before publish, so transient coordinator outages are retried
-  instead of requiring manual test seeding.
+  instead of requiring manual test seeding. Rust topology diagnostics now use
+  the same stable transition id shapes as Go for peer changes, range splits,
+  and range merges.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -285,8 +287,12 @@ Known gaps:
   split/merge scheduler operations are no longer silently treated as consumed:
   the server validates their required fields and logs an explicit unsupported
   outcome with operation identifiers. Holt-backed Rust stores also retain those
-  unsupported scheduler operations in a pending catalog and surface the count
-  through `ExecutionStatus.Restart.PendingSchedulerOperationCount`.
+  unsupported scheduler operations in a pending catalog keyed by the full
+  operation identity, so different split keys or merge sources do not overwrite
+  each other. The pending count is surfaced through
+  `ExecutionStatus.Restart.PendingSchedulerOperationCount`, and each pending
+  operation also appears in `ExecutionStatus.Topology` with a stable transition
+  id.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. When a coordinator endpoint is configured, startup
