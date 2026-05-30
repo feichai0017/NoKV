@@ -17,6 +17,15 @@ import (
 	"testing"
 	"time"
 
+	coordcatalog "github.com/feichai0017/NoKV/coordinator/catalog"
+	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	coordidalloc "github.com/feichai0017/NoKV/coordinator/idalloc"
+	coordserver "github.com/feichai0017/NoKV/coordinator/server"
+	coordtso "github.com/feichai0017/NoKV/coordinator/tso"
+	metaregion "github.com/feichai0017/NoKV/meta/region"
+	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	metatopology "github.com/feichai0017/NoKV/meta/topology"
+	metawire "github.com/feichai0017/NoKV/meta/wire"
 	adminclient "github.com/feichai0017/NoKV/raftstore/admin"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -155,6 +164,62 @@ func TestRustRaftstoreEndpointReportsCoordinatorHeartbeat(t *testing.T) {
 	require.Len(t, heartbeat.GetRegionStats(), 1)
 	require.Equal(t, uint64(1), heartbeat.GetRegionStats()[0].GetRegionId())
 	require.Equal(t, uint64(11), heartbeat.GetRegionStats()[0].GetLeaderStoreId())
+}
+
+func TestRustRaftstoreEndpointRoutesThroughCoordinator(t *testing.T) {
+	svc := coordserver.NewService(coordcatalog.NewCluster(), coordidalloc.NewIDAllocator(1), coordtso.NewAllocator(1))
+	publishRustRaftstoreRootEvent(t, svc, rootevent.StoreJoined(1))
+	publishRustRaftstoreRootEvent(t, svc, rootevent.RegionBootstrapped(rustRaftstoreTopologyDescriptor()))
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorService(t, svc)
+	defer stopCoord()
+
+	storeAddr := reserveLocalAddr(t)
+	stopStore := startRustRaftstoreProcessAt(t, storeAddr, "", []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stopStore()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.Eventually(t, func() bool {
+		resp, err := svc.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: 1})
+		return err == nil &&
+			!resp.GetNotFound() &&
+			resp.GetStore().GetState() == coordpb.StoreState_STORE_STATE_UP &&
+			resp.GetStore().GetClientAddr() == storeAddr
+	}, 5*time.Second, 50*time.Millisecond)
+
+	coord, err := coordclient.NewGRPCClient(ctx, coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	cli, err := New(Config{
+		RegionResolver: coord,
+		StoreResolver:  coord,
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 3},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+
+	handled, err := cli.TryAtomicMutate(ctx, []byte("agent/coordinator-route"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("agent/coordinator-route"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 9,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/coordinator-route"),
+		Value: []byte("routed"),
+	}}, 8, 10)
+	require.NoError(t, err)
+	require.True(t, handled)
+	got, err := cli.Get(ctx, []byte("agent/coordinator-route"), 10)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("routed"), got.GetValue())
 }
 
 func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T) {
@@ -705,6 +770,49 @@ func startRustRaftstoreCoordinatorCapture(t *testing.T, heartbeats chan<- *coord
 	}
 	t.Cleanup(stop)
 	return lis.Addr().String(), stop
+}
+
+func startRustRaftstoreCoordinatorService(t *testing.T, svc coordpb.CoordinatorServer) (string, func()) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	coordpb.RegisterCoordinatorServer(server, svc)
+	go func() {
+		if serveErr := server.Serve(lis); serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {
+			t.Logf("coordinator service server error: %v", serveErr)
+		}
+	}()
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			server.Stop()
+			if err := lis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				require.NoError(t, err)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return lis.Addr().String(), stop
+}
+
+func publishRustRaftstoreRootEvent(t *testing.T, svc *coordserver.Service, event rootevent.Event) {
+	t.Helper()
+	_, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
+		Event: metawire.RootEventToProto(event),
+	})
+	require.NoError(t, err)
+}
+
+func rustRaftstoreTopologyDescriptor() metatopology.Descriptor {
+	desc := metatopology.Descriptor{
+		RegionID: 1,
+		Epoch:    metaregion.Epoch{Version: 1, ConfVersion: 1},
+		Peers:    []metaregion.Peer{{StoreID: 1, PeerID: 1}},
+		State:    metaregion.ReplicaStateRunning,
+	}
+	desc.EnsureHash()
+	return desc
 }
 
 func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {

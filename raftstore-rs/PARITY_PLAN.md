@@ -207,6 +207,10 @@ The first slices are intentionally narrow:
   through `fsmeta/runtime/raftstore.Runner` against a Rust StoreKV endpoint,
   proving the upper fsmeta semantic path can use the Rust data plane without
   changing fsmeta execution code.
+- The tagged Go client harness now also starts a real Go coordinator service,
+  publishes rooted store and region metadata, lets the Rust store populate
+  `StoreInfo` through heartbeat, and routes `StoreKV` traffic through the
+  coordinator-backed resolver instead of a static in-test resolver.
 - The tagged Go raftstore client harness now starts three standalone Rust
   server processes, uses the existing Go `RaftAdmin` client to add and remove
   non-bootstrap peers, writes through the existing Go `StoreKV` client before
@@ -233,9 +237,10 @@ Known gaps:
   writes across the active membership. The standalone binary can now report
   StoreHeartbeat telemetry to the coordinator and execute coordinator-returned
   leader-transfer operations through the local admin service. Production route
-  integration, coordinator-provided endpoint refresh/lifecycle, split/merge
-  scheduler operation execution, and remaining `RaftAdmin` RPC wiring are still
-  being built out.
+  integration now has tagged coverage for coordinator-backed store discovery
+  and key routing; coordinator-owned process lifecycle, split/merge scheduler
+  operation execution, and remaining `RaftAdmin` RPC wiring are still being
+  built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. Coordinator-owned route integration and automatic
