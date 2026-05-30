@@ -3691,6 +3691,49 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_runtime_status_reports_unhosted_joining_peer() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
+        let state_machine = nokv_raftnode::RegionStateMachine::new(
+            nokv_raftnode::AppliedKvEngine::new(7, MvccStore::new()),
+        );
+        let region = nokv_raftnode::OpenRaftRegion::open_with_network(
+            2,
+            7,
+            nokv_raftnode::RegionLogStorage::new(log),
+            state_machine,
+            nokv_raftnode::MemoryRaftNetworkRegistry::default().factory(),
+        )
+        .await
+        .unwrap();
+        let service = RaftAdminService::with_admission(
+            region,
+            RegionAdmission {
+                region_id: 7,
+                store_id: 2,
+                peer_id: 2,
+                leader: false,
+                ..Default::default()
+            },
+        );
+
+        let response = service
+            .region_runtime_status(Request::new(adminpb::RegionRuntimeStatusRequest {
+                region_id: 7,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(!response.known);
+        assert!(!response.hosted);
+        assert_eq!(response.local_peer_id, 2);
+        assert_eq!(response.leader_peer_id, 0);
+        assert!(!response.leader);
+        assert!(response.region.is_none());
+    }
+
+    #[tokio::test]
     async fn admin_runtime_status_requires_region_id() {
         let service =
             RaftAdminService::new(nokv_raftnode::AppliedKvEngine::new(11, MvccStore::new()));
