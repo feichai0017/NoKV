@@ -137,6 +137,10 @@ The first slices are intentionally narrow:
   not expose that operation through the public boundary.
   `RegionRuntimeStatus` now reports OpenRaft-derived local peer, leader peer,
   and leader/follower state instead of assuming every service endpoint is peer 1.
+  `AddPeer` resolves the target peer's OpenRaft `BasicNode.addr` through a
+  server-side peer endpoint catalog, and the standalone binary can load that
+  catalog from `NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS`. This keeps real tonic
+  membership changes from recording unreachable placeholder node addresses.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`. Read-only commands stay read-only behind the
@@ -195,8 +199,8 @@ Known gaps:
   the `RaftNetwork` boundary, and the first tonic transport service/client can
   replicate between local servers. The standalone Rust server now mounts the
   transport beside StoreKV/RaftAdmin and has server-level replication coverage.
-  Production route integration, endpoint refresh/lifecycle, and remaining
-  `RaftAdmin` RPC wiring are still being built out.
+  Production route integration, coordinator-provided endpoint refresh/lifecycle,
+  and remaining `RaftAdmin` RPC wiring are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   multi-node membership configuration and route integration are still being
   built out.

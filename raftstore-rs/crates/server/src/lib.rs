@@ -4,6 +4,7 @@
 //! protobuf contract intact while the Rust state-machine and replication layers
 //! are brought up behind the service.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -852,6 +853,7 @@ where
 pub struct RaftAdminService<S = EmptyApplyStatus> {
     status: S,
     admission: RegionAdmissionState,
+    peer_endpoints: PeerEndpointCatalog,
     execution: ExecutionRuntime,
 }
 
@@ -881,12 +883,81 @@ impl<S> RaftAdminService<S> {
         admission: RegionAdmissionState,
         execution: ExecutionRuntime,
     ) -> Self {
-        Self {
+        Self::with_admission_state_execution_and_peer_endpoints(
             status,
             admission,
             execution,
+            PeerEndpointCatalog::default(),
+        )
+    }
+
+    fn with_admission_state_execution_and_peer_endpoints(
+        status: S,
+        admission: RegionAdmissionState,
+        execution: ExecutionRuntime,
+        peer_endpoints: PeerEndpointCatalog,
+    ) -> Self {
+        Self {
+            status,
+            admission,
+            peer_endpoints,
+            execution,
         }
     }
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct PeerEndpointCatalog {
+    endpoints: Arc<Mutex<BTreeMap<u64, String>>>,
+    require_configured: bool,
+}
+
+impl PeerEndpointCatalog {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn require_configured() -> Self {
+        Self {
+            endpoints: Arc::new(Mutex::new(BTreeMap::new())),
+            require_configured: true,
+        }
+    }
+
+    pub fn insert_peer(&self, peer_id: u64, endpoint: impl Into<String>) -> Result<(), Status> {
+        if peer_id == 0 {
+            return Err(Status::invalid_argument("peer_id is required"));
+        }
+        let endpoint = endpoint.into();
+        if endpoint.is_empty() {
+            return Err(Status::invalid_argument("peer endpoint is required"));
+        }
+        self.endpoints
+            .lock()
+            .map_err(|_| peer_endpoint_catalog_poisoned())?
+            .insert(peer_id, endpoint);
+        Ok(())
+    }
+
+    fn node_for(&self, store_id: u64, peer_id: u64) -> Result<BasicNode, Status> {
+        let endpoints = self
+            .endpoints
+            .lock()
+            .map_err(|_| peer_endpoint_catalog_poisoned())?;
+        if let Some(endpoint) = endpoints.get(&peer_id) {
+            return Ok(BasicNode::new(endpoint.clone()));
+        }
+        if self.require_configured {
+            return Err(Status::failed_precondition(format!(
+                "endpoint for store {store_id} peer {peer_id} is not configured"
+            )));
+        }
+        Ok(BasicNode::new(format!("store-{store_id}-peer-{peer_id}")))
+    }
+}
+
+fn peer_endpoint_catalog_poisoned() -> Status {
+    Status::internal("peer endpoint catalog mutex poisoned")
 }
 
 fn membership_unimplemented() -> Status {
@@ -1074,10 +1145,8 @@ where
         self.status
             .add_voter(
                 request.peer_id,
-                BasicNode::new(format!(
-                    "store-{}-peer-{}",
-                    request.store_id, request.peer_id
-                )),
+                self.peer_endpoints
+                    .node_for(request.store_id, request.peer_id)?,
             )
             .await?;
         let region = self.admission.add_peer(request.peer_id, request.store_id)?;
@@ -1240,6 +1309,24 @@ pub async fn serve_with_openraft_region_and_admission<E>(
 where
     E: RegionSnapshotEngine + RaftCommandExecutor,
 {
+    serve_with_openraft_region_admission_and_peer_endpoints(
+        addr,
+        region,
+        admission,
+        PeerEndpointCatalog::default(),
+    )
+    .await
+}
+
+pub async fn serve_with_openraft_region_admission_and_peer_endpoints<E>(
+    addr: SocketAddr,
+    region: nokv_raftnode::OpenRaftRegion<E>,
+    admission: RegionAdmission,
+    peer_endpoints: PeerEndpointCatalog,
+) -> Result<(), tonic::transport::Error>
+where
+    E: RegionSnapshotEngine + RaftCommandExecutor,
+{
     let execution = ExecutionRuntime::default();
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
     transport.register(admission.region_id, region.raft_handle());
@@ -1253,7 +1340,12 @@ where
             ),
         ))
         .add_service(RaftAdminServer::new(
-            RaftAdminService::with_admission_state_and_execution(region, admission, execution),
+            RaftAdminService::with_admission_state_execution_and_peer_endpoints(
+                region,
+                admission,
+                execution,
+                peer_endpoints,
+            ),
         ))
         .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
         .serve(addr)
@@ -1465,6 +1557,11 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
+        assert!(
+            response.region_error.is_none(),
+            "unexpected region error: {:?}",
+            response.region_error
+        );
         assert_eq!(response.response.unwrap().applied_keys, 1);
         assert_eq!(engine.status().applied_index, 1);
     }
@@ -1515,11 +1612,19 @@ mod tests {
         let mut dirs = Vec::new();
         let mut engines = BTreeMap::new();
         let mut regions = BTreeMap::new();
-        let mut addrs = BTreeMap::new();
+        let addrs = (1..=3)
+            .map(|node_id| (node_id, reserve_loopback_addr()))
+            .collect::<BTreeMap<_, _>>();
+        let peer_endpoints = PeerEndpointCatalog::new();
+        for (peer_id, addr) in &addrs {
+            peer_endpoints
+                .insert_peer(*peer_id, addr.to_string())
+                .unwrap();
+        }
         let peers = BTreeMap::from([(1, 1), (2, 2), (3, 3)]);
 
         for node_id in 1..=3 {
-            let addr = reserve_loopback_addr();
+            let addr = *addrs.get(&node_id).unwrap();
             let dir = tempfile::tempdir().unwrap();
             let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
             let engine = nokv_raftnode::AppliedKvEngine::new(7, MvccStore::new());
@@ -1536,22 +1641,22 @@ mod tests {
                 region_id: 7,
                 store_id: node_id,
                 peer_id: node_id,
-                peers: peers.clone(),
+                peers: BTreeMap::from([(node_id, node_id)]),
                 leader_peer_id: 1,
                 epoch_conf_version: 1,
                 leader: node_id == 1,
                 ..Default::default()
             };
-            let handle = tokio::spawn(serve_with_openraft_region_and_admission(
+            let handle = tokio::spawn(serve_with_openraft_region_admission_and_peer_endpoints(
                 addr,
                 region.clone(),
                 admission,
+                peer_endpoints.clone(),
             ));
             wait_for_server(addr).await;
             dirs.push(dir);
             engines.insert(node_id, engine);
             regions.insert(node_id, region);
-            addrs.insert(node_id, addr);
             handles.push(handle);
         }
 
@@ -1565,16 +1670,28 @@ mod tests {
             .unwrap();
         leader.wait_for_leader(1).await.unwrap();
         leader.ensure_linearizable().await.unwrap();
-        leader
-            .add_voter(2, BasicNode::new(addrs.get(&2).unwrap().to_string()))
+        let leader_addr = addrs.get(&1).unwrap();
+        let mut admin_client =
+            adminpb::raft_admin_client::RaftAdminClient::connect(format!("http://{leader_addr}"))
+                .await
+                .unwrap();
+        admin_client
+            .add_peer(adminpb::AddPeerRequest {
+                region_id: 7,
+                store_id: 2,
+                peer_id: 2,
+            })
             .await
             .unwrap();
-        leader
-            .add_voter(3, BasicNode::new(addrs.get(&3).unwrap().to_string()))
+        admin_client
+            .add_peer(adminpb::AddPeerRequest {
+                region_id: 7,
+                store_id: 3,
+                peer_id: 3,
+            })
             .await
             .unwrap();
 
-        let leader_addr = addrs.get(&1).unwrap();
         let mut client =
             kvpb::store_kv_client::StoreKvClient::connect(format!("http://{leader_addr}"))
                 .await
@@ -1585,7 +1702,7 @@ mod tests {
             peer_id: 1,
             peers,
             leader_peer_id: 1,
-            epoch_conf_version: 1,
+            epoch_conf_version: 3,
             leader: true,
             ..Default::default()
         };
@@ -1607,6 +1724,11 @@ mod tests {
             .await
             .unwrap()
             .into_inner();
+        assert!(
+            response.region_error.is_none(),
+            "unexpected region error: {:?}",
+            response.region_error
+        );
         assert_eq!(response.response.unwrap().applied_keys, 1);
         let target_index = leader.apply_status().applied_index;
 
@@ -2419,6 +2541,14 @@ mod tests {
         assert_eq!(err.code(), tonic::Code::Unimplemented);
     }
 
+    #[test]
+    fn strict_peer_endpoint_catalog_rejects_missing_peer() {
+        let catalog = PeerEndpointCatalog::require_configured();
+        let err = catalog.node_for(2, 202).unwrap_err();
+        assert_eq!(err.code(), tonic::Code::FailedPrecondition);
+        assert!(err.message().contains("peer 202"));
+    }
+
     #[tokio::test]
     async fn admin_adds_and_removes_openraft_voter() {
         let registry = nokv_raftnode::MemoryRaftNetworkRegistry::default();
@@ -2460,7 +2590,14 @@ mod tests {
             epoch_conf_version: 1,
             ..Default::default()
         };
-        let service = RaftAdminService::with_admission(leader.clone(), admission);
+        let peer_endpoints = PeerEndpointCatalog::new();
+        peer_endpoints.insert_peer(2, "node-2").unwrap();
+        let service = RaftAdminService::with_admission_state_execution_and_peer_endpoints(
+            leader.clone(),
+            RegionAdmissionState::new(admission),
+            ExecutionRuntime::default(),
+            peer_endpoints,
+        );
         let store_service = StoreKvService::with_admission_state_and_execution(
             leader.clone(),
             service.admission.clone(),
