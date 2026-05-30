@@ -23,3 +23,12 @@ See [PARITY_PLAN.md](PARITY_PLAN.md) for the full Go `raftstore` parity plan and
 the cutover rule: keep the workspace named `raftstore-rs` while the Go
 implementation still exists, then rename it to `raftstore` after the Go package
 is removed.
+
+Run the explicit Go compatibility smoke test with:
+
+```bash
+go test -tags rust_raftstore -run TestRustRaftstoreEndpointClientAtomicMutateGetAndWatch -count=1 ./raftstore/client
+```
+
+The tag keeps Cargo-backed cross-language tests out of the regular Go unit-test
+path until Rust raftstore becomes the default data plane.

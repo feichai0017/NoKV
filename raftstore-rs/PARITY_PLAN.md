@@ -101,11 +101,14 @@ Implementation:
   `raftstore/client` tests against it.
 - Add environment/config wiring so `fsmeta/runtime/raftstore` can target a Rust
   endpoint in integration tests.
+- Keep cross-language tests behind the `rust_raftstore` build tag until the Rust
+  data plane is the default runtime.
 
 Gate:
 
 ```bash
 cargo test --manifest-path raftstore-rs/Cargo.toml --workspace
+go test -tags rust_raftstore -run TestRustRaftstoreEndpointClientAtomicMutateGetAndWatch -count=1 ./raftstore/client
 go test -count=1 ./raftstore/client ./raftstore/admin
 go test -count=1 ./fsmeta/runtime/raftstore ./fsmeta/contract ./fsmeta/integration
 ```
