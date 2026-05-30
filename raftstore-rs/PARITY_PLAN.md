@@ -97,7 +97,10 @@ The first slices are intentionally narrow:
 - `MemoryRaftNetworkRegistry` provides an in-process OpenRaft network for
   parity tests. A three-node test now initializes a region, elects a leader,
   commits an existing `RaftCmdRequest`, and verifies that every peer applies the
-  committed value through its own MVCC state machine.
+  committed value through its own MVCC state machine. The testkit also covers a
+  joining peer catching up from a leader snapshot after the snapshot-covered log
+  prefix is purged, which validates the real OpenRaft install-snapshot path
+  rather than only the state-machine snapshot codec.
 - `OpenRaftRegion` exposes NoKV-owned voter-change helpers over OpenRaft
   learner and membership APIs. The in-process testkit covers adding a new voter,
   committing a real metadata KV command to the joined peer, and removing that
@@ -173,10 +176,12 @@ Known gaps:
   and durable vote/committed metadata. Multi-node restart still needs full
   bootstrap validation for membership-change state and snapshot install before
   it is production-complete.
-- Snapshot catch-up has a first real state-machine snapshot path, but peer
-  catch-up from snapshot and snapshot-triggered log compaction still need full
-  integration tests. Corrupt snapshot payloads are rejected before state-machine
-  mutation in the current unit coverage.
+- Snapshot catch-up has both state-machine snapshot coverage and an in-process
+  OpenRaft peer catch-up test where a joining peer installs a snapshot after the
+  leader purges covered logs. Snapshot-triggered log compaction still needs
+  broader restart and external-transport integration tests. Corrupt snapshot
+  payloads are rejected before state-machine mutation in the current unit
+  coverage.
 - Go fsmeta and raftstore client Rust-endpoint tests remain behind the
   `rust_raftstore` build tag until the Rust data plane is the default runtime.
 - Rust follower reads are intentionally not served locally yet. The service

@@ -919,9 +919,32 @@ where
     pub async fn open_with_network<N>(
         node_id: NodeId,
         region_id: RegionId,
+        log_store: RegionLogStorage,
+        state_machine: RegionStateMachine<E>,
+        network: N,
+    ) -> Result<OpenRaftRegion<E>, Error>
+    where
+        N: RaftNetworkFactory<RaftStoreConfig>,
+    {
+        let config = default_openraft_config(region_id)?;
+        Self::open_with_network_config(
+            node_id,
+            region_id,
+            log_store,
+            state_machine,
+            network,
+            config,
+        )
+        .await
+    }
+
+    async fn open_with_network_config<N>(
+        node_id: NodeId,
+        _region_id: RegionId,
         mut log_store: RegionLogStorage,
         mut state_machine: RegionStateMachine<E>,
         network: N,
+        config: Arc<Config>,
     ) -> Result<OpenRaftRegion<E>, Error>
     where
         N: RaftNetworkFactory<RaftStoreConfig>,
@@ -932,6 +955,14 @@ where
         {
             state_machine.restore_membership(membership);
         }
+        let apply_status = state_machine.apply_engine().apply_status();
+        if apply_status.applied_index != 0 {
+            state_machine.restore_last_applied(
+                log_store
+                    .log_id_at_index(apply_status.applied_index)
+                    .map_err(|err| Error::OpenRaft(err.to_string()))?,
+            );
+        }
         let voters = state_machine.membership().voter_ids().collect::<Vec<_>>();
         if voters.as_slice() == [node_id] {
             log_store
@@ -939,14 +970,6 @@ where
                 .map_err(|err| Error::OpenRaft(err.to_string()))?;
         }
         let apply_engine = state_machine.apply_engine().clone();
-        let config = Arc::new(
-            Config {
-                cluster_name: format!("nokv-region-{region_id}"),
-                ..Default::default()
-            }
-            .validate()
-            .map_err(|err| Error::OpenRaft(err.to_string()))?,
-        );
         let raft = Raft::new(node_id, config, network, log_store, state_machine)
             .await
             .map_err(openraft_error)?;
@@ -955,6 +978,40 @@ where
             raft,
             apply_engine,
         })
+    }
+
+    #[cfg(test)]
+    async fn open_with_network_for_test<N, F>(
+        node_id: NodeId,
+        region_id: RegionId,
+        log_store: RegionLogStorage,
+        state_machine: RegionStateMachine<E>,
+        network: N,
+        configure: F,
+    ) -> Result<OpenRaftRegion<E>, Error>
+    where
+        N: RaftNetworkFactory<RaftStoreConfig>,
+        F: FnOnce(&mut Config),
+    {
+        let mut config = Config {
+            cluster_name: format!("nokv-region-{region_id}"),
+            ..Default::default()
+        };
+        configure(&mut config);
+        let config = Arc::new(
+            config
+                .validate()
+                .map_err(|err| Error::OpenRaft(err.to_string()))?,
+        );
+        Self::open_with_network_config(
+            node_id,
+            region_id,
+            log_store,
+            state_machine,
+            network,
+            config,
+        )
+        .await
     }
 
     pub fn node_id(&self) -> NodeId {
@@ -1102,6 +1159,25 @@ where
             .map_err(openraft_api_error)?;
         Ok(response.data)
     }
+
+    pub async fn trigger_snapshot(&self) -> Result<(), Error> {
+        self.raft.trigger().snapshot().await.map_err(openraft_error)
+    }
+
+    pub async fn trigger_log_purge(&self, upto: u64) -> Result<(), Error> {
+        self.raft
+            .trigger()
+            .purge_log(upto)
+            .await
+            .map_err(openraft_error)
+    }
+
+    pub async fn shutdown(&self) -> Result<(), Error> {
+        self.raft
+            .shutdown()
+            .await
+            .map_err(|err| Error::OpenRaft(err.to_string()))
+    }
 }
 
 impl<E> ApplyStatusProvider for OpenRaftRegion<E>
@@ -1237,6 +1313,17 @@ where
     E: StdError,
 {
     Error::OpenRaft(err.to_string())
+}
+
+fn default_openraft_config(region_id: RegionId) -> Result<Arc<Config>, Error> {
+    Ok(Arc::new(
+        Config {
+            cluster_name: format!("nokv-region-{region_id}"),
+            ..Default::default()
+        }
+        .validate()
+        .map_err(|err| Error::OpenRaft(err.to_string()))?,
+    ))
 }
 
 #[cfg(test)]
@@ -1615,6 +1702,138 @@ mod tests {
             .voter_ids()
             .collect::<Vec<_>>();
         assert_eq!(voters, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn openraft_region_catches_up_joining_peer_from_snapshot() {
+        let registry = MemoryRaftNetworkRegistry::default();
+        let leader_dir = tempfile::tempdir().unwrap();
+        let leader_log = SegmentedEntryLog::open(7, leader_dir.path()).unwrap();
+        let leader_log_store = RegionLogStorage::new(leader_log);
+        let leader_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let leader = OpenRaftRegion::open_with_network_for_test(
+            1,
+            7,
+            leader_log_store,
+            RegionStateMachine::new(leader_engine.clone()),
+            registry.factory(),
+            |config| {
+                config.snapshot_policy = openraft::SnapshotPolicy::Never;
+                config.replication_lag_threshold = 1;
+                config.max_in_snapshot_log_to_keep = 0;
+            },
+        )
+        .await
+        .unwrap();
+        registry.register(1, leader.raft_handle());
+        leader
+            .initialize_members(BTreeMap::from([(1, BasicNode::new("node-1"))]))
+            .await
+            .unwrap();
+        leader.wait_for_leader(1).await.unwrap();
+
+        let mut last_applied = None;
+        for version in 1..=8 {
+            let command = raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    request_id: version,
+                    ..Default::default()
+                }),
+                requests: vec![raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                        kvpb::TryAtomicMutateRequest {
+                            mutations: vec![kvpb::Mutation {
+                                key: format!("k{version}").into_bytes(),
+                                value: format!("v{version}").into_bytes(),
+                                op: kvpb::mutation::Op::Put as i32,
+                                ..Default::default()
+                            }],
+                            commit_version: version,
+                            ..Default::default()
+                        },
+                    )),
+                }],
+            };
+            last_applied = Some(
+                leader
+                    .propose(Proposal::from_raft_command(&command).unwrap())
+                    .await
+                    .unwrap(),
+            );
+        }
+        let last_applied = last_applied.unwrap();
+        leader.trigger_snapshot().await.unwrap();
+        leader
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .metrics(
+                |metrics| {
+                    metrics
+                        .snapshot
+                        .map(|snapshot| snapshot.index >= last_applied.index)
+                        .unwrap_or(false)
+                },
+                "leader snapshot before joining peer",
+            )
+            .await
+            .unwrap();
+        leader.trigger_log_purge(last_applied.index).await.unwrap();
+        leader
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .metrics(
+                |metrics| {
+                    metrics
+                        .purged
+                        .map(|purged| purged.index >= last_applied.index)
+                        .unwrap_or(false)
+                },
+                "leader purges snapshot-covered log",
+            )
+            .await
+            .unwrap();
+
+        let joining_dir = tempfile::tempdir().unwrap();
+        let joining_log = SegmentedEntryLog::open(7, joining_dir.path()).unwrap();
+        let joining_log_store = RegionLogStorage::new(joining_log);
+        let joining_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let joining = OpenRaftRegion::open_with_network_for_test(
+            2,
+            7,
+            joining_log_store,
+            RegionStateMachine::new(joining_engine.clone()),
+            registry.factory(),
+            |config| {
+                config.snapshot_policy = openraft::SnapshotPolicy::Never;
+                config.replication_lag_threshold = 1;
+                config.max_in_snapshot_log_to_keep = 0;
+            },
+        )
+        .await
+        .unwrap();
+        registry.register(2, joining.raft_handle());
+
+        leader.add_voter(2, BasicNode::new("node-2")).await.unwrap();
+        joining
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .applied_index_at_least(Some(last_applied.index), "joining peer snapshot catch-up")
+            .await
+            .unwrap();
+        assert!(
+            joining.raft_handle().metrics().borrow().snapshot.is_some(),
+            "joining peer should install a snapshot instead of replaying purged logs"
+        );
+
+        let current = joining_engine
+            .get(&kvpb::GetRequest {
+                key: b"k8".to_vec(),
+                version: 8,
+            })
+            .unwrap();
+        assert_eq!(current.value, b"v8".to_vec());
     }
 
     #[test]

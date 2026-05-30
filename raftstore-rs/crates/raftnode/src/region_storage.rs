@@ -40,6 +40,20 @@ impl RegionLogStorage {
         Ok(latest)
     }
 
+    pub fn log_id_at_index(&self, index: u64) -> Result<Option<LogId<NodeId>>, Error> {
+        let log = self.lock_log()?;
+        if let Some(purged) = log.last_purged_log_id()? {
+            if purged.index == index {
+                return Ok(Some(purged));
+            }
+        }
+        Ok(log
+            .recover_entries()?
+            .into_iter()
+            .find(|entry| entry.log_id.index == index)
+            .map(|entry| entry.log_id))
+    }
+
     pub fn seed_single_node_vote_above_log(&mut self, node_id: NodeId) -> Result<(), Error> {
         if self.vote.is_some() {
             return Ok(());
@@ -75,6 +89,7 @@ impl RegionLogStorage {
 pub struct RegionStateMachine<E> {
     engine: E,
     membership: StoredMembership<NodeId, BasicNode>,
+    last_applied: Option<LogId<NodeId>>,
 }
 
 impl<E> RegionStateMachine<E> {
@@ -82,11 +97,16 @@ impl<E> RegionStateMachine<E> {
         Self {
             engine,
             membership: StoredMembership::default(),
+            last_applied: None,
         }
     }
 
     pub fn with_membership(engine: E, membership: StoredMembership<NodeId, BasicNode>) -> Self {
-        Self { engine, membership }
+        Self {
+            engine,
+            membership,
+            last_applied: None,
+        }
     }
 
     pub fn apply_engine(&self) -> &E {
@@ -95,6 +115,12 @@ impl<E> RegionStateMachine<E> {
 
     pub fn restore_membership(&mut self, membership: StoredMembership<NodeId, BasicNode>) {
         self.membership = membership;
+    }
+
+    pub fn restore_last_applied(&mut self, last_applied: Option<LogId<NodeId>>) {
+        if last_applied.is_some() {
+            self.last_applied = last_applied;
+        }
     }
 
     pub fn membership(&self) -> &StoredMembership<NodeId, BasicNode> {
@@ -279,11 +305,13 @@ where
     ) -> Result<(Option<LogId<NodeId>>, StoredMembership<NodeId, BasicNode>), StorageError<NodeId>>
     {
         let status = self.engine.apply_status();
-        let last_applied = (status.applied_index != 0).then(|| {
-            LogId::new(
-                CommittedLeaderId::new(status.term, NodeId::default()),
-                status.applied_index,
-            )
+        let last_applied = self.last_applied.or_else(|| {
+            (status.applied_index != 0).then(|| {
+                LogId::new(
+                    CommittedLeaderId::new(status.term, NodeId::default()),
+                    status.applied_index,
+                )
+            })
         });
         Ok((last_applied, self.membership.clone()))
     }
@@ -294,14 +322,24 @@ where
         I::IntoIter: OptionalSend,
     {
         let entries = entries.into_iter().collect::<Vec<_>>();
+        let mut membership = None;
+        let last_applied = entries.last().map(|entry| entry.log_id);
         for entry in &entries {
-            if let openraft::EntryPayload::Membership(membership) = &entry.payload {
-                self.membership = StoredMembership::new(Some(entry.log_id), membership.clone());
+            if let openraft::EntryPayload::Membership(next) = &entry.payload {
+                membership = Some(StoredMembership::new(Some(entry.log_id), next.clone()));
             }
         }
-        self.engine
+        let applied = self
+            .engine
             .apply_openraft_entries(entries)
-            .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))
+            .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
+        if let Some(membership) = membership {
+            self.membership = membership;
+        }
+        if let Some(last_applied) = last_applied {
+            self.last_applied = Some(last_applied);
+        }
+        Ok(applied)
     }
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
@@ -350,6 +388,7 @@ where
             .install_region_snapshot(&payload)
             .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
         self.membership = meta.last_membership.clone();
+        self.last_applied = meta.last_log_id;
         Ok(())
     }
 
@@ -551,6 +590,23 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn region_log_storage_recovers_exact_log_id_for_applied_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut storage = RegionLogStorage::new(SegmentedEntryLog::open(7, dir.path()).unwrap());
+        storage
+            .blocking_append(vec![
+                normal_entry(7, 1, b"a", b"1"),
+                normal_entry(7, 2, b"b", b"2"),
+            ])
+            .await
+            .unwrap();
+        assert_eq!(storage.log_id_at_index(2).unwrap(), Some(log_id(3, 2)));
+        storage.purge(log_id(3, 2)).await.unwrap();
+        assert_eq!(storage.log_id_at_index(2).unwrap(), Some(log_id(3, 2)));
+        assert_eq!(storage.log_id_at_index(3).unwrap(), None);
+    }
+
+    #[tokio::test]
     async fn region_log_storage_seeds_restart_vote_above_log() {
         let dir = tempfile::tempdir().unwrap();
         let mut log = SegmentedEntryLog::open(7, dir.path()).unwrap();
@@ -619,7 +675,7 @@ mod tests {
 
         let mut builder = state_machine.get_snapshot_builder().await;
         let snapshot = builder.build_snapshot().await.unwrap();
-        assert_eq!(snapshot.meta.last_log_id.unwrap().index, 2);
+        assert_eq!(snapshot.meta.last_log_id.unwrap(), log_id(3, 2));
         assert!(!snapshot.snapshot.get_ref().is_empty());
 
         let restored = AppliedKvEngine::new(7, MvccStore::default());
