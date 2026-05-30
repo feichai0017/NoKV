@@ -134,6 +134,10 @@ pub trait RaftCommandExecutor: Clone + Send + Sync + 'static {
     ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse>;
 }
 
+pub trait ApplyStatusSink: Clone + Send + Sync + 'static {
+    fn save_apply_status(&self, status: &ApplyStatus) -> nokv_mvcc::Result<()>;
+}
+
 #[derive(Debug)]
 struct AppliedKvInner<E> {
     region_id: RegionId,
@@ -156,6 +160,22 @@ struct ApplyEvent {
 #[derive(Debug, Clone)]
 pub struct AppliedKvEngine<E = MvccStore> {
     inner: Arc<AppliedKvInner<E>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct PersistentAppliedKvEngine<E, S> {
+    engine: AppliedKvEngine<E>,
+    sink: S,
+}
+
+impl<E, S> PersistentAppliedKvEngine<E, S> {
+    pub fn new(engine: AppliedKvEngine<E>, sink: S) -> Self {
+        Self { engine, sink }
+    }
+
+    pub fn inner(&self) -> &AppliedKvEngine<E> {
+        &self.engine
+    }
 }
 
 impl<E> AppliedKvEngine<E> {
@@ -204,12 +224,32 @@ where
     }
 }
 
+impl<E, S> ApplyStatusProvider for PersistentAppliedKvEngine<E, S>
+where
+    E: Clone + Send + Sync + 'static,
+    S: ApplyStatusSink,
+{
+    fn apply_status(&self) -> ApplyStatus {
+        self.engine.status()
+    }
+}
+
 impl<E> ApplyWatchProvider for AppliedKvEngine<E>
 where
     E: Clone + Send + Sync + 'static,
 {
     fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
         self.subscribe()
+    }
+}
+
+impl<E, S> ApplyWatchProvider for PersistentAppliedKvEngine<E, S>
+where
+    E: Clone + Send + Sync + 'static,
+    S: ApplyStatusSink,
+{
+    fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
+        self.engine.subscribe()
     }
 }
 
@@ -504,6 +544,46 @@ where
     }
 }
 
+impl<E, S> RaftCommandExecutor for PersistentAppliedKvEngine<E, S>
+where
+    E: KvEngine,
+    S: ApplyStatusSink,
+{
+    fn execute_raft_command(
+        &self,
+        req: &raftpb::RaftCmdRequest,
+    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
+        let before = self.engine.status().applied_index;
+        let response = self.engine.execute_raft_command(req)?;
+        self.persist_if_advanced(before)?;
+        Ok(response)
+    }
+}
+
+impl<E, S> PersistentAppliedKvEngine<E, S>
+where
+    E: KvEngine,
+    S: ApplyStatusSink,
+{
+    pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    where
+        I: IntoIterator<Item = OpenRaftEntry>,
+    {
+        let before = self.engine.status().applied_index;
+        let applied = self.engine.apply_openraft_entries(entries)?;
+        self.persist_if_advanced(before)?;
+        Ok(applied)
+    }
+
+    fn persist_if_advanced(&self, before: u64) -> nokv_mvcc::Result<()> {
+        let status = self.engine.status();
+        if status.applied_index != before {
+            self.sink.save_apply_status(&status)?;
+        }
+        Ok(())
+    }
+}
+
 fn invalid_raft_command(detail: &str) -> nokv_mvcc::Error {
     nokv_mvcc::Error::Backend(format!("invalid raft command: {detail}"))
 }
@@ -668,6 +748,19 @@ impl RegionRaft for OpenRaftRegion {
 mod tests {
     use super::*;
     use prost::Message;
+    use std::sync::{Arc, Mutex};
+
+    #[derive(Clone, Default)]
+    struct RecordingApplyStatusSink {
+        statuses: Arc<Mutex<Vec<ApplyStatus>>>,
+    }
+
+    impl ApplyStatusSink for RecordingApplyStatusSink {
+        fn save_apply_status(&self, status: &ApplyStatus) -> nokv_mvcc::Result<()> {
+            self.statuses.lock().unwrap().push(status.clone());
+            Ok(())
+        }
+    }
 
     #[test]
     fn openraft_boundary_does_not_claim_replication_yet() {
@@ -949,5 +1042,72 @@ mod tests {
         assert_eq!(event.commit_version, 9);
         let response = raftpb::RaftCmdResponse::decode(applied[0].payload.as_slice()).unwrap();
         assert_eq!(response.responses.len(), 1);
+    }
+
+    #[test]
+    fn persistent_applied_engine_saves_status_after_write_command() {
+        let sink = RecordingApplyStatusSink::default();
+        let statuses = sink.statuses.clone();
+        let engine =
+            PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);
+
+        engine
+            .execute_raft_command(&raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    ..Default::default()
+                }),
+                requests: vec![raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                        kvpb::TryAtomicMutateRequest {
+                            mutations: vec![kvpb::Mutation {
+                                key: b"k".to_vec(),
+                                value: b"v".to_vec(),
+                                op: kvpb::mutation::Op::Put as i32,
+                                ..Default::default()
+                            }],
+                            commit_version: 2,
+                            ..Default::default()
+                        },
+                    )),
+                }],
+            })
+            .unwrap();
+
+        assert_eq!(
+            statuses.lock().unwrap().as_slice(),
+            &[ApplyStatus {
+                region_id: 7,
+                term: 1,
+                applied_index: 1,
+            }]
+        );
+    }
+
+    #[test]
+    fn persistent_applied_engine_does_not_save_status_after_read_command() {
+        let sink = RecordingApplyStatusSink::default();
+        let statuses = sink.statuses.clone();
+        let engine =
+            PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);
+
+        engine
+            .execute_raft_command(&raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    ..Default::default()
+                }),
+                requests: vec![raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdGet as i32,
+                    cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
+                        key: b"k".to_vec(),
+                        version: 1,
+                    })),
+                }],
+            })
+            .unwrap();
+
+        assert!(statuses.lock().unwrap().is_empty());
     }
 }

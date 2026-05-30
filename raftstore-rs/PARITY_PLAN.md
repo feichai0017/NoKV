@@ -67,7 +67,8 @@ The first slices are intentionally narrow:
   record is appended. `AppliedKvEngine` now has an OpenRaft-entry apply path
   that uses the committed entry's log index and term for apply status and watch
   events, while direct command execution advances the local applied index once
-  per Raft command.
+  per Raft command. Holt server mode wraps the apply engine with an apply-status
+  sink, so writes persist the latest region apply status for restart bootstrap.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -78,7 +79,8 @@ Known gaps:
 
 - OpenRaft is not wired into proposal, replication, or membership yet.
 - Region metadata has a Holt persistence point for descriptors and apply-state
-  records, but the single-region service still bootstraps a default descriptor
+  records, and Holt server mode persists apply status after successful write
+  commands. The single-region service still bootstraps a default descriptor
   until coordinator-provided topology is wired.
 - Admin membership RPCs return `Unimplemented`.
 - Restart recovery does not yet combine Holt state, apply state, and raft log.
