@@ -79,6 +79,9 @@ The first slices are intentionally narrow:
 - `OpenRaftRegion` can bootstrap a single-node OpenRaft group with the v2 log
   store and state machine, initialize local membership, trigger election, and
   apply an existing `RaftCmdRequest` through `client_write`.
+- `StoreKV` now depends on an async raft-command executor, and the tonic
+  service has coverage against both the direct apply engine and
+  `OpenRaftRegion`.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -89,8 +92,8 @@ Known gaps:
 
 - OpenRaft is not wired into proposal, replication, or membership yet.
 - The v2 storage path is mounted behind a single-node OpenRaft node, but the
-  tonic server still uses the direct apply engine while multi-node networking
-  and route integration are built out.
+  default server startup still uses the direct apply engine while multi-node
+  networking and route integration are built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. The single-region service still bootstraps a default descriptor

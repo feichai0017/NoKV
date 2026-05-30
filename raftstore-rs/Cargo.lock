@@ -998,6 +998,7 @@ dependencies = [
  "nokv-mvcc",
  "nokv-proto",
  "nokv-raftnode",
+ "tempfile",
  "tokio",
  "tokio-stream",
  "tonic",

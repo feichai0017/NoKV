@@ -40,7 +40,7 @@ impl<E> StoreKvService<E>
 where
     E: RaftCommandExecutor,
 {
-    fn execute_raft_request(
+    async fn execute_raft_request(
         &self,
         context: Option<&kvpb::Context>,
         request: raftpb::Request,
@@ -53,6 +53,7 @@ where
                 header: Some(header_from_context(context)),
                 requests: vec![request],
             })
+            .await
             .map_err(internal_error)?;
         let mut responses = response.responses.into_iter();
         let Some(response) = responses.next() else {
@@ -90,14 +91,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdGet as i32,
-                cmd: Some(raftpb::request::Cmd::Get(inner.clone())),
-            },
-            "get",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdGet as i32,
+                    cmd: Some(raftpb::request::Cmd::Get(inner.clone())),
+                },
+                "get",
+            )
+            .await?
+        {
             raftpb::response::Cmd::Get(response) => response,
             _ => return Err(raft_payload_error("get", "unexpected get payload")),
         };
@@ -143,6 +147,7 @@ where
         let command_response = self
             .engine
             .execute_raft_command(&command)
+            .await
             .map_err(internal_error)?;
         let mut responses = Vec::with_capacity(command_response.responses.len());
         for response in command_response.responses {
@@ -181,14 +186,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdScan as i32,
-                cmd: Some(raftpb::request::Cmd::Scan(inner.clone())),
-            },
-            "scan",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdScan as i32,
+                    cmd: Some(raftpb::request::Cmd::Scan(inner.clone())),
+                },
+                "scan",
+            )
+            .await?
+        {
             raftpb::response::Cmd::Scan(response) => response,
             _ => return Err(raft_payload_error("scan", "unexpected scan payload")),
         };
@@ -219,14 +227,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdPrewrite as i32,
-                cmd: Some(raftpb::request::Cmd::Prewrite(inner.clone())),
-            },
-            "prewrite",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdPrewrite as i32,
+                    cmd: Some(raftpb::request::Cmd::Prewrite(inner.clone())),
+                },
+                "prewrite",
+            )
+            .await?
+        {
             raftpb::response::Cmd::Prewrite(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -259,14 +270,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdCommit as i32,
-                cmd: Some(raftpb::request::Cmd::Commit(inner.clone())),
-            },
-            "commit",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdCommit as i32,
+                    cmd: Some(raftpb::request::Cmd::Commit(inner.clone())),
+                },
+                "commit",
+            )
+            .await?
+        {
             raftpb::response::Cmd::Commit(response) => response,
             _ => return Err(raft_payload_error("commit", "unexpected commit payload")),
         };
@@ -294,14 +308,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdBatchRollback as i32,
-                cmd: Some(raftpb::request::Cmd::BatchRollback(inner.clone())),
-            },
-            "batch rollback",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdBatchRollback as i32,
+                    cmd: Some(raftpb::request::Cmd::BatchRollback(inner.clone())),
+                },
+                "batch rollback",
+            )
+            .await?
+        {
             raftpb::response::Cmd::BatchRollback(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -334,14 +351,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdResolveLock as i32,
-                cmd: Some(raftpb::request::Cmd::ResolveLock(inner.clone())),
-            },
-            "resolve lock",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdResolveLock as i32,
+                    cmd: Some(raftpb::request::Cmd::ResolveLock(inner.clone())),
+                },
+                "resolve lock",
+            )
+            .await?
+        {
             raftpb::response::Cmd::ResolveLock(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -374,14 +394,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdCheckTxnStatus as i32,
-                cmd: Some(raftpb::request::Cmd::CheckTxnStatus(inner.clone())),
-            },
-            "check txn status",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdCheckTxnStatus as i32,
+                    cmd: Some(raftpb::request::Cmd::CheckTxnStatus(inner.clone())),
+                },
+                "check txn status",
+            )
+            .await?
+        {
             raftpb::response::Cmd::CheckTxnStatus(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -414,14 +437,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTxnHeartBeat as i32,
-                cmd: Some(raftpb::request::Cmd::TxnHeartBeat(inner.clone())),
-            },
-            "txn heart beat",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTxnHeartBeat as i32,
+                    cmd: Some(raftpb::request::Cmd::TxnHeartBeat(inner.clone())),
+                },
+                "txn heart beat",
+            )
+            .await?
+        {
             raftpb::response::Cmd::TxnHeartBeat(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -464,14 +490,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(inner.clone())),
-            },
-            "atomic mutate",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(inner.clone())),
+                },
+                "atomic mutate",
+            )
+            .await?
+        {
             raftpb::response::Cmd::TryAtomicMutate(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -506,14 +535,17 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self.execute_raft_request(
-            request.context.as_ref(),
-            raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdInstallPreparedMvcc as i32,
-                cmd: Some(raftpb::request::Cmd::InstallPreparedMvcc(inner.clone())),
-            },
-            "install prepared mvcc",
-        )? {
+        let response = match self
+            .execute_raft_request(
+                request.context.as_ref(),
+                raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdInstallPreparedMvcc as i32,
+                    cmd: Some(raftpb::request::Cmd::InstallPreparedMvcc(inner.clone())),
+                },
+                "install prepared mvcc",
+            )
+            .await?
+        {
             raftpb::response::Cmd::InstallPreparedMvcc(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -808,6 +840,46 @@ mod tests {
             .into_inner();
         assert_eq!(response.response.unwrap().applied_keys, 1);
         assert_eq!(engine.status().applied_index, 1);
+    }
+
+    #[tokio::test]
+    async fn service_can_run_against_openraft_region() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = nokv_raftnode::SegmentedEntryLog::open(1, dir.path()).unwrap();
+        let state_machine = nokv_raftnode::RegionStateMachine::new(
+            nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()),
+        );
+        let region = nokv_raftnode::OpenRaftRegion::bootstrap_single_node(
+            1,
+            1,
+            nokv_raftnode::RegionLogStorage::new(log),
+            state_machine,
+        )
+        .await
+        .unwrap();
+        let service = StoreKvService::new(region.clone());
+
+        let response = service
+            .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
+                context: Some(default_context()),
+                request: Some(kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"k".to_vec(),
+                        value: b"v".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 2,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert_eq!(response.response.unwrap().applied_keys, 1);
+        assert_eq!(region.apply_status().applied_index, 2);
     }
 
     #[tokio::test]

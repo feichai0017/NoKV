@@ -132,10 +132,10 @@ pub trait ApplyWatchProvider: Clone + Send + Sync + 'static {
 }
 
 pub trait RaftCommandExecutor: Clone + Send + Sync + 'static {
-    fn execute_raft_command(
-        &self,
-        req: &raftpb::RaftCmdRequest,
-    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse>;
+    fn execute_raft_command<'a>(
+        &'a self,
+        req: &'a raftpb::RaftCmdRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a;
 }
 
 pub trait ApplyStatusSink: Clone + Send + Sync + 'static {
@@ -540,11 +540,12 @@ impl<E> RaftCommandExecutor for AppliedKvEngine<E>
 where
     E: KvEngine,
 {
-    fn execute_raft_command(
-        &self,
-        req: &raftpb::RaftCmdRequest,
-    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
-        self.execute_raft_command_inner(req)
+    fn execute_raft_command<'a>(
+        &'a self,
+        req: &'a raftpb::RaftCmdRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
+    {
+        async move { self.execute_raft_command_inner(req) }
     }
 }
 
@@ -553,14 +554,17 @@ where
     E: KvEngine,
     S: ApplyStatusSink,
 {
-    fn execute_raft_command(
-        &self,
-        req: &raftpb::RaftCmdRequest,
-    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
-        let before = self.engine.status().applied_index;
-        let response = self.engine.execute_raft_command(req)?;
-        self.persist_if_advanced(before)?;
-        Ok(response)
+    fn execute_raft_command<'a>(
+        &'a self,
+        req: &'a raftpb::RaftCmdRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
+    {
+        async move {
+            let before = self.engine.status().applied_index;
+            let response = self.engine.execute_raft_command(req).await?;
+            self.persist_if_advanced(before)?;
+            Ok(response)
+        }
     }
 }
 
@@ -598,6 +602,11 @@ fn encode_raft_response(response: &raftpb::RaftCmdResponse) -> nokv_mvcc::Result
         .encode(&mut payload)
         .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
     Ok(payload)
+}
+
+fn decode_raft_response(payload: &[u8]) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
+    raftpb::RaftCmdResponse::decode(payload)
+        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
 }
 
 impl<E> KvEngine for AppliedKvEngine<E>
@@ -727,20 +736,22 @@ where
 }
 
 #[derive(Clone)]
-pub struct OpenRaftRegion {
+pub struct OpenRaftRegion<E = MvccStore> {
     raft: Raft<RaftStoreConfig>,
+    apply_engine: AppliedKvEngine<E>,
 }
 
-impl OpenRaftRegion {
-    pub async fn bootstrap_single_node<E>(
+impl<E> OpenRaftRegion<E>
+where
+    E: KvEngine,
+{
+    pub async fn bootstrap_single_node(
         node_id: NodeId,
         region_id: RegionId,
         log_store: RegionLogStorage,
         state_machine: RegionStateMachine<E>,
-    ) -> Result<Self, Error>
-    where
-        E: KvEngine,
-    {
+    ) -> Result<OpenRaftRegion<E>, Error> {
+        let apply_engine = state_machine.apply_engine().clone();
         let config = Arc::new(
             Config {
                 cluster_name: format!("nokv-region-{region_id}"),
@@ -763,7 +774,7 @@ impl OpenRaftRegion {
         members.insert(node_id, BasicNode::new(format!("local-{node_id}")));
         raft.initialize(members).await.map_err(openraft_api_error)?;
         raft.trigger().elect().await.map_err(openraft_error)?;
-        Ok(Self { raft })
+        Ok(OpenRaftRegion { raft, apply_engine })
     }
 
     pub async fn propose(&self, proposal: Proposal) -> Result<AppliedProposal, Error> {
@@ -773,6 +784,45 @@ impl OpenRaftRegion {
             .await
             .map_err(openraft_api_error)?;
         Ok(response.data)
+    }
+}
+
+impl<E> ApplyStatusProvider for OpenRaftRegion<E>
+where
+    E: KvEngine,
+{
+    fn apply_status(&self) -> ApplyStatus {
+        self.apply_engine.status()
+    }
+}
+
+impl<E> ApplyWatchProvider for OpenRaftRegion<E>
+where
+    E: Clone + Send + Sync + 'static,
+{
+    fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
+        self.apply_engine.subscribe()
+    }
+}
+
+impl<E> RaftCommandExecutor for OpenRaftRegion<E>
+where
+    E: KvEngine,
+{
+    fn execute_raft_command<'a>(
+        &'a self,
+        req: &'a raftpb::RaftCmdRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
+    {
+        async move {
+            let proposal = Proposal::from_raft_command(req)
+                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+            let applied = self
+                .propose(proposal)
+                .await
+                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+            decode_raft_response(&applied.payload)
+        }
     }
 }
 
@@ -1025,8 +1075,8 @@ mod tests {
         assert_eq!(event.keys, vec![b"k".to_vec()]);
     }
 
-    #[test]
-    fn applied_kv_engine_executes_existing_raft_command_payload() {
+    #[tokio::test]
+    async fn applied_kv_engine_executes_existing_raft_command_payload() {
         let engine = AppliedKvEngine::new(7, MvccStore::new());
         let response = engine
             .execute_raft_command(&raftpb::RaftCmdRequest {
@@ -1059,6 +1109,7 @@ mod tests {
                     },
                 ],
             })
+            .await
             .unwrap();
 
         assert_eq!(response.responses.len(), 2);
@@ -1074,8 +1125,8 @@ mod tests {
         assert_eq!(engine.status().applied_index, 1);
     }
 
-    #[test]
-    fn raft_command_with_multiple_writes_advances_index_once() {
+    #[tokio::test]
+    async fn raft_command_with_multiple_writes_advances_index_once() {
         let engine = AppliedKvEngine::new(7, MvccStore::new());
         let mut watch = engine.subscribe();
 
@@ -1118,6 +1169,7 @@ mod tests {
                     },
                 ],
             })
+            .await
             .unwrap();
 
         assert_eq!(engine.status().applied_index, 1);
@@ -1174,8 +1226,8 @@ mod tests {
         assert_eq!(response.responses.len(), 1);
     }
 
-    #[test]
-    fn persistent_applied_engine_saves_status_after_write_command() {
+    #[tokio::test]
+    async fn persistent_applied_engine_saves_status_after_write_command() {
         let sink = RecordingApplyStatusSink::default();
         let statuses = sink.statuses.clone();
         let engine =
@@ -1203,6 +1255,7 @@ mod tests {
                     )),
                 }],
             })
+            .await
             .unwrap();
 
         assert_eq!(
@@ -1215,8 +1268,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn persistent_applied_engine_does_not_save_status_after_read_command() {
+    #[tokio::test]
+    async fn persistent_applied_engine_does_not_save_status_after_read_command() {
         let sink = RecordingApplyStatusSink::default();
         let statuses = sink.statuses.clone();
         let engine =
@@ -1236,6 +1289,7 @@ mod tests {
                     })),
                 }],
             })
+            .await
             .unwrap();
 
         assert!(statuses.lock().unwrap().is_empty());
