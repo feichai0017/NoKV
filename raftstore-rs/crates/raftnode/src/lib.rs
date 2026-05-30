@@ -18,6 +18,17 @@ use tokio::sync::broadcast;
 pub type NodeId = u64;
 pub type RegionId = u64;
 
+openraft::declare_raft_types!(
+    pub RaftStoreConfig:
+        D = Proposal,
+        R = AppliedProposal,
+        NodeId = NodeId,
+        Node = openraft::BasicNode,
+        Entry = openraft::Entry<RaftStoreConfig>,
+        SnapshotData = std::io::Cursor<Vec<u8>>,
+        AsyncRuntime = openraft::TokioRuntime,
+);
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proposal {
     pub region_id: RegionId,
@@ -433,7 +444,7 @@ where
 /// MVCC behind the existing wire contract.
 #[derive(Debug, Default)]
 pub struct OpenRaftRegion {
-    _openraft: PhantomData<openraft::RaftMetrics<u64, ()>>,
+    _openraft: PhantomData<RaftStoreConfig>,
 }
 
 impl OpenRaftRegion {

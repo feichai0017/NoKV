@@ -29,6 +29,9 @@ payload shape for local apply, and `StoreKV` handlers execute through that
 boundary. The future replicated proposal path can therefore carry the Go
 raftstore command contract unchanged; `Proposal` encodes that command payload
 directly and validates that the proposal region matches the command header.
+`RaftStoreConfig` fixes the OpenRaft type boundary around that proposal/result
+shape without exposing OpenRaft types through the service or Go protobuf
+boundary.
 
 See [PARITY_PLAN.md](PARITY_PLAN.md) for the full Go `raftstore` parity plan and
 the cutover rule: keep the workspace named `raftstore-rs` while the Go

@@ -58,7 +58,8 @@ The first slices are intentionally narrow:
   `RaftCmdRequest` payloads against the MVCC state machine, which fixes the
   proposal/apply payload shape before OpenRaft is wired. `Proposal` also
   round-trips those commands through prost bytes and rejects region/header
-  mismatches.
+  mismatches. `RaftStoreConfig` pins the OpenRaft data, response, node,
+  entry, snapshot, and runtime types to this NoKV-owned proposal boundary.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
