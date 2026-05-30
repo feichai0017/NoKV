@@ -257,10 +257,10 @@ Known gaps:
   Holt-backed blocked-event catalog and surface pending/blocked counts through
   `ExecutionStatus.Restart`. Production route integration now has tagged
   coverage for coordinator-backed store discovery, key routing, admin
-  descriptor publication, and pending descriptor retry; coordinator-owned
-  process lifecycle, operator resolution for blocked events, split/merge
-  scheduler operation execution, and remaining `RaftAdmin` RPC wiring are still
-  being built out.
+  descriptor publication, pending descriptor retry, and blocked descriptor
+  recovery after Rust process restart; coordinator-owned process lifecycle,
+  operator resolution for blocked events, split/merge scheduler operation
+  execution, and remaining `RaftAdmin` RPC wiring are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. Coordinator-owned route integration and automatic

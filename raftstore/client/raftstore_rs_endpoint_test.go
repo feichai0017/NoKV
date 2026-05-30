@@ -338,6 +338,74 @@ func TestRustRaftstoreEndpointRetriesPendingCoordinatorDescriptor(t *testing.T) 
 	}, 8*time.Second, 50*time.Millisecond)
 }
 
+func TestRustRaftstoreEndpointBlocksInvalidCoordinatorDescriptor(t *testing.T) {
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorService(t, rejectingRootEventCoordinator{})
+	defer stopCoord()
+
+	addrs := map[uint64]string{
+		1: reserveLocalAddr(t),
+		2: reserveLocalAddr(t),
+	}
+	dir1 := t.TempDir()
+	env1 := []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2],
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	}
+	stop1 := startRustRaftstoreProcessAt(t, addrs[1], dir1, env1)
+	defer func() {
+		if stop1 != nil {
+			stop1()
+		}
+	}()
+	stop2 := startRustRaftstoreProcessAt(t, addrs[2], t.TempDir(), []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stop2()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	admin, closeAdmin, err := adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	_, err = admin.AddPeer(ctx, &adminpb.AddPeerRequest{RegionId: 1, StoreId: 2, PeerId: 2})
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		execution, statusErr := admin.ExecutionStatus(ctx, &adminpb.ExecutionStatusRequest{})
+		if statusErr != nil {
+			return false
+		}
+		restart := execution.GetRestart()
+		topology := execution.GetTopology()
+		return restart.GetPendingRootEventCount() == 0 &&
+			restart.GetBlockedRootEventCount() == 1 &&
+			len(topology) == 1 &&
+			topology[0].GetPublish() == adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_BLOCKED
+	}, 5*time.Second, 50*time.Millisecond)
+	require.NoError(t, closeAdmin())
+
+	stop1()
+	stop1 = nil
+	stop1 = startRustRaftstoreProcessAt(t, addrs[1], dir1, env1)
+	admin, closeAdmin, err = adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closeAdmin()) }()
+	require.Eventually(t, func() bool {
+		execution, statusErr := admin.ExecutionStatus(ctx, &adminpb.ExecutionStatusRequest{})
+		return statusErr == nil &&
+			execution.GetRestart().GetPendingRootEventCount() == 0 &&
+			execution.GetRestart().GetBlockedRootEventCount() == 1
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
 func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T) {
 	addrs := map[uint64]string{
 		1: reserveLocalAddr(t),
@@ -923,6 +991,14 @@ func startRustRaftstoreCoordinatorServiceOnListener(t *testing.T, lis net.Listen
 	}
 	t.Cleanup(stop)
 	return stop
+}
+
+type rejectingRootEventCoordinator struct {
+	coordpb.UnimplementedCoordinatorServer
+}
+
+func (rejectingRootEventCoordinator) PublishRootEvent(context.Context, *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+	return nil, status.Error(codes.InvalidArgument, "reject root event")
 }
 
 func publishRustRaftstoreRootEvent(t *testing.T, svc *coordserver.Service, event rootevent.Event) {

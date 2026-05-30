@@ -357,7 +357,9 @@ impl HoltMvccStore {
             .lock()
             .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
         let sequence = self.store.next_pending_root_event_sequence()?;
-        self.store.put_pending_root_event(sequence, event)?;
+        self.store
+            .put_pending_root_event(sequence, event)
+            .and_then(|_| self.store.checkpoint())?;
         Ok(sequence)
     }
 
@@ -366,7 +368,9 @@ impl HoltMvccStore {
             .gate
             .lock()
             .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
-        self.store.delete_pending_root_event(sequence)
+        self.store
+            .delete_pending_root_event(sequence)
+            .and_then(|_| self.store.checkpoint())
     }
 
     pub fn pending_root_events(&self) -> Result<Vec<PendingRootEvent>> {
@@ -386,6 +390,7 @@ impl HoltMvccStore {
             .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
         self.store
             .block_pending_root_event(sequence, event, transition_id, last_error)
+            .and_then(|_| self.store.checkpoint())
     }
 
     pub fn blocked_root_events(&self) -> Result<Vec<BlockedRootEvent>> {
