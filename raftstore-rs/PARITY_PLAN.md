@@ -304,8 +304,10 @@ Known gaps:
   lifecycle wiring is still being built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
-  commands. The single-region service still bootstraps a default descriptor
-  until coordinator-provided topology is wired.
+  commands. Non-bootstrap Rust peers no longer persist a default descriptor or
+  report a hosted region before OpenRaft membership exists. Bootstrap peers
+  still seed the initial descriptor locally, and full coordinator-provided
+  topology bootstrap is still pending.
 - Admin `AddPeer`/`RemovePeer` RPCs are wired for `OpenRaftRegion`.
   `TransferLeader` is wired for current-leader no-op and target-peer
   self-election. When the current leader has a configured target peer endpoint,
