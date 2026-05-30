@@ -2,6 +2,7 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use nokv_holtstore::HoltMvccStore;
@@ -15,7 +16,9 @@ use nokv_raftnode::{
     TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
-    apply_status_from_holt, HoltRegionMetadataSink, PeerEndpointCatalog, RegionAdmission,
+    apply_status_from_holt, EmptyRegionDescriptorSink, EmptyTopologyPublisher,
+    HoltRegionMetadataSink, PeerEndpointCatalog, RegionAdmission, TopologyPublishOutcome,
+    TopologyPublisher,
 };
 
 #[tokio::main]
@@ -48,12 +51,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
         spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone());
-        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_and_descriptor_sink(
+        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_and_topology_publisher(
             addr,
             region,
             admission,
             peer_endpoints,
             HoltRegionMetadataSink::new(mvcc),
+            coordinator_topology_publisher(coordinator),
         )
         .await?;
     } else {
@@ -62,8 +66,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
         engine.set_region_descriptor(default_region_descriptor(identity))?;
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
-        spawn_coordinator_heartbeat(coordinator, identity, addr, region.clone());
-        nokv_raftstore_server::serve_with_openraft_region_admission_and_peer_endpoints(
+        spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone());
+        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_and_topology_publisher(
             addr,
             region,
             RegionAdmission::from_descriptor(
@@ -71,6 +75,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 identity.bootstrap,
             )?,
             peer_endpoints,
+            EmptyRegionDescriptorSink,
+            coordinator_topology_publisher(coordinator),
         )
         .await?;
     }
@@ -212,6 +218,100 @@ fn coordinator_endpoint(addr: &str) -> String {
         addr.to_owned()
     } else {
         format!("http://{addr}")
+    }
+}
+
+#[derive(Debug, Clone)]
+struct CoordinatorTopologyPublisher {
+    endpoint: String,
+}
+
+fn coordinator_topology_publisher(
+    config: Option<CoordinatorHeartbeatConfig>,
+) -> Arc<dyn TopologyPublisher> {
+    config
+        .map(|config| {
+            Arc::new(CoordinatorTopologyPublisher {
+                endpoint: config.endpoint,
+            }) as Arc<dyn TopologyPublisher>
+        })
+        .unwrap_or_else(|| Arc::new(EmptyTopologyPublisher))
+}
+
+#[tonic::async_trait]
+impl TopologyPublisher for CoordinatorTopologyPublisher {
+    async fn publish_peer_added(
+        &self,
+        region_id: u64,
+        store_id: u64,
+        peer_id: u64,
+        region: &metapb::RegionDescriptor,
+    ) -> TopologyPublishOutcome {
+        self.publish_peer_change(
+            metapb::RootEventKind::PeerAdded,
+            region_id,
+            store_id,
+            peer_id,
+            region,
+        )
+        .await
+    }
+
+    async fn publish_peer_removed(
+        &self,
+        region_id: u64,
+        store_id: u64,
+        peer_id: u64,
+        region: &metapb::RegionDescriptor,
+    ) -> TopologyPublishOutcome {
+        self.publish_peer_change(
+            metapb::RootEventKind::PeerRemoved,
+            region_id,
+            store_id,
+            peer_id,
+            region,
+        )
+        .await
+    }
+}
+
+impl CoordinatorTopologyPublisher {
+    async fn publish_peer_change(
+        &self,
+        kind: metapb::RootEventKind,
+        region_id: u64,
+        store_id: u64,
+        peer_id: u64,
+        region: &metapb::RegionDescriptor,
+    ) -> TopologyPublishOutcome {
+        let mut client =
+            match coordpb::coordinator_client::CoordinatorClient::connect(self.endpoint.clone())
+                .await
+            {
+                Ok(client) => client,
+                Err(err) => return TopologyPublishOutcome::terminal_failed(err.to_string()),
+            };
+        match client
+            .publish_root_event(coordpb::PublishRootEventRequest {
+                event: Some(metapb::RootEvent {
+                    kind: kind as i32,
+                    payload: Some(metapb::root_event::Payload::PeerChange(
+                        metapb::RootPeerChange {
+                            region_id,
+                            store_id,
+                            peer_id,
+                            target: Some(region.clone()),
+                            ..Default::default()
+                        },
+                    )),
+                }),
+                ..Default::default()
+            })
+            .await
+        {
+            Ok(_) => TopologyPublishOutcome::terminal_published(),
+            Err(status) => TopologyPublishOutcome::terminal_failed(status.to_string()),
+        }
     }
 }
 

@@ -84,6 +84,64 @@ pub trait RegionDescriptorSink: Clone + Send + Sync + 'static {
     fn save_region_descriptor(&self, descriptor: &metapb::RegionDescriptor) -> Result<(), Status>;
 }
 
+#[tonic::async_trait]
+pub trait TopologyPublisher: Send + Sync + 'static {
+    async fn publish_peer_added(
+        &self,
+        _region_id: u64,
+        _store_id: u64,
+        _peer_id: u64,
+        _region: &metapb::RegionDescriptor,
+    ) -> TopologyPublishOutcome {
+        TopologyPublishOutcome::not_required()
+    }
+
+    async fn publish_peer_removed(
+        &self,
+        _region_id: u64,
+        _store_id: u64,
+        _peer_id: u64,
+        _region: &metapb::RegionDescriptor,
+    ) -> TopologyPublishOutcome {
+        TopologyPublishOutcome::not_required()
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct TopologyPublishOutcome {
+    publish: adminpb::ExecutionPublishState,
+    last_error: String,
+}
+
+impl TopologyPublishOutcome {
+    pub fn not_required() -> Self {
+        Self {
+            publish: adminpb::ExecutionPublishState::NotRequired,
+            last_error: String::new(),
+        }
+    }
+
+    pub fn terminal_published() -> Self {
+        Self {
+            publish: adminpb::ExecutionPublishState::TerminalPublished,
+            last_error: String::new(),
+        }
+    }
+
+    pub fn terminal_failed(error: impl Into<String>) -> Self {
+        Self {
+            publish: adminpb::ExecutionPublishState::TerminalFailed,
+            last_error: error.into(),
+        }
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct EmptyTopologyPublisher;
+
+#[tonic::async_trait]
+impl TopologyPublisher for EmptyTopologyPublisher {}
+
 #[derive(Debug, Clone, Default)]
 pub struct EmptyRegionDescriptorSink;
 
@@ -881,13 +939,14 @@ where
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Clone)]
 pub struct RaftAdminService<S = EmptyApplyStatus, D = EmptyRegionDescriptorSink> {
     status: S,
     admission: RegionAdmissionState,
     peer_endpoints: PeerEndpointCatalog,
     execution: ExecutionRuntime,
     descriptor_sink: D,
+    topology_publisher: Arc<dyn TopologyPublisher>,
 }
 
 impl<S> RaftAdminService<S, EmptyRegionDescriptorSink> {
@@ -957,7 +1016,13 @@ where
             peer_endpoints,
             execution,
             descriptor_sink,
+            topology_publisher: Arc::new(EmptyTopologyPublisher),
         }
+    }
+
+    fn with_topology_publisher(mut self, topology_publisher: Arc<dyn TopologyPublisher>) -> Self {
+        self.topology_publisher = topology_publisher;
+        self
     }
 }
 
@@ -1242,11 +1307,22 @@ where
         let region = self.admission.add_peer(request.peer_id, request.store_id)?;
         self.status.propose_region_descriptor(&region).await?;
         self.descriptor_sink.save_region_descriptor(&region)?;
+        let publish = self
+            .topology_publisher
+            .publish_peer_added(
+                request.region_id,
+                request.store_id,
+                request.peer_id,
+                &region,
+            )
+            .await;
         self.execution.record_topology_applied(
             request.region_id,
             request.peer_id,
             peer_change_transition_id("add", request.region_id, request.peer_id, &region),
             "peer change",
+            publish.publish,
+            publish.last_error,
         );
         Ok(Response::new(adminpb::AddPeerResponse {
             region: Some(region),
@@ -1264,15 +1340,34 @@ where
             ));
         }
         self.admission.validate_region(request.region_id)?;
+        let removed_store_id = self
+            .admission
+            .descriptor()?
+            .peers
+            .iter()
+            .find(|peer| peer.peer_id == request.peer_id)
+            .map(|peer| peer.store_id)
+            .unwrap_or(request.peer_id);
         self.status.remove_voter(request.peer_id).await?;
         let region = self.admission.remove_peer(request.peer_id)?;
         self.status.propose_region_descriptor(&region).await?;
         self.descriptor_sink.save_region_descriptor(&region)?;
+        let publish = self
+            .topology_publisher
+            .publish_peer_removed(
+                request.region_id,
+                removed_store_id,
+                request.peer_id,
+                &region,
+            )
+            .await;
         self.execution.record_topology_applied(
             request.region_id,
             request.peer_id,
             peer_change_transition_id("remove", request.region_id, request.peer_id, &region),
             "peer change",
+            publish.publish,
+            publish.last_error,
         );
         Ok(Response::new(adminpb::RemovePeerResponse {
             region: Some(region),
@@ -1469,6 +1564,32 @@ where
     E: RegionSnapshotEngine + RaftCommandExecutor,
     D: RegionDescriptorSink,
 {
+    serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_and_topology_publisher(
+        addr,
+        region,
+        admission,
+        peer_endpoints,
+        descriptor_sink,
+        Arc::new(EmptyTopologyPublisher),
+    )
+    .await
+}
+
+pub async fn serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_and_topology_publisher<
+    E,
+    D,
+>(
+    addr: SocketAddr,
+    region: nokv_raftnode::OpenRaftRegion<E>,
+    admission: RegionAdmission,
+    peer_endpoints: PeerEndpointCatalog,
+    descriptor_sink: D,
+    topology_publisher: Arc<dyn TopologyPublisher>,
+) -> Result<(), tonic::transport::Error>
+where
+    E: RegionSnapshotEngine + RaftCommandExecutor,
+    D: RegionDescriptorSink,
+{
     let execution = ExecutionRuntime::default();
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
     transport.register(admission.region_id, region.raft_handle());
@@ -1488,7 +1609,8 @@ where
                 execution,
                 peer_endpoints,
                 descriptor_sink,
-            ),
+            )
+            .with_topology_publisher(topology_publisher),
         ))
         .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
         .serve(addr)
@@ -1561,8 +1683,120 @@ mod tests {
     use nokv_proto::nokv::meta::v1 as metapb;
     use std::collections::BTreeMap;
     use std::path::Path;
+    use std::sync::{Arc, Mutex};
     use std::time::Duration;
     use tokio_stream::StreamExt;
+
+    #[derive(Clone, Default)]
+    struct CaptureTopologyPublisher {
+        events: Arc<Mutex<Vec<(String, u64, u64, u64, u64)>>>,
+    }
+
+    #[tonic::async_trait]
+    impl TopologyPublisher for CaptureTopologyPublisher {
+        async fn publish_peer_added(
+            &self,
+            region_id: u64,
+            store_id: u64,
+            peer_id: u64,
+            region: &metapb::RegionDescriptor,
+        ) -> TopologyPublishOutcome {
+            self.events.lock().unwrap().push((
+                "added".to_owned(),
+                region_id,
+                store_id,
+                peer_id,
+                region
+                    .epoch
+                    .as_ref()
+                    .map(|epoch| epoch.conf_version)
+                    .unwrap_or_default(),
+            ));
+            TopologyPublishOutcome::terminal_published()
+        }
+
+        async fn publish_peer_removed(
+            &self,
+            region_id: u64,
+            store_id: u64,
+            peer_id: u64,
+            region: &metapb::RegionDescriptor,
+        ) -> TopologyPublishOutcome {
+            self.events.lock().unwrap().push((
+                "removed".to_owned(),
+                region_id,
+                store_id,
+                peer_id,
+                region
+                    .epoch
+                    .as_ref()
+                    .map(|epoch| epoch.conf_version)
+                    .unwrap_or_default(),
+            ));
+            TopologyPublishOutcome::terminal_published()
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct NoopAdminStatus;
+
+    impl ApplyStatusProvider for NoopAdminStatus {
+        fn apply_status(&self) -> nokv_raftnode::ApplyStatus {
+            nokv_raftnode::ApplyStatus {
+                region_id: 1,
+                term: 1,
+                applied_index: 1,
+            }
+        }
+    }
+
+    impl RaftRuntimeStatusProvider for NoopAdminStatus {
+        fn raft_runtime_status(&self) -> RaftRuntimeStatus {
+            RaftRuntimeStatus {
+                local_peer_id: 1,
+                leader_peer_id: 1,
+                leader: true,
+            }
+        }
+    }
+
+    #[tonic::async_trait]
+    impl RaftMembershipAdmin for NoopAdminStatus {
+        async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
+            Ok(())
+        }
+
+        async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
+            Ok(())
+        }
+
+        async fn transfer_leader(&self, _peer_id: u64) -> Result<(), Status> {
+            Ok(())
+        }
+
+        async fn propose_region_descriptor(
+            &self,
+            _descriptor: &metapb::RegionDescriptor,
+        ) -> Result<(), Status> {
+            Ok(())
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct FailedTopologyPublisher;
+
+    #[tonic::async_trait]
+    impl TopologyPublisher for FailedTopologyPublisher {
+        async fn publish_peer_added(
+            &self,
+            _region_id: u64,
+            _store_id: u64,
+            _peer_id: u64,
+            _region: &metapb::RegionDescriptor,
+        ) -> TopologyPublishOutcome {
+            TopologyPublishOutcome::terminal_failed("coordinator unavailable")
+        }
+    }
 
     fn context(admission: &RegionAdmission) -> kvpb::Context {
         kvpb::Context {
@@ -2696,6 +2930,39 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn admin_add_peer_records_failed_topology_publish_without_failing_change() {
+        let service = RaftAdminService::with_admission(NoopAdminStatus, RegionAdmission::default())
+            .with_topology_publisher(Arc::new(FailedTopologyPublisher));
+
+        let add = service
+            .add_peer(Request::new(adminpb::AddPeerRequest {
+                region_id: 1,
+                store_id: 2,
+                peer_id: 2,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .region
+            .unwrap();
+        assert_eq!(add.epoch.unwrap().conf_version, 2);
+
+        let execution = service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(execution.topology.len(), 1);
+        assert_eq!(
+            execution.topology[0].publish,
+            adminpb::ExecutionPublishState::TerminalFailed as i32
+        );
+        assert!(execution.topology[0]
+            .last_error
+            .contains("coordinator unavailable"));
+    }
+
+    #[tokio::test]
     async fn admin_adds_and_removes_openraft_voter() {
         let registry = nokv_raftnode::MemoryRaftNetworkRegistry::default();
         let mut dirs = Vec::new();
@@ -2740,6 +3007,8 @@ mod tests {
         peer_endpoints.insert_peer(2, "node-2").unwrap();
         let descriptor_dir = tempfile::tempdir().unwrap();
         let descriptor_store = HoltMvccStore::open_file(descriptor_dir.path()).unwrap();
+        let topology_publisher = CaptureTopologyPublisher::default();
+        let published_topology = topology_publisher.events.clone();
         let service =
             RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
                 leader.clone(),
@@ -2747,7 +3016,8 @@ mod tests {
                 ExecutionRuntime::default(),
                 peer_endpoints,
                 HoltRegionMetadataSink::new(descriptor_store.clone()),
-            );
+            )
+            .with_topology_publisher(Arc::new(topology_publisher));
         let store_service = StoreKvService::with_admission_state_and_execution(
             leader.clone(),
             service.admission.clone(),
@@ -2790,6 +3060,10 @@ mod tests {
                 .conf_version,
             2
         );
+        assert_eq!(
+            published_topology.lock().unwrap().as_slice(),
+            &[("added".to_owned(), 7, 2, 2, 2)]
+        );
         let execution_after_add = service
             .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
             .await
@@ -2807,7 +3081,7 @@ mod tests {
         );
         assert_eq!(
             execution_after_add.topology[0].publish,
-            adminpb::ExecutionPublishState::NotRequired as i32
+            adminpb::ExecutionPublishState::TerminalPublished as i32
         );
 
         let leader_status = service
@@ -2943,6 +3217,13 @@ mod tests {
                 peer_id: 1
             }]
         );
+        assert_eq!(
+            published_topology.lock().unwrap().as_slice(),
+            &[
+                ("added".to_owned(), 7, 2, 2, 2),
+                ("removed".to_owned(), 7, 2, 2, 3),
+            ]
+        );
         let execution_after_remove = service
             .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
             .await
@@ -2957,6 +3238,10 @@ mod tests {
         assert_eq!(
             execution_after_remove.topology[1].outcome,
             adminpb::ExecutionTopologyOutcome::Applied as i32
+        );
+        assert_eq!(
+            execution_after_remove.topology[1].publish,
+            adminpb::ExecutionPublishState::TerminalPublished as i32
         );
     }
 

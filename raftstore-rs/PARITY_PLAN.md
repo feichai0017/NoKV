@@ -171,7 +171,11 @@ The first slices are intentionally narrow:
   region count, leader count, leader region ids, and minimal per-region runtime
   stats. Coordinator-returned leader-transfer operations now execute through
   the local `RaftAdmin.TransferLeader` service path; split and merge operations
-  remain explicit no-ops until Rust owns those admin RPCs.
+  remain explicit no-ops until Rust owns those admin RPCs. When the same
+  coordinator endpoint is configured, successful Rust `AddPeer` and
+  `RemovePeer` operations also publish terminal rooted peer-change events back
+  to the Go coordinator, so the rooted region descriptor can advance after the
+  Rust data plane applies the membership change.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -218,6 +222,10 @@ The first slices are intentionally narrow:
   through admin status. This covers the public wire contract for multi-process
   AddPeer/RemovePeer plus tonic replication rather than only Rust in-process
   tests.
+- The tagged Go coordinator harness now also verifies the reverse control-plane
+  path: a Rust `RaftAdmin AddPeer` call publishes the updated region descriptor
+  through the existing Go coordinator root-event service, and subsequent
+  coordinator routing observes the new epoch and peer list.
 - A tagged Go Holt restart harness now starts two standalone Rust processes,
   adds a non-bootstrap peer, writes through the existing Go client, restarts
   both processes from their Holt and raftlog directories, verifies the persisted
@@ -235,12 +243,14 @@ Known gaps:
   The Go tagged harness also covers three standalone Rust processes joining and
   leaving through `RaftAdmin AddPeer`/`RemovePeer`, then replicating `StoreKV`
   writes across the active membership. The standalone binary can now report
-  StoreHeartbeat telemetry to the coordinator and execute coordinator-returned
-  leader-transfer operations through the local admin service. Production route
-  integration now has tagged coverage for coordinator-backed store discovery
-  and key routing; coordinator-owned process lifecycle, split/merge scheduler
-  operation execution, and remaining `RaftAdmin` RPC wiring are still being
-  built out.
+  StoreHeartbeat telemetry to the coordinator, execute coordinator-returned
+  leader-transfer operations through the local admin service, and publish
+  terminal peer-add/remove descriptors back to the coordinator after successful
+  Rust admin membership changes. Production route integration now has tagged
+  coverage for coordinator-backed store discovery, key routing, and admin
+  descriptor publication; coordinator-owned process lifecycle, durable
+  pending-event retry, split/merge scheduler operation execution, and remaining
+  `RaftAdmin` RPC wiring are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. Coordinator-owned route integration and automatic
@@ -253,6 +263,10 @@ Known gaps:
   `TransferLeader` is wired for current-leader no-op. Directed transfer from
   the current leader to a different remote peer still returns
   `FailedPrecondition` until raftnode owns a full public transfer boundary.
+  Terminal AddPeer/RemovePeer descriptors can be published to the coordinator
+  when `NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR` is configured, but this is still
+  a best-effort synchronous publish after the data-plane membership change, not
+  a durable pending topology-event queue.
 - Restart recovery now covers single-node Holt restart, write-after-restart,
   durable vote/committed metadata, and an in-process multi-node restart after a
   membership change. The Go tagged harness also covers Holt-backed

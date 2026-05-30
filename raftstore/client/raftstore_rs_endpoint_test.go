@@ -222,6 +222,67 @@ func TestRustRaftstoreEndpointRoutesThroughCoordinator(t *testing.T) {
 	require.Equal(t, []byte("routed"), got.GetValue())
 }
 
+func TestRustRaftstoreEndpointAdminPublishesCoordinatorDescriptor(t *testing.T) {
+	svc := coordserver.NewService(coordcatalog.NewCluster(), coordidalloc.NewIDAllocator(1), coordtso.NewAllocator(1))
+	publishRustRaftstoreRootEvent(t, svc, rootevent.StoreJoined(1))
+	publishRustRaftstoreRootEvent(t, svc, rootevent.StoreJoined(2))
+	publishRustRaftstoreRootEvent(t, svc, rootevent.RegionBootstrapped(rustRaftstoreTopologyDescriptor()))
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorService(t, svc)
+	defer stopCoord()
+
+	addrs := map[uint64]string{
+		1: reserveLocalAddr(t),
+		2: reserveLocalAddr(t),
+	}
+	stop1 := startRustRaftstoreProcessAt(t, addrs[1], "", []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2],
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stop1()
+	stop2 := startRustRaftstoreProcessAt(t, addrs[2], "", []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stop2()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	require.Eventually(t, func() bool {
+		resp1, err1 := svc.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: 1})
+		resp2, err2 := svc.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: 2})
+		return err1 == nil && err2 == nil &&
+			resp1.GetStore().GetState() == coordpb.StoreState_STORE_STATE_UP &&
+			resp2.GetStore().GetState() == coordpb.StoreState_STORE_STATE_UP
+	}, 5*time.Second, 50*time.Millisecond)
+
+	admin, closeAdmin, err := adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closeAdmin()) }()
+	_, err = admin.AddPeer(ctx, &adminpb.AddPeerRequest{RegionId: 1, StoreId: 2, PeerId: 2})
+	require.NoError(t, err)
+
+	require.Eventually(t, func() bool {
+		resp, err := svc.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: []byte("agent/coordinator-add-peer")})
+		if err != nil || resp.GetNotFound() {
+			return false
+		}
+		region := resp.GetRegionDescriptor()
+		return region.GetEpoch().GetConfVersion() == 2 &&
+			len(region.GetPeers()) == 2 &&
+			region.GetPeers()[1].GetStoreId() == 2 &&
+			region.GetPeers()[1].GetPeerId() == 2
+	}, 5*time.Second, 50*time.Millisecond)
+}
+
 func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T) {
 	addrs := map[uint64]string{
 		1: reserveLocalAddr(t),

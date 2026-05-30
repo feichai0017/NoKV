@@ -45,6 +45,8 @@ impl ExecutionRuntime {
         peer_id: u64,
         transition_id: impl Into<String>,
         action: impl Into<String>,
+        publish: adminpb::ExecutionPublishState,
+        last_error: impl Into<String>,
     ) {
         let now = now_unix_nano();
         if let Ok(mut last) = self.last_admission.lock() {
@@ -66,7 +68,8 @@ impl ExecutionRuntime {
                 region_id,
                 action: action.into(),
                 outcome: adminpb::ExecutionTopologyOutcome::Applied as i32,
-                publish: adminpb::ExecutionPublishState::NotRequired as i32,
+                publish: publish as i32,
+                last_error: last_error.into(),
                 updated_at_unix_nano: now,
                 ..Default::default()
             });
