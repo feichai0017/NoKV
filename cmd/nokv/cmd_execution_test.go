@@ -76,10 +76,13 @@ func TestRunExecutionCmdJSON(t *testing.T) {
 					AtUnixNano: time.Unix(1710000000, 123).UnixNano(),
 				},
 				Restart: &adminpb.ExecutionRestartStatus{
-					State:              adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_DEGRADED,
-					RegionCount:        3,
-					RaftGroupCount:     2,
-					MissingRaftPointer: []uint64{7},
+					State:                          adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_DEGRADED,
+					RegionCount:                    3,
+					RaftGroupCount:                 2,
+					MissingRaftPointer:             []uint64{7},
+					PendingRootEventCount:          4,
+					BlockedRootEventCount:          5,
+					PendingSchedulerOperationCount: 6,
 				},
 				Topology: []*adminpb.ExecutionTopologyStatus{
 					{
@@ -116,6 +119,9 @@ func TestRunExecutionCmdJSON(t *testing.T) {
 	require.Equal(t, "accepted", admission["reason"])
 	restart := payload["restart"].(map[string]any)
 	require.Equal(t, "degraded", restart["state"])
+	require.Equal(t, float64(4), restart["pending_root_event_count"])
+	require.Equal(t, float64(5), restart["blocked_root_event_count"])
+	require.Equal(t, float64(6), restart["pending_scheduler_operation_count"])
 	topology := payload["topology"].([]any)
 	require.Len(t, topology, 1)
 	entry := topology[0].(map[string]any)
@@ -177,10 +183,13 @@ func TestRunExecutionCmdText(t *testing.T) {
 					Detail:   "request keys failed local validation",
 				},
 				Restart: &adminpb.ExecutionRestartStatus{
-					State:              adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_READY,
-					RegionCount:        1,
-					RaftGroupCount:     1,
-					MissingRaftPointer: nil,
+					State:                          adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_READY,
+					RegionCount:                    1,
+					RaftGroupCount:                 1,
+					MissingRaftPointer:             nil,
+					PendingRootEventCount:          2,
+					BlockedRootEventCount:          3,
+					PendingSchedulerOperationCount: 4,
 				},
 				Topology: []*adminpb.ExecutionTopologyStatus{{
 					TransitionId: "tr-2",
@@ -202,6 +211,9 @@ func TestRunExecutionCmdText(t *testing.T) {
 	require.Contains(t, out, "Admission.Class       read")
 	require.Contains(t, out, "Admission.Reason      key-not-in-region")
 	require.Contains(t, out, "Restart.State         ready")
+	require.Contains(t, out, "Restart.PendingRoot   2")
+	require.Contains(t, out, "Restart.BlockedRoot   3")
+	require.Contains(t, out, "Restart.PendingSched  4")
 	require.Contains(t, out, "Topology.Count        1")
 	require.Contains(t, out, "transition=tr-2")
 	require.Contains(t, out, "publish=planned-published")

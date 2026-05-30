@@ -82,10 +82,13 @@ type executionAdmissionView struct {
 }
 
 type executionRestartView struct {
-	State              string   `json:"state"`
-	RegionCount        uint64   `json:"region_count"`
-	RaftGroupCount     uint64   `json:"raft_group_count"`
-	MissingRaftPointer []uint64 `json:"missing_raft_pointer,omitempty"`
+	State                          string   `json:"state"`
+	RegionCount                    uint64   `json:"region_count"`
+	RaftGroupCount                 uint64   `json:"raft_group_count"`
+	PendingRootEventCount          uint64   `json:"pending_root_event_count"`
+	BlockedRootEventCount          uint64   `json:"blocked_root_event_count"`
+	PendingSchedulerOperationCount uint64   `json:"pending_scheduler_operation_count"`
+	MissingRaftPointer             []uint64 `json:"missing_raft_pointer,omitempty"`
 }
 
 type executionTopologyView struct {
@@ -134,6 +137,9 @@ func renderExecutionText(w io.Writer, addr string, resp *adminpb.ExecutionStatus
 	_, _ = fmt.Fprintf(w, "Restart.State         %s\n", view.Restart.State)
 	_, _ = fmt.Fprintf(w, "Restart.Regions       %d\n", view.Restart.RegionCount)
 	_, _ = fmt.Fprintf(w, "Restart.RaftGroups    %d\n", view.Restart.RaftGroupCount)
+	_, _ = fmt.Fprintf(w, "Restart.PendingRoot   %d\n", view.Restart.PendingRootEventCount)
+	_, _ = fmt.Fprintf(w, "Restart.BlockedRoot   %d\n", view.Restart.BlockedRootEventCount)
+	_, _ = fmt.Fprintf(w, "Restart.PendingSched  %d\n", view.Restart.PendingSchedulerOperationCount)
 	if len(view.Restart.MissingRaftPointer) > 0 {
 		_, _ = fmt.Fprintf(w, "Restart.Missing       %v\n", view.Restart.MissingRaftPointer)
 	}
@@ -177,10 +183,13 @@ func buildExecutionStatusView(addr string, resp *adminpb.ExecutionStatusResponse
 	}
 	restart := resp.GetRestart()
 	view.Restart = executionRestartView{
-		State:              formatExecutionRestartState(restart.GetState()),
-		RegionCount:        restart.GetRegionCount(),
-		RaftGroupCount:     restart.GetRaftGroupCount(),
-		MissingRaftPointer: append([]uint64(nil), restart.GetMissingRaftPointer()...),
+		State:                          formatExecutionRestartState(restart.GetState()),
+		RegionCount:                    restart.GetRegionCount(),
+		RaftGroupCount:                 restart.GetRaftGroupCount(),
+		PendingRootEventCount:          restart.GetPendingRootEventCount(),
+		BlockedRootEventCount:          restart.GetBlockedRootEventCount(),
+		PendingSchedulerOperationCount: restart.GetPendingSchedulerOperationCount(),
+		MissingRaftPointer:             append([]uint64(nil), restart.GetMissingRaftPointer()...),
 	}
 	for _, entry := range resp.GetTopology() {
 		view.Topology = append(view.Topology, executionTopologyView{
@@ -242,10 +251,13 @@ func cloneExecutionRestartStatus(in *adminpb.ExecutionRestartStatus) *adminpb.Ex
 		return nil
 	}
 	return &adminpb.ExecutionRestartStatus{
-		State:              in.GetState(),
-		RegionCount:        in.GetRegionCount(),
-		RaftGroupCount:     in.GetRaftGroupCount(),
-		MissingRaftPointer: append([]uint64(nil), in.GetMissingRaftPointer()...),
+		State:                          in.GetState(),
+		RegionCount:                    in.GetRegionCount(),
+		RaftGroupCount:                 in.GetRaftGroupCount(),
+		MissingRaftPointer:             append([]uint64(nil), in.GetMissingRaftPointer()...),
+		PendingRootEventCount:          in.GetPendingRootEventCount(),
+		BlockedRootEventCount:          in.GetBlockedRootEventCount(),
+		PendingSchedulerOperationCount: in.GetPendingSchedulerOperationCount(),
 	}
 }
 
