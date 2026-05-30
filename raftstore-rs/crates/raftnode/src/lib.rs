@@ -24,10 +24,12 @@ use tokio::sync::broadcast;
 
 mod log_codec;
 mod log_store;
+mod network;
 mod region_storage;
 
 pub use log_codec::{decode_log_entry, encode_log_entry};
 pub use log_store::{RaftEntryLog, SegmentedEntryLog};
+pub use network::{MemoryRaftNetworkFactory, MemoryRaftNetworkRegistry};
 pub use region_storage::{NoopSnapshotBuilder, RegionLogStorage, RegionStateMachine};
 
 pub type NodeId = u64;
@@ -777,23 +779,24 @@ impl<E> OpenRaftRegion<E>
 where
     E: RegionApplyEngine,
 {
-    pub async fn bootstrap_single_node(
+    pub async fn open_with_network<N>(
         node_id: NodeId,
         region_id: RegionId,
         mut log_store: RegionLogStorage,
         mut state_machine: RegionStateMachine<E>,
-    ) -> Result<OpenRaftRegion<E>, Error> {
+        network: N,
+    ) -> Result<OpenRaftRegion<E>, Error>
+    where
+        N: RaftNetworkFactory<RaftStoreConfig>,
+    {
         if let Some(membership) = log_store
             .latest_membership()
             .map_err(|err| Error::OpenRaft(err.to_string()))?
         {
             state_machine.restore_membership(membership);
         }
-        let self_voter = state_machine
-            .membership()
-            .voter_ids()
-            .any(|voter| voter == node_id);
-        if self_voter {
+        let voters = state_machine.membership().voter_ids().collect::<Vec<_>>();
+        if voters.as_slice() == [node_id] {
             log_store
                 .seed_single_node_vote_above_log(node_id)
                 .map_err(|err| Error::OpenRaft(err.to_string()))?;
@@ -807,51 +810,66 @@ where
             .validate()
             .map_err(|err| Error::OpenRaft(err.to_string()))?,
         );
-        let raft = Raft::new(
+        let raft = Raft::new(node_id, config, network, log_store, state_machine)
+            .await
+            .map_err(openraft_error)?;
+        Ok(OpenRaftRegion { raft, apply_engine })
+    }
+
+    pub async fn bootstrap_single_node(
+        node_id: NodeId,
+        region_id: RegionId,
+        log_store: RegionLogStorage,
+        state_machine: RegionStateMachine<E>,
+    ) -> Result<OpenRaftRegion<E>, Error> {
+        let region = Self::open_with_network(
             node_id,
-            config,
-            NoopNetworkFactory,
+            region_id,
             log_store,
             state_machine,
+            NoopNetworkFactory,
         )
-        .await
-        .map_err(openraft_error)?;
-
+        .await?;
         let mut members = BTreeMap::new();
         members.insert(node_id, BasicNode::new(format!("local-{node_id}")));
-        let initialized = match raft.initialize(members).await {
-            Ok(()) => true,
-            Err(RaftError::APIError(InitializeError::NotAllowed(_))) => false,
-            Err(err) => return Err(openraft_api_error(err)),
-        };
-        if initialized || self_voter {
-            let election_term_floor = raft.metrics().borrow().current_term + 1;
-            raft.trigger().elect().await.map_err(openraft_error)?;
-            raft.wait(Some(Duration::from_secs(5)))
-                .metrics(
-                    |metrics| {
-                        metrics.current_term >= election_term_floor
-                            && metrics.current_leader == Some(node_id)
-                    },
-                    "single-node bootstrap leader",
-                )
-                .await
-                .map_err(|err| Error::OpenRaft(err.to_string()))?;
-            raft.wait(Some(Duration::from_secs(5)))
-                .metrics(
-                    |metrics| {
-                        metrics.last_log_index == metrics.last_applied.as_ref().map(|id| id.index)
-                            && metrics
-                                .last_applied
-                                .as_ref()
-                                .is_some_and(|id| id.leader_id.term >= metrics.current_term)
-                    },
-                    "single-node bootstrap applied frontier",
-                )
-                .await
-                .map_err(|err| Error::OpenRaft(err.to_string()))?;
+        if region.initialize_members(members).await? {
+            region.wait_for_leader(node_id).await?;
+        } else {
+            region.elect_and_wait(node_id).await?;
         }
-        Ok(OpenRaftRegion { raft, apply_engine })
+        Ok(region)
+    }
+
+    pub fn raft_handle(&self) -> Raft<RaftStoreConfig> {
+        self.raft.clone()
+    }
+
+    pub async fn initialize_members(
+        &self,
+        members: BTreeMap<NodeId, BasicNode>,
+    ) -> Result<bool, Error> {
+        match self.raft.initialize(members).await {
+            Ok(()) => Ok(true),
+            Err(RaftError::APIError(InitializeError::NotAllowed(_))) => Ok(false),
+            Err(err) => return Err(openraft_api_error(err)),
+        }
+    }
+
+    pub async fn elect_and_wait(&self, node_id: NodeId) -> Result<(), Error> {
+        self.raft.trigger().elect().await.map_err(openraft_error)?;
+        self.wait_for_leader(node_id).await
+    }
+
+    pub async fn wait_for_leader(&self, node_id: NodeId) -> Result<(), Error> {
+        self.raft
+            .wait(Some(Duration::from_secs(5)))
+            .metrics(
+                |metrics| metrics.current_leader == Some(node_id),
+                "raft leader election",
+            )
+            .await
+            .map_err(|err| Error::OpenRaft(err.to_string()))?;
+        Ok(())
     }
 
     pub async fn propose(&self, proposal: Proposal) -> Result<AppliedProposal, Error> {
@@ -1028,7 +1046,91 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(applied.region_id, 7);
-        assert_eq!(applied.index, 3);
+        assert_eq!(applied.index, 2);
+    }
+
+    #[tokio::test]
+    async fn openraft_region_replicates_proposal_to_memory_peers() {
+        let registry = MemoryRaftNetworkRegistry::default();
+        let mut dirs = Vec::new();
+        let mut regions = Vec::new();
+        let mut engines = BTreeMap::new();
+
+        for node_id in 1..=3 {
+            let dir = tempfile::tempdir().unwrap();
+            let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+            let log_store = RegionLogStorage::new(log);
+            let engine = AppliedKvEngine::new(7, MvccStore::new());
+            let state_machine = RegionStateMachine::new(engine.clone());
+            let region = OpenRaftRegion::open_with_network(
+                node_id,
+                7,
+                log_store,
+                state_machine,
+                registry.factory(),
+            )
+            .await
+            .unwrap();
+            registry.register(node_id, region.raft_handle());
+            dirs.push(dir);
+            engines.insert(node_id, engine);
+            regions.push(region);
+        }
+
+        let mut members = BTreeMap::new();
+        members.insert(1, BasicNode::new("node-1"));
+        members.insert(2, BasicNode::new("node-2"));
+        members.insert(3, BasicNode::new("node-3"));
+        regions[0].initialize_members(members).await.unwrap();
+        regions[0].wait_for_leader(1).await.unwrap();
+
+        let command = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 7,
+                request_id: 1,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                    kvpb::TryAtomicMutateRequest {
+                        mutations: vec![kvpb::Mutation {
+                            key: b"k".to_vec(),
+                            value: b"v".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        }],
+                        commit_version: 10,
+                        ..Default::default()
+                    },
+                )),
+            }],
+        };
+
+        let applied = regions[0]
+            .propose(Proposal::from_raft_command(&command).unwrap())
+            .await
+            .unwrap();
+        for region in &regions {
+            region
+                .raft_handle()
+                .wait(Some(Duration::from_secs(5)))
+                .applied_index_at_least(Some(applied.index), "memory peer proposal")
+                .await
+                .unwrap();
+        }
+
+        for node_id in 1..=3 {
+            let get = engines
+                .get(&node_id)
+                .unwrap()
+                .get(&kvpb::GetRequest {
+                    key: b"k".to_vec(),
+                    version: 10,
+                })
+                .unwrap();
+            assert_eq!(get.value, b"v".to_vec(), "node {node_id} did not apply");
+        }
     }
 
     #[test]

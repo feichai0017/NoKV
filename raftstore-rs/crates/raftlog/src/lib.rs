@@ -12,7 +12,7 @@ const MAGIC: u32 = 0x4e4b_524c; // NKRL
 const MARKER_MAGIC: u32 = 0x4e4b_524d; // NKRM
 const VERSION: u16 = 1;
 const HEADER_LEN: usize = 4 + 2 + 2 + 8 + 8 + 8 + 4;
-const MARKER_LEN: usize = 4 + 2 + 2 + 8 + 8 + 8 + 4;
+const MARKER_LEN: usize = 4 + 2 + 2 + 8 + 8 + 8 + 8 + 4;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LogEntry {
@@ -27,6 +27,7 @@ pub struct LogMarker {
     pub region_id: u64,
     pub index: u64,
     pub term: u64,
+    pub node_id: u64,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -273,6 +274,7 @@ fn write_marker(path: &Path, marker: LogMarker) -> Result<()> {
     bytes.extend_from_slice(&marker.region_id.to_le_bytes());
     bytes.extend_from_slice(&marker.index.to_le_bytes());
     bytes.extend_from_slice(&marker.term.to_le_bytes());
+    bytes.extend_from_slice(&marker.node_id.to_le_bytes());
     let crc = {
         let mut hasher = crc32fast::Hasher::new();
         hasher.update(&bytes);
@@ -327,6 +329,7 @@ fn read_marker(path: &Path) -> Result<Option<LogMarker>> {
         region_id: u64::from_le_bytes(bytes[8..16].try_into().unwrap()),
         index: u64::from_le_bytes(bytes[16..24].try_into().unwrap()),
         term: u64::from_le_bytes(bytes[24..32].try_into().unwrap()),
+        node_id: u64::from_le_bytes(bytes[32..40].try_into().unwrap()),
     }))
 }
 
@@ -444,6 +447,7 @@ mod tests {
             region_id: 7,
             index: 2,
             term: 1,
+            node_id: 1,
         })
         .unwrap();
         drop(log);
@@ -455,6 +459,7 @@ mod tests {
                 region_id: 7,
                 index: 2,
                 term: 1,
+                node_id: 1,
             })
         );
         let recovered = log.recover().unwrap();
@@ -485,6 +490,7 @@ mod tests {
             region_id: 7,
             index: 5,
             term: 3,
+            node_id: 1,
         })
         .unwrap();
 
@@ -495,6 +501,7 @@ mod tests {
                 region_id: 7,
                 index: 5,
                 term: 3,
+                node_id: 1,
             })
         );
         log.append(&[LogEntry {

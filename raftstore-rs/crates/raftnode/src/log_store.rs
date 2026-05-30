@@ -85,6 +85,7 @@ impl RaftEntryLog for SegmentedEntryLog {
             region_id: self.region_id,
             index: log_id.index,
             term: log_id.leader_id.term,
+            node_id: log_id.leader_id.node_id,
         })?;
         Ok(())
     }
@@ -109,7 +110,7 @@ where
 
 fn marker_to_log_id(marker: LogMarker) -> openraft::LogId<NodeId> {
     openraft::LogId::new(
-        openraft::CommittedLeaderId::new(marker.term, NodeId::default()),
+        openraft::CommittedLeaderId::new(marker.term, marker.node_id),
         marker.index,
     )
 }
@@ -210,7 +211,9 @@ mod tests {
         drop(log);
 
         let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
-        assert_eq!(log.last_purged_log_id().unwrap().unwrap().index, 2);
+        let purged = log.last_purged_log_id().unwrap().unwrap();
+        assert_eq!(purged.index, 2);
+        assert_eq!(purged.leader_id.node_id, 1);
         assert_eq!(
             log.recover_entries()
                 .unwrap()

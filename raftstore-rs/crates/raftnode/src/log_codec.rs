@@ -21,6 +21,8 @@ struct PersistedEntry {
     normal_payload: Vec<u8>,
     #[prost(message, optional, tag = "4")]
     membership: Option<PersistedMembership>,
+    #[prost(uint64, tag = "5")]
+    leader_node_id: NodeId,
 }
 
 #[derive(Clone, PartialEq, Message)]
@@ -52,6 +54,7 @@ pub fn encode_log_entry(region_id: RegionId, entry: &OpenRaftEntry) -> Result<Lo
             payload_kind: PAYLOAD_BLANK,
             normal_payload: Vec::new(),
             membership: None,
+            leader_node_id: entry.log_id.leader_id.node_id,
         },
         EntryPayload::Normal(proposal) => {
             if proposal.region_id != region_id {
@@ -65,6 +68,7 @@ pub fn encode_log_entry(region_id: RegionId, entry: &OpenRaftEntry) -> Result<Lo
                 payload_kind: PAYLOAD_NORMAL,
                 normal_payload: proposal.payload.clone(),
                 membership: None,
+                leader_node_id: entry.log_id.leader_id.node_id,
             }
         }
         EntryPayload::Membership(membership) => PersistedEntry {
@@ -72,6 +76,7 @@ pub fn encode_log_entry(region_id: RegionId, entry: &OpenRaftEntry) -> Result<Lo
             payload_kind: PAYLOAD_MEMBERSHIP,
             normal_payload: Vec::new(),
             membership: Some(encode_membership(membership)),
+            leader_node_id: entry.log_id.leader_id.node_id,
         },
     };
 
@@ -117,7 +122,10 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
     };
 
     Ok(OpenRaftEntry {
-        log_id: LogId::new(CommittedLeaderId::new(record.term, 0), record.index),
+        log_id: LogId::new(
+            CommittedLeaderId::new(record.term, persisted.leader_node_id),
+            record.index,
+        ),
         payload,
     })
 }
@@ -213,6 +221,7 @@ mod tests {
         let decoded = decode_log_entry(&record).unwrap();
         assert_eq!(decoded.log_id.index, 11);
         assert_eq!(decoded.log_id.leader_id.term, 3);
+        assert_eq!(decoded.log_id.leader_id.node_id, 1);
         assert_eq!(
             decoded.payload,
             EntryPayload::<RaftStoreConfig>::Normal(proposal)

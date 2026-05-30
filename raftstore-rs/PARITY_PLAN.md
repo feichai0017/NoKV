@@ -62,6 +62,9 @@ The first slices are intentionally narrow:
   entry, snapshot, and runtime types to this NoKV-owned proposal boundary.
   The crate now also encodes OpenRaft entries into `nokv-raftlog` records and
   decodes them back, covering normal command, blank, and membership entries.
+  The durable entry codec preserves the full OpenRaft log id, including the
+  leader node id, so replicated followers compare exactly the same log identity
+  that the leader proposed.
   `SegmentedEntryLog` wraps the low-level WAL with a region-local OpenRaft
   entry append/recover boundary and rejects mismatched-region batches before any
   record is appended. It also exposes range reads, last-log-id lookup, conflict
@@ -72,15 +75,22 @@ The first slices are intentionally narrow:
   per Raft command. Holt server mode wraps the apply engine with an apply-status
   sink, so writes persist the latest region apply status for restart bootstrap.
 - `RegionLogStorage` and `RegionStateMachine` implement OpenRaft's v2 storage
-  boundary over `SegmentedEntryLog` and `AppliedKvEngine`. They are
-  intentionally limited to append/read/truncate/purge/apply; real snapshots
-  remain an explicit gap before replicated clusters are enabled.
+  boundary over `SegmentedEntryLog` and `AppliedKvEngine`. The log reader shares
+  the live region log with append/truncate/purge, because OpenRaft can keep a
+  reader across later appends. The implementation is intentionally limited to
+  append/read/truncate/purge/apply; purge markers also preserve the full
+  OpenRaft log id. Real snapshots remain an explicit gap.
 - `OpenRaftRegion` can bootstrap a single-node OpenRaft group with the v2 log
-  store and state machine, initialize local membership, wait for leader no-op
-  application, and apply an existing `RaftCmdRequest` through `client_write`.
-  On Holt restart, the single-node path restores the latest membership from the
-  persisted raft log and seeds a restart vote above the last log term so it can
-  elect again and accept writes.
+  store and state machine, initialize local membership, wait for leadership,
+  and apply an existing `RaftCmdRequest` through `client_write`. On Holt
+  restart, the single-node path restores the latest membership from the
+  persisted raft log and seeds a restart vote above the last log term only for a
+  single-voter membership so it can elect again and accept writes without
+  biasing multi-node elections.
+- `MemoryRaftNetworkRegistry` provides an in-process OpenRaft network for
+  parity tests. A three-node test now initializes a region, elects a leader,
+  commits an existing `RaftCmdRequest`, and verifies that every peer applies the
+  committed value through its own MVCC state machine.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`.
@@ -95,9 +105,9 @@ The first slices are intentionally narrow:
 
 Known gaps:
 
-- OpenRaft proposal/apply is wired for the single-node server path, but
-  multi-node networking, replication, and membership changes are still being
-  built out.
+- OpenRaft proposal/apply now has in-process three-node replication coverage,
+  but the external tonic raft transport, route integration, and admin-driven
+  membership changes are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   multi-node networking and route integration are still being built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state

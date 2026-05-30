@@ -1,6 +1,7 @@
 use std::fmt::Debug;
 use std::io;
 use std::ops::RangeBounds;
+use std::sync::{Arc, Mutex, MutexGuard};
 
 use openraft::{
     storage::{LogFlushed, RaftLogStorage, RaftStateMachine},
@@ -15,7 +16,7 @@ use crate::{
 };
 
 pub struct RegionLogStorage {
-    log: SegmentedEntryLog,
+    log: Arc<Mutex<SegmentedEntryLog>>,
     vote: Option<Vote<NodeId>>,
     committed: Option<LogId<NodeId>>,
 }
@@ -23,7 +24,7 @@ pub struct RegionLogStorage {
 impl RegionLogStorage {
     pub fn new(log: SegmentedEntryLog) -> Self {
         Self {
-            log,
+            log: Arc::new(Mutex::new(log)),
             vote: None,
             committed: None,
         }
@@ -31,7 +32,7 @@ impl RegionLogStorage {
 
     pub fn latest_membership(&self) -> Result<Option<StoredMembership<NodeId, BasicNode>>, Error> {
         let mut latest = None;
-        for entry in self.log.recover_entries()? {
+        for entry in self.lock_log()?.recover_entries()? {
             if let openraft::EntryPayload::Membership(membership) = entry.payload {
                 latest = Some(StoredMembership::new(Some(entry.log_id), membership));
             }
@@ -43,11 +44,29 @@ impl RegionLogStorage {
         if self.vote.is_some() {
             return Ok(());
         }
-        let last_log_id = self.log.last_log_id()?.or(self.log.last_purged_log_id()?);
+        let last_log_id = {
+            let log = self.lock_log()?;
+            log.last_log_id()?.or(log.last_purged_log_id()?)
+        };
         if let Some(log_id) = last_log_id {
             self.vote = Some(Vote::new_committed(log_id.leader_id.term + 1, node_id));
         }
         Ok(())
+    }
+
+    fn lock_log(&self) -> Result<MutexGuard<'_, SegmentedEntryLog>, Error> {
+        self.log
+            .lock()
+            .map_err(|_| Error::OpenRaft("region log mutex poisoned".to_owned()))
+    }
+
+    fn lock_storage_log(
+        &self,
+        verb: ErrorVerb,
+    ) -> Result<MutexGuard<'_, SegmentedEntryLog>, StorageError<NodeId>> {
+        self.log
+            .lock()
+            .map_err(|_| storage_error(verb, "region log mutex poisoned"))
     }
 }
 
@@ -83,7 +102,7 @@ impl<E> RegionStateMachine<E> {
 
 #[derive(Clone)]
 pub struct RegionLogReader {
-    entries: Vec<OpenRaftEntry>,
+    log: Arc<Mutex<SegmentedEntryLog>>,
 }
 
 impl RaftLogReader<RaftStoreConfig> for RegionLogReader {
@@ -91,12 +110,11 @@ impl RaftLogReader<RaftStoreConfig> for RegionLogReader {
         &mut self,
         range: RB,
     ) -> Result<Vec<OpenRaftEntry>, StorageError<NodeId>> {
-        Ok(self
-            .entries
-            .iter()
-            .filter(|entry| range_contains(&range, entry.log_id.index))
-            .cloned()
-            .collect())
+        self.log
+            .lock()
+            .map_err(|_| storage_error(ErrorVerb::Read, "region log mutex poisoned"))?
+            .read_entries(range)
+            .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))
     }
 }
 
@@ -105,7 +123,7 @@ impl RaftLogReader<RaftStoreConfig> for RegionLogStorage {
         &mut self,
         range: RB,
     ) -> Result<Vec<OpenRaftEntry>, StorageError<NodeId>> {
-        self.log
+        self.lock_storage_log(ErrorVerb::Read)?
             .read_entries(range)
             .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))
     }
@@ -115,12 +133,11 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
     type LogReader = RegionLogReader;
 
     async fn get_log_state(&mut self) -> Result<LogState<RaftStoreConfig>, StorageError<NodeId>> {
-        let last_purged_log_id = self
-            .log
+        let log = self.lock_storage_log(ErrorVerb::Read)?;
+        let last_purged_log_id = log
             .last_purged_log_id()
             .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))?;
-        let last_log_id = self
-            .log
+        let last_log_id = log
             .last_log_id()
             .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))?
             .or(last_purged_log_id);
@@ -132,7 +149,7 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
 
     async fn get_log_reader(&mut self) -> Self::LogReader {
         RegionLogReader {
-            entries: self.log.recover_entries().unwrap_or_default(),
+            log: self.log.clone(),
         }
     }
 
@@ -167,10 +184,11 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
         I::IntoIter: OptionalSend,
     {
         let entries = entries.into_iter().collect::<Vec<_>>();
-        let result = self
-            .log
-            .append_entries(&entries)
-            .and_then(|_| self.log.sync());
+        let result = self.lock_storage_log(ErrorVerb::Write).and_then(|mut log| {
+            log.append_entries(&entries)
+                .and_then(|_| log.sync())
+                .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))
+        });
         match result {
             Ok(()) => {
                 callback.log_io_completed(Ok(()));
@@ -185,17 +203,21 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
     }
 
     async fn truncate(&mut self, log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
-        self.log
-            .truncate_since(log_id)
-            .and_then(|_| self.log.sync())
-            .map_err(|err| storage_error(ErrorVerb::Delete, err.to_string()))
+        self.lock_storage_log(ErrorVerb::Delete)
+            .and_then(|mut log| {
+                log.truncate_since(log_id)
+                    .and_then(|_| log.sync())
+                    .map_err(|err| storage_error(ErrorVerb::Delete, err.to_string()))
+            })
     }
 
     async fn purge(&mut self, log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
-        self.log
-            .purge_upto(log_id)
-            .and_then(|_| self.log.sync())
-            .map_err(|err| storage_error(ErrorVerb::Delete, err.to_string()))
+        self.lock_storage_log(ErrorVerb::Delete)
+            .and_then(|mut log| {
+                log.purge_upto(log_id)
+                    .and_then(|_| log.sync())
+                    .map_err(|err| storage_error(ErrorVerb::Delete, err.to_string()))
+            })
     }
 }
 
@@ -283,23 +305,6 @@ where
     ) -> Result<Option<Snapshot<RaftStoreConfig>>, StorageError<NodeId>> {
         Ok(None)
     }
-}
-
-fn range_contains<R>(range: &R, index: u64) -> bool
-where
-    R: RangeBounds<u64>,
-{
-    let after_start = match range.start_bound() {
-        std::ops::Bound::Included(start) => index >= *start,
-        std::ops::Bound::Excluded(start) => index > *start,
-        std::ops::Bound::Unbounded => true,
-    };
-    let before_end = match range.end_bound() {
-        std::ops::Bound::Included(end) => index <= *end,
-        std::ops::Bound::Excluded(end) => index < *end,
-        std::ops::Bound::Unbounded => true,
-    };
-    after_start && before_end
 }
 
 fn storage_error(verb: ErrorVerb, message: impl Into<String>) -> StorageError<NodeId> {
@@ -447,7 +452,9 @@ mod tests {
         let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
         let mut storage = RegionLogStorage::new(log);
         let state = storage.get_log_state().await.unwrap();
-        assert_eq!(state.last_purged_log_id.unwrap().index, 2);
+        let purged = state.last_purged_log_id.unwrap();
+        assert_eq!(purged.index, 2);
+        assert_eq!(purged.leader_id.node_id, 1);
         assert_eq!(state.last_log_id.unwrap().index, 3);
 
         let mut reader = storage.get_log_reader().await;
