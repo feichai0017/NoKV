@@ -876,7 +876,7 @@ where
     let known = status.region_id != 0;
     let leader = known && leader_peer_id == identity.peer_id;
     let pending_admin = root_events
-        .map(root_event_catalog_has_unpublished_work)
+        .map(topology_catalog_has_pending_admin_work)
         .unwrap_or(false);
     coordpb::StoreHeartbeatRequest {
         store_id: identity.store_id,
@@ -902,7 +902,7 @@ where
     }
 }
 
-fn root_event_catalog_has_unpublished_work(store: &HoltMvccStore) -> bool {
+fn topology_catalog_has_pending_admin_work(store: &HoltMvccStore) -> bool {
     let pending = store
         .pending_root_events()
         .map(|events| !events.is_empty())
@@ -911,7 +911,11 @@ fn root_event_catalog_has_unpublished_work(store: &HoltMvccStore) -> bool {
         .blocked_root_events()
         .map(|events| !events.is_empty())
         .unwrap_or(true);
-    pending || blocked
+    let scheduler = store
+        .pending_scheduler_operations()
+        .map(|ops| !ops.is_empty())
+        .unwrap_or(true);
+    pending || blocked || scheduler
 }
 
 async fn open_openraft_region<E>(
@@ -1356,6 +1360,44 @@ mod tests {
                         ..Default::default()
                     },
                 )),
+            })
+            .unwrap();
+        let region = open_openraft_region(
+            identity,
+            addr,
+            dir.path().to_path_buf(),
+            AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        )
+        .await
+        .unwrap();
+
+        let req = coordinator_heartbeat_request(identity, addr, &region, Some(&store));
+
+        assert_eq!(req.region_stats.len(), 1);
+        assert!(req.region_stats[0].pending_admin);
+    }
+
+    #[tokio::test]
+    async fn coordinator_heartbeat_marks_pending_admin_for_pending_scheduler_operations() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+        let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .record_pending_scheduler_operation(&coordpb::SchedulerOperation {
+                r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+                region_id: identity.region_id,
+                split_key: b"m".to_vec(),
+                split_child: Some(metapb::RegionDescriptor {
+                    region_id: 8,
+                    ..Default::default()
+                }),
+                ..Default::default()
             })
             .unwrap();
         let region = open_openraft_region(
