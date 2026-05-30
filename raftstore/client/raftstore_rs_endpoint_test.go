@@ -177,10 +177,20 @@ func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr s
 	require.NoError(t, err)
 	require.True(t, handled)
 
+	admin, closeAdmin, err := adminclient.Dial(ctx, addr)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
+	statusAfterWrite, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, statusAfterWrite.GetAppliedIndex(), uint64(2))
+
 	got, err := cli.Get(ctx, []byte("agent/k"), 10)
 	require.NoError(t, err)
 	require.False(t, got.GetNotFound())
 	require.Equal(t, []byte("v1"), got.GetValue())
+	statusAfterRead, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	require.Equal(t, statusAfterWrite.GetAppliedIndex(), statusAfterRead.GetAppliedIndex())
 
 	event, err := watch.Recv()
 	require.NoError(t, err)
@@ -207,9 +217,6 @@ func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr s
 	require.Equal(t, uint64(12), event.GetEvent().GetCommitVersion())
 	require.Equal(t, [][]byte{[]byte("agent/multi")}, event.GetEvent().GetKeys())
 
-	admin, closeAdmin, err := adminclient.Dial(ctx, addr)
-	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
 	runtimeStatus, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
 	require.NoError(t, err)
 	require.True(t, runtimeStatus.GetKnown())
