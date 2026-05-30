@@ -5,7 +5,7 @@
 //! OpenRaft-backed implementation will fill this boundary as region replication
 //! is brought up.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -872,6 +872,49 @@ where
         Ok(())
     }
 
+    pub async fn add_voter(&self, node_id: NodeId, node: BasicNode) -> Result<(), Error> {
+        self.raft
+            .add_learner(node_id, node, true)
+            .await
+            .map_err(openraft_api_error)?;
+        self.raft
+            .change_membership(
+                openraft::ChangeMembers::AddVoterIds(BTreeSet::from([node_id])),
+                true,
+            )
+            .await
+            .map_err(openraft_api_error)?;
+        self.wait_for_voter(node_id, true).await
+    }
+
+    pub async fn remove_voter(&self, node_id: NodeId, retain: bool) -> Result<(), Error> {
+        self.raft
+            .change_membership(
+                openraft::ChangeMembers::RemoveVoters(BTreeSet::from([node_id])),
+                retain,
+            )
+            .await
+            .map_err(openraft_api_error)?;
+        self.wait_for_voter(node_id, false).await
+    }
+
+    pub async fn wait_for_voter(&self, node_id: NodeId, present: bool) -> Result<(), Error> {
+        self.raft
+            .wait(Some(Duration::from_secs(5)))
+            .metrics(
+                |metrics| {
+                    let membership = &metrics.membership_config;
+                    let uniform = membership.membership().get_joint_config().len() == 1;
+                    let observed = membership.voter_ids().any(|voter| voter == node_id);
+                    uniform && observed == present
+                },
+                "raft membership voter state",
+            )
+            .await
+            .map_err(|err| Error::OpenRaft(err.to_string()))?;
+        Ok(())
+    }
+
     pub async fn propose(&self, proposal: Proposal) -> Result<AppliedProposal, Error> {
         let response = self
             .raft
@@ -1131,6 +1174,105 @@ mod tests {
                 .unwrap();
             assert_eq!(get.value, b"v".to_vec(), "node {node_id} did not apply");
         }
+    }
+
+    #[tokio::test]
+    async fn openraft_region_adds_voter_and_replicates_to_new_peer() {
+        let registry = MemoryRaftNetworkRegistry::default();
+        let mut dirs = Vec::new();
+        let mut regions = BTreeMap::new();
+        let mut engines = BTreeMap::new();
+
+        for node_id in 1..=2 {
+            let dir = tempfile::tempdir().unwrap();
+            let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+            let log_store = RegionLogStorage::new(log);
+            let engine = AppliedKvEngine::new(7, MvccStore::new());
+            let state_machine = RegionStateMachine::new(engine.clone());
+            let region = OpenRaftRegion::open_with_network(
+                node_id,
+                7,
+                log_store,
+                state_machine,
+                registry.factory(),
+            )
+            .await
+            .unwrap();
+            registry.register(node_id, region.raft_handle());
+            dirs.push(dir);
+            engines.insert(node_id, engine);
+            regions.insert(node_id, region);
+        }
+
+        let leader = regions.get(&1).unwrap();
+        leader
+            .initialize_members(BTreeMap::from([(1, BasicNode::new("node-1"))]))
+            .await
+            .unwrap();
+        leader.wait_for_leader(1).await.unwrap();
+        leader.add_voter(2, BasicNode::new("node-2")).await.unwrap();
+
+        let command = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 7,
+                request_id: 2,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                    kvpb::TryAtomicMutateRequest {
+                        mutations: vec![kvpb::Mutation {
+                            key: b"joined".to_vec(),
+                            value: b"yes".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        }],
+                        commit_version: 20,
+                        ..Default::default()
+                    },
+                )),
+            }],
+        };
+
+        let applied = leader
+            .propose(Proposal::from_raft_command(&command).unwrap())
+            .await
+            .unwrap();
+        for region in regions.values() {
+            region
+                .raft_handle()
+                .wait(Some(Duration::from_secs(5)))
+                .applied_index_at_least(Some(applied.index), "added voter proposal")
+                .await
+                .unwrap();
+        }
+
+        for node_id in 1..=2 {
+            let get = engines
+                .get(&node_id)
+                .unwrap()
+                .get(&kvpb::GetRequest {
+                    key: b"joined".to_vec(),
+                    version: 20,
+                })
+                .unwrap();
+            assert_eq!(
+                get.value,
+                b"yes".to_vec(),
+                "node {node_id} did not apply after membership change"
+            );
+        }
+
+        leader.remove_voter(2, false).await.unwrap();
+        let voters = leader
+            .raft_handle()
+            .metrics()
+            .borrow()
+            .membership_config
+            .voter_ids()
+            .collect::<Vec<_>>();
+        assert_eq!(voters, vec![1]);
     }
 
     #[test]

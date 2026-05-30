@@ -91,6 +91,10 @@ The first slices are intentionally narrow:
   parity tests. A three-node test now initializes a region, elects a leader,
   commits an existing `RaftCmdRequest`, and verifies that every peer applies the
   committed value through its own MVCC state machine.
+- `OpenRaftRegion` exposes NoKV-owned voter-change helpers over OpenRaft
+  learner and membership APIs. The in-process testkit covers adding a new voter,
+  committing a real metadata KV command to the joined peer, and removing that
+  voter back out of the membership.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`.
@@ -105,16 +109,19 @@ The first slices are intentionally narrow:
 
 Known gaps:
 
-- OpenRaft proposal/apply now has in-process three-node replication coverage,
-  but the external tonic raft transport, route integration, and admin-driven
-  membership changes are still being built out.
+- OpenRaft proposal/apply now has in-process three-node replication coverage
+  and raftnode-level voter add/remove helpers, but the external tonic raft
+  transport, route integration, and `RaftAdmin` RPC wiring are still being built
+  out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   multi-node networking and route integration are still being built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. The single-region service still bootstraps a default descriptor
   until coordinator-provided topology is wired.
-- Admin membership RPCs return `Unimplemented`.
+- Admin membership RPCs return `Unimplemented` until the service layer can map
+  protobuf region/peer requests onto the raftnode voter-change helpers and
+  return a real region descriptor.
 - Restart recovery now covers single-node Holt restart and write-after-restart.
   Multi-node restart still needs durable vote, membership-change state, and
   snapshot install before it is production-complete.
