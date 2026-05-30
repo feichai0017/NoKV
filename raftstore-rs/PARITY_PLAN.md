@@ -250,6 +250,11 @@ The first slices are intentionally narrow:
   `join-rust-raftstore-peers.sh` so one-region Rust parity runs can derive
   identity, peer endpoints, and AddPeer calls from the normal NoKV config
   instead of hand-written environment variables.
+- Rust coordinator publication and heartbeat now accept comma-separated
+  endpoint lists like the Go deployment config and try endpoints in order,
+  keeping `InvalidArgument`/permanent root validation failures terminal while
+  allowing transient leader/unavailability failures to fall through to another
+  coordinator endpoint.
 
 Known gaps:
 

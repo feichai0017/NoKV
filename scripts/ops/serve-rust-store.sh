@@ -16,8 +16,7 @@ Options:
   --scope <local|docker>   Select which addresses to use (default: local)
   --workdir <dir>          Required Holt workdir for this store-region process
   --coordinator-addr <addr>
-                           Optional Coordinator gRPC endpoint. If a comma-separated
-                           list is provided, the first endpoint is used.
+                           Optional Coordinator gRPC endpoint list.
   --extra <args...>        Additional arguments passed to nokv-raftstore-server
 
 Notes:
@@ -167,8 +166,6 @@ if [[ -z "$COORDINATOR_ADDR" ]]; then
   fi
   COORDINATOR_ADDR=$(nokv_config_coordinator_addr "$CONFIG" "$coord_scope")
 fi
-COORDINATOR_ADDR=${COORDINATOR_ADDR%%,*}
-
 mkdir -p "$WORKDIR"
 
 export NOKV_RUST_RAFTSTORE_ADDR="$listen_addr"

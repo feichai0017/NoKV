@@ -207,7 +207,7 @@ fn peer_endpoint_catalog_from_env() -> Result<PeerEndpointCatalog, Box<dyn std::
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 struct CoordinatorHeartbeatConfig {
-    endpoint: String,
+    endpoints: Vec<String>,
     interval: Duration,
 }
 
@@ -220,15 +220,27 @@ fn coordinator_heartbeat_config_from_env(
     if addr.is_empty() {
         return Ok(None);
     }
+    let endpoints = coordinator_endpoints(addr);
+    if endpoints.is_empty() {
+        return Ok(None);
+    }
     let interval_ms = parse_required_nonzero_u64(
         "NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS",
         std::env::var("NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS").ok(),
         1_000,
     )?;
     Ok(Some(CoordinatorHeartbeatConfig {
-        endpoint: coordinator_endpoint(addr),
+        endpoints,
         interval: Duration::from_millis(interval_ms),
     }))
+}
+
+fn coordinator_endpoints(raw: &str) -> Vec<String> {
+    raw.split(',')
+        .map(str::trim)
+        .filter(|addr| !addr.is_empty())
+        .map(coordinator_endpoint)
+        .collect()
 }
 
 fn coordinator_endpoint(addr: &str) -> String {
@@ -241,7 +253,7 @@ fn coordinator_endpoint(addr: &str) -> String {
 
 #[derive(Clone)]
 struct CoordinatorTopologyPublisher {
-    endpoint: String,
+    endpoints: Vec<String>,
     pending_store: Option<HoltMvccStore>,
 }
 
@@ -252,7 +264,7 @@ fn coordinator_topology_publisher(
     config
         .map(|config| {
             Arc::new(CoordinatorTopologyPublisher {
-                endpoint: config.endpoint,
+                endpoints: config.endpoints,
                 pending_store,
             }) as Arc<dyn TopologyPublisher>
         })
@@ -317,12 +329,12 @@ impl CoordinatorTopologyPublisher {
                 },
             )),
         };
-        publish_root_event_with_pending(&self.endpoint, self.pending_store.as_ref(), event).await
+        publish_root_event_with_pending(&self.endpoints, self.pending_store.as_ref(), event).await
     }
 }
 
 async fn publish_root_event_with_pending(
-    endpoint: &str,
+    endpoints: &[String],
     pending_store: Option<&HoltMvccStore>,
     event: metapb::RootEvent,
 ) -> TopologyPublishOutcome {
@@ -337,7 +349,7 @@ async fn publish_root_event_with_pending(
         },
         None => None,
     };
-    match publish_root_event(endpoint, event.clone()).await {
+    match publish_root_event_to_any(endpoints, event.clone()).await {
         Ok(()) => {
             if let (Some(store), Some(sequence)) = (pending_store, sequence) {
                 if let Err(err) = store.delete_pending_root_event(sequence) {
@@ -365,6 +377,27 @@ async fn publish_root_event_with_pending(
             TopologyPublishOutcome::terminal_blocked(message)
         }
     }
+}
+
+async fn publish_root_event_to_any(
+    endpoints: &[String],
+    event: metapb::RootEvent,
+) -> Result<(), RootEventPublishError> {
+    let mut last_transient = None;
+    for endpoint in endpoints {
+        match publish_root_event(endpoint, event.clone()).await {
+            Ok(()) => return Ok(()),
+            Err(RootEventPublishError::Permanent(message)) => {
+                return Err(RootEventPublishError::Permanent(message));
+            }
+            Err(RootEventPublishError::Transient(message)) => {
+                last_transient = Some(message);
+            }
+        }
+    }
+    Err(RootEventPublishError::Transient(
+        last_transient.unwrap_or_else(|| "coordinator endpoints unavailable".to_owned()),
+    ))
 }
 
 async fn publish_root_event(
@@ -528,7 +561,7 @@ fn spawn_startup_root_publication(
     tokio::spawn(async move {
         for event in startup_root_events(identity, descriptor) {
             let outcome =
-                publish_root_event_with_pending(&config.endpoint, pending_store.as_ref(), event)
+                publish_root_event_with_pending(&config.endpoints, pending_store.as_ref(), event)
                     .await;
             if outcome.publish_state() == adminpb::ExecutionPublishState::TerminalPublished {
                 continue;
@@ -574,11 +607,11 @@ async fn run_pending_topology_retries(
     let mut ticker = tokio::time::interval(config.interval);
     loop {
         ticker.tick().await;
-        retry_pending_topology_events(&config.endpoint, &pending_store).await;
+        retry_pending_topology_events(&config.endpoints, &pending_store).await;
     }
 }
 
-async fn retry_pending_topology_events(endpoint: &str, pending_store: &HoltMvccStore) {
+async fn retry_pending_topology_events(endpoints: &[String], pending_store: &HoltMvccStore) {
     let pending = match pending_store.pending_root_events() {
         Ok(pending) => pending,
         Err(err) => {
@@ -587,7 +620,7 @@ async fn retry_pending_topology_events(endpoint: &str, pending_store: &HoltMvccS
         }
     };
     for item in pending {
-        match publish_root_event(endpoint, item.event.clone()).await {
+        match publish_root_event_to_any(endpoints, item.event.clone()).await {
             Ok(()) => {
                 if let Err(err) = pending_store.delete_pending_root_event(item.sequence) {
                     tracing::debug!(
@@ -662,39 +695,53 @@ async fn run_coordinator_heartbeat<E>(
     loop {
         ticker.tick().await;
         let request = coordinator_heartbeat_request(identity, addr, &region, root_events.as_ref());
-        match coordpb::coordinator_client::CoordinatorClient::connect(config.endpoint.clone()).await
-        {
-            Ok(mut client) => match client.store_heartbeat(request).await {
-                Ok(response) => {
-                    let operations = response.into_inner().operations;
-                    for operation in operations {
-                        match execute_scheduler_operation(&admin_endpoint, operation).await {
-                            Ok(true) => {
-                                tracing::debug!("rust raftstore applied coordinator operation");
-                            }
-                            Ok(false) => {
-                                tracing::debug!(
-                                    "rust raftstore ignored unsupported coordinator operation"
-                                );
-                            }
-                            Err(err) => {
-                                tracing::debug!(
-                                    error = %err,
-                                    "rust raftstore coordinator operation failed"
-                                );
-                            }
+        match send_store_heartbeat(&config.endpoints, request).await {
+            Ok(operations) => {
+                for operation in operations {
+                    match execute_scheduler_operation(&admin_endpoint, operation).await {
+                        Ok(true) => {
+                            tracing::debug!("rust raftstore applied coordinator operation");
+                        }
+                        Ok(false) => {
+                            tracing::debug!(
+                                "rust raftstore ignored unsupported coordinator operation"
+                            );
+                        }
+                        Err(err) => {
+                            tracing::debug!(
+                                error = %err,
+                                "rust raftstore coordinator operation failed"
+                            );
                         }
                     }
                 }
-                Err(err) => {
-                    tracing::debug!(error = %err, "rust raftstore coordinator heartbeat failed");
-                }
-            },
+            }
             Err(err) => {
-                tracing::debug!(error = %err, "rust raftstore coordinator connect failed");
+                tracing::debug!(error = %err, "rust raftstore coordinator heartbeat failed");
             }
         }
     }
+}
+
+async fn send_store_heartbeat(
+    endpoints: &[String],
+    request: coordpb::StoreHeartbeatRequest,
+) -> Result<Vec<coordpb::SchedulerOperation>, String> {
+    let mut last_error = None;
+    for endpoint in endpoints {
+        match coordpb::coordinator_client::CoordinatorClient::connect(endpoint.clone()).await {
+            Ok(mut client) => match client.store_heartbeat(request.clone()).await {
+                Ok(response) => return Ok(response.into_inner().operations),
+                Err(err) => {
+                    last_error = Some(err.to_string());
+                }
+            },
+            Err(err) => {
+                last_error = Some(err.to_string());
+            }
+        }
+    }
+    Err(last_error.unwrap_or_else(|| "coordinator endpoints unavailable".to_owned()))
 }
 
 async fn execute_scheduler_operation(
@@ -969,6 +1016,18 @@ mod tests {
         assert_eq!(
             coordinator_endpoint("http://127.0.0.1:23790"),
             "http://127.0.0.1:23790"
+        );
+    }
+
+    #[test]
+    fn coordinator_endpoints_split_comma_separated_addresses() {
+        assert_eq!(
+            coordinator_endpoints("127.0.0.1:23790, http://127.0.0.1:23791 ,,127.0.0.1:23792"),
+            vec![
+                "http://127.0.0.1:23790".to_owned(),
+                "http://127.0.0.1:23791".to_owned(),
+                "http://127.0.0.1:23792".to_owned(),
+            ]
         );
     }
 

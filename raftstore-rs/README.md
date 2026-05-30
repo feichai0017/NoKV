@@ -77,7 +77,10 @@ When `NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR` is set, the server publishes its
 `StoreJoined` root event during startup. The bootstrap peer also publishes the
 initial `RegionBootstrapped` descriptor. Holt mode persists those startup root
 events before publishing so coordinator outages can be retried through the same
-pending root-event queue used by later topology changes.
+pending root-event queue used by later topology changes. Comma-separated
+coordinator endpoint lists are accepted; heartbeat and topology publication try
+the configured endpoints until one succeeds or a permanent root validation
+failure is returned.
 
 OpenRaft replication, membership changes, snapshots, and WatchApply delivery are
 staged behind these boundaries. Experimental Peras witness services and legacy
