@@ -101,7 +101,10 @@ The first slices are intentionally narrow:
   return an explicit `Unimplemented` error for membership RPCs.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
-  `OpenRaftRegion`.
+  `OpenRaftRegion`. Service-level tests now exercise the transaction RPC
+  surface through `Prewrite`, `Commit`, `BatchGet`, `Scan`, `BatchRollback`,
+  `ResolveLock`, `CheckTxnStatus`, `TxnHeartBeat`, and
+  `InstallPreparedMVCCEntries`.
 - The standalone Rust raftstore server now boots `OpenRaftRegion` by default
   for both memory and Holt modes. Holt mode keeps the persistent apply-status
   sink behind the OpenRaft state machine.

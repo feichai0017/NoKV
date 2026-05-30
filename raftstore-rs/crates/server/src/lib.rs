@@ -1109,6 +1109,246 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn transaction_rpcs_round_trip_through_service() {
+        let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
+        let context = default_context();
+
+        let prewrite = service
+            .prewrite(Request::new(kvpb::KvPrewriteRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::PrewriteRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"txn/a".to_vec(),
+                        value: b"va".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    primary_lock: b"txn/a".to_vec(),
+                    start_version: 10,
+                    lock_ttl: 10,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert!(prewrite.errors.is_empty());
+
+        let heartbeat = service
+            .txn_heart_beat(Request::new(kvpb::KvTxnHeartBeatRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::TxnHeartBeatRequest {
+                    primary_key: b"txn/a".to_vec(),
+                    start_version: 10,
+                    ttl_extension: 100,
+                    current_time: 1,
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert!(heartbeat.error.is_none());
+        assert!(heartbeat.lock_ttl >= 100);
+
+        let status = service
+            .check_txn_status(Request::new(kvpb::KvCheckTxnStatusRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::CheckTxnStatusRequest {
+                    primary_key: b"txn/a".to_vec(),
+                    lock_ts: 10,
+                    current_ts: 11,
+                    caller_start_ts: 11,
+                    current_time: 1,
+                    rollback_if_not_exist: true,
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert!(status.error.is_none());
+        assert_eq!(
+            status.action,
+            kvpb::CheckTxnStatusAction::CheckTxnStatusMinCommitTsPushed as i32
+        );
+
+        let commit = service
+            .commit(Request::new(kvpb::KvCommitRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::CommitRequest {
+                    keys: vec![b"txn/a".to_vec()],
+                    start_version: 10,
+                    commit_version: 20,
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert!(commit.error.is_none());
+
+        let batch_get = service
+            .batch_get(Request::new(kvpb::KvBatchGetRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::BatchGetRequest {
+                    requests: vec![
+                        kvpb::GetRequest {
+                            key: b"txn/a".to_vec(),
+                            version: 20,
+                        },
+                        kvpb::GetRequest {
+                            key: b"txn/missing".to_vec(),
+                            version: 20,
+                        },
+                    ],
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert_eq!(batch_get.responses[0].value, b"va".to_vec());
+        assert!(batch_get.responses[1].not_found);
+
+        let scan = service
+            .scan(Request::new(kvpb::KvScanRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::ScanRequest {
+                    start_key: b"txn/".to_vec(),
+                    limit: 10,
+                    version: 20,
+                    include_start: true,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert_eq!(scan.kvs.len(), 1);
+        assert_eq!(scan.kvs[0].key, b"txn/a".to_vec());
+
+        service
+            .prewrite(Request::new(kvpb::KvPrewriteRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::PrewriteRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"txn/rollback".to_vec(),
+                        value: b"discard".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    primary_lock: b"txn/rollback".to_vec(),
+                    start_version: 30,
+                    lock_ttl: 10,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap();
+        let rollback = service
+            .batch_rollback(Request::new(kvpb::KvBatchRollbackRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::BatchRollbackRequest {
+                    keys: vec![b"txn/rollback".to_vec()],
+                    start_version: 30,
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert!(rollback.error.is_none());
+
+        service
+            .prewrite(Request::new(kvpb::KvPrewriteRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::PrewriteRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"txn/resolve".to_vec(),
+                        value: b"resolved".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    primary_lock: b"txn/resolve".to_vec(),
+                    start_version: 40,
+                    lock_ttl: 10,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap();
+        let resolved = service
+            .resolve_lock(Request::new(kvpb::KvResolveLockRequest {
+                context: Some(context.clone()),
+                request: Some(kvpb::ResolveLockRequest {
+                    start_version: 40,
+                    commit_version: 50,
+                    keys: vec![b"txn/resolve".to_vec()],
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert_eq!(resolved.resolved_locks, 1);
+
+        let install = service
+            .install_prepared_mvcc_entries(Request::new(
+                kvpb::KvInstallPreparedMvccEntriesRequest {
+                    context: Some(context.clone()),
+                    request: Some(kvpb::InstallPreparedMvccEntriesRequest {
+                        routing_key: b"txn/prepared".to_vec(),
+                        commit_version: 60,
+                        entries: vec![kvpb::PreparedMvccEntry {
+                            column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
+                            key: b"txn/prepared".to_vec(),
+                            version: 60,
+                            value: b"prepared".to_vec(),
+                            has_value: true,
+                            ..Default::default()
+                        }],
+                        watch_keys: vec![b"txn/prepared".to_vec()],
+                        ..Default::default()
+                    }),
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert_eq!(install.applied_entries, 1);
+        assert_eq!(install.commit_version, 60);
+
+        let prepared = service
+            .get(Request::new(kvpb::KvGetRequest {
+                context: Some(context),
+                request: Some(kvpb::GetRequest {
+                    key: b"txn/prepared".to_vec(),
+                    version: 60,
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert_eq!(prepared.value, b"prepared".to_vec());
+    }
+
+    #[tokio::test]
     async fn watch_apply_streams_matching_apply_events() {
         let engine = nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new());
         let service = StoreKvService::new(engine.clone());
