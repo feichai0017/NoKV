@@ -222,7 +222,10 @@ The first slices are intentionally narrow:
   through `fsmeta/runtime/raftstore.Runner` against a Rust StoreKV endpoint,
   proving the upper fsmeta semantic path can use the Rust data plane without
   changing fsmeta execution code. The same fsmeta contract now runs against
-  both the in-memory Rust store and the Holt-backed Rust store.
+  both the in-memory Rust store and the Holt-backed Rust store. A Holt restart
+  regression now creates a namespace entry through fsmeta, stops the Rust
+  process, restarts the same Holt-backed store, and verifies `Lookup` plus
+  `ReadDirPlus` still observe the persisted dentry and inode attributes.
 - The tagged Go client harness now also starts a real Go coordinator service,
   publishes rooted store and region metadata, lets the Rust store populate
   `StoreInfo` through heartbeat, and routes `StoreKV` traffic through the

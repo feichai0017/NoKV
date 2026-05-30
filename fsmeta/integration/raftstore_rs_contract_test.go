@@ -73,6 +73,56 @@ func TestRustRaftstoreEndpointFSMetaContract(t *testing.T) {
 	}
 }
 
+func TestRustRaftstoreEndpointFSMetaHoltRestartPreservesNamespace(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	holtDir := t.TempDir()
+	addr := reserveRustEndpointAddr(t)
+	stop := startRustRaftstoreEndpointAt(t, addr, holtDir)
+	executor, runner, closeExecutor := openRustRaftstoreFSMetaExecutor(t, addr, 100, 10)
+	seedRootInode(t, ctx, runner, model.MountIdentity{MountID: "vol", MountKeyID: 1})
+	created, err := executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "restart-artifact",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 123,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err)
+	require.NotZero(t, created.Inode.Inode)
+	closeExecutor()
+	stop()
+
+	stop = startRustRaftstoreEndpointAt(t, addr, holtDir)
+	defer stop()
+	executor, _, closeExecutor = openRustRaftstoreFSMetaExecutor(t, addr, 1_000, 100)
+	defer closeExecutor()
+
+	dentry, err := executor.Lookup(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "restart-artifact",
+	})
+	require.NoError(t, err)
+	require.Equal(t, created.Dentry, dentry)
+
+	pairs, err := executor.ReadDirPlus(ctx, model.ReadDirRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Limit:  16,
+	})
+	require.NoError(t, err)
+	require.Len(t, pairs, 1)
+	require.Equal(t, created.Dentry, pairs[0].Dentry)
+	require.Equal(t, created.Inode.Inode, pairs[0].Inode.Inode)
+	require.Equal(t, uint64(123), pairs[0].Inode.Size)
+	require.Equal(t, uint32(0o644), pairs[0].Inode.Mode)
+}
+
 type rustStoreResolver struct {
 	addr string
 }
@@ -127,9 +177,49 @@ func (a *rustInodeAllocator) AllocateCreateInode(context.Context, model.MountIde
 	return inode, nil
 }
 
+func openRustRaftstoreFSMetaExecutor(t *testing.T, addr string, tsoStart uint64, inodeStart model.InodeID) (*fsmetaexec.Executor, *fsmetaraftstore.Runner, func()) {
+	t.Helper()
+	runner, closeRunner := openRustRaftstoreRunner(t, addr, tsoStart)
+	executor, err := fsmetaexec.New(
+		runner,
+		fsmetaexec.WithMountResolver(rustMountResolver{}),
+		fsmetaexec.WithInodeAllocator(&rustInodeAllocator{next: inodeStart}),
+	)
+	require.NoError(t, err)
+	return executor, runner, closeRunner
+}
+
+func openRustRaftstoreRunner(t *testing.T, addr string, tsoStart uint64) (*fsmetaraftstore.Runner, func()) {
+	t.Helper()
+	region := rustRaftstoreSingleRegion()
+	kv, err := client.New(client.Config{
+		RegionResolver: &staticRegionResolver{regions: []*metapb.RegionDescriptor{region}},
+		StoreResolver:  rustStoreResolver{addr: addr},
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          client.RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	var closeOnce sync.Once
+	closeRunner := func() {
+		closeOnce.Do(func() {
+			require.NoError(t, kv.Close())
+		})
+	}
+	t.Cleanup(closeRunner)
+	runner, err := fsmetaraftstore.NewRunner(kv, &rustTSO{next: tsoStart})
+	require.NoError(t, err)
+	return runner, closeRunner
+}
+
 func startRustRaftstoreEndpoint(t *testing.T, holtDir string) string {
 	t.Helper()
 	addr := reserveRustEndpointAddr(t)
+	startRustRaftstoreEndpointAt(t, addr, holtDir)
+	return addr
+}
+
+func startRustRaftstoreEndpointAt(t *testing.T, addr, holtDir string) func() {
+	t.Helper()
 	root := findRustEndpointRepoRoot(t)
 	ctx, cancel := context.WithCancel(context.Background())
 	cmd := exec.CommandContext(
@@ -162,7 +252,12 @@ func startRustRaftstoreEndpoint(t *testing.T, holtDir string) string {
 	go logRustEndpointPipe(t, "raftstore-rs stdout", stdout)
 	go logRustEndpointPipe(t, "raftstore-rs stderr", stderr)
 	waitForRustEndpointTCP(t, addr, 15*time.Second)
-	return addr
+	return func() {
+		stopOnce.Do(func() {
+			cancel()
+			_ = cmd.Wait()
+		})
+	}
 }
 
 func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {
