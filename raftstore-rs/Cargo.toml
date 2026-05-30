@@ -26,7 +26,7 @@ nokv-mvcc = { path = "crates/mvcc" }
 nokv-proto = { path = "crates/proto" }
 nokv-raftlog = { path = "crates/raftlog" }
 nokv-raftnode = { path = "crates/raftnode" }
-openraft = "0.9"
+openraft = { version = "0.9", features = ["storage-v2"] }
 prost = "0.13"
 prost-types = "0.13"
 tempfile = "3"

@@ -17,9 +17,11 @@ use tokio::sync::broadcast;
 
 mod log_codec;
 mod log_store;
+mod region_storage;
 
 pub use log_codec::{decode_log_entry, encode_log_entry};
 pub use log_store::{RaftEntryLog, SegmentedEntryLog};
+pub use region_storage::{NoopSnapshotBuilder, RegionLogStorage, RegionStateMachine};
 
 pub type NodeId = u64;
 pub type RegionId = u64;

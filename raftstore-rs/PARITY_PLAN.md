@@ -71,6 +71,11 @@ The first slices are intentionally narrow:
   events, while direct command execution advances the local applied index once
   per Raft command. Holt server mode wraps the apply engine with an apply-status
   sink, so writes persist the latest region apply status for restart bootstrap.
+- `RegionLogStorage` and `RegionStateMachine` implement OpenRaft's v2 storage
+  boundary over `SegmentedEntryLog` and `AppliedKvEngine`. They are
+  intentionally limited to the append/read/apply main path; conflict
+  truncation, purge, and real snapshots remain explicit gaps before replicated
+  clusters are enabled.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -80,6 +85,8 @@ The first slices are intentionally narrow:
 Known gaps:
 
 - OpenRaft is not wired into proposal, replication, or membership yet.
+- The v2 storage path exists, but it is not yet mounted behind a running
+  OpenRaft node.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. The single-region service still bootstraps a default descriptor
