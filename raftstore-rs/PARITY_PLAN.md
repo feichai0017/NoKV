@@ -125,6 +125,9 @@ The first slices are intentionally narrow:
   mutate/get/watch, Holt apply-status restart, 2PC, `BatchGet`, `Scan`, and
   `InstallPreparedMVCCEntries` against the Rust server. Rust `Scan` now also
   matches the Go service boundary by rejecting reverse scans as unimplemented.
+  Rust `MVCCMaintenance` now validates the whole tombstone batch before
+  applying it and reports requested tombstones rather than only keys that
+  existed locally, matching the Go raft apply boundary.
 
 Known gaps:
 

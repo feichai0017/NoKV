@@ -576,24 +576,38 @@ impl MvccStore {
         &self,
         req: &kvpb::MvccMaintenanceRequest,
     ) -> Result<kvpb::MvccMaintenanceResponse> {
-        let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
-        let mut applied = 0;
+        let mut tombstones = Vec::with_capacity(req.tombstones.len());
         for tombstone in &req.tombstones {
-            match kvpb::internal_entry_tombstone::ColumnFamily::try_from(tombstone.column_family)
-                .unwrap_or(kvpb::internal_entry_tombstone::ColumnFamily::Default)
-            {
-                kvpb::internal_entry_tombstone::ColumnFamily::Default
-                | kvpb::internal_entry_tombstone::ColumnFamily::Write => {
-                    if let Some(versions) = inner.writes.get_mut(&tombstone.key) {
-                        if versions.remove(&tombstone.version).is_some() {
-                            applied += 1;
-                        }
-                    }
+            match kvpb::internal_entry_tombstone::ColumnFamily::try_from(tombstone.column_family) {
+                Ok(kvpb::internal_entry_tombstone::ColumnFamily::Default)
+                | Ok(kvpb::internal_entry_tombstone::ColumnFamily::Write) => {}
+                Err(_) => {
+                    return Ok(kvpb::MvccMaintenanceResponse {
+                        error: Some(maintenance_abort("invalid column family")),
+                        ..Default::default()
+                    })
+                }
+            };
+            if tombstone.key.is_empty() {
+                return Ok(kvpb::MvccMaintenanceResponse {
+                    error: Some(maintenance_abort("empty key")),
+                    ..Default::default()
+                });
+            }
+            tombstones.push((tombstone.key.clone(), tombstone.version));
+        }
+
+        let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
+        for (key, version) in &tombstones {
+            if let Some(versions) = inner.writes.get_mut(key) {
+                versions.remove(version);
+                if versions.is_empty() {
+                    inner.writes.remove(key);
                 }
             }
         }
         Ok(kvpb::MvccMaintenanceResponse {
-            applied_entries: applied,
+            applied_entries: tombstones.len() as u64,
             ..Default::default()
         })
     }
@@ -1028,6 +1042,13 @@ fn validate_commit_version(start_version: u64, commit_version: u64) -> Option<kv
     })
 }
 
+fn maintenance_abort(message: &str) -> kvpb::KeyError {
+    kvpb::KeyError {
+        abort: message.to_owned(),
+        ..Default::default()
+    }
+}
+
 pub fn predicate_matches(predicate: &kvpb::AtomicPredicate, observed: Option<&[u8]>) -> bool {
     match kvpb::AtomicPredicateKind::try_from(predicate.kind)
         .unwrap_or(kvpb::AtomicPredicateKind::NotExists)
@@ -1190,6 +1211,106 @@ mod tests {
             })
             .unwrap();
         assert!(second.error.unwrap().already_exists.is_some());
+    }
+
+    #[test]
+    fn mvcc_maintenance_counts_requested_tombstones() {
+        let store = MvccStore::new();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"maint/k".to_vec(),
+                    value: b"value".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 2,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let response = store
+            .mvcc_maintenance(&kvpb::MvccMaintenanceRequest {
+                tombstones: vec![
+                    kvpb::InternalEntryTombstone {
+                        column_family: kvpb::internal_entry_tombstone::ColumnFamily::Write as i32,
+                        key: b"maint/k".to_vec(),
+                        version: 2,
+                    },
+                    kvpb::InternalEntryTombstone {
+                        column_family: kvpb::internal_entry_tombstone::ColumnFamily::Default as i32,
+                        key: b"maint/missing".to_vec(),
+                        version: 9,
+                    },
+                ],
+            })
+            .unwrap();
+        assert_eq!(response.applied_entries, 2);
+        assert!(response.error.is_none());
+
+        let got = store
+            .get(&kvpb::GetRequest {
+                key: b"maint/k".to_vec(),
+                version: 2,
+            })
+            .unwrap();
+        assert!(got.not_found);
+    }
+
+    #[test]
+    fn mvcc_maintenance_rejects_malformed_batch_without_partial_apply() {
+        let store = MvccStore::new();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"maint/keep".to_vec(),
+                    value: b"value".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 2,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let response = store
+            .mvcc_maintenance(&kvpb::MvccMaintenanceRequest {
+                tombstones: vec![
+                    kvpb::InternalEntryTombstone {
+                        column_family: 99,
+                        key: b"maint/bad".to_vec(),
+                        version: 1,
+                    },
+                    kvpb::InternalEntryTombstone {
+                        column_family: kvpb::internal_entry_tombstone::ColumnFamily::Write as i32,
+                        key: b"maint/keep".to_vec(),
+                        version: 2,
+                    },
+                ],
+            })
+            .unwrap();
+        assert!(response.error.unwrap().abort.contains("column family"));
+
+        let got = store
+            .get(&kvpb::GetRequest {
+                key: b"maint/keep".to_vec(),
+                version: 2,
+            })
+            .unwrap();
+        assert_eq!(got.value, b"value");
+
+        let empty_key = store
+            .mvcc_maintenance(&kvpb::MvccMaintenanceRequest {
+                tombstones: vec![kvpb::InternalEntryTombstone {
+                    column_family: kvpb::internal_entry_tombstone::ColumnFamily::Write as i32,
+                    key: Vec::new(),
+                    version: 2,
+                }],
+            })
+            .unwrap();
+        assert!(empty_key.error.unwrap().abort.contains("empty key"));
     }
 
     #[test]
