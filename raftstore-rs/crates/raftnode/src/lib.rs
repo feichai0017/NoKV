@@ -776,6 +776,7 @@ where
 
 #[derive(Clone)]
 pub struct OpenRaftRegion<E = AppliedKvEngine<MvccStore>> {
+    node_id: NodeId,
     raft: Raft<RaftStoreConfig>,
     apply_engine: E,
 }
@@ -818,7 +819,15 @@ where
         let raft = Raft::new(node_id, config, network, log_store, state_machine)
             .await
             .map_err(openraft_error)?;
-        Ok(OpenRaftRegion { raft, apply_engine })
+        Ok(OpenRaftRegion {
+            node_id,
+            raft,
+            apply_engine,
+        })
+    }
+
+    pub fn node_id(&self) -> NodeId {
+        self.node_id
     }
 
     pub async fn bootstrap_single_node(

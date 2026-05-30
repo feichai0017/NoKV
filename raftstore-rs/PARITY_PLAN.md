@@ -100,7 +100,9 @@ The first slices are intentionally narrow:
 - `RaftAdmin` now wires `AddPeer` and `RemovePeer` onto those
   `OpenRaftRegion` voter-change helpers and returns an updated protobuf region
   descriptor from the service-local topology. Non-OpenRaft apply engines still
-  return an explicit `Unimplemented` error for membership RPCs.
+  return an explicit `Unimplemented` error for membership RPCs. `RegionRuntimeStatus`
+  now reports OpenRaft-derived local peer, leader peer, and leader/follower
+  state instead of assuming every service endpoint is peer 1.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`. Service-level tests now exercise the transaction RPC

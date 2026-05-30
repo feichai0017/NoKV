@@ -735,6 +735,17 @@ pub trait RaftMembershipAdmin: Clone + Send + Sync + 'static {
     async fn remove_voter(&self, peer_id: u64) -> Result<(), Status>;
 }
 
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RaftRuntimeStatus {
+    pub local_peer_id: u64,
+    pub leader_peer_id: u64,
+    pub leader: bool,
+}
+
+pub trait RaftRuntimeStatusProvider: ApplyStatusProvider {
+    fn raft_runtime_status(&self) -> RaftRuntimeStatus;
+}
+
 #[tonic::async_trait]
 impl<E> RaftMembershipAdmin for nokv_raftnode::OpenRaftRegion<E>
 where
@@ -753,6 +764,26 @@ where
     }
 }
 
+impl<E> RaftRuntimeStatusProvider for nokv_raftnode::OpenRaftRegion<E>
+where
+    E: RegionApplyEngine,
+{
+    fn raft_runtime_status(&self) -> RaftRuntimeStatus {
+        let local_peer_id = self.node_id();
+        let leader_peer_id = self
+            .raft_handle()
+            .metrics()
+            .borrow()
+            .current_leader
+            .unwrap_or_default();
+        RaftRuntimeStatus {
+            local_peer_id,
+            leader_peer_id,
+            leader: leader_peer_id == local_peer_id && leader_peer_id != 0,
+        }
+    }
+}
+
 #[tonic::async_trait]
 impl<E> RaftMembershipAdmin for AppliedKvEngine<E>
 where
@@ -764,6 +795,20 @@ where
 
     async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
         Err(membership_unimplemented())
+    }
+}
+
+impl<E> RaftRuntimeStatusProvider for AppliedKvEngine<E>
+where
+    E: Clone + Send + Sync + 'static,
+{
+    fn raft_runtime_status(&self) -> RaftRuntimeStatus {
+        let known = self.apply_status().region_id != 0;
+        RaftRuntimeStatus {
+            local_peer_id: u64::from(known),
+            leader_peer_id: u64::from(known),
+            leader: known,
+        }
     }
 }
 
@@ -782,6 +827,21 @@ where
     }
 }
 
+impl<E, S> RaftRuntimeStatusProvider for PersistentAppliedKvEngine<E, S>
+where
+    E: Clone + Send + Sync + 'static,
+    S: ApplyStatusSink,
+{
+    fn raft_runtime_status(&self) -> RaftRuntimeStatus {
+        let known = self.apply_status().region_id != 0;
+        RaftRuntimeStatus {
+            local_peer_id: u64::from(known),
+            leader_peer_id: u64::from(known),
+            leader: known,
+        }
+    }
+}
+
 #[tonic::async_trait]
 impl RaftMembershipAdmin for EmptyApplyStatus {
     async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
@@ -790,6 +850,12 @@ impl RaftMembershipAdmin for EmptyApplyStatus {
 
     async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
         Err(membership_unimplemented())
+    }
+}
+
+impl RaftRuntimeStatusProvider for EmptyApplyStatus {
+    fn raft_runtime_status(&self) -> RaftRuntimeStatus {
+        RaftRuntimeStatus::default()
     }
 }
 
@@ -809,7 +875,7 @@ impl ApplyStatusProvider for EmptyApplyStatus {
 #[tonic::async_trait]
 impl<S> adminpb::raft_admin_server::RaftAdmin for RaftAdminService<S>
 where
-    S: ApplyStatusProvider + RaftMembershipAdmin,
+    S: RaftRuntimeStatusProvider + RaftMembershipAdmin,
 {
     async fn add_peer(
         &self,
@@ -894,12 +960,13 @@ where
         } else {
             Some(admin_region_descriptor(&self.topology)?)
         };
+        let runtime = self.status.raft_runtime_status();
         Ok(Response::new(adminpb::RegionRuntimeStatusResponse {
             known: status.region_id != 0,
             hosted: status.region_id != 0,
-            local_peer_id: 1,
-            leader_peer_id: 1,
-            leader: status.region_id != 0,
+            local_peer_id: runtime.local_peer_id,
+            leader_peer_id: runtime.leader_peer_id,
+            leader: runtime.leader,
             region,
             applied_index: status.applied_index,
             applied_term: status.term,
@@ -946,7 +1013,11 @@ pub async fn serve_with_region_engine<E>(
     engine: E,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RaftCommandExecutor + ApplyStatusProvider + ApplyWatchProvider + RaftMembershipAdmin,
+    E: RaftCommandExecutor
+        + ApplyStatusProvider
+        + ApplyWatchProvider
+        + RaftMembershipAdmin
+        + RaftRuntimeStatusProvider,
 {
     serve_with_region_engine_and_admission(addr, engine, RegionAdmission::default()).await
 }
@@ -957,7 +1028,11 @@ pub async fn serve_with_region_engine_and_admission<E>(
     admission: RegionAdmission,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RaftCommandExecutor + ApplyStatusProvider + ApplyWatchProvider + RaftMembershipAdmin,
+    E: RaftCommandExecutor
+        + ApplyStatusProvider
+        + ApplyWatchProvider
+        + RaftMembershipAdmin
+        + RaftRuntimeStatusProvider,
 {
     tonic::transport::Server::builder()
         .add_service(StoreKvServer::new(StoreKvService::with_admission(
@@ -1611,6 +1686,38 @@ mod tests {
                 },
             ]
         );
+
+        let leader_status = service
+            .region_runtime_status(Request::new(adminpb::RegionRuntimeStatusRequest {
+                region_id: 7,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(leader_status.local_peer_id, 1);
+        assert_eq!(leader_status.leader_peer_id, 1);
+        assert!(leader_status.leader);
+
+        let follower_service = RaftAdminService::with_admission(
+            regions.get(&2).unwrap().clone(),
+            RegionAdmission {
+                region_id: 7,
+                store_id: 2,
+                peer_id: 2,
+                epoch_conf_version: 2,
+                ..Default::default()
+            },
+        );
+        let follower_status = follower_service
+            .region_runtime_status(Request::new(adminpb::RegionRuntimeStatusRequest {
+                region_id: 7,
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(follower_status.local_peer_id, 2);
+        assert_eq!(follower_status.leader_peer_id, 1);
+        assert!(!follower_status.leader);
 
         let remove = service
             .remove_peer(Request::new(adminpb::RemovePeerRequest {
