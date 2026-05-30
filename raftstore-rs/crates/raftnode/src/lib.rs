@@ -1119,7 +1119,7 @@ where
 
 impl<E> RaftCommandExecutor for OpenRaftRegion<E>
 where
-    E: RegionSnapshotEngine,
+    E: RegionSnapshotEngine + RaftCommandExecutor,
 {
     fn execute_raft_command<'a>(
         &'a self,
@@ -1129,6 +1129,22 @@ where
         async move {
             let proposal = Proposal::from_raft_command(req)
                 .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+            if raft_command_is_read_only(req) {
+                let applied_region_id = self.apply_engine.apply_status().region_id;
+                if proposal.region_id != applied_region_id {
+                    return Err(nokv_mvcc::Error::Backend(
+                        Error::LogRegionMismatch {
+                            record_region_id: applied_region_id,
+                            proposal_region_id: proposal.region_id,
+                        }
+                        .to_string(),
+                    ));
+                }
+                self.raft.ensure_linearizable().await.map_err(|err| {
+                    nokv_mvcc::Error::Backend(openraft_api_error(err).to_string())
+                })?;
+                return self.apply_engine.execute_raft_command(req).await;
+            }
             let applied = self
                 .propose(proposal)
                 .await
@@ -1136,6 +1152,16 @@ where
             decode_raft_response(&applied.payload)
         }
     }
+}
+
+fn raft_command_is_read_only(req: &raftpb::RaftCmdRequest) -> bool {
+    !req.requests.is_empty()
+        && req.requests.iter().all(|request| {
+            matches!(
+                raftpb::CmdType::try_from(request.cmd_type),
+                Ok(raftpb::CmdType::CmdGet | raftpb::CmdType::CmdScan)
+            )
+        })
 }
 
 #[derive(Clone, Default)]
@@ -1264,6 +1290,65 @@ mod tests {
             .unwrap();
         assert_eq!(applied.region_id, 7);
         assert_eq!(applied.index, 2);
+    }
+
+    #[tokio::test]
+    async fn openraft_region_serves_read_without_advancing_apply_index() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        let log_store = RegionLogStorage::new(log);
+        let state_machine = RegionStateMachine::new(AppliedKvEngine::new(7, MvccStore::new()));
+        let raft = OpenRaftRegion::bootstrap_single_node(1, 7, log_store, state_machine)
+            .await
+            .unwrap();
+
+        let write = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 7,
+                request_id: 1,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                    kvpb::TryAtomicMutateRequest {
+                        mutations: vec![kvpb::Mutation {
+                            key: b"k".to_vec(),
+                            value: b"v".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        }],
+                        commit_version: 2,
+                        ..Default::default()
+                    },
+                )),
+            }],
+        };
+        raft.execute_raft_command(&write).await.unwrap();
+        let applied_after_write = raft.apply_status().applied_index;
+        assert!(applied_after_write > 0);
+
+        let read = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 7,
+                request_id: 2,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdGet as i32,
+                cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
+                    key: b"k".to_vec(),
+                    version: 2,
+                })),
+            }],
+        };
+        let response = raft.execute_raft_command(&read).await.unwrap();
+
+        assert_eq!(raft.apply_status().applied_index, applied_after_write);
+        match response.responses[0].cmd.as_ref().unwrap() {
+            raftpb::response::Cmd::Get(get) => assert_eq!(get.value, b"v".to_vec()),
+            other => panic!("unexpected read response: {other:?}"),
+        }
     }
 
     #[tokio::test]

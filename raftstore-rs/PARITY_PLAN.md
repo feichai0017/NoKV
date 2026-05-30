@@ -89,7 +89,9 @@ The first slices are intentionally narrow:
   restart, the single-node path restores the latest membership from the
   persisted raft log and seeds a restart vote above the last log term only for a
   single-voter membership so it can elect again and accept writes without
-  biasing multi-node elections.
+  biasing multi-node elections. GET/SCAN commands now use OpenRaft's
+  linearizable read boundary and execute against the state machine without
+  appending a new raft log entry.
 - `MemoryRaftNetworkRegistry` provides an in-process OpenRaft network for
   parity tests. A three-node test now initializes a region, elects a leader,
   commits an existing `RaftCmdRequest`, and verifies that every peer applies the
@@ -110,7 +112,9 @@ The first slices are intentionally narrow:
   and leader/follower state instead of assuming every service endpoint is peer 1.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
-  `OpenRaftRegion`. Service-level tests now exercise the transaction RPC
+  `OpenRaftRegion`. Read-only commands stay read-only behind the
+  `OpenRaftRegion` executor instead of being converted into write proposals.
+  Service-level tests now exercise the transaction RPC
   surface through `Prewrite`, `Commit`, `BatchGet`, `Scan`, `BatchRollback`,
   `ResolveLock`, `CheckTxnStatus`, `TxnHeartBeat`, and
   `InstallPreparedMVCCEntries`.
