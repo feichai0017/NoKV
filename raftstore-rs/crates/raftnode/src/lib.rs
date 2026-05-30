@@ -780,9 +780,24 @@ where
     pub async fn bootstrap_single_node(
         node_id: NodeId,
         region_id: RegionId,
-        log_store: RegionLogStorage,
-        state_machine: RegionStateMachine<E>,
+        mut log_store: RegionLogStorage,
+        mut state_machine: RegionStateMachine<E>,
     ) -> Result<OpenRaftRegion<E>, Error> {
+        if let Some(membership) = log_store
+            .latest_membership()
+            .map_err(|err| Error::OpenRaft(err.to_string()))?
+        {
+            state_machine.restore_membership(membership);
+        }
+        let self_voter = state_machine
+            .membership()
+            .voter_ids()
+            .any(|voter| voter == node_id);
+        if self_voter {
+            log_store
+                .seed_single_node_vote_above_log(node_id)
+                .map_err(|err| Error::OpenRaft(err.to_string()))?;
+        }
         let apply_engine = state_machine.apply_engine().clone();
         let config = Arc::new(
             Config {
@@ -809,7 +824,7 @@ where
             Err(RaftError::APIError(InitializeError::NotAllowed(_))) => false,
             Err(err) => return Err(openraft_api_error(err)),
         };
-        if initialized {
+        if initialized || self_voter {
             let election_term_floor = raft.metrics().borrow().current_term + 1;
             raft.trigger().elect().await.map_err(openraft_error)?;
             raft.wait(Some(Duration::from_secs(5)))

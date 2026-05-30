@@ -10,8 +10,8 @@ use openraft::{
 };
 
 use crate::{
-    AppliedProposal, NodeId, OpenRaftEntry, RaftEntryLog, RaftStoreConfig, RegionApplyEngine,
-    SegmentedEntryLog,
+    AppliedProposal, Error, NodeId, OpenRaftEntry, RaftEntryLog, RaftStoreConfig,
+    RegionApplyEngine, SegmentedEntryLog,
 };
 
 pub struct RegionLogStorage {
@@ -28,6 +28,27 @@ impl RegionLogStorage {
             committed: None,
         }
     }
+
+    pub fn latest_membership(&self) -> Result<Option<StoredMembership<NodeId, BasicNode>>, Error> {
+        let mut latest = None;
+        for entry in self.log.recover_entries()? {
+            if let openraft::EntryPayload::Membership(membership) = entry.payload {
+                latest = Some(StoredMembership::new(Some(entry.log_id), membership));
+            }
+        }
+        Ok(latest)
+    }
+
+    pub fn seed_single_node_vote_above_log(&mut self, node_id: NodeId) -> Result<(), Error> {
+        if self.vote.is_some() {
+            return Ok(());
+        }
+        let last_log_id = self.log.last_log_id()?.or(self.log.last_purged_log_id()?);
+        if let Some(log_id) = last_log_id {
+            self.vote = Some(Vote::new_committed(log_id.leader_id.term + 1, node_id));
+        }
+        Ok(())
+    }
 }
 
 pub struct RegionStateMachine<E> {
@@ -43,8 +64,20 @@ impl<E> RegionStateMachine<E> {
         }
     }
 
+    pub fn with_membership(engine: E, membership: StoredMembership<NodeId, BasicNode>) -> Self {
+        Self { engine, membership }
+    }
+
     pub fn apply_engine(&self) -> &E {
         &self.engine
+    }
+
+    pub fn restore_membership(&mut self, membership: StoredMembership<NodeId, BasicNode>) {
+        self.membership = membership;
+    }
+
+    pub fn membership(&self) -> &StoredMembership<NodeId, BasicNode> {
+        &self.membership
     }
 }
 
@@ -287,6 +320,7 @@ mod tests {
     use nokv_proto::nokv::kv::v1 as kvpb;
     use nokv_proto::nokv::raft::v1 as raftpb;
     use openraft::{storage::RaftLogStorageExt, CommittedLeaderId, EntryPayload, LogId};
+    use std::collections::{BTreeMap, BTreeSet};
 
     fn log_id(term: u64, index: u64) -> LogId<NodeId> {
         LogId::new(CommittedLeaderId::new(term, 1), index)
@@ -317,6 +351,17 @@ mod tests {
         OpenRaftEntry {
             log_id: log_id(3, index),
             payload: EntryPayload::Normal(Proposal::from_raft_command(&command).unwrap()),
+        }
+    }
+
+    fn membership_entry(_region_id: u64, index: u64, voter: NodeId) -> OpenRaftEntry {
+        let nodes = BTreeMap::from([(voter, BasicNode::new(format!("local-{voter}")))]);
+        OpenRaftEntry {
+            log_id: log_id(1, index),
+            payload: EntryPayload::Membership(openraft::Membership::new(
+                vec![BTreeSet::from([voter])],
+                nodes,
+            )),
         }
     }
 
@@ -412,6 +457,40 @@ mod tests {
                 .map(|entry| entry.log_id.index)
                 .collect::<Vec<_>>(),
             vec![3]
+        );
+    }
+
+    #[tokio::test]
+    async fn region_log_storage_recovers_latest_membership() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        log.append_entries(&[
+            membership_entry(7, 1, 1),
+            normal_entry(7, 2, b"a", b"1"),
+            membership_entry(7, 3, 2),
+        ])
+        .unwrap();
+        drop(log);
+
+        let storage = RegionLogStorage::new(SegmentedEntryLog::open(7, dir.path()).unwrap());
+        let membership = storage.latest_membership().unwrap().unwrap();
+        assert_eq!(membership.log_id().as_ref().unwrap().index, 3);
+        assert_eq!(membership.voter_ids().collect::<Vec<_>>(), vec![2]);
+    }
+
+    #[tokio::test]
+    async fn region_log_storage_seeds_restart_vote_above_log() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        log.append_entries(&[membership_entry(7, 1, 1), normal_entry(7, 2, b"a", b"1")])
+            .unwrap();
+        drop(log);
+
+        let mut storage = RegionLogStorage::new(SegmentedEntryLog::open(7, dir.path()).unwrap());
+        storage.seed_single_node_vote_above_log(1).unwrap();
+        assert_eq!(
+            storage.read_vote().await.unwrap().unwrap().leader_id.term,
+            4
         );
     }
 

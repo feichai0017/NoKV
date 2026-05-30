@@ -86,10 +86,38 @@ func TestRustRaftstoreEndpointHoltApplyStatusSurvivesRestart(t *testing.T) {
 	addr, _ = startRustRaftstoreProcess(t, dir)
 	admin, closeAdmin, err = adminclient.Dial(ctx, addr)
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
 	status, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
 	require.NoError(t, err)
-	require.Equal(t, statusBefore.GetAppliedIndex(), status.GetAppliedIndex())
+	require.GreaterOrEqual(t, status.GetAppliedIndex(), statusBefore.GetAppliedIndex())
+	require.NoError(t, closeAdmin())
+
+	cli, err = New(Config{
+		RegionResolver: &mockRegionResolver{region: meta},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 1,
+			Addr:    addr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+	handled, err = cli.TryAtomicMutate(ctx, []byte("agent/restart2"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("agent/restart2"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 9,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/restart2"),
+		Value: []byte("v2"),
+	}}, 11, 12)
+	require.NoError(t, err)
+	require.True(t, handled)
+	got, err := cli.Get(ctx, []byte("agent/restart2"), 12)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("v2"), got.GetValue())
 }
 
 func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr string) {

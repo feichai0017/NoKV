@@ -78,6 +78,9 @@ The first slices are intentionally narrow:
 - `OpenRaftRegion` can bootstrap a single-node OpenRaft group with the v2 log
   store and state machine, initialize local membership, wait for leader no-op
   application, and apply an existing `RaftCmdRequest` through `client_write`.
+  On Holt restart, the single-node path restores the latest membership from the
+  persisted raft log and seeds a restart vote above the last log term so it can
+  elect again and accept writes.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`.
@@ -102,9 +105,9 @@ Known gaps:
   commands. The single-region service still bootstraps a default descriptor
   until coordinator-provided topology is wired.
 - Admin membership RPCs return `Unimplemented`.
-- Restart recovery does not yet combine Holt state, apply state, raft log, and
-  persisted membership into a write-capable Raft group. Holt restart smoke
-  currently verifies apply-status recovery only.
+- Restart recovery now covers single-node Holt restart and write-after-restart.
+  Multi-node restart still needs durable vote, membership-change state, and
+  snapshot install before it is production-complete.
 - Snapshot checkpoint/install is not implemented.
 - Go fsmeta and raftstore client tests do not yet run against Rust by default.
 
