@@ -309,6 +309,15 @@ impl HoltStore {
                 pending.operation.region_id,
                 pending.operation.r#type,
                 pending.operation.source_region_id,
+                pending.operation.split_key.clone(),
+                pending
+                    .operation
+                    .split_child
+                    .as_ref()
+                    .map(|child| child.region_id)
+                    .unwrap_or_default(),
+                pending.operation.source_peer_id,
+                pending.operation.target_peer_id,
             )
         });
         Ok(out)
@@ -1548,10 +1557,14 @@ fn pending_scheduler_operation_key(operation: &coordpb::SchedulerOperation) -> R
             "scheduler operation region is required".to_owned(),
         ));
     }
-    let mut key = Vec::with_capacity(PENDING_SCHEDULER_OPERATION_PREFIX.len() + 4 + 8);
+    let mut encoded = Vec::with_capacity(operation.encoded_len());
+    operation.encode(&mut encoded)?;
+    let mut key =
+        Vec::with_capacity(PENDING_SCHEDULER_OPERATION_PREFIX.len() + 4 + 8 + encoded.len());
     key.extend_from_slice(PENDING_SCHEDULER_OPERATION_PREFIX);
     key.extend_from_slice(&(kind as i32).to_be_bytes());
     key.extend_from_slice(&operation.region_id.to_be_bytes());
+    key.extend_from_slice(&encoded);
     Ok(key)
 }
 
@@ -1854,6 +1867,48 @@ mod tests {
         let pending = reopened.pending_scheduler_operations().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].operation, merge);
+    }
+
+    #[test]
+    fn pending_scheduler_operations_dedupe_by_full_operation_identity() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let split_m = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+            region_id: 42,
+            split_key: b"m".to_vec(),
+            split_child: Some(metapb::RegionDescriptor {
+                region_id: 43,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let split_n = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+            region_id: 42,
+            split_key: b"n".to_vec(),
+            split_child: Some(metapb::RegionDescriptor {
+                region_id: 44,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        let merge = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::MergeRegion as i32,
+            region_id: 42,
+            source_region_id: 43,
+            ..Default::default()
+        };
+
+        store.record_pending_scheduler_operation(&split_m).unwrap();
+        store.record_pending_scheduler_operation(&split_m).unwrap();
+        store.record_pending_scheduler_operation(&split_n).unwrap();
+        store.record_pending_scheduler_operation(&merge).unwrap();
+
+        let pending = store.pending_scheduler_operations().unwrap();
+        assert_eq!(pending.len(), 3);
+        assert_eq!(pending[0].operation, split_m);
+        assert_eq!(pending[1].operation, split_n);
+        assert_eq!(pending[2].operation, merge);
     }
 
     #[test]
