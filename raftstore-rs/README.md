@@ -21,6 +21,29 @@ When Holt mode is enabled, the server loads or bootstraps that single-region
 descriptor through the `region_meta` tree so the admission boundary has a
 durable metadata source before OpenRaft owns topology changes.
 
+Standalone multi-process tests can start a seed peer with the default bootstrap
+mode and start joining peers with explicit identity plus bootstrap disabled:
+
+```bash
+NOKV_RUST_RAFTSTORE_ADDR=127.0.0.1:23880 \
+NOKV_RUST_RAFTSTORE_REGION_ID=1 \
+NOKV_RUST_RAFTSTORE_STORE_ID=1 \
+NOKV_RUST_RAFTSTORE_PEER_ID=1 \
+NOKV_RUST_RAFTSTORE_BOOTSTRAP=true \
+NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=127.0.0.1:23881,3=127.0.0.1:23882 \
+cargo run --manifest-path raftstore-rs/Cargo.toml -p nokv-raftstore-server
+
+NOKV_RUST_RAFTSTORE_ADDR=127.0.0.1:23881 \
+NOKV_RUST_RAFTSTORE_STORE_ID=2 \
+NOKV_RUST_RAFTSTORE_PEER_ID=2 \
+NOKV_RUST_RAFTSTORE_BOOTSTRAP=false \
+cargo run --manifest-path raftstore-rs/Cargo.toml -p nokv-raftstore-server
+```
+
+`NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS` is only needed on nodes that accept
+`RaftAdmin AddPeer`; missing endpoints fail the membership RPC instead of
+recording an unreachable placeholder address.
+
 OpenRaft replication, membership changes, snapshots, and WatchApply delivery are
 staged behind these boundaries. Experimental Peras witness services and legacy
 migration/SST paths are outside v1.

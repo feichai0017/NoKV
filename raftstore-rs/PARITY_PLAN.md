@@ -154,7 +154,10 @@ The first slices are intentionally narrow:
   factory and mounts the internal `RaftTransport` service beside StoreKV and
   RaftAdmin, so the process boundary can carry OpenRaft replication traffic
   without changing the public Go protobuf services. Holt mode keeps the
-  persistent apply-status sink behind the OpenRaft state machine.
+  persistent apply-status sink behind the OpenRaft state machine. The binary
+  also accepts explicit region/store/peer identity and a non-bootstrap startup
+  mode, so additional processes can start as uninitialized joining peers and be
+  added through the existing `RaftAdmin AddPeer` wire contract.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -202,8 +205,9 @@ Known gaps:
   Production route integration, coordinator-provided endpoint refresh/lifecycle,
   and remaining `RaftAdmin` RPC wiring are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
-  multi-node membership configuration and route integration are still being
-  built out.
+  additional peers can now start in non-bootstrap mode and join through
+  `RaftAdmin AddPeer`. Coordinator-owned route integration and automatic
+  process lifecycle wiring are still being built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. The single-region service still bootstraps a default descriptor
