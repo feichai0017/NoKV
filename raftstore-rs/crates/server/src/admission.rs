@@ -4,6 +4,7 @@
 //! store, stale epoch, non-hosted region, non-leader peer, or keys outside the
 //! hosted region before the state machine observes the request.
 
+use std::collections::BTreeMap;
 use std::fmt;
 
 use nokv_proto::nokv::error::v1 as errorpb;
@@ -11,11 +12,15 @@ use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use tonic::Status;
 
+use crate::RaftRuntimeStatus;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegionAdmission {
     pub region_id: u64,
     pub store_id: u64,
     pub peer_id: u64,
+    pub peers: BTreeMap<u64, u64>,
+    pub leader_peer_id: u64,
     pub epoch_version: u64,
     pub epoch_conf_version: u64,
     pub start_key: Vec<u8>,
@@ -48,6 +53,8 @@ impl Default for RegionAdmission {
             region_id: 1,
             store_id: 1,
             peer_id: 1,
+            peers: BTreeMap::from([(1, 1)]),
+            leader_peer_id: 1,
             epoch_version: 1,
             epoch_conf_version: 1,
             start_key: Vec::new(),
@@ -74,16 +81,37 @@ impl RegionAdmission {
             .iter()
             .find(|peer| peer.store_id != 0 && peer.peer_id != 0)
             .ok_or(RegionAdmissionConfigError::MissingPeer)?;
+        let peers = descriptor
+            .peers
+            .iter()
+            .filter(|peer| peer.store_id != 0 && peer.peer_id != 0)
+            .map(|peer| (peer.peer_id, peer.store_id))
+            .collect::<BTreeMap<_, _>>();
         Ok(Self {
             region_id: descriptor.region_id,
             store_id: peer.store_id,
             peer_id: peer.peer_id,
+            peers,
+            leader_peer_id: if leader { peer.peer_id } else { 0 },
             epoch_version: epoch.version,
             epoch_conf_version: epoch.conf_version,
             start_key: descriptor.start_key.clone(),
             end_key: descriptor.end_key.clone(),
             leader,
         })
+    }
+
+    pub(crate) fn with_runtime_status(&self, status: RaftRuntimeStatus) -> Self {
+        let mut admission = self.clone();
+        if status.local_peer_id != 0 {
+            admission.peer_id = status.local_peer_id;
+            if let Some(store_id) = admission.peers.get(&status.local_peer_id) {
+                admission.store_id = *store_id;
+            }
+        }
+        admission.leader = status.leader;
+        admission.leader_peer_id = status.leader_peer_id;
+        admission
     }
 
     pub(crate) fn admit_read_optional_keys<'a, I>(
@@ -215,12 +243,23 @@ impl RegionAdmission {
     }
 
     fn descriptor(&self) -> metapb::RegionDescriptor {
+        let peers = if self.peers.is_empty() {
+            vec![self.peer()]
+        } else {
+            self.peers
+                .iter()
+                .map(|(peer_id, store_id)| metapb::RegionPeer {
+                    store_id: *store_id,
+                    peer_id: *peer_id,
+                })
+                .collect()
+        };
         metapb::RegionDescriptor {
             region_id: self.region_id,
             start_key: self.start_key.clone(),
             end_key: self.end_key.clone(),
             epoch: Some(self.epoch()),
-            peers: vec![self.peer()],
+            peers,
             ..Default::default()
         }
     }
@@ -253,10 +292,17 @@ impl RegionAdmission {
     }
 
     fn not_leader(&self) -> errorpb::RegionError {
+        let leader = self
+            .peers
+            .get(&self.leader_peer_id)
+            .map(|store_id| metapb::RegionPeer {
+                store_id: *store_id,
+                peer_id: self.leader_peer_id,
+            });
         errorpb::RegionError {
             not_leader: Some(errorpb::NotLeader {
                 region_id: self.region_id,
-                leader: None,
+                leader,
             }),
             ..Default::default()
         }
@@ -316,6 +362,8 @@ mod tests {
         assert_eq!(admission.region_id, 7);
         assert_eq!(admission.store_id, 9);
         assert_eq!(admission.peer_id, 99);
+        assert_eq!(admission.peers, BTreeMap::from([(99, 9)]));
+        assert_eq!(admission.leader_peer_id, 99);
         assert_eq!(admission.epoch_version, 3);
         assert_eq!(admission.epoch_conf_version, 2);
         assert_eq!(admission.start_key, b"a".to_vec());

@@ -89,9 +89,11 @@ The first slices are intentionally narrow:
   restart, the single-node path restores the latest membership from the
   persisted raft log and seeds a restart vote above the last log term only for a
   single-voter membership so it can elect again and accept writes without
-  biasing multi-node elections. GET/SCAN commands now use OpenRaft's
-  linearizable read boundary and execute against the state machine without
-  appending a new raft log entry.
+  biasing multi-node elections. Bootstrap also waits for OpenRaft's
+  linearizable barrier after leadership, so the first post-restart client write
+  is not consumed by a leader no-op and returns the real command response.
+  GET/SCAN commands now use OpenRaft's linearizable read boundary and execute
+  against the state machine without appending a new raft log entry.
 - `MemoryRaftNetworkRegistry` provides an in-process OpenRaft network for
   parity tests. A three-node test now initializes a region, elects a leader,
   commits an existing `RaftCmdRequest`, and verifies that every peer applies the
@@ -138,6 +140,10 @@ The first slices are intentionally narrow:
   `WatchApply` now mirrors Go's prefix projection more closely: buffer 0 maps
   to the default watch buffer, emitted events contain only matching keys, and
   large key sets are split into bounded messages.
+  `StoreKV` admission now derives the leader/follower decision from the live
+  runtime status instead of trusting the service bootstrap flag, so stale
+  leader endpoints reject writes with `NotLeader` and follower-prefer reads keep
+  the Go client's `StaleCommand` fallback path.
   Read admission now keeps the follower-prefer fallback contract: when the
   local Rust service is not the leader and follower serving is not wired yet,
   follower-prefer reads return `StaleCommand` so Go clients retry the leader,

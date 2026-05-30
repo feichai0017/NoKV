@@ -982,6 +982,11 @@ where
         } else {
             region.elect_and_wait(node_id).await?;
         }
+        region
+            .raft
+            .ensure_linearizable()
+            .await
+            .map_err(openraft_api_error)?;
         Ok(region)
     }
 
@@ -1349,6 +1354,84 @@ mod tests {
             raftpb::response::Cmd::Get(get) => assert_eq!(get.value, b"v".to_vec()),
             other => panic!("unexpected read response: {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn openraft_region_restart_write_returns_client_response() {
+        let dir = tempfile::tempdir().unwrap();
+        let status = {
+            let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+            let log_store = RegionLogStorage::new(log);
+            let state_machine = RegionStateMachine::new(AppliedKvEngine::new(7, MvccStore::new()));
+            let raft = OpenRaftRegion::bootstrap_single_node(1, 7, log_store, state_machine)
+                .await
+                .unwrap();
+            raft.execute_raft_command(&raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    request_id: 1,
+                    ..Default::default()
+                }),
+                requests: vec![raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                        kvpb::TryAtomicMutateRequest {
+                            mutations: vec![kvpb::Mutation {
+                                key: b"k1".to_vec(),
+                                value: b"v1".to_vec(),
+                                op: kvpb::mutation::Op::Put as i32,
+                                ..Default::default()
+                            }],
+                            commit_version: 2,
+                            ..Default::default()
+                        },
+                    )),
+                }],
+            })
+            .await
+            .unwrap();
+            raft.apply_status()
+        };
+
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        let log_store = RegionLogStorage::new(log);
+        let state_machine =
+            RegionStateMachine::new(AppliedKvEngine::with_status(status, MvccStore::new()));
+        let raft = OpenRaftRegion::bootstrap_single_node(1, 7, log_store, state_machine)
+            .await
+            .unwrap();
+
+        let response = raft
+            .execute_raft_command(&raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    request_id: 2,
+                    ..Default::default()
+                }),
+                requests: vec![raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                        kvpb::TryAtomicMutateRequest {
+                            mutations: vec![kvpb::Mutation {
+                                key: b"k2".to_vec(),
+                                value: b"v2".to_vec(),
+                                op: kvpb::mutation::Op::Put as i32,
+                                ..Default::default()
+                            }],
+                            commit_version: 4,
+                            ..Default::default()
+                        },
+                    )),
+                }],
+            })
+            .await
+            .unwrap();
+
+        assert_eq!(response.responses.len(), 1);
+        assert!(matches!(
+            response.responses[0].cmd,
+            Some(raftpb::response::Cmd::TryAtomicMutate(_))
+        ));
     }
 
     #[tokio::test]

@@ -78,10 +78,20 @@ where
     }
 }
 
+impl<E> StoreKvService<E>
+where
+    E: RaftRuntimeStatusProvider,
+{
+    fn admission_snapshot(&self) -> RegionAdmission {
+        self.admission
+            .with_runtime_status(self.engine.raft_runtime_status())
+    }
+}
+
 #[tonic::async_trait]
 impl<E> kvpb::store_kv_server::StoreKv for StoreKvService<E>
 where
-    E: RaftCommandExecutor + ApplyWatchProvider,
+    E: RaftCommandExecutor + ApplyWatchProvider + RaftRuntimeStatusProvider,
 {
     async fn get(
         &self,
@@ -92,7 +102,8 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("get request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_read_optional_keys(
+        let admission = self.admission_snapshot();
+        if let Some(region_error) = admission.admit_read_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.key.as_slice()),
         )? {
@@ -130,7 +141,8 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("batch get request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_read_optional_keys(
+        let admission = self.admission_snapshot();
+        if let Some(region_error) = admission.admit_read_optional_keys(
             request.context.as_ref(),
             inner.requests.iter().map(|req| req.key.as_slice()),
         )? {
@@ -192,7 +204,8 @@ where
                 "StoreKV Scan reverse scans are not supported yet",
             ));
         }
-        if let Some(region_error) = self.admission.admit_read_optional_keys(
+        let admission = self.admission_snapshot();
+        if let Some(region_error) = admission.admit_read_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.start_key.as_slice()),
         )? {
@@ -230,7 +243,8 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("prewrite request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_leader_optional_keys(
+        let admission = self.admission_snapshot();
+        if let Some(region_error) = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner
                 .mutations
@@ -276,7 +290,8 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("commit request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_leader_optional_keys(
+        let admission = self.admission_snapshot();
+        if let Some(region_error) = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
         )? {
@@ -314,7 +329,8 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("batch rollback request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_leader_optional_keys(
+        let admission = self.admission_snapshot();
+        if let Some(region_error) = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
         )? {
@@ -357,7 +373,8 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("resolve lock request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_leader_optional_keys(
+        let admission = self.admission_snapshot();
+        if let Some(region_error) = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
         )? {
@@ -400,7 +417,8 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("check txn status request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_leader_optional_keys(
+        let admission = self.admission_snapshot();
+        if let Some(region_error) = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.primary_key.as_slice()),
         )? {
@@ -443,7 +461,8 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("txn heart beat request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_leader_optional_keys(
+        let admission = self.admission_snapshot();
+        if let Some(region_error) = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.primary_key.as_slice()),
         )? {
@@ -496,9 +515,9 @@ where
                     .iter()
                     .map(|mutation| mutation.key.as_slice()),
             );
-        if let Some(region_error) = self
-            .admission
-            .admit_leader_optional_keys(request.context.as_ref(), keys)?
+        let admission = self.admission_snapshot();
+        if let Some(region_error) =
+            admission.admit_leader_optional_keys(request.context.as_ref(), keys)?
         {
             return Ok(Response::new(kvpb::KvTryAtomicMutateResponse {
                 response: None,
@@ -541,9 +560,9 @@ where
         let keys = std::iter::once(inner.routing_key.as_slice())
             .chain(inner.dependency_keys.iter().map(|key| key.as_slice()))
             .chain(inner.entries.iter().map(|entry| entry.key.as_slice()));
-        if let Some(region_error) = self
-            .admission
-            .admit_leader_required_keys(request.context.as_ref(), keys)?
+        let admission = self.admission_snapshot();
+        if let Some(region_error) =
+            admission.admit_leader_required_keys(request.context.as_ref(), keys)?
         {
             return Ok(Response::new(kvpb::KvInstallPreparedMvccEntriesResponse {
                 response: None,
@@ -659,13 +678,18 @@ impl Default for AdminTopology {
 
 impl AdminTopology {
     fn from_admission(admission: &RegionAdmission) -> Self {
+        let peers = if admission.peers.is_empty() {
+            BTreeMap::from([(admission.peer_id, admission.store_id)])
+        } else {
+            admission.peers.clone()
+        };
         Self {
             region_id: admission.region_id,
             epoch_version: admission.epoch_version,
             conf_version: admission.epoch_conf_version,
             start_key: admission.start_key.clone(),
             end_key: admission.end_key.clone(),
-            peers: BTreeMap::from([(admission.peer_id, admission.store_id)]),
+            peers,
         }
     }
 
@@ -1175,6 +1199,53 @@ mod tests {
         context(&RegionAdmission::default())
     }
 
+    #[derive(Debug, Clone)]
+    struct FixedRuntimeEngine {
+        inner: nokv_raftnode::AppliedKvEngine<MvccStore>,
+        runtime: RaftRuntimeStatus,
+    }
+
+    impl FixedRuntimeEngine {
+        fn follower(region_id: u64, local_peer_id: u64, leader_peer_id: u64) -> Self {
+            Self {
+                inner: nokv_raftnode::AppliedKvEngine::new(region_id, MvccStore::new()),
+                runtime: RaftRuntimeStatus {
+                    local_peer_id,
+                    leader_peer_id,
+                    leader: false,
+                },
+            }
+        }
+    }
+
+    impl RaftCommandExecutor for FixedRuntimeEngine {
+        fn execute_raft_command<'a>(
+            &'a self,
+            req: &'a raftpb::RaftCmdRequest,
+        ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
+        {
+            self.inner.execute_raft_command(req)
+        }
+    }
+
+    impl ApplyStatusProvider for FixedRuntimeEngine {
+        fn apply_status(&self) -> nokv_raftnode::ApplyStatus {
+            self.inner.apply_status()
+        }
+    }
+
+    impl ApplyWatchProvider for FixedRuntimeEngine {
+        fn subscribe_apply(&self) -> tokio::sync::broadcast::Receiver<kvpb::ApplyWatchEvent> {
+            self.inner.subscribe_apply()
+        }
+    }
+
+    impl RaftRuntimeStatusProvider for FixedRuntimeEngine {
+        fn raft_runtime_status(&self) -> RaftRuntimeStatus {
+            self.runtime
+        }
+    }
+
     #[tokio::test]
     async fn get_returns_not_found_from_empty_store() {
         let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
@@ -1645,6 +1716,8 @@ mod tests {
             region_id: 10,
             store_id: 7,
             peer_id: 77,
+            peers: BTreeMap::from([(77, 7)]),
+            leader_peer_id: 77,
             epoch_version: 3,
             epoch_conf_version: 2,
             start_key: b"a".to_vec(),
@@ -1681,7 +1754,7 @@ mod tests {
             ..Default::default()
         };
         let service = StoreKvService::with_admission(
-            nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()),
+            FixedRuntimeEngine::follower(1, 1, 0),
             admission.clone(),
         );
         let response = service
@@ -1708,7 +1781,7 @@ mod tests {
             ..Default::default()
         };
         let service = StoreKvService::with_admission(
-            nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()),
+            FixedRuntimeEngine::follower(1, 1, 0),
             admission.clone(),
         );
         let mut ctx = context(&admission);
@@ -1734,13 +1807,60 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn store_kv_admission_uses_live_follower_status() {
+        let admission = RegionAdmission {
+            store_id: 2,
+            peer_id: 2,
+            peers: BTreeMap::from([(1, 1), (2, 2)]),
+            leader_peer_id: 2,
+            leader: true,
+            ..Default::default()
+        };
+        let service = StoreKvService::with_admission(
+            FixedRuntimeEngine::follower(1, 2, 1),
+            admission.clone(),
+        );
+
+        let response = service
+            .prewrite(Request::new(kvpb::KvPrewriteRequest {
+                context: Some(context(&admission)),
+                request: Some(kvpb::PrewriteRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"k".to_vec(),
+                        value: b"v".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    primary_lock: b"k".to_vec(),
+                    start_version: 10,
+                    lock_ttl: 10,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let not_leader = response.region_error.unwrap().not_leader.unwrap();
+        assert_eq!(not_leader.region_id, 1);
+        assert_eq!(
+            not_leader.leader,
+            Some(metapb::RegionPeer {
+                store_id: 1,
+                peer_id: 1
+            })
+        );
+        assert!(response.response.is_none());
+    }
+
+    #[tokio::test]
     async fn writes_remain_leader_only_when_follower_prefer_is_set() {
         let admission = RegionAdmission {
             leader: false,
             ..Default::default()
         };
         let service = StoreKvService::with_admission(
-            nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()),
+            FixedRuntimeEngine::follower(1, 1, 0),
             admission.clone(),
         );
         let mut ctx = context(&admission);
