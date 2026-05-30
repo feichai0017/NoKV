@@ -64,7 +64,9 @@ The first slices are intentionally narrow:
   decodes them back, covering normal command, blank, and membership entries.
   `SegmentedEntryLog` wraps the low-level WAL with a region-local OpenRaft
   entry append/recover boundary and rejects mismatched-region batches before any
-  record is appended. `AppliedKvEngine` now has an OpenRaft-entry apply path
+  record is appended. It also exposes range reads and last-log-id lookup for the
+  next OpenRaft storage adapter slice. `AppliedKvEngine` now has an
+  OpenRaft-entry apply path
   that uses the committed entry's log index and term for apply status and watch
   events, while direct command execution advances the local applied index once
   per Raft command. Holt server mode wraps the apply engine with an apply-status
