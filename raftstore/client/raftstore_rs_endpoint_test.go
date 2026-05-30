@@ -23,6 +23,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 
 	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -120,6 +121,40 @@ func TestRustRaftstoreEndpointHoltApplyStatusSurvivesRestart(t *testing.T) {
 	require.NoError(t, err)
 	require.False(t, got.GetNotFound())
 	require.Equal(t, []byte("v2"), got.GetValue())
+}
+
+func TestRustRaftstoreEndpointReportsCoordinatorHeartbeat(t *testing.T) {
+	heartbeatCh := make(chan *coordpb.StoreHeartbeatRequest, 16)
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorCapture(t, heartbeatCh)
+	defer stopCoord()
+
+	storeAddr := reserveLocalAddr(t)
+	stopStore := startRustRaftstoreProcessAt(t, storeAddr, "", []string{
+		"NOKV_RUST_RAFTSTORE_STORE_ID=11",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=101",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stopStore()
+
+	var heartbeat *coordpb.StoreHeartbeatRequest
+	require.Eventually(t, func() bool {
+		select {
+		case heartbeat = <-heartbeatCh:
+			return heartbeat.GetStoreId() == 11 &&
+				heartbeat.GetRegionNum() == 1 &&
+				heartbeat.GetLeaderNum() == 1 &&
+				len(heartbeat.GetLeaderRegionIds()) == 1 &&
+				heartbeat.GetLeaderRegionIds()[0] == 1
+		default:
+			return false
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+	require.Equal(t, storeAddr, heartbeat.GetClientAddr())
+	require.Equal(t, storeAddr, heartbeat.GetRaftAddr())
+	require.Len(t, heartbeat.GetRegionStats(), 1)
+	require.Equal(t, uint64(1), heartbeat.GetRegionStats()[0].GetRegionId())
+	require.Equal(t, uint64(11), heartbeat.GetRegionStats()[0].GetLeaderStoreId())
 }
 
 func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T) {
@@ -633,6 +668,43 @@ func startRustRaftstoreProcessAt(t *testing.T, addr, holtDir string, extraEnv []
 	go logPipe(t, "raftstore-rs stderr", stderr)
 	waitForTCP(t, addr, 15*time.Second)
 	return stop
+}
+
+type rustRaftstoreCoordinatorCapture struct {
+	coordpb.UnimplementedCoordinatorServer
+	heartbeats chan<- *coordpb.StoreHeartbeatRequest
+}
+
+func (s *rustRaftstoreCoordinatorCapture) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
+	select {
+	case s.heartbeats <- proto.Clone(req).(*coordpb.StoreHeartbeatRequest):
+	default:
+	}
+	return &coordpb.StoreHeartbeatResponse{Accepted: true}, nil
+}
+
+func startRustRaftstoreCoordinatorCapture(t *testing.T, heartbeats chan<- *coordpb.StoreHeartbeatRequest) (string, func()) {
+	t.Helper()
+	lis, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	coordpb.RegisterCoordinatorServer(server, &rustRaftstoreCoordinatorCapture{heartbeats: heartbeats})
+	go func() {
+		if serveErr := server.Serve(lis); serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {
+			t.Logf("coordinator capture server error: %v", serveErr)
+		}
+	}()
+	var stopOnce sync.Once
+	stop := func() {
+		stopOnce.Do(func() {
+			server.Stop()
+			if err := lis.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+				require.NoError(t, err)
+			}
+		})
+	}
+	t.Cleanup(stop)
+	return lis.Addr().String(), stop
 }
 
 func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {
