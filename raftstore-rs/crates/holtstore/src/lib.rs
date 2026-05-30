@@ -52,6 +52,12 @@ pub struct RegionApplyState {
     pub truncated_index: u64,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct PendingRootEvent {
+    pub sequence: u64,
+    pub event: metapb::RootEvent,
+}
+
 #[derive(Clone)]
 pub struct HoltStore {
     db: DB,
@@ -161,6 +167,51 @@ impl HoltStore {
         decode_apply_state(&bytes).map(Some)
     }
 
+    pub fn put_pending_root_event(&self, sequence: u64, event: &metapb::RootEvent) -> Result<()> {
+        let mut bytes = Vec::with_capacity(event.encoded_len());
+        event.encode(&mut bytes)?;
+        self.region_meta()?
+            .put(&pending_root_event_key(sequence), &bytes)?;
+        Ok(())
+    }
+
+    pub fn delete_pending_root_event(&self, sequence: u64) -> Result<()> {
+        self.region_meta()?
+            .delete(&pending_root_event_key(sequence))?;
+        Ok(())
+    }
+
+    pub fn pending_root_events(&self) -> Result<Vec<PendingRootEvent>> {
+        let mut out = Vec::new();
+        for entry in self
+            .region_meta()?
+            .range()
+            .prefix(PENDING_ROOT_EVENT_PREFIX)
+        {
+            let entry = entry?;
+            let RangeEntry::Key { key, value, .. } = entry else {
+                continue;
+            };
+            let Some(sequence) = pending_root_event_sequence(&key) else {
+                continue;
+            };
+            out.push(PendingRootEvent {
+                sequence,
+                event: metapb::RootEvent::decode(value.as_slice())?,
+            });
+        }
+        out.sort_by_key(|event| event.sequence);
+        Ok(out)
+    }
+
+    pub fn next_pending_root_event_sequence(&self) -> Result<u64> {
+        Ok(self
+            .pending_root_events()?
+            .last()
+            .map(|event| event.sequence.saturating_add(1))
+            .unwrap_or(1))
+    }
+
     pub fn put_data(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.data()?.put(key, value)?;
         Ok(())
@@ -232,6 +283,28 @@ impl HoltMvccStore {
 
     pub fn get_region_apply_state(&self, region_id: u64) -> Result<Option<RegionApplyState>> {
         self.store.get_region_apply_state(region_id)
+    }
+
+    pub fn enqueue_pending_root_event(&self, event: &metapb::RootEvent) -> Result<u64> {
+        let _guard = self
+            .gate
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
+        let sequence = self.store.next_pending_root_event_sequence()?;
+        self.store.put_pending_root_event(sequence, event)?;
+        Ok(sequence)
+    }
+
+    pub fn delete_pending_root_event(&self, sequence: u64) -> Result<()> {
+        let _guard = self
+            .gate
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
+        self.store.delete_pending_root_event(sequence)
+    }
+
+    pub fn pending_root_events(&self) -> Result<Vec<PendingRootEvent>> {
+        self.store.pending_root_events()
     }
 
     fn lock(&self) -> mvcc::Result<std::sync::MutexGuard<'_, ()>> {
@@ -1263,6 +1336,20 @@ fn region_apply_state_key(region_id: u64) -> Vec<u8> {
     region_meta_key(b"apply-state/", region_id)
 }
 
+const PENDING_ROOT_EVENT_PREFIX: &[u8] = b"pending-root-event/";
+
+fn pending_root_event_key(sequence: u64) -> Vec<u8> {
+    region_meta_key(PENDING_ROOT_EVENT_PREFIX, sequence)
+}
+
+fn pending_root_event_sequence(key: &[u8]) -> Option<u64> {
+    let rest = key.strip_prefix(PENDING_ROOT_EVENT_PREFIX)?;
+    if rest.len() != 8 {
+        return None;
+    }
+    Some(u64::from_be_bytes(rest.try_into().ok()?))
+}
+
 fn region_meta_key(prefix: &[u8], region_id: u64) -> Vec<u8> {
     let mut key = Vec::with_capacity(prefix.len() + 8);
     key.extend_from_slice(prefix);
@@ -1444,6 +1531,43 @@ mod tests {
         }
         let reopened = HoltStore::open_file(dir.path()).unwrap();
         assert_eq!(reopened.get_region_apply_state(42).unwrap().unwrap(), state);
+    }
+
+    #[test]
+    fn pending_root_events_survive_reopen_and_delete() {
+        let dir = tempfile::tempdir().unwrap();
+        let event = metapb::RootEvent {
+            kind: metapb::RootEventKind::PeerAdded as i32,
+            payload: Some(metapb::root_event::Payload::PeerChange(
+                metapb::RootPeerChange {
+                    region_id: 42,
+                    store_id: 7,
+                    peer_id: 9,
+                    target: Some(metapb::RegionDescriptor {
+                        region_id: 42,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+        };
+        {
+            let store = HoltMvccStore::open_file(dir.path()).unwrap();
+            assert_eq!(store.enqueue_pending_root_event(&event).unwrap(), 1);
+            assert_eq!(store.enqueue_pending_root_event(&event).unwrap(), 2);
+            store.checkpoint().unwrap();
+        }
+
+        let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+        let pending = reopened.pending_root_events().unwrap();
+        assert_eq!(pending.len(), 2);
+        assert_eq!(pending[0].sequence, 1);
+        assert_eq!(pending[0].event, event);
+
+        reopened.delete_pending_root_event(1).unwrap();
+        let pending = reopened.pending_root_events().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].sequence, 2);
     }
 
     #[test]

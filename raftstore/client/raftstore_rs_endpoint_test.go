@@ -283,6 +283,61 @@ func TestRustRaftstoreEndpointAdminPublishesCoordinatorDescriptor(t *testing.T) 
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
+func TestRustRaftstoreEndpointRetriesPendingCoordinatorDescriptor(t *testing.T) {
+	svc := coordserver.NewService(coordcatalog.NewCluster(), coordidalloc.NewIDAllocator(1), coordtso.NewAllocator(1))
+	publishRustRaftstoreRootEvent(t, svc, rootevent.StoreJoined(1))
+	publishRustRaftstoreRootEvent(t, svc, rootevent.StoreJoined(2))
+	publishRustRaftstoreRootEvent(t, svc, rootevent.RegionBootstrapped(rustRaftstoreTopologyDescriptor()))
+	coordAddr := reserveLocalAddr(t)
+
+	addrs := map[uint64]string{
+		1: reserveLocalAddr(t),
+		2: reserveLocalAddr(t),
+	}
+	stop1 := startRustRaftstoreProcessAt(t, addrs[1], t.TempDir(), []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2],
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stop1()
+	stop2 := startRustRaftstoreProcessAt(t, addrs[2], t.TempDir(), []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stop2()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	admin, closeAdmin, err := adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closeAdmin()) }()
+	_, err = admin.AddPeer(ctx, &adminpb.AddPeerRequest{RegionId: 1, StoreId: 2, PeerId: 2})
+	require.NoError(t, err)
+
+	stopCoord := startRustRaftstoreCoordinatorServiceAt(t, coordAddr, svc)
+	defer stopCoord()
+
+	require.Eventually(t, func() bool {
+		resp, err := svc.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: []byte("agent/pending-coordinator-add-peer")})
+		if err != nil || resp.GetNotFound() {
+			return false
+		}
+		region := resp.GetRegionDescriptor()
+		return region.GetEpoch().GetConfVersion() == 2 &&
+			len(region.GetPeers()) == 2 &&
+			region.GetPeers()[1].GetStoreId() == 2 &&
+			region.GetPeers()[1].GetPeerId() == 2
+	}, 8*time.Second, 50*time.Millisecond)
+}
+
 func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T) {
 	addrs := map[uint64]string{
 		1: reserveLocalAddr(t),
@@ -837,6 +892,19 @@ func startRustRaftstoreCoordinatorService(t *testing.T, svc coordpb.CoordinatorS
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
+	stop := startRustRaftstoreCoordinatorServiceOnListener(t, lis, svc)
+	return lis.Addr().String(), stop
+}
+
+func startRustRaftstoreCoordinatorServiceAt(t *testing.T, addr string, svc coordpb.CoordinatorServer) func() {
+	t.Helper()
+	lis, err := net.Listen("tcp", addr)
+	require.NoError(t, err)
+	return startRustRaftstoreCoordinatorServiceOnListener(t, lis, svc)
+}
+
+func startRustRaftstoreCoordinatorServiceOnListener(t *testing.T, lis net.Listener, svc coordpb.CoordinatorServer) func() {
+	t.Helper()
 	server := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(server, svc)
 	go func() {
@@ -854,7 +922,7 @@ func startRustRaftstoreCoordinatorService(t *testing.T, svc coordpb.CoordinatorS
 		})
 	}
 	t.Cleanup(stop)
-	return lis.Addr().String(), stop
+	return stop
 }
 
 func publishRustRaftstoreRootEvent(t *testing.T, svc *coordserver.Service, event rootevent.Event) {

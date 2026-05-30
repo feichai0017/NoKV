@@ -51,13 +51,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
         spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone());
+        spawn_pending_topology_retries(coordinator.clone(), mvcc.clone());
+        let topology_publisher = coordinator_topology_publisher(coordinator, Some(mvcc.clone()));
         nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_and_topology_publisher(
             addr,
             region,
             admission,
             peer_endpoints,
             HoltRegionMetadataSink::new(mvcc),
-            coordinator_topology_publisher(coordinator),
+            topology_publisher,
         )
         .await?;
     } else {
@@ -76,7 +78,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             )?,
             peer_endpoints,
             EmptyRegionDescriptorSink,
-            coordinator_topology_publisher(coordinator),
+            coordinator_topology_publisher(coordinator, None),
         )
         .await?;
     }
@@ -221,18 +223,21 @@ fn coordinator_endpoint(addr: &str) -> String {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 struct CoordinatorTopologyPublisher {
     endpoint: String,
+    pending_store: Option<HoltMvccStore>,
 }
 
 fn coordinator_topology_publisher(
     config: Option<CoordinatorHeartbeatConfig>,
+    pending_store: Option<HoltMvccStore>,
 ) -> Arc<dyn TopologyPublisher> {
     config
         .map(|config| {
             Arc::new(CoordinatorTopologyPublisher {
                 endpoint: config.endpoint,
+                pending_store,
             }) as Arc<dyn TopologyPublisher>
         })
         .unwrap_or_else(|| Arc::new(EmptyTopologyPublisher))
@@ -284,33 +289,110 @@ impl CoordinatorTopologyPublisher {
         peer_id: u64,
         region: &metapb::RegionDescriptor,
     ) -> TopologyPublishOutcome {
-        let mut client =
-            match coordpb::coordinator_client::CoordinatorClient::connect(self.endpoint.clone())
-                .await
-            {
-                Ok(client) => client,
-                Err(err) => return TopologyPublishOutcome::terminal_failed(err.to_string()),
-            };
-        match client
-            .publish_root_event(coordpb::PublishRootEventRequest {
-                event: Some(metapb::RootEvent {
-                    kind: kind as i32,
-                    payload: Some(metapb::root_event::Payload::PeerChange(
-                        metapb::RootPeerChange {
-                            region_id,
-                            store_id,
-                            peer_id,
-                            target: Some(region.clone()),
-                            ..Default::default()
-                        },
-                    )),
-                }),
-                ..Default::default()
-            })
-            .await
-        {
-            Ok(_) => TopologyPublishOutcome::terminal_published(),
-            Err(status) => TopologyPublishOutcome::terminal_failed(status.to_string()),
+        let event = metapb::RootEvent {
+            kind: kind as i32,
+            payload: Some(metapb::root_event::Payload::PeerChange(
+                metapb::RootPeerChange {
+                    region_id,
+                    store_id,
+                    peer_id,
+                    target: Some(region.clone()),
+                    ..Default::default()
+                },
+            )),
+        };
+        let sequence = match self.pending_store.as_ref() {
+            Some(store) => match store.enqueue_pending_root_event(&event) {
+                Ok(sequence) => Some(sequence),
+                Err(err) => {
+                    return TopologyPublishOutcome::terminal_failed(format!(
+                        "persist pending root event: {err}"
+                    ))
+                }
+            },
+            None => None,
+        };
+        match publish_root_event(&self.endpoint, event).await {
+            Ok(()) => {
+                if let (Some(store), Some(sequence)) = (self.pending_store.as_ref(), sequence) {
+                    if let Err(err) = store.delete_pending_root_event(sequence) {
+                        return TopologyPublishOutcome::terminal_failed(format!(
+                            "delete pending root event {sequence}: {err}"
+                        ));
+                    }
+                }
+                TopologyPublishOutcome::terminal_published()
+            }
+            Err(err) => TopologyPublishOutcome::terminal_failed(err),
+        }
+    }
+}
+
+async fn publish_root_event(endpoint: &str, event: metapb::RootEvent) -> Result<(), String> {
+    let mut client = coordpb::coordinator_client::CoordinatorClient::connect(endpoint.to_owned())
+        .await
+        .map_err(|err| err.to_string())?;
+    client
+        .publish_root_event(coordpb::PublishRootEventRequest {
+            event: Some(event),
+            ..Default::default()
+        })
+        .await
+        .map_err(|status| status.to_string())?;
+    Ok(())
+}
+
+fn spawn_pending_topology_retries(
+    config: Option<CoordinatorHeartbeatConfig>,
+    pending_store: HoltMvccStore,
+) {
+    let Some(config) = config else {
+        return;
+    };
+    tokio::spawn(async move {
+        run_pending_topology_retries(config, pending_store).await;
+    });
+}
+
+async fn run_pending_topology_retries(
+    config: CoordinatorHeartbeatConfig,
+    pending_store: HoltMvccStore,
+) {
+    let mut ticker = tokio::time::interval(config.interval);
+    loop {
+        ticker.tick().await;
+        retry_pending_topology_events(&config.endpoint, &pending_store).await;
+    }
+}
+
+async fn retry_pending_topology_events(endpoint: &str, pending_store: &HoltMvccStore) {
+    let pending = match pending_store.pending_root_events() {
+        Ok(pending) => pending,
+        Err(err) => {
+            tracing::debug!(error = %err, "rust raftstore pending topology load failed");
+            return;
+        }
+    };
+    for item in pending {
+        match publish_root_event(endpoint, item.event.clone()).await {
+            Ok(()) => {
+                if let Err(err) = pending_store.delete_pending_root_event(item.sequence) {
+                    tracing::debug!(
+                        error = %err,
+                        sequence = item.sequence,
+                        "rust raftstore pending topology delete failed"
+                    );
+                    return;
+                }
+            }
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    sequence = item.sequence,
+                    "rust raftstore pending topology publish failed"
+                );
+                return;
+            }
         }
     }
 }
