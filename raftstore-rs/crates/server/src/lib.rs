@@ -9,7 +9,7 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use nokv_holtstore::{
-    BlockedRootEvent, HoltMvccStore, PendingSchedulerOperation, RegionApplyState,
+    BlockedRootEvent, HoltMvccStore, PendingRootEvent, PendingSchedulerOperation, RegionApplyState,
 };
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
@@ -149,14 +149,19 @@ impl RestartDiagnosticsProvider for HoltMvccStore {
     }
 
     fn pending_topology_statuses(&self) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
-        self.pending_scheduler_operations()
-            .map(|operations| {
-                operations
-                    .iter()
-                    .map(pending_scheduler_operation_topology_status)
-                    .collect()
-            })
-            .map_err(|err| Status::internal(err.to_string()))
+        let mut statuses = self
+            .pending_root_events()
+            .map_err(|err| Status::internal(err.to_string()))?
+            .iter()
+            .map(pending_root_event_topology_status)
+            .collect::<Vec<_>>();
+        statuses.extend(
+            self.pending_scheduler_operations()
+                .map_err(|err| Status::internal(err.to_string()))?
+                .iter()
+                .map(pending_scheduler_operation_topology_status),
+        );
+        Ok(statuses)
     }
 }
 
@@ -170,6 +175,20 @@ fn blocked_root_event_topology_status(
         outcome: adminpb::ExecutionTopologyOutcome::Failed as i32,
         publish: adminpb::ExecutionPublishState::TerminalBlocked as i32,
         last_error: blocked.last_error.clone(),
+        ..Default::default()
+    }
+}
+
+fn pending_root_event_topology_status(
+    pending: &PendingRootEvent,
+) -> adminpb::ExecutionTopologyStatus {
+    adminpb::ExecutionTopologyStatus {
+        transition_id: root_event_transition_id(&pending.event),
+        region_id: root_event_region_id(&pending.event),
+        action: root_event_action(&pending.event).to_owned(),
+        outcome: adminpb::ExecutionTopologyOutcome::Applied as i32,
+        publish: adminpb::ExecutionPublishState::TerminalPending as i32,
+        last_error: "root event publish pending".to_owned(),
         ..Default::default()
     }
 }
@@ -3253,6 +3272,17 @@ mod tests {
                 },
             )),
         };
+        let pending_event = metapb::RootEvent {
+            kind: metapb::RootEventKind::PeerRemoved as i32,
+            payload: Some(metapb::root_event::Payload::PeerChange(
+                metapb::RootPeerChange {
+                    region_id: 1,
+                    store_id: 2,
+                    peer_id: 3,
+                    ..Default::default()
+                },
+            )),
+        };
         let blocked_sequence = store.enqueue_pending_root_event(&event).unwrap();
         store
             .block_pending_root_event(
@@ -3262,7 +3292,7 @@ mod tests {
                 "catalog precondition",
             )
             .unwrap();
-        store.enqueue_pending_root_event(&event).unwrap();
+        store.enqueue_pending_root_event(&pending_event).unwrap();
         store
             .record_pending_scheduler_operation(&coordpb::SchedulerOperation {
                 r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
@@ -3287,7 +3317,7 @@ mod tests {
         assert_eq!(restart.pending_root_event_count, 1);
         assert_eq!(restart.blocked_root_event_count, 1);
         assert_eq!(restart.pending_scheduler_operation_count, 1);
-        assert_eq!(execution.topology.len(), 2);
+        assert_eq!(execution.topology.len(), 3);
         let blocked = execution
             .topology
             .iter()
@@ -3304,6 +3334,23 @@ mod tests {
             adminpb::ExecutionPublishState::TerminalBlocked as i32
         );
         assert_eq!(blocked.last_error, "catalog precondition");
+
+        let root_pending = execution
+            .topology
+            .iter()
+            .find(|status| status.transition_id == "peer:1:remove:2:3")
+            .unwrap();
+        assert_eq!(root_pending.region_id, 1);
+        assert_eq!(root_pending.action, "peer change");
+        assert_eq!(
+            root_pending.outcome,
+            adminpb::ExecutionTopologyOutcome::Applied as i32
+        );
+        assert_eq!(
+            root_pending.publish,
+            adminpb::ExecutionPublishState::TerminalPending as i32
+        );
+        assert_eq!(root_pending.last_error, "root event publish pending");
 
         let pending = execution
             .topology
