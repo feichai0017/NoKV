@@ -14,6 +14,9 @@ tests. Set `NOKV_RUST_RAFTSTORE_HOLT_DIR=/path/to/store` to run the same
 `StoreKV` service against Holt-backed MVCC trees. In both modes, mutating
 `StoreKV` calls pass through a region-local apply wrapper so the RPC layer is
 already separated from direct state-machine mutation before OpenRaft is wired.
+The tonic service also enforces the current single-region admission boundary:
+request context, region epoch, target store, leader state, and key range are
+validated before the MVCC engine observes the request.
 
 OpenRaft replication, membership changes, snapshots, and WatchApply delivery are
 staged behind these boundaries. Experimental Peras witness services and legacy

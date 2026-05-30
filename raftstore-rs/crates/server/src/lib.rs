@@ -13,17 +13,25 @@ use nokv_raftnode::{ApplyStatusProvider, ApplyWatchProvider};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
+mod admission;
+
 pub use adminpb::raft_admin_server::RaftAdminServer;
+pub use admission::RegionAdmission;
 pub use kvpb::store_kv_server::StoreKvServer;
 
 #[derive(Debug, Clone, Default)]
 pub struct StoreKvService<E = MvccStore> {
     engine: E,
+    admission: RegionAdmission,
 }
 
 impl<E> StoreKvService<E> {
     pub fn new(engine: E) -> Self {
-        Self { engine }
+        Self::with_admission(engine, RegionAdmission::default())
+    }
+
+    pub fn with_admission(engine: E, admission: RegionAdmission) -> Self {
+        Self { engine, admission }
     }
 }
 
@@ -36,8 +44,21 @@ where
         &self,
         request: Request<kvpb::KvGetRequest>,
     ) -> Result<Response<kvpb::KvGetResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
-        let response = self.engine.get(&inner).map_err(internal_error)?;
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("get request missing payload"))?;
+        if let Some(region_error) = self.admission.admit_optional_keys(
+            request.context.as_ref(),
+            std::iter::once(inner.key.as_slice()),
+        )? {
+            return Ok(Response::new(kvpb::KvGetResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
+        let response = self.engine.get(inner).map_err(internal_error)?;
         Ok(Response::new(kvpb::KvGetResponse {
             response: Some(response),
             region_error: None,
@@ -48,8 +69,21 @@ where
         &self,
         request: Request<kvpb::KvBatchGetRequest>,
     ) -> Result<Response<kvpb::KvBatchGetResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
-        let response = self.engine.batch_get(&inner).map_err(internal_error)?;
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("batch get request missing payload"))?;
+        if let Some(region_error) = self.admission.admit_optional_keys(
+            request.context.as_ref(),
+            inner.requests.iter().map(|req| req.key.as_slice()),
+        )? {
+            return Ok(Response::new(kvpb::KvBatchGetResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
+        let response = self.engine.batch_get(inner).map_err(internal_error)?;
         Ok(Response::new(kvpb::KvBatchGetResponse {
             response: Some(response),
             region_error: None,
@@ -60,8 +94,21 @@ where
         &self,
         request: Request<kvpb::KvScanRequest>,
     ) -> Result<Response<kvpb::KvScanResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
-        let response = self.engine.scan(&inner).map_err(internal_error)?;
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("scan request missing payload"))?;
+        if let Some(region_error) = self.admission.admit_optional_keys(
+            request.context.as_ref(),
+            std::iter::once(inner.start_key.as_slice()),
+        )? {
+            return Ok(Response::new(kvpb::KvScanResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
+        let response = self.engine.scan(inner).map_err(internal_error)?;
         Ok(Response::new(kvpb::KvScanResponse {
             response: Some(response),
             region_error: None,
@@ -72,8 +119,24 @@ where
         &self,
         request: Request<kvpb::KvPrewriteRequest>,
     ) -> Result<Response<kvpb::KvPrewriteResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
-        let response = self.engine.prewrite(&inner).map_err(internal_error)?;
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("prewrite request missing payload"))?;
+        if let Some(region_error) = self.admission.admit_optional_keys(
+            request.context.as_ref(),
+            inner
+                .mutations
+                .iter()
+                .map(|mutation| mutation.key.as_slice()),
+        )? {
+            return Ok(Response::new(kvpb::KvPrewriteResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
+        let response = self.engine.prewrite(inner).map_err(internal_error)?;
         Ok(Response::new(kvpb::KvPrewriteResponse {
             response: Some(response),
             region_error: None,
@@ -84,8 +147,21 @@ where
         &self,
         request: Request<kvpb::KvCommitRequest>,
     ) -> Result<Response<kvpb::KvCommitResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
-        let response = self.engine.commit(&inner).map_err(internal_error)?;
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("commit request missing payload"))?;
+        if let Some(region_error) = self.admission.admit_optional_keys(
+            request.context.as_ref(),
+            inner.keys.iter().map(|key| key.as_slice()),
+        )? {
+            return Ok(Response::new(kvpb::KvCommitResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
+        let response = self.engine.commit(inner).map_err(internal_error)?;
         Ok(Response::new(kvpb::KvCommitResponse {
             response: Some(response),
             region_error: None,
@@ -96,8 +172,21 @@ where
         &self,
         request: Request<kvpb::KvBatchRollbackRequest>,
     ) -> Result<Response<kvpb::KvBatchRollbackResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
-        let response = self.engine.batch_rollback(&inner).map_err(internal_error)?;
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("batch rollback request missing payload"))?;
+        if let Some(region_error) = self.admission.admit_optional_keys(
+            request.context.as_ref(),
+            inner.keys.iter().map(|key| key.as_slice()),
+        )? {
+            return Ok(Response::new(kvpb::KvBatchRollbackResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
+        let response = self.engine.batch_rollback(inner).map_err(internal_error)?;
         Ok(Response::new(kvpb::KvBatchRollbackResponse {
             response: Some(response),
             region_error: None,
@@ -108,8 +197,21 @@ where
         &self,
         request: Request<kvpb::KvResolveLockRequest>,
     ) -> Result<Response<kvpb::KvResolveLockResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
-        let response = self.engine.resolve_lock(&inner).map_err(internal_error)?;
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("resolve lock request missing payload"))?;
+        if let Some(region_error) = self.admission.admit_optional_keys(
+            request.context.as_ref(),
+            inner.keys.iter().map(|key| key.as_slice()),
+        )? {
+            return Ok(Response::new(kvpb::KvResolveLockResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
+        let response = self.engine.resolve_lock(inner).map_err(internal_error)?;
         Ok(Response::new(kvpb::KvResolveLockResponse {
             response: Some(response),
             region_error: None,
@@ -120,10 +222,23 @@ where
         &self,
         request: Request<kvpb::KvCheckTxnStatusRequest>,
     ) -> Result<Response<kvpb::KvCheckTxnStatusResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("check txn status request missing payload"))?;
+        if let Some(region_error) = self.admission.admit_optional_keys(
+            request.context.as_ref(),
+            std::iter::once(inner.primary_key.as_slice()),
+        )? {
+            return Ok(Response::new(kvpb::KvCheckTxnStatusResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
         let response = self
             .engine
-            .check_txn_status(&inner)
+            .check_txn_status(inner)
             .map_err(internal_error)?;
         Ok(Response::new(kvpb::KvCheckTxnStatusResponse {
             response: Some(response),
@@ -135,8 +250,21 @@ where
         &self,
         request: Request<kvpb::KvTxnHeartBeatRequest>,
     ) -> Result<Response<kvpb::KvTxnHeartBeatResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
-        let response = self.engine.txn_heartbeat(&inner).map_err(internal_error)?;
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("txn heart beat request missing payload"))?;
+        if let Some(region_error) = self.admission.admit_optional_keys(
+            request.context.as_ref(),
+            std::iter::once(inner.primary_key.as_slice()),
+        )? {
+            return Ok(Response::new(kvpb::KvTxnHeartBeatResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
+        let response = self.engine.txn_heartbeat(inner).map_err(internal_error)?;
         Ok(Response::new(kvpb::KvTxnHeartBeatResponse {
             response: Some(response),
             region_error: None,
@@ -147,10 +275,33 @@ where
         &self,
         request: Request<kvpb::KvTryAtomicMutateRequest>,
     ) -> Result<Response<kvpb::KvTryAtomicMutateResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
+        let request = request.into_inner();
+        let inner = request
+            .request
+            .as_ref()
+            .ok_or_else(|| Status::invalid_argument("atomic mutate request missing payload"))?;
+        let keys = inner
+            .predicates
+            .iter()
+            .map(|predicate| predicate.key.as_slice())
+            .chain(
+                inner
+                    .mutations
+                    .iter()
+                    .map(|mutation| mutation.key.as_slice()),
+            );
+        if let Some(region_error) = self
+            .admission
+            .admit_optional_keys(request.context.as_ref(), keys)?
+        {
+            return Ok(Response::new(kvpb::KvTryAtomicMutateResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
         let response = self
             .engine
-            .try_atomic_mutate(&inner)
+            .try_atomic_mutate(inner)
             .map_err(internal_error)?;
         Ok(Response::new(kvpb::KvTryAtomicMutateResponse {
             response: Some(response),
@@ -162,10 +313,25 @@ where
         &self,
         request: Request<kvpb::KvInstallPreparedMvccEntriesRequest>,
     ) -> Result<Response<kvpb::KvInstallPreparedMvccEntriesResponse>, Status> {
-        let inner = request.into_inner().request.unwrap_or_default();
+        let request = request.into_inner();
+        let inner = request.request.as_ref().ok_or_else(|| {
+            Status::invalid_argument("install prepared mvcc request missing payload")
+        })?;
+        let keys = std::iter::once(inner.routing_key.as_slice())
+            .chain(inner.dependency_keys.iter().map(|key| key.as_slice()))
+            .chain(inner.entries.iter().map(|entry| entry.key.as_slice()));
+        if let Some(region_error) = self
+            .admission
+            .admit_required_keys(request.context.as_ref(), keys)?
+        {
+            return Ok(Response::new(kvpb::KvInstallPreparedMvccEntriesResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
         let response = self
             .engine
-            .install_prepared(&inner)
+            .install_prepared(inner)
             .map_err(internal_error)?;
         Ok(Response::new(kvpb::KvInstallPreparedMvccEntriesResponse {
             response: Some(response),
@@ -353,13 +519,34 @@ mod tests {
     use super::*;
     use adminpb::raft_admin_server::RaftAdmin;
     use kvpb::store_kv_server::StoreKv;
+    use nokv_proto::nokv::meta::v1 as metapb;
     use tokio_stream::StreamExt;
+
+    fn context(admission: &RegionAdmission) -> kvpb::Context {
+        kvpb::Context {
+            region_id: admission.region_id,
+            region_epoch: Some(metapb::RegionEpoch {
+                version: admission.epoch_version,
+                conf_version: admission.epoch_conf_version,
+            }),
+            peer: Some(metapb::RegionPeer {
+                store_id: admission.store_id,
+                peer_id: admission.peer_id,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn default_context() -> kvpb::Context {
+        context(&RegionAdmission::default())
+    }
 
     #[tokio::test]
     async fn get_returns_not_found_from_empty_store() {
         let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
         let response = service
             .get(Request::new(kvpb::KvGetRequest {
+                context: Some(default_context()),
                 request: Some(kvpb::GetRequest {
                     key: b"missing".to_vec(),
                     version: 1,
@@ -381,6 +568,7 @@ mod tests {
         let service = StoreKvService::new(engine.clone());
         let response = service
             .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
+                context: Some(default_context()),
                 request: Some(kvpb::TryAtomicMutateRequest {
                     mutations: vec![kvpb::Mutation {
                         key: b"k".to_vec(),
@@ -415,6 +603,7 @@ mod tests {
 
         service
             .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
+                context: Some(default_context()),
                 request: Some(kvpb::TryAtomicMutateRequest {
                     mutations: vec![kvpb::Mutation {
                         key: b"prefix/k".to_vec(),
@@ -434,6 +623,149 @@ mod tests {
         let event = response.event.unwrap();
         assert_eq!(event.commit_version, 9);
         assert_eq!(event.keys, vec![b"prefix/k".to_vec()]);
+    }
+
+    #[tokio::test]
+    async fn get_requires_context() {
+        let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
+        let err = service
+            .get(Request::new(kvpb::KvGetRequest {
+                request: Some(kvpb::GetRequest {
+                    key: b"k".to_vec(),
+                    version: 1,
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn get_rejects_region_not_found() {
+        let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
+        let mut ctx = default_context();
+        ctx.region_id = 99;
+        let response = service
+            .get(Request::new(kvpb::KvGetRequest {
+                context: Some(ctx),
+                request: Some(kvpb::GetRequest {
+                    key: b"k".to_vec(),
+                    version: 1,
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let region_error = response.region_error.unwrap();
+        assert!(region_error.region_not_found.is_some());
+        assert!(response.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_rejects_store_not_match() {
+        let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
+        let mut ctx = default_context();
+        ctx.peer.as_mut().unwrap().store_id = 999;
+        let response = service
+            .get(Request::new(kvpb::KvGetRequest {
+                context: Some(ctx),
+                request: Some(kvpb::GetRequest {
+                    key: b"k".to_vec(),
+                    version: 1,
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let mismatch = response.region_error.unwrap().store_not_match.unwrap();
+        assert_eq!(mismatch.request_store_id, 999);
+        assert_eq!(mismatch.actual_store_id, 1);
+        assert!(response.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_rejects_epoch_not_match() {
+        let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
+        let mut ctx = default_context();
+        ctx.region_epoch.as_mut().unwrap().version = 99;
+        let response = service
+            .get(Request::new(kvpb::KvGetRequest {
+                context: Some(ctx),
+                request: Some(kvpb::GetRequest {
+                    key: b"k".to_vec(),
+                    version: 1,
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let mismatch = response.region_error.unwrap().epoch_not_match.unwrap();
+        assert_eq!(mismatch.current_epoch.unwrap().version, 1);
+        assert_eq!(mismatch.regions.len(), 1);
+        assert!(response.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn get_rejects_key_not_in_region() {
+        let admission = RegionAdmission {
+            region_id: 10,
+            store_id: 7,
+            peer_id: 77,
+            epoch_version: 3,
+            epoch_conf_version: 2,
+            start_key: b"a".to_vec(),
+            end_key: b"m".to_vec(),
+            leader: true,
+        };
+        let service = StoreKvService::with_admission(
+            nokv_raftnode::AppliedKvEngine::new(10, MvccStore::new()),
+            admission.clone(),
+        );
+        let response = service
+            .get(Request::new(kvpb::KvGetRequest {
+                context: Some(context(&admission)),
+                request: Some(kvpb::GetRequest {
+                    key: b"z".to_vec(),
+                    version: 1,
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let out = response.region_error.unwrap().key_not_in_region.unwrap();
+        assert_eq!(out.key, b"z".to_vec());
+        assert_eq!(out.region_id, 10);
+        assert_eq!(out.start_key, b"a".to_vec());
+        assert_eq!(out.end_key, b"m".to_vec());
+        assert!(response.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn scan_rejects_not_leader() {
+        let admission = RegionAdmission {
+            leader: false,
+            ..Default::default()
+        };
+        let service = StoreKvService::with_admission(
+            nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()),
+            admission.clone(),
+        );
+        let response = service
+            .scan(Request::new(kvpb::KvScanRequest {
+                context: Some(context(&admission)),
+                request: Some(kvpb::ScanRequest {
+                    start_key: b"k".to_vec(),
+                    limit: 1,
+                    version: 1,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(response.region_error.unwrap().not_leader.is_some());
+        assert!(response.response.is_none());
     }
 
     #[tokio::test]

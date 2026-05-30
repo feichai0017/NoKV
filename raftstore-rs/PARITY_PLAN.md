@@ -56,13 +56,14 @@ The first slices are intentionally narrow:
 - `nokv-raftnode` exposes a NoKV-owned OpenRaft boundary and a single-region
   `AppliedKvEngine` apply wrapper.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
-  services, including `WatchApply` and apply status.
+  services, including `WatchApply`, apply status, and a single-region admission
+  gate for context, epoch, store, leader, and key-range errors.
 
 Known gaps:
 
 - OpenRaft is not wired into proposal, replication, or membership yet.
-- Region descriptors, epochs, peers, key ranges, and route errors are not
-  enforced.
+- Region metadata is still configured in memory for the single-region service;
+  descriptors, epochs, peers, and ranges are not persisted in Holt yet.
 - Admin membership RPCs return `Unimplemented`.
 - Restart recovery does not yet combine Holt state, apply state, and raft log.
 - Snapshot checkpoint/install is not implemented.
