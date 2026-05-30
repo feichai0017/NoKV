@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use nokv_holtstore::HoltMvccStore;
 use nokv_mvcc::MvccStore;
+use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::{
@@ -239,6 +240,7 @@ async fn run_coordinator_heartbeat<E>(
     E: RegionSnapshotEngine + Send + Sync + 'static,
 {
     let mut ticker = tokio::time::interval(config.interval);
+    let admin_endpoint = local_admin_endpoint(addr);
     loop {
         ticker.tick().await;
         let request = coordinator_heartbeat_request(identity, addr, &region);
@@ -246,12 +248,24 @@ async fn run_coordinator_heartbeat<E>(
         {
             Ok(mut client) => match client.store_heartbeat(request).await {
                 Ok(response) => {
-                    let operations = response.into_inner().operations.len();
-                    if operations != 0 {
-                        tracing::debug!(
-                            operations,
-                            "rust raftstore received coordinator operations; execution is not wired yet"
-                        );
+                    let operations = response.into_inner().operations;
+                    for operation in operations {
+                        match execute_scheduler_operation(&admin_endpoint, operation).await {
+                            Ok(true) => {
+                                tracing::debug!("rust raftstore applied coordinator operation");
+                            }
+                            Ok(false) => {
+                                tracing::debug!(
+                                    "rust raftstore ignored unsupported coordinator operation"
+                                );
+                            }
+                            Err(err) => {
+                                tracing::debug!(
+                                    error = %err,
+                                    "rust raftstore coordinator operation failed"
+                                );
+                            }
+                        }
                     }
                 }
                 Err(err) => {
@@ -262,6 +276,46 @@ async fn run_coordinator_heartbeat<E>(
                 tracing::debug!(error = %err, "rust raftstore coordinator connect failed");
             }
         }
+    }
+}
+
+async fn execute_scheduler_operation(
+    admin_endpoint: &str,
+    operation: coordpb::SchedulerOperation,
+) -> Result<bool, tonic::Status> {
+    let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
+        .unwrap_or(coordpb::SchedulerOperationType::None);
+    match kind {
+        coordpb::SchedulerOperationType::LeaderTransfer => {
+            if operation.region_id == 0
+                || operation.source_peer_id == 0
+                || operation.target_peer_id == 0
+            {
+                return Ok(false);
+            }
+            let mut client =
+                adminpb::raft_admin_client::RaftAdminClient::connect(admin_endpoint.to_owned())
+                    .await
+                    .map_err(|err| tonic::Status::unavailable(err.to_string()))?;
+            client
+                .transfer_leader(adminpb::TransferLeaderRequest {
+                    region_id: operation.region_id,
+                    peer_id: operation.target_peer_id,
+                })
+                .await?;
+            Ok(true)
+        }
+        coordpb::SchedulerOperationType::SplitRegion
+        | coordpb::SchedulerOperationType::MergeRegion
+        | coordpb::SchedulerOperationType::None => Ok(false),
+    }
+}
+
+fn local_admin_endpoint(addr: SocketAddr) -> String {
+    if addr.ip().is_unspecified() {
+        format!("http://127.0.0.1:{}", addr.port())
+    } else {
+        format!("http://{addr}")
     }
 }
 
@@ -371,6 +425,64 @@ fn default_region_descriptor(identity: ServerIdentity) -> metapb::RegionDescript
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Mutex};
+    use tonic::{Request, Response, Status};
+
+    #[derive(Clone, Default)]
+    struct CaptureRaftAdmin {
+        transfers: Arc<Mutex<Vec<adminpb::TransferLeaderRequest>>>,
+    }
+
+    #[tonic::async_trait]
+    impl adminpb::raft_admin_server::RaftAdmin for CaptureRaftAdmin {
+        async fn add_peer(
+            &self,
+            _request: Request<adminpb::AddPeerRequest>,
+        ) -> Result<Response<adminpb::AddPeerResponse>, Status> {
+            Err(Status::unimplemented("add peer is not used by this test"))
+        }
+
+        async fn remove_peer(
+            &self,
+            _request: Request<adminpb::RemovePeerRequest>,
+        ) -> Result<Response<adminpb::RemovePeerResponse>, Status> {
+            Err(Status::unimplemented(
+                "remove peer is not used by this test",
+            ))
+        }
+
+        async fn transfer_leader(
+            &self,
+            request: Request<adminpb::TransferLeaderRequest>,
+        ) -> Result<Response<adminpb::TransferLeaderResponse>, Status> {
+            let request = request.into_inner();
+            self.transfers.lock().unwrap().push(request.clone());
+            Ok(Response::new(adminpb::TransferLeaderResponse {
+                region: Some(metapb::RegionDescriptor {
+                    region_id: request.region_id,
+                    ..Default::default()
+                }),
+            }))
+        }
+
+        async fn region_runtime_status(
+            &self,
+            _request: Request<adminpb::RegionRuntimeStatusRequest>,
+        ) -> Result<Response<adminpb::RegionRuntimeStatusResponse>, Status> {
+            Err(Status::unimplemented(
+                "region runtime status is not used by this test",
+            ))
+        }
+
+        async fn execution_status(
+            &self,
+            _request: Request<adminpb::ExecutionStatusRequest>,
+        ) -> Result<Response<adminpb::ExecutionStatusResponse>, Status> {
+            Err(Status::unimplemented(
+                "execution status is not used by this test",
+            ))
+        }
+    }
 
     #[test]
     fn server_identity_defaults_to_single_node_bootstrap() {
@@ -425,6 +537,64 @@ mod tests {
         );
     }
 
+    #[test]
+    fn local_admin_endpoint_uses_loopback_for_unspecified_bind_addr() {
+        let addr: SocketAddr = "0.0.0.0:23880".parse().unwrap();
+        assert_eq!(local_admin_endpoint(addr), "http://127.0.0.1:23880");
+    }
+
+    #[tokio::test]
+    async fn scheduler_operation_executes_leader_transfer_via_admin_rpc() {
+        let addr = reserve_loopback_addr();
+        let admin = CaptureRaftAdmin::default();
+        let transfers = admin.transfers.clone();
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(adminpb::raft_admin_server::RaftAdminServer::new(admin))
+                .serve(addr)
+                .await
+                .unwrap();
+        });
+        wait_for_server(addr).await;
+
+        let applied = execute_scheduler_operation(
+            &local_admin_endpoint(addr),
+            coordpb::SchedulerOperation {
+                r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
+                region_id: 7,
+                source_peer_id: 101,
+                target_peer_id: 202,
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(applied);
+        let captured = transfers.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].region_id, 7);
+        assert_eq!(captured[0].peer_id, 202);
+        handle.abort();
+    }
+
+    #[tokio::test]
+    async fn scheduler_operation_ignores_unsupported_split_without_dialing_admin() {
+        let applied = execute_scheduler_operation(
+            "http://127.0.0.1:1",
+            coordpb::SchedulerOperation {
+                r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+                region_id: 7,
+                split_key: b"k".to_vec(),
+                ..Default::default()
+            },
+        )
+        .await
+        .unwrap();
+
+        assert!(!applied);
+    }
+
     #[tokio::test]
     async fn non_bootstrap_start_opens_joining_peer_without_initializing_membership() {
         let dir = tempfile::tempdir().unwrap();
@@ -477,5 +647,28 @@ mod tests {
         assert_eq!(req.region_stats.len(), 1);
         assert_eq!(req.region_stats[0].region_id, 7);
         assert_eq!(req.region_stats[0].leader_store_id, 11);
+    }
+
+    fn reserve_loopback_addr() -> SocketAddr {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        drop(listener);
+        addr
+    }
+
+    async fn wait_for_server(addr: SocketAddr) {
+        let endpoint = local_admin_endpoint(addr);
+        for _ in 0..50 {
+            if tonic::transport::Endpoint::from_shared(endpoint.clone())
+                .unwrap()
+                .connect()
+                .await
+                .is_ok()
+            {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(20)).await;
+        }
+        panic!("rust raftstore test server at {addr} did not become ready");
     }
 }
