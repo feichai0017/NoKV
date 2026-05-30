@@ -26,12 +26,19 @@ mod log_codec;
 mod log_store;
 mod network;
 mod region_storage;
+mod transport_codec;
 
 pub use log_codec::{decode_log_entry, encode_log_entry};
 pub use log_store::{RaftEntryLog, SegmentedEntryLog};
 pub use network::{MemoryRaftNetworkFactory, MemoryRaftNetworkRegistry};
 pub use openraft::BasicNode;
 pub use region_storage::{RegionLogStorage, RegionSnapshotBuilder, RegionStateMachine};
+pub use transport_codec::{
+    decode_append_entries_request, decode_append_entries_response, decode_install_snapshot_request,
+    decode_install_snapshot_response, decode_vote_request, decode_vote_response,
+    encode_append_entries_request, encode_append_entries_response, encode_install_snapshot_request,
+    encode_install_snapshot_response, encode_vote_request, encode_vote_response,
+};
 
 pub type NodeId = u64;
 pub type RegionId = u64;
@@ -110,6 +117,8 @@ pub enum Error {
     },
     #[error("invalid raft log payload: {0}")]
     InvalidLogPayload(String),
+    #[error("invalid raft transport payload: {0}")]
+    InvalidTransportPayload(String),
     #[error("raft log error: {0}")]
     RaftLog(#[from] nokv_raftlog::Error),
     #[error("raft metadata io error: {0}")]

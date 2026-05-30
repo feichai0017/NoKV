@@ -101,6 +101,12 @@ The first slices are intentionally narrow:
   joining peer catching up from a leader snapshot after the snapshot-covered log
   prefix is purged, which validates the real OpenRaft install-snapshot path
   rather than only the state-machine snapshot codec.
+- `nokv-raftnode` now owns a prost transport codec for OpenRaft
+  `AppendEntries`, `Vote`, and `InstallSnapshot` request/response payloads.
+  The codec is intentionally internal to the Rust data plane and reuses the
+  durable entry and membership encoding so external network transport can move
+  OpenRaft RPCs across process boundaries without changing the existing Go
+  `StoreKV` or `RaftAdmin` protobuf contract.
 - `OpenRaftRegion` exposes NoKV-owned voter-change helpers over OpenRaft
   learner and membership APIs. The in-process testkit covers adding a new voter,
   committing a real metadata KV command to the joined peer, restarting the
@@ -163,9 +169,10 @@ The first slices are intentionally narrow:
 
 Known gaps:
 
-- OpenRaft proposal/apply now has in-process three-node replication coverage
-  and raftnode-level voter add/remove helpers, but the external tonic raft
-  transport, route integration, and `RaftAdmin` RPC wiring are still being built
+- OpenRaft proposal/apply now has in-process three-node replication coverage,
+  raftnode-level voter add/remove helpers, and an internal prost codec for
+  OpenRaft RPC payloads. The external tonic raft transport service/client,
+  route integration, and remaining `RaftAdmin` RPC wiring are still being built
   out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   multi-node networking and route integration are still being built out.

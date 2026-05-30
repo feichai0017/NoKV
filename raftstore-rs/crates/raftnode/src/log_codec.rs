@@ -176,6 +176,21 @@ fn decode_membership(
     Ok(Membership::new(configs, nodes))
 }
 
+pub(crate) fn encode_membership_payload(
+    membership: &Membership<NodeId, BasicNode>,
+) -> Result<Vec<u8>, Error> {
+    let persisted = encode_membership(membership);
+    let mut payload = Vec::with_capacity(persisted.encoded_len());
+    persisted.encode(&mut payload)?;
+    Ok(payload)
+}
+
+pub(crate) fn decode_membership_payload(
+    payload: &[u8],
+) -> Result<Membership<NodeId, BasicNode>, Error> {
+    decode_membership(PersistedMembership::decode(payload)?)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
