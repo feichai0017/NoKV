@@ -30,7 +30,10 @@ mod transport_codec;
 
 pub use log_codec::{decode_log_entry, encode_log_entry};
 pub use log_store::{RaftEntryLog, SegmentedEntryLog};
-pub use network::{MemoryRaftNetworkFactory, MemoryRaftNetworkRegistry};
+pub use network::{
+    EncodedRaftNetworkFactory, EncodedRaftNetworkRegistry, MemoryRaftNetworkFactory,
+    MemoryRaftNetworkRegistry,
+};
 pub use openraft::BasicNode;
 pub use region_storage::{RegionLogStorage, RegionSnapshotBuilder, RegionStateMachine};
 pub use transport_codec::{

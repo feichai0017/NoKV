@@ -107,6 +107,12 @@ The first slices are intentionally narrow:
   durable entry and membership encoding so external network transport can move
   OpenRaft RPCs across process boundaries without changing the existing Go
   `StoreKV` or `RaftAdmin` protobuf contract.
+- `EncodedRaftNetworkRegistry` wires that codec into OpenRaft's
+  `RaftNetworkFactory` boundary for tests. The encoded network still runs
+  in-process, but every replication RPC is encoded to bytes, decoded at the
+  target, applied through the target Raft node, encoded as a response, and
+  decoded by the caller. This keeps the next tonic transport slice focused on
+  IO rather than OpenRaft type conversion.
 - `OpenRaftRegion` exposes NoKV-owned voter-change helpers over OpenRaft
   learner and membership APIs. The in-process testkit covers adding a new voter,
   committing a real metadata KV command to the joined peer, restarting the
@@ -171,7 +177,8 @@ Known gaps:
 
 - OpenRaft proposal/apply now has in-process three-node replication coverage,
   raftnode-level voter add/remove helpers, and an internal prost codec for
-  OpenRaft RPC payloads. The external tonic raft transport service/client,
+  OpenRaft RPC payloads. The encoded test network now exercises that codec at
+  the `RaftNetwork` boundary. The external tonic raft transport service/client,
   route integration, and remaining `RaftAdmin` RPC wiring are still being built
   out.
 - The default server startup is mounted behind a single-node OpenRaft node;
