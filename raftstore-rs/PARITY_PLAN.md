@@ -134,6 +134,10 @@ The first slices are intentionally narrow:
   `WatchApply` now mirrors Go's prefix projection more closely: buffer 0 maps
   to the default watch buffer, emitted events contain only matching keys, and
   large key sets are split into bounded messages.
+  Read admission now keeps the follower-prefer fallback contract: when the
+  local Rust service is not the leader and follower serving is not wired yet,
+  follower-prefer reads return `StaleCommand` so Go clients retry the leader,
+  while writes remain leader-only and continue to return `NotLeader`.
 
 Known gaps:
 
@@ -160,6 +164,10 @@ Known gaps:
   integration tests. Corrupt snapshot payloads are rejected before state-machine
   mutation in the current unit coverage.
 - Go fsmeta and raftstore client tests do not yet run against Rust by default.
+- Rust follower reads are intentionally not served locally yet. The service
+  preserves the Go client fallback shape for follower-prefer reads, but safe
+  follower ReadIndex and bounded-stale serving still require the multi-node
+  transport and freshness budget to be wired through raftnode.
 
 ## Target Architecture
 

@@ -92,7 +92,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("get request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_optional_keys(
+        if let Some(region_error) = self.admission.admit_read_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.key.as_slice()),
         )? {
@@ -130,7 +130,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("batch get request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_optional_keys(
+        if let Some(region_error) = self.admission.admit_read_optional_keys(
             request.context.as_ref(),
             inner.requests.iter().map(|req| req.key.as_slice()),
         )? {
@@ -192,7 +192,7 @@ where
                 "StoreKV Scan reverse scans are not supported yet",
             ));
         }
-        if let Some(region_error) = self.admission.admit_optional_keys(
+        if let Some(region_error) = self.admission.admit_read_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.start_key.as_slice()),
         )? {
@@ -230,7 +230,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("prewrite request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_optional_keys(
+        if let Some(region_error) = self.admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner
                 .mutations
@@ -276,7 +276,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("commit request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_optional_keys(
+        if let Some(region_error) = self.admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
         )? {
@@ -314,7 +314,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("batch rollback request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_optional_keys(
+        if let Some(region_error) = self.admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
         )? {
@@ -357,7 +357,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("resolve lock request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_optional_keys(
+        if let Some(region_error) = self.admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
         )? {
@@ -400,7 +400,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("check txn status request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_optional_keys(
+        if let Some(region_error) = self.admission.admit_leader_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.primary_key.as_slice()),
         )? {
@@ -443,7 +443,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("txn heart beat request missing payload"))?;
-        if let Some(region_error) = self.admission.admit_optional_keys(
+        if let Some(region_error) = self.admission.admit_leader_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.primary_key.as_slice()),
         )? {
@@ -498,7 +498,7 @@ where
             );
         if let Some(region_error) = self
             .admission
-            .admit_optional_keys(request.context.as_ref(), keys)?
+            .admit_leader_optional_keys(request.context.as_ref(), keys)?
         {
             return Ok(Response::new(kvpb::KvTryAtomicMutateResponse {
                 response: None,
@@ -543,7 +543,7 @@ where
             .chain(inner.entries.iter().map(|entry| entry.key.as_slice()));
         if let Some(region_error) = self
             .admission
-            .admit_required_keys(request.context.as_ref(), keys)?
+            .admit_leader_required_keys(request.context.as_ref(), keys)?
         {
             return Ok(Response::new(kvpb::KvInstallPreparedMvccEntriesResponse {
                 response: None,
@@ -1698,6 +1698,77 @@ mod tests {
             .unwrap()
             .into_inner();
         assert!(response.region_error.unwrap().not_leader.is_some());
+        assert!(response.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn follower_prefer_read_returns_stale_for_leader_fallback() {
+        let admission = RegionAdmission {
+            leader: false,
+            ..Default::default()
+        };
+        let service = StoreKvService::with_admission(
+            nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()),
+            admission.clone(),
+        );
+        let mut ctx = context(&admission);
+        ctx.read_preference = kvpb::ReadPreference::FollowerPrefer as i32;
+
+        let response = service
+            .get(Request::new(kvpb::KvGetRequest {
+                context: Some(ctx),
+                request: Some(kvpb::GetRequest {
+                    key: b"k".to_vec(),
+                    version: 1,
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let region_error = response.region_error.unwrap();
+        assert!(region_error.stale_command.is_some());
+        assert!(region_error.not_leader.is_none());
+        assert!(response.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn writes_remain_leader_only_when_follower_prefer_is_set() {
+        let admission = RegionAdmission {
+            leader: false,
+            ..Default::default()
+        };
+        let service = StoreKvService::with_admission(
+            nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()),
+            admission.clone(),
+        );
+        let mut ctx = context(&admission);
+        ctx.read_preference = kvpb::ReadPreference::FollowerPrefer as i32;
+
+        let response = service
+            .prewrite(Request::new(kvpb::KvPrewriteRequest {
+                context: Some(ctx),
+                request: Some(kvpb::PrewriteRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"k".to_vec(),
+                        value: b"v".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    primary_lock: b"k".to_vec(),
+                    start_version: 10,
+                    lock_ttl: 10,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        let region_error = response.region_error.unwrap();
+        assert!(region_error.not_leader.is_some());
+        assert!(region_error.stale_command.is_none());
         assert!(response.response.is_none());
     }
 

@@ -86,7 +86,7 @@ impl RegionAdmission {
         })
     }
 
-    pub(crate) fn admit_optional_keys<'a, I>(
+    pub(crate) fn admit_read_optional_keys<'a, I>(
         &self,
         context: Option<&kvpb::Context>,
         keys: I,
@@ -94,10 +94,10 @@ impl RegionAdmission {
     where
         I: IntoIterator<Item = &'a [u8]>,
     {
-        self.admit_keys(context, keys, true)
+        self.admit_keys(context, keys, true, AdmissionRole::Read)
     }
 
-    pub(crate) fn admit_required_keys<'a, I>(
+    pub(crate) fn admit_leader_optional_keys<'a, I>(
         &self,
         context: Option<&kvpb::Context>,
         keys: I,
@@ -105,7 +105,18 @@ impl RegionAdmission {
     where
         I: IntoIterator<Item = &'a [u8]>,
     {
-        self.admit_keys(context, keys, false)
+        self.admit_keys(context, keys, true, AdmissionRole::LeaderOnly)
+    }
+
+    pub(crate) fn admit_leader_required_keys<'a, I>(
+        &self,
+        context: Option<&kvpb::Context>,
+        keys: I,
+    ) -> Result<Option<errorpb::RegionError>, Status>
+    where
+        I: IntoIterator<Item = &'a [u8]>,
+    {
+        self.admit_keys(context, keys, false, AdmissionRole::LeaderOnly)
     }
 
     fn admit_keys<'a, I>(
@@ -113,6 +124,7 @@ impl RegionAdmission {
         context: Option<&kvpb::Context>,
         keys: I,
         skip_empty_keys: bool,
+        role: AdmissionRole,
     ) -> Result<Option<errorpb::RegionError>, Status>
     where
         I: IntoIterator<Item = &'a [u8]>,
@@ -131,7 +143,7 @@ impl RegionAdmission {
             return Ok(Some(self.epoch_not_match()));
         }
         if !self.leader {
-            return Ok(Some(self.not_leader()));
+            return Ok(Some(self.non_leader_error(context, role)));
         }
         for key in keys {
             if skip_empty_keys && key.is_empty() {
@@ -175,6 +187,24 @@ impl RegionAdmission {
             version: self.epoch_version,
             conf_version: self.epoch_conf_version,
         }
+    }
+
+    fn non_leader_error(
+        &self,
+        context: &kvpb::Context,
+        role: AdmissionRole,
+    ) -> errorpb::RegionError {
+        if role == AdmissionRole::Read
+            && normalize_read_preference(context.read_preference)
+                == kvpb::ReadPreference::FollowerPrefer
+        {
+            // The Go client falls back to a leader read only when a
+            // follower-prefer attempt returns StaleCommand. Returning NotLeader
+            // here would stop that fallback path before Rust owns safe follower
+            // ReadIndex or bounded-stale serving.
+            return self.stale_command();
+        }
+        self.not_leader()
     }
 
     fn peer(&self) -> metapb::RegionPeer {
@@ -232,6 +262,13 @@ impl RegionAdmission {
         }
     }
 
+    fn stale_command(&self) -> errorpb::RegionError {
+        errorpb::RegionError {
+            stale_command: Some(errorpb::StaleCommand {}),
+            ..Default::default()
+        }
+    }
+
     fn key_not_in_region(&self, key: &[u8]) -> errorpb::RegionError {
         errorpb::RegionError {
             key_not_in_region: Some(errorpb::KeyNotInRegion {
@@ -243,6 +280,16 @@ impl RegionAdmission {
             ..Default::default()
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AdmissionRole {
+    Read,
+    LeaderOnly,
+}
+
+fn normalize_read_preference(preference: i32) -> kvpb::ReadPreference {
+    kvpb::ReadPreference::try_from(preference).unwrap_or(kvpb::ReadPreference::LeaderOnly)
 }
 
 #[cfg(test)]
