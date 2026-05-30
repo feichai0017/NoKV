@@ -9,9 +9,11 @@ transaction semantics for single-node tests, `nokv-holtstore` fixes the future
 Holt multi-tree layout, `nokv-raftlog` owns the append-only Raft WAL format, and
 `nokv-raftstore-server` exposes the compatible tonic services.
 
-The server binary uses in-memory MVCC by default for compatibility tests. Set
-`NOKV_RUST_RAFTSTORE_HOLT_DIR=/path/to/store` to run the same `StoreKV` service
-against Holt-backed MVCC trees.
+The server binary uses an in-memory MVCC engine by default for compatibility
+tests. Set `NOKV_RUST_RAFTSTORE_HOLT_DIR=/path/to/store` to run the same
+`StoreKV` service against Holt-backed MVCC trees. In both modes, mutating
+`StoreKV` calls pass through a region-local apply wrapper so the RPC layer is
+already separated from direct state-machine mutation before OpenRaft is wired.
 
 OpenRaft replication, membership changes, snapshots, and WatchApply delivery are
 staged behind these boundaries. Experimental Peras witness services and legacy

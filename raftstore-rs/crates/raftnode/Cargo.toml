@@ -7,5 +7,7 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+nokv-mvcc.workspace = true
+nokv-proto.workspace = true
 openraft.workspace = true
 thiserror.workspace = true

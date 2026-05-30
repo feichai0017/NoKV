@@ -279,7 +279,11 @@ mod tests {
 
     #[tokio::test]
     async fn service_can_run_against_holt_mvcc_engine() {
-        let service = StoreKvService::new(nokv_holtstore::HoltMvccStore::open_memory().unwrap());
+        let engine = nokv_raftnode::AppliedKvEngine::new(
+            1,
+            nokv_holtstore::HoltMvccStore::open_memory().unwrap(),
+        );
+        let service = StoreKvService::new(engine.clone());
         let response = service
             .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
                 request: Some(kvpb::TryAtomicMutateRequest {
@@ -298,6 +302,7 @@ mod tests {
             .unwrap()
             .into_inner();
         assert_eq!(response.response.unwrap().applied_keys, 1);
+        assert_eq!(engine.status().applied_index, 1);
     }
 
     #[tokio::test]

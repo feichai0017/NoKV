@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 
 use nokv_holtstore::HoltMvccStore;
 use nokv_mvcc::MvccStore;
+use nokv_raftnode::AppliedKvEngine;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -12,10 +13,12 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .parse::<SocketAddr>()?;
     if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_HOLT_DIR") {
         tracing::info!(%addr, %path, "starting rust raftstore server with Holt MVCC");
-        nokv_raftstore_server::serve_with_engine(addr, HoltMvccStore::open_file(path)?).await?;
+        let engine = AppliedKvEngine::new(1, HoltMvccStore::open_file(path)?);
+        nokv_raftstore_server::serve_with_engine(addr, engine).await?;
     } else {
         tracing::info!(%addr, "starting rust raftstore compatibility server with in-memory MVCC");
-        nokv_raftstore_server::serve(addr, MvccStore::new()).await?;
+        let engine = AppliedKvEngine::new(1, MvccStore::new());
+        nokv_raftstore_server::serve_with_engine(addr, engine).await?;
     }
     Ok(())
 }

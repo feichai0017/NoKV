@@ -10,6 +10,7 @@ authors.workspace = true
 nokv-holtstore.workspace = true
 nokv-mvcc.workspace = true
 nokv-proto.workspace = true
+nokv-raftnode.workspace = true
 tokio.workspace = true
 tokio-stream.workspace = true
 tonic.workspace = true

@@ -979,6 +979,8 @@ dependencies = [
 name = "nokv-raftnode"
 version = "0.1.0"
 dependencies = [
+ "nokv-mvcc",
+ "nokv-proto",
  "openraft",
  "thiserror 2.0.18",
 ]
@@ -990,6 +992,7 @@ dependencies = [
  "nokv-holtstore",
  "nokv-mvcc",
  "nokv-proto",
+ "nokv-raftnode",
  "tokio",
  "tokio-stream",
  "tonic",
