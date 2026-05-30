@@ -36,7 +36,9 @@ boundary. `raftnode` also owns the codec between OpenRaft entries and
 OpenRaft while still preserving normal command, blank, and membership entries.
 The `SegmentedEntryLog` wrapper fixes a region-local append/recover boundary and
 pre-encodes batches before append, so an invalid entry cannot partially write a
-log batch.
+log batch. `AppliedKvEngine` can now apply OpenRaft entries using the committed
+entry log id, and command execution advances the applied index once per Raft
+command rather than once per inner request.
 
 See [PARITY_PLAN.md](PARITY_PLAN.md) for the full Go `raftstore` parity plan and
 the cutover rule: keep the workspace named `raftstore-rs` while the Go

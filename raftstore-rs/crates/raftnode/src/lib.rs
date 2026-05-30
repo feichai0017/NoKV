@@ -137,10 +137,17 @@ pub trait RaftCommandExecutor: Clone + Send + Sync + 'static {
 #[derive(Debug)]
 struct AppliedKvInner<E> {
     region_id: RegionId,
-    term: u64,
+    term: AtomicU64,
     applied_index: AtomicU64,
     engine: Mutex<E>,
     watch: broadcast::Sender<kvpb::ApplyWatchEvent>,
+}
+
+#[derive(Debug)]
+struct ApplyEvent {
+    source: kvpb::ApplyWatchEventSource,
+    commit_version: u64,
+    keys: Vec<Vec<u8>>,
 }
 
 /// Region-local apply boundary used before the OpenRaft-backed implementation
@@ -167,7 +174,7 @@ impl<E> AppliedKvEngine<E> {
         Self {
             inner: Arc::new(AppliedKvInner {
                 region_id: status.region_id,
-                term: status.term,
+                term: AtomicU64::new(status.term),
                 applied_index: AtomicU64::new(status.applied_index),
                 engine: Mutex::new(engine),
                 watch: broadcast::channel(1024).0,
@@ -178,7 +185,7 @@ impl<E> AppliedKvEngine<E> {
     pub fn status(&self) -> ApplyStatus {
         ApplyStatus {
             region_id: self.inner.region_id,
-            term: self.inner.term,
+            term: self.inner.term.load(Ordering::Acquire),
             applied_index: self.inner.applied_index.load(Ordering::Acquire),
         }
     }
@@ -214,9 +221,89 @@ where
         &self,
         req: &raftpb::RaftCmdRequest,
     ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
-        let mut responses = Vec::with_capacity(req.requests.len());
-        for request in &req.requests {
-            responses.push(self.execute_raft_request(request)?);
+        self.execute_raft_command_at(req, None)
+    }
+
+    pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    where
+        I: IntoIterator<Item = OpenRaftEntry>,
+    {
+        let mut applied = Vec::new();
+        for entry in entries {
+            let index = entry.log_id.index;
+            let term = entry.log_id.leader_id.term;
+            match entry.payload {
+                openraft::EntryPayload::Blank | openraft::EntryPayload::Membership(_) => {
+                    self.record_applied_status(term, index);
+                    applied.push(AppliedProposal {
+                        region_id: self.inner.region_id,
+                        index,
+                        term,
+                        payload: Vec::new(),
+                    });
+                }
+                openraft::EntryPayload::Normal(proposal) => {
+                    if proposal.region_id != self.inner.region_id {
+                        return Err(nokv_mvcc::Error::Backend(
+                            Error::LogRegionMismatch {
+                                record_region_id: self.inner.region_id,
+                                proposal_region_id: proposal.region_id,
+                            }
+                            .to_string(),
+                        ));
+                    }
+                    let req = proposal
+                        .decode_raft_command()
+                        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+                    let response = self.execute_raft_command_at(&req, Some((term, index)))?;
+                    applied.push(AppliedProposal {
+                        region_id: proposal.region_id,
+                        index,
+                        term,
+                        payload: encode_raft_response(&response)?,
+                    });
+                }
+            }
+        }
+        Ok(applied)
+    }
+
+    fn execute_raft_command_at(
+        &self,
+        req: &raftpb::RaftCmdRequest,
+        forced_status: Option<(u64, u64)>,
+    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
+        let (responses, writes, events) = {
+            let engine =
+                self.inner.engine.lock().map_err(|_| {
+                    nokv_mvcc::Error::Backend("region apply mutex poisoned".to_owned())
+                })?;
+            let mut responses = Vec::with_capacity(req.requests.len());
+            let mut writes = false;
+            let mut events = Vec::new();
+            for request in &req.requests {
+                let (response, write, event) = Self::execute_raft_request_on(&*engine, request)?;
+                writes |= write;
+                if let Some(event) = event {
+                    events.push(event);
+                }
+                responses.push(response);
+            }
+            (responses, writes, events)
+        };
+
+        let applied_status = if let Some((term, index)) = forced_status {
+            self.record_applied_status(term, index);
+            Some((term, index))
+        } else if writes {
+            Some(self.advance_apply_index())
+        } else {
+            None
+        };
+        if let Some((term, index)) = applied_status {
+            for event in events {
+                self.publish_apply(index, term, event.source, event.commit_version, event.keys);
+            }
         }
         Ok(raftpb::RaftCmdResponse {
             header: req.header.clone(),
@@ -225,55 +312,117 @@ where
         })
     }
 
-    fn execute_raft_request(&self, req: &raftpb::Request) -> nokv_mvcc::Result<raftpb::Response> {
+    fn execute_raft_request_on(
+        engine: &E,
+        req: &raftpb::Request,
+    ) -> nokv_mvcc::Result<(raftpb::Response, bool, Option<ApplyEvent>)> {
         use raftpb::request::Cmd as RequestCmd;
         use raftpb::response::Cmd as ResponseCmd;
 
         let cmd = raftpb::CmdType::try_from(req.cmd_type).unwrap_or(raftpb::CmdType::CmdInvalid);
-        let response = match (cmd, req.cmd.as_ref()) {
+        let (response, write, event) = match (cmd, req.cmd.as_ref()) {
             (raftpb::CmdType::CmdGet, Some(RequestCmd::Get(inner))) => {
-                ResponseCmd::Get(self.get(inner)?)
+                (ResponseCmd::Get(engine.get(inner)?), false, None)
             }
             (raftpb::CmdType::CmdScan, Some(RequestCmd::Scan(inner))) => {
-                ResponseCmd::Scan(self.scan(inner)?)
+                (ResponseCmd::Scan(engine.scan(inner)?), false, None)
             }
             (raftpb::CmdType::CmdPrewrite, Some(RequestCmd::Prewrite(inner))) => {
-                ResponseCmd::Prewrite(self.prewrite(inner)?)
+                (ResponseCmd::Prewrite(engine.prewrite(inner)?), true, None)
             }
-            (raftpb::CmdType::CmdCommit, Some(RequestCmd::Commit(inner))) => {
-                ResponseCmd::Commit(self.commit(inner)?)
-            }
-            (raftpb::CmdType::CmdBatchRollback, Some(RequestCmd::BatchRollback(inner))) => {
-                ResponseCmd::BatchRollback(self.batch_rollback(inner)?)
-            }
+            (raftpb::CmdType::CmdCommit, Some(RequestCmd::Commit(inner))) => (
+                ResponseCmd::Commit(engine.commit(inner)?),
+                true,
+                Some(ApplyEvent {
+                    source: kvpb::ApplyWatchEventSource::Commit,
+                    commit_version: inner.commit_version,
+                    keys: inner.keys.clone(),
+                }),
+            ),
+            (raftpb::CmdType::CmdBatchRollback, Some(RequestCmd::BatchRollback(inner))) => (
+                ResponseCmd::BatchRollback(engine.batch_rollback(inner)?),
+                true,
+                None,
+            ),
             (raftpb::CmdType::CmdResolveLock, Some(RequestCmd::ResolveLock(inner))) => {
-                ResponseCmd::ResolveLock(self.resolve_lock(inner)?)
+                let event = (inner.commit_version != 0).then(|| ApplyEvent {
+                    source: kvpb::ApplyWatchEventSource::ResolveLock,
+                    commit_version: inner.commit_version,
+                    keys: inner.keys.clone(),
+                });
+                (
+                    ResponseCmd::ResolveLock(engine.resolve_lock(inner)?),
+                    true,
+                    event,
+                )
             }
-            (raftpb::CmdType::CmdCheckTxnStatus, Some(RequestCmd::CheckTxnStatus(inner))) => {
-                ResponseCmd::CheckTxnStatus(self.check_txn_status(inner)?)
-            }
-            (raftpb::CmdType::CmdMvccMaintenance, Some(RequestCmd::MvccMaintenance(inner))) => {
-                ResponseCmd::MvccMaintenance(self.mvcc_maintenance(inner)?)
-            }
-            (raftpb::CmdType::CmdTxnHeartBeat, Some(RequestCmd::TxnHeartBeat(inner))) => {
-                ResponseCmd::TxnHeartBeat(self.txn_heartbeat(inner)?)
-            }
+            (raftpb::CmdType::CmdCheckTxnStatus, Some(RequestCmd::CheckTxnStatus(inner))) => (
+                ResponseCmd::CheckTxnStatus(engine.check_txn_status(inner)?),
+                true,
+                None,
+            ),
+            (raftpb::CmdType::CmdMvccMaintenance, Some(RequestCmd::MvccMaintenance(inner))) => (
+                ResponseCmd::MvccMaintenance(engine.mvcc_maintenance(inner)?),
+                true,
+                None,
+            ),
+            (raftpb::CmdType::CmdTxnHeartBeat, Some(RequestCmd::TxnHeartBeat(inner))) => (
+                ResponseCmd::TxnHeartBeat(engine.txn_heartbeat(inner)?),
+                true,
+                None,
+            ),
             (raftpb::CmdType::CmdTryAtomicMutate, Some(RequestCmd::TryAtomicMutate(inner))) => {
-                ResponseCmd::TryAtomicMutate(self.try_atomic_mutate(inner)?)
+                let keys = inner
+                    .mutations
+                    .iter()
+                    .map(|mutation| mutation.key.clone())
+                    .collect::<Vec<_>>();
+                (
+                    ResponseCmd::TryAtomicMutate(engine.try_atomic_mutate(inner)?),
+                    true,
+                    Some(ApplyEvent {
+                        source: kvpb::ApplyWatchEventSource::Commit,
+                        commit_version: inner.commit_version,
+                        keys,
+                    }),
+                )
             }
             (
                 raftpb::CmdType::CmdInstallPreparedMvcc,
                 Some(RequestCmd::InstallPreparedMvcc(inner)),
-            ) => ResponseCmd::InstallPreparedMvcc(self.install_prepared(inner)?),
+            ) => {
+                let keys = if inner.watch_keys.is_empty() {
+                    inner
+                        .entries
+                        .iter()
+                        .map(|entry| entry.key.clone())
+                        .collect::<Vec<_>>()
+                } else {
+                    inner.watch_keys.clone()
+                };
+                (
+                    ResponseCmd::InstallPreparedMvcc(engine.install_prepared(inner)?),
+                    true,
+                    Some(ApplyEvent {
+                        source: kvpb::ApplyWatchEventSource::Commit,
+                        commit_version: inner.commit_version,
+                        keys,
+                    }),
+                )
+            }
             _ => {
                 return Err(invalid_raft_command(
                     "command type and payload do not match",
                 ))
             }
         };
-        Ok(raftpb::Response {
-            cmd: Some(response),
-        })
+        Ok((
+            raftpb::Response {
+                cmd: Some(response),
+            },
+            write,
+            event,
+        ))
     }
 
     fn read<T>(&self, f: impl FnOnce(&E) -> nokv_mvcc::Result<T>) -> nokv_mvcc::Result<T> {
@@ -285,20 +434,46 @@ where
         f(&engine)
     }
 
-    fn apply<T>(&self, f: impl FnOnce(&E) -> nokv_mvcc::Result<T>) -> nokv_mvcc::Result<(u64, T)> {
+    fn apply<T>(
+        &self,
+        f: impl FnOnce(&E) -> nokv_mvcc::Result<T>,
+    ) -> nokv_mvcc::Result<(u64, u64, T)> {
         let engine = self
             .inner
             .engine
             .lock()
             .map_err(|_| nokv_mvcc::Error::Backend("region apply mutex poisoned".to_owned()))?;
         let result = f(&engine)?;
+        let (term, index) = self.advance_apply_index();
+        Ok((term, index, result))
+    }
+
+    fn advance_apply_index(&self) -> (u64, u64) {
         let index = self.inner.applied_index.fetch_add(1, Ordering::AcqRel) + 1;
-        Ok((index, result))
+        let term = self.inner.term.load(Ordering::Acquire);
+        (term, index)
+    }
+
+    fn record_applied_status(&self, term: u64, index: u64) {
+        self.inner.term.store(term, Ordering::Release);
+        let mut current = self.inner.applied_index.load(Ordering::Acquire);
+        while current < index {
+            match self.inner.applied_index.compare_exchange(
+                current,
+                index,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(observed) => current = observed,
+            }
+        }
     }
 
     fn publish_apply(
         &self,
         index: u64,
+        term: u64,
         source: kvpb::ApplyWatchEventSource,
         commit_version: u64,
         keys: Vec<Vec<u8>>,
@@ -308,7 +483,7 @@ where
         }
         let _ = self.inner.watch.send(kvpb::ApplyWatchEvent {
             region_id: self.inner.region_id,
-            term: self.inner.term,
+            term,
             index,
             source: source as i32,
             commit_version,
@@ -333,6 +508,14 @@ fn invalid_raft_command(detail: &str) -> nokv_mvcc::Error {
     nokv_mvcc::Error::Backend(format!("invalid raft command: {detail}"))
 }
 
+fn encode_raft_response(response: &raftpb::RaftCmdResponse) -> nokv_mvcc::Result<Vec<u8>> {
+    let mut payload = Vec::with_capacity(response.encoded_len());
+    response
+        .encode(&mut payload)
+        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+    Ok(payload)
+}
+
 impl<E> KvEngine for AppliedKvEngine<E>
 where
     E: KvEngine,
@@ -351,13 +534,14 @@ where
 
     fn prewrite(&self, req: &kvpb::PrewriteRequest) -> nokv_mvcc::Result<kvpb::PrewriteResponse> {
         self.apply(|engine| engine.prewrite(req))
-            .map(|(_, result)| result)
+            .map(|(_, _, result)| result)
     }
 
     fn commit(&self, req: &kvpb::CommitRequest) -> nokv_mvcc::Result<kvpb::CommitResponse> {
-        let (index, result) = self.apply(|engine| engine.commit(req))?;
+        let (term, index, result) = self.apply(|engine| engine.commit(req))?;
         self.publish_apply(
             index,
+            term,
             kvpb::ApplyWatchEventSource::Commit,
             req.commit_version,
             req.keys.clone(),
@@ -370,17 +554,18 @@ where
         req: &kvpb::BatchRollbackRequest,
     ) -> nokv_mvcc::Result<kvpb::BatchRollbackResponse> {
         self.apply(|engine| engine.batch_rollback(req))
-            .map(|(_, result)| result)
+            .map(|(_, _, result)| result)
     }
 
     fn resolve_lock(
         &self,
         req: &kvpb::ResolveLockRequest,
     ) -> nokv_mvcc::Result<kvpb::ResolveLockResponse> {
-        let (index, result) = self.apply(|engine| engine.resolve_lock(req))?;
+        let (term, index, result) = self.apply(|engine| engine.resolve_lock(req))?;
         if req.commit_version != 0 {
             self.publish_apply(
                 index,
+                term,
                 kvpb::ApplyWatchEventSource::ResolveLock,
                 req.commit_version,
                 req.keys.clone(),
@@ -394,7 +579,7 @@ where
         req: &kvpb::CheckTxnStatusRequest,
     ) -> nokv_mvcc::Result<kvpb::CheckTxnStatusResponse> {
         self.apply(|engine| engine.check_txn_status(req))
-            .map(|(_, result)| result)
+            .map(|(_, _, result)| result)
     }
 
     fn txn_heartbeat(
@@ -402,7 +587,7 @@ where
         req: &kvpb::TxnHeartBeatRequest,
     ) -> nokv_mvcc::Result<kvpb::TxnHeartBeatResponse> {
         self.apply(|engine| engine.txn_heartbeat(req))
-            .map(|(_, result)| result)
+            .map(|(_, _, result)| result)
     }
 
     fn try_atomic_mutate(
@@ -414,9 +599,10 @@ where
             .iter()
             .map(|mutation| mutation.key.clone())
             .collect::<Vec<_>>();
-        let (index, result) = self.apply(|engine| engine.try_atomic_mutate(req))?;
+        let (term, index, result) = self.apply(|engine| engine.try_atomic_mutate(req))?;
         self.publish_apply(
             index,
+            term,
             kvpb::ApplyWatchEventSource::Commit,
             req.commit_version,
             keys,
@@ -436,9 +622,10 @@ where
         } else {
             req.watch_keys.clone()
         };
-        let (index, result) = self.apply(|engine| engine.install_prepared(req))?;
+        let (term, index, result) = self.apply(|engine| engine.install_prepared(req))?;
         self.publish_apply(
             index,
+            term,
             kvpb::ApplyWatchEventSource::Commit,
             req.commit_version,
             keys,
@@ -451,7 +638,7 @@ where
         req: &kvpb::MvccMaintenanceRequest,
     ) -> nokv_mvcc::Result<kvpb::MvccMaintenanceResponse> {
         self.apply(|engine| engine.mvcc_maintenance(req))
-            .map(|(_, result)| result)
+            .map(|(_, _, result)| result)
     }
 }
 
@@ -480,6 +667,7 @@ impl RegionRaft for OpenRaftRegion {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use prost::Message;
 
     #[test]
     fn openraft_boundary_does_not_claim_replication_yet() {
@@ -661,5 +849,105 @@ mod tests {
         };
         assert_eq!(out.value, b"v".to_vec());
         assert_eq!(engine.status().applied_index, 1);
+    }
+
+    #[test]
+    fn raft_command_with_multiple_writes_advances_index_once() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        let mut watch = engine.subscribe();
+
+        engine
+            .execute_raft_command(&raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    ..Default::default()
+                }),
+                requests: vec![
+                    raftpb::Request {
+                        cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                        cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                            kvpb::TryAtomicMutateRequest {
+                                mutations: vec![kvpb::Mutation {
+                                    key: b"k1".to_vec(),
+                                    value: b"v1".to_vec(),
+                                    op: kvpb::mutation::Op::Put as i32,
+                                    ..Default::default()
+                                }],
+                                commit_version: 2,
+                                ..Default::default()
+                            },
+                        )),
+                    },
+                    raftpb::Request {
+                        cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                        cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                            kvpb::TryAtomicMutateRequest {
+                                mutations: vec![kvpb::Mutation {
+                                    key: b"k2".to_vec(),
+                                    value: b"v2".to_vec(),
+                                    op: kvpb::mutation::Op::Put as i32,
+                                    ..Default::default()
+                                }],
+                                commit_version: 3,
+                                ..Default::default()
+                            },
+                        )),
+                    },
+                ],
+            })
+            .unwrap();
+
+        assert_eq!(engine.status().applied_index, 1);
+        assert_eq!(watch.try_recv().unwrap().index, 1);
+        assert_eq!(watch.try_recv().unwrap().index, 1);
+    }
+
+    #[test]
+    fn apply_openraft_entry_uses_committed_log_status() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        let mut watch = engine.subscribe();
+        let command = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 7,
+                request_id: 55,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                    kvpb::TryAtomicMutateRequest {
+                        mutations: vec![kvpb::Mutation {
+                            key: b"k".to_vec(),
+                            value: b"v".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        }],
+                        commit_version: 9,
+                        ..Default::default()
+                    },
+                )),
+            }],
+        };
+        let entry = OpenRaftEntry {
+            log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+            payload: openraft::EntryPayload::Normal(Proposal::from_raft_command(&command).unwrap()),
+        };
+
+        let applied = engine.apply_openraft_entries([entry]).unwrap();
+
+        assert_eq!(
+            engine.status(),
+            ApplyStatus {
+                region_id: 7,
+                term: 5,
+                applied_index: 42,
+            }
+        );
+        let event = watch.try_recv().unwrap();
+        assert_eq!(event.term, 5);
+        assert_eq!(event.index, 42);
+        assert_eq!(event.commit_version, 9);
+        let response = raftpb::RaftCmdResponse::decode(applied[0].payload.as_slice()).unwrap();
+        assert_eq!(response.responses.len(), 1);
     }
 }

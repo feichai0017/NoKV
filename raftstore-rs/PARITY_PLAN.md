@@ -64,7 +64,10 @@ The first slices are intentionally narrow:
   decodes them back, covering normal command, blank, and membership entries.
   `SegmentedEntryLog` wraps the low-level WAL with a region-local OpenRaft
   entry append/recover boundary and rejects mismatched-region batches before any
-  record is appended.
+  record is appended. `AppliedKvEngine` now has an OpenRaft-entry apply path
+  that uses the committed entry's log index and term for apply status and watch
+  events, while direct command execution advances the local applied index once
+  per Raft command.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
