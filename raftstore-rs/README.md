@@ -17,6 +17,9 @@ already separated from direct state-machine mutation before OpenRaft is wired.
 The tonic service also enforces the current single-region admission boundary:
 request context, region epoch, target store, leader state, and key range are
 validated before the MVCC engine observes the request.
+When Holt mode is enabled, the server loads or bootstraps that single-region
+descriptor through the `region_meta` tree so the admission boundary has a
+durable metadata source before OpenRaft owns topology changes.
 
 OpenRaft replication, membership changes, snapshots, and WatchApply delivery are
 staged behind these boundaries. Experimental Peras witness services and legacy

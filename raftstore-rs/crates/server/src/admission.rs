@@ -4,6 +4,8 @@
 //! store, stale epoch, non-hosted region, non-leader peer, or keys outside the
 //! hosted region before the state machine observes the request.
 
+use std::fmt;
+
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
@@ -21,6 +23,25 @@ pub struct RegionAdmission {
     pub leader: bool,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RegionAdmissionConfigError {
+    MissingRegionId,
+    MissingEpoch,
+    MissingPeer,
+}
+
+impl fmt::Display for RegionAdmissionConfigError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::MissingRegionId => f.write_str("region descriptor id is required"),
+            Self::MissingEpoch => f.write_str("region descriptor epoch is required"),
+            Self::MissingPeer => f.write_str("region descriptor peer is required"),
+        }
+    }
+}
+
+impl std::error::Error for RegionAdmissionConfigError {}
+
 impl Default for RegionAdmission {
     fn default() -> Self {
         Self {
@@ -37,6 +58,34 @@ impl Default for RegionAdmission {
 }
 
 impl RegionAdmission {
+    pub fn from_descriptor(
+        descriptor: &metapb::RegionDescriptor,
+        leader: bool,
+    ) -> Result<Self, RegionAdmissionConfigError> {
+        if descriptor.region_id == 0 {
+            return Err(RegionAdmissionConfigError::MissingRegionId);
+        }
+        let epoch = descriptor
+            .epoch
+            .as_ref()
+            .ok_or(RegionAdmissionConfigError::MissingEpoch)?;
+        let peer = descriptor
+            .peers
+            .iter()
+            .find(|peer| peer.store_id != 0 && peer.peer_id != 0)
+            .ok_or(RegionAdmissionConfigError::MissingPeer)?;
+        Ok(Self {
+            region_id: descriptor.region_id,
+            store_id: peer.store_id,
+            peer_id: peer.peer_id,
+            epoch_version: epoch.version,
+            epoch_conf_version: epoch.conf_version,
+            start_key: descriptor.start_key.clone(),
+            end_key: descriptor.end_key.clone(),
+            leader,
+        })
+    }
+
     pub(crate) fn admit_optional_keys<'a, I>(
         &self,
         context: Option<&kvpb::Context>,
@@ -193,5 +242,37 @@ impl RegionAdmission {
             }),
             ..Default::default()
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn admission_can_be_built_from_region_descriptor() {
+        let descriptor = metapb::RegionDescriptor {
+            region_id: 7,
+            start_key: b"a".to_vec(),
+            end_key: b"z".to_vec(),
+            epoch: Some(metapb::RegionEpoch {
+                version: 3,
+                conf_version: 2,
+            }),
+            peers: vec![metapb::RegionPeer {
+                store_id: 9,
+                peer_id: 99,
+            }],
+            ..Default::default()
+        };
+        let admission = RegionAdmission::from_descriptor(&descriptor, true).unwrap();
+        assert_eq!(admission.region_id, 7);
+        assert_eq!(admission.store_id, 9);
+        assert_eq!(admission.peer_id, 99);
+        assert_eq!(admission.epoch_version, 3);
+        assert_eq!(admission.epoch_conf_version, 2);
+        assert_eq!(admission.start_key, b"a".to_vec());
+        assert_eq!(admission.end_key, b"z".to_vec());
+        assert!(admission.leader);
     }
 }

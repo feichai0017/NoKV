@@ -62,8 +62,9 @@ The first slices are intentionally narrow:
 Known gaps:
 
 - OpenRaft is not wired into proposal, replication, or membership yet.
-- Region metadata is still configured in memory for the single-region service;
-  descriptors, epochs, peers, and ranges are not persisted in Holt yet.
+- Region metadata has a Holt persistence point for descriptors and apply-state
+  records, but the single-region service still bootstraps a default descriptor
+  until coordinator-provided topology is wired.
 - Admin membership RPCs return `Unimplemented`.
 - Restart recovery does not yet combine Holt state, apply state, and raft log.
 - Snapshot checkpoint/install is not implemented.

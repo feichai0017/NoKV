@@ -503,8 +503,22 @@ pub async fn serve_with_region_engine<E>(
 where
     E: KvEngine + ApplyStatusProvider + ApplyWatchProvider,
 {
+    serve_with_region_engine_and_admission(addr, engine, RegionAdmission::default()).await
+}
+
+pub async fn serve_with_region_engine_and_admission<E>(
+    addr: SocketAddr,
+    engine: E,
+    admission: RegionAdmission,
+) -> Result<(), tonic::transport::Error>
+where
+    E: KvEngine + ApplyStatusProvider + ApplyWatchProvider,
+{
     tonic::transport::Server::builder()
-        .add_service(StoreKvServer::new(StoreKvService::new(engine.clone())))
+        .add_service(StoreKvServer::new(StoreKvService::with_admission(
+            engine.clone(),
+            admission,
+        )))
         .add_service(RaftAdminServer::new(RaftAdminService::new(engine)))
         .serve(addr)
         .await

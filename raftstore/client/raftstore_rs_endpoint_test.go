@@ -28,7 +28,22 @@ import (
 )
 
 func TestRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T) {
-	addr := startRustRaftstoreEndpoint(t)
+	for _, tc := range []struct {
+		name string
+		holt bool
+	}{
+		{name: "memory"},
+		{name: "holt", holt: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			addr := startRustRaftstoreEndpoint(t, tc.holt)
+			testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t, addr)
+		})
+	}
+}
+
+func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr string) {
+	t.Helper()
 	meta := rustRaftstoreSingleRegion()
 	cli, err := New(Config{
 		RegionResolver: &mockRegionResolver{region: meta},
@@ -89,7 +104,7 @@ func TestRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T) {
 	require.Equal(t, uint64(1), status.GetAppliedIndex())
 }
 
-func startRustRaftstoreEndpoint(t *testing.T) string {
+func startRustRaftstoreEndpoint(t *testing.T, holt bool) string {
 	t.Helper()
 	addr := reserveLocalAddr(t)
 	root := findRepoRoot(t)
@@ -106,6 +121,9 @@ func startRustRaftstoreEndpoint(t *testing.T) string {
 	)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "NOKV_RUST_RAFTSTORE_ADDR="+addr)
+	if holt {
+		cmd.Env = append(cmd.Env, "NOKV_RUST_RAFTSTORE_HOLT_DIR="+t.TempDir())
+	}
 	stdout, err := cmd.StdoutPipe()
 	require.NoError(t, err)
 	stderr, err := cmd.StderrPipe()

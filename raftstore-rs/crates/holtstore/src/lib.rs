@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use holt::{RangeEntry, Tree, TreeConfig, DB};
 use nokv_mvcc as mvcc;
 use nokv_proto::nokv::kv::v1 as kvpb;
+use nokv_proto::nokv::meta::v1 as metapb;
+use prost::Message;
 
 pub const DATA_TREE: &str = "data";
 pub const WRITE_TREE: &str = "write";
@@ -31,9 +33,24 @@ const REQUIRED_TREES: [&str; 6] = [
 pub enum Error {
     #[error("holt error: {0}")]
     Holt(#[from] holt::Error),
+    #[error("protobuf decode error: {0}")]
+    Decode(#[from] prost::DecodeError),
+    #[error("protobuf encode error: {0}")]
+    Encode(#[from] prost::EncodeError),
+    #[error("invalid metadata record: {0}")]
+    InvalidMetadata(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RegionApplyState {
+    pub region_id: u64,
+    pub term: u64,
+    pub applied_index: u64,
+    pub truncated_term: u64,
+    pub truncated_index: u64,
+}
 
 #[derive(Clone)]
 pub struct HoltStore {
@@ -92,6 +109,58 @@ impl HoltStore {
         self.tree(WATCH_APPLY_TREE)
     }
 
+    pub fn put_region_descriptor(&self, descriptor: &metapb::RegionDescriptor) -> Result<()> {
+        let mut bytes = Vec::with_capacity(descriptor.encoded_len());
+        descriptor.encode(&mut bytes)?;
+        self.region_meta()?
+            .put(&region_descriptor_key(descriptor.region_id), &bytes)?;
+        Ok(())
+    }
+
+    pub fn get_region_descriptor(
+        &self,
+        region_id: u64,
+    ) -> Result<Option<metapb::RegionDescriptor>> {
+        let Some(bytes) = self.region_meta()?.get(&region_descriptor_key(region_id))? else {
+            return Ok(None);
+        };
+        Ok(Some(metapb::RegionDescriptor::decode(bytes.as_slice())?))
+    }
+
+    pub fn load_or_bootstrap_region_descriptor(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+    ) -> Result<metapb::RegionDescriptor> {
+        if descriptor.region_id == 0 {
+            return Err(Error::InvalidMetadata(
+                "region descriptor id is required".to_owned(),
+            ));
+        }
+        if let Some(existing) = self.get_region_descriptor(descriptor.region_id)? {
+            return Ok(existing);
+        }
+        self.put_region_descriptor(descriptor)?;
+        Ok(descriptor.clone())
+    }
+
+    pub fn put_region_apply_state(&self, state: &RegionApplyState) -> Result<()> {
+        self.apply_state()?.put(
+            &region_apply_state_key(state.region_id),
+            &encode_apply_state(state),
+        )?;
+        Ok(())
+    }
+
+    pub fn get_region_apply_state(&self, region_id: u64) -> Result<Option<RegionApplyState>> {
+        let Some(bytes) = self
+            .apply_state()?
+            .get(&region_apply_state_key(region_id))?
+        else {
+            return Ok(None);
+        };
+        decode_apply_state(&bytes).map(Some)
+    }
+
     pub fn put_data(&self, key: &[u8], value: &[u8]) -> Result<()> {
         self.data()?.put(key, value)?;
         Ok(())
@@ -137,6 +206,32 @@ impl HoltMvccStore {
 
     pub fn checkpoint(&self) -> Result<()> {
         self.store.checkpoint()
+    }
+
+    pub fn put_region_descriptor(&self, descriptor: &metapb::RegionDescriptor) -> Result<()> {
+        self.store.put_region_descriptor(descriptor)
+    }
+
+    pub fn get_region_descriptor(
+        &self,
+        region_id: u64,
+    ) -> Result<Option<metapb::RegionDescriptor>> {
+        self.store.get_region_descriptor(region_id)
+    }
+
+    pub fn load_or_bootstrap_region_descriptor(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+    ) -> Result<metapb::RegionDescriptor> {
+        self.store.load_or_bootstrap_region_descriptor(descriptor)
+    }
+
+    pub fn put_region_apply_state(&self, state: &RegionApplyState) -> Result<()> {
+        self.store.put_region_apply_state(state)
+    }
+
+    pub fn get_region_apply_state(&self, region_id: u64) -> Result<Option<RegionApplyState>> {
+        self.store.get_region_apply_state(region_id)
     }
 
     fn lock(&self) -> mvcc::Result<std::sync::MutexGuard<'_, ()>> {
@@ -1032,6 +1127,52 @@ fn validate_commit_version(start_version: u64, commit_version: u64) -> Option<kv
     })
 }
 
+fn region_descriptor_key(region_id: u64) -> Vec<u8> {
+    region_meta_key(b"descriptor/", region_id)
+}
+
+fn region_apply_state_key(region_id: u64) -> Vec<u8> {
+    region_meta_key(b"apply-state/", region_id)
+}
+
+fn region_meta_key(prefix: &[u8], region_id: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(prefix.len() + 8);
+    key.extend_from_slice(prefix);
+    key.extend_from_slice(&region_id.to_be_bytes());
+    key
+}
+
+fn encode_apply_state(state: &RegionApplyState) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + 8 * 5);
+    out.push(1);
+    out.extend_from_slice(&state.region_id.to_be_bytes());
+    out.extend_from_slice(&state.term.to_be_bytes());
+    out.extend_from_slice(&state.applied_index.to_be_bytes());
+    out.extend_from_slice(&state.truncated_term.to_be_bytes());
+    out.extend_from_slice(&state.truncated_index.to_be_bytes());
+    out
+}
+
+fn decode_apply_state(bytes: &[u8]) -> Result<RegionApplyState> {
+    if bytes.len() != 1 + 8 * 5 {
+        return Err(Error::InvalidMetadata(
+            "invalid apply state length".to_owned(),
+        ));
+    }
+    if bytes[0] != 1 {
+        return Err(Error::InvalidMetadata(
+            "unsupported apply state version".to_owned(),
+        ));
+    }
+    Ok(RegionApplyState {
+        region_id: u64::from_be_bytes(bytes[1..9].try_into().unwrap()),
+        term: u64::from_be_bytes(bytes[9..17].try_into().unwrap()),
+        applied_index: u64::from_be_bytes(bytes[17..25].try_into().unwrap()),
+        truncated_term: u64::from_be_bytes(bytes[25..33].try_into().unwrap()),
+        truncated_index: u64::from_be_bytes(bytes[33..41].try_into().unwrap()),
+    })
+}
+
 fn to_backend_error(err: impl std::fmt::Display) -> mvcc::Error {
     mvcc::Error::Backend(err.to_string())
 }
@@ -1123,6 +1264,58 @@ mod tests {
         assert!(applied);
         assert_eq!(store.data().unwrap().get(b"k").unwrap().unwrap(), b"v");
         assert_eq!(store.lock().unwrap().get(b"k").unwrap().unwrap(), b"lock");
+    }
+
+    #[test]
+    fn region_descriptor_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let descriptor = metapb::RegionDescriptor {
+            region_id: 42,
+            start_key: b"a".to_vec(),
+            end_key: b"z".to_vec(),
+            epoch: Some(metapb::RegionEpoch {
+                version: 7,
+                conf_version: 3,
+            }),
+            peers: vec![metapb::RegionPeer {
+                store_id: 5,
+                peer_id: 55,
+            }],
+            ..Default::default()
+        };
+        {
+            let store = HoltStore::open_file(dir.path()).unwrap();
+            assert!(store.get_region_descriptor(42).unwrap().is_none());
+            let bootstrapped = store
+                .load_or_bootstrap_region_descriptor(&descriptor)
+                .unwrap();
+            assert_eq!(bootstrapped, descriptor);
+            store.checkpoint().unwrap();
+        }
+        let reopened = HoltStore::open_file(dir.path()).unwrap();
+        assert_eq!(
+            reopened.get_region_descriptor(42).unwrap().unwrap(),
+            descriptor
+        );
+    }
+
+    #[test]
+    fn region_apply_state_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let state = RegionApplyState {
+            region_id: 42,
+            term: 9,
+            applied_index: 123,
+            truncated_term: 8,
+            truncated_index: 99,
+        };
+        {
+            let store = HoltStore::open_file(dir.path()).unwrap();
+            store.put_region_apply_state(&state).unwrap();
+            store.checkpoint().unwrap();
+        }
+        let reopened = HoltStore::open_file(dir.path()).unwrap();
+        assert_eq!(reopened.get_region_apply_state(42).unwrap().unwrap(), state);
     }
 
     #[test]
