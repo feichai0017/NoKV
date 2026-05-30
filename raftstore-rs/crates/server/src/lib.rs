@@ -1484,7 +1484,7 @@ where
         request: Request<adminpb::AddPeerRequest>,
     ) -> Result<Response<adminpb::AddPeerResponse>, Status> {
         let request = request.into_inner();
-        if request.store_id == 0 || request.peer_id == 0 {
+        if request.region_id == 0 || request.store_id == 0 || request.peer_id == 0 {
             return Err(Status::invalid_argument(
                 "region_id, store_id, and peer_id are required",
             ));
@@ -3221,6 +3221,36 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn admin_add_peer_requires_region_store_and_peer() {
+        let service = RaftAdminService::new(EmptyApplyStatus);
+
+        for request in [
+            adminpb::AddPeerRequest {
+                region_id: 0,
+                store_id: 1,
+                peer_id: 1,
+            },
+            adminpb::AddPeerRequest {
+                region_id: 1,
+                store_id: 0,
+                peer_id: 1,
+            },
+            adminpb::AddPeerRequest {
+                region_id: 1,
+                store_id: 1,
+                peer_id: 0,
+            },
+        ] {
+            let err = service.add_peer(Request::new(request)).await.unwrap_err();
+            assert_eq!(err.code(), tonic::Code::InvalidArgument);
+            assert_eq!(
+                err.message(),
+                "region_id, store_id, and peer_id are required"
+            );
+        }
     }
 
     #[test]
