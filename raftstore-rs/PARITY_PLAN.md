@@ -296,7 +296,10 @@ Known gaps:
   each other. Scheduler operations that should be executable but currently fail
   at the local admin boundary, such as a transient leader-transfer RPC failure,
   are also persisted into the same pending catalog instead of being dropped
-  after one heartbeat attempt. The pending count is surfaced through
+  after one heartbeat attempt. The Rust pending topology retry loop now also
+  replays pending scheduler operations through the local admin endpoint and
+  removes them from Holt after an applied or permanently invalid result. The
+  pending count is surfaced through
   `ExecutionStatus.Restart.PendingSchedulerOperationCount`, and each pending
   operation also appears in `ExecutionStatus.Topology` with a stable transition
   id. Rust store heartbeat now also matches the Go coordinator client policy:

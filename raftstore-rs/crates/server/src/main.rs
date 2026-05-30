@@ -65,7 +65,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             region.clone(),
             Some(mvcc.clone()),
         );
-        spawn_pending_topology_retries(coordinator.clone(), mvcc.clone());
+        spawn_pending_topology_retries(coordinator.clone(), mvcc.clone(), addr);
         let topology_publisher = coordinator_topology_publisher(coordinator, Some(mvcc.clone()));
         nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
             addr,
@@ -514,12 +514,13 @@ fn root_event_status_metadata(status: &tonic::Status) -> Option<HashMap<String, 
 fn spawn_pending_topology_retries(
     config: Option<CoordinatorHeartbeatConfig>,
     pending_store: HoltMvccStore,
+    addr: SocketAddr,
 ) {
     let Some(config) = config else {
         return;
     };
     tokio::spawn(async move {
-        run_pending_topology_retries(config, pending_store).await;
+        run_pending_topology_retries(config, pending_store, local_admin_endpoint(addr)).await;
     });
 }
 
@@ -577,11 +578,13 @@ fn startup_root_events(
 async fn run_pending_topology_retries(
     config: CoordinatorHeartbeatConfig,
     pending_store: HoltMvccStore,
+    admin_endpoint: String,
 ) {
     let mut ticker = tokio::time::interval(config.interval);
     loop {
         ticker.tick().await;
         retry_pending_topology_events(&config.endpoints, &pending_store).await;
+        retry_pending_scheduler_operations(&admin_endpoint, &pending_store).await;
     }
 }
 
@@ -631,6 +634,45 @@ async fn retry_pending_topology_events(endpoints: &[String], pending_store: &Hol
                     error = %err,
                     sequence = item.sequence,
                     "rust raftstore pending topology publish failed"
+                );
+                return;
+            }
+        }
+    }
+}
+
+async fn retry_pending_scheduler_operations(admin_endpoint: &str, pending_store: &HoltMvccStore) {
+    let pending = match pending_store.pending_scheduler_operations() {
+        Ok(pending) => pending,
+        Err(err) => {
+            tracing::debug!(error = %err, "rust raftstore pending scheduler load failed");
+            return;
+        }
+    };
+    for item in pending {
+        match execute_scheduler_operation(admin_endpoint, &item.operation).await {
+            Ok(SchedulerOperationOutcome::Applied)
+            | Ok(SchedulerOperationOutcome::Invalid { .. }) => {
+                if let Err(err) = pending_store.delete_pending_scheduler_operation(&item.operation)
+                {
+                    tracing::debug!(
+                        error = %err,
+                        "rust raftstore pending scheduler delete failed"
+                    );
+                    return;
+                }
+            }
+            Ok(SchedulerOperationOutcome::Unsupported { kind, reason }) => {
+                tracing::debug!(
+                    ?kind,
+                    %reason,
+                    "rust raftstore pending scheduler operation still unsupported"
+                );
+            }
+            Err(err) => {
+                tracing::debug!(
+                    error = %err,
+                    "rust raftstore pending scheduler operation retry failed"
                 );
                 return;
             }
@@ -1448,6 +1490,41 @@ mod tests {
         let pending = store.pending_scheduler_operations().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].operation, operation);
+    }
+
+    #[tokio::test]
+    async fn pending_scheduler_operation_retries_and_deletes_after_apply() {
+        let addr = reserve_loopback_addr();
+        let admin = CaptureRaftAdmin::default();
+        let transfers = admin.transfers.clone();
+        let handle = tokio::spawn(async move {
+            tonic::transport::Server::builder()
+                .add_service(adminpb::raft_admin_server::RaftAdminServer::new(admin))
+                .serve(addr)
+                .await
+                .unwrap();
+        });
+        wait_for_server(addr).await;
+        let store = HoltMvccStore::open_memory().unwrap();
+        let operation = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
+            region_id: 7,
+            source_peer_id: 101,
+            target_peer_id: 202,
+            ..Default::default()
+        };
+        store
+            .record_pending_scheduler_operation(&operation)
+            .unwrap();
+
+        retry_pending_scheduler_operations(&local_admin_endpoint(addr), &store).await;
+
+        assert!(store.pending_scheduler_operations().unwrap().is_empty());
+        let captured = transfers.lock().unwrap();
+        assert_eq!(captured.len(), 1);
+        assert_eq!(captured[0].region_id, 7);
+        assert_eq!(captured[0].peer_id, 202);
+        handle.abort();
     }
 
     #[tokio::test]
