@@ -242,7 +242,7 @@ impl RegionAdmission {
         }
     }
 
-    fn descriptor(&self) -> metapb::RegionDescriptor {
+    pub(crate) fn descriptor(&self) -> metapb::RegionDescriptor {
         let peers = if self.peers.is_empty() {
             vec![self.peer()]
         } else {

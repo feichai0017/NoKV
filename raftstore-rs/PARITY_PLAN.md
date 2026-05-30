@@ -165,6 +165,9 @@ The first slices are intentionally narrow:
   `RegionRuntimeStatus` now rejects missing region ids like the Go admin
   service, and `ExecutionStatus` returns the last `StoreKV` admission decision
   plus restart counts for the hosted single-region runtime.
+  StoreKV and RaftAdmin now share one mutable admission state, so successful
+  membership changes immediately advance the StoreKV epoch/peer gate instead
+  of leaving reads and writes on a stale startup descriptor.
   `WatchApply` now mirrors Go's prefix projection more closely: buffer 0 maps
   to the default watch buffer, emitted events contain only matching keys, and
   large key sets are split into bounded messages.

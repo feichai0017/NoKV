@@ -4,7 +4,6 @@
 //! protobuf contract intact while the Rust state-machine and replication layers
 //! are brought up behind the service.
 
-use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
@@ -72,7 +71,7 @@ pub fn apply_status_from_holt(state: RegionApplyState) -> nokv_raftnode::ApplySt
 #[derive(Debug, Clone, Default)]
 pub struct StoreKvService<E = MvccStore> {
     engine: E,
-    admission: RegionAdmission,
+    admission: RegionAdmissionState,
     execution: ExecutionRuntime,
 }
 
@@ -88,6 +87,18 @@ impl<E> StoreKvService<E> {
     fn with_admission_and_execution(
         engine: E,
         admission: RegionAdmission,
+        execution: ExecutionRuntime,
+    ) -> Self {
+        Self::with_admission_state_and_execution(
+            engine,
+            RegionAdmissionState::new(admission),
+            execution,
+        )
+    }
+
+    fn with_admission_state_and_execution(
+        engine: E,
+        admission: RegionAdmissionState,
         execution: ExecutionRuntime,
     ) -> Self {
         Self {
@@ -134,7 +145,7 @@ impl<E> StoreKvService<E>
 where
     E: RaftRuntimeStatusProvider,
 {
-    fn admission_snapshot(&self) -> RegionAdmission {
+    fn admission_snapshot(&self) -> Result<RegionAdmission, Status> {
         self.admission
             .with_runtime_status(self.engine.raft_runtime_status())
     }
@@ -148,6 +159,73 @@ where
         self.execution
             .record_admission(class, context, region_error);
     }
+}
+
+#[derive(Debug, Clone)]
+struct RegionAdmissionState {
+    inner: Arc<Mutex<RegionAdmission>>,
+}
+
+impl Default for RegionAdmissionState {
+    fn default() -> Self {
+        Self::new(RegionAdmission::default())
+    }
+}
+
+impl RegionAdmissionState {
+    fn new(admission: RegionAdmission) -> Self {
+        Self {
+            inner: Arc::new(Mutex::new(admission)),
+        }
+    }
+
+    fn snapshot(&self) -> Result<RegionAdmission, Status> {
+        self.inner
+            .lock()
+            .map_err(|_| admission_state_poisoned())
+            .map(|admission| admission.clone())
+    }
+
+    fn with_runtime_status(&self, status: RaftRuntimeStatus) -> Result<RegionAdmission, Status> {
+        Ok(self.snapshot()?.with_runtime_status(status))
+    }
+
+    fn validate_region(&self, region_id: u64) -> Result<(), Status> {
+        if region_id == 0 {
+            return Err(Status::invalid_argument("region_id is required"));
+        }
+        let admission = self.snapshot()?;
+        if region_id != admission.region_id {
+            return Err(Status::failed_precondition(format!(
+                "region {region_id} is not hosted by this raft admin"
+            )));
+        }
+        Ok(())
+    }
+
+    fn descriptor(&self) -> Result<metapb::RegionDescriptor, Status> {
+        Ok(self.snapshot()?.descriptor())
+    }
+
+    fn add_peer(&self, peer_id: u64, store_id: u64) -> Result<metapb::RegionDescriptor, Status> {
+        let mut admission = self.inner.lock().map_err(|_| admission_state_poisoned())?;
+        if admission.peers.insert(peer_id, store_id).is_none() {
+            admission.epoch_conf_version += 1;
+        }
+        Ok(admission.descriptor())
+    }
+
+    fn remove_peer(&self, peer_id: u64) -> Result<metapb::RegionDescriptor, Status> {
+        let mut admission = self.inner.lock().map_err(|_| admission_state_poisoned())?;
+        if admission.peers.remove(&peer_id).is_some() {
+            admission.epoch_conf_version += 1;
+        }
+        Ok(admission.descriptor())
+    }
+}
+
+fn admission_state_poisoned() -> Status {
+    Status::internal("region admission state mutex poisoned")
 }
 
 #[tonic::async_trait]
@@ -164,7 +242,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("get request missing payload"))?;
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_read_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.key.as_slice()),
@@ -209,7 +287,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("batch get request missing payload"))?;
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_read_optional_keys(
             request.context.as_ref(),
             inner.requests.iter().map(|req| req.key.as_slice()),
@@ -283,7 +361,7 @@ where
                 "StoreKV Scan reverse scans are not supported yet",
             ));
         }
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_read_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.start_key.as_slice()),
@@ -328,7 +406,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("prewrite request missing payload"))?;
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner
@@ -381,7 +459,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("commit request missing payload"))?;
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
@@ -426,7 +504,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("batch rollback request missing payload"))?;
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
@@ -476,7 +554,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("resolve lock request missing payload"))?;
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
@@ -526,7 +604,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("check txn status request missing payload"))?;
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.primary_key.as_slice()),
@@ -576,7 +654,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("txn heart beat request missing payload"))?;
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.primary_key.as_slice()),
@@ -636,7 +714,7 @@ where
                     .iter()
                     .map(|mutation| mutation.key.as_slice()),
             );
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_optional_keys(request.context.as_ref(), keys)?;
         self.record_admission(
             adminpb::ExecutionAdmissionClass::Write,
@@ -685,7 +763,7 @@ where
         let keys = std::iter::once(inner.routing_key.as_slice())
             .chain(inner.dependency_keys.iter().map(|key| key.as_slice()))
             .chain(inner.entries.iter().map(|entry| entry.key.as_slice()));
-        let admission = self.admission_snapshot();
+        let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_required_keys(request.context.as_ref(), keys)?;
         self.record_admission(
             adminpb::ExecutionAdmissionClass::Write,
@@ -773,7 +851,7 @@ where
 #[derive(Debug, Clone, Default)]
 pub struct RaftAdminService<S = EmptyApplyStatus> {
     status: S,
-    topology: Arc<Mutex<AdminTopology>>,
+    admission: RegionAdmissionState,
     execution: ExecutionRuntime,
 }
 
@@ -791,118 +869,28 @@ impl<S> RaftAdminService<S> {
         admission: RegionAdmission,
         execution: ExecutionRuntime,
     ) -> Self {
+        Self::with_admission_state_and_execution(
+            status,
+            RegionAdmissionState::new(admission),
+            execution,
+        )
+    }
+
+    fn with_admission_state_and_execution(
+        status: S,
+        admission: RegionAdmissionState,
+        execution: ExecutionRuntime,
+    ) -> Self {
         Self {
             status,
-            topology: Arc::new(Mutex::new(AdminTopology::from_admission(&admission))),
+            admission,
             execution,
-        }
-    }
-}
-
-#[derive(Debug, Clone)]
-struct AdminTopology {
-    region_id: u64,
-    epoch_version: u64,
-    conf_version: u64,
-    start_key: Vec<u8>,
-    end_key: Vec<u8>,
-    peers: BTreeMap<u64, u64>,
-}
-
-impl Default for AdminTopology {
-    fn default() -> Self {
-        Self::from_admission(&RegionAdmission::default())
-    }
-}
-
-impl AdminTopology {
-    fn from_admission(admission: &RegionAdmission) -> Self {
-        let peers = if admission.peers.is_empty() {
-            BTreeMap::from([(admission.peer_id, admission.store_id)])
-        } else {
-            admission.peers.clone()
-        };
-        Self {
-            region_id: admission.region_id,
-            epoch_version: admission.epoch_version,
-            conf_version: admission.epoch_conf_version,
-            start_key: admission.start_key.clone(),
-            end_key: admission.end_key.clone(),
-            peers,
-        }
-    }
-
-    fn add_peer(&mut self, peer_id: u64, store_id: u64) {
-        if self.peers.insert(peer_id, store_id).is_none() {
-            self.conf_version += 1;
-        }
-    }
-
-    fn remove_peer(&mut self, peer_id: u64) {
-        if self.peers.remove(&peer_id).is_some() {
-            self.conf_version += 1;
-        }
-    }
-
-    fn validate_region(&self, region_id: u64) -> Result<(), Status> {
-        if region_id == 0 {
-            return Err(Status::invalid_argument("region_id is required"));
-        }
-        if region_id != self.region_id {
-            return Err(Status::failed_precondition(format!(
-                "region {region_id} is not hosted by this raft admin"
-            )));
-        }
-        Ok(())
-    }
-
-    fn descriptor(&self) -> metapb::RegionDescriptor {
-        metapb::RegionDescriptor {
-            region_id: self.region_id,
-            start_key: self.start_key.clone(),
-            end_key: self.end_key.clone(),
-            epoch: Some(metapb::RegionEpoch {
-                version: self.epoch_version,
-                conf_version: self.conf_version,
-            }),
-            peers: self
-                .peers
-                .iter()
-                .map(|(peer_id, store_id)| metapb::RegionPeer {
-                    store_id: *store_id,
-                    peer_id: *peer_id,
-                })
-                .collect(),
-            ..Default::default()
         }
     }
 }
 
 fn membership_unimplemented() -> Status {
     Status::unimplemented("rust raft membership requires an OpenRaftRegion")
-}
-
-fn admin_topology_poisoned() -> Status {
-    Status::internal("admin topology mutex poisoned")
-}
-
-fn admin_region_descriptor(
-    topology: &Arc<Mutex<AdminTopology>>,
-) -> Result<metapb::RegionDescriptor, Status> {
-    topology
-        .lock()
-        .map_err(|_| admin_topology_poisoned())
-        .map(|topology| topology.descriptor())
-}
-
-fn validate_admin_region(
-    topology: &Arc<Mutex<AdminTopology>>,
-    region_id: u64,
-) -> Result<(), Status> {
-    topology
-        .lock()
-        .map_err(|_| admin_topology_poisoned())?
-        .validate_region(region_id)
 }
 
 #[tonic::async_trait]
@@ -1082,7 +1070,7 @@ where
                 "region_id, store_id, and peer_id are required",
             ));
         }
-        validate_admin_region(&self.topology, request.region_id)?;
+        self.admission.validate_region(request.region_id)?;
         self.status
             .add_voter(
                 request.peer_id,
@@ -1092,14 +1080,7 @@ where
                 )),
             )
             .await?;
-        let region = {
-            let mut topology = self
-                .topology
-                .lock()
-                .map_err(|_| admin_topology_poisoned())?;
-            topology.add_peer(request.peer_id, request.store_id);
-            topology.descriptor()
-        };
+        let region = self.admission.add_peer(request.peer_id, request.store_id)?;
         Ok(Response::new(adminpb::AddPeerResponse {
             region: Some(region),
         }))
@@ -1115,16 +1096,9 @@ where
                 "region_id and peer_id are required",
             ));
         }
-        validate_admin_region(&self.topology, request.region_id)?;
+        self.admission.validate_region(request.region_id)?;
         self.status.remove_voter(request.peer_id).await?;
-        let region = {
-            let mut topology = self
-                .topology
-                .lock()
-                .map_err(|_| admin_topology_poisoned())?;
-            topology.remove_peer(request.peer_id);
-            topology.descriptor()
-        };
+        let region = self.admission.remove_peer(request.peer_id)?;
         Ok(Response::new(adminpb::RemovePeerResponse {
             region: Some(region),
         }))
@@ -1140,10 +1114,10 @@ where
                 "region_id and peer_id are required",
             ));
         }
-        validate_admin_region(&self.topology, request.region_id)?;
+        self.admission.validate_region(request.region_id)?;
         self.status.transfer_leader(request.peer_id).await?;
         Ok(Response::new(adminpb::TransferLeaderResponse {
-            region: Some(admin_region_descriptor(&self.topology)?),
+            region: Some(self.admission.descriptor()?),
         }))
     }
 
@@ -1164,7 +1138,7 @@ where
         let region = if status.region_id == 0 {
             None
         } else {
-            Some(admin_region_descriptor(&self.topology)?)
+            Some(self.admission.descriptor()?)
         };
         let runtime = self.status.raft_runtime_status();
         Ok(Response::new(adminpb::RegionRuntimeStatusResponse {
@@ -1242,16 +1216,17 @@ where
         + RaftRuntimeStatusProvider,
 {
     let execution = ExecutionRuntime::default();
+    let admission = RegionAdmissionState::new(admission);
     tonic::transport::Server::builder()
         .add_service(StoreKvServer::new(
-            StoreKvService::with_admission_and_execution(
+            StoreKvService::with_admission_state_and_execution(
                 engine.clone(),
                 admission.clone(),
                 execution.clone(),
             ),
         ))
         .add_service(RaftAdminServer::new(
-            RaftAdminService::with_admission_and_execution(engine, admission, execution),
+            RaftAdminService::with_admission_state_and_execution(engine, admission, execution),
         ))
         .serve(addr)
         .await
@@ -1268,16 +1243,17 @@ where
     let execution = ExecutionRuntime::default();
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
     transport.register(admission.region_id, region.raft_handle());
+    let admission = RegionAdmissionState::new(admission);
     tonic::transport::Server::builder()
         .add_service(StoreKvServer::new(
-            StoreKvService::with_admission_and_execution(
+            StoreKvService::with_admission_state_and_execution(
                 region.clone(),
                 admission.clone(),
                 execution.clone(),
             ),
         ))
         .add_service(RaftAdminServer::new(
-            RaftAdminService::with_admission_and_execution(region, admission, execution),
+            RaftAdminService::with_admission_state_and_execution(region, admission, execution),
         ))
         .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
         .serve(addr)
@@ -1348,6 +1324,7 @@ mod tests {
     use adminpb::raft_admin_server::RaftAdmin;
     use kvpb::store_kv_server::StoreKv;
     use nokv_proto::nokv::meta::v1 as metapb;
+    use std::collections::BTreeMap;
     use std::path::Path;
     use std::time::Duration;
     use tokio_stream::StreamExt;
@@ -2484,6 +2461,11 @@ mod tests {
             ..Default::default()
         };
         let service = RaftAdminService::with_admission(leader.clone(), admission);
+        let store_service = StoreKvService::with_admission_state_and_execution(
+            leader.clone(),
+            service.admission.clone(),
+            ExecutionRuntime::default(),
+        );
 
         let add = service
             .add_peer(Request::new(adminpb::AddPeerRequest {
@@ -2522,6 +2504,58 @@ mod tests {
         assert_eq!(leader_status.local_peer_id, 1);
         assert_eq!(leader_status.leader_peer_id, 1);
         assert!(leader_status.leader);
+
+        let stale_epoch = store_service
+            .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
+                context: Some(context(&RegionAdmission {
+                    region_id: 7,
+                    store_id: 1,
+                    peer_id: 1,
+                    epoch_conf_version: 1,
+                    ..Default::default()
+                })),
+                request: Some(kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"admin-updated-admission-stale".to_vec(),
+                        value: b"rejected".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 10,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(stale_epoch.region_error.unwrap().epoch_not_match.is_some());
+
+        let accepted = store_service
+            .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
+                context: Some(context(&RegionAdmission {
+                    region_id: 7,
+                    store_id: 1,
+                    peer_id: 1,
+                    epoch_conf_version: 2,
+                    ..Default::default()
+                })),
+                request: Some(kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"admin-updated-admission".to_vec(),
+                        value: b"accepted".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 11,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(accepted.response.unwrap().applied_keys, 1);
 
         let transfer = service
             .transfer_leader(Request::new(adminpb::TransferLeaderRequest {
