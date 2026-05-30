@@ -577,6 +577,35 @@ func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T
 	}}, 96, 97)
 	require.NoError(t, err)
 	require.True(t, handled)
+
+	peer2Admin, closePeer2Admin, err = adminclient.Dial(ctx, addrs[2])
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closePeer2Admin()) }()
+	removePeer1, err := peer2Admin.RemovePeer(ctx, &adminpb.RemovePeerRequest{
+		RegionId: 1,
+		PeerId:   1,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(5), removePeer1.GetRegion().GetEpoch().GetConfVersion())
+	require.Equal(t, []*metapb.RegionPeer{{StoreId: 2, PeerId: 2}}, removePeer1.GetRegion().GetPeers())
+
+	cliPeer2Only, err := New(Config{
+		RegionResolver: &mockRegionResolver{region: rustRaftstoreSinglePeerRegionAt(2, 2, 5)},
+		StoreResolver: staticStoreResolver{
+			{StoreID: 2, Addr: addrs[2], State: coordpb.StoreState_STORE_STATE_UP},
+		},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 3},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cliPeer2Only.Close()) })
+	handled, err = cliPeer2Only.TryAtomicMutate(ctx, []byte("agent/peer2-only"), nil, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/peer2-only"),
+		Value: []byte("single-peer2"),
+	}}, 98, 99)
+	require.NoError(t, err)
+	require.True(t, handled)
 }
 
 func TestRustRaftstoreEndpointHoltMembershipSurvivesRestart(t *testing.T) {
@@ -1055,10 +1084,14 @@ func rustRaftstoreTopologyDescriptor() metatopology.Descriptor {
 }
 
 func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {
+	return rustRaftstoreSinglePeerRegionAt(1, 1, 1)
+}
+
+func rustRaftstoreSinglePeerRegionAt(storeID, peerID, confVersion uint64) *metapb.RegionDescriptor {
 	return &metapb.RegionDescriptor{
 		RegionId: 1,
-		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
-		Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 1}},
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: confVersion},
+		Peers:    []*metapb.RegionPeer{{StoreId: storeID, PeerId: peerID}},
 	}
 }
 
