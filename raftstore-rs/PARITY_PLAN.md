@@ -292,7 +292,9 @@ Known gaps:
   each other. The pending count is surfaced through
   `ExecutionStatus.Restart.PendingSchedulerOperationCount`, and each pending
   operation also appears in `ExecutionStatus.Topology` with a stable transition
-  id.
+  id. Pending root events are also projected into `ExecutionStatus.Topology`
+  with `TerminalPending` publish state, while blocked events remain terminal
+  and take precedence for the same transition id.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. When a coordinator endpoint is configured, startup
