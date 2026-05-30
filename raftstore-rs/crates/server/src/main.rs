@@ -17,9 +17,9 @@ use nokv_raftnode::{
     TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
-    apply_status_from_holt, EmptyRegionDescriptorSink, EmptyRestartDiagnostics,
-    EmptyTopologyPublisher, HoltRegionMetadataSink, PeerEndpointCatalog, RegionAdmission,
-    TopologyPublishOutcome, TopologyPublisher,
+    apply_status_from_holt, root_event_transition_id, EmptyRegionDescriptorSink,
+    EmptyRestartDiagnostics, EmptyTopologyPublisher, HoltRegionMetadataSink, PeerEndpointCatalog,
+    RegionAdmission, TopologyPublishOutcome, TopologyPublisher,
 };
 use prost::Message;
 use prost_types::Any;
@@ -510,49 +510,6 @@ fn root_event_status_metadata(status: &tonic::Status) -> Option<HashMap<String, 
         }
     }
     None
-}
-
-fn root_event_transition_id(event: &metapb::RootEvent) -> String {
-    match event.payload.as_ref() {
-        Some(metapb::root_event::Payload::PeerChange(change)) => {
-            let action = match metapb::RootEventKind::try_from(event.kind)
-                .unwrap_or(metapb::RootEventKind::Unspecified)
-            {
-                metapb::RootEventKind::PeerAdditionPlanned
-                | metapb::RootEventKind::PeerAdded
-                | metapb::RootEventKind::PeerAdditionCancelled => "add",
-                metapb::RootEventKind::PeerRemovalPlanned
-                | metapb::RootEventKind::PeerRemoved
-                | metapb::RootEventKind::PeerRemovalCancelled => "remove",
-                _ => "unknown",
-            };
-            format!(
-                "peer:{}:{action}:{}:{}",
-                change.region_id, change.store_id, change.peer_id
-            )
-        }
-        Some(metapb::root_event::Payload::RangeSplit(split)) => {
-            format!(
-                "split:{}:{}",
-                split.parent_region_id,
-                lowercase_hex(&split.split_key)
-            )
-        }
-        Some(metapb::root_event::Payload::RangeMerge(merge)) => {
-            format!("merge:{}:{}", merge.left_region_id, merge.right_region_id)
-        }
-        _ => format!("root-event:{}", event.kind),
-    }
-}
-
-fn lowercase_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 
 fn spawn_pending_topology_retries(

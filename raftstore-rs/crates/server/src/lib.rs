@@ -13,7 +13,6 @@ use nokv_holtstore::{
 };
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
-use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
@@ -27,11 +26,16 @@ use tonic::{Request, Response, Status};
 
 mod admission;
 mod execution;
+mod topology;
 
 pub use adminpb::raft_admin_server::RaftAdminServer;
 pub use admission::RegionAdmission;
 use execution::ExecutionRuntime;
 pub use kvpb::store_kv_server::StoreKvServer;
+pub use topology::root_event_transition_id;
+use topology::{
+    peer_change_transition_id, scheduler_operation_action, scheduler_operation_transition_id,
+};
 
 const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;
 const DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE: usize = 512;
@@ -208,54 +212,6 @@ fn pending_scheduler_operation_topology_status(
         last_error: "scheduler operation pending".to_owned(),
         ..Default::default()
     }
-}
-
-fn scheduler_operation_transition_id(operation: &coordpb::SchedulerOperation) -> String {
-    let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
-        .unwrap_or(coordpb::SchedulerOperationType::None);
-    match kind {
-        coordpb::SchedulerOperationType::LeaderTransfer => format!(
-            "leader-transfer:{}:{}:{}",
-            operation.region_id, operation.source_peer_id, operation.target_peer_id
-        ),
-        coordpb::SchedulerOperationType::SplitRegion => {
-            format!(
-                "split:{}:{}",
-                operation.region_id,
-                lowercase_hex(&operation.split_key)
-            )
-        }
-        coordpb::SchedulerOperationType::MergeRegion => {
-            format!(
-                "merge:{}:{}",
-                operation.region_id, operation.source_region_id
-            )
-        }
-        coordpb::SchedulerOperationType::None => {
-            format!("scheduler:{}:{}", operation.r#type, operation.region_id)
-        }
-    }
-}
-
-fn scheduler_operation_action(operation: &coordpb::SchedulerOperation) -> &'static str {
-    let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
-        .unwrap_or(coordpb::SchedulerOperationType::None);
-    match kind {
-        coordpb::SchedulerOperationType::LeaderTransfer => "leader transfer",
-        coordpb::SchedulerOperationType::SplitRegion => "range split",
-        coordpb::SchedulerOperationType::MergeRegion => "range merge",
-        coordpb::SchedulerOperationType::None => "scheduler operation",
-    }
-}
-
-fn lowercase_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }
 
 #[tonic::async_trait]
@@ -1696,10 +1652,6 @@ fn push_missing_topology_status(
         return;
     }
     topology.push(status);
-}
-
-fn peer_change_transition_id(action: &str, region_id: u64, store_id: u64, peer_id: u64) -> String {
-    format!("peer:{region_id}:{action}:{store_id}:{peer_id}")
 }
 
 pub async fn serve(addr: SocketAddr, mvcc: MvccStore) -> Result<(), tonic::transport::Error> {
