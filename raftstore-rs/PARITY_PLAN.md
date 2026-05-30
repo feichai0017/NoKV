@@ -95,6 +95,10 @@ The first slices are intentionally narrow:
   learner and membership APIs. The in-process testkit covers adding a new voter,
   committing a real metadata KV command to the joined peer, and removing that
   voter back out of the membership.
+- `RaftAdmin` now wires `AddPeer` and `RemovePeer` onto those
+  `OpenRaftRegion` voter-change helpers and returns an updated protobuf region
+  descriptor from the service-local topology. Non-OpenRaft apply engines still
+  return an explicit `Unimplemented` error for membership RPCs.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`.
@@ -119,9 +123,9 @@ Known gaps:
   records, and Holt server mode persists apply status after successful write
   commands. The single-region service still bootstraps a default descriptor
   until coordinator-provided topology is wired.
-- Admin membership RPCs return `Unimplemented` until the service layer can map
-  protobuf region/peer requests onto the raftnode voter-change helpers and
-  return a real region descriptor.
+- Admin `AddPeer`/`RemovePeer` RPCs are wired for `OpenRaftRegion`.
+  `TransferLeader` remains explicitly unimplemented until raftnode exposes a
+  matching leadership-transfer boundary.
 - Restart recovery now covers single-node Holt restart and write-after-restart.
   Multi-node restart still needs durable vote, membership-change state, and
   snapshot install before it is production-complete.

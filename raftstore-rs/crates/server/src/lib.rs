@@ -4,13 +4,19 @@
 //! protobuf contract intact while the Rust state-machine and replication layers
 //! are brought up behind the service.
 
+use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::sync::{Arc, Mutex};
 
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
+use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
-use nokv_raftnode::{ApplyStatusProvider, ApplyWatchProvider, RaftCommandExecutor};
+use nokv_raftnode::{
+    AppliedKvEngine, ApplyStatusProvider, ApplyStatusSink, ApplyWatchProvider, BasicNode,
+    PersistentAppliedKvEngine, RaftCommandExecutor, RegionApplyEngine,
+};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
@@ -606,11 +612,184 @@ where
 #[derive(Debug, Clone, Default)]
 pub struct RaftAdminService<S = EmptyApplyStatus> {
     status: S,
+    topology: Arc<Mutex<AdminTopology>>,
 }
 
 impl<S> RaftAdminService<S> {
     pub fn new(status: S) -> Self {
-        Self { status }
+        Self::with_admission(status, RegionAdmission::default())
+    }
+
+    pub fn with_admission(status: S, admission: RegionAdmission) -> Self {
+        Self {
+            status,
+            topology: Arc::new(Mutex::new(AdminTopology::from_admission(&admission))),
+        }
+    }
+}
+
+#[derive(Debug, Clone)]
+struct AdminTopology {
+    region_id: u64,
+    epoch_version: u64,
+    conf_version: u64,
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+    peers: BTreeMap<u64, u64>,
+}
+
+impl Default for AdminTopology {
+    fn default() -> Self {
+        Self::from_admission(&RegionAdmission::default())
+    }
+}
+
+impl AdminTopology {
+    fn from_admission(admission: &RegionAdmission) -> Self {
+        Self {
+            region_id: admission.region_id,
+            epoch_version: admission.epoch_version,
+            conf_version: admission.epoch_conf_version,
+            start_key: admission.start_key.clone(),
+            end_key: admission.end_key.clone(),
+            peers: BTreeMap::from([(admission.peer_id, admission.store_id)]),
+        }
+    }
+
+    fn add_peer(&mut self, peer_id: u64, store_id: u64) {
+        if self.peers.insert(peer_id, store_id).is_none() {
+            self.conf_version += 1;
+        }
+    }
+
+    fn remove_peer(&mut self, peer_id: u64) {
+        if self.peers.remove(&peer_id).is_some() {
+            self.conf_version += 1;
+        }
+    }
+
+    fn validate_region(&self, region_id: u64) -> Result<(), Status> {
+        if region_id == 0 {
+            return Err(Status::invalid_argument("region_id is required"));
+        }
+        if region_id != self.region_id {
+            return Err(Status::failed_precondition(format!(
+                "region {region_id} is not hosted by this raft admin"
+            )));
+        }
+        Ok(())
+    }
+
+    fn descriptor(&self) -> metapb::RegionDescriptor {
+        metapb::RegionDescriptor {
+            region_id: self.region_id,
+            start_key: self.start_key.clone(),
+            end_key: self.end_key.clone(),
+            epoch: Some(metapb::RegionEpoch {
+                version: self.epoch_version,
+                conf_version: self.conf_version,
+            }),
+            peers: self
+                .peers
+                .iter()
+                .map(|(peer_id, store_id)| metapb::RegionPeer {
+                    store_id: *store_id,
+                    peer_id: *peer_id,
+                })
+                .collect(),
+            ..Default::default()
+        }
+    }
+}
+
+fn membership_unimplemented() -> Status {
+    Status::unimplemented("rust raft membership requires an OpenRaftRegion")
+}
+
+fn admin_topology_poisoned() -> Status {
+    Status::internal("admin topology mutex poisoned")
+}
+
+fn admin_region_descriptor(
+    topology: &Arc<Mutex<AdminTopology>>,
+) -> Result<metapb::RegionDescriptor, Status> {
+    topology
+        .lock()
+        .map_err(|_| admin_topology_poisoned())
+        .map(|topology| topology.descriptor())
+}
+
+fn validate_admin_region(
+    topology: &Arc<Mutex<AdminTopology>>,
+    region_id: u64,
+) -> Result<(), Status> {
+    topology
+        .lock()
+        .map_err(|_| admin_topology_poisoned())?
+        .validate_region(region_id)
+}
+
+#[tonic::async_trait]
+pub trait RaftMembershipAdmin: Clone + Send + Sync + 'static {
+    async fn add_voter(&self, peer_id: u64, node: BasicNode) -> Result<(), Status>;
+    async fn remove_voter(&self, peer_id: u64) -> Result<(), Status>;
+}
+
+#[tonic::async_trait]
+impl<E> RaftMembershipAdmin for nokv_raftnode::OpenRaftRegion<E>
+where
+    E: RegionApplyEngine,
+{
+    async fn add_voter(&self, peer_id: u64, node: BasicNode) -> Result<(), Status> {
+        self.add_voter(peer_id, node)
+            .await
+            .map_err(|err| Status::failed_precondition(err.to_string()))
+    }
+
+    async fn remove_voter(&self, peer_id: u64) -> Result<(), Status> {
+        self.remove_voter(peer_id, false)
+            .await
+            .map_err(|err| Status::failed_precondition(err.to_string()))
+    }
+}
+
+#[tonic::async_trait]
+impl<E> RaftMembershipAdmin for AppliedKvEngine<E>
+where
+    E: Clone + Send + Sync + 'static,
+{
+    async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
+
+    async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
+}
+
+#[tonic::async_trait]
+impl<E, S> RaftMembershipAdmin for PersistentAppliedKvEngine<E, S>
+where
+    E: Clone + Send + Sync + 'static,
+    S: ApplyStatusSink,
+{
+    async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
+
+    async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
+}
+
+#[tonic::async_trait]
+impl RaftMembershipAdmin for EmptyApplyStatus {
+    async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
+        Err(membership_unimplemented())
+    }
+
+    async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
+        Err(membership_unimplemented())
     }
 }
 
@@ -630,24 +809,64 @@ impl ApplyStatusProvider for EmptyApplyStatus {
 #[tonic::async_trait]
 impl<S> adminpb::raft_admin_server::RaftAdmin for RaftAdminService<S>
 where
-    S: ApplyStatusProvider,
+    S: ApplyStatusProvider + RaftMembershipAdmin,
 {
     async fn add_peer(
         &self,
-        _request: Request<adminpb::AddPeerRequest>,
+        request: Request<adminpb::AddPeerRequest>,
     ) -> Result<Response<adminpb::AddPeerResponse>, Status> {
-        Err(Status::unimplemented(
-            "rust raft membership is not wired yet",
-        ))
+        let request = request.into_inner();
+        if request.store_id == 0 || request.peer_id == 0 {
+            return Err(Status::invalid_argument(
+                "region_id, store_id, and peer_id are required",
+            ));
+        }
+        validate_admin_region(&self.topology, request.region_id)?;
+        self.status
+            .add_voter(
+                request.peer_id,
+                BasicNode::new(format!(
+                    "store-{}-peer-{}",
+                    request.store_id, request.peer_id
+                )),
+            )
+            .await?;
+        let region = {
+            let mut topology = self
+                .topology
+                .lock()
+                .map_err(|_| admin_topology_poisoned())?;
+            topology.add_peer(request.peer_id, request.store_id);
+            topology.descriptor()
+        };
+        Ok(Response::new(adminpb::AddPeerResponse {
+            region: Some(region),
+        }))
     }
 
     async fn remove_peer(
         &self,
-        _request: Request<adminpb::RemovePeerRequest>,
+        request: Request<adminpb::RemovePeerRequest>,
     ) -> Result<Response<adminpb::RemovePeerResponse>, Status> {
-        Err(Status::unimplemented(
-            "rust raft membership is not wired yet",
-        ))
+        let request = request.into_inner();
+        if request.peer_id == 0 {
+            return Err(Status::invalid_argument(
+                "region_id and peer_id are required",
+            ));
+        }
+        validate_admin_region(&self.topology, request.region_id)?;
+        self.status.remove_voter(request.peer_id).await?;
+        let region = {
+            let mut topology = self
+                .topology
+                .lock()
+                .map_err(|_| admin_topology_poisoned())?;
+            topology.remove_peer(request.peer_id);
+            topology.descriptor()
+        };
+        Ok(Response::new(adminpb::RemovePeerResponse {
+            region: Some(region),
+        }))
     }
 
     async fn transfer_leader(
@@ -670,13 +889,18 @@ where
                 adminpb::RegionRuntimeStatusResponse::default(),
             ));
         }
+        let region = if status.region_id == 0 {
+            None
+        } else {
+            Some(admin_region_descriptor(&self.topology)?)
+        };
         Ok(Response::new(adminpb::RegionRuntimeStatusResponse {
             known: status.region_id != 0,
             hosted: status.region_id != 0,
             local_peer_id: 1,
             leader_peer_id: 1,
             leader: status.region_id != 0,
-            region: None,
+            region,
             applied_index: status.applied_index,
             applied_term: status.term,
         }))
@@ -722,7 +946,7 @@ pub async fn serve_with_region_engine<E>(
     engine: E,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RaftCommandExecutor + ApplyStatusProvider + ApplyWatchProvider,
+    E: RaftCommandExecutor + ApplyStatusProvider + ApplyWatchProvider + RaftMembershipAdmin,
 {
     serve_with_region_engine_and_admission(addr, engine, RegionAdmission::default()).await
 }
@@ -733,14 +957,16 @@ pub async fn serve_with_region_engine_and_admission<E>(
     admission: RegionAdmission,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RaftCommandExecutor + ApplyStatusProvider + ApplyWatchProvider,
+    E: RaftCommandExecutor + ApplyStatusProvider + ApplyWatchProvider + RaftMembershipAdmin,
 {
     tonic::transport::Server::builder()
         .add_service(StoreKvServer::new(StoreKvService::with_admission(
             engine.clone(),
-            admission,
+            admission.clone(),
         )))
-        .add_service(RaftAdminServer::new(RaftAdminService::new(engine)))
+        .add_service(RaftAdminServer::new(RaftAdminService::with_admission(
+            engine, admission,
+        )))
         .serve(addr)
         .await
 }
@@ -1074,6 +1300,96 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[tokio::test]
+    async fn admin_adds_and_removes_openraft_voter() {
+        let registry = nokv_raftnode::MemoryRaftNetworkRegistry::default();
+        let mut dirs = Vec::new();
+        let mut regions = BTreeMap::new();
+
+        for node_id in 1..=2 {
+            let dir = tempfile::tempdir().unwrap();
+            let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
+            let log_store = nokv_raftnode::RegionLogStorage::new(log);
+            let state_machine = nokv_raftnode::RegionStateMachine::new(
+                nokv_raftnode::AppliedKvEngine::new(7, MvccStore::new()),
+            );
+            let region = nokv_raftnode::OpenRaftRegion::open_with_network(
+                node_id,
+                7,
+                log_store,
+                state_machine,
+                registry.factory(),
+            )
+            .await
+            .unwrap();
+            registry.register(node_id, region.raft_handle());
+            dirs.push(dir);
+            regions.insert(node_id, region);
+        }
+
+        let leader = regions.get(&1).unwrap();
+        leader
+            .initialize_members(BTreeMap::from([(1, BasicNode::new("node-1"))]))
+            .await
+            .unwrap();
+        leader.wait_for_leader(1).await.unwrap();
+
+        let admission = RegionAdmission {
+            region_id: 7,
+            store_id: 1,
+            peer_id: 1,
+            epoch_conf_version: 1,
+            ..Default::default()
+        };
+        let service = RaftAdminService::with_admission(leader.clone(), admission);
+
+        let add = service
+            .add_peer(Request::new(adminpb::AddPeerRequest {
+                region_id: 7,
+                store_id: 2,
+                peer_id: 2,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .region
+            .unwrap();
+        assert_eq!(add.region_id, 7);
+        assert_eq!(add.epoch.unwrap().conf_version, 2);
+        assert_eq!(
+            add.peers,
+            vec![
+                metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 1
+                },
+                metapb::RegionPeer {
+                    store_id: 2,
+                    peer_id: 2
+                },
+            ]
+        );
+
+        let remove = service
+            .remove_peer(Request::new(adminpb::RemovePeerRequest {
+                region_id: 7,
+                peer_id: 2,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .region
+            .unwrap();
+        assert_eq!(remove.epoch.unwrap().conf_version, 3);
+        assert_eq!(
+            remove.peers,
+            vec![metapb::RegionPeer {
+                store_id: 1,
+                peer_id: 1
+            }]
+        );
     }
 
     #[tokio::test]

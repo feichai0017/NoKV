@@ -17,7 +17,7 @@ use nokv_proto::nokv::raft::v1 as raftpb;
 use openraft::{
     error::{Fatal, InitializeError, RPCError, RaftError, Unreachable},
     network::{RPCOption, RaftNetwork, RaftNetworkFactory},
-    BasicNode, Config, Raft,
+    Config, Raft,
 };
 use prost::Message;
 use tokio::sync::broadcast;
@@ -30,6 +30,7 @@ mod region_storage;
 pub use log_codec::{decode_log_entry, encode_log_entry};
 pub use log_store::{RaftEntryLog, SegmentedEntryLog};
 pub use network::{MemoryRaftNetworkFactory, MemoryRaftNetworkRegistry};
+pub use openraft::BasicNode;
 pub use region_storage::{NoopSnapshotBuilder, RegionLogStorage, RegionStateMachine};
 
 pub type NodeId = u64;
