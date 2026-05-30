@@ -59,7 +59,9 @@ The first slices are intentionally narrow:
   proposal/apply payload shape before OpenRaft is wired.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
-  gate for context, epoch, store, leader, and key-range errors.
+  gate for context, epoch, store, leader, and key-range errors. `StoreKV`
+  handlers now execute through the same `RaftCmdRequest` boundary that OpenRaft
+  proposals will carry.
 
 Known gaps:
 

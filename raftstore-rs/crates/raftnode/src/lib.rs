@@ -56,6 +56,13 @@ pub trait ApplyWatchProvider: Clone + Send + Sync + 'static {
     fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent>;
 }
 
+pub trait RaftCommandExecutor: Clone + Send + Sync + 'static {
+    fn execute_raft_command(
+        &self,
+        req: &raftpb::RaftCmdRequest,
+    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse>;
+}
+
 #[derive(Debug)]
 struct AppliedKvInner<E> {
     region_id: RegionId,
@@ -121,7 +128,7 @@ impl<E> AppliedKvEngine<E>
 where
     E: KvEngine,
 {
-    pub fn execute_raft_command(
+    fn execute_raft_command_inner(
         &self,
         req: &raftpb::RaftCmdRequest,
     ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
@@ -225,6 +232,18 @@ where
             commit_version,
             keys,
         });
+    }
+}
+
+impl<E> RaftCommandExecutor for AppliedKvEngine<E>
+where
+    E: KvEngine,
+{
+    fn execute_raft_command(
+        &self,
+        req: &raftpb::RaftCmdRequest,
+    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
+        self.execute_raft_command_inner(req)
     }
 }
 
