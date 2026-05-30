@@ -148,6 +148,10 @@ The first slices are intentionally narrow:
   local Rust service is not the leader and follower serving is not wired yet,
   follower-prefer reads return `StaleCommand` so Go clients retry the leader,
   while writes remain leader-only and continue to return `NotLeader`.
+- The tagged Go integration harness now runs the fsmeta contract executor
+  through `fsmeta/runtime/raftstore.Runner` against a Rust StoreKV endpoint,
+  proving the upper fsmeta semantic path can use the Rust data plane without
+  changing fsmeta execution code.
 
 Known gaps:
 
@@ -173,7 +177,8 @@ Known gaps:
   catch-up from snapshot and snapshot-triggered log compaction still need full
   integration tests. Corrupt snapshot payloads are rejected before state-machine
   mutation in the current unit coverage.
-- Go fsmeta and raftstore client tests do not yet run against Rust by default.
+- Go fsmeta and raftstore client Rust-endpoint tests remain behind the
+  `rust_raftstore` build tag until the Rust data plane is the default runtime.
 - Rust follower reads are intentionally not served locally yet. The service
   preserves the Go client fallback shape for follower-prefer reads, but safe
   follower ReadIndex and bounded-stale serving still require the multi-node
