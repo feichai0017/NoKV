@@ -232,7 +232,12 @@ The first slices are intentionally narrow:
   and after membership removal, and verifies remaining follower apply progress
   through admin status. This covers the public wire contract for multi-process
   AddPeer/RemovePeer plus tonic replication rather than only Rust in-process
-  tests.
+  tests. Service admission now refreshes from the region descriptor already
+  applied by the OpenRaft state machine before layering on the local
+  leader/hosted runtime status, so a follower that later becomes leader uses
+  the replicated epoch and peer list instead of a stale startup descriptor.
+  The Go harness transfers leadership to an added peer after membership
+  changes and writes through the existing client to verify that boundary.
 - The tagged Go coordinator harness now also verifies the reverse control-plane
   path: a Rust `RaftAdmin AddPeer` call publishes the updated region descriptor
   through the existing Go coordinator root-event service, and subsequent

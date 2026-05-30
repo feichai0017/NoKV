@@ -562,6 +562,21 @@ func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T
 		return err == nil && status.GetAppliedIndex() >= leaderStatusAfterRemove.GetAppliedIndex()
 	}, 5*time.Second, 100*time.Millisecond)
 	require.NoError(t, closePeer2Admin())
+
+	_, err = admin.TransferLeader(ctx, &adminpb.TransferLeaderRequest{RegionId: 1, PeerId: 2})
+	require.NoError(t, err)
+	leaderPeerID, _ := waitForRustRaftstoreLeader(t, ctx, map[uint64]string{
+		1: addrs[1],
+		2: addrs[2],
+	})
+	require.Equal(t, uint64(2), leaderPeerID)
+	handled, err = cliAfterRemove.TryAtomicMutate(ctx, []byte("agent/after-transfer"), nil, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/after-transfer"),
+		Value: []byte("peer2-leader"),
+	}}, 96, 97)
+	require.NoError(t, err)
+	require.True(t, handled)
 }
 
 func TestRustRaftstoreEndpointHoltMembershipSurvivesRestart(t *testing.T) {

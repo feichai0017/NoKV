@@ -405,11 +405,14 @@ where
 
 impl<E> StoreKvService<E>
 where
-    E: RaftRuntimeStatusProvider,
+    E: AppliedRegionDescriptorProvider + RaftRuntimeStatusProvider,
 {
     fn admission_snapshot(&self) -> Result<RegionAdmission, Status> {
-        self.admission
-            .with_runtime_status(self.engine.raft_runtime_status())
+        let runtime = self.engine.raft_runtime_status();
+        self.admission.with_applied_descriptor_and_runtime_status(
+            self.engine.applied_region_descriptor()?,
+            runtime,
+        )
     }
 
     fn record_admission(
@@ -450,6 +453,24 @@ impl RegionAdmissionState {
 
     fn with_runtime_status(&self, status: RaftRuntimeStatus) -> Result<RegionAdmission, Status> {
         Ok(self.snapshot()?.with_runtime_status(status))
+    }
+
+    fn with_applied_descriptor_and_runtime_status(
+        &self,
+        descriptor: Option<metapb::RegionDescriptor>,
+        status: RaftRuntimeStatus,
+    ) -> Result<RegionAdmission, Status> {
+        let Some(descriptor) = descriptor else {
+            return self.with_runtime_status(status);
+        };
+        let admission = RegionAdmission::from_descriptor(&descriptor, status.leader)
+            .map_err(|err| {
+                Status::failed_precondition(format!("invalid region descriptor: {err}"))
+            })?
+            .with_runtime_status(status);
+        let mut current = self.inner.lock().map_err(|_| admission_state_poisoned())?;
+        *current = admission.clone();
+        Ok(admission)
     }
 
     fn validate_region(&self, region_id: u64) -> Result<(), Status> {
@@ -493,7 +514,10 @@ fn admission_state_poisoned() -> Status {
 #[tonic::async_trait]
 impl<E> kvpb::store_kv_server::StoreKv for StoreKvService<E>
 where
-    E: RaftCommandExecutor + ApplyWatchProvider + RaftRuntimeStatusProvider,
+    E: AppliedRegionDescriptorProvider
+        + ApplyWatchProvider
+        + RaftCommandExecutor
+        + RaftRuntimeStatusProvider,
 {
     async fn get(
         &self,
@@ -1207,6 +1231,19 @@ where
     }
 }
 
+impl<S, D> RaftAdminService<S, D>
+where
+    S: AppliedRegionDescriptorProvider + RaftRuntimeStatusProvider,
+{
+    fn admission_snapshot(&self) -> Result<RegionAdmission, Status> {
+        let runtime = self.status.raft_runtime_status();
+        self.admission.with_applied_descriptor_and_runtime_status(
+            self.status.applied_region_descriptor()?,
+            runtime,
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct PeerEndpointCatalog {
     endpoints: Arc<Mutex<BTreeMap<u64, String>>>,
@@ -1295,6 +1332,12 @@ pub trait RaftRuntimeStatusProvider: ApplyStatusProvider {
     fn raft_runtime_status(&self) -> RaftRuntimeStatus;
 }
 
+pub trait AppliedRegionDescriptorProvider: ApplyStatusProvider {
+    fn applied_region_descriptor(&self) -> Result<Option<metapb::RegionDescriptor>, Status> {
+        Ok(None)
+    }
+}
+
 #[tonic::async_trait]
 impl<E> RaftMembershipAdmin for nokv_raftnode::OpenRaftRegion<E>
 where
@@ -1350,6 +1393,15 @@ where
     }
 }
 
+impl<E> AppliedRegionDescriptorProvider for nokv_raftnode::OpenRaftRegion<E>
+where
+    E: RegionSnapshotEngine,
+{
+    fn applied_region_descriptor(&self) -> Result<Option<metapb::RegionDescriptor>, Status> {
+        nokv_raftnode::OpenRaftRegion::region_descriptor(self).map_err(internal_error)
+    }
+}
+
 #[tonic::async_trait]
 impl<E> RaftMembershipAdmin for AppliedKvEngine<E>
 where
@@ -1387,6 +1439,15 @@ where
             leader: known,
             hosted: known,
         }
+    }
+}
+
+impl<E> AppliedRegionDescriptorProvider for AppliedKvEngine<E>
+where
+    E: Clone + Send + Sync + 'static,
+{
+    fn applied_region_descriptor(&self) -> Result<Option<metapb::RegionDescriptor>, Status> {
+        AppliedKvEngine::region_descriptor(self).map_err(internal_error)
     }
 }
 
@@ -1432,6 +1493,16 @@ where
     }
 }
 
+impl<E, S> AppliedRegionDescriptorProvider for PersistentAppliedKvEngine<E, S>
+where
+    E: Clone + Send + Sync + 'static,
+    S: RegionMetadataSink,
+{
+    fn applied_region_descriptor(&self) -> Result<Option<metapb::RegionDescriptor>, Status> {
+        self.inner().region_descriptor().map_err(internal_error)
+    }
+}
+
 #[tonic::async_trait]
 impl RaftMembershipAdmin for EmptyApplyStatus {
     async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
@@ -1460,6 +1531,8 @@ impl RaftRuntimeStatusProvider for EmptyApplyStatus {
     }
 }
 
+impl AppliedRegionDescriptorProvider for EmptyApplyStatus {}
+
 #[derive(Debug, Clone, Default)]
 pub struct EmptyApplyStatus;
 
@@ -1476,7 +1549,7 @@ impl ApplyStatusProvider for EmptyApplyStatus {
 #[tonic::async_trait]
 impl<S, D> adminpb::raft_admin_server::RaftAdmin for RaftAdminService<S, D>
 where
-    S: RaftRuntimeStatusProvider + RaftMembershipAdmin,
+    S: AppliedRegionDescriptorProvider + RaftMembershipAdmin + RaftRuntimeStatusProvider,
     D: RegionDescriptorSink,
 {
     async fn add_peer(
@@ -1588,13 +1661,13 @@ where
             if let Some(endpoint) = self.peer_endpoints.endpoint_for_peer(request.peer_id)? {
                 transfer_leader_via_peer(&endpoint, request.region_id, request.peer_id).await?;
                 return Ok(Response::new(adminpb::TransferLeaderResponse {
-                    region: Some(self.admission.descriptor()?),
+                    region: Some(self.admission_snapshot()?.descriptor()),
                 }));
             }
         }
         self.status.transfer_leader(request.peer_id).await?;
         Ok(Response::new(adminpb::TransferLeaderResponse {
-            region: Some(self.admission.descriptor()?),
+            region: Some(self.admission_snapshot()?.descriptor()),
         }))
     }
 
@@ -1617,7 +1690,7 @@ where
         let region = if !hosted {
             None
         } else {
-            Some(self.admission.descriptor()?)
+            Some(self.admission_snapshot()?.descriptor())
         };
         Ok(Response::new(adminpb::RegionRuntimeStatusResponse {
             known: hosted,
@@ -1700,7 +1773,8 @@ pub async fn serve_with_region_engine<E>(
     engine: E,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RaftCommandExecutor
+    E: AppliedRegionDescriptorProvider
+        + RaftCommandExecutor
         + ApplyStatusProvider
         + ApplyWatchProvider
         + RaftMembershipAdmin
@@ -1715,7 +1789,8 @@ pub async fn serve_with_region_engine_and_admission<E>(
     admission: RegionAdmission,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RaftCommandExecutor
+    E: AppliedRegionDescriptorProvider
+        + RaftCommandExecutor
         + ApplyStatusProvider
         + ApplyWatchProvider
         + RaftMembershipAdmin
@@ -2040,6 +2115,8 @@ mod tests {
         }
     }
 
+    impl AppliedRegionDescriptorProvider for NoopAdminStatus {}
+
     #[tonic::async_trait]
     impl RaftMembershipAdmin for NoopAdminStatus {
         async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
@@ -2134,6 +2211,18 @@ mod tests {
     }
 
     impl FixedRuntimeEngine {
+        fn leader(region_id: u64, local_peer_id: u64) -> Self {
+            Self {
+                inner: nokv_raftnode::AppliedKvEngine::new(region_id, MvccStore::new()),
+                runtime: RaftRuntimeStatus {
+                    local_peer_id,
+                    leader_peer_id: local_peer_id,
+                    leader: true,
+                    hosted: true,
+                },
+            }
+        }
+
         fn follower(region_id: u64, local_peer_id: u64, leader_peer_id: u64) -> Self {
             Self {
                 inner: nokv_raftnode::AppliedKvEngine::new(region_id, MvccStore::new()),
@@ -2156,6 +2245,10 @@ mod tests {
                     hosted: false,
                 },
             }
+        }
+
+        fn set_region_descriptor(&self, descriptor: metapb::RegionDescriptor) {
+            self.inner.set_region_descriptor(descriptor).unwrap();
         }
     }
 
@@ -2184,6 +2277,12 @@ mod tests {
     impl RaftRuntimeStatusProvider for FixedRuntimeEngine {
         fn raft_runtime_status(&self) -> RaftRuntimeStatus {
             self.runtime
+        }
+    }
+
+    impl AppliedRegionDescriptorProvider for FixedRuntimeEngine {
+        fn applied_region_descriptor(&self) -> Result<Option<metapb::RegionDescriptor>, Status> {
+            self.inner.region_descriptor().map_err(internal_error)
         }
     }
 
@@ -2237,6 +2336,73 @@ mod tests {
         );
         assert_eq!(response.response.unwrap().applied_keys, 1);
         assert_eq!(engine.status().applied_index, 1);
+    }
+
+    #[tokio::test]
+    async fn store_admission_refreshes_from_applied_region_descriptor() {
+        let engine = FixedRuntimeEngine::leader(7, 2);
+        engine.set_region_descriptor(metapb::RegionDescriptor {
+            region_id: 7,
+            epoch: Some(metapb::RegionEpoch {
+                version: 1,
+                conf_version: 2,
+            }),
+            peers: vec![
+                metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 1,
+                },
+                metapb::RegionPeer {
+                    store_id: 2,
+                    peer_id: 2,
+                },
+            ],
+            ..Default::default()
+        });
+        let service = StoreKvService::with_admission(
+            engine,
+            RegionAdmission {
+                region_id: 7,
+                store_id: 1,
+                peer_id: 1,
+                epoch_conf_version: 1,
+                peers: BTreeMap::from([(1, 1)]),
+                ..Default::default()
+            },
+        );
+
+        let response = service
+            .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
+                context: Some(context(&RegionAdmission {
+                    region_id: 7,
+                    store_id: 2,
+                    peer_id: 2,
+                    epoch_conf_version: 2,
+                    peers: BTreeMap::from([(1, 1), (2, 2)]),
+                    ..Default::default()
+                })),
+                request: Some(kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"applied-descriptor".to_vec(),
+                        value: b"accepted".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 11,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+
+        assert!(
+            response.region_error.is_none(),
+            "unexpected region error: {:?}",
+            response.region_error
+        );
+        assert_eq!(response.response.unwrap().applied_keys, 1);
     }
 
     #[tokio::test]

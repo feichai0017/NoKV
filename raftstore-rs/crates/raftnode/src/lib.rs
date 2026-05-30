@@ -249,6 +249,8 @@ pub trait RegionApplyEngine: ApplyStatusProvider + ApplyWatchProvider {
 }
 
 pub trait RegionSnapshotEngine: RegionApplyEngine {
+    fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>>;
+
     fn export_region_snapshot(&self) -> nokv_mvcc::Result<Vec<u8>>;
     fn install_region_snapshot(&self, snapshot: &[u8]) -> nokv_mvcc::Result<ApplyStatus>;
 }
@@ -793,6 +795,10 @@ impl<E> RegionSnapshotEngine for AppliedKvEngine<E>
 where
     E: KvEngine + MvccSnapshotEngine,
 {
+    fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+        AppliedKvEngine::region_descriptor(self)
+    }
+
     fn export_region_snapshot(&self) -> nokv_mvcc::Result<Vec<u8>> {
         let status = self.status();
         let mvcc_snapshot = {
@@ -864,6 +870,10 @@ where
     E: KvEngine + MvccSnapshotEngine,
     S: RegionMetadataSink,
 {
+    fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+        self.engine.region_descriptor()
+    }
+
     fn export_region_snapshot(&self) -> nokv_mvcc::Result<Vec<u8>> {
         self.engine.export_region_snapshot()
     }
@@ -1251,6 +1261,10 @@ where
 
     pub fn raft_handle(&self) -> Raft<RaftStoreConfig> {
         self.raft.clone()
+    }
+
+    pub fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+        self.apply_engine.region_descriptor()
     }
 
     pub async fn initialize_members(
