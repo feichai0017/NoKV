@@ -252,12 +252,15 @@ Known gaps:
   leader-transfer operations through the local admin service, and publish
   terminal peer-add/remove descriptors back to the coordinator after successful
   Rust admin membership changes, with a Holt-backed pending root-event queue
-  for retry when the coordinator is temporarily unavailable. Production route
-  integration now has tagged coverage for coordinator-backed store discovery,
-  key routing, admin descriptor publication, and pending descriptor retry;
-  coordinator-owned process lifecycle, permanent blocked-event reconciliation,
-  split/merge scheduler operation execution, and remaining `RaftAdmin` RPC
-  wiring are still being built out.
+  for retry when the coordinator is temporarily unavailable. Permanent
+  coordinator validation failures now move the event into a durable
+  Holt-backed blocked-event catalog and surface pending/blocked counts through
+  `ExecutionStatus.Restart`. Production route integration now has tagged
+  coverage for coordinator-backed store discovery, key routing, admin
+  descriptor publication, and pending descriptor retry; coordinator-owned
+  process lifecycle, operator resolution for blocked events, split/merge
+  scheduler operation execution, and remaining `RaftAdmin` RPC wiring are still
+  being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. Coordinator-owned route integration and automatic
@@ -273,8 +276,9 @@ Known gaps:
   Terminal AddPeer/RemovePeer descriptors can be published to the coordinator
   when `NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR` is configured. Holt mode now
   persists pending topology events before publication and retries them in the
-  background; permanent validation failures are still only surfaced as failed
-  diagnostics, not moved into a durable blocked-event catalog.
+  background; permanent validation failures are moved from pending into a
+  durable blocked-event catalog so they stop retrying silently and remain
+  visible in admin diagnostics.
 - Restart recovery now covers single-node Holt restart, write-after-restart,
   durable vote/committed metadata, and an in-process multi-node restart after a
   membership change. The Go tagged harness also covers Holt-backed

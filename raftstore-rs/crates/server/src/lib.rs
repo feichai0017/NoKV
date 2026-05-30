@@ -84,6 +84,35 @@ pub trait RegionDescriptorSink: Clone + Send + Sync + 'static {
     fn save_region_descriptor(&self, descriptor: &metapb::RegionDescriptor) -> Result<(), Status>;
 }
 
+pub trait RestartDiagnosticsProvider: Send + Sync + 'static {
+    fn pending_root_event_count(&self) -> Result<u64, Status> {
+        Ok(0)
+    }
+
+    fn blocked_root_event_count(&self) -> Result<u64, Status> {
+        Ok(0)
+    }
+}
+
+#[derive(Debug, Default)]
+pub struct EmptyRestartDiagnostics;
+
+impl RestartDiagnosticsProvider for EmptyRestartDiagnostics {}
+
+impl RestartDiagnosticsProvider for HoltMvccStore {
+    fn pending_root_event_count(&self) -> Result<u64, Status> {
+        self.pending_root_events()
+            .map(|events| events.len() as u64)
+            .map_err(|err| Status::internal(err.to_string()))
+    }
+
+    fn blocked_root_event_count(&self) -> Result<u64, Status> {
+        self.blocked_root_events()
+            .map(|events| events.len() as u64)
+            .map_err(|err| Status::internal(err.to_string()))
+    }
+}
+
 #[tonic::async_trait]
 pub trait TopologyPublisher: Send + Sync + 'static {
     async fn publish_peer_added(
@@ -128,9 +157,23 @@ impl TopologyPublishOutcome {
         }
     }
 
+    pub fn terminal_pending(error: impl Into<String>) -> Self {
+        Self {
+            publish: adminpb::ExecutionPublishState::TerminalPending,
+            last_error: error.into(),
+        }
+    }
+
     pub fn terminal_failed(error: impl Into<String>) -> Self {
         Self {
             publish: adminpb::ExecutionPublishState::TerminalFailed,
+            last_error: error.into(),
+        }
+    }
+
+    pub fn terminal_blocked(error: impl Into<String>) -> Self {
+        Self {
+            publish: adminpb::ExecutionPublishState::TerminalBlocked,
             last_error: error.into(),
         }
     }
@@ -947,6 +990,7 @@ pub struct RaftAdminService<S = EmptyApplyStatus, D = EmptyRegionDescriptorSink>
     execution: ExecutionRuntime,
     descriptor_sink: D,
     topology_publisher: Arc<dyn TopologyPublisher>,
+    restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
 }
 
 impl<S> RaftAdminService<S, EmptyRegionDescriptorSink> {
@@ -1017,11 +1061,20 @@ where
             execution,
             descriptor_sink,
             topology_publisher: Arc::new(EmptyTopologyPublisher),
+            restart_diagnostics: Arc::new(EmptyRestartDiagnostics),
         }
     }
 
     fn with_topology_publisher(mut self, topology_publisher: Arc<dyn TopologyPublisher>) -> Self {
         self.topology_publisher = topology_publisher;
+        self
+    }
+
+    fn with_restart_diagnostics(
+        mut self,
+        restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
+    ) -> Self {
+        self.restart_diagnostics = restart_diagnostics;
         self
     }
 }
@@ -1438,6 +1491,8 @@ where
                 },
                 region_count: if status.region_id == 0 { 0 } else { 1 },
                 raft_group_count: if status.region_id == 0 { 0 } else { 1 },
+                pending_root_event_count: self.restart_diagnostics.pending_root_event_count()?,
+                blocked_root_event_count: self.restart_diagnostics.blocked_root_event_count()?,
                 ..Default::default()
             }),
             topology: self.execution.topology_snapshot()?,
@@ -1590,6 +1645,34 @@ where
     E: RegionSnapshotEngine + RaftCommandExecutor,
     D: RegionDescriptorSink,
 {
+    serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
+        addr,
+        region,
+        admission,
+        peer_endpoints,
+        descriptor_sink,
+        topology_publisher,
+        Arc::new(EmptyRestartDiagnostics),
+    )
+    .await
+}
+
+pub async fn serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics<
+    E,
+    D,
+>(
+    addr: SocketAddr,
+    region: nokv_raftnode::OpenRaftRegion<E>,
+    admission: RegionAdmission,
+    peer_endpoints: PeerEndpointCatalog,
+    descriptor_sink: D,
+    topology_publisher: Arc<dyn TopologyPublisher>,
+    restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
+) -> Result<(), tonic::transport::Error>
+where
+    E: RegionSnapshotEngine + RaftCommandExecutor,
+    D: RegionDescriptorSink,
+{
     let execution = ExecutionRuntime::default();
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
     transport.register(admission.region_id, region.raft_handle());
@@ -1610,7 +1693,8 @@ where
                 peer_endpoints,
                 descriptor_sink,
             )
-            .with_topology_publisher(topology_publisher),
+            .with_topology_publisher(topology_publisher)
+            .with_restart_diagnostics(restart_diagnostics),
         ))
         .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
         .serve(addr)
@@ -2960,6 +3044,47 @@ mod tests {
         assert!(execution.topology[0]
             .last_error
             .contains("coordinator unavailable"));
+    }
+
+    #[tokio::test]
+    async fn execution_status_reports_holt_root_event_catalog_counts() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let event = metapb::RootEvent {
+            kind: metapb::RootEventKind::PeerAdded as i32,
+            payload: Some(metapb::root_event::Payload::PeerChange(
+                metapb::RootPeerChange {
+                    region_id: 1,
+                    store_id: 2,
+                    peer_id: 2,
+                    target: Some(metapb::RegionDescriptor {
+                        region_id: 1,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+        };
+        let blocked_sequence = store.enqueue_pending_root_event(&event).unwrap();
+        store
+            .block_pending_root_event(
+                blocked_sequence,
+                &event,
+                "peer-change:1:add:2:2",
+                "catalog precondition",
+            )
+            .unwrap();
+        store.enqueue_pending_root_event(&event).unwrap();
+
+        let service = RaftAdminService::with_admission(NoopAdminStatus, RegionAdmission::default())
+            .with_restart_diagnostics(Arc::new(store));
+        let execution = service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        let restart = execution.restart.unwrap();
+        assert_eq!(restart.pending_root_event_count, 1);
+        assert_eq!(restart.blocked_root_event_count, 1);
     }
 
     #[tokio::test]

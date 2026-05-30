@@ -1000,6 +1000,8 @@ dependencies = [
  "nokv-mvcc",
  "nokv-proto",
  "nokv-raftnode",
+ "prost",
+ "prost-types",
  "tempfile",
  "tokio",
  "tokio-stream",

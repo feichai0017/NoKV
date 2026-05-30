@@ -58,6 +58,14 @@ pub struct PendingRootEvent {
     pub event: metapb::RootEvent,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockedRootEvent {
+    pub sequence: u64,
+    pub event: metapb::RootEvent,
+    pub transition_id: String,
+    pub last_error: String,
+}
+
 #[derive(Clone)]
 pub struct HoltStore {
     db: DB,
@@ -204,11 +212,69 @@ impl HoltStore {
         Ok(out)
     }
 
+    pub fn block_pending_root_event(
+        &self,
+        sequence: u64,
+        event: &metapb::RootEvent,
+        transition_id: &str,
+        last_error: &str,
+    ) -> Result<()> {
+        let record = metapb::BlockedRootEvent {
+            sequence,
+            event: Some(event.clone()),
+            transition_id: transition_id.to_owned(),
+            last_error: last_error.to_owned(),
+        };
+        let mut bytes = Vec::with_capacity(record.encoded_len());
+        record.encode(&mut bytes)?;
+        self.atomic(|batch| {
+            batch.put(REGION_META_TREE, &blocked_root_event_key(sequence), &bytes);
+            batch.delete(REGION_META_TREE, &pending_root_event_key(sequence));
+        })?;
+        Ok(())
+    }
+
+    pub fn blocked_root_events(&self) -> Result<Vec<BlockedRootEvent>> {
+        let mut out = Vec::new();
+        for entry in self
+            .region_meta()?
+            .range()
+            .prefix(BLOCKED_ROOT_EVENT_PREFIX)
+        {
+            let entry = entry?;
+            let RangeEntry::Key { key, value, .. } = entry else {
+                continue;
+            };
+            let Some(sequence) = blocked_root_event_sequence(&key) else {
+                continue;
+            };
+            let record = metapb::BlockedRootEvent::decode(value.as_slice())?;
+            let event = record.event.ok_or_else(|| {
+                Error::InvalidMetadata(format!("blocked root event {sequence} missing event"))
+            })?;
+            out.push(BlockedRootEvent {
+                sequence,
+                event,
+                transition_id: record.transition_id,
+                last_error: record.last_error,
+            });
+        }
+        out.sort_by_key(|event| event.sequence);
+        Ok(out)
+    }
+
     pub fn next_pending_root_event_sequence(&self) -> Result<u64> {
         Ok(self
             .pending_root_events()?
-            .last()
-            .map(|event| event.sequence.saturating_add(1))
+            .into_iter()
+            .map(|event| event.sequence)
+            .chain(
+                self.blocked_root_events()?
+                    .into_iter()
+                    .map(|event| event.sequence),
+            )
+            .max()
+            .map(|sequence| sequence.saturating_add(1))
             .unwrap_or(1))
     }
 
@@ -305,6 +371,25 @@ impl HoltMvccStore {
 
     pub fn pending_root_events(&self) -> Result<Vec<PendingRootEvent>> {
         self.store.pending_root_events()
+    }
+
+    pub fn block_pending_root_event(
+        &self,
+        sequence: u64,
+        event: &metapb::RootEvent,
+        transition_id: &str,
+        last_error: &str,
+    ) -> Result<()> {
+        let _guard = self
+            .gate
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
+        self.store
+            .block_pending_root_event(sequence, event, transition_id, last_error)
+    }
+
+    pub fn blocked_root_events(&self) -> Result<Vec<BlockedRootEvent>> {
+        self.store.blocked_root_events()
     }
 
     fn lock(&self) -> mvcc::Result<std::sync::MutexGuard<'_, ()>> {
@@ -1337,6 +1422,7 @@ fn region_apply_state_key(region_id: u64) -> Vec<u8> {
 }
 
 const PENDING_ROOT_EVENT_PREFIX: &[u8] = b"pending-root-event/";
+const BLOCKED_ROOT_EVENT_PREFIX: &[u8] = b"blocked-root-event/";
 
 fn pending_root_event_key(sequence: u64) -> Vec<u8> {
     region_meta_key(PENDING_ROOT_EVENT_PREFIX, sequence)
@@ -1344,6 +1430,18 @@ fn pending_root_event_key(sequence: u64) -> Vec<u8> {
 
 fn pending_root_event_sequence(key: &[u8]) -> Option<u64> {
     let rest = key.strip_prefix(PENDING_ROOT_EVENT_PREFIX)?;
+    if rest.len() != 8 {
+        return None;
+    }
+    Some(u64::from_be_bytes(rest.try_into().ok()?))
+}
+
+fn blocked_root_event_key(sequence: u64) -> Vec<u8> {
+    region_meta_key(BLOCKED_ROOT_EVENT_PREFIX, sequence)
+}
+
+fn blocked_root_event_sequence(key: &[u8]) -> Option<u64> {
+    let rest = key.strip_prefix(BLOCKED_ROOT_EVENT_PREFIX)?;
     if rest.len() != 8 {
         return None;
     }
@@ -1568,6 +1666,49 @@ mod tests {
         let pending = reopened.pending_root_events().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].sequence, 2);
+    }
+
+    #[test]
+    fn blocked_root_events_survive_reopen_and_advance_sequence() {
+        let dir = tempfile::tempdir().unwrap();
+        let event = metapb::RootEvent {
+            kind: metapb::RootEventKind::PeerAdded as i32,
+            payload: Some(metapb::root_event::Payload::PeerChange(
+                metapb::RootPeerChange {
+                    region_id: 42,
+                    store_id: 7,
+                    peer_id: 9,
+                    target: Some(metapb::RegionDescriptor {
+                        region_id: 42,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )),
+        };
+        {
+            let store = HoltMvccStore::open_file(dir.path()).unwrap();
+            let sequence = store.enqueue_pending_root_event(&event).unwrap();
+            store
+                .block_pending_root_event(
+                    sequence,
+                    &event,
+                    "peer-change:42:add:9:2",
+                    "catalog precondition",
+                )
+                .unwrap();
+            store.checkpoint().unwrap();
+        }
+
+        let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+        assert!(reopened.pending_root_events().unwrap().is_empty());
+        let blocked = reopened.blocked_root_events().unwrap();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].sequence, 1);
+        assert_eq!(blocked[0].event, event);
+        assert_eq!(blocked[0].transition_id, "peer-change:42:add:9:2");
+        assert_eq!(blocked[0].last_error, "catalog precondition");
+        assert_eq!(reopened.enqueue_pending_root_event(&event).unwrap(), 2);
     }
 
     #[test]

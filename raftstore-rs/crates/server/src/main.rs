@@ -1,5 +1,6 @@
 //! Standalone Rust raftstore server entrypoint for local compatibility tests.
 
+use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -16,10 +17,12 @@ use nokv_raftnode::{
     TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
-    apply_status_from_holt, EmptyRegionDescriptorSink, EmptyTopologyPublisher,
-    HoltRegionMetadataSink, PeerEndpointCatalog, RegionAdmission, TopologyPublishOutcome,
-    TopologyPublisher,
+    apply_status_from_holt, EmptyRegionDescriptorSink, EmptyRestartDiagnostics,
+    EmptyTopologyPublisher, HoltRegionMetadataSink, PeerEndpointCatalog, RegionAdmission,
+    TopologyPublishOutcome, TopologyPublisher,
 };
+use prost::Message;
+use prost_types::Any;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -53,13 +56,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone());
         spawn_pending_topology_retries(coordinator.clone(), mvcc.clone());
         let topology_publisher = coordinator_topology_publisher(coordinator, Some(mvcc.clone()));
-        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_and_topology_publisher(
+        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
             addr,
             region,
             admission,
             peer_endpoints,
-            HoltRegionMetadataSink::new(mvcc),
+            HoltRegionMetadataSink::new(mvcc.clone()),
             topology_publisher,
+            Arc::new(mvcc.clone()),
         )
         .await?;
     } else {
@@ -69,7 +73,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         engine.set_region_descriptor(default_region_descriptor(identity))?;
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
         spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone());
-        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_and_topology_publisher(
+        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
             addr,
             region,
             RegionAdmission::from_descriptor(
@@ -79,6 +83,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             peer_endpoints,
             EmptyRegionDescriptorSink,
             coordinator_topology_publisher(coordinator, None),
+            Arc::new(EmptyRestartDiagnostics),
         )
         .await?;
     }
@@ -312,7 +317,7 @@ impl CoordinatorTopologyPublisher {
             },
             None => None,
         };
-        match publish_root_event(&self.endpoint, event).await {
+        match publish_root_event(&self.endpoint, event.clone()).await {
             Ok(()) => {
                 if let (Some(store), Some(sequence)) = (self.pending_store.as_ref(), sequence) {
                     if let Err(err) = store.delete_pending_root_event(sequence) {
@@ -323,23 +328,166 @@ impl CoordinatorTopologyPublisher {
                 }
                 TopologyPublishOutcome::terminal_published()
             }
-            Err(err) => TopologyPublishOutcome::terminal_failed(err),
+            Err(err) => match err {
+                RootEventPublishError::Transient(message) => {
+                    TopologyPublishOutcome::terminal_pending(message)
+                }
+                RootEventPublishError::Permanent(message) => {
+                    if let (Some(store), Some(sequence)) = (self.pending_store.as_ref(), sequence) {
+                        let transition_id = root_event_transition_id(&event);
+                        if let Err(block_err) = store.block_pending_root_event(
+                            sequence,
+                            &event,
+                            &transition_id,
+                            &message,
+                        ) {
+                            return TopologyPublishOutcome::terminal_failed(format!(
+                                "block pending root event {sequence}: {block_err}"
+                            ));
+                        }
+                    }
+                    TopologyPublishOutcome::terminal_blocked(message)
+                }
+            },
         }
     }
 }
 
-async fn publish_root_event(endpoint: &str, event: metapb::RootEvent) -> Result<(), String> {
+async fn publish_root_event(
+    endpoint: &str,
+    event: metapb::RootEvent,
+) -> Result<(), RootEventPublishError> {
     let mut client = coordpb::coordinator_client::CoordinatorClient::connect(endpoint.to_owned())
         .await
-        .map_err(|err| err.to_string())?;
-    client
+        .map_err(|err| RootEventPublishError::Transient(err.to_string()))?;
+    let response = client
         .publish_root_event(coordpb::PublishRootEventRequest {
             event: Some(event),
             ..Default::default()
         })
         .await
-        .map_err(|status| status.to_string())?;
+        .map_err(classify_root_event_publish_status)?
+        .into_inner();
+    if !response.accepted {
+        return Err(RootEventPublishError::Permanent(
+            "coordinator rejected root event".to_owned(),
+        ));
+    }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum RootEventPublishError {
+    Transient(String),
+    Permanent(String),
+}
+
+fn classify_root_event_publish_status(status: tonic::Status) -> RootEventPublishError {
+    let message = status.to_string();
+    match status.code() {
+        tonic::Code::InvalidArgument => RootEventPublishError::Permanent(message),
+        tonic::Code::FailedPrecondition => {
+            let reason = root_event_status_metadata(&status)
+                .and_then(|metadata| metadata.get(COORDINATOR_REASON_METADATA).cloned());
+            match reason.as_deref() {
+                Some(
+                    "catalog_invalid"
+                    | "catalog_precondition"
+                    | "cluster_era_mismatch"
+                    | "invalid_request",
+                ) => RootEventPublishError::Permanent(message),
+                Some(
+                    "not_leader"
+                    | "grant_not_held"
+                    | "root_unavailable"
+                    | "root_lag_exceeded"
+                    | "required_rooted_token"
+                    | "required_descriptor"
+                    | "range_change_pending"
+                    | "bootstrap_required"
+                    | "root_storage_unavailable",
+                ) => RootEventPublishError::Transient(message),
+                _ => RootEventPublishError::Transient(message),
+            }
+        }
+        tonic::Code::AlreadyExists => RootEventPublishError::Permanent(message),
+        tonic::Code::Unavailable
+        | tonic::Code::DeadlineExceeded
+        | tonic::Code::Cancelled
+        | tonic::Code::Aborted
+        | tonic::Code::ResourceExhausted
+        | tonic::Code::Internal
+        | tonic::Code::Unknown => RootEventPublishError::Transient(message),
+        _ => RootEventPublishError::Transient(message),
+    }
+}
+
+const COORDINATOR_REASON_METADATA: &str = "coordinator_reason";
+const NOKV_ERROR_INFO_DOMAIN: &str = "nokv";
+const NOKV_ERROR_INFO_REASON: &str = "nokv_error";
+const GOOGLE_RPC_ERROR_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ErrorInfo";
+
+#[derive(Clone, PartialEq, Message)]
+struct RpcStatusDetails {
+    #[prost(int32, tag = "1")]
+    code: i32,
+    #[prost(string, tag = "2")]
+    message: String,
+    #[prost(message, repeated, tag = "3")]
+    details: Vec<Any>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct RpcErrorInfo {
+    #[prost(string, tag = "1")]
+    reason: String,
+    #[prost(string, tag = "2")]
+    domain: String,
+    #[prost(map = "string, string", tag = "3")]
+    metadata: HashMap<String, String>,
+}
+
+fn root_event_status_metadata(status: &tonic::Status) -> Option<HashMap<String, String>> {
+    let details = status.details();
+    if details.is_empty() {
+        return None;
+    }
+    let details = RpcStatusDetails::decode(details).ok()?;
+    for detail in details.details {
+        if detail.type_url != GOOGLE_RPC_ERROR_INFO_TYPE {
+            continue;
+        }
+        let info = RpcErrorInfo::decode(detail.value.as_slice()).ok()?;
+        if info.domain == NOKV_ERROR_INFO_DOMAIN && info.reason == NOKV_ERROR_INFO_REASON {
+            return Some(info.metadata);
+        }
+    }
+    None
+}
+
+fn root_event_transition_id(event: &metapb::RootEvent) -> String {
+    match event.payload.as_ref() {
+        Some(metapb::root_event::Payload::PeerChange(change)) => {
+            let action = match metapb::RootEventKind::try_from(event.kind)
+                .unwrap_or(metapb::RootEventKind::Unspecified)
+            {
+                metapb::RootEventKind::PeerAdded => "add",
+                metapb::RootEventKind::PeerRemoved => "remove",
+                _ => "peer",
+            };
+            let conf_version = change
+                .target
+                .as_ref()
+                .and_then(|target| target.epoch.as_ref())
+                .map(|epoch| epoch.conf_version)
+                .unwrap_or_default();
+            format!(
+                "peer-change:{}:{action}:{}:{conf_version}",
+                change.region_id, change.peer_id
+            )
+        }
+        _ => format!("root-event:{}", event.kind),
+    }
 }
 
 fn spawn_pending_topology_retries(
@@ -385,7 +533,28 @@ async fn retry_pending_topology_events(endpoint: &str, pending_store: &HoltMvccS
                     return;
                 }
             }
-            Err(err) => {
+            Err(RootEventPublishError::Permanent(err)) => {
+                let transition_id = root_event_transition_id(&item.event);
+                if let Err(block_err) = pending_store.block_pending_root_event(
+                    item.sequence,
+                    &item.event,
+                    &transition_id,
+                    &err,
+                ) {
+                    tracing::debug!(
+                        error = %block_err,
+                        sequence = item.sequence,
+                        "rust raftstore pending topology block failed"
+                    );
+                    return;
+                }
+                tracing::debug!(
+                    error = %err,
+                    sequence = item.sequence,
+                    "rust raftstore pending topology blocked"
+                );
+            }
+            Err(RootEventPublishError::Transient(err)) => {
                 tracing::debug!(
                     error = %err,
                     sequence = item.sequence,
@@ -717,6 +886,47 @@ mod tests {
             coordinator_endpoint("http://127.0.0.1:23790"),
             "http://127.0.0.1:23790"
         );
+    }
+
+    #[test]
+    fn root_event_publish_status_classifies_coordinator_error_info() {
+        assert!(matches!(
+            classify_root_event_publish_status(status_with_coordinator_reason("not_leader")),
+            RootEventPublishError::Transient(_)
+        ));
+        assert!(matches!(
+            classify_root_event_publish_status(status_with_coordinator_reason(
+                "catalog_precondition"
+            )),
+            RootEventPublishError::Permanent(_)
+        ));
+        assert!(matches!(
+            classify_root_event_publish_status(Status::invalid_argument("bad root event")),
+            RootEventPublishError::Permanent(_)
+        ));
+    }
+
+    fn status_with_coordinator_reason(reason: &str) -> Status {
+        let mut metadata = HashMap::new();
+        metadata.insert(COORDINATOR_REASON_METADATA.to_owned(), reason.to_owned());
+        let info = RpcErrorInfo {
+            reason: NOKV_ERROR_INFO_REASON.to_owned(),
+            domain: NOKV_ERROR_INFO_DOMAIN.to_owned(),
+            metadata,
+        };
+        let details = RpcStatusDetails {
+            code: tonic::Code::FailedPrecondition as i32,
+            message: reason.to_owned(),
+            details: vec![Any {
+                type_url: GOOGLE_RPC_ERROR_INFO_TYPE.to_owned(),
+                value: info.encode_to_vec(),
+            }],
+        };
+        Status::with_details(
+            tonic::Code::FailedPrecondition,
+            reason.to_owned(),
+            details.encode_to_vec().into(),
+        )
     }
 
     #[test]
