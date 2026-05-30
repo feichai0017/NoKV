@@ -293,9 +293,11 @@ Known gaps:
   commands. The single-region service still bootstraps a default descriptor
   until coordinator-provided topology is wired.
 - Admin `AddPeer`/`RemovePeer` RPCs are wired for `OpenRaftRegion`.
-  `TransferLeader` is wired for current-leader no-op. Directed transfer from
-  the current leader to a different remote peer still returns
-  `FailedPrecondition` until raftnode owns a full public transfer boundary.
+  `TransferLeader` is wired for current-leader no-op and target-peer
+  self-election. When the current leader has a configured target peer endpoint,
+  the admin service now routes directed transfer to that target peer and waits
+  for the target-side election boundary. Missing or unreachable target
+  endpoints still return `FailedPrecondition`.
   Terminal AddPeer/RemovePeer descriptors can be published to the coordinator
   when `NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR` is configured. Holt mode now
   persists pending topology events before publication and retries them in the

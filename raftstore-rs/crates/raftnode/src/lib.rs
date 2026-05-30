@@ -1329,10 +1329,15 @@ where
         if metrics.current_leader == Some(node_id) {
             return Ok(());
         }
+        if node_id == self.node_id {
+            self.elect_and_wait(node_id).await?;
+            self.ensure_linearizable().await?;
+            return Ok(());
+        }
         Err(Error::UnsupportedLeaderTransfer {
             local: self.node_id,
             target: node_id,
-            reason: "OpenRaft 0.9 does not expose source-initiated directed transfer",
+            reason: "remote directed transfer requires routing the request to the target peer",
         })
     }
 
@@ -1922,6 +1927,93 @@ mod tests {
             .voter_ids()
             .collect::<Vec<_>>();
         assert_eq!(voters, vec![1]);
+    }
+
+    #[tokio::test]
+    async fn openraft_region_target_peer_can_take_leadership() {
+        let registry = MemoryRaftNetworkRegistry::default();
+        let leader_dir = tempfile::tempdir().unwrap();
+        let follower_dir = tempfile::tempdir().unwrap();
+
+        let leader_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let leader = OpenRaftRegion::open_with_network(
+            1,
+            7,
+            RegionLogStorage::new(SegmentedEntryLog::open(7, leader_dir.path()).unwrap()),
+            RegionStateMachine::new(leader_engine.clone()),
+            registry.factory(),
+        )
+        .await
+        .unwrap();
+        registry.register(1, leader.raft_handle());
+
+        let follower_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let follower = OpenRaftRegion::open_with_network(
+            2,
+            7,
+            RegionLogStorage::new(SegmentedEntryLog::open(7, follower_dir.path()).unwrap()),
+            RegionStateMachine::new(follower_engine.clone()),
+            registry.factory(),
+        )
+        .await
+        .unwrap();
+        registry.register(2, follower.raft_handle());
+
+        leader
+            .initialize_members(BTreeMap::from([(1, BasicNode::new("node-1"))]))
+            .await
+            .unwrap();
+        leader.wait_for_leader(1).await.unwrap();
+        leader.add_voter(2, BasicNode::new("node-2")).await.unwrap();
+        follower.wait_for_voter(2, true).await.unwrap();
+
+        follower.transfer_leader(2).await.unwrap();
+        leader.wait_for_leader(2).await.unwrap();
+        follower.wait_for_leader(2).await.unwrap();
+
+        let command = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 7,
+                request_id: 20,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                    kvpb::TryAtomicMutateRequest {
+                        mutations: vec![kvpb::Mutation {
+                            key: b"new-leader".to_vec(),
+                            value: b"peer-2".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        }],
+                        commit_version: 22,
+                        ..Default::default()
+                    },
+                )),
+            }],
+        };
+
+        let applied = follower
+            .propose(Proposal::from_raft_command(&command).unwrap())
+            .await
+            .unwrap();
+        leader
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .applied_index_at_least(Some(applied.index), "transferred leader proposal")
+            .await
+            .unwrap();
+        assert_eq!(
+            leader_engine
+                .get(&kvpb::GetRequest {
+                    key: b"new-leader".to_vec(),
+                    version: 22,
+                })
+                .unwrap()
+                .value,
+            b"peer-2".to_vec()
+        );
     }
 
     #[tokio::test]

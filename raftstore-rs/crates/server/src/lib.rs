@@ -1190,6 +1190,13 @@ impl PeerEndpointCatalog {
         }
         Ok(BasicNode::new(format!("store-{store_id}-peer-{peer_id}")))
     }
+
+    fn endpoint_for_peer(&self, peer_id: u64) -> Result<Option<String>, Status> {
+        self.endpoints
+            .lock()
+            .map_err(|_| peer_endpoint_catalog_poisoned())
+            .map(|endpoints| endpoints.get(&peer_id).cloned())
+    }
 }
 
 fn peer_endpoint_catalog_poisoned() -> Status {
@@ -1501,6 +1508,15 @@ where
             ));
         }
         self.admission.validate_region(request.region_id)?;
+        let runtime = self.status.raft_runtime_status();
+        if runtime.leader && request.peer_id != runtime.local_peer_id {
+            if let Some(endpoint) = self.peer_endpoints.endpoint_for_peer(request.peer_id)? {
+                transfer_leader_via_peer(&endpoint, request.region_id, request.peer_id).await?;
+                return Ok(Response::new(adminpb::TransferLeaderResponse {
+                    region: Some(self.admission.descriptor()?),
+                }));
+            }
+        }
         self.status.transfer_leader(request.peer_id).await?;
         Ok(Response::new(adminpb::TransferLeaderResponse {
             region: Some(self.admission.descriptor()?),
@@ -1790,6 +1806,34 @@ fn header_from_context(context: &kvpb::Context) -> raftpb::CmdHeader {
         max_stale_read_ms: context.max_stale_read_ms,
         store_id: peer.map(|peer| peer.store_id).unwrap_or_default(),
         ..Default::default()
+    }
+}
+
+async fn transfer_leader_via_peer(
+    endpoint: &str,
+    region_id: u64,
+    peer_id: u64,
+) -> Result<(), Status> {
+    let mut client =
+        adminpb::raft_admin_client::RaftAdminClient::connect(normalize_admin_endpoint(endpoint))
+            .await
+            .map_err(|err| {
+                Status::failed_precondition(format!("dial target peer {peer_id}: {err}"))
+            })?;
+    client
+        .transfer_leader(adminpb::TransferLeaderRequest { region_id, peer_id })
+        .await
+        .map(|_| ())
+        .map_err(|err| {
+            Status::failed_precondition(format!("target peer {peer_id} transfer failed: {err}"))
+        })
+}
+
+fn normalize_admin_endpoint(endpoint: &str) -> String {
+    if endpoint.starts_with("http://") || endpoint.starts_with("https://") {
+        endpoint.to_owned()
+    } else {
+        format!("http://{endpoint}")
     }
 }
 
@@ -2289,6 +2333,27 @@ mod tests {
                 b"replicated".to_vec()
             );
         }
+
+        admin_client
+            .transfer_leader(adminpb::TransferLeaderRequest {
+                region_id: 7,
+                peer_id: 2,
+            })
+            .await
+            .unwrap();
+        regions.get(&2).unwrap().wait_for_leader(2).await.unwrap();
+        let peer2_addr = addrs.get(&2).unwrap();
+        let mut peer2_admin =
+            adminpb::raft_admin_client::RaftAdminClient::connect(format!("http://{peer2_addr}"))
+                .await
+                .unwrap();
+        let peer2_status = peer2_admin
+            .region_runtime_status(adminpb::RegionRuntimeStatusRequest { region_id: 7 })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(peer2_status.leader);
+        assert_eq!(peer2_status.leader_peer_id, 2);
 
         for region in regions.values() {
             region.shutdown().await.unwrap();
@@ -3215,7 +3280,6 @@ mod tests {
             ..Default::default()
         };
         let peer_endpoints = PeerEndpointCatalog::new();
-        peer_endpoints.insert_peer(2, "node-2").unwrap();
         let descriptor_dir = tempfile::tempdir().unwrap();
         let descriptor_store = HoltMvccStore::open_file(descriptor_dir.path()).unwrap();
         let topology_publisher = CaptureTopologyPublisher::default();
@@ -3378,7 +3442,9 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
-        assert!(err.message().contains("source-initiated directed transfer"));
+        assert!(err
+            .message()
+            .contains("routing the request to the target peer"));
 
         let follower_service = RaftAdminService::with_admission(
             regions.get(&2).unwrap().clone(),
