@@ -191,12 +191,24 @@ func testRustRaftstoreEndpointClientAtomicMutateGetAndWatch(t *testing.T, addr s
 	admin, closeAdmin, err := adminclient.Dial(ctx, addr)
 	require.NoError(t, err)
 	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
-	status, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	runtimeStatus, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
 	require.NoError(t, err)
-	require.True(t, status.GetKnown())
-	require.True(t, status.GetHosted())
-	require.True(t, status.GetLeader())
-	require.GreaterOrEqual(t, status.GetAppliedIndex(), uint64(2))
+	require.True(t, runtimeStatus.GetKnown())
+	require.True(t, runtimeStatus.GetHosted())
+	require.True(t, runtimeStatus.GetLeader())
+	require.GreaterOrEqual(t, runtimeStatus.GetAppliedIndex(), uint64(2))
+
+	_, err = admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{})
+	require.Error(t, err)
+	require.Equal(t, codes.InvalidArgument, status.Code(err))
+
+	execution, err := admin.ExecutionStatus(ctx, &adminpb.ExecutionStatusRequest{})
+	require.NoError(t, err)
+	require.NotNil(t, execution.GetLastAdmission())
+	require.False(t, execution.GetLastAdmission().GetObserved())
+	require.Equal(t, adminpb.ExecutionRestartState_EXECUTION_RESTART_STATE_READY, execution.GetRestart().GetState())
+	require.Equal(t, uint64(1), execution.GetRestart().GetRegionCount())
+	require.Equal(t, uint64(1), execution.GetRestart().GetRaftGroupCount())
 }
 
 func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string) {

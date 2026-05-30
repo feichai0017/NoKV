@@ -128,6 +128,9 @@ The first slices are intentionally narrow:
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.
+  `RegionRuntimeStatus` now rejects missing region ids like the Go admin
+  service, and `ExecutionStatus` returns the default admission object plus
+  restart counts for the hosted single-region runtime.
 
 Known gaps:
 

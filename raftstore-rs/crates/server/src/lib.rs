@@ -981,8 +981,11 @@ where
         request: Request<adminpb::RegionRuntimeStatusRequest>,
     ) -> Result<Response<adminpb::RegionRuntimeStatusResponse>, Status> {
         let request = request.into_inner();
+        if request.region_id == 0 {
+            return Err(Status::invalid_argument("region_id is required"));
+        }
         let status = self.status.apply_status();
-        if request.region_id != 0 && request.region_id != status.region_id {
+        if request.region_id != status.region_id {
             return Ok(Response::new(
                 adminpb::RegionRuntimeStatusResponse::default(),
             ));
@@ -1011,6 +1014,7 @@ where
     ) -> Result<Response<adminpb::ExecutionStatusResponse>, Status> {
         let status = self.status.apply_status();
         Ok(Response::new(adminpb::ExecutionStatusResponse {
+            last_admission: Some(adminpb::ExecutionAdmissionStatus::default()),
             restart: Some(adminpb::ExecutionRestartStatus {
                 state: if status.region_id == 0 {
                     adminpb::ExecutionRestartState::Degraded as i32
@@ -1837,5 +1841,35 @@ mod tests {
         assert!(response.known);
         assert_eq!(response.applied_index, 1);
         assert_eq!(response.applied_term, 1);
+    }
+
+    #[tokio::test]
+    async fn admin_runtime_status_requires_region_id() {
+        let service =
+            RaftAdminService::new(nokv_raftnode::AppliedKvEngine::new(11, MvccStore::new()));
+        let err = service
+            .region_runtime_status(Request::new(adminpb::RegionRuntimeStatusRequest {
+                region_id: 0,
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(err.code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
+    async fn admin_execution_status_reports_default_admission() {
+        let service =
+            RaftAdminService::new(nokv_raftnode::AppliedKvEngine::new(11, MvccStore::new()));
+        let response = service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        let admission = response.last_admission.unwrap();
+        assert!(!admission.observed);
+        let restart = response.restart.unwrap();
+        assert_eq!(restart.state, adminpb::ExecutionRestartState::Ready as i32);
+        assert_eq!(restart.region_count, 1);
+        assert_eq!(restart.raft_group_count, 1);
     }
 }
