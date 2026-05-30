@@ -164,7 +164,10 @@ The first slices are intentionally narrow:
   leader. The binary also accepts explicit region/store/peer identity and a
   non-bootstrap startup mode, so additional processes can start as
   uninitialized joining peers and be added through the existing `RaftAdmin
-  AddPeer` wire contract.
+  AddPeer` wire contract. The repository Docker image now packages this server
+  as `/usr/local/bin/nokv-raftstore-server`, but compose still starts the Go
+  store path until the Rust data plane owns the full fsmeta smoke and benchmark
+  gates.
 - The standalone server has an optional coordinator heartbeat path behind
   `NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR`. It reports the existing
   `StoreHeartbeat` wire shape with store identity, client/raft address,
@@ -294,6 +297,9 @@ Known gaps:
   before state-machine mutation in the current unit coverage.
 - Go fsmeta and raftstore client Rust-endpoint tests remain behind the
   `rust_raftstore` build tag until the Rust data plane is the default runtime.
+- The Docker image can carry the Rust server binary, but compose default
+  cutover is still pending coordinator-managed lifecycle wiring and benchmark
+  validation.
 - Rust follower reads are intentionally not served locally yet. The service
   preserves the Go client fallback shape for follower-prefer reads, but safe
   follower ReadIndex and bounded-stale serving still require the multi-node

@@ -25,6 +25,21 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS:-$(go env GOOS)} GOARCH=${TARGETARCH:-$(go env GOARCH)} go build -o /out/nokv-fsmeta ./cmd/nokv-fsmeta
 
+FROM --platform=$TARGETPLATFORM rust:1.82-bookworm AS rust-builder
+WORKDIR /workspace
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends protobuf-compiler ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
+COPY pb ./pb
+COPY third_party/holt ./third_party/holt
+COPY raftstore-rs ./raftstore-rs
+RUN --mount=type=cache,target=/usr/local/cargo/registry \
+    --mount=type=cache,target=/usr/local/cargo/git \
+    --mount=type=cache,target=/workspace/raftstore-rs/target \
+    cargo build --manifest-path raftstore-rs/Cargo.toml --release -p nokv-raftstore-server \
+    && mkdir -p /out \
+    && cp raftstore-rs/target/release/nokv-raftstore-server /out/nokv-raftstore-server
+
 FROM debian:bookworm-slim
 RUN useradd --system --create-home --home-dir /var/lib/nokv nokv \
     && apt-get update \
@@ -33,6 +48,7 @@ RUN useradd --system --create-home --home-dir /var/lib/nokv nokv \
 COPY --from=builder /out/nokv /usr/local/bin/nokv
 COPY --from=builder /out/nokv-config /usr/local/bin/nokv-config
 COPY --from=builder /out/nokv-fsmeta /usr/local/bin/nokv-fsmeta
+COPY --from=rust-builder /out/nokv-raftstore-server /usr/local/bin/nokv-raftstore-server
 COPY scripts /usr/local/lib/nokv-scripts
 # Wrappers instead of symlinks: the scripts resolve $SCRIPT_DIR from
 # $BASH_SOURCE[0], which with a symlink points at /usr/local/bin and breaks
@@ -42,7 +58,9 @@ RUN chmod +x /usr/local/lib/nokv-scripts/ops/serve-store.sh /usr/local/lib/nokv-
     && printf '#!/usr/bin/env bash\nexec /usr/local/lib/nokv-scripts/ops/serve-store.sh "$@"\n' > /usr/local/bin/serve-store.sh \
     && printf '#!/usr/bin/env bash\nexec /usr/local/lib/nokv-scripts/ops/bootstrap.sh "$@"\n' > /usr/local/bin/bootstrap.sh \
     && chmod +x /usr/local/bin/serve-store.sh /usr/local/bin/bootstrap.sh \
-    && mkdir -p /etc/nokv /var/lib/nokv/store /var/lib/nokv/peras-visible-log /var/lib/nokv-meta-root \
+    && mkdir -p /etc/nokv /var/lib/nokv/store /var/lib/nokv/peras-visible-log \
+               /var/lib/nokv/raftstore-rs/holt /var/lib/nokv/raftstore-rs/raftlog \
+               /var/lib/nokv-meta-root \
                /volumes/store-1 /volumes/store-2 /volumes/store-3 \
     && chown -R nokv:nokv /var/lib/nokv /var/lib/nokv-meta-root /volumes
 COPY raft_config.example.json /etc/nokv/raft_config.json

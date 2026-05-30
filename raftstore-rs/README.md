@@ -21,6 +21,11 @@ When Holt mode is enabled, the server loads or bootstraps that single-region
 descriptor through the `region_meta` tree so the admission boundary has a
 durable metadata source before OpenRaft owns topology changes.
 
+The repository Docker image builds the same binary at
+`/usr/local/bin/nokv-raftstore-server`. Docker compose still starts the Go
+store path by default until the Rust data plane passes the compose fsmeta smoke
+and benchmark gates.
+
 Standalone multi-process tests can start a seed peer with the default bootstrap
 mode and start joining peers with explicit identity plus bootstrap disabled:
 
