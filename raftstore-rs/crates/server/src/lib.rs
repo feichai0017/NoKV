@@ -10,6 +10,7 @@ use std::sync::{Arc, Mutex};
 
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
+use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
@@ -21,9 +22,11 @@ use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 mod admission;
+mod execution;
 
 pub use adminpb::raft_admin_server::RaftAdminServer;
 pub use admission::RegionAdmission;
+use execution::ExecutionRuntime;
 pub use kvpb::store_kv_server::StoreKvServer;
 
 const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;
@@ -34,6 +37,7 @@ const DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE: usize = 512 * 1024;
 pub struct StoreKvService<E = MvccStore> {
     engine: E,
     admission: RegionAdmission,
+    execution: ExecutionRuntime,
 }
 
 impl<E> StoreKvService<E> {
@@ -42,7 +46,19 @@ impl<E> StoreKvService<E> {
     }
 
     pub fn with_admission(engine: E, admission: RegionAdmission) -> Self {
-        Self { engine, admission }
+        Self::with_admission_and_execution(engine, admission, ExecutionRuntime::default())
+    }
+
+    fn with_admission_and_execution(
+        engine: E,
+        admission: RegionAdmission,
+        execution: ExecutionRuntime,
+    ) -> Self {
+        Self {
+            engine,
+            admission,
+            execution,
+        }
     }
 }
 
@@ -86,6 +102,16 @@ where
         self.admission
             .with_runtime_status(self.engine.raft_runtime_status())
     }
+
+    fn record_admission(
+        &self,
+        class: adminpb::ExecutionAdmissionClass,
+        context: Option<&kvpb::Context>,
+        region_error: Option<&errorpb::RegionError>,
+    ) {
+        self.execution
+            .record_admission(class, context, region_error);
+    }
 }
 
 #[tonic::async_trait]
@@ -103,10 +129,16 @@ where
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("get request missing payload"))?;
         let admission = self.admission_snapshot();
-        if let Some(region_error) = admission.admit_read_optional_keys(
+        let region_error = admission.admit_read_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.key.as_slice()),
-        )? {
+        )?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Read,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvGetResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -142,10 +174,16 @@ where
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("batch get request missing payload"))?;
         let admission = self.admission_snapshot();
-        if let Some(region_error) = admission.admit_read_optional_keys(
+        let region_error = admission.admit_read_optional_keys(
             request.context.as_ref(),
             inner.requests.iter().map(|req| req.key.as_slice()),
-        )? {
+        )?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Read,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvBatchGetResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -200,15 +238,26 @@ where
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("scan request missing payload"))?;
         if inner.reverse {
+            self.execution.record_invalid(
+                adminpb::ExecutionAdmissionClass::Read,
+                request.context.as_ref(),
+                "reverse scan unsupported",
+            );
             return Err(Status::unimplemented(
                 "StoreKV Scan reverse scans are not supported yet",
             ));
         }
         let admission = self.admission_snapshot();
-        if let Some(region_error) = admission.admit_read_optional_keys(
+        let region_error = admission.admit_read_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.start_key.as_slice()),
-        )? {
+        )?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Read,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvScanResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -244,13 +293,19 @@ where
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("prewrite request missing payload"))?;
         let admission = self.admission_snapshot();
-        if let Some(region_error) = admission.admit_leader_optional_keys(
+        let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner
                 .mutations
                 .iter()
                 .map(|mutation| mutation.key.as_slice()),
-        )? {
+        )?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Write,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvPrewriteResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -291,10 +346,16 @@ where
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("commit request missing payload"))?;
         let admission = self.admission_snapshot();
-        if let Some(region_error) = admission.admit_leader_optional_keys(
+        let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
-        )? {
+        )?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Write,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvCommitResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -330,10 +391,16 @@ where
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("batch rollback request missing payload"))?;
         let admission = self.admission_snapshot();
-        if let Some(region_error) = admission.admit_leader_optional_keys(
+        let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
-        )? {
+        )?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Write,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvBatchRollbackResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -374,10 +441,16 @@ where
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("resolve lock request missing payload"))?;
         let admission = self.admission_snapshot();
-        if let Some(region_error) = admission.admit_leader_optional_keys(
+        let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             inner.keys.iter().map(|key| key.as_slice()),
-        )? {
+        )?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Write,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvResolveLockResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -418,10 +491,16 @@ where
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("check txn status request missing payload"))?;
         let admission = self.admission_snapshot();
-        if let Some(region_error) = admission.admit_leader_optional_keys(
+        let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.primary_key.as_slice()),
-        )? {
+        )?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Write,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvCheckTxnStatusResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -462,10 +541,16 @@ where
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("txn heart beat request missing payload"))?;
         let admission = self.admission_snapshot();
-        if let Some(region_error) = admission.admit_leader_optional_keys(
+        let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
             std::iter::once(inner.primary_key.as_slice()),
-        )? {
+        )?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Write,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvTxnHeartBeatResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -516,9 +601,13 @@ where
                     .map(|mutation| mutation.key.as_slice()),
             );
         let admission = self.admission_snapshot();
-        if let Some(region_error) =
-            admission.admit_leader_optional_keys(request.context.as_ref(), keys)?
-        {
+        let region_error = admission.admit_leader_optional_keys(request.context.as_ref(), keys)?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Write,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvTryAtomicMutateResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -561,9 +650,13 @@ where
             .chain(inner.dependency_keys.iter().map(|key| key.as_slice()))
             .chain(inner.entries.iter().map(|entry| entry.key.as_slice()));
         let admission = self.admission_snapshot();
-        if let Some(region_error) =
-            admission.admit_leader_required_keys(request.context.as_ref(), keys)?
-        {
+        let region_error = admission.admit_leader_required_keys(request.context.as_ref(), keys)?;
+        self.record_admission(
+            adminpb::ExecutionAdmissionClass::Write,
+            request.context.as_ref(),
+            region_error.as_ref(),
+        );
+        if let Some(region_error) = region_error {
             return Ok(Response::new(kvpb::KvInstallPreparedMvccEntriesResponse {
                 response: None,
                 region_error: Some(region_error),
@@ -645,6 +738,7 @@ where
 pub struct RaftAdminService<S = EmptyApplyStatus> {
     status: S,
     topology: Arc<Mutex<AdminTopology>>,
+    execution: ExecutionRuntime,
 }
 
 impl<S> RaftAdminService<S> {
@@ -653,9 +747,18 @@ impl<S> RaftAdminService<S> {
     }
 
     pub fn with_admission(status: S, admission: RegionAdmission) -> Self {
+        Self::with_admission_and_execution(status, admission, ExecutionRuntime::default())
+    }
+
+    fn with_admission_and_execution(
+        status: S,
+        admission: RegionAdmission,
+        execution: ExecutionRuntime,
+    ) -> Self {
         Self {
             status,
             topology: Arc::new(Mutex::new(AdminTopology::from_admission(&admission))),
+            execution,
         }
     }
 }
@@ -1046,7 +1149,7 @@ where
     ) -> Result<Response<adminpb::ExecutionStatusResponse>, Status> {
         let status = self.status.apply_status();
         Ok(Response::new(adminpb::ExecutionStatusResponse {
-            last_admission: Some(adminpb::ExecutionAdmissionStatus::default()),
+            last_admission: Some(self.execution.snapshot()?),
             restart: Some(adminpb::ExecutionRestartStatus {
                 state: if status.region_id == 0 {
                     adminpb::ExecutionRestartState::Degraded as i32
@@ -1102,14 +1205,18 @@ where
         + RaftMembershipAdmin
         + RaftRuntimeStatusProvider,
 {
+    let execution = ExecutionRuntime::default();
     tonic::transport::Server::builder()
-        .add_service(StoreKvServer::new(StoreKvService::with_admission(
-            engine.clone(),
-            admission.clone(),
-        )))
-        .add_service(RaftAdminServer::new(RaftAdminService::with_admission(
-            engine, admission,
-        )))
+        .add_service(StoreKvServer::new(
+            StoreKvService::with_admission_and_execution(
+                engine.clone(),
+                admission.clone(),
+                execution.clone(),
+            ),
+        ))
+        .add_service(RaftAdminServer::new(
+            RaftAdminService::with_admission_and_execution(engine, admission, execution),
+        ))
         .serve(addr)
         .await
 }
@@ -2124,5 +2231,70 @@ mod tests {
         assert_eq!(restart.state, adminpb::ExecutionRestartState::Ready as i32);
         assert_eq!(restart.region_count, 1);
         assert_eq!(restart.raft_group_count, 1);
+    }
+
+    #[tokio::test]
+    async fn admin_execution_status_reports_store_kv_admission() {
+        let execution = ExecutionRuntime::default();
+        let admission = RegionAdmission {
+            store_id: 2,
+            peer_id: 2,
+            peers: BTreeMap::from([(1, 1), (2, 2)]),
+            leader_peer_id: 2,
+            leader: true,
+            ..Default::default()
+        };
+        let store_service = StoreKvService::with_admission_and_execution(
+            FixedRuntimeEngine::follower(1, 2, 1),
+            admission.clone(),
+            execution.clone(),
+        );
+        let admin_service = RaftAdminService::with_admission_and_execution(
+            nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()),
+            admission.clone(),
+            execution,
+        );
+
+        let response = store_service
+            .prewrite(Request::new(kvpb::KvPrewriteRequest {
+                context: Some(context(&admission)),
+                request: Some(kvpb::PrewriteRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"k".to_vec(),
+                        value: b"v".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    primary_lock: b"k".to_vec(),
+                    start_version: 10,
+                    lock_ttl: 10,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(response.region_error.unwrap().not_leader.is_some());
+
+        let execution_status = admin_service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        let admission = execution_status.last_admission.unwrap();
+        assert!(admission.observed);
+        assert_eq!(
+            admission.class,
+            adminpb::ExecutionAdmissionClass::Write as i32
+        );
+        assert_eq!(
+            admission.reason,
+            adminpb::ExecutionAdmissionReason::NotLeader as i32
+        );
+        assert!(!admission.accepted);
+        assert_eq!(admission.region_id, 1);
+        assert_eq!(admission.peer_id, 2);
+        assert_eq!(admission.detail, "not leader");
+        assert!(admission.at_unix_nano > 0);
     }
 }
