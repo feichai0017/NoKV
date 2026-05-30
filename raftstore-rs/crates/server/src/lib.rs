@@ -8,7 +8,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
-use nokv_holtstore::{HoltMvccStore, RegionApplyState};
+use nokv_holtstore::{BlockedRootEvent, HoltMvccStore, RegionApplyState};
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
@@ -92,6 +92,10 @@ pub trait RestartDiagnosticsProvider: Send + Sync + 'static {
     fn blocked_root_event_count(&self) -> Result<u64, Status> {
         Ok(0)
     }
+
+    fn blocked_topology_statuses(&self) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
+        Ok(Vec::new())
+    }
 }
 
 #[derive(Debug, Default)]
@@ -110,6 +114,57 @@ impl RestartDiagnosticsProvider for HoltMvccStore {
         self.blocked_root_events()
             .map(|events| events.len() as u64)
             .map_err(|err| Status::internal(err.to_string()))
+    }
+
+    fn blocked_topology_statuses(&self) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
+        self.blocked_root_events()
+            .map(|events| {
+                events
+                    .iter()
+                    .map(blocked_root_event_topology_status)
+                    .collect()
+            })
+            .map_err(|err| Status::internal(err.to_string()))
+    }
+}
+
+fn blocked_root_event_topology_status(
+    blocked: &BlockedRootEvent,
+) -> adminpb::ExecutionTopologyStatus {
+    adminpb::ExecutionTopologyStatus {
+        transition_id: blocked.transition_id.clone(),
+        region_id: root_event_region_id(&blocked.event),
+        action: root_event_action(&blocked.event).to_owned(),
+        outcome: adminpb::ExecutionTopologyOutcome::Failed as i32,
+        publish: adminpb::ExecutionPublishState::TerminalBlocked as i32,
+        last_error: blocked.last_error.clone(),
+        ..Default::default()
+    }
+}
+
+fn root_event_region_id(event: &metapb::RootEvent) -> u64 {
+    match event.payload.as_ref() {
+        Some(metapb::root_event::Payload::PeerChange(change)) => change.region_id,
+        Some(metapb::root_event::Payload::RegionDescriptor(descriptor)) => descriptor
+            .descriptor
+            .as_ref()
+            .map(|region| region.region_id)
+            .unwrap_or_default(),
+        Some(metapb::root_event::Payload::RegionRemoval(removal)) => removal.region_id,
+        Some(metapb::root_event::Payload::RangeSplit(split)) => split.parent_region_id,
+        Some(metapb::root_event::Payload::RangeMerge(merge)) => merge.left_region_id,
+        _ => 0,
+    }
+}
+
+fn root_event_action(event: &metapb::RootEvent) -> &'static str {
+    match event.payload.as_ref() {
+        Some(metapb::root_event::Payload::PeerChange(_)) => "peer change",
+        Some(metapb::root_event::Payload::RegionDescriptor(_)) => "region descriptor",
+        Some(metapb::root_event::Payload::RegionRemoval(_)) => "region removal",
+        Some(metapb::root_event::Payload::RangeSplit(_)) => "range split",
+        Some(metapb::root_event::Payload::RangeMerge(_)) => "range merge",
+        _ => "root event",
     }
 }
 
@@ -1481,6 +1536,16 @@ where
         _request: Request<adminpb::ExecutionStatusRequest>,
     ) -> Result<Response<adminpb::ExecutionStatusResponse>, Status> {
         let status = self.status.apply_status();
+        let mut topology = self.execution.topology_snapshot()?;
+        for blocked in self.restart_diagnostics.blocked_topology_statuses()? {
+            if topology
+                .iter()
+                .any(|status| status.transition_id == blocked.transition_id)
+            {
+                continue;
+            }
+            topology.push(blocked);
+        }
         Ok(Response::new(adminpb::ExecutionStatusResponse {
             last_admission: Some(self.execution.snapshot()?),
             restart: Some(adminpb::ExecutionRestartStatus {
@@ -1495,7 +1560,7 @@ where
                 blocked_root_event_count: self.restart_diagnostics.blocked_root_event_count()?,
                 ..Default::default()
             }),
-            topology: self.execution.topology_snapshot()?,
+            topology,
             ..Default::default()
         }))
     }
@@ -3085,6 +3150,19 @@ mod tests {
         let restart = execution.restart.unwrap();
         assert_eq!(restart.pending_root_event_count, 1);
         assert_eq!(restart.blocked_root_event_count, 1);
+        assert_eq!(execution.topology.len(), 1);
+        assert_eq!(execution.topology[0].transition_id, "peer-change:1:add:2:2");
+        assert_eq!(execution.topology[0].region_id, 1);
+        assert_eq!(execution.topology[0].action, "peer change");
+        assert_eq!(
+            execution.topology[0].outcome,
+            adminpb::ExecutionTopologyOutcome::Failed as i32
+        );
+        assert_eq!(
+            execution.topology[0].publish,
+            adminpb::ExecutionPublishState::TerminalBlocked as i32
+        );
+        assert_eq!(execution.topology[0].last_error, "catalog precondition");
     }
 
     #[tokio::test]

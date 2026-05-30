@@ -400,9 +400,17 @@ func TestRustRaftstoreEndpointBlocksInvalidCoordinatorDescriptor(t *testing.T) {
 	defer func() { require.NoError(t, closeAdmin()) }()
 	require.Eventually(t, func() bool {
 		execution, statusErr := admin.ExecutionStatus(ctx, &adminpb.ExecutionStatusRequest{})
-		return statusErr == nil &&
-			execution.GetRestart().GetPendingRootEventCount() == 0 &&
-			execution.GetRestart().GetBlockedRootEventCount() == 1
+		if statusErr != nil {
+			return false
+		}
+		topology := execution.GetTopology()
+		return execution.GetRestart().GetPendingRootEventCount() == 0 &&
+			execution.GetRestart().GetBlockedRootEventCount() == 1 &&
+			len(topology) == 1 &&
+			topology[0].GetRegionId() == 1 &&
+			topology[0].GetAction() == "peer change" &&
+			topology[0].GetPublish() == adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_TERMINAL_BLOCKED &&
+			topology[0].GetLastError() != ""
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
