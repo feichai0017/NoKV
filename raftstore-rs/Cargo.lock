@@ -982,8 +982,10 @@ version = "0.1.0"
 dependencies = [
  "nokv-mvcc",
  "nokv-proto",
+ "nokv-raftlog",
  "openraft",
  "prost",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
 ]

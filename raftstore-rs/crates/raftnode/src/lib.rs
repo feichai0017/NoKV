@@ -15,8 +15,13 @@ use nokv_proto::nokv::raft::v1 as raftpb;
 use prost::Message;
 use tokio::sync::broadcast;
 
+mod log_codec;
+
+pub use log_codec::{decode_log_entry, encode_log_entry};
+
 pub type NodeId = u64;
 pub type RegionId = u64;
+pub type OpenRaftEntry = openraft::Entry<RaftStoreConfig>;
 
 openraft::declare_raft_types!(
     pub RaftStoreConfig:
@@ -86,6 +91,13 @@ pub enum Error {
         proposal_region_id: RegionId,
         command_region_id: RegionId,
     },
+    #[error("raft log record region {record_region_id} does not match proposal region {proposal_region_id}")]
+    LogRegionMismatch {
+        record_region_id: RegionId,
+        proposal_region_id: RegionId,
+    },
+    #[error("invalid raft log payload: {0}")]
+    InvalidLogPayload(String),
     #[error("raft command encode error: {0}")]
     Encode(#[from] prost::EncodeError),
     #[error("raft command decode error: {0}")]

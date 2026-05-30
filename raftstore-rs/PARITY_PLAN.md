@@ -60,6 +60,8 @@ The first slices are intentionally narrow:
   round-trips those commands through prost bytes and rejects region/header
   mismatches. `RaftStoreConfig` pins the OpenRaft data, response, node,
   entry, snapshot, and runtime types to this NoKV-owned proposal boundary.
+  The crate now also encodes OpenRaft entries into `nokv-raftlog` records and
+  decodes them back, covering normal command, blank, and membership entries.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`

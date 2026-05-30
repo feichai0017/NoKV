@@ -31,7 +31,9 @@ raftstore command contract unchanged; `Proposal` encodes that command payload
 directly and validates that the proposal region matches the command header.
 `RaftStoreConfig` fixes the OpenRaft type boundary around that proposal/result
 shape without exposing OpenRaft types through the service or Go protobuf
-boundary.
+boundary. `raftnode` also owns the codec between OpenRaft entries and
+`nokv-raftlog` records, so the low-level segmented WAL stays independent from
+OpenRaft while still preserving normal command, blank, and membership entries.
 
 See [PARITY_PLAN.md](PARITY_PLAN.md) for the full Go `raftstore` parity plan and
 the cutover rule: keep the workspace named `raftstore-rs` while the Go
