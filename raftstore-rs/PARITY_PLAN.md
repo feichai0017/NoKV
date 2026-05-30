@@ -113,6 +113,12 @@ The first slices are intentionally narrow:
   target, applied through the target Raft node, encoded as a response, and
   decoded by the caller. This keeps the next tonic transport slice focused on
   IO rather than OpenRaft type conversion.
+- `TonicRaftNetworkFactory` and `RaftTransportServer` now provide the first
+  real Rust gRPC OpenRaft transport boundary. The transport is internal to
+  `raftnode`, uses the NoKV-owned encoded payloads above instead of changing
+  repository protobufs, and derives target endpoints from OpenRaft
+  `BasicNode.addr`. The testkit starts three tonic transport servers, elects a
+  leader, commits a real `RaftCmdRequest`, and verifies all peers apply it.
 - `OpenRaftRegion` exposes NoKV-owned voter-change helpers over OpenRaft
   learner and membership APIs. The in-process testkit covers adding a new voter,
   committing a real metadata KV command to the joined peer, restarting the
@@ -178,9 +184,10 @@ Known gaps:
 - OpenRaft proposal/apply now has in-process three-node replication coverage,
   raftnode-level voter add/remove helpers, and an internal prost codec for
   OpenRaft RPC payloads. The encoded test network now exercises that codec at
-  the `RaftNetwork` boundary. The external tonic raft transport service/client,
-  route integration, and remaining `RaftAdmin` RPC wiring are still being built
-  out.
+  the `RaftNetwork` boundary, and the first tonic transport service/client can
+  replicate between local servers. Production route integration, transport
+  pooling, endpoint lifecycle, and remaining `RaftAdmin` RPC wiring are still
+  being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   multi-node networking and route integration are still being built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state

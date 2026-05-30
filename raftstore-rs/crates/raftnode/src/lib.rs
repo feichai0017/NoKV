@@ -26,6 +26,7 @@ mod log_codec;
 mod log_store;
 mod network;
 mod region_storage;
+mod tonic_transport;
 mod transport_codec;
 
 pub use log_codec::{decode_log_entry, encode_log_entry};
@@ -36,6 +37,10 @@ pub use network::{
 };
 pub use openraft::BasicNode;
 pub use region_storage::{RegionLogStorage, RegionSnapshotBuilder, RegionStateMachine};
+pub use tonic_transport::{
+    RaftTransportServer, TonicRaftNetworkFactory, TonicRaftTransportRegistry,
+    TonicRaftTransportService,
+};
 pub use transport_codec::{
     decode_append_entries_request, decode_append_entries_response, decode_install_snapshot_request,
     decode_install_snapshot_response, decode_vote_request, decode_vote_response,
