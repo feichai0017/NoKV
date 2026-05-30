@@ -937,6 +937,134 @@ impl mvcc::KvEngine for HoltMvccStore {
     }
 }
 
+impl mvcc::MvccSnapshotEngine for HoltMvccStore {
+    fn export_mvcc_snapshot(&self) -> mvcc::Result<mvcc::MvccSnapshot> {
+        let _guard = self.lock()?;
+        let mut writes = Vec::new();
+        for entry in self.store.write().map_err(to_backend_error)?.range() {
+            let entry = entry.map_err(to_backend_error)?;
+            let RangeEntry::Key { key, value, .. } = entry else {
+                continue;
+            };
+            let Some((user_key, commit_version)) = decode_write_key(&key)? else {
+                continue;
+            };
+            writes.push(mvcc::MvccSnapshotWrite {
+                key: user_key,
+                commit_version,
+                value: decode_value(&value)?,
+            });
+        }
+        writes.sort_by(|left, right| {
+            left.key
+                .cmp(&right.key)
+                .then(left.commit_version.cmp(&right.commit_version))
+        });
+
+        let mut locks = Vec::new();
+        for entry in self.store.lock().map_err(to_backend_error)?.range() {
+            let entry = entry.map_err(to_backend_error)?;
+            let RangeEntry::Key { key, value, .. } = entry else {
+                continue;
+            };
+            locks.push(mvcc::MvccSnapshotLock {
+                key,
+                lock: decode_lock(&value)?,
+            });
+        }
+        locks.sort_by(|left, right| left.key.cmp(&right.key));
+
+        let rollbacks = writes
+            .iter()
+            .filter(|write| write.value.kind == kvpb::mutation::Op::Rollback)
+            .map(|write| mvcc::MvccSnapshotRollback {
+                key: write.key.clone(),
+                start_version: write.value.start_version,
+            })
+            .collect();
+        Ok(mvcc::MvccSnapshot {
+            writes,
+            locks,
+            rollbacks,
+        })
+    }
+
+    fn install_mvcc_snapshot(&self, mut snapshot: mvcc::MvccSnapshot) -> mvcc::Result<()> {
+        let _guard = self.lock()?;
+        let mut rollback_writes = snapshot
+            .writes
+            .iter()
+            .filter(|write| write.value.kind == kvpb::mutation::Op::Rollback)
+            .map(|write| (write.key.clone(), write.value.start_version))
+            .collect::<std::collections::BTreeSet<_>>();
+        for rollback in &snapshot.rollbacks {
+            if rollback_writes.insert((rollback.key.clone(), rollback.start_version)) {
+                snapshot.writes.push(mvcc::MvccSnapshotWrite {
+                    key: rollback.key.clone(),
+                    commit_version: rollback.start_version,
+                    value: mvcc::VersionedValue {
+                        kind: kvpb::mutation::Op::Rollback,
+                        start_version: rollback.start_version,
+                        value: None,
+                        expires_at: 0,
+                    },
+                });
+            }
+        }
+        snapshot.writes.sort_by(|left, right| {
+            left.key
+                .cmp(&right.key)
+                .then(left.commit_version.cmp(&right.commit_version))
+        });
+        let encoded_locks = snapshot
+            .locks
+            .iter()
+            .map(|lock| encode_lock(&lock.lock).map(|encoded| (lock.key.clone(), encoded)))
+            .collect::<mvcc::Result<Vec<_>>>()?;
+
+        let mut data_keys = Vec::new();
+        for entry in self.store.data().map_err(to_backend_error)?.range() {
+            let entry = entry.map_err(to_backend_error)?;
+            if let RangeEntry::Key { key, .. } = entry {
+                data_keys.push(key);
+            }
+        }
+        let mut write_keys = Vec::new();
+        for entry in self.store.write().map_err(to_backend_error)?.range() {
+            let entry = entry.map_err(to_backend_error)?;
+            if let RangeEntry::Key { key, .. } = entry {
+                write_keys.push(key);
+            }
+        }
+        let mut lock_keys = Vec::new();
+        for entry in self.store.lock().map_err(to_backend_error)?.range() {
+            let entry = entry.map_err(to_backend_error)?;
+            if let RangeEntry::Key { key, .. } = entry {
+                lock_keys.push(key);
+            }
+        }
+
+        self.atomic(|batch| {
+            for key in &data_keys {
+                batch.delete(DATA_TREE, key);
+            }
+            for key in &write_keys {
+                batch.delete(WRITE_TREE, key);
+            }
+            for key in &lock_keys {
+                batch.delete(LOCK_TREE, key);
+            }
+            for write in &snapshot.writes {
+                apply_committed(batch, &write.key, write.commit_version, &write.value);
+            }
+            for (key, encoded) in &encoded_locks {
+                batch.put(LOCK_TREE, key, encoded);
+            }
+        })?;
+        Ok(())
+    }
+}
+
 fn lock_value(lock: &mvcc::LockRecord) -> mvcc::VersionedValue {
     let value = match lock.op {
         kvpb::mutation::Op::Put | kvpb::mutation::Op::Lock => Some(lock.value.clone()),
@@ -1232,7 +1360,7 @@ impl<'a> Cursor<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mvcc::KvEngine;
+    use mvcc::{KvEngine, MvccSnapshotEngine};
 
     #[test]
     fn opens_required_multi_tree_layout() {
@@ -1431,6 +1559,91 @@ mod tests {
             .unwrap();
         assert!(!current.not_found);
         assert_eq!(current.value, b"v1");
+    }
+
+    #[test]
+    fn holt_mvcc_snapshot_replaces_write_and_lock_trees() {
+        let source = HoltMvccStore::open_memory().unwrap();
+        source
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        source
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"locked".to_vec(),
+                    value: b"pending".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: b"locked".to_vec(),
+                start_version: 20,
+                lock_ttl: 30_000,
+                ..Default::default()
+            })
+            .unwrap();
+        source
+            .batch_rollback(&kvpb::BatchRollbackRequest {
+                keys: vec![b"rolled-back".to_vec()],
+                start_version: 30,
+            })
+            .unwrap();
+
+        let target = HoltMvccStore::open_memory().unwrap();
+        target
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"old".to_vec(),
+                    value: b"gone".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                commit_version: 5,
+                ..Default::default()
+            })
+            .unwrap();
+        target
+            .install_mvcc_snapshot(source.export_mvcc_snapshot().unwrap())
+            .unwrap();
+
+        let current = target
+            .get(&kvpb::GetRequest {
+                key: b"k".to_vec(),
+                version: 10,
+            })
+            .unwrap();
+        assert_eq!(current.value, b"v1");
+        let old = target
+            .get(&kvpb::GetRequest {
+                key: b"old".to_vec(),
+                version: 10,
+            })
+            .unwrap();
+        assert!(old.not_found);
+        let locked = target
+            .get(&kvpb::GetRequest {
+                key: b"locked".to_vec(),
+                version: 20,
+            })
+            .unwrap();
+        assert!(locked.error.unwrap().locked.is_some());
+        let rolled_back = target
+            .commit(&kvpb::CommitRequest {
+                keys: vec![b"rolled-back".to_vec()],
+                start_version: 30,
+                commit_version: 40,
+            })
+            .unwrap();
+        assert!(rolled_back.error.unwrap().abort.contains("rolled back"));
     }
 
     #[test]

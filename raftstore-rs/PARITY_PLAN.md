@@ -80,8 +80,9 @@ The first slices are intentionally narrow:
   reader across later appends. The implementation is intentionally limited to
   append/read/truncate/purge/apply; purge markers also preserve the full
   OpenRaft log id. Region vote and committed log-id metadata are persisted next
-  to the segmented log and covered by reopen tests. Real snapshots remain an
-  explicit gap.
+  to the segmented log and covered by reopen tests. The state machine now builds
+  real OpenRaft snapshots from a NoKV-owned MVCC snapshot contract, installs
+  them into empty peers, and rejects stale snapshots before mutating state.
 - `OpenRaftRegion` can bootstrap a single-node OpenRaft group with the v2 log
   store and state machine, initialize local membership, wait for leadership,
   and apply an existing `RaftCmdRequest` through `client_write`. On Holt
@@ -139,7 +140,9 @@ Known gaps:
   and durable vote/committed metadata. Multi-node restart still needs full
   bootstrap validation for membership-change state and snapshot install before
   it is production-complete.
-- Snapshot checkpoint/install is not implemented.
+- Snapshot catch-up has a first real state-machine snapshot path, but peer
+  catch-up from snapshot, snapshot-triggered log compaction, and corrupt
+  snapshot rejection still need full integration tests.
 - Go fsmeta and raftstore client tests do not yet run against Rust by default.
 
 ## Target Architecture

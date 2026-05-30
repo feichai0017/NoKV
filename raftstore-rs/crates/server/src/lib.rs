@@ -15,7 +15,7 @@ use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
     AppliedKvEngine, ApplyStatusProvider, ApplyStatusSink, ApplyWatchProvider, BasicNode,
-    PersistentAppliedKvEngine, RaftCommandExecutor, RegionApplyEngine,
+    PersistentAppliedKvEngine, RaftCommandExecutor, RegionSnapshotEngine,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
@@ -749,7 +749,7 @@ pub trait RaftRuntimeStatusProvider: ApplyStatusProvider {
 #[tonic::async_trait]
 impl<E> RaftMembershipAdmin for nokv_raftnode::OpenRaftRegion<E>
 where
-    E: RegionApplyEngine,
+    E: RegionSnapshotEngine,
 {
     async fn add_voter(&self, peer_id: u64, node: BasicNode) -> Result<(), Status> {
         self.add_voter(peer_id, node)
@@ -758,7 +758,7 @@ where
     }
 
     async fn remove_voter(&self, peer_id: u64) -> Result<(), Status> {
-        self.remove_voter(peer_id, false)
+        nokv_raftnode::OpenRaftRegion::remove_voter(self, peer_id, false)
             .await
             .map_err(|err| Status::failed_precondition(err.to_string()))
     }
@@ -766,7 +766,7 @@ where
 
 impl<E> RaftRuntimeStatusProvider for nokv_raftnode::OpenRaftRegion<E>
 where
-    E: RegionApplyEngine,
+    E: RegionSnapshotEngine,
 {
     fn raft_runtime_status(&self) -> RaftRuntimeStatus {
         let local_peer_id = self.node_id();

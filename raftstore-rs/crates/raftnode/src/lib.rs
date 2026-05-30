@@ -11,7 +11,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use nokv_mvcc::{KvEngine, MvccStore};
+use nokv_mvcc::{KvEngine, MvccSnapshotEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use openraft::{
@@ -31,7 +31,7 @@ pub use log_codec::{decode_log_entry, encode_log_entry};
 pub use log_store::{RaftEntryLog, SegmentedEntryLog};
 pub use network::{MemoryRaftNetworkFactory, MemoryRaftNetworkRegistry};
 pub use openraft::BasicNode;
-pub use region_storage::{NoopSnapshotBuilder, RegionLogStorage, RegionStateMachine};
+pub use region_storage::{RegionLogStorage, RegionSnapshotBuilder, RegionStateMachine};
 
 pub type NodeId = u64;
 pub type RegionId = u64;
@@ -150,6 +150,11 @@ pub trait RegionApplyEngine: ApplyStatusProvider + ApplyWatchProvider {
     fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
     where
         I: IntoIterator<Item = OpenRaftEntry>;
+}
+
+pub trait RegionSnapshotEngine: RegionApplyEngine {
+    fn export_region_snapshot(&self) -> nokv_mvcc::Result<Vec<u8>>;
+    fn install_region_snapshot(&self, snapshot: &[u8]) -> nokv_mvcc::Result<ApplyStatus>;
 }
 
 pub trait ApplyStatusSink: Clone + Send + Sync + 'static {
@@ -606,6 +611,88 @@ where
     }
 }
 
+impl<E> RegionSnapshotEngine for AppliedKvEngine<E>
+where
+    E: KvEngine + MvccSnapshotEngine,
+{
+    fn export_region_snapshot(&self) -> nokv_mvcc::Result<Vec<u8>> {
+        let status = self.status();
+        let mvcc_snapshot = {
+            let engine =
+                self.inner.engine.lock().map_err(|_| {
+                    nokv_mvcc::Error::Backend("region apply mutex poisoned".to_owned())
+                })?;
+            engine.export_mvcc_snapshot()?
+        };
+        Ok(RegionSnapshotPayload {
+            format_version: 1,
+            region_id: status.region_id,
+            term: status.term,
+            applied_index: status.applied_index,
+            mvcc_snapshot: nokv_mvcc::encode_mvcc_snapshot(&mvcc_snapshot),
+        }
+        .encode_to_vec())
+    }
+
+    fn install_region_snapshot(&self, snapshot: &[u8]) -> nokv_mvcc::Result<ApplyStatus> {
+        let payload = decode_region_snapshot_payload(snapshot)?;
+        if payload.format_version != 1 {
+            return Err(nokv_mvcc::Error::Decode(format!(
+                "unsupported region snapshot format {}",
+                payload.format_version
+            )));
+        }
+        if payload.region_id != self.inner.region_id {
+            return Err(nokv_mvcc::Error::Backend(format!(
+                "region snapshot {} cannot install into region {}",
+                payload.region_id, self.inner.region_id
+            )));
+        }
+        let current = self.status();
+        if payload.applied_index < current.applied_index {
+            return Err(nokv_mvcc::Error::Backend(format!(
+                "stale region snapshot index {} is behind current applied index {}",
+                payload.applied_index, current.applied_index
+            )));
+        }
+        if payload.applied_index == current.applied_index
+            && current.applied_index != 0
+            && payload.term != current.term
+        {
+            return Err(nokv_mvcc::Error::Backend(format!(
+                "region snapshot term {} conflicts with current applied term {} at index {}",
+                payload.term, current.term, payload.applied_index
+            )));
+        }
+        let mvcc_snapshot = nokv_mvcc::decode_mvcc_snapshot(&payload.mvcc_snapshot)?;
+        {
+            let engine =
+                self.inner.engine.lock().map_err(|_| {
+                    nokv_mvcc::Error::Backend("region apply mutex poisoned".to_owned())
+                })?;
+            engine.install_mvcc_snapshot(mvcc_snapshot)?;
+        }
+        self.record_applied_status(payload.term, payload.applied_index);
+        Ok(self.status())
+    }
+}
+
+impl<E, S> RegionSnapshotEngine for PersistentAppliedKvEngine<E, S>
+where
+    E: KvEngine + MvccSnapshotEngine,
+    S: ApplyStatusSink,
+{
+    fn export_region_snapshot(&self) -> nokv_mvcc::Result<Vec<u8>> {
+        self.engine.export_region_snapshot()
+    }
+
+    fn install_region_snapshot(&self, snapshot: &[u8]) -> nokv_mvcc::Result<ApplyStatus> {
+        let status = self.engine.install_region_snapshot(snapshot)?;
+        self.sink.save_apply_status(&status)?;
+        Ok(status)
+    }
+}
+
 impl<E> RegionApplyEngine for AppliedKvEngine<E>
 where
     E: KvEngine,
@@ -646,6 +733,39 @@ fn encode_raft_response(response: &raftpb::RaftCmdResponse) -> nokv_mvcc::Result
 fn decode_raft_response(payload: &[u8]) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
     raftpb::RaftCmdResponse::decode(payload)
         .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
+}
+
+fn decode_region_snapshot_payload(snapshot: &[u8]) -> nokv_mvcc::Result<RegionSnapshotPayload> {
+    RegionSnapshotPayload::decode(snapshot).map_err(|err| nokv_mvcc::Error::Decode(err.to_string()))
+}
+
+pub(crate) fn decode_region_snapshot_status(snapshot: &[u8]) -> nokv_mvcc::Result<ApplyStatus> {
+    let payload = decode_region_snapshot_payload(snapshot)?;
+    if payload.format_version != 1 {
+        return Err(nokv_mvcc::Error::Decode(format!(
+            "unsupported region snapshot format {}",
+            payload.format_version
+        )));
+    }
+    Ok(ApplyStatus {
+        region_id: payload.region_id,
+        term: payload.term,
+        applied_index: payload.applied_index,
+    })
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct RegionSnapshotPayload {
+    #[prost(uint32, tag = "1")]
+    format_version: u32,
+    #[prost(uint64, tag = "2")]
+    region_id: RegionId,
+    #[prost(uint64, tag = "3")]
+    term: u64,
+    #[prost(uint64, tag = "4")]
+    applied_index: u64,
+    #[prost(bytes = "vec", tag = "5")]
+    mvcc_snapshot: Vec<u8>,
 }
 
 impl<E> KvEngine for AppliedKvEngine<E>
@@ -783,7 +903,7 @@ pub struct OpenRaftRegion<E = AppliedKvEngine<MvccStore>> {
 
 impl<E> OpenRaftRegion<E>
 where
-    E: RegionApplyEngine,
+    E: RegionSnapshotEngine,
 {
     pub async fn open_with_network<N>(
         node_id: NodeId,
@@ -959,7 +1079,7 @@ where
 
 impl<E> RaftCommandExecutor for OpenRaftRegion<E>
 where
-    E: RegionApplyEngine,
+    E: RegionSnapshotEngine,
 {
     fn execute_raft_command<'a>(
         &'a self,

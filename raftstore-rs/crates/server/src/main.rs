@@ -8,7 +8,7 @@ use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::{
     AppliedKvEngine, ApplyStatus, ApplyStatusSink, OpenRaftRegion, PersistentAppliedKvEngine,
-    RegionLogStorage, RegionStateMachine, SegmentedEntryLog,
+    RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog,
 };
 use nokv_raftstore_server::RegionAdmission;
 
@@ -56,7 +56,7 @@ async fn bootstrap_openraft_region<E>(
     engine: E,
 ) -> Result<OpenRaftRegion<E>, Box<dyn std::error::Error>>
 where
-    E: nokv_raftnode::RegionApplyEngine,
+    E: RegionSnapshotEngine,
 {
     let log = SegmentedEntryLog::open(region_id, log_dir)?;
     let state_machine = RegionStateMachine::new(engine);

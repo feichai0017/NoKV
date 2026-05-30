@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use nokv_proto::nokv::kv::v1 as kvpb;
+use prost::Message;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -21,7 +22,7 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionedValue {
     pub kind: kvpb::mutation::Op,
     pub start_version: u64,
@@ -29,7 +30,7 @@ pub struct VersionedValue {
     pub expires_at: u64,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LockRecord {
     pub primary: Vec<u8>,
     pub start_version: u64,
@@ -39,6 +40,32 @@ pub struct LockRecord {
     pub op: kvpb::mutation::Op,
     pub value: Vec<u8>,
     pub expires_at: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MvccSnapshot {
+    pub writes: Vec<MvccSnapshotWrite>,
+    pub locks: Vec<MvccSnapshotLock>,
+    pub rollbacks: Vec<MvccSnapshotRollback>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MvccSnapshotWrite {
+    pub key: Vec<u8>,
+    pub commit_version: u64,
+    pub value: VersionedValue,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MvccSnapshotLock {
+    pub key: Vec<u8>,
+    pub lock: LockRecord,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MvccSnapshotRollback {
+    pub key: Vec<u8>,
+    pub start_version: u64,
 }
 
 #[derive(Debug, Default)]
@@ -84,6 +111,11 @@ pub trait KvEngine: Clone + Send + Sync + 'static {
         &self,
         req: &kvpb::MvccMaintenanceRequest,
     ) -> Result<kvpb::MvccMaintenanceResponse>;
+}
+
+pub trait MvccSnapshotEngine: Clone + Send + Sync + 'static {
+    fn export_mvcc_snapshot(&self) -> Result<MvccSnapshot>;
+    fn install_mvcc_snapshot(&self, snapshot: MvccSnapshot) -> Result<()>;
 }
 
 impl MvccStore {
@@ -565,6 +597,17 @@ impl MvccStore {
             ..Default::default()
         })
     }
+
+    pub fn export_snapshot(&self) -> Result<MvccSnapshot> {
+        let inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
+        Ok(snapshot_from_inner(&inner))
+    }
+
+    pub fn install_snapshot(&self, snapshot: MvccSnapshot) -> Result<()> {
+        let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
+        *inner = inner_from_snapshot(snapshot)?;
+        Ok(())
+    }
 }
 
 impl KvEngine for MvccStore {
@@ -630,6 +673,105 @@ impl KvEngine for MvccStore {
     ) -> Result<kvpb::MvccMaintenanceResponse> {
         self.mvcc_maintenance(req)
     }
+}
+
+impl MvccSnapshotEngine for MvccStore {
+    fn export_mvcc_snapshot(&self) -> Result<MvccSnapshot> {
+        self.export_snapshot()
+    }
+
+    fn install_mvcc_snapshot(&self, snapshot: MvccSnapshot) -> Result<()> {
+        self.install_snapshot(snapshot)
+    }
+}
+
+pub fn encode_mvcc_snapshot(snapshot: &MvccSnapshot) -> Vec<u8> {
+    let payload = SnapshotPayload {
+        writes: snapshot
+            .writes
+            .iter()
+            .map(|write| SnapshotWrite {
+                key: write.key.clone(),
+                commit_version: write.commit_version,
+                kind: write.value.kind as i32,
+                start_version: write.value.start_version,
+                has_value: write.value.value.is_some(),
+                value: write.value.value.clone().unwrap_or_default(),
+                expires_at: write.value.expires_at,
+            })
+            .collect(),
+        locks: snapshot
+            .locks
+            .iter()
+            .map(|lock| SnapshotLock {
+                key: lock.key.clone(),
+                primary: lock.lock.primary.clone(),
+                start_version: lock.lock.start_version,
+                start_time: lock.lock.start_time,
+                ttl: lock.lock.ttl,
+                min_commit_ts: lock.lock.min_commit_ts,
+                op: lock.lock.op as i32,
+                value: lock.lock.value.clone(),
+                expires_at: lock.lock.expires_at,
+            })
+            .collect(),
+        rollbacks: snapshot
+            .rollbacks
+            .iter()
+            .map(|rollback| SnapshotRollback {
+                key: rollback.key.clone(),
+                start_version: rollback.start_version,
+            })
+            .collect(),
+    };
+    payload.encode_to_vec()
+}
+
+pub fn decode_mvcc_snapshot(bytes: &[u8]) -> Result<MvccSnapshot> {
+    let payload = SnapshotPayload::decode(bytes).map_err(|err| Error::Decode(err.to_string()))?;
+    let mut writes = Vec::with_capacity(payload.writes.len());
+    for write in payload.writes {
+        let kind = kvpb::mutation::Op::try_from(write.kind).unwrap_or(kvpb::mutation::Op::Put);
+        writes.push(MvccSnapshotWrite {
+            key: write.key,
+            commit_version: write.commit_version,
+            value: VersionedValue {
+                kind,
+                start_version: write.start_version,
+                value: write.has_value.then_some(write.value),
+                expires_at: write.expires_at,
+            },
+        });
+    }
+    let mut locks = Vec::with_capacity(payload.locks.len());
+    for lock in payload.locks {
+        locks.push(MvccSnapshotLock {
+            key: lock.key,
+            lock: LockRecord {
+                primary: lock.primary,
+                start_version: lock.start_version,
+                start_time: lock.start_time,
+                ttl: lock.ttl,
+                min_commit_ts: lock.min_commit_ts,
+                op: kvpb::mutation::Op::try_from(lock.op).unwrap_or(kvpb::mutation::Op::Put),
+                value: lock.value,
+                expires_at: lock.expires_at,
+            },
+        });
+    }
+    let rollbacks = payload
+        .rollbacks
+        .into_iter()
+        .map(|rollback| MvccSnapshotRollback {
+            key: rollback.key,
+            start_version: rollback.start_version,
+        })
+        .collect();
+    Ok(MvccSnapshot {
+        writes,
+        locks,
+        rollbacks,
+    })
 }
 
 fn blocking_lock<'a>(inner: &'a Inner, key: &[u8], read_version: u64) -> Option<&'a LockRecord> {
@@ -734,6 +876,127 @@ fn apply_rollback(inner: &mut Inner, key: &[u8], start_version: u64) {
         },
     );
     inner.rollbacks.insert((key.to_vec(), start_version));
+}
+
+fn snapshot_from_inner(inner: &Inner) -> MvccSnapshot {
+    let writes = inner
+        .writes
+        .iter()
+        .flat_map(|(key, versions)| {
+            versions
+                .iter()
+                .map(|(commit_version, value)| MvccSnapshotWrite {
+                    key: key.clone(),
+                    commit_version: *commit_version,
+                    value: value.clone(),
+                })
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let locks = inner
+        .locks
+        .iter()
+        .map(|(key, lock)| MvccSnapshotLock {
+            key: key.clone(),
+            lock: lock.clone(),
+        })
+        .collect();
+    let rollbacks = inner
+        .rollbacks
+        .iter()
+        .map(|(key, start_version)| MvccSnapshotRollback {
+            key: key.clone(),
+            start_version: *start_version,
+        })
+        .collect();
+    MvccSnapshot {
+        writes,
+        locks,
+        rollbacks,
+    }
+}
+
+fn inner_from_snapshot(snapshot: MvccSnapshot) -> Result<Inner> {
+    let mut inner = Inner::default();
+    for write in snapshot.writes {
+        inner
+            .writes
+            .entry(write.key.clone())
+            .or_default()
+            .insert(write.commit_version, write.value.clone());
+        if write.value.kind == kvpb::mutation::Op::Rollback {
+            inner
+                .rollbacks
+                .insert((write.key, write.value.start_version));
+        }
+    }
+    for lock in snapshot.locks {
+        inner.locks.insert(lock.key, lock.lock);
+    }
+    for rollback in snapshot.rollbacks {
+        inner
+            .rollbacks
+            .insert((rollback.key, rollback.start_version));
+    }
+    Ok(inner)
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct SnapshotPayload {
+    #[prost(message, repeated, tag = "1")]
+    writes: Vec<SnapshotWrite>,
+    #[prost(message, repeated, tag = "2")]
+    locks: Vec<SnapshotLock>,
+    #[prost(message, repeated, tag = "3")]
+    rollbacks: Vec<SnapshotRollback>,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct SnapshotWrite {
+    #[prost(bytes = "vec", tag = "1")]
+    key: Vec<u8>,
+    #[prost(uint64, tag = "2")]
+    commit_version: u64,
+    #[prost(int32, tag = "3")]
+    kind: i32,
+    #[prost(uint64, tag = "4")]
+    start_version: u64,
+    #[prost(bool, tag = "5")]
+    has_value: bool,
+    #[prost(bytes = "vec", tag = "6")]
+    value: Vec<u8>,
+    #[prost(uint64, tag = "7")]
+    expires_at: u64,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct SnapshotLock {
+    #[prost(bytes = "vec", tag = "1")]
+    key: Vec<u8>,
+    #[prost(bytes = "vec", tag = "2")]
+    primary: Vec<u8>,
+    #[prost(uint64, tag = "3")]
+    start_version: u64,
+    #[prost(uint64, tag = "4")]
+    start_time: u64,
+    #[prost(uint64, tag = "5")]
+    ttl: u64,
+    #[prost(uint64, tag = "6")]
+    min_commit_ts: u64,
+    #[prost(int32, tag = "7")]
+    op: i32,
+    #[prost(bytes = "vec", tag = "8")]
+    value: Vec<u8>,
+    #[prost(uint64, tag = "9")]
+    expires_at: u64,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct SnapshotRollback {
+    #[prost(bytes = "vec", tag = "1")]
+    key: Vec<u8>,
+    #[prost(uint64, tag = "2")]
+    start_version: u64,
 }
 
 fn current_physical_time_millis() -> u64 {
@@ -960,6 +1223,75 @@ mod tests {
             .unwrap();
         assert!(!current.not_found);
         assert_eq!(current.value, b"v1");
+    }
+
+    #[test]
+    fn snapshot_round_trips_writes_locks_and_rollbacks() {
+        let store = MvccStore::new();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"locked".to_vec(),
+                    value: b"pending".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: b"locked".to_vec(),
+                start_version: 20,
+                lock_ttl: 30_000,
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .batch_rollback(&kvpb::BatchRollbackRequest {
+                keys: vec![b"rolled-back".to_vec()],
+                start_version: 30,
+            })
+            .unwrap();
+
+        let encoded = encode_mvcc_snapshot(&store.export_snapshot().unwrap());
+        let restored = MvccStore::new();
+        restored
+            .install_snapshot(decode_mvcc_snapshot(&encoded).unwrap())
+            .unwrap();
+
+        let committed = restored
+            .get(&kvpb::GetRequest {
+                key: b"k".to_vec(),
+                version: 10,
+            })
+            .unwrap();
+        assert_eq!(committed.value, b"v1");
+
+        let locked = restored
+            .get(&kvpb::GetRequest {
+                key: b"locked".to_vec(),
+                version: 20,
+            })
+            .unwrap();
+        assert!(locked.error.unwrap().locked.is_some());
+
+        let rolled_back = restored
+            .commit(&kvpb::CommitRequest {
+                keys: vec![b"rolled-back".to_vec()],
+                start_version: 30,
+                commit_version: 40,
+            })
+            .unwrap();
+        assert!(rolled_back.error.unwrap().abort.contains("rolled back"));
     }
 
     #[test]

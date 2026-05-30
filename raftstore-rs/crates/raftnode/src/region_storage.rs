@@ -11,8 +11,8 @@ use openraft::{
 };
 
 use crate::{
-    AppliedProposal, Error, NodeId, OpenRaftEntry, RaftEntryLog, RaftStoreConfig,
-    RegionApplyEngine, SegmentedEntryLog,
+    decode_region_snapshot_status, AppliedProposal, Error, NodeId, OpenRaftEntry, RaftEntryLog,
+    RaftStoreConfig, RegionSnapshotEngine, SegmentedEntryLog,
 };
 
 pub struct RegionLogStorage {
@@ -245,29 +245,34 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
     }
 }
 
-pub struct NoopSnapshotBuilder {
+pub struct RegionSnapshotBuilder {
     last_log_id: Option<LogId<NodeId>>,
     membership: StoredMembership<NodeId, BasicNode>,
+    payload: Result<Vec<u8>, String>,
 }
 
-impl RaftSnapshotBuilder<RaftStoreConfig> for NoopSnapshotBuilder {
+impl RaftSnapshotBuilder<RaftStoreConfig> for RegionSnapshotBuilder {
     async fn build_snapshot(&mut self) -> Result<Snapshot<RaftStoreConfig>, StorageError<NodeId>> {
+        let payload = self
+            .payload
+            .clone()
+            .map_err(|err| storage_error(ErrorVerb::Read, err))?;
         Ok(Snapshot {
             meta: SnapshotMeta {
                 last_log_id: self.last_log_id,
                 last_membership: self.membership.clone(),
-                snapshot_id: "noop".to_owned(),
+                snapshot_id: snapshot_id(self.last_log_id, &payload),
             },
-            snapshot: Box::new(std::io::Cursor::new(Vec::new())),
+            snapshot: Box::new(std::io::Cursor::new(payload)),
         })
     }
 }
 
 impl<E> RaftStateMachine<RaftStoreConfig> for RegionStateMachine<E>
 where
-    E: RegionApplyEngine,
+    E: RegionSnapshotEngine,
 {
-    type SnapshotBuilder = NoopSnapshotBuilder;
+    type SnapshotBuilder = RegionSnapshotBuilder;
 
     async fn applied_state(
         &mut self,
@@ -301,9 +306,13 @@ where
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
         let (last_log_id, membership) = self.applied_state().await.unwrap_or_default();
-        NoopSnapshotBuilder {
+        RegionSnapshotBuilder {
             last_log_id,
             membership,
+            payload: self
+                .engine
+                .export_region_snapshot()
+                .map_err(|err| err.to_string()),
         }
     }
 
@@ -315,19 +324,40 @@ where
 
     async fn install_snapshot(
         &mut self,
-        _meta: &SnapshotMeta<NodeId, BasicNode>,
-        _snapshot: Box<std::io::Cursor<Vec<u8>>>,
+        meta: &SnapshotMeta<NodeId, BasicNode>,
+        snapshot: Box<std::io::Cursor<Vec<u8>>>,
     ) -> Result<(), StorageError<NodeId>> {
-        Err(storage_error(
-            ErrorVerb::Write,
-            "raft snapshot install is not wired yet",
-        ))
+        let payload = snapshot.into_inner();
+        let status = decode_region_snapshot_status(&payload)
+            .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))?;
+        if let Some(log_id) = meta.last_log_id {
+            if log_id.index != status.applied_index || log_id.leader_id.term != status.term {
+                return Err(storage_error(
+                    ErrorVerb::Write,
+                    format!(
+                        "snapshot metadata log id {log_id:?} does not match payload term {} index {}",
+                        status.term, status.applied_index
+                    ),
+                ));
+            }
+        } else if status.applied_index != 0 {
+            return Err(storage_error(
+                ErrorVerb::Write,
+                "non-empty snapshot is missing last log id",
+            ));
+        }
+        self.engine
+            .install_region_snapshot(&payload)
+            .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
+        self.membership = meta.last_membership.clone();
+        Ok(())
     }
 
     async fn get_current_snapshot(
         &mut self,
     ) -> Result<Option<Snapshot<RaftStoreConfig>>, StorageError<NodeId>> {
-        Ok(None)
+        let mut builder = self.get_snapshot_builder().await;
+        builder.build_snapshot().await.map(Some)
     }
 }
 
@@ -341,11 +371,21 @@ fn storage_error(verb: ErrorVerb, message: impl Into<String>) -> StorageError<No
     }
 }
 
+fn snapshot_id(last_log_id: Option<LogId<NodeId>>, payload: &[u8]) -> String {
+    let (term, index) = last_log_id
+        .map(|log_id| (log_id.leader_id.term, log_id.index))
+        .unwrap_or_default();
+    format!(
+        "region-snapshot-{term}-{index}-{:08x}",
+        crc32fast::hash(payload)
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::{AppliedKvEngine, Proposal};
-    use nokv_mvcc::MvccStore;
+    use nokv_mvcc::{KvEngine, MvccStore};
     use nokv_proto::nokv::kv::v1 as kvpb;
     use nokv_proto::nokv::raft::v1 as raftpb;
     use openraft::{storage::RaftLogStorageExt, CommittedLeaderId, EntryPayload, LogId};
@@ -372,6 +412,7 @@ mod tests {
                             value: value.to_vec(),
                             ..Default::default()
                         }],
+                        commit_version: index,
                         ..Default::default()
                     },
                 )),
@@ -562,5 +603,74 @@ mod tests {
         let applied = state_machine.apply(entries).await.unwrap();
         assert_eq!(applied.len(), 2);
         assert_eq!(state_machine.apply_engine().status().applied_index, 2);
+    }
+
+    #[tokio::test]
+    async fn region_state_machine_builds_and_installs_snapshot() {
+        let engine = AppliedKvEngine::new(7, MvccStore::default());
+        let mut state_machine = RegionStateMachine::new(engine.clone());
+        state_machine
+            .apply(vec![
+                normal_entry(7, 1, b"a", b"1"),
+                normal_entry(7, 2, b"b", b"2"),
+            ])
+            .await
+            .unwrap();
+
+        let mut builder = state_machine.get_snapshot_builder().await;
+        let snapshot = builder.build_snapshot().await.unwrap();
+        assert_eq!(snapshot.meta.last_log_id.unwrap().index, 2);
+        assert!(!snapshot.snapshot.get_ref().is_empty());
+
+        let restored = AppliedKvEngine::new(7, MvccStore::default());
+        let mut restored_state_machine = RegionStateMachine::new(restored.clone());
+        restored_state_machine
+            .install_snapshot(&snapshot.meta, snapshot.snapshot)
+            .await
+            .unwrap();
+
+        assert_eq!(restored.status().applied_index, 2);
+        let current = restored
+            .get(&kvpb::GetRequest {
+                key: b"b".to_vec(),
+                version: 2,
+            })
+            .unwrap();
+        assert_eq!(current.value, b"2");
+
+        let current_snapshot = restored_state_machine
+            .get_current_snapshot()
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(!current_snapshot.snapshot.get_ref().is_empty());
+    }
+
+    #[tokio::test]
+    async fn region_state_machine_rejects_stale_snapshot_install() {
+        let old_engine = AppliedKvEngine::new(7, MvccStore::default());
+        let mut old_state_machine = RegionStateMachine::new(old_engine);
+        old_state_machine
+            .apply(vec![normal_entry(7, 1, b"a", b"1")])
+            .await
+            .unwrap();
+        let mut old_builder = old_state_machine.get_snapshot_builder().await;
+        let old_snapshot = old_builder.build_snapshot().await.unwrap();
+
+        let current_engine = AppliedKvEngine::new(7, MvccStore::default());
+        let mut current_state_machine = RegionStateMachine::new(current_engine);
+        current_state_machine
+            .apply(vec![
+                normal_entry(7, 1, b"a", b"1"),
+                normal_entry(7, 2, b"b", b"2"),
+            ])
+            .await
+            .unwrap();
+
+        let err = current_state_machine
+            .install_snapshot(&old_snapshot.meta, old_snapshot.snapshot)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("stale region snapshot"));
     }
 }
