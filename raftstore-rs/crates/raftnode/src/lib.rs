@@ -1705,6 +1705,175 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn openraft_region_restarts_after_membership_change_without_single_node_vote() {
+        let registry = MemoryRaftNetworkRegistry::default();
+        let leader_dir = tempfile::tempdir().unwrap();
+        let follower_dir = tempfile::tempdir().unwrap();
+
+        let leader_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let leader = OpenRaftRegion::open_with_network(
+            1,
+            7,
+            RegionLogStorage::new(SegmentedEntryLog::open(7, leader_dir.path()).unwrap()),
+            RegionStateMachine::new(leader_engine.clone()),
+            registry.factory(),
+        )
+        .await
+        .unwrap();
+        registry.register(1, leader.raft_handle());
+
+        let follower_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let follower = OpenRaftRegion::open_with_network(
+            2,
+            7,
+            RegionLogStorage::new(SegmentedEntryLog::open(7, follower_dir.path()).unwrap()),
+            RegionStateMachine::new(follower_engine.clone()),
+            registry.factory(),
+        )
+        .await
+        .unwrap();
+        registry.register(2, follower.raft_handle());
+
+        leader
+            .initialize_members(BTreeMap::from([(1, BasicNode::new("node-1"))]))
+            .await
+            .unwrap();
+        leader.wait_for_leader(1).await.unwrap();
+        leader.add_voter(2, BasicNode::new("node-2")).await.unwrap();
+        follower.wait_for_voter(2, true).await.unwrap();
+
+        let before_restart = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 7,
+                request_id: 10,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                    kvpb::TryAtomicMutateRequest {
+                        mutations: vec![kvpb::Mutation {
+                            key: b"before-restart".to_vec(),
+                            value: b"ok".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        }],
+                        commit_version: 30,
+                        ..Default::default()
+                    },
+                )),
+            }],
+        };
+        let applied_before_restart = leader
+            .propose(Proposal::from_raft_command(&before_restart).unwrap())
+            .await
+            .unwrap();
+        for region in [&leader, &follower] {
+            region
+                .raft_handle()
+                .wait(Some(Duration::from_secs(5)))
+                .applied_index_at_least(
+                    Some(applied_before_restart.index),
+                    "membership restart baseline proposal",
+                )
+                .await
+                .unwrap();
+        }
+
+        let leader_status = leader.apply_status();
+        let follower_status = follower.apply_status();
+        leader.shutdown().await.unwrap();
+        follower.shutdown().await.unwrap();
+        drop(leader);
+        drop(follower);
+        drop(leader_engine);
+        drop(follower_engine);
+
+        let restarted_registry = MemoryRaftNetworkRegistry::default();
+        let restarted_leader_engine = AppliedKvEngine::with_status(leader_status, MvccStore::new());
+        let restarted_leader = OpenRaftRegion::open_with_network(
+            1,
+            7,
+            RegionLogStorage::new(SegmentedEntryLog::open(7, leader_dir.path()).unwrap()),
+            RegionStateMachine::new(restarted_leader_engine.clone()),
+            restarted_registry.factory(),
+        )
+        .await
+        .unwrap();
+        restarted_registry.register(1, restarted_leader.raft_handle());
+
+        let restarted_follower_engine =
+            AppliedKvEngine::with_status(follower_status, MvccStore::new());
+        let restarted_follower = OpenRaftRegion::open_with_network(
+            2,
+            7,
+            RegionLogStorage::new(SegmentedEntryLog::open(7, follower_dir.path()).unwrap()),
+            RegionStateMachine::new(restarted_follower_engine.clone()),
+            restarted_registry.factory(),
+        )
+        .await
+        .unwrap();
+        restarted_registry.register(2, restarted_follower.raft_handle());
+
+        restarted_leader.wait_for_voter(2, true).await.unwrap();
+        restarted_follower.wait_for_voter(2, true).await.unwrap();
+        restarted_leader.elect_and_wait(1).await.unwrap();
+        restarted_follower.wait_for_leader(1).await.unwrap();
+
+        let after_restart = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 7,
+                request_id: 11,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                    kvpb::TryAtomicMutateRequest {
+                        mutations: vec![kvpb::Mutation {
+                            key: b"after-restart".to_vec(),
+                            value: b"still-quorum".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        }],
+                        commit_version: 40,
+                        ..Default::default()
+                    },
+                )),
+            }],
+        };
+        let applied_after_restart = restarted_leader
+            .propose(Proposal::from_raft_command(&after_restart).unwrap())
+            .await
+            .unwrap();
+        for region in [&restarted_leader, &restarted_follower] {
+            region
+                .raft_handle()
+                .wait(Some(Duration::from_secs(5)))
+                .applied_index_at_least(
+                    Some(applied_after_restart.index),
+                    "post-membership-restart proposal",
+                )
+                .await
+                .unwrap();
+        }
+
+        for (node_id, engine) in [(1, restarted_leader_engine), (2, restarted_follower_engine)] {
+            let get = engine
+                .get(&kvpb::GetRequest {
+                    key: b"after-restart".to_vec(),
+                    version: 40,
+                })
+                .unwrap();
+            assert_eq!(
+                get.value,
+                b"still-quorum".to_vec(),
+                "node {node_id} did not apply after multi-voter restart"
+            );
+        }
+    }
+
+    #[tokio::test]
     async fn openraft_region_catches_up_joining_peer_from_snapshot() {
         let registry = MemoryRaftNetworkRegistry::default();
         let leader_dir = tempfile::tempdir().unwrap();

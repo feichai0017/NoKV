@@ -103,8 +103,10 @@ The first slices are intentionally narrow:
   rather than only the state-machine snapshot codec.
 - `OpenRaftRegion` exposes NoKV-owned voter-change helpers over OpenRaft
   learner and membership APIs. The in-process testkit covers adding a new voter,
-  committing a real metadata KV command to the joined peer, and removing that
-  voter back out of the membership.
+  committing a real metadata KV command to the joined peer, restarting the
+  two-voter membership without reseeding a single-node vote, committing again
+  after the restarted quorum elects a leader, and removing that voter back out
+  of the membership.
 - `RaftAdmin` now wires `AddPeer`, `RemovePeer`, and the currently safe
   `TransferLeader` subset onto those
   `OpenRaftRegion` voter-change helpers and returns an updated protobuf region
@@ -173,9 +175,10 @@ Known gaps:
   the current leader to a different remote peer still returns
   `FailedPrecondition` until raftnode owns a full public transfer boundary.
 - Restart recovery now covers single-node Holt restart, write-after-restart,
-  and durable vote/committed metadata. Multi-node restart still needs full
-  bootstrap validation for membership-change state and snapshot install before
-  it is production-complete.
+  durable vote/committed metadata, and an in-process multi-node restart after a
+  membership change. Production completeness still needs external-transport
+  bootstrap coverage and snapshot-install restart coverage with persistent Holt
+  state.
 - Snapshot catch-up has both state-machine snapshot coverage and an in-process
   OpenRaft peer catch-up test where a joining peer installs a snapshot after the
   leader purges covered logs. Snapshot-triggered log compaction still needs
