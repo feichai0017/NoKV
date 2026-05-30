@@ -4,8 +4,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest_dir = PathBuf::from(std::env::var("CARGO_MANIFEST_DIR")?);
     let repo_root = manifest_dir
         .ancestors()
-        .nth(4)
-        .ok_or("nokv-proto crate must live under rust/raftstore/crates/proto")?;
+        .nth(3)
+        .ok_or("nokv-proto crate must live under raftstore-rs/crates/proto")?;
     let proto_root = repo_root.join("pb");
     let files = [
         "error/error.proto",

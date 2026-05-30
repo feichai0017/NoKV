@@ -1,4 +1,4 @@
-# Rust raftstore
+# raftstore-rs
 
 This workspace is the Rust data-plane replacement track for NoKV raftstore.
 
