@@ -19,7 +19,7 @@ use nokv_raftnode::{
 use nokv_raftstore_server::{
     apply_status_from_holt, root_event_transition_id, EmptyRegionDescriptorSink,
     EmptyRestartDiagnostics, EmptyTopologyPublisher, HoltRegionMetadataSink, PeerEndpointCatalog,
-    RegionAdmission, TopologyPublishOutcome, TopologyPublisher,
+    RaftRuntimeStatusProvider, RegionAdmission, TopologyPublishOutcome, TopologyPublisher,
 };
 use prost::Message;
 use prost_types::Any;
@@ -37,8 +37,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(%addr, %path, "starting rust raftstore server with Holt MVCC");
         let log_dir = raft_log_dir(Some(PathBuf::from(&path)), &mut temp_log_dir)?;
         let mvcc = HoltMvccStore::open_file(path)?;
-        let descriptor =
-            mvcc.load_or_bootstrap_region_descriptor(&default_region_descriptor(identity))?;
+        let descriptor = startup_region_descriptor(&mvcc, identity)?;
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
         let apply_status = mvcc
             .get_region_apply_state(descriptor.region_id)?
@@ -842,14 +841,9 @@ where
     E: RegionSnapshotEngine,
 {
     let status = region.apply_status();
-    let leader_peer_id = region
-        .raft_handle()
-        .metrics()
-        .borrow()
-        .current_leader
-        .unwrap_or_default();
-    let known = status.region_id != 0;
-    let leader = known && leader_peer_id == identity.peer_id;
+    let runtime = region.raft_runtime_status();
+    let known = status.region_id != 0 && runtime.hosted;
+    let leader = known && runtime.leader;
     let pending_admin = root_events
         .map(topology_catalog_has_pending_admin_work)
         .unwrap_or(false);
@@ -954,6 +948,19 @@ fn default_region_descriptor(identity: ServerIdentity) -> metapb::RegionDescript
         }],
         ..Default::default()
     }
+}
+
+fn startup_region_descriptor(
+    store: &HoltMvccStore,
+    identity: ServerIdentity,
+) -> nokv_holtstore::Result<metapb::RegionDescriptor> {
+    let default = default_region_descriptor(identity);
+    if identity.bootstrap {
+        return store.load_or_bootstrap_region_descriptor(&default);
+    }
+    Ok(store
+        .get_region_descriptor(identity.region_id)?
+        .unwrap_or(default))
 }
 
 #[cfg(test)]
@@ -1336,6 +1343,49 @@ mod tests {
         let metrics = region.raft_handle().metrics().borrow().clone();
         assert!(metrics.current_leader.is_none());
         assert!(metrics.membership_config.voter_ids().next().is_none());
+
+        let heartbeat = coordinator_heartbeat_request(
+            identity,
+            "127.0.0.1:23880".parse().unwrap(),
+            &region,
+            None,
+        );
+        assert_eq!(heartbeat.region_num, 0);
+        assert_eq!(heartbeat.leader_num, 0);
+        assert!(heartbeat.leader_region_ids.is_empty());
+        assert!(heartbeat.region_stats.is_empty());
+    }
+
+    #[test]
+    fn non_bootstrap_holt_start_does_not_persist_default_descriptor() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 2,
+            peer_id: 2,
+            bootstrap: false,
+        };
+
+        let descriptor = startup_region_descriptor(&store, identity).unwrap();
+
+        assert_eq!(descriptor, default_region_descriptor(identity));
+        assert!(store.get_region_descriptor(7).unwrap().is_none());
+    }
+
+    #[test]
+    fn bootstrap_holt_start_persists_default_descriptor() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 1,
+            peer_id: 1,
+            bootstrap: true,
+        };
+
+        let descriptor = startup_region_descriptor(&store, identity).unwrap();
+
+        assert_eq!(descriptor, default_region_descriptor(identity));
+        assert_eq!(store.get_region_descriptor(7).unwrap().unwrap(), descriptor);
     }
 
     #[tokio::test]

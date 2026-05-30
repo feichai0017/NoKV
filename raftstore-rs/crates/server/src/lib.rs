@@ -1288,6 +1288,7 @@ pub struct RaftRuntimeStatus {
     pub local_peer_id: u64,
     pub leader_peer_id: u64,
     pub leader: bool,
+    pub hosted: bool,
 }
 
 pub trait RaftRuntimeStatusProvider: ApplyStatusProvider {
@@ -1333,16 +1334,18 @@ where
 {
     fn raft_runtime_status(&self) -> RaftRuntimeStatus {
         let local_peer_id = self.node_id();
-        let leader_peer_id = self
-            .raft_handle()
-            .metrics()
-            .borrow()
-            .current_leader
-            .unwrap_or_default();
+        let metrics = self.raft_handle().metrics();
+        let metrics = metrics.borrow();
+        let leader_peer_id = metrics.current_leader.unwrap_or_default();
+        let hosted = metrics
+            .membership_config
+            .voter_ids()
+            .any(|peer_id| peer_id == local_peer_id);
         RaftRuntimeStatus {
             local_peer_id,
             leader_peer_id,
             leader: leader_peer_id == local_peer_id && leader_peer_id != 0,
+            hosted,
         }
     }
 }
@@ -1382,6 +1385,7 @@ where
             local_peer_id: u64::from(known),
             leader_peer_id: u64::from(known),
             leader: known,
+            hosted: known,
         }
     }
 }
@@ -1423,6 +1427,7 @@ where
             local_peer_id: u64::from(known),
             leader_peer_id: u64::from(known),
             leader: known,
+            hosted: known,
         }
     }
 }
@@ -1602,20 +1607,21 @@ where
             return Err(Status::invalid_argument("region_id is required"));
         }
         let status = self.status.apply_status();
+        let runtime = self.status.raft_runtime_status();
+        let hosted = status.region_id != 0 && runtime.hosted;
         if request.region_id != status.region_id {
             return Ok(Response::new(
                 adminpb::RegionRuntimeStatusResponse::default(),
             ));
         }
-        let region = if status.region_id == 0 {
+        let region = if !hosted {
             None
         } else {
             Some(self.admission.descriptor()?)
         };
-        let runtime = self.status.raft_runtime_status();
         Ok(Response::new(adminpb::RegionRuntimeStatusResponse {
-            known: status.region_id != 0,
-            hosted: status.region_id != 0,
+            known: hosted,
+            hosted,
             local_peer_id: runtime.local_peer_id,
             leader_peer_id: runtime.leader_peer_id,
             leader: runtime.leader,
@@ -2027,6 +2033,7 @@ mod tests {
                 local_peer_id: 1,
                 leader_peer_id: 1,
                 leader: true,
+                hosted: true,
             }
         }
     }
@@ -2132,6 +2139,7 @@ mod tests {
                     local_peer_id,
                     leader_peer_id,
                     leader: false,
+                    hosted: true,
                 },
             }
         }
