@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use std::error::Error as StdError;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
@@ -803,12 +804,38 @@ where
 
         let mut members = BTreeMap::new();
         members.insert(node_id, BasicNode::new(format!("local-{node_id}")));
-        match raft.initialize(members).await {
-            Ok(()) => {}
-            Err(RaftError::APIError(InitializeError::NotAllowed(_))) => {}
+        let initialized = match raft.initialize(members).await {
+            Ok(()) => true,
+            Err(RaftError::APIError(InitializeError::NotAllowed(_))) => false,
             Err(err) => return Err(openraft_api_error(err)),
+        };
+        if initialized {
+            let election_term_floor = raft.metrics().borrow().current_term + 1;
+            raft.trigger().elect().await.map_err(openraft_error)?;
+            raft.wait(Some(Duration::from_secs(5)))
+                .metrics(
+                    |metrics| {
+                        metrics.current_term >= election_term_floor
+                            && metrics.current_leader == Some(node_id)
+                    },
+                    "single-node bootstrap leader",
+                )
+                .await
+                .map_err(|err| Error::OpenRaft(err.to_string()))?;
+            raft.wait(Some(Duration::from_secs(5)))
+                .metrics(
+                    |metrics| {
+                        metrics.last_log_index == metrics.last_applied.as_ref().map(|id| id.index)
+                            && metrics
+                                .last_applied
+                                .as_ref()
+                                .is_some_and(|id| id.leader_id.term >= metrics.current_term)
+                    },
+                    "single-node bootstrap applied frontier",
+                )
+                .await
+                .map_err(|err| Error::OpenRaft(err.to_string()))?;
         }
-        raft.trigger().elect().await.map_err(openraft_error)?;
         Ok(OpenRaftRegion { raft, apply_engine })
     }
 
@@ -986,7 +1013,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(applied.region_id, 7);
-        assert_eq!(applied.index, 2);
+        assert_eq!(applied.index, 3);
     }
 
     #[test]

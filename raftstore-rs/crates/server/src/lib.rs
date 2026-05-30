@@ -879,7 +879,7 @@ mod tests {
             .into_inner();
 
         assert_eq!(response.response.unwrap().applied_keys, 1);
-        assert_eq!(region.apply_status().applied_index, 2);
+        assert_eq!(region.apply_status().applied_index, 3);
     }
 
     #[tokio::test]

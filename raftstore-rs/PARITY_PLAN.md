@@ -64,21 +64,20 @@ The first slices are intentionally narrow:
   decodes them back, covering normal command, blank, and membership entries.
   `SegmentedEntryLog` wraps the low-level WAL with a region-local OpenRaft
   entry append/recover boundary and rejects mismatched-region batches before any
-  record is appended. It also exposes range reads and last-log-id lookup for the
-  next OpenRaft storage adapter slice. `AppliedKvEngine` now has an
-  OpenRaft-entry apply path
+  record is appended. It also exposes range reads, last-log-id lookup, conflict
+  suffix truncation, and purge markers that survive restart. `AppliedKvEngine`
+  now has an OpenRaft-entry apply path
   that uses the committed entry's log index and term for apply status and watch
   events, while direct command execution advances the local applied index once
   per Raft command. Holt server mode wraps the apply engine with an apply-status
   sink, so writes persist the latest region apply status for restart bootstrap.
 - `RegionLogStorage` and `RegionStateMachine` implement OpenRaft's v2 storage
   boundary over `SegmentedEntryLog` and `AppliedKvEngine`. They are
-  intentionally limited to the append/read/apply main path; conflict
-  truncation, purge, and real snapshots remain explicit gaps before replicated
-  clusters are enabled.
+  intentionally limited to append/read/truncate/purge/apply; real snapshots
+  remain an explicit gap before replicated clusters are enabled.
 - `OpenRaftRegion` can bootstrap a single-node OpenRaft group with the v2 log
-  store and state machine, initialize local membership, trigger election, and
-  apply an existing `RaftCmdRequest` through `client_write`.
+  store and state machine, initialize local membership, wait for leader no-op
+  application, and apply an existing `RaftCmdRequest` through `client_write`.
 - `StoreKV` now depends on an async raft-command executor, and the tonic
   service has coverage against both the direct apply engine and
   `OpenRaftRegion`.
@@ -93,7 +92,9 @@ The first slices are intentionally narrow:
 
 Known gaps:
 
-- OpenRaft is not wired into proposal, replication, or membership yet.
+- OpenRaft proposal/apply is wired for the single-node server path, but
+  multi-node networking, replication, and membership changes are still being
+  built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   multi-node networking and route integration are still being built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
@@ -101,7 +102,9 @@ Known gaps:
   commands. The single-region service still bootstraps a default descriptor
   until coordinator-provided topology is wired.
 - Admin membership RPCs return `Unimplemented`.
-- Restart recovery does not yet combine Holt state, apply state, and raft log.
+- Restart recovery does not yet combine Holt state, apply state, raft log, and
+  persisted membership into a write-capable Raft group. Holt restart smoke
+  currently verifies apply-status recovery only.
 - Snapshot checkpoint/install is not implemented.
 - Go fsmeta and raftstore client tests do not yet run against Rust by default.
 

@@ -82,12 +82,17 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
     type LogReader = RegionLogReader;
 
     async fn get_log_state(&mut self) -> Result<LogState<RaftStoreConfig>, StorageError<NodeId>> {
+        let last_purged_log_id = self
+            .log
+            .last_purged_log_id()
+            .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))?;
         let last_log_id = self
             .log
             .last_log_id()
-            .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))?;
+            .map_err(|err| storage_error(ErrorVerb::Read, err.to_string()))?
+            .or(last_purged_log_id);
         Ok(LogState {
-            last_purged_log_id: None,
+            last_purged_log_id,
             last_log_id,
         })
     }
@@ -146,18 +151,18 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
         }
     }
 
-    async fn truncate(&mut self, _log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
-        Err(storage_error(
-            ErrorVerb::Delete,
-            "raft log conflict deletion is not wired yet",
-        ))
+    async fn truncate(&mut self, log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
+        self.log
+            .truncate_since(log_id)
+            .and_then(|_| self.log.sync())
+            .map_err(|err| storage_error(ErrorVerb::Delete, err.to_string()))
     }
 
-    async fn purge(&mut self, _log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
-        Err(storage_error(
-            ErrorVerb::Delete,
-            "raft log purge is not wired yet",
-        ))
+    async fn purge(&mut self, log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
+        self.log
+            .purge_upto(log_id)
+            .and_then(|_| self.log.sync())
+            .map_err(|err| storage_error(ErrorVerb::Delete, err.to_string()))
     }
 }
 
@@ -341,6 +346,73 @@ mod tests {
         let read = reader.try_get_log_entries(2..3).await.unwrap();
         assert_eq!(read.len(), 1);
         assert_eq!(read[0].log_id.index, 2);
+    }
+
+    #[tokio::test]
+    async fn region_log_storage_truncates_conflicting_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        let mut storage = RegionLogStorage::new(log);
+        storage
+            .blocking_append(vec![
+                normal_entry(7, 1, b"a", b"1"),
+                normal_entry(7, 2, b"b", b"2"),
+                normal_entry(7, 3, b"c", b"3"),
+            ])
+            .await
+            .unwrap();
+
+        storage.truncate(log_id(3, 3)).await.unwrap();
+        let mut reader = storage.get_log_reader().await;
+        let read = reader.try_get_log_entries(0..10).await.unwrap();
+        assert_eq!(
+            read.iter()
+                .map(|entry| entry.log_id.index)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(
+            storage
+                .get_log_state()
+                .await
+                .unwrap()
+                .last_log_id
+                .unwrap()
+                .index,
+            2
+        );
+    }
+
+    #[tokio::test]
+    async fn region_log_storage_purges_prefix_and_recovers_marker() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        let mut storage = RegionLogStorage::new(log);
+        storage
+            .blocking_append(vec![
+                normal_entry(7, 1, b"a", b"1"),
+                normal_entry(7, 2, b"b", b"2"),
+                normal_entry(7, 3, b"c", b"3"),
+            ])
+            .await
+            .unwrap();
+        storage.purge(log_id(3, 2)).await.unwrap();
+        drop(storage);
+
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        let mut storage = RegionLogStorage::new(log);
+        let state = storage.get_log_state().await.unwrap();
+        assert_eq!(state.last_purged_log_id.unwrap().index, 2);
+        assert_eq!(state.last_log_id.unwrap().index, 3);
+
+        let mut reader = storage.get_log_reader().await;
+        let read = reader.try_get_log_entries(0..10).await.unwrap();
+        assert_eq!(
+            read.iter()
+                .map(|entry| entry.log_id.index)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
     }
 
     #[tokio::test]

@@ -1,7 +1,7 @@
 use std::ops::{Bound, RangeBounds};
 use std::path::Path;
 
-use nokv_raftlog::SegmentedRaftLog;
+use nokv_raftlog::{LogMarker, SegmentedRaftLog};
 
 use crate::{decode_log_entry, encode_log_entry, Error, NodeId, OpenRaftEntry, RegionId};
 
@@ -9,10 +9,13 @@ pub trait RaftEntryLog {
     fn append_entries(&mut self, entries: &[OpenRaftEntry]) -> Result<(), Error>;
     fn sync(&self) -> Result<(), Error>;
     fn recover_entries(&self) -> Result<Vec<OpenRaftEntry>, Error>;
+    fn last_purged_log_id(&self) -> Result<Option<openraft::LogId<NodeId>>, Error>;
     fn last_log_id(&self) -> Result<Option<openraft::LogId<NodeId>>, Error>;
     fn read_entries<R>(&self, range: R) -> Result<Vec<OpenRaftEntry>, Error>
     where
         R: RangeBounds<u64>;
+    fn truncate_since(&mut self, log_id: openraft::LogId<NodeId>) -> Result<(), Error>;
+    fn purge_upto(&mut self, log_id: openraft::LogId<NodeId>) -> Result<(), Error>;
 }
 
 pub struct SegmentedEntryLog {
@@ -52,6 +55,10 @@ impl RaftEntryLog for SegmentedEntryLog {
             .collect::<Result<Vec<_>, _>>()
     }
 
+    fn last_purged_log_id(&self) -> Result<Option<openraft::LogId<NodeId>>, Error> {
+        Ok(self.inner.last_purged()?.map(marker_to_log_id))
+    }
+
     fn last_log_id(&self) -> Result<Option<openraft::LogId<NodeId>>, Error> {
         Ok(self.recover_entries()?.last().map(|entry| entry.log_id))
     }
@@ -66,6 +73,20 @@ impl RaftEntryLog for SegmentedEntryLog {
                 .filter(|entry| range_contains(&range, entry.log_id.index))
                 .collect()
         })
+    }
+
+    fn truncate_since(&mut self, log_id: openraft::LogId<NodeId>) -> Result<(), Error> {
+        self.inner.truncate_since(log_id.index)?;
+        Ok(())
+    }
+
+    fn purge_upto(&mut self, log_id: openraft::LogId<NodeId>) -> Result<(), Error> {
+        self.inner.purge_upto(LogMarker {
+            region_id: self.region_id,
+            index: log_id.index,
+            term: log_id.leader_id.term,
+        })?;
+        Ok(())
     }
 }
 
@@ -84,6 +105,13 @@ where
         Bound::Unbounded => true,
     };
     after_start && before_end
+}
+
+fn marker_to_log_id(marker: LogMarker) -> openraft::LogId<NodeId> {
+    openraft::LogId::new(
+        openraft::CommittedLeaderId::new(marker.term, NodeId::default()),
+        marker.index,
+    )
 }
 
 #[cfg(test)]
@@ -152,6 +180,45 @@ mod tests {
             vec![2, 3]
         );
         assert_eq!(log.last_log_id().unwrap().unwrap().index, 3);
+    }
+
+    #[test]
+    fn segmented_entry_log_truncates_conflicting_suffix() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        log.append_entries(&[normal_entry(7, 1), normal_entry(7, 2), normal_entry(7, 3)])
+            .unwrap();
+
+        log.truncate_since(log_id(3, 3)).unwrap();
+        assert_eq!(
+            log.recover_entries()
+                .unwrap()
+                .iter()
+                .map(|entry| entry.log_id.index)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+    }
+
+    #[test]
+    fn segmented_entry_log_persists_purged_log_id() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        log.append_entries(&[normal_entry(7, 1), normal_entry(7, 2), normal_entry(7, 3)])
+            .unwrap();
+        log.purge_upto(log_id(3, 2)).unwrap();
+        drop(log);
+
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        assert_eq!(log.last_purged_log_id().unwrap().unwrap().index, 2);
+        assert_eq!(
+            log.recover_entries()
+                .unwrap()
+                .iter()
+                .map(|entry| entry.log_id.index)
+                .collect::<Vec<_>>(),
+            vec![3]
+        );
     }
 
     #[test]
