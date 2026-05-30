@@ -165,6 +165,12 @@ The first slices are intentionally narrow:
   non-bootstrap startup mode, so additional processes can start as
   uninitialized joining peers and be added through the existing `RaftAdmin
   AddPeer` wire contract.
+- The standalone server has an optional coordinator heartbeat path behind
+  `NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR`. It reports the existing
+  `StoreHeartbeat` wire shape with store identity, client/raft address,
+  region count, leader count, leader region ids, and minimal per-region runtime
+  stats. Coordinator-returned scheduler operations are observed but not
+  executed yet.
 - `nokv-raftstore-server` exposes compatible tonic `StoreKV` and `RaftAdmin`
   services, including `WatchApply`, apply status, and a single-region admission
   gate for context, epoch, store, leader, and key-range errors. `StoreKV`
@@ -223,9 +229,10 @@ Known gaps:
   transport beside StoreKV/RaftAdmin and has server-level replication coverage.
   The Go tagged harness also covers three standalone Rust processes joining and
   leaving through `RaftAdmin AddPeer`/`RemovePeer`, then replicating `StoreKV`
-  writes across the active membership. Production route integration,
-  coordinator-provided endpoint refresh/lifecycle, and remaining `RaftAdmin` RPC
-  wiring are still being built out.
+  writes across the active membership. The standalone binary can now report
+  StoreHeartbeat telemetry to the coordinator. Production route integration,
+  coordinator-provided endpoint refresh/lifecycle, scheduler operation
+  execution, and remaining `RaftAdmin` RPC wiring are still being built out.
 - The default server startup is mounted behind a single-node OpenRaft node;
   additional peers can now start in non-bootstrap mode and join through
   `RaftAdmin AddPeer`. Coordinator-owned route integration and automatic

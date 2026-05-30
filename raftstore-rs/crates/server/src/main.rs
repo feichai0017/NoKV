@@ -2,13 +2,16 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::time::Duration;
 
 use nokv_holtstore::HoltMvccStore;
 use nokv_mvcc::MvccStore;
+use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::{
-    AppliedKvEngine, OpenRaftRegion, PersistentAppliedKvEngine, RegionLogStorage,
-    RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog, TonicRaftNetworkFactory,
+    AppliedKvEngine, ApplyStatusProvider, OpenRaftRegion, PersistentAppliedKvEngine,
+    RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog,
+    TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
     apply_status_from_holt, HoltRegionMetadataSink, PeerEndpointCatalog, RegionAdmission,
@@ -20,6 +23,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "127.0.0.1:23880".to_owned())
         .parse::<SocketAddr>()?;
     let identity = ServerIdentity::from_env()?;
+    let coordinator = coordinator_heartbeat_config_from_env()?;
     let peer_endpoints = peer_endpoint_catalog_from_env()?;
     let mut temp_log_dir = None;
     if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_HOLT_DIR") {
@@ -42,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let engine =
             PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
+        spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone());
         nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_and_descriptor_sink(
             addr,
             region,
@@ -56,6 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
         engine.set_region_descriptor(default_region_descriptor(identity))?;
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
+        spawn_coordinator_heartbeat(coordinator, identity, addr, region.clone());
         nokv_raftstore_server::serve_with_openraft_region_admission_and_peer_endpoints(
             addr,
             region,
@@ -174,6 +180,131 @@ fn peer_endpoint_catalog_from_env() -> Result<PeerEndpointCatalog, Box<dyn std::
     Ok(catalog)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct CoordinatorHeartbeatConfig {
+    endpoint: String,
+    interval: Duration,
+}
+
+fn coordinator_heartbeat_config_from_env(
+) -> Result<Option<CoordinatorHeartbeatConfig>, Box<dyn std::error::Error>> {
+    let Ok(raw_addr) = std::env::var("NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR") else {
+        return Ok(None);
+    };
+    let addr = raw_addr.trim();
+    if addr.is_empty() {
+        return Ok(None);
+    }
+    let interval_ms = parse_required_nonzero_u64(
+        "NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS",
+        std::env::var("NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS").ok(),
+        1_000,
+    )?;
+    Ok(Some(CoordinatorHeartbeatConfig {
+        endpoint: coordinator_endpoint(addr),
+        interval: Duration::from_millis(interval_ms),
+    }))
+}
+
+fn coordinator_endpoint(addr: &str) -> String {
+    if addr.contains("://") {
+        addr.to_owned()
+    } else {
+        format!("http://{addr}")
+    }
+}
+
+fn spawn_coordinator_heartbeat<E>(
+    config: Option<CoordinatorHeartbeatConfig>,
+    identity: ServerIdentity,
+    addr: SocketAddr,
+    region: OpenRaftRegion<E>,
+) where
+    E: RegionSnapshotEngine + Send + Sync + 'static,
+{
+    let Some(config) = config else {
+        return;
+    };
+    tokio::spawn(async move {
+        run_coordinator_heartbeat(config, identity, addr, region).await;
+    });
+}
+
+async fn run_coordinator_heartbeat<E>(
+    config: CoordinatorHeartbeatConfig,
+    identity: ServerIdentity,
+    addr: SocketAddr,
+    region: OpenRaftRegion<E>,
+) where
+    E: RegionSnapshotEngine + Send + Sync + 'static,
+{
+    let mut ticker = tokio::time::interval(config.interval);
+    loop {
+        ticker.tick().await;
+        let request = coordinator_heartbeat_request(identity, addr, &region);
+        match coordpb::coordinator_client::CoordinatorClient::connect(config.endpoint.clone()).await
+        {
+            Ok(mut client) => match client.store_heartbeat(request).await {
+                Ok(response) => {
+                    let operations = response.into_inner().operations.len();
+                    if operations != 0 {
+                        tracing::debug!(
+                            operations,
+                            "rust raftstore received coordinator operations; execution is not wired yet"
+                        );
+                    }
+                }
+                Err(err) => {
+                    tracing::debug!(error = %err, "rust raftstore coordinator heartbeat failed");
+                }
+            },
+            Err(err) => {
+                tracing::debug!(error = %err, "rust raftstore coordinator connect failed");
+            }
+        }
+    }
+}
+
+fn coordinator_heartbeat_request<E>(
+    identity: ServerIdentity,
+    addr: SocketAddr,
+    region: &OpenRaftRegion<E>,
+) -> coordpb::StoreHeartbeatRequest
+where
+    E: RegionSnapshotEngine,
+{
+    let status = region.apply_status();
+    let leader_peer_id = region
+        .raft_handle()
+        .metrics()
+        .borrow()
+        .current_leader
+        .unwrap_or_default();
+    let known = status.region_id != 0;
+    let leader = known && leader_peer_id == identity.peer_id;
+    coordpb::StoreHeartbeatRequest {
+        store_id: identity.store_id,
+        region_num: u64::from(known),
+        leader_num: u64::from(leader),
+        leader_region_ids: if leader {
+            vec![status.region_id]
+        } else {
+            Vec::new()
+        },
+        client_addr: addr.to_string(),
+        raft_addr: addr.to_string(),
+        region_stats: known
+            .then(|| coordpb::RegionRuntimeStats {
+                region_id: status.region_id,
+                leader_store_id: if leader { identity.store_id } else { 0 },
+                ..Default::default()
+            })
+            .into_iter()
+            .collect(),
+        ..Default::default()
+    }
+}
+
 async fn open_openraft_region<E>(
     identity: ServerIdentity,
     addr: SocketAddr,
@@ -282,6 +413,18 @@ mod tests {
         assert!(err.to_string().contains("NOKV_RUST_RAFTSTORE_BOOTSTRAP"));
     }
 
+    #[test]
+    fn coordinator_endpoint_adds_http_scheme_for_host_port() {
+        assert_eq!(
+            coordinator_endpoint("127.0.0.1:23790"),
+            "http://127.0.0.1:23790"
+        );
+        assert_eq!(
+            coordinator_endpoint("http://127.0.0.1:23790"),
+            "http://127.0.0.1:23790"
+        );
+    }
+
     #[tokio::test]
     async fn non_bootstrap_start_opens_joining_peer_without_initializing_membership() {
         let dir = tempfile::tempdir().unwrap();
@@ -302,5 +445,37 @@ mod tests {
         let metrics = region.raft_handle().metrics().borrow().clone();
         assert!(metrics.current_leader.is_none());
         assert!(metrics.membership_config.voter_ids().next().is_none());
+    }
+
+    #[tokio::test]
+    async fn coordinator_heartbeat_reports_local_leader_region() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+        let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
+        let region = open_openraft_region(
+            identity,
+            addr,
+            dir.path().to_path_buf(),
+            AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        )
+        .await
+        .unwrap();
+
+        let req = coordinator_heartbeat_request(identity, addr, &region);
+
+        assert_eq!(req.store_id, 11);
+        assert_eq!(req.region_num, 1);
+        assert_eq!(req.leader_num, 1);
+        assert_eq!(req.leader_region_ids, vec![7]);
+        assert_eq!(req.client_addr, "127.0.0.1:23880");
+        assert_eq!(req.raft_addr, "127.0.0.1:23880");
+        assert_eq!(req.region_stats.len(), 1);
+        assert_eq!(req.region_stats[0].region_id, 7);
+        assert_eq!(req.region_stats[0].leader_store_id, 11);
     }
 }
