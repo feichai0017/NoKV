@@ -5,13 +5,19 @@
 //! OpenRaft-backed implementation will fill this boundary as region replication
 //! is brought up.
 
-use std::marker::PhantomData;
+use std::collections::BTreeMap;
+use std::error::Error as StdError;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::raft::v1 as raftpb;
+use openraft::{
+    error::{Fatal, RPCError, RaftError, Unreachable},
+    network::{RPCOption, RaftNetwork, RaftNetworkFactory},
+    BasicNode, Config, Raft,
+};
 use prost::Message;
 use tokio::sync::broadcast;
 
@@ -86,8 +92,6 @@ pub struct AppliedProposal {
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("raft replication is not wired yet")]
-    NotReady,
     #[error("raft command header region id is required")]
     MissingRegionHeader,
     #[error("raft proposal region {proposal_region_id} does not match command region {command_region_id}")]
@@ -108,10 +112,8 @@ pub enum Error {
     Encode(#[from] prost::EncodeError),
     #[error("raft command decode error: {0}")]
     Decode(#[from] prost::DecodeError),
-}
-
-pub trait RegionRaft: Send + Sync {
-    fn propose(&self, proposal: Proposal) -> Result<AppliedProposal, Error>;
+    #[error("openraft error: {0}")]
+    OpenRaft(String),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -724,26 +726,124 @@ where
     }
 }
 
-/// Marker for the future OpenRaft-backed implementation. Keeping this type in
-/// place makes the dependency explicit while the first slice runs single-node
-/// MVCC behind the existing wire contract.
-#[derive(Debug, Default)]
+#[derive(Clone)]
 pub struct OpenRaftRegion {
-    _openraft: PhantomData<RaftStoreConfig>,
+    raft: Raft<RaftStoreConfig>,
 }
 
 impl OpenRaftRegion {
-    pub fn new() -> Self {
-        Self {
-            _openraft: PhantomData,
-        }
+    pub async fn bootstrap_single_node<E>(
+        node_id: NodeId,
+        region_id: RegionId,
+        log_store: RegionLogStorage,
+        state_machine: RegionStateMachine<E>,
+    ) -> Result<Self, Error>
+    where
+        E: KvEngine,
+    {
+        let config = Arc::new(
+            Config {
+                cluster_name: format!("nokv-region-{region_id}"),
+                ..Default::default()
+            }
+            .validate()
+            .map_err(|err| Error::OpenRaft(err.to_string()))?,
+        );
+        let raft = Raft::new(
+            node_id,
+            config,
+            NoopNetworkFactory,
+            log_store,
+            state_machine,
+        )
+        .await
+        .map_err(openraft_error)?;
+
+        let mut members = BTreeMap::new();
+        members.insert(node_id, BasicNode::new(format!("local-{node_id}")));
+        raft.initialize(members).await.map_err(openraft_api_error)?;
+        raft.trigger().elect().await.map_err(openraft_error)?;
+        Ok(Self { raft })
+    }
+
+    pub async fn propose(&self, proposal: Proposal) -> Result<AppliedProposal, Error> {
+        let response = self
+            .raft
+            .client_write(proposal)
+            .await
+            .map_err(openraft_api_error)?;
+        Ok(response.data)
     }
 }
 
-impl RegionRaft for OpenRaftRegion {
-    fn propose(&self, _proposal: Proposal) -> Result<AppliedProposal, Error> {
-        Err(Error::NotReady)
+#[derive(Clone, Default)]
+struct NoopNetworkFactory;
+
+struct NoopNetwork;
+
+#[derive(Debug, thiserror::Error)]
+#[error("single-node raft network has no remote peers")]
+struct NoopNetworkError;
+
+impl RaftNetworkFactory<RaftStoreConfig> for NoopNetworkFactory {
+    type Network = NoopNetwork;
+
+    async fn new_client(&mut self, _target: NodeId, _node: &BasicNode) -> Self::Network {
+        NoopNetwork
     }
+}
+
+impl RaftNetwork<RaftStoreConfig> for NoopNetwork {
+    async fn append_entries(
+        &mut self,
+        _rpc: openraft::raft::AppendEntriesRequest<RaftStoreConfig>,
+        _option: RPCOption,
+    ) -> Result<
+        openraft::raft::AppendEntriesResponse<NodeId>,
+        RPCError<NodeId, BasicNode, RaftError<NodeId>>,
+    > {
+        Err(remote_unreachable())
+    }
+
+    async fn install_snapshot(
+        &mut self,
+        _rpc: openraft::raft::InstallSnapshotRequest<RaftStoreConfig>,
+        _option: RPCOption,
+    ) -> Result<
+        openraft::raft::InstallSnapshotResponse<NodeId>,
+        RPCError<NodeId, BasicNode, RaftError<NodeId, openraft::error::InstallSnapshotError>>,
+    > {
+        Err(remote_unreachable())
+    }
+
+    async fn vote(
+        &mut self,
+        _rpc: openraft::raft::VoteRequest<NodeId>,
+        _option: RPCOption,
+    ) -> Result<openraft::raft::VoteResponse<NodeId>, RPCError<NodeId, BasicNode, RaftError<NodeId>>>
+    {
+        Err(remote_unreachable())
+    }
+}
+
+fn remote_unreachable<NID, N, E>() -> RPCError<NID, N, E>
+where
+    NID: openraft::NodeId,
+    N: openraft::Node,
+    E: StdError,
+{
+    RPCError::Unreachable(Unreachable::new(&NoopNetworkError))
+}
+
+fn openraft_error(err: Fatal<NodeId>) -> Error {
+    Error::OpenRaft(err.to_string())
+}
+
+fn openraft_api_error<E>(err: RaftError<NodeId, E>) -> Error
+where
+    E: StdError,
+{
+    Error::OpenRaft(err.to_string())
 }
 
 #[cfg(test)]
@@ -764,16 +864,44 @@ mod tests {
         }
     }
 
-    #[test]
-    fn openraft_boundary_does_not_claim_replication_yet() {
-        let raft = OpenRaftRegion::new();
-        let err = raft
-            .propose(Proposal {
-                region_id: 1,
-                payload: b"cmd".to_vec(),
-            })
-            .unwrap_err();
-        assert!(matches!(err, Error::NotReady));
+    #[tokio::test]
+    async fn openraft_region_bootstraps_single_node_and_applies_proposal() {
+        let dir = tempfile::tempdir().unwrap();
+        let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+        let log_store = RegionLogStorage::new(log);
+        let state_machine = RegionStateMachine::new(AppliedKvEngine::new(7, MvccStore::new()));
+        let raft = OpenRaftRegion::bootstrap_single_node(1, 7, log_store, state_machine)
+            .await
+            .unwrap();
+
+        let command = raftpb::RaftCmdRequest {
+            header: Some(raftpb::CmdHeader {
+                region_id: 7,
+                request_id: 1,
+                ..Default::default()
+            }),
+            requests: vec![raftpb::Request {
+                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                    kvpb::TryAtomicMutateRequest {
+                        mutations: vec![kvpb::Mutation {
+                            key: b"k".to_vec(),
+                            value: b"v".to_vec(),
+                            op: kvpb::mutation::Op::Put as i32,
+                            ..Default::default()
+                        }],
+                        commit_version: 2,
+                        ..Default::default()
+                    },
+                )),
+            }],
+        };
+        let applied = raft
+            .propose(Proposal::from_raft_command(&command).unwrap())
+            .await
+            .unwrap();
+        assert_eq!(applied.region_id, 7);
+        assert_eq!(applied.index, 2);
     }
 
     #[test]
