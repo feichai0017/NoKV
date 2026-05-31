@@ -3,15 +3,15 @@ use nokv_proto::nokv::metadata::v1 as metadatapb;
 use prost::Message;
 
 use crate::trees::{watch_apply_event_key, watch_apply_region_prefix};
-use crate::{HoltMetadataStore, HoltStore, Result};
+use crate::{HoltMetadataStore, Result};
 
 pub const DEFAULT_WATCH_APPLY_REPLAY_LIMIT: usize = 4096;
 
-impl HoltStore {
+impl HoltMetadataStore {
     pub fn put_watch_apply_event(&self, event: &metadatapb::MetadataApplyWatchEvent) -> Result<()> {
         let mut bytes = Vec::with_capacity(event.encoded_len());
         event.encode(&mut bytes)?;
-        self.watch_apply()?.put(
+        self.store.watch_apply()?.put(
             &watch_apply_event_key(
                 event.region_id,
                 event.term,
@@ -29,7 +29,7 @@ impl HoltStore {
         region_id: u64,
     ) -> Result<Option<metadatapb::MetadataApplyWatchEvent>> {
         let prefix = watch_apply_region_prefix(region_id);
-        for entry in self.watch_apply()?.range().prefix(&prefix) {
+        for entry in self.store.watch_apply()?.range().prefix(&prefix) {
             let entry = entry?;
             let RangeEntry::Key { value, .. } = entry else {
                 continue;
@@ -51,7 +51,7 @@ impl HoltStore {
     ) -> Result<Vec<metadatapb::MetadataApplyWatchEvent>> {
         let prefix = watch_apply_region_prefix(region_id);
         let mut out = Vec::new();
-        for entry in self.watch_apply()?.range().prefix(&prefix) {
+        for entry in self.store.watch_apply()?.range().prefix(&prefix) {
             let entry = entry?;
             let RangeEntry::Key { value, .. } = entry else {
                 continue;
@@ -69,31 +69,6 @@ impl HoltStore {
             }
         }
         Ok(out)
-    }
-}
-
-impl HoltMetadataStore {
-    pub fn put_watch_apply_event(&self, event: &metadatapb::MetadataApplyWatchEvent) -> Result<()> {
-        self.store.put_watch_apply_event(event)
-    }
-
-    pub fn first_watch_apply_event(
-        &self,
-        region_id: u64,
-    ) -> Result<Option<metadatapb::MetadataApplyWatchEvent>> {
-        self.store.first_watch_apply_event(region_id)
-    }
-
-    pub fn watch_apply_events_after(
-        &self,
-        region_id: u64,
-        term: u64,
-        index: u64,
-        key_prefix: &[u8],
-        limit: usize,
-    ) -> Result<Vec<metadatapb::MetadataApplyWatchEvent>> {
-        self.store
-            .watch_apply_events_after(region_id, term, index, key_prefix, limit)
     }
 }
 
