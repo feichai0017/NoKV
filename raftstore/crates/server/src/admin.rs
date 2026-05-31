@@ -31,7 +31,11 @@ pub struct RaftAdminService<S = EmptyApplyStatus, D = EmptyRegionDescriptorSink>
 
 impl<S> RaftAdminService<S, EmptyRegionDescriptorSink> {
     pub fn new(status: S) -> Self {
-        Self::with_admission(status, RegionAdmission::default())
+        Self::with_admission_and_execution(
+            status,
+            RegionAdmission::default(),
+            ExecutionRuntime::default(),
+        )
     }
 
     pub fn with_admission(status: S, admission: RegionAdmission) -> Self {
@@ -43,23 +47,12 @@ impl<S> RaftAdminService<S, EmptyRegionDescriptorSink> {
         admission: RegionAdmission,
         execution: ExecutionRuntime,
     ) -> Self {
-        Self::with_admission_state_and_execution(
+        RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
             status,
             RegionAdmissionState::new(admission),
             execution,
-        )
-    }
-
-    pub(crate) fn with_admission_state_and_execution(
-        status: S,
-        admission: RegionAdmissionState,
-        execution: ExecutionRuntime,
-    ) -> Self {
-        Self::with_admission_state_execution_and_peer_endpoints(
-            status,
-            admission,
-            execution,
             PeerEndpointCatalog::default(),
+            EmptyRegionDescriptorSink,
         )
     }
 }
@@ -68,21 +61,6 @@ impl<S, D> RaftAdminService<S, D>
 where
     D: RegionDescriptorSink,
 {
-    pub(crate) fn with_admission_state_execution_and_peer_endpoints(
-        status: S,
-        admission: RegionAdmissionState,
-        execution: ExecutionRuntime,
-        peer_endpoints: PeerEndpointCatalog,
-    ) -> RaftAdminService<S, EmptyRegionDescriptorSink> {
-        RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
-            status,
-            admission,
-            execution,
-            peer_endpoints,
-            EmptyRegionDescriptorSink,
-        )
-    }
-
     pub(crate) fn with_admission_state_execution_peer_endpoints_and_descriptor_sink(
         status: S,
         admission: RegionAdmissionState,
