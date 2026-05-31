@@ -13,7 +13,7 @@ use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
-    AppliedKvEngine, ApplyStatusProvider, OpenRaftRegion, PersistentAppliedKvEngine,
+    AppliedKvEngine, ApplyStatusProvider, BasicNode, OpenRaftRegion, PersistentAppliedKvEngine,
     RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
     SegmentedEntryLog, TonicRaftNetworkFactory,
 };
@@ -551,9 +551,8 @@ impl HoltRangeController {
             .ok_or_else(|| tonic::Status::failed_precondition("split parent descriptor missing"))?;
         let (left, right) =
             build_split_descriptors(&parent_descriptor, &operation.split_key, child)?;
-        ensure_single_peer_transition("split parent", &left)?;
-        ensure_single_peer_transition("split child", &right)?;
         local_peer_for_store(&right, self.store_id)?;
+        self.validate_child_bootstrap_members(&right)?;
 
         self.publish_split_event(
             metapb::RootEventKind::RegionSplitPlanned,
@@ -575,6 +574,8 @@ impl HoltRangeController {
             .propose_admin_command(operation.region_id, &split_command)
             .await
             .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
+        self.open_missing_local_region_descriptor(right.clone(), true)
+            .await?;
         self.reconcile_local_region_descriptors().await?;
         self.publish_split_event(
             metapb::RootEventKind::RegionSplitCommitted,
@@ -592,7 +593,7 @@ impl HoltRangeController {
             .region_descriptors()
             .map_err(|err| tonic::Status::internal(err.to_string()))?;
         for descriptor in descriptors {
-            self.open_missing_local_region_descriptor(descriptor)
+            self.open_missing_local_region_descriptor(descriptor, false)
                 .await?;
         }
         Ok(())
@@ -601,6 +602,7 @@ impl HoltRangeController {
     async fn open_missing_local_region_descriptor(
         &self,
         descriptor: metapb::RegionDescriptor,
+        force_membership_init: bool,
     ) -> Result<(), tonic::Status> {
         if descriptor.region_id == 0
             || self
@@ -616,24 +618,44 @@ impl HoltRangeController {
             Err(err) if err.code() == tonic::Code::FailedPrecondition => return Ok(()),
             Err(err) => return Err(err),
         };
-        if descriptor.peers.len() != 1 {
-            tracing::debug!(
-                region_id = descriptor.region_id,
-                peer_count = descriptor.peers.len(),
-                "rust raftstore skipped multi-peer region descriptor reconcile until child peer lifecycle is implemented"
-            );
-            return Ok(());
-        }
+        let membership_init =
+            self.child_membership_init(&descriptor, &peer, force_membership_init)?;
         self.open_split_child_region(
             ServerIdentity {
                 region_id: descriptor.region_id,
                 store_id: peer.store_id,
                 peer_id: peer.peer_id,
-                bootstrap: true,
+                bootstrap: descriptor.peers.len() == 1,
             },
             descriptor,
+            membership_init,
         )
         .await
+    }
+
+    fn validate_child_bootstrap_members(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+    ) -> Result<(), tonic::Status> {
+        let local_peer = local_peer_for_store(descriptor, self.store_id)?;
+        self.child_membership_init(descriptor, &local_peer, true)
+            .map(|_| ())
+    }
+
+    fn child_membership_init(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+        local_peer: &metapb::RegionPeer,
+        force_membership_init: bool,
+    ) -> Result<Option<BTreeMap<u64, BasicNode>>, tonic::Status> {
+        if descriptor.peers.len() <= 1 {
+            return Ok(None);
+        }
+        if !force_membership_init && !local_peer_is_first(descriptor, local_peer) {
+            return Ok(None);
+        }
+        descriptor_membership_nodes(descriptor, local_peer, self.addr, &self.peer_endpoints)
+            .map(Some)
     }
 
     async fn execute_merge(
@@ -810,6 +832,7 @@ impl HoltRangeController {
         &self,
         identity: ServerIdentity,
         descriptor: metapb::RegionDescriptor,
+        membership_init: Option<BTreeMap<u64, BasicNode>>,
     ) -> Result<(), tonic::Status> {
         self.mvcc
             .put_region_descriptor(&descriptor)
@@ -836,11 +859,21 @@ impl HoltRangeController {
             identity.region_id,
             true,
         );
-        let region = open_openraft_region(identity, self.addr, log_dir, engine)
+        let open_identity = ServerIdentity {
+            bootstrap: identity.bootstrap && membership_init.is_none(),
+            ..identity
+        };
+        let region = open_openraft_region(open_identity, self.addr, log_dir, engine)
             .await
             .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
         self.transport
             .register(identity.region_id, region.raft_handle());
+        if let Some(members) = membership_init {
+            region
+                .initialize_members(members)
+                .await
+                .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
+        }
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)
             .map_err(|err| tonic::Status::invalid_argument(err.to_string()))?;
         let (store, admin) = openraft_region_service_pair(
@@ -911,6 +944,44 @@ fn local_peer_for_store(
                 descriptor.region_id, store_id
             ))
         })
+}
+
+fn local_peer_is_first(
+    descriptor: &metapb::RegionDescriptor,
+    local_peer: &metapb::RegionPeer,
+) -> bool {
+    descriptor.peers.first().is_some_and(|peer| {
+        peer.store_id == local_peer.store_id && peer.peer_id == local_peer.peer_id
+    })
+}
+
+fn descriptor_membership_nodes(
+    descriptor: &metapb::RegionDescriptor,
+    local_peer: &metapb::RegionPeer,
+    local_addr: SocketAddr,
+    peer_endpoints: &PeerEndpointCatalog,
+) -> Result<BTreeMap<u64, BasicNode>, tonic::Status> {
+    let mut members = BTreeMap::new();
+    for peer in &descriptor.peers {
+        if peer.store_id == 0 || peer.peer_id == 0 {
+            return Err(tonic::Status::invalid_argument(format!(
+                "region {} has an invalid peer entry",
+                descriptor.region_id
+            )));
+        }
+        let node = if peer.store_id == local_peer.store_id && peer.peer_id == local_peer.peer_id {
+            BasicNode::new(local_addr.to_string())
+        } else {
+            peer_endpoints.node_for_peer(peer.store_id, peer.peer_id)?
+        };
+        if members.insert(peer.peer_id, node).is_some() {
+            return Err(tonic::Status::invalid_argument(format!(
+                "region {} has duplicate peer id {}",
+                descriptor.region_id, peer.peer_id
+            )));
+        }
+    }
+    Ok(members)
 }
 
 fn internal_status(message: impl ToString) -> tonic::Status {
@@ -1145,6 +1216,11 @@ async fn serve_holt_regions(
             raft_log_dir_for_region(Some(&persistent_root), identity, multi_region, temp_log_dir)?;
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
         transport.register(identity.region_id, region.raft_handle());
+        if let Some(members) =
+            recovered_descriptor_membership_init(&descriptor, identity, addr, &peer_endpoints)?
+        {
+            region.initialize_members(members).await?;
+        }
         let (store_service, admin_service) = openraft_region_service_pair(
             region.clone(),
             admission,
@@ -1226,12 +1302,28 @@ fn recover_holt_hosted_identities(
             region_id: descriptor.region_id,
             store_id: peer.store_id,
             peer_id: peer.peer_id,
-            bootstrap: true,
+            bootstrap: descriptor.peers.len() == 1,
         });
         seen.insert(descriptor.region_id);
     }
     identities.sort_by_key(|identity| identity.region_id);
     Ok(identities)
+}
+
+fn recovered_descriptor_membership_init(
+    descriptor: &metapb::RegionDescriptor,
+    identity: ServerIdentity,
+    addr: SocketAddr,
+    peer_endpoints: &PeerEndpointCatalog,
+) -> Result<Option<BTreeMap<u64, BasicNode>>, tonic::Status> {
+    if descriptor.peers.len() <= 1 {
+        return Ok(None);
+    }
+    let local_peer = local_peer_for_store(descriptor, identity.store_id)?;
+    if local_peer.peer_id != identity.peer_id || !local_peer_is_first(descriptor, &local_peer) {
+        return Ok(None);
+    }
+    descriptor_membership_nodes(descriptor, &local_peer, addr, peer_endpoints).map(Some)
 }
 
 async fn serve_memory_regions(
@@ -3471,7 +3563,7 @@ mod tests {
     }
 
     #[test]
-    fn range_transition_rejects_multi_peer_descriptor_until_lifecycle_is_replicated() {
+    fn merge_transition_rejects_multi_peer_descriptor_until_lifecycle_is_replicated() {
         let mut descriptor = default_region_descriptor(ServerIdentity {
             region_id: 7,
             store_id: 11,
@@ -3489,6 +3581,134 @@ mod tests {
         assert!(err
             .message()
             .contains("must apply multi-peer region lifecycle through the parent raft group"));
+    }
+
+    #[test]
+    fn descriptor_membership_nodes_use_local_addr_and_configured_remote_endpoints() {
+        let mut descriptor = default_region_descriptor(ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        });
+        descriptor.peers.push(metapb::RegionPeer {
+            store_id: 12,
+            peer_id: 102,
+        });
+        let peer_endpoints = PeerEndpointCatalog::require_configured();
+        peer_endpoints
+            .insert_peer(102, "http://127.0.0.1:30202")
+            .unwrap();
+        let local_peer = descriptor.peers[0].clone();
+
+        let members = descriptor_membership_nodes(
+            &descriptor,
+            &local_peer,
+            "127.0.0.1:30101".parse().unwrap(),
+            &peer_endpoints,
+        )
+        .unwrap();
+
+        assert_eq!(members.len(), 2);
+        assert_eq!(members.get(&101).unwrap().addr, "127.0.0.1:30101");
+        assert_eq!(members.get(&102).unwrap().addr, "http://127.0.0.1:30202");
+    }
+
+    #[test]
+    fn recover_holt_hosted_identities_marks_multi_peer_descriptor_non_bootstrap() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .put_region_descriptor(&metapb::RegionDescriptor {
+                region_id: 2,
+                peers: vec![
+                    metapb::RegionPeer {
+                        store_id: 7,
+                        peer_id: 20,
+                    },
+                    metapb::RegionPeer {
+                        store_id: 8,
+                        peer_id: 30,
+                    },
+                ],
+                ..default_region_descriptor(ServerIdentity {
+                    region_id: 2,
+                    store_id: 7,
+                    peer_id: 20,
+                    bootstrap: true,
+                })
+            })
+            .unwrap();
+
+        let identities = recover_holt_hosted_identities(
+            &store,
+            vec![ServerIdentity {
+                region_id: 1,
+                store_id: 7,
+                peer_id: 10,
+                bootstrap: true,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(identities.len(), 2);
+        assert_eq!(identities[1].region_id, 2);
+        assert_eq!(identities[1].peer_id, 20);
+        assert!(!identities[1].bootstrap);
+    }
+
+    #[test]
+    fn recovered_descriptor_membership_init_only_runs_on_first_local_peer() {
+        let descriptor = metapb::RegionDescriptor {
+            region_id: 2,
+            peers: vec![
+                metapb::RegionPeer {
+                    store_id: 7,
+                    peer_id: 20,
+                },
+                metapb::RegionPeer {
+                    store_id: 8,
+                    peer_id: 30,
+                },
+            ],
+            ..default_region_descriptor(ServerIdentity {
+                region_id: 2,
+                store_id: 7,
+                peer_id: 20,
+                bootstrap: true,
+            })
+        };
+        let peer_endpoints = PeerEndpointCatalog::require_configured();
+        peer_endpoints
+            .insert_peer(30, "http://127.0.0.1:30303")
+            .unwrap();
+
+        let first = recovered_descriptor_membership_init(
+            &descriptor,
+            ServerIdentity {
+                region_id: 2,
+                store_id: 7,
+                peer_id: 20,
+                bootstrap: false,
+            },
+            "127.0.0.1:30202".parse().unwrap(),
+            &peer_endpoints,
+        )
+        .unwrap();
+        assert!(first.is_some());
+
+        let second = recovered_descriptor_membership_init(
+            &descriptor,
+            ServerIdentity {
+                region_id: 2,
+                store_id: 8,
+                peer_id: 30,
+                bootstrap: false,
+            },
+            "127.0.0.1:30303".parse().unwrap(),
+            &peer_endpoints,
+        )
+        .unwrap();
+        assert!(second.is_none());
     }
 
     #[test]

@@ -1315,7 +1315,7 @@ impl PeerEndpointCatalog {
         Ok(())
     }
 
-    fn node_for(&self, store_id: u64, peer_id: u64) -> Result<BasicNode, Status> {
+    pub fn node_for_peer(&self, store_id: u64, peer_id: u64) -> Result<BasicNode, Status> {
         let endpoints = self
             .endpoints
             .lock()
@@ -1605,7 +1605,7 @@ where
             .add_voter(
                 request.peer_id,
                 self.peer_endpoints
-                    .node_for(request.store_id, request.peer_id)?,
+                    .node_for_peer(request.store_id, request.peer_id)?,
             )
             .await?;
         let region = self.admission.add_peer(request.peer_id, request.store_id)?;
@@ -3521,7 +3521,7 @@ mod tests {
     #[test]
     fn strict_peer_endpoint_catalog_rejects_missing_peer() {
         let catalog = PeerEndpointCatalog::require_configured();
-        let err = catalog.node_for(2, 202).unwrap_err();
+        let err = catalog.node_for_peer(2, 202).unwrap_err();
         assert_eq!(err.code(), tonic::Code::FailedPrecondition);
         assert!(err.message().contains("peer 202"));
     }

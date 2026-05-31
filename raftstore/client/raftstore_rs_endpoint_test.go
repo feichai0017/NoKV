@@ -1051,6 +1051,85 @@ func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegion(t *testing.T) {
 	require.True(t, handled)
 }
 
+func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegionAfterAddPeer(t *testing.T) {
+	heartbeatCh := make(chan *coordpb.StoreHeartbeatRequest, 64)
+	operationCh := make(chan *coordpb.SchedulerOperation, 1)
+	rootEventCh := make(chan *metapb.RootEvent, 16)
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorCaptureWithOperationsForStoreAndRootEvents(t, heartbeatCh, operationCh, 1, rootEventCh)
+	defer stopCoord()
+
+	addrs := map[uint64]string{
+		1: reserveLocalAddr(t),
+		2: reserveLocalAddr(t),
+	}
+	startRustRaftstoreProcessAt(t, addrs[1], t.TempDir(), []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2] + ",4=" + addrs[2],
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	startRustRaftstoreProcessAt(t, addrs[2], t.TempDir(), []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	admin, closeAdmin, err := adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
+	_, err = admin.AddPeer(ctx, &adminpb.AddPeerRequest{RegionId: 1, StoreId: 2, PeerId: 2})
+	require.NoError(t, err)
+	leaderStatus, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	waitForRustRaftstoreRegionApply(t, ctx, addrs[2], 1, leaderStatus.GetAppliedIndex())
+
+	child := rustRaftstoreRegionAtEpoch(2, 1, 3, 1, 2, []byte("m"), nil)
+	child.Peers = append(child.Peers, &metapb.RegionPeer{StoreId: 2, PeerId: 4})
+	operationCh <- &coordpb.SchedulerOperation{
+		Type:       coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION,
+		RegionId:   1,
+		SplitKey:   []byte("m"),
+		SplitChild: child,
+	}
+	_, _ = waitForRustRaftstoreRegionLeader(t, ctx, addrs, 2)
+
+	left := rustRaftstoreRegionAtEpoch(1, 1, 1, 2, 2, nil, []byte("m"))
+	left.Peers = append(left.Peers, &metapb.RegionPeer{StoreId: 2, PeerId: 2})
+	right := proto.Clone(child).(*metapb.RegionDescriptor)
+	cli, err := New(Config{
+		RegionResolver: &mockRegionResolver{regions: []*metapb.RegionDescriptor{left, right}},
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addrs[1], State: coordpb.StoreState_STORE_STATE_UP},
+			{StoreID: 2, Addr: addrs[2], State: coordpb.StoreState_STORE_STATE_UP},
+		},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 3},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+	handled, err := cli.TryAtomicMutate(ctx, []byte("workspace/multipeer-split"), nil, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("workspace/multipeer-split"),
+		Value: []byte("split"),
+	}}, 130, 131)
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	got, err := cli.Get(ctx, []byte("workspace/multipeer-split"), 131)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("split"), got.GetValue())
+	requireRustRaftstoreSplitRootEvents(t, rootEventCh)
+}
+
 func TestRustRaftstoreEndpointAppliesCoordinatorMergeRegion(t *testing.T) {
 	heartbeatCh := make(chan *coordpb.StoreHeartbeatRequest, 32)
 	operationCh := make(chan *coordpb.SchedulerOperation, 2)
@@ -1584,9 +1663,10 @@ func startRustRaftstoreProcessAt(t *testing.T, addr, holtDir string, extraEnv []
 
 type rustRaftstoreCoordinatorCapture struct {
 	coordpb.UnimplementedCoordinatorServer
-	heartbeats chan<- *coordpb.StoreHeartbeatRequest
-	operations <-chan *coordpb.SchedulerOperation
-	rootEvents chan<- *metapb.RootEvent
+	heartbeats       chan<- *coordpb.StoreHeartbeatRequest
+	operations       <-chan *coordpb.SchedulerOperation
+	operationStoreID uint64
+	rootEvents       chan<- *metapb.RootEvent
 }
 
 func (s *rustRaftstoreCoordinatorCapture) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
@@ -1595,12 +1675,14 @@ func (s *rustRaftstoreCoordinatorCapture) StoreHeartbeat(_ context.Context, req 
 	default:
 	}
 	resp := &coordpb.StoreHeartbeatResponse{Accepted: true}
-	select {
-	case operation := <-s.operations:
-		if operation != nil {
-			resp.Operations = []*coordpb.SchedulerOperation{proto.Clone(operation).(*coordpb.SchedulerOperation)}
+	if s.operationStoreID == 0 || s.operationStoreID == req.GetStoreId() {
+		select {
+		case operation := <-s.operations:
+			if operation != nil {
+				resp.Operations = []*coordpb.SchedulerOperation{proto.Clone(operation).(*coordpb.SchedulerOperation)}
+			}
+		default:
 		}
-	default:
 	}
 	return resp, nil
 }
@@ -1624,14 +1706,19 @@ func startRustRaftstoreCoordinatorCaptureWithOperations(t *testing.T, heartbeats
 }
 
 func startRustRaftstoreCoordinatorCaptureWithOperationsAndRootEvents(t *testing.T, heartbeats chan<- *coordpb.StoreHeartbeatRequest, operations <-chan *coordpb.SchedulerOperation, rootEvents chan<- *metapb.RootEvent) (string, func()) {
+	return startRustRaftstoreCoordinatorCaptureWithOperationsForStoreAndRootEvents(t, heartbeats, operations, 0, rootEvents)
+}
+
+func startRustRaftstoreCoordinatorCaptureWithOperationsForStoreAndRootEvents(t *testing.T, heartbeats chan<- *coordpb.StoreHeartbeatRequest, operations <-chan *coordpb.SchedulerOperation, operationStoreID uint64, rootEvents chan<- *metapb.RootEvent) (string, func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
 	server := grpc.NewServer()
 	coordpb.RegisterCoordinatorServer(server, &rustRaftstoreCoordinatorCapture{
-		heartbeats: heartbeats,
-		operations: operations,
-		rootEvents: rootEvents,
+		heartbeats:       heartbeats,
+		operations:       operations,
+		operationStoreID: operationStoreID,
+		rootEvents:       rootEvents,
 	})
 	go func() {
 		if serveErr := server.Serve(lis); serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {
@@ -1784,17 +1871,25 @@ func newRustRaftstoreTwoPeerClient(addrs map[uint64]string, meta *metapb.RegionD
 }
 
 func waitForRustRaftstoreApply(t *testing.T, ctx context.Context, addr string, appliedIndex uint64) {
+	waitForRustRaftstoreRegionApply(t, ctx, addr, 1, appliedIndex)
+}
+
+func waitForRustRaftstoreRegionApply(t *testing.T, ctx context.Context, addr string, regionID uint64, appliedIndex uint64) {
 	t.Helper()
 	admin, closeAdmin, err := adminclient.Dial(ctx, addr)
 	require.NoError(t, err)
 	defer func() { require.NoError(t, closeAdmin()) }()
 	require.Eventually(t, func() bool {
-		status, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+		status, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 		return err == nil && status.GetAppliedIndex() >= appliedIndex
 	}, 5*time.Second, 100*time.Millisecond)
 }
 
 func waitForRustRaftstoreLeader(t *testing.T, ctx context.Context, addrs map[uint64]string) (uint64, string) {
+	return waitForRustRaftstoreRegionLeader(t, ctx, addrs, 1)
+}
+
+func waitForRustRaftstoreRegionLeader(t *testing.T, ctx context.Context, addrs map[uint64]string, regionID uint64) (uint64, string) {
 	t.Helper()
 	var leaderPeerID uint64
 	var leaderAddr string
@@ -1804,7 +1899,7 @@ func waitForRustRaftstoreLeader(t *testing.T, ctx context.Context, addrs map[uin
 			if err != nil {
 				continue
 			}
-			status, statusErr := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+			status, statusErr := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
 			_ = closeAdmin()
 			if statusErr == nil && status.GetLeader() {
 				leaderPeerID = peerID
