@@ -4,6 +4,9 @@ mod bootstrap;
 mod coordinator;
 mod hosted_region;
 mod metrics;
+mod range_controller;
+mod range_topology;
+mod region_open;
 mod root_publication;
 mod startup;
 
@@ -18,6 +21,12 @@ use coordinator::coordinator_heartbeat_config_from_env;
 pub(crate) use coordinator::*;
 #[cfg(test)]
 pub(crate) use hosted_region::*;
+#[cfg(test)]
+pub(crate) use range_controller::*;
+#[cfg(test)]
+pub(crate) use range_topology::*;
+#[cfg(test)]
+pub(crate) use region_open::*;
 #[cfg(test)]
 pub(crate) use root_publication::*;
 #[cfg(test)]
