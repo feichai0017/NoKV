@@ -167,6 +167,89 @@ func TestRustRaftstoreEndpointReportsCoordinatorHeartbeat(t *testing.T) {
 	require.False(t, heartbeat.GetRegionStats()[0].GetPendingAdmin())
 }
 
+func TestRustRaftstoreEndpointMultiRegionStartupRoutesAndHeartbeats(t *testing.T) {
+	heartbeatCh := make(chan *coordpb.StoreHeartbeatRequest, 16)
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorCapture(t, heartbeatCh)
+	defer stopCoord()
+
+	storeAddr := reserveLocalAddr(t)
+	stopStore := startRustRaftstoreProcessAt(t, storeAddr, "", []string{
+		"NOKV_RUST_RAFTSTORE_REGIONS=1:11:101:true,2:11:102:true",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stopStore()
+
+	var heartbeat *coordpb.StoreHeartbeatRequest
+	require.Eventually(t, func() bool {
+		select {
+		case heartbeat = <-heartbeatCh:
+			return heartbeat.GetStoreId() == 11 &&
+				heartbeat.GetRegionNum() == 2 &&
+				heartbeat.GetLeaderNum() == 2
+		default:
+			return false
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+	require.ElementsMatch(t, []uint64{1, 2}, heartbeat.GetLeaderRegionIds())
+	require.Equal(t, storeAddr, heartbeat.GetClientAddr())
+	require.Len(t, heartbeat.GetRegionStats(), 2)
+
+	cli, err := New(Config{
+		RegionResolver: &mockRegionResolver{regions: []*metapb.RegionDescriptor{
+			rustRaftstoreRegion(1, 11, 101, nil, []byte("m")),
+			rustRaftstoreRegion(2, 11, 102, []byte("m"), nil),
+		}},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 11,
+			Addr:    storeAddr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	for _, tc := range []struct {
+		key        []byte
+		value      []byte
+		commitVers uint64
+	}{
+		{key: []byte("agent/a"), value: []byte("r1"), commitVers: 10},
+		{key: []byte("workspace/z"), value: []byte("r2"), commitVers: 12},
+	} {
+		handled, err := cli.TryAtomicMutate(ctx, tc.key, []*kvrpcpb.AtomicPredicate{{
+			Key:         tc.key,
+			Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+			ReadVersion: tc.commitVers - 1,
+		}}, []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   tc.key,
+			Value: tc.value,
+		}}, tc.commitVers-2, tc.commitVers)
+		require.NoError(t, err)
+		require.True(t, handled)
+		got, err := cli.Get(ctx, tc.key, tc.commitVers)
+		require.NoError(t, err)
+		require.False(t, got.GetNotFound())
+		require.Equal(t, tc.value, got.GetValue())
+	}
+
+	admin, closeAdmin, err := adminclient.Dial(ctx, storeAddr)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
+	for _, regionID := range []uint64{1, 2} {
+		status, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: regionID})
+		require.NoError(t, err)
+		require.True(t, status.GetKnown())
+		require.True(t, status.GetHosted())
+		require.True(t, status.GetLeader())
+	}
+}
+
 func TestRustRaftstoreEndpointRoutesThroughCoordinator(t *testing.T) {
 	svc := coordserver.NewService(coordcatalog.NewCluster(), coordidalloc.NewIDAllocator(1), coordtso.NewAllocator(1))
 	coordAddr, stopCoord := startRustRaftstoreCoordinatorService(t, svc)
@@ -1179,6 +1262,16 @@ func rustRaftstoreTopologyDescriptor() metatopology.Descriptor {
 
 func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {
 	return rustRaftstoreSinglePeerRegionAt(1, 1, 1)
+}
+
+func rustRaftstoreRegion(regionID, storeID, peerID uint64, startKey, endKey []byte) *metapb.RegionDescriptor {
+	return &metapb.RegionDescriptor{
+		RegionId: regionID,
+		StartKey: append([]byte(nil), startKey...),
+		EndKey:   append([]byte(nil), endKey...),
+		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		Peers:    []*metapb.RegionPeer{{StoreId: storeID, PeerId: peerID}},
+	}
 }
 
 func rustRaftstoreSinglePeerRegionAt(storeID, peerID, confVersion uint64) *metapb.RegionDescriptor {
