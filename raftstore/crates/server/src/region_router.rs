@@ -9,7 +9,9 @@ use std::sync::{Arc, RwLock};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
-use nokv_raftnode::{ApplyWatchProvider, MetadataCommandExecutor, MetadataReadExecutor};
+use nokv_raftnode::{
+    ApplyWatchProvider, MetadataCommandExecutor, MetadataReadExecutor, MetadataRetentionExecutor,
+};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status};
 
@@ -318,7 +320,10 @@ impl<S, D> MultiRegionRaftAdminService<S, D> {
 #[tonic::async_trait]
 impl<S, D> adminpb::raft_admin_server::RaftAdmin for MultiRegionRaftAdminService<S, D>
 where
-    S: AppliedRegionDescriptorProvider + RaftMembershipAdmin + RaftRuntimeStatusProvider,
+    S: AppliedRegionDescriptorProvider
+        + MetadataRetentionExecutor
+        + RaftMembershipAdmin
+        + RaftRuntimeStatusProvider,
     D: RegionDescriptorSink,
 {
     async fn add_peer(
@@ -428,6 +433,19 @@ where
             topology,
         }))
     }
+
+    async fn prune_metadata_versions(
+        &self,
+        request: Request<adminpb::PruneMetadataVersionsRequest>,
+    ) -> Result<Response<adminpb::PruneMetadataVersionsResponse>, Status> {
+        let request = request.into_inner();
+        if request.region_id == 0 {
+            return Err(Status::invalid_argument("region_id is required"));
+        }
+        self.service_for_region(request.region_id)?
+            .prune_metadata_versions(Request::new(request))
+            .await
+    }
 }
 
 fn merge_last_admission(
@@ -461,7 +479,10 @@ where
         + MetadataCommandExecutor
         + MetadataReadExecutor
         + RaftRuntimeStatusProvider,
-    S: AppliedRegionDescriptorProvider + RaftMembershipAdmin + RaftRuntimeStatusProvider,
+    S: AppliedRegionDescriptorProvider
+        + MetadataRetentionExecutor
+        + RaftMembershipAdmin
+        + RaftRuntimeStatusProvider,
     D: RegionDescriptorSink,
 {
     tonic::transport::Server::builder()
@@ -554,6 +575,18 @@ mod tests {
         }
     }
 
+    impl MetadataRetentionExecutor for FixedRuntimeEngine {
+        fn prune_metadata_versions<'a>(
+            &'a self,
+            retention_floor: u64,
+        ) -> impl std::future::Future<
+            Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+        > + Send
+               + 'a {
+            self.inner.prune_metadata_versions(retention_floor)
+        }
+    }
+
     impl ApplyStatusProvider for FixedRuntimeEngine {
         fn apply_status(&self) -> nokv_raftnode::ApplyStatus {
             self.inner.apply_status()
@@ -614,6 +647,23 @@ mod tests {
     }
 
     impl AppliedRegionDescriptorProvider for NoopAdminStatus {}
+
+    impl MetadataRetentionExecutor for NoopAdminStatus {
+        fn prune_metadata_versions<'a>(
+            &'a self,
+            retention_floor: u64,
+        ) -> impl std::future::Future<
+            Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+        > + Send
+               + 'a {
+            async move {
+                Ok(nokv_metastore::MetadataRetentionResult {
+                    retention_floor,
+                    ..Default::default()
+                })
+            }
+        }
+    }
 
     #[tonic::async_trait]
     impl RaftMembershipAdmin for NoopAdminStatus {

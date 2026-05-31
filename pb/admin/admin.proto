@@ -138,10 +138,22 @@ message ExecutionStatusResponse {
   repeated ExecutionTopologyStatus topology = 3;
 }
 
+message PruneMetadataVersionsRequest {
+  uint64 region_id = 1;
+  uint64 retention_floor = 2;
+}
+
+message PruneMetadataVersionsResponse {
+  uint64 retention_floor = 1;
+  uint64 pruned_versions = 2;
+  uint64 retained_anchor_versions = 3;
+}
+
 service RaftAdmin {
   rpc AddPeer(AddPeerRequest) returns (AddPeerResponse);
   rpc RemovePeer(RemovePeerRequest) returns (RemovePeerResponse);
   rpc TransferLeader(TransferLeaderRequest) returns (TransferLeaderResponse);
   rpc RegionRuntimeStatus(RegionRuntimeStatusRequest) returns (RegionRuntimeStatusResponse);
   rpc ExecutionStatus(ExecutionStatusRequest) returns (ExecutionStatusResponse);
+  rpc PruneMetadataVersions(PruneMetadataVersionsRequest) returns (PruneMetadataVersionsResponse);
 }

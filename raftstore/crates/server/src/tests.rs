@@ -13,7 +13,7 @@ use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_raftnode::{
     ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplayRequest, BasicNode,
-    MetadataCommandExecutor, MetadataReadExecutor, RegionMetadataSink,
+    MetadataCommandExecutor, MetadataReadExecutor, MetadataRetentionExecutor, RegionMetadataSink,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -97,6 +97,23 @@ impl RaftRuntimeStatusProvider for NoopAdminStatus {
 }
 
 impl AppliedRegionDescriptorProvider for NoopAdminStatus {}
+
+impl MetadataRetentionExecutor for NoopAdminStatus {
+    fn prune_metadata_versions<'a>(
+        &'a self,
+        retention_floor: u64,
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+    > + Send
+           + 'a {
+        async move {
+            Ok(nokv_metastore::MetadataRetentionResult {
+                retention_floor,
+                ..Default::default()
+            })
+        }
+    }
+}
 
 #[tonic::async_trait]
 impl RaftMembershipAdmin for NoopAdminStatus {
@@ -296,6 +313,18 @@ impl nokv_raftnode::MetadataCommandExecutor for FixedRuntimeEngine {
     }
 }
 
+impl MetadataRetentionExecutor for FixedRuntimeEngine {
+    fn prune_metadata_versions<'a>(
+        &'a self,
+        retention_floor: u64,
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+    > + Send
+           + 'a {
+        self.inner.prune_metadata_versions(retention_floor)
+    }
+}
+
 impl ApplyStatusProvider for FixedRuntimeEngine {
     fn apply_status(&self) -> nokv_raftnode::ApplyStatus {
         self.inner.apply_status()
@@ -326,6 +355,28 @@ impl RaftRuntimeStatusProvider for FixedRuntimeEngine {
 impl AppliedRegionDescriptorProvider for FixedRuntimeEngine {
     fn applied_region_descriptor(&self) -> Result<Option<metapb::RegionDescriptor>, Status> {
         self.inner.region_descriptor().map_err(internal_error)
+    }
+}
+
+#[tonic::async_trait]
+impl RaftMembershipAdmin for FixedRuntimeEngine {
+    async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
+        Ok(())
+    }
+
+    async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
+        Ok(())
+    }
+
+    async fn transfer_leader(&self, _peer_id: u64) -> Result<(), Status> {
+        Ok(())
+    }
+
+    async fn propose_region_descriptor(
+        &self,
+        _descriptor: &metapb::RegionDescriptor,
+    ) -> Result<(), Status> {
+        Ok(())
     }
 }
 
@@ -403,6 +454,18 @@ impl nokv_raftnode::MetadataCommandExecutor for MetadataOnlyEngine {
            + Send
            + 'a {
         self.inner.execute_metadata_command(req)
+    }
+}
+
+impl MetadataRetentionExecutor for MetadataOnlyEngine {
+    fn prune_metadata_versions<'a>(
+        &'a self,
+        retention_floor: u64,
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+    > + Send
+           + 'a {
+        self.inner.prune_metadata_versions(retention_floor)
     }
 }
 
@@ -2282,6 +2345,76 @@ async fn admin_runtime_status_reports_apply_index() {
     assert!(response.known);
     assert_eq!(response.applied_index, 1);
     assert_eq!(response.applied_term, 1);
+}
+
+#[tokio::test]
+async fn admin_prune_metadata_versions_keeps_floor_anchor() {
+    let store = MemoryMetadataStore::new();
+    let engine = nokv_raftnode::AppliedMetadataEngine::new(1, store.clone());
+    let admission = RegionAdmission::default();
+    for (read_version, commit_version, value) in [(10, 11, b"v1"), (20, 21, b"v2"), (30, 31, b"v3")]
+    {
+        engine
+            .execute_metadata_command(&metadata_put_request(
+                &admission,
+                b"k",
+                value.as_slice(),
+                read_version,
+                commit_version,
+            ))
+            .await
+            .unwrap();
+    }
+    let service = RaftAdminService::with_admission(engine.clone(), admission);
+
+    let response = service
+        .prune_metadata_versions(Request::new(adminpb::PruneMetadataVersionsRequest {
+            region_id: 1,
+            retention_floor: 25,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    assert_eq!(response.retention_floor, 25);
+    assert_eq!(response.retained_anchor_versions, 1);
+    assert_eq!(response.pruned_versions, 1);
+    let at_floor = engine
+        .execute_metadata_get(&metadatapb::MetadataGetRequest {
+            key: b"k".to_vec(),
+            version: 25,
+            ..Default::default()
+        })
+        .await
+        .unwrap();
+    assert_eq!(at_floor.kv.unwrap().value, b"v2");
+    let snapshot = store.export_snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .writes
+            .into_iter()
+            .map(|write| write.commit_version)
+            .collect::<Vec<_>>(),
+        vec![21, 31]
+    );
+}
+
+#[tokio::test]
+async fn admin_prune_metadata_versions_rejects_unhosted_region() {
+    let service = RaftAdminService::with_admission(
+        FixedRuntimeEngine::unhosted(1, 1),
+        RegionAdmission::default(),
+    );
+
+    let err = service
+        .prune_metadata_versions(Request::new(adminpb::PruneMetadataVersionsRequest {
+            region_id: 1,
+            retention_floor: 25,
+        }))
+        .await
+        .unwrap_err();
+
+    assert_eq!(err.code(), tonic::Code::FailedPrecondition);
 }
 
 #[tokio::test]

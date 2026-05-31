@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::{
-    AppliedMetadataEngine, ApplyStatusProvider, BasicNode, PersistentAppliedMetadataEngine,
-    RegionMetadataSink, RegionSnapshotEngine,
+    AppliedMetadataEngine, ApplyStatusProvider, BasicNode, MetadataRetentionExecutor,
+    PersistentAppliedMetadataEngine, RegionMetadataSink, RegionSnapshotEngine,
 };
 use tonic::{Request, Response, Status};
 
@@ -420,6 +420,22 @@ impl RaftRuntimeStatusProvider for EmptyApplyStatus {
 
 impl AppliedRegionDescriptorProvider for EmptyApplyStatus {}
 
+impl MetadataRetentionExecutor for EmptyApplyStatus {
+    fn prune_metadata_versions<'a>(
+        &'a self,
+        _retention_floor: u64,
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+    > + Send
+           + 'a {
+        async move {
+            Err(nokv_metastore::Error::Backend(
+                "metadata retention requires a hosted region".to_owned(),
+            ))
+        }
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct EmptyApplyStatus;
 
@@ -436,7 +452,10 @@ impl ApplyStatusProvider for EmptyApplyStatus {
 #[tonic::async_trait]
 impl<S, D> adminpb::raft_admin_server::RaftAdmin for RaftAdminService<S, D>
 where
-    S: AppliedRegionDescriptorProvider + RaftMembershipAdmin + RaftRuntimeStatusProvider,
+    S: AppliedRegionDescriptorProvider
+        + MetadataRetentionExecutor
+        + RaftMembershipAdmin
+        + RaftRuntimeStatusProvider,
     D: RegionDescriptorSink,
 {
     async fn add_peer(
@@ -624,6 +643,32 @@ where
             }),
             topology,
             ..Default::default()
+        }))
+    }
+
+    async fn prune_metadata_versions(
+        &self,
+        request: Request<adminpb::PruneMetadataVersionsRequest>,
+    ) -> Result<Response<adminpb::PruneMetadataVersionsResponse>, Status> {
+        let request = request.into_inner();
+        if request.region_id == 0 {
+            return Err(Status::invalid_argument("region_id is required"));
+        }
+        self.admission.validate_region(request.region_id)?;
+        let status = self.status.apply_status();
+        let runtime = self.status.raft_runtime_status();
+        if status.region_id != request.region_id || !runtime.hosted {
+            return Err(Status::failed_precondition("region is not hosted"));
+        }
+        let result = self
+            .status
+            .prune_metadata_versions(request.retention_floor)
+            .await
+            .map_err(internal_error)?;
+        Ok(Response::new(adminpb::PruneMetadataVersionsResponse {
+            retention_floor: result.retention_floor,
+            pruned_versions: result.pruned_versions,
+            retained_anchor_versions: result.retained_anchor_versions,
         }))
     }
 }

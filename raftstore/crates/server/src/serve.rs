@@ -2,7 +2,9 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use nokv_raftnode::{MetadataCommandExecutor, MetadataReadExecutor, RegionSnapshotEngine};
+use nokv_raftnode::{
+    MetadataCommandExecutor, MetadataReadExecutor, MetadataRetentionExecutor, RegionSnapshotEngine,
+};
 
 use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
@@ -24,7 +26,10 @@ pub async fn serve_with_openraft_metadata_region_admission_and_peer_endpoints<E>
     peer_endpoints: PeerEndpointCatalog,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RegionSnapshotEngine + MetadataCommandExecutor + MetadataReadExecutor,
+    E: RegionSnapshotEngine
+        + MetadataCommandExecutor
+        + MetadataReadExecutor
+        + MetadataRetentionExecutor,
 {
     let (metadata, admin) = openraft_metadata_service_pair_with_execution(
         region.clone(),
@@ -57,7 +62,10 @@ pub fn openraft_metadata_service_pair<E, D>(
     RaftAdminService<nokv_raftnode::OpenRaftRegion<E>, D>,
 )
 where
-    E: RegionSnapshotEngine + MetadataCommandExecutor + MetadataReadExecutor,
+    E: RegionSnapshotEngine
+        + MetadataCommandExecutor
+        + MetadataReadExecutor
+        + MetadataRetentionExecutor,
     D: RegionDescriptorSink,
 {
     let execution = ExecutionRuntime::default();
@@ -86,7 +94,10 @@ fn openraft_metadata_service_pair_with_execution<E, D>(
     RaftAdminService<nokv_raftnode::OpenRaftRegion<E>, D>,
 )
 where
-    E: RegionSnapshotEngine + MetadataCommandExecutor + MetadataReadExecutor,
+    E: RegionSnapshotEngine
+        + MetadataCommandExecutor
+        + MetadataReadExecutor
+        + MetadataRetentionExecutor,
     D: RegionDescriptorSink,
 {
     let metadata = MetadataPlaneService::with_admission_state_and_execution(

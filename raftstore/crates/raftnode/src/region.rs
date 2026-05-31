@@ -18,9 +18,9 @@ use tokio::sync::broadcast;
 use crate::{
     decode_metadata_response, AppliedMetadataEngine, AppliedProposal, ApplyStatus,
     ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode,
-    Error, MetadataCommandExecutor, MetadataReadExecutor, NodeId, Proposal, RaftStoreConfig,
-    RegionId, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
-    RegionTrafficSnapshot,
+    Error, MetadataCommandExecutor, MetadataReadExecutor, MetadataRetentionExecutor, NodeId,
+    Proposal, RaftStoreConfig, RegionId, RegionLogStorage, RegionSnapshotEngine,
+    RegionStateMachine, RegionTrafficProvider, RegionTrafficSnapshot,
 };
 
 #[derive(Clone)]
@@ -467,6 +467,25 @@ where
                 });
             }
             self.apply_engine.execute_metadata_scan(req).await
+        }
+    }
+}
+
+impl<E> MetadataRetentionExecutor for OpenRaftRegion<E>
+where
+    E: RegionSnapshotEngine + MetadataRetentionExecutor,
+{
+    fn prune_metadata_versions<'a>(
+        &'a self,
+        retention_floor: u64,
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+    > + Send
+           + 'a {
+        async move {
+            self.apply_engine
+                .prune_metadata_versions(retention_floor)
+                .await
         }
     }
 }

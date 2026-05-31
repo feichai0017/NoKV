@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nokv_metastore::{MemoryMetadataStore, MetadataEngine};
+use nokv_metastore::{MemoryMetadataStore, MetadataEngine, MetadataRetentionEngine};
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use tokio::sync::broadcast;
@@ -64,6 +64,16 @@ pub trait MetadataReadExecutor: Clone + Send + Sync + 'static {
         req: &'a metadatapb::MetadataScanRequest,
     ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>>
            + Send
+           + 'a;
+}
+
+pub trait MetadataRetentionExecutor: Clone + Send + Sync + 'static {
+    fn prune_metadata_versions<'a>(
+        &'a self,
+        retention_floor: u64,
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+    > + Send
            + 'a;
 }
 
@@ -590,6 +600,26 @@ where
     }
 }
 
+impl<E> MetadataRetentionExecutor for AppliedMetadataEngine<E>
+where
+    E: MetadataRetentionEngine,
+{
+    fn prune_metadata_versions<'a>(
+        &'a self,
+        retention_floor: u64,
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+    > + Send
+           + 'a {
+        async move {
+            let engine = self.inner.engine.lock().map_err(|_| {
+                nokv_metastore::Error::Backend("region apply mutex poisoned".to_owned())
+            })?;
+            engine.prune_metadata_versions(retention_floor)
+        }
+    }
+}
+
 impl<E, S> PersistentAppliedMetadataEngine<E, S>
 where
     E: MetadataEngine,
@@ -658,6 +688,22 @@ where
         I: IntoIterator<Item = OpenRaftEntry>,
     {
         self.apply_openraft_entries(entries)
+    }
+}
+
+impl<E, S> MetadataRetentionExecutor for PersistentAppliedMetadataEngine<E, S>
+where
+    E: MetadataRetentionEngine,
+    S: RegionMetadataSink,
+{
+    fn prune_metadata_versions<'a>(
+        &'a self,
+        retention_floor: u64,
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+    > + Send
+           + 'a {
+        async move { self.engine.prune_metadata_versions(retention_floor).await }
     }
 }
 

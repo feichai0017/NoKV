@@ -1145,6 +1145,118 @@ func (x *ExecutionStatusResponse) GetTopology() []*ExecutionTopologyStatus {
 	return nil
 }
 
+type PruneMetadataVersionsRequest struct {
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	RegionId       uint64                 `protobuf:"varint,1,opt,name=region_id,json=regionId,proto3" json:"region_id,omitempty"`
+	RetentionFloor uint64                 `protobuf:"varint,2,opt,name=retention_floor,json=retentionFloor,proto3" json:"retention_floor,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
+}
+
+func (x *PruneMetadataVersionsRequest) Reset() {
+	*x = PruneMetadataVersionsRequest{}
+	mi := &file_admin_admin_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneMetadataVersionsRequest) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneMetadataVersionsRequest) ProtoMessage() {}
+
+func (x *PruneMetadataVersionsRequest) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_admin_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneMetadataVersionsRequest.ProtoReflect.Descriptor instead.
+func (*PruneMetadataVersionsRequest) Descriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *PruneMetadataVersionsRequest) GetRegionId() uint64 {
+	if x != nil {
+		return x.RegionId
+	}
+	return 0
+}
+
+func (x *PruneMetadataVersionsRequest) GetRetentionFloor() uint64 {
+	if x != nil {
+		return x.RetentionFloor
+	}
+	return 0
+}
+
+type PruneMetadataVersionsResponse struct {
+	state                  protoimpl.MessageState `protogen:"open.v1"`
+	RetentionFloor         uint64                 `protobuf:"varint,1,opt,name=retention_floor,json=retentionFloor,proto3" json:"retention_floor,omitempty"`
+	PrunedVersions         uint64                 `protobuf:"varint,2,opt,name=pruned_versions,json=prunedVersions,proto3" json:"pruned_versions,omitempty"`
+	RetainedAnchorVersions uint64                 `protobuf:"varint,3,opt,name=retained_anchor_versions,json=retainedAnchorVersions,proto3" json:"retained_anchor_versions,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
+}
+
+func (x *PruneMetadataVersionsResponse) Reset() {
+	*x = PruneMetadataVersionsResponse{}
+	mi := &file_admin_admin_proto_msgTypes[14]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *PruneMetadataVersionsResponse) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*PruneMetadataVersionsResponse) ProtoMessage() {}
+
+func (x *PruneMetadataVersionsResponse) ProtoReflect() protoreflect.Message {
+	mi := &file_admin_admin_proto_msgTypes[14]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use PruneMetadataVersionsResponse.ProtoReflect.Descriptor instead.
+func (*PruneMetadataVersionsResponse) Descriptor() ([]byte, []int) {
+	return file_admin_admin_proto_rawDescGZIP(), []int{14}
+}
+
+func (x *PruneMetadataVersionsResponse) GetRetentionFloor() uint64 {
+	if x != nil {
+		return x.RetentionFloor
+	}
+	return 0
+}
+
+func (x *PruneMetadataVersionsResponse) GetPrunedVersions() uint64 {
+	if x != nil {
+		return x.PrunedVersions
+	}
+	return 0
+}
+
+func (x *PruneMetadataVersionsResponse) GetRetainedAnchorVersions() uint64 {
+	if x != nil {
+		return x.RetainedAnchorVersions
+	}
+	return 0
+}
+
 var File_admin_admin_proto protoreflect.FileDescriptor
 
 const file_admin_admin_proto_rawDesc = "" +
@@ -1210,7 +1322,14 @@ const file_admin_admin_proto_rawDesc = "" +
 	"\x17ExecutionStatusResponse\x12N\n" +
 	"\x0elast_admission\x18\x01 \x01(\v2'.nokv.admin.v1.ExecutionAdmissionStatusR\rlastAdmission\x12?\n" +
 	"\arestart\x18\x02 \x01(\v2%.nokv.admin.v1.ExecutionRestartStatusR\arestart\x12B\n" +
-	"\btopology\x18\x03 \x03(\v2&.nokv.admin.v1.ExecutionTopologyStatusR\btopology*\xb5\x01\n" +
+	"\btopology\x18\x03 \x03(\v2&.nokv.admin.v1.ExecutionTopologyStatusR\btopology\"d\n" +
+	"\x1cPruneMetadataVersionsRequest\x12\x1b\n" +
+	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12'\n" +
+	"\x0fretention_floor\x18\x02 \x01(\x04R\x0eretentionFloor\"\xab\x01\n" +
+	"\x1dPruneMetadataVersionsResponse\x12'\n" +
+	"\x0fretention_floor\x18\x01 \x01(\x04R\x0eretentionFloor\x12'\n" +
+	"\x0fpruned_versions\x18\x02 \x01(\x04R\x0eprunedVersions\x128\n" +
+	"\x18retained_anchor_versions\x18\x03 \x01(\x04R\x16retainedAnchorVersions*\xb5\x01\n" +
 	"\x17ExecutionAdmissionClass\x12)\n" +
 	"%EXECUTION_ADMISSION_CLASS_UNSPECIFIED\x10\x00\x12\"\n" +
 	"\x1eEXECUTION_ADMISSION_CLASS_READ\x10\x01\x12#\n" +
@@ -1245,14 +1364,15 @@ const file_admin_admin_proto_rawDesc = "" +
 	"\x15ExecutionRestartState\x12'\n" +
 	"#EXECUTION_RESTART_STATE_UNSPECIFIED\x10\x00\x12!\n" +
 	"\x1dEXECUTION_RESTART_STATE_READY\x10\x01\x12$\n" +
-	" EXECUTION_RESTART_STATE_DEGRADED\x10\x022\xd7\x03\n" +
+	" EXECUTION_RESTART_STATE_DEGRADED\x10\x022\xcb\x04\n" +
 	"\tRaftAdmin\x12H\n" +
 	"\aAddPeer\x12\x1d.nokv.admin.v1.AddPeerRequest\x1a\x1e.nokv.admin.v1.AddPeerResponse\x12Q\n" +
 	"\n" +
 	"RemovePeer\x12 .nokv.admin.v1.RemovePeerRequest\x1a!.nokv.admin.v1.RemovePeerResponse\x12]\n" +
 	"\x0eTransferLeader\x12$.nokv.admin.v1.TransferLeaderRequest\x1a%.nokv.admin.v1.TransferLeaderResponse\x12l\n" +
 	"\x13RegionRuntimeStatus\x12).nokv.admin.v1.RegionRuntimeStatusRequest\x1a*.nokv.admin.v1.RegionRuntimeStatusResponse\x12`\n" +
-	"\x0fExecutionStatus\x12%.nokv.admin.v1.ExecutionStatusRequest\x1a&.nokv.admin.v1.ExecutionStatusResponseB.Z,github.com/feichai0017/NoKV/pb/admin;adminpbb\x06proto3"
+	"\x0fExecutionStatus\x12%.nokv.admin.v1.ExecutionStatusRequest\x1a&.nokv.admin.v1.ExecutionStatusResponse\x12r\n" +
+	"\x15PruneMetadataVersions\x12+.nokv.admin.v1.PruneMetadataVersionsRequest\x1a,.nokv.admin.v1.PruneMetadataVersionsResponseB.Z,github.com/feichai0017/NoKV/pb/admin;adminpbb\x06proto3"
 
 var (
 	file_admin_admin_proto_rawDescOnce sync.Once
@@ -1267,33 +1387,35 @@ func file_admin_admin_proto_rawDescGZIP() []byte {
 }
 
 var file_admin_admin_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_admin_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 13)
+var file_admin_admin_proto_msgTypes = make([]protoimpl.MessageInfo, 15)
 var file_admin_admin_proto_goTypes = []any{
-	(ExecutionAdmissionClass)(0),        // 0: nokv.admin.v1.ExecutionAdmissionClass
-	(ExecutionAdmissionReason)(0),       // 1: nokv.admin.v1.ExecutionAdmissionReason
-	(ExecutionTopologyOutcome)(0),       // 2: nokv.admin.v1.ExecutionTopologyOutcome
-	(ExecutionPublishState)(0),          // 3: nokv.admin.v1.ExecutionPublishState
-	(ExecutionRestartState)(0),          // 4: nokv.admin.v1.ExecutionRestartState
-	(*AddPeerRequest)(nil),              // 5: nokv.admin.v1.AddPeerRequest
-	(*AddPeerResponse)(nil),             // 6: nokv.admin.v1.AddPeerResponse
-	(*RemovePeerRequest)(nil),           // 7: nokv.admin.v1.RemovePeerRequest
-	(*RemovePeerResponse)(nil),          // 8: nokv.admin.v1.RemovePeerResponse
-	(*TransferLeaderRequest)(nil),       // 9: nokv.admin.v1.TransferLeaderRequest
-	(*TransferLeaderResponse)(nil),      // 10: nokv.admin.v1.TransferLeaderResponse
-	(*RegionRuntimeStatusRequest)(nil),  // 11: nokv.admin.v1.RegionRuntimeStatusRequest
-	(*RegionRuntimeStatusResponse)(nil), // 12: nokv.admin.v1.RegionRuntimeStatusResponse
-	(*ExecutionStatusRequest)(nil),      // 13: nokv.admin.v1.ExecutionStatusRequest
-	(*ExecutionAdmissionStatus)(nil),    // 14: nokv.admin.v1.ExecutionAdmissionStatus
-	(*ExecutionTopologyStatus)(nil),     // 15: nokv.admin.v1.ExecutionTopologyStatus
-	(*ExecutionRestartStatus)(nil),      // 16: nokv.admin.v1.ExecutionRestartStatus
-	(*ExecutionStatusResponse)(nil),     // 17: nokv.admin.v1.ExecutionStatusResponse
-	(*meta.RegionDescriptor)(nil),       // 18: nokv.meta.v1.RegionDescriptor
+	(ExecutionAdmissionClass)(0),          // 0: nokv.admin.v1.ExecutionAdmissionClass
+	(ExecutionAdmissionReason)(0),         // 1: nokv.admin.v1.ExecutionAdmissionReason
+	(ExecutionTopologyOutcome)(0),         // 2: nokv.admin.v1.ExecutionTopologyOutcome
+	(ExecutionPublishState)(0),            // 3: nokv.admin.v1.ExecutionPublishState
+	(ExecutionRestartState)(0),            // 4: nokv.admin.v1.ExecutionRestartState
+	(*AddPeerRequest)(nil),                // 5: nokv.admin.v1.AddPeerRequest
+	(*AddPeerResponse)(nil),               // 6: nokv.admin.v1.AddPeerResponse
+	(*RemovePeerRequest)(nil),             // 7: nokv.admin.v1.RemovePeerRequest
+	(*RemovePeerResponse)(nil),            // 8: nokv.admin.v1.RemovePeerResponse
+	(*TransferLeaderRequest)(nil),         // 9: nokv.admin.v1.TransferLeaderRequest
+	(*TransferLeaderResponse)(nil),        // 10: nokv.admin.v1.TransferLeaderResponse
+	(*RegionRuntimeStatusRequest)(nil),    // 11: nokv.admin.v1.RegionRuntimeStatusRequest
+	(*RegionRuntimeStatusResponse)(nil),   // 12: nokv.admin.v1.RegionRuntimeStatusResponse
+	(*ExecutionStatusRequest)(nil),        // 13: nokv.admin.v1.ExecutionStatusRequest
+	(*ExecutionAdmissionStatus)(nil),      // 14: nokv.admin.v1.ExecutionAdmissionStatus
+	(*ExecutionTopologyStatus)(nil),       // 15: nokv.admin.v1.ExecutionTopologyStatus
+	(*ExecutionRestartStatus)(nil),        // 16: nokv.admin.v1.ExecutionRestartStatus
+	(*ExecutionStatusResponse)(nil),       // 17: nokv.admin.v1.ExecutionStatusResponse
+	(*PruneMetadataVersionsRequest)(nil),  // 18: nokv.admin.v1.PruneMetadataVersionsRequest
+	(*PruneMetadataVersionsResponse)(nil), // 19: nokv.admin.v1.PruneMetadataVersionsResponse
+	(*meta.RegionDescriptor)(nil),         // 20: nokv.meta.v1.RegionDescriptor
 }
 var file_admin_admin_proto_depIdxs = []int32{
-	18, // 0: nokv.admin.v1.AddPeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	18, // 1: nokv.admin.v1.RemovePeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	18, // 2: nokv.admin.v1.TransferLeaderResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
-	18, // 3: nokv.admin.v1.RegionRuntimeStatusResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	20, // 0: nokv.admin.v1.AddPeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	20, // 1: nokv.admin.v1.RemovePeerResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	20, // 2: nokv.admin.v1.TransferLeaderResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
+	20, // 3: nokv.admin.v1.RegionRuntimeStatusResponse.region:type_name -> nokv.meta.v1.RegionDescriptor
 	0,  // 4: nokv.admin.v1.ExecutionAdmissionStatus.class:type_name -> nokv.admin.v1.ExecutionAdmissionClass
 	1,  // 5: nokv.admin.v1.ExecutionAdmissionStatus.reason:type_name -> nokv.admin.v1.ExecutionAdmissionReason
 	2,  // 6: nokv.admin.v1.ExecutionTopologyStatus.outcome:type_name -> nokv.admin.v1.ExecutionTopologyOutcome
@@ -1307,13 +1429,15 @@ var file_admin_admin_proto_depIdxs = []int32{
 	9,  // 14: nokv.admin.v1.RaftAdmin.TransferLeader:input_type -> nokv.admin.v1.TransferLeaderRequest
 	11, // 15: nokv.admin.v1.RaftAdmin.RegionRuntimeStatus:input_type -> nokv.admin.v1.RegionRuntimeStatusRequest
 	13, // 16: nokv.admin.v1.RaftAdmin.ExecutionStatus:input_type -> nokv.admin.v1.ExecutionStatusRequest
-	6,  // 17: nokv.admin.v1.RaftAdmin.AddPeer:output_type -> nokv.admin.v1.AddPeerResponse
-	8,  // 18: nokv.admin.v1.RaftAdmin.RemovePeer:output_type -> nokv.admin.v1.RemovePeerResponse
-	10, // 19: nokv.admin.v1.RaftAdmin.TransferLeader:output_type -> nokv.admin.v1.TransferLeaderResponse
-	12, // 20: nokv.admin.v1.RaftAdmin.RegionRuntimeStatus:output_type -> nokv.admin.v1.RegionRuntimeStatusResponse
-	17, // 21: nokv.admin.v1.RaftAdmin.ExecutionStatus:output_type -> nokv.admin.v1.ExecutionStatusResponse
-	17, // [17:22] is the sub-list for method output_type
-	12, // [12:17] is the sub-list for method input_type
+	18, // 17: nokv.admin.v1.RaftAdmin.PruneMetadataVersions:input_type -> nokv.admin.v1.PruneMetadataVersionsRequest
+	6,  // 18: nokv.admin.v1.RaftAdmin.AddPeer:output_type -> nokv.admin.v1.AddPeerResponse
+	8,  // 19: nokv.admin.v1.RaftAdmin.RemovePeer:output_type -> nokv.admin.v1.RemovePeerResponse
+	10, // 20: nokv.admin.v1.RaftAdmin.TransferLeader:output_type -> nokv.admin.v1.TransferLeaderResponse
+	12, // 21: nokv.admin.v1.RaftAdmin.RegionRuntimeStatus:output_type -> nokv.admin.v1.RegionRuntimeStatusResponse
+	17, // 22: nokv.admin.v1.RaftAdmin.ExecutionStatus:output_type -> nokv.admin.v1.ExecutionStatusResponse
+	19, // 23: nokv.admin.v1.RaftAdmin.PruneMetadataVersions:output_type -> nokv.admin.v1.PruneMetadataVersionsResponse
+	18, // [18:24] is the sub-list for method output_type
+	12, // [12:18] is the sub-list for method input_type
 	12, // [12:12] is the sub-list for extension type_name
 	12, // [12:12] is the sub-list for extension extendee
 	0,  // [0:12] is the sub-list for field type_name
@@ -1330,7 +1454,7 @@ func file_admin_admin_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_admin_admin_proto_rawDesc), len(file_admin_admin_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   13,
+			NumMessages:   15,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

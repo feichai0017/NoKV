@@ -99,6 +99,15 @@ impl adminpb::raft_admin_server::RaftAdmin for CaptureRaftAdmin {
             "execution status is not used by this test",
         ))
     }
+
+    async fn prune_metadata_versions(
+        &self,
+        _request: Request<adminpb::PruneMetadataVersionsRequest>,
+    ) -> Result<Response<adminpb::PruneMetadataVersionsResponse>, Status> {
+        Err(Status::unimplemented(
+            "metadata retention is not used by this test",
+        ))
+    }
 }
 
 #[test]

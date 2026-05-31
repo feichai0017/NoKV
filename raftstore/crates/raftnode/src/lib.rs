@@ -24,8 +24,9 @@ mod watch;
 
 pub use apply::{
     AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
-    MetadataCommandExecutor, MetadataReadExecutor, PersistentAppliedMetadataEngine,
-    RegionApplyEngine, RegionDescriptorCatalog, RegionMetadataSink, RegionSnapshotEngine,
+    MetadataCommandExecutor, MetadataReadExecutor, MetadataRetentionExecutor,
+    PersistentAppliedMetadataEngine, RegionApplyEngine, RegionDescriptorCatalog,
+    RegionMetadataSink, RegionSnapshotEngine,
 };
 pub use error::Error;
 pub use log_codec::{decode_log_entry, encode_log_entry};

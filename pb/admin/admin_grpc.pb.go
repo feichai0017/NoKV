@@ -24,11 +24,12 @@ import (
 const _ = grpc.SupportPackageIsVersion9
 
 const (
-	RaftAdmin_AddPeer_FullMethodName             = "/nokv.admin.v1.RaftAdmin/AddPeer"
-	RaftAdmin_RemovePeer_FullMethodName          = "/nokv.admin.v1.RaftAdmin/RemovePeer"
-	RaftAdmin_TransferLeader_FullMethodName      = "/nokv.admin.v1.RaftAdmin/TransferLeader"
-	RaftAdmin_RegionRuntimeStatus_FullMethodName = "/nokv.admin.v1.RaftAdmin/RegionRuntimeStatus"
-	RaftAdmin_ExecutionStatus_FullMethodName     = "/nokv.admin.v1.RaftAdmin/ExecutionStatus"
+	RaftAdmin_AddPeer_FullMethodName               = "/nokv.admin.v1.RaftAdmin/AddPeer"
+	RaftAdmin_RemovePeer_FullMethodName            = "/nokv.admin.v1.RaftAdmin/RemovePeer"
+	RaftAdmin_TransferLeader_FullMethodName        = "/nokv.admin.v1.RaftAdmin/TransferLeader"
+	RaftAdmin_RegionRuntimeStatus_FullMethodName   = "/nokv.admin.v1.RaftAdmin/RegionRuntimeStatus"
+	RaftAdmin_ExecutionStatus_FullMethodName       = "/nokv.admin.v1.RaftAdmin/ExecutionStatus"
+	RaftAdmin_PruneMetadataVersions_FullMethodName = "/nokv.admin.v1.RaftAdmin/PruneMetadataVersions"
 )
 
 // RaftAdminClient is the client API for RaftAdmin service.
@@ -40,6 +41,7 @@ type RaftAdminClient interface {
 	TransferLeader(ctx context.Context, in *TransferLeaderRequest, opts ...grpc.CallOption) (*TransferLeaderResponse, error)
 	RegionRuntimeStatus(ctx context.Context, in *RegionRuntimeStatusRequest, opts ...grpc.CallOption) (*RegionRuntimeStatusResponse, error)
 	ExecutionStatus(ctx context.Context, in *ExecutionStatusRequest, opts ...grpc.CallOption) (*ExecutionStatusResponse, error)
+	PruneMetadataVersions(ctx context.Context, in *PruneMetadataVersionsRequest, opts ...grpc.CallOption) (*PruneMetadataVersionsResponse, error)
 }
 
 type raftAdminClient struct {
@@ -100,6 +102,16 @@ func (c *raftAdminClient) ExecutionStatus(ctx context.Context, in *ExecutionStat
 	return out, nil
 }
 
+func (c *raftAdminClient) PruneMetadataVersions(ctx context.Context, in *PruneMetadataVersionsRequest, opts ...grpc.CallOption) (*PruneMetadataVersionsResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(PruneMetadataVersionsResponse)
+	err := c.cc.Invoke(ctx, RaftAdmin_PruneMetadataVersions_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
 // RaftAdminServer is the server API for RaftAdmin service.
 // All implementations should embed UnimplementedRaftAdminServer
 // for forward compatibility.
@@ -109,6 +121,7 @@ type RaftAdminServer interface {
 	TransferLeader(context.Context, *TransferLeaderRequest) (*TransferLeaderResponse, error)
 	RegionRuntimeStatus(context.Context, *RegionRuntimeStatusRequest) (*RegionRuntimeStatusResponse, error)
 	ExecutionStatus(context.Context, *ExecutionStatusRequest) (*ExecutionStatusResponse, error)
+	PruneMetadataVersions(context.Context, *PruneMetadataVersionsRequest) (*PruneMetadataVersionsResponse, error)
 }
 
 // UnimplementedRaftAdminServer should be embedded to have
@@ -132,6 +145,9 @@ func (UnimplementedRaftAdminServer) RegionRuntimeStatus(context.Context, *Region
 }
 func (UnimplementedRaftAdminServer) ExecutionStatus(context.Context, *ExecutionStatusRequest) (*ExecutionStatusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ExecutionStatus not implemented")
+}
+func (UnimplementedRaftAdminServer) PruneMetadataVersions(context.Context, *PruneMetadataVersionsRequest) (*PruneMetadataVersionsResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method PruneMetadataVersions not implemented")
 }
 func (UnimplementedRaftAdminServer) testEmbeddedByValue() {}
 
@@ -243,6 +259,24 @@ func _RaftAdmin_ExecutionStatus_Handler(srv interface{}, ctx context.Context, de
 	return interceptor(ctx, in, info, handler)
 }
 
+func _RaftAdmin_PruneMetadataVersions_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(PruneMetadataVersionsRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(RaftAdminServer).PruneMetadataVersions(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: RaftAdmin_PruneMetadataVersions_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(RaftAdminServer).PruneMetadataVersions(ctx, req.(*PruneMetadataVersionsRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
 // RaftAdmin_ServiceDesc is the grpc.ServiceDesc for RaftAdmin service.
 // It's only intended for direct use with grpc.RegisterService,
 // and not to be introspected or modified (even as a copy)
@@ -269,6 +303,10 @@ var RaftAdmin_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "ExecutionStatus",
 			Handler:    _RaftAdmin_ExecutionStatus_Handler,
+		},
+		{
+			MethodName: "PruneMetadataVersions",
+			Handler:    _RaftAdmin_PruneMetadataVersions_Handler,
 		},
 	},
 	Streams:  []grpc.StreamDesc{},
