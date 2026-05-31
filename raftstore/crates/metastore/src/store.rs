@@ -24,6 +24,22 @@ pub fn scan_limit(limit: u32) -> usize {
     }
 }
 
+pub fn scan_key_matches_start(
+    key: &[u8],
+    start_key: &[u8],
+    include_start: bool,
+    reverse: bool,
+) -> bool {
+    if start_key.is_empty() {
+        return true;
+    }
+    match key.cmp(start_key) {
+        std::cmp::Ordering::Less => reverse,
+        std::cmp::Ordering::Equal => include_start,
+        std::cmp::Ordering::Greater => !reverse,
+    }
+}
+
 pub fn value_is_expired(expires_at: u64) -> bool {
     expires_at > 0 && expires_at <= current_unix_seconds()
 }

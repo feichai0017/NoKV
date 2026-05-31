@@ -59,19 +59,21 @@ impl metastore::MetadataEngine for HoltMetadataStore {
         &self,
         req: &metadatapb::MetadataScanRequest,
     ) -> metastore::Result<metadatapb::MetadataScanResponse> {
-        if req.reverse {
-            return Err(metastore::Error::Backend(
-                "metadata reverse scans are not supported".to_owned(),
-            ));
-        }
         let _guard = self.lock()?;
         let read_version = metastore::scan_read_version(req.version);
         let limit = metastore::scan_limit(req.limit);
         let mut kvs = Vec::new();
-        for key in self.scan_write_user_keys()? {
-            if key.as_slice() < req.start_key.as_slice()
-                || (!req.include_start && key == req.start_key)
-            {
+        let mut keys = self.scan_write_user_keys()?;
+        if req.reverse {
+            keys.reverse();
+        }
+        for key in keys {
+            if !metastore::scan_key_matches_start(
+                &key,
+                &req.start_key,
+                req.include_start,
+                req.reverse,
+            ) {
                 continue;
             }
             if let Some((_commit_version, value)) = self.read_committed(&key, read_version)? {

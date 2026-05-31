@@ -113,11 +113,6 @@ where
         &self,
         req: &metadatapb::MetadataScanRequest,
     ) -> nokv_metastore::Result<metadatapb::MetadataScanResponse> {
-        if req.reverse {
-            return Err(invalid_raft_command(
-                "metadata reverse scans are not supported",
-            ));
-        }
         let response = self.read(|engine| engine.scan_metadata(req))?;
         self.inner.traffic.record_read(1);
         Ok(response)

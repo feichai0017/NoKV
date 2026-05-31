@@ -136,11 +136,6 @@ where
         request: Request<metadatapb::MetadataScanRequest>,
     ) -> Result<Response<metadatapb::MetadataScanResponse>, Status> {
         let request = request.into_inner();
-        if request.reverse {
-            return Err(Status::unimplemented(
-                "MetadataPlane Scan reverse scans are not supported yet",
-            ));
-        }
         let context = required_metadata_context(request.context.as_ref())?;
         let admission = self.admission_snapshot()?;
         let region_error = admission.admit_read_optional_keys(

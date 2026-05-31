@@ -1,9 +1,9 @@
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 use crate::{
-    errors, read_committed, scan_limit, scan_read_version, validation, value_is_expired,
-    write_by_start_version, Error, Inner, MemoryMetadataStore, MetadataApplyResult, MetadataEngine,
-    Result, ValueKind, VersionedValue,
+    errors, read_committed, scan_key_matches_start, scan_limit, scan_read_version, validation,
+    value_is_expired, write_by_start_version, Error, Inner, MemoryMetadataStore,
+    MetadataApplyResult, MetadataEngine, Result, ValueKind, VersionedValue,
 };
 
 impl MemoryMetadataStore {
@@ -61,19 +61,16 @@ impl MemoryMetadataStore {
         &self,
         req: &metadatapb::MetadataScanRequest,
     ) -> Result<metadatapb::MetadataScanResponse> {
-        if req.reverse {
-            return Err(Error::Backend(
-                "metadata reverse scans are not supported".to_owned(),
-            ));
-        }
         let inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         let read_version = scan_read_version(req.version);
         let limit = scan_limit(req.limit);
         let mut kvs = Vec::new();
-        for key in inner.writes.keys() {
-            if key.as_slice() < req.start_key.as_slice()
-                || (!req.include_start && key == &req.start_key)
-            {
+        let mut keys = inner.writes.keys().collect::<Vec<_>>();
+        if req.reverse {
+            keys.reverse();
+        }
+        for key in keys {
+            if !scan_key_matches_start(key, &req.start_key, req.include_start, req.reverse) {
                 continue;
             }
             if let Some(value) = read_committed(&inner, key, read_version) {

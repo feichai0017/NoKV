@@ -136,6 +136,42 @@ fn metadata_snapshot_round_trips_committed_versions() {
 }
 
 #[test]
+fn metadata_reverse_scan_uses_start_key_as_upper_bound() {
+    let store = MemoryMetadataStore::new();
+    store
+        .commit_metadata(&put_command(b"a", b"v1", 10), 11)
+        .unwrap();
+    store
+        .commit_metadata(&put_command(b"b", b"v2", 11), 12)
+        .unwrap();
+    store
+        .commit_metadata(&put_command(b"c", b"v3", 12), 13)
+        .unwrap();
+
+    let scan = store
+        .scan_metadata(&metadatapb::MetadataScanRequest {
+            start_key: b"c".to_vec(),
+            include_start: false,
+            limit: 10,
+            version: 13,
+            reverse: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        scan.kvs
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect::<Vec<_>>(),
+        vec![
+            (b"b".to_vec(), b"v2".to_vec()),
+            (b"a".to_vec(), b"v1".to_vec())
+        ]
+    );
+}
+
+#[test]
 fn metadata_retention_prunes_only_versions_hidden_by_floor_anchor() {
     let store = MemoryMetadataStore::new();
     store

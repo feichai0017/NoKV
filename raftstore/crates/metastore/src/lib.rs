@@ -13,7 +13,7 @@ mod types;
 pub mod validation;
 
 pub use snapshot::{decode_metadata_snapshot, encode_metadata_snapshot};
-pub use store::{scan_limit, scan_read_version, value_is_expired};
+pub use store::{scan_key_matches_start, scan_limit, scan_read_version, value_is_expired};
 pub use types::{
     Error, MemoryMetadataStore, MetadataApplyResult, MetadataEngine, MetadataRetentionEngine,
     MetadataRetentionResult, MetadataSnapshot, MetadataSnapshotEngine, MetadataSnapshotWrite,

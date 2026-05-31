@@ -1856,24 +1856,50 @@ async fn writes_remain_leader_only_when_follower_prefer_is_set() {
 }
 
 #[tokio::test]
-async fn scan_rejects_reverse_scan() {
+async fn scan_supports_reverse_scan() {
     let admission = RegionAdmission::default();
     let service = MetadataPlaneService::with_admission_state_and_execution(
-        FixedRuntimeEngine::leader(1, 1),
+        nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
         RegionAdmissionState::new(admission.clone()),
         ExecutionRuntime::default(),
     );
-    let err = service
+    for (key, value) in [
+        (b"reverse/a".as_slice(), b"value-a".as_slice()),
+        (b"reverse/b".as_slice(), b"value-b".as_slice()),
+        (b"reverse/c".as_slice(), b"value-c".as_slice()),
+    ] {
+        service
+            .commit_metadata(Request::new(metadata_put_request(
+                &admission,
+                key.to_vec(),
+                value.to_vec(),
+                19,
+                20,
+            )))
+            .await
+            .unwrap();
+    }
+
+    let scan = service
         .scan(Request::new(metadatapb::MetadataScanRequest {
             context: Some(metadata_context(&admission)),
-            start_key: b"k".to_vec(),
-            limit: 1,
+            start_key: b"reverse/c".to_vec(),
+            limit: 10,
+            version: 20,
+            include_start: false,
             reverse: true,
             ..Default::default()
         }))
         .await
-        .unwrap_err();
-    assert_eq!(err.code(), tonic::Code::Unimplemented);
+        .unwrap()
+        .into_inner();
+
+    let keys = scan
+        .kvs
+        .iter()
+        .map(|kv| kv.key.as_slice())
+        .collect::<Vec<_>>();
+    assert_eq!(keys, vec![b"reverse/b".as_slice(), b"reverse/a".as_slice()]);
 }
 
 #[tokio::test]

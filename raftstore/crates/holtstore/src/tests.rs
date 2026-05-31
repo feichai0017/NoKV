@@ -526,6 +526,42 @@ fn holt_metadata_snapshot_replaces_write_tree() {
 }
 
 #[test]
+fn holt_metadata_reverse_scan_uses_start_key_as_upper_bound() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    store
+        .commit_metadata(&metadata_put_command(b"artifact/a", b"v1", 10), 11)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_put_command(b"artifact/b", b"v2", 11), 12)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_put_command(b"artifact/c", b"v3", 12), 13)
+        .unwrap();
+
+    let scan = store
+        .scan_metadata(&metadatapb::MetadataScanRequest {
+            start_key: b"artifact/c".to_vec(),
+            include_start: false,
+            limit: 10,
+            version: 13,
+            reverse: true,
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        scan.kvs
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect::<Vec<_>>(),
+        vec![
+            (b"artifact/b".to_vec(), b"v2".to_vec()),
+            (b"artifact/a".to_vec(), b"v1".to_vec())
+        ]
+    );
+}
+
+#[test]
 fn holt_metadata_retention_prunes_only_versions_hidden_by_floor_anchor() {
     let store = HoltMetadataStore::open_memory().unwrap();
     store
