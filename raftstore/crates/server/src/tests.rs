@@ -774,7 +774,7 @@ async fn server_mounts_openraft_transport_for_metadata_replication() {
         region_id: 7,
         store_id: 1,
         peer_id: 1,
-        peers,
+        peers: peers.clone(),
         leader_peer_id: 1,
         epoch_conf_version: 3,
         leader: true,
@@ -856,6 +856,79 @@ async fn server_mounts_openraft_transport_for_metadata_replication() {
         .into_inner();
     assert!(peer2_status.leader);
     assert_eq!(peer2_status.leader_peer_id, 2);
+
+    let mut peer2_client = metadatapb::metadata_plane_client::MetadataPlaneClient::connect(
+        format!("http://{peer2_addr}"),
+    )
+    .await
+    .unwrap();
+    let transferred_admission = RegionAdmission {
+        region_id: 7,
+        store_id: 2,
+        peer_id: 2,
+        peers,
+        leader_peer_id: 2,
+        epoch_conf_version: 3,
+        leader: true,
+        ..Default::default()
+    };
+    let transferred_write = peer2_client
+        .commit_metadata(metadatapb::MetadataCommitRequest {
+            context: Some(metadata_context(&transferred_admission)),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"server-transport-after-transfer".to_vec(),
+                read_version: 42,
+                commit_version: 43,
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"server-transport-after-transfer".to_vec(),
+                    value: b"replicated-after-transfer".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"server-transport-after-transfer".to_vec()],
+                ..Default::default()
+            }),
+        })
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(
+        transferred_write.region_error.is_none(),
+        "unexpected post-transfer region error: {:?}",
+        transferred_write.region_error
+    );
+    assert_eq!(transferred_write.result.unwrap().applied_mutations, 1);
+    let transferred_index = regions.get(&2).unwrap().apply_status().applied_index;
+    for region in regions.values() {
+        region
+            .raft_handle()
+            .wait(Some(Duration::from_secs(5)))
+            .applied_index_at_least(
+                Some(transferred_index),
+                "server transport post-transfer replication",
+            )
+            .await
+            .unwrap();
+    }
+    for engine in engines.values() {
+        assert_eq!(
+            engine
+                .execute_metadata_get(&metadatapb::MetadataGetRequest {
+                    context: Some(metadatapb::MetadataContext {
+                        region_id: 7,
+                        ..Default::default()
+                    }),
+                    key: b"server-transport-after-transfer".to_vec(),
+                    version: 43,
+                })
+                .await
+                .unwrap()
+                .kv
+                .unwrap()
+                .value,
+            b"replicated-after-transfer".to_vec()
+        );
+    }
 
     for region in regions.values() {
         region.shutdown().await.unwrap();
