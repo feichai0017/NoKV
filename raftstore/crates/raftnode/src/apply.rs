@@ -136,9 +136,12 @@ struct AppliedMetadataInner<E> {
     history: Mutex<ApplyHistory>,
 }
 
-/// Region-local apply boundary used before the OpenRaft-backed implementation
-/// is complete. Reads go through the current state-machine view; writes advance
-/// a monotonically increasing applied index under the region apply mutex.
+/// Region-local metadata state-machine apply engine.
+///
+/// OpenRaft drives this engine through committed log entries; tests also use it
+/// directly when Raft ordering is not the behavior under test. Reads go through
+/// the current state-machine view, and writes advance the applied frontier under
+/// the region apply mutex.
 #[derive(Debug, Clone)]
 pub struct AppliedMetadataEngine<E = MemoryMetadataStore> {
     inner: Arc<AppliedMetadataInner<E>>,

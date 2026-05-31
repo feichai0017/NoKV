@@ -503,7 +503,7 @@ impl AppliedRegionDescriptorProvider for MetadataOnlyEngine {
 }
 
 #[tokio::test]
-async fn metadata_plane_read_does_not_require_legacy_raft_command_executor() {
+async fn metadata_plane_read_uses_read_executor_boundary() {
     let admission = RegionAdmission {
         region_id: 7,
         store_id: 2,
