@@ -1001,6 +1001,166 @@ func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegion(t *testing.T) {
 	require.True(t, handled)
 }
 
+func TestRustRaftstoreEndpointAppliesCoordinatorMergeRegion(t *testing.T) {
+	heartbeatCh := make(chan *coordpb.StoreHeartbeatRequest, 32)
+	operationCh := make(chan *coordpb.SchedulerOperation, 2)
+	rootEventCh := make(chan *metapb.RootEvent, 32)
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorCaptureWithOperationsAndRootEvents(t, heartbeatCh, operationCh, rootEventCh)
+	defer stopCoord()
+
+	storeAddr := reserveLocalAddr(t)
+	storeDir := t.TempDir()
+	env := []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	}
+	stopStore := startRustRaftstoreProcessAt(t, storeAddr, storeDir, env)
+	defer stopStore()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+	defer cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case heartbeat := <-heartbeatCh:
+			return heartbeat.GetStoreId() == 1 &&
+				heartbeat.GetRegionNum() == 1 &&
+				heartbeat.GetLeaderNum() == 1
+		default:
+			return false
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	operationCh <- &coordpb.SchedulerOperation{
+		Type:       coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION,
+		RegionId:   1,
+		SplitKey:   []byte("m"),
+		SplitChild: rustRaftstoreRegion(2, 1, 2, []byte("m"), nil),
+	}
+	admin, closeAdmin, err := adminclient.Dial(ctx, storeAddr)
+	require.NoError(t, err)
+	require.Eventually(t, func() bool {
+		status, statusErr := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 2})
+		return statusErr == nil &&
+			status.GetKnown() &&
+			status.GetHosted() &&
+			status.GetLeader() &&
+			status.GetLocalPeerId() == 2
+	}, 5*time.Second, 50*time.Millisecond)
+	requireRustRaftstoreSplitRootEvents(t, rootEventCh)
+
+	left := rustRaftstoreRegionAtEpoch(1, 1, 1, 2, 1, nil, []byte("m"))
+	right := rustRaftstoreRegion(2, 1, 2, []byte("m"), nil)
+	cli, err := New(Config{
+		RegionResolver: &mockRegionResolver{regions: []*metapb.RegionDescriptor{left, right}},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 1,
+			Addr:    storeAddr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	handled, err := cli.TryAtomicMutate(ctx, []byte("workspace/merge-right"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("workspace/merge-right"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 39,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("workspace/merge-right"),
+		Value: []byte("right"),
+	}}, 40, 41)
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.NoError(t, cli.Close())
+
+	operationCh <- &coordpb.SchedulerOperation{
+		Type:           coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_MERGE_REGION,
+		RegionId:       1,
+		SourceRegionId: 2,
+	}
+	require.Eventually(t, func() bool {
+		status, statusErr := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 2})
+		return statusErr == nil && !status.GetKnown() && !status.GetHosted()
+	}, 5*time.Second, 50*time.Millisecond)
+	require.Eventually(t, func() bool {
+		select {
+		case heartbeat := <-heartbeatCh:
+			return heartbeat.GetStoreId() == 1 &&
+				heartbeat.GetRegionNum() == 1 &&
+				heartbeat.GetLeaderNum() == 1
+		default:
+			return false
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+	execution, err := admin.ExecutionStatus(ctx, &adminpb.ExecutionStatusRequest{})
+	require.NoError(t, err)
+	require.Zero(t, execution.GetRestart().GetPendingSchedulerOperationCount())
+	requireRustRaftstoreMergeRootEvents(t, rootEventCh)
+
+	merged := rustRaftstoreRegionAtEpoch(1, 1, 1, 3, 1, nil, nil)
+	cli, err = New(Config{
+		RegionResolver: &mockRegionResolver{region: merged},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 1,
+			Addr:    storeAddr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	got, err := cli.Get(ctx, []byte("workspace/merge-right"), 41)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("right"), got.GetValue())
+	handled, err = cli.TryAtomicMutate(ctx, []byte("workspace/merged-write"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("workspace/merged-write"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 49,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("workspace/merged-write"),
+		Value: []byte("merged"),
+	}}, 50, 51)
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.NoError(t, cli.Close())
+	require.NoError(t, closeAdmin())
+
+	stopStore()
+	stopRestarted := startRustRaftstoreProcessAt(t, storeAddr, storeDir, env)
+	defer stopRestarted()
+	admin, closeAdmin, err = adminclient.Dial(ctx, storeAddr)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closeAdmin()) }()
+	require.Eventually(t, func() bool {
+		status, statusErr := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 2})
+		return statusErr == nil && !status.GetKnown() && !status.GetHosted()
+	}, 5*time.Second, 50*time.Millisecond)
+
+	cli, err = New(Config{
+		RegionResolver: &mockRegionResolver{region: merged},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 1,
+			Addr:    storeAddr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cli.Close()) }()
+	got, err = cli.Get(ctx, []byte("workspace/merged-write"), 51)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("merged"), got.GetValue())
+}
+
 func TestRustRaftstoreEndpointHoltMembershipSurvivesRestart(t *testing.T) {
 	addrs := map[uint64]string{
 		1: reserveLocalAddr(t),
@@ -1651,6 +1811,36 @@ func requireRustRaftstoreSplitRootEvents(t *testing.T, rootEvents <-chan *metapb
 		require.Equal(t, []byte("m"), split.GetLeft().GetEndKey())
 		require.Equal(t, uint64(2), split.GetRight().GetRegionId())
 		require.Equal(t, []byte("m"), split.GetRight().GetStartKey())
+	}
+}
+
+func requireRustRaftstoreMergeRootEvents(t *testing.T, rootEvents <-chan *metapb.RootEvent) {
+	t.Helper()
+	var planned, committed *metapb.RootEvent
+	require.Eventually(t, func() bool {
+		for {
+			select {
+			case event := <-rootEvents:
+				switch event.GetKind() {
+				case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_PLANNED:
+					planned = event
+				case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED:
+					committed = event
+				}
+			default:
+				return planned != nil && committed != nil
+			}
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+	for _, event := range []*metapb.RootEvent{planned, committed} {
+		merge := event.GetRangeMerge()
+		require.NotNil(t, merge)
+		require.Equal(t, uint64(1), merge.GetLeftRegionId())
+		require.Equal(t, uint64(2), merge.GetRightRegionId())
+		require.Equal(t, uint64(1), merge.GetMerged().GetRegionId())
+		require.Empty(t, merge.GetMerged().GetStartKey())
+		require.Empty(t, merge.GetMerged().GetEndKey())
+		require.Equal(t, uint64(3), merge.GetMerged().GetEpoch().GetVersion())
 	}
 }
 

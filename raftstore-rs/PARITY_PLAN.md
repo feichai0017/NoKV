@@ -172,9 +172,12 @@ The first slices are intentionally narrow:
   `StoreHeartbeat` wire shape with store identity, client/raft address,
   region count, leader count, leader region ids, and minimal per-region runtime
   stats. Coordinator-returned leader-transfer operations now execute through
-  the local `RaftAdmin.TransferLeader` service path; split and merge operations
-  are validated and reported as explicit unsupported scheduler outcomes until
-  Rust owns those admin RPCs. When the same
+  the local `RaftAdmin.TransferLeader` service path. Holt-backed single-store
+  split and merge operations also execute through the same scheduler path:
+  split requires the planned root event before local mutation and merge removes
+  the source region from the in-process routers, raft transport registry, and
+  persisted Holt descriptor catalog after the target descriptor is committed.
+  When the same
   coordinator endpoint is configured, successful Rust `AddPeer` and
   `RemovePeer` operations also persist terminal rooted peer-change events in
   Holt before attempting publication back to the Go coordinator, so a
@@ -351,20 +354,25 @@ Known gaps:
   endpoint requires the planned root event before local mutation, proposes the
   left descriptor through the parent OpenRaft region, opens the right child as a
   new local OpenRaft region, publishes the committed split event, and routes
-  right-range reads/writes through the dynamically registered child. Holt
+  right-range reads/writes through the dynamically registered child. Holt-backed
+  single-store merge execution now requires the planned root event, proposes the
+  merged descriptor through the target region, removes the merged source from
+  the hosted-region registry and persisted descriptor catalog, unregisters its
+  raft transport endpoint, and publishes the committed merge event. Holt
   startup now scans persisted region descriptors and reopens locally hosted
-  split children after restart; the Go tagged harness verifies right-range data
-  remains readable and writable after the Rust endpoint restarts. The
-  multi-region StoreKV/RaftAdmin router now uses an in-process mutable region
-  registry, which is the routing prerequisite for dynamic child-region
-  registration after split apply.
+  split children after restart while keeping merged-away source regions absent;
+  the Go tagged harness verifies right-range data remains readable and writable
+  after split restart and after a later merge restart. The multi-region
+  StoreKV/RaftAdmin router now uses an in-process mutable region registry,
+  which is the routing prerequisite for dynamic child-region registration after
+  split apply and source-region removal after merge apply.
   Coordinator heartbeats now read from the same mutable hosted-region model
   instead of a startup-only region list, so future split-created child regions
-  can be advertised without restarting the process. The single-region server
+  can be advertised or removed without restarting the process. The single-region server
   startup path now also uses the same multi-region service and heartbeat
   assembly, so dynamic region registration applies to the default endpoint
   instead of only to explicit multi-region startup. Multi-peer split bootstrap,
-  merge execution, coordinator-owned lifecycle coverage, and default compose
+  multi-peer merge, coordinator-owned lifecycle coverage, and default compose
   cutover are still pending.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write

@@ -56,6 +56,14 @@ impl<T> RegionServiceRegistry<T> {
         Ok(())
     }
 
+    fn remove_region(&self, region_id: u64) -> Result<Option<T>, Status> {
+        validate_region_service_id(region_id)?;
+        self.regions
+            .write()
+            .map_err(|_| region_service_registry_poisoned())
+            .map(|mut regions| regions.remove(&region_id))
+    }
+
     fn get_region(&self, region_id: u64) -> Result<Option<T>, Status>
     where
         T: Clone,
@@ -154,6 +162,10 @@ impl<E> MultiRegionStoreKvService<E> {
 
     pub fn insert_region(&self, region_id: u64, service: StoreKvService<E>) -> Result<(), Status> {
         self.regions.insert_region(region_id, service)
+    }
+
+    pub fn remove_region(&self, region_id: u64) -> Result<Option<StoreKvService<E>>, Status> {
+        self.regions.remove_region(region_id)
     }
 
     fn service_for_context(
@@ -335,6 +347,10 @@ impl<S, D> MultiRegionRaftAdminService<S, D> {
         service: RaftAdminService<S, D>,
     ) -> Result<(), Status> {
         self.regions.insert_region(region_id, service)
+    }
+
+    pub fn remove_region(&self, region_id: u64) -> Result<Option<RaftAdminService<S, D>>, Status> {
+        self.regions.remove_region(region_id)
     }
 
     pub fn with_restart_diagnostics(

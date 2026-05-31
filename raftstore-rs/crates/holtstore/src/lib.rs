@@ -147,6 +147,12 @@ impl HoltStore {
         Ok(Some(metapb::RegionDescriptor::decode(bytes.as_slice())?))
     }
 
+    pub fn delete_region_descriptor(&self, region_id: u64) -> Result<()> {
+        self.region_meta()?
+            .delete(&region_descriptor_key(region_id))?;
+        Ok(())
+    }
+
     pub fn region_descriptors(&self) -> Result<Vec<metapb::RegionDescriptor>> {
         let mut out = Vec::new();
         for entry in self.region_meta()?.range().prefix(REGION_DESCRIPTOR_PREFIX) {
@@ -407,6 +413,16 @@ impl HoltMvccStore {
         region_id: u64,
     ) -> Result<Option<metapb::RegionDescriptor>> {
         self.store.get_region_descriptor(region_id)
+    }
+
+    pub fn delete_region_descriptor(&self, region_id: u64) -> Result<()> {
+        let _guard = self
+            .gate
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
+        self.store
+            .delete_region_descriptor(region_id)
+            .and_then(|_| self.store.checkpoint())
     }
 
     pub fn region_descriptors(&self) -> Result<Vec<metapb::RegionDescriptor>> {
@@ -1748,6 +1764,8 @@ mod tests {
             reopened.get_region_descriptor(42).unwrap().unwrap(),
             descriptor
         );
+        reopened.delete_region_descriptor(42).unwrap();
+        assert!(reopened.get_region_descriptor(42).unwrap().is_none());
     }
 
     #[test]

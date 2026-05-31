@@ -466,6 +466,16 @@ impl<E> HostedRegionRegistry<E> {
             .map(|regions| regions.get(&region_id).cloned())
     }
 
+    fn remove(&self, region_id: u64) -> Result<Option<(ServerIdentity, OpenRaftRegion<E>)>, String>
+    where
+        E: Clone,
+    {
+        self.regions
+            .write()
+            .map_err(|_| "hosted region registry lock poisoned".to_owned())
+            .map(|mut regions| regions.remove(&region_id))
+    }
+
     fn snapshot(&self) -> Result<Vec<(ServerIdentity, OpenRaftRegion<E>)>, String>
     where
         E: Clone,
@@ -481,7 +491,7 @@ type HoltApplyEngine = PersistentAppliedKvEngine<HoltMvccStore, HoltRegionMetada
 type HoltRegion = OpenRaftRegion<HoltApplyEngine>;
 
 #[derive(Clone)]
-struct HoltSplitController {
+struct HoltRangeController {
     store_id: u64,
     addr: SocketAddr,
     persistent_root: PathBuf,
@@ -495,7 +505,7 @@ struct HoltSplitController {
     topology_publisher: Arc<dyn TopologyPublisher>,
 }
 
-impl HoltSplitController {
+impl HoltRangeController {
     async fn execute_split(
         &self,
         operation: &coordpb::SchedulerOperation,
@@ -588,6 +598,81 @@ impl HoltSplitController {
         Ok(SchedulerOperationOutcome::Applied)
     }
 
+    async fn execute_merge(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<SchedulerOperationOutcome, tonic::Status> {
+        if operation.region_id == 0 || operation.source_region_id == 0 {
+            return Ok(SchedulerOperationOutcome::Invalid {
+                reason: "merge requires target region and source region",
+            });
+        }
+        let (_identity, target) = self
+            .hosted_regions
+            .get(operation.region_id)
+            .map_err(internal_status)?
+            .ok_or_else(|| {
+                tonic::Status::failed_precondition(format!(
+                    "merge target region {} is not hosted",
+                    operation.region_id
+                ))
+            })?;
+        let target_descriptor = target
+            .region_descriptor()
+            .map_err(|err| tonic::Status::internal(err.to_string()))?
+            .ok_or_else(|| tonic::Status::failed_precondition("merge target descriptor missing"))?;
+        let Some((_source_identity, source)) = self
+            .hosted_regions
+            .get(operation.source_region_id)
+            .map_err(internal_status)?
+        else {
+            if merge_source_already_absorbed(&target_descriptor, operation.source_region_id) {
+                return Ok(SchedulerOperationOutcome::Applied);
+            }
+            return Err(tonic::Status::failed_precondition(format!(
+                "merge source region {} is not hosted",
+                operation.source_region_id
+            )));
+        };
+        let runtime = target.raft_runtime_status();
+        if !runtime.leader {
+            return Err(tonic::Status::failed_precondition(format!(
+                "merge target region {} is not leader",
+                operation.region_id
+            )));
+        }
+        let source_descriptor = source
+            .region_descriptor()
+            .map_err(|err| tonic::Status::internal(err.to_string()))?
+            .ok_or_else(|| tonic::Status::failed_precondition("merge source descriptor missing"))?;
+        let merged = build_merge_descriptor(&target_descriptor, &source_descriptor)?;
+        let (left_id, right_id) = merge_region_ids(&target_descriptor, &source_descriptor);
+
+        self.publish_merge_event(
+            metapb::RootEventKind::RegionMergePlanned,
+            left_id,
+            right_id,
+            &merged,
+            true,
+        )
+        .await?;
+        target
+            .propose_region_descriptor(&merged)
+            .await
+            .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
+        self.remove_merged_source_region(operation.source_region_id)
+            .await?;
+        self.publish_merge_event(
+            metapb::RootEventKind::RegionMerged,
+            left_id,
+            right_id,
+            &merged,
+            false,
+        )
+        .await?;
+        Ok(SchedulerOperationOutcome::Applied)
+    }
+
     async fn publish_split_event(
         &self,
         kind: metapb::RootEventKind,
@@ -628,6 +713,53 @@ impl HoltSplitController {
             | adminpb::ExecutionPublishState::PlannedPublished => {
                 Err(tonic::Status::internal(format!(
                     "split root event reached invalid publish state {:?}",
+                    outcome.publish_state()
+                )))
+            }
+        }
+    }
+
+    async fn publish_merge_event(
+        &self,
+        kind: metapb::RootEventKind,
+        left_region_id: u64,
+        right_region_id: u64,
+        merged: &metapb::RegionDescriptor,
+        require_published: bool,
+    ) -> Result<(), tonic::Status> {
+        let Some(config) = &self.coordinator else {
+            return Ok(());
+        };
+        let event = merge_root_event(kind, left_region_id, right_region_id, merged);
+        let outcome =
+            publish_root_event_with_pending(&config.endpoints, Some(&self.mvcc), event).await;
+        match outcome.publish_state() {
+            adminpb::ExecutionPublishState::TerminalPublished => Ok(()),
+            adminpb::ExecutionPublishState::TerminalPending
+            | adminpb::ExecutionPublishState::TerminalBlocked
+                if !require_published =>
+            {
+                Ok(())
+            }
+            adminpb::ExecutionPublishState::TerminalPending
+            | adminpb::ExecutionPublishState::TerminalBlocked => Err(tonic::Status::unavailable(
+                format!("merge root event not published: {}", outcome.last_error()),
+            )),
+            adminpb::ExecutionPublishState::TerminalFailed => {
+                Err(tonic::Status::internal(outcome.last_error().to_owned()))
+            }
+            adminpb::ExecutionPublishState::Unspecified
+            | adminpb::ExecutionPublishState::NotRequired
+            | adminpb::ExecutionPublishState::PlannedPublished
+                if !require_published =>
+            {
+                Ok(())
+            }
+            adminpb::ExecutionPublishState::Unspecified
+            | adminpb::ExecutionPublishState::NotRequired
+            | adminpb::ExecutionPublishState::PlannedPublished => {
+                Err(tonic::Status::internal(format!(
+                    "merge root event reached invalid publish state {:?}",
                     outcome.publish_state()
                 )))
             }
@@ -686,6 +818,26 @@ impl HoltSplitController {
         self.hosted_regions
             .insert(identity, region)
             .map_err(internal_status)?;
+        Ok(())
+    }
+
+    async fn remove_merged_source_region(&self, region_id: u64) -> Result<(), tonic::Status> {
+        let removed = self
+            .hosted_regions
+            .remove(region_id)
+            .map_err(internal_status)?;
+        self.store_services.remove_region(region_id)?;
+        self.admin_services.remove_region(region_id)?;
+        self.transport.unregister(region_id);
+        self.mvcc
+            .delete_region_descriptor(region_id)
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
+        if let Some((_identity, region)) = removed {
+            region
+                .shutdown()
+                .await
+                .map_err(|err| tonic::Status::internal(err.to_string()))?;
+        }
         Ok(())
     }
 }
@@ -764,6 +916,62 @@ fn append_split_lineage(
     });
 }
 
+fn build_merge_descriptor(
+    target: &metapb::RegionDescriptor,
+    source: &metapb::RegionDescriptor,
+) -> Result<metapb::RegionDescriptor, tonic::Status> {
+    if target.region_id == 0 || source.region_id == 0 {
+        return Err(tonic::Status::invalid_argument(
+            "merge target and source region ids are required",
+        ));
+    }
+    if target.end_key != source.start_key {
+        return Err(tonic::Status::unimplemented(
+            "raftstore-rs merge currently requires the source region to be the target's right sibling",
+        ));
+    }
+    let Some(source_epoch) = source.epoch.clone() else {
+        return Err(tonic::Status::invalid_argument(
+            "merge source epoch is required",
+        ));
+    };
+    let Some(target_epoch) = target.epoch.clone() else {
+        return Err(tonic::Status::invalid_argument(
+            "merge target epoch is required",
+        ));
+    };
+    let mut merged = target.clone();
+    merged.end_key = source.end_key.clone();
+    let epoch = merged.epoch.get_or_insert(target_epoch);
+    epoch.version = epoch.version.saturating_add(1);
+    merged.hash.clear();
+    merged.lineage.push(metapb::DescriptorLineageRef {
+        region_id: source.region_id,
+        epoch: Some(source_epoch),
+        hash: source.hash.clone(),
+        kind: metapb::DescriptorLineageKind::MergeSource as i32,
+    });
+    Ok(merged)
+}
+
+fn merge_region_ids(
+    target: &metapb::RegionDescriptor,
+    source: &metapb::RegionDescriptor,
+) -> (u64, u64) {
+    if source.start_key < target.start_key {
+        (source.region_id, target.region_id)
+    } else {
+        (target.region_id, source.region_id)
+    }
+}
+
+fn merge_source_already_absorbed(target: &metapb::RegionDescriptor, source_region_id: u64) -> bool {
+    target.lineage.iter().any(|lineage| {
+        lineage.region_id == source_region_id
+            && lineage.kind == metapb::DescriptorLineageKind::MergeSource as i32
+    })
+}
+
 fn split_root_event(
     kind: metapb::RootEventKind,
     left: &metapb::RegionDescriptor,
@@ -777,6 +985,25 @@ fn split_root_event(
                 split_key: right.start_key.clone(),
                 left: Some(left.clone()),
                 right: Some(right.clone()),
+                ..Default::default()
+            },
+        )),
+    }
+}
+
+fn merge_root_event(
+    kind: metapb::RootEventKind,
+    left_region_id: u64,
+    right_region_id: u64,
+    merged: &metapb::RegionDescriptor,
+) -> metapb::RootEvent {
+    metapb::RootEvent {
+        kind: kind as i32,
+        payload: Some(metapb::root_event::Payload::RangeMerge(
+            metapb::RootRangeMerge {
+                left_region_id,
+                right_region_id,
+                merged: Some(merged.clone()),
                 ..Default::default()
             },
         )),
@@ -873,7 +1100,7 @@ async fn serve_holt_regions(
     let store_router = MultiRegionStoreKvService::new(store_services)?;
     let admin_router = MultiRegionRaftAdminService::new(admin_services)?
         .with_restart_diagnostics(Arc::new(mvcc.clone()));
-    let split_controller = HoltSplitController {
+    let range_controller = HoltRangeController {
         store_id: identities[0].store_id,
         addr,
         persistent_root: persistent_root.clone(),
@@ -892,9 +1119,9 @@ async fn serve_holt_regions(
         addr,
         hosted_region_registry,
         Some(mvcc.clone()),
-        Some(split_controller.clone()),
+        Some(range_controller.clone()),
     );
-    spawn_pending_topology_retries(coordinator, mvcc.clone(), addr, Some(split_controller));
+    spawn_pending_topology_retries(coordinator, mvcc.clone(), addr, Some(range_controller));
     serve_with_multi_region_services(addr, store_router, admin_router, transport).await?;
     Ok(())
 }
@@ -1250,7 +1477,7 @@ fn spawn_pending_topology_retries(
     config: Option<CoordinatorHeartbeatConfig>,
     pending_store: HoltMvccStore,
     addr: SocketAddr,
-    split_controller: Option<HoltSplitController>,
+    range_controller: Option<HoltRangeController>,
 ) {
     let Some(config) = config else {
         return;
@@ -1260,7 +1487,7 @@ fn spawn_pending_topology_retries(
             config,
             pending_store,
             local_admin_endpoint(addr),
-            split_controller,
+            range_controller,
         )
         .await;
     });
@@ -1333,7 +1560,7 @@ async fn run_pending_topology_retries(
     config: CoordinatorHeartbeatConfig,
     pending_store: HoltMvccStore,
     admin_endpoint: String,
-    split_controller: Option<HoltSplitController>,
+    range_controller: Option<HoltRangeController>,
 ) {
     let mut ticker = tokio::time::interval(config.interval);
     loop {
@@ -1342,7 +1569,7 @@ async fn run_pending_topology_retries(
         retry_pending_scheduler_operations(
             &admin_endpoint,
             &pending_store,
-            split_controller.as_ref(),
+            range_controller.as_ref(),
         )
         .await;
     }
@@ -1404,7 +1631,7 @@ async fn retry_pending_topology_events(endpoints: &[String], pending_store: &Hol
 async fn retry_pending_scheduler_operations(
     admin_endpoint: &str,
     pending_store: &HoltMvccStore,
-    split_controller: Option<&HoltSplitController>,
+    range_controller: Option<&HoltRangeController>,
 ) {
     let pending = match pending_store.pending_scheduler_operations() {
         Ok(pending) => pending,
@@ -1414,7 +1641,7 @@ async fn retry_pending_scheduler_operations(
         }
     };
     for item in pending {
-        match execute_scheduler_operation(admin_endpoint, split_controller, &item.operation).await {
+        match execute_scheduler_operation(admin_endpoint, range_controller, &item.operation).await {
             Ok(SchedulerOperationOutcome::Applied)
             | Ok(SchedulerOperationOutcome::Invalid { .. }) => {
                 if let Err(err) = pending_store.delete_pending_scheduler_operation(&item.operation)
@@ -1450,7 +1677,7 @@ fn spawn_multi_region_coordinator_heartbeat<E>(
     addr: SocketAddr,
     regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
-    split_controller: Option<HoltSplitController>,
+    range_controller: Option<HoltRangeController>,
 ) where
     E: RegionSnapshotEngine + Send + Sync + 'static,
 {
@@ -1464,7 +1691,7 @@ fn spawn_multi_region_coordinator_heartbeat<E>(
             addr,
             regions,
             root_events,
-            split_controller,
+            range_controller,
         )
         .await;
     });
@@ -1476,7 +1703,7 @@ async fn run_multi_region_coordinator_heartbeat<E>(
     addr: SocketAddr,
     regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
-    split_controller: Option<HoltSplitController>,
+    range_controller: Option<HoltRangeController>,
 ) where
     E: RegionSnapshotEngine + Send + Sync + 'static,
 {
@@ -1504,7 +1731,7 @@ async fn run_multi_region_coordinator_heartbeat<E>(
                         &operation,
                         execute_scheduler_operation(
                             &admin_endpoint,
-                            split_controller.as_ref(),
+                            range_controller.as_ref(),
                             &operation,
                         )
                         .await,
@@ -1641,7 +1868,7 @@ enum SchedulerOperationOutcome {
 
 async fn execute_scheduler_operation(
     admin_endpoint: &str,
-    split_controller: Option<&HoltSplitController>,
+    range_controller: Option<&HoltRangeController>,
     operation: &coordpb::SchedulerOperation,
 ) -> Result<SchedulerOperationOutcome, tonic::Status> {
     let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
@@ -1680,7 +1907,7 @@ async fn execute_scheduler_operation(
                     reason: "split requires region, split key, and child descriptor",
                 });
             }
-            if let Some(controller) = split_controller {
+            if let Some(controller) = range_controller {
                 return controller.execute_split(operation).await;
             }
             Ok(SchedulerOperationOutcome::Unsupported {
@@ -1693,6 +1920,9 @@ async fn execute_scheduler_operation(
                 return Ok(SchedulerOperationOutcome::Invalid {
                     reason: "merge requires target region and source region",
                 });
+            }
+            if let Some(controller) = range_controller {
+                return controller.execute_merge(operation).await;
             }
             Ok(SchedulerOperationOutcome::Unsupported {
                 kind,
@@ -2921,6 +3151,102 @@ mod tests {
 
         assert_eq!(descriptor.start_key, b"a");
         assert_eq!(descriptor.end_key, b"z");
+    }
+
+    #[test]
+    fn build_merge_descriptor_extends_target_to_right_sibling() {
+        let target = default_region_descriptor_with_range(
+            ServerIdentity {
+                region_id: 1,
+                store_id: 11,
+                peer_id: 101,
+                bootstrap: true,
+            },
+            Some(&RegionKeyRange {
+                start_key: b"a".to_vec(),
+                end_key: b"m".to_vec(),
+            }),
+        );
+        let source = default_region_descriptor_with_range(
+            ServerIdentity {
+                region_id: 2,
+                store_id: 11,
+                peer_id: 102,
+                bootstrap: true,
+            },
+            Some(&RegionKeyRange {
+                start_key: b"m".to_vec(),
+                end_key: b"z".to_vec(),
+            }),
+        );
+
+        let merged = build_merge_descriptor(&target, &source).unwrap();
+
+        assert_eq!(merged.region_id, 1);
+        assert_eq!(merged.start_key, b"a");
+        assert_eq!(merged.end_key, b"z");
+        assert_eq!(merged.epoch.unwrap().version, 2);
+        assert_eq!(merged.lineage.len(), 1);
+        assert_eq!(merged.lineage[0].region_id, 2);
+        assert_eq!(
+            merged.lineage[0].kind,
+            metapb::DescriptorLineageKind::MergeSource as i32
+        );
+        assert!(merge_source_already_absorbed(&merged, 2));
+        assert!(!merge_source_already_absorbed(&target, 2));
+        assert_eq!(merge_region_ids(&target, &source), (1, 2));
+    }
+
+    #[test]
+    fn build_merge_descriptor_rejects_non_right_sibling_source() {
+        let target = default_region_descriptor_with_range(
+            ServerIdentity {
+                region_id: 1,
+                store_id: 11,
+                peer_id: 101,
+                bootstrap: true,
+            },
+            Some(&RegionKeyRange {
+                start_key: b"m".to_vec(),
+                end_key: b"z".to_vec(),
+            }),
+        );
+        let source = default_region_descriptor_with_range(
+            ServerIdentity {
+                region_id: 2,
+                store_id: 11,
+                peer_id: 102,
+                bootstrap: true,
+            },
+            Some(&RegionKeyRange {
+                start_key: b"a".to_vec(),
+                end_key: b"m".to_vec(),
+            }),
+        );
+
+        let err = build_merge_descriptor(&target, &source).unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[test]
+    fn merge_root_event_carries_merged_descriptor() {
+        let merged = default_region_descriptor(ServerIdentity {
+            region_id: 1,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        });
+
+        let event = merge_root_event(metapb::RootEventKind::RegionMerged, 1, 2, &merged);
+
+        assert_eq!(event.kind, metapb::RootEventKind::RegionMerged as i32);
+        let Some(metapb::root_event::Payload::RangeMerge(merge)) = event.payload else {
+            panic!("merge event should carry a range merge payload");
+        };
+        assert_eq!(merge.left_region_id, 1);
+        assert_eq!(merge.right_region_id, 2);
+        assert_eq!(merge.merged.unwrap().region_id, 1);
     }
 
     #[test]

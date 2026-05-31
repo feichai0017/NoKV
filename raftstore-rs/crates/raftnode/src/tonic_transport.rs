@@ -70,6 +70,13 @@ impl TonicRaftTransportRegistry {
             .insert(region_id, raft);
     }
 
+    pub fn unregister(&self, region_id: RegionId) {
+        self.peers
+            .lock()
+            .expect("tonic raft transport registry poisoned")
+            .remove(&region_id);
+    }
+
     pub fn service(&self) -> TonicRaftTransportService {
         TonicRaftTransportService {
             peers: self.peers.clone(),
