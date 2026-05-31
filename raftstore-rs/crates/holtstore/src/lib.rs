@@ -840,7 +840,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         if let Some(lock) = self.get_lock(&req.key)? {
             if lock.start_version <= req.version {
                 return Ok(kvpb::GetResponse {
-                    error: Some(mvcc::locked_error(&req.key, &lock)),
+                    error: Some(mvcc::errors::locked(&req.key, &lock)),
                     ..Default::default()
                 });
             }
@@ -900,7 +900,7 @@ impl mvcc::KvEngine for HoltMvccStore {
             if let Some(lock) = self.get_lock(&key)? {
                 if lock.start_version <= read_version {
                     return Ok(kvpb::ScanResponse {
-                        error: Some(mvcc::locked_error(&key, &lock)),
+                        error: Some(mvcc::errors::locked(&key, &lock)),
                         ..Default::default()
                     });
                 }
@@ -934,19 +934,19 @@ impl mvcc::KvEngine for HoltMvccStore {
         let mut errors = Vec::new();
         for mutation in &req.mutations {
             if mutation.key.is_empty() {
-                errors.push(mvcc::empty_mutation_key_error());
+                errors.push(mvcc::errors::empty_mutation_key());
                 continue;
             }
             if let Some(existing) = self.get_lock(&mutation.key)? {
                 if existing.start_version != req.start_version {
-                    errors.push(mvcc::locked_error(&mutation.key, &existing));
+                    errors.push(mvcc::errors::locked(&mutation.key, &existing));
                     continue;
                 }
             }
             if let Some((commit_ts, _)) =
                 self.first_write_after(&mutation.key, req.start_version)?
             {
-                errors.push(mvcc::write_conflict_error(
+                errors.push(mvcc::errors::write_conflict(
                     &mutation.key,
                     &req.primary_lock,
                     req.start_version,
@@ -960,7 +960,7 @@ impl mvcc::KvEngine for HoltMvccStore {
                     .and_then(|(_, value)| value.value)
                     .is_some()
             {
-                errors.push(mvcc::already_exists_error(&mutation.key));
+                errors.push(mvcc::errors::already_exists(&mutation.key));
             }
         }
         if !errors.is_empty() {
@@ -1002,7 +1002,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         for key in &req.keys {
             if key.is_empty() {
                 return Ok(kvpb::CommitResponse {
-                    error: Some(mvcc::empty_commit_key_error()),
+                    error: Some(mvcc::errors::empty_commit_key()),
                 });
             }
             let Some(lock) = self.get_lock(key)? else {
@@ -1028,12 +1028,12 @@ impl mvcc::KvEngine for HoltMvccStore {
             };
             if lock.start_version != req.start_version {
                 return Ok(kvpb::CommitResponse {
-                    error: Some(mvcc::locked_error(key, &lock)),
+                    error: Some(mvcc::errors::locked(key, &lock)),
                 });
             }
             if req.commit_version < lock.min_commit_ts {
                 return Ok(kvpb::CommitResponse {
-                    error: Some(mvcc::commit_ts_expired_error(
+                    error: Some(mvcc::errors::commit_ts_expired(
                         key,
                         req.commit_version,
                         lock.min_commit_ts,
@@ -1059,7 +1059,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         let _guard = self.lock()?;
         if req.keys.iter().any(Vec::is_empty) {
             return Ok(kvpb::BatchRollbackResponse {
-                error: Some(mvcc::empty_rollback_key_error()),
+                error: Some(mvcc::errors::empty_rollback_key()),
             });
         }
         let mut delete_locks = Vec::new();
@@ -1117,7 +1117,7 @@ impl mvcc::KvEngine for HoltMvccStore {
             if lock.start_version == req.start_version {
                 if req.commit_version != 0 && req.commit_version < lock.min_commit_ts {
                     return Ok(kvpb::ResolveLockResponse {
-                        error: Some(mvcc::commit_ts_expired_error(
+                        error: Some(mvcc::errors::commit_ts_expired(
                             &key,
                             req.commit_version,
                             lock.min_commit_ts,
@@ -1158,7 +1158,7 @@ impl mvcc::KvEngine for HoltMvccStore {
                 if is_lock_expired(&lock, req.current_time) {
                     if req.primary_key.is_empty() {
                         return Ok(kvpb::CheckTxnStatusResponse {
-                            error: Some(mvcc::empty_rollback_key_error()),
+                            error: Some(mvcc::errors::empty_rollback_key()),
                             ..Default::default()
                         });
                     }
@@ -1189,7 +1189,7 @@ impl mvcc::KvEngine for HoltMvccStore {
                 });
             } else {
                 return Ok(kvpb::CheckTxnStatusResponse {
-                    error: Some(mvcc::locked_error(&req.primary_key, &lock)),
+                    error: Some(mvcc::errors::locked(&req.primary_key, &lock)),
                     ..Default::default()
                 });
             }
@@ -1212,7 +1212,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         if req.rollback_if_not_exist {
             if req.primary_key.is_empty() {
                 return Ok(kvpb::CheckTxnStatusResponse {
-                    error: Some(mvcc::empty_rollback_key_error()),
+                    error: Some(mvcc::errors::empty_rollback_key()),
                     ..Default::default()
                 });
             }
@@ -1233,7 +1233,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         req: &kvpb::TxnHeartBeatRequest,
     ) -> mvcc::Result<kvpb::TxnHeartBeatResponse> {
         let _guard = self.lock()?;
-        if let Some(error) = mvcc::txn_heartbeat_validation_error(req) {
+        if let Some(error) = mvcc::errors::txn_heartbeat_validation(req) {
             return Ok(kvpb::TxnHeartBeatResponse {
                 error: Some(error),
                 ..Default::default()
@@ -1262,13 +1262,13 @@ impl mvcc::KvEngine for HoltMvccStore {
         };
         if lock.start_version != req.start_version {
             return Ok(kvpb::TxnHeartBeatResponse {
-                error: Some(mvcc::locked_error(&req.primary_key, &lock)),
+                error: Some(mvcc::errors::locked(&req.primary_key, &lock)),
                 ..Default::default()
             });
         }
         if lock.primary.as_slice() != req.primary_key.as_slice() {
             return Ok(kvpb::TxnHeartBeatResponse {
-                error: Some(mvcc::txn_heartbeat_primary_mismatch_error()),
+                error: Some(mvcc::errors::txn_heartbeat_primary_mismatch()),
                 ..Default::default()
             });
         }
@@ -1313,14 +1313,14 @@ impl mvcc::KvEngine for HoltMvccStore {
         for predicate in &req.predicates {
             if predicate.key.is_empty() {
                 return Ok(kvpb::TryAtomicMutateResponse {
-                    error: Some(mvcc::empty_mutation_key_error()),
+                    error: Some(mvcc::errors::empty_mutation_key()),
                     ..Default::default()
                 });
             }
             if let Some(lock) = self.get_lock(&predicate.key)? {
                 if lock.start_version <= predicate.read_version {
                     return Ok(kvpb::TryAtomicMutateResponse {
-                        error: Some(mvcc::locked_error(&predicate.key, &lock)),
+                        error: Some(mvcc::errors::locked(&predicate.key, &lock)),
                         ..Default::default()
                     });
                 }
@@ -1330,14 +1330,14 @@ impl mvcc::KvEngine for HoltMvccStore {
                 .and_then(|(_, value)| value.value);
             if !mvcc::predicate_matches(predicate, observed.as_deref()) {
                 return Ok(kvpb::TryAtomicMutateResponse {
-                    error: Some(mvcc::predicate_error(predicate)),
+                    error: Some(mvcc::errors::predicate(predicate)),
                     ..Default::default()
                 });
             }
         }
         if req.mutations.iter().any(|mutation| mutation.key.is_empty()) {
             return Ok(kvpb::TryAtomicMutateResponse {
-                error: Some(mvcc::empty_mutation_key_error()),
+                error: Some(mvcc::errors::empty_mutation_key()),
                 ..Default::default()
             });
         }

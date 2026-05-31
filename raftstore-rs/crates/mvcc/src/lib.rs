@@ -10,6 +10,8 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use nokv_proto::nokv::kv::v1 as kvpb;
 use prost::Message;
 
+pub mod errors;
+
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("mvcc store mutex poisoned")]
@@ -127,7 +129,7 @@ impl MvccStore {
         let inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         if let Some(lock) = blocking_lock(&inner, &req.key, req.version) {
             return Ok(kvpb::GetResponse {
-                error: Some(locked_error(&req.key, lock)),
+                error: Some(errors::locked(&req.key, lock)),
                 ..Default::default()
             });
         }
@@ -174,7 +176,7 @@ impl MvccStore {
             }
             if let Some(lock) = blocking_lock(&inner, key, read_version) {
                 return Ok(kvpb::ScanResponse {
-                    error: Some(locked_error(key, lock)),
+                    error: Some(errors::locked(key, lock)),
                     ..Default::default()
                 });
             }
@@ -207,12 +209,12 @@ impl MvccStore {
         let mut errors = Vec::new();
         for mutation in &req.mutations {
             if mutation.key.is_empty() {
-                errors.push(empty_mutation_key_error());
+                errors.push(errors::empty_mutation_key());
                 continue;
             }
             if let Some(existing) = inner.locks.get(&mutation.key) {
                 if existing.start_version != req.start_version {
-                    errors.push(locked_error(&mutation.key, existing));
+                    errors.push(errors::locked(&mutation.key, existing));
                     continue;
                 }
             }
@@ -221,7 +223,7 @@ impl MvccStore {
                 .get(&mutation.key)
                 .and_then(|versions| versions.range((req.start_version + 1)..).next())
             {
-                errors.push(write_conflict_error(
+                errors.push(errors::write_conflict(
                     &mutation.key,
                     &req.primary_lock,
                     req.start_version,
@@ -234,7 +236,7 @@ impl MvccStore {
                     .and_then(|value| value.value)
                     .is_some()
             {
-                errors.push(already_exists_error(&mutation.key));
+                errors.push(errors::already_exists(&mutation.key));
             }
         }
         if !errors.is_empty() {
@@ -268,7 +270,7 @@ impl MvccStore {
         for key in &req.keys {
             if key.is_empty() {
                 return Ok(kvpb::CommitResponse {
-                    error: Some(empty_commit_key_error()),
+                    error: Some(errors::empty_commit_key()),
                 });
             }
             let Some(lock) = inner.locks.get(key).cloned() else {
@@ -294,12 +296,12 @@ impl MvccStore {
             };
             if lock.start_version != req.start_version {
                 return Ok(kvpb::CommitResponse {
-                    error: Some(locked_error(key, &lock)),
+                    error: Some(errors::locked(key, &lock)),
                 });
             }
             if req.commit_version < lock.min_commit_ts {
                 return Ok(kvpb::CommitResponse {
-                    error: Some(commit_ts_expired_error(
+                    error: Some(errors::commit_ts_expired(
                         key,
                         req.commit_version,
                         lock.min_commit_ts,
@@ -321,7 +323,7 @@ impl MvccStore {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         if req.keys.iter().any(Vec::is_empty) {
             return Ok(kvpb::BatchRollbackResponse {
-                error: Some(empty_rollback_key_error()),
+                error: Some(errors::empty_rollback_key()),
             });
         }
         for key in &req.keys {
@@ -373,7 +375,7 @@ impl MvccStore {
             }
             if req.commit_version != 0 && req.commit_version < lock.min_commit_ts {
                 return Ok(kvpb::ResolveLockResponse {
-                    error: Some(commit_ts_expired_error(
+                    error: Some(errors::commit_ts_expired(
                         &key,
                         req.commit_version,
                         lock.min_commit_ts,
@@ -408,7 +410,7 @@ impl MvccStore {
                 if is_lock_expired(&lock, req.current_time) {
                     if req.primary_key.is_empty() {
                         return Ok(kvpb::CheckTxnStatusResponse {
-                            error: Some(empty_rollback_key_error()),
+                            error: Some(errors::empty_rollback_key()),
                             ..Default::default()
                         });
                     }
@@ -435,7 +437,7 @@ impl MvccStore {
                 });
             } else {
                 return Ok(kvpb::CheckTxnStatusResponse {
-                    error: Some(locked_error(&req.primary_key, &lock)),
+                    error: Some(errors::locked(&req.primary_key, &lock)),
                     ..Default::default()
                 });
             }
@@ -458,7 +460,7 @@ impl MvccStore {
         if req.rollback_if_not_exist {
             if req.primary_key.is_empty() {
                 return Ok(kvpb::CheckTxnStatusResponse {
-                    error: Some(empty_rollback_key_error()),
+                    error: Some(errors::empty_rollback_key()),
                     ..Default::default()
                 });
             }
@@ -476,7 +478,7 @@ impl MvccStore {
         req: &kvpb::TxnHeartBeatRequest,
     ) -> Result<kvpb::TxnHeartBeatResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
-        if let Some(error) = txn_heartbeat_validation_error(req) {
+        if let Some(error) = errors::txn_heartbeat_validation(req) {
             return Ok(kvpb::TxnHeartBeatResponse {
                 error: Some(error),
                 ..Default::default()
@@ -502,13 +504,13 @@ impl MvccStore {
         };
         if lock.start_version != req.start_version {
             return Ok(kvpb::TxnHeartBeatResponse {
-                error: Some(locked_error(&req.primary_key, &lock)),
+                error: Some(errors::locked(&req.primary_key, &lock)),
                 ..Default::default()
             });
         }
         if lock.primary.as_slice() != req.primary_key.as_slice() {
             return Ok(kvpb::TxnHeartBeatResponse {
-                error: Some(txn_heartbeat_primary_mismatch_error()),
+                error: Some(errors::txn_heartbeat_primary_mismatch()),
                 ..Default::default()
             });
         }
@@ -548,13 +550,13 @@ impl MvccStore {
         for predicate in &req.predicates {
             if predicate.key.is_empty() {
                 return Ok(kvpb::TryAtomicMutateResponse {
-                    error: Some(empty_mutation_key_error()),
+                    error: Some(errors::empty_mutation_key()),
                     ..Default::default()
                 });
             }
             if let Some(lock) = blocking_lock(&inner, &predicate.key, predicate.read_version) {
                 return Ok(kvpb::TryAtomicMutateResponse {
-                    error: Some(locked_error(&predicate.key, lock)),
+                    error: Some(errors::locked(&predicate.key, lock)),
                     ..Default::default()
                 });
             }
@@ -562,14 +564,14 @@ impl MvccStore {
                 .and_then(|value| value.value);
             if !predicate_matches(predicate, observed.as_deref()) {
                 return Ok(kvpb::TryAtomicMutateResponse {
-                    error: Some(predicate_error(predicate)),
+                    error: Some(errors::predicate(predicate)),
                     ..Default::default()
                 });
             }
         }
         if req.mutations.iter().any(|mutation| mutation.key.is_empty()) {
             return Ok(kvpb::TryAtomicMutateResponse {
-                error: Some(empty_mutation_key_error()),
+                error: Some(errors::empty_mutation_key()),
                 ..Default::default()
             });
         }
@@ -1112,51 +1114,6 @@ fn validate_commit_version(start_version: u64, commit_version: u64) -> Option<kv
     })
 }
 
-pub fn empty_mutation_key_error() -> kvpb::KeyError {
-    abort_error("percolator: empty key in mutation")
-}
-
-pub fn empty_commit_key_error() -> kvpb::KeyError {
-    abort_error("percolator: empty key in commit")
-}
-
-pub fn empty_rollback_key_error() -> kvpb::KeyError {
-    abort_error("percolator: empty key in rollback")
-}
-
-pub fn txn_heartbeat_validation_error(req: &kvpb::TxnHeartBeatRequest) -> Option<kvpb::KeyError> {
-    if req.primary_key.is_empty() {
-        return Some(abort_error("percolator: heartbeat primary key is required"));
-    }
-    if req.start_version == 0 {
-        return Some(abort_error(
-            "percolator: heartbeat start version is required",
-        ));
-    }
-    if req.ttl_extension == 0 {
-        return Some(abort_error(
-            "percolator: heartbeat ttl extension is required",
-        ));
-    }
-    if req.current_time == 0 {
-        return Some(abort_error(
-            "percolator: heartbeat current time is required",
-        ));
-    }
-    None
-}
-
-pub fn txn_heartbeat_primary_mismatch_error() -> kvpb::KeyError {
-    abort_error("percolator: heartbeat primary key does not match lock primary")
-}
-
-pub fn abort_error(message: &str) -> kvpb::KeyError {
-    kvpb::KeyError {
-        abort: message.to_owned(),
-        ..Default::default()
-    }
-}
-
 fn maintenance_abort(message: &str) -> kvpb::KeyError {
     kvpb::KeyError {
         abort: message.to_owned(),
@@ -1173,68 +1130,6 @@ pub fn predicate_matches(predicate: &kvpb::AtomicPredicate, observed: Option<&[u
         kvpb::AtomicPredicateKind::ValueEquals => {
             observed == Some(predicate.expected_value.as_slice())
         }
-    }
-}
-
-pub fn predicate_error(predicate: &kvpb::AtomicPredicate) -> kvpb::KeyError {
-    match kvpb::AtomicPredicateKind::try_from(predicate.kind)
-        .unwrap_or(kvpb::AtomicPredicateKind::NotExists)
-    {
-        kvpb::AtomicPredicateKind::NotExists => already_exists_error(&predicate.key),
-        _ => kvpb::KeyError {
-            abort: "atomic predicate rejected".to_owned(),
-            ..Default::default()
-        },
-    }
-}
-
-pub fn locked_error(key: &[u8], lock: &LockRecord) -> kvpb::KeyError {
-    kvpb::KeyError {
-        locked: Some(kvpb::Locked {
-            primary_lock: lock.primary.clone(),
-            key: key.to_vec(),
-            lock_version: lock.start_version,
-            lock_ttl: lock.ttl,
-            lock_type: lock.op as i32,
-            min_commit_ts: lock.min_commit_ts,
-        }),
-        ..Default::default()
-    }
-}
-
-pub fn write_conflict_error(
-    key: &[u8],
-    primary: &[u8],
-    start_ts: u64,
-    commit_ts: u64,
-) -> kvpb::KeyError {
-    kvpb::KeyError {
-        write_conflict: Some(kvpb::WriteConflict {
-            key: key.to_vec(),
-            primary: primary.to_vec(),
-            conflict_ts: commit_ts,
-            commit_ts,
-            start_ts,
-        }),
-        ..Default::default()
-    }
-}
-
-pub fn already_exists_error(key: &[u8]) -> kvpb::KeyError {
-    kvpb::KeyError {
-        already_exists: Some(kvpb::KeyAlreadyExists { key: key.to_vec() }),
-        ..Default::default()
-    }
-}
-
-pub fn commit_ts_expired_error(key: &[u8], commit_ts: u64, min_commit_ts: u64) -> kvpb::KeyError {
-    kvpb::KeyError {
-        commit_ts_expired: Some(kvpb::CommitTsExpired {
-            key: key.to_vec(),
-            commit_ts,
-            min_commit_ts,
-        }),
-        ..Default::default()
     }
 }
 
