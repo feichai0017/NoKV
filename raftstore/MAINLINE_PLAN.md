@@ -39,8 +39,9 @@ semantics.
 - Define the Rust write command around fsmeta backend needs: request id,
   mount/region context, predicate set, mutation set, and watch/snapshot
   projection metadata.
-- Keep protobuf compatibility where it helps startup, but do not treat the old
-  StoreKV/Percolator API as the long-term product surface.
+- Keep protobuf ownership explicit: metadata data-plane APIs live in
+  `pb/metadata`; deleted StoreKV/Percolator APIs are not compatibility
+  surfaces.
 - Return a committed apply frontier as the fsmeta commit version.
 - Keep `fsmeta/exec` as the semantic owner; Rust executes compiled effects and
   must not import Go fsmeta packages.
@@ -71,6 +72,7 @@ Gate:
 
 ```bash
 go test -count=1 ./fsmeta/runtime/raftstore ./fsmeta/contract
+go test -tags rust_raftstore -count=1 ./fsmeta/runtime/raftstore
 cargo test --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server
 ```
 
@@ -107,6 +109,7 @@ Gate:
 
 ```bash
 go test -count=1 ./fsmeta/contract ./fsmeta/runtime/raftstore
+go test -tags rust_raftstore -count=1 ./fsmeta/runtime/raftstore
 cargo test --manifest-path raftstore/Cargo.toml -p nokv-raftnode -p nokv-raftstore-server
 ```
 
@@ -123,6 +126,7 @@ Gate:
 
 ```bash
 cargo test --manifest-path raftstore/Cargo.toml --workspace
+go test -tags rust_raftstore -count=1 ./fsmeta/runtime/raftstore
 make lint
 make test
 ```

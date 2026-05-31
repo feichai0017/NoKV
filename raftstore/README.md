@@ -35,7 +35,7 @@ The Rust workspace keeps responsibilities small:
 
 ## Running Locally
 
-The server defaults to an in-memory backend for local compatibility tests. Set
+The server defaults to an in-memory backend for lightweight local tests. Set
 `NOKV_RAFTSTORE_HOLT_DIR` to use Holt-backed state-machine storage.
 
 ```bash
