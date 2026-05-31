@@ -313,6 +313,7 @@ struct AppliedKvInner<E> {
     applied_index: AtomicU64,
     engine: Mutex<E>,
     descriptor: Mutex<Option<metapb::RegionDescriptor>>,
+    topology_descriptors: Mutex<Vec<metapb::RegionDescriptor>>,
     traffic: RegionTrafficStats,
     watch: broadcast::Sender<kvpb::ApplyWatchEvent>,
 }
@@ -449,6 +450,7 @@ impl<E> AppliedKvEngine<E> {
                 applied_index: AtomicU64::new(status.applied_index),
                 engine: Mutex::new(engine),
                 descriptor: Mutex::new(None),
+                topology_descriptors: Mutex::new(Vec::new()),
                 traffic: RegionTrafficStats::default(),
                 watch: broadcast::channel(1024).0,
             }),
@@ -475,6 +477,40 @@ impl<E> AppliedKvEngine<E> {
             .map(|descriptor| descriptor.clone())
     }
 
+    fn record_topology_descriptor(
+        &self,
+        descriptor: metapb::RegionDescriptor,
+    ) -> nokv_mvcc::Result<()> {
+        self.validate_topology_descriptor(&descriptor)?;
+        self.inner
+            .topology_descriptors
+            .lock()
+            .map_err(|_| {
+                nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
+            })?
+            .push(descriptor);
+        Ok(())
+    }
+
+    fn topology_descriptors(&self) -> nokv_mvcc::Result<Vec<metapb::RegionDescriptor>> {
+        self.inner
+            .topology_descriptors
+            .lock()
+            .map_err(|_| nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned()))
+            .map(|descriptors| descriptors.clone())
+    }
+
+    fn clear_topology_descriptors(&self) -> nokv_mvcc::Result<()> {
+        self.inner
+            .topology_descriptors
+            .lock()
+            .map_err(|_| {
+                nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
+            })?
+            .clear();
+        Ok(())
+    }
+
     fn validate_region_descriptor(
         &self,
         descriptor: &metapb::RegionDescriptor,
@@ -493,6 +529,24 @@ impl<E> AppliedKvEngine<E> {
                 Error::InvalidRegionDescriptor("region descriptor epoch is required".to_owned())
                     .to_string(),
             ));
+        }
+        Ok(())
+    }
+
+    fn validate_topology_descriptor(
+        &self,
+        descriptor: &metapb::RegionDescriptor,
+    ) -> nokv_mvcc::Result<()> {
+        if descriptor.region_id == 0 {
+            return Err(nokv_mvcc::Error::Backend(
+                "topology descriptor region id is required".to_owned(),
+            ));
+        }
+        if descriptor.peers.is_empty() {
+            return Err(nokv_mvcc::Error::Backend(format!(
+                "topology descriptor for region {} has no peers",
+                descriptor.region_id
+            )));
         }
         Ok(())
     }
@@ -703,13 +757,16 @@ where
                 "split key must be inside parent descriptor range",
             ));
         }
-        let child = split
+        let mut child = split
             .child
             .ok_or_else(|| invalid_raft_command("split child descriptor is required"))?;
         if child.region_id == 0 {
             return Err(invalid_raft_command("split child region id is required"));
         }
-        if !child.start_key.is_empty() && child.start_key != split.split_key {
+        if child.start_key.is_empty() {
+            child.start_key = split.split_key.clone();
+        }
+        if child.start_key != split.split_key {
             return Err(invalid_raft_command(
                 "split child start key must equal split key",
             ));
@@ -720,19 +777,28 @@ where
             ));
         }
 
+        let parent_epoch = parent.epoch.clone();
+        let parent_hash = parent.hash.clone();
         let mut descriptor = parent.clone();
         descriptor.end_key = split.split_key;
         let epoch = descriptor.epoch.get_or_insert_with(Default::default);
         epoch.version = epoch.version.saturating_add(1);
         descriptor.hash.clear();
-        if let Some(parent_epoch) = parent.epoch {
-            descriptor.lineage.push(metapb::DescriptorLineageRef {
-                region_id: parent.region_id,
-                epoch: Some(parent_epoch),
-                hash: parent.hash,
-                kind: metapb::DescriptorLineageKind::SplitParent as i32,
-            });
+        if let Some(parent_epoch) = parent_epoch.clone() {
+            push_split_lineage_once(
+                &mut descriptor,
+                parent.region_id,
+                parent_epoch.clone(),
+                &parent_hash,
+            );
+            if child.epoch.is_none() {
+                child.epoch = Some(parent_epoch);
+            }
         }
+        if let Some(parent_epoch) = parent_epoch {
+            push_split_lineage_once(&mut child, parent.region_id, parent_epoch, &parent_hash);
+        }
+        self.record_topology_descriptor(child)?;
         self.apply_region_descriptor_at(term, index, descriptor)
     }
 
@@ -1042,6 +1108,13 @@ where
             if let Some(descriptor) = self.engine.region_descriptor()? {
                 self.sink.save_region_descriptor(&descriptor)?;
             }
+            let topology_descriptors = self.engine.topology_descriptors()?;
+            for descriptor in &topology_descriptors {
+                self.sink.save_region_descriptor(descriptor)?;
+            }
+            if !topology_descriptors.is_empty() {
+                self.engine.clear_topology_descriptors()?;
+            }
             self.sink.save_apply_status(&status)?;
         }
         Ok(())
@@ -1172,6 +1245,28 @@ where
 
 fn invalid_raft_command(detail: &str) -> nokv_mvcc::Error {
     nokv_mvcc::Error::Backend(format!("invalid raft command: {detail}"))
+}
+
+fn push_split_lineage_once(
+    descriptor: &mut metapb::RegionDescriptor,
+    parent_region_id: RegionId,
+    parent_epoch: metapb::RegionEpoch,
+    parent_hash: &[u8],
+) {
+    let kind = metapb::DescriptorLineageKind::SplitParent as i32;
+    if descriptor
+        .lineage
+        .iter()
+        .any(|lineage| lineage.region_id == parent_region_id && lineage.kind == kind)
+    {
+        return;
+    }
+    descriptor.lineage.push(metapb::DescriptorLineageRef {
+        region_id: parent_region_id,
+        epoch: Some(parent_epoch),
+        hash: parent_hash.to_vec(),
+        kind,
+    });
 }
 
 fn encode_raft_response(response: &raftpb::RaftCmdResponse) -> nokv_mvcc::Result<Vec<u8>> {
@@ -3186,6 +3281,13 @@ mod tests {
         assert_eq!(descriptor.region_id, 7);
         assert_eq!(descriptor.end_key, b"m");
         assert_eq!(descriptor.epoch.unwrap().version, 4);
+        let topology = engine.topology_descriptors().unwrap();
+        assert_eq!(topology.len(), 1);
+        assert_eq!(topology[0].region_id, 8);
+        assert_eq!(topology[0].start_key, b"m");
+        assert_eq!(topology[0].end_key, b"z");
+        assert_eq!(topology[0].lineage.len(), 1);
+        assert_eq!(topology[0].lineage[0].region_id, 7);
         assert_eq!(
             engine.status(),
             ApplyStatus {
@@ -3196,6 +3298,65 @@ mod tests {
         );
         assert_eq!(applied.len(), 1);
         assert!(applied[0].payload.is_empty());
+    }
+
+    #[test]
+    fn persistent_applied_engine_saves_split_parent_and_child_descriptors() {
+        let sink = RecordingRegionMetadataSink::default();
+        let descriptors = sink.descriptors.clone();
+        let engine =
+            PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);
+        engine
+            .inner()
+            .set_region_descriptor(metapb::RegionDescriptor {
+                region_id: 7,
+                end_key: b"z".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 3,
+                    conf_version: 1,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 1,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Split as i32,
+            split: Some(raftpb::SplitCommand {
+                parent_region_id: 7,
+                split_key: b"m".to_vec(),
+                child: Some(metapb::RegionDescriptor {
+                    region_id: 8,
+                    start_key: b"m".to_vec(),
+                    end_key: b"z".to_vec(),
+                    peers: vec![metapb::RegionPeer {
+                        store_id: 2,
+                        peer_id: 20,
+                    }],
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+
+        engine
+            .apply_openraft_entries([OpenRaftEntry {
+                log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+                payload: openraft::EntryPayload::Normal(
+                    Proposal::from_admin_command(7, &command).unwrap(),
+                ),
+            }])
+            .unwrap();
+
+        let saved = descriptors.lock().unwrap().clone();
+        assert_eq!(saved.len(), 2);
+        assert_eq!(saved[0].region_id, 7);
+        assert_eq!(saved[0].end_key, b"m");
+        assert_eq!(saved[1].region_id, 8);
+        assert_eq!(saved[1].start_key, b"m");
+        assert_eq!(saved[1].end_key, b"z");
     }
 
     #[tokio::test]
