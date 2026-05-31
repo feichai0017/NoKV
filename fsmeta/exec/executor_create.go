@@ -41,7 +41,7 @@ func (e *Executor) tryVisibleCreate(ctx context.Context, program compile.CreateP
 	return e.tryVisibleCommitAfterRead(ctx, view, concrete)
 }
 
-// Create creates one dentry and its inode record in a single transaction.
+// Create creates one dentry and its inode record in one metadata command.
 func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.CreateResult, error) {
 	if e.inodes == nil {
 		return model.CreateResult{}, errInodeAllocatorRequired
@@ -105,7 +105,7 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 			return model.CreateResult{Dentry: dentry, Inode: inode}, nil
 		}
 	}
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		parent, err := e.readDirectoryInode(ctx, mount, req.Parent, startVersion)
 		if err != nil {
 			return err
@@ -154,7 +154,7 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 		}
 		all := append(cloneMutations(mutations), quotaMutations...)
 		if len(quotaMutations) == 0 {
-			// One-phase counters are per transaction attempt, not per logical
+			// One-phase counters are per commit attempt, not per logical
 			// Create, so contention retries and admission misses stay visible.
 			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
 		}

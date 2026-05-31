@@ -196,7 +196,7 @@ func TestExecutorCreateVisibleCommitSkipsSharedQuota(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Zero(t, committer.calls, "shared quota must remain on the transaction runner until quota credits exist")
+	require.Zero(t, committer.calls, "shared quota must remain on the metadata command runner until quota credits exist")
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
 	require.Len(t, runner.mutations, 1)
 	require.Len(t, runner.mutations[0], 4)

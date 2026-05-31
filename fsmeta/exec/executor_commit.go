@@ -128,7 +128,7 @@ func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uin
 	return e.reserveReadVersion(ctx)
 }
 
-// reserveTxnVersions reserves a read version plus a speculative commit version
+// reserveCommitVersions reserves a read version plus a speculative commit version
 // in one TSO hop. Metadata backends may use the speculative commit version or
 // push the actual commit version after observing newer concurrent reads.
 //
@@ -141,9 +141,9 @@ func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uin
 //
 // Together these force a retry-with-fresh-ts under contention: incorrect
 // speculative commit versions are detected at commit time, never silently
-// accepted. CommitTsExpired is retried transparently by withTxnRetry below.
-func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, error) {
-	startVersion, err := e.reserveTimestampWithRetry(ctx, 2, maxTxnContentionRetries, &e.txnRetriesTotal, &e.txnRetryExhaustedTotal)
+// accepted. CommitTsExpired is retried transparently by withCommitRetry below.
+func (e *Executor) reserveCommitVersions(ctx context.Context) (uint64, uint64, error) {
+	startVersion, err := e.reserveTimestampWithRetry(ctx, 2, maxCommitContentionRetries, &e.commitRetriesTotal, &e.commitRetryExhaustedTotal)
 	if err != nil {
 		return 0, 0, err
 	}
@@ -173,25 +173,25 @@ func (e *Executor) reserveTimestampWithRetry(ctx context.Context, count uint64, 
 		// Coordinator duty handoff can reject a timestamp request with stale
 		// evidence before any fsmeta mutation has started. Retrying here keeps
 		// transient authority churn below the namespace API boundary.
-		if err := waitTxnContentionRetryDelay(ctx, txnContentionRetryDelay(attempt)); err != nil {
+		if err := waitCommitContentionRetryDelay(ctx, commitContentionRetryDelay(attempt)); err != nil {
 			return 0, err
 		}
 	}
 	return 0, last
 }
 
-func (e *Executor) withTxnRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error, scopes ...compile.AuthorityScope) error {
+func (e *Executor) withCommitRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error, scopes ...compile.AuthorityScope) error {
 	if err := e.drainVisibleAuthority(ctx, scopes...); err != nil {
 		return err
 	}
-	return e.withTxnRetryNoVisibleFlush(ctx, run)
+	return e.withCommitRetryNoVisibleFlush(ctx, run)
 }
 
-func (e *Executor) withTxnRetryNoVisibleFlush(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
+func (e *Executor) withCommitRetryNoVisibleFlush(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
 	var last error
 	started := time.Now()
 	for attempt := 0; ; attempt++ {
-		startVersion, commitVersion, err := e.reserveTxnVersions(ctx)
+		startVersion, commitVersion, err := e.reserveCommitVersions(ctx)
 		if err != nil {
 			return err
 		}
@@ -199,28 +199,28 @@ func (e *Executor) withTxnRetryNoVisibleFlush(ctx context.Context, run func(star
 		if err == nil {
 			return nil
 		}
-		if !isRetryableTxnAttempt(err) {
+		if !isRetryableCommitAttempt(err) {
 			return translateMutateError(err)
 		}
 		last = err
-		if !canRetryTxnAttempt(attempt, started, err, e.lockTTL) {
-			e.txnRetryExhaustedTotal.Add(1)
+		if !canRetryCommitAttempt(attempt, started, err, e.lockTTL) {
+			e.commitRetryExhaustedTotal.Add(1)
 			break
 		}
 		// A live backend lock or a coordinator/region route refresh can race
 		// with the same semantic fsmeta operation. Retrying at this boundary
 		// keeps transient MVCC and route churn below the API contract.
-		e.txnRetriesTotal.Add(1)
-		delay := txnContentionRetryDelay(attempt)
-		if budget := txnRetryBudget(err, e.lockTTL); budget > 0 {
+		e.commitRetriesTotal.Add(1)
+		delay := commitContentionRetryDelay(attempt)
+		if budget := commitRetryBudget(err, e.lockTTL); budget > 0 {
 			remaining := budget - time.Since(started)
 			if remaining <= 0 {
-				e.txnRetryExhaustedTotal.Add(1)
+				e.commitRetryExhaustedTotal.Add(1)
 				break
 			}
 			delay = min(delay, remaining)
 		}
-		if err := waitTxnContentionRetryDelay(ctx, delay); err != nil {
+		if err := waitCommitContentionRetryDelay(ctx, delay); err != nil {
 			return err
 		}
 	}
@@ -250,21 +250,21 @@ func (e *Executor) withReadRetry(ctx context.Context, snapshotVersion uint64, ru
 		// route refresh. Retrying keeps the external API at the fsmeta level
 		// instead of leaking transient storage details to callers.
 		e.readRetriesTotal.Add(1)
-		if err := waitTxnContentionRetryDelay(ctx, txnContentionRetryDelay(attempt)); err != nil {
+		if err := waitCommitContentionRetryDelay(ctx, commitContentionRetryDelay(attempt)); err != nil {
 			return err
 		}
 	}
 	return last
 }
 
-func canRetryTxnAttempt(attempt int, started time.Time, err error, fallbackLockTTL uint64) bool {
-	if budget := txnRetryBudget(err, fallbackLockTTL); budget > 0 {
+func canRetryCommitAttempt(attempt int, started time.Time, err error, fallbackLockTTL uint64) bool {
+	if budget := commitRetryBudget(err, fallbackLockTTL); budget > 0 {
 		return time.Since(started) < budget
 	}
-	return attempt < maxTxnContentionRetries
+	return attempt < maxCommitContentionRetries
 }
 
-func txnRetryBudget(err error, fallbackLockTTL uint64) time.Duration {
+func commitRetryBudget(err error, fallbackLockTTL uint64) time.Duration {
 	switch {
 	case nokverrors.IsKind(err, nokverrors.KindLockConflict):
 	case nokverrors.IsKind(err, nokverrors.KindRetryable):
@@ -276,21 +276,21 @@ func txnRetryBudget(err error, fallbackLockTTL uint64) time.Duration {
 	default:
 		return 0
 	}
-	ttlMillis := txnLockTTLMillis(err)
+	ttlMillis := commitLockTTLMillis(err)
 	if ttlMillis == 0 {
 		ttlMillis = fallbackLockTTL
 	}
 	if ttlMillis == 0 {
-		return txnContentionRetryMaxBackoff
+		return commitContentionRetryMaxBackoff
 	}
 	budget := time.Duration(ttlMillis) * time.Millisecond
-	if budget <= 0 || budget > maxTxnLockRetryBudget {
-		return maxTxnLockRetryBudget
+	if budget <= 0 || budget > maxCommitLockRetryBudget {
+		return maxCommitLockRetryBudget
 	}
-	return budget + txnContentionRetryMaxBackoff
+	return budget + commitContentionRetryMaxBackoff
 }
 
-func txnLockTTLMillis(err error) uint64 {
+func commitLockTTLMillis(err error) uint64 {
 	var carrier nokverrors.KeyErrorCarrier
 	if !errors.As(err, &carrier) {
 		return 0
@@ -304,17 +304,17 @@ func txnLockTTLMillis(err error) uint64 {
 	return maxTTL
 }
 
-func txnContentionRetryDelay(attempt int) time.Duration {
+func commitContentionRetryDelay(attempt int) time.Duration {
 	if attempt <= 0 {
-		return txnContentionRetryBaseBackoff
+		return commitContentionRetryBaseBackoff
 	}
 	if attempt >= 7 {
-		return txnContentionRetryMaxBackoff
+		return commitContentionRetryMaxBackoff
 	}
-	return min(txnContentionRetryBaseBackoff<<attempt, txnContentionRetryMaxBackoff)
+	return min(commitContentionRetryBaseBackoff<<attempt, commitContentionRetryMaxBackoff)
 }
 
-func waitTxnContentionRetryDelay(ctx context.Context, delay time.Duration) error {
+func waitCommitContentionRetryDelay(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 	select {
@@ -380,16 +380,16 @@ func translateMutateError(err error) error {
 	return err
 }
 
-func isRetryableTxnContention(err error) bool {
+func isRetryableCommitContention(err error) bool {
 	return nokverrors.IsMetadataContention(err)
 }
 
-func isRetryableTxnAttempt(err error) bool {
-	return isRetryableTxnContention(err) || isRetryableRouteRefresh(err)
+func isRetryableCommitAttempt(err error) bool {
+	return isRetryableCommitContention(err) || isRetryableRouteRefresh(err)
 }
 
 func isRetryableReadAttempt(err error) bool {
-	return isRetryableTxnContention(err) || isRetryableRouteRefresh(err)
+	return isRetryableCommitContention(err) || isRetryableRouteRefresh(err)
 }
 
 func isRetryableRouteRefresh(err error) bool {

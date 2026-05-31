@@ -41,7 +41,7 @@ func TestExecutorRetriesTimestampAuthorityRefreshBeforeMutate(t *testing.T) {
 	require.NoError(t, err)
 	require.Empty(t, runner.timestampErrs)
 	require.Len(t, runner.mutations, 1)
-	requireStatUint(t, executor.Stats(), "txn_retries_total", 1)
+	requireStatUint(t, executor.Stats(), "commit_retries_total", 1)
 }
 
 func TestExecutorRetriesReadTimestampAuthorityRefresh(t *testing.T) {
@@ -58,7 +58,7 @@ func TestExecutorRetriesReadTimestampAuthorityRefresh(t *testing.T) {
 	requireStatUint(t, executor.Stats(), "read_retries_total", 1)
 }
 
-func TestExecutorRetriesLostTxnLock(t *testing.T) {
+func TestExecutorRetriesLostCommitLock(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
 		fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
@@ -80,8 +80,8 @@ func TestExecutorRetriesLostTxnLock(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, runner.mutations, 1)
 	require.Equal(t, 1, allocator.calls)
-	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
-	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+	require.Equal(t, uint64(1), executor.Stats()["commit_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["commit_retry_exhausted_total"])
 }
 
 func TestExecutorRetriesCommitTsExpired(t *testing.T) {
@@ -109,8 +109,8 @@ func TestExecutorRetriesCommitTsExpired(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 	require.Equal(t, 1, allocator.calls)
 	require.Equal(t, uint64(5), runner.nextTS)
-	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
-	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+	require.Equal(t, uint64(1), executor.Stats()["commit_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["commit_retry_exhausted_total"])
 }
 
 func TestExecutorRetriesRouteUnavailable(t *testing.T) {
@@ -133,8 +133,8 @@ func TestExecutorRetriesRouteUnavailable(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 	require.Equal(t, 1, allocator.calls)
 	require.Equal(t, uint64(5), runner.nextTS)
-	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
-	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+	require.Equal(t, uint64(1), executor.Stats()["commit_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["commit_retry_exhausted_total"])
 }
 
 func TestExecutorRetriesWriteConflict(t *testing.T) {
@@ -161,11 +161,11 @@ func TestExecutorRetriesWriteConflict(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, runner.mutations, 1)
 	require.Equal(t, 1, allocator.calls)
-	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
-	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+	require.Equal(t, uint64(1), executor.Stats()["commit_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["commit_retry_exhausted_total"])
 }
 
-func TestExecutorRetriesLockedTxnContention(t *testing.T) {
+func TestExecutorRetriesLockedCommitContention(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
 		fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
@@ -191,11 +191,11 @@ func TestExecutorRetriesLockedTxnContention(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 	require.Equal(t, 1, allocator.calls)
 	require.Equal(t, uint64(5), runner.nextTS)
-	require.Equal(t, uint64(1), executor.Stats()["txn_retries_total"])
-	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+	require.Equal(t, uint64(1), executor.Stats()["commit_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["commit_retry_exhausted_total"])
 }
 
-func TestExecutorRetriesSustainedLiveTxnContention(t *testing.T) {
+func TestExecutorRetriesSustainedLiveCommitContention(t *testing.T) {
 	runner := newFakeRunner()
 	for range 9 {
 		runner.mutateErrs = append(runner.mutateErrs, fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
@@ -221,11 +221,11 @@ func TestExecutorRetriesSustainedLiveTxnContention(t *testing.T) {
 	require.Len(t, runner.mutations, 1)
 	require.Equal(t, 1, allocator.calls)
 	require.Equal(t, uint64(21), runner.nextTS)
-	require.Equal(t, uint64(9), executor.Stats()["txn_retries_total"])
-	require.Equal(t, uint64(0), executor.Stats()["txn_retry_exhausted_total"])
+	require.Equal(t, uint64(9), executor.Stats()["commit_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["commit_retry_exhausted_total"])
 }
 
-func TestTxnContentionRetryPolicyUsesLockTTLAfterFixedAttempts(t *testing.T) {
+func TestCommitContentionRetryPolicyUsesLockTTLAfterFixedAttempts(t *testing.T) {
 	lockErr := fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
 		Kind:        nokverrors.KindLockConflict,
 		Primary:     []byte("dentry"),
@@ -233,14 +233,14 @@ func TestTxnContentionRetryPolicyUsesLockTTLAfterFixedAttempts(t *testing.T) {
 		LockVersion: 2,
 		LockTTL:     uint64(5 * time.Second / time.Millisecond),
 	}}}
-	budget := txnRetryBudget(lockErr, defaultLockTTL)
+	budget := commitRetryBudget(lockErr, defaultLockTTL)
 
-	require.Equal(t, 5*time.Second+txnContentionRetryMaxBackoff, budget)
-	require.True(t, canRetryTxnAttempt(maxTxnContentionRetries+8, time.Now(), lockErr, defaultLockTTL))
-	require.False(t, canRetryTxnAttempt(maxTxnContentionRetries+8, time.Now().Add(-budget-time.Millisecond), lockErr, defaultLockTTL))
+	require.Equal(t, 5*time.Second+commitContentionRetryMaxBackoff, budget)
+	require.True(t, canRetryCommitAttempt(maxCommitContentionRetries+8, time.Now(), lockErr, defaultLockTTL))
+	require.False(t, canRetryCommitAttempt(maxCommitContentionRetries+8, time.Now().Add(-budget-time.Millisecond), lockErr, defaultLockTTL))
 }
 
-func TestTxnContentionRetryPolicyKeepsCountBoundForNonLockConflicts(t *testing.T) {
+func TestCommitContentionRetryPolicyKeepsCountBoundForNonLockConflicts(t *testing.T) {
 	writeConflictErr := fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
 		Kind:            nokverrors.KindWriteConflict,
 		Key:             []byte("dentry"),
@@ -248,25 +248,25 @@ func TestTxnContentionRetryPolicyKeepsCountBoundForNonLockConflicts(t *testing.T
 		StartVersion:    2,
 	}}}
 
-	require.Zero(t, txnRetryBudget(writeConflictErr, defaultLockTTL))
-	require.True(t, canRetryTxnAttempt(maxTxnContentionRetries-1, time.Now(), writeConflictErr, defaultLockTTL))
-	require.False(t, canRetryTxnAttempt(maxTxnContentionRetries, time.Now(), writeConflictErr, defaultLockTTL))
+	require.Zero(t, commitRetryBudget(writeConflictErr, defaultLockTTL))
+	require.True(t, canRetryCommitAttempt(maxCommitContentionRetries-1, time.Now(), writeConflictErr, defaultLockTTL))
+	require.False(t, canRetryCommitAttempt(maxCommitContentionRetries, time.Now(), writeConflictErr, defaultLockTTL))
 }
 
-func TestTxnRetryBudgetFallsBackWhenLockDetailsAreUnavailable(t *testing.T) {
+func TestCommitRetryBudgetFallsBackWhenLockDetailsAreUnavailable(t *testing.T) {
 	err := nokverrors.New(nokverrors.KindLockConflict, "lock conflict translated across rpc boundary")
 
-	require.Equal(t, 25*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 25))
+	require.Equal(t, 25*time.Millisecond+commitContentionRetryMaxBackoff, commitRetryBudget(err, 25))
 }
 
-func TestTxnRetryBudgetCoversRetryableStartTSLoss(t *testing.T) {
+func TestCommitRetryBudgetCoversRetryableStartTSLoss(t *testing.T) {
 	err := fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
 		Kind:    nokverrors.KindRetryable,
 		Message: "backend: lock not found",
 	}}}
 
-	require.Equal(t, 50*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 50))
-	require.True(t, canRetryTxnAttempt(maxTxnContentionRetries+1, time.Now(), err, 50))
+	require.Equal(t, 50*time.Millisecond+commitContentionRetryMaxBackoff, commitRetryBudget(err, 50))
+	require.True(t, canRetryCommitAttempt(maxCommitContentionRetries+1, time.Now(), err, 50))
 }
 
 func TestExecutorMetadataPredicateCommitRecordsEveryAttempt(t *testing.T) {

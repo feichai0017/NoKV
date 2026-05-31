@@ -157,7 +157,7 @@ func requireVisibleCommitStatBool(t *testing.T, stats map[string]any, key string
 	require.Equal(t, want, got)
 }
 
-func txnLockedError(mount model.MountID, parent model.InodeID, name string) error {
+func metadataLockedError(mount model.MountID, parent model.InodeID, name string) error {
 	key, err := layout.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
 	if err != nil {
 		panic(err)

@@ -23,13 +23,13 @@ type QuotaChange struct {
 }
 
 // QuotaResolver resolves rooted quota fences and plans usage-counter mutations
-// that must be committed in the same transaction as the metadata mutation.
+// that must be committed in the same metadata command as the metadata mutation.
 type QuotaResolver interface {
 	ReserveQuota(context.Context, backend.Store, []QuotaChange, uint64) ([]*backend.Mutation, error)
 }
 
 // QuotaUsageResolver lets a runtime derive usage without storing quota counter
-// keys in the write transaction. Runtimes that do not implement it keep the
+// keys in the write command. Runtimes that do not implement it keep the
 // persisted counter-key behavior in GetQuotaUsage.
 type QuotaUsageResolver interface {
 	ReadQuotaUsage(context.Context, backend.Store, model.MountIdentity, model.InodeID, uint64) (model.UsageRecord, bool, error)

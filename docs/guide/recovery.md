@@ -12,7 +12,7 @@ NoKV now has two active recovery scopes.
 `fsmeta/runtime/local` stores versioned metadata records in Pebble. Recovery is
 Pebble reopen plus fsmeta snapshot/watch registry reconstruction owned by the
 local runtime. There is no separate NoKV WAL, generic local DB facade, or
-external transaction recovery path on the local demo runtime.
+external two-phase recovery path on the local demo runtime.
 
 ## Rooted Truth
 

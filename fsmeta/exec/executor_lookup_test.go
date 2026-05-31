@@ -246,7 +246,7 @@ func TestExecutorReadDirConsumesPlanCursorAndLimit(t *testing.T) {
 
 func TestExecutorReadDirRetriesLiveLock(t *testing.T) {
 	runner := newFakeRunner()
-	runner.scanErrs = []error{txnLockedError("vol", 7, "a")}
+	runner.scanErrs = []error{metadataLockedError("vol", 7, "a")}
 	seedDentry(t, runner, "vol", 7, "a", 21)
 	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
@@ -266,7 +266,7 @@ func TestExecutorReadDirRetriesLiveLock(t *testing.T) {
 func TestExecutorReadDirExhaustsRetriesOnLiveLock(t *testing.T) {
 	runner := newFakeRunner()
 	for range maxReadContentionRetries + 1 {
-		runner.scanErrs = append(runner.scanErrs, txnLockedError("vol", 7, "a"))
+		runner.scanErrs = append(runner.scanErrs, metadataLockedError("vol", 7, "a"))
 	}
 	seedDentry(t, runner, "vol", 7, "a", 21)
 	executor, err := newTestExecutor(runner)

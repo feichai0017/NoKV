@@ -60,29 +60,29 @@ type metadataPredicateCounters struct {
 func (e *Executor) Stats() map[string]any {
 	if e == nil {
 		return map[string]any{
-			"read_retries_total":         uint64(0),
-			"read_retry_exhausted_total": uint64(0),
-			"txn_retries_total":          uint64(0),
-			"txn_retry_exhausted_total":  uint64(0),
-			"create_total":               uint64(0),
-			"commit_contract":            commitContractStats(false),
-			"visible_admission":          visibleAdmissionStats(nil, false),
-			"visible_commit":             visibleCommitStats(nil, false),
-			"visible_directory_read":     visibleDirectoryReadStats(nil),
-			"metadata_predicate_commit":  metadataPredicateStats(nil),
+			"read_retries_total":           uint64(0),
+			"read_retry_exhausted_total":   uint64(0),
+			"commit_retries_total":         uint64(0),
+			"commit_retry_exhausted_total": uint64(0),
+			"create_total":                 uint64(0),
+			"commit_contract":              commitContractStats(false),
+			"visible_admission":            visibleAdmissionStats(nil, false),
+			"visible_commit":               visibleCommitStats(nil, false),
+			"visible_directory_read":       visibleDirectoryReadStats(nil),
+			"metadata_predicate_commit":    metadataPredicateStats(nil),
 		}
 	}
 	out := map[string]any{
-		"read_retries_total":         e.readRetriesTotal.Load(),
-		"read_retry_exhausted_total": e.readRetryExhaustedTotal.Load(),
-		"txn_retries_total":          e.txnRetriesTotal.Load(),
-		"txn_retry_exhausted_total":  e.txnRetryExhaustedTotal.Load(),
-		"create_total":               e.createTotal.Load(),
-		"commit_contract":            commitContractStats(e.visibleCommitter != nil),
-		"visible_admission":          visibleAdmissionStats(&e.visibleAdmission, e.visibleAuthority != nil),
-		"visible_commit":             visibleCommitStats(&e.visibleCommit, e.visibleCommitter != nil),
-		"visible_directory_read":     visibleDirectoryReadStats(&e.visibleDirectoryRead),
-		"metadata_predicate_commit":  metadataPredicateStats(e.metadataPredicates),
+		"read_retries_total":           e.readRetriesTotal.Load(),
+		"read_retry_exhausted_total":   e.readRetryExhaustedTotal.Load(),
+		"commit_retries_total":         e.commitRetriesTotal.Load(),
+		"commit_retry_exhausted_total": e.commitRetryExhaustedTotal.Load(),
+		"create_total":                 e.createTotal.Load(),
+		"commit_contract":              commitContractStats(e.visibleCommitter != nil),
+		"visible_admission":            visibleAdmissionStats(&e.visibleAdmission, e.visibleAuthority != nil),
+		"visible_commit":               visibleCommitStats(&e.visibleCommit, e.visibleCommitter != nil),
+		"visible_directory_read":       visibleDirectoryReadStats(&e.visibleDirectoryRead),
+		"metadata_predicate_commit":    metadataPredicateStats(e.metadataPredicates),
 	}
 	if stats, ok := e.runner.(backend.StatsProvider); ok {
 		out["runner"] = stats.Stats()

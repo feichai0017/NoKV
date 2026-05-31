@@ -109,7 +109,7 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 		return result, nil
 	}
 	var result model.RemoveResult
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
 			return err
@@ -206,7 +206,7 @@ func (e *Executor) Unlink(ctx context.Context, req model.UnlinkRequest) error {
 
 // RemoveDirectory removes one empty directory dentry and its directory inode.
 // Empty is checked through the directory inode ChildCount, which every child
-// membership mutation updates in the same metadata transaction.
+// membership mutation updates in the same metadata command.
 func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirectoryRequest) error {
 	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
@@ -228,7 +228,7 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 		}
 		return nil
 	}
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		parent, err := e.readDirectoryInode(ctx, mount, req.Parent, startVersion)
 		if err != nil {
 			return err

@@ -103,7 +103,7 @@ func (e *Executor) tryVisibleLink(ctx context.Context, program compile.LinkProgr
 }
 
 // Link creates a second dentry for an existing non-directory inode and bumps
-// the inode link count in the same transaction.
+// the inode link count in the same metadata command.
 func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
@@ -126,7 +126,7 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 		e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 		return nil
 	}
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err

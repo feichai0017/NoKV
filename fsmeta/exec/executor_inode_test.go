@@ -160,7 +160,7 @@ func TestExecutorUpdateInodeVisibleRechecksObservedValue(t *testing.T) {
 
 	require.Equal(t, uint64(2048), updated.Size)
 	require.Zero(t, committer.calls, "stale observed value must reject the visible admission before commit")
-	require.Len(t, runner.mutations, 1, "rejected visible admission should fall back to the ordinary transaction path")
+	require.Len(t, runner.mutations, 1, "rejected visible admission should fall back to the ordinary commit path")
 	requireVisibleCommitStatUint(t, executor.Stats(), "skip_predicate_total", 1)
 }
 

@@ -143,7 +143,7 @@ func renameMoveFromRenameSubtree(req model.RenameSubtreeRequest, identity model.
 }
 
 // Rename moves one dentry inside the same subtree authority. It is deliberately
-// a data-plane transaction: no rooted handoff is published, so common staged
+// a data-plane metadata command: no rooted handoff is published, so common staged
 // publish paths do not serialize through the control plane.
 func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
@@ -173,7 +173,7 @@ func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 		e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 		return nil
 	}
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		mutations, predicates, err := e.prepareRenameMutations(ctx, plan, move, startVersion, &movedSize, &movedInode)
 		if err != nil {
 			return err
@@ -192,7 +192,7 @@ func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 // RenameReplace atomically publishes the source dentry at the destination name,
 // replacing an existing non-directory destination dentry when present. It is the
 // artifact publish primitive: no subtree handoff or durability barrier is
-// emitted, and all namespace/index mutations commit in one backend.KV transaction.
+// emitted, and all namespace/index mutations commit in one backend metadata command.
 func (e *Executor) RenameReplace(ctx context.Context, req model.RenameReplaceRequest) (model.RenameReplaceResult, error) {
 	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {
@@ -213,7 +213,7 @@ func (e *Executor) RenameReplace(ctx context.Context, req model.RenameReplaceReq
 	plan := delta.Plan
 	move := renameMoveFromRenameReplace(req, mount)
 	var result model.RenameReplaceResult
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		nextResult, mutations, err := e.prepareRenameReplaceMutations(ctx, plan, move, startVersion)
 		if err != nil {
 			return fmt.Errorf("prepare rename replace: %w", err)
@@ -256,7 +256,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req model.RenameSubtreeReq
 	var committedAt uint64
 	var handoffStarted bool
 	move := renameMoveFromRenameSubtree(req, mount)
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		mutations, _, err := e.prepareRenameMutations(ctx, plan, move, startVersion, &movedSize, &movedInode)
 		if err != nil {
 			return err
@@ -269,7 +269,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req model.RenameSubtreeReq
 		actualCommitVersion := result.CommitVersion
 		// Subtree handoff start publishes a rooted predecessor frontier before the
 		// data mutation runs. That external frontier must be the same commit_ts
-		// used by the data transaction; otherwise concurrent handoffs can observe a
+		// used by the metadata command; otherwise concurrent handoffs can observe a
 		// later completed frontier and reject the older pending handoff.
 		// Once StartSubtreeHandoff is rooted, a Mutate error may still be
 		// ambiguous with respect to primary commit. Complete closes the rooted

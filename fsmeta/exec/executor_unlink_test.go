@@ -194,7 +194,7 @@ func TestExecutorUnlinkRejectsDirectoryBeforeVisibleCommit(t *testing.T) {
 	require.Equal(t, uint64(0), committer.Stats()["commit_total"])
 }
 
-func TestExecutorUnlinkRejectsDirectoryOnTxnPath(t *testing.T) {
+func TestExecutorUnlinkRejectsDirectoryOnCommitPath(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7, 7)
 	seedDentryType(t, runner, "vol", 7, "dir", inode, model.InodeTypeDirectory)
@@ -208,7 +208,7 @@ func TestExecutorUnlinkRejectsDirectoryOnTxnPath(t *testing.T) {
 	require.Empty(t, runner.mutations)
 }
 
-func TestExecutorRemoveRejectsDirectoryOnTxnPath(t *testing.T) {
+func TestExecutorRemoveRejectsDirectoryOnCommitPath(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7, 7)
 	seedDentryType(t, runner, "vol", 7, "dir", inode, model.InodeTypeDirectory)

@@ -46,8 +46,8 @@ func (e *Executor) tryVisibleOpenWriteSession(ctx context.Context, program compi
 			return model.SessionRecord{}, false, nil
 		}
 		// Stale cleanup is value-sensitive and may touch an old session-id key
-		// outside this request's concrete write-set. Keep it on the transaction
-		// runner.
+		// outside this request's concrete write-set. Keep it on the metadata
+		// command runner.
 		return model.SessionRecord{}, false, nil
 	}
 	if index := e.visiblePredicateIndex(); !e.visibleNotExistsKnown(delta.Authority, plan.ReadKeys[2], index) {
@@ -235,7 +235,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSess
 		return record, nil
 	}
 	var record model.SessionRecord
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		inode, ok, err := e.readInode(ctx, mount, req.Inode, startVersion)
 		if err != nil {
 			return err
@@ -353,7 +353,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req model.Heartbea
 		return record, nil
 	}
 	var record model.SessionRecord
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		nowTime := e.clock()
 		expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
 		if !ok {
@@ -426,7 +426,7 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req model.CloseWriteSe
 	if committed, err := e.tryVisibleCloseWriteSession(ctx, program, mount, req); committed || err != nil {
 		return err
 	}
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		session, ok, err := e.readSessionByKey(ctx, mount, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err
@@ -485,7 +485,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 	now := e.clock().UnixNano()
 	var expired uint64
 	scanPrefixes := plan.ReadPrefixes
-	if err := e.withTxnRetryNoVisibleFlush(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetryNoVisibleFlush(ctx, func(startVersion, commitVersion uint64) error {
 		deletes := make(map[string][]byte)
 		type expiredSessionKey struct {
 			inode   model.InodeID

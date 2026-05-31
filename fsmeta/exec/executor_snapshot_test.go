@@ -127,7 +127,7 @@ func testSnapshotEvidenceRef(epoch uint64, seed byte) model.SnapshotEvidenceRef 
 
 func TestExecutorReadDirPlusRetriesLiveLockAtSnapshotVersion(t *testing.T) {
 	runner := newFakeRunner()
-	runner.scanErrs = []error{txnLockedError("vol", 7, "a")}
+	runner.scanErrs = []error{metadataLockedError("vol", 7, "a")}
 	seedDentry(t, runner, "vol", 7, "a", 21)
 	seedInode(t, runner, "vol", model.InodeRecord{
 		Inode:     21,

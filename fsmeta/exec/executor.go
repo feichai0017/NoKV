@@ -16,22 +16,22 @@ const (
 	// Backend lock TTLs are encoded in milliseconds. Distributed fsmeta
 	// mutations cross the coordinator TSO path plus apply queues, so the
 	// default must cover short commit stalls instead of letting read-side lock
-	// resolution roll back a live metadata transaction.
+	// resolution roll back a live metadata command.
 	defaultLockTTL uint64 = uint64(30 * time.Second / time.Millisecond)
 
 	// Non-lock conflicts are retried by count because fresh timestamps normally
 	// make progress immediately. Live locks are bounded separately by the lock
 	// TTL so fsmeta does not leak ordinary backend lock waits to callers.
-	maxTxnContentionRetries  = 32
-	maxReadContentionRetries = 32
+	maxCommitContentionRetries = 32
+	maxReadContentionRetries   = 32
 
-	txnContentionRetryBaseBackoff = time.Millisecond
-	txnContentionRetryMaxBackoff  = 100 * time.Millisecond
-	maxTxnLockRetryBudget         = time.Hour
+	commitContentionRetryBaseBackoff = time.Millisecond
+	commitContentionRetryMaxBackoff  = 100 * time.Millisecond
+	maxCommitLockRetryBudget         = time.Hour
 )
 
 // InodeAllocator assigns Create inode IDs. The executor allocates once before
-// transaction retry so a retry cannot publish a different inode for the same
+// commit retry so a retry cannot publish a different inode for the same
 // logical Create after a conflict or ambiguous transport error.
 type InodeAllocator interface {
 	AllocateCreateInode(ctx context.Context, mount model.MountIdentity, parent model.InodeID, name string) (model.InodeID, error)
@@ -75,27 +75,27 @@ type VisibleQuotaAdmitter interface {
 
 // Executor interprets fsmeta operation plans against a backend.Store.
 type Executor struct {
-	runner                  backend.Store
-	inodes                  InodeAllocator
-	mounts                  MountResolver
-	quotas                  QuotaResolver
-	subtrees                SubtreeHandoffPublisher
-	authorities             SubtreeAuthorityResolver
-	visibleAuthority        VisibleAuthorityAdmitter
-	visibleCommitter        VisibleCommitter
-	visibleClientID         string
-	lockTTL                 uint64
-	now                     func() time.Time
-	readRetriesTotal        atomic.Uint64
-	readRetryExhaustedTotal atomic.Uint64
-	txnRetriesTotal         atomic.Uint64
-	txnRetryExhaustedTotal  atomic.Uint64
-	createTotal             atomic.Uint64
-	visibleAdmission        visibleAdmissionCounters
-	visibleCommit           visibleCommitCounters
-	visibleDirectoryRead    visibleDirectoryReadCounters
-	visibleSeq              atomic.Uint64
-	metadataPredicates      map[model.OperationKind]*metadataPredicateCounters
+	runner                    backend.Store
+	inodes                    InodeAllocator
+	mounts                    MountResolver
+	quotas                    QuotaResolver
+	subtrees                  SubtreeHandoffPublisher
+	authorities               SubtreeAuthorityResolver
+	visibleAuthority          VisibleAuthorityAdmitter
+	visibleCommitter          VisibleCommitter
+	visibleClientID           string
+	lockTTL                   uint64
+	now                       func() time.Time
+	readRetriesTotal          atomic.Uint64
+	readRetryExhaustedTotal   atomic.Uint64
+	commitRetriesTotal        atomic.Uint64
+	commitRetryExhaustedTotal atomic.Uint64
+	createTotal               atomic.Uint64
+	visibleAdmission          visibleAdmissionCounters
+	visibleCommit             visibleCommitCounters
+	visibleDirectoryRead      visibleDirectoryReadCounters
+	visibleSeq                atomic.Uint64
+	metadataPredicates        map[model.OperationKind]*metadataPredicateCounters
 }
 
 // Option configures an Executor.

@@ -88,7 +88,7 @@ func (e *Executor) tryVisibleUpdateInode(ctx context.Context, program compile.Up
 }
 
 // UpdateInode updates mutable inode attributes and applies the size quota delta
-// in the same transaction. The parent field is required because quota is
+// in the same metadata command. The parent field is required because quota is
 // directory-scoped by parent inode.
 func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest) (model.InodeRecord, error) {
 	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
@@ -115,7 +115,7 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 		return updated, nil
 	}
 	var updated model.InodeRecord
-	if err := e.withTxnRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		dentry, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err
