@@ -268,11 +268,11 @@ func commitRetryBudget(err error, fallbackLockTTL uint64) time.Duration {
 	switch {
 	case nokverrors.IsKind(err, nokverrors.KindLockConflict):
 	case nokverrors.IsKind(err, nokverrors.KindRetryable):
-		// Replicated backends may use Retryable for a dead start_ts, for
-		// example when commit finds that the intent was already rolled back. The
-		// fsmeta semantic operation can safely re-read and re-plan, but under
-		// raft/store congestion it needs the same bounded liveness window as a
-		// visible live-lock wait.
+		// Replicated backends use Retryable for metadata-native revision
+		// conflicts, for example when another command has committed at or above
+		// the read version. The fsmeta semantic operation can safely re-read and
+		// re-plan, but under raft/store congestion it needs the same bounded
+		// liveness window as a visible live-lock wait.
 	default:
 		return 0
 	}

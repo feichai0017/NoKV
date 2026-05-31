@@ -37,26 +37,12 @@ message MetadataKV {
 }
 
 message MetadataKeyError {
-  MetadataLocked locked = 1;
-  MetadataWriteConflict write_conflict = 2;
+  reserved 1, 2;
+  reserved "locked", "write_conflict";
+
   MetadataKeyAlreadyExists already_exists = 3;
   string retryable = 4;
   string abort = 5;
-}
-
-message MetadataLocked {
-  bytes primary_lock = 1;
-  bytes key = 2;
-  uint64 lock_version = 3;
-  uint64 lock_ttl = 4;
-}
-
-message MetadataWriteConflict {
-  bytes key = 1;
-  bytes primary = 2;
-  uint64 conflict_ts = 3;
-  uint64 commit_ts = 4;
-  uint64 start_ts = 5;
 }
 
 message MetadataKeyAlreadyExists {

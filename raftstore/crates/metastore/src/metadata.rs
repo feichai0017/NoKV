@@ -167,16 +167,11 @@ fn commit_metadata_inner(
             return metadata_error(command, commit_version, error);
         }
     }
-    let primary = command
-        .mutations
-        .first()
-        .map(|mutation| mutation.key.as_slice())
-        .unwrap_or_default();
     for mutation in &command.mutations {
         if let Some(error) = validation::metadata_command_mutation(mutation) {
             return metadata_error(command, commit_version, error);
         }
-        if let Some((commit_ts, value)) = inner
+        if let Some((commit_ts, _)) = inner
             .writes
             .get(&mutation.key)
             .and_then(|versions| versions.range(command.read_version..).next())
@@ -184,13 +179,7 @@ fn commit_metadata_inner(
             return metadata_error(
                 command,
                 commit_version,
-                errors::metadata_write_conflict(
-                    &mutation.key,
-                    primary,
-                    *commit_ts,
-                    value.start_version,
-                    command.read_version,
-                ),
+                errors::metadata_revision_conflict(&mutation.key, *commit_ts, command.read_version),
             );
         }
         if mutation.assertion_not_exist

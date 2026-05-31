@@ -36,23 +36,17 @@ pub fn metadata_retryable(message: &str) -> metadatapb::MetadataKeyError {
     }
 }
 
-pub fn metadata_write_conflict(
+pub fn metadata_revision_conflict(
     key: &[u8],
-    primary: &[u8],
-    conflict_ts: u64,
-    conflicting_start_ts: u64,
-    current_ts: u64,
+    conflict_version: u64,
+    read_version: u64,
 ) -> metadatapb::MetadataKeyError {
-    metadatapb::MetadataKeyError {
-        write_conflict: Some(metadatapb::MetadataWriteConflict {
-            key: key.to_vec(),
-            primary: primary.to_vec(),
-            conflict_ts,
-            commit_ts: current_ts,
-            start_ts: conflicting_start_ts,
-        }),
-        ..Default::default()
-    }
+    metadata_retryable(&format!(
+        "metadata: revision conflict key_len={} conflict_version={} read_version={}",
+        key.len(),
+        conflict_version,
+        read_version
+    ))
 }
 
 pub fn metadata_already_exists(key: &[u8]) -> metadatapb::MetadataKeyError {

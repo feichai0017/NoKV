@@ -134,25 +134,18 @@ impl metastore::MetadataEngine for HoltMetadataStore {
                 return Ok(metadata_apply_error(commit_version, error));
             }
         }
-        let primary = command
-            .mutations
-            .first()
-            .map(|mutation| mutation.key.as_slice())
-            .unwrap_or_default();
         for mutation in &command.mutations {
             if let Some(error) = metastore::validation::metadata_command_mutation(mutation) {
                 return Ok(metadata_apply_error(commit_version, error));
             }
-            if let Some((commit_ts, value)) =
+            if let Some((commit_ts, _)) =
                 self.first_write_after_or_at(&mutation.key, command.read_version)?
             {
                 return Ok(metadata_apply_error(
                     commit_version,
-                    metastore::errors::metadata_write_conflict(
+                    metastore::errors::metadata_revision_conflict(
                         &mutation.key,
-                        primary,
                         commit_ts,
-                        value.start_version,
                         command.read_version,
                     ),
                 ));

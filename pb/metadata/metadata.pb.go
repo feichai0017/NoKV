@@ -258,7 +258,7 @@ func (x MetadataMutation_Op) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MetadataMutation_Op.Descriptor instead.
 func (MetadataMutation_Op) EnumDescriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{13, 0}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{11, 0}
 }
 
 type MetadataContext struct {
@@ -407,8 +407,6 @@ func (x *MetadataKV) GetExpiresAt() uint64 {
 
 type MetadataKeyError struct {
 	state         protoimpl.MessageState    `protogen:"open.v1"`
-	Locked        *MetadataLocked           `protobuf:"bytes,1,opt,name=locked,proto3" json:"locked,omitempty"`
-	WriteConflict *MetadataWriteConflict    `protobuf:"bytes,2,opt,name=write_conflict,json=writeConflict,proto3" json:"write_conflict,omitempty"`
 	AlreadyExists *MetadataKeyAlreadyExists `protobuf:"bytes,3,opt,name=already_exists,json=alreadyExists,proto3" json:"already_exists,omitempty"`
 	Retryable     string                    `protobuf:"bytes,4,opt,name=retryable,proto3" json:"retryable,omitempty"`
 	Abort         string                    `protobuf:"bytes,5,opt,name=abort,proto3" json:"abort,omitempty"`
@@ -446,20 +444,6 @@ func (*MetadataKeyError) Descriptor() ([]byte, []int) {
 	return file_metadata_metadata_proto_rawDescGZIP(), []int{2}
 }
 
-func (x *MetadataKeyError) GetLocked() *MetadataLocked {
-	if x != nil {
-		return x.Locked
-	}
-	return nil
-}
-
-func (x *MetadataKeyError) GetWriteConflict() *MetadataWriteConflict {
-	if x != nil {
-		return x.WriteConflict
-	}
-	return nil
-}
-
 func (x *MetadataKeyError) GetAlreadyExists() *MetadataKeyAlreadyExists {
 	if x != nil {
 		return x.AlreadyExists
@@ -481,150 +465,6 @@ func (x *MetadataKeyError) GetAbort() string {
 	return ""
 }
 
-type MetadataLocked struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	PrimaryLock   []byte                 `protobuf:"bytes,1,opt,name=primary_lock,json=primaryLock,proto3" json:"primary_lock,omitempty"`
-	Key           []byte                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
-	LockVersion   uint64                 `protobuf:"varint,3,opt,name=lock_version,json=lockVersion,proto3" json:"lock_version,omitempty"`
-	LockTtl       uint64                 `protobuf:"varint,4,opt,name=lock_ttl,json=lockTtl,proto3" json:"lock_ttl,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *MetadataLocked) Reset() {
-	*x = MetadataLocked{}
-	mi := &file_metadata_metadata_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *MetadataLocked) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*MetadataLocked) ProtoMessage() {}
-
-func (x *MetadataLocked) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use MetadataLocked.ProtoReflect.Descriptor instead.
-func (*MetadataLocked) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *MetadataLocked) GetPrimaryLock() []byte {
-	if x != nil {
-		return x.PrimaryLock
-	}
-	return nil
-}
-
-func (x *MetadataLocked) GetKey() []byte {
-	if x != nil {
-		return x.Key
-	}
-	return nil
-}
-
-func (x *MetadataLocked) GetLockVersion() uint64 {
-	if x != nil {
-		return x.LockVersion
-	}
-	return 0
-}
-
-func (x *MetadataLocked) GetLockTtl() uint64 {
-	if x != nil {
-		return x.LockTtl
-	}
-	return 0
-}
-
-type MetadataWriteConflict struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
-	Primary       []byte                 `protobuf:"bytes,2,opt,name=primary,proto3" json:"primary,omitempty"`
-	ConflictTs    uint64                 `protobuf:"varint,3,opt,name=conflict_ts,json=conflictTs,proto3" json:"conflict_ts,omitempty"`
-	CommitTs      uint64                 `protobuf:"varint,4,opt,name=commit_ts,json=commitTs,proto3" json:"commit_ts,omitempty"`
-	StartTs       uint64                 `protobuf:"varint,5,opt,name=start_ts,json=startTs,proto3" json:"start_ts,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *MetadataWriteConflict) Reset() {
-	*x = MetadataWriteConflict{}
-	mi := &file_metadata_metadata_proto_msgTypes[4]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *MetadataWriteConflict) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*MetadataWriteConflict) ProtoMessage() {}
-
-func (x *MetadataWriteConflict) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[4]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use MetadataWriteConflict.ProtoReflect.Descriptor instead.
-func (*MetadataWriteConflict) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{4}
-}
-
-func (x *MetadataWriteConflict) GetKey() []byte {
-	if x != nil {
-		return x.Key
-	}
-	return nil
-}
-
-func (x *MetadataWriteConflict) GetPrimary() []byte {
-	if x != nil {
-		return x.Primary
-	}
-	return nil
-}
-
-func (x *MetadataWriteConflict) GetConflictTs() uint64 {
-	if x != nil {
-		return x.ConflictTs
-	}
-	return 0
-}
-
-func (x *MetadataWriteConflict) GetCommitTs() uint64 {
-	if x != nil {
-		return x.CommitTs
-	}
-	return 0
-}
-
-func (x *MetadataWriteConflict) GetStartTs() uint64 {
-	if x != nil {
-		return x.StartTs
-	}
-	return 0
-}
-
 type MetadataKeyAlreadyExists struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Key           []byte                 `protobuf:"bytes,1,opt,name=key,proto3" json:"key,omitempty"`
@@ -634,7 +474,7 @@ type MetadataKeyAlreadyExists struct {
 
 func (x *MetadataKeyAlreadyExists) Reset() {
 	*x = MetadataKeyAlreadyExists{}
-	mi := &file_metadata_metadata_proto_msgTypes[5]
+	mi := &file_metadata_metadata_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -646,7 +486,7 @@ func (x *MetadataKeyAlreadyExists) String() string {
 func (*MetadataKeyAlreadyExists) ProtoMessage() {}
 
 func (x *MetadataKeyAlreadyExists) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[5]
+	mi := &file_metadata_metadata_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -659,7 +499,7 @@ func (x *MetadataKeyAlreadyExists) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataKeyAlreadyExists.ProtoReflect.Descriptor instead.
 func (*MetadataKeyAlreadyExists) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{5}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *MetadataKeyAlreadyExists) GetKey() []byte {
@@ -680,7 +520,7 @@ type MetadataGetRequest struct {
 
 func (x *MetadataGetRequest) Reset() {
 	*x = MetadataGetRequest{}
-	mi := &file_metadata_metadata_proto_msgTypes[6]
+	mi := &file_metadata_metadata_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -692,7 +532,7 @@ func (x *MetadataGetRequest) String() string {
 func (*MetadataGetRequest) ProtoMessage() {}
 
 func (x *MetadataGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[6]
+	mi := &file_metadata_metadata_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -705,7 +545,7 @@ func (x *MetadataGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataGetRequest.ProtoReflect.Descriptor instead.
 func (*MetadataGetRequest) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{6}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *MetadataGetRequest) GetContext() *MetadataContext {
@@ -741,7 +581,7 @@ type MetadataGetResponse struct {
 
 func (x *MetadataGetResponse) Reset() {
 	*x = MetadataGetResponse{}
-	mi := &file_metadata_metadata_proto_msgTypes[7]
+	mi := &file_metadata_metadata_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -753,7 +593,7 @@ func (x *MetadataGetResponse) String() string {
 func (*MetadataGetResponse) ProtoMessage() {}
 
 func (x *MetadataGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[7]
+	mi := &file_metadata_metadata_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -766,7 +606,7 @@ func (x *MetadataGetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataGetResponse.ProtoReflect.Descriptor instead.
 func (*MetadataGetResponse) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{7}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *MetadataGetResponse) GetKv() *MetadataKV {
@@ -807,7 +647,7 @@ type MetadataBatchGetRequest struct {
 
 func (x *MetadataBatchGetRequest) Reset() {
 	*x = MetadataBatchGetRequest{}
-	mi := &file_metadata_metadata_proto_msgTypes[8]
+	mi := &file_metadata_metadata_proto_msgTypes[6]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -819,7 +659,7 @@ func (x *MetadataBatchGetRequest) String() string {
 func (*MetadataBatchGetRequest) ProtoMessage() {}
 
 func (x *MetadataBatchGetRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[8]
+	mi := &file_metadata_metadata_proto_msgTypes[6]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -832,7 +672,7 @@ func (x *MetadataBatchGetRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataBatchGetRequest.ProtoReflect.Descriptor instead.
 func (*MetadataBatchGetRequest) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{8}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{6}
 }
 
 func (x *MetadataBatchGetRequest) GetContext() *MetadataContext {
@@ -859,7 +699,7 @@ type MetadataBatchGetResponse struct {
 
 func (x *MetadataBatchGetResponse) Reset() {
 	*x = MetadataBatchGetResponse{}
-	mi := &file_metadata_metadata_proto_msgTypes[9]
+	mi := &file_metadata_metadata_proto_msgTypes[7]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -871,7 +711,7 @@ func (x *MetadataBatchGetResponse) String() string {
 func (*MetadataBatchGetResponse) ProtoMessage() {}
 
 func (x *MetadataBatchGetResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[9]
+	mi := &file_metadata_metadata_proto_msgTypes[7]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -884,7 +724,7 @@ func (x *MetadataBatchGetResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataBatchGetResponse.ProtoReflect.Descriptor instead.
 func (*MetadataBatchGetResponse) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{9}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{7}
 }
 
 func (x *MetadataBatchGetResponse) GetResponses() []*MetadataGetResponse {
@@ -915,7 +755,7 @@ type MetadataScanRequest struct {
 
 func (x *MetadataScanRequest) Reset() {
 	*x = MetadataScanRequest{}
-	mi := &file_metadata_metadata_proto_msgTypes[10]
+	mi := &file_metadata_metadata_proto_msgTypes[8]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -927,7 +767,7 @@ func (x *MetadataScanRequest) String() string {
 func (*MetadataScanRequest) ProtoMessage() {}
 
 func (x *MetadataScanRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[10]
+	mi := &file_metadata_metadata_proto_msgTypes[8]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -940,7 +780,7 @@ func (x *MetadataScanRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataScanRequest.ProtoReflect.Descriptor instead.
 func (*MetadataScanRequest) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{10}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{8}
 }
 
 func (x *MetadataScanRequest) GetContext() *MetadataContext {
@@ -996,7 +836,7 @@ type MetadataScanResponse struct {
 
 func (x *MetadataScanResponse) Reset() {
 	*x = MetadataScanResponse{}
-	mi := &file_metadata_metadata_proto_msgTypes[11]
+	mi := &file_metadata_metadata_proto_msgTypes[9]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1008,7 +848,7 @@ func (x *MetadataScanResponse) String() string {
 func (*MetadataScanResponse) ProtoMessage() {}
 
 func (x *MetadataScanResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[11]
+	mi := &file_metadata_metadata_proto_msgTypes[9]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1021,7 +861,7 @@ func (x *MetadataScanResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataScanResponse.ProtoReflect.Descriptor instead.
 func (*MetadataScanResponse) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{11}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{9}
 }
 
 func (x *MetadataScanResponse) GetKvs() []*MetadataKV {
@@ -1057,7 +897,7 @@ type MetadataPredicate struct {
 
 func (x *MetadataPredicate) Reset() {
 	*x = MetadataPredicate{}
-	mi := &file_metadata_metadata_proto_msgTypes[12]
+	mi := &file_metadata_metadata_proto_msgTypes[10]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1069,7 +909,7 @@ func (x *MetadataPredicate) String() string {
 func (*MetadataPredicate) ProtoMessage() {}
 
 func (x *MetadataPredicate) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[12]
+	mi := &file_metadata_metadata_proto_msgTypes[10]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1082,7 +922,7 @@ func (x *MetadataPredicate) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataPredicate.ProtoReflect.Descriptor instead.
 func (*MetadataPredicate) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{12}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{10}
 }
 
 func (x *MetadataPredicate) GetKey() []byte {
@@ -1126,7 +966,7 @@ type MetadataMutation struct {
 
 func (x *MetadataMutation) Reset() {
 	*x = MetadataMutation{}
-	mi := &file_metadata_metadata_proto_msgTypes[13]
+	mi := &file_metadata_metadata_proto_msgTypes[11]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1138,7 +978,7 @@ func (x *MetadataMutation) String() string {
 func (*MetadataMutation) ProtoMessage() {}
 
 func (x *MetadataMutation) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[13]
+	mi := &file_metadata_metadata_proto_msgTypes[11]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1151,7 +991,7 @@ func (x *MetadataMutation) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataMutation.ProtoReflect.Descriptor instead.
 func (*MetadataMutation) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{13}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{11}
 }
 
 func (x *MetadataMutation) GetOp() MetadataMutation_Op {
@@ -1206,7 +1046,7 @@ type MetadataCommand struct {
 
 func (x *MetadataCommand) Reset() {
 	*x = MetadataCommand{}
-	mi := &file_metadata_metadata_proto_msgTypes[14]
+	mi := &file_metadata_metadata_proto_msgTypes[12]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1218,7 +1058,7 @@ func (x *MetadataCommand) String() string {
 func (*MetadataCommand) ProtoMessage() {}
 
 func (x *MetadataCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[14]
+	mi := &file_metadata_metadata_proto_msgTypes[12]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1231,7 +1071,7 @@ func (x *MetadataCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataCommand.ProtoReflect.Descriptor instead.
 func (*MetadataCommand) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{14}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{12}
 }
 
 func (x *MetadataCommand) GetRequestId() []byte {
@@ -1310,7 +1150,7 @@ type MetadataCommitResult struct {
 
 func (x *MetadataCommitResult) Reset() {
 	*x = MetadataCommitResult{}
-	mi := &file_metadata_metadata_proto_msgTypes[15]
+	mi := &file_metadata_metadata_proto_msgTypes[13]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1322,7 +1162,7 @@ func (x *MetadataCommitResult) String() string {
 func (*MetadataCommitResult) ProtoMessage() {}
 
 func (x *MetadataCommitResult) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[15]
+	mi := &file_metadata_metadata_proto_msgTypes[13]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1335,7 +1175,7 @@ func (x *MetadataCommitResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataCommitResult.ProtoReflect.Descriptor instead.
 func (*MetadataCommitResult) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{15}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{13}
 }
 
 func (x *MetadataCommitResult) GetCommitVersion() uint64 {
@@ -1383,7 +1223,7 @@ type MetadataCommitRequest struct {
 
 func (x *MetadataCommitRequest) Reset() {
 	*x = MetadataCommitRequest{}
-	mi := &file_metadata_metadata_proto_msgTypes[16]
+	mi := &file_metadata_metadata_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1395,7 +1235,7 @@ func (x *MetadataCommitRequest) String() string {
 func (*MetadataCommitRequest) ProtoMessage() {}
 
 func (x *MetadataCommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[16]
+	mi := &file_metadata_metadata_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1408,7 +1248,7 @@ func (x *MetadataCommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataCommitRequest.ProtoReflect.Descriptor instead.
 func (*MetadataCommitRequest) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{16}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *MetadataCommitRequest) GetContext() *MetadataContext {
@@ -1436,7 +1276,7 @@ type MetadataCommitResponse struct {
 
 func (x *MetadataCommitResponse) Reset() {
 	*x = MetadataCommitResponse{}
-	mi := &file_metadata_metadata_proto_msgTypes[17]
+	mi := &file_metadata_metadata_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1448,7 +1288,7 @@ func (x *MetadataCommitResponse) String() string {
 func (*MetadataCommitResponse) ProtoMessage() {}
 
 func (x *MetadataCommitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[17]
+	mi := &file_metadata_metadata_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1461,7 +1301,7 @@ func (x *MetadataCommitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataCommitResponse.ProtoReflect.Descriptor instead.
 func (*MetadataCommitResponse) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{17}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *MetadataCommitResponse) GetResult() *MetadataCommitResult {
@@ -1498,7 +1338,7 @@ type MetadataWatchApplyRequest struct {
 
 func (x *MetadataWatchApplyRequest) Reset() {
 	*x = MetadataWatchApplyRequest{}
-	mi := &file_metadata_metadata_proto_msgTypes[18]
+	mi := &file_metadata_metadata_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1510,7 +1350,7 @@ func (x *MetadataWatchApplyRequest) String() string {
 func (*MetadataWatchApplyRequest) ProtoMessage() {}
 
 func (x *MetadataWatchApplyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[18]
+	mi := &file_metadata_metadata_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1523,7 +1363,7 @@ func (x *MetadataWatchApplyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataWatchApplyRequest.ProtoReflect.Descriptor instead.
 func (*MetadataWatchApplyRequest) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{18}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *MetadataWatchApplyRequest) GetKeyPrefix() []byte {
@@ -1575,7 +1415,7 @@ type MetadataApplyWatchEvent struct {
 
 func (x *MetadataApplyWatchEvent) Reset() {
 	*x = MetadataApplyWatchEvent{}
-	mi := &file_metadata_metadata_proto_msgTypes[19]
+	mi := &file_metadata_metadata_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1587,7 +1427,7 @@ func (x *MetadataApplyWatchEvent) String() string {
 func (*MetadataApplyWatchEvent) ProtoMessage() {}
 
 func (x *MetadataApplyWatchEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[19]
+	mi := &file_metadata_metadata_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1600,7 +1440,7 @@ func (x *MetadataApplyWatchEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataApplyWatchEvent.ProtoReflect.Descriptor instead.
 func (*MetadataApplyWatchEvent) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{19}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *MetadataApplyWatchEvent) GetRegionId() uint64 {
@@ -1655,7 +1495,7 @@ type MetadataWatchApplyResponse struct {
 
 func (x *MetadataWatchApplyResponse) Reset() {
 	*x = MetadataWatchApplyResponse{}
-	mi := &file_metadata_metadata_proto_msgTypes[20]
+	mi := &file_metadata_metadata_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1667,7 +1507,7 @@ func (x *MetadataWatchApplyResponse) String() string {
 func (*MetadataWatchApplyResponse) ProtoMessage() {}
 
 func (x *MetadataWatchApplyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[20]
+	mi := &file_metadata_metadata_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1680,7 +1520,7 @@ func (x *MetadataWatchApplyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataWatchApplyResponse.ProtoReflect.Descriptor instead.
 func (*MetadataWatchApplyResponse) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{20}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *MetadataWatchApplyResponse) GetEvent() *MetadataApplyWatchEvent {
@@ -1714,25 +1554,11 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\fR\x05value\x12\x18\n" +
 	"\aversion\x18\x03 \x01(\x04R\aversion\x12\x1d\n" +
 	"\n" +
-	"expires_at\x18\x04 \x01(\x04R\texpiresAt\"\xa3\x02\n" +
-	"\x10MetadataKeyError\x128\n" +
-	"\x06locked\x18\x01 \x01(\v2 .nokv.metadata.v1.MetadataLockedR\x06locked\x12N\n" +
-	"\x0ewrite_conflict\x18\x02 \x01(\v2'.nokv.metadata.v1.MetadataWriteConflictR\rwriteConflict\x12Q\n" +
+	"expires_at\x18\x04 \x01(\x04R\texpiresAt\"\xbd\x01\n" +
+	"\x10MetadataKeyError\x12Q\n" +
 	"\x0ealready_exists\x18\x03 \x01(\v2*.nokv.metadata.v1.MetadataKeyAlreadyExistsR\ralreadyExists\x12\x1c\n" +
 	"\tretryable\x18\x04 \x01(\tR\tretryable\x12\x14\n" +
-	"\x05abort\x18\x05 \x01(\tR\x05abort\"\x83\x01\n" +
-	"\x0eMetadataLocked\x12!\n" +
-	"\fprimary_lock\x18\x01 \x01(\fR\vprimaryLock\x12\x10\n" +
-	"\x03key\x18\x02 \x01(\fR\x03key\x12!\n" +
-	"\flock_version\x18\x03 \x01(\x04R\vlockVersion\x12\x19\n" +
-	"\block_ttl\x18\x04 \x01(\x04R\alockTtl\"\x9c\x01\n" +
-	"\x15MetadataWriteConflict\x12\x10\n" +
-	"\x03key\x18\x01 \x01(\fR\x03key\x12\x18\n" +
-	"\aprimary\x18\x02 \x01(\fR\aprimary\x12\x1f\n" +
-	"\vconflict_ts\x18\x03 \x01(\x04R\n" +
-	"conflictTs\x12\x1b\n" +
-	"\tcommit_ts\x18\x04 \x01(\x04R\bcommitTs\x12\x19\n" +
-	"\bstart_ts\x18\x05 \x01(\x04R\astartTs\",\n" +
+	"\x05abort\x18\x05 \x01(\tR\x05abortJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03R\x06lockedR\x0ewrite_conflict\",\n" +
 	"\x18MetadataKeyAlreadyExists\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\fR\x03key\"}\n" +
 	"\x12MetadataGetRequest\x12;\n" +
@@ -1858,7 +1684,7 @@ func file_metadata_metadata_proto_rawDescGZIP() []byte {
 }
 
 var file_metadata_metadata_proto_enumTypes = make([]protoimpl.EnumInfo, 5)
-var file_metadata_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
+var file_metadata_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 19)
 var file_metadata_metadata_proto_goTypes = []any{
 	(ReadConsistency)(0),               // 0: nokv.metadata.v1.ReadConsistency
 	(ReadPreference)(0),                // 1: nokv.metadata.v1.ReadPreference
@@ -1868,74 +1694,70 @@ var file_metadata_metadata_proto_goTypes = []any{
 	(*MetadataContext)(nil),            // 5: nokv.metadata.v1.MetadataContext
 	(*MetadataKV)(nil),                 // 6: nokv.metadata.v1.MetadataKV
 	(*MetadataKeyError)(nil),           // 7: nokv.metadata.v1.MetadataKeyError
-	(*MetadataLocked)(nil),             // 8: nokv.metadata.v1.MetadataLocked
-	(*MetadataWriteConflict)(nil),      // 9: nokv.metadata.v1.MetadataWriteConflict
-	(*MetadataKeyAlreadyExists)(nil),   // 10: nokv.metadata.v1.MetadataKeyAlreadyExists
-	(*MetadataGetRequest)(nil),         // 11: nokv.metadata.v1.MetadataGetRequest
-	(*MetadataGetResponse)(nil),        // 12: nokv.metadata.v1.MetadataGetResponse
-	(*MetadataBatchGetRequest)(nil),    // 13: nokv.metadata.v1.MetadataBatchGetRequest
-	(*MetadataBatchGetResponse)(nil),   // 14: nokv.metadata.v1.MetadataBatchGetResponse
-	(*MetadataScanRequest)(nil),        // 15: nokv.metadata.v1.MetadataScanRequest
-	(*MetadataScanResponse)(nil),       // 16: nokv.metadata.v1.MetadataScanResponse
-	(*MetadataPredicate)(nil),          // 17: nokv.metadata.v1.MetadataPredicate
-	(*MetadataMutation)(nil),           // 18: nokv.metadata.v1.MetadataMutation
-	(*MetadataCommand)(nil),            // 19: nokv.metadata.v1.MetadataCommand
-	(*MetadataCommitResult)(nil),       // 20: nokv.metadata.v1.MetadataCommitResult
-	(*MetadataCommitRequest)(nil),      // 21: nokv.metadata.v1.MetadataCommitRequest
-	(*MetadataCommitResponse)(nil),     // 22: nokv.metadata.v1.MetadataCommitResponse
-	(*MetadataWatchApplyRequest)(nil),  // 23: nokv.metadata.v1.MetadataWatchApplyRequest
-	(*MetadataApplyWatchEvent)(nil),    // 24: nokv.metadata.v1.MetadataApplyWatchEvent
-	(*MetadataWatchApplyResponse)(nil), // 25: nokv.metadata.v1.MetadataWatchApplyResponse
-	(*meta.RegionEpoch)(nil),           // 26: nokv.meta.v1.RegionEpoch
-	(*meta.RegionPeer)(nil),            // 27: nokv.meta.v1.RegionPeer
-	(*error1.RegionError)(nil),         // 28: nokv.error.v1.RegionError
+	(*MetadataKeyAlreadyExists)(nil),   // 8: nokv.metadata.v1.MetadataKeyAlreadyExists
+	(*MetadataGetRequest)(nil),         // 9: nokv.metadata.v1.MetadataGetRequest
+	(*MetadataGetResponse)(nil),        // 10: nokv.metadata.v1.MetadataGetResponse
+	(*MetadataBatchGetRequest)(nil),    // 11: nokv.metadata.v1.MetadataBatchGetRequest
+	(*MetadataBatchGetResponse)(nil),   // 12: nokv.metadata.v1.MetadataBatchGetResponse
+	(*MetadataScanRequest)(nil),        // 13: nokv.metadata.v1.MetadataScanRequest
+	(*MetadataScanResponse)(nil),       // 14: nokv.metadata.v1.MetadataScanResponse
+	(*MetadataPredicate)(nil),          // 15: nokv.metadata.v1.MetadataPredicate
+	(*MetadataMutation)(nil),           // 16: nokv.metadata.v1.MetadataMutation
+	(*MetadataCommand)(nil),            // 17: nokv.metadata.v1.MetadataCommand
+	(*MetadataCommitResult)(nil),       // 18: nokv.metadata.v1.MetadataCommitResult
+	(*MetadataCommitRequest)(nil),      // 19: nokv.metadata.v1.MetadataCommitRequest
+	(*MetadataCommitResponse)(nil),     // 20: nokv.metadata.v1.MetadataCommitResponse
+	(*MetadataWatchApplyRequest)(nil),  // 21: nokv.metadata.v1.MetadataWatchApplyRequest
+	(*MetadataApplyWatchEvent)(nil),    // 22: nokv.metadata.v1.MetadataApplyWatchEvent
+	(*MetadataWatchApplyResponse)(nil), // 23: nokv.metadata.v1.MetadataWatchApplyResponse
+	(*meta.RegionEpoch)(nil),           // 24: nokv.meta.v1.RegionEpoch
+	(*meta.RegionPeer)(nil),            // 25: nokv.meta.v1.RegionPeer
+	(*error1.RegionError)(nil),         // 26: nokv.error.v1.RegionError
 }
 var file_metadata_metadata_proto_depIdxs = []int32{
-	26, // 0: nokv.metadata.v1.MetadataContext.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
-	27, // 1: nokv.metadata.v1.MetadataContext.peer:type_name -> nokv.meta.v1.RegionPeer
+	24, // 0: nokv.metadata.v1.MetadataContext.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
+	25, // 1: nokv.metadata.v1.MetadataContext.peer:type_name -> nokv.meta.v1.RegionPeer
 	0,  // 2: nokv.metadata.v1.MetadataContext.read_consistency:type_name -> nokv.metadata.v1.ReadConsistency
 	1,  // 3: nokv.metadata.v1.MetadataContext.read_preference:type_name -> nokv.metadata.v1.ReadPreference
-	8,  // 4: nokv.metadata.v1.MetadataKeyError.locked:type_name -> nokv.metadata.v1.MetadataLocked
-	9,  // 5: nokv.metadata.v1.MetadataKeyError.write_conflict:type_name -> nokv.metadata.v1.MetadataWriteConflict
-	10, // 6: nokv.metadata.v1.MetadataKeyError.already_exists:type_name -> nokv.metadata.v1.MetadataKeyAlreadyExists
-	5,  // 7: nokv.metadata.v1.MetadataGetRequest.context:type_name -> nokv.metadata.v1.MetadataContext
-	6,  // 8: nokv.metadata.v1.MetadataGetResponse.kv:type_name -> nokv.metadata.v1.MetadataKV
-	7,  // 9: nokv.metadata.v1.MetadataGetResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
-	28, // 10: nokv.metadata.v1.MetadataGetResponse.region_error:type_name -> nokv.error.v1.RegionError
-	5,  // 11: nokv.metadata.v1.MetadataBatchGetRequest.context:type_name -> nokv.metadata.v1.MetadataContext
-	11, // 12: nokv.metadata.v1.MetadataBatchGetRequest.requests:type_name -> nokv.metadata.v1.MetadataGetRequest
-	12, // 13: nokv.metadata.v1.MetadataBatchGetResponse.responses:type_name -> nokv.metadata.v1.MetadataGetResponse
-	28, // 14: nokv.metadata.v1.MetadataBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
-	5,  // 15: nokv.metadata.v1.MetadataScanRequest.context:type_name -> nokv.metadata.v1.MetadataContext
-	6,  // 16: nokv.metadata.v1.MetadataScanResponse.kvs:type_name -> nokv.metadata.v1.MetadataKV
-	7,  // 17: nokv.metadata.v1.MetadataScanResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
-	28, // 18: nokv.metadata.v1.MetadataScanResponse.region_error:type_name -> nokv.error.v1.RegionError
-	2,  // 19: nokv.metadata.v1.MetadataPredicate.kind:type_name -> nokv.metadata.v1.MetadataPredicateKind
-	4,  // 20: nokv.metadata.v1.MetadataMutation.op:type_name -> nokv.metadata.v1.MetadataMutation.Op
-	17, // 21: nokv.metadata.v1.MetadataCommand.predicates:type_name -> nokv.metadata.v1.MetadataPredicate
-	18, // 22: nokv.metadata.v1.MetadataCommand.mutations:type_name -> nokv.metadata.v1.MetadataMutation
-	5,  // 23: nokv.metadata.v1.MetadataCommitRequest.context:type_name -> nokv.metadata.v1.MetadataContext
-	19, // 24: nokv.metadata.v1.MetadataCommitRequest.command:type_name -> nokv.metadata.v1.MetadataCommand
-	20, // 25: nokv.metadata.v1.MetadataCommitResponse.result:type_name -> nokv.metadata.v1.MetadataCommitResult
-	7,  // 26: nokv.metadata.v1.MetadataCommitResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
-	28, // 27: nokv.metadata.v1.MetadataCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
-	3,  // 28: nokv.metadata.v1.MetadataApplyWatchEvent.source:type_name -> nokv.metadata.v1.MetadataApplyWatchEventSource
-	24, // 29: nokv.metadata.v1.MetadataWatchApplyResponse.event:type_name -> nokv.metadata.v1.MetadataApplyWatchEvent
-	11, // 30: nokv.metadata.v1.MetadataPlane.Get:input_type -> nokv.metadata.v1.MetadataGetRequest
-	13, // 31: nokv.metadata.v1.MetadataPlane.BatchGet:input_type -> nokv.metadata.v1.MetadataBatchGetRequest
-	15, // 32: nokv.metadata.v1.MetadataPlane.Scan:input_type -> nokv.metadata.v1.MetadataScanRequest
-	21, // 33: nokv.metadata.v1.MetadataPlane.CommitMetadata:input_type -> nokv.metadata.v1.MetadataCommitRequest
-	23, // 34: nokv.metadata.v1.MetadataPlane.WatchApply:input_type -> nokv.metadata.v1.MetadataWatchApplyRequest
-	12, // 35: nokv.metadata.v1.MetadataPlane.Get:output_type -> nokv.metadata.v1.MetadataGetResponse
-	14, // 36: nokv.metadata.v1.MetadataPlane.BatchGet:output_type -> nokv.metadata.v1.MetadataBatchGetResponse
-	16, // 37: nokv.metadata.v1.MetadataPlane.Scan:output_type -> nokv.metadata.v1.MetadataScanResponse
-	22, // 38: nokv.metadata.v1.MetadataPlane.CommitMetadata:output_type -> nokv.metadata.v1.MetadataCommitResponse
-	25, // 39: nokv.metadata.v1.MetadataPlane.WatchApply:output_type -> nokv.metadata.v1.MetadataWatchApplyResponse
-	35, // [35:40] is the sub-list for method output_type
-	30, // [30:35] is the sub-list for method input_type
-	30, // [30:30] is the sub-list for extension type_name
-	30, // [30:30] is the sub-list for extension extendee
-	0,  // [0:30] is the sub-list for field type_name
+	8,  // 4: nokv.metadata.v1.MetadataKeyError.already_exists:type_name -> nokv.metadata.v1.MetadataKeyAlreadyExists
+	5,  // 5: nokv.metadata.v1.MetadataGetRequest.context:type_name -> nokv.metadata.v1.MetadataContext
+	6,  // 6: nokv.metadata.v1.MetadataGetResponse.kv:type_name -> nokv.metadata.v1.MetadataKV
+	7,  // 7: nokv.metadata.v1.MetadataGetResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
+	26, // 8: nokv.metadata.v1.MetadataGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	5,  // 9: nokv.metadata.v1.MetadataBatchGetRequest.context:type_name -> nokv.metadata.v1.MetadataContext
+	9,  // 10: nokv.metadata.v1.MetadataBatchGetRequest.requests:type_name -> nokv.metadata.v1.MetadataGetRequest
+	10, // 11: nokv.metadata.v1.MetadataBatchGetResponse.responses:type_name -> nokv.metadata.v1.MetadataGetResponse
+	26, // 12: nokv.metadata.v1.MetadataBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	5,  // 13: nokv.metadata.v1.MetadataScanRequest.context:type_name -> nokv.metadata.v1.MetadataContext
+	6,  // 14: nokv.metadata.v1.MetadataScanResponse.kvs:type_name -> nokv.metadata.v1.MetadataKV
+	7,  // 15: nokv.metadata.v1.MetadataScanResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
+	26, // 16: nokv.metadata.v1.MetadataScanResponse.region_error:type_name -> nokv.error.v1.RegionError
+	2,  // 17: nokv.metadata.v1.MetadataPredicate.kind:type_name -> nokv.metadata.v1.MetadataPredicateKind
+	4,  // 18: nokv.metadata.v1.MetadataMutation.op:type_name -> nokv.metadata.v1.MetadataMutation.Op
+	15, // 19: nokv.metadata.v1.MetadataCommand.predicates:type_name -> nokv.metadata.v1.MetadataPredicate
+	16, // 20: nokv.metadata.v1.MetadataCommand.mutations:type_name -> nokv.metadata.v1.MetadataMutation
+	5,  // 21: nokv.metadata.v1.MetadataCommitRequest.context:type_name -> nokv.metadata.v1.MetadataContext
+	17, // 22: nokv.metadata.v1.MetadataCommitRequest.command:type_name -> nokv.metadata.v1.MetadataCommand
+	18, // 23: nokv.metadata.v1.MetadataCommitResponse.result:type_name -> nokv.metadata.v1.MetadataCommitResult
+	7,  // 24: nokv.metadata.v1.MetadataCommitResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
+	26, // 25: nokv.metadata.v1.MetadataCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
+	3,  // 26: nokv.metadata.v1.MetadataApplyWatchEvent.source:type_name -> nokv.metadata.v1.MetadataApplyWatchEventSource
+	22, // 27: nokv.metadata.v1.MetadataWatchApplyResponse.event:type_name -> nokv.metadata.v1.MetadataApplyWatchEvent
+	9,  // 28: nokv.metadata.v1.MetadataPlane.Get:input_type -> nokv.metadata.v1.MetadataGetRequest
+	11, // 29: nokv.metadata.v1.MetadataPlane.BatchGet:input_type -> nokv.metadata.v1.MetadataBatchGetRequest
+	13, // 30: nokv.metadata.v1.MetadataPlane.Scan:input_type -> nokv.metadata.v1.MetadataScanRequest
+	19, // 31: nokv.metadata.v1.MetadataPlane.CommitMetadata:input_type -> nokv.metadata.v1.MetadataCommitRequest
+	21, // 32: nokv.metadata.v1.MetadataPlane.WatchApply:input_type -> nokv.metadata.v1.MetadataWatchApplyRequest
+	10, // 33: nokv.metadata.v1.MetadataPlane.Get:output_type -> nokv.metadata.v1.MetadataGetResponse
+	12, // 34: nokv.metadata.v1.MetadataPlane.BatchGet:output_type -> nokv.metadata.v1.MetadataBatchGetResponse
+	14, // 35: nokv.metadata.v1.MetadataPlane.Scan:output_type -> nokv.metadata.v1.MetadataScanResponse
+	20, // 36: nokv.metadata.v1.MetadataPlane.CommitMetadata:output_type -> nokv.metadata.v1.MetadataCommitResponse
+	23, // 37: nokv.metadata.v1.MetadataPlane.WatchApply:output_type -> nokv.metadata.v1.MetadataWatchApplyResponse
+	33, // [33:38] is the sub-list for method output_type
+	28, // [28:33] is the sub-list for method input_type
+	28, // [28:28] is the sub-list for extension type_name
+	28, // [28:28] is the sub-list for extension extendee
+	0,  // [0:28] is the sub-list for field type_name
 }
 
 func init() { file_metadata_metadata_proto_init() }
@@ -1949,7 +1771,7 @@ func file_metadata_metadata_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_metadata_metadata_proto_rawDesc), len(file_metadata_metadata_proto_rawDesc)),
 			NumEnums:      5,
-			NumMessages:   21,
+			NumMessages:   19,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

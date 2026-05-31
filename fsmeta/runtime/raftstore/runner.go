@@ -404,42 +404,6 @@ func keyError(err *metadatapb.MetadataKeyError) error {
 			Message: msg,
 		})
 	}
-	if conflict := err.GetWriteConflict(); conflict != nil {
-		msg := fmt.Sprintf(
-			"fsmeta/runtime/raftstore: metadata write conflict key=%q primary=%q start=%d conflict=%d commit=%d",
-			conflict.GetKey(),
-			conflict.GetPrimary(),
-			conflict.GetStartTs(),
-			conflict.GetConflictTs(),
-			conflict.GetCommitTs(),
-		)
-		return nokverrors.NewMetadataKeyError(nokverrors.MetadataKeyIssue{
-			Kind:            nokverrors.KindWriteConflict,
-			Key:             cloneBytes(conflict.GetKey()),
-			Primary:         cloneBytes(conflict.GetPrimary()),
-			StartVersion:    conflict.GetStartTs(),
-			ConflictVersion: conflict.GetConflictTs(),
-			CommitVersion:   conflict.GetCommitTs(),
-			Message:         msg,
-		})
-	}
-	if locked := err.GetLocked(); locked != nil {
-		msg := fmt.Sprintf(
-			"fsmeta/runtime/raftstore: metadata lock conflict key=%q primary=%q version=%d ttl=%d",
-			locked.GetKey(),
-			locked.GetPrimaryLock(),
-			locked.GetLockVersion(),
-			locked.GetLockTtl(),
-		)
-		return nokverrors.NewMetadataKeyError(nokverrors.MetadataKeyIssue{
-			Kind:        nokverrors.KindLockConflict,
-			Key:         cloneBytes(locked.GetKey()),
-			Primary:     cloneBytes(locked.GetPrimaryLock()),
-			LockVersion: locked.GetLockVersion(),
-			LockTTL:     locked.GetLockTtl(),
-			Message:     msg,
-		})
-	}
 	return nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: empty metadata key error")
 }
 
