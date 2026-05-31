@@ -354,7 +354,10 @@ Known gaps:
   prerequisite for dynamic child-region registration after split apply.
   Coordinator heartbeats now read from the same mutable hosted-region model
   instead of a startup-only region list, so future split-created child regions
-  can be advertised without restarting the process.
+  can be advertised without restarting the process. The single-region server
+  startup path now also uses the same multi-region service and heartbeat
+  assembly, so dynamic region registration will apply to the default endpoint
+  instead of only to explicit multi-region startup.
   Coordinator-owned lifecycle, split/merge execution, and default compose
   cutover are still pending.
 - Region metadata has a Holt persistence point for descriptors and apply-state

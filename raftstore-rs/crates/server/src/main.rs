@@ -37,96 +37,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let coordinator = coordinator_heartbeat_config_from_env()?;
     let peer_endpoints = peer_endpoint_catalog_from_env()?;
     let mut temp_log_dir = None;
-    if identities.len() > 1 {
-        if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_HOLT_DIR") {
-            serve_holt_regions(
-                addr,
-                identities,
-                coordinator,
-                peer_endpoints,
-                region_ranges,
-                PathBuf::from(path),
-                &mut temp_log_dir,
-            )
-            .await?;
-        } else {
-            serve_memory_regions(
-                addr,
-                identities,
-                coordinator,
-                peer_endpoints,
-                region_ranges,
-                &mut temp_log_dir,
-            )
-            .await?;
-        }
-        return Ok(());
-    }
-    let identity = identities[0];
     if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_HOLT_DIR") {
-        tracing::info!(%addr, %path, "starting rust raftstore server with Holt MVCC");
-        let path = PathBuf::from(path);
-        let log_dir = raft_log_dir(Some(path.clone()), &mut temp_log_dir)?;
-        let mvcc = HoltMvccStore::open_file(path)?;
-        let descriptor =
-            startup_region_descriptor(&mvcc, identity, region_ranges.get(identity.region_id))?;
-        let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
-        let apply_status = mvcc
-            .get_region_apply_state(descriptor.region_id)?
-            .map(apply_status_from_holt)
-            .unwrap_or(nokv_raftnode::ApplyStatus {
-                region_id: descriptor.region_id,
-                term: 1,
-                applied_index: 0,
-            });
-        let engine = AppliedKvEngine::with_status(apply_status, mvcc.clone());
-        engine.set_region_descriptor(descriptor.clone())?;
-        let engine =
-            PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
-        let region = open_openraft_region(identity, addr, log_dir, engine).await?;
-        spawn_startup_root_publication(
-            coordinator.clone(),
-            identity,
-            descriptor.clone(),
-            Some(mvcc.clone()),
-        );
-        spawn_coordinator_heartbeat(
-            coordinator.clone(),
-            identity,
+        serve_holt_regions(
             addr,
-            region.clone(),
-            Some(mvcc.clone()),
-        );
-        spawn_pending_topology_retries(coordinator.clone(), mvcc.clone(), addr);
-        let topology_publisher = coordinator_topology_publisher(coordinator, Some(mvcc.clone()));
-        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
-            addr,
-            region,
-            admission,
+            identities,
+            coordinator,
             peer_endpoints,
-            HoltRegionMetadataSink::new(mvcc.clone()),
-            topology_publisher,
-            Arc::new(mvcc.clone()),
+            region_ranges,
+            PathBuf::from(path),
+            &mut temp_log_dir,
         )
         .await?;
     } else {
-        tracing::info!(%addr, "starting rust raftstore server with in-memory MVCC");
-        let log_dir = raft_log_dir(None, &mut temp_log_dir)?;
-        let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
-        let descriptor =
-            default_region_descriptor_with_range(identity, region_ranges.get(identity.region_id));
-        engine.set_region_descriptor(descriptor.clone())?;
-        let region = open_openraft_region(identity, addr, log_dir, engine).await?;
-        spawn_startup_root_publication(coordinator.clone(), identity, descriptor.clone(), None);
-        spawn_coordinator_heartbeat(coordinator.clone(), identity, addr, region.clone(), None);
-        nokv_raftstore_server::serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
+        serve_memory_regions(
             addr,
-            region,
-            RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?,
+            identities,
+            coordinator,
             peer_endpoints,
-            EmptyRegionDescriptorSink,
-            coordinator_topology_publisher(coordinator, None),
-            Arc::new(EmptyRestartDiagnostics),
+            region_ranges,
+            &mut temp_log_dir,
         )
         .await?;
     }
@@ -958,32 +887,6 @@ fn spawn_pending_topology_retries(
     });
 }
 
-fn spawn_startup_root_publication(
-    config: Option<CoordinatorHeartbeatConfig>,
-    identity: ServerIdentity,
-    descriptor: metapb::RegionDescriptor,
-    pending_store: Option<HoltMvccStore>,
-) {
-    let Some(config) = config else {
-        return;
-    };
-    tokio::spawn(async move {
-        for event in startup_root_events(identity, descriptor) {
-            let outcome =
-                publish_root_event_with_pending(&config.endpoints, pending_store.as_ref(), event)
-                    .await;
-            if outcome.publish_state() == adminpb::ExecutionPublishState::TerminalPublished {
-                continue;
-            }
-            tracing::debug!(
-                publish = ?outcome.publish_state(),
-                error = %outcome.last_error(),
-                "rust raftstore startup root publication deferred"
-            );
-        }
-    });
-}
-
 fn spawn_startup_root_publication_for_regions(
     config: Option<CoordinatorHeartbeatConfig>,
     identities: Vec<ServerIdentity>,
@@ -1152,23 +1055,6 @@ async fn retry_pending_scheduler_operations(admin_endpoint: &str, pending_store:
     }
 }
 
-fn spawn_coordinator_heartbeat<E>(
-    config: Option<CoordinatorHeartbeatConfig>,
-    identity: ServerIdentity,
-    addr: SocketAddr,
-    region: OpenRaftRegion<E>,
-    root_events: Option<HoltMvccStore>,
-) where
-    E: RegionSnapshotEngine + Send + Sync + 'static,
-{
-    let Some(config) = config else {
-        return;
-    };
-    tokio::spawn(async move {
-        run_coordinator_heartbeat(config, identity, addr, region, root_events).await;
-    });
-}
-
 fn spawn_multi_region_coordinator_heartbeat<E>(
     config: Option<CoordinatorHeartbeatConfig>,
     store_id: u64,
@@ -1184,37 +1070,6 @@ fn spawn_multi_region_coordinator_heartbeat<E>(
     tokio::spawn(async move {
         run_multi_region_coordinator_heartbeat(config, store_id, addr, regions, root_events).await;
     });
-}
-
-async fn run_coordinator_heartbeat<E>(
-    config: CoordinatorHeartbeatConfig,
-    identity: ServerIdentity,
-    addr: SocketAddr,
-    region: OpenRaftRegion<E>,
-    root_events: Option<HoltMvccStore>,
-) where
-    E: RegionSnapshotEngine + Send + Sync + 'static,
-{
-    let mut ticker = tokio::time::interval(config.interval);
-    let admin_endpoint = local_admin_endpoint(addr);
-    loop {
-        ticker.tick().await;
-        let request = coordinator_heartbeat_request(identity, addr, &region, root_events.as_ref());
-        match send_store_heartbeat(&config.endpoints, request).await {
-            Ok(operations) => {
-                for operation in operations {
-                    record_scheduler_operation_outcome(
-                        root_events.as_ref(),
-                        &operation,
-                        execute_scheduler_operation(&admin_endpoint, &operation).await,
-                    );
-                }
-            }
-            Err(err) => {
-                tracing::debug!(error = %err, "rust raftstore coordinator heartbeat failed");
-            }
-        }
-    }
 }
 
 async fn run_multi_region_coordinator_heartbeat<E>(
@@ -1579,18 +1434,6 @@ where
         TonicRaftNetworkFactory::new(identity.region_id),
     )
     .await?)
-}
-
-fn raft_log_dir(
-    persistent_root: Option<PathBuf>,
-    temp_log_dir: &mut Option<tempfile::TempDir>,
-) -> Result<PathBuf, Box<dyn std::error::Error>> {
-    raft_log_dir_for_region(
-        persistent_root.as_deref(),
-        ServerIdentity::default(),
-        false,
-        temp_log_dir,
-    )
 }
 
 fn raft_log_dir_for_region(
