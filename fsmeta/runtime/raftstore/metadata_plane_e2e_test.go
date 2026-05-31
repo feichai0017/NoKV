@@ -324,6 +324,63 @@ func TestRustMetadataPlaneRouteSurvivesCoordinatorRebuild(t *testing.T) {
 	require.Equal(t, created.Inode.Inode, lookup.Inode.Inode)
 }
 
+func TestRustMetadataPlaneRejectsRetiredMountAfterCoordinatorRebuild(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	repo := repoRootFromThisFile(t)
+	binary := buildRustRaftstoreServer(t, ctx, repo)
+	addr := freeTCPAddr(t)
+	logs := startRustRaftstoreServer(t, ctx, binary, repo, addr)
+	waitForRustMetadataPlane(t, ctx, addr)
+
+	rootStore := newE2ERootStorage()
+	firstCoordinator := newE2ERootedCoordinator(rootStore)
+	publishRootEvent(t, firstCoordinator, rootevent.StoreJoined(1))
+	publishRootEvent(t, firstCoordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
+	publishRootEvent(t, firstCoordinator, rootevent.RegionBootstrapped(testMetadataPlaneDescriptor()))
+	heartbeatRustStore(t, ctx, firstCoordinator, addr)
+
+	active, err := Open(ctx, Options{
+		Coordinator:    firstCoordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	require.NoError(t, active.Close())
+	publishRootEvent(t, firstCoordinator, rootevent.MountRetired("vol"))
+
+	rebuiltCoordinator := newE2ERootedCoordinator(rootStore)
+	require.NoError(t, rebuiltCoordinator.ReloadFromStorage())
+	heartbeatRustStore(t, ctx, rebuiltCoordinator, addr)
+
+	_, err = Open(ctx, Options{
+		Coordinator:    rebuiltCoordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.ErrorIs(t, err, model.ErrMountRetired)
+
+	runtime, err := Open(ctx, Options{
+		Coordinator: rebuiltCoordinator,
+		DialTimeout: 5 * time.Second,
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
+
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-retire-rebuild.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 1,
+			Mode: 0o644,
+		},
+	})
+	require.ErrorIs(t, err, model.ErrMountRetired)
+}
+
 func TestRustMetadataPlaneSurvivesRaftstoreRestart(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
