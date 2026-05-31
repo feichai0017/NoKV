@@ -835,6 +835,57 @@ func TestRustRaftstoreEndpointAppliesCoordinatorLeaderTransfer(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
+func TestRustRaftstoreEndpointKeepsUnsupportedSplitSchedulerOperationPendingAcrossRestart(t *testing.T) {
+	heartbeatCh := make(chan *coordpb.StoreHeartbeatRequest, 32)
+	operationCh := make(chan *coordpb.SchedulerOperation, 1)
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorCaptureWithOperations(t, heartbeatCh, operationCh)
+	defer stopCoord()
+
+	storeAddr := reserveLocalAddr(t)
+	storeDir := t.TempDir()
+	env := []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	}
+	stopStore := startRustRaftstoreProcessAt(t, storeAddr, storeDir, env)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	require.Eventually(t, func() bool {
+		select {
+		case heartbeat := <-heartbeatCh:
+			return heartbeat.GetStoreId() == 1 &&
+				heartbeat.GetRegionNum() == 1 &&
+				heartbeat.GetLeaderNum() == 1
+		default:
+			return false
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+
+	operationCh <- &coordpb.SchedulerOperation{
+		Type:       coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION,
+		RegionId:   1,
+		SplitKey:   []byte("m"),
+		SplitChild: rustRaftstoreRegion(2, 1, 2, []byte("m"), nil),
+	}
+	admin, closeAdmin, err := adminclient.Dial(ctx, storeAddr)
+	require.NoError(t, err)
+	requireRustRaftstorePendingSplitSchedulerOperation(t, ctx, admin)
+	require.NoError(t, closeAdmin())
+	stopStore()
+
+	stopStore = startRustRaftstoreProcessAt(t, storeAddr, storeDir, env)
+	defer stopStore()
+	admin, closeAdmin, err = adminclient.Dial(ctx, storeAddr)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closeAdmin()) }()
+	requireRustRaftstorePendingSplitSchedulerOperation(t, ctx, admin)
+}
+
 func TestRustRaftstoreEndpointHoltMembershipSurvivesRestart(t *testing.T) {
 	addrs := map[uint64]string{
 		1: reserveLocalAddr(t),
@@ -1440,6 +1491,30 @@ func waitForRustRaftstoreLeaderPeer(t *testing.T, ctx context.Context, addrs map
 		_ = closeAdmin()
 		return statusErr == nil && status.GetLeader()
 	}, 5*time.Second, 100*time.Millisecond)
+}
+
+func requireRustRaftstorePendingSplitSchedulerOperation(t *testing.T, ctx context.Context, admin adminclient.Client) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		execution, err := admin.ExecutionStatus(ctx, &adminpb.ExecutionStatusRequest{})
+		if err != nil {
+			return false
+		}
+		if execution.GetRestart().GetPendingSchedulerOperationCount() != 1 {
+			return false
+		}
+		for _, status := range execution.GetTopology() {
+			if status.GetTransitionId() == "split:1:6d" &&
+				status.GetRegionId() == 1 &&
+				status.GetAction() == "range split" &&
+				status.GetOutcome() == adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_QUEUED &&
+				status.GetPublish() == adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_NOT_REQUIRED &&
+				status.GetLastError() == "scheduler operation pending" {
+				return true
+			}
+		}
+		return false
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func reserveLocalAddr(t *testing.T) string {

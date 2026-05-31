@@ -346,7 +346,10 @@ Known gaps:
   aggregate store heartbeat for the process. Multi-region bootstrap now
   requires explicit non-overlapping key ranges before publishing those startup
   descriptors, and the Go tagged harness covers routing through a real
-  coordinator using the published descriptors. Coordinator-owned lifecycle,
+  coordinator using the published descriptors. Unsupported coordinator split
+  operations are persisted as pending Holt scheduler diagnostics and the Go
+  tagged harness now verifies that the pending record survives a Rust endpoint
+  restart instead of being silently consumed. Coordinator-owned lifecycle,
   split/merge execution, and default compose cutover are still pending.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
