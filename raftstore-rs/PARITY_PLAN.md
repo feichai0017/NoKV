@@ -201,6 +201,9 @@ The first slices are intentionally narrow:
   mutate/get/watch, Holt apply-status restart, 2PC, `BatchGet`, `Scan`, and
   `InstallPreparedMVCCEntries` against the Rust server. Rust `Scan` now also
   matches the Go service boundary by rejecting reverse scans as unimplemented.
+  Rust `CheckTxnStatus` and `TxnHeartBeat` now also match Go's RPC boundary by
+  filling omitted `current_time` fields with service physical time before
+  proposing the request.
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.

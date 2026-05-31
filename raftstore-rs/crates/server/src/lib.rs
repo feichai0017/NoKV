@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use nokv_holtstore::{
     BlockedRootEvent, BlockedSchedulerOperation, HoltMvccStore, PendingRootEvent,
@@ -45,6 +46,33 @@ use topology::{
 const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;
 const DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE: usize = 512;
 const DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE: usize = 512 * 1024;
+
+fn service_physical_time_millis() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_millis() as u64)
+        .unwrap_or_default()
+}
+
+fn check_txn_status_request_with_service_time(
+    req: &kvpb::CheckTxnStatusRequest,
+) -> kvpb::CheckTxnStatusRequest {
+    let mut out = req.clone();
+    if out.current_time == 0 {
+        out.current_time = service_physical_time_millis();
+    }
+    out
+}
+
+fn txn_heart_beat_request_with_service_time(
+    req: &kvpb::TxnHeartBeatRequest,
+) -> kvpb::TxnHeartBeatRequest {
+    let mut out = req.clone();
+    if out.current_time == 0 {
+        out.current_time = service_physical_time_millis();
+    }
+    out
+}
 
 /// Persists OpenRaft region metadata into Holt metadata trees.
 #[derive(Clone)]
@@ -964,6 +992,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("check txn status request missing payload"))?;
+        let inner = check_txn_status_request_with_service_time(inner);
         let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
@@ -985,7 +1014,7 @@ where
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdCheckTxnStatus as i32,
-                    cmd: Some(raftpb::request::Cmd::CheckTxnStatus(inner.clone())),
+                    cmd: Some(raftpb::request::Cmd::CheckTxnStatus(inner)),
                 },
                 "check txn status",
             )
@@ -1016,6 +1045,7 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("txn heart beat request missing payload"))?;
+        let inner = txn_heart_beat_request_with_service_time(inner);
         let admission = self.admission_snapshot()?;
         let region_error = admission.admit_leader_optional_keys(
             request.context.as_ref(),
@@ -1037,7 +1067,7 @@ where
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdTxnHeartBeat as i32,
-                    cmd: Some(raftpb::request::Cmd::TxnHeartBeat(inner.clone())),
+                    cmd: Some(raftpb::request::Cmd::TxnHeartBeat(inner)),
                 },
                 "txn heart beat",
             )
@@ -3119,7 +3149,7 @@ mod tests {
                     }],
                     primary_lock: b"txn/a".to_vec(),
                     start_version: 10,
-                    lock_ttl: 10,
+                    lock_ttl: 10_000,
                     ..Default::default()
                 }),
             }))
@@ -3137,7 +3167,7 @@ mod tests {
                     primary_key: b"txn/a".to_vec(),
                     start_version: 10,
                     ttl_extension: 100,
-                    current_time: 1,
+                    ..Default::default()
                 }),
             }))
             .await
@@ -3156,7 +3186,7 @@ mod tests {
                     lock_ts: 10,
                     current_ts: 11,
                     caller_start_ts: 11,
-                    current_time: 1,
+                    current_time: 0,
                     rollback_if_not_exist: true,
                 }),
             }))

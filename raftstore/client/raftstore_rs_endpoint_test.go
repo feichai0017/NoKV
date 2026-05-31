@@ -1790,7 +1790,8 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = conn.Close() })
-	_, err = kvrpcpb.NewStoreKVClient(conn).Scan(ctx, &kvrpcpb.KvScanRequest{
+	raw := kvrpcpb.NewStoreKVClient(conn)
+	_, err = raw.Scan(ctx, &kvrpcpb.KvScanRequest{
 		Context: &kvrpcpb.Context{
 			RegionId:    meta.GetRegionId(),
 			RegionEpoch: meta.GetEpoch(),
@@ -1804,6 +1805,33 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	})
 	require.Error(t, err)
 	require.Equal(t, codes.Unimplemented, status.Code(err))
+
+	heartbeatKey := []byte("agent/heartbeat-lock")
+	prewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   heartbeatKey,
+				Value: []byte("pending"),
+			}},
+			PrimaryLock:  heartbeatKey,
+			StartVersion: 50,
+			LockTtl:      10_000,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, prewrite.GetRegionError())
+	require.Empty(t, prewrite.GetResponse().GetErrors())
+
+	heartbeat, err := cli.TxnHeartBeat(ctx, heartbeatKey, 50, 60_000)
+	require.NoError(t, err)
+	require.Nil(t, heartbeat.GetError())
+	require.GreaterOrEqual(t, heartbeat.GetLockTtl(), uint64(60_000))
 
 	install, err := cli.InstallPreparedMVCCEntries(ctx, []byte("agent/prepared"), &kvrpcpb.InstallPreparedMVCCEntriesRequest{
 		CommitVersion: 40,
