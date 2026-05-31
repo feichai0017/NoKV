@@ -5,6 +5,7 @@ package raftstore
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -42,6 +43,7 @@ type CoordinatorRouteProvider struct {
 	mu          sync.Mutex
 	clients     map[string]storeClient
 	leaderHints map[uint64]*metapb.RegionPeer
+	failedPeers map[uint64]map[string]time.Time
 }
 
 type storeClient struct {
@@ -72,6 +74,7 @@ func NewCoordinatorRouteProvider(coordinator CoordinatorClient, opts Coordinator
 		dialTimeout: timeout,
 		clients:     make(map[string]storeClient),
 		leaderHints: make(map[uint64]*metapb.RegionPeer),
+		failedPeers: make(map[uint64]map[string]time.Time),
 	}, nil
 }
 
@@ -93,8 +96,13 @@ func (p *CoordinatorRouteProvider) RouteForKey(ctx context.Context, key []byte) 
 	if len(peers) == 0 {
 		return MetadataRoute{}, nokverrors.New(nokverrors.KindRouteUnavailable, "fsmeta/runtime/raftstore: metadata region has no serving peer")
 	}
+	regionID := resp.GetRegionDescriptor().GetRegionId()
+	now := time.Now()
 	var lastErr error
 	for _, peer := range peers {
+		if p.peerFailureActive(regionID, peer, now) {
+			continue
+		}
 		storeResp, err := p.coordinator.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: peer.GetStoreId()})
 		if err != nil {
 			lastErr = err
@@ -111,13 +119,14 @@ func (p *CoordinatorRouteProvider) RouteForKey(ctx context.Context, key []byte) 
 		}
 		return MetadataRoute{
 			Context: &metadatapb.MetadataContext{
-				RegionId:        resp.GetRegionDescriptor().GetRegionId(),
+				RegionId:        regionID,
 				RegionEpoch:     resp.GetRegionDescriptor().GetEpoch(),
 				Peer:            peer,
 				ReadConsistency: metadatapb.ReadConsistency_READ_CONSISTENCY_STRONG,
 				ReadPreference:  metadatapb.ReadPreference_READ_PREFERENCE_LEADER_ONLY,
 			},
-			Client: client,
+			StoreAddr: store.GetClientAddr(),
+			Client:    client,
 		}, nil
 	}
 	if lastErr != nil {
@@ -140,6 +149,37 @@ func (p *CoordinatorRouteProvider) ObserveRegionError(_ context.Context, _ []byt
 	p.mu.Unlock()
 }
 
+func (p *CoordinatorRouteProvider) ObserveRouteFailure(_ context.Context, _ []byte, route MetadataRoute, _ error) {
+	if p == nil || route.Context == nil || route.Context.GetPeer() == nil {
+		return
+	}
+	regionID := route.Context.GetRegionId()
+	peerKey := routePeerFailureKey(route.Context.GetPeer())
+	if regionID == 0 || peerKey == "" {
+		return
+	}
+	target := normalizeStoreTarget(route.StoreAddr)
+	var staleConn *grpc.ClientConn
+	p.mu.Lock()
+	if p.failedPeers == nil {
+		p.failedPeers = make(map[uint64]map[string]time.Time)
+	}
+	if p.failedPeers[regionID] == nil {
+		p.failedPeers[regionID] = make(map[string]time.Time)
+	}
+	p.failedPeers[regionID][peerKey] = time.Now().Add(p.dialTimeout)
+	if target != "" {
+		if cached, ok := p.clients[target]; ok {
+			staleConn = cached.conn
+			delete(p.clients, target)
+		}
+	}
+	p.mu.Unlock()
+	if staleConn != nil {
+		_ = staleConn.Close()
+	}
+}
+
 func (p *CoordinatorRouteProvider) Close() error {
 	if p == nil {
 		return nil
@@ -158,6 +198,31 @@ func (p *CoordinatorRouteProvider) Close() error {
 		}
 	}
 	return first
+}
+
+func (p *CoordinatorRouteProvider) peerFailureActive(regionID uint64, peer *metapb.RegionPeer, now time.Time) bool {
+	key := routePeerFailureKey(peer)
+	if p == nil || regionID == 0 || key == "" {
+		return false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	failed := p.failedPeers[regionID]
+	if len(failed) == 0 {
+		return false
+	}
+	until, ok := failed[key]
+	if !ok {
+		return false
+	}
+	if !now.Before(until) {
+		delete(failed, key)
+		if len(failed) == 0 {
+			delete(p.failedPeers, regionID)
+		}
+		return false
+	}
+	return true
 }
 
 func (p *CoordinatorRouteProvider) leaderHint(regionID uint64) *metapb.RegionPeer {
@@ -237,6 +302,13 @@ func peerInCandidateList(peers []*metapb.RegionPeer, peer *metapb.RegionPeer) bo
 		}
 	}
 	return false
+}
+
+func routePeerFailureKey(peer *metapb.RegionPeer) string {
+	if peer == nil || peer.GetStoreId() == 0 || peer.GetPeerId() == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d", peer.GetStoreId(), peer.GetPeerId())
 }
 
 func descriptorHasPeer(desc *metapb.RegionDescriptor, peer *metapb.RegionPeer) bool {

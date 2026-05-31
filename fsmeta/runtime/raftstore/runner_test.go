@@ -12,7 +12,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
@@ -207,6 +209,69 @@ func TestRunnerCommitMetadataRetriesAfterNotLeaderRouteError(t *testing.T) {
 	require.Equal(t, 1, secondAttempts)
 	require.Equal(t, 2, routes.routeCalls)
 	require.Equal(t, 1, routes.observedNotLeader)
+	require.Equal(t, []byte("primary"), routes.observedKey)
+}
+
+func TestRunnerCommitMetadataRetriesAfterTransportRouteFailure(t *testing.T) {
+	var firstAttempts int
+	var secondAttempts int
+	firstClient := &fakeMetadataPlaneClient{
+		commitMetadata: func(context.Context, *metadatapb.MetadataCommitRequest) (*metadatapb.MetadataCommitResponse, error) {
+			firstAttempts++
+			return nil, status.Error(codes.Unavailable, "cached leader connection is down")
+		},
+	}
+	secondClient := &fakeMetadataPlaneClient{
+		commitMetadata: func(_ context.Context, req *metadatapb.MetadataCommitRequest) (*metadatapb.MetadataCommitResponse, error) {
+			secondAttempts++
+			require.Equal(t, []byte("req-transport-retry"), req.GetCommand().GetRequestId())
+			require.Equal(t, uint64(2), req.GetContext().GetPeer().GetStoreId())
+			return &metadatapb.MetadataCommitResponse{
+				Result: &metadatapb.MetadataCommitResult{
+					CommitVersion:    14,
+					RegionId:         7,
+					Term:             4,
+					Index:            46,
+					AppliedMutations: 1,
+				},
+			}, nil
+		},
+	}
+	routes := &transportRetryRouteProvider{
+		initial: MetadataRoute{
+			Context: &metadatapb.MetadataContext{
+				RegionId: 7,
+				Peer:     &metapb.RegionPeer{StoreId: 1, PeerId: 11},
+			},
+			StoreAddr: "store-1",
+			Client:    firstClient,
+		},
+		next: MetadataRoute{
+			Context: &metadatapb.MetadataContext{
+				RegionId: 7,
+				Peer:     &metapb.RegionPeer{StoreId: 2, PeerId: 22},
+			},
+			StoreAddr: "store-2",
+			Client:    secondClient,
+		},
+	}
+	runner, err := NewRunner(routes, newMonotonicTimestampSource(1))
+	require.NoError(t, err)
+
+	result, err := runner.CommitMetadata(context.Background(), backend.MetadataCommand{
+		RequestID:   []byte("req-transport-retry"),
+		PrimaryKey:  []byte("primary"),
+		ReadVersion: 10,
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: []byte("primary"), Value: []byte("v")},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(14), result.CommitVersion)
+	require.Equal(t, 1, firstAttempts)
+	require.Equal(t, 1, secondAttempts)
+	require.Equal(t, 2, routes.routeCalls)
+	require.Equal(t, 1, routes.observedFailures)
 	require.Equal(t, []byte("primary"), routes.observedKey)
 }
 
@@ -843,5 +908,30 @@ func (p *notLeaderRetryRouteProvider) ObserveRegionError(_ context.Context, key 
 		return
 	}
 	p.observedNotLeader++
+	p.observedKey = cloneBytes(key)
+}
+
+type transportRetryRouteProvider struct {
+	initial MetadataRoute
+	next    MetadataRoute
+
+	routeCalls       int
+	observedFailures int
+	observedKey      []byte
+}
+
+func (p *transportRetryRouteProvider) RouteForKey(context.Context, []byte) (MetadataRoute, error) {
+	p.routeCalls++
+	if p.observedFailures > 0 {
+		return p.next, nil
+	}
+	return p.initial, nil
+}
+
+func (p *transportRetryRouteProvider) ObserveRouteFailure(_ context.Context, key []byte, _ MetadataRoute, err error) {
+	if err == nil {
+		return
+	}
+	p.observedFailures++
 	p.observedKey = cloneBytes(key)
 }

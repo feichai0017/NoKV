@@ -11,6 +11,8 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	metadatapb "github.com/feichai0017/NoKV/pb/metadata"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 )
 
 const maxRouteAttempts = 3
@@ -22,8 +24,9 @@ type TimestampSource interface {
 
 // MetadataRoute is one resolved data-plane serving route.
 type MetadataRoute struct {
-	Context *metadatapb.MetadataContext
-	Client  metadatapb.MetadataPlaneClient
+	Context   *metadatapb.MetadataContext
+	StoreAddr string
+	Client    metadatapb.MetadataPlaneClient
 }
 
 // RouteProvider returns the current serving route for a metadata key. The
@@ -35,6 +38,10 @@ type RouteProvider interface {
 
 type routeErrorObserver interface {
 	ObserveRegionError(context.Context, []byte, MetadataRoute, *errorpb.RegionError)
+}
+
+type routeFailureObserver interface {
+	ObserveRouteFailure(context.Context, []byte, MetadataRoute, error)
 }
 
 // Runner implements backend.Store over MetadataPlane.
@@ -71,6 +78,11 @@ func (r *Runner) Get(ctx context.Context, key []byte, version uint64) ([]byte, b
 			Version: version,
 		})
 		if err != nil {
+			if shouldRetryRouteCall(ctx, err, attempt) {
+				lastErr = err
+				r.observeRouteFailure(ctx, key, route, err)
+				continue
+			}
 			return nil, false, err
 		}
 		if routeErr := resp.GetRegionError(); routeErr != nil {
@@ -115,6 +127,11 @@ func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 			Requests: reqs,
 		})
 		if err != nil {
+			if shouldRetryRouteCall(ctx, err, attempt) {
+				lastErr = err
+				r.observeRouteFailure(ctx, keys[0], route, err)
+				continue
+			}
 			return nil, err
 		}
 		if routeErr := resp.GetRegionError(); routeErr != nil {
@@ -159,6 +176,11 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 			Version:  version,
 		})
 		if err != nil {
+			if shouldRetryRouteCall(ctx, err, attempt) {
+				lastErr = err
+				r.observeRouteFailure(ctx, startKey, route, err)
+				continue
+			}
 			return nil, err
 		}
 		if routeErr := resp.GetRegionError(); routeErr != nil {
@@ -200,6 +222,11 @@ func (r *Runner) CommitMetadata(ctx context.Context, command backend.MetadataCom
 			Command: metadataCommandToProto(command),
 		})
 		if err != nil {
+			if shouldRetryRouteCall(ctx, err, attempt) {
+				lastErr = err
+				r.observeRouteFailure(ctx, routeKey, route, err)
+				continue
+			}
 			return backend.MetadataCommitResult{}, err
 		}
 		if routeErr := resp.GetRegionError(); routeErr != nil {
@@ -234,6 +261,26 @@ func (r *Runner) observeRegionError(ctx context.Context, key []byte, route Metad
 		return
 	}
 	observer.ObserveRegionError(ctx, key, route, err)
+}
+
+func (r *Runner) observeRouteFailure(ctx context.Context, key []byte, route MetadataRoute, err error) {
+	observer, ok := r.routes.(routeFailureObserver)
+	if !ok {
+		return
+	}
+	observer.ObserveRouteFailure(ctx, key, route, err)
+}
+
+func shouldRetryRouteCall(ctx context.Context, err error, attempt int) bool {
+	if err == nil || attempt >= maxRouteAttempts-1 || ctx.Err() != nil {
+		return false
+	}
+	switch status.Code(err) {
+	case codes.Unavailable, codes.DeadlineExceeded:
+		return true
+	default:
+		return false
+	}
 }
 
 func canRetryRouteError(err error) bool {
