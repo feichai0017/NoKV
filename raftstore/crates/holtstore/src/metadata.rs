@@ -1,5 +1,4 @@
 use nokv_mvcc as mvcc;
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 use crate::mvcc_engine::apply_committed;
@@ -14,9 +13,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
         if let Some(lock) = self.get_lock(&req.key)? {
             if lock.start_version <= req.version {
                 return Ok(metadatapb::MetadataGetResponse {
-                    error: Some(mvcc::metadata_key_error_from_kv(mvcc::errors::locked(
-                        &req.key, &lock,
-                    ))),
+                    error: Some(mvcc::errors::metadata_locked(&req.key, &lock)),
                     ..Default::default()
                 });
             }
@@ -88,9 +85,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             if let Some(lock) = self.get_lock(&key)? {
                 if lock.start_version <= read_version {
                     return Ok(metadatapb::MetadataScanResponse {
-                        error: Some(mvcc::metadata_key_error_from_kv(mvcc::errors::locked(
-                            &key, &lock,
-                        ))),
+                        error: Some(mvcc::errors::metadata_locked(&key, &lock)),
                         ..Default::default()
                     });
                 }
@@ -125,7 +120,8 @@ impl mvcc::MetadataEngine for HoltMvccStore {
         commit_version: u64,
     ) -> mvcc::Result<mvcc::MetadataApplyResult> {
         let _guard = self.lock()?;
-        if let Some(error) = mvcc::validation::commit_version(command.read_version, commit_version)
+        if let Some(error) =
+            mvcc::validation::metadata_commit_version(command.read_version, commit_version)
         {
             return Ok(metadata_apply_error(commit_version, error));
         }
@@ -146,16 +142,17 @@ impl mvcc::MetadataEngine for HoltMvccStore {
                 if lock.start_version <= read_version {
                     return Ok(metadata_apply_error(
                         commit_version,
-                        mvcc::errors::locked(&predicate.key, &lock),
+                        mvcc::errors::metadata_locked(&predicate.key, &lock),
                     ));
                 }
             }
             let observed = self
                 .read_committed(&predicate.key, read_version)?
                 .and_then(|(_, value)| value.value);
-            if let Some(error) =
-                mvcc::validation::metadata_predicate_observation(predicate, observed.as_deref())
-            {
+            if let Some(error) = mvcc::validation::metadata_command_predicate_observation(
+                predicate,
+                observed.as_deref(),
+            ) {
                 return Ok(metadata_apply_error(commit_version, error));
             }
         }
@@ -165,13 +162,13 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             .map(|mutation| mutation.key.as_slice())
             .unwrap_or_default();
         for mutation in &command.mutations {
-            if let Some(error) = mvcc::validation::metadata_mutation(mutation) {
+            if let Some(error) = mvcc::validation::metadata_command_mutation(mutation) {
                 return Ok(metadata_apply_error(commit_version, error));
             }
             if let Some(lock) = self.get_lock(&mutation.key)? {
                 return Ok(metadata_apply_error(
                     commit_version,
-                    mvcc::errors::locked(&mutation.key, &lock),
+                    mvcc::errors::metadata_locked(&mutation.key, &lock),
                 ));
             }
             if let Some((commit_ts, value)) =
@@ -179,7 +176,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             {
                 return Ok(metadata_apply_error(
                     commit_version,
-                    mvcc::errors::write_conflict(
+                    mvcc::errors::metadata_write_conflict(
                         &mutation.key,
                         primary,
                         commit_ts,
@@ -196,7 +193,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             {
                 return Ok(metadata_apply_error(
                     commit_version,
-                    mvcc::errors::already_exists(&mutation.key),
+                    mvcc::errors::metadata_already_exists(&mutation.key),
                 ));
             }
         }
@@ -249,7 +246,10 @@ impl HoltMvccStore {
     }
 }
 
-fn metadata_apply_error(commit_version: u64, error: kvpb::KeyError) -> mvcc::MetadataApplyResult {
+fn metadata_apply_error(
+    commit_version: u64,
+    error: metadatapb::MetadataKeyError,
+) -> mvcc::MetadataApplyResult {
     mvcc::MetadataApplyResult {
         commit_version,
         applied_mutations: 0,

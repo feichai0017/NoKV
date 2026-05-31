@@ -887,7 +887,7 @@ async fn applied_metadata_engine_suppresses_watch_events_for_failed_writes() {
         .await
         .unwrap();
 
-    assert!(rejected.error.is_some());
+    assert!(rejected.error.unwrap().already_exists.is_some());
     assert!(watch.try_recv().is_err());
 }
 
@@ -990,7 +990,7 @@ async fn metadata_command_suppresses_watch_events_for_failed_mutation() {
         .await
         .unwrap();
 
-    assert!(response.error.is_some());
+    assert!(response.error.unwrap().already_exists.is_some());
     assert!(watch.try_recv().is_err());
 }
 

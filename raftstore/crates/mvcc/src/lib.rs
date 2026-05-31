@@ -23,10 +23,7 @@ pub use types::{
     MvccSnapshotLock, MvccSnapshotRollback, MvccSnapshotWrite, MvccStore, Result, VersionedValue,
 };
 
-pub use metadata::{
-    metadata_get_response_from_kv, metadata_key_error_from_kv, metadata_mutation_matches_value,
-    metadata_mutation_value, metadata_scan_response_from_kv,
-};
+pub use metadata::{metadata_mutation_matches_value, metadata_mutation_value};
 
 pub(crate) use store::{
     apply_lock, apply_mutation, apply_rollback, blocking_lock, current_physical_time_millis,

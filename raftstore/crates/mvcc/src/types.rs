@@ -80,7 +80,7 @@ pub struct MvccStore {
 pub struct MetadataApplyResult {
     pub commit_version: u64,
     pub applied_mutations: u64,
-    pub error: Option<kvpb::KeyError>,
+    pub error: Option<metadatapb::MetadataKeyError>,
 }
 
 pub trait MetadataEngine: Clone + Send + Sync + 'static {

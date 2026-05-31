@@ -78,7 +78,7 @@ where
                     0
                 },
             }),
-            error: response.error.map(nokv_mvcc::metadata_key_error_from_kv),
+            error: response.error,
             region_error: None,
         })
     }
