@@ -1221,12 +1221,9 @@ impl mvcc::KvEngine for HoltMvccStore {
         req: &kvpb::TxnHeartBeatRequest,
     ) -> mvcc::Result<kvpb::TxnHeartBeatResponse> {
         let _guard = self.lock()?;
-        if req.ttl_extension == 0 || req.current_time == 0 {
+        if let Some(error) = mvcc::txn_heartbeat_validation_error(req) {
             return Ok(kvpb::TxnHeartBeatResponse {
-                error: Some(kvpb::KeyError {
-                    abort: "invalid txn heartbeat request".to_owned(),
-                    ..Default::default()
-                }),
+                error: Some(error),
                 ..Default::default()
             });
         }
@@ -1254,6 +1251,12 @@ impl mvcc::KvEngine for HoltMvccStore {
         if lock.start_version != req.start_version {
             return Ok(kvpb::TxnHeartBeatResponse {
                 error: Some(mvcc::locked_error(&req.primary_key, &lock)),
+                ..Default::default()
+            });
+        }
+        if lock.primary.as_slice() != req.primary_key.as_slice() {
+            return Ok(kvpb::TxnHeartBeatResponse {
+                error: Some(mvcc::txn_heartbeat_primary_mismatch_error()),
                 ..Default::default()
             });
         }
@@ -2765,5 +2768,81 @@ mod tests {
             })
             .unwrap();
         assert!(committed.error.unwrap().abort.contains("rolled back"));
+    }
+
+    #[test]
+    fn holt_mvcc_txn_heartbeat_validates_request_like_go_percolator() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let cases = [
+            (
+                kvpb::TxnHeartBeatRequest {
+                    primary_key: Vec::new(),
+                    start_version: 10,
+                    ttl_extension: 1,
+                    current_time: 1,
+                },
+                "heartbeat primary key is required",
+            ),
+            (
+                kvpb::TxnHeartBeatRequest {
+                    primary_key: b"k".to_vec(),
+                    start_version: 0,
+                    ttl_extension: 1,
+                    current_time: 1,
+                },
+                "heartbeat start version is required",
+            ),
+            (
+                kvpb::TxnHeartBeatRequest {
+                    primary_key: b"k".to_vec(),
+                    start_version: 10,
+                    ttl_extension: 0,
+                    current_time: 1,
+                },
+                "heartbeat ttl extension is required",
+            ),
+            (
+                kvpb::TxnHeartBeatRequest {
+                    primary_key: b"k".to_vec(),
+                    start_version: 10,
+                    ttl_extension: 1,
+                    current_time: 0,
+                },
+                "heartbeat current time is required",
+            ),
+        ];
+        for (request, needle) in cases {
+            let heartbeat = store.txn_heartbeat(&request).unwrap();
+            assert_abort_contains(heartbeat.error, needle);
+        }
+    }
+
+    #[test]
+    fn holt_mvcc_txn_heartbeat_rejects_secondary_lock_primary_mismatch() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"secondary".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: b"primary".to_vec(),
+                start_version: 10,
+                lock_ttl: 10,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let heartbeat = store
+            .txn_heartbeat(&kvpb::TxnHeartBeatRequest {
+                primary_key: b"secondary".to_vec(),
+                start_version: 10,
+                ttl_extension: 100,
+                current_time: current_physical_time_millis(),
+            })
+            .unwrap();
+        assert_abort_contains(heartbeat.error, "primary key does not match lock primary");
     }
 }

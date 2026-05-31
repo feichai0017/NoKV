@@ -1861,6 +1861,22 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Nil(t, emptyRollback.GetRegionError())
 	require.Contains(t, emptyRollback.GetResponse().GetError().GetAbort(), "empty key in rollback")
 
+	emptyHeartbeat, err := raw.TxnHeartBeat(ctx, &kvrpcpb.KvTxnHeartBeatRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.TxnHeartBeatRequest{
+			PrimaryKey:   nil,
+			StartVersion: 91,
+			TtlExtension: 1,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, emptyHeartbeat.GetRegionError())
+	require.Contains(t, emptyHeartbeat.GetResponse().GetError().GetAbort(), "heartbeat primary key is required")
+
 	expiredKey := []byte("agent/expired")
 	expiredPrewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
 		Context: &kvrpcpb.Context{

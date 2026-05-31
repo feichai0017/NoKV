@@ -220,6 +220,10 @@ The first slices are intentionally narrow:
   `Prewrite`, `Commit`, `BatchRollback`, and 1PC atomic mutate return
   command-level aborts and do not partially apply valid keys from the same
   request.
+  Rust transaction heartbeat now matches Go's command-level validation for
+  missing primary key, start version, TTL extension, current time, and
+  primary-lock mismatch instead of collapsing them into a generic invalid
+  heartbeat error.
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.

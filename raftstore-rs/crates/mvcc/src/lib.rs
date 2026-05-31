@@ -464,12 +464,9 @@ impl MvccStore {
         req: &kvpb::TxnHeartBeatRequest,
     ) -> Result<kvpb::TxnHeartBeatResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
-        if req.ttl_extension == 0 || req.current_time == 0 {
+        if let Some(error) = txn_heartbeat_validation_error(req) {
             return Ok(kvpb::TxnHeartBeatResponse {
-                error: Some(kvpb::KeyError {
-                    abort: "invalid txn heartbeat request".to_owned(),
-                    ..Default::default()
-                }),
+                error: Some(error),
                 ..Default::default()
             });
         }
@@ -494,6 +491,12 @@ impl MvccStore {
         if lock.start_version != req.start_version {
             return Ok(kvpb::TxnHeartBeatResponse {
                 error: Some(locked_error(&req.primary_key, &lock)),
+                ..Default::default()
+            });
+        }
+        if lock.primary.as_slice() != req.primary_key.as_slice() {
+            return Ok(kvpb::TxnHeartBeatResponse {
+                error: Some(txn_heartbeat_primary_mismatch_error()),
                 ..Default::default()
             });
         }
@@ -1107,6 +1110,32 @@ pub fn empty_commit_key_error() -> kvpb::KeyError {
 
 pub fn empty_rollback_key_error() -> kvpb::KeyError {
     abort_error("percolator: empty key in rollback")
+}
+
+pub fn txn_heartbeat_validation_error(req: &kvpb::TxnHeartBeatRequest) -> Option<kvpb::KeyError> {
+    if req.primary_key.is_empty() {
+        return Some(abort_error("percolator: heartbeat primary key is required"));
+    }
+    if req.start_version == 0 {
+        return Some(abort_error(
+            "percolator: heartbeat start version is required",
+        ));
+    }
+    if req.ttl_extension == 0 {
+        return Some(abort_error(
+            "percolator: heartbeat ttl extension is required",
+        ));
+    }
+    if req.current_time == 0 {
+        return Some(abort_error(
+            "percolator: heartbeat current time is required",
+        ));
+    }
+    None
+}
+
+pub fn txn_heartbeat_primary_mismatch_error() -> kvpb::KeyError {
+    abort_error("percolator: heartbeat primary key does not match lock primary")
 }
 
 pub fn abort_error(message: &str) -> kvpb::KeyError {
@@ -1838,5 +1867,81 @@ mod tests {
             .unwrap();
         assert!(heartbeat.lock_ttl >= 100);
         assert!(heartbeat.lock_expire_time > 0);
+    }
+
+    #[test]
+    fn txn_heartbeat_validates_request_like_go_percolator() {
+        let store = MvccStore::new();
+        let cases = [
+            (
+                kvpb::TxnHeartBeatRequest {
+                    primary_key: Vec::new(),
+                    start_version: 10,
+                    ttl_extension: 1,
+                    current_time: 1,
+                },
+                "heartbeat primary key is required",
+            ),
+            (
+                kvpb::TxnHeartBeatRequest {
+                    primary_key: b"k".to_vec(),
+                    start_version: 0,
+                    ttl_extension: 1,
+                    current_time: 1,
+                },
+                "heartbeat start version is required",
+            ),
+            (
+                kvpb::TxnHeartBeatRequest {
+                    primary_key: b"k".to_vec(),
+                    start_version: 10,
+                    ttl_extension: 0,
+                    current_time: 1,
+                },
+                "heartbeat ttl extension is required",
+            ),
+            (
+                kvpb::TxnHeartBeatRequest {
+                    primary_key: b"k".to_vec(),
+                    start_version: 10,
+                    ttl_extension: 1,
+                    current_time: 0,
+                },
+                "heartbeat current time is required",
+            ),
+        ];
+        for (request, needle) in cases {
+            let heartbeat = store.txn_heartbeat(&request).unwrap();
+            assert_abort_contains(heartbeat.error, needle);
+        }
+    }
+
+    #[test]
+    fn txn_heartbeat_rejects_secondary_lock_primary_mismatch() {
+        let store = MvccStore::new();
+        store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"secondary".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: b"primary".to_vec(),
+                start_version: 10,
+                lock_ttl: 10,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let heartbeat = store
+            .txn_heartbeat(&kvpb::TxnHeartBeatRequest {
+                primary_key: b"secondary".to_vec(),
+                start_version: 10,
+                ttl_extension: 100,
+                current_time: current_physical_time_millis(),
+            })
+            .unwrap();
+        assert_abort_contains(heartbeat.error, "primary key does not match lock primary");
     }
 }
