@@ -140,6 +140,75 @@ func TestRunnerMapsMetadataKeyError(t *testing.T) {
 	require.True(t, nokverrors.IsKind(err, nokverrors.KindAlreadyExists))
 }
 
+func TestRunnerCommitMetadataRetriesAfterNotLeaderRouteError(t *testing.T) {
+	var firstAttempts int
+	var secondAttempts int
+	firstClient := &fakeMetadataPlaneClient{
+		commitMetadata: func(context.Context, *metadatapb.MetadataCommitRequest) (*metadatapb.MetadataCommitResponse, error) {
+			firstAttempts++
+			return &metadatapb.MetadataCommitResponse{
+				RegionError: &errorpb.RegionError{
+					NotLeader: &errorpb.NotLeader{
+						RegionId: 7,
+						Leader:   &metapb.RegionPeer{StoreId: 2, PeerId: 22},
+					},
+				},
+			}, nil
+		},
+	}
+	secondClient := &fakeMetadataPlaneClient{
+		commitMetadata: func(_ context.Context, req *metadatapb.MetadataCommitRequest) (*metadatapb.MetadataCommitResponse, error) {
+			secondAttempts++
+			require.Equal(t, []byte("req-retry"), req.GetCommand().GetRequestId())
+			require.Equal(t, []byte("primary"), req.GetCommand().GetPrimaryKey())
+			require.Equal(t, uint64(2), req.GetContext().GetPeer().GetStoreId())
+			return &metadatapb.MetadataCommitResponse{
+				Result: &metadatapb.MetadataCommitResult{
+					CommitVersion:    12,
+					RegionId:         7,
+					Term:             3,
+					Index:            44,
+					AppliedMutations: 1,
+				},
+			}, nil
+		},
+	}
+	routes := &notLeaderRetryRouteProvider{
+		initial: MetadataRoute{
+			Context: &metadatapb.MetadataContext{
+				RegionId: 7,
+				Peer:     &metapb.RegionPeer{StoreId: 1, PeerId: 11},
+			},
+			Client: firstClient,
+		},
+		leader: MetadataRoute{
+			Context: &metadatapb.MetadataContext{
+				RegionId: 7,
+				Peer:     &metapb.RegionPeer{StoreId: 2, PeerId: 22},
+			},
+			Client: secondClient,
+		},
+	}
+	runner, err := NewRunner(routes, NewMonotonicTimestampSource(1))
+	require.NoError(t, err)
+
+	result, err := runner.CommitMetadata(context.Background(), backend.MetadataCommand{
+		RequestID:   []byte("req-retry"),
+		PrimaryKey:  []byte("primary"),
+		ReadVersion: 10,
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: []byte("primary"), Value: []byte("v")},
+		},
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(12), result.CommitVersion)
+	require.Equal(t, 1, firstAttempts)
+	require.Equal(t, 1, secondAttempts)
+	require.Equal(t, 2, routes.routeCalls)
+	require.Equal(t, 1, routes.observedNotLeader)
+	require.Equal(t, []byte("primary"), routes.observedKey)
+}
+
 func TestCoordinatorRouteProviderUsesLeaderHintFromCoordinator(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
@@ -516,4 +585,29 @@ func fakeRouteCoordinator() *fakeCoordinatorClient {
 			},
 		},
 	}
+}
+
+type notLeaderRetryRouteProvider struct {
+	initial MetadataRoute
+	leader  MetadataRoute
+
+	routeCalls        int
+	observedNotLeader int
+	observedKey       []byte
+}
+
+func (p *notLeaderRetryRouteProvider) RouteForKey(context.Context, []byte) (MetadataRoute, error) {
+	p.routeCalls++
+	if p.observedNotLeader > 0 {
+		return p.leader, nil
+	}
+	return p.initial, nil
+}
+
+func (p *notLeaderRetryRouteProvider) ObserveRegionError(_ context.Context, key []byte, _ MetadataRoute, err *errorpb.RegionError) {
+	if err.GetNotLeader() == nil {
+		return
+	}
+	p.observedNotLeader++
+	p.observedKey = cloneBytes(key)
 }
