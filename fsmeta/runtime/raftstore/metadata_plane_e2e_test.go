@@ -1499,47 +1499,69 @@ func openRustMetadataPlaneThreePeerRuntime(t *testing.T, ctx context.Context) (*
 	addr2 := freeTCPAddr(t)
 	addr3 := freeTCPAddr(t)
 	peerEndpoints := map[uint64]string{1: addr1, 2: addr2, 3: addr3}
+	rootStore := newE2ERootStorage()
+	coordinator := newE2ERootedCoordinator(rootStore)
+	coordinatorAddr := startCoordinatorGRPCServer(t, coordinator)
 	peer1 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
-		addr:          addr1,
-		storeID:       1,
-		peerID:        1,
-		bootstrap:     true,
-		peerEndpoints: peerEndpoints,
+		addr:                 addr1,
+		storeID:              1,
+		peerID:               1,
+		bootstrap:            true,
+		peerEndpoints:        peerEndpoints,
+		coordinatorAddr:      coordinatorAddr,
+		coordinatorHeartbeat: 100 * time.Millisecond,
 	})
 	peer2 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
-		addr:          addr2,
-		storeID:       2,
-		peerID:        2,
-		bootstrap:     false,
-		peerEndpoints: peerEndpoints,
+		addr:                 addr2,
+		storeID:              2,
+		peerID:               2,
+		bootstrap:            false,
+		peerEndpoints:        peerEndpoints,
+		coordinatorAddr:      coordinatorAddr,
+		coordinatorHeartbeat: 100 * time.Millisecond,
 	})
 	peer3 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
-		addr:          addr3,
-		storeID:       3,
-		peerID:        3,
-		bootstrap:     false,
-		peerEndpoints: peerEndpoints,
+		addr:                 addr3,
+		storeID:              3,
+		peerID:               3,
+		bootstrap:            false,
+		peerEndpoints:        peerEndpoints,
+		coordinatorAddr:      coordinatorAddr,
+		coordinatorHeartbeat: 100 * time.Millisecond,
 	})
 	waitForRustMetadataPlane(t, ctx, addr1)
 	waitForRustAdmin(t, ctx, addr2)
 	waitForRustAdmin(t, ctx, addr3)
-
-	rootStore := newE2ERootStorage()
-	coordinator := newE2ERootedCoordinator(rootStore)
-	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
-	publishRootEvent(t, coordinator, rootevent.StoreJoined(2))
-	publishRootEvent(t, coordinator, rootevent.StoreJoined(3))
+	waitForCoordinatorRoute(t, ctx, coordinator, addr1)
+	waitForCoordinatorStore(t, ctx, coordinator, 2, addr2)
+	waitForCoordinatorStore(t, ctx, coordinator, 3, addr3)
 	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
-	target := testMetadataPlaneDescriptor()
-	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(target))
-	heartbeatRustStoreAs(t, ctx, coordinator, 1, addr1, true)
-	heartbeatRustStoreAs(t, ctx, coordinator, 2, addr2, false)
-	heartbeatRustStoreAs(t, ctx, coordinator, 3, addr3, false)
 
 	admin1, closeAdmin1 := rustAdminClient(t, addr1)
 	defer closeAdmin1()
-	addRustPeerToMetadataPlaneCluster(t, ctx, admin1, coordinator, &target, 2, 2, addr2, peer2.logs)
-	addRustPeerToMetadataPlaneCluster(t, ctx, admin1, coordinator, &target, 3, 3, addr3, peer3.logs)
+	addResp, err := admin1.AddPeer(ctx, &adminpb.AddPeerRequest{
+		RegionId: 1,
+		StoreId:  2,
+		PeerId:   2,
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", peer2.logs.String())
+	waitForCoordinatorRegionPeers(t, ctx, coordinator, 2, addResp.GetRegion().GetEpoch().GetConfVersion())
+	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return status.GetHosted() && len(status.GetRegion().GetPeers()) == 2
+	})
+	addResp, err = admin1.AddPeer(ctx, &adminpb.AddPeerRequest{
+		RegionId: 1,
+		StoreId:  3,
+		PeerId:   3,
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", peer3.logs.String())
+	waitForCoordinatorRegionPeers(t, ctx, coordinator, 3, addResp.GetRegion().GetEpoch().GetConfVersion())
+	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return status.GetHosted() && len(status.GetRegion().GetPeers()) == 3
+	})
+	waitForRustRegionStatus(t, ctx, addr3, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return status.GetHosted() && len(status.GetRegion().GetPeers()) == 3
+	})
 
 	runtime, err := Open(ctx, Options{
 		Coordinator:    coordinator,
@@ -1549,34 +1571,6 @@ func openRustMetadataPlaneThreePeerRuntime(t *testing.T, ctx context.Context) (*
 	logs := []*bytes.Buffer{peer1.logs, peer2.logs, peer3.logs}
 	require.NoError(t, err, "raftstore logs:\n%s", rustClusterLogs(logs))
 	return runtime, logs, coordinator
-}
-
-func addRustPeerToMetadataPlaneCluster(
-	t *testing.T,
-	ctx context.Context,
-	admin adminpb.RaftAdminClient,
-	coordinator *coordserver.Service,
-	target *topology.Descriptor,
-	storeID uint64,
-	peerID uint64,
-	addr string,
-	logs *bytes.Buffer,
-) {
-	t.Helper()
-	addResp, err := admin.AddPeer(ctx, &adminpb.AddPeerRequest{
-		RegionId: 1,
-		StoreId:  storeID,
-		PeerId:   peerID,
-	})
-	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
-	target.Peers = append(target.Peers, metaregion.Peer{StoreID: storeID, PeerID: peerID})
-	target.Epoch.ConfVersion = addResp.GetRegion().GetEpoch().GetConfVersion()
-	target.Hash = nil
-	target.EnsureHash()
-	publishRootEvent(t, coordinator, rootevent.PeerAdded(1, storeID, peerID, *target))
-	waitForRustRegionStatus(t, ctx, addr, func(status *adminpb.RegionRuntimeStatusResponse) bool {
-		return status.GetHosted() && len(status.GetRegion().GetPeers()) == len(target.Peers)
-	})
 }
 
 func rustClusterLogs(logs []*bytes.Buffer) string {
