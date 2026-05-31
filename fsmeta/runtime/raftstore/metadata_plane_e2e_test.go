@@ -501,6 +501,128 @@ func TestRustMetadataPlaneRoutesAfterLeaderTransfer(t *testing.T) {
 	require.Equal(t, created.Inode.Inode, lookup.Inode.Inode)
 }
 
+func TestRustMetadataPlaneRejectsRemovedPeer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	repo := repoRootFromThisFile(t)
+	binary := buildRustRaftstoreServer(t, ctx, repo)
+	addr1 := freeTCPAddr(t)
+	addr2 := freeTCPAddr(t)
+	peerEndpoints := map[uint64]string{1: addr1, 2: addr2}
+	_ = startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:          addr1,
+		storeID:       1,
+		peerID:        1,
+		bootstrap:     true,
+		peerEndpoints: peerEndpoints,
+	})
+	peer2 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:          addr2,
+		storeID:       2,
+		peerID:        2,
+		bootstrap:     false,
+		peerEndpoints: peerEndpoints,
+	})
+	waitForRustMetadataPlane(t, ctx, addr1)
+	waitForRustAdmin(t, ctx, addr2)
+
+	rootStore := newE2ERootStorage()
+	coordinator := newE2ERootedCoordinator(rootStore)
+	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
+	publishRootEvent(t, coordinator, rootevent.StoreJoined(2))
+	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
+	base := testMetadataPlaneDescriptor()
+	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(base))
+	heartbeatRustStoreAs(t, ctx, coordinator, 1, addr1, true)
+	heartbeatRustStoreAs(t, ctx, coordinator, 2, addr2, false)
+
+	admin1, closeAdmin1 := rustAdminClient(t, addr1)
+	defer closeAdmin1()
+	addResp, err := admin1.AddPeer(ctx, &adminpb.AddPeerRequest{
+		RegionId: 1,
+		StoreId:  2,
+		PeerId:   2,
+	})
+	require.NoError(t, err, "peer2 raftstore logs:\n%s", peer2.logs.String())
+	added := base.Clone()
+	added.Peers = append(added.Peers, metaregion.Peer{StoreID: 2, PeerID: 2})
+	added.Epoch.ConfVersion = addResp.GetRegion().GetEpoch().GetConfVersion()
+	added.Hash = nil
+	added.EnsureHash()
+	publishRootEvent(t, coordinator, rootevent.PeerAdded(1, 2, 2, added))
+	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return status.GetHosted() && len(status.GetRegion().GetPeers()) == 2
+	})
+
+	removeResp, err := admin1.RemovePeer(ctx, &adminpb.RemovePeerRequest{
+		RegionId: 1,
+		PeerId:   2,
+	})
+	require.NoError(t, err, "peer2 raftstore logs:\n%s", peer2.logs.String())
+	removed := base.Clone()
+	removed.Epoch.ConfVersion = removeResp.GetRegion().GetEpoch().GetConfVersion()
+	removed.Hash = nil
+	removed.EnsureHash()
+	publishRootEvent(t, coordinator, rootevent.PeerRemoved(1, 2, 2, removed))
+	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return !status.GetHosted()
+	})
+	heartbeatRustStoreAs(t, ctx, coordinator, 1, addr1, true)
+
+	metadata2, closeMetadata2 := rustMetadataClient(t, addr2)
+	defer closeMetadata2()
+	staleResp, err := metadata2.CommitMetadata(ctx, &metadatapb.MetadataCommitRequest{
+		Context: &metadatapb.MetadataContext{
+			RegionId:    1,
+			RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: addResp.GetRegion().GetEpoch().GetConfVersion()},
+			Peer:        &metapb.RegionPeer{StoreId: 2, PeerId: 2},
+		},
+		Command: &metadatapb.MetadataCommand{
+			RequestId:     []byte("removed-peer-write"),
+			PrimaryKey:    []byte("removed-peer-write"),
+			ReadVersion:   10,
+			CommitVersion: 11,
+			Mutations: []*metadatapb.MetadataMutation{{
+				Op:    metadatapb.MetadataMutation_PUT,
+				Key:   []byte("removed-peer-write"),
+				Value: []byte("must-not-apply"),
+			}},
+			WatchKeys: [][]byte{[]byte("removed-peer-write")},
+		},
+	})
+	require.NoError(t, err, "peer2 raftstore logs:\n%s", peer2.logs.String())
+	require.NotNil(t, staleResp.GetRegionError(), "removed peer accepted stale write")
+	require.Nil(t, staleResp.GetResult(), "removed peer returned a successful commit result")
+
+	runtime, err := Open(ctx, Options{
+		Coordinator:    coordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
+
+	created, err := runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-remove-peer.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 71,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "peer2 raftstore logs:\n%s", peer2.logs.String())
+	lookup, err := runtime.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-remove-peer.json",
+	})
+	require.NoError(t, err)
+	require.Equal(t, created.Dentry.Inode, lookup.Dentry.Inode)
+}
+
 func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, *bytes.Buffer, *coordserver.Service) {
 	t.Helper()
 	repo := repoRootFromThisFile(t)
@@ -726,6 +848,16 @@ func rustAdminClient(t *testing.T, addr string) (adminpb.RaftAdminClient, func()
 	require.NoError(t, err)
 	conn.Connect()
 	return adminpb.NewRaftAdminClient(conn), func() {
+		require.NoError(t, conn.Close())
+	}
+}
+
+func rustMetadataClient(t *testing.T, addr string) (metadatapb.MetadataPlaneClient, func()) {
+	t.Helper()
+	conn, err := grpc.NewClient("dns:///"+addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	conn.Connect()
+	return metadatapb.NewMetadataPlaneClient(conn), func() {
 		require.NoError(t, conn.Close())
 	}
 }

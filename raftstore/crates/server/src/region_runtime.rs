@@ -54,7 +54,9 @@ where
     }
 
     async fn remove_voter(&self, peer_id: u64) -> Result<(), Status> {
-        nokv_raftnode::OpenRaftRegion::remove_voter(self, peer_id, false)
+        // Retain the removed peer as a learner long enough for the descriptor
+        // update to demote its local serving state before physical cleanup.
+        nokv_raftnode::OpenRaftRegion::remove_voter(self, peer_id, true)
             .await
             .map_err(|err| Status::failed_precondition(err.to_string()))
     }
