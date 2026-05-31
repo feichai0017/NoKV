@@ -1224,6 +1224,78 @@ async fn watch_apply_streams_matching_apply_events() {
     assert_eq!(event.keys, vec![b"prefix/k".to_vec()]);
 }
 
+#[tokio::test]
+async fn watch_apply_replays_after_resume_cursor() {
+    let engine = nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new());
+    let admission = RegionAdmission::default();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        engine,
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
+
+    service
+        .commit_metadata(Request::new(metadatapb::MetadataCommitRequest {
+            context: Some(metadata_context(&admission)),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"watch-replay-1".to_vec(),
+                read_version: 8,
+                commit_version: 9,
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"prefix/a".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"prefix/a".to_vec()],
+                ..Default::default()
+            }),
+        }))
+        .await
+        .unwrap();
+    service
+        .commit_metadata(Request::new(metadatapb::MetadataCommitRequest {
+            context: Some(metadata_context(&admission)),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"watch-replay-2".to_vec(),
+                read_version: 10,
+                commit_version: 11,
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"prefix/b".to_vec(),
+                    value: b"v2".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"prefix/b".to_vec()],
+                ..Default::default()
+            }),
+        }))
+        .await
+        .unwrap();
+
+    let mut stream = service
+        .watch_apply(Request::new(metadatapb::MetadataWatchApplyRequest {
+            key_prefix: b"prefix/".to_vec(),
+            resume_region_id: admission.region_id,
+            resume_term: 1,
+            resume_index: 1,
+            buffer: 4,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+
+    let response = tokio::time::timeout(Duration::from_secs(3), stream.next())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let event = response.event.unwrap();
+    assert_eq!(event.commit_version, 11);
+    assert_eq!(event.index, 2);
+    assert_eq!(event.keys, vec![b"prefix/b".to_vec()]);
+}
+
 #[test]
 fn apply_watch_chunks_large_key_sets() {
     let keys = (0..(DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE + 7))
