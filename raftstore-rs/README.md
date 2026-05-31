@@ -31,6 +31,11 @@ store launcher in opt-in parity runs. The image also includes
 parity runs. The launcher can start one configured region or every region
 hosted by a store process; the join script drives the existing `RaftAdmin
 AddPeer` wire contract through `nokv raft-admin`.
+In Rust compose mode, `bootstrap.sh` skips the Go local peer-catalog seed
+because the Rust launcher reads configured regions directly. The launcher also
+keeps the bind address and advertised address separate: containers bind
+`0.0.0.0:20160`, while coordinator heartbeats and OpenRaft membership publish
+the configured client address such as `nokv-store-1:20160`.
 
 Standalone multi-process tests can start a seed peer with the default bootstrap
 mode and start joining peers with explicit identity plus bootstrap disabled:

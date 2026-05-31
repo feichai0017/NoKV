@@ -294,7 +294,10 @@ The first slices are intentionally narrow:
   normal NoKV config instead of hand-written environment variables. Docker
   compose can opt into the Rust launcher with `NOKV_RAFTSTORE_IMPL=rust` while
   keeping the Go store as the default. The Rust launcher can start one
-  configured region or every region hosted by a store process.
+  configured region or every region hosted by a store process. In Rust compose
+  mode, bootstrap skips the Go local peer-catalog seed; the Rust launcher reads
+  the configured regions directly and advertises the configured store client
+  address rather than the container bind address.
 - Rust coordinator publication and heartbeat now accept comma-separated
   endpoint lists like the Go deployment config and try endpoints in order,
   keeping `InvalidArgument`/permanent root validation failures terminal while

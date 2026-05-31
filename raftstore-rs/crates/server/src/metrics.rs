@@ -13,7 +13,7 @@ use super::{coordinator_heartbeat_request_for_hosted_regions, HostedRegionRegist
 pub(super) fn spawn_metrics_server<E>(
     metrics_addr: Option<SocketAddr>,
     store_id: u64,
-    addr: SocketAddr,
+    advertised_addr: String,
     registry: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
 ) where
@@ -23,8 +23,14 @@ pub(super) fn spawn_metrics_server<E>(
         return;
     };
     tokio::spawn(async move {
-        if let Err(err) =
-            run_metrics_server(metrics_addr, store_id, addr, registry, root_events).await
+        if let Err(err) = run_metrics_server(
+            metrics_addr,
+            store_id,
+            advertised_addr,
+            registry,
+            root_events,
+        )
+        .await
         {
             tracing::warn!(%metrics_addr, error = %err, "rust raftstore metrics server stopped");
         }
@@ -34,7 +40,7 @@ pub(super) fn spawn_metrics_server<E>(
 async fn run_metrics_server<E>(
     metrics_addr: SocketAddr,
     store_id: u64,
-    addr: SocketAddr,
+    advertised_addr: String,
     registry: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
@@ -47,6 +53,7 @@ where
         let (mut stream, _) = listener.accept().await?;
         let registry = registry.clone();
         let root_events = root_events.clone();
+        let advertised_addr = advertised_addr.clone();
         tokio::spawn(async move {
             let mut request = [0_u8; 1024];
             let read = match stream.read(&mut request).await {
@@ -60,7 +67,12 @@ where
             let (status, body) = if request.starts_with("GET /debug/vars ") {
                 (
                     "200 OK",
-                    rust_metrics_payload(store_id, addr, &registry, root_events.as_ref()),
+                    rust_metrics_payload(
+                        store_id,
+                        &advertised_addr,
+                        &registry,
+                        root_events.as_ref(),
+                    ),
                 )
             } else {
                 ("404 Not Found", "{}\n".to_owned())
@@ -78,15 +90,19 @@ where
 
 fn rust_metrics_payload<E>(
     store_id: u64,
-    addr: SocketAddr,
+    advertised_addr: &str,
     registry: &HostedRegionRegistry<E>,
     root_events: Option<&HoltMvccStore>,
 ) -> String
 where
     E: Clone + RegionSnapshotEngine + RegionTrafficProvider,
 {
-    let heartbeat =
-        coordinator_heartbeat_request_for_hosted_regions(store_id, addr, registry, root_events);
+    let heartbeat = coordinator_heartbeat_request_for_hosted_regions(
+        store_id,
+        advertised_addr,
+        registry,
+        root_events,
+    );
     match heartbeat {
         Ok(heartbeat) => rust_metrics_payload_from_heartbeat(&heartbeat),
         Err(err) => format!(

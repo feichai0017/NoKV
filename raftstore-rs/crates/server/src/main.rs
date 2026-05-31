@@ -36,6 +36,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = std::env::var("NOKV_RUST_RAFTSTORE_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:23880".to_owned())
         .parse::<SocketAddr>()?;
+    let advertised_addr = advertised_addr_from_env(addr)?;
     let identities = ServerIdentity::from_env_list()?;
     let region_ranges = RegionRangeCatalog::from_env()?;
     validate_startup_region_ranges(&identities, &region_ranges)?;
@@ -45,6 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_HOLT_DIR") {
         serve_holt_regions(
             addr,
+            advertised_addr,
             identities,
             coordinator,
             peer_endpoints,
@@ -57,6 +59,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     } else {
         serve_memory_regions(
             addr,
+            advertised_addr,
             identities,
             coordinator,
             peer_endpoints,
@@ -67,6 +70,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     }
     Ok(())
+}
+
+fn advertised_addr_from_env(bind_addr: SocketAddr) -> Result<String, Box<dyn std::error::Error>> {
+    let addr = std::env::var("NOKV_RUST_RAFTSTORE_ADVERTISE_ADDR")
+        .unwrap_or_else(|_| bind_addr.to_string());
+    let addr = addr.trim();
+    if addr.is_empty() {
+        return Err("NOKV_RUST_RAFTSTORE_ADVERTISE_ADDR must not be empty".into());
+    }
+    Ok(addr.to_owned())
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
@@ -561,7 +574,7 @@ impl RegionDescriptorCatalog for HoltRegionDescriptorCatalog {
 #[derive(Clone)]
 struct HoltRangeController {
     store_id: u64,
-    addr: SocketAddr,
+    advertised_addr: String,
     persistent_root: PathBuf,
     coordinator: Option<CoordinatorHeartbeatConfig>,
     mvcc: HoltMvccStore,
@@ -728,8 +741,13 @@ impl HoltRangeController {
         if !force_membership_init && !local_peer_is_first(descriptor, local_peer) {
             return Ok(None);
         }
-        descriptor_membership_nodes(descriptor, local_peer, self.addr, &self.peer_endpoints)
-            .map(Some)
+        descriptor_membership_nodes(
+            descriptor,
+            local_peer,
+            &self.advertised_addr,
+            &self.peer_endpoints,
+        )
+        .map(Some)
     }
 
     async fn execute_merge(
@@ -948,7 +966,7 @@ impl HoltRangeController {
             bootstrap: identity.bootstrap && membership_init.is_none(),
             ..identity
         };
-        let region = open_openraft_region(open_identity, self.addr, log_dir, engine)
+        let region = open_openraft_region(open_identity, &self.advertised_addr, log_dir, engine)
             .await
             .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
         self.transport
@@ -1106,7 +1124,7 @@ fn local_peer_is_first(
 fn descriptor_membership_nodes(
     descriptor: &metapb::RegionDescriptor,
     local_peer: &metapb::RegionPeer,
-    local_addr: SocketAddr,
+    local_addr: &str,
     peer_endpoints: &PeerEndpointCatalog,
 ) -> Result<BTreeMap<u64, BasicNode>, tonic::Status> {
     let mut members = BTreeMap::new();
@@ -1118,7 +1136,7 @@ fn descriptor_membership_nodes(
             )));
         }
         let node = if peer.store_id == local_peer.store_id && peer.peer_id == local_peer.peer_id {
-            BasicNode::new(local_addr.to_string())
+            BasicNode::new(local_addr.to_owned())
         } else {
             peer_endpoints.node_for_peer(peer.store_id, peer.peer_id)?
         };
@@ -1316,6 +1334,7 @@ fn coordinator_topology_publisher(
 
 async fn serve_holt_regions(
     addr: SocketAddr,
+    advertised_addr: String,
     identities: Vec<ServerIdentity>,
     coordinator: Option<CoordinatorHeartbeatConfig>,
     peer_endpoints: PeerEndpointCatalog,
@@ -1332,6 +1351,7 @@ async fn serve_holt_regions(
     let identities = recover_holt_hosted_identities(&mvcc, identities)?;
     tracing::info!(
         %addr,
+        %advertised_addr,
         path = %persistent_root.display(),
         region_count = identities.len(),
         "starting rust raftstore server with multi-region Holt MVCC"
@@ -1367,11 +1387,14 @@ async fn serve_holt_regions(
             PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
         let log_dir =
             raft_log_dir_for_region(Some(&persistent_root), identity, multi_region, temp_log_dir)?;
-        let region = open_openraft_region(identity, addr, log_dir, engine).await?;
+        let region = open_openraft_region(identity, &advertised_addr, log_dir, engine).await?;
         transport.register(identity.region_id, region.raft_handle());
-        if let Some(members) =
-            recovered_descriptor_membership_init(&descriptor, identity, addr, &peer_endpoints)?
-        {
+        if let Some(members) = recovered_descriptor_membership_init(
+            &descriptor,
+            identity,
+            &advertised_addr,
+            &peer_endpoints,
+        )? {
             region.initialize_members(members).await?;
             recovered_leadership.push((identity, region.clone()));
         }
@@ -1405,13 +1428,13 @@ async fn serve_holt_regions(
     spawn_metrics_server(
         metrics_addr,
         identities[0].store_id,
-        addr,
+        advertised_addr.clone(),
         hosted_region_registry.clone(),
         Some(mvcc.clone()),
     );
     let range_controller = HoltRangeController {
         store_id: identities[0].store_id,
-        addr,
+        advertised_addr: advertised_addr.clone(),
         persistent_root: persistent_root.clone(),
         coordinator: coordinator.clone(),
         mvcc: mvcc.clone(),
@@ -1426,6 +1449,7 @@ async fn serve_holt_regions(
         coordinator.clone(),
         identities[0].store_id,
         addr,
+        advertised_addr,
         hosted_region_registry,
         Some(mvcc.clone()),
         Some(range_controller.clone()),
@@ -1480,7 +1504,7 @@ fn recover_holt_hosted_identities(
 fn recovered_descriptor_membership_init(
     descriptor: &metapb::RegionDescriptor,
     identity: ServerIdentity,
-    addr: SocketAddr,
+    addr: &str,
     peer_endpoints: &PeerEndpointCatalog,
 ) -> Result<Option<BTreeMap<u64, BasicNode>>, tonic::Status> {
     if descriptor.peers.len() <= 1 {
@@ -1536,6 +1560,7 @@ where
 
 async fn serve_memory_regions(
     addr: SocketAddr,
+    advertised_addr: String,
     identities: Vec<ServerIdentity>,
     coordinator: Option<CoordinatorHeartbeatConfig>,
     peer_endpoints: PeerEndpointCatalog,
@@ -1545,6 +1570,7 @@ async fn serve_memory_regions(
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
         %addr,
+        %advertised_addr,
         region_count = identities.len(),
         "starting rust raftstore server with multi-region in-memory MVCC"
     );
@@ -1563,7 +1589,7 @@ async fn serve_memory_regions(
         engine.set_region_descriptor(descriptor.clone())?;
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
         let log_dir = raft_log_dir_for_region(None, identity, multi_region, temp_log_dir)?;
-        let region = open_openraft_region(identity, addr, log_dir, engine).await?;
+        let region = open_openraft_region(identity, &advertised_addr, log_dir, engine).await?;
         transport.register(identity.region_id, region.raft_handle());
         let (store_service, admin_service) = openraft_region_service_pair(
             region.clone(),
@@ -1589,7 +1615,7 @@ async fn serve_memory_regions(
     spawn_metrics_server(
         metrics_addr,
         identities[0].store_id,
-        addr,
+        advertised_addr.clone(),
         hosted_region_registry.clone(),
         None,
     );
@@ -1597,6 +1623,7 @@ async fn serve_memory_regions(
         coordinator,
         identities[0].store_id,
         addr,
+        advertised_addr,
         hosted_region_registry,
         None,
         None,
@@ -2127,6 +2154,7 @@ fn spawn_multi_region_coordinator_heartbeat<E>(
     config: Option<CoordinatorHeartbeatConfig>,
     store_id: u64,
     addr: SocketAddr,
+    advertised_addr: String,
     regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
     range_controller: Option<HoltRangeController>,
@@ -2141,6 +2169,7 @@ fn spawn_multi_region_coordinator_heartbeat<E>(
             config,
             store_id,
             addr,
+            advertised_addr,
             regions,
             root_events,
             range_controller,
@@ -2153,6 +2182,7 @@ async fn run_multi_region_coordinator_heartbeat<E>(
     config: CoordinatorHeartbeatConfig,
     store_id: u64,
     addr: SocketAddr,
+    advertised_addr: String,
     regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
     range_controller: Option<HoltRangeController>,
@@ -2173,7 +2203,7 @@ async fn run_multi_region_coordinator_heartbeat<E>(
         }
         let request = match coordinator_heartbeat_request_for_hosted_regions(
             store_id,
-            addr,
+            &advertised_addr,
             &regions,
             root_events.as_ref(),
         ) {
@@ -2406,7 +2436,7 @@ fn local_admin_endpoint(addr: SocketAddr) -> String {
 #[cfg(test)]
 fn coordinator_heartbeat_request<E>(
     identity: ServerIdentity,
-    addr: SocketAddr,
+    addr: &str,
     region: &OpenRaftRegion<E>,
     root_events: Option<&HoltMvccStore>,
 ) -> coordpb::StoreHeartbeatRequest
@@ -2423,7 +2453,7 @@ where
 
 fn coordinator_heartbeat_request_for_hosted_regions<E>(
     store_id: u64,
-    addr: SocketAddr,
+    addr: &str,
     registry: &HostedRegionRegistry<E>,
     root_events: Option<&HoltMvccStore>,
 ) -> Result<coordpb::StoreHeartbeatRequest, String>
@@ -2441,7 +2471,7 @@ where
 
 fn coordinator_heartbeat_request_for_regions<E>(
     store_id: u64,
-    addr: SocketAddr,
+    addr: &str,
     regions: &[(ServerIdentity, OpenRaftRegion<E>)],
     root_events: Option<&HoltMvccStore>,
 ) -> coordpb::StoreHeartbeatRequest
@@ -2485,8 +2515,8 @@ where
         region_num,
         leader_num,
         leader_region_ids,
-        client_addr: addr.to_string(),
-        raft_addr: addr.to_string(),
+        client_addr: addr.to_owned(),
+        raft_addr: addr.to_owned(),
         region_stats,
         ..Default::default()
     }
@@ -2514,7 +2544,7 @@ fn topology_catalog_has_pending_admin_work(store: &HoltMvccStore) -> bool {
 
 async fn open_openraft_region<E>(
     identity: ServerIdentity,
-    addr: SocketAddr,
+    addr: &str,
     log_dir: PathBuf,
     engine: E,
 ) -> Result<OpenRaftRegion<E>, Box<dyn std::error::Error>>
@@ -2530,7 +2560,7 @@ where
             RegionLogStorage::new(log),
             state_machine,
             TonicRaftNetworkFactory::new(identity.region_id),
-            addr.to_string(),
+            addr.to_owned(),
         )
         .await?);
     }
@@ -3268,7 +3298,7 @@ mod tests {
         };
         let region = open_openraft_region(
             identity,
-            "127.0.0.1:0".parse().unwrap(),
+            "127.0.0.1:0",
             dir.path().to_path_buf(),
             AppliedKvEngine::new(identity.region_id, MvccStore::new()),
         )
@@ -3278,12 +3308,7 @@ mod tests {
         assert!(metrics.current_leader.is_none());
         assert!(metrics.membership_config.voter_ids().next().is_none());
 
-        let heartbeat = coordinator_heartbeat_request(
-            identity,
-            "127.0.0.1:23880".parse().unwrap(),
-            &region,
-            None,
-        );
+        let heartbeat = coordinator_heartbeat_request(identity, "127.0.0.1:23880", &region, None);
         assert_eq!(heartbeat.region_num, 0);
         assert_eq!(heartbeat.leader_num, 0);
         assert!(heartbeat.leader_region_ids.is_empty());
@@ -3381,14 +3406,14 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
         let region = open_openraft_region(
             identity,
-            addr,
+            &addr.to_string(),
             dir.path().to_path_buf(),
             AppliedKvEngine::new(identity.region_id, MvccStore::new()),
         )
         .await
         .unwrap();
 
-        let req = coordinator_heartbeat_request(identity, addr, &region, None);
+        let req = coordinator_heartbeat_request(identity, &addr.to_string(), &region, None);
 
         assert_eq!(req.store_id, 11);
         assert_eq!(req.region_num, 1);
@@ -3400,6 +3425,33 @@ mod tests {
         assert_eq!(req.region_stats[0].region_id, 7);
         assert_eq!(req.region_stats[0].leader_store_id, 11);
         assert!(!req.region_stats[0].pending_admin);
+    }
+
+    #[tokio::test]
+    async fn coordinator_heartbeat_uses_advertised_dns_addr() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+        let bind_addr: SocketAddr = "0.0.0.0:20160".parse().unwrap();
+        let advertised_addr = "nokv-store-1:20160";
+        let region = open_openraft_region(
+            identity,
+            advertised_addr,
+            dir.path().to_path_buf(),
+            AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        )
+        .await
+        .unwrap();
+
+        let req = coordinator_heartbeat_request(identity, advertised_addr, &region, None);
+
+        assert_eq!(local_admin_endpoint(bind_addr), "http://127.0.0.1:20160");
+        assert_eq!(req.client_addr, advertised_addr);
+        assert_eq!(req.raft_addr, advertised_addr);
     }
 
     #[tokio::test]
@@ -3420,7 +3472,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
         let region1 = open_openraft_region(
             identity1,
-            addr,
+            &addr.to_string(),
             dir.path().join("region-7"),
             AppliedKvEngine::new(identity1.region_id, MvccStore::new()),
         )
@@ -3428,7 +3480,7 @@ mod tests {
         .unwrap();
         let region2 = open_openraft_region(
             identity2,
-            addr,
+            &addr.to_string(),
             dir.path().join("region-8"),
             AppliedKvEngine::new(identity2.region_id, MvccStore::new()),
         )
@@ -3437,7 +3489,7 @@ mod tests {
 
         let req = coordinator_heartbeat_request_for_regions(
             11,
-            addr,
+            &addr.to_string(),
             &[(identity1, region1), (identity2, region2)],
             None,
         );
@@ -3471,7 +3523,7 @@ mod tests {
         let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
         let region1 = open_openraft_region(
             identity1,
-            addr,
+            &addr.to_string(),
             dir.path().join("region-7"),
             AppliedKvEngine::new(identity1.region_id, MvccStore::new()),
         )
@@ -3479,7 +3531,7 @@ mod tests {
         .unwrap();
         let region2 = open_openraft_region(
             identity2,
-            addr,
+            &addr.to_string(),
             dir.path().join("region-8"),
             AppliedKvEngine::new(identity2.region_id, MvccStore::new()),
         )
@@ -3488,8 +3540,13 @@ mod tests {
         let registry = HostedRegionRegistry::new([(identity1, region1)]).unwrap();
 
         registry.insert(identity2, region2).unwrap();
-        let req =
-            coordinator_heartbeat_request_for_hosted_regions(11, addr, &registry, None).unwrap();
+        let req = coordinator_heartbeat_request_for_hosted_regions(
+            11,
+            &addr.to_string(),
+            &registry,
+            None,
+        )
+        .unwrap();
 
         assert_eq!(req.region_num, 2);
         assert_eq!(req.leader_num, 2);
@@ -3524,14 +3581,14 @@ mod tests {
             .unwrap();
         let region = open_openraft_region(
             identity,
-            addr,
+            &addr.to_string(),
             dir.path().to_path_buf(),
             AppliedKvEngine::new(identity.region_id, MvccStore::new()),
         )
         .await
         .unwrap();
 
-        let req = coordinator_heartbeat_request(identity, addr, &region, Some(&store));
+        let req = coordinator_heartbeat_request(identity, &addr.to_string(), &region, Some(&store));
 
         assert_eq!(req.region_stats.len(), 1);
         assert!(req.region_stats[0].pending_admin);
@@ -3562,14 +3619,14 @@ mod tests {
             .unwrap();
         let region = open_openraft_region(
             identity,
-            addr,
+            &addr.to_string(),
             dir.path().to_path_buf(),
             AppliedKvEngine::new(identity.region_id, MvccStore::new()),
         )
         .await
         .unwrap();
 
-        let req = coordinator_heartbeat_request(identity, addr, &region, Some(&store));
+        let req = coordinator_heartbeat_request(identity, &addr.to_string(), &region, Some(&store));
 
         assert_eq!(req.region_stats.len(), 1);
         assert!(req.region_stats[0].pending_admin);
@@ -3604,14 +3661,14 @@ mod tests {
             .unwrap();
         let region = open_openraft_region(
             identity,
-            addr,
+            &addr.to_string(),
             dir.path().to_path_buf(),
             AppliedKvEngine::new(identity.region_id, MvccStore::new()),
         )
         .await
         .unwrap();
 
-        let req = coordinator_heartbeat_request(identity, addr, &region, Some(&store));
+        let req = coordinator_heartbeat_request(identity, &addr.to_string(), &region, Some(&store));
 
         assert_eq!(req.region_stats.len(), 1);
         assert!(req.region_stats[0].pending_admin);
@@ -3913,7 +3970,7 @@ mod tests {
         let members = descriptor_membership_nodes(
             &descriptor,
             &local_peer,
-            "127.0.0.1:30101".parse().unwrap(),
+            "127.0.0.1:30101",
             &peer_endpoints,
         )
         .unwrap();
@@ -4046,7 +4103,7 @@ mod tests {
                 peer_id: 20,
                 bootstrap: false,
             },
-            "127.0.0.1:30202".parse().unwrap(),
+            "127.0.0.1:30202",
             &peer_endpoints,
         )
         .unwrap();
@@ -4060,7 +4117,7 @@ mod tests {
                 peer_id: 30,
                 bootstrap: false,
             },
-            "127.0.0.1:30303".parse().unwrap(),
+            "127.0.0.1:30303",
             &peer_endpoints,
         )
         .unwrap();

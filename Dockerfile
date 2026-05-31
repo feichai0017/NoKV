@@ -25,7 +25,7 @@ RUN --mount=type=cache,target=/go/pkg/mod \
     --mount=type=cache,target=/root/.cache/go-build \
     CGO_ENABLED=0 GOOS=${TARGETOS:-$(go env GOOS)} GOARCH=${TARGETARCH:-$(go env GOARCH)} go build -o /out/nokv-fsmeta ./cmd/nokv-fsmeta
 
-FROM --platform=$TARGETPLATFORM rust:1.82-bookworm AS rust-builder
+FROM --platform=$TARGETPLATFORM rust:1.88-bookworm AS rust-builder
 WORKDIR /workspace
 RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler ca-certificates \

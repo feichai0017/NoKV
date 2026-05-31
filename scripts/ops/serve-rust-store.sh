@@ -133,6 +133,10 @@ listen_addr=${STORE_LISTEN_ADDRS[$STORE_ID]:-}
 if [[ -z "$listen_addr" ]]; then
   nokv_die "serve-rust-store.sh: store $STORE_ID not found in $CONFIG"
 fi
+advertise_addr=${STORE_CLIENT_ADDRS[$STORE_ID]:-}
+if [[ -z "$advertise_addr" ]]; then
+  nokv_die "serve-rust-store.sh: store $STORE_ID has no configured client address"
+fi
 
 region_specs=()
 region_ranges=()
@@ -233,6 +237,7 @@ fi
 mkdir -p "$WORKDIR"
 
 export NOKV_RUST_RAFTSTORE_ADDR="$listen_addr"
+export NOKV_RUST_RAFTSTORE_ADVERTISE_ADDR="$advertise_addr"
 if [[ "$ALL_REGIONS" -eq 1 ]]; then
   export NOKV_RUST_RAFTSTORE_REGIONS
   export NOKV_RUST_RAFTSTORE_REGION_RANGES

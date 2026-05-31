@@ -7,15 +7,24 @@
 
 # Build artefacts
 /build
+/bin
 /dist
 artifacts
+coverage.out
 **/*.pprof
-benchmark/ycsb/data
+benchmark/data
+raftstore-rs/target
+.tlc-states
 
 # Module caches
 .gocache
 .gomodcache
+**/node_modules
+
+# Research dependencies not used by the runtime image
+third_party/tla
 
 # Docker
 Dockerfile
 .gitignore
+.DS_Store

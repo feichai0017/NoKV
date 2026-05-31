@@ -41,6 +41,7 @@ x-nokv-image: &nokv-image
   # deployments must provide their own signing and verification keys.
   environment:
     NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY: "${NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY:-rM0DUr4noWKwu7NlAoX2A6FXpdUyLESmwvqNYOkeNIc=}"
+    NOKV_RAFTSTORE_IMPL: "${NOKV_RAFTSTORE_IMPL:-go}"
 
 x-common: &common
   image: ${NOKV_IMAGE:-ghcr.io/feichai0017/nokv:${NOKV_IMAGE_TAG:-latest}}
@@ -52,6 +53,7 @@ x-common: &common
   # deployments must provide their own signing and verification keys.
   environment:
     NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY: "${NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY:-rM0DUr4noWKwu7NlAoX2A6FXpdUyLESmwvqNYOkeNIc=}"
+    NOKV_RAFTSTORE_IMPL: "${NOKV_RAFTSTORE_IMPL:-go}"
 
 services:
   # ---------- bootstrap (seed stores once, then exit) ----------

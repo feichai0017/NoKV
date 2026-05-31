@@ -21,6 +21,8 @@ Options:
 
 Notes:
   - bootstrap.sh only seeds fresh store workdirs from config.regions.
+  - Rust raftstore reads the configured regions directly and skips this seed
+    step when NOKV_RAFTSTORE_IMPL=rust.
   - It must not be used to restart a store that already has runtime raft/local metadata.
   - Runtime topology changes are recovered from local metadata, not from config.regions.
   - --skip-existing is intended for Docker Compose restart workflows; the default
@@ -62,6 +64,11 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "${NOKV_RAFTSTORE_IMPL:-go}" == "rust" ]]; then
+  echo "bootstrap.sh: rust raftstore uses config-driven startup; skipping local peer catalog seed"
+  exit 0
+fi
 
 ROOT_DIR=$NOKV_ROOT_DIR
 if [[ -z "$CONFIG" ]]; then
