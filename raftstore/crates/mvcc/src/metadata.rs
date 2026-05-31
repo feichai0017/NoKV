@@ -7,6 +7,65 @@ use crate::{
 };
 
 impl MvccStore {
+    pub fn get_metadata(
+        &self,
+        req: &metadatapb::MetadataGetRequest,
+    ) -> Result<metadatapb::MetadataGetResponse> {
+        Ok(metadata_get_response_from_kv(self.get(
+            &kvpb::GetRequest {
+                key: req.key.clone(),
+                version: req.version,
+            },
+        )?))
+    }
+
+    pub fn batch_get_metadata(
+        &self,
+        req: &metadatapb::MetadataBatchGetRequest,
+    ) -> Result<metadatapb::MetadataBatchGetResponse> {
+        if req.requests.is_empty() {
+            return Ok(metadatapb::MetadataBatchGetResponse::default());
+        }
+        let response = self.batch_get(&kvpb::BatchGetRequest {
+            requests: req
+                .requests
+                .iter()
+                .map(|request| kvpb::GetRequest {
+                    key: request.key.clone(),
+                    version: request.version,
+                })
+                .collect(),
+        })?;
+        Ok(metadatapb::MetadataBatchGetResponse {
+            responses: response
+                .responses
+                .into_iter()
+                .map(metadata_get_response_from_kv)
+                .collect(),
+            region_error: None,
+        })
+    }
+
+    pub fn scan_metadata(
+        &self,
+        req: &metadatapb::MetadataScanRequest,
+    ) -> Result<metadatapb::MetadataScanResponse> {
+        if req.reverse {
+            return Err(Error::Backend(
+                "metadata reverse scans are not supported".to_owned(),
+            ));
+        }
+        Ok(metadata_scan_response_from_kv(self.scan(
+            &kvpb::ScanRequest {
+                start_key: req.start_key.clone(),
+                limit: req.limit,
+                version: req.version,
+                include_start: req.include_start,
+                reverse: false,
+            },
+        )?))
+    }
+
     pub fn commit_metadata(
         &self,
         command: &metadatapb::MetadataCommand,
@@ -18,12 +77,92 @@ impl MvccStore {
 }
 
 impl MetadataEngine for MvccStore {
+    fn get_metadata(
+        &self,
+        req: &metadatapb::MetadataGetRequest,
+    ) -> Result<metadatapb::MetadataGetResponse> {
+        MvccStore::get_metadata(self, req)
+    }
+
+    fn batch_get_metadata(
+        &self,
+        req: &metadatapb::MetadataBatchGetRequest,
+    ) -> Result<metadatapb::MetadataBatchGetResponse> {
+        MvccStore::batch_get_metadata(self, req)
+    }
+
+    fn scan_metadata(
+        &self,
+        req: &metadatapb::MetadataScanRequest,
+    ) -> Result<metadatapb::MetadataScanResponse> {
+        MvccStore::scan_metadata(self, req)
+    }
+
     fn commit_metadata(
         &self,
         command: &metadatapb::MetadataCommand,
         commit_version: u64,
     ) -> Result<MetadataApplyResult> {
         MvccStore::commit_metadata(self, command, commit_version)
+    }
+}
+
+pub fn metadata_key_error_from_kv(error: kvpb::KeyError) -> metadatapb::MetadataKeyError {
+    metadatapb::MetadataKeyError {
+        locked: error.locked.map(|locked| metadatapb::MetadataLocked {
+            primary_lock: locked.primary_lock,
+            key: locked.key,
+            lock_version: locked.lock_version,
+            lock_ttl: locked.lock_ttl,
+        }),
+        write_conflict: error
+            .write_conflict
+            .map(|conflict| metadatapb::MetadataWriteConflict {
+                key: conflict.key,
+                primary: conflict.primary,
+                conflict_ts: conflict.conflict_ts,
+                commit_ts: conflict.commit_ts,
+                start_ts: conflict.start_ts,
+            }),
+        already_exists: error
+            .already_exists
+            .map(|exists| metadatapb::MetadataKeyAlreadyExists { key: exists.key }),
+        retryable: error.retryable,
+        abort: error.abort,
+    }
+}
+
+pub fn metadata_get_response_from_kv(
+    response: kvpb::GetResponse,
+) -> metadatapb::MetadataGetResponse {
+    metadatapb::MetadataGetResponse {
+        kv: (!response.not_found && response.error.is_none()).then(|| metadatapb::MetadataKv {
+            value: response.value,
+            expires_at: response.expires_at,
+            ..Default::default()
+        }),
+        not_found: response.not_found,
+        error: response.error.map(metadata_key_error_from_kv),
+        region_error: None,
+    }
+}
+
+pub fn metadata_scan_response_from_kv(
+    response: kvpb::ScanResponse,
+) -> metadatapb::MetadataScanResponse {
+    metadatapb::MetadataScanResponse {
+        kvs: response
+            .kvs
+            .into_iter()
+            .map(|kv| metadatapb::MetadataKv {
+                key: kv.key,
+                value: kv.value,
+                version: kv.version,
+                expires_at: kv.expires_at,
+            })
+            .collect(),
+        error: response.error.map(metadata_key_error_from_kv),
+        region_error: None,
     }
 }
 

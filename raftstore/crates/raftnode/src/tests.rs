@@ -2,7 +2,7 @@ use super::*;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use nokv_mvcc::{KvEngine, MvccStore};
+use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
@@ -120,6 +120,24 @@ where
         .await
 }
 
+async fn read_metadata_value<E>(
+    engine: &E,
+    region_id: RegionId,
+    key: impl Into<Vec<u8>>,
+    version: u64,
+) -> Vec<u8>
+where
+    E: MetadataReadExecutor,
+{
+    engine
+        .execute_metadata_get(&metadata_get_request(region_id, key, version))
+        .await
+        .unwrap()
+        .kv
+        .unwrap()
+        .value
+}
+
 #[tokio::test]
 async fn openraft_region_bootstraps_single_node_and_applies_proposal() {
     let dir = tempfile::tempdir().unwrap();
@@ -202,14 +220,10 @@ async fn applied_kv_engine_executes_metadata_command_payload() {
     assert_eq!(result.commit_version, 2);
     assert_eq!(result.applied_mutations, 1);
 
-    let read = engine
-        .get(&kvpb::GetRequest {
-            key: b"k".to_vec(),
-            version: result.commit_version,
-        })
-        .unwrap();
-    assert_eq!(read.value, b"v");
-    assert!(!read.not_found);
+    assert_eq!(
+        read_metadata_value(&engine, 7, b"k", result.commit_version).await,
+        b"v".to_vec()
+    );
 }
 
 #[tokio::test]
@@ -295,15 +309,11 @@ async fn openraft_region_replicates_proposal_to_memory_peers() {
     }
 
     for node_id in 1..=3 {
-        let get = engines
-            .get(&node_id)
-            .unwrap()
-            .get(&kvpb::GetRequest {
-                key: b"k".to_vec(),
-                version: 10,
-            })
-            .unwrap();
-        assert_eq!(get.value, b"v".to_vec(), "node {node_id} did not apply");
+        assert_eq!(
+            read_metadata_value(engines.get(&node_id).unwrap(), 7, b"k", 10).await,
+            b"v".to_vec(),
+            "node {node_id} did not apply"
+        );
     }
 }
 
@@ -360,16 +370,8 @@ async fn openraft_region_adds_voter_and_replicates_to_new_peer() {
     }
 
     for node_id in 1..=2 {
-        let get = engines
-            .get(&node_id)
-            .unwrap()
-            .get(&kvpb::GetRequest {
-                key: b"joined".to_vec(),
-                version: 20,
-            })
-            .unwrap();
         assert_eq!(
-            get.value,
+            read_metadata_value(engines.get(&node_id).unwrap(), 7, b"joined", 20).await,
             b"yes".to_vec(),
             "node {node_id} did not apply after membership change"
         );
@@ -449,13 +451,7 @@ async fn openraft_region_target_peer_can_take_leadership() {
         .await
         .unwrap();
     assert_eq!(
-        leader_engine
-            .get(&kvpb::GetRequest {
-                key: b"new-leader".to_vec(),
-                version: 22,
-            })
-            .unwrap()
-            .value,
+        read_metadata_value(&leader_engine, 7, b"new-leader", 22).await,
         b"peer-2".to_vec()
     );
 }
@@ -591,14 +587,8 @@ async fn openraft_region_restarts_after_membership_change_without_single_node_vo
     }
 
     for (node_id, engine) in [(1, restarted_leader_engine), (2, restarted_follower_engine)] {
-        let get = engine
-            .get(&kvpb::GetRequest {
-                key: b"after-restart".to_vec(),
-                version: 40,
-            })
-            .unwrap();
         assert_eq!(
-            get.value,
+            read_metadata_value(&engine, 7, b"after-restart", 40).await,
             b"still-quorum".to_vec(),
             "node {node_id} did not apply after multi-voter restart"
         );
@@ -716,13 +706,10 @@ async fn openraft_region_catches_up_joining_peer_from_snapshot() {
         "joining peer should install a snapshot instead of replaying purged logs"
     );
 
-    let current = joining_engine
-        .get(&kvpb::GetRequest {
-            key: b"k8".to_vec(),
-            version: 9,
-        })
-        .unwrap();
-    assert_eq!(current.value, b"v8".to_vec());
+    assert_eq!(
+        read_metadata_value(&joining_engine, 7, b"k8", 9).await,
+        b"v8".to_vec()
+    );
 }
 
 #[test]
@@ -742,37 +729,26 @@ fn proposal_rejects_region_mismatch() {
     assert!(matches!(err, Error::RegionMismatch { .. }));
 }
 
-#[test]
-fn applied_kv_engine_advances_index_only_for_writes() {
+#[tokio::test]
+async fn applied_kv_engine_advances_index_only_for_writes() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
     assert_eq!(engine.status().applied_index, 0);
 
     let get = engine
-        .get(&kvpb::GetRequest {
-            key: b"k".to_vec(),
-            version: 1,
-        })
+        .execute_metadata_get(&metadata_get_request(7, b"k", 1))
+        .await
         .unwrap();
     assert!(get.not_found);
     assert_eq!(engine.status().applied_index, 0);
 
-    engine
-        .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-            mutations: vec![kvpb::Mutation {
-                key: b"k".to_vec(),
-                value: b"v".to_vec(),
-                op: kvpb::mutation::Op::Put as i32,
-                ..Default::default()
-            }],
-            commit_version: 2,
-            ..Default::default()
-        })
+    execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
+        .await
         .unwrap();
     assert_eq!(engine.status().applied_index, 1);
 }
 
-#[test]
-fn applied_kv_engine_can_start_from_persisted_status() {
+#[tokio::test]
+async fn applied_kv_engine_can_start_from_persisted_status() {
     let engine = AppliedKvEngine::with_status(
         ApplyStatus {
             region_id: 7,
@@ -789,36 +765,18 @@ fn applied_kv_engine_can_start_from_persisted_status() {
             applied_index: 41,
         }
     );
-    engine
-        .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-            mutations: vec![kvpb::Mutation {
-                key: b"k".to_vec(),
-                value: b"v".to_vec(),
-                op: kvpb::mutation::Op::Put as i32,
-                ..Default::default()
-            }],
-            commit_version: 2,
-            ..Default::default()
-        })
+    execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
+        .await
         .unwrap();
     assert_eq!(engine.status().applied_index, 42);
 }
 
-#[test]
-fn applied_kv_engine_publishes_watch_events_for_writes() {
+#[tokio::test]
+async fn applied_kv_engine_publishes_watch_events_for_writes() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
     let mut watch = engine.subscribe();
-    engine
-        .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-            mutations: vec![kvpb::Mutation {
-                key: b"k".to_vec(),
-                value: b"v".to_vec(),
-                op: kvpb::mutation::Op::Put as i32,
-                ..Default::default()
-            }],
-            commit_version: 2,
-            ..Default::default()
-        })
+    execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
+        .await
         .unwrap();
     let event = watch.try_recv().unwrap();
     assert_eq!(event.region_id, 7);
@@ -827,26 +785,25 @@ fn applied_kv_engine_publishes_watch_events_for_writes() {
     assert_eq!(event.keys, vec![b"k".to_vec()]);
 }
 
-#[test]
-fn applied_kv_engine_replays_watch_events_after_cursor() {
+#[tokio::test]
+async fn applied_kv_engine_replays_watch_events_after_cursor() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
     for (key, commit_version) in [
         (b"k/a".to_vec(), 2),
         (b"k/b".to_vec(), 3),
         (b"z".to_vec(), 4),
     ] {
-        engine
-            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
-                    key,
-                    value: b"v".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                commit_version,
-                ..Default::default()
-            })
-            .unwrap();
+        execute_metadata_put(
+            &engine,
+            7,
+            commit_version,
+            key,
+            b"v",
+            commit_version - 1,
+            commit_version,
+        )
+        .await
+        .unwrap();
     }
 
     let replay = engine
@@ -864,74 +821,82 @@ fn applied_kv_engine_replays_watch_events_after_cursor() {
     assert_eq!(replay.events[0].keys, vec![b"k/b".to_vec()]);
 }
 
-#[test]
-fn applied_kv_engine_suppresses_watch_events_for_failed_writes() {
+#[tokio::test]
+async fn applied_kv_engine_suppresses_watch_events_for_failed_writes() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
     let mut watch = engine.subscribe();
     engine
-        .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-            predicates: vec![kvpb::AtomicPredicate {
-                key: b"k".to_vec(),
-                kind: kvpb::AtomicPredicateKind::NotExists as i32,
+        .execute_metadata_command(&metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
+                region_id: 7,
+                ..Default::default()
+            }),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"first".to_vec(),
                 read_version: 1,
+                commit_version: 2,
+                predicates: vec![metadatapb::MetadataPredicate {
+                    key: b"k".to_vec(),
+                    kind: metadatapb::MetadataPredicateKind::NotExists as i32,
+                    read_version: 1,
+                    ..Default::default()
+                }],
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"k".to_vec()],
                 ..Default::default()
-            }],
-            mutations: vec![kvpb::Mutation {
-                key: b"k".to_vec(),
-                value: b"v1".to_vec(),
-                op: kvpb::mutation::Op::Put as i32,
-                ..Default::default()
-            }],
-            start_version: 1,
-            commit_version: 2,
+            }),
         })
+        .await
         .unwrap();
     assert_eq!(watch.try_recv().unwrap().keys, vec![b"k".to_vec()]);
 
     let rejected = engine
-        .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-            predicates: vec![kvpb::AtomicPredicate {
-                key: b"k".to_vec(),
-                kind: kvpb::AtomicPredicateKind::NotExists as i32,
+        .execute_metadata_command(&metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
+                region_id: 7,
+                ..Default::default()
+            }),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"rejected".to_vec(),
                 read_version: 2,
+                commit_version: 4,
+                predicates: vec![metadatapb::MetadataPredicate {
+                    key: b"k".to_vec(),
+                    kind: metadatapb::MetadataPredicateKind::NotExists as i32,
+                    read_version: 2,
+                    ..Default::default()
+                }],
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"k".to_vec(),
+                    value: b"v2".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"k".to_vec()],
                 ..Default::default()
-            }],
-            mutations: vec![kvpb::Mutation {
-                key: b"k".to_vec(),
-                value: b"v2".to_vec(),
-                op: kvpb::mutation::Op::Put as i32,
-                ..Default::default()
-            }],
-            start_version: 3,
-            commit_version: 4,
+            }),
         })
+        .await
         .unwrap();
 
     assert!(rejected.error.is_some());
     assert!(watch.try_recv().is_err());
 }
 
-#[test]
-fn applied_kv_engine_traffic_snapshot_drains_counters() {
+#[tokio::test]
+async fn applied_kv_engine_traffic_snapshot_drains_counters() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
-    engine
-        .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-            mutations: vec![kvpb::Mutation {
-                key: b"k".to_vec(),
-                value: b"v".to_vec(),
-                op: kvpb::mutation::Op::Put as i32,
-                ..Default::default()
-            }],
-            start_version: 1,
-            commit_version: 2,
-            ..Default::default()
-        })
+    execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
+        .await
         .unwrap();
     engine
-        .get(&kvpb::GetRequest {
-            key: b"k".to_vec(),
-            version: 2,
-        })
+        .execute_metadata_get(&metadata_get_request(7, b"k", 2))
+        .await
         .unwrap();
 
     let snapshot = engine.traffic_snapshot();

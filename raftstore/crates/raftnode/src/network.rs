@@ -271,14 +271,13 @@ where
 mod tests {
     use std::collections::BTreeMap;
 
-    use nokv_mvcc::{KvEngine, MvccStore};
-    use nokv_proto::nokv::kv::v1 as kvpb;
+    use nokv_mvcc::MvccStore;
     use nokv_proto::nokv::metadata::v1 as metadatapb;
 
     use super::*;
     use crate::{
-        AppliedKvEngine, ApplyStatusProvider, MetadataCommandExecutor, OpenRaftRegion,
-        RegionLogStorage, RegionStateMachine,
+        AppliedKvEngine, ApplyStatusProvider, MetadataCommandExecutor, MetadataReadExecutor,
+        OpenRaftRegion, RegionLogStorage, RegionStateMachine,
     };
 
     #[tokio::test]
@@ -351,12 +350,17 @@ mod tests {
 
         for (_node_id, engine) in engines {
             let response = engine
-                .get(&kvpb::GetRequest {
+                .execute_metadata_get(&metadatapb::MetadataGetRequest {
+                    context: Some(metadatapb::MetadataContext {
+                        region_id: 7,
+                        ..Default::default()
+                    }),
                     key: b"encoded-network".to_vec(),
                     version: 10,
                 })
+                .await
                 .unwrap();
-            assert_eq!(response.value, b"replicated".to_vec());
+            assert_eq!(response.kv.unwrap().value, b"replicated".to_vec());
         }
     }
 }

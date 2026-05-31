@@ -2,7 +2,7 @@ use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nokv_mvcc::{KvEngine, MetadataEngine, MvccSnapshotEngine, MvccStore};
+use nokv_mvcc::{MetadataEngine, MvccSnapshotEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
@@ -10,10 +10,7 @@ use nokv_proto::nokv::raft::v1 as raftpb;
 use prost::Message;
 use tokio::sync::broadcast;
 
-use crate::metadata::{
-    encode_metadata_response, metadata_command_watch_keys, metadata_get_response_from_kv,
-    metadata_key_error_from_kv, metadata_scan_response_from_kv,
-};
+use crate::metadata::{encode_metadata_response, metadata_command_watch_keys};
 use crate::traffic::{RegionTrafficProvider, RegionTrafficSnapshot, RegionTrafficStats};
 use crate::watch::{ApplyHistory, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
 use crate::{Error, OpenRaftEntry, ProposalPayloadKind, RegionId};
@@ -439,7 +436,7 @@ where
 
 impl<E> AppliedKvEngine<E>
 where
-    E: KvEngine + MetadataEngine,
+    E: MetadataEngine,
 {
     fn execute_metadata_command_inner(
         &self,
@@ -452,14 +449,9 @@ where
         &self,
         req: &metadatapb::MetadataGetRequest,
     ) -> nokv_mvcc::Result<metadatapb::MetadataGetResponse> {
-        let response = self.read(|engine| {
-            engine.get(&kvpb::GetRequest {
-                key: req.key.clone(),
-                version: req.version,
-            })
-        })?;
+        let response = self.read(|engine| engine.get_metadata(req))?;
         self.inner.traffic.record_read(1);
-        Ok(metadata_get_response_from_kv(response))
+        Ok(response)
     }
 
     fn execute_metadata_batch_get_inner(
@@ -469,27 +461,9 @@ where
         if req.requests.is_empty() {
             return Ok(metadatapb::MetadataBatchGetResponse::default());
         }
-        let response = self.read(|engine| {
-            engine.batch_get(&kvpb::BatchGetRequest {
-                requests: req
-                    .requests
-                    .iter()
-                    .map(|request| kvpb::GetRequest {
-                        key: request.key.clone(),
-                        version: request.version,
-                    })
-                    .collect(),
-            })
-        })?;
+        let response = self.read(|engine| engine.batch_get_metadata(req))?;
         self.inner.traffic.record_read(req.requests.len() as u64);
-        Ok(metadatapb::MetadataBatchGetResponse {
-            responses: response
-                .responses
-                .into_iter()
-                .map(metadata_get_response_from_kv)
-                .collect(),
-            region_error: None,
-        })
+        Ok(response)
     }
 
     fn execute_metadata_scan_inner(
@@ -501,17 +475,9 @@ where
                 "metadata reverse scans are not supported",
             ));
         }
-        let response = self.read(|engine| {
-            engine.scan(&kvpb::ScanRequest {
-                start_key: req.start_key.clone(),
-                limit: req.limit,
-                version: req.version,
-                include_start: req.include_start,
-                reverse: false,
-            })
-        })?;
+        let response = self.read(|engine| engine.scan_metadata(req))?;
         self.inner.traffic.record_read(1);
-        Ok(metadata_scan_response_from_kv(response))
+        Ok(response)
     }
 
     pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
@@ -789,7 +755,7 @@ where
                     0
                 },
             }),
-            error: response.error.map(metadata_key_error_from_kv),
+            error: response.error.map(nokv_mvcc::metadata_key_error_from_kv),
             region_error: None,
         })
     }
@@ -812,20 +778,6 @@ where
         self.set_region_descriptor(descriptor)?;
         self.record_applied_status(term, index);
         Ok(())
-    }
-
-    fn apply<T>(
-        &self,
-        f: impl FnOnce(&E) -> nokv_mvcc::Result<T>,
-    ) -> nokv_mvcc::Result<(u64, u64, T)> {
-        let engine = self
-            .inner
-            .engine
-            .lock()
-            .map_err(|_| nokv_mvcc::Error::Backend("region apply mutex poisoned".to_owned()))?;
-        let result = f(&engine)?;
-        let (term, index) = self.advance_apply_index();
-        Ok((term, index, result))
     }
 
     fn advance_apply_index(&self) -> (u64, u64) {
@@ -880,7 +832,7 @@ where
 
 impl<E> MetadataCommandExecutor for AppliedKvEngine<E>
 where
-    E: KvEngine + MetadataEngine,
+    E: MetadataEngine,
 {
     fn execute_metadata_command<'a>(
         &'a self,
@@ -894,7 +846,7 @@ where
 
 impl<E> MetadataReadExecutor for AppliedKvEngine<E>
 where
-    E: KvEngine + MetadataEngine,
+    E: MetadataEngine,
 {
     fn execute_metadata_get<'a>(
         &'a self,
@@ -924,7 +876,7 @@ where
 
 impl<E, S> MetadataCommandExecutor for PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine + MetadataEngine,
+    E: MetadataEngine,
     S: RegionMetadataSink,
 {
     fn execute_metadata_command<'a>(
@@ -944,7 +896,7 @@ where
 
 impl<E, S> MetadataReadExecutor for PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine + MetadataEngine,
+    E: MetadataEngine,
     S: RegionMetadataSink,
 {
     fn execute_metadata_get<'a>(
@@ -975,7 +927,7 @@ where
 
 impl<E, S> PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine + MetadataEngine,
+    E: MetadataEngine,
     S: RegionMetadataSink,
 {
     pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
@@ -1018,7 +970,7 @@ where
 
 impl<E> RegionSnapshotEngine for AppliedKvEngine<E>
 where
-    E: KvEngine + MetadataEngine + MvccSnapshotEngine,
+    E: MetadataEngine + MvccSnapshotEngine,
 {
     fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
         AppliedKvEngine::region_descriptor(self)
@@ -1092,7 +1044,7 @@ where
 
 impl<E, S> RegionSnapshotEngine for PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine + MetadataEngine + MvccSnapshotEngine,
+    E: MetadataEngine + MvccSnapshotEngine,
     S: RegionMetadataSink,
 {
     fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
@@ -1115,7 +1067,7 @@ where
 
 impl<E> RegionApplyEngine for AppliedKvEngine<E>
 where
-    E: KvEngine + MetadataEngine,
+    E: MetadataEngine,
 {
     fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
     where
@@ -1127,7 +1079,7 @@ where
 
 impl<E, S> RegionApplyEngine for PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine + MetadataEngine,
+    E: MetadataEngine,
     S: RegionMetadataSink,
 {
     fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
@@ -1269,139 +1221,3 @@ fn region_peer_store_ids_for_apply(
 }
 
 use crate::snapshot::{decode_region_snapshot_payload, RegionSnapshotPayload};
-
-impl<E> KvEngine for AppliedKvEngine<E>
-where
-    E: KvEngine + MetadataEngine,
-{
-    fn get(&self, req: &kvpb::GetRequest) -> nokv_mvcc::Result<kvpb::GetResponse> {
-        let response = self.read(|engine| engine.get(req))?;
-        self.inner.traffic.record_read(1);
-        Ok(response)
-    }
-
-    fn batch_get(&self, req: &kvpb::BatchGetRequest) -> nokv_mvcc::Result<kvpb::BatchGetResponse> {
-        let response = self.read(|engine| engine.batch_get(req))?;
-        self.inner.traffic.record_read(req.requests.len() as u64);
-        Ok(response)
-    }
-
-    fn scan(&self, req: &kvpb::ScanRequest) -> nokv_mvcc::Result<kvpb::ScanResponse> {
-        let response = self.read(|engine| engine.scan(req))?;
-        self.inner.traffic.record_read(1);
-        Ok(response)
-    }
-
-    fn prewrite(&self, req: &kvpb::PrewriteRequest) -> nokv_mvcc::Result<kvpb::PrewriteResponse> {
-        self.apply(|engine| engine.prewrite(req))
-            .map(|(_, _, result)| result)
-    }
-
-    fn commit(&self, req: &kvpb::CommitRequest) -> nokv_mvcc::Result<kvpb::CommitResponse> {
-        let (term, index, result) = self.apply(|engine| engine.commit(req))?;
-        if result.error.is_none() && !req.keys.is_empty() {
-            self.publish_apply(
-                index,
-                term,
-                kvpb::ApplyWatchEventSource::Commit,
-                req.commit_version,
-                req.keys.clone(),
-                false,
-            );
-        }
-        Ok(result)
-    }
-
-    fn batch_rollback(
-        &self,
-        req: &kvpb::BatchRollbackRequest,
-    ) -> nokv_mvcc::Result<kvpb::BatchRollbackResponse> {
-        self.apply(|engine| engine.batch_rollback(req))
-            .map(|(_, _, result)| result)
-    }
-
-    fn resolve_lock(
-        &self,
-        req: &kvpb::ResolveLockRequest,
-    ) -> nokv_mvcc::Result<kvpb::ResolveLockResponse> {
-        let (term, index, result) = self.apply(|engine| engine.resolve_lock(req))?;
-        if result.error.is_none() && req.commit_version != 0 && !req.keys.is_empty() {
-            self.publish_apply(
-                index,
-                term,
-                kvpb::ApplyWatchEventSource::ResolveLock,
-                req.commit_version,
-                req.keys.clone(),
-                false,
-            );
-        }
-        Ok(result)
-    }
-
-    fn check_txn_status(
-        &self,
-        req: &kvpb::CheckTxnStatusRequest,
-    ) -> nokv_mvcc::Result<kvpb::CheckTxnStatusResponse> {
-        self.apply(|engine| engine.check_txn_status(req))
-            .map(|(_, _, result)| result)
-    }
-
-    fn txn_heartbeat(
-        &self,
-        req: &kvpb::TxnHeartBeatRequest,
-    ) -> nokv_mvcc::Result<kvpb::TxnHeartBeatResponse> {
-        self.apply(|engine| engine.txn_heartbeat(req))
-            .map(|(_, _, result)| result)
-    }
-
-    fn try_atomic_mutate(
-        &self,
-        req: &kvpb::TryAtomicMutateRequest,
-    ) -> nokv_mvcc::Result<kvpb::TryAtomicMutateResponse> {
-        let (term, index, result) = self.apply(|engine| engine.try_atomic_mutate(req))?;
-        if result.error.is_none()
-            && !result.fallback_to_two_phase_commit
-            && req.commit_version != 0
-            && !req.mutations.is_empty()
-        {
-            self.publish_apply(
-                index,
-                term,
-                kvpb::ApplyWatchEventSource::Commit,
-                req.commit_version,
-                req.mutations
-                    .iter()
-                    .map(|mutation| mutation.key.clone())
-                    .collect(),
-                true,
-            );
-        }
-        Ok(result)
-    }
-
-    fn install_prepared(
-        &self,
-        req: &kvpb::InstallPreparedMvccEntriesRequest,
-    ) -> nokv_mvcc::Result<kvpb::InstallPreparedMvccEntriesResponse> {
-        let (term, index, result) = self.apply(|engine| engine.install_prepared(req))?;
-        if result.error.is_none() && req.commit_version != 0 && !req.watch_keys.is_empty() {
-            self.publish_apply(
-                index,
-                term,
-                kvpb::ApplyWatchEventSource::Commit,
-                req.commit_version,
-                req.watch_keys.clone(),
-                false,
-            );
-        }
-        Ok(result)
-    }
-
-    fn mvcc_maintenance(
-        &self,
-        req: &kvpb::MvccMaintenanceRequest,
-    ) -> nokv_mvcc::Result<kvpb::MvccMaintenanceResponse> {
-        self.apply(|engine| engine.mvcc_maintenance(req))
-            .map(|(_, _, result)| result)
-    }
-}

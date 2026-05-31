@@ -423,9 +423,8 @@ fn snapshot_id(last_log_id: Option<LogId<NodeId>>, payload: &[u8]) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{AppliedKvEngine, Proposal};
-    use nokv_mvcc::{KvEngine, MvccStore};
-    use nokv_proto::nokv::kv::v1 as kvpb;
+    use crate::{AppliedKvEngine, MetadataReadExecutor, Proposal};
+    use nokv_mvcc::MvccStore;
     use nokv_proto::nokv::metadata::v1 as metadatapb;
     use openraft::{storage::RaftLogStorageExt, CommittedLeaderId, EntryPayload, LogId};
     use std::collections::{BTreeMap, BTreeSet};
@@ -684,12 +683,17 @@ mod tests {
 
         assert_eq!(restored.status().applied_index, 2);
         let current = restored
-            .get(&kvpb::GetRequest {
+            .execute_metadata_get(&metadatapb::MetadataGetRequest {
+                context: Some(metadatapb::MetadataContext {
+                    region_id: 7,
+                    ..Default::default()
+                }),
                 key: b"b".to_vec(),
                 version: 3,
             })
+            .await
             .unwrap();
-        assert_eq!(current.value, b"2");
+        assert_eq!(current.kv.unwrap().value, b"2");
 
         let current_snapshot = restored_state_machine
             .get_current_snapshot()
@@ -751,10 +755,15 @@ mod tests {
         assert_eq!(restored.status().applied_index, 0);
 
         let missing = restored
-            .get(&kvpb::GetRequest {
+            .execute_metadata_get(&metadatapb::MetadataGetRequest {
+                context: Some(metadatapb::MetadataContext {
+                    region_id: 7,
+                    ..Default::default()
+                }),
                 key: b"a".to_vec(),
                 version: 1,
             })
+            .await
             .unwrap();
         assert!(missing.not_found);
     }

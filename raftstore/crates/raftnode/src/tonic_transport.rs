@@ -497,15 +497,14 @@ mod tests {
     use std::net::SocketAddr;
     use std::time::Duration;
 
-    use nokv_mvcc::{KvEngine, MvccStore};
-    use nokv_proto::nokv::kv::v1 as kvpb;
+    use nokv_mvcc::MvccStore;
     use nokv_proto::nokv::metadata::v1 as metadatapb;
     use tokio::task::JoinHandle;
 
     use super::*;
     use crate::{
-        AppliedKvEngine, ApplyStatusProvider, MetadataCommandExecutor, OpenRaftRegion, Proposal,
-        RegionLogStorage, RegionStateMachine, SegmentedEntryLog,
+        AppliedKvEngine, ApplyStatusProvider, MetadataCommandExecutor, MetadataReadExecutor,
+        OpenRaftRegion, Proposal, RegionLogStorage, RegionStateMachine, SegmentedEntryLog,
     };
 
     #[tokio::test]
@@ -590,12 +589,17 @@ mod tests {
         }
         for (_node_id, engine) in engines {
             let response = engine
-                .get(&kvpb::GetRequest {
+                .execute_metadata_get(&metadatapb::MetadataGetRequest {
+                    context: Some(metadatapb::MetadataContext {
+                        region_id: 7,
+                        ..Default::default()
+                    }),
                     key: b"tonic-network".to_vec(),
                     version: 10,
                 })
+                .await
                 .unwrap();
-            assert_eq!(response.value, b"replicated".to_vec());
+            assert_eq!(response.kv.unwrap().value, b"replicated".to_vec());
         }
 
         for handle in handles {
@@ -748,12 +752,17 @@ mod tests {
         );
 
         let response = joining_engine
-            .get(&kvpb::GetRequest {
+            .execute_metadata_get(&metadatapb::MetadataGetRequest {
+                context: Some(metadatapb::MetadataContext {
+                    region_id: 7,
+                    ..Default::default()
+                }),
                 key: b"k8".to_vec(),
                 version: 9,
             })
+            .await
             .unwrap();
-        assert_eq!(response.value, b"v8".to_vec());
+        assert_eq!(response.kv.unwrap().value, b"v8".to_vec());
 
         for handle in handles {
             handle.abort();

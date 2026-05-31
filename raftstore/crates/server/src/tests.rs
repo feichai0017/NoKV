@@ -14,7 +14,7 @@ use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_raftnode::{
     ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplayRequest, BasicNode,
-    MetadataReadExecutor, RegionMetadataSink,
+    MetadataCommandExecutor, MetadataReadExecutor, RegionMetadataSink,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -740,10 +740,17 @@ async fn server_mounts_openraft_transport_for_metadata_replication() {
     for engine in engines.values() {
         assert_eq!(
             engine
-                .get(&kvpb::GetRequest {
+                .execute_metadata_get(&metadatapb::MetadataGetRequest {
+                    context: Some(metadatapb::MetadataContext {
+                        region_id: 7,
+                        ..Default::default()
+                    }),
                     key: b"server-transport".to_vec(),
                     version: 42,
                 })
+                .await
+                .unwrap()
+                .kv
                 .unwrap()
                 .value,
             b"replicated".to_vec()
@@ -2156,16 +2163,26 @@ async fn admin_adds_and_removes_openraft_voter() {
 async fn admin_runtime_status_reports_apply_index() {
     let engine = nokv_raftnode::AppliedKvEngine::new(11, MvccStore::new());
     engine
-        .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-            mutations: vec![kvpb::Mutation {
-                key: b"k".to_vec(),
-                value: b"v".to_vec(),
-                op: kvpb::mutation::Op::Put as i32,
+        .execute_metadata_command(&metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
+                region_id: 11,
                 ..Default::default()
-            }],
-            commit_version: 2,
-            ..Default::default()
+            }),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"status".to_vec(),
+                read_version: 1,
+                commit_version: 2,
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"k".to_vec(),
+                    value: b"v".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"k".to_vec()],
+                ..Default::default()
+            }),
         })
+        .await
         .unwrap();
     let service = RaftAdminService::new(engine);
     let response = service

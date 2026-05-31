@@ -187,6 +187,70 @@ impl HoltMvccStore {
 }
 
 impl mvcc::MetadataEngine for HoltMvccStore {
+    fn get_metadata(
+        &self,
+        req: &metadatapb::MetadataGetRequest,
+    ) -> mvcc::Result<metadatapb::MetadataGetResponse> {
+        Ok(mvcc::metadata_get_response_from_kv(mvcc::KvEngine::get(
+            self,
+            &kvpb::GetRequest {
+                key: req.key.clone(),
+                version: req.version,
+            },
+        )?))
+    }
+
+    fn batch_get_metadata(
+        &self,
+        req: &metadatapb::MetadataBatchGetRequest,
+    ) -> mvcc::Result<metadatapb::MetadataBatchGetResponse> {
+        if req.requests.is_empty() {
+            return Ok(metadatapb::MetadataBatchGetResponse::default());
+        }
+        let response = mvcc::KvEngine::batch_get(
+            self,
+            &kvpb::BatchGetRequest {
+                requests: req
+                    .requests
+                    .iter()
+                    .map(|request| kvpb::GetRequest {
+                        key: request.key.clone(),
+                        version: request.version,
+                    })
+                    .collect(),
+            },
+        )?;
+        Ok(metadatapb::MetadataBatchGetResponse {
+            responses: response
+                .responses
+                .into_iter()
+                .map(mvcc::metadata_get_response_from_kv)
+                .collect(),
+            region_error: None,
+        })
+    }
+
+    fn scan_metadata(
+        &self,
+        req: &metadatapb::MetadataScanRequest,
+    ) -> mvcc::Result<metadatapb::MetadataScanResponse> {
+        if req.reverse {
+            return Err(mvcc::Error::Backend(
+                "metadata reverse scans are not supported".to_owned(),
+            ));
+        }
+        Ok(mvcc::metadata_scan_response_from_kv(mvcc::KvEngine::scan(
+            self,
+            &kvpb::ScanRequest {
+                start_key: req.start_key.clone(),
+                limit: req.limit,
+                version: req.version,
+                include_start: req.include_start,
+                reverse: false,
+            },
+        )?))
+    }
+
     fn commit_metadata(
         &self,
         command: &metadatapb::MetadataCommand,

@@ -115,6 +115,21 @@ pub struct MetadataApplyResult {
 }
 
 pub trait MetadataEngine: Clone + Send + Sync + 'static {
+    fn get_metadata(
+        &self,
+        req: &metadatapb::MetadataGetRequest,
+    ) -> Result<metadatapb::MetadataGetResponse>;
+
+    fn batch_get_metadata(
+        &self,
+        req: &metadatapb::MetadataBatchGetRequest,
+    ) -> Result<metadatapb::MetadataBatchGetResponse>;
+
+    fn scan_metadata(
+        &self,
+        req: &metadatapb::MetadataScanRequest,
+    ) -> Result<metadatapb::MetadataScanResponse>;
+
     fn commit_metadata(
         &self,
         command: &metadatapb::MetadataCommand,
