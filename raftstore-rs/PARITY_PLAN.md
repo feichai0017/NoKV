@@ -291,9 +291,10 @@ The first slices are intentionally narrow:
   The Docker image also packages `serve-rust-store.sh` and
   `join-rust-raftstore-peers.sh` so Rust parity runs can derive identity,
   hosted-region sets, key ranges, peer endpoints, and AddPeer calls from the
-  normal NoKV config instead of hand-written environment variables. The Rust
-  launcher can start one configured region or every region hosted by a store
-  process.
+  normal NoKV config instead of hand-written environment variables. Docker
+  compose can opt into the Rust launcher with `NOKV_RAFTSTORE_IMPL=rust` while
+  keeping the Go store as the default. The Rust launcher can start one
+  configured region or every region hosted by a store process.
 - Rust coordinator publication and heartbeat now accept comma-separated
   endpoint lists like the Go deployment config and try endpoints in order,
   keeping `InvalidArgument`/permanent root validation failures terminal while
@@ -429,9 +430,10 @@ Known gaps:
   before state-machine mutation in the current unit coverage.
 - Go fsmeta and raftstore client Rust-endpoint tests remain behind the
   `rust_raftstore` build tag until the Rust data plane is the default runtime.
-- The Docker image can carry the Rust server binary and config-driven Rust
-  launcher/join scripts, but compose default cutover is still pending
-  coordinator-managed multi-region lifecycle wiring and benchmark validation.
+- The Docker image carries the Rust server binary and config-driven Rust
+  launcher/join scripts, and docker compose has an opt-in Rust store mode.
+  Compose default cutover is still pending coordinator-managed multi-region
+  lifecycle wiring and benchmark validation.
 - Rust strong follower reads are intentionally not served locally yet. The
   service preserves the Go client fallback shape for strong follower-prefer
   reads. Bounded-stale follower reads now have a safe local serving subset for

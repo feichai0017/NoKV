@@ -25,11 +25,12 @@ The repository Docker image builds the same binary at
 `/usr/local/bin/nokv-raftstore-server`. Docker compose still starts the Go
 store path by default until the Rust data plane passes the compose fsmeta smoke
 and benchmark gates.
-The image also includes `serve-rust-store.sh` and
-`join-rust-raftstore-peers.sh` for config-driven Rust parity runs. The launcher
-can start one configured region or every region hosted by a store process; the
-join script drives the existing `RaftAdmin AddPeer` wire contract through
-`nokv raft-admin`.
+Set `NOKV_RAFTSTORE_IMPL=rust` when running docker compose to use the Rust
+store launcher in opt-in parity runs. The image also includes
+`serve-rust-store.sh` and `join-rust-raftstore-peers.sh` for config-driven Rust
+parity runs. The launcher can start one configured region or every region
+hosted by a store process; the join script drives the existing `RaftAdmin
+AddPeer` wire contract through `nokv raft-admin`.
 
 Standalone multi-process tests can start a seed peer with the default bootstrap
 mode and start joining peers with explicit identity plus bootstrap disabled:

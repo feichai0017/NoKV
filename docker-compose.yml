@@ -13,6 +13,9 @@
 # Local development build:
 #   docker compose up -d --build
 #
+# Rust raftstore parity path:
+#   NOKV_RAFTSTORE_IMPL=rust docker compose up -d --build
+#
 # Architecture:
 #   Truth plane:     3× meta-root  (replicated raft, quorum of 2 — tolerates 1 peer loss)
 #   Control plane:   3× coordinator (Eunomia grant-gated singleton; one active holder, two standby)
@@ -216,7 +219,7 @@ services:
   store-1:
     <<: *common
     container_name: nokv-store-1
-    entrypoint: ["/usr/local/bin/serve-store.sh"]
+    entrypoint: ["/usr/local/bin/serve-compose-store.sh"]
     command:
       - "--config"
       - "/etc/nokv/raft_config.json"
@@ -245,7 +248,7 @@ services:
   store-2:
     <<: *common
     container_name: nokv-store-2
-    entrypoint: ["/usr/local/bin/serve-store.sh"]
+    entrypoint: ["/usr/local/bin/serve-compose-store.sh"]
     command:
       - "--config"
       - "/etc/nokv/raft_config.json"
@@ -274,7 +277,7 @@ services:
   store-3:
     <<: *common
     container_name: nokv-store-3
-    entrypoint: ["/usr/local/bin/serve-store.sh"]
+    entrypoint: ["/usr/local/bin/serve-compose-store.sh"]
     command:
       - "--config"
       - "/etc/nokv/raft_config.json"

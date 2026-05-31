@@ -55,13 +55,15 @@ COPY scripts /usr/local/lib/nokv-scripts
 # the sibling `../lib/common.sh` source. `exec <real path>` makes the target
 # script see its real location as BASH_SOURCE[0].
 RUN chmod +x /usr/local/lib/nokv-scripts/ops/serve-store.sh /usr/local/lib/nokv-scripts/ops/bootstrap.sh \
+               /usr/local/lib/nokv-scripts/ops/serve-compose-store.sh \
                /usr/local/lib/nokv-scripts/ops/serve-rust-store.sh \
                /usr/local/lib/nokv-scripts/ops/join-rust-raftstore-peers.sh \
     && printf '#!/usr/bin/env bash\nexec /usr/local/lib/nokv-scripts/ops/serve-store.sh "$@"\n' > /usr/local/bin/serve-store.sh \
+    && printf '#!/usr/bin/env bash\nexec /usr/local/lib/nokv-scripts/ops/serve-compose-store.sh "$@"\n' > /usr/local/bin/serve-compose-store.sh \
     && printf '#!/usr/bin/env bash\nexec /usr/local/lib/nokv-scripts/ops/bootstrap.sh "$@"\n' > /usr/local/bin/bootstrap.sh \
     && printf '#!/usr/bin/env bash\nexec /usr/local/lib/nokv-scripts/ops/serve-rust-store.sh "$@"\n' > /usr/local/bin/serve-rust-store.sh \
     && printf '#!/usr/bin/env bash\nexec /usr/local/lib/nokv-scripts/ops/join-rust-raftstore-peers.sh "$@"\n' > /usr/local/bin/join-rust-raftstore-peers.sh \
-    && chmod +x /usr/local/bin/serve-store.sh /usr/local/bin/bootstrap.sh \
+    && chmod +x /usr/local/bin/serve-store.sh /usr/local/bin/serve-compose-store.sh /usr/local/bin/bootstrap.sh \
                /usr/local/bin/serve-rust-store.sh /usr/local/bin/join-rust-raftstore-peers.sh \
     && mkdir -p /etc/nokv /var/lib/nokv/store /var/lib/nokv/peras-visible-log \
                /var/lib/nokv/raftstore-rs/holt /var/lib/nokv/raftstore-rs/raftlog \
