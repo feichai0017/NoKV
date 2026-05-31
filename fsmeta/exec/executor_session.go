@@ -209,7 +209,7 @@ func sessionDrainScopeForInodes(mount model.MountIdentity, inodes map[model.Inod
 
 // OpenWriteSession records one exclusive writer lease for an inode. It writes
 // both a session-id key and an inode-owner key so concurrent opens for the same
-// inode conflict on one Percolator key.
+// inode conflict on one backend key.
 func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSessionRequest) (model.SessionRecord, error) {
 	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
 	if err != nil {

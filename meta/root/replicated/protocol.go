@@ -11,8 +11,8 @@ import (
 	"os"
 	"path/filepath"
 
-	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/storage/vfs"
+	etcdraft "go.etcd.io/raft/v3"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 // protocolStateFileName stores replicated metadata protocol recovery state.
@@ -23,9 +23,9 @@ import (
 const protocolStateFileName = "root.raft.bin"
 
 type persistedProtocolState struct {
-	HardState myraft.HardState
-	Snapshot  myraft.Snapshot
-	Entries   []myraft.Entry
+	HardState raftpb.HardState
+	Snapshot  raftpb.Snapshot
+	Entries   []raftpb.Entry
 }
 
 // loadProtocolState reads root.raft.bin.
@@ -83,13 +83,13 @@ func loadProtocolState(workdir string) (persistedProtocolState, error) {
 	}
 	count := int(binary.LittleEndian.Uint32(data[off : off+4]))
 	off += 4
-	state.Entries = make([]myraft.Entry, 0, count)
+	state.Entries = make([]raftpb.Entry, 0, count)
 	for range count {
 		payload, err := read()
 		if err != nil {
 			return persistedProtocolState{}, err
 		}
-		var entry myraft.Entry
+		var entry raftpb.Entry
 		if len(payload) > 0 {
 			if err := entry.Unmarshal(payload); err != nil {
 				return persistedProtocolState{}, err
@@ -156,12 +156,25 @@ func saveProtocolState(workdir string, state persistedProtocolState) error {
 		return err
 	}
 	renamed = true
-	return vfs.SyncDir(vfs.Ensure(nil), workdir)
+	return syncProtocolDir(workdir)
+}
+
+func syncProtocolDir(dir string) error {
+	f, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	syncErr := f.Sync()
+	closeErr := f.Close()
+	if syncErr != nil {
+		return syncErr
+	}
+	return closeErr
 }
 
 // captureProtocolState snapshots the in-memory raft storage into the durable
 // backend-private recovery image persisted as root.raft.bin.
-func captureProtocolState(storage *myraft.MemoryStorage) (persistedProtocolState, error) {
+func captureProtocolState(storage *etcdraft.MemoryStorage) (persistedProtocolState, error) {
 	if storage == nil {
 		return persistedProtocolState{}, nil
 	}
@@ -186,16 +199,16 @@ func captureProtocolState(storage *myraft.MemoryStorage) (persistedProtocolState
 		if snapshotIndex == 0 {
 			snapshotIndex = last
 		}
-		if snapshotIndex > 0 && (myraft.IsEmptySnap(snap) || len(snap.Metadata.ConfState.Voters) == 0 || snap.Metadata.Index < snapshotIndex) {
+		if snapshotIndex > 0 && (etcdraft.IsEmptySnap(snap) || len(snap.Metadata.ConfState.Voters) == 0 || snap.Metadata.Index < snapshotIndex) {
 			snap, err = storage.CreateSnapshot(snapshotIndex, &cs, nil)
 			if err != nil {
 				return persistedProtocolState{}, err
 			}
 		}
 	}
-	var entries []myraft.Entry
+	var entries []raftpb.Entry
 	start := first
-	if !myraft.IsEmptySnap(snap) && snap.Metadata.Index+1 > start {
+	if !etcdraft.IsEmptySnap(snap) && snap.Metadata.Index+1 > start {
 		start = snap.Metadata.Index + 1
 	}
 	if last+1 > start {

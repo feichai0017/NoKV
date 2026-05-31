@@ -434,7 +434,7 @@ func MountKeyResolver(key []byte) (uint64, bool) {
 
 // HashBucketForKey returns the hash affinity bucket for one encoded fsmeta key.
 // It is used for diagnostics and synthetic placement tests only; physical
-// atomicity is owned by storage/kv.ApplyBatch.
+// atomicity is owned by the backend runtime.
 func HashBucketForKey(key []byte, bucketCount int) int {
 	bucketCount = NormalizeAffinityBucketCount(bucketCount)
 	if bucketCount <= 1 {

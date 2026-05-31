@@ -15,7 +15,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/feichai0017/NoKV/fsmeta/observe"
-	storemvcc "github.com/feichai0017/NoKV/raftstore/mvcc"
 	"github.com/stretchr/testify/require"
 )
 
@@ -278,14 +277,9 @@ func TestLocalRuntimePublishesAndRetiresSnapshots(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, token.ReadVersion, floor)
 
-	gcKey, err := layout.EncodeDentryKey(testMount(), model.RootInode, "pinned")
-	require.NoError(t, err)
-	policy := storemvcc.SafePointPolicy{
-		RequestedSafePoint: token.ReadVersion + 100,
-		SnapshotRetention:  rt.Snapshots.SnapshotRetentionIndex(),
-		Mount:              layout.MountKeyResolver,
-	}
-	require.Equal(t, token.ReadVersion, policy.EffectiveForKey(gcKey))
+	index := rt.Snapshots.SnapshotRetentionIndex()
+	require.Equal(t, token.ReadVersion, index.GlobalFloor)
+	require.Equal(t, token.ReadVersion, index.MountFloors[uint64(testMount().MountKeyID)])
 
 	require.NoError(t, rt.Close())
 

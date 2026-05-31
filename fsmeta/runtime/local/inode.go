@@ -10,8 +10,6 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	localdb "github.com/feichai0017/NoKV/local"
-	kv "github.com/feichai0017/NoKV/txn/storage"
 )
 
 // InodeAllocator assigns monotonically increasing local inode IDs.
@@ -28,8 +26,8 @@ type InodeAllocator struct {
 
 // NewInodeAllocator initializes allocation above every inode key already
 // present for mount.
-func NewInodeAllocator(db *localdb.DB, mount model.MountIdentity) (*InodeAllocator, error) {
-	maxInode, err := maxInodeInStore(db, mount)
+func NewInodeAllocator(runner *Runner, mount model.MountIdentity) (*InodeAllocator, error) {
+	maxInode, err := maxInodeInStore(runner, mount)
 	if err != nil {
 		return nil, err
 	}
@@ -107,35 +105,20 @@ func localCreateDentryBucket(mount model.MountIdentity, parent model.InodeID, na
 	return bucket, nil
 }
 
-func maxInodeInStore(db *localdb.DB, mount model.MountIdentity) (model.InodeID, error) {
-	if db == nil {
+func maxInodeInStore(runner *Runner, mount model.MountIdentity) (model.InodeID, error) {
+	if runner == nil {
 		return 0, nil
 	}
-	iter := db.NewInternalIterator(&kv.Options{IsAsc: true})
-	if iter == nil {
-		return 0, nil
-	}
-	defer func() { _ = iter.Close() }()
 	var maxInode model.InodeID
-	iter.Seek(kv.InternalKey(kv.CFWrite, nil, kv.MaxVersion))
-	for iter.Valid() {
-		item := iter.Item()
-		if item == nil || item.Entry() == nil {
-			iter.Next()
-			continue
-		}
-		cf, userKey, _, ok := kv.SplitInternalKey(item.Entry().Key)
-		if !ok {
-			return 0, errInvalidInternalEntry
-		}
-		if cf != kv.CFWrite {
-			break
-		}
+	err := runner.scanUserKeys(nil, func(userKey []byte) (bool, error) {
 		parts, ok := layout.InspectKey(userKey)
 		if ok && parts.MountKeyID == mount.MountKeyID && parts.Kind == layout.KeyKindInode && parts.Inode > maxInode {
 			maxInode = parts.Inode
 		}
-		iter.Next()
+		return true, nil
+	})
+	if err != nil {
+		return 0, err
 	}
 	return maxInode, nil
 }

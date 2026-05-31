@@ -50,7 +50,7 @@ func run(pass *analysis.Pass) (any, error) {
 			// recordX is reserved for metric updates. We only flag the
 			// function when its body actually touches a sync/atomic value;
 			// state-tracking helpers that happen to use the record* prefix
-			// (raftstore/store/* topology transitions, scheduler health
+			// (data-plane topology transitions, scheduler health
 			// logs) are tagged by name but never mutate atomics. The naming
 			// drift is real, but enforcing it via this analyzer would
 			// produce more noise than signal.

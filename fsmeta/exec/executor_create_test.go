@@ -203,7 +203,7 @@ func TestExecutorCreateVisibleCommitSkipsSharedQuota(t *testing.T) {
 
 	stats := executor.Stats()
 	requireVisibleCommitStatUint(t, stats, "attempt_total", 0)
-	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.perasChecks)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.visibleChecks)
 }
 
 func TestExecutorCreateVisibleCommitAllowsQuotaResolverWithoutFence(t *testing.T) {
@@ -232,7 +232,7 @@ func TestExecutorCreateVisibleCommitAllowsQuotaResolverWithoutFence(t *testing.T
 	require.Equal(t, 1, committer.calls)
 	require.Empty(t, quota.changes)
 	require.Empty(t, runner.mutations)
-	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.perasChecks)
+	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.visibleChecks)
 
 	stats := executor.Stats()
 	requireVisibleCommitStatUint(t, stats, "attempt_total", 1)

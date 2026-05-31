@@ -13,7 +13,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	"github.com/feichai0017/NoKV/txn/storage"
 )
 
 // SnapshotRegistry tracks locally published snapshot tokens. When constructed
@@ -210,46 +209,26 @@ func (r *SnapshotRegistry) load(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	iter := r.runner.db.NewInternalIterator(&storage.Options{IsAsc: true})
-	if iter == nil {
-		return nil
-	}
-	defer func() { _ = iter.Close() }()
-	var (
-		loaded      uint64
-		lastUserKey []byte
-	)
-	iter.Seek(storage.InternalKey(storage.CFWrite, prefix, storage.MaxVersion))
-	for iter.Valid() {
+	var loaded uint64
+	err = r.runner.scanUserKeys(prefix, func(userKey []byte) (bool, error) {
 		if err := ctxErr(ctx); err != nil {
-			return err
+			return false, err
 		}
-		item := iter.Item()
-		if item == nil || item.Entry() == nil {
-			iter.Next()
-			continue
+		if !bytes.HasPrefix(userKey, prefix) {
+			return false, nil
 		}
-		cf, userKey, _, ok := storage.SplitInternalKey(item.Entry().Key)
-		if !ok {
-			return errInvalidInternalEntry
-		}
-		if cf != storage.CFWrite || !bytes.HasPrefix(userKey, prefix) {
-			break
-		}
-		if bytes.Equal(userKey, lastUserKey) {
-			iter.Next()
-			continue
-		}
-		lastUserKey = cloneBytes(userKey)
 		token, ok, err := r.readSnapshotRecord(userKey)
 		if err != nil {
-			return err
+			return false, err
 		}
 		if ok {
 			r.active[localSnapshotKeyFromToken(token)] = struct{}{}
 			loaded++
 		}
-		iter.Next()
+		return true, nil
+	})
+	if err != nil {
+		return err
 	}
 	r.recoveredTotal.Add(loaded)
 	return nil
@@ -260,7 +239,7 @@ func (r *SnapshotRegistry) readSnapshotRecord(key []byte) (model.SnapshotSubtree
 	if !ok || parts.Kind != layout.KeyKindSnapshot {
 		return model.SnapshotSubtreeToken{}, false, layout.ErrInvalidKey
 	}
-	value, ok, err := r.runner.readValue(key, storage.MaxVersion)
+	value, ok, err := r.runner.readValue(key, localMaxVersion)
 	if err != nil || !ok {
 		return model.SnapshotSubtreeToken{}, ok, err
 	}
@@ -282,7 +261,7 @@ func (r *SnapshotRegistry) applySnapshotMutation(ctx context.Context, primary []
 	if err != nil {
 		return err
 	}
-	_, _, err = r.runner.applyMutationGroup(primary, []*backend.Mutation{mutation}, startVersion, startVersion+1, false)
+	_, _, err = r.runner.applyMutationGroup(primary, []*backend.Mutation{mutation}, startVersion, startVersion+1, false, false)
 	return err
 }
 

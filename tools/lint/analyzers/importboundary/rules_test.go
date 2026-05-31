@@ -15,20 +15,36 @@ func TestEvaluateCatchesForbiddenBoundaries(t *testing.T) {
 		wantPackage string
 	}{
 		{
-			name:        "root package importing distributed assembly",
+			name:        "root package importing fsmeta",
 			pkg:         ModulePath,
-			imports:     []string{ModulePath + "/raftstore/mvcc"},
-			wantRule:    "root package stays free of distributed assembly",
-			wantImport:  ModulePath + "/raftstore/mvcc",
+			imports:     []string{ModulePath + "/fsmeta/model"},
+			wantRule:    "root package stays an architecture anchor",
+			wantImport:  ModulePath + "/fsmeta/model",
 			wantPackage: ModulePath,
 		},
 		{
-			name:        "fsmeta exec importing raftstore",
-			pkg:         ModulePath + "/fsmeta/exec",
-			imports:     []string{ModulePath + "/raftstore/client"},
-			wantRule:    "fsmeta executor stays runtime-neutral",
-			wantImport:  ModulePath + "/raftstore/client",
-			wantPackage: ModulePath + "/fsmeta/exec",
+			name:        "fsmeta model importing layout",
+			pkg:         ModulePath + "/fsmeta/model",
+			imports:     []string{ModulePath + "/fsmeta/layout"},
+			wantRule:    "fsmeta model stays semantic-only",
+			wantImport:  ModulePath + "/fsmeta/layout",
+			wantPackage: ModulePath + "/fsmeta/model",
+		},
+		{
+			name:        "fsmeta layout importing executor",
+			pkg:         ModulePath + "/fsmeta/layout",
+			imports:     []string{ModulePath + "/fsmeta/exec"},
+			wantRule:    "fsmeta layout stays below execution",
+			wantImport:  ModulePath + "/fsmeta/exec",
+			wantPackage: ModulePath + "/fsmeta/layout",
+		},
+		{
+			name:        "fsmeta backend importing runtime",
+			pkg:         ModulePath + "/fsmeta/backend",
+			imports:     []string{ModulePath + "/fsmeta/runtime/local"},
+			wantRule:    "fsmeta backend stays runtime-neutral",
+			wantImport:  ModulePath + "/fsmeta/runtime/local",
+			wantPackage: ModulePath + "/fsmeta/backend",
 		},
 		{
 			name:        "fsmeta exec importing protobuf",
@@ -39,78 +55,6 @@ func TestEvaluateCatchesForbiddenBoundaries(t *testing.T) {
 			wantPackage: ModulePath + "/fsmeta/exec",
 		},
 		{
-			name:        "fsmeta backend importing concrete runtime",
-			pkg:         ModulePath + "/fsmeta/backend",
-			imports:     []string{ModulePath + "/local"},
-			wantRule:    "fsmeta backend stays storage-neutral",
-			wantImport:  ModulePath + "/local",
-			wantPackage: ModulePath + "/fsmeta/backend",
-		},
-		{
-			name:        "raftstore snapshot protocol importing concrete storage engine",
-			pkg:         ModulePath + "/raftstore/snapshot",
-			imports:     []string{ModulePath + "/storage/pebble"},
-			wantRule:    "raftstore snapshot protocol stays backend-neutral",
-			wantImport:  ModulePath + "/storage/pebble",
-			wantPackage: ModulePath + "/raftstore/snapshot",
-		},
-		{
-			name:        "local db importing raftstore",
-			pkg:         ModulePath + "/local/stats",
-			imports:     []string{ModulePath + "/raftstore/stats"},
-			wantRule:    "local db stays free of distributed assembly",
-			wantImport:  ModulePath + "/raftstore/stats",
-			wantPackage: ModulePath + "/local/stats",
-		},
-		{
-			name:        "txn percolator importing raftstore",
-			pkg:         ModulePath + "/txn/percolator",
-			imports:     []string{ModulePath + "/raftstore/client"},
-			wantRule:    "txn layer stays below distributed assembly",
-			wantImport:  ModulePath + "/raftstore/client",
-			wantPackage: ModulePath + "/txn/percolator",
-		},
-		{
-			name:        "txn mvcc reaching back into percolator",
-			pkg:         ModulePath + "/txn/mvcc",
-			imports:     []string{ModulePath + "/txn/percolator"},
-			wantRule:    "txn mvcc stays protocol-neutral",
-			wantImport:  ModulePath + "/txn/percolator",
-			wantPackage: ModulePath + "/txn/mvcc",
-		},
-		{
-			name:        "local runtime taking global errors",
-			pkg:         ModulePath + "/local/internal/commit",
-			imports:     []string{ModulePath + "/errors"},
-			wantRule:    "local runtime stays free of global error taxonomy",
-			wantImport:  ModulePath + "/errors",
-			wantPackage: ModulePath + "/local/internal/commit",
-		},
-		{
-			name:        "storage engine taking global errors",
-			pkg:         ModulePath + "/storage/pebble",
-			imports:     []string{ModulePath + "/errors"},
-			wantRule:    "storage engines stay below MVCC and distributed semantics",
-			wantImport:  ModulePath + "/errors",
-			wantPackage: ModulePath + "/storage/pebble",
-		},
-		{
-			name:        "holt adapter taking fsmeta semantics",
-			pkg:         ModulePath + "/storage/holt",
-			imports:     []string{ModulePath + "/fsmeta/model"},
-			wantRule:    "holt storage engine stays below MVCC and distributed semantics",
-			wantImport:  ModulePath + "/fsmeta/model",
-			wantPackage: ModulePath + "/storage/holt",
-		},
-		{
-			name:        "runtime importing third-party holt checkout",
-			pkg:         ModulePath + "/local",
-			imports:     []string{ModulePath + "/third_party/holt"},
-			wantRule:    "third-party holt checkout is adapter-only",
-			wantImport:  ModulePath + "/third_party/holt",
-			wantPackage: ModulePath + "/local",
-		},
-		{
 			name:        "meta root reaching into coordinator",
 			pkg:         ModulePath + "/meta/root/server",
 			imports:     []string{ModulePath + "/coordinator/client"},
@@ -119,12 +63,12 @@ func TestEvaluateCatchesForbiddenBoundaries(t *testing.T) {
 			wantPackage: ModulePath + "/meta/root/server",
 		},
 		{
-			name:        "coordinator reaching into raftstore",
-			pkg:         ModulePath + "/coordinator/balancer",
-			imports:     []string{ModulePath + "/raftstore/store"},
-			wantRule:    "coordinator stays free of raftstore execution packages",
-			wantImport:  ModulePath + "/raftstore/store",
-			wantPackage: ModulePath + "/coordinator/balancer",
+			name:        "coordinator importing fsmeta runtime",
+			pkg:         ModulePath + "/coordinator/server",
+			imports:     []string{ModulePath + "/fsmeta/runtime/local"},
+			wantRule:    "coordinator does not import fsmeta execution",
+			wantImport:  ModulePath + "/fsmeta/runtime/local",
+			wantPackage: ModulePath + "/coordinator/server",
 		},
 		{
 			name:        "scheduling reaching into service layer",
@@ -142,6 +86,22 @@ func TestEvaluateCatchesForbiddenBoundaries(t *testing.T) {
 			wantImport:  ModulePath + "/coordinator/scheduling",
 			wantPackage: ModulePath + "/coordinator/storecontrol",
 		},
+		{
+			name:        "utils importing fsmeta",
+			pkg:         ModulePath + "/utils",
+			imports:     []string{ModulePath + "/fsmeta/model"},
+			wantRule:    "utils stays domain-neutral",
+			wantImport:  ModulePath + "/fsmeta/model",
+			wantPackage: ModulePath + "/utils",
+		},
+		{
+			name:        "go runtime importing third-party holt checkout",
+			pkg:         ModulePath + "/fsmeta/runtime/local",
+			imports:     []string{ModulePath + "/third_party/holt"},
+			wantRule:    "third-party holt checkout is Rust-adapter-only",
+			wantImport:  ModulePath + "/third_party/holt",
+			wantPackage: ModulePath + "/fsmeta/runtime/local",
+		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -154,7 +114,7 @@ func TestEvaluateCatchesForbiddenBoundaries(t *testing.T) {
 	}
 }
 
-func TestEvaluateHonorsExactAndExemptScopes(t *testing.T) {
+func TestEvaluateHonorsScopes(t *testing.T) {
 	cases := []struct {
 		name    string
 		pkg     string
@@ -162,18 +122,13 @@ func TestEvaluateHonorsExactAndExemptScopes(t *testing.T) {
 	}{
 		{
 			name:    "exact-match rule does not apply to subpackages",
-			pkg:     ModulePath + "/cmd/nokv",
-			imports: []string{ModulePath + "/raftstore/mvcc"},
+			pkg:     ModulePath + "/cmd/nokv-fsmeta",
+			imports: []string{ModulePath + "/fsmeta/model"},
 		},
 		{
-			name:    "fsmeta client outside fsmeta/exec scope",
+			name:    "fsmeta client outside fsmeta exec scope",
 			pkg:     ModulePath + "/fsmeta/client",
-			imports: []string{ModulePath + "/raftstore/client"},
-		},
-		{
-			name:    "local/errkind exempt from local error rule",
-			pkg:     ModulePath + "/local/errkind",
-			imports: []string{ModulePath + "/errors"},
+			imports: []string{ModulePath + "/pb/fsmeta"},
 		},
 		{
 			name: "storecontrol importing client is allowed",
@@ -193,13 +148,13 @@ func TestEvaluateHonorsExactAndExemptScopes(t *testing.T) {
 }
 
 func TestPathMatchesIsPrefixSafe(t *testing.T) {
-	if !PathMatches(ModulePath+"/raftstore/client", ModulePath+"/raftstore") {
+	if !PathMatches(ModulePath+"/fsmeta/client", ModulePath+"/fsmeta") {
 		t.Fatal("child package should match prefix")
 	}
-	if PathMatches(ModulePath+"/raftstorex", ModulePath+"/raftstore") {
+	if PathMatches(ModulePath+"/fsmetax", ModulePath+"/fsmeta") {
 		t.Fatal("sibling prefix sharing leading characters must not match")
 	}
-	if !PathMatches(ModulePath+"/raftstore", ModulePath+"/raftstore") {
+	if !PathMatches(ModulePath+"/fsmeta", ModulePath+"/fsmeta") {
 		t.Fatal("exact package should match")
 	}
 }

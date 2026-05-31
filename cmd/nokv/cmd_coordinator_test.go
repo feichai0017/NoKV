@@ -201,7 +201,7 @@ func TestRunCoordinatorCmdResolvesAddrFromConfig(t *testing.T) {
 	t.Cleanup(stop)
 
 	cfgDir := t.TempDir()
-	cfgPath := filepath.Join(cfgDir, "raft_config.json")
+	cfgPath := filepath.Join(cfgDir, "topology_seed.json")
 	cfg := &config.File{
 		MaxRetries: 3,
 		Coordinator: &config.Coordinator{

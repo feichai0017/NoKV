@@ -50,10 +50,9 @@ type Predicate struct {
 // Store is the minimum MVCC metadata backend required by fsmeta execution.
 //
 // Mutation atomicity is defined over the supplied mutation group. Implementors
-// may use a local one-phase write, a mount-scoped Raft command, legacy
-// Percolator 2PC, or another equivalent protocol, but operational data
-// movement, physical ingest/export, and engine diagnostics are intentionally
-// outside this contract.
+// may use a local one-phase write, a mount-scoped Raft command, or another
+// equivalent protocol, but operational data movement, physical ingest/export,
+// and engine diagnostics are intentionally outside this contract.
 type Store interface {
 	ReserveTimestamp(ctx context.Context, count uint64) (uint64, error)
 	Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)

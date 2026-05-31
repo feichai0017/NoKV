@@ -13,15 +13,15 @@ import (
 )
 
 const (
-	// Percolator TTLs are encoded in milliseconds. fsmeta mutations cross the
-	// coordinator TSO path plus raft apply queues, so the default must cover
-	// short commit stalls instead of letting read-side lock resolution roll
-	// back a live metadata transaction.
+	// Backend lock TTLs are encoded in milliseconds. Distributed fsmeta
+	// mutations cross the coordinator TSO path plus apply queues, so the
+	// default must cover short commit stalls instead of letting read-side lock
+	// resolution roll back a live metadata transaction.
 	defaultLockTTL uint64 = uint64(30 * time.Second / time.Millisecond)
 
 	// Non-lock conflicts are retried by count because fresh timestamps normally
 	// make progress immediately. Live locks are bounded separately by the lock
-	// TTL so fsmeta does not leak ordinary Percolator lock waits to callers.
+	// TTL so fsmeta does not leak ordinary backend lock waits to callers.
 	maxTxnContentionRetries  = 32
 	maxReadContentionRetries = 32
 
@@ -101,7 +101,7 @@ type Executor struct {
 // Option configures an Executor.
 type Option func(*Executor)
 
-// WithLockTTL overrides the Percolator lock TTL used by mutating operations.
+// WithLockTTL overrides the backend lock TTL used by mutating operations.
 func WithLockTTL(ttl uint64) Option {
 	return func(e *Executor) {
 		if ttl > 0 {

@@ -6,21 +6,22 @@ package local
 import (
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble"
+
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	localdb "github.com/feichai0017/NoKV/local"
 )
 
 // Options configures the embedded fsmeta runtime.
 type Options struct {
-	// DB reuses an already-open embedded database. When nil, Open creates and
-	// owns a DB from DBOptions/WorkDir.
-	DB *localdb.DB
+	// DB reuses an already-open Pebble database. When nil, Open creates and
+	// owns a Pebble DB under WorkDir.
+	DB *cpebble.DB
 
-	// DBOptions configures a runtime-owned DB. Open copies these options before
-	// filling fsmeta-specific storage settings.
-	DBOptions *localdb.Options
+	// DBOptions configures a runtime-owned Pebble DB. Open copies these options
+	// before applying fsmeta-local defaults.
+	DBOptions *cpebble.Options
 
-	// WorkDir is required when DB is nil. It overrides DBOptions.WorkDir.
+	// WorkDir is required when DB is nil.
 	WorkDir string
 
 	// Mount is the single local fsmeta mount admitted by this runtime.
@@ -49,20 +50,17 @@ func (opts Options) validate() error {
 	if opts.Mount.MountID == "" || opts.Mount.MountKeyID == 0 {
 		return errMountRequired
 	}
-	if opts.DB == nil && opts.WorkDir == "" && (opts.DBOptions == nil || opts.DBOptions.WorkDir == "") {
+	if opts.DB == nil && opts.WorkDir == "" {
 		return errWorkDirRequired
 	}
 	return nil
 }
 
-func localDBOptions(opts Options) *localdb.Options {
-	cfg := localdb.NewDefaultOptions()
+func localDBOptions(opts Options) *cpebble.Options {
+	cfg := &cpebble.Options{}
 	if opts.DBOptions != nil {
 		copy := *opts.DBOptions
 		cfg = &copy
-	}
-	if opts.WorkDir != "" {
-		cfg.WorkDir = opts.WorkDir
 	}
 	return cfg
 }

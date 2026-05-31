@@ -82,7 +82,7 @@ make bench
 - Link related issue(s).
 - Include docs updates when behavior/config/CLI changes.
 - Keep PRs small enough for focused review.
-- Keep each PR scoped to one logical boundary. Do not mix root/control-plane fixes, fsmeta/Peras changes, generated-code rewrites, benchmarks, or unrelated refactors.
+- Keep each PR scoped to one logical boundary. Do not mix root/control-plane fixes, fsmeta changes, generated-code rewrites, benchmarks, or unrelated refactors.
 - Every non-merge commit must include a `Signed-off-by` trailer matching the Developer Certificate of Origin in [`DCO`](./DCO).
 - If you use Codex or another agent to review a PR, point it at [`docs/guide/development/code_contract.md`](./docs/guide/development/code_contract.md) and [`docs/guide/development/pr_review_checklist.md`](./docs/guide/development/pr_review_checklist.md).
 

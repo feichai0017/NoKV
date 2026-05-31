@@ -13,7 +13,7 @@ artifacts
 coverage.out
 **/*.pprof
 benchmark/data
-raftstore-rs/target
+raftstore/target
 .tlc-states
 
 # Module caches

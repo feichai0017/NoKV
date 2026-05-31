@@ -5,19 +5,21 @@ package local
 
 import (
 	"context"
+	"path/filepath"
 	"sync"
 	"time"
+
+	cpebble "github.com/cockroachdb/pebble"
 
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	localdb "github.com/feichai0017/NoKV/local"
 )
 
-// Runtime is a complete fsmeta runtime backed by one embedded local.DB.
+// Runtime is a complete fsmeta runtime backed by one embedded Pebble DB.
 type Runtime struct {
-	DB        *localdb.DB
+	DB        *cpebble.DB
 	Runner    *Runner
 	Executor  *fsmetaexec.Executor
 	Mounts    *MountCatalog
@@ -41,7 +43,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	closeDB := false
 	if db == nil {
 		var err error
-		db, err = localdb.Open(localDBOptions(opts))
+		db, err = cpebble.Open(localPebbleDir(opts.WorkDir), localDBOptions(opts))
 		if err != nil {
 			return nil, err
 		}
@@ -74,7 +76,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		}
 		return nil, err
 	}
-	inodes, err := NewInodeAllocator(db, opts.Mount)
+	inodes, err := NewInodeAllocator(runner, opts.Mount)
 	if err != nil {
 		if closeDB {
 			_ = db.Close()
@@ -111,6 +113,10 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		Snapshots: snapshots,
 		closeDB:   closeDB,
 	}, nil
+}
+
+func localPebbleDir(workDir string) string {
+	return filepath.Join(workDir, "storage")
 }
 
 // Close releases the runtime-owned DB. Caller-owned DB handles are left open.

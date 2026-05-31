@@ -18,7 +18,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/feichai0017/NoKV/fsmeta/observe"
 	fsmetalocal "github.com/feichai0017/NoKV/fsmeta/runtime/local"
-	"github.com/feichai0017/NoKV/storage/wal"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
@@ -41,52 +40,6 @@ func TestPublishExpvarOnceDoesNotOverwriteExistingMetric(t *testing.T) {
 	}
 }
 
-func TestParsePerasVisibleLogPolicy(t *testing.T) {
-	cases := map[string]wal.DurabilityPolicy{
-		"":              wal.DurabilityFlushed,
-		"flushed":       wal.DurabilityFlushed,
-		"fsync-batched": wal.DurabilityFsyncBatched,
-		"fsync_batched": wal.DurabilityFsyncBatched,
-		"batched":       wal.DurabilityFsyncBatched,
-		"fsync":         wal.DurabilityFsync,
-		"buffered":      wal.DurabilityBuffered,
-	}
-	for input, want := range cases {
-		got, err := parsePerasVisibleLogPolicy(input)
-		if err != nil {
-			t.Fatalf("parse %q: %v", input, err)
-		}
-		if got != want {
-			t.Fatalf("parse %q got %v want %v", input, got, want)
-		}
-	}
-	if _, err := parsePerasVisibleLogPolicy("bad"); err == nil {
-		t.Fatal("expected invalid policy to fail")
-	}
-}
-
-func TestParseFSMetaBackend(t *testing.T) {
-	cases := map[string]fsmetaBackend{
-		"":          fsmetaBackendRaftstore,
-		"raftstore": fsmetaBackendRaftstore,
-		"RAFTSTORE": fsmetaBackendRaftstore,
-		"local":     fsmetaBackendLocal,
-		" LOCAL ":   fsmetaBackendLocal,
-	}
-	for input, want := range cases {
-		got, err := parseFSMetaBackend(input)
-		if err != nil {
-			t.Fatalf("parse %q: %v", input, err)
-		}
-		if got != want {
-			t.Fatalf("parse %q got %q want %q", input, got, want)
-		}
-	}
-	if _, err := parseFSMetaBackend("memory"); err == nil {
-		t.Fatal("expected invalid backend to fail")
-	}
-}
-
 func TestLocalMountIdentity(t *testing.T) {
 	got, err := localMountIdentity(" vol ", 7)
 	if err != nil {
@@ -106,7 +59,6 @@ func TestLocalMountIdentity(t *testing.T) {
 func TestOpenConfiguredRuntimeLocal(t *testing.T) {
 	ctx := context.Background()
 	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
-		Backend: fsmetaBackendLocal,
 		Local: fsmetalocal.Options{
 			WorkDir: t.TempDir(),
 			Mount:   model.MountIdentity{MountID: "vol", MountKeyID: 1},
@@ -129,7 +81,7 @@ func TestOpenConfiguredRuntimeLocal(t *testing.T) {
 	if rt.snapshot == nil {
 		t.Fatal("expected local snapshot publisher")
 	}
-	if !strings.Contains(rt.startupSummary, "fsmeta backend: local") || strings.Contains(rt.startupSummary, "peras=") {
+	if !strings.Contains(rt.startupSummary, "fsmeta backend: local") {
 		t.Fatalf("local runtime summary should stay direct-only: %s", rt.startupSummary)
 	}
 	result, err := rt.executor.Create(ctx, model.CreateRequest{
@@ -153,7 +105,6 @@ func TestOpenConfiguredRuntimeLocal(t *testing.T) {
 func TestOpenConfiguredRuntimeLocalCommitContract(t *testing.T) {
 	ctx := context.Background()
 	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
-		Backend: fsmetaBackendLocal,
 		Local: fsmetalocal.Options{
 			WorkDir: t.TempDir(),
 			Mount:   model.MountIdentity{MountID: "vol", MountKeyID: 1},
@@ -167,11 +118,11 @@ func TestOpenConfiguredRuntimeLocalCommitContract(t *testing.T) {
 			t.Fatalf("close local runtime: %v", err)
 		}
 	}()
-	if !strings.Contains(rt.contractLog, "one embedded MVCC store") {
+	if !strings.Contains(rt.contractLog, "Pebble-backed one-node MVCC store") {
 		t.Fatalf("unexpected local contract log: %s", rt.contractLog)
 	}
 	contract := localCommitContractStats()
-	if got := contract["default_write_path"]; got != "local_mvcc" {
+	if got := contract["default_write_path"]; got != "local_pebble_mvcc" {
 		t.Fatalf("default write path got %v", got)
 	}
 	if got := contract["successful_write_boundary"]; got != "durable" {
@@ -182,7 +133,6 @@ func TestOpenConfiguredRuntimeLocalCommitContract(t *testing.T) {
 func TestLocalRuntimeRegistersWatchAndSnapshot(t *testing.T) {
 	ctx := context.Background()
 	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
-		Backend: fsmetaBackendLocal,
 		Local: fsmetalocal.Options{
 			WorkDir: t.TempDir(),
 			Mount:   model.MountIdentity{MountID: "vol", MountKeyID: 1},

@@ -108,17 +108,17 @@ func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uin
 
 // reserveTxnVersions reserves start_ts plus a speculative commit_ts in one TSO
 // hop. AtomicMutate and in-memory runners use the speculative commit version.
-// The real raftstore runner obtains commit_ts after prewrite for regular 2PC,
-// which is the strict Percolator boundary under read/write contention.
+// A replicated backend may obtain commit_ts after intent placement for a
+// stricter read/write contention boundary.
 //
 // When a path does use the speculative commit_ts, two server-side safety nets
 // keep pre-allocation from silently violating snapshot isolation:
 //
 //  1. When a concurrent reader at start_ts > our commit_ts encounters our
 //     prewrite lock, it pushes lock.MinCommitTs = reader_start_ts + 1 via
-//     CheckTxnStatus (see txn/percolator/txn.go: CallerStartTs handling).
+//     backend lock resolution.
 //  2. commitKey rejects the commit with keyErrorCommitTsExpired when
-//     lock.MinCommitTs > commitVersion (see txn/percolator/txn.go:373-375).
+//     lock.MinCommitTs > commitVersion.
 //
 // Together these force a retry-with-fresh-ts under contention: incorrect
 // speculative commit_ts is detected at commit time, never silently accepted.
@@ -188,7 +188,7 @@ func (e *Executor) withTxnRetryNoVisibleFlush(ctx context.Context, run func(star
 			e.txnRetryExhaustedTotal.Add(1)
 			break
 		}
-		// A live Percolator lock or a coordinator/region route refresh can race
+		// A live backend lock or a coordinator/region route refresh can race
 		// with the same semantic fsmeta operation. Retrying at this boundary
 		// keeps transient MVCC and route churn below the API contract.
 		e.txnRetriesTotal.Add(1)
@@ -227,7 +227,7 @@ func (e *Executor) withReadRetry(ctx context.Context, snapshotVersion uint64, ru
 			e.readRetryExhaustedTotal.Add(1)
 			break
 		}
-		// ReadDir and ReadDirPlus may race with live Percolator locks or region
+		// ReadDir and ReadDirPlus may race with live backend locks or region
 		// route refresh. Retrying keeps the external API at the fsmeta level
 		// instead of leaking transient storage details to callers.
 		e.readRetriesTotal.Add(1)
@@ -249,8 +249,8 @@ func txnRetryBudget(err error, fallbackLockTTL uint64) time.Duration {
 	switch {
 	case nokverrors.IsKind(err, nokverrors.KindLockConflict):
 	case nokverrors.IsKind(err, nokverrors.KindRetryable):
-		// Percolator uses Retryable for a dead start_ts, for example when
-		// commit finds that the prewrite lock was already rolled back. The
+		// Replicated backends may use Retryable for a dead start_ts, for
+		// example when commit finds that the intent was already rolled back. The
 		// fsmeta semantic operation can safely re-read and re-plan, but under
 		// raft/store congestion it needs the same bounded liveness window as a
 		// visible live-lock wait.

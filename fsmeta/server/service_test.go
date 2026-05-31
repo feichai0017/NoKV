@@ -672,7 +672,7 @@ func TestGRPCServiceRetireSnapshotSubtree(t *testing.T) {
 	}, publisher.retired)
 }
 
-func TestGRPCServiceRetireSnapshotSubtreeRejectsMalformedPerasRef(t *testing.T) {
+func TestGRPCServiceRetireSnapshotSubtreeRejectsMalformedEvidenceRef(t *testing.T) {
 	publisher := &fakeSnapshotPublisher{}
 	client, cleanup := openBufconnClient(t, &fakeExecutor{}, WithSnapshotPublisher(publisher))
 	defer cleanup()

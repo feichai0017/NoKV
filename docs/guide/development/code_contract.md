@@ -5,22 +5,21 @@ SPDX-License-Identifier: Apache-2.0
 
 # NoKV Code Contract
 
-This document is the repository-level code contract for NoKV. It is stricter
-than a Go style guide: it defines ownership boundaries, file placement, naming,
-error taxonomy, metrics ownership, tests, and PR hygiene. Contributors and
-review agents must check this document before approving a change.
+This document is the repository-level source of truth for code structure,
+package boundaries, naming, errors, metrics, tests, DCO, and
+distributed-safety review.
 
-NoKV accepts breaking changes when they keep the codebase simpler and safer.
-Do not add compatibility shims, forwarding wrappers, deprecated aliases, or
-dual execution paths unless the PR explains the operational need and the
-removal condition.
+NoKV accepts breaking internal changes when they remove ambiguity or long-term
+maintenance cost. Do not add compatibility shims, forwarding wrappers,
+deprecated aliases, or dual execution paths unless the PR states the
+operational need and removal condition.
 
-## 1. Pull Request Scope
+## Pull Request Scope
 
 - One PR changes one logical boundary.
 - Do not mix behavior changes, broad refactors, benchmarks, generated-code
   rewrites, and documentation churn unless they are inseparable.
-- A root/control-plane fix must not include unrelated fsmeta, Peras, engine, or
+- A root/control-plane fix must not include unrelated fsmeta, raftstore, or
   benchmark changes.
 - A performance PR must include benchmark evidence and must not hide semantic
   changes.
@@ -33,127 +32,66 @@ Use:
 git commit -s -m "fix: catch up root leader before writes"
 ```
 
-If a commit already exists without DCO:
-
-```bash
-git commit --amend -s --no-edit
-git rebase --signoff origin/main
-```
-
-## 2. Package Boundaries
+## Package Boundaries
 
 Package boundaries follow ownership of truth, not convenience.
 
 | Package | Owns | Must Not Do |
 | --- | --- | --- |
-| `storage/kv/` | Ordered key/value backend contract, including atomic storage batch apply. | Expose MVCC, fsmeta, raftstore, migration, SST, or protobuf semantics. |
-| `storage/pebble/`, `storage/holt/`, `storage/memory/` | Concrete ordered KV backends. | Own MVCC timestamps, column families, transactions, fsmeta layout, raftstore routing, or migration policy. |
-| `storage/wal/`, `storage/vfs/` | Low-level WAL and VFS support for concrete runtime internals. | Become public fsmeta, txn, raftstore, or migration contracts. |
-| `local/` | Embedded DB facade and local runtime assembly. | Know fsmeta, coordinator, root, or raftstore semantics. |
-| `txn/storage/` | MVCC internal keys, column families, timestamp encoding, entries, and transaction storage contract. | Import Percolator, raftstore, fsmeta, coordinator, root, or concrete storage backends. |
-| `txn/` | Transaction protocol layers. | Let `mvcc`, `storage`, or `latch` depend on Percolator or raftstore. |
-| `raftstore/` | Region Raft execution and data-plane apply. | Interpret fsmeta namespace semantics. |
-| `raftstore/snapshot/` | Raftstore-internal MVCC entry snapshot protocol for peer bootstrap and raft snapshot apply. | Import concrete storage engines, local DB, fsmeta, migration, or SST/table/manifest implementations. |
-| `meta/root/` | Rooted truth for authority, topology, grants, seals, and lifecycle facts. | Import coordinator service/client packages. |
-| `coordinator/` | Rebuildable control-plane view, routing, and service orchestration. | Become the source of truth for rooted facts. |
-| `fsmeta/model/` | Storage-engine-neutral namespace model: inode/dentry records, operation request/result shapes, and model validation. | Import key/value layout, protobuf, raftstore, coordinator, root, Peras, or concrete backend packages. |
-| `fsmeta/layout/` | Ordered-key backend layout: key/value codecs, key-family kinds, affinity buckets, placement ranges, and operation key plans. | Own namespace semantics, protobuf, raftstore, coordinator, root, Peras, or concrete backend clients. |
-| `fsmeta/backend/` | Storage-engine-neutral MVCC metadata backend contract consumed by fsmeta execution. | Import protobuf, engine, local, raftstore, coordinator, root, Peras, or concrete backend packages. |
-| `fsmeta/observe/` | Runtime-neutral watch and snapshot observation surfaces: requests, cursors, events, subscriptions, apply notifications, and snapshot publication hooks. | Own namespace model objects, storage runtimes, protobuf conversion, raftstore, coordinator, root, Peras, or backend clients. |
-| `fsmeta/` | Package-level architecture anchor. | Re-own model/layout/observe types or add forwarding aliases for `fsmeta/model`, `fsmeta/layout`, or `fsmeta/observe`. |
-| `fsmeta/exec/` | Semantic execution, compiler, and holder logic over the `fsmeta/backend` contract. | Import protobuf, `raftstore`, `coordinator`, `meta/root`, or concrete backend packages. |
-| `fsmeta/runtime/` | Runtime adapters that bind fsmeta execution to storage backends. | Reinterpret compiler semantics without going through the compiler contract. |
-| `cmd/` | Binary assembly, flags, env, and config wiring. | Contain core protocol or storage logic. |
-| `raftstore-rs/` | Rust replacement track for the distributed fsmeta data plane. It owns mount-scoped Raft execution, OpenRaft isolation, Holt state-machine adapters, and internal transport while both Go and Rust raftstores coexist. | Redesign Go protobuf wire contracts, import fsmeta semantic execution, extend Percolator parity as the mainline target, implement Peras witness paths, or revive legacy migration/SST APIs. |
-| `pb/`, `*/wire/` | Proto definitions and conversion glue. | Leak protobuf structs into storage or semantic cores when a domain type exists. |
-| `utils/` | Domain-neutral helpers shared by multiple packages. | Import global error taxonomy or own storage, raft, fsmeta, coordinator, or root semantics. |
-| `third_party/holt/` | Pinned external Holt source checkout for the future Rust-backed storage adapter. | Be imported directly by Go runtime code or become a semantic storage contract. |
+| `fsmeta/model/` | Storage-engine-neutral namespace model: mount, inode, dentry, session, quota, watch, snapshot, operation request/result types, and validation. | Import key layout, protobuf, coordinator, root, raftstore, Pebble, Holt, or runtime packages. |
+| `fsmeta/layout/` | Ordered fsmeta key layout, value codecs, key-family kinds, placement ranges, and operation key plans. | Own high-level namespace semantics, import protobuf, coordinator, root, raftstore, Pebble, Holt, or runtime packages. |
+| `fsmeta/backend/` | Minimal MVCC metadata backend contract consumed by `fsmeta/exec`. | Import protobuf, concrete runtimes, coordinator, root, raftstore, Pebble, Holt, migration, SST, or storage-engine diagnostics. |
+| `fsmeta/observe/` | Runtime-neutral watch and snapshot observation surfaces. | Own namespace model objects, protobuf conversion, concrete runtimes, or backend clients. |
+| `fsmeta/exec/` | Semantic compiler, executor, visible-read helpers, and runtime-neutral holder logic over `fsmeta/backend`. | Import protobuf, coordinator, root, raftstore, Pebble, Holt, or concrete runtime packages. |
+| `fsmeta/runtime/local/` | Pebble-backed one-process fsmeta backend for demos, tests, and small deployments. | Become a generic KV database, import coordinator/root, or reinterpret compiler semantics outside the executor contract. |
+| `fsmeta/server/`, `fsmeta/client/` | gRPC server/client boundary and protobuf conversion. | Put semantic execution or persistence logic in wire conversion code. |
+| `meta/root/` | Rooted truth for topology, authority, lifecycle events, grants, and seals. | Import coordinator service/client packages or fsmeta execution packages. |
+| `coordinator/` | Rebuildable serving view over root truth: routing, TSO, store discovery, scheduling, and root-event publish. | Become the source of rooted truth or own high-frequency fsmeta data. |
+| `raftstore/` | Rust distributed data-plane target: OpenRaft isolation, mount-scoped replicated execution, raft log, Holt state-machine storage, snapshots, apply notifications, and existing protobuf service compatibility. | Import Go fsmeta semantic packages, redesign public protobuf without a wire-compatibility plan, or revive deleted Go raftstore/txn/local/storage/experimental paths. |
+| `pb/`, `*/wire/` | Proto definitions and conversion glue. | Leak protobuf structs into semantic cores when a domain type exists. |
+| `metrics/` | Reusable metric value types. | Own subsystem state. |
+| `utils/` | Domain-neutral helpers shared by multiple non-test packages. | Import domain packages or hide fsmeta/root/coordinator/raftstore semantics. |
+| `third_party/holt/` | Pinned external Holt source checkout for Rust data-plane work. | Be imported directly by Go runtime code or become the public storage contract. |
+| `cmd/` | Binary assembly, flags, env, and config wiring. | Contain core protocol, semantic, or storage logic. |
+
+Deleted package trees are intentionally not compatibility surfaces:
+
+- old Go `local/`;
+- old Go `storage/`;
+- old Go `txn/`;
+- old Go `raftstore/`;
+- `experimental/`.
 
 If a lower layer needs a higher-layer operation, define a narrow interface at
 the caller boundary instead of importing the higher layer.
 
-Every new package must have a clear owner and one sentence of responsibility in
-`doc.go` or the package-level comment. Reviewers should be able to answer:
+Every new package must have a clear owner and a package comment or `doc.go`
+stating:
 
-- What authoritative state, if any, does this package own?
-- Which package is allowed to mutate that state?
-- Which package is allowed to observe it?
-- Which lower-layer packages may it import?
-- Which higher-layer packages must not import it?
+- what authoritative state it owns, if any;
+- which package may mutate that state;
+- which package may observe it;
+- which lower-layer packages it may import;
+- which higher-layer packages must not import it.
 
-The current responsibility map is:
-
-- `storage/kv/*`: ordered KV contract only.
-- `storage/pebble/*`: default Pebble-backed ordered KV implementation.
-- `storage/holt/*`: owned Holt backend adapter once it is wired into this repo.
-- `storage/memory/*`: test ordered KV implementation.
-- `third_party/holt`: pinned external Holt submodule. Go code should depend on
-  a future `storage/holt` adapter, not on this checkout directly.
-- `storage/wal`, `storage/vfs`: low-level support packages used by concrete
-  runtimes. They are not fsmeta or migration contracts.
-- `local/*`: embedded DB assembly around the storage backend, NoKV MVCC key
-  encoding, local stats, workdir mode, and commit queues. It may collect local
-  stats, but it does not own distributed truth.
-- `txn/mvcc`, `txn/storage`, `txn/latch`: reusable transaction building blocks.
-  They remain protocol-neutral.
-- `txn/percolator`: 2PC/MVCC protocol logic on top of transaction primitives.
-- `raftstore/*`: replicated region execution, apply, split/merge, peer
-  lifecycle, and internal install commands.
-- `raftstore/snapshot/*`: raftstore-internal MVCC entry snapshot payloads for
-  peer bootstrap and raft snapshot apply. Operator migration and SST fast paths
-  are not part of the mainline backend contract.
-- `meta/root/*`: rooted truth for cluster and metadata authority facts.
-- `coordinator/*`: rebuildable serving layer over root facts.
-- `fsmeta/model/*`: storage-engine-neutral inode/dentry/session/quota/snapshot
-  model objects, operation request/result types, and model validation.
-- `fsmeta/layout/*`: namespace key layout, value codecs, placement planning,
-  and operation key plans for ordered storage backends.
-- `fsmeta/backend/*`: minimal MVCC metadata backend contract. It contains
-  backend-neutral key/value, mutation, predicate, atomic mutation, and stats
-  surfaces only. Migration, SST ingest/export, LSM diagnostics, storage backend
-  stats, and raftstore RPC conversion remain in concrete runtime or operations
-  packages.
-- `fsmeta/observe/*`: runtime-neutral watch and snapshot observation surfaces.
-- `fsmeta/*`: package-level architecture anchor only.
-- `fsmeta/exec/*`: semantic compiler, executor, and runtime-neutral holder
-  logic. It may depend on `fsmeta/backend`, but it must not import protobuf or
-  concrete storage runtimes.
-- `fsmeta/runtime/*`: concrete runtime bindings from fsmeta execution to
-  raftstore or other storage backends.
-- `raftstore-rs/*`: Rust data-plane replacement track for distributed fsmeta.
-  The mainline target is one Raft group per mount by default. Rust executes
-  compiled predicates and mutations from the Go fsmeta runtime, isolates
-  OpenRaft behind a NoKV-owned boundary, adapts Holt multi-tree storage behind
-  Rust-only adapter crates, and excludes full Percolator parity, experimental
-  Peras witness, and legacy migration/SST paths from v1.
-- `experimental/peras/*`: Peras admission, visible-log, witness, segment, and
-  recovery experiments.
-- `experimental/thermos/*`: optional Thermos hotspot/admission experiments.
-- `metrics/*`: reusable metric value types, not subsystem ownership.
-- `*/stats/*`: subsystem-specific typed diagnostic adapters.
-
-## 3. Shared Helpers and `utils`
+## Shared Helpers and `utils`
 
 Before adding helper code, check the standard library and existing repository
-packages. Do not reimplement common retry loops, throttles, closers, backoff,
-cloning, sorting, or context helpers when an existing helper already fits.
+packages.
 
 Use `utils/` only when all of these are true:
 
-- The helper is domain-neutral.
-- At least two non-test packages use it, or the second use is part of the same
-  PR.
-- It has no hidden global state.
-- It does not import `errors`, `engine`, `local`, `txn`, `raftstore`,
-  `coordinator`, `meta/root`, or `fsmeta`.
-- It has focused tests.
+- the helper is domain-neutral;
+- at least two non-test packages use it, or the second use is part of the same
+  PR;
+- it has no hidden global state;
+- it does not import `errors`, `fsmeta`, `coordinator`, `meta/root`, or
+  raftstore-related packages;
+- it has focused tests.
 
-Do not move code into `utils/` just to avoid thinking about ownership.
-Single-use helpers belong next to the flow that uses them. Domain helpers belong
-in the domain package, for example `fsmeta`, `raftstore`, or `meta/root`, not in
-`utils/`.
+Domain helpers belong in the domain package.
 
-## 4. File Layout
+## File Layout
 
 Use responsibility-based file names. Avoid `utils.go`, `helpers.go`,
 `common.go`, and `misc.go` unless the package is tiny and the file has a single
@@ -163,11 +101,11 @@ Recommended package layout:
 
 | File | Contents |
 | --- | --- |
-| `doc.go` | Package responsibility, authority/truth boundary, and major invariants. |
+| `doc.go` | Package responsibility, truth boundary, and major invariants. |
 | `types.go` | Core domain types, small enums, and interfaces. |
-| `options.go` | Options, defaults, and `Validate` methods. |
+| `options.go` | Options, defaults, and validation. |
 | `errors.go` | Package sentinel errors and error helpers. |
-| `metrics.go` | Runtime counters and `recordX` methods. |
+| `metrics.go` | Runtime counters and record methods. |
 | `stats.go` | Typed diagnostic snapshots and aggregation. |
 | `store.go` | Authoritative in-memory state or the package's primary object. |
 | `service.go` | RPC/service boundary and request/response conversion. |
@@ -175,223 +113,75 @@ Recommended package layout:
 | `recovery.go` | Recovery, replay, bootstrap, and restart behavior. |
 | `encode.go` | Durable format encoding/decoding. |
 | `validation.go` | Input, invariant, and state validation. |
-| `*_test.go` | Tests for the file or behavior under test. |
-| `test_helpers_test.go` | Test-only helpers shared inside the package. |
+| `*_test.go` | Tests for the behavior under test. |
 
 When a file grows because it has multiple responsibilities, split by protocol
-stage or data owner. Examples: `grant.go`, `seal.go`, `frontier.go`,
-`catalog.go`, `witness.go`, `install.go`, `flush_pipeline.go`.
+stage or data owner.
 
-## 5. File Naming
+## Naming
 
 - File names are lowercase snake_case.
-- Files should name the owner or behavior, not the implementation trick.
-- Generated files must have a stable suffix such as `.program.go` or `.pb.go`.
-- Test files should mirror the behavior under test:
-  - `store_test.go` for store-local invariants.
-  - `service_test.go` for RPC/service behavior.
-  - `recovery_test.go` for recovery and replay behavior.
-  - `*_integration_test.go` only when the test crosses package/runtime
-    boundaries.
-- Benchmarks belong in `*_bench_test.go`.
-- Do not create catch-all files named `new.go`, `manager.go`, `impl.go`,
-  `handler.go`, or `runtime.go` unless the package truly has one runtime owner.
-
-## 6. Type, Interface, and Field Naming
-
-- Exported types must describe domain responsibility: `AuthorityGrant`,
-  `SegmentWitnessRecord`, `RootStore`, `RuntimeStats`.
-- Avoid vague names such as `Manager`, `Handler`, `Processor`, `Data`,
-  `Info`, and `Config` when the package already has multiple authorities.
-- Interfaces should name the behavior required by the caller:
-  `SegmentInstaller`, `AuthoritySealer`, `RootWritePreparer`.
-- Keep interfaces small and define them near the consumer, not the producer.
-- Use `Options` for construction-time configuration and give it a `Validate`
-  method when invalid combinations are possible.
+- Exported types must describe domain responsibility.
+- Avoid vague names such as `Manager`, `Handler`, `Processor`, `Data`, `Info`,
+  and `Config` when a package has multiple authorities.
+- Interfaces should name behavior required by the caller and stay near the
+  consumer.
+- Use `Options` for construction-time configuration and validate invalid
+  combinations.
 - Use `Stats` for live collectors and `StatsSnapshot` for read-only snapshots.
-- Use `Metrics` for counters and histograms owned by a runtime component.
-- Use `Record`, `Entry`, `Frame`, or `Snapshot` only when the durable or
-  diagnostic boundary is clear.
-- Boolean fields should read naturally at call sites: `Durable`, `Sealed`,
-  `Ready`, `RequiresPublish`, `AllowOpaqueKeys`.
-- Avoid negative boolean names such as `DisableX` in internal structs. Prefer a
-  positive mode enum when there are more than two states.
+- Boolean fields should read naturally at call sites.
 
-## 7. Function Naming and Placement
+## Errors
 
-Function names should make the state transition explicit.
+- Sentinel errors belong in the package that owns the semantic condition.
+- Do not introduce string matching for errors.
+- Preserve root, freshness, durability, recovery, and GC ambiguity in typed
+  errors instead of collapsing everything into `ErrInternal`.
+- Wire conversion belongs at the service/client boundary.
 
-- Use `Load`, `Open`, `Start`, `Close` for lifecycle.
-- Use `Acquire`, `Issue`, `Seal`, `Retire`, `Install`, `Recover`, `Replay`,
-  `Fence`, `Publish`, and `Observe` for distributed state transitions.
-- Use `ValidateX` for pure validation and `EnsureX` only when the function may
-  mutate state to satisfy the condition.
-- Use `recordX` for metrics updates.
-- Use `cloneX` for deep copies and `copyX` only for byte/slice copying.
-- Use `encodeX` / `decodeX` for internal formats and `EncodeX` / `DecodeX`
-  only when the format is a public package contract.
+## Metrics and Stats
 
-Place functions in a file in this order:
+- Metrics are owned by the subsystem whose behavior they describe.
+- Stats snapshots must be typed at the owner boundary and converted to generic
+  maps only at diagnostics/API edges.
+- Do not put runtime diagnostics into lower-layer contracts unless every
+  implementation can expose the same meaning.
 
-1. Exported types and constructors.
-2. Public methods for the main type.
-3. The main state-transition functions in call order.
-4. Private helpers used only by the transition immediately above them.
-5. Small pure helpers, sorting helpers, clone helpers, and digest helpers.
+## Tests
 
-Do not add one-line forwarding functions:
+Match test level to risk:
 
-```go
-func (s *Store) Foo(ctx context.Context, req Request) error {
-    return s.backend.Foo(ctx, req)
-}
-```
+- package tests for local invariants;
+- contract tests for `fsmeta/backend` and public fsmeta semantics;
+- recovery/fault tests for rooted truth and distributed data-plane changes;
+- benchmark evidence for performance claims;
+- Rust workspace tests for `raftstore` behavior.
 
-Forwarding is allowed only for:
-
-- RPC or CLI boundary adapters.
-- Interface adaptation between packages.
-- Generated code.
-- Test helpers.
-- A temporary migration shim with a removal issue and deadline.
-
-## 8. Errors
-
-The root `errors` package owns only stable cross-package error kinds, retry
-classification, and RPC mapping.
-
-- Package-specific sentinel errors belong in that package's `errors.go`.
-- Cross-package errors must be classifiable through `errors.KindOf`.
-- Callers must branch on `errors.Is`, `errors.As`, or `errors.KindOf`; never
-  match message strings.
-- RPC handlers should convert errors at the service boundary. Core packages
-  should not return gRPC status errors directly.
-- Do not define `ErrXxx` or `errXxx` in random implementation files.
-- Lower storage packages must not import the global error taxonomy unless the
-  architecture guard explicitly allows it.
-
-## 9. Metrics and Stats
-
-Metrics and stats are owned code, not incidental counters.
-
-- Runtime counters live in `metrics.go`.
-- Typed snapshots and aggregators live in `stats.go` or a dedicated `*/stats`
-  package.
-- Business logic should call `recordX` helpers instead of mutating atomics
-  directly.
-- Internal diagnostics should prefer typed snapshots over `map[string]any`.
-- `map[string]any` is allowed only at external diagnostics/export boundaries.
-- Global expvar/prometheus registration must be centralized. Packages must not
-  register ad hoc global metric names.
-- Metrics names are stable API. Renames require docs and test updates.
-- A subsystem-level stats collector may aggregate child metrics, but child
-  packages still own their counters.
-
-## 10. Generated Code
-
-- Handwritten specs are the source of truth.
-- Generated files must not be edited manually.
-- Generated files must include a stable header that names the generator.
-- `go generate` must be deterministic and must leave `git diff` clean.
-- Do not keep two semantic sources of truth. A migration may temporarily keep
-  old and generated paths, but the PR must state the removal condition.
-
-For fsmeta semantic program generation, the contract is:
-
-```text
-specs/operations.go -> internal/opgen -> *.program.go -> materialized runtime descriptor
-```
-
-Runtime code must consume generated descriptors rather than reinterpreting
-operation semantics by hand.
-
-## 11. Tests
-
-Use package-local tests for invariants and external-package tests for public
-API behavior.
-
-| Test Type | Placement |
-| --- | --- |
-| Private invariant tests | Same package in `*_test.go`. |
-| Public API tests | External package, e.g. `package local_test`. |
-| Cross-module behavior | `integration/` package or explicit `*_integration_test.go`. |
-| Model/contract tests | `contract/` or model-specific package. |
-| Benchmarks | `*_bench_test.go`. |
-| Test helpers | `test_helpers_test.go`. |
-
-Bug-fix tests should name the failure mode:
-
-```go
-func TestRootLeaderHandoffCatchesUpBeforeGrantWrite(t *testing.T)
-func TestPerasRecoveryRejectsSegmentOutsideAuthority(t *testing.T)
-func TestWitnessGCDoesNotDropUnsealedAckedSegment(t *testing.T)
-```
-
-Distributed changes must test at least one non-happy-path boundary: stale
-leader, stale epoch, retry, context cancellation, crash window, recovery replay,
-duplicate request, or GC frontier.
-
-## 12. Distributed Safety
-
-Every distributed write path must make these boundaries explicit:
-
-- Authority owner.
-- Freshness/fence check.
-- Visibility boundary.
-- Durability boundary.
-- Recovery source.
-- GC or seal condition.
-- Slow/fallback path.
-
-Rules:
-
-- Root writes must prepare against the latest committed root state before
-  issuing new authority facts.
-- Raftstore writes must pass region/epoch/fence checks unless they are a
-  validated internal install command.
-- fsmeta fast paths must go through holder authority.
-- Peras install and recovery paths must validate the segment authority and
-  payload digest before publishing read-state.
-- Witness records, seals, and catalog entries must be self-describing enough
-  for recovery.
-- Background repair is not a substitute for safety.
-
-## 13. Compatibility and Breaking Changes
-
-NoKV prefers simple breaking changes over compatibility debt.
-
-- Do not add deprecated aliases by default.
-- Do not keep old and new runtime paths unless the PR names the removal point.
-- Do not add config aliases unless an already released CLI/config requires it.
-- When changing a persisted format, RPC, or CLI flag, update docs and tests in
-  the same PR.
-- Compatibility exceptions must include a removal issue, owner, and deadline.
-
-## 14. Local Validation
-
-Before opening a PR, run the smallest meaningful loop first, then the full
-repository gates:
+Required local gates before pushing substantial changes:
 
 ```bash
-make fmt
-make lint
-make test
+go test -count=1 ./...
+cargo test --manifest-path raftstore/Cargo.toml --workspace
+git diff --check
 ```
 
-Dependency-boundary checks are part of `make lint` (the `importboundary`
-analyzer in the `nokvcontract` plugin). Run the full lint pipeline before any
-PR that moves an import:
+Run `make lint` when package boundaries or generated code are touched.
 
-```bash
-make lint
-```
+## Generated Code
 
-For generated code:
+- Edit `.proto` files, not generated `.pb.go` files.
+- Run `make proto-check` after protobuf changes.
+- Generated files must not be manually patched.
 
-```bash
-go generate ./fsmeta/exec/compile
-git diff --exit-code -- fsmeta/exec/compile
-```
+## Documentation
 
-For concurrency-sensitive or distributed-recovery changes, run the relevant
-smoke or failpoint suite and include the exact commands in the PR.
+When a PR moves or deletes packages, update:
+
+- this code contract;
+- `README.md`;
+- `docs/guide/architecture.md`;
+- any guide page that names the moved package;
+- benchmark and Docker instructions if user-facing commands change.
+
+Do not keep docs for deleted mainline modules unless the page is explicitly
+marked as historical.

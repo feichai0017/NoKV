@@ -9,7 +9,7 @@ import (
 
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	myraft "github.com/feichai0017/NoKV/raft"
+	etcdraft "go.etcd.io/raft/v3"
 )
 
 func (d *NetworkDriver) ObserveTail(after rootstorage.TailToken) (rootstorage.TailAdvance, error) {
@@ -85,7 +85,7 @@ func (d *NetworkDriver) AppendCommitted(ctx context.Context, records ...rootstor
 		d.mu.Unlock()
 		return 0, errNetworkDriverClosed
 	}
-	if d.node.raw.Status().RaftState != myraft.StateLeader {
+	if d.node.raw.Status().RaftState != etcdraft.StateLeader {
 		d.mu.Unlock()
 		return 0, errNodeNotLeader(d.id)
 	}

@@ -11,8 +11,7 @@ import (
 	"time"
 
 	rootfile "github.com/feichai0017/NoKV/meta/root/storage/file"
-	myraft "github.com/feichai0017/NoKV/raft"
-	"github.com/feichai0017/NoKV/storage/vfs"
+	etcdraft "go.etcd.io/raft/v3"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
@@ -81,7 +80,7 @@ func NewNetworkDriver(cfg NetworkConfig) (*NetworkDriver, error) {
 	if err := os.MkdirAll(cfg.WorkDir, 0o755); err != nil {
 		return nil, err
 	}
-	adapter, err := newVirtualLogAdapter(rootfile.NewStore(vfs.Ensure(nil), cfg.WorkDir))
+	adapter, err := newVirtualLogAdapter(rootfile.NewStore(cfg.WorkDir))
 	if err != nil {
 		return nil, err
 	}
@@ -113,7 +112,7 @@ func (d *NetworkDriver) IsLeader() bool {
 	if d.node == nil {
 		return false
 	}
-	return d.node.raw.Status().RaftState == myraft.StateLeader
+	return d.node.raw.Status().RaftState == etcdraft.StateLeader
 }
 
 func (d *NetworkDriver) LeaderID() uint64 {
@@ -204,7 +203,7 @@ func (d *NetworkDriver) tickLoop(interval time.Duration) {
 			return
 		case <-ticker.C:
 			d.mu.Lock()
-			var outbound []myraft.Message
+			var outbound []raftpb.Message
 			if d.node != nil && !d.ticksPaused {
 				d.node.raw.Tick()
 				_, outbound, _ = d.drainLocked()
@@ -215,7 +214,7 @@ func (d *NetworkDriver) tickLoop(interval time.Duration) {
 	}
 }
 
-func (d *NetworkDriver) handleTransportMessage(msg myraft.Message) error {
+func (d *NetworkDriver) handleTransportMessage(msg raftpb.Message) error {
 	d.mu.Lock()
 	if d.node == nil {
 		d.mu.Unlock()
@@ -241,22 +240,22 @@ func (d *NetworkDriver) handleTransportMessage(msg myraft.Message) error {
 type networkNode struct {
 	id      uint64
 	peerIDs []uint64
-	storage *myraft.MemoryStorage
-	raw     *myraft.RawNode
+	storage *etcdraft.MemoryStorage
+	raw     *etcdraft.RawNode
 }
 
 func newNetworkNode(cfg NetworkConfig, handler MessageHandler) (*networkNode, error) {
-	storage := myraft.NewMemoryStorage()
+	storage := etcdraft.NewMemoryStorage()
 	state, err := loadProtocolState(cfg.WorkDir)
 	if err != nil {
 		return nil, err
 	}
-	if !myraft.IsEmptySnap(state.Snapshot) {
+	if !etcdraft.IsEmptySnap(state.Snapshot) {
 		if err := storage.ApplySnapshot(state.Snapshot); err != nil {
 			return nil, err
 		}
 	}
-	if !myraft.IsEmptyHardState(state.HardState) {
+	if !etcdraft.IsEmptyHardState(state.HardState) {
 		if err := storage.SetHardState(state.HardState); err != nil {
 			return nil, err
 		}
@@ -266,7 +265,7 @@ func newNetworkNode(cfg NetworkConfig, handler MessageHandler) (*networkNode, er
 			return nil, err
 		}
 	}
-	rcfg := &myraft.Config{
+	rcfg := &etcdraft.Config{
 		ID:              cfg.ID,
 		ElectionTick:    defaultNetworkElectionTick,
 		HeartbeatTick:   defaultNetworkHeartbeatTick,
@@ -275,15 +274,15 @@ func newNetworkNode(cfg NetworkConfig, handler MessageHandler) (*networkNode, er
 		MaxInflightMsgs: 256,
 		PreVote:         true,
 	}
-	raw, err := myraft.NewRawNode(rcfg)
+	raw, err := etcdraft.NewRawNode(rcfg)
 	if err != nil {
 		return nil, err
 	}
-	restarted := !myraft.IsEmptyHardState(state.HardState) || !myraft.IsEmptySnap(state.Snapshot) || len(state.Entries) > 0
+	restarted := !etcdraft.IsEmptyHardState(state.HardState) || !etcdraft.IsEmptySnap(state.Snapshot) || len(state.Entries) > 0
 	if !restarted {
-		peers := make([]myraft.Peer, 0, len(cfg.PeerIDs))
+		peers := make([]etcdraft.Peer, 0, len(cfg.PeerIDs))
 		for _, id := range cfg.PeerIDs {
-			peers = append(peers, myraft.Peer{ID: id})
+			peers = append(peers, etcdraft.Peer{ID: id})
 		}
 		if err := raw.Bootstrap(peers); err != nil {
 			return nil, err
@@ -302,7 +301,7 @@ func newNetworkNode(cfg NetworkConfig, handler MessageHandler) (*networkNode, er
 	}, nil
 }
 
-func (d *NetworkDriver) sendMessages(msgs []myraft.Message) error {
+func (d *NetworkDriver) sendMessages(msgs []raftpb.Message) error {
 	if len(msgs) == 0 {
 		return nil
 	}

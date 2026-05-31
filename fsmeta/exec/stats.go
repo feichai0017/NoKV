@@ -130,9 +130,9 @@ func commitContractStats(visibleEnabled bool) map[string]any {
 		}
 	}
 	return map[string]any{
-		"default_write_path":        "percolator",
+		"default_write_path":        "backend_commit",
 		"successful_write_boundary": "durable",
-		"durable_boundary":          "raftstore_commit",
+		"durable_boundary":          "backend_commit",
 	}
 }
 

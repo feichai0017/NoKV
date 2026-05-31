@@ -4,21 +4,21 @@
 package local
 
 import (
-	"bytes"
 	"context"
 	"sync"
 	"sync/atomic"
 	"testing"
 
+	cpebble "github.com/cockroachdb/pebble"
+
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	localdb "github.com/feichai0017/NoKV/local"
 	"github.com/stretchr/testify/require"
 )
 
 func TestRunnerProvidesSnapshotReads(t *testing.T) {
-	db := openTestDB(t, nil)
+	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -51,9 +51,7 @@ func TestRunnerProvidesSnapshotReads(t *testing.T) {
 }
 
 func TestRunnerMutateHandlesMultiKeyPebbleBatch(t *testing.T) {
-	opts := localdb.NewDefaultOptions()
-	opts.WorkDir = t.TempDir()
-	db := openTestDB(t, opts)
+	db := openTestDB(t, t.TempDir(), nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -70,9 +68,7 @@ func TestRunnerMutateHandlesMultiKeyPebbleBatch(t *testing.T) {
 }
 
 func TestRunnerInstallMutationsAtCommitAcceptsMultiKeyGroup(t *testing.T) {
-	opts := localdb.NewDefaultOptions()
-	opts.WorkDir = t.TempDir()
-	db := openTestDB(t, opts)
+	db := openTestDB(t, t.TempDir(), nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -99,7 +95,7 @@ func TestRunnerInstallMutationsAtCommitAcceptsMultiKeyGroup(t *testing.T) {
 }
 
 func TestRunnerInstallMutationsAtCommitAllowsMissingDeletePrimary(t *testing.T) {
-	db := openTestDB(t, nil)
+	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -120,101 +116,8 @@ func TestRunnerInstallMutationsAtCommitAllowsMissingDeletePrimary(t *testing.T) 
 	require.False(t, ok)
 }
 
-func TestRunnerInstallMutationsAtCommitChunksLargeGroups(t *testing.T) {
-	opts := localdb.NewDefaultOptions()
-	opts.WorkDir = t.TempDir()
-	// Squeeze the per-batch budget so the install path is forced to chunk.
-	opts.MaxBatchCount = 8
-	opts.MaxBatchSize = 64 << 10
-	db := openTestDB(t, opts)
-	defer func() { require.NoError(t, db.Close()) }()
-	runner, err := NewRunner(db)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	start, err := runner.ReserveTimestamp(ctx, 2)
-	require.NoError(t, err)
-	const n = 64
-	mutations := make([]*backend.Mutation, 0, n)
-	for i := range n {
-		k := []byte("install-chunk-" + string(rune('A'+i/26)) + string(rune('a'+i%26)))
-		mutations = append(mutations, &backend.Mutation{
-			Op:    backend.MutationPut,
-			Key:   append([]byte(nil), k...),
-			Value: []byte("v"),
-		})
-	}
-	commit, err := runner.InstallMutationsAtCommit(ctx, mutations[0].Key, mutations, start, start+1)
-	require.NoError(t, err, "install must chunk to fit MaxBatchCount=%d", opts.MaxBatchCount)
-	require.Equal(t, start+1, commit)
-
-	for _, mutation := range mutations {
-		got, ok, err := runner.Get(ctx, mutation.Key, commit)
-		require.NoError(t, err)
-		require.True(t, ok, "key %q must be visible after chunked install", mutation.Key)
-		require.Equal(t, []byte("v"), got)
-	}
-}
-
-func TestRunnerInstallMutationsAtCommitRespectsSmallMaxBatchSize(t *testing.T) {
-	opts := localdb.NewDefaultOptions()
-	opts.WorkDir = t.TempDir()
-	opts.MaxBatchCount = 10_000
-	opts.MaxBatchSize = 64
-	db := openTestDB(t, opts)
-	defer func() { require.NoError(t, db.Close()) }()
-	runner, err := NewRunner(db)
-	require.NoError(t, err)
-
-	mutations := make([]*backend.Mutation, 0, 5)
-	for i := range 5 {
-		mutations = append(mutations, &backend.Mutation{
-			Op:    backend.MutationPut,
-			Key:   []byte{byte('a' + i), byte('k')},
-			Value: bytes.Repeat([]byte{byte('v')}, 18),
-		})
-	}
-	chunks, err := runner.chunkInstallMutations(mutations)
-	require.NoError(t, err)
-	require.Greater(t, len(chunks), 1)
-	for _, chunk := range chunks {
-		var size int64
-		for _, mutation := range chunk {
-			size += int64(len(mutation.Key) + len(mutation.Value))
-		}
-		require.LessOrEqual(t, size, int64(56))
-	}
-}
-
-func TestRunnerInstallMutationsAtCommitChunksDeleteGroupsBelowStrictLimit(t *testing.T) {
-	opts := localdb.NewDefaultOptions()
-	opts.WorkDir = t.TempDir()
-	opts.MaxBatchCount = 8
-	opts.MaxBatchSize = 64 << 10
-	db := openTestDB(t, opts)
-	defer func() { require.NoError(t, db.Close()) }()
-	runner, err := NewRunner(db)
-	require.NoError(t, err)
-
-	ctx := context.Background()
-	start, err := runner.ReserveTimestamp(ctx, 2)
-	require.NoError(t, err)
-	const n = 16
-	mutations := make([]*backend.Mutation, 0, n)
-	for i := range n {
-		k := []byte("install-delete-" + string(rune('a'+i)))
-		mutations = append(mutations, &backend.Mutation{
-			Op:  backend.MutationDelete,
-			Key: append([]byte(nil), k...),
-		})
-	}
-	commit, err := runner.InstallMutationsAtCommit(ctx, mutations[0].Key, mutations, start, start+1)
-	require.NoError(t, err, "install chunks must stay strictly below MaxBatchCount=%d after delete expansion", opts.MaxBatchCount)
-	require.Equal(t, start+1, commit)
-}
-
 func TestRunnerInstallMutationsAtCommitRejectsBadCommitVersion(t *testing.T) {
-	db := openTestDB(t, nil)
+	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -232,7 +135,7 @@ func TestRunnerInstallMutationsAtCommitRejectsBadCommitVersion(t *testing.T) {
 }
 
 func TestRunnerInstallMutationsAtCommitEmptyGroupIsNoop(t *testing.T) {
-	db := openTestDB(t, nil)
+	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -255,7 +158,7 @@ func TestRunnerInstallMutationsAtCommitEmptyGroupIsNoop(t *testing.T) {
 // Runner instance (process restart), where nextTS is rebuilt from disk state.
 
 func TestRunnerTryAtomicMutateAppliesPredicateCheckedGroup(t *testing.T) {
-	db := openTestDB(t, nil)
+	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -283,7 +186,7 @@ func TestRunnerTryAtomicMutateAppliesPredicateCheckedGroup(t *testing.T) {
 }
 
 func TestRunnerTryAtomicMutateRejectsValuePredicateMismatch(t *testing.T) {
-	db := openTestDB(t, nil)
+	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -319,9 +222,7 @@ func TestRunnerTryAtomicMutateRejectsValuePredicateMismatch(t *testing.T) {
 }
 
 func TestRunnerTryAtomicMutateHandlesMultiKeyPebbleBatch(t *testing.T) {
-	opts := localdb.NewDefaultOptions()
-	opts.WorkDir = t.TempDir()
-	db := openTestDB(t, opts)
+	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -338,7 +239,7 @@ func TestRunnerTryAtomicMutateHandlesMultiKeyPebbleBatch(t *testing.T) {
 }
 
 func TestRunnerTryAtomicMutateSerializesConcurrentSameKey(t *testing.T) {
-	db := openTestDB(t, nil)
+	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
@@ -394,7 +295,7 @@ func TestRunnerTryAtomicMutateSerializesConcurrentSameKey(t *testing.T) {
 
 func TestRunnerRestartsAboveObservedTimestamp(t *testing.T) {
 	dir := t.TempDir()
-	db := openTestDB(t, testDBOptions(dir))
+	db := openTestDB(t, dir, nil)
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
 	start, err := runner.ReserveTimestamp(context.Background(), 2)
@@ -407,7 +308,7 @@ func TestRunnerRestartsAboveObservedTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 
-	db = openTestDB(t, testDBOptions(dir))
+	db = openTestDB(t, dir, nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	recovered, err := NewRunner(db)
 	require.NoError(t, err)
@@ -416,21 +317,17 @@ func TestRunnerRestartsAboveObservedTimestamp(t *testing.T) {
 	require.Greater(t, next, start+1)
 }
 
-func openTestDB(t *testing.T, opts *localdb.Options) *localdb.DB {
+func openTestDB(t *testing.T, dir string, opts *cpebble.Options) *cpebble.DB {
 	t.Helper()
 	if opts == nil {
-		opts = localdb.NewDefaultOptions()
-		opts.WorkDir = t.TempDir()
+		opts = &cpebble.Options{}
 	}
-	db, err := localdb.Open(opts)
+	if dir == "" {
+		dir = t.TempDir()
+	}
+	db, err := cpebble.Open(dir, opts)
 	require.NoError(t, err)
 	return db
-}
-
-func testDBOptions(dir string) *localdb.Options {
-	opts := localdb.NewDefaultOptions()
-	opts.WorkDir = dir
-	return opts
 }
 
 func testMount() model.MountIdentity {

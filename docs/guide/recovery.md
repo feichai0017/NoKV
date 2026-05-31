@@ -3,28 +3,42 @@ Copyright 2024-2026 The NoKV Authors.
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Recovery Model
+# Recovery
 
-NoKV recovery is intentionally strict: authoritative state is either recovered
-from its owner or startup returns an error. The current mainline separates
-recovery ownership by layer.
+NoKV now has two active recovery scopes.
 
-| Layer | Recovery owner |
-| --- | --- |
-| Ordered KV | Concrete `storage/kv` backend: Pebble today, Holt target |
-| NoKV MVCC keys and versions | `txn/storage`, `txn/mvcc`, and `local.DB` |
-| Raft logs and peer snapshots | `raftstore/raftlog` and `raftstore/snapshot` |
-| Store-local region catalog | `raftstore/localmeta` |
-| Rooted topology / authority truth | `meta/root` |
-| fsmeta namespace model | `fsmeta/exec` over `fsmeta/backend` |
+## Local fsmeta
 
-The removed self-managed LSM path had manifest/SST/WAL recovery invariants.
-Those files are no longer mainline product state. Concrete backends own their
-own physical recovery formats, and this version does not provide an online
-migration path from old self-managed LSM workdirs.
+`fsmeta/runtime/local` stores versioned metadata records in Pebble. Recovery is
+Pebble reopen plus fsmeta snapshot/watch registry reconstruction owned by the
+local runtime. There is no separate NoKV WAL, generic local DB facade, or
+external transaction recovery path on the local demo runtime.
 
-Useful focused checks:
+## Rooted Truth
+
+`meta/root` recovers rooted lifecycle facts from its log and checkpoints.
+Coordinator state is rebuildable from this rooted truth.
+
+## Distributed Data Plane Target
+
+`raftstore` owns Rust-side recovery for:
+
+- Raft log replay;
+- OpenRaft state;
+- Holt state-machine trees;
+- region descriptors;
+- apply state;
+- snapshots;
+- apply watch cursors.
+
+The Rust data plane should keep recovery evidence in Rust-owned durable state
+and publish only lifecycle/control-plane facts through root/coordinator.
+
+## Required Tests
+
+Recovery changes should include focused tests for the changed boundary:
 
 ```bash
-go test ./local/... ./txn/... ./raftstore/raftlog ./raftstore/store ./raftstore/server ./fsmeta/contract ./fsmeta/integration -count=1
+go test -count=1 ./fsmeta/runtime/local ./meta/root/...
+cargo test --manifest-path raftstore/Cargo.toml --workspace
 ```

@@ -16,14 +16,12 @@ import (
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/storage/vfs"
 	"google.golang.org/protobuf/proto"
 )
 
 const recordHeaderSize = 24
 
 type fileEventLog struct {
-	fs      vfs.FS
 	workdir string
 }
 
@@ -40,7 +38,7 @@ type fileEventLog struct {
 // continue from the last fully published committed record.
 func (l fileEventLog) ReadCommitted(offset int64) (rootstorage.CommittedTail, error) {
 	path := filepath.Join(l.workdir, LogFileName)
-	f, err := l.fs.OpenHandle(path)
+	f, err := os.Open(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return rootstorage.CommittedTail{RequestedOffset: offset, StartOffset: offset, EndOffset: offset}, nil
@@ -79,7 +77,7 @@ func (l fileEventLog) ReadCommitted(offset int64) (rootstorage.CommittedTail, er
 // and fsyncs the file before reporting the new end offset.
 func (l fileEventLog) AppendCommitted(records ...rootstorage.CommittedEvent) (int64, error) {
 	path := filepath.Join(l.workdir, LogFileName)
-	f, err := l.fs.OpenFileHandle(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR|os.O_APPEND, 0o644)
 	if err != nil {
 		return 0, err
 	}
@@ -111,34 +109,34 @@ func (l fileEventLog) AppendCommitted(records ...rootstorage.CommittedEvent) (in
 func (l fileEventLog) CompactCommitted(stream rootstorage.CommittedTail) error {
 	path := filepath.Join(l.workdir, LogFileName)
 	tmp := path + ".tmp"
-	f, err := l.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
 	for _, rec := range stream.Records {
 		if err := writeRecord(f, rec); err != nil {
 			_ = f.Close()
-			_ = l.fs.Remove(tmp)
+			_ = os.Remove(tmp)
 			return err
 		}
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		_ = l.fs.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		_ = l.fs.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
-	if err := l.fs.Rename(tmp, path); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	return vfs.SyncDir(l.fs, l.workdir)
+	return syncDir(l.workdir)
 }
 
 func (l fileEventLog) Size() (int64, error) {
-	info, err := l.fs.Stat(filepath.Join(l.workdir, LogFileName))
+	info, err := os.Stat(filepath.Join(l.workdir, LogFileName))
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return 0, nil

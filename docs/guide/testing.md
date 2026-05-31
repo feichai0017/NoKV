@@ -3,49 +3,38 @@ Copyright 2024-2026 The NoKV Authors.
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# Testing Strategy
+# Testing
 
-NoKV tests follow the current three-layer architecture: fsmeta semantics,
-distributed execution, and storage backends.
+Use the smallest test scope that proves the boundary you changed.
 
-## Fast Local Matrix
-
-```bash
-go test -count=1 ./storage/kv ./storage/memory ./storage/pebble ./txn/storage
-go test -count=1 ./local/... ./txn/...
-go test -count=1 ./raftstore/kv ./raftstore/mvcc ./raftstore/store ./raftstore/server ./raftstore/admin
-go test -count=1 ./fsmeta/backend ./fsmeta/exec ./fsmeta/runtime/local ./fsmeta/runtime/raftstore ./fsmeta/contract ./fsmeta/integration
-go test -count=1 ./cmd/nokv ./cmd/nokv-fsmeta
-cargo test --manifest-path raftstore-rs/Cargo.toml --workspace
-```
-
-## Ownership Checks
-
-| Layer | Primary tests |
-| --- | --- |
-| Storage backend | `storage/kv`, `storage/pebble`, `storage/memory`; add `storage/holt` here when wired |
-| MVCC storage encoding | `txn/storage`, `txn/mvcc`, `txn/percolator` for local and legacy Go paths |
-| Local runtime | `local/...`, `fsmeta/runtime/local` |
-| Distributed runtime | `raftstore-rs`, `fsmeta/runtime/raftstore`; Go `raftstore/*` remains the legacy baseline during cutover |
-| fsmeta semantics | `fsmeta/exec`, `fsmeta/contract`, `fsmeta/integration` |
-| CLI wiring | `cmd/nokv`, `cmd/nokv-fsmeta` |
-| Package boundaries | `make lint` |
-
-## Migration Status
-
-Operator-facing migration tests for `nokv migrate`, `raftstore/migrate`, and
-SST import/export were removed with the migration feature. Raftstore still has
-internal snapshot tests for peer bootstrap and raft snapshot apply.
-
-## Full Gates
-
-Use these before merging broad architecture changes:
+## Default Gates
 
 ```bash
+go test -count=1 ./...
+cargo test --manifest-path raftstore/Cargo.toml --workspace
 git diff --check
-make lint
-make test
 ```
 
-Use Docker chaos and long soak scripts for release hardening rather than every
-PR edit loop.
+Run `make lint` for package-boundary changes, generated code, or PR-ready
+validation.
+
+## Package Focus
+
+| Area | Tests |
+|---|---|
+| fsmeta semantics | `go test ./fsmeta/model ./fsmeta/layout ./fsmeta/exec ./fsmeta/contract` |
+| local Pebble runtime | `go test ./fsmeta/runtime/local ./cmd/nokv-fsmeta` |
+| root truth | `go test ./meta/root/...` |
+| coordinator | `go test ./coordinator/...` |
+| Rust data plane | `cargo test --manifest-path raftstore/Cargo.toml --workspace` |
+
+## Benchmarks
+
+The main benchmark target is local fsmeta:
+
+```bash
+NOKV_FSMETA_BENCH_MODE=local make fsmeta-bench
+```
+
+Do not claim a performance improvement without a before/after workload result
+and the command used to produce it.

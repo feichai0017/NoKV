@@ -2,25 +2,20 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package importboundary enforces NoKV's package-import direction rules from
-// docs/development/code_contract.md §2. Ownership of truth — not file count or
-// convenience — drives which package may import which. The rules were
-// originally tracked in architecture/dependencies.go and have been folded into
-// the unified lint pipeline.
+// docs/guide/development/code_contract.md. Ownership of truth, not convenience,
+// decides which package may import which.
 package importboundary
 
 import "strings"
 
 // ModulePath is the canonical Go module path used by all import-direction
-// rules. Keeping it a public constant lets tests construct synthetic packages
-// without relying on the go list driver.
+// rules. Keeping it public lets tests construct synthetic packages without
+// relying on the go list driver.
 const ModulePath = "github.com/feichai0017/NoKV"
 
 // Rule describes one import-direction constraint. PackagePrefix selects which
 // packages the rule applies to; Forbidden lists package paths that those
 // packages may not import. Exempt opts specific sub-paths out of the rule.
-//
-// When PackageExact is true PackagePrefix matches one package only; otherwise
-// it matches the prefix and every sub-package.
 type Rule struct {
 	Name          string
 	PackagePrefix string
@@ -29,190 +24,74 @@ type Rule struct {
 	Exempt        []string
 }
 
+func (r Rule) MatchesPackage(pkgPath string) bool {
+	if r.PackageExact {
+		return pkgPath == r.PackagePrefix
+	}
+	return PathMatches(pkgPath, r.PackagePrefix)
+}
+
+func (r Rule) IsExempt(pkgPath string) bool {
+	return exempted(pkgPath, r.Exempt)
+}
+
 // Rules is the full ordered list of import-direction constraints. The order is
-// significant only for deterministic diagnostic output: each rule is checked
-// independently against every (package, import) pair.
-//
-// New rules must record the contract section they enforce and keep
-// PackagePrefix anchored at ModulePath so the rule scope cannot be widened by
-// accident.
+// significant only for deterministic diagnostic output.
 var Rules = []Rule{
 	{
-		Name:          "root package stays free of distributed assembly",
+		Name:          "root package stays an architecture anchor",
 		PackagePrefix: ModulePath,
 		PackageExact:  true,
 		Forbidden: []string{
 			ModulePath + "/fsmeta",
-			ModulePath + "/raftstore/localmeta",
-			ModulePath + "/raftstore/raftlog",
-			ModulePath + "/raftstore/snapshot",
-			ModulePath + "/raftstore/mvcc",
-			ModulePath + "/raftstore/mode",
-		},
-	},
-	{
-		Name:          "local db stays free of distributed assembly",
-		PackagePrefix: ModulePath + "/local",
-		Forbidden: []string{
-			ModulePath + "/fsmeta",
-			ModulePath + "/coordinator",
-			ModulePath + "/meta/root",
-			ModulePath + "/raftstore",
-			ModulePath + "/txn/percolator",
-		},
-	},
-	{
-		Name:          "txn layer stays below distributed assembly",
-		PackagePrefix: ModulePath + "/txn",
-		Forbidden: []string{
-			ModulePath + "/fsmeta",
-			ModulePath + "/coordinator",
-			ModulePath + "/meta/root",
-			ModulePath + "/raftstore",
-		},
-	},
-	{
-		Name:          "txn mvcc stays protocol-neutral",
-		PackagePrefix: ModulePath + "/txn/mvcc",
-		Forbidden: []string{
-			ModulePath + "/txn/percolator",
-			ModulePath + "/txn/latch",
-		},
-	},
-	{
-		Name:          "txn storage stays protocol-neutral",
-		PackagePrefix: ModulePath + "/txn/storage",
-		Forbidden: []string{
-			ModulePath + "/txn/percolator",
-			ModulePath + "/txn/latch",
-			ModulePath + "/txn/mvcc",
-		},
-	},
-	{
-		Name:          "txn latch stays protocol-neutral",
-		PackagePrefix: ModulePath + "/txn/latch",
-		Forbidden: []string{
-			ModulePath + "/txn/percolator",
-			ModulePath + "/txn/mvcc",
-			ModulePath + "/txn/storage",
-		},
-	},
-	{
-		Name:          "local runtime stays free of global error taxonomy",
-		PackagePrefix: ModulePath + "/local",
-		Forbidden: []string{
-			ModulePath + "/errors",
-		},
-		Exempt: []string{
-			ModulePath + "/local/errkind",
-		},
-	},
-	{
-		Name:          "storage backend contract stays semantics-free",
-		PackagePrefix: ModulePath + "/storage/kv",
-		Forbidden: []string{
-			ModulePath + "/errors",
-			ModulePath + "/fsmeta",
-			ModulePath + "/txn",
-			ModulePath + "/raftstore",
 			ModulePath + "/coordinator",
 			ModulePath + "/meta/root",
 			ModulePath + "/pb",
 		},
 	},
 	{
-		Name:          "storage engines stay below MVCC and distributed semantics",
-		PackagePrefix: ModulePath + "/storage/pebble",
+		Name:          "fsmeta model stays semantic-only",
+		PackagePrefix: ModulePath + "/fsmeta/model",
 		Forbidden: []string{
-			ModulePath + "/errors",
-			ModulePath + "/fsmeta",
-			ModulePath + "/txn",
-			ModulePath + "/raftstore",
+			ModulePath + "/fsmeta/layout",
+			ModulePath + "/fsmeta/backend",
+			ModulePath + "/fsmeta/exec",
+			ModulePath + "/fsmeta/runtime",
 			ModulePath + "/coordinator",
 			ModulePath + "/meta/root",
 			ModulePath + "/pb",
 		},
 	},
 	{
-		Name:          "memory storage engines stay below MVCC and distributed semantics",
-		PackagePrefix: ModulePath + "/storage/memory",
+		Name:          "fsmeta layout stays below execution",
+		PackagePrefix: ModulePath + "/fsmeta/layout",
 		Forbidden: []string{
-			ModulePath + "/errors",
-			ModulePath + "/fsmeta",
-			ModulePath + "/txn",
-			ModulePath + "/raftstore",
+			ModulePath + "/fsmeta/backend",
+			ModulePath + "/fsmeta/exec",
+			ModulePath + "/fsmeta/runtime",
 			ModulePath + "/coordinator",
 			ModulePath + "/meta/root",
 			ModulePath + "/pb",
 		},
 	},
 	{
-		Name:          "holt storage engine stays below MVCC and distributed semantics",
-		PackagePrefix: ModulePath + "/storage/holt",
+		Name:          "fsmeta backend stays runtime-neutral",
+		PackagePrefix: ModulePath + "/fsmeta/backend",
 		Forbidden: []string{
-			ModulePath + "/errors",
-			ModulePath + "/fsmeta",
-			ModulePath + "/txn",
-			ModulePath + "/raftstore",
+			ModulePath + "/fsmeta/runtime",
 			ModulePath + "/coordinator",
 			ModulePath + "/meta/root",
 			ModulePath + "/pb",
-		},
-	},
-	{
-		Name:          "third-party holt checkout is adapter-only",
-		PackagePrefix: ModulePath,
-		Forbidden: []string{
-			ModulePath + "/third_party/holt",
-		},
-	},
-	{
-		Name:          "utils stays free of global error taxonomy",
-		PackagePrefix: ModulePath + "/utils",
-		Forbidden: []string{
-			ModulePath + "/errors",
 		},
 	},
 	{
 		Name:          "fsmeta executor stays runtime-neutral",
 		PackagePrefix: ModulePath + "/fsmeta/exec",
 		Forbidden: []string{
-			ModulePath + "/pb",
-			ModulePath + "/coordinator",
-			ModulePath + "/raftstore",
-			ModulePath + "/meta/root",
-			ModulePath + "/local",
-		},
-	},
-	{
-		Name:          "fsmeta backend stays storage-neutral",
-		PackagePrefix: ModulePath + "/fsmeta/backend",
-		Forbidden: []string{
-			ModulePath + "/pb",
-			ModulePath + "/local",
-			ModulePath + "/raftstore",
+			ModulePath + "/fsmeta/runtime",
 			ModulePath + "/coordinator",
 			ModulePath + "/meta/root",
-			ModulePath + "/experimental/peras",
-		},
-	},
-	{
-		Name:          "fsmeta watch router stays store-neutral",
-		PackagePrefix: ModulePath + "/fsmeta/exec/watch",
-		Forbidden: []string{
-			ModulePath + "/raftstore/store",
-		},
-	},
-	{
-		Name:          "raftstore snapshot protocol stays backend-neutral",
-		PackagePrefix: ModulePath + "/raftstore/snapshot",
-		PackageExact:  true,
-		Forbidden: []string{
-			ModulePath + "/storage/pebble",
-			ModulePath + "/storage/memory",
-			ModulePath + "/storage/wal",
-			ModulePath + "/local",
-			ModulePath + "/fsmeta",
+			ModulePath + "/pb",
 		},
 	},
 	{
@@ -223,10 +102,11 @@ var Rules = []Rule{
 		},
 	},
 	{
-		Name:          "coordinator stays free of raftstore execution packages",
+		Name:          "coordinator does not import fsmeta execution",
 		PackagePrefix: ModulePath + "/coordinator",
 		Forbidden: []string{
-			ModulePath + "/raftstore",
+			ModulePath + "/fsmeta/exec",
+			ModulePath + "/fsmeta/runtime",
 		},
 	},
 	{
@@ -246,6 +126,24 @@ var Rules = []Rule{
 			ModulePath + "/coordinator/server",
 		},
 	},
+	{
+		Name:          "utils stays domain-neutral",
+		PackagePrefix: ModulePath + "/utils",
+		Forbidden: []string{
+			ModulePath + "/errors",
+			ModulePath + "/fsmeta",
+			ModulePath + "/coordinator",
+			ModulePath + "/meta/root",
+			ModulePath + "/pb",
+		},
+	},
+	{
+		Name:          "third-party holt checkout is Rust-adapter-only",
+		PackagePrefix: ModulePath,
+		Forbidden: []string{
+			ModulePath + "/third_party/holt",
+		},
+	},
 }
 
 // Violation describes one (package, import) pair that broke a Rule.
@@ -259,7 +157,7 @@ type Violation struct {
 // declared importPaths. The pure function exists so unit tests can exercise the
 // matching logic without spinning up a Go analyzer Pass.
 func Evaluate(pkgPath string, importPaths []string) []Violation {
-	var out []Violation
+	var violations []Violation
 	for _, rule := range Rules {
 		if !rule.MatchesPackage(pkgPath) || rule.IsExempt(pkgPath) {
 			continue
@@ -267,7 +165,7 @@ func Evaluate(pkgPath string, importPaths []string) []Violation {
 		for _, imp := range importPaths {
 			for _, forbidden := range rule.Forbidden {
 				if PathMatches(imp, forbidden) {
-					out = append(out, Violation{
+					violations = append(violations, Violation{
 						Rule:    rule.Name,
 						Package: pkgPath,
 						Import:  imp,
@@ -276,30 +174,21 @@ func Evaluate(pkgPath string, importPaths []string) []Violation {
 			}
 		}
 	}
-	return out
+	return violations
 }
 
-// MatchesPackage reports whether pkgPath is in the rule's scope.
-func (r Rule) MatchesPackage(pkgPath string) bool {
-	if r.PackageExact {
-		return pkgPath == r.PackagePrefix
-	}
-	return PathMatches(pkgPath, r.PackagePrefix)
+// PathMatches reports whether path is exactly prefix or under prefix as a Go
+// import path segment. It deliberately rejects sibling strings that merely
+// share leading characters.
+func PathMatches(path, prefix string) bool {
+	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
 
-// IsExempt reports whether pkgPath is explicitly opted out of the rule.
-func (r Rule) IsExempt(pkgPath string) bool {
-	for _, exempt := range r.Exempt {
-		if PathMatches(pkgPath, exempt) {
+func exempted(pkgPath string, prefixes []string) bool {
+	for _, prefix := range prefixes {
+		if PathMatches(pkgPath, prefix) {
 			return true
 		}
 	}
 	return false
-}
-
-// PathMatches treats prefix as a Go package path prefix. The prefix matches the
-// exact path or any sub-package; sibling packages whose name happens to share
-// the same leading characters are not treated as matches.
-func PathMatches(path, prefix string) bool {
-	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }

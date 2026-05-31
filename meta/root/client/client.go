@@ -2,10 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package client is the coordinator-side gRPC client for the meta-root
-// service. It mirrors the layout used by raftstore/client and
-// coordinator/client: callers dial the Service registered by meta/root/server
-// via Dial/DialCluster and get back a Client that implements the same
-// authority surface (Snapshot/Append/FenceAllocator/ObserveTail/...) used by
+// service. Callers dial the Service registered by meta/root/server via
+// Dial/DialCluster and get back a Client that implements the same authority
+// surface (Snapshot/Append/FenceAllocator/ObserveTail/...) used by
 // coordinator/rootview.
 package client
 

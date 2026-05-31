@@ -67,8 +67,8 @@ export default withMermaid(
           items: [
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'fsmeta API', link: '/guide/fsmeta' },
-            { text: 'CLI', link: '/guide/cli' },
-            { text: 'Configuration', link: '/guide/config' },
+            { text: 'Rooted Truth', link: '/guide/rooted_truth' },
+            { text: 'Coordinator', link: '/guide/coordinator' },
           ],
         },
         {
@@ -105,11 +105,6 @@ export default withMermaid(
             collapsed: false,
             items: [
               { text: 'Architecture', link: '/guide/architecture' },
-              { text: 'Runtime Call Chains', link: '/guide/runtime' },
-              {
-                text: 'Control & Execution Protocols',
-                link: '/guide/control_and_execution_protocols',
-              },
             ],
           },
           {
@@ -119,47 +114,16 @@ export default withMermaid(
               { text: 'fsmeta', link: '/guide/fsmeta' },
               { text: 'Rooted Truth (meta/root)', link: '/guide/rooted_truth' },
               { text: 'Coordinator', link: '/guide/coordinator' },
-              { text: 'Percolator', link: '/guide/percolator' },
               { text: 'Recovery', link: '/guide/recovery' },
-            ],
-          },
-          {
-            text: 'Distributed Runtime',
-            collapsed: true,
-            items: [{ text: 'Raftstore', link: '/guide/raftstore' }],
-          },
-          {
-            text: 'Storage Backends',
-            collapsed: true,
-            items: [
-              { text: 'Runtime', link: '/guide/runtime' },
-              { text: 'Entry Model', link: '/guide/entry' },
-              { text: 'VFS', link: '/guide/vfs' },
-              { text: 'WAL Boundaries', link: '/guide/wal' },
-              { text: 'Error Handling', link: '/guide/errors' },
-            ],
-          },
-          {
-            text: 'Experimental',
-            collapsed: true,
-            items: [
-              {
-                text: 'Experimental Boundary Plan',
-                link: '/guide/experimental_boundary_plan',
-              },
-              { text: 'Thermos', link: '/guide/thermos' },
             ],
           },
           {
             text: 'Operations & Tooling',
             collapsed: true,
             items: [
-              { text: 'Configuration', link: '/guide/config' },
-              { text: 'CLI', link: '/guide/cli' },
-              { text: 'Cluster Demo', link: '/guide/demo' },
-              { text: 'Scripts', link: '/guide/scripts' },
               { text: 'Stats & Observability', link: '/guide/stats' },
               { text: 'Testing', link: '/guide/testing' },
+              { text: 'Error Handling', link: '/guide/errors' },
             ],
           },
           {

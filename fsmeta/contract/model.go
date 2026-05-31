@@ -104,8 +104,8 @@ type sessionKey struct {
 }
 
 // Model is a sequential oracle for fsmeta namespace semantics. It does not
-// model raftstore, routing, or Percolator internals; it models the user-visible
-// metadata contract those layers must preserve.
+// model routing or backend internals; it models the user-visible metadata
+// contract those layers must preserve.
 type Model struct {
 	Mount       model.MountID
 	Root        model.InodeID

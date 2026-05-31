@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0
 ## Scope
 
 - [ ] This PR changes one logical boundary only.
-- [ ] No unrelated refactor, benchmark, generated-code, fsmeta/Peras, root, coordinator, raftstore, or docs change is mixed in.
+- [ ] No unrelated refactor, benchmark, generated-code, fsmeta, root, coordinator, raftstore, or docs change is mixed in.
 - [ ] Any breaking change is intentional and documented.
 - [ ] No compatibility shim, deprecated alias, or forwarding wrapper was added without a removal condition.
 

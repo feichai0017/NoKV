@@ -5,16 +5,18 @@ package replicated
 
 import (
 	"context"
+
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	myraft "github.com/feichai0017/NoKV/raft"
+	etcdraft "go.etcd.io/raft/v3"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
-func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Message, error) {
+func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []raftpb.Message, error) {
 	if d.node == nil {
 		return nil, nil, nil
 	}
 	var committed []rootstorage.CommittedEvent
-	var outbound []myraft.Message
+	var outbound []raftpb.Message
 	for d.node.raw.HasReady() {
 		rd := d.node.raw.Ready()
 		readyCommitted, readyOutbound, err := d.applyReadyLocked(rd)
@@ -33,7 +35,7 @@ func (d *NetworkDriver) drainLocked() ([]rootstorage.CommittedEvent, []myraft.Me
 	return committed, outbound, nil
 }
 
-func (d *NetworkDriver) applyReadyLocked(rd myraft.Ready) ([]rootstorage.CommittedEvent, []myraft.Message, error) {
+func (d *NetworkDriver) applyReadyLocked(rd etcdraft.Ready) ([]rootstorage.CommittedEvent, []raftpb.Message, error) {
 	if err := d.persistReadyLocked(rd); err != nil {
 		return nil, nil, err
 	}
@@ -44,15 +46,15 @@ func (d *NetworkDriver) applyReadyLocked(rd myraft.Ready) ([]rootstorage.Committ
 	return committed, rd.Messages, nil
 }
 
-func (d *NetworkDriver) persistReadyLocked(rd myraft.Ready) error {
+func (d *NetworkDriver) persistReadyLocked(rd etcdraft.Ready) error {
 	persistProtocol := false
-	if !myraft.IsEmptyHardState(rd.HardState) {
+	if !etcdraft.IsEmptyHardState(rd.HardState) {
 		if err := d.node.storage.SetHardState(rd.HardState); err != nil {
 			return err
 		}
 		persistProtocol = true
 	}
-	if !myraft.IsEmptySnap(rd.Snapshot) {
+	if !etcdraft.IsEmptySnap(rd.Snapshot) {
 		if err := d.node.storage.ApplySnapshot(rd.Snapshot); err != nil {
 			return err
 		}
@@ -74,13 +76,13 @@ func (d *NetworkDriver) persistReadyLocked(rd myraft.Ready) error {
 	return saveProtocolState(d.workdir, state)
 }
 
-func decodeCommittedEntries(entries []myraft.Entry) ([]rootstorage.CommittedEvent, error) {
+func decodeCommittedEntries(entries []raftpb.Entry) ([]rootstorage.CommittedEvent, error) {
 	if len(entries) == 0 {
 		return nil, nil
 	}
 	committed := make([]rootstorage.CommittedEvent, 0, len(entries))
 	for _, entry := range entries {
-		if entry.Type != myraft.EntryNormal || len(entry.Data) == 0 {
+		if entry.Type != raftpb.EntryNormal || len(entry.Data) == 0 {
 			continue
 		}
 		rec, err := unmarshalCommittedEvent(entry.Data)

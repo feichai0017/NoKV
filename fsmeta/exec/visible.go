@@ -64,7 +64,7 @@ type VisibleAuthorityRetirer interface {
 }
 
 // VisibleCommitter is the opt-in visible commit boundary. Success replaces the
-// ordinary Percolator/Raft commit for this fsmeta operation, so errors are
+// ordinary backend commit for this fsmeta operation, so errors are
 // returned and never silently fall back after the runtime overlay may already
 // include the operation.
 type VisibleCommitter interface {

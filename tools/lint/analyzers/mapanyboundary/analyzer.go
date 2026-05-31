@@ -143,7 +143,7 @@ func isAllowedBoundary(filename string, pkg *types.Package) bool {
 	if base == "stats.go" || base == "metrics.go" || base == "diagnostics.go" || base == "service.go" {
 		return true
 	}
-	if strings.HasSuffix(base, ".pb.go") || strings.HasSuffix(base, ".peras.go") || strings.HasSuffix(base, ".gen.go") {
+	if strings.HasSuffix(base, ".pb.go") || strings.HasSuffix(base, ".gen.go") {
 		return true
 	}
 	if pkg != nil {

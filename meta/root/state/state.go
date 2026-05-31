@@ -8,8 +8,8 @@
 //
 // This package is the only place where the meaning of a typed rooted
 // event is codified. meta/root/replicated persists the events through a
-// 3-peer raft quorum; callers under meta/root/server, meta/root/client,
-// coordinator/, and raftstore/ consume the resulting State as truth.
+// 3-peer raft quorum; callers under meta/root/server, meta/root/client, and
+// coordinator/ consume the resulting State as truth.
 package state
 
 import (

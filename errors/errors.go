@@ -342,15 +342,15 @@ func kindFromMessage(message string) Kind {
 	return ParseKind(token)
 }
 
-// KeyErrorCarrier is the common surface for Percolator key errors carried
-// through raftstore and higher-level runtimes.
+// KeyErrorCarrier is the common surface for structured key errors carried
+// through metadata runtimes.
 type KeyErrorCarrier interface {
 	KeyErrors() []*kvrpcpb.KeyError
 }
 
-// TxnKeyError carries Percolator key errors without flattening their semantic
-// class into text. It is the common error boundary for transaction retries and
-// conflict reporting.
+// TxnKeyError carries structured transaction key errors without flattening
+// their semantic class into text. It is the common error boundary for
+// transaction retries and conflict reporting.
 type TxnKeyError struct {
 	Errors []*kvrpcpb.KeyError
 }

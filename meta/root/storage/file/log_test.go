@@ -11,13 +11,12 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/storage/vfs"
 	"github.com/stretchr/testify/require"
 )
 
 func TestEventLogReadCommittedIgnoresTornTail(t *testing.T) {
 	dir := t.TempDir()
-	log := fileEventLog{fs: vfs.Ensure(nil), workdir: dir}
+	log := fileEventLog{workdir: dir}
 	records := []rootstorage.CommittedEvent{
 		{Cursor: rootstate.Cursor{Term: 1, Index: 1}, Event: rootevent.StoreJoined(1)},
 		{Cursor: rootstate.Cursor{Term: 1, Index: 2}, Event: rootevent.StoreJoined(2)},
@@ -42,7 +41,7 @@ func TestEventLogReadCommittedIgnoresTornTail(t *testing.T) {
 
 func TestEventLogReadCommittedRejectsCorruptFrame(t *testing.T) {
 	dir := t.TempDir()
-	log := fileEventLog{fs: vfs.Ensure(nil), workdir: dir}
+	log := fileEventLog{workdir: dir}
 	record := rootstorage.CommittedEvent{
 		Cursor: rootstate.Cursor{Term: 1, Index: 1},
 		Event:  rootevent.StoreJoined(1),

@@ -198,8 +198,8 @@ func (r *versionedRunner) MutateAtCommit(_ context.Context, primary []byte, muta
 func (r *versionedRunner) applyMutations(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowCommitPush bool) (uint64, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	// The contract fake has no lock table, so it models Percolator's
-	// min-commit push by placing late commits after any timestamp that was
+	// The contract fake has no lock table, so it models min-commit push by
+	// placing late commits after any timestamp that was
 	// allocated while the transaction was in flight.
 	effectiveCommitVersion := commitVersion
 	if allowCommitPush && r.latestObservedTS >= effectiveCommitVersion {

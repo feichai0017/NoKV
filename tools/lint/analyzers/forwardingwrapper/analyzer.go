@@ -221,6 +221,5 @@ func rootIdent(expr ast.Expr) string {
 func isGenerated(name string) bool {
 	return strings.HasSuffix(name, ".pb.go") ||
 		strings.HasSuffix(name, "_grpc.pb.go") ||
-		strings.HasSuffix(name, ".peras.go") ||
 		strings.HasSuffix(name, ".gen.go")
 }

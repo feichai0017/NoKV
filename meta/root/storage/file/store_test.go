@@ -10,13 +10,12 @@ import (
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/storage/vfs"
 	"github.com/stretchr/testify/require"
 )
 
 func TestStoreReadCommittedReportsFellBehindCompaction(t *testing.T) {
 	dir := t.TempDir()
-	store := NewStore(vfs.Ensure(nil), dir)
+	store := NewStore(dir)
 
 	rec1 := rootstorage.CommittedEvent{
 		Cursor: rootstate.Cursor{Term: 1, Index: 1},
@@ -54,7 +53,7 @@ func TestStoreReadCommittedReportsFellBehindCompaction(t *testing.T) {
 
 func TestStoreInstallBootstrapNormalizesTailOrigin(t *testing.T) {
 	dir := t.TempDir()
-	store := NewStore(vfs.Ensure(nil), dir)
+	store := NewStore(dir)
 
 	observed := rootstorage.ObservedCommitted{
 		Checkpoint: rootstorage.Checkpoint{
@@ -84,7 +83,7 @@ func TestStoreInstallBootstrapNormalizesTailOrigin(t *testing.T) {
 
 func TestStoreInstallBootstrapReplaysAfterReopen(t *testing.T) {
 	dir := t.TempDir()
-	store := NewStore(vfs.Ensure(nil), dir)
+	store := NewStore(dir)
 
 	observed := rootstorage.ObservedCommitted{
 		Checkpoint: rootstorage.Checkpoint{
@@ -103,7 +102,7 @@ func TestStoreInstallBootstrapReplaysAfterReopen(t *testing.T) {
 	}
 	require.NoError(t, store.InstallBootstrap(observed))
 
-	reopened := NewStore(vfs.Ensure(nil), dir)
+	reopened := NewStore(dir)
 	checkpoint, err := reopened.LoadCheckpoint()
 	require.NoError(t, err)
 	require.Equal(t, rootstate.Cursor{Term: 3, Index: 7}, checkpoint.Snapshot.State.LastCommitted)

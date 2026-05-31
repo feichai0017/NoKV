@@ -15,7 +15,6 @@ import (
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
-	fsperas "github.com/feichai0017/NoKV/experimental/peras/exec"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/feichai0017/NoKV/fsmeta/layout"
@@ -212,13 +211,17 @@ type testVersionAllocator interface {
 }
 
 type testVisibleCommitter struct {
-	holder    *fsperas.Holder
 	versions  testVersionAllocator
-	view      *fsperas.OverlayView
 	submitErr error
 
-	mu          sync.Mutex
-	commitTotal uint64
+	mu               sync.Mutex
+	rows             map[string]VisibleOverlayKV
+	generation       uint64
+	commitTotal      uint64
+	knownKeys        map[string]bool
+	emptyDirs        map[string]struct{}
+	emptyBaseDirs    map[string]struct{}
+	emptySessionDirs map[string]struct{}
 }
 
 type fakeVisibleAuthorityFlusher struct {
@@ -262,7 +265,7 @@ type fakeQuotaResolver struct {
 	changes            [][]QuotaChange
 	mutation           *backend.Mutation
 	allowVisibleCommit bool
-	perasChecks        [][]QuotaChange
+	visibleChecks      [][]QuotaChange
 }
 
 type fakeInodeAllocator struct {
@@ -346,7 +349,7 @@ func (q *fakeQuotaResolver) ReserveQuota(_ context.Context, _ backend.Store, cha
 }
 
 func (q *fakeQuotaResolver) AllowVisibleQuota(_ context.Context, changes []QuotaChange) (bool, error) {
-	q.perasChecks = append(q.perasChecks, append([]QuotaChange(nil), changes...))
+	q.visibleChecks = append(q.visibleChecks, append([]QuotaChange(nil), changes...))
 	if q.err != nil {
 		return false, q.err
 	}
@@ -414,11 +417,9 @@ func (c *fakeVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOper
 	if c.beforeAdmission != nil {
 		c.beforeAdmission()
 	}
-	admitted, err := fsperas.AdmitAndSeal(ctx, op, visibleAdmissionFuncForTest(admission), fsperas.AdmissionContext{
-		ProofFrontier: proof.ProofFrontier{EpochID: 1, Sequence: id.Seq},
-	})
+	admitted, err := admitVisibleForTest(ctx, op, admission, proof.ProofFrontier{EpochID: 1, Sequence: id.Seq})
 	if err != nil {
-		return VisibleAck{}, visibleErrorForTest(err)
+		return VisibleAck{}, err
 	}
 	op = admitted
 	c.calls++
@@ -431,30 +432,22 @@ func (c *fakeVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOper
 }
 
 func (c *testVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOperationID, op compile.MaterializedOp, admission VisibleAdmissionFunc) (VisibleAck, error) {
-	if c == nil || c.holder == nil || c.view == nil {
-		return VisibleAck{}, fsperas.ErrHolderConfigInvalid
+	if c == nil {
+		return VisibleAck{}, errVisibleAuthorityNotHeld
 	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	admitted, err := fsperas.AdmitAndSeal(ctx, op, visibleAdmissionFuncForTest(admission), fsperas.AdmissionContext{
-		ProofFrontier: proof.ProofFrontier{EpochID: c.holder.EpochID(), Sequence: id.Seq},
-	})
+	admitted, err := admitVisibleForTest(ctx, op, admission, proof.ProofFrontier{EpochID: 1, Sequence: id.Seq})
 	if err != nil {
-		return VisibleAck{}, visibleErrorForTest(err)
+		return VisibleAck{}, err
 	}
 	op = admitted
 	if c.submitErr != nil {
 		return VisibleAck{}, c.submitErr
 	}
-	ack, _, err := c.holder.Submit(ctx, perasOperationIDForTest(id), op)
-	if err != nil {
-		return VisibleAck{}, err
-	}
-	if err := c.view.Add(perasOperationIDForTest(id), op); err != nil {
-		return VisibleAck{}, err
-	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.applyVisibleDeltaLocked(op.Delta)
 	c.commitTotal++
-	return visibleAckForTest(ack), nil
+	return VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
 }
 
 func (c *testVisibleCommitter) Flush(ctx context.Context) error {
@@ -462,136 +455,205 @@ func (c *testVisibleCommitter) Flush(ctx context.Context) error {
 }
 
 func (c *testVisibleCommitter) FlushDurable(ctx context.Context) error {
-	if c == nil || c.holder == nil || c.versions == nil || c.view == nil {
-		return fsperas.ErrHolderConfigInvalid
+	if c == nil || c.versions == nil {
+		return errVisibleAuthorityNotHeld
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	pending := c.holder.PendingIDs()
-	if len(pending) == 0 {
+	if len(c.rows) == 0 {
 		return nil
 	}
-	firstVersion, err := c.versions.ReserveTimestamp(ctx, uint64(len(pending)))
-	if err != nil {
+	if _, err := c.versions.ReserveTimestamp(ctx, uint64(len(c.rows))); err != nil {
 		return err
 	}
-	plan, _, err := c.holder.BuildPendingReplayPlan(firstVersion)
-	if err != nil {
-		return err
-	}
-	if len(plan.Operations) != len(pending) {
-		return fsperas.ErrInvalidPerasSegment
-	}
-	if err := c.holder.MarkReplayPlanApplied(plan); err != nil {
-		return err
-	}
-	c.view.RemovePlan(plan)
+	c.rows = make(map[string]VisibleOverlayKV)
+	c.generation++
 	return nil
 }
 
 func (c *testVisibleCommitter) GetVisibleOverlay(key []byte) ([]byte, bool, bool) {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return nil, false, false
 	}
-	return c.view.Get(key)
+	value, deleted, ok := c.GetVisibleOverlayView(key)
+	return cloneTestBytes(value), deleted, ok
 }
 
 func (c *testVisibleCommitter) GetVisibleOverlayView(key []byte) ([]byte, bool, bool) {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return nil, false, false
 	}
-	return c.view.GetView(key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	row, ok := c.rows[string(key)]
+	if !ok {
+		return nil, false, false
+	}
+	return row.Value, row.Delete, true
 }
 
 func (c *testVisibleCommitter) CaptureVisibleOverlayRead() (uint64, uint64) {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return 0, 0
 	}
-	return c.view.Generation(), 0
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.generation, 0
 }
 
 func (c *testVisibleCommitter) GetVisibleOverlayViewAt(overlayGeneration, _ uint64, key []byte) ([]byte, bool, bool) {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return nil, false, false
 	}
-	return c.view.GetViewAt(overlayGeneration, key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if overlayGeneration != c.generation {
+		return nil, false, false
+	}
+	row, ok := c.rows[string(key)]
+	if !ok {
+		return nil, false, false
+	}
+	return row.Value, row.Delete, true
 }
 
 func (c *testVisibleCommitter) ScanVisibleOverlay(start []byte, limit uint32) []VisibleOverlayKV {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return nil
 	}
-	return visibleRowsForTest(c.view.Scan(start, limit))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return scanVisibleRowsForTest(c.rows, nil, start, limit)
 }
 
 func (c *testVisibleCommitter) ScanVisibleDirectoryAt(overlayGeneration, _ uint64, prefix, start []byte, limit uint32) []VisibleOverlayKV {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return nil
 	}
-	return visibleRowsForTest(c.view.ScanDirectoryAt(overlayGeneration, prefix, start, limit))
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if overlayGeneration != c.generation {
+		return nil
+	}
+	return scanVisibleRowsForTest(c.rows, prefix, start, limit)
 }
 
 func (c *testVisibleCommitter) HasVisibleDirectoryOverlay(prefix []byte) bool {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return false
 	}
-	return c.view.HasDirectory(prefix)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	for _, row := range c.rows {
+		if bytes.HasPrefix(row.Key, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func (c *testVisibleCommitter) KeyState(key []byte) (bool, bool) {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return false, false
 	}
-	return c.view.KeyState(key)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	row, ok := c.rows[string(key)]
+	if ok {
+		return !row.Delete, true
+	}
+	present, ok := c.knownKeys[string(key)]
+	if ok {
+		return present, true
+	}
+	parts, ok := layout.InspectKey(key)
+	if !ok || parts.Kind != layout.KeyKindSession {
+		return false, false
+	}
+	mount := model.MountIdentity{MountID: testMountIdentity.MountID, MountKeyID: parts.MountKeyID}
+	if _, ok := c.emptySessionDirs[visibleDirectoryFactKey(mount, parts.Inode)]; ok {
+		return false, true
+	}
+	return false, false
 }
 
 func (c *testVisibleCommitter) DirectoryEmpty(mount model.MountIdentity, inode model.InodeID) bool {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return false
 	}
-	return c.view.DirectoryEmpty(mount, inode)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.emptyDirs[visibleDirectoryFactKey(mount, inode)]
+	return ok
 }
 
 func (c *testVisibleCommitter) DirectoryBaseEmpty(mount model.MountIdentity, inode model.InodeID) bool {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return false
 	}
-	return c.view.DirectoryBaseEmpty(mount, inode)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.emptyBaseDirs[visibleDirectoryFactKey(mount, inode)]
+	return ok
 }
 
 func (c *testVisibleCommitter) SessionNamespaceEmpty(mount model.MountIdentity, inode model.InodeID) bool {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return false
 	}
-	return c.view.SessionNamespaceEmpty(mount, inode)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	_, ok := c.emptySessionDirs[visibleDirectoryFactKey(mount, inode)]
+	return ok
 }
 
 func (c *testVisibleCommitter) RememberKey(key []byte, present bool) {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return
 	}
-	c.view.RememberKey(key, present)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.knownKeys == nil {
+		c.knownKeys = make(map[string]bool)
+	}
+	c.knownKeys[string(key)] = present
 }
 
 func (c *testVisibleCommitter) RememberEmptyDirectory(mount model.MountIdentity, inode model.InodeID) {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return
 	}
-	c.view.RememberEmptyDirectory(mount, inode)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.emptyDirs == nil {
+		c.emptyDirs = make(map[string]struct{})
+	}
+	if c.emptyBaseDirs == nil {
+		c.emptyBaseDirs = make(map[string]struct{})
+	}
+	c.emptyDirs[visibleDirectoryFactKey(mount, inode)] = struct{}{}
+	c.emptyBaseDirs[visibleDirectoryFactKey(mount, inode)] = struct{}{}
 }
 
 func (c *testVisibleCommitter) ForgetEmptyDirectory(mount model.MountIdentity, inode model.InodeID) {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return
 	}
-	c.view.ForgetEmptyDirectory(mount, inode)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.emptyDirs, visibleDirectoryFactKey(mount, inode))
 }
 
 func (c *testVisibleCommitter) RememberEmptySessionNamespace(mount model.MountIdentity, inode model.InodeID) {
-	if c == nil || c.view == nil {
+	if c == nil {
 		return
 	}
-	c.view.RememberEmptySessionNamespace(mount, inode)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.emptySessionDirs == nil {
+		c.emptySessionDirs = make(map[string]struct{})
+	}
+	c.emptySessionDirs[visibleDirectoryFactKey(mount, inode)] = struct{}{}
 }
 
 func (c *testVisibleCommitter) Stats() map[string]any {
@@ -754,64 +816,126 @@ func (ownedVisibleAdmitter) AcquireVisibleAuthority(context.Context, compile.Aut
 	return true, nil
 }
 
-func perasOperationIDForTest(id VisibleOperationID) fsperas.OperationID {
-	return fsperas.OperationID{ClientID: id.ClientID, Seq: id.Seq}
-}
-
-func visibleOperationIDForTest(id fsperas.OperationID) VisibleOperationID {
-	return VisibleOperationID{ClientID: id.ClientID, Seq: id.Seq}
-}
-
-func visibleAckForTest(ack fsperas.VisibleAck) VisibleAck {
-	return VisibleAck{
-		EpochID:  ack.EpochID,
-		OpID:     visibleOperationIDForTest(ack.OpID),
-		HolderID: ack.HolderID,
+func admitVisibleForTest(ctx context.Context, op compile.MaterializedOp, admission VisibleAdmissionFunc, frontier proof.ProofFrontier) (compile.MaterializedOp, error) {
+	if op.Delta.Eligibility != compile.EligibilityVisibleCommit {
+		return compile.MaterializedOp{}, ErrVisibleIneligibleOperation
 	}
+	if admission == nil {
+		return op, nil
+	}
+	result, ok, err := admission(ctx, op, VisibleAdmissionContext{ProofFrontier: frontier})
+	if err != nil {
+		return compile.MaterializedOp{}, err
+	}
+	if !ok {
+		return compile.MaterializedOp{}, ErrVisibleAdmissionRejected
+	}
+	op.PredicateProofs = append([]proof.PredicateProof(nil), result.PredicateProofs...)
+	op.GuardProofs = append([]proof.GuardProof(nil), result.GuardProofs...)
+	return op, nil
 }
 
-func visibleAdmissionFuncForTest(fn VisibleAdmissionFunc) fsperas.AdmissionFunc {
-	if fn == nil {
-		return nil
+func (c *testVisibleCommitter) applyVisibleDeltaLocked(delta compile.SemanticDelta) {
+	if c.rows == nil {
+		c.rows = make(map[string]VisibleOverlayKV)
 	}
-	return func(ctx context.Context, op compile.MaterializedOp, admissionCtx fsperas.AdmissionContext) (fsperas.AdmissionResult, bool, error) {
-		result, ok, err := fn(ctx, op, VisibleAdmissionContext{ProofFrontier: admissionCtx.ProofFrontier})
-		if err != nil || !ok {
-			return fsperas.AdmissionResult{}, ok, err
+	for _, effect := range delta.WriteEffects {
+		key := string(effect.Key)
+		switch effect.Kind {
+		case compile.EffectPut, compile.EffectDerivedPut:
+			c.rows[key] = VisibleOverlayKV{Key: cloneTestBytes(effect.Key), Value: cloneTestBytes(effect.Value)}
+		case compile.EffectDelete, compile.EffectDerivedDelete:
+			c.rows[key] = VisibleOverlayKV{Key: cloneTestBytes(effect.Key), Delete: true}
 		}
-		return fsperas.AdmissionResult{
-			PredicateProofs: result.PredicateProofs,
-			GuardProofs:     result.GuardProofs,
-		}, true, nil
+	}
+	c.rememberDerivedFactsLocked(delta)
+	c.generation++
+}
+
+func (c *testVisibleCommitter) rememberDerivedFactsLocked(delta compile.SemanticDelta) {
+	switch delta.Kind {
+	case model.OperationCreate:
+		if len(delta.WriteEffects) < 3 {
+			return
+		}
+		effect := delta.WriteEffects[2]
+		if effect.Kind != compile.EffectPut {
+			return
+		}
+		c.rememberNewInodeFactsLocked(effect.Key, effect.Value)
 	}
 }
 
-func visibleRowsForTest(rows []fsperas.OverlayKV) []VisibleOverlayKV {
-	if len(rows) == 0 {
+func (c *testVisibleCommitter) rememberNewInodeFactsLocked(key, value []byte) {
+	parts, ok := layout.InspectKey(key)
+	if !ok || parts.Kind != layout.KeyKindInode {
+		return
+	}
+	inode, err := layout.DecodeInodeValue(value)
+	if err != nil {
+		return
+	}
+	mount := model.MountIdentity{MountID: testMountIdentity.MountID, MountKeyID: parts.MountKeyID}
+	if inode.Type == model.InodeTypeDirectory {
+		if c.emptyDirs == nil {
+			c.emptyDirs = make(map[string]struct{})
+		}
+		if c.emptyBaseDirs == nil {
+			c.emptyBaseDirs = make(map[string]struct{})
+		}
+		factKey := visibleDirectoryFactKey(mount, parts.Inode)
+		c.emptyDirs[factKey] = struct{}{}
+		c.emptyBaseDirs[factKey] = struct{}{}
+	}
+	if c.emptySessionDirs == nil {
+		c.emptySessionDirs = make(map[string]struct{})
+	}
+	c.emptySessionDirs[visibleDirectoryFactKey(mount, parts.Inode)] = struct{}{}
+	if c.knownKeys == nil {
+		c.knownKeys = make(map[string]bool)
+	}
+	if ownerKey, err := layout.EncodeInodeSessionKey(mount, parts.Inode); err == nil {
+		c.knownKeys[string(ownerKey)] = false
+	}
+}
+
+func scanVisibleRowsForTest(rows map[string]VisibleOverlayKV, prefix, start []byte, limit uint32) []VisibleOverlayKV {
+	if len(rows) == 0 || limit == 0 {
 		return nil
 	}
-	out := make([]VisibleOverlayKV, len(rows))
-	for i, row := range rows {
-		out[i] = VisibleOverlayKV{
-			Key:    row.Key,
-			Value:  row.Value,
-			Delete: row.Delete,
+	keys := make([]string, 0, len(rows))
+	for key, row := range rows {
+		if len(prefix) != 0 && !bytes.HasPrefix(row.Key, prefix) {
+			continue
+		}
+		if bytes.Compare(row.Key, start) < 0 {
+			continue
+		}
+		keys = append(keys, key)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return bytes.Compare(rows[keys[i]].Key, rows[keys[j]].Key) < 0
+	})
+	out := make([]VisibleOverlayKV, 0, min(len(keys), int(limit)))
+	for _, key := range keys {
+		row := rows[key]
+		out = append(out, VisibleOverlayKV{Key: cloneTestBytes(row.Key), Value: cloneTestBytes(row.Value), Delete: row.Delete})
+		if uint32(len(out)) == limit {
+			break
 		}
 	}
 	return out
 }
 
-func visibleErrorForTest(err error) error {
-	switch {
-	case err == nil:
+func visibleDirectoryFactKey(mount model.MountIdentity, inode model.InodeID) string {
+	return fmt.Sprintf("%s/%d/%d", mount.MountID, mount.MountKeyID, inode)
+}
+
+func cloneTestBytes(src []byte) []byte {
+	if src == nil {
 		return nil
-	case errors.Is(err, fsperas.ErrAdmissionRejected):
-		return errors.Join(ErrVisibleAdmissionRejected, err)
-	case errors.Is(err, fsperas.ErrIneligibleOperation):
-		return errors.Join(ErrVisibleIneligibleOperation, err)
-	default:
-		return err
 	}
+	return append([]byte(nil), src...)
 }
 
 func newFakeRunner() *fakeRunner {
@@ -1138,15 +1262,13 @@ func (e fakeTxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
 
 func newTestVisibleCommitter(t testing.TB, versions testVersionAllocator) *testVisibleCommitter {
 	t.Helper()
-	holder, err := fsperas.NewHolder(fsperas.HolderConfig{
-		EpochID:  1,
-		HolderID: "holder-a",
-	})
-	require.NoError(t, err)
 	return &testVisibleCommitter{
-		holder:   holder,
-		versions: versions,
-		view:     fsperas.NewOverlayView(),
+		versions:         versions,
+		rows:             make(map[string]VisibleOverlayKV),
+		knownKeys:        make(map[string]bool),
+		emptyDirs:        make(map[string]struct{}),
+		emptyBaseDirs:    make(map[string]struct{}),
+		emptySessionDirs: make(map[string]struct{}),
 	}
 }
 

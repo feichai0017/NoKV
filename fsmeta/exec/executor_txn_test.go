@@ -47,7 +47,7 @@ func TestExecutorRetriesTimestampAuthorityRefreshBeforeMutate(t *testing.T) {
 
 func TestExecutorRetriesReadTimestampAuthorityRefresh(t *testing.T) {
 	runner := newFakeRunner()
-	runner.timestampErrs = []error{nokverrors.New(nokverrors.KindStaleEpoch, "coordinator client: stale witness era")}
+	runner.timestampErrs = []error{nokverrors.New(nokverrors.KindStaleEpoch, "coordinator client: stale authority era")}
 	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
@@ -63,7 +63,7 @@ func TestExecutorRetriesLostTxnLock(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
 		fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-			Retryable: "percolator: lock not found",
+			Retryable: "backend: lock not found",
 		}}},
 		nil,
 	}
@@ -265,9 +265,9 @@ func TestTxnRetryBudgetFallsBackWhenLockDetailsAreUnavailable(t *testing.T) {
 	require.Equal(t, 25*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 25))
 }
 
-func TestTxnRetryBudgetCoversPercolatorRetryableStartTSLoss(t *testing.T) {
+func TestTxnRetryBudgetCoversRetryableStartTSLoss(t *testing.T) {
 	err := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-		Retryable: "percolator: lock not found",
+		Retryable: "backend: lock not found",
 	}}}
 
 	require.Equal(t, 50*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 50))

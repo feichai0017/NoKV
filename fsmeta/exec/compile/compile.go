@@ -5,7 +5,7 @@
 //
 // The compiler is deliberately conservative. Generated programs describe the
 // static key footprint, concrete or symbolic effects, and the guards an
-// optimized runtime must prove before bypassing the ordinary Percolator/Raft
+// optimized runtime must prove before bypassing the ordinary backend commit
 // path. The compiler does not execute reads, does not allocate timestamps, and
 // does not weaken the current fsmeta executor.
 package compile
@@ -37,7 +37,7 @@ func (e Eligibility) String() string {
 	}
 }
 
-// SlowReason records why a request must remain on the current Percolator/Raft
+// SlowReason records why a request must remain on the current backend commit
 // path.
 type SlowReason string
 

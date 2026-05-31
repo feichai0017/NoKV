@@ -11,7 +11,6 @@ on:
     paths:
       - ".github/workflows/fsmeta-benchmark.yml"
       - "benchmark/**"
-      - "cmd/nokv/**"
       - "cmd/nokv-fsmeta/**"
       - "coordinator/**"
       - "Dockerfile"
@@ -20,7 +19,6 @@ on:
       - "fsmeta/**"
       - "go.mod"
       - "go.sum"
-      - "local/**"
       - "Makefile"
       - "metrics/**"
       - "meta/**"
@@ -28,8 +26,6 @@ on:
       - "proto/**"
       - "raftstore/**"
       - "scripts/run_fsmeta_benchmarks.sh"
-      - "storage/**"
-      - "txn/**"
       - "utils/**"
   workflow_dispatch:
     inputs:

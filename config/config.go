@@ -15,7 +15,8 @@ const (
 	scopeDocker = "docker"
 )
 
-// File models the raft topology configuration shared by CLIs and gateways.
+// File models a topology seed shared by demos, tests, and distributed
+// bootstrap tooling.
 //
 // The file has two kinds of content, with different lifecycles:
 //
@@ -23,11 +24,9 @@ const (
 //     directory consumed at every CLI invocation. Keep this in sync with what
 //     you have actually deployed; otherwise coordinators and gateways cannot
 //     dial.
-//   - Bootstrap-only layer (Regions): consumed by `scripts/ops/bootstrap.sh`
-//     on first startup to seed fresh store workdirs. Once a store has a
-//     `CURRENT` manifest, bootstrap skips it and the `Regions` section is
-//     ignored. Runtime topology (splits, merges, peer changes) lives in
-//     meta-root, not here; use `nokv-config regions` to inspect current state.
+//   - Bootstrap-only layer (Regions): consumed only when seeding a fresh
+//     distributed data-plane workdir. Runtime topology (splits, merges, peer
+//     changes) lives in meta-root, not here.
 type File struct {
 	MaxRetries                 int                    `json:"max_retries"`
 	MetaRoot                   *MetaRoot              `json:"meta_root,omitempty"`
@@ -114,8 +113,8 @@ type Peer struct {
 }
 
 // FSMetaRegionBootstrap is a concise bootstrap-only layout that expands to
-// ordinary byte-range regions in nokv-config. Runtime routing still uses rooted
-// region descriptors; this block is not consulted after fresh store seeding.
+// ordinary byte-range regions. Runtime routing still uses rooted region
+// descriptors; this block is not consulted after fresh store seeding.
 type FSMetaRegionBootstrap struct {
 	Mounts         []FSMetaRegionBootstrapMount `json:"mounts"`
 	BucketCount    int                          `json:"bucket_count"`

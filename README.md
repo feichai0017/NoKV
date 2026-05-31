@@ -8,11 +8,11 @@ SPDX-License-Identifier: Apache-2.0
 NoKV is a metadata execution framework for AI agent workspaces and distributed
 namespace services.
 
-The stable product core is `fsmeta`: a filesystem-shaped metadata model with
-inode, dentry, watch, snapshot, quota, session, atomic publish, remove, and
-subtree-move semantics. The distributed modules provide rooted authority,
-routing, TSO, Raft execution, MVCC transactions, and recovery. The bottom layer
-is a replaceable ordered key/value storage backend.
+The product core is `fsmeta`: a filesystem-shaped metadata model with inode,
+dentry, watch, snapshot, quota, session, atomic publish, remove, and subtree
+move semantics. The local demo runtime uses Pebble directly. The distributed
+track keeps `meta/root` and `coordinator` in Go and develops the replicated
+data plane in `raftstore` over Holt.
 
 NoKV does not own object bodies, model weights, checkpoint payloads, or POSIX
 file data. Those bytes stay in object stores, local filesystems, model stores,
@@ -23,11 +23,12 @@ references, metadata versions, watches, and lifecycle coordination.
 
 ```text
 application / SDK
-  -> fsmeta
-  -> fsmeta/runtime/local or fsmeta/runtime/raftstore
-  -> txn MVCC / Percolator
-  -> storage/kv ordered backend
-  -> storage/pebble today, future storage/holt adapter over third_party/holt
+  -> fsmeta API
+  -> fsmeta/exec semantic compiler and executor
+  -> fsmeta/backend MVCC metadata contract
+  -> fsmeta/runtime/local       # local Pebble demo path
+  -> meta/root + coordinator    # distributed truth/control plane
+  -> raftstore               # Rust/Holt distributed data-plane target
 ```
 
 The main package boundaries are:
@@ -38,23 +39,12 @@ The main package boundaries are:
 | `fsmeta/layout` | Ordered namespace key layout and value codecs. |
 | `fsmeta/backend` | Minimal MVCC metadata backend contract consumed by fsmeta execution. |
 | `fsmeta/exec` | Semantic executor and compiler for namespace operations. |
-| `fsmeta/runtime/local` | Embedded fsmeta runtime for local deployments and tests. |
-| `fsmeta/runtime/raftstore` | Adapter from fsmeta execution to distributed raftstore. |
+| `fsmeta/runtime/local` | Embedded Pebble-backed fsmeta runtime for demos and tests. |
 | `meta/root` | Rooted truth for topology, authority, lifecycle facts, grants, and seals. |
 | `coordinator` | Routing, TSO, store discovery, root-event publish, and serving-plane rebuild. |
-| `raftstore` | Replicated region execution, peer lifecycle, apply, and raft snapshot bootstrap. |
-| `txn` | MVCC storage keys, read/write planning, latches, and Percolator-style 2PC. |
-| `storage/kv` | Ordered key/value backend interface. |
-| `storage/pebble` | Default Pebble-backed storage backend. |
-| `third_party/holt` | Pinned Holt source checkout for the future Rust-backed adapter. |
-| `local` | Embedded DB facade over NoKV MVCC encoding and storage backend. |
-| `experimental` | Research mechanisms such as Peras and Thermos. |
-
-The important split is between `fsmeta/backend` and `storage/kv`.
-`fsmeta/backend` is an MVCC metadata contract with timestamps, predicates,
-mutations, scans, and optional one-phase atomic mutation. `storage/kv` stores
-opaque ordered bytes only. That keeps fsmeta semantics and distributed transaction
-behavior independent from the physical storage engine.
+| `raftstore` | Rust replacement data plane using OpenRaft and Holt multi-tree storage. |
+| `pb` | Public protobuf wire contracts. |
+| `third_party/holt` | Pinned Holt source checkout used by the Rust data-plane work. |
 
 ## fsmeta
 
@@ -86,23 +76,20 @@ Core primitives:
 for compact body references, checksums, media types, or small descriptors, not
 large artifact bodies.
 
-## Artifact Publish Model
+## Local Demo Runtime
 
-Large bodies are written outside `fsmeta`; the metadata commit happens inside
-`fsmeta`.
+The default runnable path is the local Pebble-backed fsmeta server:
 
-1. Write the body to a `BodyStore`.
-2. Encode the body reference into inode opaque attrs.
-3. Create a hidden staged namespace entry.
-4. Publish it to the final path with `RenameReplace`.
+```sh
+go run ./cmd/nokv-fsmeta \
+  --addr 127.0.0.1:8090 \
+  --metrics-addr 127.0.0.1:9400 \
+  --local-work-dir ./nokv-fsmeta-local \
+  --local-mount-id default \
+  --local-mount-key-id 1
+```
 
-Readers observe either the old body reference or the new one, never a
-half-published artifact path.
-
-## Local Runtime
-
-The local runtime is the default path for demos, small teams, and local agent
-workspace deployments.
+Library usage:
 
 ```go
 package main
@@ -137,33 +124,30 @@ func main() {
 }
 ```
 
-## Distributed Runtime
+## Distributed Track
 
-The distributed path runs the same fsmeta contract through raftstore:
+The distributed control plane remains in Go:
 
 ```text
-fsmeta client/server
-  -> fsmeta/runtime/raftstore
-  -> coordinator + meta/root + TSO
-  -> raftstore
-  -> txn
-  -> storage/kv
+meta/root      rooted lifecycle and authority truth
+coordinator    rebuildable routing, TSO, discovery, and root-event serving
 ```
 
-Use it for larger agent platforms, distributed workspace services, and
-DFS-scale namespace metadata.
+The data plane target is `raftstore`, not the deleted Go `raftstore` /
+`txn` / `local` stack. `raftstore` keeps the existing protobuf wire contract
+while moving execution to Rust, OpenRaft, and Holt multi-tree storage.
+
+Operational entrypoints are intentionally split:
 
 ```sh
-./scripts/dev/cluster.sh --config ./raft_config.example.json
-docker compose up -d
+go run ./cmd/nokv meta-root ...
+go run ./cmd/nokv coordinator ...
+go run ./cmd/nokv-fsmeta ...
+cargo run --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server -- ...
 ```
 
-Bootstrap a mount before the first distributed write:
-
-```sh
-nokv mount register --coordinator-addr 127.0.0.1:2379 \
-  --mount default --root-inode 1 --schema-version 1
-```
+`cmd/nokv` is now only the Go control-plane CLI. It does not start the deleted
+Go raftstore.
 
 ## Development
 
@@ -171,16 +155,15 @@ Common checks:
 
 ```sh
 go test ./...
+cargo test --manifest-path raftstore/Cargo.toml --workspace
 make lint
 make test
-make fsmeta-bench
+NOKV_FSMETA_BENCH_MODE=local make fsmeta-bench
 ```
 
 Repository structure and review rules live in
 `docs/guide/development/code_contract.md` and
-`docs/guide/development/pr_review_checklist.md`. Those two files are kept as
-the source of truth for package boundaries, naming, tests, DCO, generated code,
-and distributed-safety review.
+`docs/guide/development/pr_review_checklist.md`.
 
 ## License
 

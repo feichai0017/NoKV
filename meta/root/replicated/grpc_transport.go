@@ -10,7 +10,6 @@ import (
 	"sync"
 	"time"
 
-	myraft "github.com/feichai0017/NoKV/raft"
 	raftpb "go.etcd.io/raft/v3/raftpb"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/connectivity"
@@ -58,7 +57,7 @@ func (s *grpcTransportService) Step(ctx context.Context, msg *raftpb.Message) (*
 	if handler == nil {
 		return &emptypb.Empty{}, nil
 	}
-	if err := handler(myraft.Message(*msg)); err != nil {
+	if err := handler(raftpb.Message(*msg)); err != nil {
 		return nil, rpcTransportStatus(err)
 	}
 	return &emptypb.Empty{}, nil
@@ -180,7 +179,7 @@ func (t *GRPCTransport) SetPeers(peers map[uint64]string) {
 	}
 }
 
-func (t *GRPCTransport) Send(msgs ...myraft.Message) error {
+func (t *GRPCTransport) Send(msgs ...raftpb.Message) error {
 	if t == nil || len(msgs) == 0 {
 		return nil
 	}
@@ -210,7 +209,7 @@ func (t *GRPCTransport) Send(msgs ...myraft.Message) error {
 			continue
 		}
 		wg.Add(1)
-		go func(m myraft.Message) {
+		go func(m raftpb.Message) {
 			defer wg.Done()
 			client, err := t.clientFor(m.To)
 			if err != nil {

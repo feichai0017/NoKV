@@ -12,7 +12,7 @@ authority, durability, recovery, or package boundary.
 ## Scope
 
 - Does the PR change one logical boundary?
-- Are unrelated fsmeta, root, raftstore, coordinator, docs, benchmark, or
+- Are unrelated fsmeta, root, coordinator, raftstore, docs, benchmark, or
   generated-code changes mixed together?
 - Is every behavior change described in the PR summary?
 - Is every commit DCO signed with `Signed-off-by`?
@@ -121,7 +121,8 @@ Add targeted tests for the changed subsystem. Examples:
 ```bash
 make lint
 go test ./meta/root/... ./meta/root/server -count=1
-go test ./fsmeta/exec/compile ./experimental/peras/exec ./experimental/peras/runtime -count=1
+cargo test --manifest-path raftstore/Cargo.toml --workspace
+go test ./fsmeta/exec/compile ./fsmeta/runtime/local ./cmd/nokv-fsmeta -count=1
 go generate ./fsmeta/exec/compile
 git diff --exit-code -- fsmeta/exec/compile
 ```

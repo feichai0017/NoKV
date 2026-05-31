@@ -124,7 +124,7 @@ func TestRouterDeduplicatesReplicatedApplyEvents(t *testing.T) {
 	}
 }
 
-func TestRouterPublishesPerasVisibleEventsLiveOnly(t *testing.T) {
+func TestRouterPublishesVisibleEventsLiveOnly(t *testing.T) {
 	router := NewRouter()
 	sub, err := router.Subscribe(context.Background(), observe.WatchRequest{
 		KeyPrefix:          []byte("k/"),

@@ -13,15 +13,16 @@ import (
 
 var (
 	errWorkDirRequired      = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: work dir is required")
-	errDBRequired           = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: local DB is required")
+	errDBRequired           = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: pebble DB is required")
 	errMountRequired        = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: mount identity is required")
 	errTimestampCount       = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: timestamp count must be > 0")
 	errCommitVersion        = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: commit version must be greater than start version")
 	errEmptyMutationKey     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: empty mutation key")
 	errUnsupportedMutation  = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: unsupported mutation op")
-	errInvalidInternalEntry = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/local: invalid MVCC internal entry")
+	errInvalidInternalEntry = nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/local: invalid local MVCC entry")
 	errInvalidAtomicMutate  = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: invalid atomic mutate")
 	errAtomicPredicate      = nokverrors.New(nokverrors.KindRetryable, "fsmeta/runtime/local: atomic predicate mismatch")
+	errKeyNotFound          = nokverrors.New(nokverrors.KindNotFound, "fsmeta/runtime/local: key not found")
 )
 
 func txnKeyError(errs ...*kvrpcpb.KeyError) error {

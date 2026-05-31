@@ -13,12 +13,10 @@ import (
 	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
-	"github.com/feichai0017/NoKV/storage/vfs"
 	"google.golang.org/protobuf/proto"
 )
 
 type fileCheckpointStore struct {
-	fs      vfs.FS
 	workdir string
 }
 
@@ -29,7 +27,7 @@ type fileCheckpointStore struct {
 //   - one binary protobuf blob encoded as metapb.RootCheckpoint
 func (s fileCheckpointStore) LoadCheckpoint() (rootstorage.Checkpoint, error) {
 	path := filepath.Join(s.workdir, CheckpointFileName)
-	data, err := s.fs.ReadFile(path)
+	data, err := os.ReadFile(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return rootstorage.Checkpoint{
@@ -72,31 +70,31 @@ func (s fileCheckpointStore) SaveCheckpoint(checkpoint rootstorage.Checkpoint) e
 	}
 	path := filepath.Join(s.workdir, CheckpointFileName)
 	tmp := path + ".tmp"
-	f, err := s.fs.OpenFileHandle(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
+	f, err := os.OpenFile(tmp, os.O_CREATE|os.O_RDWR|os.O_TRUNC, 0o644)
 	if err != nil {
 		return err
 	}
 	if err := writeAll(f, payload); err != nil {
 		_ = f.Close()
-		_ = s.fs.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Sync(); err != nil {
 		_ = f.Close()
-		_ = s.fs.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
 	if err := f.Close(); err != nil {
-		_ = s.fs.Remove(tmp)
+		_ = os.Remove(tmp)
 		return err
 	}
-	if err := s.fs.Rename(tmp, path); err != nil {
+	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
-	return vfs.SyncDir(s.fs, s.workdir)
+	return syncDir(s.workdir)
 }
 
-func fileSize(f vfs.File) (int64, error) {
+func fileSize(f interface{ Stat() (os.FileInfo, error) }) (int64, error) {
 	info, err := f.Stat()
 	if err != nil {
 		return 0, err

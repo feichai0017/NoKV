@@ -1,8 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-// Package server exposes one metadata-root backend as a gRPC service. It
-// mirrors the layout used by raftstore/server and coordinator/server: the
+// Package server exposes one metadata-root backend as a gRPC service. The
 // companion meta/root/client package dials this service.
 package server
 

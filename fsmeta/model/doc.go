@@ -5,6 +5,6 @@
 //
 // It defines the public inode/dentry/session/quota/snapshot domain objects,
 // operation request/result shapes, and validation rules. It does not own
-// storage key encoding, protobuf conversion, raftstore commands, Percolator
+// storage key encoding, protobuf conversion, distributed data-plane commands,
 // timestamps, or any concrete backend runtime.
 package model

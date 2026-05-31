@@ -7,12 +7,12 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
-# Host-side benchmark code validates Eunomia grant evidence returned by the
-# Compose coordinators. Keep the host test process and local Compose containers
-# on the same dev/test key material; production deployments override this env.
+# The benchmark harness can run against a local host process or the local
+# Docker fsmeta demo. Distributed coordinator addresses are left empty in the
+# local modes.
 export NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY="${NOKV_EUNOMIA_GRANT_SIGNING_PRIVATE_KEY:-rM0DUr4noWKwu7NlAoX2A6FXpdUyLESmwvqNYOkeNIc=}"
 
-mode="${NOKV_FSMETA_BENCH_MODE:-compose}"
+mode="${NOKV_FSMETA_BENCH_MODE:-local}"
 profile="${NOKV_FSMETA_PROFILE:-median}"
 run_id="$(date -u +%Y%m%dT%H%M%SZ)"
 coord_addr="${NOKV_FSMETA_COORDINATOR_ADDR:-127.0.0.1:2390,127.0.0.1:2391,127.0.0.1:2392}"
@@ -25,7 +25,7 @@ output_dir="${NOKV_FSMETA_OUTPUT_DIR:-$ROOT/benchmark/data/fsmeta/results}"
 capture_profiles="${NOKV_FSMETA_CAPTURE_PROFILES:-0}"
 profile_seconds="${NOKV_FSMETA_PROFILE_SECONDS:-30}"
 profile_dir="${NOKV_FSMETA_PROFILE_DIR:-$ROOT/benchmark/data/fsmeta/profiles/fsmeta_${profile}_${run_id}}"
-profile_targets="${NOKV_FSMETA_PROFILE_TARGETS:-fsmeta=127.0.0.1:9400,store1=127.0.0.1:9200,store2=127.0.0.1:9201,store3=127.0.0.1:9202,coord1=127.0.0.1:9100,coord2=127.0.0.1:9101,coord3=127.0.0.1:9102,root1=127.0.0.1:9380,root2=127.0.0.1:9381,root3=127.0.0.1:9382}"
+profile_targets="${NOKV_FSMETA_PROFILE_TARGETS:-fsmeta=127.0.0.1:9400}"
 local_pid=""
 local_tools_dir=""
 local_tmp_dir=""
@@ -68,7 +68,6 @@ lookup_cache_ttl="${NOKV_FSMETA_LOOKUP_CACHE_TTL:-1s}"
 timeout="${NOKV_FSMETA_TIMEOUT:-$default_timeout}"
 stabilize_seconds="${NOKV_FSMETA_STABILIZE_SECONDS:-$default_stabilize_seconds}"
 reset_between_workloads="${NOKV_FSMETA_RESET_BETWEEN_WORKLOADS:-1}"
-idle_require_pending="${NOKV_FSMETA_PERAS_IDLE_REQUIRE_PENDING:-0}"
 
 case "$output_dir" in
 	/*) ;;
@@ -106,88 +105,6 @@ wait_port() {
 		sleep "$wait_interval"
 	done
 	echo "timed out waiting for $addr" >&2
-	return 1
-}
-
-peras_idle_snapshot() {
-	local metrics_url="http://${fsmeta_metrics_addr%%,*}/debug/vars"
-	local require_pending="${1:-0}"
-	python3 - "$metrics_url" "$require_pending" <<'PY'
-import json
-import sys
-import urllib.request
-
-url = sys.argv[1]
-with urllib.request.urlopen(url, timeout=2) as response:
-	data = json.load(response)
-
-peras = data.get("nokv_fsmeta_peras")
-if not isinstance(peras, dict):
-	executor = data.get("nokv_fsmeta_executor", {})
-	peras = executor.get("visible_committer", {})
-
-def number(name):
-	value = peras.get(name, 0)
-	if isinstance(value, bool):
-		return int(value)
-	if isinstance(value, (int, float)):
-		return int(value)
-	return 0
-
-state = {
-	"pending": number("pending"),
-	"install_queue_depth": number("segment_install_queue_depth"),
-	"seal_queue_depth": number("segment_seal_queue_depth"),
-	"flush_total": number("flush_total"),
-	"segment_total": number("segment_total"),
-	"seal_total": number("seal_total"),
-}
-print(json.dumps(state, sort_keys=True, separators=(",", ":")))
-require_pending = sys.argv[2] in ("1", "true", "TRUE", "yes", "YES")
-idle = state["install_queue_depth"] == 0 and state["seal_queue_depth"] == 0
-if require_pending:
-	idle = idle and state["pending"] == 0
-if idle:
-	sys.exit(0)
-sys.exit(1)
-PY
-}
-
-wait_fsmeta_peras_idle() {
-	local timeout_seconds="${NOKV_FSMETA_PERAS_IDLE_TIMEOUT_SECONDS:-180}"
-	local interval_seconds="${NOKV_FSMETA_PERAS_IDLE_INTERVAL_SECONDS:-1}"
-	local stable_polls="${NOKV_FSMETA_PERAS_IDLE_STABLE_POLLS:-2}"
-	local deadline=$((SECONDS + timeout_seconds))
-	local last=""
-	local stable=0
-	local snapshot=""
-	local status=0
-
-	while (( SECONDS < deadline )); do
-		if snapshot="$(peras_idle_snapshot "$idle_require_pending" 2>/dev/null)"; then
-			status=0
-		else
-			status=$?
-		fi
-		if (( status == 0 )); then
-			if [[ "$snapshot" == "$last" ]]; then
-				stable=$((stable + 1))
-			else
-				stable=1
-				last="$snapshot"
-			fi
-			if (( stable >= stable_polls )); then
-				return 0
-			fi
-		else
-			stable=0
-			if [[ -n "$snapshot" ]]; then
-				last="$snapshot"
-			fi
-		fi
-		sleep "$interval_seconds"
-	done
-	echo "timed out waiting for fsmeta Peras idle state; last=$last" >&2
 	return 1
 }
 
@@ -242,7 +159,6 @@ checkpoints_per_workspace_override=$checkpoints_per_workspace
 files_per_checkpoint_override=$files_per_checkpoint
 session_ttl_override=$session_ttl
 reset_between_workloads=$reset_between_workloads
-peras_idle_require_pending=$idle_require_pending
 lookup_cache_entries=$lookup_cache_entries
 lookup_cache_ttl=$lookup_cache_ttl
 profile_seconds=$profile_seconds
@@ -269,7 +185,6 @@ checkpoints_per_workspace_override=$checkpoints_per_workspace
 files_per_checkpoint_override=$files_per_checkpoint
 session_ttl_override=$session_ttl
 reset_between_workloads=$reset_between_workloads
-peras_idle_require_pending=$idle_require_pending
 lookup_cache_entries=$lookup_cache_entries
 lookup_cache_ttl=$lookup_cache_ttl
 timeout=$timeout
@@ -354,25 +269,19 @@ start_compose_cluster() {
 	if [[ "${NOKV_FSMETA_COMPOSE:-1}" != "1" ]]; then
 		return
 	fi
-	# The benchmark mount must exist before the fsmeta gateway starts.
-	# Otherwise the run depends on asynchronous root watch catch-up during
-	# the benchmark bootstrap window, which makes long/profiled CI runs flaky.
-	export NOKV_MOUNT_IDS="${NOKV_MOUNT_IDS:-default,$mount}"
+	export NOKV_FSMETA_MOUNT="$mount"
+	export NOKV_FSMETA_MOUNT_KEY_ID="$local_mount_key_id"
 	if [[ "${NOKV_FSMETA_COMPOSE_BUILD:-1}" == "1" && "$compose_built" == "0" ]]; then
-		echo "starting Docker Compose NoKV cluster with local build"
+		echo "starting Docker Compose local fsmeta demo with local build"
 		docker compose up -d --build
 		compose_built=1
 	else
-		echo "starting Docker Compose NoKV cluster"
+		echo "starting Docker Compose local fsmeta demo"
 		docker compose up -d
 	fi
 	wait_port "${fsmeta_addr%%,*}"
-	wait_port "${coord_addr%%,*}"
 	if [[ "$stabilize_seconds" != "0" ]]; then
-		# A listening gRPC port is not enough for a fair storage benchmark:
-		# freshly started Compose clusters can still be electing Raft leaders
-		# and publishing coordinator duty grants.
-		echo "waiting ${stabilize_seconds}s for raft leaders and coordinator grants to settle"
+		echo "waiting ${stabilize_seconds}s for local fsmeta warmup"
 		sleep "$stabilize_seconds"
 	fi
 }
@@ -385,6 +294,7 @@ reset_compose_cluster() {
 }
 
 run_compose_benchmarks() {
+	local coord_addr=""
 	local workloads="${NOKV_FSMETA_WORKLOADS:-mdtest-easy,mdtest-hard,filebench-varmail,mimesis-namespace,ai-checkpoint-agent}"
 	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_compose_${profile}_${run_id}_isolated.csv}"
 	case "$output" in
@@ -393,7 +303,6 @@ run_compose_benchmarks() {
 	esac
 	if ! enabled "$reset_between_workloads"; then
 		start_compose_cluster
-		wait_fsmeta_peras_idle
 		profile_dir="$profile_root_dir"
 		profile_pids=()
 		start_profile_capture "$workloads"
@@ -414,7 +323,6 @@ run_compose_benchmarks() {
 		if enabled "$reset_between_workloads"; then
 			reset_compose_cluster
 			start_compose_cluster
-			wait_fsmeta_peras_idle
 			profile_dir="$profile_root_dir/$safe_workload"
 			profile_pids=()
 			start_profile_capture "$workload"
@@ -437,7 +345,7 @@ run_compose_benchmarks() {
 		fi
 		print_bench_summary "$workload_output"
 		if ! enabled "$reset_between_workloads"; then
-			wait_fsmeta_peras_idle
+			:
 		fi
 	done
 	if ! enabled "$reset_between_workloads"; then
@@ -510,7 +418,6 @@ start_local_gateway() {
 	local log_file="$local_log_dir/fsmeta-local-${profile}-${run_id}-${suffix}.log"
 	echo "starting local fsmeta gateway on $fsmeta_addr work_dir=$work_dir"
 	"$local_tools_dir/nokv-fsmeta" \
-		--backend local \
 		--addr "$fsmeta_addr" \
 		--metrics-addr "$fsmeta_metrics_addr" \
 		--local-work-dir "$work_dir" \

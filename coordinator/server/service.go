@@ -6,9 +6,9 @@
 // rooted topology mutations.
 //
 // This package owns the SERVICE layer. It consumes rooted truth from
-// meta/root/ but never owns durable cluster state. The execution plane
-// (raftstore/) applies and publishes, and coordinator reconstructs its
-// view by tailing rooted commits.
+// meta/root/ but never owns durable cluster state. The distributed data plane
+// applies metadata commands, and coordinator reconstructs its view by tailing
+// rooted commits.
 //
 // Heavy logic is deliberately split into sibling packages:
 // catalog (region/event validation), view (directory + store health),

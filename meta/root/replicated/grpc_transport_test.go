@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/stretchr/testify/require"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 func TestGRPCTransportSendsToPeer(t *testing.T) {
@@ -26,10 +26,10 @@ func TestGRPCTransportSendsToPeer(t *testing.T) {
 
 	var (
 		mu   sync.Mutex
-		got  []myraft.Message
+		got  []raftpb.Message
 		done = make(chan struct{}, 1)
 	)
-	t2.SetHandler(func(msg myraft.Message) error {
+	t2.SetHandler(func(msg raftpb.Message) error {
 		mu.Lock()
 		got = append(got, msg)
 		mu.Unlock()
@@ -40,7 +40,7 @@ func TestGRPCTransportSendsToPeer(t *testing.T) {
 		return nil
 	})
 
-	err = t1.Send(myraft.Message{From: 1, To: 2, Type: myraft.MsgHeartbeat, Term: 3, Index: 9})
+	err = t1.Send(raftpb.Message{From: 1, To: 2, Type: raftpb.MsgHeartbeat, Term: 3, Index: 9})
 	require.NoError(t, err)
 
 	select {
@@ -54,7 +54,7 @@ func TestGRPCTransportSendsToPeer(t *testing.T) {
 	require.Len(t, got, 1)
 	require.Equal(t, uint64(1), got[0].From)
 	require.Equal(t, uint64(2), got[0].To)
-	require.Equal(t, myraft.MsgHeartbeat, got[0].Type)
+	require.Equal(t, raftpb.MsgHeartbeat, got[0].Type)
 	require.Equal(t, uint64(3), got[0].Term)
 	require.Equal(t, uint64(9), got[0].Index)
 }
@@ -64,7 +64,7 @@ func TestGRPCTransportRejectsUnknownPeer(t *testing.T) {
 	require.NoError(t, err)
 	t.Cleanup(func() { _ = t1.Close() })
 
-	err = t1.Send(myraft.Message{From: 1, To: 2, Type: myraft.MsgHeartbeat})
+	err = t1.Send(raftpb.Message{From: 1, To: 2, Type: raftpb.MsgHeartbeat})
 	require.Error(t, err)
 }
 
@@ -98,7 +98,7 @@ func TestGRPCTransportUnreachableDialDoesNotBlockLivePeer(t *testing.T) {
 	sendDone := make(chan error, 1)
 	start := time.Now()
 	go func() {
-		sendDone <- t1.Send(myraft.Message{From: 1, To: 3, Type: myraft.MsgHeartbeat, Term: 7})
+		sendDone <- t1.Send(raftpb.Message{From: 1, To: 3, Type: raftpb.MsgHeartbeat, Term: 7})
 	}()
 
 	select {

@@ -6,31 +6,34 @@ package local
 import (
 	"bytes"
 	"context"
-	"errors"
+	"encoding/binary"
 	"sync"
 	"sync/atomic"
 	"time"
 
+	cpebble "github.com/cockroachdb/pebble"
+
 	"github.com/feichai0017/NoKV/fsmeta/backend"
-	localdb "github.com/feichai0017/NoKV/local"
 	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
-	"github.com/feichai0017/NoKV/txn/latch"
-	"github.com/feichai0017/NoKV/txn/mvcc"
-	kv "github.com/feichai0017/NoKV/txn/storage"
-	"github.com/feichai0017/NoKV/utils"
 )
 
-const localRunnerLatchStripes = 1024
+const (
+	localWriteKeyPrefix byte = 'w'
+	localMaxVersion          = ^uint64(0)
 
-// Runner adapts local.DB to backend.Store with single-node MVCC commits.
+	localWritePut    byte = 1
+	localWriteDelete byte = 2
+)
+
+// Runner adapts a Pebble DB to backend.Store with one-node MVCC commits.
 type Runner struct {
-	db *localdb.DB
+	db        *cpebble.DB
+	writeOpts *cpebble.WriteOptions
 
 	mu               sync.Mutex
 	nextTS           uint64
 	latestObservedTS uint64
 	observer         mutationObserver
-	latches          *latch.Manager
 
 	atomicMutateTotal            atomic.Uint64
 	atomicPredicateRejectedTotal atomic.Uint64
@@ -41,21 +44,26 @@ type mutationObserver interface {
 	ObserveMutation(commitVersion uint64, mutations []*backend.Mutation)
 }
 
-// NewRunner constructs a local fsmeta backend store.
-func NewRunner(db *localdb.DB) (*Runner, error) {
+type localWrite struct {
+	Kind         byte
+	StartVersion uint64
+	ExpiresAt    uint64
+	Value        []byte
+}
+
+// NewRunner constructs a local fsmeta backend over a Pebble DB.
+func NewRunner(db *cpebble.DB) (*Runner, error) {
 	if db == nil {
 		return nil, errDBRequired
 	}
-	maxVersion, err := maxObservedVersion(db)
+	r := &Runner{db: db, writeOpts: cpebble.Sync}
+	maxVersion, err := r.maxObservedVersion()
 	if err != nil {
 		return nil, err
 	}
-	return &Runner{
-		db:               db,
-		nextTS:           maxVersion + 1,
-		latestObservedTS: maxVersion,
-		latches:          latch.NewManager(localRunnerLatchStripes),
-	}, nil
+	r.nextTS = maxVersion + 1
+	r.latestObservedTS = maxVersion
+	return r, nil
 }
 
 // SetMutationObserver attaches a local runtime observer that is called after a
@@ -120,45 +128,21 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 	if limit == 0 {
 		return nil, nil
 	}
-	iter := r.db.NewInternalIterator(&kv.Options{IsAsc: true})
-	if iter == nil {
-		return nil, nil
-	}
-	defer func() { _ = iter.Close() }()
 	out := make([]backend.KV, 0, limit)
-	var lastUserKey []byte
-	iter.Seek(kv.InternalKey(kv.CFWrite, startKey, kv.MaxVersion))
-	for iter.Valid() && uint32(len(out)) < limit {
+	err := r.scanUserKeys(startKey, func(userKey []byte) (bool, error) {
 		if err := ctxErr(ctx); err != nil {
-			return nil, err
+			return false, err
 		}
-		item := iter.Item()
-		if item == nil || item.Entry() == nil {
-			iter.Next()
-			continue
-		}
-		cf, userKey, _, ok := kv.SplitInternalKey(item.Entry().Key)
-		if !ok {
-			return nil, errInvalidInternalEntry
-		}
-		if cf != kv.CFWrite {
-			break
-		}
-		if bytes.Compare(userKey, startKey) < 0 || bytes.Equal(userKey, lastUserKey) {
-			iter.Next()
-			continue
-		}
-		lastUserKey = cloneBytes(userKey)
 		value, ok, err := r.readValue(userKey, version)
 		if err != nil {
-			return nil, err
+			return false, err
 		}
 		if ok {
 			out = append(out, backend.KV{Key: cloneBytes(userKey), Value: value})
 		}
-		iter.Next()
-	}
-	return out, nil
+		return uint32(len(out)) < limit, nil
+	})
+	return out, err
 }
 
 // Mutate commits all mutations atomically at the effective local commit
@@ -174,23 +158,8 @@ func (r *Runner) MutateAtCommit(ctx context.Context, primary []byte, mutations [
 }
 
 // InstallMutationsAtCommit applies a segment-install mutation group at
-// commitVersion. Large groups are chunked under the local DB's per-batch size /
-// count limit so a single segment can carry many more mutations than a
-// percolator commit ever could; every chunk shares the same commitVersion
-// so the resulting set is observationally one install.
-//
-// Contract for callers: every mutation is a versioned MVCC write whose effect
-// is idempotent on retry. The caller is responsible for not exposing the
-// install as complete until the function returns nil — partial completion on
-// crash is recovered by visibleLog replay re-running the same install with the
-// same commitVersion (the duplicate writes are no-ops because they share the
-// internal-key version).
-//
-// This path is only safe for callers that have committed to "no lock/intent
-// records, no read-your-write within the batch" semantics. percolator
-// commits MUST keep using MutateAtCommit, where the atomicity guard
-// protects the lock/commit-record transition that the percolator protocol
-// relies on for snapshot consistency.
+// commitVersion. Local demo mode stores every metadata value in the write
+// record, so installs are one Pebble batch with no separate intent table.
 func (r *Runner) InstallMutationsAtCommit(ctx context.Context, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64) (uint64, error) {
 	if err := ctxErr(ctx); err != nil {
 		return 0, err
@@ -198,88 +167,23 @@ func (r *Runner) InstallMutationsAtCommit(ctx context.Context, primary []byte, m
 	if commitVersion <= startVersion {
 		return 0, txnAbort(errCommitVersion)
 	}
-	chunks, err := r.chunkInstallMutations(mutations)
+	effectiveCommitVersion, observer, err := r.applyMutationGroup(primary, mutations, startVersion, commitVersion, false, true)
 	if err != nil {
 		return 0, err
 	}
-	var effective uint64
-	for _, chunk := range chunks {
-		v, observer, err := r.applyInstallMutationGroup(primary, chunk, startVersion, commitVersion)
-		if err != nil {
-			return 0, err
-		}
-		if effective == 0 {
-			effective = v
-		}
-		if observer != nil {
-			observer.ObserveMutation(v, chunk)
-		}
+	if observer != nil {
+		observer.ObserveMutation(effectiveCommitVersion, mutations)
 	}
-	return effective, nil
+	return effectiveCommitVersion, nil
 }
 
-// AtomicMutatePreservesReadOrder reports that TryAtomicMutate validates the
-// caller's read predicates under the same local latch used for the write group.
-// fsmeta uses this for read-modify-write namespace counters such as directory
-// ChildCount; falling back to blind direct MVCC writes can lose concurrent
-// increments when a later timestamp reads before an earlier write is applied.
+// AtomicMutatePreservesReadOrder reports that TryAtomicMutate validates
+// predicates and applies writes under the same local mutex.
 func (r *Runner) AtomicMutatePreservesReadOrder() bool {
 	return r != nil
 }
 
-// chunkInstallMutations splits mutations into batches that fit under the
-// local DB's per-write batch count and byte budgets. Chunks preserve the
-// original ordering (each chunk is a prefix slice) so callers that rely on
-// stable mutation order across replays see the same effect.
-func (r *Runner) chunkInstallMutations(mutations []*backend.Mutation) ([][]*backend.Mutation, error) {
-	if r == nil || r.db == nil {
-		return nil, errDBRequired
-	}
-	if len(mutations) == 0 {
-		return nil, nil
-	}
-	maxCount, maxSize := r.db.WriteBatchLimits()
-	if maxCount <= 0 && maxSize <= 0 {
-		return [][]*backend.Mutation{mutations}, nil
-	}
-	// Reserve headroom: one mutation can expand into up to three internal
-	// entries (default tombstone, default value, write marker). Keep the
-	// expanded chunk strictly below the DB limit because the downstream
-	// Send() check rejects count >= MaxBatchCount.
-	if maxCount > 0 {
-		maxCount = max((maxCount-1)/3, 1)
-	}
-	if maxSize > 0 {
-		maxSize -= maxSize / 8
-	}
-	chunks := make([][]*backend.Mutation, 0, 1)
-	start := 0
-	count := int64(0)
-	size := int64(0)
-	for i, mutation := range mutations {
-		var muSize int64
-		if mutation != nil {
-			muSize = int64(len(mutation.Key) + len(mutation.Value))
-		}
-		if i > start && ((maxCount > 0 && count+1 > maxCount) || (maxSize > 0 && size+muSize > maxSize)) {
-			chunks = append(chunks, mutations[start:i])
-			start = i
-			count = 0
-			size = 0
-		}
-		count++
-		size += muSize
-	}
-	if start < len(mutations) {
-		chunks = append(chunks, mutations[start:])
-	}
-	return chunks, nil
-}
-
-// TryAtomicMutate applies predicate-checked mutations through the same backend
-// atomic batch boundary used by Mutate. handled=false means this runner cannot
-// serve the one-phase fast path for the request and the caller should use the
-// regular transaction protocol.
+// TryAtomicMutate applies predicate-checked mutations through one Pebble batch.
 func (r *Runner) TryAtomicMutate(ctx context.Context, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
 	if err := ctxErr(ctx); err != nil {
 		return true, err
@@ -306,6 +210,7 @@ func (r *Runner) Stats() map[string]any {
 			"mutate_total":                    uint64(0),
 			"atomic_mutate_total":             uint64(0),
 			"atomic_predicate_rejected_total": uint64(0),
+			"storage":                         "pebble",
 		}
 	}
 	r.mu.Lock()
@@ -318,6 +223,7 @@ func (r *Runner) Stats() map[string]any {
 		"mutate_total":                    r.mutateTotal.Load(),
 		"atomic_mutate_total":             r.atomicMutateTotal.Load(),
 		"atomic_predicate_rejected_total": r.atomicPredicateRejectedTotal.Load(),
+		"storage":                         "pebble",
 	}
 }
 
@@ -328,7 +234,7 @@ func (r *Runner) mutate(ctx context.Context, primary []byte, mutations []*backen
 	if commitVersion <= startVersion {
 		return 0, txnAbort(errCommitVersion)
 	}
-	effectiveCommitVersion, observer, err := r.applyMutationGroup(primary, mutations, startVersion, commitVersion, allowCommitPush)
+	effectiveCommitVersion, observer, err := r.applyMutationGroup(primary, mutations, startVersion, commitVersion, allowCommitPush, false)
 	if err != nil {
 		return 0, err
 	}
@@ -338,98 +244,45 @@ func (r *Runner) mutate(ctx context.Context, primary []byte, mutations []*backen
 	return effectiveCommitVersion, nil
 }
 
-func (r *Runner) applyMutationGroup(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowCommitPush bool) (uint64, mutationObserver, error) {
-	guard := r.latches.Acquire(mutationLatchKeys(primary, nil, mutations))
-	defer guard.Release()
-	effectiveCommitVersion := r.reserveMutationCommitVersion(commitVersion, allowCommitPush)
-	if err := r.validateMutations(primary, mutations, startVersion, commitVersion); err != nil {
+func (r *Runner) applyMutationGroup(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowCommitPush bool, allowMissingDeletePrimary bool) (uint64, mutationObserver, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	effectiveCommitVersion := r.reserveMutationCommitVersionLocked(commitVersion, allowCommitPush)
+	if err := r.validateMutationsLocked(primary, mutations, startVersion, commitVersion, allowMissingDeletePrimary); err != nil {
 		return 0, nil, err
 	}
-	entries, err := buildMutationEntries(mutations, startVersion, effectiveCommitVersion)
-	if err != nil {
+	if err := r.applyMutationBatchLocked(mutations, startVersion, effectiveCommitVersion); err != nil {
 		return 0, nil, err
 	}
-	defer releaseEntries(entries)
-	if err := r.db.ApplyInternalEntries(entries); err != nil {
-		return 0, nil, err
-	}
-	return effectiveCommitVersion, r.completeMutationApply(effectiveCommitVersion, false), nil
-}
-
-// applyInstallMutationGroup is the segment-install sibling of
-// applyMutationGroup. It performs install-specific validation, latch acquire,
-// and entry build. Install entries are versioned MVCC writes that are
-// idempotent on visibleLog replay. See InstallMutationsAtCommit for the full
-// contract.
-func (r *Runner) applyInstallMutationGroup(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64) (uint64, mutationObserver, error) {
-	guard := r.latches.Acquire(mutationLatchKeys(primary, nil, mutations))
-	defer guard.Release()
-	effectiveCommitVersion := r.reserveMutationCommitVersion(commitVersion, false)
-	if err := r.validateInstallMutations(mutations, startVersion, commitVersion); err != nil {
-		return 0, nil, err
-	}
-	entries, err := buildMutationEntries(mutations, startVersion, effectiveCommitVersion)
-	if err != nil {
-		return 0, nil, err
-	}
-	defer releaseEntries(entries)
-	if err := r.db.ApplyInternalEntries(entries); err != nil {
-		return 0, nil, err
-	}
-	return effectiveCommitVersion, r.completeMutationApply(effectiveCommitVersion, false), nil
+	return effectiveCommitVersion, r.completeMutationApplyLocked(effectiveCommitVersion, false), nil
 }
 
 func (r *Runner) applyAtomicMutationGroup(primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (uint64, mutationObserver, bool, error) {
-	guard := r.latches.Acquire(mutationLatchKeys(primary, predicates, mutations))
-	defer guard.Release()
-	if applied, err := r.atomicMutationAlreadyApplied(mutations, startVersion, commitVersion); err != nil {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if applied, err := r.atomicMutationAlreadyAppliedLocked(mutations, startVersion, commitVersion); err != nil {
 		return 0, nil, true, txnRetryable(err)
 	} else if applied {
 		r.recordAtomicMutationMetric()
-		return commitVersion, r.currentObserver(), true, nil
+		return commitVersion, r.observer, true, nil
 	}
-	if err := r.validateAtomicPredicates(predicates, startVersion); err != nil {
+	if err := r.validateAtomicPredicatesLocked(predicates, startVersion); err != nil {
 		r.atomicPredicateRejectedTotal.Add(1)
 		return 0, nil, true, err
 	}
-	if err := r.validateMutations(primary, mutations, startVersion, commitVersion); err != nil {
+	if err := r.validateMutationsLocked(primary, mutations, startVersion, commitVersion, false); err != nil {
 		return 0, nil, true, err
 	}
-	entries, err := buildMutationEntries(mutations, startVersion, commitVersion)
-	if err != nil {
+	if err := r.applyMutationBatchLocked(mutations, startVersion, commitVersion); err != nil {
 		return 0, nil, true, err
 	}
-	defer releaseEntries(entries)
-	if err := r.db.ApplyInternalEntries(entries); err != nil {
-		return 0, nil, true, err
-	}
-	return commitVersion, r.completeMutationApply(commitVersion, true), true, nil
+	return commitVersion, r.completeMutationApplyLocked(commitVersion, true), true, nil
 }
 
-func mutationLatchKeys(primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation) [][]byte {
-	keys := make([][]byte, 0, 1+len(predicates)+len(mutations))
-	if len(primary) > 0 {
-		keys = append(keys, primary)
-	}
-	for _, pred := range predicates {
-		if pred != nil && len(pred.Key) > 0 {
-			keys = append(keys, pred.Key)
-		}
-	}
-	for _, mutation := range mutations {
-		if mutation != nil && len(mutation.Key) > 0 {
-			keys = append(keys, mutation.Key)
-		}
-	}
-	return keys
-}
-
-func (r *Runner) reserveMutationCommitVersion(commitVersion uint64, allowCommitPush bool) uint64 {
+func (r *Runner) reserveMutationCommitVersionLocked(commitVersion uint64, allowCommitPush bool) uint64 {
 	if !allowCommitPush {
 		return commitVersion
 	}
-	r.mu.Lock()
-	defer r.mu.Unlock()
 	effective := commitVersion
 	if r.latestObservedTS >= effective {
 		effective = r.latestObservedTS + 1
@@ -446,28 +299,18 @@ func (r *Runner) reserveMutationCommitVersion(commitVersion uint64, allowCommitP
 	return effective
 }
 
-func (r *Runner) completeMutationApply(commitVersion uint64, atomic bool) mutationObserver {
+func (r *Runner) completeMutationApplyLocked(commitVersion uint64, atomic bool) mutationObserver {
 	r.recordMutationMetrics(atomic)
-	r.mu.Lock()
 	if commitVersion > r.latestObservedTS {
 		r.latestObservedTS = commitVersion
 	}
 	if r.nextTS <= commitVersion {
 		r.nextTS = commitVersion + 1
 	}
-	observer := r.observer
-	r.mu.Unlock()
-	return observer
+	return r.observer
 }
 
-func (r *Runner) currentObserver() mutationObserver {
-	r.mu.Lock()
-	observer := r.observer
-	r.mu.Unlock()
-	return observer
-}
-
-func (r *Runner) validateAtomicPredicates(predicates []*backend.Predicate, startVersion uint64) error {
+func (r *Runner) validateAtomicPredicatesLocked(predicates []*backend.Predicate, startVersion uint64) error {
 	for _, pred := range predicates {
 		if pred == nil || len(pred.Key) == 0 {
 			return txnAbort(errInvalidAtomicMutate)
@@ -476,7 +319,7 @@ func (r *Runner) validateAtomicPredicates(predicates []*backend.Predicate, start
 		if readVersion == 0 {
 			readVersion = startVersion
 		}
-		value, exists, err := r.readValue(pred.Key, readVersion)
+		value, exists, err := r.readValueLocked(pred.Key, readVersion)
 		if err != nil {
 			return txnRetryable(err)
 		}
@@ -500,14 +343,14 @@ func (r *Runner) validateAtomicPredicates(predicates []*backend.Predicate, start
 	return nil
 }
 
-func (r *Runner) atomicMutationAlreadyApplied(mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
+func (r *Runner) atomicMutationAlreadyAppliedLocked(mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
 	anyPresent := false
 	allPresent := true
 	for _, mut := range mutations {
 		if mut == nil {
 			continue
 		}
-		write, foundCommit, found, err := r.writeByStartVersion(mut.Key, startVersion)
+		write, foundCommit, found, err := r.writeByStartVersionLocked(mut.Key, startVersion)
 		if err != nil {
 			return false, err
 		}
@@ -523,17 +366,14 @@ func (r *Runner) atomicMutationAlreadyApplied(mutations []*backend.Mutation, sta
 		if foundCommit != commitVersion || write.Kind != expectedKind {
 			return false, nil
 		}
-		if mut.Op == backend.MutationPut {
-			matches, err := r.committedPutMatches(write, mut, startVersion)
-			if err != nil || !matches {
-				return false, err
-			}
+		if mut.Op == backend.MutationPut && (!bytes.Equal(write.Value, mut.Value) || write.ExpiresAt != mut.ExpiresAt) {
+			return false, nil
 		}
 	}
 	return anyPresent && allPresent, nil
 }
 
-func (r *Runner) validateMutations(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+func (r *Runner) validateMutationsLocked(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowMissingDeletePrimary bool) error {
 	for _, mut := range mutations {
 		if mut == nil {
 			continue
@@ -542,7 +382,7 @@ func (r *Runner) validateMutations(primary []byte, mutations []*backend.Mutation
 		if len(key) == 0 {
 			return txnAbort(errEmptyMutationKey)
 		}
-		latest, ok, err := r.latestWriteVersion(key)
+		latest, ok, err := r.latestWriteVersionLocked(key)
 		if err != nil {
 			return txnRetryable(err)
 		}
@@ -550,22 +390,22 @@ func (r *Runner) validateMutations(primary []byte, mutations []*backend.Mutation
 			return txnCommitExpired(key, commitVersion, latest+1)
 		}
 		if mut.AssertionNotExist {
-			if _, ok, err := r.readValue(key, startVersion); err != nil {
+			if _, ok, err := r.readValueLocked(key, startVersion); err != nil {
 				return txnRetryable(err)
 			} else if ok {
 				return txnAlreadyExists(key)
 			}
-			if _, ok, err := r.readValue(key, kv.MaxVersion); err != nil {
+			if _, ok, err := r.readValueLocked(key, localMaxVersion); err != nil {
 				return txnRetryable(err)
 			} else if ok {
 				return txnAlreadyExists(key)
 			}
 		}
-		if bytes.Equal(key, primary) && mut.Op == backend.MutationDelete {
-			if _, ok, err := r.readValue(key, kv.MaxVersion); err != nil {
+		if bytes.Equal(key, primary) && mut.Op == backend.MutationDelete && !allowMissingDeletePrimary {
+			if _, ok, err := r.readValueLocked(key, localMaxVersion); err != nil {
 				return txnRetryable(err)
 			} else if !ok {
-				return txnKeyError(&kvrpcpb.KeyError{Retryable: utils.ErrKeyNotFound.Error()})
+				return txnKeyError(&kvrpcpb.KeyError{Retryable: errKeyNotFound.Error()})
 			}
 		}
 		switch mut.Op {
@@ -577,267 +417,295 @@ func (r *Runner) validateMutations(primary []byte, mutations []*backend.Mutation
 	return nil
 }
 
-func (r *Runner) validateInstallMutations(mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+func (r *Runner) applyMutationBatchLocked(mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+	batch := r.db.NewBatch()
+	defer func() { _ = batch.Close() }()
 	for _, mut := range mutations {
 		if mut == nil {
 			continue
 		}
-		key := mut.Key
-		if len(key) == 0 {
-			return txnAbort(errEmptyMutationKey)
-		}
-		latest, ok, err := r.latestWriteVersion(key)
+		write, err := writeForMutation(mut, startVersion)
 		if err != nil {
-			return txnRetryable(err)
+			return err
 		}
-		if ok && latest > startVersion {
-			return txnCommitExpired(key, commitVersion, latest+1)
-		}
-		switch mut.Op {
-		case backend.MutationPut, backend.MutationDelete:
-		default:
-			return txnUnsupportedMutation(mut.Op)
+		if err := batch.Set(encodeLocalWriteKey(mut.Key, commitVersion), encodeLocalWrite(write), nil); err != nil {
+			return err
 		}
 	}
-	return nil
+	return batch.Commit(r.writeOpts)
 }
 
 func (r *Runner) readValue(key []byte, readVersion uint64) ([]byte, bool, error) {
-	write, ok, err := r.writeForRead(key, readVersion)
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.readValueLocked(key, readVersion)
+}
+
+func (r *Runner) readValueLocked(key []byte, readVersion uint64) ([]byte, bool, error) {
+	write, ok, err := r.writeForReadLocked(key, readVersion)
 	if err != nil || !ok {
 		return nil, false, err
 	}
-	switch write.Kind {
-	case kvrpcpb.Mutation_Delete, kvrpcpb.Mutation_Rollback:
+	if write.Kind == localWriteDelete {
 		return nil, false, nil
 	}
-	if len(write.ShortValue) > 0 {
-		if write.ExpiresAt > 0 && write.ExpiresAt <= uint64(time.Now().Unix()) {
-			return nil, false, nil
-		}
-		return cloneBytes(write.ShortValue), true, nil
+	if write.ExpiresAt > 0 && write.ExpiresAt <= uint64(time.Now().Unix()) {
+		return nil, false, nil
 	}
-	entry, err := r.db.GetInternalEntry(kv.CFDefault, key, write.StartTs)
+	return cloneBytes(write.Value), true, nil
+}
+
+func (r *Runner) writeForReadLocked(key []byte, readVersion uint64) (localWrite, bool, error) {
+	iter, err := r.db.NewIter(nil)
 	if err != nil {
-		if errors.Is(err, utils.ErrKeyNotFound) {
-			return nil, false, nil
+		return localWrite{}, false, err
+	}
+	defer func() { _ = iter.Close() }()
+	seek := encodeLocalWriteKey(key, readVersion)
+	for valid := iter.SeekGE(seek); valid; valid = iter.Next() {
+		prefix, userKey, commitVersion, ok := decodeLocalVersionedKey(iter.Key())
+		if !ok || prefix != localWriteKeyPrefix || !bytes.Equal(userKey, key) {
+			break
 		}
-		return nil, false, err
+		if commitVersion > readVersion {
+			continue
+		}
+		raw, err := iter.ValueAndErr()
+		if err != nil {
+			return localWrite{}, false, err
+		}
+		write, err := decodeLocalWrite(raw)
+		if err != nil {
+			return localWrite{}, false, err
+		}
+		return write, true, nil
 	}
-	defer entry.DecrRef()
-	if entry.IsDeletedOrExpired() {
-		return nil, false, nil
-	}
-	return cloneBytes(entry.Value), true, nil
+	return localWrite{}, false, iter.Error()
 }
 
-func (r *Runner) writeForRead(key []byte, readVersion uint64) (mvcc.Write, bool, error) {
-	var (
-		best      mvcc.Write
-		bestTS    uint64
-		bestFound bool
-	)
-	err := r.scanWrites(key, func(write mvcc.Write, commitTS uint64) bool {
-		if commitTS <= readVersion && (write.Kind == kvrpcpb.Mutation_Lock || write.Kind == kvrpcpb.Mutation_Rollback) {
-			return true
-		}
-		if commitTS <= readVersion && (!bestFound || commitTS > bestTS) {
-			best = write
-			bestTS = commitTS
-			bestFound = true
-		}
-		return true
-	})
-	return best, bestFound, err
-}
-
-func (r *Runner) latestWriteVersion(key []byte) (uint64, bool, error) {
-	var (
-		latest uint64
-		found  bool
-	)
-	err := r.scanWrites(key, func(_ mvcc.Write, commitTS uint64) bool {
-		if !found || commitTS > latest {
-			latest = commitTS
+func (r *Runner) latestWriteVersionLocked(key []byte) (uint64, bool, error) {
+	var latest uint64
+	var found bool
+	err := r.scanWritesLocked(key, func(_ localWrite, commitVersion uint64) bool {
+		if !found || commitVersion > latest {
+			latest = commitVersion
 			found = true
 		}
-		return true
+		return false
 	})
 	return latest, found, err
 }
 
-func (r *Runner) writeByStartVersion(key []byte, startVersion uint64) (mvcc.Write, uint64, bool, error) {
-	var (
-		foundWrite  mvcc.Write
-		foundCommit uint64
-		found       bool
-	)
-	err := r.scanWrites(key, func(write mvcc.Write, commitTS uint64) bool {
-		if write.StartTs != startVersion {
+func (r *Runner) writeByStartVersionLocked(key []byte, startVersion uint64) (localWrite, uint64, bool, error) {
+	var foundWrite localWrite
+	var foundCommit uint64
+	var found bool
+	err := r.scanWritesLocked(key, func(write localWrite, commitVersion uint64) bool {
+		if write.StartVersion != startVersion {
 			return true
 		}
 		foundWrite = write
-		foundCommit = commitTS
+		foundCommit = commitVersion
 		found = true
 		return false
 	})
 	return foundWrite, foundCommit, found, err
 }
 
-func (r *Runner) committedPutMatches(write mvcc.Write, mut *backend.Mutation, startVersion uint64) (bool, error) {
-	if len(write.ShortValue) > 0 {
-		return bytes.Equal(write.ShortValue, mut.Value) && write.ExpiresAt == mut.ExpiresAt, nil
-	}
-	entry, err := r.db.GetInternalEntry(kv.CFDefault, mut.Key, startVersion)
+func (r *Runner) scanWritesLocked(key []byte, fn func(localWrite, uint64) bool) error {
+	iter, err := r.db.NewIter(nil)
 	if err != nil {
-		if errors.Is(err, utils.ErrKeyNotFound) {
-			return false, nil
-		}
-		return false, err
-	}
-	defer entry.DecrRef()
-	if entry.IsDeletedOrExpired() {
-		return false, nil
-	}
-	return bytes.Equal(entry.Value, mut.Value) && entry.ExpiresAt == mut.ExpiresAt, nil
-}
-
-func (r *Runner) scanWrites(key []byte, fn func(mvcc.Write, uint64) bool) error {
-	iter := r.db.NewInternalIterator(&kv.Options{IsAsc: true})
-	if iter == nil {
-		return nil
+		return err
 	}
 	defer func() { _ = iter.Close() }()
-	iter.Seek(kv.InternalKey(kv.CFWrite, key, kv.MaxVersion))
-	for iter.Valid() {
-		item := iter.Item()
-		if item == nil || item.Entry() == nil {
-			iter.Next()
-			continue
-		}
-		entry := item.Entry()
-		cf, userKey, ts, ok := kv.SplitInternalKey(entry.Key)
-		if !ok {
-			return errInvalidInternalEntry
-		}
-		if cf != kv.CFWrite || !bytes.Equal(userKey, key) {
+	for valid := iter.SeekGE(encodeLocalWriteKey(key, localMaxVersion)); valid; valid = iter.Next() {
+		prefix, userKey, commitVersion, ok := decodeLocalVersionedKey(iter.Key())
+		if !ok || prefix != localWriteKeyPrefix || !bytes.Equal(userKey, key) {
 			break
 		}
-		if entry.Meta&kv.BitDelete == 0 {
-			write, err := mvcc.DecodeWrite(entry.Value)
-			if err != nil {
-				return err
-			}
-			if !fn(write, ts) {
-				break
-			}
+		raw, err := iter.ValueAndErr()
+		if err != nil {
+			return err
 		}
-		iter.Next()
+		write, err := decodeLocalWrite(raw)
+		if err != nil {
+			return err
+		}
+		if !fn(write, commitVersion) {
+			break
+		}
+	}
+	return iter.Error()
+}
+
+func (r *Runner) scanUserKeys(startKey []byte, fn func([]byte) (bool, error)) error {
+	r.mu.Lock()
+	iter, err := r.db.NewIter(nil)
+	if err != nil {
+		r.mu.Unlock()
+		return err
+	}
+	var keys [][]byte
+	var lastUserKey []byte
+	for valid := iter.SeekGE(encodeLocalWriteKey(startKey, localMaxVersion)); valid; valid = iter.Next() {
+		prefix, userKey, _, ok := decodeLocalVersionedKey(iter.Key())
+		if !ok || prefix != localWriteKeyPrefix {
+			break
+		}
+		if bytes.Equal(userKey, lastUserKey) {
+			continue
+		}
+		lastUserKey = cloneBytes(userKey)
+		keys = append(keys, cloneBytes(userKey))
+	}
+	err = iter.Error()
+	if closeErr := iter.Close(); err == nil {
+		err = closeErr
+	}
+	r.mu.Unlock()
+	if err != nil {
+		return err
+	}
+	for _, key := range keys {
+		cont, err := fn(key)
+		if err != nil || !cont {
+			return err
+		}
 	}
 	return nil
 }
 
-type versionedOp struct {
-	cf      kv.ColumnFamily
-	key     []byte
-	version uint64
-	value   []byte
-	meta    byte
-	expires uint64
-}
-
-func buildMutationEntries(mutations []*backend.Mutation, startVersion, commitVersion uint64) ([]*kv.Entry, error) {
-	ops := make([]versionedOp, 0, len(mutations)*3)
-	for _, mut := range mutations {
-		if mut == nil {
-			continue
-		}
-		switch mut.Op {
-		case backend.MutationPut:
-			write := mvcc.Write{Kind: kvrpcpb.Mutation_Put, StartTs: startVersion}
-			if mvcc.CanInlineShortValue(kvrpcpb.Mutation_Put, mut.Value) {
-				write.ShortValue = cloneBytes(mut.Value)
-				write.ExpiresAt = mut.ExpiresAt
-				ops = append(ops, versionedOp{
-					cf:      kv.CFWrite,
-					key:     mut.Key,
-					version: commitVersion,
-					value:   mvcc.EncodeWrite(write),
-				})
-				continue
-			}
-			ops = append(ops,
-				versionedOp{cf: kv.CFDefault, key: mut.Key, version: startVersion, meta: kv.BitDelete},
-				versionedOp{cf: kv.CFDefault, key: mut.Key, version: startVersion, value: mut.Value, expires: mut.ExpiresAt},
-				versionedOp{cf: kv.CFWrite, key: mut.Key, version: commitVersion, value: mvcc.EncodeWrite(write)},
-			)
-		case backend.MutationDelete:
-			ops = append(ops,
-				versionedOp{cf: kv.CFDefault, key: mut.Key, version: startVersion, meta: kv.BitDelete},
-				versionedOp{
-					cf:      kv.CFWrite,
-					key:     mut.Key,
-					version: commitVersion,
-					value:   mvcc.EncodeWrite(mvcc.Write{Kind: kvrpcpb.Mutation_Delete, StartTs: startVersion}),
-				},
-			)
-		default:
-			return nil, txnUnsupportedMutation(mut.Op)
-		}
-	}
-	entries := make([]*kv.Entry, 0, len(ops))
-	for _, op := range ops {
-		entries = append(entries, kv.NewInternalEntry(op.cf, op.key, op.version, op.value, op.meta, op.expires))
-	}
-	return entries, nil
-}
-
-func backendMutationKind(op backend.MutationOp) (kvrpcpb.Mutation_Op, error) {
-	switch op {
-	case backend.MutationPut:
-		return kvrpcpb.Mutation_Put, nil
-	case backend.MutationDelete:
-		return kvrpcpb.Mutation_Delete, nil
-	default:
-		return kvrpcpb.Mutation_Put, txnUnsupportedMutation(op)
-	}
-}
-
-func maxObservedVersion(db *localdb.DB) (uint64, error) {
-	if db == nil {
-		return 0, nil
-	}
-	iter := db.NewInternalIterator(&kv.Options{IsAsc: true})
-	if iter == nil {
-		return 0, nil
+func (r *Runner) maxObservedVersion() (uint64, error) {
+	iter, err := r.db.NewIter(nil)
+	if err != nil {
+		return 0, err
 	}
 	defer func() { _ = iter.Close() }()
 	var maxVersion uint64
-	for iter.Rewind(); iter.Valid(); iter.Next() {
-		item := iter.Item()
-		if item == nil || item.Entry() == nil {
+	for valid := iter.First(); valid; valid = iter.Next() {
+		prefix, _, version, ok := decodeLocalVersionedKey(iter.Key())
+		if !ok || prefix != localWriteKeyPrefix {
 			continue
 		}
-		_, _, version, ok := kv.SplitInternalKey(item.Entry().Key)
-		if !ok {
-			return 0, errInvalidInternalEntry
-		}
-		if version == kv.MaxVersion {
-			continue
-		}
-		if version > maxVersion {
+		if version != localMaxVersion && version > maxVersion {
 			maxVersion = version
 		}
 	}
-	return maxVersion, nil
+	return maxVersion, iter.Error()
 }
 
-func releaseEntries(entries []*kv.Entry) {
-	for _, entry := range entries {
-		if entry != nil {
-			entry.DecrRef()
+func writeForMutation(mut *backend.Mutation, startVersion uint64) (localWrite, error) {
+	switch mut.Op {
+	case backend.MutationPut:
+		return localWrite{
+			Kind:         localWritePut,
+			StartVersion: startVersion,
+			ExpiresAt:    mut.ExpiresAt,
+			Value:        cloneBytes(mut.Value),
+		}, nil
+	case backend.MutationDelete:
+		return localWrite{Kind: localWriteDelete, StartVersion: startVersion}, nil
+	default:
+		return localWrite{}, txnUnsupportedMutation(mut.Op)
+	}
+}
+
+func backendMutationKind(op backend.MutationOp) (byte, error) {
+	switch op {
+	case backend.MutationPut:
+		return localWritePut, nil
+	case backend.MutationDelete:
+		return localWriteDelete, nil
+	default:
+		return localWritePut, txnUnsupportedMutation(op)
+	}
+}
+
+func encodeLocalWrite(write localWrite) []byte {
+	out := make([]byte, 1+8+8+binary.MaxVarintLen64+len(write.Value))
+	out[0] = write.Kind
+	binary.BigEndian.PutUint64(out[1:9], write.StartVersion)
+	binary.BigEndian.PutUint64(out[9:17], write.ExpiresAt)
+	n := binary.PutUvarint(out[17:], uint64(len(write.Value)))
+	out = out[:17+n]
+	out = append(out, write.Value...)
+	return out
+}
+
+func decodeLocalWrite(src []byte) (localWrite, error) {
+	if len(src) < 17 {
+		return localWrite{}, errInvalidInternalEntry
+	}
+	valueLen, n := binary.Uvarint(src[17:])
+	if n <= 0 {
+		return localWrite{}, errInvalidInternalEntry
+	}
+	valueStart := 17 + n
+	if uint64(len(src)-valueStart) != valueLen {
+		return localWrite{}, errInvalidInternalEntry
+	}
+	return localWrite{
+		Kind:         src[0],
+		StartVersion: binary.BigEndian.Uint64(src[1:9]),
+		ExpiresAt:    binary.BigEndian.Uint64(src[9:17]),
+		Value:        cloneBytes(src[valueStart:]),
+	}, nil
+}
+
+func encodeLocalWriteKey(userKey []byte, version uint64) []byte {
+	out := make([]byte, 0, 1+len(userKey)+2+8)
+	out = append(out, localWriteKeyPrefix)
+	out = appendEscapedKey(out, userKey)
+	out = append(out, 0, 0)
+	var suffix [8]byte
+	binary.BigEndian.PutUint64(suffix[:], ^version)
+	out = append(out, suffix[:]...)
+	return out
+}
+
+func appendEscapedKey(out []byte, key []byte) []byte {
+	for _, b := range key {
+		if b == 0 {
+			out = append(out, 0, 1)
+			continue
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
+func decodeLocalVersionedKey(key []byte) (byte, []byte, uint64, bool) {
+	if len(key) < 1+2+8 {
+		return 0, nil, 0, false
+	}
+	prefix := key[0]
+	body := key[1 : len(key)-8]
+	userKey := make([]byte, 0, len(body))
+	for i := 0; i < len(body); i++ {
+		b := body[i]
+		if b != 0 {
+			userKey = append(userKey, b)
+			continue
+		}
+		if i+1 >= len(body) {
+			return 0, nil, 0, false
+		}
+		next := body[i+1]
+		switch next {
+		case 0:
+			if i+2 != len(body) {
+				return 0, nil, 0, false
+			}
+			version := ^binary.BigEndian.Uint64(key[len(key)-8:])
+			return prefix, userKey, version, true
+		case 1:
+			userKey = append(userKey, 0)
+			i++
+		default:
+			return 0, nil, 0, false
 		}
 	}
+	return 0, nil, 0, false
 }
 
 func cloneBytes(src []byte) []byte {

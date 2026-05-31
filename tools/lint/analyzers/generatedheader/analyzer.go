@@ -18,13 +18,12 @@ import (
 // Analyzer reports generated files whose canonical header is missing.
 var Analyzer = &analysis.Analyzer{
 	Name: "generatedheader",
-	Doc:  "generated files (*.pb.go, *.peras.go, *.gen.go) must carry the 'Code generated ... DO NOT EDIT.' header (code_contract §10)",
+	Doc:  "generated files (*.pb.go, *.gen.go) must carry the 'Code generated ... DO NOT EDIT.' header (code_contract §10)",
 	Run:  run,
 }
 
 var generatedSuffixes = []string{
 	".pb.go",
-	".peras.go",
 	".gen.go",
 	"_generated.go",
 }

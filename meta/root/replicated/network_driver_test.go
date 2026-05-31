@@ -15,8 +15,8 @@ import (
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	myraft "github.com/feichai0017/NoKV/raft"
 	"github.com/stretchr/testify/require"
+	raftpb "go.etcd.io/raft/v3/raftpb"
 )
 
 func TestNetworkDriverReplicatesAcrossThreeNodes(t *testing.T) {
@@ -226,7 +226,7 @@ type postDeliveryErrorTransport struct {
 	failNextAppend atomic.Bool
 }
 
-func (t *postDeliveryErrorTransport) Send(msgs ...myraft.Message) error {
+func (t *postDeliveryErrorTransport) Send(msgs ...raftpb.Message) error {
 	err := t.Transport.Send(msgs...)
 	if t.failNextAppend.Load() && containsLogAppend(msgs) {
 		t.failNextAppend.Store(false)
@@ -235,9 +235,9 @@ func (t *postDeliveryErrorTransport) Send(msgs ...myraft.Message) error {
 	return err
 }
 
-func containsLogAppend(msgs []myraft.Message) bool {
+func containsLogAppend(msgs []raftpb.Message) bool {
 	for _, msg := range msgs {
-		if msg.Type == myraft.MsgAppend && len(msg.Entries) > 0 {
+		if msg.Type == raftpb.MsgApp && len(msg.Entries) > 0 {
 			return true
 		}
 	}

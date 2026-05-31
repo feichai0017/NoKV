@@ -5,8 +5,8 @@ package file
 
 import (
 	"context"
+
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
-	"github.com/feichai0017/NoKV/storage/vfs"
 )
 
 // store is a single-owner file-backed VirtualLog. Callers must serialize
@@ -17,10 +17,10 @@ type store struct {
 	log     fileEventLog
 }
 
-func NewStore(fs vfs.FS, workdir string) rootstorage.VirtualLog {
+func NewStore(workdir string) rootstorage.VirtualLog {
 	return store{
-		checkpt: fileCheckpointStore{fs: fs, workdir: workdir},
-		log:     fileEventLog{fs: fs, workdir: workdir},
+		checkpt: fileCheckpointStore{workdir: workdir},
+		log:     fileEventLog{workdir: workdir},
 	}
 }
 
