@@ -6,10 +6,7 @@ syntax = "proto3";
 
 package nokv.raft.v1;
 
-import "error/error.proto";
-import "kv/kv.proto";
 import "meta/descriptor.proto";
-import "meta/region.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/raft;raftcmdpb";
 
@@ -34,79 +31,4 @@ message AdminCommand {
   Type type = 1;
   SplitCommand split = 2;
   MergeCommand merge = 3;
-}
-
-// code 6 to 9 is under implementation, DO NOT use it.
-message CmdHeader {
-  uint64 region_id = 1;
-  nokv.meta.v1.RegionEpoch region_epoch = 2;
-  uint64 peer_id = 3;
-  bool read_quorum = 4;
-  uint64 request_id = 5;
-
-  nokv.kv.v1.ReadConsistency read_consistency = 6;
-  nokv.kv.v1.ReadPreference read_preference = 7;
-  uint64 max_stale_read_index = 8;
-  uint64 max_stale_read_ms = 9;
-  uint64 store_id = 10;
-}
-
-enum CmdType {
-  CMD_INVALID = 0;
-  CMD_GET = 1;
-  CMD_SCAN = 2;
-  CMD_PREWRITE = 3;
-  CMD_COMMIT = 4;
-  CMD_BATCH_ROLLBACK = 5;
-  CMD_RESOLVE_LOCK = 6;
-  CMD_CHECK_TXN_STATUS = 7;
-  CMD_MVCC_MAINTENANCE = 8;
-  CMD_TXN_HEART_BEAT = 9;
-  CMD_TRY_ATOMIC_MUTATE = 10;
-  CMD_INSTALL_PREPARED_MVCC = 12;
-}
-
-message Request {
-  CmdType cmd_type = 1;
-
-  oneof cmd {
-    nokv.kv.v1.GetRequest get = 2;
-    nokv.kv.v1.ScanRequest scan = 3;
-    nokv.kv.v1.PrewriteRequest prewrite = 4;
-    nokv.kv.v1.CommitRequest commit = 5;
-    nokv.kv.v1.BatchRollbackRequest batch_rollback = 6;
-    nokv.kv.v1.ResolveLockRequest resolve_lock = 7;
-    nokv.kv.v1.CheckTxnStatusRequest check_txn_status = 8;
-    nokv.kv.v1.MVCCMaintenanceRequest mvcc_maintenance = 9;
-    nokv.kv.v1.TxnHeartBeatRequest txn_heart_beat = 10;
-    nokv.kv.v1.TryAtomicMutateRequest try_atomic_mutate = 11;
-    nokv.kv.v1.InstallPreparedMVCCEntriesRequest install_prepared_mvcc = 13;
-  }
-}
-
-message Response {
-  oneof cmd {
-    nokv.kv.v1.GetResponse get = 1;
-    nokv.kv.v1.ScanResponse scan = 2;
-    nokv.kv.v1.PrewriteResponse prewrite = 3;
-    nokv.kv.v1.CommitResponse commit = 4;
-    nokv.kv.v1.BatchRollbackResponse batch_rollback = 5;
-    nokv.kv.v1.ResolveLockResponse resolve_lock = 6;
-    nokv.kv.v1.CheckTxnStatusResponse check_txn_status = 7;
-    nokv.kv.v1.MVCCMaintenanceResponse mvcc_maintenance = 8;
-    nokv.kv.v1.TxnHeartBeatResponse txn_heart_beat = 9;
-    nokv.kv.v1.TryAtomicMutateResponse try_atomic_mutate = 10;
-    nokv.kv.v1.InstallPreparedMVCCEntriesResponse install_prepared_mvcc = 12;
-  }
-}
-
-message RaftCmdRequest {
-  CmdHeader header = 1;
-  repeated Request requests = 2;
-}
-
-message RaftCmdResponse {
-  CmdHeader header = 1;
-  repeated Response responses = 2;
-  nokv.error.v1.RegionError region_error = 3;
 }

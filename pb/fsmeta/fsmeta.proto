@@ -123,8 +123,9 @@ message WatchCursor {
 enum WatchEventSource {
   WATCH_EVENT_SOURCE_UNSPECIFIED = 0;
   WATCH_EVENT_SOURCE_COMMIT = 1;
-  WATCH_EVENT_SOURCE_RESOLVE_LOCK = 2;
   WATCH_EVENT_SOURCE_RUNTIME_VISIBLE = 3;
+  reserved 2;
+  reserved "WATCH_EVENT_SOURCE_RESOLVE_LOCK";
 }
 
 message WatchSubtreeRequest {

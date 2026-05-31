@@ -16,7 +16,6 @@ type WatchEventSource uint8
 
 const (
 	WatchEventSourceCommit WatchEventSource = iota + 1
-	WatchEventSourceResolveLock
 	WatchEventSourceRuntimeVisible
 )
 

@@ -541,7 +541,7 @@ func TestTypedClientWatchSubtree(t *testing.T) {
 	evt := observe.WatchEvent{
 		Cursor:        observe.WatchCursor{RegionID: 8, Term: 1, Index: 2},
 		CommitVersion: 90,
-		Source:        observe.WatchEventSourceResolveLock,
+		Source:        observe.WatchEventSourceCommit,
 		Key:           []byte("fsm/checkpoint"),
 	}
 	watcher.sub.events <- evt

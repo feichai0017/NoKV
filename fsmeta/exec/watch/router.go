@@ -137,7 +137,7 @@ func eventIsReplayable(evt observe.WatchEvent) bool {
 // converted it into fsmeta's neutral ApplyEvent shape.
 func (r *Router) OnApply(evt observe.ApplyEvent) {
 	switch evt.Source {
-	case observe.WatchEventSourceCommit, observe.WatchEventSourceResolveLock:
+	case observe.WatchEventSourceCommit:
 	default:
 		return
 	}

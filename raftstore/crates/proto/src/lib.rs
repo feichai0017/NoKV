@@ -23,12 +23,6 @@ pub mod nokv {
         }
     }
 
-    pub mod kv {
-        pub mod v1 {
-            tonic::include_proto!("nokv.kv.v1");
-        }
-    }
-
     pub mod metadata {
         pub mod v1 {
             tonic::include_proto!("nokv.metadata.v1");

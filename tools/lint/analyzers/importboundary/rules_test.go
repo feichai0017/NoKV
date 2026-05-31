@@ -49,9 +49,9 @@ func TestEvaluateCatchesForbiddenBoundaries(t *testing.T) {
 		{
 			name:        "fsmeta exec importing protobuf",
 			pkg:         ModulePath + "/fsmeta/exec",
-			imports:     []string{ModulePath + "/pb/kv"},
+			imports:     []string{ModulePath + "/pb/metadata"},
 			wantRule:    "fsmeta executor stays runtime-neutral",
-			wantImport:  ModulePath + "/pb/kv",
+			wantImport:  ModulePath + "/pb/metadata",
 			wantPackage: ModulePath + "/fsmeta/exec",
 		},
 		{

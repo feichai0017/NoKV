@@ -80,7 +80,6 @@ type WatchEventSource int32
 const (
 	WatchEventSource_WATCH_EVENT_SOURCE_UNSPECIFIED     WatchEventSource = 0
 	WatchEventSource_WATCH_EVENT_SOURCE_COMMIT          WatchEventSource = 1
-	WatchEventSource_WATCH_EVENT_SOURCE_RESOLVE_LOCK    WatchEventSource = 2
 	WatchEventSource_WATCH_EVENT_SOURCE_RUNTIME_VISIBLE WatchEventSource = 3
 )
 
@@ -89,13 +88,11 @@ var (
 	WatchEventSource_name = map[int32]string{
 		0: "WATCH_EVENT_SOURCE_UNSPECIFIED",
 		1: "WATCH_EVENT_SOURCE_COMMIT",
-		2: "WATCH_EVENT_SOURCE_RESOLVE_LOCK",
 		3: "WATCH_EVENT_SOURCE_RUNTIME_VISIBLE",
 	}
 	WatchEventSource_value = map[string]int32{
 		"WATCH_EVENT_SOURCE_UNSPECIFIED":     0,
 		"WATCH_EVENT_SOURCE_COMMIT":          1,
-		"WATCH_EVENT_SOURCE_RESOLVE_LOCK":    2,
 		"WATCH_EVENT_SOURCE_RUNTIME_VISIBLE": 3,
 	}
 )
@@ -3630,12 +3627,11 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\tInodeType\x12\x1a\n" +
 	"\x16INODE_TYPE_UNSPECIFIED\x10\x00\x12\x13\n" +
 	"\x0fINODE_TYPE_FILE\x10\x01\x12\x18\n" +
-	"\x14INODE_TYPE_DIRECTORY\x10\x02*\xa2\x01\n" +
+	"\x14INODE_TYPE_DIRECTORY\x10\x02*\xa4\x01\n" +
 	"\x10WatchEventSource\x12\"\n" +
 	"\x1eWATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12\x1d\n" +
-	"\x19WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12#\n" +
-	"\x1fWATCH_EVENT_SOURCE_RESOLVE_LOCK\x10\x02\x12&\n" +
-	"\"WATCH_EVENT_SOURCE_RUNTIME_VISIBLE\x10\x032\xce\x0f\n" +
+	"\x19WATCH_EVENT_SOURCE_COMMIT\x10\x01\x12&\n" +
+	"\"WATCH_EVENT_SOURCE_RUNTIME_VISIBLE\x10\x03\"\x04\b\x02\x10\x02*\x1fWATCH_EVENT_SOURCE_RESOLVE_LOCK2\xce\x0f\n" +
 	"\n" +
 	"FSMetadata\x12G\n" +
 	"\x06Create\x12\x1d.nokv.fsmeta.v1.CreateRequest\x1a\x1e.nokv.fsmeta.v1.CreateResponse\x12V\n" +

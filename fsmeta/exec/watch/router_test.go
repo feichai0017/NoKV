@@ -85,7 +85,7 @@ func TestRouterConsumesApplyEvents(t *testing.T) {
 		RegionID:      7,
 		Term:          3,
 		Index:         9,
-		Source:        observe.WatchEventSourceResolveLock,
+		Source:        observe.WatchEventSourceCommit,
 		CommitVersion: 44,
 		Keys:          [][]byte{[]byte("dentry/a"), []byte("inode/1")},
 	})
@@ -94,7 +94,7 @@ func TestRouterConsumesApplyEvents(t *testing.T) {
 	require.Equal(t, observe.WatchEvent{
 		Cursor:        observe.WatchCursor{RegionID: 7, Term: 3, Index: 9},
 		CommitVersion: 44,
-		Source:        observe.WatchEventSourceResolveLock,
+		Source:        observe.WatchEventSourceCommit,
 		Key:           []byte("dentry/a"),
 	}, got)
 }

@@ -362,8 +362,6 @@ func watchEventSourceFromProto(source fsmetapb.WatchEventSource) observe.WatchEv
 	switch source {
 	case fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_COMMIT:
 		return observe.WatchEventSourceCommit
-	case fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_RESOLVE_LOCK:
-		return observe.WatchEventSourceResolveLock
 	case fsmetapb.WatchEventSource_WATCH_EVENT_SOURCE_RUNTIME_VISIBLE:
 		return observe.WatchEventSourceRuntimeVisible
 	default:
