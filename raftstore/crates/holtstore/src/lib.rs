@@ -4,6 +4,7 @@
 //! Holt internals out of the raftstore service and MVCC protocol crates.
 
 mod codec;
+mod metadata;
 #[path = "mvcc.rs"]
 mod mvcc_engine;
 mod region_meta;
