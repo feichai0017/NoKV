@@ -14,6 +14,9 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
+	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -36,6 +39,7 @@ import (
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
+	adminpb "github.com/feichai0017/NoKV/pb/admin"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	metadatapb "github.com/feichai0017/NoKV/pb/metadata"
@@ -401,6 +405,102 @@ func TestRustMetadataPlaneSurvivesRaftstoreRestart(t *testing.T) {
 	require.Equal(t, after.Dentry.Inode, afterLookup.Dentry.Inode)
 }
 
+func TestRustMetadataPlaneRoutesAfterLeaderTransfer(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	repo := repoRootFromThisFile(t)
+	binary := buildRustRaftstoreServer(t, ctx, repo)
+	addr1 := freeTCPAddr(t)
+	addr2 := freeTCPAddr(t)
+	peerEndpoints := map[uint64]string{1: addr1, 2: addr2}
+	_ = startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:          addr1,
+		storeID:       1,
+		peerID:        1,
+		bootstrap:     true,
+		peerEndpoints: peerEndpoints,
+	})
+	peer2 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:          addr2,
+		storeID:       2,
+		peerID:        2,
+		bootstrap:     false,
+		peerEndpoints: peerEndpoints,
+	})
+	waitForRustMetadataPlane(t, ctx, addr1)
+	waitForRustAdmin(t, ctx, addr2)
+
+	rootStore := newE2ERootStorage()
+	coordinator := newE2ERootedCoordinator(rootStore)
+	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
+	publishRootEvent(t, coordinator, rootevent.StoreJoined(2))
+	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
+	base := testMetadataPlaneDescriptor()
+	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(base))
+	heartbeatRustStoreAs(t, ctx, coordinator, 1, addr1, true)
+	heartbeatRustStoreAs(t, ctx, coordinator, 2, addr2, false)
+
+	admin1, closeAdmin1 := rustAdminClient(t, addr1)
+	defer closeAdmin1()
+	addResp, err := admin1.AddPeer(ctx, &adminpb.AddPeerRequest{
+		RegionId: 1,
+		StoreId:  2,
+		PeerId:   2,
+	})
+	require.NoError(t, err, "peer2 raftstore logs:\n%s", peer2.logs.String())
+	require.Equal(t, uint64(2), addResp.GetRegion().GetEpoch().GetConfVersion())
+	target := base.Clone()
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 2, PeerID: 2})
+	target.Epoch.ConfVersion = addResp.GetRegion().GetEpoch().GetConfVersion()
+	target.Hash = nil
+	target.EnsureHash()
+	publishRootEvent(t, coordinator, rootevent.PeerAdded(1, 2, 2, target))
+	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return status.GetHosted() && len(status.GetRegion().GetPeers()) == 2
+	})
+
+	_, err = admin1.TransferLeader(ctx, &adminpb.TransferLeaderRequest{
+		RegionId: 1,
+		PeerId:   2,
+	})
+	require.NoError(t, err, "peer2 raftstore logs:\n%s", peer2.logs.String())
+	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return status.GetLeader() && status.GetLeaderPeerId() == 2
+	})
+	// Keep the coordinator leader cache stale on store 1. The first fsmeta
+	// write must observe NotLeader from peer 1, learn the peer 2 hint, and
+	// retry through the same fsmeta runtime.
+
+	runtime, err := Open(ctx, Options{
+		Coordinator:    coordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
+
+	created, err := runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-transfer.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 64,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "peer2 raftstore logs:\n%s", peer2.logs.String())
+	lookup, err := runtime.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-transfer.json",
+	})
+	require.NoError(t, err)
+	require.Equal(t, created.Dentry.Inode, lookup.Dentry.Inode)
+	require.Equal(t, created.Inode.Inode, lookup.Inode.Inode)
+}
+
 func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, *bytes.Buffer, *coordserver.Service) {
 	t.Helper()
 	repo := repoRootFromThisFile(t)
@@ -450,16 +550,29 @@ func newE2ERootedCoordinator(rootStore rootview.RootStorage) *coordserver.Servic
 
 func heartbeatRustStore(t *testing.T, ctx context.Context, coordinator *coordserver.Service, addr string) {
 	t.Helper()
+	heartbeatRustStoreAs(t, ctx, coordinator, 1, addr, true)
+}
+
+func heartbeatRustStoreAs(t *testing.T, ctx context.Context, coordinator *coordserver.Service, storeID uint64, addr string, leader bool) {
+	t.Helper()
+	var leaderRegionIDs []uint64
+	var leaderNum uint64
+	var leaderStoreID uint64
+	if leader {
+		leaderRegionIDs = []uint64{1}
+		leaderNum = 1
+		leaderStoreID = storeID
+	}
 	heartbeat, err := coordinator.StoreHeartbeat(ctx, &coordpb.StoreHeartbeatRequest{
-		StoreId:         1,
+		StoreId:         storeID,
 		ClientAddr:      addr,
 		RaftAddr:        addr,
 		RegionNum:       1,
-		LeaderNum:       1,
-		LeaderRegionIds: []uint64{1},
+		LeaderNum:       leaderNum,
+		LeaderRegionIds: leaderRegionIDs,
 		RegionStats: []*coordpb.RegionRuntimeStats{{
 			RegionId:      1,
-			LeaderStoreId: 1,
+			LeaderStoreId: leaderStoreID,
 		}},
 	})
 	require.NoError(t, err)
@@ -484,15 +597,7 @@ func buildRustRaftstoreServer(t *testing.T, ctx context.Context, repo string) st
 
 func startRustRaftstoreServer(t *testing.T, ctx context.Context, binary, repo, addr string) *bytes.Buffer {
 	t.Helper()
-	return startRustRaftstoreServerWithDirs(
-		t,
-		ctx,
-		binary,
-		repo,
-		addr,
-		filepath.Join(t.TempDir(), "holt"),
-		filepath.Join(t.TempDir(), "raftlog"),
-	).logs
+	return startRustRaftstoreServerWithDirs(t, ctx, binary, repo, addr, filepath.Join(t.TempDir(), "holt"), filepath.Join(t.TempDir(), "raftlog")).logs
 }
 
 type rustRaftstoreProcess struct {
@@ -501,21 +606,58 @@ type rustRaftstoreProcess struct {
 	stopOnce sync.Once
 }
 
+type rustRaftstoreStartConfig struct {
+	addr          string
+	holtDir       string
+	raftLogDir    string
+	storeID       uint64
+	peerID        uint64
+	bootstrap     bool
+	peerEndpoints map[uint64]string
+}
+
 func startRustRaftstoreServerWithDirs(t *testing.T, ctx context.Context, binary, repo, addr, holtDir, raftLogDir string) *rustRaftstoreProcess {
 	t.Helper()
+	return startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:       addr,
+		holtDir:    holtDir,
+		raftLogDir: raftLogDir,
+		storeID:    1,
+		peerID:     1,
+		bootstrap:  true,
+	})
+}
+
+func startRustRaftstoreServerWithConfig(t *testing.T, ctx context.Context, binary, repo string, cfg rustRaftstoreStartConfig) *rustRaftstoreProcess {
+	t.Helper()
+	if cfg.holtDir == "" {
+		cfg.holtDir = filepath.Join(t.TempDir(), "holt")
+	}
+	if cfg.raftLogDir == "" {
+		cfg.raftLogDir = filepath.Join(t.TempDir(), "raftlog")
+	}
+	if cfg.storeID == 0 {
+		cfg.storeID = 1
+	}
+	if cfg.peerID == 0 {
+		cfg.peerID = cfg.storeID
+	}
 	var logs bytes.Buffer
 	cmd := exec.CommandContext(ctx, binary)
 	cmd.Dir = repo
 	cmd.Env = append(os.Environ(),
-		"NOKV_RAFTSTORE_ADDR="+addr,
-		"NOKV_RAFTSTORE_ADVERTISE_ADDR="+addr,
+		"NOKV_RAFTSTORE_ADDR="+cfg.addr,
+		"NOKV_RAFTSTORE_ADVERTISE_ADDR="+cfg.addr,
 		"NOKV_RAFTSTORE_REGION_ID=1",
-		"NOKV_RAFTSTORE_STORE_ID=1",
-		"NOKV_RAFTSTORE_PEER_ID=1",
-		"NOKV_RAFTSTORE_BOOTSTRAP=true",
-		"NOKV_RAFTSTORE_HOLT_DIR="+holtDir,
-		"NOKV_RAFTSTORE_LOG_DIR="+raftLogDir,
+		"NOKV_RAFTSTORE_STORE_ID="+strconv.FormatUint(cfg.storeID, 10),
+		"NOKV_RAFTSTORE_PEER_ID="+strconv.FormatUint(cfg.peerID, 10),
+		"NOKV_RAFTSTORE_BOOTSTRAP="+strconv.FormatBool(cfg.bootstrap),
+		"NOKV_RAFTSTORE_HOLT_DIR="+cfg.holtDir,
+		"NOKV_RAFTSTORE_LOG_DIR="+cfg.raftLogDir,
 	)
+	if len(cfg.peerEndpoints) != 0 {
+		cmd.Env = append(cmd.Env, "NOKV_RAFTSTORE_PEER_ENDPOINTS="+peerEndpointsEnv(cfg.peerEndpoints))
+	}
 	cmd.Stdout = &logs
 	cmd.Stderr = &logs
 	require.NoError(t, cmd.Start())
@@ -530,6 +672,19 @@ func startRustRaftstoreServerWithDirs(t *testing.T, ctx context.Context, binary,
 		}
 	})
 	return proc
+}
+
+func peerEndpointsEnv(peers map[uint64]string) string {
+	ids := make([]uint64, 0, len(peers))
+	for id := range peers {
+		ids = append(ids, id)
+	}
+	slices.Sort(ids)
+	parts := make([]string, 0, len(ids))
+	for _, id := range ids {
+		parts = append(parts, strconv.FormatUint(id, 10)+"="+peers[id])
+	}
+	return strings.Join(parts, ",")
 }
 
 func (p *rustRaftstoreProcess) stop() {
@@ -562,6 +717,40 @@ func waitForRustMetadataPlane(t *testing.T, parent context.Context, addr string)
 			Version: 1,
 		})
 		return err == nil && resp.GetRegionError() == nil
+	}, 20*time.Second, 100*time.Millisecond)
+}
+
+func rustAdminClient(t *testing.T, addr string) (adminpb.RaftAdminClient, func()) {
+	t.Helper()
+	conn, err := grpc.NewClient("dns:///"+addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	conn.Connect()
+	return adminpb.NewRaftAdminClient(conn), func() {
+		require.NoError(t, conn.Close())
+	}
+}
+
+func waitForRustAdmin(t *testing.T, parent context.Context, addr string) {
+	t.Helper()
+	client, closeClient := rustAdminClient(t, addr)
+	defer closeClient()
+	require.Eventually(t, func() bool {
+		callCtx, cancel := context.WithTimeout(parent, time.Second)
+		defer cancel()
+		_, err := client.ExecutionStatus(callCtx, &adminpb.ExecutionStatusRequest{})
+		return err == nil
+	}, 20*time.Second, 100*time.Millisecond)
+}
+
+func waitForRustRegionStatus(t *testing.T, parent context.Context, addr string, accept func(*adminpb.RegionRuntimeStatusResponse) bool) {
+	t.Helper()
+	client, closeClient := rustAdminClient(t, addr)
+	defer closeClient()
+	require.Eventually(t, func() bool {
+		callCtx, cancel := context.WithTimeout(parent, time.Second)
+		defer cancel()
+		status, err := client.RegionRuntimeStatus(callCtx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+		return err == nil && accept(status)
 	}, 20*time.Second, 100*time.Millisecond)
 }
 
