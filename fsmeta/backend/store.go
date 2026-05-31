@@ -74,7 +74,7 @@ type MetadataCommitResult struct {
 	AppliedMutations uint64
 }
 
-// Store is the minimum MVCC metadata backend required by fsmeta execution.
+// Store is the minimum versioned metadata backend required by fsmeta execution.
 //
 // Mutation atomicity is defined over the supplied mutation group. Implementors
 // may use a local one-phase write, a mount-scoped Raft command, or another

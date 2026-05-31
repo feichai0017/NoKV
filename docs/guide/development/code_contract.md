@@ -40,7 +40,7 @@ Package boundaries follow ownership of truth, not convenience.
 | --- | --- | --- |
 | `fsmeta/model/` | Storage-engine-neutral namespace model: mount, inode, dentry, session, quota, watch, snapshot, operation request/result types, and validation. | Import key layout, protobuf, coordinator, root, raftstore, Pebble, Holt, or runtime packages. |
 | `fsmeta/layout/` | Ordered fsmeta key layout, value codecs, key-family kinds, placement ranges, and operation key plans. | Own high-level namespace semantics, import protobuf, coordinator, root, raftstore, Pebble, Holt, or runtime packages. |
-| `fsmeta/backend/` | Minimal MVCC metadata backend contract consumed by `fsmeta/exec`. | Import protobuf, concrete runtimes, coordinator, root, raftstore, Pebble, Holt, migration, SST, or storage-engine diagnostics. |
+| `fsmeta/backend/` | Storage-engine-neutral metadata command contract consumed by `fsmeta/exec`. | Import protobuf, concrete runtimes, coordinator, root, raftstore, Pebble, Holt, migration, SST, or storage-engine diagnostics. |
 | `fsmeta/observe/` | Runtime-neutral watch and snapshot observation surfaces. | Own namespace model objects, protobuf conversion, concrete runtimes, or backend clients. |
 | `fsmeta/exec/` | Semantic compiler, executor, visible-read helpers, and runtime-neutral holder logic over `fsmeta/backend`. | Import protobuf, coordinator, root, raftstore, Pebble, Holt, or concrete runtime packages. |
 | `fsmeta/runtime/local/` | Pebble-backed one-process fsmeta backend for demos, tests, and small deployments. | Become a generic KV database, import coordinator/root, or reinterpret compiler semantics outside the executor contract. |

@@ -14,7 +14,7 @@ execution second, replaceable storage engines below that**.
 Layer 1: fsmeta
   model/      inode, dentry, session, quota, snapshot, watch domain types
   layout/     ordered namespace keys and value codecs
-  backend/    MVCC metadata backend contract
+  backend/    metadata command backend contract
   exec/       semantic compiler and executor
   runtime/    concrete runtime bindings
 

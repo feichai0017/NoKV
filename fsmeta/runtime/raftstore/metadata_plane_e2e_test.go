@@ -320,6 +320,87 @@ func TestRustMetadataPlaneRouteSurvivesCoordinatorRebuild(t *testing.T) {
 	require.Equal(t, created.Inode.Inode, lookup.Inode.Inode)
 }
 
+func TestRustMetadataPlaneSurvivesRaftstoreRestart(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	repo := repoRootFromThisFile(t)
+	binary := buildRustRaftstoreServer(t, ctx, repo)
+	addr := freeTCPAddr(t)
+	holtDir := filepath.Join(t.TempDir(), "holt")
+	raftLogDir := filepath.Join(t.TempDir(), "raftlog")
+
+	first := startRustRaftstoreServerWithDirs(t, ctx, binary, repo, addr, holtDir, raftLogDir)
+	waitForRustMetadataPlane(t, ctx, addr)
+
+	rootStore := newE2ERootStorage()
+	coordinator := newE2ERootedCoordinator(rootStore)
+	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
+	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
+	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(testMetadataPlaneDescriptor()))
+	heartbeatRustStore(t, ctx, coordinator, addr)
+
+	runtime, err := Open(ctx, Options{
+		Coordinator:    coordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", first.logs.String())
+	created, err := runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "before-restart.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 55,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", first.logs.String())
+	require.NoError(t, runtime.Close())
+	first.stop()
+
+	second := startRustRaftstoreServerWithDirs(t, ctx, binary, repo, addr, holtDir, raftLogDir)
+	waitForRustMetadataPlane(t, ctx, addr)
+	heartbeatRustStore(t, ctx, coordinator, addr)
+
+	reopened, err := Open(ctx, Options{
+		Coordinator:    coordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.NoError(t, err, "first raftstore logs:\n%s\nsecond raftstore logs:\n%s", first.logs.String(), second.logs.String())
+	t.Cleanup(func() { require.NoError(t, reopened.Close()) })
+
+	lookup, err := reopened.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "before-restart.json",
+	})
+	require.NoError(t, err, "first raftstore logs:\n%s\nsecond raftstore logs:\n%s", first.logs.String(), second.logs.String())
+	require.Equal(t, created.Dentry.Inode, lookup.Dentry.Inode)
+	require.Equal(t, created.Inode.Inode, lookup.Inode.Inode)
+
+	after, err := reopened.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-restart.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 89,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "first raftstore logs:\n%s\nsecond raftstore logs:\n%s", first.logs.String(), second.logs.String())
+	afterLookup, err := reopened.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-restart.json",
+	})
+	require.NoError(t, err)
+	require.Equal(t, after.Dentry.Inode, afterLookup.Dentry.Inode)
+}
+
 func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, *bytes.Buffer, *coordserver.Service) {
 	t.Helper()
 	repo := repoRootFromThisFile(t)
@@ -403,6 +484,25 @@ func buildRustRaftstoreServer(t *testing.T, ctx context.Context, repo string) st
 
 func startRustRaftstoreServer(t *testing.T, ctx context.Context, binary, repo, addr string) *bytes.Buffer {
 	t.Helper()
+	return startRustRaftstoreServerWithDirs(
+		t,
+		ctx,
+		binary,
+		repo,
+		addr,
+		filepath.Join(t.TempDir(), "holt"),
+		filepath.Join(t.TempDir(), "raftlog"),
+	).logs
+}
+
+type rustRaftstoreProcess struct {
+	cmd      *exec.Cmd
+	logs     *bytes.Buffer
+	stopOnce sync.Once
+}
+
+func startRustRaftstoreServerWithDirs(t *testing.T, ctx context.Context, binary, repo, addr, holtDir, raftLogDir string) *rustRaftstoreProcess {
+	t.Helper()
 	var logs bytes.Buffer
 	cmd := exec.CommandContext(ctx, binary)
 	cmd.Dir = repo
@@ -413,22 +513,32 @@ func startRustRaftstoreServer(t *testing.T, ctx context.Context, binary, repo, a
 		"NOKV_RAFTSTORE_STORE_ID=1",
 		"NOKV_RAFTSTORE_PEER_ID=1",
 		"NOKV_RAFTSTORE_BOOTSTRAP=true",
-		"NOKV_RAFTSTORE_HOLT_DIR="+filepath.Join(t.TempDir(), "holt"),
-		"NOKV_RAFTSTORE_LOG_DIR="+filepath.Join(t.TempDir(), "raftlog"),
+		"NOKV_RAFTSTORE_HOLT_DIR="+holtDir,
+		"NOKV_RAFTSTORE_LOG_DIR="+raftLogDir,
 	)
 	cmd.Stdout = &logs
 	cmd.Stderr = &logs
 	require.NoError(t, cmd.Start())
+	proc := &rustRaftstoreProcess{
+		cmd:  cmd,
+		logs: &logs,
+	}
 	t.Cleanup(func() {
-		if cmd.Process != nil {
-			_ = cmd.Process.Kill()
-		}
-		_ = cmd.Wait()
+		proc.stop()
 		if t.Failed() {
 			t.Logf("rust raftstore logs:\n%s", logs.String())
 		}
 	})
-	return &logs
+	return proc
+}
+
+func (p *rustRaftstoreProcess) stop() {
+	p.stopOnce.Do(func() {
+		if p.cmd.Process != nil {
+			_ = p.cmd.Process.Kill()
+		}
+		_ = p.cmd.Wait()
+	})
 }
 
 func waitForRustMetadataPlane(t *testing.T, parent context.Context, addr string) {

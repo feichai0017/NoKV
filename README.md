@@ -25,7 +25,7 @@ references, metadata versions, watches, and lifecycle coordination.
 application / SDK
   -> fsmeta API
   -> fsmeta/exec semantic compiler and executor
-  -> fsmeta/backend MVCC metadata contract
+  -> fsmeta/backend metadata command contract
   -> fsmeta/runtime/local       # local Pebble demo path
   -> meta/root + coordinator    # distributed truth/control plane
   -> raftstore               # Rust/Holt distributed data-plane target
@@ -37,7 +37,7 @@ The main package boundaries are:
 |---|---|
 | `fsmeta/model` | Inode, dentry, mount, quota, session, watch, and snapshot domain model. |
 | `fsmeta/layout` | Ordered namespace key layout and value codecs. |
-| `fsmeta/backend` | Minimal MVCC metadata backend contract consumed by fsmeta execution. |
+| `fsmeta/backend` | Metadata command backend contract consumed by fsmeta execution. |
 | `fsmeta/exec` | Semantic executor and compiler for namespace operations. |
 | `fsmeta/runtime/local` | Embedded Pebble-backed fsmeta runtime for demos and tests. |
 | `meta/root` | Rooted truth for topology, authority, lifecycle facts, grants, and seals. |
