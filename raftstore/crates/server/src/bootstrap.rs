@@ -23,11 +23,14 @@ use nokv_raftstore_server::{
 };
 
 use crate::coordinator::{
-    publish_root_event_with_pending, spawn_multi_region_coordinator_heartbeat,
-    spawn_pending_topology_retries, spawn_startup_root_publication_for_regions,
-    CoordinatorHeartbeatConfig, CoordinatorTopologyPublisher, SchedulerOperationOutcome,
+    spawn_multi_region_coordinator_heartbeat, spawn_pending_topology_retries,
+    CoordinatorHeartbeatConfig, SchedulerOperationOutcome,
 };
 use crate::metrics::spawn_metrics_server;
+use crate::root_publication::{
+    publish_root_event_with_pending, spawn_startup_root_publication_for_regions,
+    CoordinatorTopologyPublisher,
+};
 use crate::startup::{RegionKeyRange, RegionRangeCatalog, ServerIdentity};
 
 #[derive(Clone)]
