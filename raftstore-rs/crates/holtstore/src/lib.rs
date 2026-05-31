@@ -933,6 +933,10 @@ impl mvcc::KvEngine for HoltMvccStore {
         let _guard = self.lock()?;
         let mut errors = Vec::new();
         for mutation in &req.mutations {
+            if mutation.key.is_empty() {
+                errors.push(mvcc::empty_mutation_key_error());
+                continue;
+            }
             if let Some(existing) = self.get_lock(&mutation.key)? {
                 if existing.start_version != req.start_version {
                     errors.push(mvcc::locked_error(&mutation.key, &existing));
@@ -996,6 +1000,11 @@ impl mvcc::KvEngine for HoltMvccStore {
         }
         let mut locks = Vec::new();
         for key in &req.keys {
+            if key.is_empty() {
+                return Ok(kvpb::CommitResponse {
+                    error: Some(mvcc::empty_commit_key_error()),
+                });
+            }
             let Some(lock) = self.get_lock(key)? else {
                 if let Some((_commit_version, value)) =
                     self.write_by_start_version(key, req.start_version)?
@@ -1048,6 +1057,11 @@ impl mvcc::KvEngine for HoltMvccStore {
         req: &kvpb::BatchRollbackRequest,
     ) -> mvcc::Result<kvpb::BatchRollbackResponse> {
         let _guard = self.lock()?;
+        if req.keys.iter().any(Vec::is_empty) {
+            return Ok(kvpb::BatchRollbackResponse {
+                error: Some(mvcc::empty_rollback_key_error()),
+            });
+        }
         let mut delete_locks = Vec::new();
         let mut rollbacks = Vec::new();
         for key in &req.keys {
@@ -1282,6 +1296,12 @@ impl mvcc::KvEngine for HoltMvccStore {
     ) -> mvcc::Result<kvpb::TryAtomicMutateResponse> {
         let _guard = self.lock()?;
         for predicate in &req.predicates {
+            if predicate.key.is_empty() {
+                return Ok(kvpb::TryAtomicMutateResponse {
+                    error: Some(mvcc::empty_mutation_key_error()),
+                    ..Default::default()
+                });
+            }
             if let Some(lock) = self.get_lock(&predicate.key)? {
                 if lock.start_version <= predicate.read_version {
                     return Ok(kvpb::TryAtomicMutateResponse {
@@ -1299,6 +1319,12 @@ impl mvcc::KvEngine for HoltMvccStore {
                     ..Default::default()
                 });
             }
+        }
+        if req.mutations.iter().any(|mutation| mutation.key.is_empty()) {
+            return Ok(kvpb::TryAtomicMutateResponse {
+                error: Some(mvcc::empty_mutation_key_error()),
+                ..Default::default()
+            });
         }
         let values = req
             .mutations
@@ -1879,6 +1905,14 @@ mod tests {
     use super::*;
     use mvcc::{KvEngine, MvccSnapshotEngine};
 
+    fn assert_abort_contains(error: Option<kvpb::KeyError>, needle: &str) {
+        let err = error.expect("expected key error");
+        assert!(
+            err.abort.contains(needle),
+            "expected abort containing {needle:?}, got {err:?}"
+        );
+    }
+
     #[test]
     fn opens_required_multi_tree_layout() {
         let store = HoltStore::open_memory().unwrap();
@@ -2276,6 +2310,170 @@ mod tests {
             })
             .unwrap();
         assert_eq!(current.value, b"v1");
+    }
+
+    #[test]
+    fn holt_mvcc_empty_key_txn_requests_abort_without_partial_apply() {
+        let store = HoltMvccStore::open_memory().unwrap();
+
+        let prewrite = store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![
+                    kvpb::Mutation {
+                        key: b"prewrite-valid".to_vec(),
+                        value: b"v".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                    kvpb::Mutation {
+                        key: Vec::new(),
+                        value: b"bad".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                ],
+                primary_lock: b"prewrite-valid".to_vec(),
+                start_version: 10,
+                lock_ttl: 30_000,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(prewrite.errors.len(), 1);
+        assert!(prewrite.errors[0].abort.contains("empty key in mutation"));
+        let missing_lock = store
+            .commit(&kvpb::CommitRequest {
+                keys: vec![b"prewrite-valid".to_vec()],
+                start_version: 10,
+                commit_version: 20,
+            })
+            .unwrap();
+        assert_abort_contains(missing_lock.error, "lock not found");
+
+        store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"commit-valid".to_vec(),
+                    value: b"v".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: b"commit-valid".to_vec(),
+                start_version: 30,
+                lock_ttl: 30_000,
+                ..Default::default()
+            })
+            .unwrap();
+        let commit = store
+            .commit(&kvpb::CommitRequest {
+                keys: vec![b"commit-valid".to_vec(), Vec::new()],
+                start_version: 30,
+                commit_version: 40,
+            })
+            .unwrap();
+        assert_abort_contains(commit.error, "empty key in commit");
+        let not_committed = store
+            .get(&kvpb::GetRequest {
+                key: b"commit-valid".to_vec(),
+                version: 40,
+            })
+            .unwrap();
+        assert!(not_committed.error.unwrap().locked.is_some());
+
+        store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"rollback-valid".to_vec(),
+                    value: b"v".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: b"rollback-valid".to_vec(),
+                start_version: 50,
+                lock_ttl: 30_000,
+                ..Default::default()
+            })
+            .unwrap();
+        let rollback = store
+            .batch_rollback(&kvpb::BatchRollbackRequest {
+                keys: vec![b"rollback-valid".to_vec(), Vec::new()],
+                start_version: 50,
+            })
+            .unwrap();
+        assert_abort_contains(rollback.error, "empty key in rollback");
+        let still_committable = store
+            .commit(&kvpb::CommitRequest {
+                keys: vec![b"rollback-valid".to_vec()],
+                start_version: 50,
+                commit_version: 60,
+            })
+            .unwrap();
+        assert!(still_committable.error.is_none());
+    }
+
+    #[test]
+    fn holt_mvcc_empty_key_atomic_mutate_aborts_without_partial_apply() {
+        let store = HoltMvccStore::open_memory().unwrap();
+
+        let empty_predicate = store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                predicates: vec![kvpb::AtomicPredicate {
+                    key: Vec::new(),
+                    kind: kvpb::AtomicPredicateKind::NotExists as i32,
+                    read_version: 1,
+                    ..Default::default()
+                }],
+                mutations: vec![kvpb::Mutation {
+                    key: b"predicate-valid".to_vec(),
+                    value: b"v".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 2,
+            })
+            .unwrap();
+        assert_abort_contains(empty_predicate.error, "empty key in mutation");
+        assert!(
+            store
+                .get(&kvpb::GetRequest {
+                    key: b"predicate-valid".to_vec(),
+                    version: 2,
+                })
+                .unwrap()
+                .not_found
+        );
+
+        let empty_mutation = store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![
+                    kvpb::Mutation {
+                        key: b"mutation-valid".to_vec(),
+                        value: b"v".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                    kvpb::Mutation {
+                        key: Vec::new(),
+                        value: b"bad".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                ],
+                predicates: Vec::new(),
+                start_version: 3,
+                commit_version: 4,
+            })
+            .unwrap();
+        assert_abort_contains(empty_mutation.error, "empty key in mutation");
+        assert!(
+            store
+                .get(&kvpb::GetRequest {
+                    key: b"mutation-valid".to_vec(),
+                    version: 4,
+                })
+                .unwrap()
+                .not_found
+        );
     }
 
     #[test]

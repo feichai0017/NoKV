@@ -1808,6 +1808,59 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Error(t, err)
 	require.Equal(t, codes.Unimplemented, status.Code(err))
 
+	emptyPrewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   nil,
+				Value: []byte("bad"),
+			}},
+			PrimaryLock:  []byte("agent/empty-prewrite"),
+			StartVersion: 91,
+			LockTtl:      10_000,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, emptyPrewrite.GetRegionError())
+	require.Len(t, emptyPrewrite.GetResponse().GetErrors(), 1)
+	require.Contains(t, emptyPrewrite.GetResponse().GetErrors()[0].GetAbort(), "empty key in mutation")
+
+	emptyCommit, err := raw.Commit(ctx, &kvrpcpb.KvCommitRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.CommitRequest{
+			Keys:          [][]byte{nil},
+			StartVersion:  91,
+			CommitVersion: 92,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, emptyCommit.GetRegionError())
+	require.Contains(t, emptyCommit.GetResponse().GetError().GetAbort(), "empty key in commit")
+
+	emptyRollback, err := raw.BatchRollback(ctx, &kvrpcpb.KvBatchRollbackRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.BatchRollbackRequest{
+			Keys:         [][]byte{nil},
+			StartVersion: 91,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, emptyRollback.GetRegionError())
+	require.Contains(t, emptyRollback.GetResponse().GetError().GetAbort(), "empty key in rollback")
+
 	expiredKey := []byte("agent/expired")
 	expiredPrewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
 		Context: &kvrpcpb.Context{

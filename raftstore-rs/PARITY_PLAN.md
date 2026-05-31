@@ -216,6 +216,10 @@ The first slices are intentionally narrow:
   Empty Rust `BatchGet` requests now match the Go service boundary: after
   basic context/region-id validation they return an empty response without
   requiring epoch, leader, or hosted-region admission.
+  Rust Percolator commands now also match Go's empty-key boundary:
+  `Prewrite`, `Commit`, `BatchRollback`, and 1PC atomic mutate return
+  command-level aborts and do not partially apply valid keys from the same
+  request.
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.
