@@ -7,10 +7,12 @@ import (
 	"bytes"
 	"context"
 	"testing"
+	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -116,6 +118,84 @@ func TestRegisterFSMetaMountConflictUsesExistingMount(t *testing.T) {
 	require.Len(t, coord.published, 1)
 }
 
+func TestWaitFSMetaMountVisibleWaitsForCoordinatorCatalog(t *testing.T) {
+	coord := &fakeMountRegistrationCoordinator{
+		getResponses: []*coordpb.GetMountResponse{
+			{NotFound: true},
+			{NotFound: true},
+			{Mount: &coordpb.MountInfo{
+				MountId:       "vol",
+				MountKeyId:    11,
+				RootInode:     1,
+				SchemaVersion: 1,
+				State:         coordpb.MountState_MOUNT_STATE_ACTIVE,
+			}},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := waitFSMetaMountVisible(ctx, coord, fsmetaMountRegistration{
+		MountID:       "vol",
+		MountKeyID:    11,
+		RootInode:     1,
+		SchemaVersion: 1,
+	}, time.Nanosecond)
+	require.NoError(t, err)
+	require.Empty(t, coord.getResponses)
+}
+
+func TestWaitFSMetaMountVisibleRejectsVisibleMismatch(t *testing.T) {
+	coord := &fakeMountRegistrationCoordinator{
+		getResponses: []*coordpb.GetMountResponse{{Mount: &coordpb.MountInfo{
+			MountId:       "vol",
+			MountKeyId:    12,
+			RootInode:     1,
+			SchemaVersion: 1,
+			State:         coordpb.MountState_MOUNT_STATE_ACTIVE,
+		}}},
+	}
+	err := waitFSMetaMountVisible(context.Background(), coord, fsmetaMountRegistration{
+		MountID:       "vol",
+		MountKeyID:    11,
+		RootInode:     1,
+		SchemaVersion: 1,
+	}, time.Nanosecond)
+	require.ErrorContains(t, err, "mount_key_id=12")
+}
+
+func TestWaitFSMetaMountRouteVisibleWaitsForCoordinatorRoute(t *testing.T) {
+	coord := &fakeMountRegistrationCoordinator{
+		routeResponses: []*coordpb.GetRegionByKeyResponse{
+			{NotFound: true},
+			{RegionDescriptor: &metapb.RegionDescriptor{
+				RegionId: 1,
+				Epoch:    &metapb.RegionEpoch{ConfVersion: 1, Version: 1},
+			}},
+		},
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	err := waitFSMetaMountRouteVisible(ctx, coord, fsmetaMountRegistration{
+		MountID:       "vol",
+		MountKeyID:    11,
+		RootInode:     1,
+		SchemaVersion: 1,
+	}, time.Nanosecond)
+	require.NoError(t, err)
+	require.Empty(t, coord.routeResponses)
+	require.Len(t, coord.routeRequests, 2)
+	require.NotEmpty(t, coord.routeRequests[0].GetKey())
+}
+
+func TestWaitFSMetaMountRouteVisibleRequiresRegisteredIdentity(t *testing.T) {
+	err := waitFSMetaMountRouteVisible(context.Background(), &fakeMountRegistrationCoordinator{}, fsmetaMountRegistration{
+		MountID:    "vol",
+		MountKeyID: 0,
+		RootInode:  1,
+	}, time.Nanosecond)
+	require.ErrorContains(t, err, "requires registered mount identity")
+}
+
 func TestRunFSMetaMountRegisterCmdRequiresMount(t *testing.T) {
 	var buf bytes.Buffer
 	err := runFSMetaMountRegisterCmd(&buf, []string{"-coordinator-addr", "127.0.0.1:1"})
@@ -123,14 +203,17 @@ func TestRunFSMetaMountRegisterCmdRequiresMount(t *testing.T) {
 }
 
 type fakeMountRegistrationCoordinator struct {
-	getResponses []*coordpb.GetMountResponse
-	getErr       error
-	allocResp    *coordpb.AllocIDResponse
-	allocErr     error
-	publishErr   error
+	getResponses   []*coordpb.GetMountResponse
+	getErr         error
+	routeResponses []*coordpb.GetRegionByKeyResponse
+	routeErr       error
+	allocResp      *coordpb.AllocIDResponse
+	allocErr       error
+	publishErr     error
 
-	allocCalls int
-	published  []*coordpb.PublishRootEventRequest
+	allocCalls    int
+	routeRequests []*coordpb.GetRegionByKeyRequest
+	published     []*coordpb.PublishRootEventRequest
 }
 
 func (c *fakeMountRegistrationCoordinator) GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
@@ -142,6 +225,19 @@ func (c *fakeMountRegistrationCoordinator) GetMount(context.Context, *coordpb.Ge
 	}
 	resp := c.getResponses[0]
 	c.getResponses = c.getResponses[1:]
+	return resp, nil
+}
+
+func (c *fakeMountRegistrationCoordinator) GetRegionByKey(_ context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+	c.routeRequests = append(c.routeRequests, req)
+	if c.routeErr != nil {
+		return nil, c.routeErr
+	}
+	if len(c.routeResponses) == 0 {
+		return &coordpb.GetRegionByKeyResponse{NotFound: true}, nil
+	}
+	resp := c.routeResponses[0]
+	c.routeResponses = c.routeResponses[1:]
 	return resp, nil
 }
 

@@ -40,7 +40,9 @@ NOKV_FSMETA_BENCH_MODE=local make fsmeta-bench
 The Docker Compose benchmark path is also local fsmeta today. The Rust
 distributed data-plane smoke path starts a three-peer `meta-root`, one
 `coordinator`, one Rust `raftstore`, registers the benchmark mount, and then
-starts `nokv-fsmeta --runtime=raftstore`:
+starts `nokv-fsmeta --runtime=raftstore`. Rust benchmark runs build the
+raftstore server in release mode by default; set
+`NOKV_FSMETA_RUST_CARGO_PROFILE=debug` only for local debugging:
 
 ```bash
 NOKV_FSMETA_BENCH_MODE=rust \

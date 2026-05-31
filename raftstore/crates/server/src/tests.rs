@@ -1491,6 +1491,30 @@ fn holt_region_metadata_sink_replays_watch_history_after_reopen() {
     assert_eq!(replay.events, vec![event]);
 }
 
+#[test]
+fn holt_region_metadata_sink_restores_apply_status_from_wal() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
+        let sink = HoltRegionMetadataSink::new(store);
+        sink.save_apply_status(&nokv_raftnode::ApplyStatus {
+            region_id: 7,
+            term: 3,
+            applied_index: 42,
+        })
+        .unwrap();
+    }
+
+    let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
+    let status = reopened
+        .get_region_apply_state(7)
+        .unwrap()
+        .expect("apply status should replay from Holt WAL");
+    assert_eq!(status.region_id, 7);
+    assert_eq!(status.term, 3);
+    assert_eq!(status.applied_index, 42);
+}
+
 #[tokio::test]
 async fn get_requires_context() {
     let service = MetadataPlaneService::with_admission_state_and_execution(

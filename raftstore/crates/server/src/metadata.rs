@@ -26,7 +26,6 @@ impl RegionMetadataSink for HoltRegionMetadataSink {
                 truncated_term: 0,
                 truncated_index: 0,
             })
-            .and_then(|_| self.store.checkpoint())
             .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))
     }
 
@@ -36,7 +35,6 @@ impl RegionMetadataSink for HoltRegionMetadataSink {
     ) -> nokv_metastore::Result<()> {
         self.store
             .put_watch_apply_event(event)
-            .and_then(|_| self.store.checkpoint())
             .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))
     }
 

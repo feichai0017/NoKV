@@ -195,7 +195,7 @@ where
         async move {
             let before = self.engine.status().applied_index;
             let response = self.engine.execute_metadata_command(req).await?;
-            self.persist_if_advanced(before)?;
+            self.persist_if_advanced(before, false)?;
             Ok(response)
         }
     }

@@ -10,6 +10,7 @@ pub struct AppliedProposal {
     pub index: u64,
     pub term: u64,
     pub payload: Vec<u8>,
+    pub descriptor_changed: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

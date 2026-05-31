@@ -385,6 +385,7 @@ where
                         index,
                         term,
                         payload: Vec::new(),
+                        descriptor_changed: false,
                     });
                 }
                 openraft::EntryPayload::Normal(proposal) => {
@@ -409,6 +410,7 @@ where
                                 index,
                                 term,
                                 payload: encode_metadata_response(&response)?,
+                                descriptor_changed: false,
                             });
                         }
                         ProposalPayloadKind::RegionDescriptor => {
@@ -421,6 +423,7 @@ where
                                 index,
                                 term,
                                 payload: Vec::new(),
+                                descriptor_changed: true,
                             });
                         }
                         ProposalPayloadKind::AdminCommand => {
@@ -433,6 +436,7 @@ where
                                 index,
                                 term,
                                 payload: Vec::new(),
+                                descriptor_changed: true,
                             });
                         }
                     }
@@ -537,11 +541,16 @@ where
     {
         let before = self.engine.status().applied_index;
         let applied = self.engine.apply_openraft_entries(entries)?;
-        self.persist_if_advanced(before)?;
+        let descriptor_changed = applied.iter().any(|proposal| proposal.descriptor_changed);
+        self.persist_if_advanced(before, descriptor_changed)?;
         Ok(applied)
     }
 
-    fn persist_if_advanced(&self, before: u64) -> nokv_metastore::Result<()> {
+    fn persist_if_advanced(
+        &self,
+        before: u64,
+        descriptor_changed: bool,
+    ) -> nokv_metastore::Result<()> {
         let status = self.engine.status();
         if status.applied_index != before {
             let replay = self.engine.replay_apply(ApplyWatchReplayRequest {
@@ -553,8 +562,10 @@ where
             for event in &replay.events {
                 self.sink.save_apply_watch_event(event)?;
             }
-            if let Some(descriptor) = self.engine.region_descriptor()? {
-                self.sink.save_region_descriptor(&descriptor)?;
+            if descriptor_changed {
+                if let Some(descriptor) = self.engine.region_descriptor()? {
+                    self.sink.save_region_descriptor(&descriptor)?;
+                }
             }
             let topology_descriptors = self.engine.topology_descriptors()?;
             for descriptor in &topology_descriptors {

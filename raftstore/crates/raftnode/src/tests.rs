@@ -1076,6 +1076,7 @@ async fn persistent_applied_engine_saves_status_after_metadata_command() {
     let sink = RecordingRegionMetadataSink::default();
     let statuses = sink.statuses.clone();
     let events = sink.events.clone();
+    let descriptors = sink.descriptors.clone();
     let engine = PersistentAppliedMetadataEngine::new(
         AppliedMetadataEngine::new(7, MemoryMetadataStore::new()),
         sink,
@@ -1096,6 +1097,10 @@ async fn persistent_applied_engine_saves_status_after_metadata_command() {
     assert_eq!(
         events.lock().unwrap().as_slice()[0].keys,
         vec![b"k".to_vec()]
+    );
+    assert!(
+        descriptors.lock().unwrap().is_empty(),
+        "ordinary metadata applies must not persist unchanged descriptors"
     );
 }
 

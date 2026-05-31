@@ -45,6 +45,7 @@ rust_raftstore_metrics_addr="${NOKV_FSMETA_RUST_RAFTSTORE_METRICS_ADDR:-127.0.0.
 rust_root_service_addrs="${NOKV_FSMETA_RUST_ROOT_SERVICE_ADDRS:-127.0.0.1:2380,127.0.0.1:2381,127.0.0.1:2382}"
 rust_root_transport_addrs="${NOKV_FSMETA_RUST_ROOT_TRANSPORT_ADDRS:-127.0.0.1:2480,127.0.0.1:2481,127.0.0.1:2482}"
 rust_route_stabilize_seconds="${NOKV_FSMETA_RUST_ROUTE_STABILIZE_SECONDS:-2}"
+rust_cargo_profile="${NOKV_FSMETA_RUST_CARGO_PROFILE:-release}"
 
 case "$profile" in
 	median)
@@ -421,9 +422,23 @@ ensure_rust_distributed_tools() {
 	rust_tools_dir="$(mktemp -d "${TMPDIR:-/tmp}/nokv-fsmeta-rust-tools.XXXXXX")"
 	go build -o "$rust_tools_dir/nokv" ./cmd/nokv
 	go build -o "$rust_tools_dir/nokv-fsmeta" ./cmd/nokv-fsmeta
-	cargo build --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server
+	local profile_dir
+	case "$rust_cargo_profile" in
+		debug | dev)
+			cargo build --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server
+			profile_dir="debug"
+			;;
+		release)
+			cargo build --release --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server
+			profile_dir="release"
+			;;
+		*)
+			cargo build --profile "$rust_cargo_profile" --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server
+			profile_dir="$rust_cargo_profile"
+			;;
+	esac
 	local target_dir="${CARGO_TARGET_DIR:-$ROOT/raftstore/target}"
-	rust_raftstore_bin="$target_dir/debug/nokv-raftstore-server"
+	rust_raftstore_bin="$target_dir/$profile_dir/nokv-raftstore-server"
 	if [[ ! -x "$rust_raftstore_bin" ]]; then
 		echo "built Rust raftstore binary not found: $rust_raftstore_bin" >&2
 		exit 1

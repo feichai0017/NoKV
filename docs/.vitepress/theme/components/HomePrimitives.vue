@@ -30,8 +30,8 @@ const primitives = [
     name: 'RenameSubtree',
     sig: 'RenameSubtree(src, dst) → Result',
     desc:
-      'Cross-region atomic namespace move backed by Percolator 2PC + AssertionNotExist. The hard rename that generic KVs cannot deliver cleanly.',
-    bullets: ['2PC primary/secondary', 'AssertionNotExist', 'Cross-region atomic'],
+      'Atomic namespace move compiled into one MetadataCommand, with predicates and mutations committed through the mount raft group.',
+    bullets: ['Predicate checked', 'Atomic apply', 'Watch projected'],
   },
 ]
 </script>

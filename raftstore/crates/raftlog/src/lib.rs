@@ -50,6 +50,8 @@ pub struct SegmentedRaftLog {
     path: PathBuf,
     marker_path: PathBuf,
     file: File,
+    entries: Vec<LogEntry>,
+    purged: Option<LogMarker>,
 }
 
 impl SegmentedRaftLog {
@@ -58,10 +60,14 @@ impl SegmentedRaftLog {
         let path = dir.as_ref().join("000001.log");
         let marker_path = dir.as_ref().join("purged.meta");
         let file = open_log_file(&path)?;
+        let purged = read_marker(&marker_path)?;
+        let entries = read_entries_from_path(&path, purged.map(|marker| marker.index))?;
         Ok(Self {
             path,
             marker_path,
             file,
+            entries,
+            purged,
         })
     }
 
@@ -73,6 +79,7 @@ impl SegmentedRaftLog {
         for entry in entries {
             write_entry(&mut self.file, entry)?;
         }
+        self.entries.extend_from_slice(entries);
         Ok(())
     }
 
@@ -82,18 +89,7 @@ impl SegmentedRaftLog {
     }
 
     pub fn recover(&self) -> Result<Vec<LogEntry>> {
-        let mut file = File::open(&self.path)?;
-        let mut out = Vec::new();
-        let purged = self.last_purged()?.map(|marker| marker.index);
-        loop {
-            let offset = file.stream_position()?;
-            match read_entry(&mut file, offset)? {
-                Some(entry) if purged.is_none_or(|index| entry.index > index) => out.push(entry),
-                Some(_) => {}
-                None => break,
-            }
-        }
-        Ok(out)
+        Ok(self.entries.clone())
     }
 
     pub fn truncate_since(&mut self, index: u64) -> Result<()> {
@@ -111,16 +107,18 @@ impl SegmentedRaftLog {
             _ => marker,
         };
         write_marker(&self.marker_path, marker)?;
+        self.purged = Some(marker);
         let retained = self
-            .recover()?
-            .into_iter()
+            .entries
+            .iter()
             .filter(|entry| entry.index > marker.index)
+            .cloned()
             .collect::<Vec<_>>();
         self.rewrite_entries(&retained)
     }
 
     pub fn last_purged(&self) -> Result<Option<LogMarker>> {
-        read_marker(&self.marker_path)
+        Ok(self.purged)
     }
 
     fn prepare_append(&self, entries: &[LogEntry]) -> Result<Option<Vec<LogEntry>>> {
@@ -145,8 +143,8 @@ impl SegmentedRaftLog {
             }
         }
 
-        let recovered = self.recover()?;
-        let prefix = recovered
+        let prefix = self
+            .entries
             .iter()
             .take_while(|entry| entry.index < first.index)
             .cloned()
@@ -168,7 +166,7 @@ impl SegmentedRaftLog {
                 });
             }
         }
-        if prefix.len() != recovered.len() {
+        if prefix.len() != self.entries.len() {
             Ok(Some(prefix))
         } else {
             Ok(None)
@@ -191,8 +189,23 @@ impl SegmentedRaftLog {
         std::fs::rename(&tmp_path, &self.path)?;
         sync_parent(&self.path)?;
         self.file = open_log_file(&self.path)?;
+        self.entries = entries.to_vec();
         Ok(())
     }
+}
+
+fn read_entries_from_path(path: &Path, purged_index: Option<u64>) -> Result<Vec<LogEntry>> {
+    let mut file = File::open(path)?;
+    let mut out = Vec::new();
+    loop {
+        let offset = file.stream_position()?;
+        match read_entry(&mut file, offset)? {
+            Some(entry) if purged_index.is_none_or(|index| entry.index > index) => out.push(entry),
+            Some(_) => {}
+            None => break,
+        }
+    }
+    Ok(out)
 }
 
 fn open_log_file(path: &Path) -> Result<File> {
@@ -380,8 +393,10 @@ mod tests {
         file.seek(SeekFrom::End(-1)).unwrap();
         file.write_all(&[0xff]).unwrap();
         drop(file);
-        let log = SegmentedRaftLog::open(dir.path()).unwrap();
-        assert!(matches!(log.recover(), Err(Error::Corrupt { .. })));
+        assert!(matches!(
+            SegmentedRaftLog::open(dir.path()),
+            Err(Error::Corrupt { .. })
+        ));
     }
 
     #[test]

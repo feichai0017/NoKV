@@ -15,20 +15,20 @@ const layers = [
   },
   {
     tier: 'L2',
-    name: 'meta/root · coordinator · raftstore · percolator',
-    role: 'Authority truth + routing + multi-Raft + MVCC 2PC',
+    name: 'meta/root · coordinator · Rust raftstore',
+    role: 'Root truth + routing + mount-scoped replicated execution',
     parts: [
-      'Mount / SubtreeAuthority / SnapshotEpoch / QuotaFence',
-      'Route · TSO · WatchRootEvents',
-      'Apply observer + transport',
-      'Prewrite / Commit / AssertionNotExist',
+      'Mount / membership / topology truth',
+      'Route · ID grants · WatchRootEvents',
+      'MetadataPlane · RaftAdmin · transport',
+      'MetadataCommand atomic apply',
     ],
   },
   {
     tier: 'L3',
-    name: 'storage/kv · pebble · holt',
-    role: 'Replaceable raw ordered KV backend',
-    parts: ['storage/kv contract', 'Pebble default', 'Holt target adapter', 'VFS / file support'],
+    name: 'Pebble local · Holt distributed state',
+    role: 'Concrete metadata storage engines below runtime boundaries',
+    parts: ['Pebble demo runtime', 'Holt multi-tree state machine', 'Raft log', 'Snapshot / apply state'],
   },
 ]
 </script>
@@ -41,9 +41,10 @@ const layers = [
         Three layers. Hard boundaries. Enforced in code.
       </h2>
       <p class="nokv-lead">
-        The fsmeta executor consumes a narrow <code>fsmeta/backend.Store</code>.
-        Runtime adapters own local or raftstore wiring. Lower layers do not import
-        fsmeta. The raw storage backend never learns that a namespace exists.
+        The fsmeta executor emits narrow <code>MetadataCommand</code> objects.
+        Runtime adapters own local or raftstore wiring. Root truth and serving
+        routes stay separate, and the Rust data plane applies metadata commands
+        without importing fsmeta semantics.
       </p>
     </div>
 

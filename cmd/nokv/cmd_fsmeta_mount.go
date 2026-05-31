@@ -12,6 +12,7 @@ import (
 	"time"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
@@ -24,6 +25,7 @@ import (
 
 type mountRegistrationCoordinator interface {
 	GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error)
+	GetRegionByKey(context.Context, *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error)
 	AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error)
 	PublishRootEvent(context.Context, *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error)
 }
@@ -83,6 +85,12 @@ func runFSMetaMountRegisterCmd(w io.Writer, args []string) error {
 	defer func() { _ = coordRPC.Close() }()
 	registration, err := registerFSMetaMount(ctx, coordRPC, opts)
 	if err != nil {
+		return err
+	}
+	if err := waitFSMetaMountVisible(ctx, coordRPC, registration, 100*time.Millisecond); err != nil {
+		return err
+	}
+	if err := waitFSMetaMountRouteVisible(ctx, coordRPC, registration, 100*time.Millisecond); err != nil {
 		return err
 	}
 	if registration.AlreadyExists {
@@ -177,6 +185,97 @@ func lookupFSMetaMount(ctx context.Context, coord mountRegistrationCoordinator, 
 		return nil, fmt.Errorf("get fsmeta mount %q returned no mount", mountID)
 	}
 	return resp.GetMount(), nil
+}
+
+func waitFSMetaMountVisible(ctx context.Context, coord mountRegistrationCoordinator, registration fsmetaMountRegistration, interval time.Duration) error {
+	if coord == nil {
+		return fmt.Errorf("fsmeta mount visibility wait requires coordinator client")
+	}
+	if registration.MountID == "" {
+		return fmt.Errorf("fsmeta mount visibility wait requires mount id")
+	}
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
+	opts := fsmetaMountRegisterOptions{
+		MountID:       registration.MountID,
+		MountKeyID:    registration.MountKeyID,
+		RootInode:     registration.RootInode,
+		SchemaVersion: registration.SchemaVersion,
+	}
+	for {
+		existing, err := lookupFSMetaMount(ctx, coord, registration.MountID)
+		if err == nil && existing != nil {
+			_, err = existingFSMetaMountRegistration(existing, opts)
+			return err
+		}
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("wait for fsmeta mount %q to become visible: %w", registration.MountID, ctx.Err())
+			default:
+			}
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return fmt.Errorf("wait for fsmeta mount %q to become visible: %w", registration.MountID, ctx.Err())
+		case <-timer.C:
+		}
+	}
+}
+
+func waitFSMetaMountRouteVisible(ctx context.Context, coord mountRegistrationCoordinator, registration fsmetaMountRegistration, interval time.Duration) error {
+	if coord == nil {
+		return fmt.Errorf("fsmeta mount route wait requires coordinator client")
+	}
+	if registration.MountID == "" || registration.MountKeyID == 0 || registration.RootInode == 0 {
+		return fmt.Errorf("fsmeta mount route wait requires registered mount identity")
+	}
+	if interval <= 0 {
+		interval = 100 * time.Millisecond
+	}
+	key, err := layout.EncodeInodeKey(model.MountIdentity{
+		MountID:    model.MountID(registration.MountID),
+		MountKeyID: model.MountKeyID(registration.MountKeyID),
+	}, model.InodeID(registration.RootInode))
+	if err != nil {
+		return err
+	}
+	for {
+		resp, err := coord.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{
+			Key:       key,
+			Freshness: coordpb.Freshness_FRESHNESS_STRONG,
+		})
+		if err == nil && resp != nil && !resp.GetNotFound() && resp.GetRegionDescriptor() != nil {
+			return nil
+		}
+		if err != nil {
+			select {
+			case <-ctx.Done():
+				return fmt.Errorf("wait for fsmeta mount %q route to become visible: %w", registration.MountID, ctx.Err())
+			default:
+			}
+		}
+		timer := time.NewTimer(interval)
+		select {
+		case <-ctx.Done():
+			if !timer.Stop() {
+				select {
+				case <-timer.C:
+				default:
+				}
+			}
+			return fmt.Errorf("wait for fsmeta mount %q route to become visible: %w", registration.MountID, ctx.Err())
+		case <-timer.C:
+		}
+	}
 }
 
 func existingFSMetaMountRegistration(existing *coordpb.MountInfo, opts fsmetaMountRegisterOptions) (fsmetaMountRegistration, error) {
