@@ -693,11 +693,11 @@ where
         if split.split_key.is_empty() {
             return Err(invalid_raft_command("split key is required"));
         }
-        let mut descriptor = self.region_descriptor()?.ok_or_else(|| {
+        let parent = self.region_descriptor()?.ok_or_else(|| {
             invalid_raft_command("split parent descriptor must be installed before apply")
         })?;
-        if split.split_key <= descriptor.start_key
-            || (!descriptor.end_key.is_empty() && split.split_key >= descriptor.end_key)
+        if split.split_key <= parent.start_key
+            || (!parent.end_key.is_empty() && split.split_key >= parent.end_key)
         {
             return Err(invalid_raft_command(
                 "split key must be inside parent descriptor range",
@@ -714,16 +714,25 @@ where
                 "split child start key must equal split key",
             ));
         }
-        if child.end_key != descriptor.end_key {
+        if child.end_key != parent.end_key {
             return Err(invalid_raft_command(
                 "split child end key must equal original parent end key",
             ));
         }
 
+        let mut descriptor = parent.clone();
         descriptor.end_key = split.split_key;
         let epoch = descriptor.epoch.get_or_insert_with(Default::default);
         epoch.version = epoch.version.saturating_add(1);
         descriptor.hash.clear();
+        if let Some(parent_epoch) = parent.epoch {
+            descriptor.lineage.push(metapb::DescriptorLineageRef {
+                region_id: parent.region_id,
+                epoch: Some(parent_epoch),
+                hash: parent.hash,
+                kind: metapb::DescriptorLineageKind::SplitParent as i32,
+            });
+        }
         self.apply_region_descriptor_at(term, index, descriptor)
     }
 
@@ -1644,6 +1653,16 @@ where
         descriptor: &metapb::RegionDescriptor,
     ) -> Result<(), Error> {
         self.propose(Proposal::from_region_descriptor(descriptor)?)
+            .await
+            .map(|_| ())
+    }
+
+    pub async fn propose_admin_command(
+        &self,
+        region_id: RegionId,
+        command: &raftpb::AdminCommand,
+    ) -> Result<(), Error> {
+        self.propose(Proposal::from_admin_command(region_id, command)?)
             .await
             .map(|_| ())
     }

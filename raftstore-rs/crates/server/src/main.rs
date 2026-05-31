@@ -11,6 +11,7 @@ use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
+use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
     AppliedKvEngine, ApplyStatusProvider, OpenRaftRegion, PersistentAppliedKvEngine,
     RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
@@ -571,8 +572,17 @@ impl HoltRangeController {
             true,
         )
         .await?;
+        let split_command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Split as i32,
+            split: Some(raftpb::SplitCommand {
+                parent_region_id: operation.region_id,
+                split_key: operation.split_key.clone(),
+                child: Some(right.clone()),
+            }),
+            ..Default::default()
+        };
         parent
-            .propose_region_descriptor(&left)
+            .propose_admin_command(operation.region_id, &split_command)
             .await
             .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
         self.open_split_child_region(
