@@ -133,8 +133,10 @@ coordinator    rebuildable routing, TSO, discovery, and root-event serving
 ```
 
 The data plane target is `raftstore`, not the deleted Go `raftstore` /
-`txn` / `local` stack. `raftstore` keeps the existing protobuf wire contract
-while moving execution to Rust, OpenRaft, and Holt multi-tree storage.
+`txn` / `local` stack. `raftstore` exposes the metadata-native protobuf
+boundary while moving execution to Rust, OpenRaft, and Holt multi-tree storage.
+Legacy StoreKV compatibility is internal test surface only during the
+transition.
 
 Operational entrypoints are intentionally split:
 

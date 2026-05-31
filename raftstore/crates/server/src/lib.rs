@@ -1,8 +1,8 @@
-//! Tonic services for the Rust raftstore data plane.
+//! Tonic services for the Rust raftstore metadata data plane.
 //!
-//! This crate owns the external gRPC boundary. It keeps the existing NoKV
-//! protobuf contract intact while the Rust state-machine and replication layers
-//! are brought up behind the service.
+//! This crate owns the external gRPC boundary for the metadata-native path.
+//! StoreKV remains compiled only as an internal compatibility test surface while
+//! the Rust state-machine and replication layers converge on MetadataPlane.
 
 mod admin;
 mod admission;
@@ -28,18 +28,13 @@ pub use metadata::{
 };
 pub use metadata_plane::MetadataPlaneService;
 pub use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdminServer;
-pub use nokv_proto::nokv::kv::v1::store_kv_server::StoreKvServer;
 pub use nokv_proto::nokv::metadata::v1::metadata_plane_server::MetadataPlaneServer;
 pub use publisher::{EmptyTopologyPublisher, TopologyPublishOutcome, TopologyPublisher};
 pub use region_router::{
-    serve_with_multi_region_services, MultiRegionMetadataPlaneService, MultiRegionRaftAdminService,
-    MultiRegionStoreKvService,
+    serve_with_metadata_region_services, MultiRegionMetadataPlaneService,
+    MultiRegionRaftAdminService,
 };
-pub use serve::{
-    openraft_region_service_pair, serve_with_openraft_region_admission_and_peer_endpoints,
-    serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics,
-};
-pub use service::StoreKvService;
+pub use serve::openraft_metadata_service_pair;
 pub use topology::root_event_transition_id;
 
 pub(crate) const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;

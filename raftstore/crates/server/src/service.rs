@@ -1,24 +1,38 @@
 use std::sync::{Arc, Mutex};
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
+#[cfg(test)]
 use nokv_mvcc::MvccStore;
+#[cfg(test)]
 use nokv_proto::nokv::admin::v1 as adminpb;
+#[cfg(test)]
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
+#[cfg(test)]
 use nokv_raftnode::{ApplyWatchProvider, RaftCommandExecutor};
+#[cfg(test)]
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::{Request, Response, Status};
+use tonic::Status;
+#[cfg(test)]
+use tonic::{Request, Response};
 
 use crate::admission::RegionAdmission;
+#[cfg(test)]
 use crate::execution::ExecutionRuntime;
+#[cfg(test)]
 use crate::{
-    internal_error, AppliedRegionDescriptorProvider, RaftRuntimeStatus, RaftRuntimeStatusProvider,
-    DEFAULT_APPLY_WATCH_BUFFER, DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE,
+    internal_error, AppliedRegionDescriptorProvider, RaftRuntimeStatusProvider,
+    DEFAULT_APPLY_WATCH_BUFFER,
+};
+use crate::{
+    RaftRuntimeStatus, DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE,
     DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE,
 };
 
+#[cfg(test)]
 fn service_physical_time_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -26,6 +40,7 @@ fn service_physical_time_millis() -> u64 {
         .unwrap_or_default()
 }
 
+#[cfg(test)]
 fn check_txn_status_request_with_service_time(
     req: &kvpb::CheckTxnStatusRequest,
 ) -> kvpb::CheckTxnStatusRequest {
@@ -36,6 +51,7 @@ fn check_txn_status_request_with_service_time(
     out
 }
 
+#[cfg(test)]
 fn txn_heart_beat_request_with_service_time(
     req: &kvpb::TxnHeartBeatRequest,
 ) -> kvpb::TxnHeartBeatRequest {
@@ -55,6 +71,7 @@ pub(crate) fn trim_scan_response_to_region(
         .retain(|kv| admission.key_in_range(kv.key.as_slice()));
 }
 
+#[cfg(test)]
 #[derive(Clone)]
 pub struct StoreKvService<E = MvccStore> {
     engine: E,
@@ -62,6 +79,7 @@ pub struct StoreKvService<E = MvccStore> {
     execution: ExecutionRuntime,
 }
 
+#[cfg(test)]
 impl<E> StoreKvService<E> {
     pub fn new(engine: E) -> Self {
         Self::with_admission(engine, RegionAdmission::default())
@@ -96,6 +114,7 @@ impl<E> StoreKvService<E> {
     }
 }
 
+#[cfg(test)]
 impl<E> StoreKvService<E>
 where
     E: RaftCommandExecutor,
@@ -132,6 +151,7 @@ where
     }
 }
 
+#[cfg(test)]
 macro_rules! raft_cmd_or_region_error {
     ($outcome:expr, $response_type:ident) => {
         match $outcome {
@@ -146,6 +166,7 @@ macro_rules! raft_cmd_or_region_error {
     };
 }
 
+#[cfg(test)]
 impl<E> StoreKvService<E>
 where
     E: AppliedRegionDescriptorProvider + RaftRuntimeStatusProvider,
@@ -261,6 +282,7 @@ fn admission_state_poisoned() -> Status {
     Status::internal("region admission state mutex poisoned")
 }
 
+#[cfg(test)]
 #[tonic::async_trait]
 impl<E> kvpb::store_kv_server::StoreKv for StoreKvService<E>
 where

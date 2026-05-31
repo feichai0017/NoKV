@@ -129,6 +129,7 @@ impl RegionAdmission {
         self.admit_keys(context, keys, true, AdmissionRole::Read)
     }
 
+    #[cfg(test)]
     pub(crate) fn admit_leader_optional_keys<'a, I>(
         &self,
         context: Option<&kvpb::Context>,

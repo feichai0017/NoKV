@@ -16,11 +16,10 @@ use nokv_raftnode::{
     TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
-    apply_status_from_holt, openraft_region_service_pair, serve_with_multi_region_services,
+    apply_status_from_holt, openraft_metadata_service_pair, serve_with_metadata_region_services,
     EmptyRegionDescriptorSink, EmptyRestartDiagnostics, EmptyTopologyPublisher,
     HoltRegionMetadataSink, MultiRegionMetadataPlaneService, MultiRegionRaftAdminService,
-    MultiRegionStoreKvService, PeerEndpointCatalog, RaftRuntimeStatusProvider, RegionAdmission,
-    TopologyPublisher,
+    PeerEndpointCatalog, RaftRuntimeStatusProvider, RegionAdmission, TopologyPublisher,
 };
 
 use crate::coordinator::{
@@ -147,7 +146,6 @@ pub(crate) struct HoltRangeController {
     pub(crate) coordinator: Option<CoordinatorHeartbeatConfig>,
     pub(crate) mvcc: HoltMvccStore,
     pub(crate) transport: nokv_raftnode::TonicRaftTransportRegistry,
-    pub(crate) store_services: MultiRegionStoreKvService<HoltRegion>,
     pub(crate) metadata_services: MultiRegionMetadataPlaneService<HoltRegion>,
     pub(crate) admin_services: MultiRegionRaftAdminService<HoltRegion, HoltRegionMetadataSink>,
     pub(crate) hosted_regions: HostedRegionRegistry<HoltApplyEngine>,
@@ -563,7 +561,7 @@ impl HoltRangeController {
         }
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)
             .map_err(|err| tonic::Status::invalid_argument(err.to_string()))?;
-        let (store, metadata, admin) = openraft_region_service_pair(
+        let (metadata, admin) = openraft_metadata_service_pair(
             region.clone(),
             admission,
             self.peer_endpoints.clone(),
@@ -571,8 +569,6 @@ impl HoltRangeController {
             self.topology_publisher.clone(),
             Arc::new(self.mvcc.clone()),
         );
-        self.store_services
-            .insert_region(identity.region_id, store)?;
         self.metadata_services
             .insert_region(identity.region_id, metadata)?;
         self.admin_services
@@ -591,7 +587,6 @@ impl HoltRangeController {
             .hosted_regions
             .remove(region_id)
             .map_err(internal_status)?;
-        self.store_services.remove_region(region_id)?;
         self.metadata_services.remove_region(region_id)?;
         self.admin_services.remove_region(region_id)?;
         self.transport.unregister(region_id);
@@ -941,7 +936,6 @@ pub(crate) async fn serve_holt_regions(
     );
     let topology_publisher =
         coordinator_topology_publisher(coordinator.clone(), Some(mvcc.clone()));
-    let mut store_services = Vec::with_capacity(identities.len());
     let mut metadata_services = Vec::with_capacity(identities.len());
     let mut admin_services = Vec::with_capacity(identities.len());
     let mut hosted_regions = Vec::with_capacity(identities.len());
@@ -982,7 +976,7 @@ pub(crate) async fn serve_holt_regions(
             region.initialize_members(members).await?;
             recovered_leadership.push((identity, region.clone()));
         }
-        let (store_service, metadata_service, admin_service) = openraft_region_service_pair(
+        let (metadata_service, admin_service) = openraft_metadata_service_pair(
             region.clone(),
             admission,
             peer_endpoints.clone(),
@@ -990,7 +984,6 @@ pub(crate) async fn serve_holt_regions(
             topology_publisher.clone(),
             Arc::new(EmptyRestartDiagnostics),
         );
-        store_services.push((identity.region_id, store_service));
         metadata_services.push((identity.region_id, metadata_service));
         admin_services.push((identity.region_id, admin_service));
         hosted_regions.push((identity, region));
@@ -1007,7 +1000,6 @@ pub(crate) async fn serve_holt_regions(
     );
     let hosted_region_registry = HostedRegionRegistry::new(hosted_regions)?;
     spawn_recovered_region_leadership_retries(recovered_leadership);
-    let store_router = MultiRegionStoreKvService::new(store_services)?;
     let metadata_router = MultiRegionMetadataPlaneService::new(metadata_services)?;
     let admin_router = MultiRegionRaftAdminService::new(admin_services)?
         .with_restart_diagnostics(Arc::new(mvcc.clone()));
@@ -1025,7 +1017,6 @@ pub(crate) async fn serve_holt_regions(
         coordinator: coordinator.clone(),
         mvcc: mvcc.clone(),
         transport: transport.clone(),
-        store_services: store_router.clone(),
         metadata_services: metadata_router.clone(),
         admin_services: admin_router.clone(),
         hosted_regions: hosted_region_registry.clone(),
@@ -1042,8 +1033,7 @@ pub(crate) async fn serve_holt_regions(
         Some(range_controller.clone()),
     );
     spawn_pending_topology_retries(coordinator, mvcc.clone(), addr, Some(range_controller));
-    serve_with_multi_region_services(addr, store_router, metadata_router, admin_router, transport)
-        .await?;
+    serve_with_metadata_region_services(addr, metadata_router, admin_router, transport).await?;
     Ok(())
 }
 
@@ -1177,7 +1167,6 @@ pub(crate) async fn serve_memory_regions(
         "starting raftstore server with multi-region in-memory MVCC"
     );
     let topology_publisher = coordinator_topology_publisher(coordinator.clone(), None);
-    let mut store_services = Vec::with_capacity(identities.len());
     let mut metadata_services = Vec::with_capacity(identities.len());
     let mut admin_services = Vec::with_capacity(identities.len());
     let mut hosted_regions = Vec::with_capacity(identities.len());
@@ -1194,7 +1183,7 @@ pub(crate) async fn serve_memory_regions(
         let log_dir = raft_log_dir_for_region(None, identity, multi_region, temp_log_dir)?;
         let region = open_openraft_region(identity, &advertised_addr, log_dir, engine).await?;
         transport.register(identity.region_id, region.raft_handle());
-        let (store_service, metadata_service, admin_service) = openraft_region_service_pair(
+        let (metadata_service, admin_service) = openraft_metadata_service_pair(
             region.clone(),
             admission,
             peer_endpoints.clone(),
@@ -1202,7 +1191,6 @@ pub(crate) async fn serve_memory_regions(
             topology_publisher.clone(),
             Arc::new(EmptyRestartDiagnostics),
         );
-        store_services.push((identity.region_id, store_service));
         metadata_services.push((identity.region_id, metadata_service));
         admin_services.push((identity.region_id, admin_service));
         hosted_regions.push((identity, region));
@@ -1232,9 +1220,8 @@ pub(crate) async fn serve_memory_regions(
         None,
         None,
     );
-    serve_with_multi_region_services(
+    serve_with_metadata_region_services(
         addr,
-        MultiRegionStoreKvService::new(store_services)?,
         MultiRegionMetadataPlaneService::new(metadata_services)?,
         MultiRegionRaftAdminService::new(admin_services)?,
         transport,

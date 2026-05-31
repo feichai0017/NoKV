@@ -1,4 +1,4 @@
-//! Standalone Rust raftstore server entrypoint for local compatibility tests.
+//! Standalone Rust metadata raftstore server entrypoint.
 
 mod bootstrap;
 mod coordinator;

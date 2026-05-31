@@ -1,6 +1,7 @@
 use super::*;
 use crate::execution::ExecutionRuntime;
-use crate::service::{chunk_apply_watch_keys, RegionAdmissionState};
+use crate::serve::serve_with_openraft_region_admission_and_peer_endpoints;
+use crate::service::{chunk_apply_watch_keys, RegionAdmissionState, StoreKvService};
 use adminpb::raft_admin_server::RaftAdmin;
 use kvpb::store_kv_server::StoreKv;
 use nokv_holtstore::HoltMvccStore;

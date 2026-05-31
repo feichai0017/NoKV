@@ -2,8 +2,8 @@
 # SPDX-License-Identifier: Apache-2.0
 
 # Local fsmeta demo. The main product path in this repository is now fsmeta; the
-# distributed Rust data plane is developed under raftstore and is not wired
-# into the default Compose stack until its fsmeta runtime adapter is complete.
+# distributed Rust data plane is developed under raftstore and is not the default
+# Compose stack until the distributed smoke and benchmark gates are stable.
 
 services:
   fsmeta:

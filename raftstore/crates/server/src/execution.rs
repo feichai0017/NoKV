@@ -79,6 +79,7 @@ impl ExecutionRuntime {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn record_invalid(
         &self,
         class: adminpb::ExecutionAdmissionClass,

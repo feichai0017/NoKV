@@ -1,8 +1,8 @@
-//! Multi-region StoreKV/RaftAdmin routing for a single Rust raftstore process.
+//! Multi-region MetadataPlane/RaftAdmin routing for a single Rust raftstore process.
 //!
-//! The router preserves the existing protobuf contract and only selects the
-//! hosted region runtime. Authority, epoch, leader, and key-range checks remain
-//! owned by each per-region service.
+//! The main server path routes metadata-native requests. StoreKV routing remains
+//! in this module only as a compatibility test surface while fsmeta migrates to
+//! the MetadataPlane contract.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -10,16 +10,19 @@ use std::sync::{Arc, RwLock};
 
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
+#[cfg(test)]
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_raftnode::{ApplyWatchProvider, MetadataCommandExecutor, RaftCommandExecutor};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status};
 
+#[cfg(test)]
+use crate::service::StoreKvService;
 use crate::{
     push_missing_topology_status, AppliedRegionDescriptorProvider, EmptyRegionDescriptorSink,
     EmptyRestartDiagnostics, MetadataPlaneService, RaftAdminService, RaftMembershipAdmin,
-    RaftRuntimeStatusProvider, RegionDescriptorSink, RestartDiagnosticsProvider, StoreKvService,
+    RaftRuntimeStatusProvider, RegionDescriptorSink, RestartDiagnosticsProvider,
     DEFAULT_APPLY_WATCH_BUFFER,
 };
 
@@ -98,6 +101,7 @@ fn region_service_registry_poisoned() -> Status {
     Status::internal("region service registry lock poisoned")
 }
 
+#[cfg(test)]
 fn store_region_lookup<T>(
     regions: &RegionServiceRegistry<T>,
     context: Option<&kvpb::Context>,
@@ -167,11 +171,13 @@ fn validate_region_service_id(region_id: u64) -> Result<(), Status> {
 /// `Context.region_id`, and the server selects the matching hosted region
 /// before the per-region admission gate performs epoch, leader, and key-range
 /// checks.
+#[cfg(test)]
 #[derive(Clone)]
 pub struct MultiRegionStoreKvService<E> {
     regions: RegionServiceRegistry<StoreKvService<E>>,
 }
 
+#[cfg(test)]
 impl<E> MultiRegionStoreKvService<E> {
     pub fn new(
         regions: impl IntoIterator<Item = (u64, StoreKvService<E>)>,
@@ -185,10 +191,6 @@ impl<E> MultiRegionStoreKvService<E> {
         self.regions.insert_region(region_id, service)
     }
 
-    pub fn remove_region(&self, region_id: u64) -> Result<Option<StoreKvService<E>>, Status> {
-        self.regions.remove_region(region_id)
-    }
-
     fn service_for_context(
         &self,
         context: Option<&kvpb::Context>,
@@ -200,6 +202,7 @@ impl<E> MultiRegionStoreKvService<E> {
     }
 }
 
+#[cfg(test)]
 macro_rules! delegate_store_kv_request {
     ($self:expr, $request:expr, $method:ident, $response_type:ident) => {{
         let request = $request.into_inner();
@@ -213,6 +216,7 @@ macro_rules! delegate_store_kv_request {
     }};
 }
 
+#[cfg(test)]
 #[tonic::async_trait]
 impl<E> kvpb::store_kv_server::StoreKv for MultiRegionStoreKvService<E>
 where
@@ -650,9 +654,8 @@ fn merge_last_admission(
     }
 }
 
-pub async fn serve_with_multi_region_services<E, S, D>(
+pub async fn serve_with_metadata_region_services<E, S, D>(
     addr: SocketAddr,
-    store_service: MultiRegionStoreKvService<E>,
     metadata_service: MultiRegionMetadataPlaneService<E>,
     admin_service: MultiRegionRaftAdminService<S, D>,
     transport: nokv_raftnode::TonicRaftTransportRegistry,
@@ -667,7 +670,6 @@ where
     D: RegionDescriptorSink,
 {
     tonic::transport::Server::builder()
-        .add_service(crate::StoreKvServer::new(store_service))
         .add_service(crate::MetadataPlaneServer::new(metadata_service))
         .add_service(crate::RaftAdminServer::new(admin_service))
         .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
