@@ -46,7 +46,10 @@ fn txn_heart_beat_request_with_service_time(
     out
 }
 
-fn trim_scan_response_to_region(admission: &RegionAdmission, response: &mut kvpb::ScanResponse) {
+pub(crate) fn trim_scan_response_to_region(
+    admission: &RegionAdmission,
+    response: &mut kvpb::ScanResponse,
+) {
     response
         .kvs
         .retain(|kv| admission.key_in_range(kv.key.as_slice()));
@@ -925,7 +928,7 @@ where
     }
 }
 
-fn header_from_context(context: &kvpb::Context) -> raftpb::CmdHeader {
+pub(crate) fn header_from_context(context: &kvpb::Context) -> raftpb::CmdHeader {
     let peer = context.peer.as_ref();
     raftpb::CmdHeader {
         region_id: context.region_id,
@@ -940,11 +943,11 @@ fn header_from_context(context: &kvpb::Context) -> raftpb::CmdHeader {
     }
 }
 
-fn raft_payload_error(operation: &str, detail: &str) -> Status {
+pub(crate) fn raft_payload_error(operation: &str, detail: &str) -> Status {
     Status::internal(format!("{operation} raft payload error: {detail}"))
 }
 
-fn matching_apply_watch_keys(keys: &[Vec<u8>], prefix: &[u8]) -> Vec<Vec<u8>> {
+pub(crate) fn matching_apply_watch_keys(keys: &[Vec<u8>], prefix: &[u8]) -> Vec<Vec<u8>> {
     keys.iter()
         .filter(|key| prefix.is_empty() || key.starts_with(prefix))
         .cloned()

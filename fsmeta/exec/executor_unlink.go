@@ -179,9 +179,9 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 		result = attemptResult
 		mutations = append(mutations, &backend.Mutation{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[1]), Value: parentValue})
 		if len(mutations) == len(predicates) {
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return model.RemoveResult{}, err
 	}
@@ -292,9 +292,9 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 			atomicValueEquals(inodeKey, inodeValue),
 		}
 		if len(quotaMutations) == 0 {
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}

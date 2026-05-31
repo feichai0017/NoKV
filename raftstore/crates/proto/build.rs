@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         "meta/recovery.proto",
         "meta/root.proto",
         "coordinator/coordinator.proto",
+        "metadata/metadata.proto",
         "kv/kv.proto",
         "raft/cmd.proto",
         "admin/admin.proto",

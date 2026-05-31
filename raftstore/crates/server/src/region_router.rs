@@ -11,14 +11,16 @@ use std::sync::{Arc, RwLock};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
-use nokv_raftnode::{ApplyWatchProvider, RaftCommandExecutor};
+use nokv_proto::nokv::metadata::v1 as metadatapb;
+use nokv_raftnode::{ApplyWatchProvider, MetadataCommandExecutor, RaftCommandExecutor};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status};
 
 use crate::{
     push_missing_topology_status, AppliedRegionDescriptorProvider, EmptyRegionDescriptorSink,
-    EmptyRestartDiagnostics, RaftAdminService, RaftMembershipAdmin, RaftRuntimeStatusProvider,
-    RegionDescriptorSink, RestartDiagnosticsProvider, StoreKvService, DEFAULT_APPLY_WATCH_BUFFER,
+    EmptyRestartDiagnostics, MetadataPlaneService, RaftAdminService, RaftMembershipAdmin,
+    RaftRuntimeStatusProvider, RegionDescriptorSink, RestartDiagnosticsProvider, StoreKvService,
+    DEFAULT_APPLY_WATCH_BUFFER,
 };
 
 enum RegionServiceLookup<T> {
@@ -99,6 +101,25 @@ fn region_service_registry_poisoned() -> Status {
 fn store_region_lookup<T>(
     regions: &RegionServiceRegistry<T>,
     context: Option<&kvpb::Context>,
+) -> Result<RegionServiceLookup<T>, Status>
+where
+    T: Clone,
+{
+    let context = context.ok_or_else(|| Status::invalid_argument("context is required"))?;
+    if context.region_id == 0 {
+        return Err(Status::invalid_argument("region id is required"));
+    }
+    match regions.get_region(context.region_id)? {
+        Some(region) => Ok(RegionServiceLookup::Hosted(region)),
+        None => Ok(RegionServiceLookup::Missing(region_not_found_error(
+            context.region_id,
+        ))),
+    }
+}
+
+fn metadata_region_lookup<T>(
+    regions: &RegionServiceRegistry<T>,
+    context: Option<&metadatapb::MetadataContext>,
 ) -> Result<RegionServiceLookup<T>, Status>
 where
     T: Clone,
@@ -319,6 +340,132 @@ where
     }
 }
 
+#[derive(Clone)]
+pub struct MultiRegionMetadataPlaneService<E> {
+    regions: RegionServiceRegistry<MetadataPlaneService<E>>,
+}
+
+impl<E> MultiRegionMetadataPlaneService<E> {
+    pub fn new(
+        regions: impl IntoIterator<Item = (u64, MetadataPlaneService<E>)>,
+    ) -> Result<Self, Status> {
+        Ok(Self {
+            regions: RegionServiceRegistry::new(regions)?,
+        })
+    }
+
+    pub fn insert_region(
+        &self,
+        region_id: u64,
+        service: MetadataPlaneService<E>,
+    ) -> Result<(), Status> {
+        self.regions.insert_region(region_id, service)
+    }
+
+    pub fn remove_region(&self, region_id: u64) -> Result<Option<MetadataPlaneService<E>>, Status> {
+        self.regions.remove_region(region_id)
+    }
+
+    fn service_for_context(
+        &self,
+        context: Option<&metadatapb::MetadataContext>,
+    ) -> Result<RegionServiceLookup<MetadataPlaneService<E>>, Status>
+    where
+        MetadataPlaneService<E>: Clone,
+    {
+        metadata_region_lookup(&self.regions, context)
+    }
+}
+
+macro_rules! delegate_metadata_request {
+    ($self:expr, $request:expr, $method:ident, $response_type:ident) => {{
+        let request = $request.into_inner();
+        match $self.service_for_context(request.context.as_ref())? {
+            RegionServiceLookup::Hosted(service) => service.$method(Request::new(request)).await,
+            RegionServiceLookup::Missing(region_error) => {
+                Ok(Response::new(metadatapb::$response_type {
+                    region_error: Some(region_error),
+                    ..Default::default()
+                }))
+            }
+        }
+    }};
+}
+
+#[tonic::async_trait]
+impl<E> metadatapb::metadata_plane_server::MetadataPlane for MultiRegionMetadataPlaneService<E>
+where
+    E: AppliedRegionDescriptorProvider
+        + ApplyWatchProvider
+        + MetadataCommandExecutor
+        + RaftCommandExecutor
+        + RaftRuntimeStatusProvider,
+{
+    async fn get(
+        &self,
+        request: Request<metadatapb::MetadataGetRequest>,
+    ) -> Result<Response<metadatapb::MetadataGetResponse>, Status> {
+        delegate_metadata_request!(self, request, get, MetadataGetResponse)
+    }
+
+    async fn batch_get(
+        &self,
+        request: Request<metadatapb::MetadataBatchGetRequest>,
+    ) -> Result<Response<metadatapb::MetadataBatchGetResponse>, Status> {
+        delegate_metadata_request!(self, request, batch_get, MetadataBatchGetResponse)
+    }
+
+    async fn scan(
+        &self,
+        request: Request<metadatapb::MetadataScanRequest>,
+    ) -> Result<Response<metadatapb::MetadataScanResponse>, Status> {
+        delegate_metadata_request!(self, request, scan, MetadataScanResponse)
+    }
+
+    async fn commit_metadata(
+        &self,
+        request: Request<metadatapb::MetadataCommitRequest>,
+    ) -> Result<Response<metadatapb::MetadataCommitResponse>, Status> {
+        delegate_metadata_request!(self, request, commit_metadata, MetadataCommitResponse)
+    }
+
+    type WatchApplyStream = ReceiverStream<Result<metadatapb::MetadataWatchApplyResponse, Status>>;
+
+    async fn watch_apply(
+        &self,
+        request: Request<metadatapb::MetadataWatchApplyRequest>,
+    ) -> Result<Response<Self::WatchApplyStream>, Status> {
+        let request = request.into_inner();
+        let buffer = if request.buffer == 0 {
+            DEFAULT_APPLY_WATCH_BUFFER
+        } else {
+            request.buffer as usize
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel(buffer);
+        for service in self.regions.values()? {
+            let tx = tx.clone();
+            let request = request.clone();
+            tokio::spawn(async move {
+                let response = service.watch_apply(Request::new(request)).await;
+                let mut stream = match response {
+                    Ok(response) => response.into_inner(),
+                    Err(err) => {
+                        let _ = tx.send(Err(err)).await;
+                        return;
+                    }
+                };
+                while let Some(item) = stream.next().await {
+                    if tx.send(item).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
+}
+
 /// RaftAdmin service router for a process that hosts more than one region.
 ///
 /// Region-scoped admin requests are routed by the request `region_id`.
@@ -506,12 +653,14 @@ fn merge_last_admission(
 pub async fn serve_with_multi_region_services<E, S, D>(
     addr: SocketAddr,
     store_service: MultiRegionStoreKvService<E>,
+    metadata_service: MultiRegionMetadataPlaneService<E>,
     admin_service: MultiRegionRaftAdminService<S, D>,
     transport: nokv_raftnode::TonicRaftTransportRegistry,
 ) -> Result<(), tonic::transport::Error>
 where
     E: AppliedRegionDescriptorProvider
         + ApplyWatchProvider
+        + MetadataCommandExecutor
         + RaftCommandExecutor
         + RaftRuntimeStatusProvider,
     S: AppliedRegionDescriptorProvider + RaftMembershipAdmin + RaftRuntimeStatusProvider,
@@ -519,6 +668,7 @@ where
 {
     tonic::transport::Server::builder()
         .add_service(crate::StoreKvServer::new(store_service))
+        .add_service(crate::MetadataPlaneServer::new(metadata_service))
         .add_service(crate::RaftAdminServer::new(admin_service))
         .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
         .serve(addr)

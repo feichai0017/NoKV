@@ -5,6 +5,7 @@ use std::time::Duration;
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use prost::Message;
 use std::sync::{Arc, Mutex};
@@ -141,6 +142,53 @@ async fn openraft_region_serves_read_without_advancing_apply_index() {
         raftpb::response::Cmd::Get(get) => assert_eq!(get.value, b"v".to_vec()),
         other => panic!("unexpected read response: {other:?}"),
     }
+}
+
+#[tokio::test]
+async fn applied_kv_engine_executes_metadata_command_payload() {
+    let engine = AppliedKvEngine::new(7, MvccStore::new());
+    let response = engine
+        .execute_metadata_command(&metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
+                region_id: 7,
+                ..Default::default()
+            }),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"metadata-1".to_vec(),
+                mount: "vol".to_owned(),
+                mount_key_id: 1,
+                primary_key: b"k".to_vec(),
+                read_version: 1,
+                commit_version: 0,
+                predicates: vec![metadatapb::MetadataPredicate {
+                    key: b"k".to_vec(),
+                    kind: metadatapb::MetadataPredicateKind::NotExists as i32,
+                    ..Default::default()
+                }],
+                mutations: vec![metadatapb::MetadataMutation {
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    key: b"k".to_vec(),
+                    value: b"v".to_vec(),
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"k".to_vec()],
+            }),
+        })
+        .await
+        .unwrap();
+    let result = response.result.unwrap();
+    assert_eq!(result.region_id, 7);
+    assert_eq!(result.commit_version, 2);
+    assert_eq!(result.applied_mutations, 1);
+
+    let read = engine
+        .get(&kvpb::GetRequest {
+            key: b"k".to_vec(),
+            version: result.commit_version,
+        })
+        .unwrap();
+    assert_eq!(read.value, b"v");
+    assert!(!read.not_found);
 }
 
 #[tokio::test]

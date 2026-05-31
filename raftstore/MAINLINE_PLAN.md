@@ -26,9 +26,13 @@ there is clear evidence that one mount group is saturated. Splits should be
 directory/subtree aware and rooted in `meta/root`; they should not reintroduce a
 generic distributed KV transaction layer by accident.
 
-## Remaining Work
+## Status and Remaining Work
 
 ### Phase 1: Stable fsmeta Command Contract
+
+Status: implemented in the current mainline. `fsmeta/backend.Store` exposes
+`CommitMetadata`, Rust exposes `MetadataPlane.CommitMetadata`, and fsmeta write
+paths no longer depend on the old StoreKV/Percolator-shaped API.
 
 - Define the Rust write command around fsmeta backend needs: request id,
   mount/region context, predicate set, mutation set, and watch/snapshot
@@ -48,6 +52,11 @@ git diff --check
 ```
 
 ### Phase 2: Distributed Runtime Adapter
+
+Status: implemented as `fsmeta/runtime/raftstore`. The adapter resolves routes,
+timestamps, IDs, and mounts through coordinator, sends fsmeta commands to the
+Rust `MetadataPlane`, retries stale route/leader errors, streams watch apply
+events, and publishes snapshot epochs into root through coordinator.
 
 - Add a new `fsmeta/runtime/raftstore` adapter against the cleaned
   `fsmeta/backend.Store` contract.
@@ -81,6 +90,10 @@ go test -count=1 ./meta/root/... ./coordinator/...
 ```
 
 ### Phase 4: Reads, Watch, Snapshot, and GC
+
+Status: strong leader-routed reads, apply-ordered watch streams, and rooted
+snapshot epoch publish/retire are wired. Durable apply-history replay for
+watch resume and snapshot-driven data-plane GC are still remaining work.
 
 - Strong reads use leader freshness or a documented ReadIndex-equivalent signal.
 - Follower reads stay disabled until there is an explicit freshness proof.

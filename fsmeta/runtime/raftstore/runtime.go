@@ -1,15 +1,12 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-package local
+package raftstore
 
 import (
 	"context"
-	"path/filepath"
 	"sync"
 	"time"
-
-	cpebble "github.com/cockroachdb/pebble"
 
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
@@ -17,21 +14,19 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
-// Runtime is a complete fsmeta runtime backed by one embedded Pebble DB.
+// Runtime is a distributed fsmeta runtime backed by the Rust MetadataPlane.
 type Runtime struct {
-	DB        *cpebble.DB
-	Runner    *Runner
-	Executor  *fsmetaexec.Executor
-	Mounts    *MountCatalog
-	Quotas    *QuotaLedger
-	Watcher   *Watcher
-	Snapshots *SnapshotRegistry
+	Runner   *Runner
+	Executor *fsmetaexec.Executor
+	Routes   *CoordinatorRouteProvider
+	Mounts   *MountResolver
+	Inodes   *InodeAllocator
+	Watcher  *Watcher
+	Snapshot *SnapshotPublisher
 
-	closeDB bool
-	once    sync.Once
+	once sync.Once
 }
 
-// Open builds a local fsmeta runtime without coordinator, root, or raftstore.
 func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if err := opts.validate(); err != nil {
 		return nil, err
@@ -39,48 +34,41 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	db := opts.DB
-	closeDB := false
-	if db == nil {
-		var err error
-		db, err = cpebble.Open(localPebbleDir(opts.WorkDir), localDBOptions(opts))
-		if err != nil {
-			return nil, err
-		}
-		closeDB = true
-	}
-	runner, err := NewRunner(db)
-	if err != nil {
-		if closeDB {
-			_ = db.Close()
-		}
-		return nil, err
-	}
-	mounts := NewMountCatalog(MountConfig{
-		Mount:     opts.Mount,
-		RootInode: opts.rootInode(),
+	routes, err := NewCoordinatorRouteProvider(opts.Coordinator, CoordinatorRouteProviderOptions{
+		DialOptions: opts.DialOptions,
+		DialTimeout: opts.DialTimeout,
 	})
-	if err := bootstrapRootInode(ctx, runner, mounts.Admission(), opts.Clock); err != nil {
-		if closeDB {
-			_ = db.Close()
-		}
+	if err != nil {
 		return nil, err
 	}
-	watcher := NewWatcher(mounts)
-	runner.SetMutationObserver(watcher)
-	quotas := NewQuotaLedger()
-	snapshots, err := OpenSnapshotRegistry(ctx, runner, mounts.Admission().Identity())
+	tso, err := NewCoordinatorTimestampSource(opts.Coordinator)
 	if err != nil {
-		if closeDB {
-			_ = db.Close()
-		}
+		_ = routes.Close()
 		return nil, err
 	}
-	inodes, err := NewInodeAllocator(runner, opts.Mount)
+	runner, err := NewRunner(routes, tso)
 	if err != nil {
-		if closeDB {
-			_ = db.Close()
-		}
+		_ = routes.Close()
+		return nil, err
+	}
+	mounts, err := NewMountResolver(opts.Coordinator)
+	if err != nil {
+		_ = routes.Close()
+		return nil, err
+	}
+	inodes, err := NewInodeAllocator(opts.Coordinator)
+	if err != nil {
+		_ = routes.Close()
+		return nil, err
+	}
+	watcher, err := NewWatcher(routes, mounts)
+	if err != nil {
+		_ = routes.Close()
+		return nil, err
+	}
+	snapshot, err := NewSnapshotPublisher(opts.Coordinator)
+	if err != nil {
+		_ = routes.Close()
 		return nil, err
 	}
 	execOpts := []fsmetaexec.Option{
@@ -88,7 +76,6 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		fsmetaexec.WithSubtreeAuthorityResolver(mounts),
 		fsmetaexec.WithSubtreeHandoffPublisher(mounts),
 		fsmetaexec.WithInodeAllocator(inodes),
-		fsmetaexec.WithQuotaResolver(quotas),
 	}
 	if opts.LockTTL > 0 {
 		execOpts = append(execOpts, fsmetaexec.WithLockTTL(uint64((opts.LockTTL+time.Millisecond-1)/time.Millisecond)))
@@ -98,42 +85,45 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}
 	executor, err := fsmetaexec.New(runner, execOpts...)
 	if err != nil {
-		if closeDB {
-			_ = db.Close()
-		}
+		_ = routes.Close()
 		return nil, err
 	}
+	if opts.BootstrapMount != "" {
+		mount, err := mounts.ResolveMount(ctx, opts.BootstrapMount)
+		if err != nil {
+			_ = routes.Close()
+			return nil, err
+		}
+		if err := BootstrapRootInode(ctx, runner, mount, opts.Clock); err != nil {
+			_ = routes.Close()
+			return nil, err
+		}
+	}
 	return &Runtime{
-		DB:        db,
-		Runner:    runner,
-		Executor:  executor,
-		Mounts:    mounts,
-		Quotas:    quotas,
-		Watcher:   watcher,
-		Snapshots: snapshots,
-		closeDB:   closeDB,
+		Runner:   runner,
+		Executor: executor,
+		Routes:   routes,
+		Mounts:   mounts,
+		Inodes:   inodes,
+		Watcher:  watcher,
+		Snapshot: snapshot,
 	}, nil
 }
 
-func localPebbleDir(workDir string) string {
-	return filepath.Join(workDir, "storage")
-}
-
-// Close releases the runtime-owned DB. Caller-owned DB handles are left open.
 func (r *Runtime) Close() error {
 	if r == nil {
 		return nil
 	}
 	var err error
 	r.once.Do(func() {
-		if r.closeDB && r.DB != nil {
-			err = r.DB.Close()
+		if r.Routes != nil {
+			err = r.Routes.Close()
 		}
 	})
 	return err
 }
 
-func bootstrapRootInode(ctx context.Context, runner *Runner, mount fsmetaexec.MountAdmission, now func() time.Time) error {
+func BootstrapRootInode(ctx context.Context, runner *Runner, mount fsmetaexec.MountAdmission, now func() time.Time) error {
 	key, err := layout.EncodeInodeKey(mount.Identity(), mount.RootInode)
 	if err != nil {
 		return err

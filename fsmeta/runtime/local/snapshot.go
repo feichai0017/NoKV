@@ -261,7 +261,13 @@ func (r *SnapshotRegistry) applySnapshotMutation(ctx context.Context, primary []
 	if err != nil {
 		return err
 	}
-	_, _, err = r.runner.applyMutationGroup(primary, []*backend.Mutation{mutation}, startVersion, startVersion+1, false, false)
+	_, err = r.runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    cloneBytes(primary),
+		ReadVersion:   startVersion,
+		CommitVersion: startVersion + 1,
+		Mutations:     []*backend.Mutation{mutation},
+		WatchKeys:     [][]byte{cloneBytes(primary)},
+	})
 	return err
 }
 

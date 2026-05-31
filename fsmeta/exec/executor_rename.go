@@ -179,9 +179,9 @@ func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 			return err
 		}
 		if len(mutations) == len(predicates) {
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}
@@ -218,7 +218,7 @@ func (e *Executor) RenameReplace(ctx context.Context, req model.RenameReplaceReq
 		if err != nil {
 			return fmt.Errorf("prepare rename replace: %w", err)
 		}
-		if err := e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
+		if err := e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
 			return fmt.Errorf("commit rename replace: %w", err)
 		}
 		result = nextResult
@@ -265,7 +265,8 @@ func (e *Executor) RenameSubtree(ctx context.Context, req model.RenameSubtreeReq
 			return err
 		}
 		handoffStarted = true
-		actualCommitVersion, mutationErr := e.runner.MutateAtCommit(ctx, plan.PrimaryKey, mutations, startVersion, commitVersion, e.lockTTL)
+		result, mutationErr := e.commitMetadataCommandAt(ctx, mount, plan.PrimaryKey, nil, mutations, startVersion, commitVersion)
+		actualCommitVersion := result.CommitVersion
 		// Subtree handoff start publishes a rooted predecessor frontier before the
 		// data mutation runs. That external frontier must be the same commit_ts
 		// used by the data transaction; otherwise concurrent handoffs can observe a

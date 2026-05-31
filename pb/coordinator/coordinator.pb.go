@@ -3476,8 +3476,11 @@ type GetRegionByKeyResponse struct {
 	// sync_health reports the rooted catch-up health that justified this reply.
 	SyncHealth        SyncHealth                  `protobuf:"varint,14,opt,name=sync_health,json=syncHealth,proto3,enum=nokv.coordinator.v1.SyncHealth" json:"sync_health,omitempty"`
 	AuthorityEvidence *meta.RootAuthorityEvidence `protobuf:"bytes,16,opt,name=authority_evidence,json=authorityEvidence,proto3" json:"authority_evidence,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// leader_peer is the latest data-plane raft leader reported by store
+	// heartbeats for this region. It is a serving hint, not rooted truth.
+	LeaderPeer    *meta.RegionPeer `protobuf:"bytes,17,opt,name=leader_peer,json=leaderPeer,proto3" json:"leader_peer,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
 }
 
 func (x *GetRegionByKeyResponse) Reset() {
@@ -3618,6 +3621,13 @@ func (x *GetRegionByKeyResponse) GetSyncHealth() SyncHealth {
 func (x *GetRegionByKeyResponse) GetAuthorityEvidence() *meta.RootAuthorityEvidence {
 	if x != nil {
 		return x.AuthorityEvidence
+	}
+	return nil
+}
+
+func (x *GetRegionByKeyResponse) GetLeaderPeer() *meta.RegionPeer {
+	if x != nil {
+		return x.LeaderPeer
 	}
 	return nil
 }
@@ -3886,7 +3896,7 @@ var File_coordinator_coordinator_proto protoreflect.FileDescriptor
 
 const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\n" +
-	"\x1dcoordinator/coordinator.proto\x12\x13nokv.coordinator.v1\x1a\x15meta/descriptor.proto\x1a\x0fmeta/root.proto\"\x8f\x03\n" +
+	"\x1dcoordinator/coordinator.proto\x12\x13nokv.coordinator.v1\x1a\x15meta/descriptor.proto\x1a\x11meta/region.proto\x1a\x0fmeta/root.proto\"\x8f\x03\n" +
 	"\x15StoreHeartbeatRequest\x12\x19\n" +
 	"\bstore_id\x18\x01 \x01(\x04R\astoreId\x12\x1d\n" +
 	"\n" +
@@ -4085,7 +4095,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\fmax_root_lag\x18\x04 \x01(\x04H\x00R\n" +
 	"maxRootLag\x88\x01\x01\x12@\n" +
 	"\x1crequired_descriptor_revision\x18\x05 \x01(\x04R\x1arequiredDescriptorRevisionB\x0f\n" +
-	"\r_max_root_lag\"\xdd\a\n" +
+	"\r_max_root_lag\"\x98\b\n" +
 	"\x16GetRegionByKeyResponse\x12K\n" +
 	"\x11region_descriptor\x18\x01 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\x10regionDescriptor\x12\x1b\n" +
 	"\tnot_found\x18\x02 \x01(\bR\bnotFound\x12J\n" +
@@ -4104,7 +4114,9 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\rserving_class\x18\r \x01(\x0e2!.nokv.coordinator.v1.ServingClassR\fservingClass\x12@\n" +
 	"\vsync_health\x18\x0e \x01(\x0e2\x1f.nokv.coordinator.v1.SyncHealthR\n" +
 	"syncHealth\x12R\n" +
-	"\x12authority_evidence\x18\x10 \x01(\v2#.nokv.meta.v1.RootAuthorityEvidenceR\x11authorityEvidence\"&\n" +
+	"\x12authority_evidence\x18\x10 \x01(\v2#.nokv.meta.v1.RootAuthorityEvidenceR\x11authorityEvidence\x129\n" +
+	"\vleader_peer\x18\x11 \x01(\v2\x18.nokv.meta.v1.RegionPeerR\n" +
+	"leaderPeer\"&\n" +
 	"\x0eAllocIDRequest\x12\x14\n" +
 	"\x05count\x18\x01 \x01(\x04R\x05count\"\x92\x02\n" +
 	"\x0fAllocIDResponse\x12\x19\n" +
@@ -4315,6 +4327,7 @@ var file_coordinator_coordinator_proto_goTypes = []any{
 	(*meta.RootPendingPeerChange)(nil),         // 73: nokv.meta.v1.RootPendingPeerChange
 	(*meta.RootPendingRangeChange)(nil),        // 74: nokv.meta.v1.RootPendingRangeChange
 	(*meta.RootAuthorityEvidence)(nil),         // 75: nokv.meta.v1.RootAuthorityEvidence
+	(*meta.RegionPeer)(nil),                    // 76: nokv.meta.v1.RegionPeer
 }
 var file_coordinator_coordinator_proto_depIdxs = []int32{
 	15, // 0: nokv.coordinator.v1.StoreHeartbeatRequest.region_stats:type_name -> nokv.coordinator.v1.RegionRuntimeStats
@@ -4375,53 +4388,54 @@ var file_coordinator_coordinator_proto_depIdxs = []int32{
 	12, // 55: nokv.coordinator.v1.GetRegionByKeyResponse.serving_class:type_name -> nokv.coordinator.v1.ServingClass
 	13, // 56: nokv.coordinator.v1.GetRegionByKeyResponse.sync_health:type_name -> nokv.coordinator.v1.SyncHealth
 	75, // 57: nokv.coordinator.v1.GetRegionByKeyResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
-	75, // 58: nokv.coordinator.v1.AllocIDResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
-	75, // 59: nokv.coordinator.v1.TsoResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
-	14, // 60: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
-	17, // 61: nokv.coordinator.v1.Coordinator.GetStore:input_type -> nokv.coordinator.v1.GetStoreRequest
-	19, // 62: nokv.coordinator.v1.Coordinator.ListStores:input_type -> nokv.coordinator.v1.ListStoresRequest
-	22, // 63: nokv.coordinator.v1.Coordinator.GetMount:input_type -> nokv.coordinator.v1.GetMountRequest
-	24, // 64: nokv.coordinator.v1.Coordinator.ListMounts:input_type -> nokv.coordinator.v1.ListMountsRequest
-	27, // 65: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:input_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesRequest
-	31, // 66: nokv.coordinator.v1.Coordinator.GetQuotaFence:input_type -> nokv.coordinator.v1.GetQuotaFenceRequest
-	33, // 67: nokv.coordinator.v1.Coordinator.ListQuotaFences:input_type -> nokv.coordinator.v1.ListQuotaFencesRequest
-	35, // 68: nokv.coordinator.v1.Coordinator.ListVisibleAuthorityGrants:input_type -> nokv.coordinator.v1.ListVisibleAuthorityGrantsRequest
-	37, // 69: nokv.coordinator.v1.Coordinator.ListVisibleAuthoritySeals:input_type -> nokv.coordinator.v1.ListVisibleAuthoritySealsRequest
-	39, // 70: nokv.coordinator.v1.Coordinator.ApplyVisibleAuthority:input_type -> nokv.coordinator.v1.ApplyVisibleAuthorityRequest
-	41, // 71: nokv.coordinator.v1.Coordinator.WatchRootEvents:input_type -> nokv.coordinator.v1.WatchRootEventsRequest
-	45, // 72: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
-	47, // 73: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
-	51, // 74: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
-	53, // 75: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
-	55, // 76: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
-	58, // 77: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
-	60, // 78: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
-	62, // 79: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
-	44, // 80: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
-	18, // 81: nokv.coordinator.v1.Coordinator.GetStore:output_type -> nokv.coordinator.v1.GetStoreResponse
-	20, // 82: nokv.coordinator.v1.Coordinator.ListStores:output_type -> nokv.coordinator.v1.ListStoresResponse
-	23, // 83: nokv.coordinator.v1.Coordinator.GetMount:output_type -> nokv.coordinator.v1.GetMountResponse
-	25, // 84: nokv.coordinator.v1.Coordinator.ListMounts:output_type -> nokv.coordinator.v1.ListMountsResponse
-	28, // 85: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:output_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesResponse
-	32, // 86: nokv.coordinator.v1.Coordinator.GetQuotaFence:output_type -> nokv.coordinator.v1.GetQuotaFenceResponse
-	34, // 87: nokv.coordinator.v1.Coordinator.ListQuotaFences:output_type -> nokv.coordinator.v1.ListQuotaFencesResponse
-	36, // 88: nokv.coordinator.v1.Coordinator.ListVisibleAuthorityGrants:output_type -> nokv.coordinator.v1.ListVisibleAuthorityGrantsResponse
-	38, // 89: nokv.coordinator.v1.Coordinator.ListVisibleAuthoritySeals:output_type -> nokv.coordinator.v1.ListVisibleAuthoritySealsResponse
-	40, // 90: nokv.coordinator.v1.Coordinator.ApplyVisibleAuthority:output_type -> nokv.coordinator.v1.ApplyVisibleAuthorityResponse
-	42, // 91: nokv.coordinator.v1.Coordinator.WatchRootEvents:output_type -> nokv.coordinator.v1.WatchRootEventsResponse
-	46, // 92: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
-	48, // 93: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
-	52, // 94: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
-	54, // 95: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
-	56, // 96: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
-	59, // 97: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
-	61, // 98: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
-	63, // 99: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
-	80, // [80:100] is the sub-list for method output_type
-	60, // [60:80] is the sub-list for method input_type
-	60, // [60:60] is the sub-list for extension type_name
-	60, // [60:60] is the sub-list for extension extendee
-	0,  // [0:60] is the sub-list for field type_name
+	76, // 58: nokv.coordinator.v1.GetRegionByKeyResponse.leader_peer:type_name -> nokv.meta.v1.RegionPeer
+	75, // 59: nokv.coordinator.v1.AllocIDResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
+	75, // 60: nokv.coordinator.v1.TsoResponse.authority_evidence:type_name -> nokv.meta.v1.RootAuthorityEvidence
+	14, // 61: nokv.coordinator.v1.Coordinator.StoreHeartbeat:input_type -> nokv.coordinator.v1.StoreHeartbeatRequest
+	17, // 62: nokv.coordinator.v1.Coordinator.GetStore:input_type -> nokv.coordinator.v1.GetStoreRequest
+	19, // 63: nokv.coordinator.v1.Coordinator.ListStores:input_type -> nokv.coordinator.v1.ListStoresRequest
+	22, // 64: nokv.coordinator.v1.Coordinator.GetMount:input_type -> nokv.coordinator.v1.GetMountRequest
+	24, // 65: nokv.coordinator.v1.Coordinator.ListMounts:input_type -> nokv.coordinator.v1.ListMountsRequest
+	27, // 66: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:input_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesRequest
+	31, // 67: nokv.coordinator.v1.Coordinator.GetQuotaFence:input_type -> nokv.coordinator.v1.GetQuotaFenceRequest
+	33, // 68: nokv.coordinator.v1.Coordinator.ListQuotaFences:input_type -> nokv.coordinator.v1.ListQuotaFencesRequest
+	35, // 69: nokv.coordinator.v1.Coordinator.ListVisibleAuthorityGrants:input_type -> nokv.coordinator.v1.ListVisibleAuthorityGrantsRequest
+	37, // 70: nokv.coordinator.v1.Coordinator.ListVisibleAuthoritySeals:input_type -> nokv.coordinator.v1.ListVisibleAuthoritySealsRequest
+	39, // 71: nokv.coordinator.v1.Coordinator.ApplyVisibleAuthority:input_type -> nokv.coordinator.v1.ApplyVisibleAuthorityRequest
+	41, // 72: nokv.coordinator.v1.Coordinator.WatchRootEvents:input_type -> nokv.coordinator.v1.WatchRootEventsRequest
+	45, // 73: nokv.coordinator.v1.Coordinator.RegionLiveness:input_type -> nokv.coordinator.v1.RegionLivenessRequest
+	47, // 74: nokv.coordinator.v1.Coordinator.PublishRootEvent:input_type -> nokv.coordinator.v1.PublishRootEventRequest
+	51, // 75: nokv.coordinator.v1.Coordinator.ListTransitions:input_type -> nokv.coordinator.v1.ListTransitionsRequest
+	53, // 76: nokv.coordinator.v1.Coordinator.AssessRootEvent:input_type -> nokv.coordinator.v1.AssessRootEventRequest
+	55, // 77: nokv.coordinator.v1.Coordinator.RemoveRegion:input_type -> nokv.coordinator.v1.RemoveRegionRequest
+	58, // 78: nokv.coordinator.v1.Coordinator.GetRegionByKey:input_type -> nokv.coordinator.v1.GetRegionByKeyRequest
+	60, // 79: nokv.coordinator.v1.Coordinator.AllocID:input_type -> nokv.coordinator.v1.AllocIDRequest
+	62, // 80: nokv.coordinator.v1.Coordinator.Tso:input_type -> nokv.coordinator.v1.TsoRequest
+	44, // 81: nokv.coordinator.v1.Coordinator.StoreHeartbeat:output_type -> nokv.coordinator.v1.StoreHeartbeatResponse
+	18, // 82: nokv.coordinator.v1.Coordinator.GetStore:output_type -> nokv.coordinator.v1.GetStoreResponse
+	20, // 83: nokv.coordinator.v1.Coordinator.ListStores:output_type -> nokv.coordinator.v1.ListStoresResponse
+	23, // 84: nokv.coordinator.v1.Coordinator.GetMount:output_type -> nokv.coordinator.v1.GetMountResponse
+	25, // 85: nokv.coordinator.v1.Coordinator.ListMounts:output_type -> nokv.coordinator.v1.ListMountsResponse
+	28, // 86: nokv.coordinator.v1.Coordinator.ListSubtreeAuthorities:output_type -> nokv.coordinator.v1.ListSubtreeAuthoritiesResponse
+	32, // 87: nokv.coordinator.v1.Coordinator.GetQuotaFence:output_type -> nokv.coordinator.v1.GetQuotaFenceResponse
+	34, // 88: nokv.coordinator.v1.Coordinator.ListQuotaFences:output_type -> nokv.coordinator.v1.ListQuotaFencesResponse
+	36, // 89: nokv.coordinator.v1.Coordinator.ListVisibleAuthorityGrants:output_type -> nokv.coordinator.v1.ListVisibleAuthorityGrantsResponse
+	38, // 90: nokv.coordinator.v1.Coordinator.ListVisibleAuthoritySeals:output_type -> nokv.coordinator.v1.ListVisibleAuthoritySealsResponse
+	40, // 91: nokv.coordinator.v1.Coordinator.ApplyVisibleAuthority:output_type -> nokv.coordinator.v1.ApplyVisibleAuthorityResponse
+	42, // 92: nokv.coordinator.v1.Coordinator.WatchRootEvents:output_type -> nokv.coordinator.v1.WatchRootEventsResponse
+	46, // 93: nokv.coordinator.v1.Coordinator.RegionLiveness:output_type -> nokv.coordinator.v1.RegionLivenessResponse
+	48, // 94: nokv.coordinator.v1.Coordinator.PublishRootEvent:output_type -> nokv.coordinator.v1.PublishRootEventResponse
+	52, // 95: nokv.coordinator.v1.Coordinator.ListTransitions:output_type -> nokv.coordinator.v1.ListTransitionsResponse
+	54, // 96: nokv.coordinator.v1.Coordinator.AssessRootEvent:output_type -> nokv.coordinator.v1.AssessRootEventResponse
+	56, // 97: nokv.coordinator.v1.Coordinator.RemoveRegion:output_type -> nokv.coordinator.v1.RemoveRegionResponse
+	59, // 98: nokv.coordinator.v1.Coordinator.GetRegionByKey:output_type -> nokv.coordinator.v1.GetRegionByKeyResponse
+	61, // 99: nokv.coordinator.v1.Coordinator.AllocID:output_type -> nokv.coordinator.v1.AllocIDResponse
+	63, // 100: nokv.coordinator.v1.Coordinator.Tso:output_type -> nokv.coordinator.v1.TsoResponse
+	81, // [81:101] is the sub-list for method output_type
+	61, // [61:81] is the sub-list for method input_type
+	61, // [61:61] is the sub-list for extension type_name
+	61, // [61:61] is the sub-list for extension extendee
+	0,  // [0:61] is the sub-list for field type_name
 }
 
 func init() { file_coordinator_coordinator_proto_init() }

@@ -49,13 +49,6 @@ func (s *visibleAdmissionCounters) recordSlow(reason compile.SlowReason) {
 	}
 }
 
-// recordFallback records one unsupported one-phase attempt. The fallback streak
-// is global for this operation kind because physical batch atomicity belongs to
-// the backend, not to a filesystem key-placement proof.
-func (s *atomicOnePhaseCounters) recordFallback() {
-	s.consecutiveFallbacks.Add(1)
-}
-
 // recordSuccess clears the fallback streak after the backend accepts a
 // one-phase mutation for this operation kind.
 func (s *atomicOnePhaseCounters) recordSuccess() {

@@ -7,6 +7,7 @@ use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use openraft::{
     error::{Fatal, InitializeError, RPCError, RaftError, Unreachable},
@@ -16,10 +17,10 @@ use openraft::{
 use tokio::sync::broadcast;
 
 use crate::{
-    decode_raft_response, AppliedKvEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
-    ApplyWatchProvider, BasicNode, Error, NodeId, Proposal, RaftCommandExecutor, RaftStoreConfig,
-    RegionId, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
-    RegionTrafficSnapshot,
+    decode_metadata_response, decode_raft_response, AppliedKvEngine, AppliedProposal, ApplyStatus,
+    ApplyStatusProvider, ApplyWatchProvider, BasicNode, Error, MetadataCommandExecutor, NodeId,
+    Proposal, RaftCommandExecutor, RaftStoreConfig, RegionId, RegionLogStorage,
+    RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider, RegionTrafficSnapshot,
 };
 
 #[derive(Clone)]
@@ -427,6 +428,31 @@ where
     }
 }
 
+impl<E> MetadataCommandExecutor for OpenRaftRegion<E>
+where
+    E: RegionSnapshotEngine + MetadataCommandExecutor,
+{
+    fn execute_metadata_command<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataCommitRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+           + Send
+           + 'a {
+        async move {
+            let proposal = Proposal::from_metadata_command(req)
+                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+            let applied = match self.propose(proposal).await {
+                Ok(applied) => applied,
+                Err(Error::NotLeader { leader_id }) => {
+                    return Ok(self.not_leader_metadata_response(req, leader_id))
+                }
+                Err(err) => return Err(nokv_mvcc::Error::Backend(err.to_string())),
+            };
+            decode_metadata_response(&applied.payload)
+        }
+    }
+}
+
 impl<E> OpenRaftRegion<E>
 where
     E: RegionSnapshotEngine,
@@ -459,6 +485,35 @@ where
                 ..Default::default()
             }),
         })
+    }
+
+    fn not_leader_metadata_response(
+        &self,
+        req: &metadatapb::MetadataCommitRequest,
+        leader_id: Option<NodeId>,
+    ) -> metadatapb::MetadataCommitResponse {
+        let descriptor = self.apply_engine.region_descriptor().ok().flatten();
+        let region_id = descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.region_id)
+            .or_else(|| req.context.as_ref().map(|context| context.region_id))
+            .unwrap_or_else(|| self.apply_engine.apply_status().region_id);
+        let leader = leader_id.and_then(|leader_id| {
+            descriptor.as_ref().and_then(|descriptor| {
+                descriptor
+                    .peers
+                    .iter()
+                    .find(|peer| peer.peer_id == leader_id)
+                    .cloned()
+            })
+        });
+        metadatapb::MetadataCommitResponse {
+            region_error: Some(errorpb::RegionError {
+                not_leader: Some(errorpb::NotLeader { region_id, leader }),
+                ..Default::default()
+            }),
+            ..Default::default()
+        }
     }
 
     fn bounded_stale_read_admissible(&self, req: &raftpb::RaftCmdRequest) -> bool {

@@ -7,6 +7,7 @@ syntax = "proto3";
 package nokv.coordinator.v1;
 
 import "meta/descriptor.proto";
+import "meta/region.proto";
 import "meta/root.proto";
 
 option go_package = "github.com/feichai0017/NoKV/pb/coordinator;coordpb";
@@ -451,6 +452,9 @@ message GetRegionByKeyResponse {
   // sync_health reports the rooted catch-up health that justified this reply.
   SyncHealth sync_health = 14;
   nokv.meta.v1.RootAuthorityEvidence authority_evidence = 16;
+  // leader_peer is the latest data-plane raft leader reported by store
+  // heartbeats for this region. It is a serving hint, not rooted truth.
+  nokv.meta.v1.RegionPeer leader_peer = 17;
 }
 
 message AllocIDRequest {

@@ -47,6 +47,33 @@ type Predicate struct {
 	ExpectedValue []byte
 }
 
+// MetadataCommand is the semantic metadata commit object fsmeta/exec submits to
+// runtimes. It groups the predicates, mutations, and watch projection that must
+// be evaluated and applied under one metadata commit boundary.
+type MetadataCommand struct {
+	RequestID     []byte
+	Mount         string
+	MountKeyID    uint64
+	PrimaryKey    []byte
+	ReadVersion   uint64
+	CommitVersion uint64
+	Predicates    []*Predicate
+	Mutations     []*Mutation
+	WatchKeys     [][]byte
+}
+
+// MetadataCommitResult describes the committed data-plane frontier for a
+// MetadataCommand. Local runtimes may leave RegionID and Term unset; replicated
+// runtimes must return the region and raft log frontier that applied the
+// command.
+type MetadataCommitResult struct {
+	CommitVersion    uint64
+	RegionID         uint64
+	Term             uint64
+	Index            uint64
+	AppliedMutations uint64
+}
+
 // Store is the minimum MVCC metadata backend required by fsmeta execution.
 //
 // Mutation atomicity is defined over the supplied mutation group. Implementors
@@ -58,22 +85,7 @@ type Store interface {
 	Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
 	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
 	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
-	Mutate(ctx context.Context, primary []byte, mutations []*Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
-	MutateAtCommit(ctx context.Context, primary []byte, mutations []*Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
-}
-
-// AtomicMutator is an optional one-phase mutation capability.
-type AtomicMutator interface {
-	TryAtomicMutate(ctx context.Context, primary []byte, predicates []*Predicate, mutations []*Mutation, startVersion, commitVersion uint64) (handled bool, err error)
-}
-
-// ReadOrderedAtomicMutator is the one-phase mutation contract fsmeta may
-// consume. Implementations must guarantee that a read at version T cannot miss
-// any successful one-phase write whose commit version is <= T merely because
-// the write had not reached the storage apply boundary yet.
-type ReadOrderedAtomicMutator interface {
-	AtomicMutator
-	AtomicMutatePreservesReadOrder() bool
+	CommitMetadata(ctx context.Context, command MetadataCommand) (MetadataCommitResult, error)
 }
 
 // StatsProvider is implemented by lower runtime layers that expose diagnostics

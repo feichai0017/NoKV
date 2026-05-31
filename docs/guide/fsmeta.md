@@ -71,13 +71,13 @@ type Store interface {
     Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
     BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
     Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]backend.KV, error)
-    Mutate(ctx context.Context, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
-    MutateAtCommit(ctx context.Context, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion, lockTTL uint64) (uint64, error)
+    CommitMetadata(ctx context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error)
 }
 ```
 
-The executor compiles namespace operations into backend-neutral predicates and
-mutations. Runtime packages own concrete commit mechanics.
+The executor compiles namespace operations into `MetadataCommand` objects:
+backend-neutral predicates, mutations, watch keys, and an optional explicit
+commit version. Runtime packages own concrete commit mechanics.
 
 ## Local Runtime
 

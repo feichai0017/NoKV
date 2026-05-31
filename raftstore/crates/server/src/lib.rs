@@ -9,6 +9,7 @@ mod admission;
 mod diagnostics;
 mod execution;
 mod metadata;
+mod metadata_plane;
 mod publisher;
 mod region_router;
 mod serve;
@@ -25,11 +26,14 @@ pub use diagnostics::{EmptyRestartDiagnostics, RestartDiagnosticsProvider};
 pub use metadata::{
     apply_status_from_holt, EmptyRegionDescriptorSink, HoltRegionMetadataSink, RegionDescriptorSink,
 };
+pub use metadata_plane::MetadataPlaneService;
 pub use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdminServer;
 pub use nokv_proto::nokv::kv::v1::store_kv_server::StoreKvServer;
+pub use nokv_proto::nokv::metadata::v1::metadata_plane_server::MetadataPlaneServer;
 pub use publisher::{EmptyTopologyPublisher, TopologyPublishOutcome, TopologyPublisher};
 pub use region_router::{
-    serve_with_multi_region_services, MultiRegionRaftAdminService, MultiRegionStoreKvService,
+    serve_with_multi_region_services, MultiRegionMetadataPlaneService, MultiRegionRaftAdminService,
+    MultiRegionStoreKvService,
 };
 pub use serve::{
     openraft_region_service_pair, serve, serve_with_engine,

@@ -274,7 +274,7 @@ func TestTxnRetryBudgetCoversRetryableStartTSLoss(t *testing.T) {
 	require.True(t, canRetryTxnAttempt(maxTxnContentionRetries+1, time.Now(), err, 50))
 }
 
-func TestExecutorAtomicOnePhaseBacksOffAfterRepeatedFallback(t *testing.T) {
+func TestExecutorMetadataCommitDoesNotBackOffAfterBackendFallback(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
 	authority := &fakeAuthorityResolver{same: true}
@@ -300,9 +300,11 @@ func TestExecutorAtomicOnePhaseBacksOffAfterRepeatedFallback(t *testing.T) {
 		require.NoError(t, err)
 	}
 
-	require.Len(t, runner.atomicCalls, atomicOnePhaseBackoffAfter)
+	require.Len(t, runner.atomicCalls, total)
 	stats := executor.Stats()
-	requireAtomicStatUint(t, stats, model.OperationRename, "fallback_total", atomicOnePhaseBackoffAfter)
-	requireAtomicStatUint(t, stats, model.OperationRename, "skip_total", 3)
-	requireAtomicStatUint(t, stats, model.OperationRename, "backoff_skip_total", 3)
+	requireAtomicStatUint(t, stats, model.OperationRename, "attempt_total", uint64(total))
+	requireAtomicStatUint(t, stats, model.OperationRename, "success_total", uint64(total))
+	requireAtomicStatUint(t, stats, model.OperationRename, "fallback_total", 0)
+	requireAtomicStatUint(t, stats, model.OperationRename, "skip_total", 0)
+	requireAtomicStatUint(t, stats, model.OperationRename, "backoff_skip_total", 0)
 }

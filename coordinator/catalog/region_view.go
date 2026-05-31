@@ -237,32 +237,45 @@ func (v *RegionDirectoryView) Replace(descriptors map[uint64]topology.Descriptor
 }
 
 func (v *RegionDirectoryView) LookupDescriptor(key []byte) (topology.Descriptor, bool) {
-	if v == nil {
+	info, ok := v.LookupInfo(key)
+	if !ok {
 		return topology.Descriptor{}, false
+	}
+	return info.Descriptor, true
+}
+
+func (v *RegionDirectoryView) LookupInfo(key []byte) (RegionInfo, bool) {
+	if v == nil {
+		return RegionInfo{}, false
 	}
 	v.mu.RLock()
 	defer v.mu.RUnlock()
 	if len(v.regionIndex) == 0 {
-		return topology.Descriptor{}, false
+		return RegionInfo{}, false
 	}
 	idx := sort.Search(len(v.regionIndex), func(i int) bool {
 		return bytes.Compare(v.regionIndex[i].start, key) > 0
 	})
 	if idx == 0 {
-		return topology.Descriptor{}, false
+		return RegionInfo{}, false
 	}
 	entry := v.regionIndex[idx-1]
 	if bytes.Compare(key, entry.start) < 0 {
-		return topology.Descriptor{}, false
+		return RegionInfo{}, false
 	}
 	if len(entry.end) > 0 && bytes.Compare(key, entry.end) >= 0 {
-		return topology.Descriptor{}, false
+		return RegionInfo{}, false
 	}
 	desc, ok := v.regions[entry.id]
 	if !ok {
-		return topology.Descriptor{}, false
+		return RegionInfo{}, false
 	}
-	return desc.Clone(), true
+	info := RegionInfo{Descriptor: desc.Clone(), LastHeartbeat: v.regionLastHB[entry.id]}
+	if leader, ok := v.regionLeaders[entry.id]; ok {
+		info.LeaderStoreID = leader.storeID
+		info.LeaderReportedAt = leader.reportedAt
+	}
+	return info, true
 }
 
 func (v *RegionDirectoryView) Descriptor(regionID uint64) (topology.Descriptor, bool) {

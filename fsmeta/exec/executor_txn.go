@@ -5,6 +5,7 @@ package exec
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
 	"sync/atomic"
@@ -16,38 +17,82 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
-func (e *Executor) mutateWithAtomicOnePhase(ctx context.Context, kind model.OperationKind, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+func (e *Executor) mutateWithAtomicOnePhase(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
 	stats := e.atomicOnePhaseCounters(kind)
-	onePhase, ok := e.runner.(backend.ReadOrderedAtomicMutator)
-	if !ok || !onePhase.AtomicMutatePreservesReadOrder() {
-		if stats != nil {
-			stats.runnerUnsupportedTotal.Add(1)
-		}
-		_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
-	}
 	if stats != nil && !stats.allowAttempt() {
 		stats.skipTotal.Add(1)
-		_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
-		return err
+		return e.commitMetadataCommand(ctx, mount, primary, nil, mutations, startVersion, commitVersion)
 	}
 	if stats != nil {
 		stats.attemptTotal.Add(1)
 	}
-	handled, err := onePhase.TryAtomicMutate(ctx, primary, cloneAtomicPredicates(predicates), cloneMutations(mutations), startVersion, commitVersion)
-	if err != nil || handled {
-		if err == nil && stats != nil {
-			stats.successTotal.Add(1)
-			stats.recordSuccess()
-		}
-		return err
+	err := e.commitMetadataCommand(ctx, mount, primary, predicates, mutations, startVersion, commitVersion)
+	if err == nil && stats != nil {
+		stats.successTotal.Add(1)
+		stats.recordSuccess()
 	}
-	if stats != nil {
-		stats.fallbackTotal.Add(1)
-		stats.recordFallback()
-	}
-	_, err = e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
 	return err
+}
+
+func (e *Executor) commitMetadataCommand(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+	_, err := e.commitMetadataCommandWithVersion(ctx, mount, primary, predicates, mutations, startVersion, 0, commitVersion)
+	return err
+}
+
+func (e *Executor) commitMetadataCommandAt(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (backend.MetadataCommitResult, error) {
+	return e.commitMetadataCommandWithVersion(ctx, mount, primary, predicates, mutations, startVersion, commitVersion, commitVersion)
+}
+
+func (e *Executor) commitMetadataCommandWithVersion(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commandCommitVersion, requestIDCommitVersion uint64) (backend.MetadataCommitResult, error) {
+	return e.runner.CommitMetadata(ctx, backend.MetadataCommand{
+		RequestID:     metadataCommandRequestID(mount, primary, startVersion, requestIDCommitVersion),
+		Mount:         string(mount.MountID),
+		MountKeyID:    uint64(mount.MountKeyID),
+		PrimaryKey:    cloneBytes(primary),
+		ReadVersion:   startVersion,
+		CommitVersion: commandCommitVersion,
+		Predicates:    cloneAtomicPredicates(predicates),
+		Mutations:     cloneMutations(mutations),
+		WatchKeys:     metadataCommandWatchKeys(mutations),
+	})
+}
+
+func metadataCommandRequestID(mount model.MountIdentity, primary []byte, startVersion, commitVersion uint64) []byte {
+	out := make([]byte, 0, len(mount.MountID)+len(primary)+32)
+	out = append(out, string(mount.MountID)...)
+	out = append(out, 0)
+	var fixed [24]byte
+	binary.BigEndian.PutUint64(fixed[0:8], uint64(mount.MountKeyID))
+	binary.BigEndian.PutUint64(fixed[8:16], startVersion)
+	binary.BigEndian.PutUint64(fixed[16:24], commitVersion)
+	out = append(out, fixed[:]...)
+	out = append(out, primary...)
+	return out
+}
+
+func metadataCommandWatchKeys(mutations []*backend.Mutation) [][]byte {
+	keys := make([][]byte, 0, len(mutations))
+	seen := make(map[string]struct{}, len(mutations))
+	for _, mut := range mutations {
+		if mut == nil || len(mut.Key) == 0 {
+			continue
+		}
+		if _, ok := seen[string(mut.Key)]; ok {
+			continue
+		}
+		seen[string(mut.Key)] = struct{}{}
+		keys = append(keys, cloneBytes(mut.Key))
+	}
+	return keys
+}
+
+func metadataCommandPrimary(mutations []*backend.Mutation) []byte {
+	for _, mut := range mutations {
+		if mut != nil && len(mut.Key) != 0 {
+			return mut.Key
+		}
+	}
+	return nil
 }
 
 const (
@@ -67,12 +112,11 @@ func (s *atomicOnePhaseCounters) allowAttempt() bool {
 	return s.backoffSkipTotal.Add(1)%atomicOnePhaseProbeEvery == 0
 }
 
-func (e *Executor) mutateWithoutAtomicOnePhase(ctx context.Context, kind model.OperationKind, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+func (e *Executor) mutateWithoutAtomicOnePhase(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
 	if stats := e.atomicOnePhaseCounters(kind); stats != nil {
 		stats.skipTotal.Add(1)
 	}
-	_, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL)
-	return err
+	return e.commitMetadataCommand(ctx, mount, primary, nil, mutations, startVersion, commitVersion)
 }
 
 func (e *Executor) atomicOnePhaseCounters(kind model.OperationKind) *atomicOnePhaseCounters {

@@ -1,6 +1,7 @@
 use prost::Message;
 
 use nokv_proto::nokv::meta::v1 as metapb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 
 use crate::{Error, RegionId};
@@ -14,6 +15,7 @@ pub struct Proposal {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProposalPayload {
     RaftCommand(Vec<u8>),
+    MetadataCommand(Vec<u8>),
     RegionDescriptor(Vec<u8>),
     AdminCommand(Vec<u8>),
 }
@@ -47,6 +49,23 @@ impl Proposal {
         Ok(Self {
             region_id: descriptor.region_id,
             payload: ProposalPayload::RegionDescriptor(payload),
+        })
+    }
+
+    pub fn from_metadata_command(req: &metadatapb::MetadataCommitRequest) -> Result<Self, Error> {
+        let region_id = req
+            .context
+            .as_ref()
+            .map(|context| context.region_id)
+            .ok_or(Error::MissingRegionHeader)?;
+        if region_id == 0 {
+            return Err(Error::MissingRegionHeader);
+        }
+        let mut payload = Vec::with_capacity(req.encoded_len());
+        req.encode(&mut payload)?;
+        Ok(Self {
+            region_id,
+            payload: ProposalPayload::MetadataCommand(payload),
         })
     }
 
@@ -102,6 +121,27 @@ impl Proposal {
         Ok(descriptor)
     }
 
+    pub fn decode_metadata_command(&self) -> Result<metadatapb::MetadataCommitRequest, Error> {
+        let ProposalPayload::MetadataCommand(payload) = &self.payload else {
+            return Err(Error::InvalidLogPayload(
+                "non-metadata-command proposal cannot decode as metadata command".to_owned(),
+            ));
+        };
+        let req = metadatapb::MetadataCommitRequest::decode(payload.as_slice())?;
+        let region_id = req
+            .context
+            .as_ref()
+            .map(|context| context.region_id)
+            .ok_or(Error::MissingRegionHeader)?;
+        if region_id != self.region_id {
+            return Err(Error::RegionMismatch {
+                proposal_region_id: self.region_id,
+                command_region_id: region_id,
+            });
+        }
+        Ok(req)
+    }
+
     pub fn decode_admin_command(&self) -> Result<raftpb::AdminCommand, Error> {
         let ProposalPayload::AdminCommand(payload) = &self.payload else {
             return Err(Error::InvalidLogPayload(
@@ -114,6 +154,7 @@ impl Proposal {
     pub(crate) fn payload_kind(&self) -> ProposalPayloadKind {
         match &self.payload {
             ProposalPayload::RaftCommand(_) => ProposalPayloadKind::RaftCommand,
+            ProposalPayload::MetadataCommand(_) => ProposalPayloadKind::MetadataCommand,
             ProposalPayload::RegionDescriptor(_) => ProposalPayloadKind::RegionDescriptor,
             ProposalPayload::AdminCommand(_) => ProposalPayloadKind::AdminCommand,
         }
@@ -122,6 +163,7 @@ impl Proposal {
     pub(crate) fn payload_bytes(&self) -> &[u8] {
         match &self.payload {
             ProposalPayload::RaftCommand(payload)
+            | ProposalPayload::MetadataCommand(payload)
             | ProposalPayload::RegionDescriptor(payload)
             | ProposalPayload::AdminCommand(payload) => payload,
         }
@@ -131,6 +173,7 @@ impl Proposal {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProposalPayloadKind {
     RaftCommand,
+    MetadataCommand,
     RegionDescriptor,
     AdminCommand,
 }

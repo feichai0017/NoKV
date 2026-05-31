@@ -27,12 +27,18 @@ func TestRunnerProvidesSnapshotReads(t *testing.T) {
 	key := []byte("alpha")
 	start, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
-	commit, err := runner.Mutate(ctx, key, []*backend.Mutation{{
-		Op:    backend.MutationPut,
-		Key:   key,
-		Value: []byte("one"),
-	}}, start, start+1, 0)
+	result, err := runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    key,
+		ReadVersion:   start,
+		CommitVersion: start + 1,
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   key,
+			Value: []byte("one"),
+		}},
+	})
 	require.NoError(t, err)
+	commit := result.CommitVersion
 	require.Greater(t, commit, start)
 
 	_, ok, err := runner.Get(ctx, key, start)
@@ -50,7 +56,7 @@ func TestRunnerProvidesSnapshotReads(t *testing.T) {
 	require.Equal(t, []byte("one"), rows[0].Value)
 }
 
-func TestRunnerMutateHandlesMultiKeyPebbleBatch(t *testing.T) {
+func TestRunnerCommitMetadataHandlesMultiKeyPebbleBatch(t *testing.T) {
 	db := openTestDB(t, t.TempDir(), nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
@@ -59,15 +65,20 @@ func TestRunnerMutateHandlesMultiKeyPebbleBatch(t *testing.T) {
 	first, second := []byte("multi-key-a"), []byte("multi-key-b")
 	start, err := runner.ReserveTimestamp(context.Background(), 2)
 	require.NoError(t, err)
-	commit, err := runner.Mutate(context.Background(), first, []*backend.Mutation{
-		{Op: backend.MutationPut, Key: first, Value: []byte("a")},
-		{Op: backend.MutationPut, Key: second, Value: []byte("b")},
-	}, start, start+1, 0)
+	result, err := runner.CommitMetadata(context.Background(), backend.MetadataCommand{
+		PrimaryKey:    first,
+		ReadVersion:   start,
+		CommitVersion: start + 1,
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: first, Value: []byte("a")},
+			{Op: backend.MutationPut, Key: second, Value: []byte("b")},
+		},
+	})
 	require.NoError(t, err)
-	require.GreaterOrEqual(t, commit, start+1)
+	require.Equal(t, start+1, result.CommitVersion)
 }
 
-func TestRunnerInstallMutationsAtCommitAcceptsMultiKeyGroup(t *testing.T) {
+func TestRunnerCommitMetadataAcceptsExplicitMultiKeyGroup(t *testing.T) {
 	db := openTestDB(t, t.TempDir(), nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
@@ -77,24 +88,29 @@ func TestRunnerInstallMutationsAtCommitAcceptsMultiKeyGroup(t *testing.T) {
 	ctx := context.Background()
 	start, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
-	commit, err := runner.InstallMutationsAtCommit(ctx, first, []*backend.Mutation{
-		{Op: backend.MutationPut, Key: first, Value: []byte("a")},
-		{Op: backend.MutationPut, Key: second, Value: []byte("b")},
-	}, start, start+1)
-	require.NoError(t, err, "install must tolerate multi-key groups")
-	require.Equal(t, start+1, commit)
+	result, err := runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    first,
+		ReadVersion:   start,
+		CommitVersion: start + 1,
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: first, Value: []byte("a")},
+			{Op: backend.MutationPut, Key: second, Value: []byte("b")},
+		},
+	})
+	require.NoError(t, err, "metadata commit must tolerate multi-key groups")
+	require.Equal(t, start+1, result.CommitVersion)
 
-	got, ok, err := runner.Get(ctx, first, commit)
+	got, ok, err := runner.Get(ctx, first, result.CommitVersion)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, []byte("a"), got)
-	got, ok, err = runner.Get(ctx, second, commit)
+	got, ok, err = runner.Get(ctx, second, result.CommitVersion)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, []byte("b"), got)
 }
 
-func TestRunnerInstallMutationsAtCommitAllowsMissingDeletePrimary(t *testing.T) {
+func TestRunnerCommitMetadataAllowsMissingDeletePrimary(t *testing.T) {
 	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
@@ -104,19 +120,24 @@ func TestRunnerInstallMutationsAtCommitAllowsMissingDeletePrimary(t *testing.T) 
 	key := []byte("install-delete-missing")
 	start, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
-	commit, err := runner.InstallMutationsAtCommit(ctx, key, []*backend.Mutation{{
-		Op:  backend.MutationDelete,
-		Key: key,
-	}}, start, start+1)
-	require.NoError(t, err, "segment install must accept tombstones for keys already absent")
-	require.Equal(t, start+1, commit)
+	result, err := runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    key,
+		ReadVersion:   start,
+		CommitVersion: start + 1,
+		Mutations: []*backend.Mutation{{
+			Op:  backend.MutationDelete,
+			Key: key,
+		}},
+	})
+	require.NoError(t, err, "metadata commit must accept tombstones for keys already absent")
+	require.Equal(t, start+1, result.CommitVersion)
 
-	_, ok, err := runner.Get(ctx, key, commit)
+	_, ok, err := runner.Get(ctx, key, result.CommitVersion)
 	require.NoError(t, err)
 	require.False(t, ok)
 }
 
-func TestRunnerInstallMutationsAtCommitRejectsBadCommitVersion(t *testing.T) {
+func TestRunnerCommitMetadataRejectsBadCommitVersion(t *testing.T) {
 	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
@@ -125,67 +146,103 @@ func TestRunnerInstallMutationsAtCommitRejectsBadCommitVersion(t *testing.T) {
 	ctx := context.Background()
 	start, err := runner.ReserveTimestamp(ctx, 1)
 	require.NoError(t, err)
-	// commitVersion must be strictly greater than startVersion — same
-	// contract as MutateAtCommit so callers can't accidentally clobber
-	// MVCC ordering through the install path.
-	_, err = runner.InstallMutationsAtCommit(ctx, []byte("x"), []*backend.Mutation{
-		{Op: backend.MutationPut, Key: []byte("x"), Value: []byte("v")},
-	}, start, start)
+	_, err = runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    []byte("x"),
+		ReadVersion:   start,
+		CommitVersion: start,
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: []byte("x"), Value: []byte("v")},
+		},
+	})
 	require.Error(t, err)
 }
 
-func TestRunnerInstallMutationsAtCommitEmptyGroupIsNoop(t *testing.T) {
+func TestRunnerCommitMetadataEmptyGroupIsNoop(t *testing.T) {
 	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	start, err := runner.ReserveTimestamp(ctx, 2)
+	start, err := runner.ReserveTimestamp(ctx, 1)
 	require.NoError(t, err)
-	commit, err := runner.InstallMutationsAtCommit(ctx, []byte("primary"), nil, start, start+1)
+	result, err := runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:  []byte("primary"),
+		ReadVersion: start,
+	})
 	require.NoError(t, err)
-	// An empty install must still complete cleanly; the chain layers that
-	// produce zero mutations (e.g., a future SealedTrackingLayer that only
-	// updates in-memory state) need this path to succeed.
-	require.GreaterOrEqual(t, commit, uint64(0))
+	require.Equal(t, start, result.CommitVersion)
 }
 
-// Note: in-process retry of InstallMutationsAtCommit at the same
-// commitVersion is intentionally not supported — the runner's nextTS
-// advances past the commit on the first successful call and the second
-// call returns commit_ts_expired. The crash-recovery story uses a fresh
-// Runner instance (process restart), where nextTS is rebuilt from disk state.
-
-func TestRunnerTryAtomicMutateAppliesPredicateCheckedGroup(t *testing.T) {
+func TestRunnerCommitMetadataRequestIDAppliesPredicateCheckedGroup(t *testing.T) {
 	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
 
 	ctx := context.Background()
-	start, err := runner.ReserveTimestamp(ctx, 2)
+	start, err := runner.ReserveTimestamp(ctx, 1)
 	require.NoError(t, err)
-	handled, err := runner.TryAtomicMutate(ctx, []byte("alpha"), []*backend.Predicate{
-		{Key: []byte("alpha"), Kind: backend.PredicateNotExists},
-		{Key: []byte("beta"), Kind: backend.PredicateNotExists},
-	}, []*backend.Mutation{
-		{Op: backend.MutationPut, Key: []byte("alpha"), Value: []byte("one")},
-		{Op: backend.MutationPut, Key: []byte("beta"), Value: []byte("two")},
-	}, start, start+1)
+	result, err := runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:  []byte("alpha"),
+		ReadVersion: start,
+		Predicates: []*backend.Predicate{
+			{Key: []byte("alpha"), Kind: backend.PredicateNotExists},
+			{Key: []byte("beta"), Kind: backend.PredicateNotExists},
+		},
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: []byte("alpha"), Value: []byte("one")},
+			{Op: backend.MutationPut, Key: []byte("beta"), Value: []byte("two")},
+		},
+	})
 	require.NoError(t, err)
-	require.True(t, handled)
 
-	value, ok, err := runner.Get(ctx, []byte("alpha"), start+1)
+	value, ok, err := runner.Get(ctx, []byte("alpha"), result.CommitVersion)
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Equal(t, []byte("one"), value)
 	stats := runner.Stats()
-	require.Equal(t, uint64(1), stats["atomic_mutate_total"])
-	require.Equal(t, uint64(0), stats["atomic_predicate_rejected_total"])
+	require.Equal(t, uint64(1), stats["metadata_commit_total"])
+	require.Equal(t, uint64(0), stats["metadata_predicate_rejected_total"])
 }
 
-func TestRunnerTryAtomicMutateRejectsValuePredicateMismatch(t *testing.T) {
+func TestRunnerCommitMetadataAppliesPredicateCheckedGroup(t *testing.T) {
+	db := openTestDB(t, "", nil)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	readVersion, err := runner.ReserveTimestamp(ctx, 1)
+	require.NoError(t, err)
+	result, err := runner.CommitMetadata(ctx, backend.MetadataCommand{
+		RequestID:   []byte("metadata-command-1"),
+		Mount:       "vol",
+		MountKeyID:  1,
+		ReadVersion: readVersion,
+		Predicates: []*backend.Predicate{
+			{Key: []byte("alpha"), Kind: backend.PredicateNotExists},
+			{Key: []byte("beta"), Kind: backend.PredicateNotExists},
+		},
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: []byte("alpha"), Value: []byte("one")},
+			{Op: backend.MutationPut, Key: []byte("beta"), Value: []byte("two")},
+		},
+	})
+	require.NoError(t, err)
+	require.Greater(t, result.CommitVersion, readVersion)
+	require.Equal(t, uint64(2), result.AppliedMutations)
+
+	value, ok, err := runner.Get(ctx, []byte("alpha"), result.CommitVersion)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("one"), value)
+	stats := runner.Stats()
+	require.Equal(t, uint64(1), stats["metadata_commit_total"])
+	require.Equal(t, uint64(0), stats["metadata_predicate_rejected_total"])
+}
+
+func TestRunnerCommitMetadataRejectsPredicateWithoutPartialApply(t *testing.T) {
 	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
@@ -194,51 +251,145 @@ func TestRunnerTryAtomicMutateRejectsValuePredicateMismatch(t *testing.T) {
 	ctx := context.Background()
 	start, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
-	_, err = runner.Mutate(ctx, []byte("alpha"), []*backend.Mutation{{
-		Op:    backend.MutationPut,
-		Key:   []byte("alpha"),
-		Value: []byte("one"),
-	}}, start, start+1, 0)
+	_, err = runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    []byte("alpha"),
+		ReadVersion:   start,
+		CommitVersion: start + 1,
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   []byte("alpha"),
+			Value: []byte("one"),
+		}},
+	})
 	require.NoError(t, err)
 
-	nextStart, err := runner.ReserveTimestamp(ctx, 2)
+	readVersion, err := runner.ReserveTimestamp(ctx, 1)
 	require.NoError(t, err)
-	handled, err := runner.TryAtomicMutate(ctx, []byte("beta"), []*backend.Predicate{{
-		Key:           []byte("alpha"),
-		Kind:          backend.PredicateValueEquals,
-		ExpectedValue: []byte("stale"),
-	}}, []*backend.Mutation{{
-		Op:    backend.MutationPut,
-		Key:   []byte("beta"),
-		Value: []byte("two"),
-	}}, nextStart, nextStart+1)
+	_, err = runner.CommitMetadata(ctx, backend.MetadataCommand{
+		RequestID:   []byte("metadata-command-reject"),
+		ReadVersion: readVersion,
+		Predicates: []*backend.Predicate{{
+			Key:           []byte("alpha"),
+			Kind:          backend.PredicateValueEquals,
+			ExpectedValue: []byte("stale"),
+		}},
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   []byte("beta"),
+			Value: []byte("two"),
+		}},
+	})
 	require.Error(t, err)
-	require.True(t, handled)
+	require.True(t, nokverrors.Retryable(err))
+	_, ok, getErr := runner.Get(ctx, []byte("beta"), localMaxVersion)
+	require.NoError(t, getErr)
+	require.False(t, ok)
+	require.Equal(t, uint64(1), runner.Stats()["metadata_predicate_rejected_total"])
+}
+
+func TestRunnerCommitMetadataRequestIDIsIdempotent(t *testing.T) {
+	db := openTestDB(t, "", nil)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	readVersion, err := runner.ReserveTimestamp(ctx, 1)
+	require.NoError(t, err)
+	first, err := runner.CommitMetadata(ctx, backend.MetadataCommand{
+		RequestID:   []byte("metadata-command-idempotent"),
+		ReadVersion: readVersion,
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   []byte("alpha"),
+			Value: []byte("one"),
+		}},
+	})
+	require.NoError(t, err)
+	second, err := runner.CommitMetadata(ctx, backend.MetadataCommand{
+		RequestID:   []byte("metadata-command-idempotent"),
+		ReadVersion: readVersion,
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   []byte("alpha"),
+			Value: []byte("two"),
+		}},
+	})
+	require.NoError(t, err)
+	require.Equal(t, first, second)
+	value, ok, err := runner.Get(ctx, []byte("alpha"), first.CommitVersion)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, []byte("one"), value)
+	require.Equal(t, uint64(1), runner.Stats()["metadata_commit_total"])
+}
+
+func TestRunnerCommitMetadataRejectsValuePredicateMismatch(t *testing.T) {
+	db := openTestDB(t, "", nil)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	start, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	_, err = runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    []byte("alpha"),
+		ReadVersion:   start,
+		CommitVersion: start + 1,
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   []byte("alpha"),
+			Value: []byte("one"),
+		}},
+	})
+	require.NoError(t, err)
+
+	nextStart, err := runner.ReserveTimestamp(ctx, 1)
+	require.NoError(t, err)
+	_, err = runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:  []byte("beta"),
+		ReadVersion: nextStart,
+		Predicates: []*backend.Predicate{{
+			Key:           []byte("alpha"),
+			Kind:          backend.PredicateValueEquals,
+			ExpectedValue: []byte("stale"),
+		}},
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   []byte("beta"),
+			Value: []byte("two"),
+		}},
+	})
+	require.Error(t, err)
 	require.True(t, nokverrors.Retryable(err))
 	_, ok, getErr := runner.Get(ctx, []byte("beta"), nextStart+1)
 	require.NoError(t, getErr)
 	require.False(t, ok)
-	require.Equal(t, uint64(1), runner.Stats()["atomic_predicate_rejected_total"])
+	require.Equal(t, uint64(1), runner.Stats()["metadata_predicate_rejected_total"])
 }
 
-func TestRunnerTryAtomicMutateHandlesMultiKeyPebbleBatch(t *testing.T) {
+func TestRunnerCommitMetadataHandlesPredicateFreeMultiKeyPebbleBatch(t *testing.T) {
 	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
 	require.NoError(t, err)
 
 	first, second := []byte("atomic-key-a"), []byte("atomic-key-b")
-	start, err := runner.ReserveTimestamp(context.Background(), 2)
+	start, err := runner.ReserveTimestamp(context.Background(), 1)
 	require.NoError(t, err)
-	handled, err := runner.TryAtomicMutate(context.Background(), first, nil, []*backend.Mutation{
-		{Op: backend.MutationPut, Key: first, Value: []byte("a")},
-		{Op: backend.MutationPut, Key: second, Value: []byte("b")},
-	}, start, start+1)
+	_, err = runner.CommitMetadata(context.Background(), backend.MetadataCommand{
+		PrimaryKey:  first,
+		ReadVersion: start,
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: first, Value: []byte("a")},
+			{Op: backend.MutationPut, Key: second, Value: []byte("b")},
+		},
+	})
 	require.NoError(t, err)
-	require.True(t, handled)
 }
 
-func TestRunnerTryAtomicMutateSerializesConcurrentSameKey(t *testing.T) {
+func TestRunnerCommitMetadataSerializesConcurrentSameKey(t *testing.T) {
 	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
@@ -260,18 +411,19 @@ func TestRunnerTryAtomicMutateSerializesConcurrentSameKey(t *testing.T) {
 				errCh <- reserveErr
 				return
 			}
-			handled, mutateErr := runner.TryAtomicMutate(ctx, key, []*backend.Predicate{{
-				Key:  key,
-				Kind: backend.PredicateNotExists,
-			}}, []*backend.Mutation{{
-				Op:    backend.MutationPut,
-				Key:   key,
-				Value: []byte{byte(i)},
-			}}, ts, ts+1)
-			if !handled {
-				errCh <- errInvalidAtomicMutate
-				return
-			}
+			_, mutateErr := runner.CommitMetadata(ctx, backend.MetadataCommand{
+				PrimaryKey:  key,
+				ReadVersion: ts,
+				Predicates: []*backend.Predicate{{
+					Key:  key,
+					Kind: backend.PredicateNotExists,
+				}},
+				Mutations: []*backend.Mutation{{
+					Op:    backend.MutationPut,
+					Key:   key,
+					Value: []byte{byte(i)},
+				}},
+			})
 			if mutateErr == nil {
 				successes.Add(1)
 				return
@@ -300,11 +452,16 @@ func TestRunnerRestartsAboveObservedTimestamp(t *testing.T) {
 	require.NoError(t, err)
 	start, err := runner.ReserveTimestamp(context.Background(), 2)
 	require.NoError(t, err)
-	_, err = runner.Mutate(context.Background(), []byte("k"), []*backend.Mutation{{
-		Op:    backend.MutationPut,
-		Key:   []byte("k"),
-		Value: []byte("v"),
-	}}, start, start+1, 0)
+	_, err = runner.CommitMetadata(context.Background(), backend.MetadataCommand{
+		PrimaryKey:    []byte("k"),
+		ReadVersion:   start,
+		CommitVersion: start + 1,
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   []byte("k"),
+			Value: []byte("v"),
+		}},
+	})
 	require.NoError(t, err)
 	require.NoError(t, db.Close())
 

@@ -156,9 +156,9 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 		if len(quotaMutations) == 0 {
 			// One-phase counters are per transaction attempt, not per logical
 			// Create, so contention retries and admission misses stay visible.
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
+			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, all, startVersion, commitVersion)
+		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, all, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return model.CreateResult{}, err
 	}

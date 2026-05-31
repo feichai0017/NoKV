@@ -234,9 +234,9 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 				atomicValueEquals(inodeKey, oldInodeValue),
 				atomicValueEquals(parent.key, parent.value),
 			}
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}

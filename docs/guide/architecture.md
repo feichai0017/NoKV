@@ -49,8 +49,9 @@ flowchart LR
 ```
 
 `fsmeta/backend.Store` is the key boundary. It exposes timestamped reads,
-scans, predicates, mutations, and optional atomic mutation. It does not expose
-Pebble, Holt, Raft, protobuf, migration, or SST concepts.
+scans, and `MetadataCommand` commits. A command carries predicates, mutations,
+and watch projection keys under one metadata commit boundary. It does not
+expose Pebble, Holt, Raft, protobuf, migration, or SST concepts.
 
 ## Local Runtime
 
@@ -73,9 +74,9 @@ plane:
   notifications.
 
 The target shape is mount-scoped metadata execution, not a general-purpose
-distributed KV first. fsmeta compiles namespace operations into backend
-predicates and mutations; the distributed data plane applies those groups
-atomically at a committed Raft frontier.
+distributed KV first. fsmeta compiles namespace operations into metadata
+commands; the distributed data plane applies those commands atomically at a
+committed Raft frontier and streams apply-ordered watch events back to fsmeta.
 
 ## Holt Placement
 

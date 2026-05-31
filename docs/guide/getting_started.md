@@ -6,8 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 # Getting Started
 
 This guide starts the local Pebble-backed fsmeta runtime. The distributed Rust
-data plane is developed in `raftstore`; it is not the default Compose path
-until the fsmeta runtime adapter is complete.
+data plane lives in `raftstore`; it is available through the `raftstore`
+runtime but is not the default Compose demo path yet.
 
 ## Prerequisites
 
@@ -53,11 +53,14 @@ process split is:
 go run ./cmd/nokv meta-root ...
 go run ./cmd/nokv coordinator ...
 cargo run --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server -- ...
-go run ./cmd/nokv-fsmeta ...
+go run ./cmd/nokv-fsmeta \
+  --runtime raftstore \
+  --coordinator-addr 127.0.0.1:23800 \
+  --bootstrap-mount default
 ```
 
 `cmd/nokv` owns Go control-plane startup only. The Rust data-plane binary owns
-the replicated StoreKV service.
+the replicated metadata data-plane service.
 
 ## Library Usage
 

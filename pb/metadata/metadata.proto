@@ -1,0 +1,191 @@
+// Copyright 2024-2026 The NoKV Authors.
+// SPDX-License-Identifier: Apache-2.0
+
+// Use scripts/gen.sh to generate .pb.go files.
+syntax = "proto3";
+
+package nokv.metadata.v1;
+
+import "error/error.proto";
+import "meta/region.proto";
+
+option go_package = "github.com/feichai0017/NoKV/pb/metadata;metadatapb";
+
+enum ReadConsistency {
+  READ_CONSISTENCY_STRONG = 0;
+  READ_CONSISTENCY_BOUNDED_STALE = 1;
+}
+
+enum ReadPreference {
+  READ_PREFERENCE_LEADER_ONLY = 0;
+  READ_PREFERENCE_FOLLOWER_PREFER = 1;
+}
+
+message MetadataContext {
+  uint64 region_id = 1;
+  nokv.meta.v1.RegionEpoch region_epoch = 2;
+  nokv.meta.v1.RegionPeer peer = 3;
+  ReadConsistency read_consistency = 4;
+  ReadPreference read_preference = 5;
+}
+
+message MetadataKV {
+  bytes key = 1;
+  bytes value = 2;
+  uint64 version = 3;
+  uint64 expires_at = 4;
+}
+
+message MetadataKeyError {
+  MetadataLocked locked = 1;
+  MetadataWriteConflict write_conflict = 2;
+  MetadataKeyAlreadyExists already_exists = 3;
+  string retryable = 4;
+  string abort = 5;
+}
+
+message MetadataLocked {
+  bytes primary_lock = 1;
+  bytes key = 2;
+  uint64 lock_version = 3;
+  uint64 lock_ttl = 4;
+}
+
+message MetadataWriteConflict {
+  bytes key = 1;
+  bytes primary = 2;
+  uint64 conflict_ts = 3;
+  uint64 commit_ts = 4;
+  uint64 start_ts = 5;
+}
+
+message MetadataKeyAlreadyExists {
+  bytes key = 1;
+}
+
+message MetadataGetRequest {
+  MetadataContext context = 1;
+  bytes key = 2;
+  uint64 version = 3;
+}
+
+message MetadataGetResponse {
+  MetadataKV kv = 1;
+  bool not_found = 2;
+  MetadataKeyError error = 3;
+  nokv.error.v1.RegionError region_error = 4;
+}
+
+message MetadataBatchGetRequest {
+  MetadataContext context = 1;
+  repeated MetadataGetRequest requests = 2;
+}
+
+message MetadataBatchGetResponse {
+  repeated MetadataGetResponse responses = 1;
+  nokv.error.v1.RegionError region_error = 2;
+}
+
+message MetadataScanRequest {
+  MetadataContext context = 1;
+  bytes start_key = 2;
+  uint32 limit = 3;
+  uint64 version = 4;
+  bool include_start = 5;
+  bool reverse = 6;
+}
+
+message MetadataScanResponse {
+  repeated MetadataKV kvs = 1;
+  MetadataKeyError error = 2;
+  nokv.error.v1.RegionError region_error = 3;
+}
+
+enum MetadataPredicateKind {
+  METADATA_PREDICATE_KIND_NOT_EXISTS = 0;
+  METADATA_PREDICATE_KIND_EXISTS = 1;
+  METADATA_PREDICATE_KIND_VALUE_EQUALS = 2;
+}
+
+message MetadataPredicate {
+  bytes key = 1;
+  MetadataPredicateKind kind = 2;
+  uint64 read_version = 3;
+  bytes expected_value = 4;
+}
+
+message MetadataMutation {
+  enum Op {
+    PUT = 0;
+    DELETE = 1;
+  }
+
+  Op op = 1;
+  bytes key = 2;
+  bytes value = 3;
+  bool assertion_not_exist = 4;
+  uint64 expires_at = 5;
+}
+
+message MetadataCommand {
+  bytes request_id = 1;
+  string mount = 2;
+  uint64 mount_key_id = 3;
+  bytes primary_key = 4;
+  uint64 read_version = 5;
+  repeated MetadataPredicate predicates = 6;
+  repeated MetadataMutation mutations = 7;
+  repeated bytes watch_keys = 8;
+  uint64 commit_version = 9;
+}
+
+message MetadataCommitResult {
+  uint64 commit_version = 1;
+  uint64 region_id = 2;
+  uint64 term = 3;
+  uint64 index = 4;
+  uint64 applied_mutations = 5;
+}
+
+message MetadataCommitRequest {
+  MetadataContext context = 1;
+  MetadataCommand command = 2;
+}
+
+message MetadataCommitResponse {
+  MetadataCommitResult result = 1;
+  MetadataKeyError error = 2;
+  nokv.error.v1.RegionError region_error = 3;
+}
+
+enum MetadataApplyWatchEventSource {
+  METADATA_APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED = 0;
+  METADATA_APPLY_WATCH_EVENT_SOURCE_COMMIT = 1;
+}
+
+message MetadataWatchApplyRequest {
+  bytes key_prefix = 1;
+  uint32 buffer = 2;
+}
+
+message MetadataApplyWatchEvent {
+  uint64 region_id = 1;
+  uint64 term = 2;
+  uint64 index = 3;
+  MetadataApplyWatchEventSource source = 4;
+  uint64 commit_version = 5;
+  repeated bytes keys = 6;
+}
+
+message MetadataWatchApplyResponse {
+  MetadataApplyWatchEvent event = 1;
+  uint64 dropped_events = 2;
+}
+
+service MetadataPlane {
+  rpc Get(MetadataGetRequest) returns (MetadataGetResponse);
+  rpc BatchGet(MetadataBatchGetRequest) returns (MetadataBatchGetResponse);
+  rpc Scan(MetadataScanRequest) returns (MetadataScanResponse);
+  rpc CommitMetadata(MetadataCommitRequest) returns (MetadataCommitResponse);
+  rpc WatchApply(MetadataWatchApplyRequest) returns (stream MetadataWatchApplyResponse);
+}

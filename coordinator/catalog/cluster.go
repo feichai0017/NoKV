@@ -479,14 +479,20 @@ func (c *Cluster) ObserveRootEventLifecycle(event rootevent.Event) rootstate.Tra
 // GetRegionDescriptorByKey returns the rooted descriptor containing key
 // ([start, end)).
 func (c *Cluster) GetRegionDescriptorByKey(key []byte) (topology.Descriptor, bool) {
-	if c == nil {
-		return topology.Descriptor{}, false
-	}
-	desc, ok := c.regions.LookupDescriptor(key)
+	info, ok := c.GetRegionInfoByKey(key)
 	if !ok {
 		return topology.Descriptor{}, false
 	}
-	return desc, true
+	return info.Descriptor, true
+}
+
+// GetRegionInfoByKey returns the rooted descriptor containing key plus the
+// latest rebuildable leader hint observed from store heartbeats.
+func (c *Cluster) GetRegionInfoByKey(key []byte) (RegionInfo, bool) {
+	if c == nil {
+		return RegionInfo{}, false
+	}
+	return c.regions.LookupInfo(key)
 }
 
 // PendingRangeChangeForDescriptor reports whether the served descriptor is only

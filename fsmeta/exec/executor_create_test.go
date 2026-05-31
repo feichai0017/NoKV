@@ -457,9 +457,9 @@ func TestExecutorCreateSkipsSpeculativeAtomicMutateWithoutReadOrdering(t *testin
 	require.Empty(t, runner.atomicCalls)
 	require.Len(t, base.mutations, 1)
 	stats := executor.Stats()
-	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 1)
+	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 1)
+	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 1)
+	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 0)
 }
 
 func TestExecutorCreateFallsBackWhenAtomicMutateNotHandled(t *testing.T) {
@@ -480,8 +480,8 @@ func TestExecutorCreateFallsBackWhenAtomicMutateNotHandled(t *testing.T) {
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
 	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "fallback_total", 1)
+	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 1)
+	requireAtomicStatUint(t, stats, model.OperationCreate, "fallback_total", 0)
 	requireAtomicStatUint(t, stats, model.OperationCreate, "skip_total", 0)
 	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 0)
 	require.Len(t, base.mutations, 1)
@@ -503,11 +503,11 @@ func TestExecutorCreateRecordsUnsupportedAtomicRunner(t *testing.T) {
 
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 0)
+	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 1)
+	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 1)
 	requireAtomicStatUint(t, stats, model.OperationCreate, "fallback_total", 0)
 	requireAtomicStatUint(t, stats, model.OperationCreate, "skip_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 1)
+	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 0)
 	require.Len(t, runner.mutations, 1)
 }
 

@@ -18,8 +18,9 @@ import (
 )
 
 const (
-	localWriteKeyPrefix byte = 'w'
-	localMaxVersion          = ^uint64(0)
+	localWriteKeyPrefix           byte = 'w'
+	localMetadataCommandKeyPrefix byte = 'm'
+	localMaxVersion                    = ^uint64(0)
 
 	localWritePut    byte = 1
 	localWriteDelete byte = 2
@@ -35,9 +36,8 @@ type Runner struct {
 	latestObservedTS uint64
 	observer         mutationObserver
 
-	atomicMutateTotal            atomic.Uint64
-	atomicPredicateRejectedTotal atomic.Uint64
-	mutateTotal                  atomic.Uint64
+	metadataCommitTotal            atomic.Uint64
+	metadataPredicateRejectedTotal atomic.Uint64
 }
 
 type mutationObserver interface {
@@ -49,6 +49,11 @@ type localWrite struct {
 	StartVersion uint64
 	ExpiresAt    uint64
 	Value        []byte
+}
+
+type localMetadataCommandRecord struct {
+	CommitVersion    uint64
+	AppliedMutations uint64
 }
 
 // NewRunner constructs a local fsmeta backend over a Pebble DB.
@@ -145,72 +150,45 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 	return out, err
 }
 
-// Mutate commits all mutations atomically at the effective local commit
-// timestamp. The effective timestamp may move forward when another timestamp
-// was observed after the caller reserved its speculative commit timestamp.
-func (r *Runner) Mutate(ctx context.Context, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion, _ uint64) (uint64, error) {
-	return r.mutate(ctx, primary, mutations, startVersion, commitVersion, true)
-}
-
-// MutateAtCommit commits all mutations exactly at commitVersion.
-func (r *Runner) MutateAtCommit(ctx context.Context, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion, _ uint64) (uint64, error) {
-	return r.mutate(ctx, primary, mutations, startVersion, commitVersion, false)
-}
-
-// InstallMutationsAtCommit applies a segment-install mutation group at
-// commitVersion. Local demo mode stores every metadata value in the write
-// record, so installs are one Pebble batch with no separate intent table.
-func (r *Runner) InstallMutationsAtCommit(ctx context.Context, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64) (uint64, error) {
+// CommitMetadata validates predicates and applies the metadata mutation group
+// under one local Pebble batch. RequestID is optional, but when present it
+// provides durable idempotency for retried metadata commands.
+func (r *Runner) CommitMetadata(ctx context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
 	if err := ctxErr(ctx); err != nil {
-		return 0, err
+		return backend.MetadataCommitResult{}, err
 	}
-	if commitVersion <= startVersion {
-		return 0, txnAbort(errCommitVersion)
+	if command.ReadVersion == 0 {
+		return backend.MetadataCommitResult{}, txnAbort(errInvalidMetadataCommand)
 	}
-	effectiveCommitVersion, observer, err := r.applyMutationGroup(primary, mutations, startVersion, commitVersion, false, true)
+	if len(command.Mutations) == 0 {
+		return backend.MetadataCommitResult{
+			CommitVersion: command.ReadVersion,
+			Index:         command.ReadVersion,
+		}, nil
+	}
+	commitVersion, applied, observer, err := r.applyMetadataCommand(command)
 	if err != nil {
-		return 0, err
+		return backend.MetadataCommitResult{}, err
 	}
 	if observer != nil {
-		observer.ObserveMutation(effectiveCommitVersion, mutations)
+		observer.ObserveMutation(commitVersion, command.Mutations)
 	}
-	return effectiveCommitVersion, nil
-}
-
-// AtomicMutatePreservesReadOrder reports that TryAtomicMutate validates
-// predicates and applies writes under the same local mutex.
-func (r *Runner) AtomicMutatePreservesReadOrder() bool {
-	return r != nil
-}
-
-// TryAtomicMutate applies predicate-checked mutations through one Pebble batch.
-func (r *Runner) TryAtomicMutate(ctx context.Context, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
-	if err := ctxErr(ctx); err != nil {
-		return true, err
-	}
-	if commitVersion <= startVersion {
-		return true, txnAbort(errCommitVersion)
-	}
-	effectiveCommitVersion, observer, handled, err := r.applyAtomicMutationGroup(primary, predicates, mutations, startVersion, commitVersion)
-	if err != nil || !handled {
-		return handled, err
-	}
-	if observer != nil {
-		observer.ObserveMutation(effectiveCommitVersion, mutations)
-	}
-	return true, nil
+	return backend.MetadataCommitResult{
+		CommitVersion:    commitVersion,
+		Index:            commitVersion,
+		AppliedMutations: applied,
+	}, nil
 }
 
 // Stats returns local runner diagnostics.
 func (r *Runner) Stats() map[string]any {
 	if r == nil {
 		return map[string]any{
-			"next_timestamp":                  uint64(0),
-			"latest_observed":                 uint64(0),
-			"mutate_total":                    uint64(0),
-			"atomic_mutate_total":             uint64(0),
-			"atomic_predicate_rejected_total": uint64(0),
-			"storage":                         "pebble",
+			"next_timestamp":                    uint64(0),
+			"latest_observed":                   uint64(0),
+			"metadata_commit_total":             uint64(0),
+			"metadata_predicate_rejected_total": uint64(0),
+			"storage":                           "pebble",
 		}
 	}
 	r.mu.Lock()
@@ -218,65 +196,54 @@ func (r *Runner) Stats() map[string]any {
 	observed := r.latestObservedTS
 	r.mu.Unlock()
 	return map[string]any{
-		"next_timestamp":                  next,
-		"latest_observed":                 observed,
-		"mutate_total":                    r.mutateTotal.Load(),
-		"atomic_mutate_total":             r.atomicMutateTotal.Load(),
-		"atomic_predicate_rejected_total": r.atomicPredicateRejectedTotal.Load(),
-		"storage":                         "pebble",
+		"next_timestamp":                    next,
+		"latest_observed":                   observed,
+		"metadata_commit_total":             r.metadataCommitTotal.Load(),
+		"metadata_predicate_rejected_total": r.metadataPredicateRejectedTotal.Load(),
+		"storage":                           "pebble",
 	}
 }
 
-func (r *Runner) mutate(ctx context.Context, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowCommitPush bool) (uint64, error) {
-	if err := ctxErr(ctx); err != nil {
-		return 0, err
-	}
-	if commitVersion <= startVersion {
-		return 0, txnAbort(errCommitVersion)
-	}
-	effectiveCommitVersion, observer, err := r.applyMutationGroup(primary, mutations, startVersion, commitVersion, allowCommitPush, false)
-	if err != nil {
-		return 0, err
-	}
-	if observer != nil {
-		observer.ObserveMutation(effectiveCommitVersion, mutations)
-	}
-	return effectiveCommitVersion, nil
-}
-
-func (r *Runner) applyMutationGroup(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowCommitPush bool, allowMissingDeletePrimary bool) (uint64, mutationObserver, error) {
+func (r *Runner) applyMetadataCommand(command backend.MetadataCommand) (uint64, uint64, mutationObserver, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	effectiveCommitVersion := r.reserveMutationCommitVersionLocked(commitVersion, allowCommitPush)
-	if err := r.validateMutationsLocked(primary, mutations, startVersion, commitVersion, allowMissingDeletePrimary); err != nil {
-		return 0, nil, err
+	if len(command.RequestID) != 0 {
+		record, ok, err := r.readMetadataCommandRecordLocked(command.RequestID)
+		if err != nil {
+			return 0, 0, nil, txnRetryable(err)
+		}
+		if ok {
+			return record.CommitVersion, record.AppliedMutations, nil, nil
+		}
 	}
-	if err := r.applyMutationBatchLocked(mutations, startVersion, effectiveCommitVersion); err != nil {
-		return 0, nil, err
+	commitVersion := command.CommitVersion
+	allowCommitPush := true
+	if commitVersion == 0 {
+		commitVersion = command.ReadVersion + 1
+	} else {
+		allowCommitPush = false
 	}
-	return effectiveCommitVersion, r.completeMutationApplyLocked(effectiveCommitVersion, false), nil
-}
-
-func (r *Runner) applyAtomicMutationGroup(primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (uint64, mutationObserver, bool, error) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	if applied, err := r.atomicMutationAlreadyAppliedLocked(mutations, startVersion, commitVersion); err != nil {
-		return 0, nil, true, txnRetryable(err)
-	} else if applied {
-		r.recordAtomicMutationMetric()
-		return commitVersion, r.observer, true, nil
+	if commitVersion <= command.ReadVersion {
+		return 0, 0, nil, txnAbort(errCommitVersion)
 	}
-	if err := r.validateAtomicPredicatesLocked(predicates, startVersion); err != nil {
-		r.atomicPredicateRejectedTotal.Add(1)
-		return 0, nil, true, err
+	commitVersion = r.reserveMutationCommitVersionLocked(commitVersion, allowCommitPush)
+	if err := r.validateMetadataPredicatesLocked(command.Predicates, command.ReadVersion); err != nil {
+		r.metadataPredicateRejectedTotal.Add(1)
+		return 0, 0, nil, err
 	}
-	if err := r.validateMutationsLocked(primary, mutations, startVersion, commitVersion, false); err != nil {
-		return 0, nil, true, err
+	primary := command.PrimaryKey
+	if len(primary) == 0 {
+		primary = metadataCommandPrimary(command.Mutations)
 	}
-	if err := r.applyMutationBatchLocked(mutations, startVersion, commitVersion); err != nil {
-		return 0, nil, true, err
+	if err := r.validateMutationsLocked(primary, command.Mutations, command.ReadVersion, commitVersion, true); err != nil {
+		return 0, 0, nil, err
 	}
-	return commitVersion, r.completeMutationApplyLocked(commitVersion, true), true, nil
+	if err := r.applyMetadataCommandBatchLocked(command, commitVersion); err != nil {
+		return 0, 0, nil, err
+	}
+	applied := uint64(len(command.Mutations))
+	r.metadataCommitTotal.Add(1)
+	return commitVersion, applied, r.completeMetadataApplyLocked(commitVersion), nil
 }
 
 func (r *Runner) reserveMutationCommitVersionLocked(commitVersion uint64, allowCommitPush bool) uint64 {
@@ -299,8 +266,7 @@ func (r *Runner) reserveMutationCommitVersionLocked(commitVersion uint64, allowC
 	return effective
 }
 
-func (r *Runner) completeMutationApplyLocked(commitVersion uint64, atomic bool) mutationObserver {
-	r.recordMutationMetrics(atomic)
+func (r *Runner) completeMetadataApplyLocked(commitVersion uint64) mutationObserver {
 	if commitVersion > r.latestObservedTS {
 		r.latestObservedTS = commitVersion
 	}
@@ -310,10 +276,10 @@ func (r *Runner) completeMutationApplyLocked(commitVersion uint64, atomic bool) 
 	return r.observer
 }
 
-func (r *Runner) validateAtomicPredicatesLocked(predicates []*backend.Predicate, startVersion uint64) error {
+func (r *Runner) validateMetadataPredicatesLocked(predicates []*backend.Predicate, startVersion uint64) error {
 	for _, pred := range predicates {
 		if pred == nil || len(pred.Key) == 0 {
-			return txnAbort(errInvalidAtomicMutate)
+			return txnAbort(errInvalidMetadataPredicate)
 		}
 		readVersion := pred.ReadVersion
 		if readVersion == 0 {
@@ -330,47 +296,17 @@ func (r *Runner) validateAtomicPredicatesLocked(predicates []*backend.Predicate,
 			}
 		case backend.PredicateExists:
 			if !exists {
-				return txnAbort(errInvalidAtomicMutate)
+				return txnAbort(errInvalidMetadataPredicate)
 			}
 		case backend.PredicateValueEquals:
 			if !exists || !bytes.Equal(value, pred.ExpectedValue) {
-				return txnRetryable(errAtomicPredicate)
+				return txnRetryable(errMetadataPredicateMismatch)
 			}
 		default:
-			return txnAbort(errInvalidAtomicMutate)
+			return txnAbort(errInvalidMetadataPredicate)
 		}
 	}
 	return nil
-}
-
-func (r *Runner) atomicMutationAlreadyAppliedLocked(mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
-	anyPresent := false
-	allPresent := true
-	for _, mut := range mutations {
-		if mut == nil {
-			continue
-		}
-		write, foundCommit, found, err := r.writeByStartVersionLocked(mut.Key, startVersion)
-		if err != nil {
-			return false, err
-		}
-		if !found {
-			allPresent = false
-			continue
-		}
-		anyPresent = true
-		expectedKind, err := backendMutationKind(mut.Op)
-		if err != nil {
-			return false, err
-		}
-		if foundCommit != commitVersion || write.Kind != expectedKind {
-			return false, nil
-		}
-		if mut.Op == backend.MutationPut && (!bytes.Equal(write.Value, mut.Value) || write.ExpiresAt != mut.ExpiresAt) {
-			return false, nil
-		}
-	}
-	return anyPresent && allPresent, nil
 }
 
 func (r *Runner) validateMutationsLocked(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowMissingDeletePrimary bool) error {
@@ -417,14 +353,14 @@ func (r *Runner) validateMutationsLocked(primary []byte, mutations []*backend.Mu
 	return nil
 }
 
-func (r *Runner) applyMutationBatchLocked(mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+func (r *Runner) applyMetadataCommandBatchLocked(command backend.MetadataCommand, commitVersion uint64) error {
 	batch := r.db.NewBatch()
 	defer func() { _ = batch.Close() }()
-	for _, mut := range mutations {
+	for _, mut := range command.Mutations {
 		if mut == nil {
 			continue
 		}
-		write, err := writeForMutation(mut, startVersion)
+		write, err := writeForMutation(mut, command.ReadVersion)
 		if err != nil {
 			return err
 		}
@@ -432,7 +368,32 @@ func (r *Runner) applyMutationBatchLocked(mutations []*backend.Mutation, startVe
 			return err
 		}
 	}
+	if len(command.RequestID) != 0 {
+		record := localMetadataCommandRecord{
+			CommitVersion:    commitVersion,
+			AppliedMutations: uint64(len(command.Mutations)),
+		}
+		if err := batch.Set(encodeLocalMetadataCommandKey(command.RequestID), encodeLocalMetadataCommandRecord(record), nil); err != nil {
+			return err
+		}
+	}
 	return batch.Commit(r.writeOpts)
+}
+
+func (r *Runner) readMetadataCommandRecordLocked(requestID []byte) (localMetadataCommandRecord, bool, error) {
+	value, closer, err := r.db.Get(encodeLocalMetadataCommandKey(requestID))
+	if err == cpebble.ErrNotFound {
+		return localMetadataCommandRecord{}, false, nil
+	}
+	if err != nil {
+		return localMetadataCommandRecord{}, false, err
+	}
+	defer func() { _ = closer.Close() }()
+	record, err := decodeLocalMetadataCommandRecord(value)
+	if err != nil {
+		return localMetadataCommandRecord{}, false, err
+	}
+	return record, true, nil
 }
 
 func (r *Runner) readValue(key []byte, readVersion uint64) ([]byte, bool, error) {
@@ -494,22 +455,6 @@ func (r *Runner) latestWriteVersionLocked(key []byte) (uint64, bool, error) {
 		return false
 	})
 	return latest, found, err
-}
-
-func (r *Runner) writeByStartVersionLocked(key []byte, startVersion uint64) (localWrite, uint64, bool, error) {
-	var foundWrite localWrite
-	var foundCommit uint64
-	var found bool
-	err := r.scanWritesLocked(key, func(write localWrite, commitVersion uint64) bool {
-		if write.StartVersion != startVersion {
-			return true
-		}
-		foundWrite = write
-		foundCommit = commitVersion
-		found = true
-		return false
-	})
-	return foundWrite, foundCommit, found, err
 }
 
 func (r *Runner) scanWritesLocked(key []byte, fn func(localWrite, uint64) bool) error {
@@ -610,17 +555,6 @@ func writeForMutation(mut *backend.Mutation, startVersion uint64) (localWrite, e
 	}
 }
 
-func backendMutationKind(op backend.MutationOp) (byte, error) {
-	switch op {
-	case backend.MutationPut:
-		return localWritePut, nil
-	case backend.MutationDelete:
-		return localWriteDelete, nil
-	default:
-		return localWritePut, txnUnsupportedMutation(op)
-	}
-}
-
 func encodeLocalWrite(write localWrite) []byte {
 	out := make([]byte, 1+8+8+binary.MaxVarintLen64+len(write.Value))
 	out[0] = write.Kind
@@ -661,6 +595,40 @@ func encodeLocalWriteKey(userKey []byte, version uint64) []byte {
 	binary.BigEndian.PutUint64(suffix[:], ^version)
 	out = append(out, suffix[:]...)
 	return out
+}
+
+func encodeLocalMetadataCommandKey(requestID []byte) []byte {
+	out := make([]byte, 0, 1+len(requestID)+2)
+	out = append(out, localMetadataCommandKeyPrefix)
+	out = appendEscapedKey(out, requestID)
+	out = append(out, 0, 0)
+	return out
+}
+
+func encodeLocalMetadataCommandRecord(record localMetadataCommandRecord) []byte {
+	out := make([]byte, 16)
+	binary.BigEndian.PutUint64(out[0:8], record.CommitVersion)
+	binary.BigEndian.PutUint64(out[8:16], record.AppliedMutations)
+	return out
+}
+
+func decodeLocalMetadataCommandRecord(src []byte) (localMetadataCommandRecord, error) {
+	if len(src) != 16 {
+		return localMetadataCommandRecord{}, errInvalidInternalEntry
+	}
+	return localMetadataCommandRecord{
+		CommitVersion:    binary.BigEndian.Uint64(src[0:8]),
+		AppliedMutations: binary.BigEndian.Uint64(src[8:16]),
+	}, nil
+}
+
+func metadataCommandPrimary(mutations []*backend.Mutation) []byte {
+	for _, mut := range mutations {
+		if mut != nil && len(mut.Key) != 0 {
+			return mut.Key
+		}
+	}
+	return nil
 }
 
 func appendEscapedKey(out []byte, key []byte) []byte {

@@ -15,10 +15,12 @@ import (
 	"strings"
 	"syscall"
 
+	coordclient "github.com/feichai0017/NoKV/coordinator/client"
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/feichai0017/NoKV/fsmeta/observe"
 	fsmetalocal "github.com/feichai0017/NoKV/fsmeta/runtime/local"
+	fsmetaraftstore "github.com/feichai0017/NoKV/fsmeta/runtime/raftstore"
 	fsmetaserver "github.com/feichai0017/NoKV/fsmeta/server"
 	metricspkg "github.com/feichai0017/NoKV/metrics"
 	"google.golang.org/grpc"
@@ -29,6 +31,7 @@ var (
 	listen           = net.Listen
 	signalNotify     = signal.Notify
 	openLocalRuntime = fsmetalocal.Open
+	openRaftRuntime  = fsmetaraftstore.Open
 )
 
 type fsmetaServerRuntime struct {
@@ -42,7 +45,10 @@ type fsmetaServerRuntime struct {
 }
 
 type configuredRuntimeOptions struct {
-	Local fsmetalocal.Options
+	Kind            string
+	Local           fsmetalocal.Options
+	CoordinatorAddr string
+	Raftstore       fsmetaraftstore.Options
 }
 
 func fatalf(format string, args ...any) {
@@ -58,6 +64,9 @@ func main() {
 		localMountID        = flag.String("local-mount-id", "default", "single mount id admitted by the local runtime")
 		localMountKeyID     = flag.Uint64("local-mount-key-id", 1, "single mount key id admitted by the local runtime")
 		localRootInode      = flag.Uint64("local-root-inode", uint64(model.RootInode), "root inode for the local runtime")
+		runtimeKind         = flag.String("runtime", "local", "fsmeta runtime: local or raftstore")
+		coordinatorAddr     = flag.String("coordinator-addr", "", "coordinator gRPC address for raftstore runtime")
+		bootstrapMount      = flag.String("bootstrap-mount", "", "optional mount id whose root inode should be bootstrapped on raftstore runtime startup")
 		_                   = flag.Int("affinity-buckets", layout.DefaultAffinityBucketCount, "accepted for compatibility with older fsmeta demo scripts; local layout owns bucket selection")
 		lockTTL             = flag.Duration("lock-ttl", 0, "fsmeta lock TTL; zero uses the fsmeta default")
 		sessionCleanupLimit = flag.Uint("session-cleanup-limit", 0, "accepted for compatibility with older fsmeta demo scripts; local runtime has no background session cleaner")
@@ -80,11 +89,17 @@ func main() {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	rt, err := openConfiguredRuntime(ctx, configuredRuntimeOptions{
+		Kind: strings.TrimSpace(*runtimeKind),
 		Local: fsmetalocal.Options{
 			WorkDir:   *localWorkDir,
 			Mount:     localMount,
 			RootInode: model.InodeID(*localRootInode),
 			LockTTL:   *lockTTL,
+		},
+		CoordinatorAddr: strings.TrimSpace(*coordinatorAddr),
+		Raftstore: fsmetaraftstore.Options{
+			BootstrapMount: model.MountID(strings.TrimSpace(*bootstrapMount)),
+			LockTTL:        *lockTTL,
 		},
 	})
 	if err != nil {
@@ -144,11 +159,40 @@ func main() {
 }
 
 func openConfiguredRuntime(ctx context.Context, opts configuredRuntimeOptions) (*fsmetaServerRuntime, error) {
+	switch opts.Kind {
+	case "", "local":
+		return openConfiguredLocalRuntime(ctx, opts)
+	case "raftstore":
+		return openConfiguredRaftstoreRuntime(ctx, opts)
+	default:
+		return nil, fmt.Errorf("unsupported fsmeta runtime %q", opts.Kind)
+	}
+}
+
+func openConfiguredLocalRuntime(ctx context.Context, opts configuredRuntimeOptions) (*fsmetaServerRuntime, error) {
 	rt, err := openLocalRuntime(ctx, opts.Local)
 	if err != nil {
 		return nil, err
 	}
 	return localServerRuntime(rt, opts.Local), nil
+}
+
+func openConfiguredRaftstoreRuntime(ctx context.Context, opts configuredRuntimeOptions) (*fsmetaServerRuntime, error) {
+	if opts.CoordinatorAddr == "" {
+		return nil, fmt.Errorf("coordinator-addr is required for raftstore runtime")
+	}
+	coord, err := coordclient.NewGRPCClient(ctx, opts.CoordinatorAddr)
+	if err != nil {
+		return nil, err
+	}
+	raftOpts := opts.Raftstore
+	raftOpts.Coordinator = coord
+	rt, err := openRaftRuntime(ctx, raftOpts)
+	if err != nil {
+		_ = coord.Close()
+		return nil, err
+	}
+	return raftstoreServerRuntime(rt, coord, opts), nil
 }
 
 func localServerRuntime(rt *fsmetalocal.Runtime, opts fsmetalocal.Options) *fsmetaServerRuntime {
@@ -167,6 +211,48 @@ func localServerRuntime(rt *fsmetalocal.Runtime, opts fsmetalocal.Options) *fsme
 		},
 		startupSummary: fmt.Sprintf("fsmeta backend: local pebble work_dir=%q mount=%q mount_key_id=%d", opts.WorkDir, opts.Mount.MountID, opts.Mount.MountKeyID),
 		contractLog:    contractLog,
+	}
+}
+
+func raftstoreServerRuntime(rt *fsmetaraftstore.Runtime, coord *coordclient.GRPCClient, opts configuredRuntimeOptions) *fsmetaServerRuntime {
+	contractLog := "fsmeta commit contract: raftstore backend commits MetadataCommand through mount-scoped Rust/OpenRaft apply and Holt atomic metadata batches"
+	return &fsmetaServerRuntime{
+		executor: rt.Executor,
+		watcher:  rt.Watcher,
+		snapshot: rt.Snapshot,
+		close: func() error {
+			var first error
+			if err := rt.Close(); err != nil {
+				first = err
+			}
+			if err := coord.Close(); err != nil && first == nil {
+				first = err
+			}
+			return first
+		},
+		publishStats: func() {
+			publishExpvarOnce("nokv_fsmeta_executor", expvar.Func(func() any { return raftstoreExecutorStats(rt) }))
+			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return rt.Watcher.Stats() }))
+		},
+		startupSummary: fmt.Sprintf("fsmeta backend: raftstore coordinator=%q bootstrap_mount=%q", opts.CoordinatorAddr, opts.Raftstore.BootstrapMount),
+		contractLog:    contractLog,
+	}
+}
+
+func raftstoreExecutorStats(rt *fsmetaraftstore.Runtime) map[string]any {
+	if rt == nil || rt.Executor == nil {
+		return map[string]any{"commit_contract": raftstoreCommitContractStats()}
+	}
+	stats := rt.Executor.Stats()
+	stats["commit_contract"] = raftstoreCommitContractStats()
+	return stats
+}
+
+func raftstoreCommitContractStats() map[string]any {
+	return map[string]any{
+		"default_write_path":        "metadata_command_openraft_holt",
+		"successful_write_boundary": "durable",
+		"durable_boundary":          "mount_raft_commit_plus_holt_atomic_apply",
 	}
 }
 

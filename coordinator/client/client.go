@@ -698,7 +698,22 @@ func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyR
 	if resp.GetDescriptorRevision() < expectation.requiredDescriptorRevision {
 		return fmt.Errorf("%w: descriptor_revision=%d required=%d", errInvalidWitness, resp.GetDescriptorRevision(), expectation.requiredDescriptorRevision)
 	}
+	if leader := resp.GetLeaderPeer(); leader != nil && !descriptorHasPeer(resp.GetRegionDescriptor(), leader) {
+		return fmt.Errorf("%w: leader_peer store=%d peer=%d is not in descriptor", errInvalidWitness, leader.GetStoreId(), leader.GetPeerId())
+	}
 	return nil
+}
+
+func descriptorHasPeer(desc *metapb.RegionDescriptor, peer *metapb.RegionPeer) bool {
+	if desc == nil || peer == nil || peer.GetStoreId() == 0 || peer.GetPeerId() == 0 {
+		return false
+	}
+	for _, candidate := range desc.GetPeers() {
+		if candidate.GetStoreId() == peer.GetStoreId() && candidate.GetPeerId() == peer.GetPeerId() {
+			return true
+		}
+	}
+	return false
 }
 
 func validateGetStoreResponse(resp *coordpb.GetStoreResponse) error {

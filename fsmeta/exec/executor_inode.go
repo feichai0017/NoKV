@@ -187,10 +187,10 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 				atomicValueEquals(plan.ReadKeys[0], dentryValue),
 				atomicValueEquals(plan.MutateKeys[0], oldInodeValue),
 			}
-			if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+			if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 				return err
 			}
-		} else if err := e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
+		} else if err := e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		updated = inode

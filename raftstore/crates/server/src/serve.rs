@@ -3,16 +3,18 @@ use std::sync::Arc;
 
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_raftnode::{
-    ApplyStatusProvider, ApplyWatchProvider, RaftCommandExecutor, RegionSnapshotEngine,
+    ApplyStatusProvider, ApplyWatchProvider, MetadataCommandExecutor, RaftCommandExecutor,
+    RegionSnapshotEngine,
 };
 
 use crate::execution::ExecutionRuntime;
 use crate::service::RegionAdmissionState;
 use crate::{
     AppliedRegionDescriptorProvider, EmptyRegionDescriptorSink, EmptyRestartDiagnostics,
-    EmptyTopologyPublisher, PeerEndpointCatalog, RaftAdminServer, RaftAdminService,
-    RaftMembershipAdmin, RaftRuntimeStatusProvider, RegionAdmission, RegionDescriptorSink,
-    RestartDiagnosticsProvider, StoreKvServer, StoreKvService, TopologyPublisher,
+    EmptyTopologyPublisher, MetadataPlaneServer, MetadataPlaneService, PeerEndpointCatalog,
+    RaftAdminServer, RaftAdminService, RaftMembershipAdmin, RaftRuntimeStatusProvider,
+    RegionAdmission, RegionDescriptorSink, RestartDiagnosticsProvider, StoreKvServer,
+    StoreKvService, TopologyPublisher,
 };
 
 pub async fn serve(addr: SocketAddr, mvcc: MvccStore) -> Result<(), tonic::transport::Error> {
@@ -35,6 +37,7 @@ pub async fn serve_with_region_engine<E>(
 ) -> Result<(), tonic::transport::Error>
 where
     E: AppliedRegionDescriptorProvider
+        + MetadataCommandExecutor
         + RaftCommandExecutor
         + ApplyStatusProvider
         + ApplyWatchProvider
@@ -51,6 +54,7 @@ pub async fn serve_with_region_engine_and_admission<E>(
 ) -> Result<(), tonic::transport::Error>
 where
     E: AppliedRegionDescriptorProvider
+        + MetadataCommandExecutor
         + RaftCommandExecutor
         + ApplyStatusProvider
         + ApplyWatchProvider
@@ -62,6 +66,13 @@ where
     tonic::transport::Server::builder()
         .add_service(StoreKvServer::new(
             StoreKvService::with_admission_state_and_execution(
+                engine.clone(),
+                admission.clone(),
+                execution.clone(),
+            ),
+        ))
+        .add_service(MetadataPlaneServer::new(
+            MetadataPlaneService::with_admission_state_and_execution(
                 engine.clone(),
                 admission.clone(),
                 execution.clone(),
@@ -80,7 +91,7 @@ pub async fn serve_with_openraft_region_and_admission<E>(
     admission: RegionAdmission,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RegionSnapshotEngine + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
 {
     serve_with_openraft_region_admission_and_peer_endpoints(
         addr,
@@ -98,7 +109,7 @@ pub async fn serve_with_openraft_region_admission_and_peer_endpoints<E>(
     peer_endpoints: PeerEndpointCatalog,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RegionSnapshotEngine + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
 {
     serve_with_openraft_region_admission_peer_endpoints_and_descriptor_sink(
         addr,
@@ -118,7 +129,7 @@ pub async fn serve_with_openraft_region_admission_peer_endpoints_and_descriptor_
     descriptor_sink: D,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RegionSnapshotEngine + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
     D: RegionDescriptorSink,
 {
     serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_and_topology_publisher(
@@ -144,7 +155,7 @@ pub async fn serve_with_openraft_region_admission_peer_endpoints_descriptor_sink
     topology_publisher: Arc<dyn TopologyPublisher>,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RegionSnapshotEngine + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
     D: RegionDescriptorSink,
 {
     serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
@@ -168,15 +179,21 @@ pub fn openraft_region_service_pair<E, D>(
     restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
 ) -> (
     StoreKvService<nokv_raftnode::OpenRaftRegion<E>>,
+    MetadataPlaneService<nokv_raftnode::OpenRaftRegion<E>>,
     RaftAdminService<nokv_raftnode::OpenRaftRegion<E>, D>,
 )
 where
-    E: RegionSnapshotEngine + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
     D: RegionDescriptorSink,
 {
     let execution = ExecutionRuntime::default();
     let admission = RegionAdmissionState::new(admission);
     let store = StoreKvService::with_admission_state_and_execution(
+        region.clone(),
+        admission.clone(),
+        execution.clone(),
+    );
+    let metadata = MetadataPlaneService::with_admission_state_and_execution(
         region.clone(),
         admission.clone(),
         execution.clone(),
@@ -191,7 +208,7 @@ where
         )
         .with_topology_publisher(topology_publisher)
         .with_restart_diagnostics(restart_diagnostics);
-    (store, admin)
+    (store, metadata, admin)
 }
 
 pub async fn serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics<
@@ -207,12 +224,12 @@ pub async fn serve_with_openraft_region_admission_peer_endpoints_descriptor_sink
     restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RegionSnapshotEngine + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
     D: RegionDescriptorSink,
 {
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
     transport.register(admission.region_id, region.raft_handle());
-    let (store, admin) = openraft_region_service_pair(
+    let (store, metadata, admin) = openraft_region_service_pair(
         region,
         admission,
         peer_endpoints,
@@ -222,6 +239,7 @@ where
     );
     tonic::transport::Server::builder()
         .add_service(StoreKvServer::new(store))
+        .add_service(MetadataPlaneServer::new(metadata))
         .add_service(RaftAdminServer::new(admin))
         .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
         .serve(addr)

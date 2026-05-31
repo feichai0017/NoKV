@@ -187,12 +187,32 @@ func (r *versionedRunner) Scan(_ context.Context, startKey []byte, limit uint32,
 	return out, nil
 }
 
-func (r *versionedRunner) Mutate(_ context.Context, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion, _ uint64) (uint64, error) {
-	return r.applyMutations(primary, mutations, startVersion, commitVersion, true)
+func (r *versionedRunner) CommitMetadata(_ context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
+	primary := firstMutationKey(command.Mutations)
+	requestedCommitVersion := command.CommitVersion
+	allowCommitPush := false
+	if requestedCommitVersion == 0 {
+		requestedCommitVersion = command.ReadVersion + 1
+		allowCommitPush = true
+	}
+	commitVersion, err := r.applyMutations(primary, command.Mutations, command.ReadVersion, requestedCommitVersion, allowCommitPush)
+	if err != nil {
+		return backend.MetadataCommitResult{}, err
+	}
+	return backend.MetadataCommitResult{
+		CommitVersion:    commitVersion,
+		Index:            commitVersion,
+		AppliedMutations: uint64(len(command.Mutations)),
+	}, nil
 }
 
-func (r *versionedRunner) MutateAtCommit(_ context.Context, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion, _ uint64) (uint64, error) {
-	return r.applyMutations(primary, mutations, startVersion, commitVersion, false)
+func firstMutationKey(mutations []*backend.Mutation) []byte {
+	for _, mut := range mutations {
+		if mut != nil && len(mut.Key) != 0 {
+			return mut.Key
+		}
+	}
+	return nil
 }
 
 func (r *versionedRunner) applyMutations(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowCommitPush bool) (uint64, error) {
@@ -291,20 +311,29 @@ func TestVersionedRunnerDelaysPreallocatedCommitPastConcurrentRead(t *testing.T)
 
 	seedStart, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
-	_, err = runner.Mutate(ctx, epsilonKey, []*backend.Mutation{
-		{Op: backend.MutationPut, Key: epsilonKey, Value: epsilonValue},
-		{Op: backend.MutationPut, Key: inodeKey, Value: inodeValueOneLink},
-	}, seedStart, seedStart+1, 0)
+	_, err = runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    epsilonKey,
+		ReadVersion:   seedStart,
+		CommitVersion: seedStart + 1,
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: epsilonKey, Value: epsilonValue},
+			{Op: backend.MutationPut, Key: inodeKey, Value: inodeValueOneLink},
+		},
+	})
 	require.NoError(t, err)
 
 	linkStart, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
 	readVersion, err := runner.ReserveTimestamp(ctx, 1)
 	require.NoError(t, err)
-	_, err = runner.Mutate(ctx, etaKey, []*backend.Mutation{
-		{Op: backend.MutationPut, Key: etaKey, Value: etaValue, AssertionNotExist: true},
-		{Op: backend.MutationPut, Key: inodeKey, Value: inodeValueTwoLinks},
-	}, linkStart, linkStart+1, 0)
+	_, err = runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:  etaKey,
+		ReadVersion: linkStart,
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: etaKey, Value: etaValue, AssertionNotExist: true},
+			{Op: backend.MutationPut, Key: inodeKey, Value: inodeValueTwoLinks},
+		},
+	})
 	require.NoError(t, err)
 
 	_, ok, err := runner.Get(ctx, etaKey, readVersion)
@@ -337,18 +366,27 @@ func TestVersionedRunnerRejectsStaleConcurrentMutation(t *testing.T) {
 	require.NoError(t, err)
 	staleStart, err := runner.ReserveTimestamp(ctx, 2)
 	require.NoError(t, err)
-	_, err = runner.Mutate(ctx, key, []*backend.Mutation{{
-		Op:    backend.MutationPut,
-		Key:   key,
-		Value: []byte("first"),
-	}}, firstStart, firstStart+1, 0)
+	_, err = runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:  key,
+		ReadVersion: firstStart,
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   key,
+			Value: []byte("first"),
+		}},
+	})
 	require.NoError(t, err)
 
-	_, err = runner.Mutate(ctx, key, []*backend.Mutation{{
-		Op:    backend.MutationPut,
-		Key:   key,
-		Value: []byte("stale"),
-	}}, staleStart, staleStart+1, 0)
+	_, err = runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    key,
+		ReadVersion:   staleStart,
+		CommitVersion: staleStart + 1,
+		Mutations: []*backend.Mutation{{
+			Op:    backend.MutationPut,
+			Key:   key,
+			Value: []byte("stale"),
+		}},
+	})
 	require.Error(t, err)
 	var carrier interface {
 		KeyErrors() []*kvrpcpb.KeyError

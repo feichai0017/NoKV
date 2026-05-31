@@ -315,7 +315,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSess
 		// key, inode key, and any stale cleanup key must still match the values
 		// read above. Value predicates make the 1PC attempt a real CAS instead
 		// of an existence-only overwrite.
-		if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+		if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		record = candidate
@@ -395,7 +395,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req model.Heartbea
 			atomicValueEquals(plan.ReadKeys[0], sessionValue),
 			atomicValueEquals(plan.ReadKeys[1], ownerValue),
 		}
-		if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+		if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		record = candidate
@@ -457,7 +457,7 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req model.CloseWriteSe
 			predicates = append(predicates, atomicValueEquals(ownerKey, ownerValue))
 			mutations = append(mutations, &backend.Mutation{Op: backend.MutationDelete, Key: ownerKey})
 		}
-		return e.mutateWithAtomicOnePhase(ctx, plan.Kind, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+		return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}
@@ -581,7 +581,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 			mutations = append(mutations, &backend.Mutation{Op: backend.MutationDelete, Key: deletes[key]})
 		}
 		primary := deletes[keys[0]]
-		if _, err := e.runner.Mutate(ctx, primary, mutations, startVersion, commitVersion, e.lockTTL); err != nil {
+		if err := e.commitMetadataCommand(ctx, mount, primary, nil, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		expired = uint64(len(expiredSessions))

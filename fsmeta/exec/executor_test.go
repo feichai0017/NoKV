@@ -1029,12 +1029,48 @@ func (r *fakeRunner) Scan(_ context.Context, startKey []byte, limit uint32, vers
 	return out, nil
 }
 
-func (r *fakeRunner) Mutate(_ context.Context, primary []byte, mutations []*backend.Mutation, _, commitVersion, _ uint64) (uint64, error) {
-	return r.applyMutations(primary, mutations, commitVersion, r.actualCommitVersion)
-}
-
-func (r *fakeRunner) MutateAtCommit(_ context.Context, primary []byte, mutations []*backend.Mutation, _, commitVersion, _ uint64) (uint64, error) {
-	return r.applyMutations(primary, mutations, commitVersion, 0)
+func (r *fakeRunner) CommitMetadata(_ context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
+	for _, pred := range command.Predicates {
+		if pred == nil {
+			continue
+		}
+		value, exists := r.data[string(pred.Key)]
+		switch pred.Kind {
+		case backend.PredicateNotExists:
+			if exists {
+				return backend.MetadataCommitResult{}, model.ErrExists
+			}
+		case backend.PredicateExists:
+			if !exists {
+				return backend.MetadataCommitResult{}, model.ErrNotFound
+			}
+		case backend.PredicateValueEquals:
+			if !exists || !bytes.Equal(value, pred.ExpectedValue) {
+				return backend.MetadataCommitResult{}, model.ErrInvalidValue
+			}
+		default:
+			return backend.MetadataCommitResult{}, model.ErrInvalidRequest
+		}
+	}
+	commitVersion := command.CommitVersion
+	if commitVersion == 0 {
+		commitVersion = command.ReadVersion + 1
+		if r.actualCommitVersion != 0 {
+			commitVersion = r.actualCommitVersion
+		}
+	}
+	primary := command.PrimaryKey
+	if len(primary) == 0 {
+		primary = metadataCommandPrimary(command.Mutations)
+	}
+	if _, err := r.applyMutations(primary, command.Mutations, commitVersion, 0); err != nil {
+		return backend.MetadataCommitResult{}, err
+	}
+	return backend.MetadataCommitResult{
+		CommitVersion:    commitVersion,
+		Index:            commitVersion,
+		AppliedMutations: uint64(len(command.Mutations)),
+	}, nil
 }
 
 func (r *fakeRunner) applyMutations(primary []byte, mutations []*backend.Mutation, commitVersion, overrideCommitVersion uint64) (uint64, error) {
@@ -1142,6 +1178,32 @@ func (r *fakeAtomicRunner) AtomicMutatePreservesReadOrder() bool {
 	return true
 }
 
+func (r *fakeAtomicRunner) CommitMetadata(_ context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
+	commitVersion := command.CommitVersion
+	if commitVersion == 0 {
+		commitVersion = command.ReadVersion + 1
+	}
+	primary := command.PrimaryKey
+	if len(primary) == 0 {
+		primary = metadataCommandPrimary(command.Mutations)
+	}
+	if len(command.Predicates) == 0 {
+		return r.fakeRunner.CommitMetadata(context.Background(), command)
+	}
+	handled, err := r.TryAtomicMutate(context.Background(), primary, command.Predicates, command.Mutations, command.ReadVersion, commitVersion)
+	if err != nil {
+		return backend.MetadataCommitResult{}, err
+	}
+	if !handled {
+		return r.fakeRunner.CommitMetadata(context.Background(), command)
+	}
+	return backend.MetadataCommitResult{
+		CommitVersion:    commitVersion,
+		Index:            commitVersion,
+		AppliedMutations: uint64(len(command.Mutations)),
+	}, nil
+}
+
 func (r *fakeSpeculativeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
 	r.atomicCalls = append(r.atomicCalls, atomicMutateCall{
 		primary:       cloneBytes(primary),
@@ -1151,6 +1213,10 @@ func (r *fakeSpeculativeAtomicRunner) TryAtomicMutate(_ context.Context, primary
 		commitVersion: commitVersion,
 	})
 	return true, nil
+}
+
+func (r *fakeSpeculativeAtomicRunner) CommitMetadata(_ context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
+	return r.fakeRunner.CommitMetadata(context.Background(), command)
 }
 
 func seedDentry(t *testing.T, runner *fakeRunner, mount model.MountID, parent model.InodeID, name string, inode model.InodeID) {

@@ -44,6 +44,7 @@ Package boundaries follow ownership of truth, not convenience.
 | `fsmeta/observe/` | Runtime-neutral watch and snapshot observation surfaces. | Own namespace model objects, protobuf conversion, concrete runtimes, or backend clients. |
 | `fsmeta/exec/` | Semantic compiler, executor, visible-read helpers, and runtime-neutral holder logic over `fsmeta/backend`. | Import protobuf, coordinator, root, raftstore, Pebble, Holt, or concrete runtime packages. |
 | `fsmeta/runtime/local/` | Pebble-backed one-process fsmeta backend for demos, tests, and small deployments. | Become a generic KV database, import coordinator/root, or reinterpret compiler semantics outside the executor contract. |
+| `fsmeta/runtime/raftstore/` | Distributed fsmeta runtime adapter: coordinator-backed route/TSO/ID/mount resolution, MetadataPlane calls, watch apply streams, and rooted snapshot publication. | Own root truth, own topology, import Holt, reinterpret fsmeta semantics, or bypass coordinator routing and rooted lifecycle state. |
 | `fsmeta/server/`, `fsmeta/client/` | gRPC server/client boundary and protobuf conversion. | Put semantic execution or persistence logic in wire conversion code. |
 | `meta/root/` | Rooted truth for topology, authority, lifecycle events, grants, and seals. | Import coordinator service/client packages or fsmeta execution packages. |
 | `coordinator/` | Rebuildable serving view over root truth: routing, TSO, store discovery, scheduling, and root-event publish. | Become the source of rooted truth or own high-frequency fsmeta data. |

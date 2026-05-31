@@ -6,8 +6,8 @@ use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::AppliedKvEngine;
 use nokv_raftstore_server::{
-    root_event_transition_id, EmptyTopologyPublisher, MultiRegionRaftAdminService,
-    MultiRegionStoreKvService, PeerEndpointCatalog,
+    root_event_transition_id, EmptyTopologyPublisher, MultiRegionMetadataPlaneService,
+    MultiRegionRaftAdminService, MultiRegionStoreKvService, PeerEndpointCatalog,
 };
 use prost::Message;
 use prost_types::Any;
@@ -1480,6 +1480,7 @@ async fn split_child_multi_peer_bootstrap_does_not_block_on_immediate_quorum() {
         .insert_peer(202, "http://127.0.0.1:30202")
         .unwrap();
     let store_services = MultiRegionStoreKvService::new([]).unwrap();
+    let metadata_services = MultiRegionMetadataPlaneService::new([]).unwrap();
     let admin_services = MultiRegionRaftAdminService::new([]).unwrap();
     let hosted_regions = HostedRegionRegistry::new([]).unwrap();
     let controller = HoltRangeController {
@@ -1490,6 +1491,7 @@ async fn split_child_multi_peer_bootstrap_does_not_block_on_immediate_quorum() {
         mvcc: mvcc.clone(),
         transport: nokv_raftnode::TonicRaftTransportRegistry::default(),
         store_services,
+        metadata_services,
         admin_services,
         hosted_regions: hosted_regions.clone(),
         peer_endpoints: peer_endpoints.clone(),

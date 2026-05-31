@@ -15,8 +15,10 @@ import (
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
+	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
+	metapb "github.com/feichai0017/NoKV/pb/meta"
 )
 
 // GetRegionByKey returns region metadata for the specified key.
@@ -55,7 +57,7 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 		authorityAdmitted = true
 		defer authorityAdmission.Done()
 	}
-	desc, ok := s.cluster.GetRegionDescriptorByKey(req.GetKey())
+	info, ok := s.cluster.GetRegionInfoByKey(req.GetKey())
 	if !ok {
 		resp := admission.responseBase()
 		resp.NotFound = true
@@ -64,6 +66,7 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 		}
 		return resp, nil
 	}
+	desc := info.Descriptor
 	if pending, ok := s.cluster.PendingRangeChangeForDescriptor(desc.RegionID); ok {
 		return nil, statusStaleEpoch(pendingRangeChangeError(pending), reasonRangeChangePending)
 	}
@@ -73,10 +76,25 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 	resp := admission.responseBase()
 	resp.RegionDescriptor = metawire.DescriptorToProto(desc)
 	resp.DescriptorRevision = desc.RootEpoch
+	if leader := leaderPeerForDescriptor(desc, info.LeaderStoreID); leader != nil {
+		resp.LeaderPeer = leader
+	}
 	if err := s.attachMetadataAuthorityEvidence(resp, authorityAdmission, authorityAdmitted); err != nil {
 		return nil, err
 	}
 	return resp, nil
+}
+
+func leaderPeerForDescriptor(desc topology.Descriptor, storeID uint64) *metapb.RegionPeer {
+	if storeID == 0 {
+		return nil
+	}
+	for _, peer := range desc.Peers {
+		if peer.StoreID == storeID {
+			return &metapb.RegionPeer{StoreId: peer.StoreID, PeerId: peer.PeerID}
+		}
+	}
+	return nil
 }
 
 func pendingRangeChangeError(change rootstate.PendingRangeChange) string {

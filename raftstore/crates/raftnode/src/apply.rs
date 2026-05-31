@@ -6,6 +6,7 @@ use std::time::Instant;
 use nokv_mvcc::{KvEngine, MvccSnapshotEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use prost::Message;
 use tokio::sync::broadcast;
@@ -53,6 +54,15 @@ pub trait RaftCommandExecutor: Clone + Send + Sync + 'static {
         &'a self,
         req: &'a raftpb::RaftCmdRequest,
     ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a;
+}
+
+pub trait MetadataCommandExecutor: Clone + Send + Sync + 'static {
+    fn execute_metadata_command<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataCommitRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+           + Send
+           + 'a;
 }
 
 pub trait RegionApplyEngine: ApplyStatusProvider + ApplyWatchProvider {
@@ -475,6 +485,13 @@ where
         self.execute_raft_command_at(req, None)
     }
 
+    fn execute_metadata_command_inner(
+        &self,
+        req: &metadatapb::MetadataCommitRequest,
+    ) -> nokv_mvcc::Result<metadatapb::MetadataCommitResponse> {
+        self.execute_metadata_command_at(req, None)
+    }
+
     pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
     where
         I: IntoIterator<Item = OpenRaftEntry>,
@@ -515,6 +532,19 @@ where
                                 index,
                                 term,
                                 payload: encode_raft_response(&response)?,
+                            });
+                        }
+                        ProposalPayloadKind::MetadataCommand => {
+                            let req = proposal
+                                .decode_metadata_command()
+                                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+                            let response =
+                                self.execute_metadata_command_at(&req, Some((term, index)))?;
+                            applied.push(AppliedProposal {
+                                region_id: proposal.region_id,
+                                index,
+                                term,
+                                payload: encode_metadata_response(&response)?,
                             });
                         }
                         ProposalPayloadKind::RegionDescriptor => {
@@ -747,6 +777,79 @@ where
         })
     }
 
+    fn execute_metadata_command_at(
+        &self,
+        req: &metadatapb::MetadataCommitRequest,
+        forced_status: Option<(u64, u64)>,
+    ) -> nokv_mvcc::Result<metadatapb::MetadataCommitResponse> {
+        let command = req
+            .command
+            .as_ref()
+            .ok_or_else(|| invalid_raft_command("metadata command is required"))?;
+        if command.read_version == 0 {
+            return Err(invalid_raft_command(
+                "metadata command read_version is required",
+            ));
+        }
+        let commit_version = if command.commit_version == 0 {
+            command.read_version.saturating_add(1)
+        } else {
+            command.commit_version
+        };
+        if commit_version <= command.read_version {
+            return Err(invalid_raft_command(
+                "metadata command commit_version must be greater than read_version",
+            ));
+        }
+        let atomic = metadata_command_to_atomic_mutate(command, commit_version)?;
+        let response = {
+            let engine =
+                self.inner.engine.lock().map_err(|_| {
+                    nokv_mvcc::Error::Backend("region apply mutex poisoned".to_owned())
+                })?;
+            engine.try_atomic_mutate(&atomic)?
+        };
+
+        let applied_status = if let Some((term, index)) = forced_status {
+            self.record_applied_status(term, index);
+            Some((term, index))
+        } else if !command.mutations.is_empty() {
+            Some(self.advance_apply_index())
+        } else {
+            None
+        };
+        if response.error.is_none() && !response.fallback_to_two_phase_commit {
+            if let Some((term, index)) = applied_status {
+                let watch_keys = metadata_command_watch_keys(command);
+                self.publish_apply(
+                    index,
+                    term,
+                    kvpb::ApplyWatchEventSource::Commit,
+                    commit_version,
+                    watch_keys,
+                    true,
+                );
+            }
+        }
+        Ok(metadatapb::MetadataCommitResponse {
+            result: Some(metadatapb::MetadataCommitResult {
+                commit_version,
+                region_id: self.inner.region_id,
+                term: applied_status.map(|(term, _)| term).unwrap_or_default(),
+                index: applied_status.map(|(_, index)| index).unwrap_or_default(),
+                applied_mutations: if response.error.is_none()
+                    && !response.fallback_to_two_phase_commit
+                {
+                    response.applied_keys
+                } else {
+                    0
+                },
+            }),
+            error: response.error.map(metadata_key_error_from_kv),
+            region_error: None,
+        })
+    }
+
     fn execute_raft_request_on(
         engine: &E,
         req: &raftpb::Request,
@@ -951,6 +1054,20 @@ where
     }
 }
 
+impl<E> MetadataCommandExecutor for AppliedKvEngine<E>
+where
+    E: KvEngine,
+{
+    fn execute_metadata_command<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataCommitRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+           + Send
+           + 'a {
+        async move { self.execute_metadata_command_inner(req) }
+    }
+}
+
 impl<E, S> RaftCommandExecutor for PersistentAppliedKvEngine<E, S>
 where
     E: KvEngine,
@@ -964,6 +1081,26 @@ where
         async move {
             let before = self.engine.status().applied_index;
             let response = self.engine.execute_raft_command(req).await?;
+            self.persist_if_advanced(before)?;
+            Ok(response)
+        }
+    }
+}
+
+impl<E, S> MetadataCommandExecutor for PersistentAppliedKvEngine<E, S>
+where
+    E: KvEngine,
+    S: RegionMetadataSink,
+{
+    fn execute_metadata_command<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataCommitRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+           + Send
+           + 'a {
+        async move {
+            let before = self.engine.status().applied_index;
+            let response = self.engine.execute_metadata_command(req).await?;
             self.persist_if_advanced(before)?;
             Ok(response)
         }
@@ -1256,12 +1393,123 @@ fn region_peer_store_ids_for_apply(
     Ok(stores)
 }
 
+fn metadata_command_to_atomic_mutate(
+    command: &metadatapb::MetadataCommand,
+    commit_version: u64,
+) -> nokv_mvcc::Result<kvpb::TryAtomicMutateRequest> {
+    let predicates = command
+        .predicates
+        .iter()
+        .map(metadata_predicate_to_atomic)
+        .collect::<nokv_mvcc::Result<Vec<_>>>()?;
+    let mutations = command
+        .mutations
+        .iter()
+        .map(metadata_mutation_to_kv)
+        .collect::<nokv_mvcc::Result<Vec<_>>>()?;
+    Ok(kvpb::TryAtomicMutateRequest {
+        predicates,
+        mutations,
+        start_version: command.read_version,
+        commit_version,
+    })
+}
+
+fn metadata_predicate_to_atomic(
+    predicate: &metadatapb::MetadataPredicate,
+) -> nokv_mvcc::Result<kvpb::AtomicPredicate> {
+    let kind = match metadatapb::MetadataPredicateKind::try_from(predicate.kind)
+        .unwrap_or(metadatapb::MetadataPredicateKind::NotExists)
+    {
+        metadatapb::MetadataPredicateKind::NotExists => kvpb::AtomicPredicateKind::NotExists,
+        metadatapb::MetadataPredicateKind::Exists => kvpb::AtomicPredicateKind::Exists,
+        metadatapb::MetadataPredicateKind::ValueEquals => kvpb::AtomicPredicateKind::ValueEquals,
+    };
+    Ok(kvpb::AtomicPredicate {
+        key: predicate.key.clone(),
+        kind: kind as i32,
+        read_version: predicate.read_version,
+        expected_value: predicate.expected_value.clone(),
+    })
+}
+
+fn metadata_mutation_to_kv(
+    mutation: &metadatapb::MetadataMutation,
+) -> nokv_mvcc::Result<kvpb::Mutation> {
+    let op = match metadatapb::metadata_mutation::Op::try_from(mutation.op)
+        .unwrap_or(metadatapb::metadata_mutation::Op::Put)
+    {
+        metadatapb::metadata_mutation::Op::Put => kvpb::mutation::Op::Put,
+        metadatapb::metadata_mutation::Op::Delete => kvpb::mutation::Op::Delete,
+    };
+    Ok(kvpb::Mutation {
+        op: op as i32,
+        key: mutation.key.clone(),
+        value: mutation.value.clone(),
+        assertion_not_exist: mutation.assertion_not_exist,
+        expires_at: mutation.expires_at,
+    })
+}
+
+fn metadata_command_watch_keys(command: &metadatapb::MetadataCommand) -> Vec<Vec<u8>> {
+    if !command.watch_keys.is_empty() {
+        return command.watch_keys.clone();
+    }
+    command
+        .mutations
+        .iter()
+        .map(|mutation| mutation.key.clone())
+        .collect()
+}
+
+fn metadata_key_error_from_kv(error: kvpb::KeyError) -> metadatapb::MetadataKeyError {
+    metadatapb::MetadataKeyError {
+        locked: error.locked.map(|locked| metadatapb::MetadataLocked {
+            primary_lock: locked.primary_lock,
+            key: locked.key,
+            lock_version: locked.lock_version,
+            lock_ttl: locked.lock_ttl,
+        }),
+        write_conflict: error
+            .write_conflict
+            .map(|conflict| metadatapb::MetadataWriteConflict {
+                key: conflict.key,
+                primary: conflict.primary,
+                conflict_ts: conflict.conflict_ts,
+                commit_ts: conflict.commit_ts,
+                start_ts: conflict.start_ts,
+            }),
+        already_exists: error
+            .already_exists
+            .map(|exists| metadatapb::MetadataKeyAlreadyExists { key: exists.key }),
+        retryable: error.retryable,
+        abort: error.abort,
+    }
+}
+
 fn encode_raft_response(response: &raftpb::RaftCmdResponse) -> nokv_mvcc::Result<Vec<u8>> {
     let mut payload = Vec::with_capacity(response.encoded_len());
     response
         .encode(&mut payload)
         .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
     Ok(payload)
+}
+
+fn encode_metadata_response(
+    response: &metadatapb::MetadataCommitResponse,
+) -> nokv_mvcc::Result<Vec<u8>> {
+    let mut payload = Vec::with_capacity(response.encoded_len());
+    response
+        .encode(&mut payload)
+        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+    Ok(payload)
+}
+
+pub(crate) fn decode_metadata_response(
+    payload: &[u8],
+) -> nokv_mvcc::Result<metadatapb::MetadataCommitResponse> {
+    metadatapb::MetadataCommitResponse::decode(payload)
+        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
 }
 
 pub(crate) fn decode_raft_response(payload: &[u8]) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {

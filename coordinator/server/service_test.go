@@ -660,6 +660,7 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 		StoreId:           1,
 		RegionNum:         3,
 		LeaderNum:         1,
+		LeaderRegionIds:   []uint64{11},
 		Capacity:          1000,
 		Available:         800,
 		DroppedOperations: 5,
@@ -680,6 +681,8 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.False(t, getResp.GetNotFound())
 	require.NotNil(t, getResp.GetRegionDescriptor())
 	require.Equal(t, uint64(11), getResp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, uint64(1), getResp.GetLeaderPeer().GetStoreId())
+	require.Equal(t, uint64(101), getResp.GetLeaderPeer().GetPeerId())
 	require.Equal(t, coordpb.Freshness_FRESHNESS_BEST_EFFORT, getResp.GetServedFreshness())
 	require.Equal(t, coordpb.DegradedMode_DEGRADED_MODE_HEALTHY, getResp.GetDegradedMode())
 	require.Equal(t, coordpb.CatchUpState_CATCH_UP_STATE_FRESH, getResp.GetCatchUpState())
