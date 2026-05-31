@@ -12,7 +12,6 @@ use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
-use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
     ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplayRequest, BasicNode,
     MetadataReadExecutor, RegionMetadataSink,
@@ -974,41 +973,23 @@ async fn holt_snapshot_installed_peer_survives_openraft_restart() {
         .unwrap();
     leader.wait_for_leader(1).await.unwrap();
 
-    let put_command =
-        |request_id: u64, key: &[u8], value: &[u8], commit_version: u64| raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
-                region_id: 7,
-                request_id,
-                ..Default::default()
-            }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        mutations: vec![kvpb::Mutation {
-                            key: key.to_vec(),
-                            value: value.to_vec(),
-                            op: kvpb::mutation::Op::Put as i32,
-                            ..Default::default()
-                        }],
-                        commit_version,
-                        ..Default::default()
-                    },
-                )),
-            }],
-        };
+    let admission = RegionAdmission {
+        region_id: 7,
+        ..Default::default()
+    };
 
     let mut last_applied = None;
     for version in 1..=8 {
-        let command = put_command(
-            version,
+        let command = metadata_put_request(
+            &admission,
             format!("k{version}").as_bytes(),
             format!("v{version}").as_bytes(),
             version,
+            version.saturating_add(1),
         );
         last_applied = Some(
             leader
-                .propose(nokv_raftnode::Proposal::from_raft_command(&command).unwrap())
+                .propose(nokv_raftnode::Proposal::from_metadata_command(&command).unwrap())
                 .await
                 .unwrap(),
         );
@@ -1076,7 +1057,7 @@ async fn holt_snapshot_installed_peer_survives_openraft_restart() {
         joining_store
             .get(&kvpb::GetRequest {
                 key: b"k8".to_vec(),
-                version: 8,
+                version: 9,
             })
             .unwrap()
             .value,
@@ -1110,9 +1091,9 @@ async fn holt_snapshot_installed_peer_survives_openraft_restart() {
     registry.register(2, restarted_joining.raft_handle());
     restarted_joining.wait_for_voter(2, true).await.unwrap();
 
-    let after_restart = put_command(9, b"after-snapshot-restart", b"ok", 9);
+    let after_restart = metadata_put_request(&admission, b"after-snapshot-restart", b"ok", 8, 9);
     let applied_after_restart = leader
-        .propose(nokv_raftnode::Proposal::from_raft_command(&after_restart).unwrap())
+        .propose(nokv_raftnode::Proposal::from_metadata_command(&after_restart).unwrap())
         .await
         .unwrap();
     restarted_joining

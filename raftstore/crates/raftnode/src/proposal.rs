@@ -14,30 +14,12 @@ pub struct Proposal {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ProposalPayload {
-    RaftCommand(Vec<u8>),
     MetadataCommand(Vec<u8>),
     RegionDescriptor(Vec<u8>),
     AdminCommand(Vec<u8>),
 }
 
 impl Proposal {
-    pub fn from_raft_command(req: &raftpb::RaftCmdRequest) -> Result<Self, Error> {
-        let region_id = req
-            .header
-            .as_ref()
-            .map(|header| header.region_id)
-            .ok_or(Error::MissingRegionHeader)?;
-        if region_id == 0 {
-            return Err(Error::MissingRegionHeader);
-        }
-        let mut payload = Vec::with_capacity(req.encoded_len());
-        req.encode(&mut payload)?;
-        Ok(Self {
-            region_id,
-            payload: ProposalPayload::RaftCommand(payload),
-        })
-    }
-
     pub fn from_region_descriptor(descriptor: &metapb::RegionDescriptor) -> Result<Self, Error> {
         if descriptor.region_id == 0 {
             return Err(Error::InvalidRegionDescriptor(
@@ -82,27 +64,6 @@ impl Proposal {
             region_id,
             payload: ProposalPayload::AdminCommand(payload),
         })
-    }
-
-    pub fn decode_raft_command(&self) -> Result<raftpb::RaftCmdRequest, Error> {
-        let ProposalPayload::RaftCommand(payload) = &self.payload else {
-            return Err(Error::InvalidLogPayload(
-                "non-raft-command proposal cannot decode as raft command".to_owned(),
-            ));
-        };
-        let req = raftpb::RaftCmdRequest::decode(payload.as_slice())?;
-        let region_id = req
-            .header
-            .as_ref()
-            .map(|header| header.region_id)
-            .ok_or(Error::MissingRegionHeader)?;
-        if region_id != self.region_id {
-            return Err(Error::RegionMismatch {
-                proposal_region_id: self.region_id,
-                command_region_id: region_id,
-            });
-        }
-        Ok(req)
     }
 
     pub fn decode_region_descriptor(&self) -> Result<metapb::RegionDescriptor, Error> {
@@ -153,7 +114,6 @@ impl Proposal {
 
     pub(crate) fn payload_kind(&self) -> ProposalPayloadKind {
         match &self.payload {
-            ProposalPayload::RaftCommand(_) => ProposalPayloadKind::RaftCommand,
             ProposalPayload::MetadataCommand(_) => ProposalPayloadKind::MetadataCommand,
             ProposalPayload::RegionDescriptor(_) => ProposalPayloadKind::RegionDescriptor,
             ProposalPayload::AdminCommand(_) => ProposalPayloadKind::AdminCommand,
@@ -162,8 +122,7 @@ impl Proposal {
 
     pub(crate) fn payload_bytes(&self) -> &[u8] {
         match &self.payload {
-            ProposalPayload::RaftCommand(payload)
-            | ProposalPayload::MetadataCommand(payload)
+            ProposalPayload::MetadataCommand(payload)
             | ProposalPayload::RegionDescriptor(payload)
             | ProposalPayload::AdminCommand(payload) => payload,
         }
@@ -172,7 +131,6 @@ impl Proposal {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum ProposalPayloadKind {
-    RaftCommand,
     MetadataCommand,
     RegionDescriptor,
     AdminCommand,

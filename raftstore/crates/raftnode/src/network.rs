@@ -273,11 +273,11 @@ mod tests {
 
     use nokv_mvcc::{KvEngine, MvccStore};
     use nokv_proto::nokv::kv::v1 as kvpb;
-    use nokv_proto::nokv::raft::v1 as raftpb;
+    use nokv_proto::nokv::metadata::v1 as metadatapb;
 
     use super::*;
     use crate::{
-        AppliedKvEngine, ApplyStatusProvider, OpenRaftRegion, RaftCommandExecutor,
+        AppliedKvEngine, ApplyStatusProvider, MetadataCommandExecutor, OpenRaftRegion,
         RegionLogStorage, RegionStateMachine,
     };
 
@@ -318,29 +318,26 @@ mod tests {
             .unwrap();
         regions[0].wait_for_leader(1).await.unwrap();
 
-        let command = raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
+        let command = metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id: 7,
-                request_id: 1,
                 ..Default::default()
             }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        mutations: vec![kvpb::Mutation {
-                            key: b"encoded-network".to_vec(),
-                            value: b"replicated".to_vec(),
-                            op: kvpb::mutation::Op::Put as i32,
-                            ..Default::default()
-                        }],
-                        commit_version: 10,
-                        ..Default::default()
-                    },
-                )),
-            }],
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"encoded-network".to_vec(),
+                read_version: 9,
+                commit_version: 10,
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"encoded-network".to_vec(),
+                    value: b"replicated".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"encoded-network".to_vec()],
+                ..Default::default()
+            }),
         };
-        regions[0].execute_raft_command(&command).await.unwrap();
+        regions[0].execute_metadata_command(&command).await.unwrap();
         let target_index = regions[0].apply_status().applied_index;
 
         for region in &regions {

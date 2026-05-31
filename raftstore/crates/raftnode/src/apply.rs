@@ -15,9 +15,7 @@ use crate::metadata::{
     metadata_key_error_from_kv, metadata_scan_response_from_kv,
 };
 use crate::traffic::{RegionTrafficProvider, RegionTrafficSnapshot, RegionTrafficStats};
-use crate::watch::{
-    ApplyEvent, ApplyHistory, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest,
-};
+use crate::watch::{ApplyHistory, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
 use crate::{Error, OpenRaftEntry, ProposalPayloadKind, RegionId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -37,13 +35,6 @@ pub struct ApplyStatus {
 
 pub trait ApplyStatusProvider: Clone + Send + Sync + 'static {
     fn apply_status(&self) -> ApplyStatus;
-}
-
-pub trait RaftCommandExecutor: Clone + Send + Sync + 'static {
-    fn execute_raft_command<'a>(
-        &'a self,
-        req: &'a raftpb::RaftCmdRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a;
 }
 
 pub trait MetadataCommandExecutor: Clone + Send + Sync + 'static {
@@ -450,13 +441,6 @@ impl<E> AppliedKvEngine<E>
 where
     E: KvEngine + MetadataEngine,
 {
-    fn execute_raft_command_inner(
-        &self,
-        req: &raftpb::RaftCmdRequest,
-    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
-        self.execute_raft_command_at(req, None)
-    }
-
     fn execute_metadata_command_inner(
         &self,
         req: &metadatapb::MetadataCommitRequest,
@@ -559,19 +543,6 @@ where
                         ));
                     }
                     match proposal.payload_kind() {
-                        ProposalPayloadKind::RaftCommand => {
-                            let req = proposal
-                                .decode_raft_command()
-                                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
-                            let response =
-                                self.execute_raft_command_at(&req, Some((term, index)))?;
-                            applied.push(AppliedProposal {
-                                region_id: proposal.region_id,
-                                index,
-                                term,
-                                payload: encode_raft_response(&response)?,
-                            });
-                        }
                         ProposalPayloadKind::MetadataCommand => {
                             let req = proposal
                                 .decode_metadata_command()
@@ -753,68 +724,6 @@ where
         self.apply_region_descriptor_at(term, index, descriptor)
     }
 
-    fn execute_raft_command_at(
-        &self,
-        req: &raftpb::RaftCmdRequest,
-        forced_status: Option<(u64, u64)>,
-    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
-        let (responses, writes, events) = {
-            let engine =
-                self.inner.engine.lock().map_err(|_| {
-                    nokv_mvcc::Error::Backend("region apply mutex poisoned".to_owned())
-                })?;
-            let mut responses = Vec::with_capacity(req.requests.len());
-            let mut writes = false;
-            let mut events = Vec::new();
-            for request in &req.requests {
-                let (response, write, event) = Self::execute_raft_request_on(&*engine, request)?;
-                writes |= write;
-                if let Some(event) = event {
-                    events.push(event);
-                }
-                responses.push(response);
-            }
-            (responses, writes, events)
-        };
-
-        let applied_status = if let Some((term, index)) = forced_status {
-            self.record_applied_status(term, index);
-            Some((term, index))
-        } else if writes {
-            Some(self.advance_apply_index())
-        } else {
-            None
-        };
-        if let Some((term, index)) = applied_status {
-            for event in events {
-                self.publish_apply(
-                    index,
-                    term,
-                    event.source,
-                    event.commit_version,
-                    event.keys,
-                    event.atomic,
-                );
-            }
-        }
-        let read_ops = req
-            .requests
-            .iter()
-            .filter(|request| {
-                matches!(
-                    raftpb::CmdType::try_from(request.cmd_type),
-                    Ok(raftpb::CmdType::CmdGet | raftpb::CmdType::CmdScan)
-                )
-            })
-            .count() as u64;
-        self.inner.traffic.record_read(read_ops);
-        Ok(raftpb::RaftCmdResponse {
-            header: req.header.clone(),
-            responses,
-            region_error: None,
-        })
-    }
-
     fn execute_metadata_command_at(
         &self,
         req: &metadatapb::MetadataCommitRequest,
@@ -883,117 +792,6 @@ where
             error: response.error.map(metadata_key_error_from_kv),
             region_error: None,
         })
-    }
-
-    fn execute_raft_request_on(
-        engine: &E,
-        req: &raftpb::Request,
-    ) -> nokv_mvcc::Result<(raftpb::Response, bool, Option<ApplyEvent>)> {
-        use raftpb::request::Cmd as RequestCmd;
-        use raftpb::response::Cmd as ResponseCmd;
-
-        let cmd = raftpb::CmdType::try_from(req.cmd_type).unwrap_or(raftpb::CmdType::CmdInvalid);
-        let (response, write, event) = match (cmd, req.cmd.as_ref()) {
-            (raftpb::CmdType::CmdGet, Some(RequestCmd::Get(inner))) => {
-                (ResponseCmd::Get(engine.get(inner)?), false, None)
-            }
-            (raftpb::CmdType::CmdScan, Some(RequestCmd::Scan(inner))) => {
-                (ResponseCmd::Scan(engine.scan(inner)?), false, None)
-            }
-            (raftpb::CmdType::CmdPrewrite, Some(RequestCmd::Prewrite(inner))) => {
-                (ResponseCmd::Prewrite(engine.prewrite(inner)?), true, None)
-            }
-            (raftpb::CmdType::CmdCommit, Some(RequestCmd::Commit(inner))) => {
-                let response = engine.commit(inner)?;
-                let event =
-                    (response.error.is_none() && !inner.keys.is_empty()).then(|| ApplyEvent {
-                        source: kvpb::ApplyWatchEventSource::Commit,
-                        commit_version: inner.commit_version,
-                        keys: inner.keys.clone(),
-                        atomic: false,
-                    });
-                (ResponseCmd::Commit(response), true, event)
-            }
-            (raftpb::CmdType::CmdBatchRollback, Some(RequestCmd::BatchRollback(inner))) => (
-                ResponseCmd::BatchRollback(engine.batch_rollback(inner)?),
-                true,
-                None,
-            ),
-            (raftpb::CmdType::CmdResolveLock, Some(RequestCmd::ResolveLock(inner))) => {
-                let response = engine.resolve_lock(inner)?;
-                let event = (response.error.is_none()
-                    && inner.commit_version != 0
-                    && !inner.keys.is_empty())
-                .then(|| ApplyEvent {
-                    source: kvpb::ApplyWatchEventSource::ResolveLock,
-                    commit_version: inner.commit_version,
-                    keys: inner.keys.clone(),
-                    atomic: false,
-                });
-                (ResponseCmd::ResolveLock(response), true, event)
-            }
-            (raftpb::CmdType::CmdCheckTxnStatus, Some(RequestCmd::CheckTxnStatus(inner))) => (
-                ResponseCmd::CheckTxnStatus(engine.check_txn_status(inner)?),
-                true,
-                None,
-            ),
-            (raftpb::CmdType::CmdMvccMaintenance, Some(RequestCmd::MvccMaintenance(inner))) => (
-                ResponseCmd::MvccMaintenance(engine.mvcc_maintenance(inner)?),
-                true,
-                None,
-            ),
-            (raftpb::CmdType::CmdTxnHeartBeat, Some(RequestCmd::TxnHeartBeat(inner))) => (
-                ResponseCmd::TxnHeartBeat(engine.txn_heartbeat(inner)?),
-                true,
-                None,
-            ),
-            (raftpb::CmdType::CmdTryAtomicMutate, Some(RequestCmd::TryAtomicMutate(inner))) => {
-                let response = engine.try_atomic_mutate(inner)?;
-                let event = (response.error.is_none()
-                    && !response.fallback_to_two_phase_commit
-                    && inner.commit_version != 0
-                    && !inner.mutations.is_empty())
-                .then(|| ApplyEvent {
-                    source: kvpb::ApplyWatchEventSource::Commit,
-                    commit_version: inner.commit_version,
-                    keys: inner
-                        .mutations
-                        .iter()
-                        .map(|mutation| mutation.key.clone())
-                        .collect(),
-                    atomic: true,
-                });
-                (ResponseCmd::TryAtomicMutate(response), true, event)
-            }
-            (
-                raftpb::CmdType::CmdInstallPreparedMvcc,
-                Some(RequestCmd::InstallPreparedMvcc(inner)),
-            ) => {
-                let response = engine.install_prepared(inner)?;
-                let event = (response.error.is_none()
-                    && inner.commit_version != 0
-                    && !inner.watch_keys.is_empty())
-                .then(|| ApplyEvent {
-                    source: kvpb::ApplyWatchEventSource::Commit,
-                    commit_version: inner.commit_version,
-                    keys: inner.watch_keys.clone(),
-                    atomic: false,
-                });
-                (ResponseCmd::InstallPreparedMvcc(response), true, event)
-            }
-            _ => {
-                return Err(invalid_raft_command(
-                    "command type and payload do not match",
-                ))
-            }
-        };
-        Ok((
-            raftpb::Response {
-                cmd: Some(response),
-            },
-            write,
-            event,
-        ))
     }
 
     fn read<T>(&self, f: impl FnOnce(&E) -> nokv_mvcc::Result<T>) -> nokv_mvcc::Result<T> {
@@ -1080,19 +878,6 @@ where
     }
 }
 
-impl<E> RaftCommandExecutor for AppliedKvEngine<E>
-where
-    E: KvEngine + MetadataEngine,
-{
-    fn execute_raft_command<'a>(
-        &'a self,
-        req: &'a raftpb::RaftCmdRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
-    {
-        async move { self.execute_raft_command_inner(req) }
-    }
-}
-
 impl<E> MetadataCommandExecutor for AppliedKvEngine<E>
 where
     E: KvEngine + MetadataEngine,
@@ -1134,25 +919,6 @@ where
     ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
     {
         async move { self.execute_metadata_scan_inner(req) }
-    }
-}
-
-impl<E, S> RaftCommandExecutor for PersistentAppliedKvEngine<E, S>
-where
-    E: KvEngine + MetadataEngine,
-    S: RegionMetadataSink,
-{
-    fn execute_raft_command<'a>(
-        &'a self,
-        req: &'a raftpb::RaftCmdRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
-    {
-        async move {
-            let before = self.engine.status().applied_index;
-            let response = self.engine.execute_raft_command(req).await?;
-            self.persist_if_advanced(before)?;
-            Ok(response)
-        }
     }
 }
 
@@ -1500,19 +1266,6 @@ fn region_peer_store_ids_for_apply(
         return Err(invalid_raft_command("merge descriptor has no peers"));
     }
     Ok(stores)
-}
-
-fn encode_raft_response(response: &raftpb::RaftCmdResponse) -> nokv_mvcc::Result<Vec<u8>> {
-    let mut payload = Vec::with_capacity(response.encoded_len());
-    response
-        .encode(&mut payload)
-        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
-    Ok(payload)
-}
-
-pub(crate) fn decode_raft_response(payload: &[u8]) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
-    raftpb::RaftCmdResponse::decode(payload)
-        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
 }
 
 use crate::snapshot::{decode_region_snapshot_payload, RegionSnapshotPayload};

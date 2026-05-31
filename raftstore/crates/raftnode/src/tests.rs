@@ -51,6 +51,75 @@ impl RegionDescriptorCatalog for StaticRegionDescriptorCatalog {
     }
 }
 
+fn metadata_put_request(
+    region_id: RegionId,
+    request_id: u64,
+    key: impl Into<Vec<u8>>,
+    value: impl Into<Vec<u8>>,
+    read_version: u64,
+    commit_version: u64,
+) -> metadatapb::MetadataCommitRequest {
+    let key = key.into();
+    metadatapb::MetadataCommitRequest {
+        context: Some(metadatapb::MetadataContext {
+            region_id,
+            ..Default::default()
+        }),
+        command: Some(metadatapb::MetadataCommand {
+            request_id: request_id.to_be_bytes().to_vec(),
+            read_version,
+            commit_version,
+            mutations: vec![metadatapb::MetadataMutation {
+                key: key.clone(),
+                value: value.into(),
+                op: metadatapb::metadata_mutation::Op::Put as i32,
+                ..Default::default()
+            }],
+            watch_keys: vec![key],
+            ..Default::default()
+        }),
+    }
+}
+
+fn metadata_get_request(
+    region_id: RegionId,
+    key: impl Into<Vec<u8>>,
+    version: u64,
+) -> metadatapb::MetadataGetRequest {
+    metadatapb::MetadataGetRequest {
+        context: Some(metadatapb::MetadataContext {
+            region_id,
+            ..Default::default()
+        }),
+        key: key.into(),
+        version,
+    }
+}
+
+async fn execute_metadata_put<E>(
+    engine: &E,
+    region_id: RegionId,
+    request_id: u64,
+    key: impl Into<Vec<u8>>,
+    value: impl Into<Vec<u8>>,
+    read_version: u64,
+    commit_version: u64,
+) -> nokv_mvcc::Result<metadatapb::MetadataCommitResponse>
+where
+    E: MetadataCommandExecutor,
+{
+    engine
+        .execute_metadata_command(&metadata_put_request(
+            region_id,
+            request_id,
+            key,
+            value,
+            read_version,
+            commit_version,
+        ))
+        .await
+}
+
 #[tokio::test]
 async fn openraft_region_bootstraps_single_node_and_applies_proposal() {
     let dir = tempfile::tempdir().unwrap();
@@ -61,30 +130,10 @@ async fn openraft_region_bootstraps_single_node_and_applies_proposal() {
         .await
         .unwrap();
 
-    let command = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 7,
-            request_id: 1,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-            cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: b"k".to_vec(),
-                        value: b"v".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 2,
-                    ..Default::default()
-                },
-            )),
-        }],
-    };
     let applied = raft
-        .propose(Proposal::from_raft_command(&command).unwrap())
+        .propose(
+            Proposal::from_metadata_command(&metadata_put_request(7, 1, b"k", b"v", 1, 2)).unwrap(),
+        )
         .await
         .unwrap();
     assert_eq!(applied.region_id, 7);
@@ -101,53 +150,19 @@ async fn openraft_region_serves_read_without_advancing_apply_index() {
         .await
         .unwrap();
 
-    let write = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 7,
-            request_id: 1,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-            cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: b"k".to_vec(),
-                        value: b"v".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 2,
-                    ..Default::default()
-                },
-            )),
-        }],
-    };
-    raft.execute_raft_command(&write).await.unwrap();
+    execute_metadata_put(&raft, 7, 1, b"k", b"v", 1, 2)
+        .await
+        .unwrap();
     let applied_after_write = raft.apply_status().applied_index;
     assert!(applied_after_write > 0);
 
-    let read = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 7,
-            request_id: 2,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdGet as i32,
-            cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
-                key: b"k".to_vec(),
-                version: 2,
-            })),
-        }],
-    };
-    let response = raft.execute_raft_command(&read).await.unwrap();
+    let response = raft
+        .execute_metadata_get(&metadata_get_request(7, b"k", 2))
+        .await
+        .unwrap();
 
     assert_eq!(raft.apply_status().applied_index, applied_after_write);
-    match response.responses[0].cmd.as_ref().unwrap() {
-        raftpb::response::Cmd::Get(get) => assert_eq!(get.value, b"v".to_vec()),
-        other => panic!("unexpected read response: {other:?}"),
-    }
+    assert_eq!(response.kv.unwrap().value, b"v".to_vec());
 }
 
 #[tokio::test]
@@ -207,30 +222,9 @@ async fn openraft_region_restart_write_returns_client_response() {
         let raft = OpenRaftRegion::bootstrap_single_node(1, 7, log_store, state_machine)
             .await
             .unwrap();
-        raft.execute_raft_command(&raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
-                region_id: 7,
-                request_id: 1,
-                ..Default::default()
-            }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        mutations: vec![kvpb::Mutation {
-                            key: b"k1".to_vec(),
-                            value: b"v1".to_vec(),
-                            op: kvpb::mutation::Op::Put as i32,
-                            ..Default::default()
-                        }],
-                        commit_version: 2,
-                        ..Default::default()
-                    },
-                )),
-            }],
-        })
-        .await
-        .unwrap();
+        execute_metadata_put(&raft, 7, 1, b"k1", b"v1", 1, 2)
+            .await
+            .unwrap();
         raft.apply_status()
     };
 
@@ -242,37 +236,11 @@ async fn openraft_region_restart_write_returns_client_response() {
         .await
         .unwrap();
 
-    let response = raft
-        .execute_raft_command(&raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
-                region_id: 7,
-                request_id: 2,
-                ..Default::default()
-            }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        mutations: vec![kvpb::Mutation {
-                            key: b"k2".to_vec(),
-                            value: b"v2".to_vec(),
-                            op: kvpb::mutation::Op::Put as i32,
-                            ..Default::default()
-                        }],
-                        commit_version: 4,
-                        ..Default::default()
-                    },
-                )),
-            }],
-        })
+    let response = execute_metadata_put(&raft, 7, 2, b"k2", b"v2", 3, 4)
         .await
         .unwrap();
 
-    assert_eq!(response.responses.len(), 1);
-    assert!(matches!(
-        response.responses[0].cmd,
-        Some(raftpb::response::Cmd::TryAtomicMutate(_))
-    ));
+    assert_eq!(response.result.unwrap().applied_mutations, 1);
 }
 
 #[tokio::test]
@@ -310,31 +278,11 @@ async fn openraft_region_replicates_proposal_to_memory_peers() {
     regions[0].initialize_members(members).await.unwrap();
     regions[0].wait_for_leader(1).await.unwrap();
 
-    let command = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 7,
-            request_id: 1,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-            cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: b"k".to_vec(),
-                        value: b"v".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 10,
-                    ..Default::default()
-                },
-            )),
-        }],
-    };
-
     let applied = regions[0]
-        .propose(Proposal::from_raft_command(&command).unwrap())
+        .propose(
+            Proposal::from_metadata_command(&metadata_put_request(7, 1, b"k", b"v", 9, 10))
+                .unwrap(),
+        )
         .await
         .unwrap();
     for region in &regions {
@@ -395,31 +343,11 @@ async fn openraft_region_adds_voter_and_replicates_to_new_peer() {
     leader.wait_for_leader(1).await.unwrap();
     leader.add_voter(2, BasicNode::new("node-2")).await.unwrap();
 
-    let command = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 7,
-            request_id: 2,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-            cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: b"joined".to_vec(),
-                        value: b"yes".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 20,
-                    ..Default::default()
-                },
-            )),
-        }],
-    };
-
     let applied = leader
-        .propose(Proposal::from_raft_command(&command).unwrap())
+        .propose(
+            Proposal::from_metadata_command(&metadata_put_request(7, 2, b"joined", b"yes", 19, 20))
+                .unwrap(),
+        )
         .await
         .unwrap();
     for region in regions.values() {
@@ -500,31 +428,18 @@ async fn openraft_region_target_peer_can_take_leadership() {
     leader.wait_for_leader(2).await.unwrap();
     follower.wait_for_leader(2).await.unwrap();
 
-    let command = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 7,
-            request_id: 20,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-            cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: b"new-leader".to_vec(),
-                        value: b"peer-2".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 22,
-                    ..Default::default()
-                },
-            )),
-        }],
-    };
-
     let applied = follower
-        .propose(Proposal::from_raft_command(&command).unwrap())
+        .propose(
+            Proposal::from_metadata_command(&metadata_put_request(
+                7,
+                20,
+                b"new-leader",
+                b"peer-2",
+                21,
+                22,
+            ))
+            .unwrap(),
+        )
         .await
         .unwrap();
     leader
@@ -583,30 +498,18 @@ async fn openraft_region_restarts_after_membership_change_without_single_node_vo
     leader.add_voter(2, BasicNode::new("node-2")).await.unwrap();
     follower.wait_for_voter(2, true).await.unwrap();
 
-    let before_restart = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 7,
-            request_id: 10,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-            cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: b"before-restart".to_vec(),
-                        value: b"ok".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 30,
-                    ..Default::default()
-                },
-            )),
-        }],
-    };
     let applied_before_restart = leader
-        .propose(Proposal::from_raft_command(&before_restart).unwrap())
+        .propose(
+            Proposal::from_metadata_command(&metadata_put_request(
+                7,
+                10,
+                b"before-restart",
+                b"ok",
+                29,
+                30,
+            ))
+            .unwrap(),
+        )
         .await
         .unwrap();
     for region in [&leader, &follower] {
@@ -661,30 +564,18 @@ async fn openraft_region_restarts_after_membership_change_without_single_node_vo
     restarted_leader.elect_and_wait(1).await.unwrap();
     restarted_follower.wait_for_leader(1).await.unwrap();
 
-    let after_restart = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 7,
-            request_id: 11,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-            cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: b"after-restart".to_vec(),
-                        value: b"still-quorum".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 40,
-                    ..Default::default()
-                },
-            )),
-        }],
-    };
     let applied_after_restart = restarted_leader
-        .propose(Proposal::from_raft_command(&after_restart).unwrap())
+        .propose(
+            Proposal::from_metadata_command(&metadata_put_request(
+                7,
+                11,
+                b"after-restart",
+                b"still-quorum",
+                39,
+                40,
+            ))
+            .unwrap(),
+        )
         .await
         .unwrap();
     for region in [&restarted_leader, &restarted_follower] {
@@ -744,31 +635,19 @@ async fn openraft_region_catches_up_joining_peer_from_snapshot() {
 
     let mut last_applied = None;
     for version in 1..=8 {
-        let command = raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
-                region_id: 7,
-                request_id: version,
-                ..Default::default()
-            }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        mutations: vec![kvpb::Mutation {
-                            key: format!("k{version}").into_bytes(),
-                            value: format!("v{version}").into_bytes(),
-                            op: kvpb::mutation::Op::Put as i32,
-                            ..Default::default()
-                        }],
-                        commit_version: version,
-                        ..Default::default()
-                    },
-                )),
-            }],
-        };
         last_applied = Some(
             leader
-                .propose(Proposal::from_raft_command(&command).unwrap())
+                .propose(
+                    Proposal::from_metadata_command(&metadata_put_request(
+                        7,
+                        version,
+                        format!("k{version}"),
+                        format!("v{version}"),
+                        version,
+                        version.saturating_add(1),
+                    ))
+                    .unwrap(),
+                )
                 .await
                 .unwrap(),
         );
@@ -840,45 +719,26 @@ async fn openraft_region_catches_up_joining_peer_from_snapshot() {
     let current = joining_engine
         .get(&kvpb::GetRequest {
             key: b"k8".to_vec(),
-            version: 8,
+            version: 9,
         })
         .unwrap();
     assert_eq!(current.value, b"v8".to_vec());
 }
 
 #[test]
-fn proposal_round_trips_existing_raft_command_payload() {
-    let command = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 11,
-            request_id: 7,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdGet as i32,
-            cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
-                key: b"k".to_vec(),
-                version: 9,
-            })),
-        }],
-    };
-    let proposal = Proposal::from_raft_command(&command).unwrap();
+fn proposal_round_trips_metadata_command_payload() {
+    let command = metadata_put_request(11, 7, b"k", b"v", 8, 9);
+    let proposal = Proposal::from_metadata_command(&command).unwrap();
     assert_eq!(proposal.region_id, 11);
-    assert_eq!(proposal.decode_raft_command().unwrap(), command);
+    assert_eq!(proposal.decode_metadata_command().unwrap(), command);
 }
 
 #[test]
 fn proposal_rejects_region_mismatch() {
-    let command = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 11,
-            ..Default::default()
-        }),
-        ..Default::default()
-    };
-    let mut proposal = Proposal::from_raft_command(&command).unwrap();
+    let command = metadata_put_request(11, 7, b"k", b"v", 8, 9);
+    let mut proposal = Proposal::from_metadata_command(&command).unwrap();
     proposal.region_id = 12;
-    let err = proposal.decode_raft_command().unwrap_err();
+    let err = proposal.decode_metadata_command().unwrap_err();
     assert!(matches!(err, Error::RegionMismatch { .. }));
 }
 
@@ -1084,211 +944,139 @@ fn applied_kv_engine_traffic_snapshot_drains_counters() {
 }
 
 #[tokio::test]
-async fn applied_kv_engine_executes_existing_raft_command_payload() {
+async fn applied_kv_engine_executes_metadata_command_payload_and_reads_back() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
-    let response = engine
-        .execute_raft_command(&raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
-                region_id: 7,
-                ..Default::default()
-            }),
-            requests: vec![
-                raftpb::Request {
-                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                        kvpb::TryAtomicMutateRequest {
-                            mutations: vec![kvpb::Mutation {
-                                key: b"k".to_vec(),
-                                value: b"v".to_vec(),
-                                op: kvpb::mutation::Op::Put as i32,
-                                ..Default::default()
-                            }],
-                            commit_version: 2,
-                            ..Default::default()
-                        },
-                    )),
-                },
-                raftpb::Request {
-                    cmd_type: raftpb::CmdType::CmdGet as i32,
-                    cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
-                        key: b"k".to_vec(),
-                        version: 2,
-                    })),
-                },
-            ],
-        })
+    let response = execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
         .await
         .unwrap();
 
-    assert_eq!(response.responses.len(), 2);
-    let Some(raftpb::response::Cmd::TryAtomicMutate(out)) = response.responses[0].cmd.as_ref()
-    else {
-        panic!("missing atomic mutate response");
-    };
-    assert_eq!(out.applied_keys, 1);
-    let Some(raftpb::response::Cmd::Get(out)) = response.responses[1].cmd.as_ref() else {
-        panic!("missing get response");
-    };
-    assert_eq!(out.value, b"v".to_vec());
+    assert_eq!(response.result.unwrap().applied_mutations, 1);
+    let read = engine
+        .execute_metadata_get(&metadata_get_request(7, b"k", 2))
+        .await
+        .unwrap();
+    assert_eq!(read.kv.unwrap().value, b"v".to_vec());
     assert_eq!(engine.status().applied_index, 1);
 }
 
 #[tokio::test]
-async fn raft_command_suppresses_watch_events_for_failed_atomic_mutate() {
+async fn metadata_command_suppresses_watch_events_for_failed_mutation() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
     let mut watch = engine.subscribe();
     engine
-        .execute_raft_command(&raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
+        .execute_metadata_command(&metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id: 7,
                 ..Default::default()
             }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        predicates: vec![kvpb::AtomicPredicate {
-                            key: b"k".to_vec(),
-                            kind: kvpb::AtomicPredicateKind::NotExists as i32,
-                            read_version: 1,
-                            ..Default::default()
-                        }],
-                        mutations: vec![kvpb::Mutation {
-                            key: b"k".to_vec(),
-                            value: b"v1".to_vec(),
-                            op: kvpb::mutation::Op::Put as i32,
-                            ..Default::default()
-                        }],
-                        start_version: 1,
-                        commit_version: 2,
-                    },
-                )),
-            }],
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"first".to_vec(),
+                read_version: 1,
+                commit_version: 2,
+                predicates: vec![metadatapb::MetadataPredicate {
+                    key: b"k".to_vec(),
+                    kind: metadatapb::MetadataPredicateKind::NotExists as i32,
+                    read_version: 1,
+                    ..Default::default()
+                }],
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"k".to_vec()],
+                ..Default::default()
+            }),
         })
         .await
         .unwrap();
     assert_eq!(watch.try_recv().unwrap().keys, vec![b"k".to_vec()]);
 
     let response = engine
-        .execute_raft_command(&raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
+        .execute_metadata_command(&metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id: 7,
                 ..Default::default()
             }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        predicates: vec![kvpb::AtomicPredicate {
-                            key: b"k".to_vec(),
-                            kind: kvpb::AtomicPredicateKind::NotExists as i32,
-                            read_version: 2,
-                            ..Default::default()
-                        }],
-                        mutations: vec![kvpb::Mutation {
-                            key: b"k".to_vec(),
-                            value: b"v2".to_vec(),
-                            op: kvpb::mutation::Op::Put as i32,
-                            ..Default::default()
-                        }],
-                        start_version: 3,
-                        commit_version: 4,
-                    },
-                )),
-            }],
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"rejected".to_vec(),
+                read_version: 2,
+                commit_version: 4,
+                predicates: vec![metadatapb::MetadataPredicate {
+                    key: b"k".to_vec(),
+                    kind: metadatapb::MetadataPredicateKind::NotExists as i32,
+                    read_version: 2,
+                    ..Default::default()
+                }],
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"k".to_vec(),
+                    value: b"v2".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"k".to_vec()],
+                ..Default::default()
+            }),
         })
         .await
         .unwrap();
 
-    let Some(raftpb::response::Cmd::TryAtomicMutate(out)) = response.responses[0].cmd.as_ref()
-    else {
-        panic!("missing atomic mutate response");
-    };
-    assert!(out.error.is_some());
+    assert!(response.error.is_some());
     assert!(watch.try_recv().is_err());
 }
 
 #[tokio::test]
-async fn raft_command_with_multiple_writes_advances_index_once() {
+async fn metadata_command_with_multiple_writes_advances_index_once() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
     let mut watch = engine.subscribe();
 
     engine
-        .execute_raft_command(&raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
+        .execute_metadata_command(&metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id: 7,
                 ..Default::default()
             }),
-            requests: vec![
-                raftpb::Request {
-                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                        kvpb::TryAtomicMutateRequest {
-                            mutations: vec![kvpb::Mutation {
-                                key: b"k1".to_vec(),
-                                value: b"v1".to_vec(),
-                                op: kvpb::mutation::Op::Put as i32,
-                                ..Default::default()
-                            }],
-                            commit_version: 2,
-                            ..Default::default()
-                        },
-                    )),
-                },
-                raftpb::Request {
-                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                        kvpb::TryAtomicMutateRequest {
-                            mutations: vec![kvpb::Mutation {
-                                key: b"k2".to_vec(),
-                                value: b"v2".to_vec(),
-                                op: kvpb::mutation::Op::Put as i32,
-                                ..Default::default()
-                            }],
-                            commit_version: 3,
-                            ..Default::default()
-                        },
-                    )),
-                },
-            ],
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"multi".to_vec(),
+                read_version: 1,
+                commit_version: 2,
+                mutations: vec![
+                    metadatapb::MetadataMutation {
+                        key: b"k1".to_vec(),
+                        value: b"v1".to_vec(),
+                        op: metadatapb::metadata_mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                    metadatapb::MetadataMutation {
+                        key: b"k2".to_vec(),
+                        value: b"v2".to_vec(),
+                        op: metadatapb::metadata_mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                ],
+                watch_keys: vec![b"k1".to_vec(), b"k2".to_vec()],
+                ..Default::default()
+            }),
         })
         .await
         .unwrap();
 
     assert_eq!(engine.status().applied_index, 1);
     assert_eq!(watch.try_recv().unwrap().index, 1);
-    assert_eq!(watch.try_recv().unwrap().index, 1);
+    assert!(watch.try_recv().is_err());
 }
 
 #[test]
 fn apply_openraft_entry_uses_committed_log_status() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
     let mut watch = engine.subscribe();
-    let command = raftpb::RaftCmdRequest {
-        header: Some(raftpb::CmdHeader {
-            region_id: 7,
-            request_id: 55,
-            ..Default::default()
-        }),
-        requests: vec![raftpb::Request {
-            cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-            cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: b"k".to_vec(),
-                        value: b"v".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 9,
-                    ..Default::default()
-                },
-            )),
-        }],
-    };
     let entry = OpenRaftEntry {
         log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
-        payload: openraft::EntryPayload::Normal(Proposal::from_raft_command(&command).unwrap()),
+        payload: openraft::EntryPayload::Normal(
+            Proposal::from_metadata_command(&metadata_put_request(7, 55, b"k", b"v", 8, 9))
+                .unwrap(),
+        ),
     };
 
     let applied = engine.apply_openraft_entries([entry]).unwrap();
@@ -1305,39 +1093,19 @@ fn apply_openraft_entry_uses_committed_log_status() {
     assert_eq!(event.term, 5);
     assert_eq!(event.index, 42);
     assert_eq!(event.commit_version, 9);
-    let response = raftpb::RaftCmdResponse::decode(applied[0].payload.as_slice()).unwrap();
-    assert_eq!(response.responses.len(), 1);
+    let response =
+        metadatapb::MetadataCommitResponse::decode(applied[0].payload.as_slice()).unwrap();
+    assert_eq!(response.result.unwrap().applied_mutations, 1);
 }
 
 #[tokio::test]
-async fn persistent_applied_engine_saves_status_after_write_command() {
+async fn persistent_applied_engine_saves_status_after_metadata_command() {
     let sink = RecordingRegionMetadataSink::default();
     let statuses = sink.statuses.clone();
     let events = sink.events.clone();
     let engine = PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);
 
-    engine
-        .execute_raft_command(&raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
-                region_id: 7,
-                ..Default::default()
-            }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        mutations: vec![kvpb::Mutation {
-                            key: b"k".to_vec(),
-                            value: b"v".to_vec(),
-                            op: kvpb::mutation::Op::Put as i32,
-                            ..Default::default()
-                        }],
-                        commit_version: 2,
-                        ..Default::default()
-                    },
-                )),
-            }],
-        })
+    execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
         .await
         .unwrap();
 
@@ -1946,19 +1714,7 @@ async fn persistent_applied_engine_does_not_save_status_after_read_command() {
     let engine = PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);
 
     engine
-        .execute_raft_command(&raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
-                region_id: 7,
-                ..Default::default()
-            }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdGet as i32,
-                cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
-                    key: b"k".to_vec(),
-                    version: 1,
-                })),
-            }],
-        })
+        .execute_metadata_get(&metadata_get_request(7, b"k", 1))
         .await
         .unwrap();
 

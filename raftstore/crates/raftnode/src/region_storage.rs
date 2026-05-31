@@ -426,7 +426,7 @@ mod tests {
     use crate::{AppliedKvEngine, Proposal};
     use nokv_mvcc::{KvEngine, MvccStore};
     use nokv_proto::nokv::kv::v1 as kvpb;
-    use nokv_proto::nokv::raft::v1 as raftpb;
+    use nokv_proto::nokv::metadata::v1 as metadatapb;
     use openraft::{storage::RaftLogStorageExt, CommittedLeaderId, EntryPayload, LogId};
     use std::collections::{BTreeMap, BTreeSet};
 
@@ -435,31 +435,28 @@ mod tests {
     }
 
     fn normal_entry(region_id: u64, index: u64, key: &[u8], value: &[u8]) -> OpenRaftEntry {
-        let command = raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
+        let command = metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id,
-                request_id: index,
                 ..Default::default()
             }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        mutations: vec![kvpb::Mutation {
-                            op: kvpb::mutation::Op::Put as i32,
-                            key: key.to_vec(),
-                            value: value.to_vec(),
-                            ..Default::default()
-                        }],
-                        commit_version: index,
-                        ..Default::default()
-                    },
-                )),
-            }],
+            command: Some(metadatapb::MetadataCommand {
+                request_id: index.to_be_bytes().to_vec(),
+                read_version: index,
+                commit_version: index.saturating_add(1),
+                mutations: vec![metadatapb::MetadataMutation {
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    key: key.to_vec(),
+                    value: value.to_vec(),
+                    ..Default::default()
+                }],
+                watch_keys: vec![key.to_vec()],
+                ..Default::default()
+            }),
         };
         OpenRaftEntry {
             log_id: log_id(3, index),
-            payload: EntryPayload::Normal(Proposal::from_raft_command(&command).unwrap()),
+            payload: EntryPayload::Normal(Proposal::from_metadata_command(&command).unwrap()),
         }
     }
 
@@ -689,7 +686,7 @@ mod tests {
         let current = restored
             .get(&kvpb::GetRequest {
                 key: b"b".to_vec(),
-                version: 2,
+                version: 3,
             })
             .unwrap();
         assert_eq!(current.value, b"2");

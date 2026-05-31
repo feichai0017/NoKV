@@ -27,14 +27,6 @@ pub struct ApplyWatchReplay {
 }
 
 #[derive(Debug)]
-pub(crate) struct ApplyEvent {
-    pub(crate) source: kvpb::ApplyWatchEventSource,
-    pub(crate) commit_version: u64,
-    pub(crate) keys: Vec<Vec<u8>>,
-    pub(crate) atomic: bool,
-}
-
-#[derive(Debug)]
 pub(crate) struct ApplyHistory {
     limit: usize,
     events: VecDeque<kvpb::ApplyWatchEvent>,

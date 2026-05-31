@@ -284,8 +284,7 @@ fn sync_parent(path: &Path) -> Result<(), Error> {
 mod tests {
     use super::*;
     use crate::{NodeId, Proposal, RaftStoreConfig};
-    use nokv_proto::nokv::kv::v1 as kvpb;
-    use nokv_proto::nokv::raft::v1 as raftpb;
+    use nokv_proto::nokv::metadata::v1 as metadatapb;
     use openraft::{CommittedLeaderId, EntryPayload, LogId};
 
     fn log_id(term: u64, index: u64) -> LogId<NodeId> {
@@ -293,23 +292,28 @@ mod tests {
     }
 
     fn normal_entry(region_id: RegionId, index: u64) -> OpenRaftEntry {
-        let command = raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
+        let command = metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id,
-                request_id: index,
                 ..Default::default()
             }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdGet as i32,
-                cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
+            command: Some(metadatapb::MetadataCommand {
+                request_id: index.to_be_bytes().to_vec(),
+                read_version: 8,
+                commit_version: 9,
+                mutations: vec![metadatapb::MetadataMutation {
                     key: b"k".to_vec(),
-                    version: 9,
-                })),
-            }],
+                    value: b"v".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"k".to_vec()],
+                ..Default::default()
+            }),
         };
         OpenRaftEntry {
             log_id: log_id(3, index),
-            payload: EntryPayload::Normal(Proposal::from_raft_command(&command).unwrap()),
+            payload: EntryPayload::Normal(Proposal::from_metadata_command(&command).unwrap()),
         }
     }
 

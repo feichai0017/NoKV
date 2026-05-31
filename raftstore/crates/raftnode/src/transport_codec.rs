@@ -461,8 +461,7 @@ where
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
 
-    use nokv_proto::nokv::kv::v1 as kvpb;
-    use nokv_proto::nokv::raft::v1 as raftpb;
+    use nokv_proto::nokv::metadata::v1 as metadatapb;
     use openraft::{EntryPayload, LeaderId, Membership};
 
     use super::*;
@@ -472,20 +471,25 @@ mod tests {
         LogId::new(CommittedLeaderId::new(term, node_id), index)
     }
 
-    fn get_command(region_id: RegionId) -> raftpb::RaftCmdRequest {
-        raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
+    fn metadata_command(region_id: RegionId) -> metadatapb::MetadataCommitRequest {
+        metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id,
-                request_id: 77,
                 ..Default::default()
             }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdGet as i32,
-                cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"transport-codec".to_vec(),
+                read_version: 8,
+                commit_version: 9,
+                mutations: vec![metadatapb::MetadataMutation {
                     key: b"k".to_vec(),
-                    version: 9,
-                })),
-            }],
+                    value: b"v".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"k".to_vec()],
+                ..Default::default()
+            }),
         }
     }
 
@@ -502,7 +506,7 @@ mod tests {
 
     #[test]
     fn append_entries_request_round_trips_entries_and_membership() {
-        let proposal = Proposal::from_raft_command(&get_command(9)).unwrap();
+        let proposal = Proposal::from_metadata_command(&metadata_command(9)).unwrap();
         let request = AppendEntriesRequest::<RaftStoreConfig> {
             vote: Vote::new_committed(7, 1),
             prev_log_id: Some(log_id(6, 1, 41)),
@@ -596,7 +600,7 @@ mod tests {
 
     #[test]
     fn append_entries_request_rejects_entry_region_mismatch() {
-        let proposal = Proposal::from_raft_command(&get_command(7)).unwrap();
+        let proposal = Proposal::from_metadata_command(&metadata_command(7)).unwrap();
         let request = AppendEntriesRequest::<RaftStoreConfig> {
             vote: Vote::new_committed(7, 1),
             prev_log_id: None,
@@ -613,7 +617,7 @@ mod tests {
 
     #[test]
     fn append_entries_request_rejects_envelope_entry_region_mismatch() {
-        let proposal = Proposal::from_raft_command(&get_command(7)).unwrap();
+        let proposal = Proposal::from_metadata_command(&metadata_command(7)).unwrap();
         let request = AppendEntriesRequest::<RaftStoreConfig> {
             vote: Vote::new_committed(7, 1),
             prev_log_id: None,

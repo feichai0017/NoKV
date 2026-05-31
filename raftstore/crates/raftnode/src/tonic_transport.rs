@@ -499,12 +499,12 @@ mod tests {
 
     use nokv_mvcc::{KvEngine, MvccStore};
     use nokv_proto::nokv::kv::v1 as kvpb;
-    use nokv_proto::nokv::raft::v1 as raftpb;
+    use nokv_proto::nokv::metadata::v1 as metadatapb;
     use tokio::task::JoinHandle;
 
     use super::*;
     use crate::{
-        AppliedKvEngine, ApplyStatusProvider, OpenRaftRegion, Proposal, RaftCommandExecutor,
+        AppliedKvEngine, ApplyStatusProvider, MetadataCommandExecutor, OpenRaftRegion, Proposal,
         RegionLogStorage, RegionStateMachine, SegmentedEntryLog,
     };
 
@@ -558,29 +558,26 @@ mod tests {
             .unwrap();
         regions[0].wait_for_leader(1).await.unwrap();
 
-        let command = raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
+        let command = metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id: 7,
-                request_id: 1,
                 ..Default::default()
             }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                    kvpb::TryAtomicMutateRequest {
-                        mutations: vec![kvpb::Mutation {
-                            key: b"tonic-network".to_vec(),
-                            value: b"replicated".to_vec(),
-                            op: kvpb::mutation::Op::Put as i32,
-                            ..Default::default()
-                        }],
-                        commit_version: 10,
-                        ..Default::default()
-                    },
-                )),
-            }],
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"tonic-network".to_vec(),
+                read_version: 9,
+                commit_version: 10,
+                mutations: vec![metadatapb::MetadataMutation {
+                    key: b"tonic-network".to_vec(),
+                    value: b"replicated".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"tonic-network".to_vec()],
+                ..Default::default()
+            }),
         };
-        regions[0].execute_raft_command(&command).await.unwrap();
+        regions[0].execute_metadata_command(&command).await.unwrap();
         let target_index = regions[0].apply_status().applied_index;
 
         for region in &regions {
@@ -651,32 +648,29 @@ mod tests {
         leader.wait_for_leader(1).await.unwrap();
 
         let mut last_applied = None;
-        for version in 1..=8 {
-            let command = raftpb::RaftCmdRequest {
-                header: Some(raftpb::CmdHeader {
+        for version in 1u64..=8 {
+            let command = metadatapb::MetadataCommitRequest {
+                context: Some(metadatapb::MetadataContext {
                     region_id: 7,
-                    request_id: version,
                     ..Default::default()
                 }),
-                requests: vec![raftpb::Request {
-                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
-                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
-                        kvpb::TryAtomicMutateRequest {
-                            mutations: vec![kvpb::Mutation {
-                                key: format!("k{version}").into_bytes(),
-                                value: format!("v{version}").into_bytes(),
-                                op: kvpb::mutation::Op::Put as i32,
-                                ..Default::default()
-                            }],
-                            commit_version: version,
-                            ..Default::default()
-                        },
-                    )),
-                }],
+                command: Some(metadatapb::MetadataCommand {
+                    request_id: version.to_be_bytes().to_vec(),
+                    read_version: version,
+                    commit_version: version.saturating_add(1),
+                    mutations: vec![metadatapb::MetadataMutation {
+                        key: format!("k{version}").into_bytes(),
+                        value: format!("v{version}").into_bytes(),
+                        op: metadatapb::metadata_mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    watch_keys: vec![format!("k{version}").into_bytes()],
+                    ..Default::default()
+                }),
             };
             last_applied = Some(
                 leader
-                    .propose(Proposal::from_raft_command(&command).unwrap())
+                    .propose(Proposal::from_metadata_command(&command).unwrap())
                     .await
                     .unwrap(),
             );
@@ -756,7 +750,7 @@ mod tests {
         let response = joining_engine
             .get(&kvpb::GetRequest {
                 key: b"k8".to_vec(),
-                version: 8,
+                version: 9,
             })
             .unwrap();
         assert_eq!(response.value, b"v8".to_vec());

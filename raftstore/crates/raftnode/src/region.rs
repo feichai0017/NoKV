@@ -17,11 +17,11 @@ use openraft::{
 use tokio::sync::broadcast;
 
 use crate::{
-    decode_metadata_response, decode_raft_response, AppliedKvEngine, AppliedProposal, ApplyStatus,
-    ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode,
-    Error, MetadataCommandExecutor, MetadataReadExecutor, NodeId, Proposal, RaftCommandExecutor,
-    RaftStoreConfig, RegionId, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine,
-    RegionTrafficProvider, RegionTrafficSnapshot,
+    decode_metadata_response, AppliedKvEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
+    ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode, Error,
+    MetadataCommandExecutor, MetadataReadExecutor, NodeId, Proposal, RaftStoreConfig, RegionId,
+    RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
+    RegionTrafficSnapshot,
 };
 
 #[derive(Clone)]
@@ -387,55 +387,6 @@ where
     }
 }
 
-impl<E> RaftCommandExecutor for OpenRaftRegion<E>
-where
-    E: RegionSnapshotEngine + RaftCommandExecutor,
-{
-    fn execute_raft_command<'a>(
-        &'a self,
-        req: &'a raftpb::RaftCmdRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
-    {
-        async move {
-            let proposal = Proposal::from_raft_command(req)
-                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
-            if raft_command_is_read_only(req) {
-                let applied_region_id = self.apply_engine.apply_status().region_id;
-                if proposal.region_id != applied_region_id {
-                    return Err(nokv_mvcc::Error::Backend(
-                        Error::LogRegionMismatch {
-                            record_region_id: applied_region_id,
-                            proposal_region_id: proposal.region_id,
-                        }
-                        .to_string(),
-                    ));
-                }
-                if read_consistency(req) == kvpb::ReadConsistency::BoundedStale {
-                    if self.bounded_stale_read_admissible(req) {
-                        return self.apply_engine.execute_raft_command(req).await;
-                    }
-                    return Ok(stale_command_raft_response(req));
-                }
-                if let Err(err) = ensure_linearizable_for_read(&self.raft).await {
-                    if let Error::NotLeader { leader_id } = err {
-                        return self.not_leader_raft_response(req, leader_id);
-                    }
-                    return Err(nokv_mvcc::Error::Backend(err.to_string()));
-                }
-                return self.apply_engine.execute_raft_command(req).await;
-            }
-            let applied = match self.propose(proposal).await {
-                Ok(applied) => applied,
-                Err(Error::NotLeader { leader_id }) => {
-                    return self.not_leader_raft_response(req, leader_id)
-                }
-                Err(err) => return Err(nokv_mvcc::Error::Backend(err.to_string())),
-            };
-            decode_raft_response(&applied.payload)
-        }
-    }
-}
-
 impl<E> MetadataCommandExecutor for OpenRaftRegion<E>
 where
     E: RegionSnapshotEngine + MetadataCommandExecutor,
@@ -544,36 +495,6 @@ where
         Ok(None)
     }
 
-    fn not_leader_raft_response(
-        &self,
-        req: &raftpb::RaftCmdRequest,
-        leader_id: Option<NodeId>,
-    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
-        let descriptor = self.apply_engine.region_descriptor()?;
-        let region_id = descriptor
-            .as_ref()
-            .map(|descriptor| descriptor.region_id)
-            .or_else(|| req.header.as_ref().map(|header| header.region_id))
-            .unwrap_or_else(|| self.apply_engine.apply_status().region_id);
-        let leader = leader_id.and_then(|leader_id| {
-            descriptor.as_ref().and_then(|descriptor| {
-                descriptor
-                    .peers
-                    .iter()
-                    .find(|peer| peer.peer_id == leader_id)
-                    .cloned()
-            })
-        });
-        Ok(raftpb::RaftCmdResponse {
-            header: req.header.clone(),
-            responses: Vec::new(),
-            region_error: Some(errorpb::RegionError {
-                not_leader: Some(errorpb::NotLeader { region_id, leader }),
-                ..Default::default()
-            }),
-        })
-    }
-
     fn not_leader_metadata_response(
         &self,
         req: &metadatapb::MetadataCommitRequest,
@@ -601,30 +522,6 @@ where
             }),
             ..Default::default()
         }
-    }
-
-    fn bounded_stale_read_admissible(&self, req: &raftpb::RaftCmdRequest) -> bool {
-        let Some(header) = req.header.as_ref() else {
-            return false;
-        };
-        let status = self.apply_engine.apply_status();
-        if status.applied_index == 0 {
-            return false;
-        }
-        let metrics = self.raft_handle().metrics();
-        let metrics = metrics.borrow();
-        let last_log_index = metrics.last_log_index.unwrap_or_default();
-        if last_log_index < status.applied_index {
-            return false;
-        }
-        if last_log_index - status.applied_index > header.max_stale_read_index {
-            return false;
-        }
-        let local_is_leader = metrics.current_leader == Some(self.node_id);
-        if !local_is_leader && header.max_stale_read_ms > 0 {
-            return false;
-        }
-        true
     }
 
     fn ensure_metadata_read_region(
@@ -689,40 +586,12 @@ where
     }
 }
 
-fn raft_command_is_read_only(req: &raftpb::RaftCmdRequest) -> bool {
-    !req.requests.is_empty()
-        && req.requests.iter().all(|request| {
-            matches!(
-                raftpb::CmdType::try_from(request.cmd_type),
-                Ok(raftpb::CmdType::CmdGet | raftpb::CmdType::CmdScan)
-            )
-        })
-}
-
-fn read_consistency(req: &raftpb::RaftCmdRequest) -> kvpb::ReadConsistency {
-    req.header
-        .as_ref()
-        .and_then(|header| kvpb::ReadConsistency::try_from(header.read_consistency).ok())
-        .unwrap_or(kvpb::ReadConsistency::Strong)
-}
-
 fn metadata_read_consistency(
     context: Option<&metadatapb::MetadataContext>,
 ) -> metadatapb::ReadConsistency {
     context
         .and_then(|context| metadatapb::ReadConsistency::try_from(context.read_consistency).ok())
         .unwrap_or(metadatapb::ReadConsistency::Strong)
-}
-
-fn stale_command_raft_response(req: &raftpb::RaftCmdRequest) -> raftpb::RaftCmdResponse {
-    raftpb::RaftCmdResponse {
-        header: req.header.clone(),
-        responses: Vec::new(),
-        region_error: Some(errorpb::RegionError {
-            stale_command: Some(errorpb::StaleCommand {}),
-            ..Default::default()
-        }),
-    }
 }
 
 fn stale_metadata_region_error() -> errorpb::RegionError {

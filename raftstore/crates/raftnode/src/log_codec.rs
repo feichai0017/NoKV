@@ -12,7 +12,6 @@ const ENTRY_CODEC_VERSION: u32 = 1;
 const PAYLOAD_BLANK: u32 = 1;
 const PAYLOAD_NORMAL: u32 = 2;
 const PAYLOAD_MEMBERSHIP: u32 = 3;
-const NORMAL_RAFT_COMMAND: u32 = 1;
 const NORMAL_REGION_DESCRIPTOR: u32 = 2;
 const NORMAL_ADMIN_COMMAND: u32 = 3;
 const NORMAL_METADATA_COMMAND: u32 = 4;
@@ -113,7 +112,6 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
         PAYLOAD_BLANK => EntryPayload::Blank,
         PAYLOAD_NORMAL => {
             let proposal_payload = match persisted.normal_kind {
-                0 | NORMAL_RAFT_COMMAND => ProposalPayload::RaftCommand(persisted.normal_payload),
                 NORMAL_REGION_DESCRIPTOR => {
                     ProposalPayload::RegionDescriptor(persisted.normal_payload)
                 }
@@ -132,9 +130,6 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
                 payload: proposal_payload,
             };
             match proposal.payload_kind() {
-                ProposalPayloadKind::RaftCommand => {
-                    proposal.decode_raft_command()?;
-                }
                 ProposalPayloadKind::MetadataCommand => {
                     proposal.decode_metadata_command()?;
                 }
@@ -171,7 +166,6 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
 
 fn encode_normal_kind(kind: ProposalPayloadKind) -> u32 {
     match kind {
-        ProposalPayloadKind::RaftCommand => NORMAL_RAFT_COMMAND,
         ProposalPayloadKind::MetadataCommand => NORMAL_METADATA_COMMAND,
         ProposalPayloadKind::RegionDescriptor => NORMAL_REGION_DESCRIPTOR,
         ProposalPayloadKind::AdminCommand => NORMAL_ADMIN_COMMAND,
@@ -243,8 +237,8 @@ pub(crate) fn decode_membership_payload(
 mod tests {
     use super::*;
     use crate::RaftStoreConfig;
-    use nokv_proto::nokv::kv::v1 as kvpb;
     use nokv_proto::nokv::meta::v1 as metapb;
+    use nokv_proto::nokv::metadata::v1 as metadatapb;
     use nokv_proto::nokv::raft::v1 as raftpb;
     use nokv_raftlog::SegmentedRaftLog;
 
@@ -252,26 +246,31 @@ mod tests {
         LogId::new(CommittedLeaderId::new(term, 1), index)
     }
 
-    fn get_command(region_id: RegionId) -> raftpb::RaftCmdRequest {
-        raftpb::RaftCmdRequest {
-            header: Some(raftpb::CmdHeader {
+    fn metadata_command(region_id: RegionId) -> metadatapb::MetadataCommitRequest {
+        metadatapb::MetadataCommitRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id,
-                request_id: 44,
                 ..Default::default()
             }),
-            requests: vec![raftpb::Request {
-                cmd_type: raftpb::CmdType::CmdGet as i32,
-                cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"log-codec".to_vec(),
+                read_version: 8,
+                commit_version: 9,
+                mutations: vec![metadatapb::MetadataMutation {
                     key: b"k".to_vec(),
-                    version: 9,
-                })),
-            }],
+                    value: b"v".to_vec(),
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                watch_keys: vec![b"k".to_vec()],
+                ..Default::default()
+            }),
         }
     }
 
     #[test]
     fn normal_entry_round_trips_through_raftlog_record() {
-        let proposal = Proposal::from_raft_command(&get_command(7)).unwrap();
+        let proposal = Proposal::from_metadata_command(&metadata_command(7)).unwrap();
         let entry = OpenRaftEntry {
             log_id: log_id(3, 11),
             payload: EntryPayload::Normal(proposal.clone()),
@@ -364,7 +363,7 @@ mod tests {
     fn normal_entry_round_trips_through_segmented_raftlog() {
         let dir = tempfile::tempdir().unwrap();
         let mut log = SegmentedRaftLog::open(dir.path()).unwrap();
-        let proposal = Proposal::from_raft_command(&get_command(7)).unwrap();
+        let proposal = Proposal::from_metadata_command(&metadata_command(7)).unwrap();
         let entry = OpenRaftEntry {
             log_id: log_id(3, 11),
             payload: EntryPayload::Normal(proposal.clone()),
@@ -418,7 +417,7 @@ mod tests {
 
     #[test]
     fn normal_entry_rejects_record_region_mismatch() {
-        let proposal = Proposal::from_raft_command(&get_command(7)).unwrap();
+        let proposal = Proposal::from_metadata_command(&metadata_command(7)).unwrap();
         let entry = OpenRaftEntry {
             log_id: log_id(3, 11),
             payload: EntryPayload::Normal(proposal),
@@ -430,7 +429,7 @@ mod tests {
 
     #[test]
     fn normal_entry_decode_rejects_command_header_region_mismatch() {
-        let proposal = Proposal::from_raft_command(&get_command(7)).unwrap();
+        let proposal = Proposal::from_metadata_command(&metadata_command(7)).unwrap();
         let entry = OpenRaftEntry {
             log_id: log_id(3, 11),
             payload: EntryPayload::Normal(proposal),
