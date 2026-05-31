@@ -623,6 +623,112 @@ func TestRustMetadataPlaneRejectsRemovedPeer(t *testing.T) {
 	require.Equal(t, created.Dentry.Inode, lookup.Dentry.Inode)
 }
 
+func TestRustMetadataPlaneSnapshotRetentionPrunesViaCoordinator(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	repo := repoRootFromThisFile(t)
+	binary := buildRustRaftstoreServer(t, ctx, repo)
+	addr := freeTCPAddr(t)
+	logs := startRustRaftstoreServer(t, ctx, binary, repo, addr)
+	waitForRustMetadataPlane(t, ctx, addr)
+
+	rootStore := newE2ERootStorage()
+	coordinator := newE2ERootedCoordinator(rootStore)
+	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
+	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
+	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(testMetadataPlaneDescriptor()))
+	heartbeatRustStore(t, ctx, coordinator, addr)
+
+	runtime, err := Open(ctx, Options{
+		Coordinator:    coordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
+
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "retained.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 1,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	_, err = runtime.Executor.Remove(ctx, model.RemoveRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "retained.json",
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "retained.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 2,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+
+	token, err := runtime.Executor.SnapshotSubtree(ctx, model.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: model.RootInode,
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	require.NoError(t, runtime.Snapshot.PublishSnapshotSubtree(ctx, token))
+
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-retention-floor.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 3,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+
+	heartbeat := heartbeatRustStore(t, ctx, coordinator, addr)
+	prune := requirePruneOperation(t, heartbeat.GetOperations(), token.ReadVersion)
+	admin, closeAdmin := rustAdminClient(t, addr)
+	defer closeAdmin()
+	pruned, err := admin.PruneMetadataVersions(ctx, &adminpb.PruneMetadataVersionsRequest{
+		RegionId:       prune.GetRegionId(),
+		RetentionFloor: prune.GetRetentionFloor(),
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	require.Equal(t, token.ReadVersion, pruned.GetRetentionFloor())
+	require.Greater(t, pruned.GetPrunedVersions(), uint64(0), "retention prune should remove hidden old versions")
+	require.Greater(t, pruned.GetRetainedAnchorVersions(), uint64(0), "retention prune must keep a floor anchor")
+
+	snapshotEntries, err := runtime.Executor.ReadDirPlus(ctx, model.ReadDirRequest{
+		Mount:           "vol",
+		Parent:          model.RootInode,
+		Limit:           64,
+		SnapshotVersion: token.ReadVersion,
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	require.True(t, containsDentryName(snapshotEntries, "retained.json"))
+	require.False(t, containsDentryName(snapshotEntries, "after-retention-floor.json"))
+
+	latestEntries, err := runtime.Executor.ReadDirPlus(ctx, model.ReadDirRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Limit:  64,
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	require.True(t, containsDentryName(latestEntries, "retained.json"))
+	require.True(t, containsDentryName(latestEntries, "after-retention-floor.json"))
+}
+
 func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, *bytes.Buffer, *coordserver.Service) {
 	t.Helper()
 	repo := repoRootFromThisFile(t)
@@ -670,12 +776,12 @@ func newE2ERootedCoordinator(rootStore rootview.RootStorage) *coordserver.Servic
 	return coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(100), tso.NewAllocator(1000), rootStore)
 }
 
-func heartbeatRustStore(t *testing.T, ctx context.Context, coordinator *coordserver.Service, addr string) {
+func heartbeatRustStore(t *testing.T, ctx context.Context, coordinator *coordserver.Service, addr string) *coordpb.StoreHeartbeatResponse {
 	t.Helper()
-	heartbeatRustStoreAs(t, ctx, coordinator, 1, addr, true)
+	return heartbeatRustStoreAs(t, ctx, coordinator, 1, addr, true)
 }
 
-func heartbeatRustStoreAs(t *testing.T, ctx context.Context, coordinator *coordserver.Service, storeID uint64, addr string, leader bool) {
+func heartbeatRustStoreAs(t *testing.T, ctx context.Context, coordinator *coordserver.Service, storeID uint64, addr string, leader bool) *coordpb.StoreHeartbeatResponse {
 	t.Helper()
 	var leaderRegionIDs []uint64
 	var leaderNum uint64
@@ -699,6 +805,20 @@ func heartbeatRustStoreAs(t *testing.T, ctx context.Context, coordinator *coords
 	})
 	require.NoError(t, err)
 	require.True(t, heartbeat.GetAccepted())
+	return heartbeat
+}
+
+func requirePruneOperation(t *testing.T, operations []*coordpb.SchedulerOperation, floor uint64) *coordpb.SchedulerOperation {
+	t.Helper()
+	for _, op := range operations {
+		if op.GetType() == coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS &&
+			op.GetRegionId() == 1 &&
+			op.GetRetentionFloor() == floor {
+			return op
+		}
+	}
+	t.Fatalf("missing metadata retention prune operation for floor %d in %#v", floor, operations)
+	return nil
 }
 
 func repoRootFromThisFile(t *testing.T) string {
