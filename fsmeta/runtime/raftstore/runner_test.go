@@ -239,6 +239,34 @@ func TestCoordinatorRouteProviderLearnsNotLeaderHint(t *testing.T) {
 	require.Equal(t, uint64(2), route.Context.GetPeer().GetStoreId())
 }
 
+func TestMountResolverRejectsUnregisteredMount(t *testing.T) {
+	coordinator := fakeRouteCoordinator()
+	coordinator.mount = &coordpb.GetMountResponse{NotFound: true}
+	resolver, err := NewMountResolver(coordinator)
+	require.NoError(t, err)
+
+	_, err = resolver.ResolveMount(context.Background(), "vol")
+	require.ErrorIs(t, err, model.ErrMountNotRegistered)
+}
+
+func TestMountResolverRejectsRetiredMount(t *testing.T) {
+	coordinator := fakeRouteCoordinator()
+	coordinator.mount = &coordpb.GetMountResponse{
+		Mount: &coordpb.MountInfo{
+			MountId:       "vol",
+			MountKeyId:    1,
+			RootInode:     uint64(model.RootInode),
+			SchemaVersion: 1,
+			State:         coordpb.MountState_MOUNT_STATE_RETIRED,
+		},
+	}
+	resolver, err := NewMountResolver(coordinator)
+	require.NoError(t, err)
+
+	_, err = resolver.ResolveMount(context.Background(), "vol")
+	require.ErrorIs(t, err, model.ErrMountRetired)
+}
+
 func TestWatcherStreamsMetadataApplyEvents(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
@@ -428,6 +456,7 @@ func (s *fakeMetadataPlaneServer) WatchApply(req *metadatapb.MetadataWatchApplyR
 type fakeCoordinatorClient struct {
 	region    *coordpb.GetRegionByKeyResponse
 	stores    map[uint64]*coordpb.GetStoreResponse
+	mount     *coordpb.GetMountResponse
 	published []*metapb.RootEvent
 }
 
@@ -448,6 +477,9 @@ func (c *fakeCoordinatorClient) AllocID(context.Context, *coordpb.AllocIDRequest
 }
 
 func (c *fakeCoordinatorClient) GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+	if c.mount != nil {
+		return c.mount, nil
+	}
 	return &coordpb.GetMountResponse{
 		Mount: &coordpb.MountInfo{
 			MountId:       "vol",

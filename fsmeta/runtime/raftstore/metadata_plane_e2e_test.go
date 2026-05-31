@@ -24,6 +24,7 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
+	"github.com/feichai0017/NoKV/fsmeta/contract"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/feichai0017/NoKV/fsmeta/observe"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
@@ -39,37 +40,7 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	repo := repoRootFromThisFile(t)
-	binary := buildRustRaftstoreServer(t, ctx, repo)
-	addr := freeTCPAddr(t)
-	logs := startRustRaftstoreServer(t, ctx, binary, repo, addr)
-	waitForRustMetadataPlane(t, ctx, addr)
-
-	coordinator := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(100), tso.NewAllocator(1000))
-	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
-	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
-	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(testMetadataPlaneDescriptor()))
-	heartbeat, err := coordinator.StoreHeartbeat(ctx, &coordpb.StoreHeartbeatRequest{
-		StoreId:         1,
-		ClientAddr:      addr,
-		RaftAddr:        addr,
-		RegionNum:       1,
-		LeaderNum:       1,
-		LeaderRegionIds: []uint64{1},
-		RegionStats: []*coordpb.RegionRuntimeStats{{
-			RegionId:      1,
-			LeaderStoreId: 1,
-		}},
-	})
-	require.NoError(t, err)
-	require.True(t, heartbeat.GetAccepted())
-
-	runtime, err := Open(ctx, Options{
-		Coordinator:    coordinator,
-		DialTimeout:    5 * time.Second,
-		BootstrapMount: "vol",
-	})
-	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	runtime, logs := openRustMetadataPlaneRuntime(t, ctx)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 
 	created, err := runtime.Executor.Create(ctx, model.CreateRequest{
@@ -155,6 +126,56 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 	replayed := requireWatchEvent(t, resume)
 	require.Equal(t, observe.WatchEventSourceCommit, replayed.Source)
 	require.Greater(t, replayed.Cursor.Index, removeEvent.Cursor.Index)
+}
+
+func TestRustMetadataPlanePassesFSMetaContract(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	runtime, logs := openRustMetadataPlaneRuntime(t, ctx)
+	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
+
+	mapped, err := contract.NewInodeMappingExecutor(runtime.Executor)
+	require.NoError(t, err)
+	state := contract.NewModel("vol")
+	err = contract.Run(ctx, mapped, state, contract.GenerateScript(11, 70))
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+}
+
+func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, *bytes.Buffer) {
+	t.Helper()
+	repo := repoRootFromThisFile(t)
+	binary := buildRustRaftstoreServer(t, ctx, repo)
+	addr := freeTCPAddr(t)
+	logs := startRustRaftstoreServer(t, ctx, binary, repo, addr)
+	waitForRustMetadataPlane(t, ctx, addr)
+
+	coordinator := coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(100), tso.NewAllocator(1000))
+	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
+	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
+	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(testMetadataPlaneDescriptor()))
+	heartbeat, err := coordinator.StoreHeartbeat(ctx, &coordpb.StoreHeartbeatRequest{
+		StoreId:         1,
+		ClientAddr:      addr,
+		RaftAddr:        addr,
+		RegionNum:       1,
+		LeaderNum:       1,
+		LeaderRegionIds: []uint64{1},
+		RegionStats: []*coordpb.RegionRuntimeStats{{
+			RegionId:      1,
+			LeaderStoreId: 1,
+		}},
+	})
+	require.NoError(t, err)
+	require.True(t, heartbeat.GetAccepted())
+
+	runtime, err := Open(ctx, Options{
+		Coordinator:    coordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	return runtime, logs
 }
 
 func requireWatchEvent(t *testing.T, sub observe.WatchSubscription) observe.WatchEvent {
