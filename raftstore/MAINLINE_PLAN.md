@@ -121,6 +121,14 @@ cargo test --manifest-path raftstore/Cargo.toml -p nokv-raftnode -p nokv-raftsto
 
 ### Phase 5: Fault and Benchmark Gate
 
+Status: in progress. Fault coverage now includes removed-peer restart,
+coordinator rebuild after retired mount, leader handoff with old-leader stop,
+watch cursor replay after restart, and retention prune. CI now runs
+`make fsmeta-rust-smoke`, and the fsmeta benchmark workflow includes a tiny
+Rust distributed `mdtest-easy` smoke workload that starts `meta-root`,
+`coordinator`, Rust `raftstore`, and `nokv-fsmeta --runtime=raftstore` as real
+processes.
+
 - Cover leader crash during mutation, follower restart, membership-change
   restart, snapshot install, log compaction, stale leader retry, and stale route
   retry.
