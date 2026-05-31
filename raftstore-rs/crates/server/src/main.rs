@@ -550,6 +550,8 @@ impl HoltRangeController {
             .ok_or_else(|| tonic::Status::failed_precondition("split parent descriptor missing"))?;
         let (left, right) =
             build_split_descriptors(&parent_descriptor, &operation.split_key, child)?;
+        ensure_single_peer_transition("split parent", &left)?;
+        ensure_single_peer_transition("split child", &right)?;
         let child_peer = right
             .peers
             .iter()
@@ -561,11 +563,6 @@ impl HoltRangeController {
                     right.region_id, self.store_id
                 ))
             })?;
-        if right.peers.len() != 1 {
-            return Err(tonic::Status::unimplemented(
-                "multi-peer split child bootstrap is not implemented in raftstore-rs yet",
-            ));
-        }
 
         self.publish_split_event(
             metapb::RootEventKind::RegionSplitPlanned,
@@ -645,6 +642,8 @@ impl HoltRangeController {
             .region_descriptor()
             .map_err(|err| tonic::Status::internal(err.to_string()))?
             .ok_or_else(|| tonic::Status::failed_precondition("merge source descriptor missing"))?;
+        ensure_single_peer_transition("merge target", &target_descriptor)?;
+        ensure_single_peer_transition("merge source", &source_descriptor)?;
         let merged = build_merge_descriptor(&target_descriptor, &source_descriptor)?;
         let (left_id, right_id) = merge_region_ids(&target_descriptor, &source_descriptor);
 
@@ -840,6 +839,20 @@ impl HoltRangeController {
         }
         Ok(())
     }
+}
+
+fn ensure_single_peer_transition(
+    action: &str,
+    descriptor: &metapb::RegionDescriptor,
+) -> Result<(), tonic::Status> {
+    if descriptor.peers.len() == 1 {
+        return Ok(());
+    }
+    Err(tonic::Status::unimplemented(format!(
+        "{action} region {} has {} peers; raftstore-rs must apply multi-peer region lifecycle through the parent raft group before this transition is safe",
+        descriptor.region_id,
+        descriptor.peers.len()
+    )))
 }
 
 fn internal_status(message: impl ToString) -> tonic::Status {
@@ -3389,6 +3402,27 @@ mod tests {
         let err = build_merge_descriptor(&target, &source).unwrap_err();
 
         assert_eq!(err.code(), tonic::Code::Unimplemented);
+    }
+
+    #[test]
+    fn range_transition_rejects_multi_peer_descriptor_until_lifecycle_is_replicated() {
+        let mut descriptor = default_region_descriptor(ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        });
+        descriptor.peers.push(metapb::RegionPeer {
+            store_id: 12,
+            peer_id: 102,
+        });
+
+        let err = ensure_single_peer_transition("merge target", &descriptor).unwrap_err();
+
+        assert_eq!(err.code(), tonic::Code::Unimplemented);
+        assert!(err
+            .message()
+            .contains("must apply multi-peer region lifecycle through the parent raft group"));
     }
 
     #[test]
