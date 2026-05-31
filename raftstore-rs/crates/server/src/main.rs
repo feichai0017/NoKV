@@ -916,10 +916,20 @@ impl HoltRangeController {
         self.transport
             .register(identity.region_id, region.raft_handle());
         if let Some(members) = membership_init {
-            region
+            let initialized = region
                 .initialize_members(members)
                 .await
                 .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
+            if initialized {
+                region
+                    .elect_and_wait(identity.peer_id)
+                    .await
+                    .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
+                region
+                    .ensure_linearizable()
+                    .await
+                    .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
+            }
         }
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)
             .map_err(|err| tonic::Status::invalid_argument(err.to_string()))?;
