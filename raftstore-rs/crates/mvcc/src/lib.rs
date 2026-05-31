@@ -375,21 +375,39 @@ impl MvccStore {
             if lock.start_version != req.start_version {
                 continue;
             }
-            if req.commit_version != 0 && req.commit_version < lock.min_commit_ts {
-                return Ok(kvpb::ResolveLockResponse {
-                    error: Some(errors::commit_ts_expired(
-                        &key,
-                        req.commit_version,
-                        lock.min_commit_ts,
-                    )),
-                    ..Default::default()
-                });
+            if let Some((_commit_version, value)) =
+                write_by_start_version(&inner, &key, req.start_version)
+            {
+                if req.commit_version != 0 && value.kind == kvpb::mutation::Op::Rollback {
+                    return Ok(kvpb::ResolveLockResponse {
+                        error: Some(errors::txn_already_rolled_back()),
+                        ..Default::default()
+                    });
+                }
+                locks.push((key, lock, true));
+                continue;
             }
-            locks.push((key, lock));
+            if req.commit_version != 0 {
+                if req.commit_version < lock.min_commit_ts {
+                    return Ok(kvpb::ResolveLockResponse {
+                        error: Some(errors::commit_ts_expired(
+                            &key,
+                            req.commit_version,
+                            lock.min_commit_ts,
+                        )),
+                        ..Default::default()
+                    });
+                }
+            }
+            locks.push((key, lock, false));
         }
         let resolved = locks.len() as u64;
-        for (key, lock) in locks {
-            if req.commit_version == 0 {
+        for (key, lock, already_written) in locks {
+            if already_written {
+                if req.commit_version != 0 {
+                    inner.locks.remove(&key);
+                }
+            } else if req.commit_version == 0 {
                 inner.locks.remove(&key);
                 apply_rollback(&mut inner, &key, req.start_version);
             } else {
@@ -1697,6 +1715,58 @@ mod tests {
             })
             .unwrap();
         assert_eq!(got.value, b"resolve-value");
+    }
+
+    #[test]
+    fn resolve_lock_commit_matches_go_lingering_lock_boundary() {
+        let store = MvccStore::new();
+        let key = b"resolve-lingering-lock".to_vec();
+        store
+            .install_snapshot(MvccSnapshot {
+                writes: vec![MvccSnapshotWrite {
+                    key: key.clone(),
+                    commit_version: 50,
+                    value: VersionedValue {
+                        kind: kvpb::mutation::Op::Put,
+                        start_version: 45,
+                        value: Some(b"committed".to_vec()),
+                        expires_at: 0,
+                    },
+                }],
+                locks: vec![MvccSnapshotLock {
+                    key: key.clone(),
+                    lock: LockRecord {
+                        primary: key.clone(),
+                        start_version: 45,
+                        start_time: 1,
+                        ttl: 10_000,
+                        min_commit_ts: 0,
+                        op: kvpb::mutation::Op::Put,
+                        value: b"stale-lock".to_vec(),
+                        expires_at: 0,
+                    },
+                }],
+                rollbacks: Vec::new(),
+            })
+            .unwrap();
+
+        let resolved = store
+            .resolve_lock(&kvpb::ResolveLockRequest {
+                keys: vec![key.clone()],
+                start_version: 45,
+                commit_version: 60,
+            })
+            .unwrap();
+        assert!(resolved.error.is_none());
+        assert_eq!(resolved.resolved_locks, 1);
+        let snapshot = store.export_snapshot().unwrap();
+        assert!(snapshot.locks.is_empty());
+        assert!(snapshot
+            .writes
+            .iter()
+            .all(|write| write.commit_version != 60));
+        let got = store.get(&kvpb::GetRequest { key, version: 70 }).unwrap();
+        assert_eq!(got.value, b"committed");
     }
 
     #[test]
