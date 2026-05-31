@@ -418,7 +418,7 @@ where
         context: Option<&kvpb::Context>,
         request: raftpb::Request,
         operation: &str,
-    ) -> Result<raftpb::response::Cmd, Status> {
+    ) -> Result<Result<raftpb::response::Cmd, errorpb::RegionError>, Status> {
         let context = context.ok_or_else(|| Status::invalid_argument("context is required"))?;
         let response = self
             .engine
@@ -428,6 +428,9 @@ where
             })
             .await
             .map_err(internal_error)?;
+        if let Some(region_error) = response.region_error {
+            return Ok(Err(region_error));
+        }
         let mut responses = response.responses.into_iter();
         let Some(response) = responses.next() else {
             return Err(raft_payload_error(operation, "missing raft response"));
@@ -438,7 +441,22 @@ where
         response
             .cmd
             .ok_or_else(|| raft_payload_error(operation, "missing raft payload"))
+            .map(Ok)
     }
+}
+
+macro_rules! raft_cmd_or_region_error {
+    ($outcome:expr, $response_type:ident) => {
+        match $outcome {
+            Ok(cmd) => cmd,
+            Err(region_error) => {
+                return Ok(Response::new(kvpb::$response_type {
+                    response: None,
+                    region_error: Some(region_error),
+                }))
+            }
+        }
+    };
 }
 
 impl<E> StoreKvService<E>
@@ -582,8 +600,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdGet as i32,
@@ -591,8 +609,10 @@ where
                 },
                 "get",
             )
-            .await?
-        {
+            .await?,
+            KvGetResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::Get(response) => response,
             _ => return Err(raft_payload_error("get", "unexpected get payload")),
         };
@@ -647,6 +667,12 @@ where
             .execute_raft_command(&command)
             .await
             .map_err(internal_error)?;
+        if let Some(region_error) = command_response.region_error {
+            return Ok(Response::new(kvpb::KvBatchGetResponse {
+                response: None,
+                region_error: Some(region_error),
+            }));
+        }
         let mut responses = Vec::with_capacity(command_response.responses.len());
         for response in command_response.responses {
             match response.cmd {
@@ -701,8 +727,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdScan as i32,
@@ -710,8 +736,10 @@ where
                 },
                 "scan",
             )
-            .await?
-        {
+            .await?,
+            KvScanResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::Scan(response) => response,
             _ => return Err(raft_payload_error("scan", "unexpected scan payload")),
         };
@@ -749,8 +777,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdPrewrite as i32,
@@ -758,8 +786,10 @@ where
                 },
                 "prewrite",
             )
-            .await?
-        {
+            .await?,
+            KvPrewriteResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::Prewrite(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -799,8 +829,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdCommit as i32,
@@ -808,8 +838,10 @@ where
                 },
                 "commit",
             )
-            .await?
-        {
+            .await?,
+            KvCommitResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::Commit(response) => response,
             _ => return Err(raft_payload_error("commit", "unexpected commit payload")),
         };
@@ -844,8 +876,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdBatchRollback as i32,
@@ -853,8 +885,10 @@ where
                 },
                 "batch rollback",
             )
-            .await?
-        {
+            .await?,
+            KvBatchRollbackResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::BatchRollback(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -894,8 +928,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdResolveLock as i32,
@@ -903,8 +937,10 @@ where
                 },
                 "resolve lock",
             )
-            .await?
-        {
+            .await?,
+            KvResolveLockResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::ResolveLock(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -944,8 +980,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdCheckTxnStatus as i32,
@@ -953,8 +989,10 @@ where
                 },
                 "check txn status",
             )
-            .await?
-        {
+            .await?,
+            KvCheckTxnStatusResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::CheckTxnStatus(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -994,8 +1032,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdTxnHeartBeat as i32,
@@ -1003,8 +1041,10 @@ where
                 },
                 "txn heart beat",
             )
-            .await?
-        {
+            .await?,
+            KvTxnHeartBeatResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::TxnHeartBeat(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -1051,8 +1091,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
@@ -1060,8 +1100,10 @@ where
                 },
                 "atomic mutate",
             )
-            .await?
-        {
+            .await?,
+            KvTryAtomicMutateResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::TryAtomicMutate(response) => response,
             _ => {
                 return Err(raft_payload_error(
@@ -1100,8 +1142,8 @@ where
                 region_error: Some(region_error),
             }));
         }
-        let response = match self
-            .execute_raft_request(
+        let cmd = raft_cmd_or_region_error!(
+            self.execute_raft_request(
                 request.context.as_ref(),
                 raftpb::Request {
                     cmd_type: raftpb::CmdType::CmdInstallPreparedMvcc as i32,
@@ -1109,8 +1151,10 @@ where
                 },
                 "install prepared mvcc",
             )
-            .await?
-        {
+            .await?,
+            KvInstallPreparedMvccEntriesResponse
+        );
+        let response = match cmd {
             raftpb::response::Cmd::InstallPreparedMvcc(response) => response,
             _ => {
                 return Err(raft_payload_error(

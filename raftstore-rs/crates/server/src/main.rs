@@ -1,11 +1,14 @@
 //! Standalone Rust raftstore server entrypoint for local compatibility tests.
 
+mod metrics;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
+use metrics::spawn_metrics_server;
 use nokv_holtstore::HoltMvccStore;
 use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
@@ -29,6 +32,7 @@ use prost_types::Any;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let args = ServerArgs::parse(std::env::args().skip(1))?;
     let addr = std::env::var("NOKV_RUST_RAFTSTORE_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:23880".to_owned())
         .parse::<SocketAddr>()?;
@@ -46,6 +50,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             peer_endpoints,
             region_ranges,
             PathBuf::from(path),
+            args.metrics_addr,
             &mut temp_log_dir,
         )
         .await?;
@@ -56,11 +61,44 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             coordinator,
             peer_endpoints,
             region_ranges,
+            args.metrics_addr,
             &mut temp_log_dir,
         )
         .await?;
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct ServerArgs {
+    metrics_addr: Option<SocketAddr>,
+}
+
+impl ServerArgs {
+    fn parse<I>(args: I) -> Result<Self, Box<dyn std::error::Error>>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut metrics_addr = None;
+        let mut iter = args.into_iter();
+        while let Some(arg) = iter.next() {
+            if let Some(value) = arg.strip_prefix("--metrics-addr=") {
+                metrics_addr = Some(value.parse::<SocketAddr>()?);
+                continue;
+            }
+            if arg == "--metrics-addr" {
+                let value = iter.next().ok_or_else(|| {
+                    std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        "--metrics-addr requires a listen address",
+                    )
+                })?;
+                metrics_addr = Some(value.parse::<SocketAddr>()?);
+                continue;
+            }
+        }
+        Ok(Self { metrics_addr })
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1283,6 +1321,7 @@ async fn serve_holt_regions(
     peer_endpoints: PeerEndpointCatalog,
     region_ranges: RegionRangeCatalog,
     persistent_root: PathBuf,
+    metrics_addr: Option<SocketAddr>,
     temp_log_dir: &mut Option<tempfile::TempDir>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let mvcc = HoltMvccStore::open_file(&persistent_root)?;
@@ -1303,6 +1342,7 @@ async fn serve_holt_regions(
     let mut admin_services = Vec::with_capacity(identities.len());
     let mut hosted_regions = Vec::with_capacity(identities.len());
     let mut startup_descriptors = Vec::with_capacity(identities.len());
+    let mut recovered_leadership = Vec::new();
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
     let multi_region = true;
 
@@ -1333,6 +1373,7 @@ async fn serve_holt_regions(
             recovered_descriptor_membership_init(&descriptor, identity, addr, &peer_endpoints)?
         {
             region.initialize_members(members).await?;
+            recovered_leadership.push((identity, region.clone()));
         }
         let (store_service, admin_service) = openraft_region_service_pair(
             region.clone(),
@@ -1357,9 +1398,17 @@ async fn serve_holt_regions(
         Some(mvcc.clone()),
     );
     let hosted_region_registry = HostedRegionRegistry::new(hosted_regions)?;
+    spawn_recovered_region_leadership_retries(recovered_leadership);
     let store_router = MultiRegionStoreKvService::new(store_services)?;
     let admin_router = MultiRegionRaftAdminService::new(admin_services)?
         .with_restart_diagnostics(Arc::new(mvcc.clone()));
+    spawn_metrics_server(
+        metrics_addr,
+        identities[0].store_id,
+        addr,
+        hosted_region_registry.clone(),
+        Some(mvcc.clone()),
+    );
     let range_controller = HoltRangeController {
         store_id: identities[0].store_id,
         addr,
@@ -1444,12 +1493,54 @@ fn recovered_descriptor_membership_init(
     descriptor_membership_nodes(descriptor, &local_peer, addr, peer_endpoints).map(Some)
 }
 
+fn spawn_recovered_region_leadership_retries<E>(regions: Vec<(ServerIdentity, OpenRaftRegion<E>)>)
+where
+    E: RegionSnapshotEngine + Send + Sync + 'static,
+{
+    for (identity, region) in regions {
+        tokio::spawn(async move {
+            for attempt in 1..=50 {
+                match region.elect_and_wait(identity.peer_id).await {
+                    Ok(()) => match region.ensure_linearizable().await {
+                        Ok(()) => return,
+                        Err(err) => {
+                            tracing::debug!(
+                                region_id = identity.region_id,
+                                peer_id = identity.peer_id,
+                                attempt,
+                                error = %err,
+                                "rust raftstore recovered region linearizable wait failed"
+                            );
+                        }
+                    },
+                    Err(err) => {
+                        tracing::debug!(
+                            region_id = identity.region_id,
+                            peer_id = identity.peer_id,
+                            attempt,
+                            error = %err,
+                            "rust raftstore recovered region election failed"
+                        );
+                    }
+                }
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+            tracing::warn!(
+                region_id = identity.region_id,
+                peer_id = identity.peer_id,
+                "rust raftstore recovered region did not elect a startup leader"
+            );
+        });
+    }
+}
+
 async fn serve_memory_regions(
     addr: SocketAddr,
     identities: Vec<ServerIdentity>,
     coordinator: Option<CoordinatorHeartbeatConfig>,
     peer_endpoints: PeerEndpointCatalog,
     region_ranges: RegionRangeCatalog,
+    metrics_addr: Option<SocketAddr>,
     temp_log_dir: &mut Option<tempfile::TempDir>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
@@ -1495,6 +1586,13 @@ async fn serve_memory_regions(
         None,
     );
     let hosted_region_registry = HostedRegionRegistry::new(hosted_regions)?;
+    spawn_metrics_server(
+        metrics_addr,
+        identities[0].store_id,
+        addr,
+        hosted_region_registry.clone(),
+        None,
+    );
     spawn_multi_region_coordinator_heartbeat(
         coordinator,
         identities[0].store_id,
@@ -1801,6 +1899,7 @@ fn spawn_startup_root_publication_for_regions(
     });
 }
 
+#[cfg(test)]
 fn startup_root_events(
     identity: ServerIdentity,
     descriptor: metapb::RegionDescriptor,
@@ -2304,6 +2403,7 @@ fn local_admin_endpoint(addr: SocketAddr) -> String {
     }
 }
 
+#[cfg(test)]
 fn coordinator_heartbeat_request<E>(
     identity: ServerIdentity,
     addr: SocketAddr,
@@ -2480,6 +2580,7 @@ fn region_log_dir(root: PathBuf, region_id: u64, multi_region: bool) -> PathBuf 
     }
 }
 
+#[cfg(test)]
 fn default_region_descriptor(identity: ServerIdentity) -> metapb::RegionDescriptor {
     default_region_descriptor_with_range(identity, None)
 }
@@ -2526,6 +2627,35 @@ mod tests {
     use std::collections::BTreeMap;
     use std::sync::{Arc, Mutex};
     use tonic::{Request, Response, Status};
+
+    #[test]
+    fn server_args_parse_metrics_addr_from_compose_extra() {
+        let args = ServerArgs::parse(vec![
+            "--storage-max-batch-count=1024".to_owned(),
+            "--metrics-addr=0.0.0.0:9200".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            args.metrics_addr,
+            Some("0.0.0.0:9200".parse::<SocketAddr>().unwrap())
+        );
+
+        let args = ServerArgs::parse(vec![
+            "--metrics-addr".to_owned(),
+            "127.0.0.1:9201".to_owned(),
+        ])
+        .unwrap();
+        assert_eq!(
+            args.metrics_addr,
+            Some("127.0.0.1:9201".parse::<SocketAddr>().unwrap())
+        );
+    }
+
+    #[test]
+    fn server_args_reject_missing_metrics_addr_value() {
+        let err = ServerArgs::parse(vec!["--metrics-addr".to_owned()]).unwrap_err();
+        assert!(err.to_string().contains("requires a listen address"));
+    }
 
     #[derive(Clone, Default)]
     struct CaptureRaftAdmin {

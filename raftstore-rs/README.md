@@ -54,6 +54,11 @@ cargo run --manifest-path raftstore-rs/Cargo.toml -p nokv-raftstore-server
 `RaftAdmin AddPeer`; missing endpoints fail the membership RPC instead of
 recording an unreachable placeholder address.
 
+`nokv-raftstore-server` also accepts `--metrics-addr=<addr>`, matching the
+existing compose `--extra --metrics-addr=...` shape. The endpoint serves
+`/debug/vars` with a `nokv_raftstore_rs` block containing hosted region counts,
+leader regions, traffic rates, and pending-admin state.
+
 For config-driven local smoke runs, build the binaries and launch one process
 per store-region:
 

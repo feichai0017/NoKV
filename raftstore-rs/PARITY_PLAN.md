@@ -294,7 +294,9 @@ The first slices are intentionally narrow:
   endpoint lists like the Go deployment config and try endpoints in order,
   keeping `InvalidArgument`/permanent root validation failures terminal while
   allowing transient leader/unavailability failures to fall through to another
-  coordinator endpoint.
+  coordinator endpoint. The standalone server also accepts the compose-compatible
+  `--metrics-addr` argument and exposes `/debug/vars` with hosted-region,
+  leader, traffic, and pending-admin diagnostics under `nokv_raftstore_rs`.
 
 Known gaps:
 

@@ -12,6 +12,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use nokv_mvcc::{KvEngine, MvccSnapshotEngine, MvccStore};
+use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
@@ -239,6 +240,8 @@ pub enum Error {
         target: NodeId,
         reason: &'static str,
     },
+    #[error("not raft leader; forward to {leader_id:?}")]
+    NotLeader { leader_id: Option<NodeId> },
     #[error("raft command encode error: {0}")]
     Encode(#[from] prost::EncodeError),
     #[error("raft command decode error: {0}")]
@@ -1832,7 +1835,7 @@ where
             .ensure_linearizable()
             .await
             .map(|_| ())
-            .map_err(openraft_api_error)
+            .map_err(openraft_check_leader_error)
     }
 
     pub fn raft_handle(&self) -> Raft<RaftStoreConfig> {
@@ -1953,7 +1956,7 @@ where
             .raft
             .client_write(proposal)
             .await
-            .map_err(openraft_api_error)?;
+            .map_err(openraft_client_write_error)?;
         Ok(response.data)
     }
 
@@ -2046,17 +2049,58 @@ where
                         .to_string(),
                     ));
                 }
-                self.raft.ensure_linearizable().await.map_err(|err| {
-                    nokv_mvcc::Error::Backend(openraft_api_error(err).to_string())
-                })?;
+                if let Err(err) = ensure_linearizable_for_read(&self.raft).await {
+                    if let Error::NotLeader { leader_id } = err {
+                        return self.not_leader_raft_response(req, leader_id);
+                    }
+                    return Err(nokv_mvcc::Error::Backend(err.to_string()));
+                }
                 return self.apply_engine.execute_raft_command(req).await;
             }
-            let applied = self
-                .propose(proposal)
-                .await
-                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+            let applied = match self.propose(proposal).await {
+                Ok(applied) => applied,
+                Err(Error::NotLeader { leader_id }) => {
+                    return self.not_leader_raft_response(req, leader_id)
+                }
+                Err(err) => return Err(nokv_mvcc::Error::Backend(err.to_string())),
+            };
             decode_raft_response(&applied.payload)
         }
+    }
+}
+
+impl<E> OpenRaftRegion<E>
+where
+    E: RegionSnapshotEngine,
+{
+    fn not_leader_raft_response(
+        &self,
+        req: &raftpb::RaftCmdRequest,
+        leader_id: Option<NodeId>,
+    ) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {
+        let descriptor = self.apply_engine.region_descriptor()?;
+        let region_id = descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.region_id)
+            .or_else(|| req.header.as_ref().map(|header| header.region_id))
+            .unwrap_or_else(|| self.apply_engine.apply_status().region_id);
+        let leader = leader_id.and_then(|leader_id| {
+            descriptor.as_ref().and_then(|descriptor| {
+                descriptor
+                    .peers
+                    .iter()
+                    .find(|peer| peer.peer_id == leader_id)
+                    .cloned()
+            })
+        });
+        Ok(raftpb::RaftCmdResponse {
+            header: req.header.clone(),
+            responses: Vec::new(),
+            region_error: Some(errorpb::RegionError {
+                not_leader: Some(errorpb::NotLeader { region_id, leader }),
+                ..Default::default()
+            }),
+        })
     }
 }
 
@@ -2068,6 +2112,29 @@ fn raft_command_is_read_only(req: &raftpb::RaftCmdRequest) -> bool {
                 Ok(raftpb::CmdType::CmdGet | raftpb::CmdType::CmdScan)
             )
         })
+}
+
+async fn ensure_linearizable_for_read(raft: &Raft<RaftStoreConfig>) -> Result<(), Error> {
+    let mut last_error = None;
+    for attempt in 1..=50 {
+        match raft.ensure_linearizable().await {
+            Ok(_) => return Ok(()),
+            Err(err) => {
+                let err = openraft_check_leader_error(err);
+                if matches!(err, Error::NotLeader { leader_id: Some(_) }) {
+                    return Err(err);
+                }
+                last_error = Some(err);
+                if attempt < 50 {
+                    tokio::time::sleep(Duration::from_millis(100)).await;
+                }
+            }
+        }
+    }
+    let err = last_error
+        .map(|err| err.to_string())
+        .unwrap_or_else(|| "linearizable read did not complete".to_owned());
+    Err(Error::OpenRaft(err))
 }
 
 #[derive(Clone, Default)]
@@ -2138,6 +2205,28 @@ where
     E: StdError,
 {
     Error::OpenRaft(err.to_string())
+}
+
+fn openraft_client_write_error(
+    err: RaftError<NodeId, openraft::error::ClientWriteError<NodeId, BasicNode>>,
+) -> Error {
+    if let Some(forward) = err.forward_to_leader() {
+        return Error::NotLeader {
+            leader_id: forward.leader_id,
+        };
+    }
+    openraft_api_error(err)
+}
+
+fn openraft_check_leader_error(
+    err: RaftError<NodeId, openraft::error::CheckIsLeaderError<NodeId, BasicNode>>,
+) -> Error {
+    if let Some(forward) = err.forward_to_leader() {
+        return Error::NotLeader {
+            leader_id: forward.leader_id,
+        };
+    }
+    openraft_api_error(err)
 }
 
 fn default_openraft_config(region_id: RegionId) -> Result<Arc<Config>, Error> {
