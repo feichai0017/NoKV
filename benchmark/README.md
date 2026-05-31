@@ -23,6 +23,16 @@ Run the Docker Compose distributed matrix:
 NOKV_FSMETA_BENCH_MODE=compose make fsmeta-bench
 ```
 
+Run the Rust distributed smoke or workload matrix:
+
+```sh
+NOKV_FSMETA_BENCH_MODE=rust make fsmeta-bench
+```
+
+Rust mode starts three `nokv-raftstore-server` peers, the Go root and
+coordinator control plane, and `nokv-fsmeta --runtime=raftstore` before running
+the benchmark client.
+
 Useful environment variables:
 
 | Variable | Purpose |
@@ -31,6 +41,8 @@ Useful environment variables:
 | `NOKV_FSMETA_WORKLOADS` | Comma-separated workload filter. |
 | `NOKV_FSMETA_OUTPUT_DIR` | Directory for CSV outputs and manifests. |
 | `NOKV_FSMETA_RESET_BETWEEN_WORKLOADS` | Reset the runtime between workloads when set to `1`. |
+| `NOKV_FSMETA_RUST_RAFTSTORE_ADDRS` | Three comma-separated Rust raftstore gRPC endpoints for Rust mode. |
+| `NOKV_FSMETA_RUST_RAFTSTORE_METRICS_ADDRS` | Three comma-separated Rust raftstore metrics endpoints for Rust mode. |
 
 The benchmark package lives under `benchmark/fsmeta` and the reusable workload
 definitions live under `benchmark/fsmeta/workload`.

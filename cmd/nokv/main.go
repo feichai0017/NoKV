@@ -28,6 +28,8 @@ func main() {
 		err = runFSMetaMountRegisterCmd(os.Stdout, args)
 	case "meta-root":
 		err = runMetaRootCmd(os.Stdout, args)
+	case "raftstore-add-peer":
+		err = runRaftstoreAddPeerCmd(os.Stdout, args)
 	case "help", "-h", "--help":
 		printUsage(os.Stdout)
 	default:
@@ -47,6 +49,7 @@ func printUsage(w io.Writer) {
 	  coordinator             Start coordinator gRPC service (control plane)
 	  fsmeta-mount-register  Register an fsmeta mount in rooted truth
 	  meta-root              Start metadata root gRPC service
+	  raftstore-add-peer     Add one peer through the Rust RaftAdmin service
 
 	Other binaries:
 	  nokv-fsmeta                         Start the local Pebble fsmeta gateway

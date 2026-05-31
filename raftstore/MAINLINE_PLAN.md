@@ -127,8 +127,8 @@ leader handoff with old-leader stop, cached leader crash retry, follower
 restart catch-up, watch cursor replay after restart, and retention prune. CI now
 runs `make fsmeta-rust-smoke`, and the fsmeta benchmark workflow includes a
 tiny Rust distributed `mdtest-easy` smoke workload that starts `meta-root`,
-`coordinator`, Rust `raftstore`, and `nokv-fsmeta --runtime=raftstore` as real
-processes.
+`coordinator`, a three-peer Rust `raftstore` group, and
+`nokv-fsmeta --runtime=raftstore` as real processes.
 
 - Continue hardening membership-change restart, snapshot install, log
   compaction, stale leader retry, and stale route retry beyond the current
@@ -136,9 +136,9 @@ processes.
 - Prove Holt state, Raft log, apply state, and region descriptor advance
   monotonically after restart.
 - Run the Rust distributed fsmeta benchmark gate after the runtime adapter is
-  real. This launcher starts `meta-root`, `coordinator`, Rust `raftstore`, and
-  `nokv-fsmeta --runtime=raftstore` as separate processes before running the
-  benchmark client.
+  real. This launcher starts `meta-root`, `coordinator`, three Rust
+  `raftstore` peers, and `nokv-fsmeta --runtime=raftstore` as separate
+  processes before running the benchmark client.
 
 Gate:
 

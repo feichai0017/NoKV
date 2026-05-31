@@ -40,8 +40,8 @@ local_mount_key_id="${NOKV_FSMETA_LOCAL_MOUNT_KEY_ID:-2}"
 local_log_dir="${NOKV_FSMETA_LOCAL_LOG_DIR:-$ROOT/benchmark/data/fsmeta/ci}"
 rust_log_dir="${NOKV_FSMETA_RUST_LOG_DIR:-$ROOT/benchmark/data/fsmeta/rust}"
 rust_coord_addr="${NOKV_FSMETA_RUST_COORDINATOR_ADDR:-127.0.0.1:2379}"
-rust_raftstore_addr="${NOKV_FSMETA_RUST_RAFTSTORE_ADDR:-127.0.0.1:23880}"
-rust_raftstore_metrics_addr="${NOKV_FSMETA_RUST_RAFTSTORE_METRICS_ADDR:-127.0.0.1:9480}"
+rust_raftstore_addrs="${NOKV_FSMETA_RUST_RAFTSTORE_ADDRS:-127.0.0.1:23880,127.0.0.1:23881,127.0.0.1:23882}"
+rust_raftstore_metrics_addrs="${NOKV_FSMETA_RUST_RAFTSTORE_METRICS_ADDRS:-127.0.0.1:9480,127.0.0.1:9481,127.0.0.1:9482}"
 rust_root_service_addrs="${NOKV_FSMETA_RUST_ROOT_SERVICE_ADDRS:-127.0.0.1:2380,127.0.0.1:2381,127.0.0.1:2382}"
 rust_root_transport_addrs="${NOKV_FSMETA_RUST_ROOT_TRANSPORT_ADDRS:-127.0.0.1:2480,127.0.0.1:2481,127.0.0.1:2482}"
 rust_route_stabilize_seconds="${NOKV_FSMETA_RUST_ROUTE_STABILIZE_SECONDS:-2}"
@@ -475,6 +475,31 @@ register_rust_benchmark_mount() {
 	return 1
 }
 
+add_rust_benchmark_peer() {
+	local suffix="$1"
+	local admin_addr="$2"
+	local store_id="$3"
+	local peer_id="$4"
+	local log_file="$rust_log_dir/add-peer-${profile}-${run_id}-${suffix}-${peer_id}.log"
+	rm -f "$log_file"
+	for _ in $(seq 1 "$wait_attempts"); do
+		if "$rust_tools_dir/nokv" raftstore-add-peer \
+			--admin-addr "$admin_addr" \
+			--region-id 1 \
+			--store-id "$store_id" \
+			--peer-id "$peer_id" \
+			--timeout 10s \
+			>>"$log_file" 2>&1; then
+			tail -1 "$log_file"
+			return 0
+		fi
+		sleep "$wait_interval"
+	done
+	echo "timed out adding Rust raftstore peer store=$store_id peer=$peer_id" >&2
+	cat "$log_file" >&2 || true
+	return 1
+}
+
 stop_rust_distributed_stack() {
 	for pid in "${rust_pids[@]}"; do
 		kill "$pid" 2>/dev/null || true
@@ -515,8 +540,12 @@ start_rust_distributed_stack() {
 
 	local root_service=()
 	local root_transport=()
+	local raft_addrs=()
+	local raft_metrics=()
 	IFS=',' read -r -a root_service <<<"$rust_root_service_addrs"
 	IFS=',' read -r -a root_transport <<<"$rust_root_transport_addrs"
+	IFS=',' read -r -a raft_addrs <<<"$rust_raftstore_addrs"
+	IFS=',' read -r -a raft_metrics <<<"$rust_raftstore_metrics_addrs"
 	if [[ "${#root_service[@]}" -ne 3 ]]; then
 		echo "NOKV_FSMETA_RUST_ROOT_SERVICE_ADDRS requires exactly 3 comma-separated addresses" >&2
 		exit 2
@@ -525,12 +554,25 @@ start_rust_distributed_stack() {
 		echo "NOKV_FSMETA_RUST_ROOT_TRANSPORT_ADDRS requires exactly 3 comma-separated addresses" >&2
 		exit 2
 	fi
+	if [[ "${#raft_addrs[@]}" -ne 3 ]]; then
+		echo "NOKV_FSMETA_RUST_RAFTSTORE_ADDRS requires exactly 3 comma-separated addresses" >&2
+		exit 2
+	fi
+	if [[ "${#raft_metrics[@]}" -ne 3 ]]; then
+		echo "NOKV_FSMETA_RUST_RAFTSTORE_METRICS_ADDRS requires exactly 3 comma-separated addresses" >&2
+		exit 2
+	fi
 	local root_peer_args=()
 	local root_service_peer_args=()
+	local raft_peer_endpoints=""
 	for i in 0 1 2; do
 		local id="$((i + 1))"
 		root_peer_args+=("-peer" "$id=${root_transport[$i]}")
 		root_service_peer_args+=("-root-peer" "$id=${root_service[$i]}")
+		if [[ -n "$raft_peer_endpoints" ]]; then
+			raft_peer_endpoints+=","
+		fi
+		raft_peer_endpoints+="$id=${raft_addrs[$i]}"
 	done
 
 	for i in 0 1 2; do
@@ -554,22 +596,41 @@ start_rust_distributed_stack() {
 		"${root_service_peer_args[@]}"
 	wait_port "$rust_coord_addr"
 
-	start_rust_process "raftstore" "$rust_log_dir/raftstore-${profile}-${run_id}-${suffix}.log" \
-		env \
-		NOKV_RAFTSTORE_ADDR="$rust_raftstore_addr" \
-		NOKV_RAFTSTORE_ADVERTISE_ADDR="$rust_raftstore_addr" \
-		NOKV_RAFTSTORE_COORDINATOR_ADDR="$rust_coord_addr" \
-		NOKV_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=250 \
-		NOKV_RAFTSTORE_HOLT_DIR="$rust_work_dir/raftstore-holt" \
-		NOKV_RAFTSTORE_LOG_DIR="$rust_work_dir/raftstore-log" \
-		"$rust_raftstore_bin" --metrics-addr "$rust_raftstore_metrics_addr"
-	wait_port "$rust_raftstore_addr"
-	wait_port "$rust_raftstore_metrics_addr"
+	for i in 0 1 2; do
+		local id="$((i + 1))"
+		local bootstrap="false"
+		if [[ "$id" -eq 1 ]]; then
+			bootstrap="true"
+		fi
+		start_rust_process "raftstore-$id" "$rust_log_dir/raftstore-${profile}-${run_id}-${suffix}-${id}.log" \
+			env \
+			NOKV_RAFTSTORE_ADDR="${raft_addrs[$i]}" \
+			NOKV_RAFTSTORE_ADVERTISE_ADDR="${raft_addrs[$i]}" \
+			NOKV_RAFTSTORE_REGION_ID=1 \
+			NOKV_RAFTSTORE_STORE_ID="$id" \
+			NOKV_RAFTSTORE_PEER_ID="$id" \
+			NOKV_RAFTSTORE_BOOTSTRAP="$bootstrap" \
+			NOKV_RAFTSTORE_PEER_ENDPOINTS="$raft_peer_endpoints" \
+			NOKV_RAFTSTORE_COORDINATOR_ADDR="$rust_coord_addr" \
+			NOKV_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=250 \
+			NOKV_RAFTSTORE_HOLT_DIR="$rust_work_dir/raftstore-$id-holt" \
+			NOKV_RAFTSTORE_LOG_DIR="$rust_work_dir/raftstore-$id-log" \
+			"$rust_raftstore_bin" --metrics-addr "${raft_metrics[$i]}"
+	done
+	for addr in "${raft_addrs[@]}"; do
+		wait_port "$addr"
+	done
+	for addr in "${raft_metrics[@]}"; do
+		wait_port "$addr"
+	done
 
 	if [[ "$rust_route_stabilize_seconds" != "0" ]]; then
 		echo "waiting ${rust_route_stabilize_seconds}s for Rust raftstore route publication"
 		sleep "$rust_route_stabilize_seconds"
 	fi
+
+	add_rust_benchmark_peer "$suffix" "${raft_addrs[0]}" 2 2
+	add_rust_benchmark_peer "$suffix" "${raft_addrs[0]}" 3 3
 
 	register_rust_benchmark_mount "$suffix"
 
@@ -696,7 +757,13 @@ run_local_benchmarks() {
 
 run_rust_distributed_benchmarks() {
 	coord_addr="$rust_coord_addr"
-	profile_targets="${NOKV_FSMETA_PROFILE_TARGETS:-fsmeta=$fsmeta_metrics_addr,raftstore=$rust_raftstore_metrics_addr}"
+	local raft_metrics=()
+	local default_profile_targets="fsmeta=$fsmeta_metrics_addr"
+	IFS=',' read -r -a raft_metrics <<<"$rust_raftstore_metrics_addrs"
+	for i in "${!raft_metrics[@]}"; do
+		default_profile_targets+=",raftstore$((i + 1))=${raft_metrics[$i]}"
+	done
+	profile_targets="${NOKV_FSMETA_PROFILE_TARGETS:-$default_profile_targets}"
 	local workloads="${NOKV_FSMETA_WORKLOADS:-mdtest-easy,mdtest-hard,filebench-varmail,mimesis-namespace,ai-checkpoint-agent}"
 	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_rust_${profile}_${run_id}_isolated.csv}"
 	trap cleanup_rust_distributed_stack EXIT

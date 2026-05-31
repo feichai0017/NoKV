@@ -58,8 +58,8 @@ It runs the tagged fsmeta runtime suite, including the single-node and
 three-peer contract checks plus coordinator rebuild, restart, leader handoff,
 follower catch-up, removed-peer, watch replay, and retention paths. Use
 `NOKV_FSMETA_BENCH_MODE=rust make fsmeta-bench` when the change needs real
-process startup, mount registration, coordinator routing, or benchmark-client
-evidence.
+process startup, a three-peer Rust data-plane group, mount registration,
+coordinator routing, or benchmark-client evidence.
 
 Do not claim a performance improvement without a before/after workload result
 and the command used to produce it.
