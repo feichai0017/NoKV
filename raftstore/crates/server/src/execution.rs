@@ -3,7 +3,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
-use nokv_proto::nokv::kv::v1 as kvpb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use tonic::Status;
 
 #[derive(Debug, Clone, Default)]
@@ -16,7 +16,7 @@ impl ExecutionRuntime {
     pub(crate) fn record_admission(
         &self,
         class: adminpb::ExecutionAdmissionClass,
-        context: Option<&kvpb::Context>,
+        context: Option<&metadatapb::MetadataContext>,
         region_error: Option<&errorpb::RegionError>,
     ) {
         let (reason, accepted, detail) = classify_admission(region_error);

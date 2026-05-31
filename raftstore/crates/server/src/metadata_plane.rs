@@ -55,9 +55,8 @@ where
         context: Option<&metadatapb::MetadataContext>,
         region_error: Option<&errorpb::RegionError>,
     ) {
-        let kv_context = context.map(kv_context_from_metadata);
         self.execution
-            .record_admission(class, kv_context.as_ref(), region_error);
+            .record_admission(class, context, region_error);
     }
 }
 
@@ -75,10 +74,10 @@ where
         request: Request<metadatapb::MetadataGetRequest>,
     ) -> Result<Response<metadatapb::MetadataGetResponse>, Status> {
         let request = request.into_inner();
-        let kv_context = kv_context_from_required_metadata(request.context.as_ref())?;
+        let context = required_metadata_context(request.context.as_ref())?;
         let admission = self.admission_snapshot()?;
         let region_error = admission
-            .admit_read_optional_keys(Some(&kv_context), std::iter::once(request.key.as_slice()))?;
+            .admit_read_optional_keys(Some(context), std::iter::once(request.key.as_slice()))?;
         self.record_admission(
             adminpb::ExecutionAdmissionClass::Read,
             request.context.as_ref(),
@@ -103,7 +102,7 @@ where
         request: Request<metadatapb::MetadataBatchGetRequest>,
     ) -> Result<Response<metadatapb::MetadataBatchGetResponse>, Status> {
         let request = request.into_inner();
-        let kv_context = kv_context_from_required_metadata(request.context.as_ref())?;
+        let context = required_metadata_context(request.context.as_ref())?;
         if request.requests.is_empty() {
             return Ok(Response::new(
                 metadatapb::MetadataBatchGetResponse::default(),
@@ -111,7 +110,7 @@ where
         }
         let admission = self.admission_snapshot()?;
         let region_error = admission.admit_read_optional_keys(
-            Some(&kv_context),
+            Some(context),
             request.requests.iter().map(|req| req.key.as_slice()),
         )?;
         self.record_admission(
@@ -143,10 +142,10 @@ where
                 "MetadataPlane Scan reverse scans are not supported yet",
             ));
         }
-        let kv_context = kv_context_from_required_metadata(request.context.as_ref())?;
+        let context = required_metadata_context(request.context.as_ref())?;
         let admission = self.admission_snapshot()?;
         let region_error = admission.admit_read_optional_keys(
-            Some(&kv_context),
+            Some(context),
             std::iter::once(request.start_key.as_slice()),
         )?;
         self.record_admission(
@@ -178,16 +177,14 @@ where
         request: Request<metadatapb::MetadataCommitRequest>,
     ) -> Result<Response<metadatapb::MetadataCommitResponse>, Status> {
         let request = request.into_inner();
-        let kv_context = kv_context_from_required_metadata(request.context.as_ref())?;
+        let context = required_metadata_context(request.context.as_ref())?;
         let command = request
             .command
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("metadata command is required"))?;
         let admission = self.admission_snapshot()?;
-        let region_error = admission.admit_leader_required_keys(
-            Some(&kv_context),
-            metadata_command_admission_keys(command),
-        )?;
+        let region_error = admission
+            .admit_leader_required_keys(Some(context), metadata_command_admission_keys(command))?;
         self.record_admission(
             adminpb::ExecutionAdmissionClass::Write,
             request.context.as_ref(),
@@ -336,35 +333,14 @@ fn apply_watch_cursor_after(candidate: (u64, u64), cursor: (u64, u64)) -> bool {
     candidate.0 > cursor.0 || (candidate.0 == cursor.0 && candidate.1 > cursor.1)
 }
 
-fn kv_context_from_required_metadata(
+fn required_metadata_context(
     context: Option<&metadatapb::MetadataContext>,
-) -> Result<kvpb::Context, Status> {
+) -> Result<&metadatapb::MetadataContext, Status> {
     let context = context.ok_or_else(|| Status::invalid_argument("context is required"))?;
     if context.region_id == 0 {
         return Err(Status::invalid_argument("region id is required"));
     }
-    Ok(kv_context_from_metadata(context))
-}
-
-fn kv_context_from_metadata(context: &metadatapb::MetadataContext) -> kvpb::Context {
-    kvpb::Context {
-        region_id: context.region_id,
-        region_epoch: context.region_epoch.clone(),
-        peer: context.peer.clone(),
-        read_consistency: match metadatapb::ReadConsistency::try_from(context.read_consistency)
-            .unwrap_or(metadatapb::ReadConsistency::Strong)
-        {
-            metadatapb::ReadConsistency::Strong => kvpb::ReadConsistency::Strong,
-            metadatapb::ReadConsistency::BoundedStale => kvpb::ReadConsistency::BoundedStale,
-        } as i32,
-        read_preference: match metadatapb::ReadPreference::try_from(context.read_preference)
-            .unwrap_or(metadatapb::ReadPreference::LeaderOnly)
-        {
-            metadatapb::ReadPreference::LeaderOnly => kvpb::ReadPreference::LeaderOnly,
-            metadatapb::ReadPreference::FollowerPrefer => kvpb::ReadPreference::FollowerPrefer,
-        } as i32,
-        ..Default::default()
-    }
+    Ok(context)
 }
 
 fn metadata_command_admission_keys(

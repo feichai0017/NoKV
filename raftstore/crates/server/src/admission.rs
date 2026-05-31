@@ -8,8 +8,8 @@ use std::collections::BTreeMap;
 use std::fmt;
 
 use nokv_proto::nokv::error::v1 as errorpb;
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use tonic::Status;
 
 use crate::RaftRuntimeStatus;
@@ -120,7 +120,7 @@ impl RegionAdmission {
 
     pub(crate) fn admit_read_optional_keys<'a, I>(
         &self,
-        context: Option<&kvpb::Context>,
+        context: Option<&metadatapb::MetadataContext>,
         keys: I,
     ) -> Result<Option<errorpb::RegionError>, Status>
     where
@@ -131,7 +131,7 @@ impl RegionAdmission {
 
     pub(crate) fn admit_leader_required_keys<'a, I>(
         &self,
-        context: Option<&kvpb::Context>,
+        context: Option<&metadatapb::MetadataContext>,
         keys: I,
     ) -> Result<Option<errorpb::RegionError>, Status>
     where
@@ -142,7 +142,7 @@ impl RegionAdmission {
 
     fn admit_keys<'a, I>(
         &self,
-        context: Option<&kvpb::Context>,
+        context: Option<&metadatapb::MetadataContext>,
         keys: I,
         skip_empty_keys: bool,
         role: AdmissionRole,
@@ -180,7 +180,10 @@ impl RegionAdmission {
         Ok(None)
     }
 
-    fn validate_context(&self, context: Option<&kvpb::Context>) -> Result<(), Status> {
+    fn validate_context(
+        &self,
+        context: Option<&metadatapb::MetadataContext>,
+    ) -> Result<(), Status> {
         let context = context.ok_or_else(|| Status::invalid_argument("context is required"))?;
         if context.region_id == 0 {
             return Err(Status::invalid_argument("region id is required"));
@@ -206,12 +209,16 @@ impl RegionAdmission {
             .unwrap_or(false)
     }
 
-    fn read_can_run_on_follower(&self, context: &kvpb::Context, role: AdmissionRole) -> bool {
+    fn read_can_run_on_follower(
+        &self,
+        context: &metadatapb::MetadataContext,
+        role: AdmissionRole,
+    ) -> bool {
         role == AdmissionRole::Read
             && normalize_read_preference(context.read_preference)
-                == kvpb::ReadPreference::FollowerPrefer
+                == metadatapb::ReadPreference::FollowerPrefer
             && normalize_read_consistency(context.read_consistency)
-                == kvpb::ReadConsistency::BoundedStale
+                == metadatapb::ReadConsistency::BoundedStale
     }
 
     fn epoch(&self) -> metapb::RegionEpoch {
@@ -223,12 +230,12 @@ impl RegionAdmission {
 
     fn non_leader_error(
         &self,
-        context: &kvpb::Context,
+        context: &metadatapb::MetadataContext,
         role: AdmissionRole,
     ) -> errorpb::RegionError {
         if role == AdmissionRole::Read
             && normalize_read_preference(context.read_preference)
-                == kvpb::ReadPreference::FollowerPrefer
+                == metadatapb::ReadPreference::FollowerPrefer
         {
             // The Go client falls back to a leader read only when a
             // follower-prefer attempt returns StaleCommand. Returning NotLeader
@@ -338,12 +345,14 @@ enum AdmissionRole {
     LeaderOnly,
 }
 
-fn normalize_read_preference(preference: i32) -> kvpb::ReadPreference {
-    kvpb::ReadPreference::try_from(preference).unwrap_or(kvpb::ReadPreference::LeaderOnly)
+fn normalize_read_preference(preference: i32) -> metadatapb::ReadPreference {
+    metadatapb::ReadPreference::try_from(preference)
+        .unwrap_or(metadatapb::ReadPreference::LeaderOnly)
 }
 
-fn normalize_read_consistency(consistency: i32) -> kvpb::ReadConsistency {
-    kvpb::ReadConsistency::try_from(consistency).unwrap_or(kvpb::ReadConsistency::Strong)
+fn normalize_read_consistency(consistency: i32) -> metadatapb::ReadConsistency {
+    metadatapb::ReadConsistency::try_from(consistency)
+        .unwrap_or(metadatapb::ReadConsistency::Strong)
 }
 
 #[cfg(test)]
