@@ -1808,6 +1808,49 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Error(t, err)
 	require.Equal(t, codes.Unimplemented, status.Code(err))
 
+	expiredKey := []byte("agent/expired")
+	expiredPrewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:        kvrpcpb.Mutation_Put,
+				Key:       expiredKey,
+				Value:     []byte("expired"),
+				ExpiresAt: 1,
+			}},
+			PrimaryLock:  expiredKey,
+			StartVersion: 70,
+			LockTtl:      10_000,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, expiredPrewrite.GetRegionError())
+	require.Empty(t, expiredPrewrite.GetResponse().GetErrors())
+
+	expiredCommit, err := raw.Commit(ctx, &kvrpcpb.KvCommitRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.CommitRequest{
+			Keys:          [][]byte{expiredKey},
+			StartVersion:  70,
+			CommitVersion: 80,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, expiredCommit.GetRegionError())
+	require.Nil(t, expiredCommit.GetResponse().GetError())
+
+	expiredRead, err := cli.Get(ctx, expiredKey, 90)
+	require.NoError(t, err)
+	require.True(t, expiredRead.GetNotFound())
+
 	heartbeatKey := []byte("agent/heartbeat-lock")
 	prewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
 		Context: &kvrpcpb.Context{

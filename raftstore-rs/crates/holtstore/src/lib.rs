@@ -847,6 +847,12 @@ impl mvcc::KvEngine for HoltMvccStore {
         }
         Ok(match self.read_committed(&req.key, req.version)? {
             Some((_commit, value)) => {
+                if mvcc::value_is_expired(value.expires_at) {
+                    return Ok(kvpb::GetResponse {
+                        not_found: true,
+                        ..Default::default()
+                    });
+                }
                 let not_found = value.value.is_none();
                 kvpb::GetResponse {
                     value: value.value.unwrap_or_default(),
@@ -900,6 +906,9 @@ impl mvcc::KvEngine for HoltMvccStore {
                 }
             }
             if let Some((_commit_version, value)) = self.read_committed(&key, read_version)? {
+                if mvcc::value_is_expired(value.expires_at) {
+                    continue;
+                }
                 if let Some(bytes) = value.value {
                     kvs.push(kvpb::Kv {
                         key,
@@ -2393,6 +2402,44 @@ mod tests {
             .unwrap();
         assert_eq!(latest.kvs.len(), 1);
         assert_eq!(latest.kvs[0].version, u64::MAX);
+    }
+
+    #[test]
+    fn holt_mvcc_expired_values_are_not_visible_to_get_or_scan() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"expired".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    expires_at: 1,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let got = store
+            .get(&kvpb::GetRequest {
+                key: b"k".to_vec(),
+                version: 20,
+            })
+            .unwrap();
+        assert!(got.not_found);
+
+        let scan = store
+            .scan(&kvpb::ScanRequest {
+                start_key: b"k".to_vec(),
+                limit: 1,
+                version: 20,
+                include_start: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(scan.kvs.is_empty());
     }
 
     #[test]

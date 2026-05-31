@@ -210,6 +210,9 @@ The first slices are intentionally narrow:
   request read version, treating `version=0` as the latest MVCC version, and
   skipping committed lock/rollback marker writes when an older put remains
   visible.
+  Rust `Get` and `Scan` now also match Go MVCC TTL visibility by treating
+  expired committed values as not found rather than returning stale payload
+  bytes with `expires_at`.
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.
