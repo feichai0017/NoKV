@@ -630,15 +630,21 @@ func TestRustMetadataPlaneSnapshotRetentionPrunesViaCoordinator(t *testing.T) {
 	repo := repoRootFromThisFile(t)
 	binary := buildRustRaftstoreServer(t, ctx, repo)
 	addr := freeTCPAddr(t)
-	logs := startRustRaftstoreServer(t, ctx, binary, repo, addr)
-	waitForRustMetadataPlane(t, ctx, addr)
-
 	rootStore := newE2ERootStorage()
 	coordinator := newE2ERootedCoordinator(rootStore)
-	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
+	coordinatorAddr := startCoordinatorGRPCServer(t, coordinator)
 	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
-	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(testMetadataPlaneDescriptor()))
-	heartbeatRustStore(t, ctx, coordinator, addr)
+
+	logs := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:                 addr,
+		storeID:              1,
+		peerID:               1,
+		bootstrap:            true,
+		coordinatorAddr:      coordinatorAddr,
+		coordinatorHeartbeat: 25 * time.Millisecond,
+	}).logs
+	waitForRustMetadataPlane(t, ctx, addr)
+	waitForCoordinatorRoute(t, ctx, coordinator, addr)
 
 	runtime, err := Open(ctx, Options{
 		Coordinator:    coordinator,
@@ -659,6 +665,16 @@ func TestRustMetadataPlaneSnapshotRetentionPrunesViaCoordinator(t *testing.T) {
 		},
 	})
 	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	oldVersion, err := runtime.Executor.GetReadVersion(ctx, model.ReadVersionRequest{Mount: "vol"})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	oldEntries, err := runtime.Executor.ReadDirPlus(ctx, model.ReadDirRequest{
+		Mount:           "vol",
+		Parent:          model.RootInode,
+		Limit:           64,
+		SnapshotVersion: oldVersion,
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	require.True(t, containsDentryName(oldEntries, "retained.json"))
 	_, err = runtime.Executor.Remove(ctx, model.RemoveRequest{
 		Mount:  "vol",
 		Parent: model.RootInode,
@@ -696,18 +712,15 @@ func TestRustMetadataPlaneSnapshotRetentionPrunesViaCoordinator(t *testing.T) {
 	})
 	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
 
-	heartbeat := heartbeatRustStore(t, ctx, coordinator, addr)
-	prune := requirePruneOperation(t, heartbeat.GetOperations(), token.ReadVersion)
-	admin, closeAdmin := rustAdminClient(t, addr)
-	defer closeAdmin()
-	pruned, err := admin.PruneMetadataVersions(ctx, &adminpb.PruneMetadataVersionsRequest{
-		RegionId:       prune.GetRegionId(),
-		RetentionFloor: prune.GetRetentionFloor(),
-	})
-	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
-	require.Equal(t, token.ReadVersion, pruned.GetRetentionFloor())
-	require.Greater(t, pruned.GetPrunedVersions(), uint64(0), "retention prune should remove hidden old versions")
-	require.Greater(t, pruned.GetRetainedAnchorVersions(), uint64(0), "retention prune must keep a floor anchor")
+	require.Eventually(t, func() bool {
+		prunedEntries, err := runtime.Executor.ReadDirPlus(ctx, model.ReadDirRequest{
+			Mount:           "vol",
+			Parent:          model.RootInode,
+			Limit:           64,
+			SnapshotVersion: oldVersion,
+		})
+		return err == nil && !containsDentryName(prunedEntries, "retained.json")
+	}, 10*time.Second, 100*time.Millisecond, "coordinator-driven retention prune did not remove hidden versions; raftstore logs:\n%s", logs.String())
 
 	snapshotEntries, err := runtime.Executor.ReadDirPlus(ctx, model.ReadDirRequest{
 		Mount:           "vol",
@@ -727,6 +740,22 @@ func TestRustMetadataPlaneSnapshotRetentionPrunesViaCoordinator(t *testing.T) {
 	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
 	require.True(t, containsDentryName(latestEntries, "retained.json"))
 	require.True(t, containsDentryName(latestEntries, "after-retention-floor.json"))
+}
+
+func startCoordinatorGRPCServer(t *testing.T, coordinator *coordserver.Service) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	require.NoError(t, err)
+	server := grpc.NewServer()
+	coordpb.RegisterCoordinatorServer(server, coordinator)
+	go func() {
+		_ = server.Serve(listener)
+	}()
+	t.Cleanup(func() {
+		server.Stop()
+		_ = listener.Close()
+	})
+	return listener.Addr().String()
 }
 
 func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, *bytes.Buffer, *coordserver.Service) {
@@ -808,17 +837,21 @@ func heartbeatRustStoreAs(t *testing.T, ctx context.Context, coordinator *coords
 	return heartbeat
 }
 
-func requirePruneOperation(t *testing.T, operations []*coordpb.SchedulerOperation, floor uint64) *coordpb.SchedulerOperation {
+func waitForCoordinatorRoute(t *testing.T, parent context.Context, coordinator *coordserver.Service, addr string) {
 	t.Helper()
-	for _, op := range operations {
-		if op.GetType() == coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS &&
-			op.GetRegionId() == 1 &&
-			op.GetRetentionFloor() == floor {
-			return op
+	require.Eventually(t, func() bool {
+		callCtx, cancel := context.WithTimeout(parent, time.Second)
+		defer cancel()
+		store, err := coordinator.GetStore(callCtx, &coordpb.GetStoreRequest{StoreId: 1})
+		if err != nil || store.GetNotFound() || store.GetStore().GetClientAddr() != addr {
+			return false
 		}
-	}
-	t.Fatalf("missing metadata retention prune operation for floor %d in %#v", floor, operations)
-	return nil
+		region, err := coordinator.GetRegionByKey(callCtx, &coordpb.GetRegionByKeyRequest{
+			Key:       []byte("__probe"),
+			Freshness: coordpb.Freshness_FRESHNESS_STRONG,
+		})
+		return err == nil && !region.GetNotFound() && region.GetRegionDescriptor().GetRegionId() == 1
+	}, 20*time.Second, 100*time.Millisecond)
 }
 
 func repoRootFromThisFile(t *testing.T) string {
@@ -849,13 +882,15 @@ type rustRaftstoreProcess struct {
 }
 
 type rustRaftstoreStartConfig struct {
-	addr          string
-	holtDir       string
-	raftLogDir    string
-	storeID       uint64
-	peerID        uint64
-	bootstrap     bool
-	peerEndpoints map[uint64]string
+	addr                 string
+	holtDir              string
+	raftLogDir           string
+	storeID              uint64
+	peerID               uint64
+	bootstrap            bool
+	peerEndpoints        map[uint64]string
+	coordinatorAddr      string
+	coordinatorHeartbeat time.Duration
 }
 
 func startRustRaftstoreServerWithDirs(t *testing.T, ctx context.Context, binary, repo, addr, holtDir, raftLogDir string) *rustRaftstoreProcess {
@@ -899,6 +934,12 @@ func startRustRaftstoreServerWithConfig(t *testing.T, ctx context.Context, binar
 	)
 	if len(cfg.peerEndpoints) != 0 {
 		cmd.Env = append(cmd.Env, "NOKV_RAFTSTORE_PEER_ENDPOINTS="+peerEndpointsEnv(cfg.peerEndpoints))
+	}
+	if cfg.coordinatorAddr != "" {
+		cmd.Env = append(cmd.Env, "NOKV_RAFTSTORE_COORDINATOR_ADDR="+cfg.coordinatorAddr)
+	}
+	if cfg.coordinatorHeartbeat > 0 {
+		cmd.Env = append(cmd.Env, "NOKV_RAFTSTORE_COORDINATOR_HEARTBEAT_MS="+strconv.FormatInt(cfg.coordinatorHeartbeat.Milliseconds(), 10))
 	}
 	cmd.Stdout = &logs
 	cmd.Stderr = &logs
