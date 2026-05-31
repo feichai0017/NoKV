@@ -147,6 +147,19 @@ impl HoltStore {
         Ok(Some(metapb::RegionDescriptor::decode(bytes.as_slice())?))
     }
 
+    pub fn region_descriptors(&self) -> Result<Vec<metapb::RegionDescriptor>> {
+        let mut out = Vec::new();
+        for entry in self.region_meta()?.range().prefix(REGION_DESCRIPTOR_PREFIX) {
+            let entry = entry?;
+            let RangeEntry::Key { value, .. } = entry else {
+                continue;
+            };
+            out.push(metapb::RegionDescriptor::decode(value.as_slice())?);
+        }
+        out.sort_by_key(|descriptor| descriptor.region_id);
+        Ok(out)
+    }
+
     pub fn load_or_bootstrap_region_descriptor(
         &self,
         descriptor: &metapb::RegionDescriptor,
@@ -394,6 +407,10 @@ impl HoltMvccStore {
         region_id: u64,
     ) -> Result<Option<metapb::RegionDescriptor>> {
         self.store.get_region_descriptor(region_id)
+    }
+
+    pub fn region_descriptors(&self) -> Result<Vec<metapb::RegionDescriptor>> {
+        self.store.region_descriptors()
     }
 
     pub fn load_or_bootstrap_region_descriptor(
@@ -1508,17 +1525,18 @@ fn validate_commit_version(start_version: u64, commit_version: u64) -> Option<kv
     })
 }
 
+const REGION_DESCRIPTOR_PREFIX: &[u8] = b"descriptor/";
+const PENDING_ROOT_EVENT_PREFIX: &[u8] = b"pending-root-event/";
+const BLOCKED_ROOT_EVENT_PREFIX: &[u8] = b"blocked-root-event/";
+const PENDING_SCHEDULER_OPERATION_PREFIX: &[u8] = b"pending-scheduler-operation/";
+
 fn region_descriptor_key(region_id: u64) -> Vec<u8> {
-    region_meta_key(b"descriptor/", region_id)
+    region_meta_key(REGION_DESCRIPTOR_PREFIX, region_id)
 }
 
 fn region_apply_state_key(region_id: u64) -> Vec<u8> {
     region_meta_key(b"apply-state/", region_id)
 }
-
-const PENDING_ROOT_EVENT_PREFIX: &[u8] = b"pending-root-event/";
-const BLOCKED_ROOT_EVENT_PREFIX: &[u8] = b"blocked-root-event/";
-const PENDING_SCHEDULER_OPERATION_PREFIX: &[u8] = b"pending-scheduler-operation/";
 
 fn pending_root_event_key(sequence: u64) -> Vec<u8> {
     region_meta_key(PENDING_ROOT_EVENT_PREFIX, sequence)
@@ -1730,6 +1748,42 @@ mod tests {
             reopened.get_region_descriptor(42).unwrap().unwrap(),
             descriptor
         );
+    }
+
+    #[test]
+    fn region_descriptors_list_persisted_descriptors_in_region_order() {
+        let store = HoltStore::open_memory().unwrap();
+        let first = metapb::RegionDescriptor {
+            region_id: 2,
+            start_key: b"m".to_vec(),
+            peers: vec![metapb::RegionPeer {
+                store_id: 7,
+                peer_id: 20,
+            }],
+            ..Default::default()
+        };
+        let second = metapb::RegionDescriptor {
+            region_id: 1,
+            end_key: b"m".to_vec(),
+            peers: vec![metapb::RegionPeer {
+                store_id: 7,
+                peer_id: 10,
+            }],
+            ..Default::default()
+        };
+        store.put_region_descriptor(&first).unwrap();
+        store.put_region_descriptor(&second).unwrap();
+
+        let descriptors = store.region_descriptors().unwrap();
+        assert_eq!(
+            descriptors
+                .iter()
+                .map(|descriptor| descriptor.region_id)
+                .collect::<Vec<_>>(),
+            vec![1, 2]
+        );
+        assert_eq!(descriptors[0], second);
+        assert_eq!(descriptors[1], first);
     }
 
     #[test]

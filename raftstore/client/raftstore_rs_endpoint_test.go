@@ -901,7 +901,6 @@ func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegion(t *testing.T) {
 	}
 	admin, closeAdmin, err := adminclient.Dial(ctx, storeAddr)
 	require.NoError(t, err)
-	defer func() { require.NoError(t, closeAdmin()) }()
 	require.Eventually(t, func() bool {
 		status, statusErr := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 2})
 		return statusErr == nil &&
@@ -924,7 +923,6 @@ func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegion(t *testing.T) {
 		Retry:       RetryPolicy{MaxAttempts: 1},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cli.Close()) })
 
 	got, err := cli.Get(ctx, []byte("workspace/before-split"), 11)
 	require.NoError(t, err)
@@ -956,6 +954,51 @@ func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegion(t *testing.T) {
 	require.NoError(t, err)
 	require.Zero(t, execution.GetRestart().GetPendingSchedulerOperationCount())
 	requireRustRaftstoreSplitRootEvents(t, rootEventCh)
+	require.NoError(t, closeAdmin())
+	require.NoError(t, cli.Close())
+
+	stopStore()
+	stopRestarted := startRustRaftstoreProcessAt(t, storeAddr, storeDir, env)
+	defer stopRestarted()
+	admin, closeAdmin, err = adminclient.Dial(ctx, storeAddr)
+	require.NoError(t, err)
+	defer func() { require.NoError(t, closeAdmin()) }()
+	require.Eventually(t, func() bool {
+		status, statusErr := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 2})
+		return statusErr == nil &&
+			status.GetKnown() &&
+			status.GetHosted() &&
+			status.GetLeader() &&
+			status.GetLocalPeerId() == 2
+	}, 5*time.Second, 50*time.Millisecond)
+
+	cli, err = New(Config{
+		RegionResolver: &mockRegionResolver{regions: []*metapb.RegionDescriptor{left, right}},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 1,
+			Addr:    storeAddr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cli.Close()) }()
+	got, err = cli.Get(ctx, []byte("workspace/after-split"), 21)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("after"), got.GetValue())
+	handled, err = cli.TryAtomicMutate(ctx, []byte("workspace/restarted-split"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("workspace/restarted-split"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 29,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("workspace/restarted-split"),
+		Value: []byte("restart"),
+	}}, 30, 31)
+	require.NoError(t, err)
+	require.True(t, handled)
 }
 
 func TestRustRaftstoreEndpointHoltMembershipSurvivesRestart(t *testing.T) {

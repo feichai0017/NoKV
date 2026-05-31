@@ -1,6 +1,6 @@
 //! Standalone Rust raftstore server entrypoint for local compatibility tests.
 
-use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
@@ -806,13 +806,18 @@ async fn serve_holt_regions(
     persistent_root: PathBuf,
     temp_log_dir: &mut Option<tempfile::TempDir>,
 ) -> Result<(), Box<dyn std::error::Error>> {
+    let mvcc = HoltMvccStore::open_file(&persistent_root)?;
+    let configured_region_ids = identities
+        .iter()
+        .map(|identity| identity.region_id)
+        .collect::<HashSet<_>>();
+    let identities = recover_holt_hosted_identities(&mvcc, identities)?;
     tracing::info!(
         %addr,
         path = %persistent_root.display(),
         region_count = identities.len(),
         "starting rust raftstore server with multi-region Holt MVCC"
     );
-    let mvcc = HoltMvccStore::open_file(&persistent_root)?;
     let topology_publisher =
         coordinator_topology_publisher(coordinator.clone(), Some(mvcc.clone()));
     let mut store_services = Vec::with_capacity(identities.len());
@@ -820,7 +825,7 @@ async fn serve_holt_regions(
     let mut hosted_regions = Vec::with_capacity(identities.len());
     let mut startup_descriptors = Vec::with_capacity(identities.len());
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
-    let multi_region = identities.len() > 1;
+    let multi_region = true;
 
     for identity in identities.iter().copied() {
         let descriptor =
@@ -853,7 +858,9 @@ async fn serve_holt_regions(
         store_services.push((identity.region_id, store_service));
         admin_services.push((identity.region_id, admin_service));
         hosted_regions.push((identity, region));
-        startup_descriptors.push(descriptor);
+        if configured_region_ids.contains(&identity.region_id) {
+            startup_descriptors.push(descriptor);
+        }
     }
 
     spawn_startup_root_publication_for_regions(
@@ -890,6 +897,43 @@ async fn serve_holt_regions(
     spawn_pending_topology_retries(coordinator, mvcc.clone(), addr, Some(split_controller));
     serve_with_multi_region_services(addr, store_router, admin_router, transport).await?;
     Ok(())
+}
+
+fn recover_holt_hosted_identities(
+    store: &HoltMvccStore,
+    configured: Vec<ServerIdentity>,
+) -> Result<Vec<ServerIdentity>, Box<dyn std::error::Error>> {
+    let Some(first) = configured.first().copied() else {
+        return Ok(configured);
+    };
+    let local_store_id = first.store_id;
+    let mut seen = configured
+        .iter()
+        .map(|identity| identity.region_id)
+        .collect::<HashSet<_>>();
+    let mut identities = configured;
+    for descriptor in store.region_descriptors()? {
+        if descriptor.region_id == 0 || seen.contains(&descriptor.region_id) {
+            continue;
+        }
+        let Some(peer) = descriptor
+            .peers
+            .iter()
+            .find(|peer| peer.store_id == local_store_id)
+            .cloned()
+        else {
+            continue;
+        };
+        identities.push(ServerIdentity {
+            region_id: descriptor.region_id,
+            store_id: peer.store_id,
+            peer_id: peer.peer_id,
+            bootstrap: true,
+        });
+        seen.insert(descriptor.region_id);
+    }
+    identities.sort_by_key(|identity| identity.region_id);
+    Ok(identities)
 }
 
 async fn serve_memory_regions(
@@ -2507,6 +2551,53 @@ mod tests {
 
         assert_eq!(descriptor, default_region_descriptor(identity));
         assert_eq!(store.get_region_descriptor(7).unwrap().unwrap(), descriptor);
+    }
+
+    #[test]
+    fn recover_holt_hosted_identities_adds_persisted_local_regions() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .put_region_descriptor(&metapb::RegionDescriptor {
+                region_id: 2,
+                start_key: b"m".to_vec(),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 7,
+                    peer_id: 20,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .put_region_descriptor(&metapb::RegionDescriptor {
+                region_id: 3,
+                start_key: b"z".to_vec(),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 8,
+                    peer_id: 30,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let identities = recover_holt_hosted_identities(
+            &store,
+            vec![ServerIdentity {
+                region_id: 1,
+                store_id: 7,
+                peer_id: 10,
+                bootstrap: true,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            identities
+                .iter()
+                .map(|identity| (identity.region_id, identity.store_id, identity.peer_id))
+                .collect::<Vec<_>>(),
+            vec![(1, 7, 10), (2, 7, 20)]
+        );
+        assert!(identities[1].bootstrap);
     }
 
     #[tokio::test]

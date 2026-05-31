@@ -351,7 +351,10 @@ Known gaps:
   endpoint requires the planned root event before local mutation, proposes the
   left descriptor through the parent OpenRaft region, opens the right child as a
   new local OpenRaft region, publishes the committed split event, and routes
-  right-range reads/writes through the dynamically registered child. The
+  right-range reads/writes through the dynamically registered child. Holt
+  startup now scans persisted region descriptors and reopens locally hosted
+  split children after restart; the Go tagged harness verifies right-range data
+  remains readable and writable after the Rust endpoint restarts. The
   multi-region StoreKV/RaftAdmin router now uses an in-process mutable region
   registry, which is the routing prerequisite for dynamic child-region
   registration after split apply.
