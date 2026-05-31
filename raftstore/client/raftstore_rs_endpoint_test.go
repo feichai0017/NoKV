@@ -1830,6 +1830,38 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Len(t, emptyPrewrite.GetResponse().GetErrors(), 1)
 	require.Contains(t, emptyPrewrite.GetResponse().GetErrors()[0].GetAbort(), "empty key in mutation")
 
+	unsupportedPrewriteKey := []byte("agent/unsupported-prewrite-valid")
+	unsupportedPrewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{
+				{
+					Op:    kvrpcpb.Mutation_Put,
+					Key:   unsupportedPrewriteKey,
+					Value: []byte("should-not-apply"),
+				},
+				{
+					Op:  kvrpcpb.Mutation_Rollback,
+					Key: []byte("agent/unsupported-prewrite-rollback"),
+				},
+			},
+			PrimaryLock:  unsupportedPrewriteKey,
+			StartVersion: 93,
+			LockTtl:      10_000,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, unsupportedPrewrite.GetRegionError())
+	require.Len(t, unsupportedPrewrite.GetResponse().GetErrors(), 1)
+	require.Contains(t, unsupportedPrewrite.GetResponse().GetErrors()[0].GetAbort(), "unsupported mutation op")
+	notApplied, err := cli.Get(ctx, unsupportedPrewriteKey, 94)
+	require.NoError(t, err)
+	require.True(t, notApplied.GetNotFound())
+
 	emptyCommit, err := raw.Commit(ctx, &kvrpcpb.KvCommitRequest{
 		Context: &kvrpcpb.Context{
 			RegionId:    meta.GetRegionId(),

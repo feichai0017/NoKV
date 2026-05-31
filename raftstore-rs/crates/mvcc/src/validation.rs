@@ -16,6 +16,16 @@ pub fn atomic_mutation(mutation: &kvpb::Mutation) -> Option<kvpb::KeyError> {
     }
 }
 
+pub fn prewrite_mutation(mutation: &kvpb::Mutation) -> Option<kvpb::KeyError> {
+    if mutation.key.is_empty() {
+        return Some(errors::empty_mutation_key());
+    }
+    match kvpb::mutation::Op::try_from(mutation.op) {
+        Ok(kvpb::mutation::Op::Put | kvpb::mutation::Op::Delete | kvpb::mutation::Op::Lock) => None,
+        _ => Some(errors::unsupported_mutation_op(mutation.op)),
+    }
+}
+
 pub fn atomic_predicate_observation(
     predicate: &kvpb::AtomicPredicate,
     observed: Option<&[u8]>,

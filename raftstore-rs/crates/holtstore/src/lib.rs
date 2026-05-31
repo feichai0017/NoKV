@@ -949,8 +949,8 @@ impl mvcc::KvEngine for HoltMvccStore {
         let _guard = self.lock()?;
         let mut errors = Vec::new();
         for mutation in &req.mutations {
-            if mutation.key.is_empty() {
-                errors.push(mvcc::errors::empty_mutation_key());
+            if let Some(error) = mvcc::validation::prewrite_mutation(mutation) {
+                errors.push(error);
                 continue;
             }
             if let Some(existing) = self.get_lock(&mutation.key)? {
@@ -2718,6 +2718,47 @@ mod tests {
             })
             .unwrap();
         assert_eq!(got.value, b"resolve-value");
+    }
+
+    #[test]
+    fn holt_mvcc_prewrite_rejects_unsupported_ops_without_partial_apply() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let valid_key = b"prewrite-valid-before-unsupported".to_vec();
+        let invalid_key = b"prewrite-unsupported".to_vec();
+        let response = store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![
+                    kvpb::Mutation {
+                        key: valid_key.clone(),
+                        value: b"valid".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                    kvpb::Mutation {
+                        key: invalid_key,
+                        op: kvpb::mutation::Op::Rollback as i32,
+                        ..Default::default()
+                    },
+                ],
+                primary_lock: valid_key.clone(),
+                start_version: 70,
+                lock_ttl: 10_000,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(response.errors.len(), 1);
+        assert_abort_contains(
+            response.errors.into_iter().next(),
+            "unsupported mutation op",
+        );
+
+        let got = store
+            .get(&kvpb::GetRequest {
+                key: valid_key,
+                version: 80,
+            })
+            .unwrap();
+        assert!(got.not_found);
     }
 
     #[test]

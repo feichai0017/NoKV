@@ -230,6 +230,9 @@ The first slices are intentionally narrow:
   Rust `ResolveLock` now matches Go's key-set boundary: an empty key list is a
   no-op, empty keys inside an explicit list are skipped, and duplicate keys are
   resolved once for count and apply semantics.
+  Rust `Prewrite` now rejects unsupported mutation ops like Go Percolator and
+  preserves the no-partial-apply boundary when a request mixes valid mutations
+  with an unsupported op.
   Rust 1PC atomic mutate now also mirrors Go Percolator validation and retry
   semantics: exact retries are idempotent, predicate read version `0` maps to
   the request start version, value-equals mismatches are retryable, unsupported
