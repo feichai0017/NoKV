@@ -29,11 +29,22 @@ profile_targets="${NOKV_FSMETA_PROFILE_TARGETS:-fsmeta=127.0.0.1:9400}"
 local_pid=""
 local_tools_dir=""
 local_tmp_dir=""
+rust_tools_dir=""
+rust_work_dir=""
+rust_raftstore_bin=""
+rust_pids=()
 profile_pids=()
 profile_root_dir=""
 compose_built=0
 local_mount_key_id="${NOKV_FSMETA_LOCAL_MOUNT_KEY_ID:-2}"
 local_log_dir="${NOKV_FSMETA_LOCAL_LOG_DIR:-$ROOT/benchmark/data/fsmeta/ci}"
+rust_log_dir="${NOKV_FSMETA_RUST_LOG_DIR:-$ROOT/benchmark/data/fsmeta/rust}"
+rust_coord_addr="${NOKV_FSMETA_RUST_COORDINATOR_ADDR:-127.0.0.1:2379}"
+rust_raftstore_addr="${NOKV_FSMETA_RUST_RAFTSTORE_ADDR:-127.0.0.1:23880}"
+rust_raftstore_metrics_addr="${NOKV_FSMETA_RUST_RAFTSTORE_METRICS_ADDR:-127.0.0.1:9480}"
+rust_root_service_addrs="${NOKV_FSMETA_RUST_ROOT_SERVICE_ADDRS:-127.0.0.1:2380,127.0.0.1:2381,127.0.0.1:2382}"
+rust_root_transport_addrs="${NOKV_FSMETA_RUST_ROOT_TRANSPORT_ADDRS:-127.0.0.1:2480,127.0.0.1:2481,127.0.0.1:2482}"
+rust_route_stabilize_seconds="${NOKV_FSMETA_RUST_ROUTE_STABILIZE_SECONDS:-2}"
 
 case "$profile" in
 	median)
@@ -80,6 +91,12 @@ case "$local_log_dir" in
 	*) local_log_dir="$ROOT/$local_log_dir" ;;
 esac
 mkdir -p "$local_log_dir"
+
+case "$rust_log_dir" in
+	/*) ;;
+	*) rust_log_dir="$ROOT/$rust_log_dir" ;;
+esac
+mkdir -p "$rust_log_dir"
 
 case "$profile_dir" in
 	/*) ;;
@@ -397,6 +414,164 @@ cleanup_local_gateway() {
 	fi
 }
 
+ensure_rust_distributed_tools() {
+	if [[ -n "$rust_tools_dir" ]]; then
+		return
+	fi
+	rust_tools_dir="$(mktemp -d "${TMPDIR:-/tmp}/nokv-fsmeta-rust-tools.XXXXXX")"
+	go build -o "$rust_tools_dir/nokv" ./cmd/nokv
+	go build -o "$rust_tools_dir/nokv-fsmeta" ./cmd/nokv-fsmeta
+	cargo build --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server
+	local target_dir="${CARGO_TARGET_DIR:-$ROOT/raftstore/target}"
+	rust_raftstore_bin="$target_dir/debug/nokv-raftstore-server"
+	if [[ ! -x "$rust_raftstore_bin" ]]; then
+		echo "built Rust raftstore binary not found: $rust_raftstore_bin" >&2
+		exit 1
+	fi
+}
+
+start_rust_process() {
+	local name="$1"
+	local log_file="$2"
+	shift 2
+	echo "starting $name (log: $log_file)"
+	"$@" >"$log_file" 2>&1 &
+	rust_pids+=("$!")
+}
+
+register_rust_benchmark_mount() {
+	local suffix="$1"
+	local log_file="$rust_log_dir/mount-register-${profile}-${run_id}-${suffix}.log"
+	rm -f "$log_file"
+	for _ in $(seq 1 "$wait_attempts"); do
+		if "$rust_tools_dir/nokv" fsmeta-mount-register \
+			--coordinator-addr "$rust_coord_addr" \
+			--mount "$mount" \
+			--root-inode 1 \
+			--timeout 10s \
+			>>"$log_file" 2>&1; then
+			tail -1 "$log_file"
+			return 0
+		fi
+		sleep "$wait_interval"
+	done
+	echo "timed out registering Rust fsmeta benchmark mount $mount" >&2
+	cat "$log_file" >&2 || true
+	return 1
+}
+
+stop_rust_distributed_stack() {
+	for pid in "${rust_pids[@]}"; do
+		kill "$pid" 2>/dev/null || true
+	done
+	for pid in "${rust_pids[@]}"; do
+		wait "$pid" 2>/dev/null || true
+	done
+	rust_pids=()
+	if [[ -z "${NOKV_FSMETA_RUST_WORKDIR:-}" && -n "$rust_work_dir" ]]; then
+		rm -rf "$rust_work_dir"
+		rust_work_dir=""
+	fi
+}
+
+cleanup_rust_distributed_stack() {
+	stop_rust_distributed_stack
+	if [[ -n "$rust_tools_dir" ]]; then
+		rm -rf "$rust_tools_dir"
+		rust_tools_dir=""
+	fi
+}
+
+start_rust_distributed_stack() {
+	local suffix="$1"
+	ensure_rust_distributed_tools
+	stop_rust_distributed_stack
+
+	if [[ -n "${NOKV_FSMETA_RUST_WORKDIR:-}" ]]; then
+		rust_work_dir="$NOKV_FSMETA_RUST_WORKDIR"
+		if enabled "$reset_between_workloads"; then
+			rust_work_dir="$rust_work_dir/$suffix"
+			rm -rf "$rust_work_dir"
+		fi
+	else
+		rust_work_dir="$(mktemp -d "${TMPDIR:-/tmp}/nokv-fsmeta-rust.XXXXXX")"
+	fi
+	mkdir -p "$rust_work_dir"
+
+	local root_service=()
+	local root_transport=()
+	IFS=',' read -r -a root_service <<<"$rust_root_service_addrs"
+	IFS=',' read -r -a root_transport <<<"$rust_root_transport_addrs"
+	if [[ "${#root_service[@]}" -ne 3 ]]; then
+		echo "NOKV_FSMETA_RUST_ROOT_SERVICE_ADDRS requires exactly 3 comma-separated addresses" >&2
+		exit 2
+	fi
+	if [[ "${#root_transport[@]}" -ne 3 ]]; then
+		echo "NOKV_FSMETA_RUST_ROOT_TRANSPORT_ADDRS requires exactly 3 comma-separated addresses" >&2
+		exit 2
+	fi
+	local root_peer_args=()
+	local root_service_peer_args=()
+	for i in 0 1 2; do
+		local id="$((i + 1))"
+		root_peer_args+=("-peer" "$id=${root_transport[$i]}")
+		root_service_peer_args+=("-root-peer" "$id=${root_service[$i]}")
+	done
+
+	for i in 0 1 2; do
+		local id="$((i + 1))"
+		start_rust_process "meta-root-$id" "$rust_log_dir/meta-root-${profile}-${run_id}-${suffix}-${id}.log" \
+			"$rust_tools_dir/nokv" meta-root \
+			--addr "${root_service[$i]}" \
+			--node-id "$id" \
+			--workdir "$rust_work_dir/meta-root-$id" \
+			--transport-addr "${root_transport[$i]}" \
+			"${root_peer_args[@]}"
+	done
+	for addr in "${root_service[@]}"; do
+		wait_port "$addr"
+	done
+
+	start_rust_process "coordinator" "$rust_log_dir/coordinator-${profile}-${run_id}-${suffix}.log" \
+		"$rust_tools_dir/nokv" coordinator \
+		--addr "$rust_coord_addr" \
+		--coordinator-id "fsmeta-bench" \
+		"${root_service_peer_args[@]}"
+	wait_port "$rust_coord_addr"
+
+	start_rust_process "raftstore" "$rust_log_dir/raftstore-${profile}-${run_id}-${suffix}.log" \
+		env \
+		NOKV_RAFTSTORE_ADDR="$rust_raftstore_addr" \
+		NOKV_RAFTSTORE_ADVERTISE_ADDR="$rust_raftstore_addr" \
+		NOKV_RAFTSTORE_COORDINATOR_ADDR="$rust_coord_addr" \
+		NOKV_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=250 \
+		NOKV_RAFTSTORE_HOLT_DIR="$rust_work_dir/raftstore-holt" \
+		NOKV_RAFTSTORE_LOG_DIR="$rust_work_dir/raftstore-log" \
+		"$rust_raftstore_bin" --metrics-addr "$rust_raftstore_metrics_addr"
+	wait_port "$rust_raftstore_addr"
+	wait_port "$rust_raftstore_metrics_addr"
+
+	if [[ "$rust_route_stabilize_seconds" != "0" ]]; then
+		echo "waiting ${rust_route_stabilize_seconds}s for Rust raftstore route publication"
+		sleep "$rust_route_stabilize_seconds"
+	fi
+
+	register_rust_benchmark_mount "$suffix"
+
+	start_rust_process "fsmeta-raftstore" "$rust_log_dir/fsmeta-raftstore-${profile}-${run_id}-${suffix}.log" \
+		"$rust_tools_dir/nokv-fsmeta" \
+		--runtime raftstore \
+		--addr "$fsmeta_addr" \
+		--metrics-addr "$fsmeta_metrics_addr" \
+		--coordinator-addr "$rust_coord_addr" \
+		--bootstrap-mount "$mount"
+	if ! wait_port "${fsmeta_addr%%,*}"; then
+		cat "$rust_log_dir/fsmeta-raftstore-${profile}-${run_id}-${suffix}.log" >&2 || true
+		return 1
+	fi
+	wait_port "${fsmeta_metrics_addr%%,*}"
+}
+
 start_local_gateway() {
 	local suffix="$1"
 	ensure_local_gateway_binary
@@ -504,6 +679,78 @@ run_local_benchmarks() {
 	echo "wrote isolated local fsmeta benchmark summary: $output"
 }
 
+run_rust_distributed_benchmarks() {
+	coord_addr="$rust_coord_addr"
+	profile_targets="${NOKV_FSMETA_PROFILE_TARGETS:-fsmeta=$fsmeta_metrics_addr,raftstore=$rust_raftstore_metrics_addr}"
+	local workloads="${NOKV_FSMETA_WORKLOADS:-mdtest-easy,mdtest-hard,filebench-varmail,mimesis-namespace,ai-checkpoint-agent}"
+	local output="${NOKV_FSMETA_OUTPUT:-$output_dir/fsmeta_rust_${profile}_${run_id}_isolated.csv}"
+	trap cleanup_rust_distributed_stack EXIT
+	case "$output" in
+		/*) ;;
+		*) output="$ROOT/$output" ;;
+	esac
+	if ! enabled "$reset_between_workloads"; then
+		start_rust_distributed_stack "shared"
+		profile_dir="$profile_root_dir"
+		profile_pids=()
+		start_profile_capture "$workloads"
+	fi
+	local combined_tmp="$output.tmp"
+	local wrote_header=0
+	local bench_status=0
+	rm -f "$combined_tmp" "$output"
+	IFS=',' read -r -a workload_list <<<"$workloads"
+	for workload in "${workload_list[@]}"; do
+		workload="${workload//[[:space:]]/}"
+		if [[ -z "$workload" ]]; then
+			continue
+		fi
+		local safe_workload="${workload//[^A-Za-z0-9_-]/_}"
+		local workload_output="$output_dir/fsmeta_rust_${profile}_${run_id}_${safe_workload}.csv"
+		echo "running isolated Rust distributed fsmeta workload: $workload"
+		if enabled "$reset_between_workloads"; then
+			start_rust_distributed_stack "$safe_workload"
+			profile_dir="$profile_root_dir/$safe_workload"
+			profile_pids=()
+			start_profile_capture "$workload"
+		fi
+		set +e
+		run_bench "$fsmeta_addr" "$workload" "$workload_output"
+		bench_status=$?
+		set -e
+		if enabled "$reset_between_workloads"; then
+			finish_profile_capture
+			stop_rust_distributed_stack
+		fi
+		if [[ "$bench_status" -ne 0 ]]; then
+			break
+		fi
+		if [[ "$wrote_header" -eq 0 ]]; then
+			cat "$workload_output" >"$combined_tmp"
+			wrote_header=1
+		else
+			tail -n +2 "$workload_output" >>"$combined_tmp"
+		fi
+		print_bench_summary "$workload_output"
+	done
+	if ! enabled "$reset_between_workloads"; then
+		finish_profile_capture
+	fi
+	if [[ "$bench_status" -ne 0 ]]; then
+		rm -f "$combined_tmp"
+		exit "$bench_status"
+	fi
+	if [[ "$wrote_header" -eq 0 ]]; then
+		echo "no fsmeta workloads selected" >&2
+		rm -f "$combined_tmp"
+		exit 2
+	fi
+	mv "$combined_tmp" "$output"
+	write_benchmark_manifest "$output" "$workloads"
+	print_bench_summary "$output"
+	echo "wrote isolated Rust distributed fsmeta benchmark summary: $output"
+}
+
 case "$mode" in
 	compose)
 		run_compose_benchmarks
@@ -511,8 +758,11 @@ case "$mode" in
 	local)
 		run_local_benchmarks
 		;;
+	rust|rust-distributed)
+		run_rust_distributed_benchmarks
+		;;
 	*)
-		echo "unknown NOKV_FSMETA_BENCH_MODE=$mode; use compose or local" >&2
+		echo "unknown NOKV_FSMETA_BENCH_MODE=$mode; use compose, local, or rust" >&2
 		exit 2
 		;;
 esac

@@ -30,7 +30,7 @@ help:
 	@echo "  make verify             - Run build + lint + test-lint + test"
 	@echo "  make proto              - Format .proto files and regenerate Go protobuf code"
 	@echo "  make proto-check        - Verify proto format, lint, and generated code"
-	@echo "  make fsmeta-bench       - Run the local fsmeta benchmark matrix"
+	@echo "  make fsmeta-bench       - Run fsmeta benchmarks (NOKV_FSMETA_BENCH_MODE=local|compose|rust)"
 	@echo "  make fsmeta-rust-smoke  - Run fsmeta against the Rust MetadataPlane e2e gate"
 	@echo "  make docker-up          - Start the local fsmeta demo container"
 	@echo "  make docker-dev-up      - Build and start the local fsmeta demo container"

@@ -37,10 +37,24 @@ The stable benchmark target is local fsmeta:
 NOKV_FSMETA_BENCH_MODE=local make fsmeta-bench
 ```
 
-The Docker Compose benchmark path is also local fsmeta today. Use
-`make fsmeta-rust-smoke` for the current Rust distributed data-plane gate until
-the distributed benchmark launcher starts `meta-root`, `coordinator`,
-`raftstore`, and `nokv-fsmeta --runtime=raftstore` as one harness.
+The Docker Compose benchmark path is also local fsmeta today. The Rust
+distributed data-plane smoke path starts a three-peer `meta-root`, one
+`coordinator`, one Rust `raftstore`, registers the benchmark mount, and then
+starts `nokv-fsmeta --runtime=raftstore`:
+
+```bash
+NOKV_FSMETA_BENCH_MODE=rust \
+NOKV_FSMETA_WORKLOADS=mdtest-easy \
+NOKV_FSMETA_CLIENTS=1 \
+NOKV_FSMETA_DIRS=1 \
+NOKV_FSMETA_FILES_PER_DIR=2 \
+make fsmeta-bench
+```
+
+Use `make fsmeta-rust-smoke` for the faster in-process MetadataPlane contract
+gate, and `NOKV_FSMETA_BENCH_MODE=rust make fsmeta-bench` when the change
+needs real process startup, mount registration, coordinator routing, or
+benchmark-client evidence.
 
 Do not claim a performance improvement without a before/after workload result
 and the command used to produce it.

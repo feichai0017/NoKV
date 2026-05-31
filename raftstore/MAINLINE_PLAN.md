@@ -126,12 +126,16 @@ cargo test --manifest-path raftstore/Cargo.toml -p nokv-raftnode -p nokv-raftsto
   retry.
 - Prove Holt state, Raft log, apply state, and region descriptor advance
   monotonically after restart.
-- Run fsmeta compose smoke and benchmark only after the runtime adapter is real.
+- Run the Rust distributed fsmeta benchmark gate after the runtime adapter is
+  real. This launcher starts `meta-root`, `coordinator`, Rust `raftstore`, and
+  `nokv-fsmeta --runtime=raftstore` as separate processes before running the
+  benchmark client.
 
 Gate:
 
 ```bash
 make fsmeta-rust-smoke
+NOKV_FSMETA_BENCH_MODE=rust NOKV_FSMETA_WORKLOADS=mdtest-easy NOKV_FSMETA_CLIENTS=1 NOKV_FSMETA_DIRS=1 NOKV_FSMETA_FILES_PER_DIR=2 make fsmeta-bench
 cargo test --manifest-path raftstore/Cargo.toml --workspace
 go test -tags rust_raftstore -count=1 ./fsmeta/runtime/raftstore
 make lint

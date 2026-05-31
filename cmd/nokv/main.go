@@ -24,6 +24,8 @@ func main() {
 	switch cmd {
 	case "coordinator":
 		err = runCoordinatorCmd(os.Stdout, args)
+	case "fsmeta-mount-register":
+		err = runFSMetaMountRegisterCmd(os.Stdout, args)
 	case "meta-root":
 		err = runMetaRootCmd(os.Stdout, args)
 	case "help", "-h", "--help":
@@ -42,8 +44,9 @@ func printUsage(w io.Writer) {
 	_, _ = fmt.Fprintln(w, `Usage: nokv <command> [flags]
 
 	Commands:
-	  coordinator Start coordinator gRPC service (control plane)
-	  meta-root Start metadata root gRPC service
+	  coordinator             Start coordinator gRPC service (control plane)
+	  fsmeta-mount-register  Register an fsmeta mount in rooted truth
+	  meta-root              Start metadata root gRPC service
 
 	Other binaries:
 	  nokv-fsmeta                         Start the local Pebble fsmeta gateway
