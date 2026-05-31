@@ -146,7 +146,7 @@ impl HoltMvccStore {
         Ok(any_present && all_present)
     }
 
-    fn scan_write_user_keys(&self) -> mvcc::Result<Vec<Vec<u8>>> {
+    pub(crate) fn scan_write_user_keys(&self) -> mvcc::Result<Vec<Vec<u8>>> {
         let mut keys = std::collections::BTreeSet::new();
         for entry in self.store.write().map_err(to_backend_error)?.range() {
             let entry = entry.map_err(to_backend_error)?;

@@ -10,13 +10,43 @@ impl mvcc::MetadataEngine for HoltMvccStore {
         &self,
         req: &metadatapb::MetadataGetRequest,
     ) -> mvcc::Result<metadatapb::MetadataGetResponse> {
-        Ok(mvcc::metadata_get_response_from_kv(mvcc::KvEngine::get(
-            self,
-            &kvpb::GetRequest {
-                key: req.key.clone(),
-                version: req.version,
+        let _guard = self.lock()?;
+        if let Some(lock) = self.get_lock(&req.key)? {
+            if lock.start_version <= req.version {
+                return Ok(metadatapb::MetadataGetResponse {
+                    error: Some(mvcc::metadata_key_error_from_kv(mvcc::errors::locked(
+                        &req.key, &lock,
+                    ))),
+                    ..Default::default()
+                });
+            }
+        }
+        Ok(match self.read_committed(&req.key, req.version)? {
+            Some((_commit, value)) => {
+                if mvcc::value_is_expired(value.expires_at) {
+                    return Ok(metadatapb::MetadataGetResponse {
+                        not_found: true,
+                        ..Default::default()
+                    });
+                }
+                let expires_at = value.expires_at;
+                let bytes = value.value;
+                let not_found = bytes.is_none();
+                metadatapb::MetadataGetResponse {
+                    kv: bytes.map(|value| metadatapb::MetadataKv {
+                        value,
+                        expires_at,
+                        ..Default::default()
+                    }),
+                    not_found,
+                    ..Default::default()
+                }
+            }
+            None => metadatapb::MetadataGetResponse {
+                not_found: true,
+                ..Default::default()
             },
-        )?))
+        })
     }
 
     fn batch_get_metadata(
@@ -26,25 +56,12 @@ impl mvcc::MetadataEngine for HoltMvccStore {
         if req.requests.is_empty() {
             return Ok(metadatapb::MetadataBatchGetResponse::default());
         }
-        let response = mvcc::KvEngine::batch_get(
-            self,
-            &kvpb::BatchGetRequest {
-                requests: req
-                    .requests
-                    .iter()
-                    .map(|request| kvpb::GetRequest {
-                        key: request.key.clone(),
-                        version: request.version,
-                    })
-                    .collect(),
-            },
-        )?;
+        let mut responses = Vec::with_capacity(req.requests.len());
+        for request in &req.requests {
+            responses.push(self.get_metadata(request)?);
+        }
         Ok(metadatapb::MetadataBatchGetResponse {
-            responses: response
-                .responses
-                .into_iter()
-                .map(mvcc::metadata_get_response_from_kv)
-                .collect(),
+            responses,
             region_error: None,
         })
     }
@@ -58,16 +75,48 @@ impl mvcc::MetadataEngine for HoltMvccStore {
                 "metadata reverse scans are not supported".to_owned(),
             ));
         }
-        Ok(mvcc::metadata_scan_response_from_kv(mvcc::KvEngine::scan(
-            self,
-            &kvpb::ScanRequest {
-                start_key: req.start_key.clone(),
-                limit: req.limit,
-                version: req.version,
-                include_start: req.include_start,
-                reverse: false,
-            },
-        )?))
+        let _guard = self.lock()?;
+        let read_version = mvcc::scan_read_version(req.version);
+        let limit = mvcc::scan_limit(req.limit);
+        let mut kvs = Vec::new();
+        for key in self.scan_write_user_keys()? {
+            if key.as_slice() < req.start_key.as_slice()
+                || (!req.include_start && key == req.start_key)
+            {
+                continue;
+            }
+            if let Some(lock) = self.get_lock(&key)? {
+                if lock.start_version <= read_version {
+                    return Ok(metadatapb::MetadataScanResponse {
+                        error: Some(mvcc::metadata_key_error_from_kv(mvcc::errors::locked(
+                            &key, &lock,
+                        ))),
+                        ..Default::default()
+                    });
+                }
+            }
+            if let Some((_commit_version, value)) = self.read_committed(&key, read_version)? {
+                if mvcc::value_is_expired(value.expires_at) {
+                    continue;
+                }
+                let expires_at = value.expires_at;
+                if let Some(bytes) = value.value {
+                    kvs.push(metadatapb::MetadataKv {
+                        key,
+                        value: bytes,
+                        version: read_version,
+                        expires_at,
+                    });
+                    if kvs.len() >= limit {
+                        break;
+                    }
+                }
+            }
+        }
+        Ok(metadatapb::MetadataScanResponse {
+            kvs,
+            ..Default::default()
+        })
     }
 
     fn commit_metadata(
