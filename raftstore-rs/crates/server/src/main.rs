@@ -592,7 +592,14 @@ impl HoltRangeController {
             .mvcc
             .region_descriptors()
             .map_err(|err| tonic::Status::internal(err.to_string()))?;
+        let merged_sources = merged_source_region_ids_for_store(&descriptors, self.store_id);
+        for region_id in &merged_sources {
+            self.remove_merged_source_region(*region_id).await?;
+        }
         for descriptor in descriptors {
+            if merged_sources.contains(&descriptor.region_id) {
+                continue;
+            }
             self.open_missing_local_region_descriptor(descriptor, false)
                 .await?;
         }
@@ -705,8 +712,7 @@ impl HoltRangeController {
             .region_descriptor()
             .map_err(|err| tonic::Status::internal(err.to_string()))?
             .ok_or_else(|| tonic::Status::failed_precondition("merge source descriptor missing"))?;
-        ensure_single_peer_transition("merge target", &target_descriptor)?;
-        ensure_single_peer_transition("merge source", &source_descriptor)?;
+        ensure_merge_store_coverage(&target_descriptor, &source_descriptor)?;
         let merged = build_merge_descriptor(&target_descriptor, &source_descriptor)?;
         let (left_id, right_id) = merge_region_ids(&target_descriptor, &source_descriptor);
 
@@ -722,8 +728,7 @@ impl HoltRangeController {
             .propose_region_descriptor(&merged)
             .await
             .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
-        self.remove_merged_source_region(operation.source_region_id)
-            .await?;
+        self.reconcile_local_region_descriptors().await?;
         self.publish_merge_event(
             metapb::RootEventKind::RegionMerged,
             left_id,
@@ -915,18 +920,71 @@ impl HoltRangeController {
     }
 }
 
-fn ensure_single_peer_transition(
-    action: &str,
-    descriptor: &metapb::RegionDescriptor,
+fn ensure_merge_store_coverage(
+    target: &metapb::RegionDescriptor,
+    source: &metapb::RegionDescriptor,
 ) -> Result<(), tonic::Status> {
-    if descriptor.peers.len() == 1 {
+    let target_stores = region_peer_store_ids(target)?;
+    let source_stores = region_peer_store_ids(source)?;
+    if target_stores == source_stores {
         return Ok(());
     }
     Err(tonic::Status::unimplemented(format!(
-        "{action} region {} has {} peers; raftstore-rs must apply multi-peer region lifecycle through the parent raft group before this transition is safe",
-        descriptor.region_id,
-        descriptor.peers.len()
+        "merge target region {} and source region {} must cover the same store set before raftstore-rs can safely retire source peers",
+        target.region_id, source.region_id
     )))
+}
+
+fn region_peer_store_ids(
+    descriptor: &metapb::RegionDescriptor,
+) -> Result<BTreeSet<u64>, tonic::Status> {
+    let mut stores = BTreeSet::new();
+    for peer in &descriptor.peers {
+        if peer.store_id == 0 || peer.peer_id == 0 {
+            return Err(tonic::Status::invalid_argument(format!(
+                "region {} has an invalid peer entry",
+                descriptor.region_id
+            )));
+        }
+        if !stores.insert(peer.store_id) {
+            return Err(tonic::Status::invalid_argument(format!(
+                "region {} has duplicate peer store {}",
+                descriptor.region_id, peer.store_id
+            )));
+        }
+    }
+    if stores.is_empty() {
+        return Err(tonic::Status::invalid_argument(format!(
+            "region {} has no peers",
+            descriptor.region_id
+        )));
+    }
+    Ok(stores)
+}
+
+fn merged_source_region_ids_for_store(
+    descriptors: &[metapb::RegionDescriptor],
+    store_id: u64,
+) -> HashSet<u64> {
+    descriptors
+        .iter()
+        .filter(|descriptor| {
+            descriptor
+                .peers
+                .iter()
+                .any(|peer| peer.store_id == store_id && peer.peer_id != 0)
+        })
+        .flat_map(|descriptor| {
+            descriptor
+                .lineage
+                .iter()
+                .filter(|lineage| {
+                    lineage.region_id != 0
+                        && lineage.kind == metapb::DescriptorLineageKind::MergeSource as i32
+                })
+                .map(|lineage| lineage.region_id)
+        })
+        .collect()
 }
 
 fn local_peer_for_store(
@@ -1286,8 +1344,13 @@ fn recover_holt_hosted_identities(
         .map(|identity| identity.region_id)
         .collect::<HashSet<_>>();
     let mut identities = configured;
-    for descriptor in store.region_descriptors()? {
+    let descriptors = store.region_descriptors()?;
+    let merged_sources = merged_source_region_ids_for_store(&descriptors, local_store_id);
+    for descriptor in descriptors {
         if descriptor.region_id == 0 || seen.contains(&descriptor.region_id) {
+            continue;
+        }
+        if merged_sources.contains(&descriptor.region_id) {
             continue;
         }
         let Some(peer) = descriptor
@@ -3563,24 +3626,85 @@ mod tests {
     }
 
     #[test]
-    fn merge_transition_rejects_multi_peer_descriptor_until_lifecycle_is_replicated() {
-        let mut descriptor = default_region_descriptor(ServerIdentity {
+    fn merge_store_coverage_accepts_matching_store_sets() {
+        let mut target = default_region_descriptor(ServerIdentity {
             region_id: 7,
             store_id: 11,
             peer_id: 101,
             bootstrap: true,
         });
-        descriptor.peers.push(metapb::RegionPeer {
+        target.peers.push(metapb::RegionPeer {
             store_id: 12,
             peer_id: 102,
         });
+        let mut source = default_region_descriptor(ServerIdentity {
+            region_id: 8,
+            store_id: 11,
+            peer_id: 201,
+            bootstrap: true,
+        });
+        source.peers.push(metapb::RegionPeer {
+            store_id: 12,
+            peer_id: 202,
+        });
 
-        let err = ensure_single_peer_transition("merge target", &descriptor).unwrap_err();
+        ensure_merge_store_coverage(&target, &source).unwrap();
+    }
+
+    #[test]
+    fn merge_store_coverage_rejects_mismatched_store_sets() {
+        let mut target = default_region_descriptor(ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        });
+        target.peers.push(metapb::RegionPeer {
+            store_id: 12,
+            peer_id: 102,
+        });
+        let source = default_region_descriptor(ServerIdentity {
+            region_id: 8,
+            store_id: 11,
+            peer_id: 201,
+            bootstrap: true,
+        });
+
+        let err = ensure_merge_store_coverage(&target, &source).unwrap_err();
 
         assert_eq!(err.code(), tonic::Code::Unimplemented);
-        assert!(err
-            .message()
-            .contains("must apply multi-peer region lifecycle through the parent raft group"));
+        assert!(err.message().contains("must cover the same store set"));
+    }
+
+    #[test]
+    fn merged_source_region_ids_are_scoped_to_local_target_peers() {
+        let mut merged = default_region_descriptor(ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        });
+        merged.peers.push(metapb::RegionPeer {
+            store_id: 12,
+            peer_id: 102,
+        });
+        merged.lineage.push(metapb::DescriptorLineageRef {
+            region_id: 8,
+            kind: metapb::DescriptorLineageKind::MergeSource as i32,
+            ..Default::default()
+        });
+        let source = default_region_descriptor(ServerIdentity {
+            region_id: 8,
+            store_id: 12,
+            peer_id: 202,
+            bootstrap: true,
+        });
+
+        let local = merged_source_region_ids_for_store(&[merged, source], 12);
+        let unrelated = merged_source_region_ids_for_store(&[], 13);
+
+        assert!(local.contains(&8));
+        assert!(unrelated.is_empty());
     }
 
     #[test]
@@ -3654,6 +3778,53 @@ mod tests {
         assert_eq!(identities[1].region_id, 2);
         assert_eq!(identities[1].peer_id, 20);
         assert!(!identities[1].bootstrap);
+    }
+
+    #[test]
+    fn recover_holt_hosted_identities_skips_merged_source_descriptor() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let mut merged = default_region_descriptor(ServerIdentity {
+            region_id: 1,
+            store_id: 7,
+            peer_id: 10,
+            bootstrap: true,
+        });
+        merged.lineage.push(metapb::DescriptorLineageRef {
+            region_id: 2,
+            kind: metapb::DescriptorLineageKind::MergeSource as i32,
+            ..Default::default()
+        });
+        store.put_region_descriptor(&merged).unwrap();
+        store
+            .put_region_descriptor(&metapb::RegionDescriptor {
+                region_id: 2,
+                start_key: b"m".to_vec(),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 7,
+                    peer_id: 20,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+
+        let identities = recover_holt_hosted_identities(
+            &store,
+            vec![ServerIdentity {
+                region_id: 1,
+                store_id: 7,
+                peer_id: 10,
+                bootstrap: true,
+            }],
+        )
+        .unwrap();
+
+        assert_eq!(
+            identities
+                .iter()
+                .map(|identity| identity.region_id)
+                .collect::<Vec<_>>(),
+            vec![1]
+        );
     }
 
     #[test]
