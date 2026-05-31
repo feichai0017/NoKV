@@ -338,10 +338,14 @@ Known gaps:
   `RaftAdmin AddPeer`. When a coordinator endpoint is configured, startup
   publishes the store membership and bootstrap region descriptor needed for
   coordinator-backed routing. Config-driven one-region process launch and
-  AddPeer joining now have ops scripts, and the server crate has a multi-region
-  service routing boundary. Automatic multi-region process lifecycle wiring
-  that opens, registers, and supervises multiple OpenRaft groups from
-  coordinator topology is still being built out.
+  AddPeer joining now have ops scripts. The server crate now has a
+  multi-region service routing boundary and a config-driven multi-region
+  startup path that opens several local OpenRaft groups in one process, isolates
+  each region's raftlog directory, publishes store membership once, publishes
+  one bootstrap descriptor per bootstrapped region, and sends a single
+  aggregate store heartbeat for the process. Coordinator-owned lifecycle,
+  topology bootstrap, split/merge execution, and default compose cutover are
+  still pending.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. Non-bootstrap Rust peers no longer persist a default descriptor,

@@ -1,8 +1,8 @@
 //! Standalone Rust raftstore server entrypoint for local compatibility tests.
 
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -17,9 +17,11 @@ use nokv_raftnode::{
     TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
-    apply_status_from_holt, root_event_transition_id, EmptyRegionDescriptorSink,
-    EmptyRestartDiagnostics, EmptyTopologyPublisher, HoltRegionMetadataSink, PeerEndpointCatalog,
-    RaftRuntimeStatusProvider, RegionAdmission, TopologyPublishOutcome, TopologyPublisher,
+    apply_status_from_holt, openraft_region_service_pair, root_event_transition_id,
+    serve_with_multi_region_services, EmptyRegionDescriptorSink, EmptyRestartDiagnostics,
+    EmptyTopologyPublisher, HoltRegionMetadataSink, MultiRegionRaftAdminService,
+    MultiRegionStoreKvService, PeerEndpointCatalog, RaftRuntimeStatusProvider, RegionAdmission,
+    TopologyPublishOutcome, TopologyPublisher,
 };
 use prost::Message;
 use prost_types::Any;
@@ -29,13 +31,38 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let addr = std::env::var("NOKV_RUST_RAFTSTORE_ADDR")
         .unwrap_or_else(|_| "127.0.0.1:23880".to_owned())
         .parse::<SocketAddr>()?;
-    let identity = ServerIdentity::from_env()?;
+    let identities = ServerIdentity::from_env_list()?;
     let coordinator = coordinator_heartbeat_config_from_env()?;
     let peer_endpoints = peer_endpoint_catalog_from_env()?;
     let mut temp_log_dir = None;
+    if identities.len() > 1 {
+        if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_HOLT_DIR") {
+            serve_holt_regions(
+                addr,
+                identities,
+                coordinator,
+                peer_endpoints,
+                PathBuf::from(path),
+                &mut temp_log_dir,
+            )
+            .await?;
+        } else {
+            serve_memory_regions(
+                addr,
+                identities,
+                coordinator,
+                peer_endpoints,
+                &mut temp_log_dir,
+            )
+            .await?;
+        }
+        return Ok(());
+    }
+    let identity = identities[0];
     if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_HOLT_DIR") {
         tracing::info!(%addr, %path, "starting rust raftstore server with Holt MVCC");
-        let log_dir = raft_log_dir(Some(PathBuf::from(&path)), &mut temp_log_dir)?;
+        let path = PathBuf::from(path);
+        let log_dir = raft_log_dir(Some(path.clone()), &mut temp_log_dir)?;
         let mvcc = HoltMvccStore::open_file(path)?;
         let descriptor = startup_region_descriptor(&mvcc, identity)?;
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
@@ -120,6 +147,13 @@ impl Default for ServerIdentity {
 }
 
 impl ServerIdentity {
+    fn from_env_list() -> Result<Vec<Self>, Box<dyn std::error::Error>> {
+        if let Ok(raw) = std::env::var("NOKV_RUST_RAFTSTORE_REGIONS") {
+            return Self::from_region_list(&raw);
+        }
+        Ok(vec![Self::from_env()?])
+    }
+
     fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
         Self::from_values(
             std::env::var("NOKV_RUST_RAFTSTORE_REGION_ID").ok(),
@@ -155,6 +189,66 @@ impl ServerIdentity {
             bootstrap: parse_bootstrap_flag(bootstrap, default.bootstrap)?,
         })
     }
+
+    fn from_region_list(raw: &str) -> Result<Vec<Self>, Box<dyn std::error::Error>> {
+        let mut identities = Vec::new();
+        for item in raw
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            let fields = item.split(':').collect::<Vec<_>>();
+            if fields.len() != 4 {
+                return Err(format!(
+                    "invalid NOKV_RUST_RAFTSTORE_REGIONS entry {item:?}: expected region_id:store_id:peer_id:bootstrap"
+                )
+                .into());
+            }
+            identities.push(Self::from_values(
+                Some(fields[0].to_owned()),
+                Some(fields[1].to_owned()),
+                Some(fields[2].to_owned()),
+                Some(fields[3].to_owned()),
+            )?);
+        }
+        validate_server_identities(&identities)?;
+        Ok(identities)
+    }
+}
+
+fn validate_server_identities(
+    identities: &[ServerIdentity],
+) -> Result<(), Box<dyn std::error::Error>> {
+    if identities.is_empty() {
+        return Err("NOKV_RUST_RAFTSTORE_REGIONS must contain at least one region".into());
+    }
+    let store_id = identities[0].store_id;
+    let mut region_ids = BTreeSet::new();
+    let mut peer_ids = BTreeSet::new();
+    for identity in identities {
+        if identity.store_id != store_id {
+            return Err(format!(
+                "NOKV_RUST_RAFTSTORE_REGIONS must use one store_id per process: got {} and {}",
+                store_id, identity.store_id
+            )
+            .into());
+        }
+        if !region_ids.insert(identity.region_id) {
+            return Err(format!(
+                "duplicate region_id {} in NOKV_RUST_RAFTSTORE_REGIONS",
+                identity.region_id
+            )
+            .into());
+        }
+        if !peer_ids.insert(identity.peer_id) {
+            return Err(format!(
+                "duplicate peer_id {} in NOKV_RUST_RAFTSTORE_REGIONS",
+                identity.peer_id
+            )
+            .into());
+        }
+    }
+    Ok(())
 }
 
 fn parse_required_nonzero_u64(
@@ -268,6 +362,152 @@ fn coordinator_topology_publisher(
             }) as Arc<dyn TopologyPublisher>
         })
         .unwrap_or_else(|| Arc::new(EmptyTopologyPublisher))
+}
+
+async fn serve_holt_regions(
+    addr: SocketAddr,
+    identities: Vec<ServerIdentity>,
+    coordinator: Option<CoordinatorHeartbeatConfig>,
+    peer_endpoints: PeerEndpointCatalog,
+    persistent_root: PathBuf,
+    temp_log_dir: &mut Option<tempfile::TempDir>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!(
+        %addr,
+        path = %persistent_root.display(),
+        region_count = identities.len(),
+        "starting rust raftstore server with multi-region Holt MVCC"
+    );
+    let mvcc = HoltMvccStore::open_file(&persistent_root)?;
+    let topology_publisher =
+        coordinator_topology_publisher(coordinator.clone(), Some(mvcc.clone()));
+    let mut store_services = Vec::with_capacity(identities.len());
+    let mut admin_services = Vec::with_capacity(identities.len());
+    let mut hosted_regions = Vec::with_capacity(identities.len());
+    let mut startup_descriptors = Vec::with_capacity(identities.len());
+    let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
+    let multi_region = identities.len() > 1;
+
+    for identity in identities.iter().copied() {
+        let descriptor = startup_region_descriptor(&mvcc, identity)?;
+        let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
+        let apply_status = mvcc
+            .get_region_apply_state(descriptor.region_id)?
+            .map(apply_status_from_holt)
+            .unwrap_or(nokv_raftnode::ApplyStatus {
+                region_id: descriptor.region_id,
+                term: 1,
+                applied_index: 0,
+            });
+        let engine = AppliedKvEngine::with_status(apply_status, mvcc.clone());
+        engine.set_region_descriptor(descriptor.clone())?;
+        let engine =
+            PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
+        let log_dir =
+            raft_log_dir_for_region(Some(&persistent_root), identity, multi_region, temp_log_dir)?;
+        let region = open_openraft_region(identity, addr, log_dir, engine).await?;
+        transport.register(identity.region_id, region.raft_handle());
+        let (store_service, admin_service) = openraft_region_service_pair(
+            region.clone(),
+            admission,
+            peer_endpoints.clone(),
+            HoltRegionMetadataSink::new(mvcc.clone()),
+            topology_publisher.clone(),
+            Arc::new(EmptyRestartDiagnostics),
+        );
+        store_services.push((identity.region_id, store_service));
+        admin_services.push((identity.region_id, admin_service));
+        hosted_regions.push((identity, region));
+        startup_descriptors.push(descriptor);
+    }
+
+    spawn_startup_root_publication_for_regions(
+        coordinator.clone(),
+        identities.clone(),
+        startup_descriptors,
+        Some(mvcc.clone()),
+    );
+    spawn_multi_region_coordinator_heartbeat(
+        coordinator.clone(),
+        identities[0].store_id,
+        addr,
+        hosted_regions,
+        Some(mvcc.clone()),
+    );
+    spawn_pending_topology_retries(coordinator, mvcc.clone(), addr);
+    serve_with_multi_region_services(
+        addr,
+        MultiRegionStoreKvService::new(store_services)?,
+        MultiRegionRaftAdminService::new(admin_services)?.with_restart_diagnostics(Arc::new(mvcc)),
+        transport,
+    )
+    .await?;
+    Ok(())
+}
+
+async fn serve_memory_regions(
+    addr: SocketAddr,
+    identities: Vec<ServerIdentity>,
+    coordinator: Option<CoordinatorHeartbeatConfig>,
+    peer_endpoints: PeerEndpointCatalog,
+    temp_log_dir: &mut Option<tempfile::TempDir>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    tracing::info!(
+        %addr,
+        region_count = identities.len(),
+        "starting rust raftstore server with multi-region in-memory MVCC"
+    );
+    let topology_publisher = coordinator_topology_publisher(coordinator.clone(), None);
+    let mut store_services = Vec::with_capacity(identities.len());
+    let mut admin_services = Vec::with_capacity(identities.len());
+    let mut hosted_regions = Vec::with_capacity(identities.len());
+    let mut startup_descriptors = Vec::with_capacity(identities.len());
+    let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
+    let multi_region = identities.len() > 1;
+
+    for identity in identities.iter().copied() {
+        let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
+        let descriptor = default_region_descriptor(identity);
+        engine.set_region_descriptor(descriptor.clone())?;
+        let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
+        let log_dir = raft_log_dir_for_region(None, identity, multi_region, temp_log_dir)?;
+        let region = open_openraft_region(identity, addr, log_dir, engine).await?;
+        transport.register(identity.region_id, region.raft_handle());
+        let (store_service, admin_service) = openraft_region_service_pair(
+            region.clone(),
+            admission,
+            peer_endpoints.clone(),
+            EmptyRegionDescriptorSink,
+            topology_publisher.clone(),
+            Arc::new(EmptyRestartDiagnostics),
+        );
+        store_services.push((identity.region_id, store_service));
+        admin_services.push((identity.region_id, admin_service));
+        hosted_regions.push((identity, region));
+        startup_descriptors.push(descriptor);
+    }
+
+    spawn_startup_root_publication_for_regions(
+        coordinator.clone(),
+        identities.clone(),
+        startup_descriptors,
+        None,
+    );
+    spawn_multi_region_coordinator_heartbeat(
+        coordinator,
+        identities[0].store_id,
+        addr,
+        hosted_regions,
+        None,
+    );
+    serve_with_multi_region_services(
+        addr,
+        MultiRegionStoreKvService::new(store_services)?,
+        MultiRegionRaftAdminService::new(admin_services)?,
+        transport,
+    )
+    .await?;
+    Ok(())
 }
 
 #[tonic::async_trait]
@@ -550,24 +790,62 @@ fn spawn_startup_root_publication(
     });
 }
 
+fn spawn_startup_root_publication_for_regions(
+    config: Option<CoordinatorHeartbeatConfig>,
+    identities: Vec<ServerIdentity>,
+    descriptors: Vec<metapb::RegionDescriptor>,
+    pending_store: Option<HoltMvccStore>,
+) {
+    let Some(config) = config else {
+        return;
+    };
+    tokio::spawn(async move {
+        for event in startup_root_events_for_regions(&identities, &descriptors) {
+            let outcome =
+                publish_root_event_with_pending(&config.endpoints, pending_store.as_ref(), event)
+                    .await;
+            if outcome.publish_state() == adminpb::ExecutionPublishState::TerminalPublished {
+                continue;
+            }
+            tracing::debug!(
+                publish = ?outcome.publish_state(),
+                error = %outcome.last_error(),
+                "rust raftstore multi-region startup root publication deferred"
+            );
+        }
+    });
+}
+
 fn startup_root_events(
     identity: ServerIdentity,
     descriptor: metapb::RegionDescriptor,
 ) -> Vec<metapb::RootEvent> {
+    startup_root_events_for_regions(&[identity], &[descriptor])
+}
+
+fn startup_root_events_for_regions(
+    identities: &[ServerIdentity],
+    descriptors: &[metapb::RegionDescriptor],
+) -> Vec<metapb::RootEvent> {
+    let store_id = identities
+        .first()
+        .map(|identity| identity.store_id)
+        .unwrap_or_default();
     let mut events = vec![metapb::RootEvent {
         kind: metapb::RootEventKind::StoreJoined as i32,
         payload: Some(metapb::root_event::Payload::StoreMembership(
-            metapb::RootStoreMembership {
-                store_id: identity.store_id,
-            },
+            metapb::RootStoreMembership { store_id },
         )),
     }];
-    if identity.bootstrap {
+    for (identity, descriptor) in identities.iter().zip(descriptors) {
+        if !identity.bootstrap {
+            continue;
+        }
         events.push(metapb::RootEvent {
             kind: metapb::RootEventKind::RegionBootstrap as i32,
             payload: Some(metapb::root_event::Payload::RegionDescriptor(
                 metapb::RootRegionDescriptor {
-                    descriptor: Some(descriptor),
+                    descriptor: Some(descriptor.clone()),
                 },
             )),
         });
@@ -697,6 +975,23 @@ fn spawn_coordinator_heartbeat<E>(
     });
 }
 
+fn spawn_multi_region_coordinator_heartbeat<E>(
+    config: Option<CoordinatorHeartbeatConfig>,
+    store_id: u64,
+    addr: SocketAddr,
+    regions: Vec<(ServerIdentity, OpenRaftRegion<E>)>,
+    root_events: Option<HoltMvccStore>,
+) where
+    E: RegionSnapshotEngine + Send + Sync + 'static,
+{
+    let Some(config) = config else {
+        return;
+    };
+    tokio::spawn(async move {
+        run_multi_region_coordinator_heartbeat(config, store_id, addr, regions, root_events).await;
+    });
+}
+
 async fn run_coordinator_heartbeat<E>(
     config: CoordinatorHeartbeatConfig,
     identity: ServerIdentity,
@@ -711,6 +1006,42 @@ async fn run_coordinator_heartbeat<E>(
     loop {
         ticker.tick().await;
         let request = coordinator_heartbeat_request(identity, addr, &region, root_events.as_ref());
+        match send_store_heartbeat(&config.endpoints, request).await {
+            Ok(operations) => {
+                for operation in operations {
+                    record_scheduler_operation_outcome(
+                        root_events.as_ref(),
+                        &operation,
+                        execute_scheduler_operation(&admin_endpoint, &operation).await,
+                    );
+                }
+            }
+            Err(err) => {
+                tracing::debug!(error = %err, "rust raftstore coordinator heartbeat failed");
+            }
+        }
+    }
+}
+
+async fn run_multi_region_coordinator_heartbeat<E>(
+    config: CoordinatorHeartbeatConfig,
+    store_id: u64,
+    addr: SocketAddr,
+    regions: Vec<(ServerIdentity, OpenRaftRegion<E>)>,
+    root_events: Option<HoltMvccStore>,
+) where
+    E: RegionSnapshotEngine + Send + Sync + 'static,
+{
+    let mut ticker = tokio::time::interval(config.interval);
+    let admin_endpoint = local_admin_endpoint(addr);
+    loop {
+        ticker.tick().await;
+        let request = coordinator_heartbeat_request_for_regions(
+            store_id,
+            addr,
+            &regions,
+            root_events.as_ref(),
+        );
         match send_store_heartbeat(&config.endpoints, request).await {
             Ok(operations) => {
                 for operation in operations {
@@ -928,33 +1259,58 @@ fn coordinator_heartbeat_request<E>(
 where
     E: RegionSnapshotEngine,
 {
-    let status = region.apply_status();
-    let runtime = region.raft_runtime_status();
-    let known = status.region_id != 0 && runtime.hosted;
-    let leader = known && runtime.leader;
+    coordinator_heartbeat_request_for_regions(
+        identity.store_id,
+        addr,
+        &[(identity, region.clone())],
+        root_events,
+    )
+}
+
+fn coordinator_heartbeat_request_for_regions<E>(
+    store_id: u64,
+    addr: SocketAddr,
+    regions: &[(ServerIdentity, OpenRaftRegion<E>)],
+    root_events: Option<&HoltMvccStore>,
+) -> coordpb::StoreHeartbeatRequest
+where
+    E: RegionSnapshotEngine,
+{
     let pending_admin = root_events
         .map(topology_catalog_has_pending_admin_work)
         .unwrap_or(false);
+    let mut region_num = 0;
+    let mut leader_num = 0;
+    let mut leader_region_ids = Vec::new();
+    let mut region_stats = Vec::new();
+    for (identity, region) in regions {
+        let status = region.apply_status();
+        let runtime = region.raft_runtime_status();
+        let known = status.region_id != 0 && runtime.hosted;
+        if !known {
+            continue;
+        }
+        region_num += 1;
+        let leader = runtime.leader;
+        if leader {
+            leader_num += 1;
+            leader_region_ids.push(status.region_id);
+        }
+        region_stats.push(coordpb::RegionRuntimeStats {
+            region_id: status.region_id,
+            leader_store_id: if leader { identity.store_id } else { 0 },
+            pending_admin,
+            ..Default::default()
+        });
+    }
     coordpb::StoreHeartbeatRequest {
-        store_id: identity.store_id,
-        region_num: u64::from(known),
-        leader_num: u64::from(leader),
-        leader_region_ids: if leader {
-            vec![status.region_id]
-        } else {
-            Vec::new()
-        },
+        store_id,
+        region_num,
+        leader_num,
+        leader_region_ids,
         client_addr: addr.to_string(),
         raft_addr: addr.to_string(),
-        region_stats: known
-            .then(|| coordpb::RegionRuntimeStats {
-                region_id: status.region_id,
-                leader_store_id: if leader { identity.store_id } else { 0 },
-                pending_admin,
-                ..Default::default()
-            })
-            .into_iter()
-            .collect(),
+        region_stats,
         ..Default::default()
     }
 }
@@ -1011,16 +1367,48 @@ fn raft_log_dir(
     persistent_root: Option<PathBuf>,
     temp_log_dir: &mut Option<tempfile::TempDir>,
 ) -> Result<PathBuf, Box<dyn std::error::Error>> {
+    raft_log_dir_for_region(
+        persistent_root.as_deref(),
+        ServerIdentity::default(),
+        false,
+        temp_log_dir,
+    )
+}
+
+fn raft_log_dir_for_region(
+    persistent_root: Option<&Path>,
+    identity: ServerIdentity,
+    multi_region: bool,
+    temp_log_dir: &mut Option<tempfile::TempDir>,
+) -> Result<PathBuf, Box<dyn std::error::Error>> {
     if let Ok(path) = std::env::var("NOKV_RUST_RAFTSTORE_LOG_DIR") {
-        return Ok(PathBuf::from(path));
+        let root = PathBuf::from(path);
+        return Ok(region_log_dir(root, identity.region_id, multi_region));
     }
     if let Some(root) = persistent_root {
-        return Ok(root.join("raftlog"));
+        return Ok(region_log_dir(
+            root.join("raftlog"),
+            identity.region_id,
+            multi_region,
+        ));
     }
-    let dir = tempfile::tempdir()?;
-    let path = dir.path().to_path_buf();
-    *temp_log_dir = Some(dir);
-    Ok(path)
+    if temp_log_dir.is_none() {
+        *temp_log_dir = Some(tempfile::tempdir()?);
+    }
+    let root = temp_log_dir
+        .as_ref()
+        .expect("temp log dir is initialized")
+        .path()
+        .to_path_buf();
+    Ok(region_log_dir(root, identity.region_id, multi_region))
+}
+
+fn region_log_dir(root: PathBuf, region_id: u64, multi_region: bool) -> PathBuf {
+    if multi_region {
+        root.join(format!("region-{region_id}"))
+    } else {
+        root
+    }
 }
 
 fn default_region_descriptor(identity: ServerIdentity) -> metapb::RegionDescriptor {
@@ -1140,6 +1528,47 @@ mod tests {
                 bootstrap: false,
             }
         );
+    }
+
+    #[test]
+    fn server_identity_parses_multi_region_list() {
+        let identities = ServerIdentity::from_region_list("7:11:101:true, 8:11:102:false").unwrap();
+
+        assert_eq!(
+            identities,
+            vec![
+                ServerIdentity {
+                    region_id: 7,
+                    store_id: 11,
+                    peer_id: 101,
+                    bootstrap: true,
+                },
+                ServerIdentity {
+                    region_id: 8,
+                    store_id: 11,
+                    peer_id: 102,
+                    bootstrap: false,
+                },
+            ]
+        );
+    }
+
+    #[test]
+    fn server_identity_rejects_multi_region_mixed_store() {
+        let err = ServerIdentity::from_region_list("7:11:101:true,8:12:102:true").unwrap_err();
+        assert!(err.to_string().contains("one store_id per process"));
+    }
+
+    #[test]
+    fn server_identity_rejects_multi_region_duplicate_region() {
+        let err = ServerIdentity::from_region_list("7:11:101:true,7:11:102:true").unwrap_err();
+        assert!(err.to_string().contains("duplicate region_id 7"));
+    }
+
+    #[test]
+    fn server_identity_rejects_multi_region_duplicate_peer() {
+        let err = ServerIdentity::from_region_list("7:11:101:true,8:11:101:true").unwrap_err();
+        assert!(err.to_string().contains("duplicate peer_id 101"));
     }
 
     #[test]
@@ -1626,6 +2055,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn coordinator_heartbeat_reports_multiple_local_regions_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity1 = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+        let identity2 = ServerIdentity {
+            region_id: 8,
+            store_id: 11,
+            peer_id: 102,
+            bootstrap: true,
+        };
+        let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
+        let region1 = open_openraft_region(
+            identity1,
+            addr,
+            dir.path().join("region-7"),
+            AppliedKvEngine::new(identity1.region_id, MvccStore::new()),
+        )
+        .await
+        .unwrap();
+        let region2 = open_openraft_region(
+            identity2,
+            addr,
+            dir.path().join("region-8"),
+            AppliedKvEngine::new(identity2.region_id, MvccStore::new()),
+        )
+        .await
+        .unwrap();
+
+        let req = coordinator_heartbeat_request_for_regions(
+            11,
+            addr,
+            &[(identity1, region1), (identity2, region2)],
+            None,
+        );
+
+        assert_eq!(req.store_id, 11);
+        assert_eq!(req.region_num, 2);
+        assert_eq!(req.leader_num, 2);
+        assert_eq!(req.leader_region_ids, vec![7, 8]);
+        assert_eq!(req.region_stats.len(), 2);
+        assert_eq!(req.region_stats[0].region_id, 7);
+        assert_eq!(req.region_stats[0].leader_store_id, 11);
+        assert_eq!(req.region_stats[1].region_id, 8);
+        assert_eq!(req.region_stats[1].leader_store_id, 11);
+    }
+
+    #[tokio::test]
     async fn coordinator_heartbeat_marks_pending_admin_for_unpublished_root_events() {
         let dir = tempfile::tempdir().unwrap();
         let identity = ServerIdentity {
@@ -1756,6 +2236,60 @@ mod tests {
             }
             other => panic!("unexpected startup event payload: {other:?}"),
         }
+    }
+
+    #[test]
+    fn startup_root_events_for_regions_publish_store_once_and_bootstrap_regions() {
+        let identity1 = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+        let identity2 = ServerIdentity {
+            region_id: 8,
+            store_id: 11,
+            peer_id: 102,
+            bootstrap: true,
+        };
+
+        let events = startup_root_events_for_regions(
+            &[identity1, identity2],
+            &[
+                default_region_descriptor(identity1),
+                default_region_descriptor(identity2),
+            ],
+        );
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].kind, metapb::RootEventKind::StoreJoined as i32);
+        assert!(matches!(
+            events[0].payload.as_ref().unwrap(),
+            metapb::root_event::Payload::StoreMembership(membership)
+                if membership.store_id == 11
+        ));
+        let bootstrapped = events[1..]
+            .iter()
+            .map(|event| match event.payload.as_ref().unwrap() {
+                metapb::root_event::Payload::RegionDescriptor(record) => {
+                    record.descriptor.as_ref().unwrap().region_id
+                }
+                other => panic!("unexpected startup event payload: {other:?}"),
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(bootstrapped, vec![7, 8]);
+    }
+
+    #[test]
+    fn region_log_dir_isolates_multi_region_logs() {
+        assert_eq!(
+            region_log_dir(PathBuf::from("/tmp/nokv-raftlog"), 7, false),
+            PathBuf::from("/tmp/nokv-raftlog")
+        );
+        assert_eq!(
+            region_log_dir(PathBuf::from("/tmp/nokv-raftlog"), 7, true),
+            PathBuf::from("/tmp/nokv-raftlog/region-7")
+        );
     }
 
     fn reserve_loopback_addr() -> SocketAddr {

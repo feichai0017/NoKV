@@ -1902,6 +1902,41 @@ where
     .await
 }
 
+pub fn openraft_region_service_pair<E, D>(
+    region: nokv_raftnode::OpenRaftRegion<E>,
+    admission: RegionAdmission,
+    peer_endpoints: PeerEndpointCatalog,
+    descriptor_sink: D,
+    topology_publisher: Arc<dyn TopologyPublisher>,
+    restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
+) -> (
+    StoreKvService<nokv_raftnode::OpenRaftRegion<E>>,
+    RaftAdminService<nokv_raftnode::OpenRaftRegion<E>, D>,
+)
+where
+    E: RegionSnapshotEngine + RaftCommandExecutor,
+    D: RegionDescriptorSink,
+{
+    let execution = ExecutionRuntime::default();
+    let admission = RegionAdmissionState::new(admission);
+    let store = StoreKvService::with_admission_state_and_execution(
+        region.clone(),
+        admission.clone(),
+        execution.clone(),
+    );
+    let admin =
+        RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
+            region,
+            admission,
+            execution,
+            peer_endpoints,
+            descriptor_sink,
+        )
+        .with_topology_publisher(topology_publisher)
+        .with_restart_diagnostics(restart_diagnostics);
+    (store, admin)
+}
+
 pub async fn serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics<
     E,
     D,
@@ -1918,29 +1953,19 @@ where
     E: RegionSnapshotEngine + RaftCommandExecutor,
     D: RegionDescriptorSink,
 {
-    let execution = ExecutionRuntime::default();
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();
     transport.register(admission.region_id, region.raft_handle());
-    let admission = RegionAdmissionState::new(admission);
+    let (store, admin) = openraft_region_service_pair(
+        region,
+        admission,
+        peer_endpoints,
+        descriptor_sink,
+        topology_publisher,
+        restart_diagnostics,
+    );
     tonic::transport::Server::builder()
-        .add_service(StoreKvServer::new(
-            StoreKvService::with_admission_state_and_execution(
-                region.clone(),
-                admission.clone(),
-                execution.clone(),
-            ),
-        ))
-        .add_service(RaftAdminServer::new(
-            RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
-                region,
-                admission,
-                execution,
-                peer_endpoints,
-                descriptor_sink,
-            )
-            .with_topology_publisher(topology_publisher)
-            .with_restart_diagnostics(restart_diagnostics),
-        ))
+        .add_service(StoreKvServer::new(store))
+        .add_service(RaftAdminServer::new(admin))
         .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
         .serve(addr)
         .await
