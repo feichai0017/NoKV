@@ -170,6 +170,32 @@ fn metadata_context(admission: &RegionAdmission) -> metadatapb::MetadataContext 
     }
 }
 
+fn metadata_put_request(
+    admission: &RegionAdmission,
+    key: impl Into<Vec<u8>>,
+    value: impl Into<Vec<u8>>,
+    read_version: u64,
+    commit_version: u64,
+) -> metadatapb::MetadataCommitRequest {
+    let key = key.into();
+    metadatapb::MetadataCommitRequest {
+        context: Some(metadata_context(admission)),
+        command: Some(metadatapb::MetadataCommand {
+            request_id: key.clone(),
+            read_version,
+            commit_version,
+            mutations: vec![metadatapb::MetadataMutation {
+                key: key.clone(),
+                value: value.into(),
+                op: metadatapb::metadata_mutation::Op::Put as i32,
+                ..Default::default()
+            }],
+            watch_keys: vec![key],
+            ..Default::default()
+        }),
+    }
+}
+
 fn default_context() -> kvpb::Context {
     context(&RegionAdmission::default())
 }
@@ -280,6 +306,17 @@ impl MetadataReadExecutor for FixedRuntimeEngine {
     ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
     {
         self.inner.execute_metadata_scan(req)
+    }
+}
+
+impl nokv_raftnode::MetadataCommandExecutor for FixedRuntimeEngine {
+    fn execute_metadata_command<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataCommitRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+           + Send
+           + 'a {
+        self.inner.execute_metadata_command(req)
     }
 }
 
@@ -514,7 +551,7 @@ async fn service_can_run_against_holt_mvcc_engine() {
 }
 
 #[tokio::test]
-async fn store_admission_refreshes_from_applied_region_descriptor() {
+async fn metadata_admission_refreshes_from_applied_region_descriptor() {
     let engine = FixedRuntimeEngine::leader(7, 2);
     engine.set_region_descriptor(metapb::RegionDescriptor {
         region_id: 7,
@@ -534,40 +571,35 @@ async fn store_admission_refreshes_from_applied_region_descriptor() {
         ],
         ..Default::default()
     });
-    let service = StoreKvService::with_admission(
+    let service = MetadataPlaneService::with_admission_state_and_execution(
         engine,
-        RegionAdmission {
+        RegionAdmissionState::new(RegionAdmission {
             region_id: 7,
             store_id: 1,
             peer_id: 1,
             epoch_conf_version: 1,
             peers: BTreeMap::from([(1, 1)]),
             ..Default::default()
-        },
+        }),
+        ExecutionRuntime::default(),
     );
+    let updated_admission = RegionAdmission {
+        region_id: 7,
+        store_id: 2,
+        peer_id: 2,
+        epoch_conf_version: 2,
+        peers: BTreeMap::from([(1, 1), (2, 2)]),
+        ..Default::default()
+    };
 
     let response = service
-        .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
-            context: Some(context(&RegionAdmission {
-                region_id: 7,
-                store_id: 2,
-                peer_id: 2,
-                epoch_conf_version: 2,
-                peers: BTreeMap::from([(1, 1), (2, 2)]),
-                ..Default::default()
-            })),
-            request: Some(kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"applied-descriptor".to_vec(),
-                    value: b"accepted".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                commit_version: 11,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }))
+        .commit_metadata(Request::new(metadata_put_request(
+            &updated_admission,
+            b"applied-descriptor".to_vec(),
+            b"accepted".to_vec(),
+            10,
+            11,
+        )))
         .await
         .unwrap()
         .into_inner();
@@ -577,7 +609,7 @@ async fn store_admission_refreshes_from_applied_region_descriptor() {
         "unexpected region error: {:?}",
         response.region_error
     );
-    assert_eq!(response.response.unwrap().applied_keys, 1);
+    assert_eq!(response.result.unwrap().applied_mutations, 1);
 }
 
 #[tokio::test]
@@ -1826,19 +1858,19 @@ async fn follower_prefer_read_returns_stale_for_leader_fallback() {
         leader: false,
         ..Default::default()
     };
-    let service =
-        StoreKvService::with_admission(FixedRuntimeEngine::follower(1, 1, 0), admission.clone());
-    let mut ctx = context(&admission);
-    ctx.read_preference = kvpb::ReadPreference::FollowerPrefer as i32;
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::follower(1, 1, 0),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
+    let mut ctx = metadata_context(&admission);
+    ctx.read_preference = metadatapb::ReadPreference::FollowerPrefer as i32;
 
     let response = service
-        .get(Request::new(kvpb::KvGetRequest {
+        .get(Request::new(metadatapb::MetadataGetRequest {
             context: Some(ctx),
-            request: Some(kvpb::GetRequest {
-                key: b"k".to_vec(),
-                version: 1,
-            }),
-            ..Default::default()
+            key: b"k".to_vec(),
+            version: 1,
         }))
         .await
         .unwrap()
@@ -1847,11 +1879,11 @@ async fn follower_prefer_read_returns_stale_for_leader_fallback() {
     let region_error = response.region_error.unwrap();
     assert!(region_error.stale_command.is_some());
     assert!(region_error.not_leader.is_none());
-    assert!(response.response.is_none());
+    assert!(response.kv.is_none());
 }
 
 #[tokio::test]
-async fn store_kv_admission_uses_live_follower_status() {
+async fn metadata_admission_uses_live_follower_status() {
     let admission = RegionAdmission {
         store_id: 2,
         peer_id: 2,
@@ -1860,25 +1892,20 @@ async fn store_kv_admission_uses_live_follower_status() {
         leader: true,
         ..Default::default()
     };
-    let service =
-        StoreKvService::with_admission(FixedRuntimeEngine::follower(1, 2, 1), admission.clone());
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::follower(1, 2, 1),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
 
     let response = service
-        .prewrite(Request::new(kvpb::KvPrewriteRequest {
-            context: Some(context(&admission)),
-            request: Some(kvpb::PrewriteRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"k".to_vec(),
-                    value: b"v".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                primary_lock: b"k".to_vec(),
-                start_version: 10,
-                lock_ttl: 10,
-                ..Default::default()
-            }),
-        }))
+        .commit_metadata(Request::new(metadata_put_request(
+            &admission,
+            b"k".to_vec(),
+            b"v".to_vec(),
+            10,
+            11,
+        )))
         .await
         .unwrap()
         .into_inner();
@@ -1892,7 +1919,7 @@ async fn store_kv_admission_uses_live_follower_status() {
             peer_id: 1
         })
     );
-    assert!(response.response.is_none());
+    assert!(response.result.is_none());
 }
 
 #[tokio::test]
@@ -1901,27 +1928,18 @@ async fn writes_remain_leader_only_when_follower_prefer_is_set() {
         leader: false,
         ..Default::default()
     };
-    let service =
-        StoreKvService::with_admission(FixedRuntimeEngine::follower(1, 1, 0), admission.clone());
-    let mut ctx = context(&admission);
-    ctx.read_preference = kvpb::ReadPreference::FollowerPrefer as i32;
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::follower(1, 1, 0),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
+    let mut ctx = metadata_context(&admission);
+    ctx.read_preference = metadatapb::ReadPreference::FollowerPrefer as i32;
+    let mut request = metadata_put_request(&admission, b"k".to_vec(), b"v".to_vec(), 10, 11);
+    request.context = Some(ctx);
 
     let response = service
-        .prewrite(Request::new(kvpb::KvPrewriteRequest {
-            context: Some(ctx),
-            request: Some(kvpb::PrewriteRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"k".to_vec(),
-                    value: b"v".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                primary_lock: b"k".to_vec(),
-                start_version: 10,
-                lock_ttl: 10,
-                ..Default::default()
-            }),
-        }))
+        .commit_metadata(Request::new(request))
         .await
         .unwrap()
         .into_inner();
@@ -1929,7 +1947,7 @@ async fn writes_remain_leader_only_when_follower_prefer_is_set() {
     let region_error = response.region_error.unwrap();
     assert!(region_error.not_leader.is_some());
     assert!(region_error.stale_command.is_none());
-    assert!(response.response.is_none());
+    assert!(response.result.is_none());
 }
 
 #[tokio::test]
@@ -2265,7 +2283,7 @@ async fn admin_adds_and_removes_openraft_voter() {
             HoltRegionMetadataSink::new(descriptor_store.clone()),
         )
         .with_topology_publisher(Arc::new(topology_publisher));
-    let store_service = StoreKvService::with_admission_state_and_execution(
+    let metadata_service = MetadataPlaneService::with_admission_state_and_execution(
         leader.clone(),
         service.admission.clone(),
         ExecutionRuntime::default(),
@@ -2342,57 +2360,43 @@ async fn admin_adds_and_removes_openraft_voter() {
     assert_eq!(leader_status.leader_peer_id, 1);
     assert!(leader_status.leader);
 
-    let stale_epoch = store_service
-        .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
-            context: Some(context(&RegionAdmission {
+    let stale_epoch = metadata_service
+        .commit_metadata(Request::new(metadata_put_request(
+            &RegionAdmission {
                 region_id: 7,
                 store_id: 1,
                 peer_id: 1,
                 epoch_conf_version: 1,
                 ..Default::default()
-            })),
-            request: Some(kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"admin-updated-admission-stale".to_vec(),
-                    value: b"rejected".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                commit_version: 10,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }))
+            },
+            b"admin-updated-admission-stale".to_vec(),
+            b"rejected".to_vec(),
+            9,
+            10,
+        )))
         .await
         .unwrap()
         .into_inner();
     assert!(stale_epoch.region_error.unwrap().epoch_not_match.is_some());
 
-    let accepted = store_service
-        .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
-            context: Some(context(&RegionAdmission {
+    let accepted = metadata_service
+        .commit_metadata(Request::new(metadata_put_request(
+            &RegionAdmission {
                 region_id: 7,
                 store_id: 1,
                 peer_id: 1,
                 epoch_conf_version: 2,
                 ..Default::default()
-            })),
-            request: Some(kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"admin-updated-admission".to_vec(),
-                    value: b"accepted".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                commit_version: 11,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }))
+            },
+            b"admin-updated-admission".to_vec(),
+            b"accepted".to_vec(),
+            10,
+            11,
+        )))
         .await
         .unwrap()
         .into_inner();
-    assert_eq!(accepted.response.unwrap().applied_keys, 1);
+    assert_eq!(accepted.result.unwrap().applied_mutations, 1);
 
     let transfer = service
         .transfer_leader(Request::new(adminpb::TransferLeaderRequest {
@@ -2636,7 +2640,7 @@ async fn admin_execution_status_reports_default_admission() {
 }
 
 #[tokio::test]
-async fn admin_execution_status_reports_store_kv_admission() {
+async fn admin_execution_status_reports_metadata_admission() {
     let execution = ExecutionRuntime::default();
     let admission = RegionAdmission {
         store_id: 2,
@@ -2646,9 +2650,9 @@ async fn admin_execution_status_reports_store_kv_admission() {
         leader: true,
         ..Default::default()
     };
-    let store_service = StoreKvService::with_admission_and_execution(
+    let metadata_service = MetadataPlaneService::with_admission_state_and_execution(
         FixedRuntimeEngine::follower(1, 2, 1),
-        admission.clone(),
+        RegionAdmissionState::new(admission.clone()),
         execution.clone(),
     );
     let admin_service = RaftAdminService::with_admission_and_execution(
@@ -2657,22 +2661,14 @@ async fn admin_execution_status_reports_store_kv_admission() {
         execution,
     );
 
-    let response = store_service
-        .prewrite(Request::new(kvpb::KvPrewriteRequest {
-            context: Some(context(&admission)),
-            request: Some(kvpb::PrewriteRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"k".to_vec(),
-                    value: b"v".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                primary_lock: b"k".to_vec(),
-                start_version: 10,
-                lock_ttl: 10,
-                ..Default::default()
-            }),
-        }))
+    let response = metadata_service
+        .commit_metadata(Request::new(metadata_put_request(
+            &admission,
+            b"k".to_vec(),
+            b"v".to_vec(),
+            10,
+            11,
+        )))
         .await
         .unwrap()
         .into_inner();
@@ -2701,7 +2697,7 @@ async fn admin_execution_status_reports_store_kv_admission() {
 }
 
 #[tokio::test]
-async fn store_kv_admission_rejects_unhosted_runtime() {
+async fn metadata_admission_rejects_unhosted_runtime() {
     let execution = ExecutionRuntime::default();
     let admission = RegionAdmission {
         store_id: 2,
@@ -2711,9 +2707,9 @@ async fn store_kv_admission_rejects_unhosted_runtime() {
         leader: false,
         ..Default::default()
     };
-    let store_service = StoreKvService::with_admission_and_execution(
+    let metadata_service = MetadataPlaneService::with_admission_state_and_execution(
         FixedRuntimeEngine::unhosted(1, 2),
-        admission.clone(),
+        RegionAdmissionState::new(admission.clone()),
         execution.clone(),
     );
     let admin_service = RaftAdminService::with_admission_and_execution(
@@ -2722,22 +2718,14 @@ async fn store_kv_admission_rejects_unhosted_runtime() {
         execution,
     );
 
-    let response = store_service
-        .prewrite(Request::new(kvpb::KvPrewriteRequest {
-            context: Some(context(&admission)),
-            request: Some(kvpb::PrewriteRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"k".to_vec(),
-                    value: b"v".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                primary_lock: b"k".to_vec(),
-                start_version: 10,
-                lock_ttl: 10,
-                ..Default::default()
-            }),
-        }))
+    let response = metadata_service
+        .commit_metadata(Request::new(metadata_put_request(
+            &admission,
+            b"k".to_vec(),
+            b"v".to_vec(),
+            10,
+            11,
+        )))
         .await
         .unwrap()
         .into_inner();
