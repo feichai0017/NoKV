@@ -14,26 +14,8 @@ mod startup;
 use std::net::SocketAddr;
 use std::path::PathBuf;
 
-#[cfg(test)]
-pub(crate) use bootstrap::*;
 use bootstrap::{serve_holt_regions, serve_memory_regions};
 use coordinator::coordinator_heartbeat_config_from_env;
-#[cfg(test)]
-pub(crate) use coordinator::*;
-#[cfg(test)]
-pub(crate) use hosted_region::*;
-#[cfg(test)]
-pub(crate) use range_controller::*;
-#[cfg(test)]
-pub(crate) use range_topology::*;
-#[cfg(test)]
-pub(crate) use region_open::*;
-#[cfg(test)]
-pub(crate) use root_publication::*;
-#[cfg(test)]
-pub(crate) use scheduler_operations::*;
-#[cfg(test)]
-pub(crate) use startup::*;
 use startup::{
     advertised_addr_from_env, peer_endpoint_catalog_from_env, validate_startup_region_ranges,
     RegionRangeCatalog, ServerArgs, ServerIdentity,
