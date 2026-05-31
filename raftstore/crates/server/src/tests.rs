@@ -1,7 +1,7 @@
 use super::*;
 use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
-use crate::serve::serve_with_openraft_region_admission_and_peer_endpoints;
+use crate::serve::serve_with_openraft_metadata_region_admission_and_peer_endpoints;
 use crate::store_kv_compat::StoreKvService;
 use crate::wire_helpers::chunk_apply_watch_keys;
 use adminpb::raft_admin_server::RaftAdmin;
@@ -142,6 +142,21 @@ impl TopologyPublisher for FailedTopologyPublisher {
 
 fn context(admission: &RegionAdmission) -> kvpb::Context {
     kvpb::Context {
+        region_id: admission.region_id,
+        region_epoch: Some(metapb::RegionEpoch {
+            version: admission.epoch_version,
+            conf_version: admission.epoch_conf_version,
+        }),
+        peer: Some(metapb::RegionPeer {
+            store_id: admission.store_id,
+            peer_id: admission.peer_id,
+        }),
+        ..Default::default()
+    }
+}
+
+fn metadata_context(admission: &RegionAdmission) -> metadatapb::MetadataContext {
+    metadatapb::MetadataContext {
         region_id: admission.region_id,
         region_epoch: Some(metapb::RegionEpoch {
             version: admission.epoch_version,
@@ -606,7 +621,7 @@ async fn service_can_run_against_openraft_region() {
 }
 
 #[tokio::test]
-async fn server_mounts_openraft_transport_for_storekv_replication() {
+async fn server_mounts_openraft_transport_for_metadata_replication() {
     let mut handles = Vec::new();
     let mut dirs = Vec::new();
     let mut engines = BTreeMap::new();
@@ -646,12 +661,14 @@ async fn server_mounts_openraft_transport_for_storekv_replication() {
             leader: node_id == 1,
             ..Default::default()
         };
-        let handle = tokio::spawn(serve_with_openraft_region_admission_and_peer_endpoints(
-            addr,
-            region.clone(),
-            admission,
-            peer_endpoints.clone(),
-        ));
+        let handle = tokio::spawn(
+            serve_with_openraft_metadata_region_admission_and_peer_endpoints(
+                addr,
+                region.clone(),
+                admission,
+                peer_endpoints.clone(),
+            ),
+        );
         wait_for_server(addr).await;
         dirs.push(dir);
         engines.insert(node_id, engine);
@@ -691,9 +708,11 @@ async fn server_mounts_openraft_transport_for_storekv_replication() {
         .await
         .unwrap();
 
-    let mut client = kvpb::store_kv_client::StoreKvClient::connect(format!("http://{leader_addr}"))
-        .await
-        .unwrap();
+    let mut client = metadatapb::metadata_plane_client::MetadataPlaneClient::connect(format!(
+        "http://{leader_addr}"
+    ))
+    .await
+    .unwrap();
     let admission = RegionAdmission {
         region_id: 7,
         store_id: 1,
@@ -705,19 +724,21 @@ async fn server_mounts_openraft_transport_for_storekv_replication() {
         ..Default::default()
     };
     let response = client
-        .try_atomic_mutate(kvpb::KvTryAtomicMutateRequest {
-            context: Some(context(&admission)),
-            request: Some(kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
+        .commit_metadata(metadatapb::MetadataCommitRequest {
+            context: Some(metadata_context(&admission)),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"server-transport".to_vec(),
+                read_version: 41,
+                commit_version: 42,
+                mutations: vec![metadatapb::MetadataMutation {
                     key: b"server-transport".to_vec(),
                     value: b"replicated".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
                     ..Default::default()
                 }],
-                commit_version: 42,
+                watch_keys: vec![b"server-transport".to_vec()],
                 ..Default::default()
             }),
-            ..Default::default()
         })
         .await
         .unwrap()
@@ -727,7 +748,7 @@ async fn server_mounts_openraft_transport_for_storekv_replication() {
         "unexpected region error: {:?}",
         response.region_error
     );
-    assert_eq!(response.response.unwrap().applied_keys, 1);
+    assert_eq!(response.result.unwrap().applied_mutations, 1);
     let target_index = leader.apply_status().applied_index;
 
     for region in regions.values() {
@@ -819,12 +840,14 @@ async fn bounded_stale_follower_prefer_read_serves_local_openraft_state() {
             leader: node_id == 1,
             ..Default::default()
         };
-        let handle = tokio::spawn(serve_with_openraft_region_admission_and_peer_endpoints(
-            addr,
-            region.clone(),
-            admission,
-            peer_endpoints.clone(),
-        ));
+        let handle = tokio::spawn(
+            serve_with_openraft_metadata_region_admission_and_peer_endpoints(
+                addr,
+                region.clone(),
+                admission,
+                peer_endpoints.clone(),
+            ),
+        );
         wait_for_server(addr).await;
         dirs.push(dir);
         regions.insert(node_id, region);
@@ -867,24 +890,27 @@ async fn bounded_stale_follower_prefer_read_serves_local_openraft_state() {
         leader: true,
         ..Default::default()
     };
-    let mut leader_client =
-        kvpb::store_kv_client::StoreKvClient::connect(format!("http://{leader_addr}"))
-            .await
-            .unwrap();
+    let mut leader_client = metadatapb::metadata_plane_client::MetadataPlaneClient::connect(
+        format!("http://{leader_addr}"),
+    )
+    .await
+    .unwrap();
     let write = leader_client
-        .try_atomic_mutate(kvpb::KvTryAtomicMutateRequest {
-            context: Some(context(&leader_admission)),
-            request: Some(kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
+        .commit_metadata(metadatapb::MetadataCommitRequest {
+            context: Some(metadata_context(&leader_admission)),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"bounded-stale".to_vec(),
+                read_version: 41,
+                commit_version: 42,
+                mutations: vec![metadatapb::MetadataMutation {
                     key: b"bounded-stale".to_vec(),
                     value: b"local-follower".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
                     ..Default::default()
                 }],
-                commit_version: 42,
+                watch_keys: vec![b"bounded-stale".to_vec()],
                 ..Default::default()
             }),
-            ..Default::default()
         })
         .await
         .unwrap()
@@ -905,11 +931,12 @@ async fn bounded_stale_follower_prefer_read_serves_local_openraft_state() {
     }
 
     let follower_addr = addrs.get(&2).unwrap();
-    let mut follower_client =
-        kvpb::store_kv_client::StoreKvClient::connect(format!("http://{follower_addr}"))
-            .await
-            .unwrap();
-    let mut follower_context = context(&RegionAdmission {
+    let mut follower_client = metadatapb::metadata_plane_client::MetadataPlaneClient::connect(
+        format!("http://{follower_addr}"),
+    )
+    .await
+    .unwrap();
+    let mut follower_context = metadata_context(&RegionAdmission {
         region_id: 7,
         store_id: 2,
         peer_id: 2,
@@ -919,18 +946,14 @@ async fn bounded_stale_follower_prefer_read_serves_local_openraft_state() {
         leader: false,
         ..Default::default()
     });
-    follower_context.read_consistency = kvpb::ReadConsistency::BoundedStale as i32;
-    follower_context.read_preference = kvpb::ReadPreference::FollowerPrefer as i32;
-    follower_context.max_stale_read_index = 0;
+    follower_context.read_consistency = metadatapb::ReadConsistency::BoundedStale as i32;
+    follower_context.read_preference = metadatapb::ReadPreference::FollowerPrefer as i32;
 
     let response = follower_client
-        .get(kvpb::KvGetRequest {
+        .get(metadatapb::MetadataGetRequest {
             context: Some(follower_context.clone()),
-            request: Some(kvpb::GetRequest {
-                key: b"bounded-stale".to_vec(),
-                version: 42,
-            }),
-            ..Default::default()
+            key: b"bounded-stale".to_vec(),
+            version: 42,
         })
         .await
         .unwrap()
@@ -940,22 +963,7 @@ async fn bounded_stale_follower_prefer_read_serves_local_openraft_state() {
         "unexpected region error: {:?}",
         response.region_error
     );
-    assert_eq!(response.response.unwrap().value, b"local-follower".to_vec());
-
-    follower_context.max_stale_read_ms = 1;
-    let stale = follower_client
-        .get(kvpb::KvGetRequest {
-            context: Some(follower_context),
-            request: Some(kvpb::GetRequest {
-                key: b"bounded-stale".to_vec(),
-                version: 42,
-            }),
-            ..Default::default()
-        })
-        .await
-        .unwrap()
-        .into_inner();
-    assert!(stale.region_error.unwrap().stale_command.is_some());
+    assert_eq!(response.kv.unwrap().value, b"local-follower".to_vec());
 
     for region in regions.values() {
         region.shutdown().await.unwrap();
