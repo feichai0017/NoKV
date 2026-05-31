@@ -1,38 +1,26 @@
-use std::sync::{Arc, Mutex};
-#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
-#[cfg(test)]
 use nokv_mvcc::MvccStore;
-#[cfg(test)]
 use nokv_proto::nokv::admin::v1 as adminpb;
-#[cfg(test)]
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
-use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
-#[cfg(test)]
 use nokv_raftnode::{ApplyWatchProvider, RaftCommandExecutor};
-#[cfg(test)]
 use tokio_stream::wrappers::ReceiverStream;
-use tonic::Status;
-#[cfg(test)]
-use tonic::{Request, Response};
+use tonic::{Request, Response, Status};
 
 use crate::admission::RegionAdmission;
-#[cfg(test)]
+use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
-#[cfg(test)]
+use crate::wire_helpers::{
+    chunk_apply_watch_keys, header_from_context, matching_apply_watch_keys, raft_payload_error,
+    trim_scan_response_to_region,
+};
 use crate::{
     internal_error, AppliedRegionDescriptorProvider, RaftRuntimeStatusProvider,
     DEFAULT_APPLY_WATCH_BUFFER,
 };
-use crate::{
-    RaftRuntimeStatus, DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE,
-    DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE,
-};
 
-#[cfg(test)]
 fn service_physical_time_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -40,7 +28,6 @@ fn service_physical_time_millis() -> u64 {
         .unwrap_or_default()
 }
 
-#[cfg(test)]
 fn check_txn_status_request_with_service_time(
     req: &kvpb::CheckTxnStatusRequest,
 ) -> kvpb::CheckTxnStatusRequest {
@@ -51,7 +38,6 @@ fn check_txn_status_request_with_service_time(
     out
 }
 
-#[cfg(test)]
 fn txn_heart_beat_request_with_service_time(
     req: &kvpb::TxnHeartBeatRequest,
 ) -> kvpb::TxnHeartBeatRequest {
@@ -62,16 +48,6 @@ fn txn_heart_beat_request_with_service_time(
     out
 }
 
-pub(crate) fn trim_scan_response_to_region(
-    admission: &RegionAdmission,
-    response: &mut kvpb::ScanResponse,
-) {
-    response
-        .kvs
-        .retain(|kv| admission.key_in_range(kv.key.as_slice()));
-}
-
-#[cfg(test)]
 #[derive(Clone)]
 pub struct StoreKvService<E = MvccStore> {
     engine: E,
@@ -79,7 +55,6 @@ pub struct StoreKvService<E = MvccStore> {
     execution: ExecutionRuntime,
 }
 
-#[cfg(test)]
 impl<E> StoreKvService<E> {
     pub fn new(engine: E) -> Self {
         Self::with_admission(engine, RegionAdmission::default())
@@ -114,7 +89,6 @@ impl<E> StoreKvService<E> {
     }
 }
 
-#[cfg(test)]
 impl<E> StoreKvService<E>
 where
     E: RaftCommandExecutor,
@@ -151,7 +125,6 @@ where
     }
 }
 
-#[cfg(test)]
 macro_rules! raft_cmd_or_region_error {
     ($outcome:expr, $response_type:ident) => {
         match $outcome {
@@ -166,7 +139,6 @@ macro_rules! raft_cmd_or_region_error {
     };
 }
 
-#[cfg(test)]
 impl<E> StoreKvService<E>
 where
     E: AppliedRegionDescriptorProvider + RaftRuntimeStatusProvider,
@@ -190,99 +162,6 @@ where
     }
 }
 
-#[derive(Debug, Clone)]
-pub(crate) struct RegionAdmissionState {
-    inner: Arc<Mutex<RegionAdmission>>,
-}
-
-impl Default for RegionAdmissionState {
-    fn default() -> Self {
-        Self::new(RegionAdmission::default())
-    }
-}
-
-impl RegionAdmissionState {
-    pub(crate) fn new(admission: RegionAdmission) -> Self {
-        Self {
-            inner: Arc::new(Mutex::new(admission)),
-        }
-    }
-
-    pub(crate) fn snapshot(&self) -> Result<RegionAdmission, Status> {
-        self.inner
-            .lock()
-            .map_err(|_| admission_state_poisoned())
-            .map(|admission| admission.clone())
-    }
-
-    pub(crate) fn with_runtime_status(
-        &self,
-        status: RaftRuntimeStatus,
-    ) -> Result<RegionAdmission, Status> {
-        Ok(self.snapshot()?.with_runtime_status(status))
-    }
-
-    pub(crate) fn with_applied_descriptor_and_runtime_status(
-        &self,
-        descriptor: Option<metapb::RegionDescriptor>,
-        status: RaftRuntimeStatus,
-    ) -> Result<RegionAdmission, Status> {
-        let Some(descriptor) = descriptor else {
-            return self.with_runtime_status(status);
-        };
-        let admission = RegionAdmission::from_descriptor(&descriptor, status.leader)
-            .map_err(|err| {
-                Status::failed_precondition(format!("invalid region descriptor: {err}"))
-            })?
-            .with_runtime_status(status);
-        let mut current = self.inner.lock().map_err(|_| admission_state_poisoned())?;
-        *current = admission.clone();
-        Ok(admission)
-    }
-
-    pub(crate) fn validate_region(&self, region_id: u64) -> Result<(), Status> {
-        if region_id == 0 {
-            return Err(Status::invalid_argument("region_id is required"));
-        }
-        let admission = self.snapshot()?;
-        if region_id != admission.region_id {
-            return Err(Status::failed_precondition(format!(
-                "region {region_id} is not hosted by this raft admin"
-            )));
-        }
-        Ok(())
-    }
-
-    pub(crate) fn descriptor(&self) -> Result<metapb::RegionDescriptor, Status> {
-        Ok(self.snapshot()?.descriptor())
-    }
-
-    pub(crate) fn add_peer(
-        &self,
-        peer_id: u64,
-        store_id: u64,
-    ) -> Result<metapb::RegionDescriptor, Status> {
-        let mut admission = self.inner.lock().map_err(|_| admission_state_poisoned())?;
-        if admission.peers.insert(peer_id, store_id).is_none() {
-            admission.epoch_conf_version += 1;
-        }
-        Ok(admission.descriptor())
-    }
-
-    pub(crate) fn remove_peer(&self, peer_id: u64) -> Result<metapb::RegionDescriptor, Status> {
-        let mut admission = self.inner.lock().map_err(|_| admission_state_poisoned())?;
-        if admission.peers.remove(&peer_id).is_some() {
-            admission.epoch_conf_version += 1;
-        }
-        Ok(admission.descriptor())
-    }
-}
-
-fn admission_state_poisoned() -> Status {
-    Status::internal("region admission state mutex poisoned")
-}
-
-#[cfg(test)]
 #[tonic::async_trait]
 impl<E> kvpb::store_kv_server::StoreKv for StoreKvService<E>
 where
@@ -948,58 +827,4 @@ where
         });
         Ok(Response::new(ReceiverStream::new(rx)))
     }
-}
-
-pub(crate) fn header_from_context(context: &kvpb::Context) -> raftpb::CmdHeader {
-    let peer = context.peer.as_ref();
-    raftpb::CmdHeader {
-        region_id: context.region_id,
-        region_epoch: context.region_epoch.clone(),
-        peer_id: peer.map(|peer| peer.peer_id).unwrap_or_default(),
-        read_consistency: context.read_consistency,
-        read_preference: context.read_preference,
-        max_stale_read_index: context.max_stale_read_index,
-        max_stale_read_ms: context.max_stale_read_ms,
-        store_id: peer.map(|peer| peer.store_id).unwrap_or_default(),
-        ..Default::default()
-    }
-}
-
-pub(crate) fn raft_payload_error(operation: &str, detail: &str) -> Status {
-    Status::internal(format!("{operation} raft payload error: {detail}"))
-}
-
-pub(crate) fn matching_apply_watch_keys(keys: &[Vec<u8>], prefix: &[u8]) -> Vec<Vec<u8>> {
-    keys.iter()
-        .filter(|key| prefix.is_empty() || key.starts_with(prefix))
-        .cloned()
-        .collect()
-}
-
-pub(crate) fn chunk_apply_watch_keys(keys: Vec<Vec<u8>>) -> Vec<Vec<Vec<u8>>> {
-    if keys.is_empty() {
-        return Vec::new();
-    }
-    let mut chunks = Vec::with_capacity(
-        (keys.len() + DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE - 1)
-            / DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE,
-    );
-    let mut current = Vec::with_capacity(keys.len().min(DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE));
-    let mut current_bytes = 0usize;
-    for key in keys {
-        let key_bytes = key.len();
-        if !current.is_empty()
-            && (current.len() >= DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE
-                || current_bytes + key_bytes > DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE)
-        {
-            chunks.push(std::mem::take(&mut current));
-            current_bytes = 0;
-        }
-        current_bytes += key_bytes;
-        current.push(key);
-    }
-    if !current.is_empty() {
-        chunks.push(current);
-    }
-    chunks
 }

@@ -10,8 +10,8 @@ use nokv_raftnode::{
 use tonic::{Request, Response, Status};
 
 use crate::admission::RegionAdmission;
+use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
-use crate::service::RegionAdmissionState;
 use crate::topology::peer_change_transition_id;
 use crate::{
     internal_error, EmptyRegionDescriptorSink, EmptyRestartDiagnostics, EmptyTopologyPublisher,

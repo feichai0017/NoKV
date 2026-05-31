@@ -9,10 +9,11 @@ use nokv_raftnode::{
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
+use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
-use crate::service::{
+use crate::wire_helpers::{
     chunk_apply_watch_keys, header_from_context, matching_apply_watch_keys, raft_payload_error,
-    trim_scan_response_to_region, RegionAdmissionState,
+    trim_scan_response_to_region,
 };
 use crate::{
     internal_error, AppliedRegionDescriptorProvider, RaftRuntimeStatusProvider,

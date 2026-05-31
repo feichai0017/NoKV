@@ -18,7 +18,7 @@ use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status};
 
 #[cfg(test)]
-use crate::service::StoreKvService;
+use crate::store_kv_compat::StoreKvService;
 use crate::{
     push_missing_topology_status, AppliedRegionDescriptorProvider, EmptyRegionDescriptorSink,
     EmptyRestartDiagnostics, MetadataPlaneService, RaftAdminService, RaftMembershipAdmin,

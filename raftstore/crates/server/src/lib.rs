@@ -6,6 +6,7 @@
 
 mod admin;
 mod admission;
+mod admission_state;
 mod diagnostics;
 mod execution;
 mod metadata;
@@ -13,8 +14,10 @@ mod metadata_plane;
 mod publisher;
 mod region_router;
 mod serve;
-mod service;
+#[cfg(test)]
+mod store_kv_compat;
 mod topology;
+mod wire_helpers;
 
 pub(crate) use admin::push_missing_topology_status;
 pub use admin::{

@@ -4,10 +4,10 @@ use std::sync::Arc;
 
 use nokv_raftnode::{MetadataCommandExecutor, RaftCommandExecutor, RegionSnapshotEngine};
 
+use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
-use crate::service::RegionAdmissionState;
 #[cfg(test)]
-use crate::service::StoreKvService;
+use crate::store_kv_compat::StoreKvService;
 #[cfg(test)]
 use crate::{
     EmptyRegionDescriptorSink, EmptyRestartDiagnostics, EmptyTopologyPublisher,
