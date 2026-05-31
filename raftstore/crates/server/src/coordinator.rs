@@ -9,7 +9,8 @@ use nokv_raftnode::{
 };
 use nokv_raftstore_server::{root_event_transition_id, RaftRuntimeStatusProvider};
 
-use crate::bootstrap::{HoltRangeController, HostedRegionRegistry};
+use crate::bootstrap::HoltRangeController;
+use crate::hosted_region::HostedRegionRegistry;
 use crate::root_publication::{publish_root_event_to_any, RootEventPublishError};
 use crate::startup::{parse_required_nonzero_u64, ServerIdentity};
 

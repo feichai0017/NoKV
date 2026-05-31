@@ -2,6 +2,7 @@
 
 mod bootstrap;
 mod coordinator;
+mod hosted_region;
 mod metrics;
 mod root_publication;
 mod startup;
@@ -15,6 +16,8 @@ use bootstrap::{serve_holt_regions, serve_memory_regions};
 use coordinator::coordinator_heartbeat_config_from_env;
 #[cfg(test)]
 pub(crate) use coordinator::*;
+#[cfg(test)]
+pub(crate) use hosted_region::*;
 #[cfg(test)]
 pub(crate) use root_publication::*;
 #[cfg(test)]

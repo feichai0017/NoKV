@@ -8,8 +8,8 @@ use nokv_raftnode::{RegionSnapshotEngine, RegionTrafficProvider};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use crate::bootstrap::HostedRegionRegistry;
 use crate::coordinator::coordinator_heartbeat_request_for_hosted_regions;
+use crate::hosted_region::HostedRegionRegistry;
 
 pub(super) fn spawn_metrics_server<E>(
     metrics_addr: Option<SocketAddr>,
