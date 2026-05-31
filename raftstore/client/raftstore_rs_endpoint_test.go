@@ -811,6 +811,71 @@ func TestRustRaftstoreEndpointAdminAddPeerReplicatesAcrossProcesses(t *testing.T
 	require.True(t, handled)
 }
 
+func TestRustRaftstoreEndpointBoundedStaleFollowerReadServesWithoutLeaderFallback(t *testing.T) {
+	addrs := map[uint64]string{
+		1: reserveLocalAddr(t),
+		2: reserveLocalAddr(t),
+	}
+	startRustRaftstoreProcessAt(t, addrs[1], "", []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=true",
+		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2],
+	})
+	startRustRaftstoreProcessAt(t, addrs[2], "", []string{
+		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
+		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
+		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
+		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
+	})
+
+	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	defer cancel()
+	admin, closeAdmin, err := adminclient.Dial(ctx, addrs[1])
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
+	_, err = admin.AddPeer(ctx, &adminpb.AddPeerRequest{RegionId: 1, StoreId: 2, PeerId: 2})
+	require.NoError(t, err)
+
+	meta := rustRaftstoreTwoPeerRegionAtConf(2)
+	cli, err := newRustRaftstoreTwoPeerClient(addrs, meta)
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+	handled, err := cli.TryAtomicMutate(ctx, []byte("agent/bounded-stale-follower"), nil, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/bounded-stale-follower"),
+		Value: []byte("from-follower"),
+	}}, 41, 42)
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	leaderStatus, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
+	require.NoError(t, err)
+	waitForRustRaftstoreApply(t, ctx, addrs[2], leaderStatus.GetAppliedIndex())
+
+	readClient, err := New(Config{
+		RegionResolver: &mockRegionResolver{region: meta},
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: reserveLocalAddr(t), State: coordpb.StoreState_STORE_STATE_UP},
+			{StoreID: 2, Addr: addrs[2], State: coordpb.StoreState_STORE_STATE_UP},
+		},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, readClient.Close()) })
+
+	got, err := readClient.GetWithOptions(ctx, []byte("agent/bounded-stale-follower"), 42, ReadOptions{
+		Consistency:       kvrpcpb.ReadConsistency_READ_CONSISTENCY_BOUNDED_STALE,
+		Preference:        kvrpcpb.ReadPreference_READ_PREFERENCE_FOLLOWER_PREFER,
+		MaxStaleReadIndex: 0,
+	})
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("from-follower"), got.GetValue())
+}
+
 func TestRustRaftstoreEndpointAppliesCoordinatorLeaderTransfer(t *testing.T) {
 	heartbeatCh := make(chan *coordpb.StoreHeartbeatRequest, 32)
 	operationCh := make(chan *coordpb.SchedulerOperation, 1)

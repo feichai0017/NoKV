@@ -185,7 +185,7 @@ impl RegionAdmission {
         if !self.hosted {
             return Ok(Some(self.region_not_found(context.region_id)));
         }
-        if !self.leader {
+        if !self.leader && !self.read_can_run_on_follower(context, role) {
             return Ok(Some(self.non_leader_error(context, role)));
         }
         Ok(None)
@@ -215,6 +215,14 @@ impl RegionAdmission {
                 epoch.version == self.epoch_version && epoch.conf_version == self.epoch_conf_version
             })
             .unwrap_or(false)
+    }
+
+    fn read_can_run_on_follower(&self, context: &kvpb::Context, role: AdmissionRole) -> bool {
+        role == AdmissionRole::Read
+            && normalize_read_preference(context.read_preference)
+                == kvpb::ReadPreference::FollowerPrefer
+            && normalize_read_consistency(context.read_consistency)
+                == kvpb::ReadConsistency::BoundedStale
     }
 
     fn epoch(&self) -> metapb::RegionEpoch {
@@ -343,6 +351,10 @@ enum AdmissionRole {
 
 fn normalize_read_preference(preference: i32) -> kvpb::ReadPreference {
     kvpb::ReadPreference::try_from(preference).unwrap_or(kvpb::ReadPreference::LeaderOnly)
+}
+
+fn normalize_read_consistency(consistency: i32) -> kvpb::ReadConsistency {
+    kvpb::ReadConsistency::try_from(consistency).unwrap_or(kvpb::ReadConsistency::Strong)
 }
 
 #[cfg(test)]

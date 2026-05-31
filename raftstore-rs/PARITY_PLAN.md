@@ -224,10 +224,14 @@ The first slices are intentionally narrow:
   runtime status instead of trusting the service bootstrap flag, so stale
   leader endpoints reject writes with `NotLeader` and follower-prefer reads keep
   the Go client's `StaleCommand` fallback path.
-  Read admission now keeps the follower-prefer fallback contract: when the
-  local Rust service is not the leader and follower serving is not wired yet,
+  Read admission now keeps the follower-prefer fallback contract: strong
   follower-prefer reads return `StaleCommand` so Go clients retry the leader,
   while writes remain leader-only and continue to return `NotLeader`.
+  Explicit bounded-stale follower-prefer reads can now be served locally when
+  the follower's applied index has caught up to its local OpenRaft log within
+  the caller's `max_stale_read_index` budget. Followers still reject bounded
+  stale reads that require a wall-clock leader-contact budget until Rust owns a
+  leader-contact freshness signal.
   The server/adapter testkit also covers a Holt-backed peer that installs a
   leader snapshot, persists its apply-state and MVCC snapshot, restarts from
   the same Holt/log directories, and applies a later leader commit.
@@ -428,10 +432,11 @@ Known gaps:
 - The Docker image can carry the Rust server binary and config-driven Rust
   launcher/join scripts, but compose default cutover is still pending
   coordinator-managed multi-region lifecycle wiring and benchmark validation.
-- Rust follower reads are intentionally not served locally yet. The service
-  preserves the Go client fallback shape for follower-prefer reads, but safe
-  follower ReadIndex and bounded-stale serving still require the multi-node
-  transport and freshness budget to be wired through raftnode.
+- Rust strong follower reads are intentionally not served locally yet. The
+  service preserves the Go client fallback shape for strong follower-prefer
+  reads. Bounded-stale follower reads now have a safe local serving subset for
+  explicit applied-index budgets; safe follower ReadIndex and wall-clock
+  leader-contact freshness budgets still need raftnode-level freshness signals.
 
 ## Target Architecture
 

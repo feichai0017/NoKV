@@ -2049,6 +2049,12 @@ where
                         .to_string(),
                     ));
                 }
+                if read_consistency(req) == kvpb::ReadConsistency::BoundedStale {
+                    if self.bounded_stale_read_admissible(req) {
+                        return self.apply_engine.execute_raft_command(req).await;
+                    }
+                    return Ok(stale_command_raft_response(req));
+                }
                 if let Err(err) = ensure_linearizable_for_read(&self.raft).await {
                     if let Error::NotLeader { leader_id } = err {
                         return self.not_leader_raft_response(req, leader_id);
@@ -2102,6 +2108,30 @@ where
             }),
         })
     }
+
+    fn bounded_stale_read_admissible(&self, req: &raftpb::RaftCmdRequest) -> bool {
+        let Some(header) = req.header.as_ref() else {
+            return false;
+        };
+        let status = self.apply_engine.apply_status();
+        if status.applied_index == 0 {
+            return false;
+        }
+        let metrics = self.raft_handle().metrics();
+        let metrics = metrics.borrow();
+        let last_log_index = metrics.last_log_index.unwrap_or_default();
+        if last_log_index < status.applied_index {
+            return false;
+        }
+        if last_log_index - status.applied_index > header.max_stale_read_index {
+            return false;
+        }
+        let local_is_leader = metrics.current_leader == Some(self.node_id);
+        if !local_is_leader && header.max_stale_read_ms > 0 {
+            return false;
+        }
+        true
+    }
 }
 
 fn raft_command_is_read_only(req: &raftpb::RaftCmdRequest) -> bool {
@@ -2112,6 +2142,24 @@ fn raft_command_is_read_only(req: &raftpb::RaftCmdRequest) -> bool {
                 Ok(raftpb::CmdType::CmdGet | raftpb::CmdType::CmdScan)
             )
         })
+}
+
+fn read_consistency(req: &raftpb::RaftCmdRequest) -> kvpb::ReadConsistency {
+    req.header
+        .as_ref()
+        .and_then(|header| kvpb::ReadConsistency::try_from(header.read_consistency).ok())
+        .unwrap_or(kvpb::ReadConsistency::Strong)
+}
+
+fn stale_command_raft_response(req: &raftpb::RaftCmdRequest) -> raftpb::RaftCmdResponse {
+    raftpb::RaftCmdResponse {
+        header: req.header.clone(),
+        responses: Vec::new(),
+        region_error: Some(errorpb::RegionError {
+            stale_command: Some(errorpb::StaleCommand {}),
+            ..Default::default()
+        }),
+    }
 }
 
 async fn ensure_linearizable_for_read(raft: &Raft<RaftStoreConfig>) -> Result<(), Error> {

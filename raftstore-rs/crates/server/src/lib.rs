@@ -2729,6 +2729,191 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn bounded_stale_follower_prefer_read_serves_local_openraft_state() {
+        let mut handles = Vec::new();
+        let mut dirs = Vec::new();
+        let mut regions = BTreeMap::new();
+        let addrs = (1..=2)
+            .map(|node_id| (node_id, reserve_loopback_addr()))
+            .collect::<BTreeMap<_, _>>();
+        let peer_endpoints = PeerEndpointCatalog::new();
+        for (peer_id, addr) in &addrs {
+            peer_endpoints
+                .insert_peer(*peer_id, addr.to_string())
+                .unwrap();
+        }
+
+        for node_id in 1..=2 {
+            let addr = *addrs.get(&node_id).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
+            let engine = nokv_raftnode::AppliedKvEngine::new(7, MvccStore::new());
+            let region = nokv_raftnode::OpenRaftRegion::open_with_network(
+                node_id,
+                7,
+                nokv_raftnode::RegionLogStorage::new(log),
+                nokv_raftnode::RegionStateMachine::new(engine),
+                nokv_raftnode::TonicRaftNetworkFactory::new(7),
+            )
+            .await
+            .unwrap();
+            let admission = RegionAdmission {
+                region_id: 7,
+                store_id: node_id,
+                peer_id: node_id,
+                peers: BTreeMap::from([(node_id, node_id)]),
+                leader_peer_id: 1,
+                epoch_conf_version: 1,
+                leader: node_id == 1,
+                ..Default::default()
+            };
+            let handle = tokio::spawn(serve_with_openraft_region_admission_and_peer_endpoints(
+                addr,
+                region.clone(),
+                admission,
+                peer_endpoints.clone(),
+            ));
+            wait_for_server(addr).await;
+            dirs.push(dir);
+            regions.insert(node_id, region);
+            handles.push(handle);
+        }
+
+        let leader = regions.get(&1).unwrap();
+        leader
+            .initialize_members(BTreeMap::from([(
+                1,
+                BasicNode::new(addrs.get(&1).unwrap().to_string()),
+            )]))
+            .await
+            .unwrap();
+        leader.wait_for_leader(1).await.unwrap();
+        leader.ensure_linearizable().await.unwrap();
+
+        let leader_addr = addrs.get(&1).unwrap();
+        let mut admin_client =
+            adminpb::raft_admin_client::RaftAdminClient::connect(format!("http://{leader_addr}"))
+                .await
+                .unwrap();
+        admin_client
+            .add_peer(adminpb::AddPeerRequest {
+                region_id: 7,
+                store_id: 2,
+                peer_id: 2,
+            })
+            .await
+            .unwrap();
+
+        let peers = BTreeMap::from([(1, 1), (2, 2)]);
+        let leader_admission = RegionAdmission {
+            region_id: 7,
+            store_id: 1,
+            peer_id: 1,
+            peers: peers.clone(),
+            leader_peer_id: 1,
+            epoch_conf_version: 2,
+            leader: true,
+            ..Default::default()
+        };
+        let mut leader_client =
+            kvpb::store_kv_client::StoreKvClient::connect(format!("http://{leader_addr}"))
+                .await
+                .unwrap();
+        let write = leader_client
+            .try_atomic_mutate(kvpb::KvTryAtomicMutateRequest {
+                context: Some(context(&leader_admission)),
+                request: Some(kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: b"bounded-stale".to_vec(),
+                        value: b"local-follower".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 42,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(
+            write.region_error.is_none(),
+            "unexpected region error: {:?}",
+            write.region_error
+        );
+        let write_index = leader.apply_status().applied_index;
+        for region in regions.values() {
+            region
+                .raft_handle()
+                .wait(Some(Duration::from_secs(5)))
+                .applied_index_at_least(Some(write_index), "bounded-stale write replication")
+                .await
+                .unwrap();
+        }
+
+        let follower_addr = addrs.get(&2).unwrap();
+        let mut follower_client =
+            kvpb::store_kv_client::StoreKvClient::connect(format!("http://{follower_addr}"))
+                .await
+                .unwrap();
+        let mut follower_context = context(&RegionAdmission {
+            region_id: 7,
+            store_id: 2,
+            peer_id: 2,
+            peers,
+            leader_peer_id: 1,
+            epoch_conf_version: 2,
+            leader: false,
+            ..Default::default()
+        });
+        follower_context.read_consistency = kvpb::ReadConsistency::BoundedStale as i32;
+        follower_context.read_preference = kvpb::ReadPreference::FollowerPrefer as i32;
+        follower_context.max_stale_read_index = 0;
+
+        let response = follower_client
+            .get(kvpb::KvGetRequest {
+                context: Some(follower_context.clone()),
+                request: Some(kvpb::GetRequest {
+                    key: b"bounded-stale".to_vec(),
+                    version: 42,
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(
+            response.region_error.is_none(),
+            "unexpected region error: {:?}",
+            response.region_error
+        );
+        assert_eq!(response.response.unwrap().value, b"local-follower".to_vec());
+
+        follower_context.max_stale_read_ms = 1;
+        let stale = follower_client
+            .get(kvpb::KvGetRequest {
+                context: Some(follower_context),
+                request: Some(kvpb::GetRequest {
+                    key: b"bounded-stale".to_vec(),
+                    version: 42,
+                }),
+                ..Default::default()
+            })
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(stale.region_error.unwrap().stale_command.is_some());
+
+        for region in regions.values() {
+            region.shutdown().await.unwrap();
+        }
+        for handle in handles {
+            handle.abort();
+        }
+    }
+
+    #[tokio::test]
     async fn holt_snapshot_installed_peer_survives_openraft_restart() {
         let registry = nokv_raftnode::MemoryRaftNetworkRegistry::default();
         let leader_log_dir = tempfile::tempdir().unwrap();
