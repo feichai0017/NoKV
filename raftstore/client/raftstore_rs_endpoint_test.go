@@ -1062,7 +1062,11 @@ func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegionAfterAddPeer(t *testi
 		1: reserveLocalAddr(t),
 		2: reserveLocalAddr(t),
 	}
-	startRustRaftstoreProcessAt(t, addrs[1], t.TempDir(), []string{
+	dirs := map[uint64]string{
+		1: t.TempDir(),
+		2: t.TempDir(),
+	}
+	store1Env := []string{
 		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
 		"NOKV_RUST_RAFTSTORE_STORE_ID=1",
 		"NOKV_RUST_RAFTSTORE_PEER_ID=1",
@@ -1070,21 +1074,26 @@ func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegionAfterAddPeer(t *testi
 		"NOKV_RUST_RAFTSTORE_PEER_ENDPOINTS=2=" + addrs[2] + ",4=" + addrs[2],
 		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
 		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
-	})
-	startRustRaftstoreProcessAt(t, addrs[2], t.TempDir(), []string{
+	}
+	store2Env := []string{
 		"NOKV_RUST_RAFTSTORE_REGION_ID=1",
 		"NOKV_RUST_RAFTSTORE_STORE_ID=2",
 		"NOKV_RUST_RAFTSTORE_PEER_ID=2",
 		"NOKV_RUST_RAFTSTORE_BOOTSTRAP=false",
 		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
 		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
-	})
+	}
+	stop1 := startRustRaftstoreProcessAt(t, addrs[1], dirs[1], store1Env)
+	stop2 := startRustRaftstoreProcessAt(t, addrs[2], dirs[2], store2Env)
+	defer func() {
+		stop2()
+		stop1()
+	}()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
 	defer cancel()
 	admin, closeAdmin, err := adminclient.Dial(ctx, addrs[1])
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, closeAdmin()) })
 	_, err = admin.AddPeer(ctx, &adminpb.AddPeerRequest{RegionId: 1, StoreId: 2, PeerId: 2})
 	require.NoError(t, err)
 	leaderStatus, err := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 1})
@@ -1114,7 +1123,6 @@ func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegionAfterAddPeer(t *testi
 		Retry:       RetryPolicy{MaxAttempts: 3},
 	})
 	require.NoError(t, err)
-	t.Cleanup(func() { require.NoError(t, cli.Close()) })
 	handled, err := cli.TryAtomicMutate(ctx, []byte("workspace/multipeer-split"), nil, []*kvrpcpb.Mutation{{
 		Op:    kvrpcpb.Mutation_Put,
 		Key:   []byte("workspace/multipeer-split"),
@@ -1128,6 +1136,36 @@ func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegionAfterAddPeer(t *testi
 	require.False(t, got.GetNotFound())
 	require.Equal(t, []byte("split"), got.GetValue())
 	requireRustRaftstoreSplitRootEvents(t, rootEventCh)
+	require.NoError(t, cli.Close())
+	require.NoError(t, closeAdmin())
+
+	stop2()
+	stop1()
+	stop2 = startRustRaftstoreProcessAt(t, addrs[2], dirs[2], store2Env)
+	stop1 = startRustRaftstoreProcessAt(t, addrs[1], dirs[1], store1Env)
+	_, _ = waitForRustRaftstoreRegionLeader(t, ctx, addrs, 2)
+	cli, err = New(Config{
+		RegionResolver: &mockRegionResolver{regions: []*metapb.RegionDescriptor{left, right}},
+		StoreResolver: staticStoreResolver{
+			{StoreID: 1, Addr: addrs[1], State: coordpb.StoreState_STORE_STATE_UP},
+			{StoreID: 2, Addr: addrs[2], State: coordpb.StoreState_STORE_STATE_UP},
+		},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 3},
+	})
+	require.NoError(t, err)
+	defer func() { require.NoError(t, cli.Close()) }()
+	got, err = cli.Get(ctx, []byte("workspace/multipeer-split"), 131)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("split"), got.GetValue())
+	handled, err = cli.TryAtomicMutate(ctx, []byte("workspace/multipeer-split-restart"), nil, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("workspace/multipeer-split-restart"),
+		Value: []byte("restart"),
+	}}, 132, 133)
+	require.NoError(t, err)
+	require.True(t, handled)
 }
 
 func TestRustRaftstoreEndpointAppliesCoordinatorMergeRegion(t *testing.T) {
