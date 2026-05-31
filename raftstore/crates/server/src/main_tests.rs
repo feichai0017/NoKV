@@ -617,6 +617,62 @@ fn failed_scheduler_operation_records_pending_holt_diagnostic() {
     assert_eq!(pending[0].operation, operation);
 }
 
+#[test]
+fn applied_scheduler_operation_clears_stale_diagnostics() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let operation = coordpb::SchedulerOperation {
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
+        region_id: 7,
+        source_peer_id: 101,
+        target_peer_id: 202,
+        ..Default::default()
+    };
+    store
+        .record_pending_scheduler_operation(&operation)
+        .unwrap();
+    store
+        .increment_pending_scheduler_operation_attempts(&operation)
+        .unwrap();
+    store
+        .block_pending_scheduler_operation(&operation, 8, "admin unavailable")
+        .unwrap();
+
+    record_scheduler_operation_outcome(
+        Some(&store),
+        &operation,
+        Ok(SchedulerOperationOutcome::Applied),
+    );
+
+    assert!(store.pending_scheduler_operations().unwrap().is_empty());
+    assert!(store.blocked_scheduler_operations().unwrap().is_empty());
+}
+
+#[test]
+fn invalid_scheduler_operation_clears_stale_diagnostics() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let operation = coordpb::SchedulerOperation {
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
+        region_id: 7,
+        source_peer_id: 101,
+        target_peer_id: 202,
+        ..Default::default()
+    };
+    store
+        .record_pending_scheduler_operation(&operation)
+        .unwrap();
+
+    record_scheduler_operation_outcome(
+        Some(&store),
+        &operation,
+        Ok(SchedulerOperationOutcome::Invalid {
+            reason: "leader transfer requires region, source peer, and target peer",
+        }),
+    );
+
+    assert!(store.pending_scheduler_operations().unwrap().is_empty());
+    assert!(store.blocked_scheduler_operations().unwrap().is_empty());
+}
+
 #[tokio::test]
 async fn pending_scheduler_operation_retries_and_deletes_after_apply() {
     let addr = reserve_loopback_addr();
@@ -649,6 +705,40 @@ async fn pending_scheduler_operation_retries_and_deletes_after_apply() {
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].region_id, 7);
     assert_eq!(captured[0].peer_id, 202);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn pending_scheduler_operation_retry_apply_clears_matching_blocked_record() {
+    let addr = reserve_loopback_addr();
+    let admin = CaptureRaftAdmin::default();
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(adminpb::raft_admin_server::RaftAdminServer::new(admin))
+            .serve(addr)
+            .await
+            .unwrap();
+    });
+    wait_for_server(addr).await;
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let operation = coordpb::SchedulerOperation {
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
+        region_id: 7,
+        source_peer_id: 101,
+        target_peer_id: 202,
+        ..Default::default()
+    };
+    store
+        .block_pending_scheduler_operation(&operation, 8, "stale blocked record")
+        .unwrap();
+    store
+        .record_pending_scheduler_operation(&operation)
+        .unwrap();
+
+    retry_pending_scheduler_operations(&local_admin_endpoint(addr), &store, None).await;
+
+    assert!(store.pending_scheduler_operations().unwrap().is_empty());
+    assert!(store.blocked_scheduler_operations().unwrap().is_empty());
     handle.abort();
 }
 

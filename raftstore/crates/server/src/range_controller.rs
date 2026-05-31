@@ -16,7 +16,7 @@ use nokv_raftstore_server::{
     RaftRuntimeStatusProvider, RegionAdmission, TopologyPublisher,
 };
 
-use crate::coordinator::{CoordinatorHeartbeatConfig, SchedulerOperationOutcome};
+use crate::coordinator::CoordinatorHeartbeatConfig;
 use crate::hosted_region::{
     HoltApplyEngine, HoltRegion, HoltRegionDescriptorCatalog, HostedRegionRegistry,
 };
@@ -30,6 +30,7 @@ use crate::region_open::{
     open_openraft_region, region_log_dir, spawn_recovered_region_leadership_retries,
 };
 use crate::root_publication::publish_root_event_with_pending;
+use crate::scheduler_operations::SchedulerOperationOutcome;
 use crate::startup::ServerIdentity;
 
 #[derive(Clone)]

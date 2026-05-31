@@ -169,6 +169,19 @@ impl HoltStore {
         Ok(())
     }
 
+    pub fn clear_scheduler_operation_diagnostic(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<()> {
+        let pending_key = pending_scheduler_operation_key(operation)?;
+        let blocked_key = blocked_scheduler_operation_key(operation)?;
+        self.atomic(|batch| {
+            batch.delete(REGION_META_TREE, &pending_key);
+            batch.delete(REGION_META_TREE, &blocked_key);
+        })?;
+        Ok(())
+    }
+
     pub fn pending_scheduler_operations(&self) -> Result<Vec<PendingSchedulerOperation>> {
         let mut out = Vec::new();
         for entry in self
@@ -223,9 +236,10 @@ impl HoltStore {
         };
         let mut bytes = Vec::with_capacity(record.encoded_len());
         record.encode(&mut bytes)?;
-        let tree = self.region_meta()?;
-        tree.put(&blocked_key, &bytes)?;
-        tree.delete(&pending_key)?;
+        self.atomic(|batch| {
+            batch.put(REGION_META_TREE, &blocked_key, &bytes);
+            batch.delete(REGION_META_TREE, &pending_key);
+        })?;
         Ok(())
     }
 
@@ -372,6 +386,19 @@ impl HoltMetadataStore {
             .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
         self.store
             .delete_pending_scheduler_operation(operation)
+            .and_then(|_| self.store.checkpoint())
+    }
+
+    pub fn clear_scheduler_operation_diagnostic(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<()> {
+        let _guard = self
+            .gate
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
+        self.store
+            .clear_scheduler_operation_diagnostic(operation)
             .and_then(|_| self.store.checkpoint())
     }
 

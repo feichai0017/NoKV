@@ -40,7 +40,6 @@ benchmark.test
 work_redis
 
 third_party/*
-!third_party/holt
 .tlc-states/
 _apalache-out/
 

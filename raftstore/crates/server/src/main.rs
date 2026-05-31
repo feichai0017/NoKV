@@ -8,6 +8,7 @@ mod range_controller;
 mod range_topology;
 mod region_open;
 mod root_publication;
+mod scheduler_operations;
 mod startup;
 
 use std::net::SocketAddr;
@@ -29,6 +30,8 @@ pub(crate) use range_topology::*;
 pub(crate) use region_open::*;
 #[cfg(test)]
 pub(crate) use root_publication::*;
+#[cfg(test)]
+pub(crate) use scheduler_operations::*;
 #[cfg(test)]
 pub(crate) use startup::*;
 use startup::{
