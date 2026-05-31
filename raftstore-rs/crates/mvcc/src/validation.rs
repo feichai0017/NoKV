@@ -26,6 +26,63 @@ pub fn prewrite_mutation(mutation: &kvpb::Mutation) -> Option<kvpb::KeyError> {
     }
 }
 
+pub fn install_prepared_request(
+    req: &kvpb::InstallPreparedMvccEntriesRequest,
+) -> Option<kvpb::KeyError> {
+    if req.routing_key.is_empty() {
+        return Some(errors::abort("missing routing key"));
+    }
+    if req.commit_version == 0 || req.commit_version == u64::MAX {
+        return Some(errors::abort("invalid commit version"));
+    }
+    for entry in &req.entries {
+        if let Some(error) = install_prepared_entry(req.commit_version, entry) {
+            return Some(error);
+        }
+    }
+    None
+}
+
+pub fn mvcc_maintenance_request(req: &kvpb::MvccMaintenanceRequest) -> Option<kvpb::KeyError> {
+    for tombstone in &req.tombstones {
+        match kvpb::internal_entry_tombstone::ColumnFamily::try_from(tombstone.column_family) {
+            Ok(
+                kvpb::internal_entry_tombstone::ColumnFamily::Default
+                | kvpb::internal_entry_tombstone::ColumnFamily::Write,
+            ) => {}
+            Err(_) => return Some(errors::abort("invalid column family")),
+        }
+        if tombstone.key.is_empty() {
+            return Some(errors::abort("empty key"));
+        }
+    }
+    None
+}
+
+fn install_prepared_entry(
+    commit_version: u64,
+    entry: &kvpb::PreparedMvccEntry,
+) -> Option<kvpb::KeyError> {
+    match kvpb::prepared_mvcc_entry::ColumnFamily::try_from(entry.column_family) {
+        Ok(
+            kvpb::prepared_mvcc_entry::ColumnFamily::Default
+            | kvpb::prepared_mvcc_entry::ColumnFamily::Lock
+            | kvpb::prepared_mvcc_entry::ColumnFamily::Write,
+        ) => {}
+        Err(_) => return Some(errors::abort("invalid column family")),
+    }
+    if entry.key.is_empty() {
+        return Some(errors::abort("empty key"));
+    }
+    if entry.version != commit_version {
+        return Some(errors::abort("entry version does not match commit version"));
+    }
+    if entry.meta > 0xff {
+        return Some(errors::abort("entry meta out of range"));
+    }
+    None
+}
+
 pub fn commit_version(start_version: u64, commit_version: u64) -> Option<kvpb::KeyError> {
     (commit_version <= start_version).then(|| kvpb::KeyError {
         abort: "commit version must be greater than start version".to_owned(),

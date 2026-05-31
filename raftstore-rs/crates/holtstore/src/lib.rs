@@ -887,6 +887,7 @@ impl mvcc::KvEngine for HoltMvccStore {
     fn scan(&self, req: &kvpb::ScanRequest) -> mvcc::Result<kvpb::ScanResponse> {
         let _guard = self.lock()?;
         let read_version = mvcc::scan_read_version(req.version);
+        let limit = mvcc::scan_limit(req.limit);
         let mut keys = self.scan_write_user_keys()?;
         if req.reverse {
             keys.reverse();
@@ -925,7 +926,7 @@ impl mvcc::KvEngine for HoltMvccStore {
                         expires_at: value.expires_at,
                         ..Default::default()
                     });
-                    if req.limit > 0 && kvs.len() >= req.limit as usize {
+                    if kvs.len() >= limit {
                         break;
                     }
                 }
@@ -1456,6 +1457,12 @@ impl mvcc::KvEngine for HoltMvccStore {
         &self,
         req: &kvpb::InstallPreparedMvccEntriesRequest,
     ) -> mvcc::Result<kvpb::InstallPreparedMvccEntriesResponse> {
+        if let Some(error) = mvcc::validation::install_prepared_request(req) {
+            return Ok(kvpb::InstallPreparedMvccEntriesResponse {
+                error: Some(error),
+                ..Default::default()
+            });
+        }
         let _guard = self.lock()?;
         let mut applied = 0;
         self.atomic(|batch| {
@@ -1496,21 +1503,18 @@ impl mvcc::KvEngine for HoltMvccStore {
         &self,
         req: &kvpb::MvccMaintenanceRequest,
     ) -> mvcc::Result<kvpb::MvccMaintenanceResponse> {
+        if let Some(error) = mvcc::validation::mvcc_maintenance_request(req) {
+            return Ok(kvpb::MvccMaintenanceResponse {
+                error: Some(error),
+                ..Default::default()
+            });
+        }
         let _guard = self.lock()?;
         let mut applied = 0;
         self.atomic(|batch| {
             for tombstone in &req.tombstones {
-                match kvpb::internal_entry_tombstone::ColumnFamily::try_from(
-                    tombstone.column_family,
-                )
-                .unwrap_or(kvpb::internal_entry_tombstone::ColumnFamily::Default)
-                {
-                    kvpb::internal_entry_tombstone::ColumnFamily::Default
-                    | kvpb::internal_entry_tombstone::ColumnFamily::Write => {
-                        batch.delete(WRITE_TREE, &write_key(&tombstone.key, tombstone.version));
-                        applied += 1;
-                    }
-                }
+                batch.delete(WRITE_TREE, &write_key(&tombstone.key, tombstone.version));
+                applied += 1;
             }
         })?;
         Ok(kvpb::MvccMaintenanceResponse {
@@ -3112,6 +3116,161 @@ mod tests {
             .unwrap();
         assert_eq!(latest.kvs.len(), 1);
         assert_eq!(latest.kvs[0].version, u64::MAX);
+    }
+
+    #[test]
+    fn holt_mvcc_scan_zero_limit_defaults_to_one_key() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![
+                    kvpb::Mutation {
+                        key: b"a".to_vec(),
+                        value: b"va".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                    kvpb::Mutation {
+                        key: b"b".to_vec(),
+                        value: b"vb".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                ],
+                start_version: 1,
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let scan = store
+            .scan(&kvpb::ScanRequest {
+                version: 20,
+                include_start: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(scan.kvs.len(), 1);
+        assert_eq!(scan.kvs[0].key, b"a");
+    }
+
+    #[test]
+    fn holt_mvcc_install_prepared_rejects_malformed_batch_without_partial_apply() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let version_mismatch = store
+            .install_prepared(&kvpb::InstallPreparedMvccEntriesRequest {
+                routing_key: b"prepared-a".to_vec(),
+                commit_version: 44,
+                entries: vec![
+                    kvpb::PreparedMvccEntry {
+                        column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
+                        key: b"prepared-a".to_vec(),
+                        version: 44,
+                        value: b"value".to_vec(),
+                        has_value: true,
+                        ..Default::default()
+                    },
+                    kvpb::PreparedMvccEntry {
+                        column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
+                        key: b"prepared-b".to_vec(),
+                        version: 45,
+                        value: b"must-not-apply".to_vec(),
+                        has_value: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_abort_contains(version_mismatch.error, "version");
+        assert!(
+            store
+                .get(&kvpb::GetRequest {
+                    key: b"prepared-a".to_vec(),
+                    version: 44,
+                })
+                .unwrap()
+                .not_found
+        );
+
+        let invalid_cf = store
+            .install_prepared(&kvpb::InstallPreparedMvccEntriesRequest {
+                routing_key: b"prepared-c".to_vec(),
+                commit_version: 50,
+                entries: vec![
+                    kvpb::PreparedMvccEntry {
+                        column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
+                        key: b"prepared-c".to_vec(),
+                        version: 50,
+                        value: b"value".to_vec(),
+                        has_value: true,
+                        ..Default::default()
+                    },
+                    kvpb::PreparedMvccEntry {
+                        column_family: 99,
+                        key: b"prepared-d".to_vec(),
+                        version: 50,
+                        value: b"must-not-apply".to_vec(),
+                        has_value: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_abort_contains(invalid_cf.error, "column family");
+        assert!(
+            store
+                .get(&kvpb::GetRequest {
+                    key: b"prepared-c".to_vec(),
+                    version: 50,
+                })
+                .unwrap()
+                .not_found
+        );
+    }
+
+    #[test]
+    fn holt_mvcc_maintenance_rejects_malformed_batch_without_partial_apply() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"maintenance-a".to_vec(),
+                    value: b"value".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let response = store
+            .mvcc_maintenance(&kvpb::MvccMaintenanceRequest {
+                tombstones: vec![
+                    kvpb::InternalEntryTombstone {
+                        column_family: kvpb::internal_entry_tombstone::ColumnFamily::Write as i32,
+                        key: b"maintenance-a".to_vec(),
+                        version: 10,
+                    },
+                    kvpb::InternalEntryTombstone {
+                        column_family: 99,
+                        key: b"maintenance-b".to_vec(),
+                        version: 11,
+                    },
+                ],
+            })
+            .unwrap();
+        assert_abort_contains(response.error, "column family");
+
+        let got = store
+            .get(&kvpb::GetRequest {
+                key: b"maintenance-a".to_vec(),
+                version: 20,
+            })
+            .unwrap();
+        assert_eq!(got.value, b"value".to_vec());
     }
 
     #[test]

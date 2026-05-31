@@ -3432,6 +3432,66 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn install_prepared_rejects_malformed_batch_without_partial_apply() {
+        let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
+        let context = default_context();
+
+        let install = service
+            .install_prepared_mvcc_entries(Request::new(
+                kvpb::KvInstallPreparedMvccEntriesRequest {
+                    context: Some(context.clone()),
+                    request: Some(kvpb::InstallPreparedMvccEntriesRequest {
+                        routing_key: b"txn/prepared-a".to_vec(),
+                        commit_version: 70,
+                        entries: vec![
+                            kvpb::PreparedMvccEntry {
+                                column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default
+                                    as i32,
+                                key: b"txn/prepared-a".to_vec(),
+                                version: 70,
+                                value: b"value".to_vec(),
+                                has_value: true,
+                                ..Default::default()
+                            },
+                            kvpb::PreparedMvccEntry {
+                                column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default
+                                    as i32,
+                                key: b"txn/prepared-b".to_vec(),
+                                version: 71,
+                                value: b"must-not-apply".to_vec(),
+                                has_value: true,
+                                ..Default::default()
+                            },
+                        ],
+                        ..Default::default()
+                    }),
+                },
+            ))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert!(install.error.unwrap().abort.contains("version"));
+
+        let prepared = service
+            .get(Request::new(kvpb::KvGetRequest {
+                context: Some(context),
+                request: Some(kvpb::GetRequest {
+                    key: b"txn/prepared-a".to_vec(),
+                    version: 70,
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+        assert!(prepared.not_found);
+    }
+
+    #[tokio::test]
     async fn watch_apply_streams_matching_apply_events() {
         let engine = nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new());
         let service = StoreKvService::new(engine.clone());
@@ -3688,6 +3748,48 @@ mod tests {
             .map(|kv| kv.key.as_slice())
             .collect::<Vec<_>>();
         assert_eq!(keys, vec![b"ak".as_slice(), b"bk".as_slice()]);
+    }
+
+    #[tokio::test]
+    async fn scan_zero_limit_matches_go_default_limit() {
+        let store = MvccStore::new();
+        for (key, value) in [
+            (b"scan-limit/a".as_slice(), b"value-a".as_slice()),
+            (b"scan-limit/b".as_slice(), b"value-b".as_slice()),
+        ] {
+            store
+                .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: key.to_vec(),
+                        value: value.to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 20,
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+        let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, store));
+
+        let scan = service
+            .scan(Request::new(kvpb::KvScanRequest {
+                context: Some(default_context()),
+                request: Some(kvpb::ScanRequest {
+                    start_key: b"scan-limit/".to_vec(),
+                    version: 20,
+                    include_start: true,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+
+        assert_eq!(scan.kvs.len(), 1);
+        assert_eq!(scan.kvs[0].key, b"scan-limit/a".to_vec());
     }
 
     #[tokio::test]

@@ -168,6 +168,7 @@ impl MvccStore {
     pub fn scan(&self, req: &kvpb::ScanRequest) -> Result<kvpb::ScanResponse> {
         let inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         let read_version = scan_read_version(req.version);
+        let limit = scan_limit(req.limit);
         let mut kvs = Vec::new();
         let start = req.start_key.as_slice();
         let include_start = req.include_start;
@@ -193,7 +194,7 @@ impl MvccStore {
                         expires_at: value.expires_at,
                         ..Default::default()
                     });
-                    if req.limit > 0 && kvs.len() >= req.limit as usize {
+                    if kvs.len() >= limit {
                         break;
                     }
                 }
@@ -667,6 +668,12 @@ impl MvccStore {
         &self,
         req: &kvpb::InstallPreparedMvccEntriesRequest,
     ) -> Result<kvpb::InstallPreparedMvccEntriesResponse> {
+        if let Some(error) = validation::install_prepared_request(req) {
+            return Ok(kvpb::InstallPreparedMvccEntriesResponse {
+                error: Some(error),
+                ..Default::default()
+            });
+        }
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         let mut applied = 0;
         for entry in &req.entries {
@@ -707,26 +714,17 @@ impl MvccStore {
         &self,
         req: &kvpb::MvccMaintenanceRequest,
     ) -> Result<kvpb::MvccMaintenanceResponse> {
-        let mut tombstones = Vec::with_capacity(req.tombstones.len());
-        for tombstone in &req.tombstones {
-            match kvpb::internal_entry_tombstone::ColumnFamily::try_from(tombstone.column_family) {
-                Ok(kvpb::internal_entry_tombstone::ColumnFamily::Default)
-                | Ok(kvpb::internal_entry_tombstone::ColumnFamily::Write) => {}
-                Err(_) => {
-                    return Ok(kvpb::MvccMaintenanceResponse {
-                        error: Some(maintenance_abort("invalid column family")),
-                        ..Default::default()
-                    })
-                }
-            };
-            if tombstone.key.is_empty() {
-                return Ok(kvpb::MvccMaintenanceResponse {
-                    error: Some(maintenance_abort("empty key")),
-                    ..Default::default()
-                });
-            }
-            tombstones.push((tombstone.key.clone(), tombstone.version));
+        if let Some(error) = validation::mvcc_maintenance_request(req) {
+            return Ok(kvpb::MvccMaintenanceResponse {
+                error: Some(error),
+                ..Default::default()
+            });
         }
+        let tombstones = req
+            .tombstones
+            .iter()
+            .map(|tombstone| (tombstone.key.clone(), tombstone.version))
+            .collect::<Vec<_>>();
 
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         for (key, version) in &tombstones {
@@ -835,6 +833,14 @@ pub fn scan_read_version(version: u64) -> u64 {
         u64::MAX
     } else {
         version
+    }
+}
+
+pub fn scan_limit(limit: u32) -> usize {
+    if limit == 0 {
+        1
+    } else {
+        limit as usize
     }
 }
 
@@ -1205,13 +1211,6 @@ fn lock_expire_time(lock: &LockRecord) -> u64 {
     lock.start_time.saturating_add(lock.ttl)
 }
 
-fn maintenance_abort(message: &str) -> kvpb::KeyError {
-    kvpb::KeyError {
-        abort: message.to_owned(),
-        ..Default::default()
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1510,6 +1509,118 @@ mod tests {
             .unwrap();
         assert_eq!(latest.kvs.len(), 1);
         assert_eq!(latest.kvs[0].version, u64::MAX);
+    }
+
+    #[test]
+    fn scan_zero_limit_defaults_to_one_key() {
+        let store = MvccStore::new();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![
+                    kvpb::Mutation {
+                        key: b"a".to_vec(),
+                        value: b"va".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                    kvpb::Mutation {
+                        key: b"b".to_vec(),
+                        value: b"vb".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    },
+                ],
+                start_version: 1,
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+
+        let scan = store
+            .scan(&kvpb::ScanRequest {
+                version: 20,
+                include_start: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(scan.kvs.len(), 1);
+        assert_eq!(scan.kvs[0].key, b"a");
+    }
+
+    #[test]
+    fn install_prepared_rejects_malformed_batch_without_partial_apply() {
+        let store = MvccStore::new();
+        let version_mismatch = store
+            .install_prepared(&kvpb::InstallPreparedMvccEntriesRequest {
+                routing_key: b"prepared-a".to_vec(),
+                commit_version: 44,
+                entries: vec![
+                    kvpb::PreparedMvccEntry {
+                        column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
+                        key: b"prepared-a".to_vec(),
+                        version: 44,
+                        value: b"value".to_vec(),
+                        has_value: true,
+                        ..Default::default()
+                    },
+                    kvpb::PreparedMvccEntry {
+                        column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
+                        key: b"prepared-b".to_vec(),
+                        version: 45,
+                        value: b"must-not-apply".to_vec(),
+                        has_value: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_abort_contains(version_mismatch.error, "version");
+        assert!(
+            store
+                .get(&kvpb::GetRequest {
+                    key: b"prepared-a".to_vec(),
+                    version: 44,
+                })
+                .unwrap()
+                .not_found
+        );
+
+        let invalid_cf = store
+            .install_prepared(&kvpb::InstallPreparedMvccEntriesRequest {
+                routing_key: b"prepared-c".to_vec(),
+                commit_version: 50,
+                entries: vec![
+                    kvpb::PreparedMvccEntry {
+                        column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
+                        key: b"prepared-c".to_vec(),
+                        version: 50,
+                        value: b"value".to_vec(),
+                        has_value: true,
+                        ..Default::default()
+                    },
+                    kvpb::PreparedMvccEntry {
+                        column_family: 99,
+                        key: b"prepared-d".to_vec(),
+                        version: 50,
+                        value: b"must-not-apply".to_vec(),
+                        has_value: true,
+                        ..Default::default()
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        assert_abort_contains(invalid_cf.error, "column family");
+        assert!(
+            store
+                .get(&kvpb::GetRequest {
+                    key: b"prepared-c".to_vec(),
+                    version: 50,
+                })
+                .unwrap()
+                .not_found
+        );
     }
 
     #[test]
