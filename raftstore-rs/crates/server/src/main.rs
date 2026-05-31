@@ -972,11 +972,12 @@ impl HoltRangeController {
         self.transport
             .register(identity.region_id, region.raft_handle());
         if let Some(members) = membership_init {
+            let single_member = members.len() == 1;
             let initialized = region
                 .initialize_members(members)
                 .await
                 .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
-            if initialized {
+            if initialized && single_member {
                 region
                     .elect_and_wait(identity.peer_id)
                     .await
@@ -985,6 +986,10 @@ impl HoltRangeController {
                     .ensure_linearizable()
                     .await
                     .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
+            } else if initialized {
+                // Remote child peers may open after observing the same split event.
+                // Register locally now and let retries elect once quorum is reachable.
+                spawn_recovered_region_leadership_retries(vec![(identity, region.clone())]);
             }
         }
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)
@@ -4122,6 +4127,70 @@ mod tests {
         )
         .unwrap();
         assert!(second.is_none());
+    }
+
+    #[tokio::test]
+    async fn split_child_multi_peer_bootstrap_does_not_block_on_immediate_quorum() {
+        let dir = tempfile::tempdir().unwrap();
+        let mvcc = HoltMvccStore::open_memory().unwrap();
+        let peer_endpoints = PeerEndpointCatalog::require_configured();
+        peer_endpoints
+            .insert_peer(202, "http://127.0.0.1:30202")
+            .unwrap();
+        let store_services = MultiRegionStoreKvService::new([]).unwrap();
+        let admin_services = MultiRegionRaftAdminService::new([]).unwrap();
+        let hosted_regions = HostedRegionRegistry::new([]).unwrap();
+        let controller = HoltRangeController {
+            store_id: 11,
+            advertised_addr: "127.0.0.1:30101".to_owned(),
+            persistent_root: dir.path().to_path_buf(),
+            coordinator: None,
+            mvcc: mvcc.clone(),
+            transport: nokv_raftnode::TonicRaftTransportRegistry::default(),
+            store_services,
+            admin_services,
+            hosted_regions: hosted_regions.clone(),
+            peer_endpoints: peer_endpoints.clone(),
+            topology_publisher: Arc::new(EmptyTopologyPublisher),
+        };
+        let identity = ServerIdentity {
+            region_id: 8,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: false,
+        };
+        let mut descriptor = default_region_descriptor_with_range(
+            identity,
+            Some(&RegionKeyRange {
+                start_key: b"m".to_vec(),
+                end_key: Vec::new(),
+            }),
+        );
+        descriptor.peers.push(metapb::RegionPeer {
+            store_id: 12,
+            peer_id: 202,
+        });
+        let members = controller
+            .child_membership_init(&descriptor, &descriptor.peers[0], true)
+            .unwrap()
+            .unwrap();
+
+        let result = tokio::time::timeout(
+            Duration::from_millis(500),
+            controller.open_split_child_region(identity, descriptor.clone(), Some(members)),
+        )
+        .await;
+
+        assert!(
+            result.is_ok(),
+            "multi-peer child bootstrap should not wait for quorum election"
+        );
+        result.unwrap().unwrap();
+        assert!(hosted_regions.get(8).unwrap().is_some());
+        assert_eq!(
+            mvcc.get_region_descriptor(8).unwrap().unwrap().peers.len(),
+            2
+        );
     }
 
     #[test]
