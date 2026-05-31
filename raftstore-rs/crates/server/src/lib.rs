@@ -226,13 +226,21 @@ fn root_event_action(event: &metapb::RootEvent) -> &'static str {
 fn pending_scheduler_operation_topology_status(
     pending: &PendingSchedulerOperation,
 ) -> adminpb::ExecutionTopologyStatus {
+    let last_error = if pending.attempts == 0 {
+        "scheduler operation pending".to_owned()
+    } else {
+        format!(
+            "scheduler operation pending after {} attempt(s)",
+            pending.attempts
+        )
+    };
     adminpb::ExecutionTopologyStatus {
         transition_id: scheduler_operation_transition_id(&pending.operation),
         region_id: pending.operation.region_id,
         action: scheduler_operation_action(&pending.operation).to_owned(),
         outcome: adminpb::ExecutionTopologyOutcome::Queued as i32,
         publish: adminpb::ExecutionPublishState::NotRequired as i32,
-        last_error: "scheduler operation pending".to_owned(),
+        last_error,
         ..Default::default()
     }
 }
@@ -3564,17 +3572,21 @@ mod tests {
             )
             .unwrap();
         store.enqueue_pending_root_event(&pending_event).unwrap();
-        store
-            .record_pending_scheduler_operation(&coordpb::SchedulerOperation {
-                r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
-                region_id: 1,
-                split_key: b"m".to_vec(),
-                split_child: Some(metapb::RegionDescriptor {
-                    region_id: 2,
-                    ..Default::default()
-                }),
+        let pending_scheduler = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+            region_id: 1,
+            split_key: b"m".to_vec(),
+            split_child: Some(metapb::RegionDescriptor {
+                region_id: 2,
                 ..Default::default()
-            })
+            }),
+            ..Default::default()
+        };
+        store
+            .record_pending_scheduler_operation(&pending_scheduler)
+            .unwrap();
+        store
+            .increment_pending_scheduler_operation_attempts(&pending_scheduler)
             .unwrap();
 
         let service = RaftAdminService::with_admission(NoopAdminStatus, RegionAdmission::default())
@@ -3638,7 +3650,10 @@ mod tests {
             pending.publish,
             adminpb::ExecutionPublishState::NotRequired as i32
         );
-        assert_eq!(pending.last_error, "scheduler operation pending");
+        assert_eq!(
+            pending.last_error,
+            "scheduler operation pending after 1 attempt(s)"
+        );
     }
 
     #[tokio::test]

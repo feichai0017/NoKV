@@ -1434,6 +1434,7 @@ const COORDINATOR_REASON_METADATA: &str = "coordinator_reason";
 const NOKV_ERROR_INFO_DOMAIN: &str = "nokv";
 const NOKV_ERROR_INFO_REASON: &str = "nokv_error";
 const GOOGLE_RPC_ERROR_INFO_TYPE: &str = "type.googleapis.com/google.rpc.ErrorInfo";
+const MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS: u32 = 8;
 
 #[derive(Clone, PartialEq, Message)]
 struct RpcStatusDetails {
@@ -1654,21 +1655,88 @@ async fn retry_pending_scheduler_operations(
                 }
             }
             Ok(SchedulerOperationOutcome::Unsupported { kind, reason }) => {
-                tracing::debug!(
-                    ?kind,
-                    %reason,
-                    "rust raftstore pending scheduler operation still unsupported"
-                );
+                match record_pending_scheduler_operation_attempt(pending_store, &item.operation) {
+                    Ok(attempts) if attempts >= MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS => {
+                        if let Err(err) =
+                            pending_store.delete_pending_scheduler_operation(&item.operation)
+                        {
+                            tracing::debug!(
+                                error = %err,
+                                "rust raftstore exhausted pending scheduler delete failed"
+                            );
+                            return;
+                        }
+                        tracing::warn!(
+                            ?kind,
+                            %reason,
+                            attempts,
+                            "rust raftstore abandoned unsupported pending scheduler operation"
+                        );
+                        continue;
+                    }
+                    Ok(attempts) => {
+                        tracing::debug!(
+                            ?kind,
+                            %reason,
+                            attempts,
+                            "rust raftstore pending scheduler operation still unsupported"
+                        );
+                    }
+                    Err(err) => {
+                        tracing::debug!(
+                            error = %err,
+                            "rust raftstore pending scheduler attempt update failed"
+                        );
+                        return;
+                    }
+                }
             }
             Err(err) => {
-                tracing::debug!(
-                    error = %err,
-                    "rust raftstore pending scheduler operation retry failed"
-                );
+                match record_pending_scheduler_operation_attempt(pending_store, &item.operation) {
+                    Ok(attempts) if attempts >= MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS => {
+                        if let Err(delete_err) =
+                            pending_store.delete_pending_scheduler_operation(&item.operation)
+                        {
+                            tracing::debug!(
+                                error = %delete_err,
+                                "rust raftstore exhausted pending scheduler delete failed"
+                            );
+                            return;
+                        }
+                        tracing::warn!(
+                            error = %err,
+                            attempts,
+                            "rust raftstore abandoned pending scheduler operation after retry limit"
+                        );
+                        continue;
+                    }
+                    Ok(attempts) => {
+                        tracing::debug!(
+                            error = %err,
+                            attempts,
+                            "rust raftstore pending scheduler operation retry failed"
+                        );
+                    }
+                    Err(update_err) => {
+                        tracing::debug!(
+                            error = %update_err,
+                            "rust raftstore pending scheduler attempt update failed"
+                        );
+                    }
+                }
                 return;
             }
         }
     }
+}
+
+fn record_pending_scheduler_operation_attempt(
+    store: &HoltMvccStore,
+    operation: &coordpb::SchedulerOperation,
+) -> Result<u32, String> {
+    store
+        .increment_pending_scheduler_operation_attempts(operation)
+        .map_err(|err| err.to_string())
 }
 
 fn spawn_multi_region_coordinator_heartbeat<E>(
@@ -2721,6 +2789,34 @@ mod tests {
         assert_eq!(captured[0].region_id, 7);
         assert_eq!(captured[0].peer_id, 202);
         handle.abort();
+    }
+
+    #[tokio::test]
+    async fn pending_scheduler_operation_tracks_attempts_and_expires() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let operation = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+            region_id: 7,
+            split_key: b"k".to_vec(),
+            split_child: Some(metapb::RegionDescriptor {
+                region_id: 8,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        store
+            .record_pending_scheduler_operation(&operation)
+            .unwrap();
+
+        retry_pending_scheduler_operations("http://127.0.0.1:1", &store, None).await;
+        let pending = store.pending_scheduler_operations().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].attempts, 1);
+
+        for _ in 1..MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS {
+            retry_pending_scheduler_operations("http://127.0.0.1:1", &store, None).await;
+        }
+        assert!(store.pending_scheduler_operations().unwrap().is_empty());
     }
 
     #[tokio::test]

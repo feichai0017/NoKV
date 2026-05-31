@@ -70,6 +70,15 @@ pub struct BlockedRootEvent {
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingSchedulerOperation {
     pub operation: coordpb::SchedulerOperation,
+    pub attempts: u32,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct PendingSchedulerOperationRecord {
+    #[prost(message, optional, tag = "1")]
+    operation: Option<coordpb::SchedulerOperation>,
+    #[prost(uint32, tag = "2")]
+    attempts: u32,
 }
 
 #[derive(Clone)]
@@ -293,10 +302,38 @@ impl HoltStore {
         operation: &coordpb::SchedulerOperation,
     ) -> Result<()> {
         let key = pending_scheduler_operation_key(operation)?;
-        let mut bytes = Vec::with_capacity(operation.encoded_len());
-        operation.encode(&mut bytes)?;
+        let attempts = self
+            .read_pending_scheduler_operation_record(&key)?
+            .map(|record| record.attempts)
+            .unwrap_or_default();
+        let record = PendingSchedulerOperationRecord {
+            operation: Some(operation.clone()),
+            attempts,
+        };
+        let mut bytes = Vec::with_capacity(record.encoded_len());
+        record.encode(&mut bytes)?;
         self.region_meta()?.put(&key, &bytes)?;
         Ok(())
+    }
+
+    pub fn increment_pending_scheduler_operation_attempts(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<u32> {
+        let key = pending_scheduler_operation_key(operation)?;
+        let attempts = self
+            .read_pending_scheduler_operation_record(&key)?
+            .map(|record| record.attempts)
+            .unwrap_or_default()
+            .saturating_add(1);
+        let record = PendingSchedulerOperationRecord {
+            operation: Some(operation.clone()),
+            attempts,
+        };
+        let mut bytes = Vec::with_capacity(record.encoded_len());
+        record.encode(&mut bytes)?;
+        self.region_meta()?.put(&key, &bytes)?;
+        Ok(attempts)
     }
 
     pub fn delete_pending_scheduler_operation(
@@ -319,8 +356,13 @@ impl HoltStore {
             let RangeEntry::Key { value, .. } = entry else {
                 continue;
             };
+            let record = PendingSchedulerOperationRecord::decode(value.as_slice())?;
+            let operation = record.operation.ok_or_else(|| {
+                Error::InvalidMetadata("pending scheduler operation missing operation".to_owned())
+            })?;
             out.push(PendingSchedulerOperation {
-                operation: coordpb::SchedulerOperation::decode(value.as_slice())?,
+                operation,
+                attempts: record.attempts,
             });
         }
         out.sort_by_key(|pending| {
@@ -340,6 +382,18 @@ impl HoltStore {
             )
         });
         Ok(out)
+    }
+
+    fn read_pending_scheduler_operation_record(
+        &self,
+        key: &[u8],
+    ) -> Result<Option<PendingSchedulerOperationRecord>> {
+        let Some(value) = self.region_meta()?.get(key)? else {
+            return Ok(None);
+        };
+        Ok(Some(PendingSchedulerOperationRecord::decode(
+            value.as_slice(),
+        )?))
     }
 
     pub fn next_pending_root_event_sequence(&self) -> Result<u64> {
@@ -501,6 +555,19 @@ impl HoltMvccStore {
         self.store
             .put_pending_scheduler_operation(operation)
             .and_then(|_| self.store.checkpoint())
+    }
+
+    pub fn increment_pending_scheduler_operation_attempts(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<u32> {
+        let _guard = self
+            .gate
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
+        self.store
+            .increment_pending_scheduler_operation_attempts(operation)
+            .and_then(|attempts| self.store.checkpoint().map(|_| attempts))
     }
 
     pub fn delete_pending_scheduler_operation(
@@ -1933,12 +2000,15 @@ mod tests {
         let pending = reopened.pending_scheduler_operations().unwrap();
         assert_eq!(pending.len(), 2);
         assert_eq!(pending[0].operation, split);
+        assert_eq!(pending[0].attempts, 0);
         assert_eq!(pending[1].operation, merge);
+        assert_eq!(pending[1].attempts, 0);
 
         reopened.delete_pending_scheduler_operation(&split).unwrap();
         let pending = reopened.pending_scheduler_operations().unwrap();
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].operation, merge);
+        assert_eq!(pending[0].attempts, 0);
     }
 
     #[test]
@@ -1979,8 +2049,51 @@ mod tests {
         let pending = store.pending_scheduler_operations().unwrap();
         assert_eq!(pending.len(), 3);
         assert_eq!(pending[0].operation, split_m);
+        assert_eq!(pending[0].attempts, 0);
         assert_eq!(pending[1].operation, split_n);
+        assert_eq!(pending[1].attempts, 0);
         assert_eq!(pending[2].operation, merge);
+        assert_eq!(pending[2].attempts, 0);
+    }
+
+    #[test]
+    fn pending_scheduler_operation_attempts_survive_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let operation = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
+            region_id: 42,
+            source_peer_id: 1,
+            target_peer_id: 2,
+            ..Default::default()
+        };
+        {
+            let store = HoltMvccStore::open_file(dir.path()).unwrap();
+            store
+                .record_pending_scheduler_operation(&operation)
+                .unwrap();
+            assert_eq!(
+                store
+                    .increment_pending_scheduler_operation_attempts(&operation)
+                    .unwrap(),
+                1
+            );
+            store
+                .record_pending_scheduler_operation(&operation)
+                .unwrap();
+            assert_eq!(
+                store
+                    .increment_pending_scheduler_operation_attempts(&operation)
+                    .unwrap(),
+                2
+            );
+            store.checkpoint().unwrap();
+        }
+
+        let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+        let pending = reopened.pending_scheduler_operations().unwrap();
+        assert_eq!(pending.len(), 1);
+        assert_eq!(pending[0].operation, operation);
+        assert_eq!(pending[0].attempts, 2);
     }
 
     #[test]

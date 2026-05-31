@@ -329,12 +329,16 @@ Known gaps:
   are also persisted into the same pending catalog instead of being dropped
   after one heartbeat attempt. The Rust pending topology retry loop now also
   replays pending scheduler operations through the local admin endpoint and
-  removes them from Holt after an applied or permanently invalid result. The
-  Go tagged harness covers the successful coordinator-returned leader-transfer
-  operation across two standalone Rust processes. The pending count is surfaced
-  through `ExecutionStatus.Restart.PendingSchedulerOperationCount`, and each
-  pending operation also appears in `ExecutionStatus.Topology` with a stable
-  transition id. Rust store heartbeat now also matches the Go coordinator
+  removes them from Holt after an applied or permanently invalid result.
+  Failed retries now persist an attempt counter and abandon the operation after
+  the same eight-attempt limit used by the Go store scheduler, while
+  `ExecutionStatus.Topology` exposes the attempt count in the pending
+  diagnostic. The Go tagged harness covers the successful coordinator-returned
+  leader-transfer operation across two standalone Rust processes. The pending
+  count is surfaced through
+  `ExecutionStatus.Restart.PendingSchedulerOperationCount`, and each pending
+  operation also appears in `ExecutionStatus.Topology` with a stable transition
+  id. Rust store heartbeat now also matches the Go coordinator
   client policy:
   it contacts every configured coordinator endpoint and prefers the first
   response that carries scheduler operations over an earlier successful
