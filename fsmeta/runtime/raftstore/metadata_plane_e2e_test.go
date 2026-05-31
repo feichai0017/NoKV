@@ -512,8 +512,9 @@ func TestRustMetadataPlaneRoutesAfterLeaderTransfer(t *testing.T) {
 	binary := buildRustRaftstoreServer(t, ctx, repo)
 	addr1 := freeTCPAddr(t)
 	addr2 := freeTCPAddr(t)
-	peerEndpoints := map[uint64]string{1: addr1, 2: addr2}
-	_ = startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+	addr3 := freeTCPAddr(t)
+	peerEndpoints := map[uint64]string{1: addr1, 2: addr2, 3: addr3}
+	peer1 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
 		addr:          addr1,
 		storeID:       1,
 		peerID:        1,
@@ -527,18 +528,28 @@ func TestRustMetadataPlaneRoutesAfterLeaderTransfer(t *testing.T) {
 		bootstrap:     false,
 		peerEndpoints: peerEndpoints,
 	})
+	peer3 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:          addr3,
+		storeID:       3,
+		peerID:        3,
+		bootstrap:     false,
+		peerEndpoints: peerEndpoints,
+	})
 	waitForRustMetadataPlane(t, ctx, addr1)
 	waitForRustAdmin(t, ctx, addr2)
+	waitForRustAdmin(t, ctx, addr3)
 
 	rootStore := newE2ERootStorage()
 	coordinator := newE2ERootedCoordinator(rootStore)
 	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
 	publishRootEvent(t, coordinator, rootevent.StoreJoined(2))
+	publishRootEvent(t, coordinator, rootevent.StoreJoined(3))
 	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
 	base := testMetadataPlaneDescriptor()
 	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(base))
 	heartbeatRustStoreAs(t, ctx, coordinator, 1, addr1, true)
 	heartbeatRustStoreAs(t, ctx, coordinator, 2, addr2, false)
+	heartbeatRustStoreAs(t, ctx, coordinator, 3, addr3, false)
 
 	admin1, closeAdmin1 := rustAdminClient(t, addr1)
 	defer closeAdmin1()
@@ -557,6 +568,24 @@ func TestRustMetadataPlaneRoutesAfterLeaderTransfer(t *testing.T) {
 	publishRootEvent(t, coordinator, rootevent.PeerAdded(1, 2, 2, target))
 	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
 		return status.GetHosted() && len(status.GetRegion().GetPeers()) == 2
+	})
+	addResp, err = admin1.AddPeer(ctx, &adminpb.AddPeerRequest{
+		RegionId: 1,
+		StoreId:  3,
+		PeerId:   3,
+	})
+	require.NoError(t, err, "peer3 raftstore logs:\n%s", peer3.logs.String())
+	require.Equal(t, uint64(3), addResp.GetRegion().GetEpoch().GetConfVersion())
+	target.Peers = append(target.Peers, metaregion.Peer{StoreID: 3, PeerID: 3})
+	target.Epoch.ConfVersion = addResp.GetRegion().GetEpoch().GetConfVersion()
+	target.Hash = nil
+	target.EnsureHash()
+	publishRootEvent(t, coordinator, rootevent.PeerAdded(1, 3, 3, target))
+	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return status.GetHosted() && len(status.GetRegion().GetPeers()) == 3
+	})
+	waitForRustRegionStatus(t, ctx, addr3, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return status.GetHosted() && len(status.GetRegion().GetPeers()) == 3
 	})
 
 	_, err = admin1.TransferLeader(ctx, &adminpb.TransferLeaderRequest{
@@ -598,6 +627,29 @@ func TestRustMetadataPlaneRoutesAfterLeaderTransfer(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, created.Dentry.Inode, lookup.Dentry.Inode)
 	require.Equal(t, created.Inode.Inode, lookup.Inode.Inode)
+
+	peer1.stop()
+	heartbeatRustStoreAs(t, ctx, coordinator, 2, addr2, true)
+	heartbeatRustStoreAs(t, ctx, coordinator, 3, addr3, false)
+	afterStop, err := runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-old-leader-stop.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 65,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "peer2 raftstore logs:\n%s\npeer3 raftstore logs:\n%s", peer2.logs.String(), peer3.logs.String())
+	afterStopLookup, err := runtime.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-old-leader-stop.json",
+	})
+	require.NoError(t, err)
+	require.Equal(t, afterStop.Dentry.Inode, afterStopLookup.Dentry.Inode)
+	require.Equal(t, afterStop.Inode.Inode, afterStopLookup.Inode.Inode)
 }
 
 func TestRustMetadataPlaneRejectsRemovedPeer(t *testing.T) {
