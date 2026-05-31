@@ -233,6 +233,9 @@ The first slices are intentionally narrow:
   Rust `ResolveLock` now matches Go's key-set boundary: an empty key list is a
   no-op, empty keys inside an explicit list are skipped, and duplicate keys are
   resolved once for count and apply semantics.
+  It also mirrors Go's lingering-lock idempotency boundary: resolving a commit
+  for a start timestamp that is already durably written only clears the stale
+  lock and does not create a second commit version.
   Rust `Prewrite` now rejects unsupported mutation ops like Go Percolator and
   preserves the no-partial-apply boundary when a request mixes valid mutations
   with an unsupported op.
