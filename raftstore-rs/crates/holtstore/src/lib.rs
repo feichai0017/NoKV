@@ -73,12 +73,29 @@ pub struct PendingSchedulerOperation {
     pub attempts: u32,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct BlockedSchedulerOperation {
+    pub operation: coordpb::SchedulerOperation,
+    pub attempts: u32,
+    pub last_error: String,
+}
+
 #[derive(Clone, PartialEq, Message)]
 struct PendingSchedulerOperationRecord {
     #[prost(message, optional, tag = "1")]
     operation: Option<coordpb::SchedulerOperation>,
     #[prost(uint32, tag = "2")]
     attempts: u32,
+}
+
+#[derive(Clone, PartialEq, Message)]
+struct BlockedSchedulerOperationRecord {
+    #[prost(message, optional, tag = "1")]
+    operation: Option<coordpb::SchedulerOperation>,
+    #[prost(uint32, tag = "2")]
+    attempts: u32,
+    #[prost(string, tag = "3")]
+    last_error: String,
 }
 
 #[derive(Clone)]
@@ -384,6 +401,59 @@ impl HoltStore {
         Ok(out)
     }
 
+    pub fn block_pending_scheduler_operation(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+        attempts: u32,
+        last_error: &str,
+    ) -> Result<()> {
+        let pending_key = pending_scheduler_operation_key(operation)?;
+        let blocked_key = blocked_scheduler_operation_key(operation)?;
+        let record = BlockedSchedulerOperationRecord {
+            operation: Some(operation.clone()),
+            attempts,
+            last_error: last_error.to_owned(),
+        };
+        let mut bytes = Vec::with_capacity(record.encoded_len());
+        record.encode(&mut bytes)?;
+        let tree = self.region_meta()?;
+        tree.put(&blocked_key, &bytes)?;
+        tree.delete(&pending_key)?;
+        Ok(())
+    }
+
+    pub fn blocked_scheduler_operations(&self) -> Result<Vec<BlockedSchedulerOperation>> {
+        let mut out = Vec::new();
+        for entry in self
+            .region_meta()?
+            .range()
+            .prefix(BLOCKED_SCHEDULER_OPERATION_PREFIX)
+        {
+            let entry = entry?;
+            let RangeEntry::Key { value, .. } = entry else {
+                continue;
+            };
+            let record = BlockedSchedulerOperationRecord::decode(value.as_slice())?;
+            let operation = record.operation.ok_or_else(|| {
+                Error::InvalidMetadata("blocked scheduler operation missing operation".to_owned())
+            })?;
+            out.push(BlockedSchedulerOperation {
+                operation,
+                attempts: record.attempts,
+                last_error: record.last_error,
+            });
+        }
+        out.sort_by_key(|blocked| {
+            (
+                blocked.operation.region_id,
+                blocked.operation.r#type,
+                blocked.operation.source_region_id,
+                blocked.operation.split_key.clone(),
+            )
+        });
+        Ok(out)
+    }
+
     fn read_pending_scheduler_operation_record(
         &self,
         key: &[u8],
@@ -585,6 +655,25 @@ impl HoltMvccStore {
 
     pub fn pending_scheduler_operations(&self) -> Result<Vec<PendingSchedulerOperation>> {
         self.store.pending_scheduler_operations()
+    }
+
+    pub fn block_pending_scheduler_operation(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+        attempts: u32,
+        last_error: &str,
+    ) -> Result<()> {
+        let _guard = self
+            .gate
+            .lock()
+            .map_err(|_| Error::InvalidMetadata("holt metadata mutex poisoned".to_owned()))?;
+        self.store
+            .block_pending_scheduler_operation(operation, attempts, last_error)
+            .and_then(|_| self.store.checkpoint())
+    }
+
+    pub fn blocked_scheduler_operations(&self) -> Result<Vec<BlockedSchedulerOperation>> {
+        self.store.blocked_scheduler_operations()
     }
 
     fn lock(&self) -> mvcc::Result<std::sync::MutexGuard<'_, ()>> {
@@ -1612,6 +1701,7 @@ const REGION_DESCRIPTOR_PREFIX: &[u8] = b"descriptor/";
 const PENDING_ROOT_EVENT_PREFIX: &[u8] = b"pending-root-event/";
 const BLOCKED_ROOT_EVENT_PREFIX: &[u8] = b"blocked-root-event/";
 const PENDING_SCHEDULER_OPERATION_PREFIX: &[u8] = b"pending-scheduler-operation/";
+const BLOCKED_SCHEDULER_OPERATION_PREFIX: &[u8] = b"blocked-scheduler-operation/";
 
 fn region_descriptor_key(region_id: u64) -> Vec<u8> {
     region_meta_key(REGION_DESCRIPTOR_PREFIX, region_id)
@@ -1666,6 +1756,17 @@ fn pending_scheduler_operation_key(operation: &coordpb::SchedulerOperation) -> R
     key.extend_from_slice(&(kind as i32).to_be_bytes());
     key.extend_from_slice(&operation.region_id.to_be_bytes());
     key.extend_from_slice(&encoded);
+    Ok(key)
+}
+
+fn blocked_scheduler_operation_key(operation: &coordpb::SchedulerOperation) -> Result<Vec<u8>> {
+    let pending = pending_scheduler_operation_key(operation)?;
+    let rest = pending
+        .strip_prefix(PENDING_SCHEDULER_OPERATION_PREFIX)
+        .expect("pending scheduler key has scheduler prefix");
+    let mut key = Vec::with_capacity(BLOCKED_SCHEDULER_OPERATION_PREFIX.len() + rest.len());
+    key.extend_from_slice(BLOCKED_SCHEDULER_OPERATION_PREFIX);
+    key.extend_from_slice(rest);
     Ok(key)
 }
 
@@ -2094,6 +2195,39 @@ mod tests {
         assert_eq!(pending.len(), 1);
         assert_eq!(pending[0].operation, operation);
         assert_eq!(pending[0].attempts, 2);
+    }
+
+    #[test]
+    fn blocked_scheduler_operations_survive_reopen_and_clear_pending() {
+        let dir = tempfile::tempdir().unwrap();
+        let operation = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+            region_id: 42,
+            split_key: b"m".to_vec(),
+            split_child: Some(metapb::RegionDescriptor {
+                region_id: 43,
+                ..Default::default()
+            }),
+            ..Default::default()
+        };
+        {
+            let store = HoltMvccStore::open_file(dir.path()).unwrap();
+            store
+                .record_pending_scheduler_operation(&operation)
+                .unwrap();
+            store
+                .block_pending_scheduler_operation(&operation, 8, "attempt limit reached")
+                .unwrap();
+            store.checkpoint().unwrap();
+        }
+
+        let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+        assert!(reopened.pending_scheduler_operations().unwrap().is_empty());
+        let blocked = reopened.blocked_scheduler_operations().unwrap();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].operation, operation);
+        assert_eq!(blocked[0].attempts, 8);
+        assert_eq!(blocked[0].last_error, "attempt limit reached");
     }
 
     #[test]

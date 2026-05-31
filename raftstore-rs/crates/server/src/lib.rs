@@ -9,7 +9,8 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use nokv_holtstore::{
-    BlockedRootEvent, HoltMvccStore, PendingRootEvent, PendingSchedulerOperation, RegionApplyState,
+    BlockedRootEvent, BlockedSchedulerOperation, HoltMvccStore, PendingRootEvent,
+    PendingSchedulerOperation, RegionApplyState,
 };
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
@@ -142,14 +143,22 @@ impl RestartDiagnosticsProvider for HoltMvccStore {
     }
 
     fn blocked_topology_statuses(&self) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
-        self.blocked_root_events()
+        let mut statuses: Vec<adminpb::ExecutionTopologyStatus> = self
+            .blocked_root_events()
             .map(|events| {
                 events
                     .iter()
                     .map(blocked_root_event_topology_status)
                     .collect()
             })
-            .map_err(|err| Status::internal(err.to_string()))
+            .map_err(|err| Status::internal(err.to_string()))?;
+        statuses.extend(
+            self.blocked_scheduler_operations()
+                .map_err(|err| Status::internal(err.to_string()))?
+                .iter()
+                .map(blocked_scheduler_operation_topology_status),
+        );
+        Ok(statuses)
     }
 
     fn pending_topology_statuses(&self) -> Result<Vec<adminpb::ExecutionTopologyStatus>, Status> {
@@ -241,6 +250,23 @@ fn pending_scheduler_operation_topology_status(
         outcome: adminpb::ExecutionTopologyOutcome::Queued as i32,
         publish: adminpb::ExecutionPublishState::NotRequired as i32,
         last_error,
+        ..Default::default()
+    }
+}
+
+fn blocked_scheduler_operation_topology_status(
+    blocked: &BlockedSchedulerOperation,
+) -> adminpb::ExecutionTopologyStatus {
+    adminpb::ExecutionTopologyStatus {
+        transition_id: scheduler_operation_transition_id(&blocked.operation),
+        region_id: blocked.operation.region_id,
+        action: scheduler_operation_action(&blocked.operation).to_owned(),
+        outcome: adminpb::ExecutionTopologyOutcome::Failed as i32,
+        publish: adminpb::ExecutionPublishState::NotRequired as i32,
+        last_error: format!(
+            "scheduler operation blocked after {} attempt(s): {}",
+            blocked.attempts, blocked.last_error
+        ),
         ..Default::default()
     }
 }
@@ -3588,6 +3614,15 @@ mod tests {
         store
             .increment_pending_scheduler_operation_attempts(&pending_scheduler)
             .unwrap();
+        let blocked_scheduler = coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::MergeRegion as i32,
+            region_id: 1,
+            source_region_id: 2,
+            ..Default::default()
+        };
+        store
+            .block_pending_scheduler_operation(&blocked_scheduler, 8, "attempt limit reached")
+            .unwrap();
 
         let service = RaftAdminService::with_admission(NoopAdminStatus, RegionAdmission::default())
             .with_restart_diagnostics(Arc::new(store));
@@ -3600,7 +3635,7 @@ mod tests {
         assert_eq!(restart.pending_root_event_count, 1);
         assert_eq!(restart.blocked_root_event_count, 1);
         assert_eq!(restart.pending_scheduler_operation_count, 1);
-        assert_eq!(execution.topology.len(), 3);
+        assert_eq!(execution.topology.len(), 4);
         let blocked = execution
             .topology
             .iter()
@@ -3653,6 +3688,26 @@ mod tests {
         assert_eq!(
             pending.last_error,
             "scheduler operation pending after 1 attempt(s)"
+        );
+
+        let blocked_scheduler_status = execution
+            .topology
+            .iter()
+            .find(|status| status.transition_id == "merge:1:2")
+            .unwrap();
+        assert_eq!(blocked_scheduler_status.region_id, 1);
+        assert_eq!(blocked_scheduler_status.action, "range merge");
+        assert_eq!(
+            blocked_scheduler_status.outcome,
+            adminpb::ExecutionTopologyOutcome::Failed as i32
+        );
+        assert_eq!(
+            blocked_scheduler_status.publish,
+            adminpb::ExecutionPublishState::NotRequired as i32
+        );
+        assert_eq!(
+            blocked_scheduler_status.last_error,
+            "scheduler operation blocked after 8 attempt(s): attempt limit reached"
         );
     }
 

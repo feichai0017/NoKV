@@ -1657,12 +1657,14 @@ async fn retry_pending_scheduler_operations(
             Ok(SchedulerOperationOutcome::Unsupported { kind, reason }) => {
                 match record_pending_scheduler_operation_attempt(pending_store, &item.operation) {
                     Ok(attempts) if attempts >= MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS => {
-                        if let Err(err) =
-                            pending_store.delete_pending_scheduler_operation(&item.operation)
-                        {
+                        if let Err(err) = pending_store.block_pending_scheduler_operation(
+                            &item.operation,
+                            attempts,
+                            reason,
+                        ) {
                             tracing::debug!(
                                 error = %err,
-                                "rust raftstore exhausted pending scheduler delete failed"
+                                "rust raftstore exhausted pending scheduler block failed"
                             );
                             return;
                         }
@@ -1694,12 +1696,14 @@ async fn retry_pending_scheduler_operations(
             Err(err) => {
                 match record_pending_scheduler_operation_attempt(pending_store, &item.operation) {
                     Ok(attempts) if attempts >= MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS => {
-                        if let Err(delete_err) =
-                            pending_store.delete_pending_scheduler_operation(&item.operation)
-                        {
+                        if let Err(block_err) = pending_store.block_pending_scheduler_operation(
+                            &item.operation,
+                            attempts,
+                            &err.to_string(),
+                        ) {
                             tracing::debug!(
-                                error = %delete_err,
-                                "rust raftstore exhausted pending scheduler delete failed"
+                                error = %block_err,
+                                "rust raftstore exhausted pending scheduler block failed"
                             );
                             return;
                         }
@@ -2112,7 +2116,11 @@ fn topology_catalog_has_pending_admin_work(store: &HoltMvccStore) -> bool {
         .pending_scheduler_operations()
         .map(|ops| !ops.is_empty())
         .unwrap_or(true);
-    pending || blocked || scheduler
+    let blocked_scheduler = store
+        .blocked_scheduler_operations()
+        .map(|ops| !ops.is_empty())
+        .unwrap_or(true);
+    pending || blocked || scheduler || blocked_scheduler
 }
 
 async fn open_openraft_region<E>(
@@ -2817,6 +2825,17 @@ mod tests {
             retry_pending_scheduler_operations("http://127.0.0.1:1", &store, None).await;
         }
         assert!(store.pending_scheduler_operations().unwrap().is_empty());
+        let blocked = store.blocked_scheduler_operations().unwrap();
+        assert_eq!(blocked.len(), 1);
+        assert_eq!(blocked[0].operation, operation);
+        assert_eq!(
+            blocked[0].attempts,
+            MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS
+        );
+        assert_eq!(
+            blocked[0].last_error,
+            "split execution is not implemented in raftstore-rs yet"
+        );
     }
 
     #[tokio::test]
@@ -3121,6 +3140,48 @@ mod tests {
                 }),
                 ..Default::default()
             })
+            .unwrap();
+        let region = open_openraft_region(
+            identity,
+            addr,
+            dir.path().to_path_buf(),
+            AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        )
+        .await
+        .unwrap();
+
+        let req = coordinator_heartbeat_request(identity, addr, &region, Some(&store));
+
+        assert_eq!(req.region_stats.len(), 1);
+        assert!(req.region_stats[0].pending_admin);
+    }
+
+    #[tokio::test]
+    async fn coordinator_heartbeat_marks_pending_admin_for_blocked_scheduler_operations() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+        let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .block_pending_scheduler_operation(
+                &coordpb::SchedulerOperation {
+                    r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+                    region_id: identity.region_id,
+                    split_key: b"m".to_vec(),
+                    split_child: Some(metapb::RegionDescriptor {
+                        region_id: 8,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+                MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS,
+                "attempt limit reached",
+            )
             .unwrap();
         let region = open_openraft_region(
             identity,
