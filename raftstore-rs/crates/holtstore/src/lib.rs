@@ -1322,6 +1322,12 @@ impl mvcc::KvEngine for HoltMvccStore {
         req: &kvpb::TryAtomicMutateRequest,
     ) -> mvcc::Result<kvpb::TryAtomicMutateResponse> {
         let _guard = self.lock()?;
+        if let Some(error) = validate_commit_version(req.start_version, req.commit_version) {
+            return Ok(kvpb::TryAtomicMutateResponse {
+                error: Some(error),
+                ..Default::default()
+            });
+        }
         if self.atomic_mutate_already_applied(req)? {
             return Ok(kvpb::TryAtomicMutateResponse {
                 applied_keys: req.mutations.len() as u64,
@@ -2552,6 +2558,35 @@ mod tests {
                 .get(&kvpb::GetRequest {
                     key: b"mutation-valid".to_vec(),
                     version: 4,
+                })
+                .unwrap()
+                .not_found
+        );
+    }
+
+    #[test]
+    fn holt_mvcc_atomic_mutate_rejects_invalid_commit_version_before_apply() {
+        let store = HoltMvccStore::open_memory().unwrap();
+
+        let result = store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"invalid-commit-version".to_vec(),
+                    value: b"bad".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 10,
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_abort_contains(result.error, "greater than start version");
+        assert!(
+            store
+                .get(&kvpb::GetRequest {
+                    key: b"invalid-commit-version".to_vec(),
+                    version: 11,
                 })
                 .unwrap()
                 .not_found

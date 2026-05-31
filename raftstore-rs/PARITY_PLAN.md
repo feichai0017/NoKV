@@ -150,7 +150,10 @@ The first slices are intentionally narrow:
   Service-level tests now exercise the transaction RPC
   surface through `Prewrite`, `Commit`, `BatchGet`, `Scan`, `BatchRollback`,
   `ResolveLock`, `CheckTxnStatus`, `TxnHeartBeat`, and
-  `InstallPreparedMVCCEntries`.
+  `InstallPreparedMVCCEntries`. Rust 1PC atomic mutate now validates the same
+  transaction boundaries as Go, including commit timestamp ordering,
+  predicate observation versions, unsupported mutation rejection, idempotent
+  retries, write-conflict fields, and no partial apply on validation failures.
 - The standalone Rust raftstore server now boots `OpenRaftRegion` by default
   for both memory and Holt modes. It uses the internal tonic Raft network
   factory and mounts the internal `RaftTransport` service beside StoreKV and

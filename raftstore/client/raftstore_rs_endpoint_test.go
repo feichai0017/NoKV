@@ -2119,6 +2119,25 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Nil(t, atomicUnsupported.GetRegionError())
 	require.Contains(t, atomicUnsupported.GetResponse().GetError().GetAbort(), "unsupported mutation op")
 
+	atomicInvalidTimestamp, err := raw.TryAtomicMutate(ctx, &kvrpcpb.KvTryAtomicMutateRequest{
+		Context: atomicRequest.GetContext(),
+		Request: &kvrpcpb.TryAtomicMutateRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   []byte("agent/raw-atomic-invalid-ts"),
+				Value: []byte("bad"),
+			}},
+			StartVersion:  207,
+			CommitVersion: 207,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, atomicInvalidTimestamp.GetRegionError())
+	require.Contains(t, atomicInvalidTimestamp.GetResponse().GetError().GetAbort(), "greater than start version")
+	invalidTimestampRead, err := cli.Get(ctx, []byte("agent/raw-atomic-invalid-ts"), 208)
+	require.NoError(t, err)
+	require.True(t, invalidTimestampRead.GetNotFound())
+
 	atomicConflict, err := raw.TryAtomicMutate(ctx, &kvrpcpb.KvTryAtomicMutateRequest{
 		Context: atomicRequest.GetContext(),
 		Request: &kvrpcpb.TryAtomicMutateRequest{
