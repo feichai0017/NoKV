@@ -8,11 +8,13 @@ package raftstore
 import (
 	"bytes"
 	"context"
+	"errors"
 	"net"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sync"
 	"testing"
 	"time"
 
@@ -22,6 +24,7 @@ import (
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
+	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	"github.com/feichai0017/NoKV/fsmeta/contract"
@@ -29,6 +32,8 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/observe"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
+	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
+	rootstate "github.com/feichai0017/NoKV/meta/root/state"
 	"github.com/feichai0017/NoKV/meta/topology"
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -265,6 +270,56 @@ func TestRustMetadataPlanePassesFSMetaContract(t *testing.T) {
 	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
 }
 
+func TestRustMetadataPlaneRouteSurvivesCoordinatorRebuild(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	defer cancel()
+
+	repo := repoRootFromThisFile(t)
+	binary := buildRustRaftstoreServer(t, ctx, repo)
+	addr := freeTCPAddr(t)
+	logs := startRustRaftstoreServer(t, ctx, binary, repo, addr)
+	waitForRustMetadataPlane(t, ctx, addr)
+
+	rootStore := newE2ERootStorage()
+	firstCoordinator := newE2ERootedCoordinator(rootStore)
+	publishRootEvent(t, firstCoordinator, rootevent.StoreJoined(1))
+	publishRootEvent(t, firstCoordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
+	publishRootEvent(t, firstCoordinator, rootevent.RegionBootstrapped(testMetadataPlaneDescriptor()))
+	heartbeatRustStore(t, ctx, firstCoordinator, addr)
+
+	rebuiltCoordinator := newE2ERootedCoordinator(rootStore)
+	require.NoError(t, rebuiltCoordinator.ReloadFromStorage())
+	heartbeatRustStore(t, ctx, rebuiltCoordinator, addr)
+
+	runtime, err := Open(ctx, Options{
+		Coordinator:    rebuiltCoordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
+
+	created, err := runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-coordinator-rebuild.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 23,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
+	lookup, err := runtime.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-coordinator-rebuild.json",
+	})
+	require.NoError(t, err)
+	require.Equal(t, created.Dentry.Inode, lookup.Dentry.Inode)
+	require.Equal(t, created.Inode.Inode, lookup.Inode.Inode)
+}
+
 func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, *bytes.Buffer, *coordserver.Service) {
 	t.Helper()
 	repo := repoRootFromThisFile(t)
@@ -277,20 +332,7 @@ func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, 
 	publishRootEvent(t, coordinator, rootevent.StoreJoined(1))
 	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
 	publishRootEvent(t, coordinator, rootevent.RegionBootstrapped(testMetadataPlaneDescriptor()))
-	heartbeat, err := coordinator.StoreHeartbeat(ctx, &coordpb.StoreHeartbeatRequest{
-		StoreId:         1,
-		ClientAddr:      addr,
-		RaftAddr:        addr,
-		RegionNum:       1,
-		LeaderNum:       1,
-		LeaderRegionIds: []uint64{1},
-		RegionStats: []*coordpb.RegionRuntimeStats{{
-			RegionId:      1,
-			LeaderStoreId: 1,
-		}},
-	})
-	require.NoError(t, err)
-	require.True(t, heartbeat.GetAccepted())
+	heartbeatRustStore(t, ctx, coordinator, addr)
 
 	runtime, err := Open(ctx, Options{
 		Coordinator:    coordinator,
@@ -319,6 +361,28 @@ func containsDentryName(entries []model.DentryAttrPair, name string) bool {
 		}
 	}
 	return false
+}
+
+func newE2ERootedCoordinator(rootStore rootview.RootStorage) *coordserver.Service {
+	return coordserver.NewService(catalog.NewCluster(), idalloc.NewIDAllocator(100), tso.NewAllocator(1000), rootStore)
+}
+
+func heartbeatRustStore(t *testing.T, ctx context.Context, coordinator *coordserver.Service, addr string) {
+	t.Helper()
+	heartbeat, err := coordinator.StoreHeartbeat(ctx, &coordpb.StoreHeartbeatRequest{
+		StoreId:         1,
+		ClientAddr:      addr,
+		RaftAddr:        addr,
+		RegionNum:       1,
+		LeaderNum:       1,
+		LeaderRegionIds: []uint64{1},
+		RegionStats: []*coordpb.RegionRuntimeStats{{
+			RegionId:      1,
+			LeaderStoreId: 1,
+		}},
+	})
+	require.NoError(t, err)
+	require.True(t, heartbeat.GetAccepted())
 }
 
 func repoRootFromThisFile(t *testing.T) string {
@@ -421,4 +485,72 @@ func freeTCPAddr(t *testing.T) string {
 	require.NoError(t, err)
 	defer func() { require.NoError(t, ln.Close()) }()
 	return ln.Addr().String()
+}
+
+type e2eRootStorage struct {
+	mu       sync.Mutex
+	snapshot rootview.Snapshot
+}
+
+func newE2ERootStorage() *e2eRootStorage {
+	return &e2eRootStorage{
+		snapshot: rootview.SnapshotFromRoot(rootstate.Snapshot{}),
+	}
+}
+
+func (s *e2eRootStorage) Load() (rootview.Snapshot, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return rootview.CloneSnapshot(s.snapshot), nil
+}
+
+func (s *e2eRootStorage) AppendRootEvent(_ context.Context, event rootevent.Event) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if event.Kind == rootevent.KindUnknown {
+		return errors.New("invalid root event")
+	}
+	rooted := s.snapshot.RootSnapshot()
+	cursor := rootstate.NextCursor(rooted.State.LastCommitted)
+	rootstate.ApplyEventToSnapshot(&rooted, cursor, event)
+	next := rootview.SnapshotFromRoot(rooted)
+	next.RootToken.Revision = s.snapshot.RootToken.Revision + 1
+	s.snapshot = next
+	return nil
+}
+
+func (s *e2eRootStorage) SaveAllocatorState(_ context.Context, idCurrent, tsCurrent uint64) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if idCurrent > s.snapshot.Allocator.IDCurrent {
+		s.snapshot.Allocator.IDCurrent = idCurrent
+	}
+	if tsCurrent > s.snapshot.Allocator.TSCurrent {
+		s.snapshot.Allocator.TSCurrent = tsCurrent
+	}
+	return nil
+}
+
+func (s *e2eRootStorage) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
+	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, errors.New("grant protocol is not used by fsmeta metadata-plane e2e tests")
+}
+
+func (s *e2eRootStorage) ApplyVisibleAuthority(context.Context, rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
+	return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, errors.New("visible authority protocol is not used by fsmeta metadata-plane e2e tests")
+}
+
+func (s *e2eRootStorage) Refresh() error {
+	return nil
+}
+
+func (s *e2eRootStorage) CanSubmitRootWrites() bool {
+	return true
+}
+
+func (s *e2eRootStorage) LeaderID() uint64 {
+	return 1
+}
+
+func (s *e2eRootStorage) Close() error {
+	return nil
 }
