@@ -13,7 +13,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -298,12 +297,11 @@ func TestExecutorOpenWriteSessionComputesExpiryInsideRetryAttempt(t *testing.T) 
 	sessionKey, err := layout.EncodeSessionKey(testMountIdentity, 22, "writer-1")
 	require.NoError(t, err)
 	runner.mutateErrs = []error{
-		nokverrors.NewTxnKeyError(&kvrpcpb.KeyError{
-			CommitTsExpired: &kvrpcpb.CommitTsExpired{
-				Key:         sessionKey,
-				CommitTs:    2,
-				MinCommitTs: 4,
-			},
+		nokverrors.NewMetadataKeyError(nokverrors.MetadataKeyIssue{
+			Kind:             nokverrors.KindCommitTsExpired,
+			Key:              sessionKey,
+			CommitVersion:    2,
+			MinCommitVersion: 4,
 		}),
 		nil,
 	}

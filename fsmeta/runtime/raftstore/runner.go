@@ -390,14 +390,18 @@ func keyError(err *metadatapb.MetadataKeyError) error {
 		return nil
 	}
 	if retryable := err.GetRetryable(); retryable != "" {
-		return nokverrors.New(nokverrors.KindRetryable, retryable)
+		return nokverrors.NewMetadataKeyError(nokverrors.MetadataKeyIssue{Kind: nokverrors.KindRetryable, Message: retryable})
 	}
 	if abort := err.GetAbort(); abort != "" {
-		return nokverrors.New(nokverrors.KindAborted, abort)
+		return nokverrors.NewMetadataKeyError(nokverrors.MetadataKeyIssue{Kind: nokverrors.KindAborted, Message: abort})
 	}
 	if exists := err.GetAlreadyExists(); exists != nil {
 		msg := fmt.Sprintf("fsmeta/runtime/raftstore: metadata key already exists: %q", exists.GetKey())
-		return nokverrors.New(nokverrors.KindAlreadyExists, msg)
+		return nokverrors.NewMetadataKeyError(nokverrors.MetadataKeyIssue{
+			Kind:    nokverrors.KindAlreadyExists,
+			Key:     cloneBytes(exists.GetKey()),
+			Message: msg,
+		})
 	}
 	if conflict := err.GetWriteConflict(); conflict != nil {
 		msg := fmt.Sprintf(
@@ -408,7 +412,15 @@ func keyError(err *metadatapb.MetadataKeyError) error {
 			conflict.GetConflictTs(),
 			conflict.GetCommitTs(),
 		)
-		return nokverrors.New(nokverrors.KindWriteConflict, msg)
+		return nokverrors.NewMetadataKeyError(nokverrors.MetadataKeyIssue{
+			Kind:            nokverrors.KindWriteConflict,
+			Key:             cloneBytes(conflict.GetKey()),
+			Primary:         cloneBytes(conflict.GetPrimary()),
+			StartVersion:    conflict.GetStartTs(),
+			ConflictVersion: conflict.GetConflictTs(),
+			CommitVersion:   conflict.GetCommitTs(),
+			Message:         msg,
+		})
 	}
 	if locked := err.GetLocked(); locked != nil {
 		msg := fmt.Sprintf(
@@ -418,7 +430,14 @@ func keyError(err *metadatapb.MetadataKeyError) error {
 			locked.GetLockVersion(),
 			locked.GetLockTtl(),
 		)
-		return nokverrors.New(nokverrors.KindLockConflict, msg)
+		return nokverrors.NewMetadataKeyError(nokverrors.MetadataKeyIssue{
+			Kind:        nokverrors.KindLockConflict,
+			Key:         cloneBytes(locked.GetKey()),
+			Primary:     cloneBytes(locked.GetPrimaryLock()),
+			LockVersion: locked.GetLockVersion(),
+			LockTTL:     locked.GetLockTtl(),
+			Message:     msg,
+		})
 	}
 	return nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: empty metadata key error")
 }

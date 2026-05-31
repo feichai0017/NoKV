@@ -9,7 +9,6 @@ import (
 	"fmt"
 	"strings"
 
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	errdetails "google.golang.org/genproto/googleapis/rpc/errdetails"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -197,7 +196,7 @@ func KindOf(err error) Kind {
 	if kind := KindOfGRPCStatus(err); kind != KindUnknown {
 		return kind
 	}
-	if kind := KindOfTxnKeyError(err); kind != KindUnknown {
+	if kind := KindOfMetadataKeyError(err); kind != KindUnknown {
 		return kind
 	}
 	return KindUnknown
@@ -214,11 +213,11 @@ func Retryable(err error) bool {
 	if err == nil {
 		return false
 	}
-	if IsTxnContention(err) {
+	if IsMetadataContention(err) {
 		return true
 	}
 	// RPC boundaries preserve only the stable kind metadata, not the original
-	// KeyErrorCarrier. Keep transaction-contention kinds retryable after gRPC
+	// KeyErrorCarrier. Keep metadata-contention kinds retryable after gRPC
 	// translation so clients do not need to parse diagnostic status text.
 	switch KindOf(err) {
 	case KindCommitTsExpired,
@@ -342,73 +341,88 @@ func kindFromMessage(message string) Kind {
 	return ParseKind(token)
 }
 
-// KeyErrorCarrier is the common surface for structured key errors carried
-// through metadata runtimes.
+// MetadataKeyIssue describes one structured metadata key failure. It is used at
+// fsmeta execution boundaries instead of backend-specific protobuf errors.
+type MetadataKeyIssue struct {
+	Kind             Kind
+	Key              []byte
+	Primary          []byte
+	StartVersion     uint64
+	ConflictVersion  uint64
+	CommitVersion    uint64
+	MinCommitVersion uint64
+	LockVersion      uint64
+	LockTTL          uint64
+	Message          string
+}
+
+// KeyErrorCarrier is the common surface for structured metadata key errors
+// carried through metadata runtimes.
 type KeyErrorCarrier interface {
-	KeyErrors() []*kvrpcpb.KeyError
+	KeyErrors() []MetadataKeyIssue
 }
 
-// TxnKeyError carries structured transaction key errors without flattening
-// their semantic class into text. It is the common error boundary for
-// transaction retries and conflict reporting.
-type TxnKeyError struct {
-	Errors []*kvrpcpb.KeyError
+// MetadataKeyError carries structured metadata key errors without flattening
+// their semantic class into text. It is the common error boundary for metadata
+// commit retries and conflict reporting.
+type MetadataKeyError struct {
+	Issues []MetadataKeyIssue
 }
 
-func NewTxnKeyError(errs ...*kvrpcpb.KeyError) error {
-	filtered := make([]*kvrpcpb.KeyError, 0, len(errs))
-	for _, err := range errs {
-		if err != nil {
-			filtered = append(filtered, err)
+func NewMetadataKeyError(issues ...MetadataKeyIssue) error {
+	filtered := make([]MetadataKeyIssue, 0, len(issues))
+	for _, issue := range issues {
+		if issue.Kind != KindUnknown {
+			filtered = append(filtered, issue)
 		}
 	}
 	if len(filtered) == 0 {
 		return nil
 	}
-	return &TxnKeyError{Errors: filtered}
+	return &MetadataKeyError{Issues: filtered}
 }
 
-func (e *TxnKeyError) Error() string {
+func (e *MetadataKeyError) Error() string {
 	if e == nil {
-		return "nokv: transaction key errors"
+		return "nokv: metadata key errors"
 	}
-	return fmt.Sprintf("nokv: transaction key errors: %+v", e.Errors)
+	return fmt.Sprintf("nokv: metadata key errors: %+v", e.Issues)
 }
 
-func (e *TxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
+func (e *MetadataKeyError) KeyErrors() []MetadataKeyIssue {
 	if e == nil {
 		return nil
 	}
-	return e.Errors
+	return e.Issues
 }
 
-func (e *TxnKeyError) ErrorKind() Kind {
+func (e *MetadataKeyError) ErrorKind() Kind {
 	if e == nil {
 		return KindUnknown
 	}
-	return KindOfTxnKeyErrors(e.Errors)
+	return KindOfMetadataKeyIssues(e.Issues)
 }
 
-func AsTxnKeyError(err error) (*TxnKeyError, bool) {
-	var target *TxnKeyError
+func AsMetadataKeyError(err error) (*MetadataKeyError, bool) {
+	var target *MetadataKeyError
 	if !stderrors.As(err, &target) {
 		return nil, false
 	}
 	return target, true
 }
 
-func KindOfTxnKeyError(err error) Kind {
+func KindOfMetadataKeyError(err error) Kind {
 	var carrier KeyErrorCarrier
 	if !stderrors.As(err, &carrier) {
 		return KindUnknown
 	}
-	return KindOfTxnKeyErrors(carrier.KeyErrors())
+	return KindOfMetadataKeyIssues(carrier.KeyErrors())
 }
 
-func KindOfTxnKeyErrors(errs []*kvrpcpb.KeyError) Kind {
+func KindOfMetadataKeyIssues(issues []MetadataKeyIssue) Kind {
 	kind := KindUnknown
-	for _, keyErr := range errs {
-		next := KindOfKeyError(keyErr)
+	for _, issue := range issues {
+		next := KindOfMetadataKeyIssue(issue)
 		if next == KindUnknown {
 			continue
 		}
@@ -423,25 +437,8 @@ func KindOfTxnKeyErrors(errs []*kvrpcpb.KeyError) Kind {
 	return kind
 }
 
-func KindOfKeyError(err *kvrpcpb.KeyError) Kind {
-	switch {
-	case err == nil:
-		return KindUnknown
-	case err.GetCommitTsExpired() != nil:
-		return KindCommitTsExpired
-	case err.GetLocked() != nil:
-		return KindLockConflict
-	case err.GetWriteConflict() != nil:
-		return KindWriteConflict
-	case err.GetAlreadyExists() != nil:
-		return KindAlreadyExists
-	case err.GetRetryable() != "":
-		return KindRetryable
-	case err.GetAbort() != "":
-		return KindAborted
-	default:
-		return KindUnknown
-	}
+func KindOfMetadataKeyIssue(issue MetadataKeyIssue) Kind {
+	return issue.Kind
 }
 
 func HasKeyErrorKind(err error, kind Kind) bool {
@@ -449,29 +446,29 @@ func HasKeyErrorKind(err error, kind Kind) bool {
 	if !stderrors.As(err, &carrier) {
 		return false
 	}
-	for _, keyErr := range carrier.KeyErrors() {
-		if KindOfKeyError(keyErr) == kind {
+	for _, issue := range carrier.KeyErrors() {
+		if KindOfMetadataKeyIssue(issue) == kind {
 			return true
 		}
 	}
 	return false
 }
 
-// IsTxnContention reports whether every non-empty key error is retryable by
-// obtaining a fresh transaction timestamp. WriteConflict means another
-// transaction committed after this start_ts; Retryable means the transaction
-// protocol could not safely finish this start_ts, but a higher layer that
-// re-reads and re-plans may try again.
+// IsMetadataContention reports whether every non-empty key error is retryable by
+// obtaining a fresh metadata timestamp. WriteConflict means another command
+// committed after this read version; Retryable means the backend could not
+// safely finish this attempt, but a higher layer that re-reads and re-plans may
+// try again.
 // Mixed semantic failures are not contention: retrying them would hide a
 // protocol or user-visible error.
-func IsTxnContention(err error) bool {
+func IsMetadataContention(err error) bool {
 	var carrier KeyErrorCarrier
 	if !stderrors.As(err, &carrier) {
 		return false
 	}
 	seen := false
-	for _, keyErr := range carrier.KeyErrors() {
-		switch KindOfKeyError(keyErr) {
+	for _, issue := range carrier.KeyErrors() {
+		switch KindOfMetadataKeyIssue(issue) {
 		case KindUnknown:
 			continue
 		case KindCommitTsExpired, KindLockConflict, KindWriteConflict, KindRetryable:

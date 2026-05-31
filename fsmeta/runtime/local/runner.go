@@ -13,8 +13,8 @@ import (
 
 	cpebble "github.com/cockroachdb/pebble"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
 const (
@@ -158,7 +158,7 @@ func (r *Runner) CommitMetadata(ctx context.Context, command backend.MetadataCom
 		return backend.MetadataCommitResult{}, err
 	}
 	if command.ReadVersion == 0 {
-		return backend.MetadataCommitResult{}, txnAbort(errInvalidMetadataCommand)
+		return backend.MetadataCommitResult{}, metadataAbort(errInvalidMetadataCommand)
 	}
 	if len(command.Mutations) == 0 {
 		return backend.MetadataCommitResult{
@@ -210,7 +210,7 @@ func (r *Runner) applyMetadataCommand(command backend.MetadataCommand) (uint64, 
 	if len(command.RequestID) != 0 {
 		record, ok, err := r.readMetadataCommandRecordLocked(command.RequestID)
 		if err != nil {
-			return 0, 0, nil, txnRetryable(err)
+			return 0, 0, nil, metadataRetryable(err)
 		}
 		if ok {
 			return record.CommitVersion, record.AppliedMutations, nil, nil
@@ -224,7 +224,7 @@ func (r *Runner) applyMetadataCommand(command backend.MetadataCommand) (uint64, 
 		allowCommitPush = false
 	}
 	if commitVersion <= command.ReadVersion {
-		return 0, 0, nil, txnAbort(errCommitVersion)
+		return 0, 0, nil, metadataAbort(errCommitVersion)
 	}
 	commitVersion = r.reserveMutationCommitVersionLocked(commitVersion, allowCommitPush)
 	if err := r.validateMetadataPredicatesLocked(command.Predicates, command.ReadVersion); err != nil {
@@ -279,7 +279,7 @@ func (r *Runner) completeMetadataApplyLocked(commitVersion uint64) mutationObser
 func (r *Runner) validateMetadataPredicatesLocked(predicates []*backend.Predicate, startVersion uint64) error {
 	for _, pred := range predicates {
 		if pred == nil || len(pred.Key) == 0 {
-			return txnAbort(errInvalidMetadataPredicate)
+			return metadataAbort(errInvalidMetadataPredicate)
 		}
 		readVersion := pred.ReadVersion
 		if readVersion == 0 {
@@ -287,23 +287,23 @@ func (r *Runner) validateMetadataPredicatesLocked(predicates []*backend.Predicat
 		}
 		value, exists, err := r.readValueLocked(pred.Key, readVersion)
 		if err != nil {
-			return txnRetryable(err)
+			return metadataRetryable(err)
 		}
 		switch pred.Kind {
 		case backend.PredicateNotExists:
 			if exists {
-				return txnAlreadyExists(pred.Key)
+				return metadataAlreadyExists(pred.Key)
 			}
 		case backend.PredicateExists:
 			if !exists {
-				return txnAbort(errInvalidMetadataPredicate)
+				return metadataAbort(errInvalidMetadataPredicate)
 			}
 		case backend.PredicateValueEquals:
 			if !exists || !bytes.Equal(value, pred.ExpectedValue) {
-				return txnRetryable(errMetadataPredicateMismatch)
+				return metadataRetryable(errMetadataPredicateMismatch)
 			}
 		default:
-			return txnAbort(errInvalidMetadataPredicate)
+			return metadataAbort(errInvalidMetadataPredicate)
 		}
 	}
 	return nil
@@ -316,38 +316,38 @@ func (r *Runner) validateMutationsLocked(primary []byte, mutations []*backend.Mu
 		}
 		key := mut.Key
 		if len(key) == 0 {
-			return txnAbort(errEmptyMutationKey)
+			return metadataAbort(errEmptyMutationKey)
 		}
 		latest, ok, err := r.latestWriteVersionLocked(key)
 		if err != nil {
-			return txnRetryable(err)
+			return metadataRetryable(err)
 		}
 		if ok && latest > startVersion {
-			return txnCommitExpired(key, commitVersion, latest+1)
+			return metadataCommitExpired(key, commitVersion, latest+1)
 		}
 		if mut.AssertionNotExist {
 			if _, ok, err := r.readValueLocked(key, startVersion); err != nil {
-				return txnRetryable(err)
+				return metadataRetryable(err)
 			} else if ok {
-				return txnAlreadyExists(key)
+				return metadataAlreadyExists(key)
 			}
 			if _, ok, err := r.readValueLocked(key, localMaxVersion); err != nil {
-				return txnRetryable(err)
+				return metadataRetryable(err)
 			} else if ok {
-				return txnAlreadyExists(key)
+				return metadataAlreadyExists(key)
 			}
 		}
 		if bytes.Equal(key, primary) && mut.Op == backend.MutationDelete && !allowMissingDeletePrimary {
 			if _, ok, err := r.readValueLocked(key, localMaxVersion); err != nil {
-				return txnRetryable(err)
+				return metadataRetryable(err)
 			} else if !ok {
-				return txnKeyError(&kvrpcpb.KeyError{Retryable: errKeyNotFound.Error()})
+				return metadataKeyError(nokverrors.MetadataKeyIssue{Kind: nokverrors.KindRetryable, Message: errKeyNotFound.Error()})
 			}
 		}
 		switch mut.Op {
 		case backend.MutationPut, backend.MutationDelete:
 		default:
-			return txnUnsupportedMutation(mut.Op)
+			return metadataUnsupportedMutation(mut.Op)
 		}
 	}
 	return nil
@@ -551,7 +551,7 @@ func writeForMutation(mut *backend.Mutation, startVersion uint64) (localWrite, e
 	case backend.MutationDelete:
 		return localWrite{Kind: localWriteDelete, StartVersion: startVersion}, nil
 	default:
-		return localWrite{}, txnUnsupportedMutation(mut.Op)
+		return localWrite{}, metadataUnsupportedMutation(mut.Op)
 	}
 }
 

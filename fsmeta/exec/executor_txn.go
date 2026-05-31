@@ -150,23 +150,20 @@ func (e *Executor) readVersion(ctx context.Context, snapshotVersion uint64) (uin
 	return e.reserveReadVersion(ctx)
 }
 
-// reserveTxnVersions reserves start_ts plus a speculative commit_ts in one TSO
-// hop. AtomicMutate and in-memory runners use the speculative commit version.
-// A replicated backend may obtain commit_ts after intent placement for a
-// stricter read/write contention boundary.
+// reserveTxnVersions reserves a read version plus a speculative commit version
+// in one TSO hop. Metadata backends may use the speculative commit version or
+// push the actual commit version after observing newer concurrent reads.
 //
-// When a path does use the speculative commit_ts, two server-side safety nets
+// When a path does use the speculative commit version, server-side safety nets
 // keep pre-allocation from silently violating snapshot isolation:
 //
-//  1. When a concurrent reader at start_ts > our commit_ts encounters our
-//     prewrite lock, it pushes lock.MinCommitTs = reader_start_ts + 1 via
-//     backend lock resolution.
-//  2. commitKey rejects the commit with keyErrorCommitTsExpired when
-//     lock.MinCommitTs > commitVersion.
+//  1. Local metadata commits can push the chosen commit version past timestamps
+//     reserved while the command was in flight.
+//  2. Backends reject stale fixed commit versions with KindCommitTsExpired.
 //
 // Together these force a retry-with-fresh-ts under contention: incorrect
-// speculative commit_ts is detected at commit time, never silently accepted.
-// CommitTsExpired is retried transparently by withTxnRetry below.
+// speculative commit versions are detected at commit time, never silently
+// accepted. CommitTsExpired is retried transparently by withTxnRetry below.
 func (e *Executor) reserveTxnVersions(ctx context.Context) (uint64, uint64, error) {
 	startVersion, err := e.reserveTimestampWithRetry(ctx, 2, maxTxnContentionRetries, &e.txnRetriesTotal, &e.txnRetryExhaustedTotal)
 	if err != nil {
@@ -321,8 +318,8 @@ func txnLockTTLMillis(err error) uint64 {
 		return 0
 	}
 	var maxTTL uint64
-	for _, keyErr := range carrier.KeyErrors() {
-		if ttl := keyErr.GetLocked().GetLockTtl(); ttl > maxTTL {
+	for _, issue := range carrier.KeyErrors() {
+		if ttl := issue.LockTTL; ttl > maxTTL {
 			maxTTL = ttl
 		}
 	}
@@ -406,7 +403,7 @@ func translateMutateError(err error) error {
 }
 
 func isRetryableTxnContention(err error) bool {
-	return nokverrors.IsTxnContention(err)
+	return nokverrors.IsMetadataContention(err)
 }
 
 func isRetryableTxnAttempt(err error) bool {

@@ -20,7 +20,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/feichai0017/NoKV/fsmeta/proof"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -169,13 +168,12 @@ func txnLockedError(mount model.MountID, parent model.InodeID, name string) erro
 	if err != nil {
 		panic(err)
 	}
-	return nokverrors.NewTxnKeyError(&kvrpcpb.KeyError{
-		Locked: &kvrpcpb.Locked{
-			PrimaryLock: key,
-			Key:         key,
-			LockVersion: 10,
-			LockTtl:     defaultLockTTL,
-		},
+	return nokverrors.NewMetadataKeyError(nokverrors.MetadataKeyIssue{
+		Kind:        nokverrors.KindLockConflict,
+		Primary:     key,
+		Key:         key,
+		LockVersion: 10,
+		LockTTL:     defaultLockTTL,
 	})
 }
 
@@ -1314,15 +1312,15 @@ func cloneMutation(mut *backend.Mutation) *backend.Mutation {
 	}
 }
 
-type fakeTxnKeyError struct {
-	errors []*kvrpcpb.KeyError
+type fakeMetadataKeyError struct {
+	errors []nokverrors.MetadataKeyIssue
 }
 
-func (e fakeTxnKeyError) Error() string {
-	return "fake txn key error"
+func (e fakeMetadataKeyError) Error() string {
+	return "fake metadata key error"
 }
 
-func (e fakeTxnKeyError) KeyErrors() []*kvrpcpb.KeyError {
+func (e fakeMetadataKeyError) KeyErrors() []nokverrors.MetadataKeyIssue {
 	return e.errors
 }
 

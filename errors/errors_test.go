@@ -8,7 +8,6 @@ import (
 	stderrors "errors"
 	"testing"
 
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -25,14 +24,14 @@ func TestKindWrapPreservesCauseAndKind(t *testing.T) {
 }
 
 func TestTxnContentionRequiresOnlyRetryableTxnConflicts(t *testing.T) {
-	err := NewTxnKeyError(
-		&kvrpcpb.KeyError{Locked: &kvrpcpb.Locked{Key: []byte("a")}},
-		&kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{Key: []byte("b"), CommitTs: 2, MinCommitTs: 3}},
-		&kvrpcpb.KeyError{WriteConflict: &kvrpcpb.WriteConflict{Key: []byte("c"), ConflictTs: 5, StartTs: 3}},
-		&kvrpcpb.KeyError{Retryable: "transaction start timestamp was rolled back"},
+	err := NewMetadataKeyError(
+		MetadataKeyIssue{Kind: KindLockConflict, Key: []byte("a")},
+		MetadataKeyIssue{Kind: KindCommitTsExpired, Key: []byte("b"), CommitVersion: 2, MinCommitVersion: 3},
+		MetadataKeyIssue{Kind: KindWriteConflict, Key: []byte("c"), ConflictVersion: 5, StartVersion: 3},
+		MetadataKeyIssue{Kind: KindRetryable, Message: "transaction start timestamp was rolled back"},
 	)
 
-	require.True(t, IsTxnContention(err))
+	require.True(t, IsMetadataContention(err))
 	require.True(t, Retryable(err))
 	require.True(t, HasKeyErrorKind(err, KindLockConflict))
 	require.True(t, HasKeyErrorKind(err, KindCommitTsExpired))
@@ -40,38 +39,40 @@ func TestTxnContentionRequiresOnlyRetryableTxnConflicts(t *testing.T) {
 	require.True(t, HasKeyErrorKind(err, KindRetryable))
 	require.Equal(t, KindConflict, KindOf(err))
 
-	txnErr, ok := AsTxnKeyError(err)
+	txnErr, ok := AsMetadataKeyError(err)
 	require.True(t, ok)
-	require.Len(t, txnErr.Errors, 4)
+	require.Len(t, txnErr.Issues, 4)
 }
 
 func TestTxnContentionRejectsMixedSemanticFailure(t *testing.T) {
-	err := NewTxnKeyError(
-		&kvrpcpb.KeyError{CommitTsExpired: &kvrpcpb.CommitTsExpired{Key: []byte("a"), CommitTs: 2, MinCommitTs: 3}},
-		&kvrpcpb.KeyError{AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: []byte("b")}},
+	err := NewMetadataKeyError(
+		MetadataKeyIssue{Kind: KindCommitTsExpired, Key: []byte("a"), CommitVersion: 2, MinCommitVersion: 3},
+		MetadataKeyIssue{Kind: KindAlreadyExists, Key: []byte("b")},
 	)
 
-	require.False(t, IsTxnContention(err))
+	require.False(t, IsMetadataContention(err))
 	require.False(t, Retryable(err))
 	require.True(t, HasKeyErrorKind(err, KindAlreadyExists))
 	require.Equal(t, KindConflict, KindOf(err))
 }
 
-func TestNewTxnKeyErrorFiltersNilInputs(t *testing.T) {
-	require.NoError(t, NewTxnKeyError(nil, nil))
-	err := NewTxnKeyError(nil, &kvrpcpb.KeyError{Retryable: "temporary"})
+func TestNewMetadataKeyErrorFiltersZeroIssues(t *testing.T) {
+	require.NoError(t, NewMetadataKeyError(MetadataKeyIssue{}))
+	err := NewMetadataKeyError(MetadataKeyIssue{}, MetadataKeyIssue{Kind: KindRetryable, Message: "temporary"})
 	require.Error(t, err)
 	require.Equal(t, KindRetryable, KindOf(err))
 	require.True(t, Retryable(err))
 }
 
 func TestKeyErrorKindPriority(t *testing.T) {
-	require.Equal(t, KindCommitTsExpired, KindOfKeyError(&kvrpcpb.KeyError{
-		Locked:          &kvrpcpb.Locked{Key: []byte("a")},
-		CommitTsExpired: &kvrpcpb.CommitTsExpired{Key: []byte("a"), CommitTs: 2, MinCommitTs: 3},
+	require.Equal(t, KindCommitTsExpired, KindOfMetadataKeyIssue(MetadataKeyIssue{
+		Kind:             KindCommitTsExpired,
+		Key:              []byte("a"),
+		CommitVersion:    2,
+		MinCommitVersion: 3,
 	}))
-	require.Equal(t, KindRetryable, KindOfKeyError(&kvrpcpb.KeyError{Retryable: "temporary"}))
-	require.Equal(t, KindAborted, KindOfKeyError(&kvrpcpb.KeyError{Abort: "abort"}))
+	require.Equal(t, KindRetryable, KindOfMetadataKeyIssue(MetadataKeyIssue{Kind: KindRetryable, Message: "temporary"}))
+	require.Equal(t, KindAborted, KindOfMetadataKeyIssue(MetadataKeyIssue{Kind: KindAborted, Message: "abort"}))
 }
 
 func TestContextAndGRPCStatusKinds(t *testing.T) {

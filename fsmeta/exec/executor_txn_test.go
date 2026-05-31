@@ -11,7 +11,6 @@ import (
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -62,8 +61,9 @@ func TestExecutorRetriesReadTimestampAuthorityRefresh(t *testing.T) {
 func TestExecutorRetriesLostTxnLock(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
-		fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-			Retryable: "backend: lock not found",
+		fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
+			Kind:    nokverrors.KindRetryable,
+			Message: "backend: lock not found",
 		}}},
 		nil,
 	}
@@ -87,12 +87,11 @@ func TestExecutorRetriesLostTxnLock(t *testing.T) {
 func TestExecutorRetriesCommitTsExpired(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
-		fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-			CommitTsExpired: &kvrpcpb.CommitTsExpired{
-				Key:         []byte("dentry"),
-				CommitTs:    2,
-				MinCommitTs: 5,
-			},
+		fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
+			Kind:             nokverrors.KindCommitTsExpired,
+			Key:              []byte("dentry"),
+			CommitVersion:    2,
+			MinCommitVersion: 5,
 		}}},
 		nil,
 	}
@@ -141,12 +140,11 @@ func TestExecutorRetriesRouteUnavailable(t *testing.T) {
 func TestExecutorRetriesWriteConflict(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
-		fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-			WriteConflict: &kvrpcpb.WriteConflict{
-				Key:        []byte("dentry"),
-				ConflictTs: 4,
-				StartTs:    2,
-			},
+		fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
+			Kind:            nokverrors.KindWriteConflict,
+			Key:             []byte("dentry"),
+			ConflictVersion: 4,
+			StartVersion:    2,
 		}}},
 		nil,
 	}
@@ -170,13 +168,12 @@ func TestExecutorRetriesWriteConflict(t *testing.T) {
 func TestExecutorRetriesLockedTxnContention(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{
-		fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-			Locked: &kvrpcpb.Locked{
-				PrimaryLock: []byte("dentry"),
-				Key:         []byte("dentry"),
-				LockVersion: 2,
-				LockTtl:     defaultLockTTL,
-			},
+		fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
+			Kind:        nokverrors.KindLockConflict,
+			Primary:     []byte("dentry"),
+			Key:         []byte("dentry"),
+			LockVersion: 2,
+			LockTTL:     defaultLockTTL,
 		}}},
 		nil,
 	}
@@ -201,13 +198,12 @@ func TestExecutorRetriesLockedTxnContention(t *testing.T) {
 func TestExecutorRetriesSustainedLiveTxnContention(t *testing.T) {
 	runner := newFakeRunner()
 	for range 9 {
-		runner.mutateErrs = append(runner.mutateErrs, fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-			Locked: &kvrpcpb.Locked{
-				PrimaryLock: []byte("dentry"),
-				Key:         []byte("dentry"),
-				LockVersion: 2,
-				LockTtl:     defaultLockTTL,
-			},
+		runner.mutateErrs = append(runner.mutateErrs, fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
+			Kind:        nokverrors.KindLockConflict,
+			Primary:     []byte("dentry"),
+			Key:         []byte("dentry"),
+			LockVersion: 2,
+			LockTTL:     defaultLockTTL,
 		}}})
 	}
 	runner.mutateErrs = append(runner.mutateErrs, nil)
@@ -230,13 +226,12 @@ func TestExecutorRetriesSustainedLiveTxnContention(t *testing.T) {
 }
 
 func TestTxnContentionRetryPolicyUsesLockTTLAfterFixedAttempts(t *testing.T) {
-	lockErr := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-		Locked: &kvrpcpb.Locked{
-			PrimaryLock: []byte("dentry"),
-			Key:         []byte("dentry"),
-			LockVersion: 2,
-			LockTtl:     uint64(5 * time.Second / time.Millisecond),
-		},
+	lockErr := fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
+		Kind:        nokverrors.KindLockConflict,
+		Primary:     []byte("dentry"),
+		Key:         []byte("dentry"),
+		LockVersion: 2,
+		LockTTL:     uint64(5 * time.Second / time.Millisecond),
 	}}}
 	budget := txnRetryBudget(lockErr, defaultLockTTL)
 
@@ -246,12 +241,11 @@ func TestTxnContentionRetryPolicyUsesLockTTLAfterFixedAttempts(t *testing.T) {
 }
 
 func TestTxnContentionRetryPolicyKeepsCountBoundForNonLockConflicts(t *testing.T) {
-	writeConflictErr := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-		WriteConflict: &kvrpcpb.WriteConflict{
-			Key:        []byte("dentry"),
-			ConflictTs: 4,
-			StartTs:    2,
-		},
+	writeConflictErr := fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
+		Kind:            nokverrors.KindWriteConflict,
+		Key:             []byte("dentry"),
+		ConflictVersion: 4,
+		StartVersion:    2,
 	}}}
 
 	require.Zero(t, txnRetryBudget(writeConflictErr, defaultLockTTL))
@@ -266,8 +260,9 @@ func TestTxnRetryBudgetFallsBackWhenLockDetailsAreUnavailable(t *testing.T) {
 }
 
 func TestTxnRetryBudgetCoversRetryableStartTSLoss(t *testing.T) {
-	err := fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-		Retryable: "backend: lock not found",
+	err := fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
+		Kind:    nokverrors.KindRetryable,
+		Message: "backend: lock not found",
 	}}}
 
 	require.Equal(t, 50*time.Millisecond+txnContentionRetryMaxBackoff, txnRetryBudget(err, 50))

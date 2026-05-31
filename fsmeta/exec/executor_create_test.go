@@ -8,11 +8,11 @@ import (
 	"errors"
 	"testing"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -658,8 +658,9 @@ func TestExecutorCreateRejectsQuotaExceededBeforeMutation(t *testing.T) {
 
 func TestExecutorCreateTranslatesAlreadyExistsConflict(t *testing.T) {
 	runner := newFakeRunner()
-	runner.mutateErr = fakeTxnKeyError{errors: []*kvrpcpb.KeyError{{
-		AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: []byte("dentry")},
+	runner.mutateErr = fakeMetadataKeyError{errors: []nokverrors.MetadataKeyIssue{{
+		Kind: nokverrors.KindAlreadyExists,
+		Key:  []byte("dentry"),
 	}}}
 	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}))
 	require.NoError(t, err)

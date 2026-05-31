@@ -357,7 +357,7 @@ func isIndeterminateHistoryError(err error) bool {
 	if err == nil {
 		return false
 	}
-	if nokverrors.IsTxnContention(err) {
+	if nokverrors.IsMetadataContention(err) {
 		return true
 	}
 	switch nokverrors.KindOf(err) {

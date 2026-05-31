@@ -15,11 +15,11 @@ import (
 	"testing"
 	"time"
 
+	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	"github.com/stretchr/testify/require"
 )
 
@@ -85,14 +85,14 @@ type versionedValue struct {
 }
 
 type versionedTxnError struct {
-	errors []*kvrpcpb.KeyError
+	errors []nokverrors.MetadataKeyIssue
 }
 
 func (e versionedTxnError) Error() string {
 	return "fsmeta/contract: transaction contention"
 }
 
-func (e versionedTxnError) KeyErrors() []*kvrpcpb.KeyError {
+func (e versionedTxnError) KeyErrors() []nokverrors.MetadataKeyIssue {
 	return e.errors
 }
 
@@ -230,12 +230,11 @@ func (r *versionedRunner) applyMutations(primary []byte, mutations []*backend.Mu
 	}
 	for _, mut := range mutations {
 		if latest, ok := r.latestVersionLocked(mut.Key); ok && latest > startVersion {
-			return 0, versionedTxnError{errors: []*kvrpcpb.KeyError{{
-				CommitTsExpired: &kvrpcpb.CommitTsExpired{
-					Key:         append([]byte(nil), mut.Key...),
-					CommitTs:    commitVersion,
-					MinCommitTs: latest + 1,
-				},
+			return 0, versionedTxnError{errors: []nokverrors.MetadataKeyIssue{{
+				Kind:             nokverrors.KindCommitTsExpired,
+				Key:              append([]byte(nil), mut.Key...),
+				CommitVersion:    commitVersion,
+				MinCommitVersion: latest + 1,
 			}}}
 		}
 		if mut.AssertionNotExist {
@@ -389,11 +388,11 @@ func TestVersionedRunnerRejectsStaleConcurrentMutation(t *testing.T) {
 	})
 	require.Error(t, err)
 	var carrier interface {
-		KeyErrors() []*kvrpcpb.KeyError
+		KeyErrors() []nokverrors.MetadataKeyIssue
 	}
 	require.ErrorAs(t, err, &carrier)
 	require.NotEmpty(t, carrier.KeyErrors())
-	require.NotNil(t, carrier.KeyErrors()[0].GetCommitTsExpired())
+	require.Equal(t, nokverrors.KindCommitTsExpired, carrier.KeyErrors()[0].Kind)
 }
 
 func (r *versionedRunner) visibleLatestLocked(key []byte) ([]byte, bool) {

@@ -8,7 +8,6 @@ import (
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 )
 
 var (
@@ -26,40 +25,37 @@ var (
 	errKeyNotFound               = nokverrors.New(nokverrors.KindNotFound, "fsmeta/runtime/local: key not found")
 )
 
-func txnKeyError(errs ...*kvrpcpb.KeyError) error {
-	return nokverrors.NewTxnKeyError(errs...)
+func metadataKeyError(issues ...nokverrors.MetadataKeyIssue) error {
+	return nokverrors.NewMetadataKeyError(issues...)
 }
 
-func txnAbort(err error) error {
+func metadataAbort(err error) error {
 	if err == nil {
 		return nil
 	}
-	return txnKeyError(&kvrpcpb.KeyError{Abort: err.Error()})
+	return metadataKeyError(nokverrors.MetadataKeyIssue{Kind: nokverrors.KindAborted, Message: err.Error()})
 }
 
-func txnRetryable(err error) error {
+func metadataRetryable(err error) error {
 	if err == nil {
 		return nil
 	}
-	return txnKeyError(&kvrpcpb.KeyError{Retryable: err.Error()})
+	return metadataKeyError(nokverrors.MetadataKeyIssue{Kind: nokverrors.KindRetryable, Message: err.Error()})
 }
 
-func txnAlreadyExists(key []byte) error {
-	return txnKeyError(&kvrpcpb.KeyError{
-		AlreadyExists: &kvrpcpb.KeyAlreadyExists{Key: cloneBytes(key)},
+func metadataAlreadyExists(key []byte) error {
+	return metadataKeyError(nokverrors.MetadataKeyIssue{Kind: nokverrors.KindAlreadyExists, Key: cloneBytes(key)})
+}
+
+func metadataCommitExpired(key []byte, commitVersion, minCommitVersion uint64) error {
+	return metadataKeyError(nokverrors.MetadataKeyIssue{
+		Kind:             nokverrors.KindCommitTsExpired,
+		Key:              cloneBytes(key),
+		CommitVersion:    commitVersion,
+		MinCommitVersion: minCommitVersion,
 	})
 }
 
-func txnCommitExpired(key []byte, commitVersion, minCommitVersion uint64) error {
-	return txnKeyError(&kvrpcpb.KeyError{
-		CommitTsExpired: &kvrpcpb.CommitTsExpired{
-			Key:         cloneBytes(key),
-			CommitTs:    commitVersion,
-			MinCommitTs: minCommitVersion,
-		},
-	})
-}
-
-func txnUnsupportedMutation(op backend.MutationOp) error {
-	return txnAbort(fmt.Errorf("%w: %d", errUnsupportedMutation, op))
+func metadataUnsupportedMutation(op backend.MutationOp) error {
+	return metadataAbort(fmt.Errorf("%w: %d", errUnsupportedMutation, op))
 }
