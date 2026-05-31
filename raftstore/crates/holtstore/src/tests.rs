@@ -427,6 +427,25 @@ fn metadata_put_command(
     }
 }
 
+fn metadata_overwrite_command(
+    key: impl Into<Vec<u8>>,
+    value: impl Into<Vec<u8>>,
+    read_version: u64,
+) -> metadatapb::MetadataCommand {
+    let key = key.into();
+    metadatapb::MetadataCommand {
+        request_id: read_version.to_be_bytes().to_vec(),
+        read_version,
+        mutations: vec![metadatapb::MetadataMutation {
+            op: metadatapb::metadata_mutation::Op::Put as i32,
+            key,
+            value: value.into(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 #[test]
 fn holt_metadata_command_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
@@ -504,4 +523,88 @@ fn holt_metadata_snapshot_replaces_write_tree() {
         })
         .unwrap();
     assert_eq!(got.kv.unwrap().value, b"v1");
+}
+
+#[test]
+fn holt_metadata_retention_prunes_only_versions_hidden_by_floor_anchor() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v1", 10), 11)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v2", 20), 21)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v3", 30), 31)
+        .unwrap();
+
+    let pruned = store.prune_metadata_versions(25).unwrap();
+    assert_eq!(pruned.retention_floor, 25);
+    assert_eq!(pruned.retained_anchor_versions, 1);
+    assert_eq!(pruned.pruned_versions, 1);
+
+    let at_floor = store
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"artifact/a".to_vec(),
+            version: 25,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(at_floor.kv.unwrap().value, b"v2");
+    let latest = store
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"artifact/a".to_vec(),
+            version: 31,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(latest.kv.unwrap().value, b"v3");
+
+    let snapshot = store.export_metadata_snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .writes
+            .into_iter()
+            .map(|write| write.commit_version)
+            .collect::<Vec<_>>(),
+        vec![21, 31]
+    );
+}
+
+#[test]
+fn holt_metadata_retention_survives_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    {
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
+        store
+            .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v1", 10), 11)
+            .unwrap();
+        store
+            .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v2", 20), 21)
+            .unwrap();
+        store
+            .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v3", 30), 31)
+            .unwrap();
+        store.prune_metadata_versions(25).unwrap();
+        store.checkpoint().unwrap();
+    }
+
+    let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
+    let at_floor = reopened
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"artifact/a".to_vec(),
+            version: 25,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(at_floor.kv.unwrap().value, b"v2");
+    let snapshot = reopened.export_metadata_snapshot().unwrap();
+    assert_eq!(
+        snapshot
+            .writes
+            .into_iter()
+            .map(|write| write.commit_version)
+            .collect::<Vec<_>>(),
+        vec![21, 31]
+    );
 }

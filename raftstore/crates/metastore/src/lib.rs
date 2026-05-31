@@ -6,6 +6,7 @@
 
 pub mod errors;
 mod metadata;
+mod retention;
 mod snapshot;
 mod store;
 mod types;
@@ -14,8 +15,9 @@ pub mod validation;
 pub use snapshot::{decode_metadata_snapshot, encode_metadata_snapshot};
 pub use store::{scan_limit, scan_read_version, value_is_expired};
 pub use types::{
-    Error, MemoryMetadataStore, MetadataApplyResult, MetadataEngine, MetadataSnapshot,
-    MetadataSnapshotEngine, MetadataSnapshotWrite, Result, ValueKind, VersionedValue,
+    Error, MemoryMetadataStore, MetadataApplyResult, MetadataEngine, MetadataRetentionEngine,
+    MetadataRetentionResult, MetadataSnapshot, MetadataSnapshotEngine, MetadataSnapshotWrite,
+    Result, ValueKind, VersionedValue,
 };
 
 pub use metadata::{metadata_mutation_matches_value, metadata_mutation_value};

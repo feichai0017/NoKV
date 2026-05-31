@@ -97,13 +97,17 @@ go test -count=1 ./meta/root/... ./coordinator/...
 
 Status: strong leader-routed reads, apply-ordered watch streams, and rooted
 snapshot epoch publish/retire are wired. Durable apply-history replay for
-watch resume and snapshot-driven data-plane GC are still remaining work.
+watch resume is wired through the Holt `watch_apply` tree. The data plane now
+has a metadata retention primitive that prunes per-key MVCC history below a
+rooted snapshot floor while keeping the floor anchor version needed by reads at
+or above that floor; the coordinator/root-driven enforcement loop is still
+remaining work.
 
 - Strong reads use leader freshness or a documented ReadIndex-equivalent signal.
 - Follower reads stay disabled until there is an explicit freshness proof.
 - Watch events are emitted after committed apply and carry a stable cursor.
 - Snapshot tokens pin a mount apply frontier.
-- Retention/GC is tied to rooted snapshot epochs, not local best effort.
+- Retention/GC must be driven by rooted snapshot epochs, not local best effort.
 
 Gate:
 

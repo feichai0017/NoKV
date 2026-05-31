@@ -69,6 +69,13 @@ pub struct MetadataApplyResult {
     pub error: Option<metadatapb::MetadataKeyError>,
 }
 
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct MetadataRetentionResult {
+    pub retention_floor: u64,
+    pub pruned_versions: u64,
+    pub retained_anchor_versions: u64,
+}
+
 pub trait MetadataEngine: Clone + Send + Sync + 'static {
     fn get_metadata(
         &self,
@@ -95,4 +102,8 @@ pub trait MetadataEngine: Clone + Send + Sync + 'static {
 pub trait MetadataSnapshotEngine: Clone + Send + Sync + 'static {
     fn export_metadata_snapshot(&self) -> Result<MetadataSnapshot>;
     fn install_metadata_snapshot(&self, snapshot: MetadataSnapshot) -> Result<()>;
+}
+
+pub trait MetadataRetentionEngine: Clone + Send + Sync + 'static {
+    fn prune_metadata_versions(&self, retention_floor: u64) -> Result<MetadataRetentionResult>;
 }

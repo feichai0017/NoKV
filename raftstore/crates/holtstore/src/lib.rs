@@ -6,6 +6,7 @@
 mod codec;
 mod metadata;
 mod region_meta;
+mod retention;
 mod scheduler_state;
 mod snapshot;
 mod store;
