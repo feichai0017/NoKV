@@ -288,6 +288,93 @@ func TestRustMetadataPlaneThreePeerPassesFSMetaContract(t *testing.T) {
 	require.NoError(t, err, "raftstore logs:\n%s", rustClusterLogs(logs))
 }
 
+func TestRustMetadataPlaneAddPeerPublishesRootTopology(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
+	defer cancel()
+
+	repo := repoRootFromThisFile(t)
+	binary := buildRustRaftstoreServer(t, ctx, repo)
+	addr1 := freeTCPAddr(t)
+	addr2 := freeTCPAddr(t)
+	peerEndpoints := map[uint64]string{1: addr1, 2: addr2}
+
+	rootStore := newE2ERootStorage()
+	coordinator := newE2ERootedCoordinator(rootStore)
+	coordinatorAddr := startCoordinatorGRPCServer(t, coordinator)
+
+	peer1 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:                 addr1,
+		storeID:              1,
+		peerID:               1,
+		bootstrap:            true,
+		peerEndpoints:        peerEndpoints,
+		coordinatorAddr:      coordinatorAddr,
+		coordinatorHeartbeat: 100 * time.Millisecond,
+	})
+	peer2 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:                 addr2,
+		storeID:              2,
+		peerID:               2,
+		bootstrap:            false,
+		peerEndpoints:        peerEndpoints,
+		coordinatorAddr:      coordinatorAddr,
+		coordinatorHeartbeat: 100 * time.Millisecond,
+	})
+	waitForRustMetadataPlane(t, ctx, addr1)
+	waitForRustAdmin(t, ctx, addr2)
+	waitForCoordinatorRoute(t, ctx, coordinator, addr1)
+	waitForCoordinatorStore(t, ctx, coordinator, 2, addr2)
+	publishRootEvent(t, coordinator, rootevent.MountRegistered("vol", 1, uint64(model.RootInode), 1))
+
+	admin1, closeAdmin1 := rustAdminClient(t, addr1)
+	defer closeAdmin1()
+	addResp, err := admin1.AddPeer(ctx, &adminpb.AddPeerRequest{
+		RegionId: 1,
+		StoreId:  2,
+		PeerId:   2,
+	})
+	require.NoError(t, err, "peer1 raftstore logs:\n%s\npeer2 raftstore logs:\n%s", peer1.logs.String(), peer2.logs.String())
+	require.Equal(t, uint64(2), addResp.GetRegion().GetEpoch().GetConfVersion())
+	waitForCoordinatorRegionPeers(t, ctx, coordinator, 2, addResp.GetRegion().GetEpoch().GetConfVersion())
+	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return status.GetHosted() && len(status.GetRegion().GetPeers()) == 2
+	})
+
+	rebuiltCoordinator := newE2ERootedCoordinator(rootStore)
+	require.NoError(t, rebuiltCoordinator.ReloadFromStorage())
+	heartbeatRustStoreAs(t, ctx, rebuiltCoordinator, 1, addr1, true)
+	heartbeatRustStoreAs(t, ctx, rebuiltCoordinator, 2, addr2, false)
+	waitForCoordinatorRegionPeers(t, ctx, rebuiltCoordinator, 2, addResp.GetRegion().GetEpoch().GetConfVersion())
+
+	runtime, err := Open(ctx, Options{
+		Coordinator:    rebuiltCoordinator,
+		DialTimeout:    5 * time.Second,
+		BootstrapMount: "vol",
+	})
+	require.NoError(t, err, "peer1 raftstore logs:\n%s\npeer2 raftstore logs:\n%s", peer1.logs.String(), peer2.logs.String())
+	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
+
+	created, err := runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-auto-peer-publish.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 24,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "peer1 raftstore logs:\n%s\npeer2 raftstore logs:\n%s", peer1.logs.String(), peer2.logs.String())
+	lookup, err := runtime.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-auto-peer-publish.json",
+	})
+	require.NoError(t, err)
+	require.Equal(t, created.Dentry.Inode, lookup.Dentry.Inode)
+	require.Equal(t, created.Inode.Inode, lookup.Inode.Inode)
+}
+
 func TestRustMetadataPlaneRouteSurvivesCoordinatorRebuild(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -1455,6 +1542,35 @@ func waitForCoordinatorRoute(t *testing.T, parent context.Context, coordinator *
 			Freshness: coordpb.Freshness_FRESHNESS_STRONG,
 		})
 		return err == nil && !region.GetNotFound() && region.GetRegionDescriptor().GetRegionId() == 1
+	}, 20*time.Second, 100*time.Millisecond)
+}
+
+func waitForCoordinatorStore(t *testing.T, parent context.Context, coordinator *coordserver.Service, storeID uint64, addr string) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		callCtx, cancel := context.WithTimeout(parent, time.Second)
+		defer cancel()
+		store, err := coordinator.GetStore(callCtx, &coordpb.GetStoreRequest{StoreId: storeID})
+		return err == nil && !store.GetNotFound() && store.GetStore().GetClientAddr() == addr
+	}, 20*time.Second, 100*time.Millisecond)
+}
+
+func waitForCoordinatorRegionPeers(t *testing.T, parent context.Context, coordinator *coordserver.Service, peerCount int, confVersion uint64) {
+	t.Helper()
+	require.Eventually(t, func() bool {
+		callCtx, cancel := context.WithTimeout(parent, time.Second)
+		defer cancel()
+		region, err := coordinator.GetRegionByKey(callCtx, &coordpb.GetRegionByKeyRequest{
+			Key:       []byte("__probe"),
+			Freshness: coordpb.Freshness_FRESHNESS_STRONG,
+		})
+		if err != nil || region.GetNotFound() {
+			return false
+		}
+		descriptor := region.GetRegionDescriptor()
+		return descriptor.GetRegionId() == 1 &&
+			len(descriptor.GetPeers()) == peerCount &&
+			descriptor.GetEpoch().GetConfVersion() == confVersion
 	}, 20*time.Second, 100*time.Millisecond)
 }
 
