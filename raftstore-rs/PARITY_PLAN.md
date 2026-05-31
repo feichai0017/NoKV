@@ -204,6 +204,8 @@ The first slices are intentionally narrow:
   Rust `CheckTxnStatus` and `TxnHeartBeat` now also match Go's RPC boundary by
   filling omitted `current_time` fields with service physical time before
   proposing the request.
+  Rust scan responses now mirror Go's region read boundary by trimming returned
+  keys to the admitted region range after local apply.
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.

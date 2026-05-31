@@ -74,6 +74,12 @@ fn txn_heart_beat_request_with_service_time(
     out
 }
 
+fn trim_scan_response_to_region(admission: &RegionAdmission, response: &mut kvpb::ScanResponse) {
+    response
+        .kvs
+        .retain(|kv| admission.key_in_range(kv.key.as_slice()));
+}
+
 /// Persists OpenRaft region metadata into Holt metadata trees.
 #[derive(Clone)]
 pub struct HoltRegionMetadataSink {
@@ -767,10 +773,11 @@ where
             .await?,
             KvScanResponse
         );
-        let response = match cmd {
+        let mut response = match cmd {
             raftpb::response::Cmd::Scan(response) => response,
             _ => return Err(raft_payload_error("scan", "unexpected scan payload")),
         };
+        trim_scan_response_to_region(&admission, &mut response);
         Ok(Response::new(kvpb::KvScanResponse {
             response: Some(response),
             region_error: None,
@@ -3572,6 +3579,63 @@ mod tests {
             .into_inner();
         assert!(response.region_error.unwrap().not_leader.is_some());
         assert!(response.response.is_none());
+    }
+
+    #[tokio::test]
+    async fn scan_trims_keys_outside_region_end() {
+        let store = MvccStore::new();
+        for (key, value) in [
+            (b"ak".as_slice(), b"value-a".as_slice()),
+            (b"bk".as_slice(), b"value-b".as_slice()),
+            (b"mz".as_slice(), b"value-z".as_slice()),
+        ] {
+            store
+                .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: key.to_vec(),
+                        value: value.to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 20,
+                    ..Default::default()
+                })
+                .unwrap();
+        }
+
+        let admission = RegionAdmission {
+            start_key: b"a".to_vec(),
+            end_key: b"m".to_vec(),
+            ..Default::default()
+        };
+        let service = StoreKvService::with_admission(
+            nokv_raftnode::AppliedKvEngine::new(1, store),
+            admission,
+        );
+
+        let scan = service
+            .scan(Request::new(kvpb::KvScanRequest {
+                context: Some(default_context()),
+                request: Some(kvpb::ScanRequest {
+                    start_key: b"a".to_vec(),
+                    limit: 10,
+                    version: 20,
+                    include_start: true,
+                    ..Default::default()
+                }),
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .response
+            .unwrap();
+
+        let keys = scan
+            .kvs
+            .iter()
+            .map(|kv| kv.key.as_slice())
+            .collect::<Vec<_>>();
+        assert_eq!(keys, vec![b"ak".as_slice(), b"bk".as_slice()]);
     }
 
     #[tokio::test]

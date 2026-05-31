@@ -199,7 +199,7 @@ impl RegionAdmission {
         Ok(())
     }
 
-    fn key_in_range(&self, key: &[u8]) -> bool {
+    pub(crate) fn key_in_range(&self, key: &[u8]) -> bool {
         if !self.start_key.is_empty() && key < self.start_key.as_slice() {
             return false;
         }
