@@ -24,9 +24,9 @@ mod transport_codec;
 mod watch;
 
 pub use apply::{
-    AppliedKvEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider, MetadataCommandExecutor,
-    MetadataReadExecutor, PersistentAppliedKvEngine, RegionApplyEngine, RegionDescriptorCatalog,
-    RegionMetadataSink, RegionSnapshotEngine,
+    AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
+    MetadataCommandExecutor, MetadataReadExecutor, PersistentAppliedMetadataEngine,
+    RegionApplyEngine, RegionDescriptorCatalog, RegionMetadataSink, RegionSnapshotEngine,
 };
 pub use error::Error;
 pub use log_codec::{decode_log_entry, encode_log_entry};

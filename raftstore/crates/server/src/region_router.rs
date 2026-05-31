@@ -487,14 +487,14 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct FixedRuntimeEngine {
-        inner: nokv_raftnode::AppliedKvEngine<MvccStore>,
+        inner: nokv_raftnode::AppliedMetadataEngine<MvccStore>,
         runtime: RaftRuntimeStatus,
     }
 
     impl FixedRuntimeEngine {
         fn leader(region_id: u64, local_peer_id: u64) -> Self {
             Self {
-                inner: nokv_raftnode::AppliedKvEngine::new(region_id, MvccStore::new()),
+                inner: nokv_raftnode::AppliedMetadataEngine::new(region_id, MvccStore::new()),
                 runtime: RaftRuntimeStatus {
                     local_peer_id,
                     leader_peer_id: local_peer_id,

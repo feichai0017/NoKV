@@ -17,15 +17,15 @@ use openraft::{
 use tokio::sync::broadcast;
 
 use crate::{
-    decode_metadata_response, AppliedKvEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
-    ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode, Error,
-    MetadataCommandExecutor, MetadataReadExecutor, NodeId, Proposal, RaftStoreConfig, RegionId,
-    RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
+    decode_metadata_response, AppliedMetadataEngine, AppliedProposal, ApplyStatus,
+    ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode,
+    Error, MetadataCommandExecutor, MetadataReadExecutor, NodeId, Proposal, RaftStoreConfig,
+    RegionId, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
     RegionTrafficSnapshot,
 };
 
 #[derive(Clone)]
-pub struct OpenRaftRegion<E = AppliedKvEngine<MvccStore>> {
+pub struct OpenRaftRegion<E = AppliedMetadataEngine<MvccStore>> {
     node_id: NodeId,
     raft: Raft<RaftStoreConfig>,
     apply_engine: E,

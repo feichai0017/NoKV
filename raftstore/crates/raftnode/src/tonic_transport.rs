@@ -503,7 +503,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        AppliedKvEngine, ApplyStatusProvider, MetadataCommandExecutor, MetadataReadExecutor,
+        AppliedMetadataEngine, ApplyStatusProvider, MetadataCommandExecutor, MetadataReadExecutor,
         OpenRaftRegion, Proposal, RegionLogStorage, RegionStateMachine, SegmentedEntryLog,
     };
 
@@ -527,7 +527,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
             let log_store = RegionLogStorage::new(log);
-            let engine = AppliedKvEngine::new(7, MvccStore::new());
+            let engine = AppliedMetadataEngine::new(7, MvccStore::new());
             let region = OpenRaftRegion::open_with_network(
                 node_id,
                 7,
@@ -623,7 +623,7 @@ mod tests {
         let leader_dir = tempfile::tempdir().unwrap();
         let leader_log = SegmentedEntryLog::open(7, leader_dir.path()).unwrap();
         let leader_log_store = RegionLogStorage::new(leader_log);
-        let leader_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let leader_engine = AppliedMetadataEngine::new(7, MvccStore::new());
         let leader = OpenRaftRegion::open_with_network_for_test(
             1,
             7,
@@ -713,7 +713,7 @@ mod tests {
 
         let joining_dir = tempfile::tempdir().unwrap();
         let joining_log = SegmentedEntryLog::open(7, joining_dir.path()).unwrap();
-        let joining_engine = AppliedKvEngine::new(7, MvccStore::new());
+        let joining_engine = AppliedMetadataEngine::new(7, MvccStore::new());
         let joining = OpenRaftRegion::open_with_network_for_test(
             2,
             7,

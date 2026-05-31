@@ -276,7 +276,7 @@ mod tests {
 
     use super::*;
     use crate::{
-        AppliedKvEngine, ApplyStatusProvider, MetadataCommandExecutor, MetadataReadExecutor,
+        AppliedMetadataEngine, ApplyStatusProvider, MetadataCommandExecutor, MetadataReadExecutor,
         OpenRaftRegion, RegionLogStorage, RegionStateMachine,
     };
 
@@ -291,7 +291,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let log = crate::SegmentedEntryLog::open(7, dir.path()).unwrap();
             let log_store = RegionLogStorage::new(log);
-            let engine = AppliedKvEngine::new(7, MvccStore::new());
+            let engine = AppliedMetadataEngine::new(7, MvccStore::new());
             let region = OpenRaftRegion::open_with_network(
                 node_id,
                 7,

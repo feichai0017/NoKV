@@ -4,7 +4,7 @@ use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
-use nokv_raftnode::AppliedKvEngine;
+use nokv_raftnode::AppliedMetadataEngine;
 use nokv_raftstore_server::{
     root_event_transition_id, EmptyTopologyPublisher, MultiRegionMetadataPlaneService,
     MultiRegionRaftAdminService, PeerEndpointCatalog,
@@ -655,7 +655,7 @@ async fn non_bootstrap_start_opens_joining_peer_without_initializing_membership(
         identity,
         "127.0.0.1:0",
         dir.path().to_path_buf(),
-        AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
     )
     .await
     .unwrap();
@@ -763,7 +763,7 @@ async fn coordinator_heartbeat_reports_local_leader_region() {
         identity,
         &addr.to_string(),
         dir.path().to_path_buf(),
-        AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
     )
     .await
     .unwrap();
@@ -797,7 +797,7 @@ async fn coordinator_heartbeat_uses_advertised_dns_addr() {
         identity,
         advertised_addr,
         dir.path().to_path_buf(),
-        AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
     )
     .await
     .unwrap();
@@ -829,7 +829,7 @@ async fn coordinator_heartbeat_reports_multiple_local_regions_once() {
         identity1,
         &addr.to_string(),
         dir.path().join("region-7"),
-        AppliedKvEngine::new(identity1.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity1.region_id, MvccStore::new()),
     )
     .await
     .unwrap();
@@ -837,7 +837,7 @@ async fn coordinator_heartbeat_reports_multiple_local_regions_once() {
         identity2,
         &addr.to_string(),
         dir.path().join("region-8"),
-        AppliedKvEngine::new(identity2.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity2.region_id, MvccStore::new()),
     )
     .await
     .unwrap();
@@ -880,7 +880,7 @@ async fn coordinator_heartbeat_reads_regions_inserted_after_registry_creation() 
         identity1,
         &addr.to_string(),
         dir.path().join("region-7"),
-        AppliedKvEngine::new(identity1.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity1.region_id, MvccStore::new()),
     )
     .await
     .unwrap();
@@ -888,7 +888,7 @@ async fn coordinator_heartbeat_reads_regions_inserted_after_registry_creation() 
         identity2,
         &addr.to_string(),
         dir.path().join("region-8"),
-        AppliedKvEngine::new(identity2.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity2.region_id, MvccStore::new()),
     )
     .await
     .unwrap();
@@ -934,7 +934,7 @@ async fn coordinator_heartbeat_marks_pending_admin_for_unpublished_root_events()
         identity,
         &addr.to_string(),
         dir.path().to_path_buf(),
-        AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
     )
     .await
     .unwrap();
@@ -972,7 +972,7 @@ async fn coordinator_heartbeat_marks_pending_admin_for_pending_scheduler_operati
         identity,
         &addr.to_string(),
         dir.path().to_path_buf(),
-        AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
     )
     .await
     .unwrap();
@@ -1014,7 +1014,7 @@ async fn coordinator_heartbeat_marks_pending_admin_for_blocked_scheduler_operati
         identity,
         &addr.to_string(),
         dir.path().to_path_buf(),
-        AppliedKvEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
     )
     .await
     .unwrap();

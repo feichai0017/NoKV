@@ -11,9 +11,9 @@ use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
-    AppliedKvEngine, BasicNode, OpenRaftRegion, PersistentAppliedKvEngine, RegionDescriptorCatalog,
-    RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog,
-    TonicRaftNetworkFactory,
+    AppliedMetadataEngine, BasicNode, OpenRaftRegion, PersistentAppliedMetadataEngine,
+    RegionDescriptorCatalog, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine,
+    SegmentedEntryLog, TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
     apply_status_from_holt, openraft_metadata_service_pair, serve_with_metadata_region_services,
@@ -106,7 +106,8 @@ impl<E> HostedRegionRegistry<E> {
     }
 }
 
-pub(crate) type HoltApplyEngine = PersistentAppliedKvEngine<HoltMvccStore, HoltRegionMetadataSink>;
+pub(crate) type HoltApplyEngine =
+    PersistentAppliedMetadataEngine<HoltMvccStore, HoltRegionMetadataSink>;
 pub(crate) type HoltRegion = OpenRaftRegion<HoltApplyEngine>;
 
 #[derive(Clone)]
@@ -513,7 +514,7 @@ impl HoltRangeController {
                 term: 1,
                 applied_index: 0,
             });
-        let engine = AppliedKvEngine::with_status(apply_status, self.mvcc.clone());
+        let engine = AppliedMetadataEngine::with_status(apply_status, self.mvcc.clone());
         engine
             .set_region_descriptor_catalog(Arc::new(HoltRegionDescriptorCatalog::new(
                 self.mvcc.clone(),
@@ -522,8 +523,10 @@ impl HoltRangeController {
         engine
             .set_region_descriptor(descriptor.clone())
             .map_err(|err| tonic::Status::internal(err.to_string()))?;
-        let engine =
-            PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(self.mvcc.clone()));
+        let engine = PersistentAppliedMetadataEngine::new(
+            engine,
+            HoltRegionMetadataSink::new(self.mvcc.clone()),
+        );
         let log_dir = region_log_dir(
             self.persistent_root.join("raftlog"),
             identity.region_id,
@@ -956,13 +959,13 @@ pub(crate) async fn serve_holt_regions(
                 term: 1,
                 applied_index: 0,
             });
-        let engine = AppliedKvEngine::with_status(apply_status, mvcc.clone());
+        let engine = AppliedMetadataEngine::with_status(apply_status, mvcc.clone());
         engine.set_region_descriptor_catalog(Arc::new(HoltRegionDescriptorCatalog::new(
             mvcc.clone(),
         )))?;
         engine.set_region_descriptor(descriptor.clone())?;
         let engine =
-            PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
+            PersistentAppliedMetadataEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
         let log_dir =
             raft_log_dir_for_region(Some(&persistent_root), identity, multi_region, temp_log_dir)?;
         let region = open_openraft_region(identity, &advertised_addr, log_dir, engine).await?;
@@ -1175,7 +1178,7 @@ pub(crate) async fn serve_memory_regions(
     let multi_region = identities.len() > 1;
 
     for identity in identities.iter().copied() {
-        let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
+        let engine = AppliedMetadataEngine::new(identity.region_id, MvccStore::new());
         let descriptor =
             default_region_descriptor_with_range(identity, region_ranges.get(identity.region_id));
         engine.set_region_descriptor(descriptor.clone())?;

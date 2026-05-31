@@ -105,7 +105,7 @@ pub trait RegionDescriptorCatalog: std::fmt::Debug + Send + Sync + 'static {
 }
 
 #[derive(Debug)]
-struct AppliedKvInner<E> {
+struct AppliedMetadataInner<E> {
     region_id: RegionId,
     term: AtomicU64,
     applied_index: AtomicU64,
@@ -122,27 +122,27 @@ struct AppliedKvInner<E> {
 /// is complete. Reads go through the current state-machine view; writes advance
 /// a monotonically increasing applied index under the region apply mutex.
 #[derive(Debug, Clone)]
-pub struct AppliedKvEngine<E = MvccStore> {
-    inner: Arc<AppliedKvInner<E>>,
+pub struct AppliedMetadataEngine<E = MvccStore> {
+    inner: Arc<AppliedMetadataInner<E>>,
 }
 
 #[derive(Debug, Clone)]
-pub struct PersistentAppliedKvEngine<E, S> {
-    engine: AppliedKvEngine<E>,
+pub struct PersistentAppliedMetadataEngine<E, S> {
+    engine: AppliedMetadataEngine<E>,
     sink: S,
 }
 
-impl<E, S> PersistentAppliedKvEngine<E, S> {
-    pub fn new(engine: AppliedKvEngine<E>, sink: S) -> Self {
+impl<E, S> PersistentAppliedMetadataEngine<E, S> {
+    pub fn new(engine: AppliedMetadataEngine<E>, sink: S) -> Self {
         Self { engine, sink }
     }
 
-    pub fn inner(&self) -> &AppliedKvEngine<E> {
+    pub fn inner(&self) -> &AppliedMetadataEngine<E> {
         &self.engine
     }
 }
 
-impl<E> AppliedKvEngine<E> {
+impl<E> AppliedMetadataEngine<E> {
     pub fn new(region_id: RegionId, engine: E) -> Self {
         Self::with_status(
             ApplyStatus {
@@ -156,7 +156,7 @@ impl<E> AppliedKvEngine<E> {
 
     pub fn with_status(status: ApplyStatus, engine: E) -> Self {
         Self {
-            inner: Arc::new(AppliedKvInner {
+            inner: Arc::new(AppliedMetadataInner {
                 region_id: status.region_id,
                 term: AtomicU64::new(status.term),
                 applied_index: AtomicU64::new(status.applied_index),
@@ -356,7 +356,7 @@ impl<E> AppliedKvEngine<E> {
     }
 }
 
-impl<E> ApplyStatusProvider for AppliedKvEngine<E>
+impl<E> ApplyStatusProvider for AppliedMetadataEngine<E>
 where
     E: Clone + Send + Sync + 'static,
 {
@@ -365,7 +365,7 @@ where
     }
 }
 
-impl<E, S> ApplyStatusProvider for PersistentAppliedKvEngine<E, S>
+impl<E, S> ApplyStatusProvider for PersistentAppliedMetadataEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
     S: RegionMetadataSink,
@@ -375,7 +375,7 @@ where
     }
 }
 
-impl<E> RegionTrafficProvider for AppliedKvEngine<E>
+impl<E> RegionTrafficProvider for AppliedMetadataEngine<E>
 where
     E: Clone + Send + Sync + 'static,
 {
@@ -384,7 +384,7 @@ where
     }
 }
 
-impl<E, S> RegionTrafficProvider for PersistentAppliedKvEngine<E, S>
+impl<E, S> RegionTrafficProvider for PersistentAppliedMetadataEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
     S: RegionMetadataSink,
@@ -394,7 +394,7 @@ where
     }
 }
 
-impl<E> ApplyWatchProvider for AppliedKvEngine<E>
+impl<E> ApplyWatchProvider for AppliedMetadataEngine<E>
 where
     E: Clone + Send + Sync + 'static,
 {
@@ -410,7 +410,7 @@ where
     }
 }
 
-impl<E, S> ApplyWatchProvider for PersistentAppliedKvEngine<E, S>
+impl<E, S> ApplyWatchProvider for PersistentAppliedMetadataEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
     S: RegionMetadataSink,
@@ -434,7 +434,7 @@ where
     }
 }
 
-impl<E> AppliedKvEngine<E>
+impl<E> AppliedMetadataEngine<E>
 where
     E: MetadataEngine,
 {
@@ -830,7 +830,7 @@ where
     }
 }
 
-impl<E> MetadataCommandExecutor for AppliedKvEngine<E>
+impl<E> MetadataCommandExecutor for AppliedMetadataEngine<E>
 where
     E: MetadataEngine,
 {
@@ -844,7 +844,7 @@ where
     }
 }
 
-impl<E> MetadataReadExecutor for AppliedKvEngine<E>
+impl<E> MetadataReadExecutor for AppliedMetadataEngine<E>
 where
     E: MetadataEngine,
 {
@@ -874,7 +874,7 @@ where
     }
 }
 
-impl<E, S> MetadataCommandExecutor for PersistentAppliedKvEngine<E, S>
+impl<E, S> MetadataCommandExecutor for PersistentAppliedMetadataEngine<E, S>
 where
     E: MetadataEngine,
     S: RegionMetadataSink,
@@ -894,7 +894,7 @@ where
     }
 }
 
-impl<E, S> MetadataReadExecutor for PersistentAppliedKvEngine<E, S>
+impl<E, S> MetadataReadExecutor for PersistentAppliedMetadataEngine<E, S>
 where
     E: MetadataEngine,
     S: RegionMetadataSink,
@@ -925,7 +925,7 @@ where
     }
 }
 
-impl<E, S> PersistentAppliedKvEngine<E, S>
+impl<E, S> PersistentAppliedMetadataEngine<E, S>
 where
     E: MetadataEngine,
     S: RegionMetadataSink,
@@ -968,12 +968,12 @@ where
     }
 }
 
-impl<E> RegionSnapshotEngine for AppliedKvEngine<E>
+impl<E> RegionSnapshotEngine for AppliedMetadataEngine<E>
 where
     E: MetadataEngine + MvccSnapshotEngine,
 {
     fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
-        AppliedKvEngine::region_descriptor(self)
+        AppliedMetadataEngine::region_descriptor(self)
     }
 
     fn export_region_snapshot(&self) -> nokv_mvcc::Result<Vec<u8>> {
@@ -1042,7 +1042,7 @@ where
     }
 }
 
-impl<E, S> RegionSnapshotEngine for PersistentAppliedKvEngine<E, S>
+impl<E, S> RegionSnapshotEngine for PersistentAppliedMetadataEngine<E, S>
 where
     E: MetadataEngine + MvccSnapshotEngine,
     S: RegionMetadataSink,
@@ -1065,7 +1065,7 @@ where
     }
 }
 
-impl<E> RegionApplyEngine for AppliedKvEngine<E>
+impl<E> RegionApplyEngine for AppliedMetadataEngine<E>
 where
     E: MetadataEngine,
 {
@@ -1077,7 +1077,7 @@ where
     }
 }
 
-impl<E, S> RegionApplyEngine for PersistentAppliedKvEngine<E, S>
+impl<E, S> RegionApplyEngine for PersistentAppliedMetadataEngine<E, S>
 where
     E: MetadataEngine,
     S: RegionMetadataSink,

@@ -4,8 +4,8 @@ use std::sync::{Arc, Mutex};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::{
-    AppliedKvEngine, ApplyStatusProvider, BasicNode, PersistentAppliedKvEngine, RegionMetadataSink,
-    RegionSnapshotEngine,
+    AppliedMetadataEngine, ApplyStatusProvider, BasicNode, PersistentAppliedMetadataEngine,
+    RegionMetadataSink, RegionSnapshotEngine,
 };
 use tonic::{Request, Response, Status};
 
@@ -290,7 +290,7 @@ where
 }
 
 #[tonic::async_trait]
-impl<E> RaftMembershipAdmin for AppliedKvEngine<E>
+impl<E> RaftMembershipAdmin for AppliedMetadataEngine<E>
 where
     E: Clone + Send + Sync + 'static,
 {
@@ -314,7 +314,7 @@ where
     }
 }
 
-impl<E> RaftRuntimeStatusProvider for AppliedKvEngine<E>
+impl<E> RaftRuntimeStatusProvider for AppliedMetadataEngine<E>
 where
     E: Clone + Send + Sync + 'static,
 {
@@ -329,17 +329,17 @@ where
     }
 }
 
-impl<E> AppliedRegionDescriptorProvider for AppliedKvEngine<E>
+impl<E> AppliedRegionDescriptorProvider for AppliedMetadataEngine<E>
 where
     E: Clone + Send + Sync + 'static,
 {
     fn applied_region_descriptor(&self) -> Result<Option<metapb::RegionDescriptor>, Status> {
-        AppliedKvEngine::region_descriptor(self).map_err(internal_error)
+        AppliedMetadataEngine::region_descriptor(self).map_err(internal_error)
     }
 }
 
 #[tonic::async_trait]
-impl<E, S> RaftMembershipAdmin for PersistentAppliedKvEngine<E, S>
+impl<E, S> RaftMembershipAdmin for PersistentAppliedMetadataEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
     S: RegionMetadataSink,
@@ -364,7 +364,7 @@ where
     }
 }
 
-impl<E, S> RaftRuntimeStatusProvider for PersistentAppliedKvEngine<E, S>
+impl<E, S> RaftRuntimeStatusProvider for PersistentAppliedMetadataEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
     S: RegionMetadataSink,
@@ -380,7 +380,7 @@ where
     }
 }
 
-impl<E, S> AppliedRegionDescriptorProvider for PersistentAppliedKvEngine<E, S>
+impl<E, S> AppliedRegionDescriptorProvider for PersistentAppliedMetadataEngine<E, S>
 where
     E: Clone + Send + Sync + 'static,
     S: RegionMetadataSink,
