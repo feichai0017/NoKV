@@ -6,6 +6,7 @@ package raftstore
 import (
 	"context"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
@@ -189,7 +190,7 @@ func TestRunnerCommitMetadataRetriesAfterNotLeaderRouteError(t *testing.T) {
 			Client: secondClient,
 		},
 	}
-	runner, err := NewRunner(routes, NewMonotonicTimestampSource(1))
+	runner, err := NewRunner(routes, newMonotonicTimestampSource(1))
 	require.NoError(t, err)
 
 	result, err := runner.CommitMetadata(context.Background(), backend.MetadataCommand{
@@ -655,12 +656,53 @@ func TestSnapshotPublisherPublishesAndRetiresRootEvents(t *testing.T) {
 
 func newTestRunner(t *testing.T, client metadatapb.MetadataPlaneClient) *Runner {
 	t.Helper()
-	runner, err := NewRunner(StaticRouteProvider{
+	runner, err := NewRunner(staticRouteProvider{
 		Context: &metadatapb.MetadataContext{RegionId: 7},
 		Client:  client,
-	}, NewMonotonicTimestampSource(1))
+	}, newMonotonicTimestampSource(1))
 	require.NoError(t, err)
 	return runner
+}
+
+type staticRouteProvider struct {
+	Context *metadatapb.MetadataContext
+	Client  metadatapb.MetadataPlaneClient
+}
+
+func (p staticRouteProvider) RouteForKey(context.Context, []byte) (MetadataRoute, error) {
+	if p.Context == nil || p.Context.GetRegionId() == 0 {
+		return MetadataRoute{}, errRouteProviderRequired
+	}
+	if p.Client == nil {
+		return MetadataRoute{}, errClientRequired
+	}
+	return MetadataRoute{
+		Context: cloneMetadataContext(p.Context),
+		Client:  p.Client,
+	}, nil
+}
+
+type monotonicTimestampSource struct {
+	mu   sync.Mutex
+	next uint64
+}
+
+func newMonotonicTimestampSource(first uint64) *monotonicTimestampSource {
+	if first == 0 {
+		first = 1
+	}
+	return &monotonicTimestampSource{next: first}
+}
+
+func (s *monotonicTimestampSource) ReserveTimestamp(_ context.Context, count uint64) (uint64, error) {
+	if count == 0 {
+		return 0, errInvalidMetadataCommand
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	first := s.next
+	s.next += count
+	return first, nil
 }
 
 type fakeMetadataPlaneClient struct {

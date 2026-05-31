@@ -6,7 +6,6 @@ package raftstore
 import (
 	"context"
 	"fmt"
-	"sync"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
@@ -16,8 +15,7 @@ import (
 
 const maxRouteAttempts = 3
 
-// TimestampSource supplies metadata MVCC timestamps. Production wiring should
-// bind this to coordinator TSO; tests may use MonotonicTimestampSource.
+// TimestampSource supplies metadata MVCC timestamps.
 type TimestampSource interface {
 	ReserveTimestamp(context.Context, uint64) (uint64, error)
 }
@@ -37,50 +35,6 @@ type RouteProvider interface {
 
 type routeErrorObserver interface {
 	ObserveRegionError(context.Context, []byte, MetadataRoute, *errorpb.RegionError)
-}
-
-// StaticRouteProvider is a single-region route provider used by tests and
-// local experiments before coordinator-backed routing is wired in.
-type StaticRouteProvider struct {
-	Context *metadatapb.MetadataContext
-	Client  metadatapb.MetadataPlaneClient
-}
-
-func (p StaticRouteProvider) RouteForKey(context.Context, []byte) (MetadataRoute, error) {
-	if p.Context == nil || p.Context.GetRegionId() == 0 {
-		return MetadataRoute{}, errRouteProviderRequired
-	}
-	if p.Client == nil {
-		return MetadataRoute{}, errClientRequired
-	}
-	return MetadataRoute{
-		Context: cloneMetadataContext(p.Context),
-		Client:  p.Client,
-	}, nil
-}
-
-// MonotonicTimestampSource is a process-local timestamp source for tests.
-type MonotonicTimestampSource struct {
-	mu   sync.Mutex
-	next uint64
-}
-
-func NewMonotonicTimestampSource(first uint64) *MonotonicTimestampSource {
-	if first == 0 {
-		first = 1
-	}
-	return &MonotonicTimestampSource{next: first}
-}
-
-func (s *MonotonicTimestampSource) ReserveTimestamp(_ context.Context, count uint64) (uint64, error) {
-	if count == 0 {
-		return 0, errInvalidMetadataCommand
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	first := s.next
-	s.next += count
-	return first, nil
 }
 
 // Runner implements backend.Store over MetadataPlane.
