@@ -213,6 +213,9 @@ The first slices are intentionally narrow:
   Rust `Get` and `Scan` now also match Go MVCC TTL visibility by treating
   expired committed values as not found rather than returning stale payload
   bytes with `expires_at`.
+  Empty Rust `BatchGet` requests now match the Go service boundary: after
+  basic context/region-id validation they return an empty response without
+  requiring epoch, leader, or hosted-region admission.
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.

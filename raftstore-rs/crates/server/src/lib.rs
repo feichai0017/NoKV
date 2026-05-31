@@ -665,6 +665,21 @@ where
             .request
             .as_ref()
             .ok_or_else(|| Status::invalid_argument("batch get request missing payload"))?;
+        if inner.requests.is_empty() {
+            let context = request
+                .context
+                .as_ref()
+                .ok_or_else(|| Status::invalid_argument("context is required"))?;
+            if context.region_id == 0 {
+                return Err(Status::invalid_argument("region id is required"));
+            }
+            return Ok(Response::new(kvpb::KvBatchGetResponse {
+                response: Some(kvpb::BatchGetResponse {
+                    responses: Vec::new(),
+                }),
+                region_error: None,
+            }));
+        }
         let admission = self.admission_snapshot()?;
         let region_error = admission.admit_read_optional_keys(
             request.context.as_ref(),
@@ -3377,6 +3392,43 @@ mod tests {
             .response
             .unwrap();
         assert_eq!(prepared.value, b"prepared".to_vec());
+    }
+
+    #[tokio::test]
+    async fn batch_get_empty_does_not_require_region_admission() {
+        let admission = RegionAdmission {
+            leader: false,
+            ..Default::default()
+        };
+        let service = StoreKvService::with_admission(
+            FixedRuntimeEngine::follower(admission.region_id, admission.peer_id, 99),
+            admission.clone(),
+        );
+
+        let response = service
+            .batch_get(Request::new(kvpb::KvBatchGetRequest {
+                context: Some(kvpb::Context {
+                    region_id: admission.region_id,
+                    ..Default::default()
+                }),
+                request: Some(kvpb::BatchGetRequest::default()),
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(response.region_error.is_none());
+        assert!(response.response.unwrap().responses.is_empty());
+
+        let missing_context = service
+            .batch_get(Request::new(kvpb::KvBatchGetRequest {
+                request: Some(kvpb::BatchGetRequest::default()),
+                ..Default::default()
+            }))
+            .await;
+        assert_eq!(
+            missing_context.unwrap_err().code(),
+            tonic::Code::InvalidArgument
+        );
     }
 
     #[tokio::test]
