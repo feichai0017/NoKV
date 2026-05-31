@@ -1781,11 +1781,13 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Equal(t, []byte("vb"), got["agent/txn-b"].GetValue())
 	require.True(t, got["agent/txn-missing"].GetNotFound())
 
-	scanned, err := cli.Scan(ctx, []byte("agent/txn-"), 10, 30)
+	scanned, err := cli.Scan(ctx, []byte("agent/txn-"), 10, 40)
 	require.NoError(t, err)
 	require.Len(t, scanned, 2)
 	require.Equal(t, []byte("agent/txn-a"), scanned[0].GetKey())
 	require.Equal(t, []byte("agent/txn-b"), scanned[1].GetKey())
+	require.Equal(t, uint64(40), scanned[0].GetVersion())
+	require.Equal(t, uint64(40), scanned[1].GetVersion())
 
 	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	require.NoError(t, err)

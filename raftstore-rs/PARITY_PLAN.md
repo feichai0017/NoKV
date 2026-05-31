@@ -206,6 +206,10 @@ The first slices are intentionally narrow:
   proposing the request.
   Rust scan responses now mirror Go's region read boundary by trimming returned
   keys to the admitted region range after local apply.
+  Rust scan values also mirror Go's response-version contract by reporting the
+  request read version, treating `version=0` as the latest MVCC version, and
+  skipping committed lock/rollback marker writes when an older put remains
+  visible.
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.

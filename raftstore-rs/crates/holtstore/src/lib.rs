@@ -872,6 +872,7 @@ impl mvcc::KvEngine for HoltMvccStore {
 
     fn scan(&self, req: &kvpb::ScanRequest) -> mvcc::Result<kvpb::ScanResponse> {
         let _guard = self.lock()?;
+        let read_version = mvcc::scan_read_version(req.version);
         let mut keys = self.scan_write_user_keys()?;
         if req.reverse {
             keys.reverse();
@@ -891,19 +892,19 @@ impl mvcc::KvEngine for HoltMvccStore {
                 continue;
             }
             if let Some(lock) = self.get_lock(&key)? {
-                if lock.start_version <= req.version {
+                if lock.start_version <= read_version {
                     return Ok(kvpb::ScanResponse {
                         error: Some(mvcc::locked_error(&key, &lock)),
                         ..Default::default()
                     });
                 }
             }
-            if let Some((commit_version, value)) = self.read_committed(&key, req.version)? {
+            if let Some((_commit_version, value)) = self.read_committed(&key, read_version)? {
                 if let Some(bytes) = value.value {
                     kvs.push(kvpb::Kv {
                         key,
                         value: bytes,
-                        version: commit_version,
+                        version: read_version,
                         expires_at: value.expires_at,
                         ..Default::default()
                     });
@@ -2343,6 +2344,55 @@ mod tests {
             .unwrap();
         assert!(!current.not_found);
         assert_eq!(current.value, b"v1");
+    }
+
+    #[test]
+    fn holt_mvcc_scan_reports_read_version_and_skips_marker_writes() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .batch_rollback(&kvpb::BatchRollbackRequest {
+                keys: vec![b"k".to_vec()],
+                start_version: 20,
+            })
+            .unwrap();
+
+        let scan = store
+            .scan(&kvpb::ScanRequest {
+                start_key: b"k".to_vec(),
+                limit: 1,
+                version: 30,
+                include_start: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(scan.kvs.len(), 1);
+        assert_eq!(scan.kvs[0].key, b"k");
+        assert_eq!(scan.kvs[0].value, b"v1");
+        assert_eq!(scan.kvs[0].version, 30);
+
+        let latest = store
+            .scan(&kvpb::ScanRequest {
+                start_key: b"k".to_vec(),
+                limit: 1,
+                include_start: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(latest.kvs.len(), 1);
+        assert_eq!(latest.kvs[0].version, u64::MAX);
     }
 
     #[test]

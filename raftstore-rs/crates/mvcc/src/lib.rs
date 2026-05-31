@@ -158,25 +158,26 @@ impl MvccStore {
 
     pub fn scan(&self, req: &kvpb::ScanRequest) -> Result<kvpb::ScanResponse> {
         let inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
+        let read_version = scan_read_version(req.version);
         let mut kvs = Vec::new();
         let start = req.start_key.as_slice();
         let include_start = req.include_start;
-        for (key, versions) in inner.writes.iter() {
+        for key in inner.writes.keys() {
             if key.as_slice() < start || (!include_start && key.as_slice() == start) {
                 continue;
             }
-            if let Some(lock) = blocking_lock(&inner, key, req.version) {
+            if let Some(lock) = blocking_lock(&inner, key, read_version) {
                 return Ok(kvpb::ScanResponse {
                     error: Some(locked_error(key, lock)),
                     ..Default::default()
                 });
             }
-            if let Some((commit_version, value)) = versions.range(..=req.version).next_back() {
+            if let Some(value) = read_committed(&inner, key, read_version) {
                 if let Some(bytes) = &value.value {
                     kvs.push(kvpb::Kv {
                         key: key.clone(),
                         value: bytes.clone(),
-                        version: *commit_version,
+                        version: read_version,
                         expires_at: value.expires_at,
                         ..Default::default()
                     });
@@ -699,6 +700,14 @@ impl MvccSnapshotEngine for MvccStore {
     }
 }
 
+pub fn scan_read_version(version: u64) -> u64 {
+    if version == 0 {
+        u64::MAX
+    } else {
+        version
+    }
+}
+
 pub fn encode_mvcc_snapshot(snapshot: &MvccSnapshot) -> Vec<u8> {
     let payload = SnapshotPayload {
         writes: snapshot
@@ -1167,6 +1176,55 @@ mod tests {
             })
             .unwrap();
         assert_eq!(current.value, b"v1");
+    }
+
+    #[test]
+    fn scan_reports_read_version_and_skips_marker_writes() {
+        let store = MvccStore::new();
+        store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 10,
+                ..Default::default()
+            })
+            .unwrap();
+        store
+            .batch_rollback(&kvpb::BatchRollbackRequest {
+                keys: vec![b"k".to_vec()],
+                start_version: 20,
+            })
+            .unwrap();
+
+        let scan = store
+            .scan(&kvpb::ScanRequest {
+                start_key: b"k".to_vec(),
+                limit: 1,
+                version: 30,
+                include_start: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(scan.kvs.len(), 1);
+        assert_eq!(scan.kvs[0].key, b"k");
+        assert_eq!(scan.kvs[0].value, b"v1");
+        assert_eq!(scan.kvs[0].version, 30);
+
+        let latest = store
+            .scan(&kvpb::ScanRequest {
+                start_key: b"k".to_vec(),
+                limit: 1,
+                include_start: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_eq!(latest.kvs.len(), 1);
+        assert_eq!(latest.kvs[0].version, u64::MAX);
     }
 
     #[test]
