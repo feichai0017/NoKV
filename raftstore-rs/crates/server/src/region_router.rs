@@ -6,7 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
@@ -21,20 +21,85 @@ use crate::{
     RegionDescriptorSink, RestartDiagnosticsProvider, StoreKvService, DEFAULT_APPLY_WATCH_BUFFER,
 };
 
-enum RegionServiceLookup<'a, T> {
-    Hosted(&'a T),
+enum RegionServiceLookup<T> {
+    Hosted(T),
     Missing(errorpb::RegionError),
 }
 
-fn store_region_lookup<'a, T>(
-    regions: &'a BTreeMap<u64, T>,
+#[derive(Clone)]
+struct RegionServiceRegistry<T> {
+    regions: Arc<RwLock<BTreeMap<u64, T>>>,
+}
+
+impl<T> RegionServiceRegistry<T> {
+    fn new(regions: impl IntoIterator<Item = (u64, T)>) -> Result<Self, Status> {
+        let registry = Self {
+            regions: Arc::new(RwLock::new(BTreeMap::new())),
+        };
+        for (region_id, service) in regions {
+            registry.insert_region(region_id, service)?;
+        }
+        Ok(registry)
+    }
+
+    fn insert_region(&self, region_id: u64, service: T) -> Result<(), Status> {
+        validate_region_service_id(region_id)?;
+        let mut regions = self
+            .regions
+            .write()
+            .map_err(|_| region_service_registry_poisoned())?;
+        if regions.insert(region_id, service).is_some() {
+            return Err(Status::invalid_argument(format!(
+                "duplicate region_id {region_id}"
+            )));
+        }
+        Ok(())
+    }
+
+    fn get_region(&self, region_id: u64) -> Result<Option<T>, Status>
+    where
+        T: Clone,
+    {
+        self.regions
+            .read()
+            .map_err(|_| region_service_registry_poisoned())
+            .map(|regions| regions.get(&region_id).cloned())
+    }
+
+    fn values(&self) -> Result<Vec<T>, Status>
+    where
+        T: Clone,
+    {
+        self.regions
+            .read()
+            .map_err(|_| region_service_registry_poisoned())
+            .map(|regions| regions.values().cloned().collect())
+    }
+
+    fn is_empty(&self) -> Result<bool, Status> {
+        self.regions
+            .read()
+            .map_err(|_| region_service_registry_poisoned())
+            .map(|regions| regions.is_empty())
+    }
+}
+
+fn region_service_registry_poisoned() -> Status {
+    Status::internal("region service registry lock poisoned")
+}
+
+fn store_region_lookup<T>(
+    regions: &RegionServiceRegistry<T>,
     context: Option<&kvpb::Context>,
-) -> Result<RegionServiceLookup<'a, T>, Status> {
+) -> Result<RegionServiceLookup<T>, Status>
+where
+    T: Clone,
+{
     let context = context.ok_or_else(|| Status::invalid_argument("context is required"))?;
     if context.region_id == 0 {
         return Err(Status::invalid_argument("region id is required"));
     }
-    match regions.get(&context.region_id) {
+    match regions.get_region(context.region_id)? {
         Some(region) => Ok(RegionServiceLookup::Hosted(region)),
         None => Ok(RegionServiceLookup::Missing(region_not_found_error(
             context.region_id,
@@ -42,8 +107,11 @@ fn store_region_lookup<'a, T>(
     }
 }
 
-fn admin_region_lookup<T>(regions: &BTreeMap<u64, T>, region_id: u64) -> Result<&T, Status> {
-    regions.get(&region_id).ok_or_else(|| {
+fn admin_region_lookup<T>(regions: &RegionServiceRegistry<T>, region_id: u64) -> Result<T, Status>
+where
+    T: Clone,
+{
+    regions.get_region(region_id)?.ok_or_else(|| {
         Status::failed_precondition(format!(
             "region {region_id} is not hosted by this raft admin"
         ))
@@ -64,21 +132,6 @@ fn validate_region_service_id(region_id: u64) -> Result<(), Status> {
     Ok(())
 }
 
-fn collect_region_services<T>(
-    regions: impl IntoIterator<Item = (u64, T)>,
-) -> Result<BTreeMap<u64, T>, Status> {
-    let mut out = BTreeMap::new();
-    for (region_id, region) in regions {
-        validate_region_service_id(region_id)?;
-        if out.insert(region_id, region).is_some() {
-            return Err(Status::invalid_argument(format!(
-                "duplicate region_id {region_id}"
-            )));
-        }
-    }
-    Ok(out)
-}
-
 /// StoreKV service router for a process that hosts more than one region.
 ///
 /// The wire contract stays unchanged: callers still send the existing
@@ -87,23 +140,29 @@ fn collect_region_services<T>(
 /// checks.
 #[derive(Clone)]
 pub struct MultiRegionStoreKvService<E> {
-    regions: Arc<BTreeMap<u64, StoreKvService<E>>>,
+    regions: RegionServiceRegistry<StoreKvService<E>>,
 }
 
 impl<E> MultiRegionStoreKvService<E> {
     pub fn new(
         regions: impl IntoIterator<Item = (u64, StoreKvService<E>)>,
     ) -> Result<Self, Status> {
-        let regions = collect_region_services(regions)?;
         Ok(Self {
-            regions: Arc::new(regions),
+            regions: RegionServiceRegistry::new(regions)?,
         })
+    }
+
+    pub fn insert_region(&self, region_id: u64, service: StoreKvService<E>) -> Result<(), Status> {
+        self.regions.insert_region(region_id, service)
     }
 
     fn service_for_context(
         &self,
         context: Option<&kvpb::Context>,
-    ) -> Result<RegionServiceLookup<'_, StoreKvService<E>>, Status> {
+    ) -> Result<RegionServiceLookup<StoreKvService<E>>, Status>
+    where
+        StoreKvService<E>: Clone,
+    {
         store_region_lookup(&self.regions, context)
     }
 }
@@ -224,7 +283,7 @@ where
             request.buffer as usize
         };
         let (tx, rx) = tokio::sync::mpsc::channel(buffer);
-        for service in self.regions.values().cloned() {
+        for service in self.regions.values()? {
             let tx = tx.clone();
             let request = request.clone();
             tokio::spawn(async move {
@@ -256,7 +315,7 @@ where
 /// without changing the protobuf contract.
 #[derive(Clone)]
 pub struct MultiRegionRaftAdminService<S, D = EmptyRegionDescriptorSink> {
-    regions: Arc<BTreeMap<u64, RaftAdminService<S, D>>>,
+    regions: RegionServiceRegistry<RaftAdminService<S, D>>,
     restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
 }
 
@@ -264,11 +323,18 @@ impl<S, D> MultiRegionRaftAdminService<S, D> {
     pub fn new(
         regions: impl IntoIterator<Item = (u64, RaftAdminService<S, D>)>,
     ) -> Result<Self, Status> {
-        let regions = collect_region_services(regions)?;
         Ok(Self {
-            regions: Arc::new(regions),
+            regions: RegionServiceRegistry::new(regions)?,
             restart_diagnostics: Arc::new(EmptyRestartDiagnostics),
         })
+    }
+
+    pub fn insert_region(
+        &self,
+        region_id: u64,
+        service: RaftAdminService<S, D>,
+    ) -> Result<(), Status> {
+        self.regions.insert_region(region_id, service)
     }
 
     pub fn with_restart_diagnostics(
@@ -279,7 +345,10 @@ impl<S, D> MultiRegionRaftAdminService<S, D> {
         self
     }
 
-    fn service_for_region(&self, region_id: u64) -> Result<&RaftAdminService<S, D>, Status> {
+    fn service_for_region(&self, region_id: u64) -> Result<RaftAdminService<S, D>, Status>
+    where
+        RaftAdminService<S, D>: Clone,
+    {
         admin_region_lookup(&self.regions, region_id)
     }
 }
@@ -343,7 +412,7 @@ where
         if request.region_id == 0 {
             return Err(Status::invalid_argument("region_id is required"));
         }
-        let Some(service) = self.regions.get(&request.region_id) else {
+        let Some(service) = self.regions.get_region(request.region_id)? else {
             return Ok(Response::new(
                 adminpb::RegionRuntimeStatusResponse::default(),
             ));
@@ -362,7 +431,7 @@ where
         };
         let mut topology = Vec::new();
 
-        for service in self.regions.values() {
+        for service in self.regions.values()? {
             let status = service.status.apply_status();
             let runtime = service.status.raft_runtime_status();
             let hosted = status.region_id != 0 && runtime.hosted;
@@ -377,7 +446,7 @@ where
                 push_missing_topology_status(&mut topology, status);
             }
         }
-        if self.regions.is_empty() {
+        if self.regions.is_empty()? {
             restart.state = adminpb::ExecutionRestartState::Degraded as i32;
         }
         restart.pending_root_event_count = self.restart_diagnostics.pending_root_event_count()?;
@@ -684,6 +753,58 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn store_kv_routes_region_inserted_after_construction() {
+        let descriptor1 = test_region_descriptor(1, 1, 10, b"", b"m");
+        let descriptor2 = test_region_descriptor(2, 1, 20, b"m", b"");
+        let admission1 = RegionAdmission::from_descriptor(&descriptor1, true).unwrap();
+        let admission2 = RegionAdmission::from_descriptor(&descriptor2, true).unwrap();
+        let engine1 = FixedRuntimeEngine::leader(1, 10);
+        let engine2 = FixedRuntimeEngine::leader(2, 20);
+        engine1.set_region_descriptor(descriptor1);
+        engine2.set_region_descriptor(descriptor2);
+        let service = MultiRegionStoreKvService::new([(
+            1,
+            StoreKvService::with_admission(engine1, admission1),
+        )])
+        .unwrap();
+
+        service
+            .insert_region(
+                2,
+                StoreKvService::with_admission(engine2, admission2.clone()),
+            )
+            .unwrap();
+
+        let key = b"m-dynamic".to_vec();
+        let put = service
+            .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
+                context: Some(context(&admission2)),
+                request: Some(kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: key.clone(),
+                        value: b"dynamic-region".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 21,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(put.region_error.is_none());
+        assert_eq!(put.response.unwrap().applied_keys, 1);
+
+        let duplicate = service.insert_region(
+            2,
+            StoreKvService::with_admission(FixedRuntimeEngine::leader(2, 20), admission2.clone()),
+        );
+        assert_eq!(duplicate.unwrap_err().code(), tonic::Code::InvalidArgument);
+    }
+
+    #[tokio::test]
     async fn admin_routes_region_scoped_membership() {
         let admission1 =
             RegionAdmission::from_descriptor(&test_region_descriptor(1, 1, 10, b"", b"m"), true)
@@ -730,6 +851,35 @@ mod tests {
             .unwrap_err();
         assert_eq!(missing.code(), tonic::Code::FailedPrecondition);
         assert!(missing.message().contains("region 3"));
+    }
+
+    #[tokio::test]
+    async fn admin_counts_region_inserted_after_construction() {
+        let admission1 =
+            RegionAdmission::from_descriptor(&test_region_descriptor(1, 1, 10, b"", b"m"), true)
+                .unwrap();
+        let admission2 =
+            RegionAdmission::from_descriptor(&test_region_descriptor(2, 1, 20, b"m", b""), true)
+                .unwrap();
+        let service = MultiRegionRaftAdminService::new([(
+            1,
+            RaftAdminService::with_admission(NoopAdminStatus, admission1),
+        )])
+        .unwrap();
+
+        service
+            .insert_region(
+                2,
+                RaftAdminService::with_admission(NoopAdminStatus, admission2),
+            )
+            .unwrap();
+
+        let status = service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(status.restart.unwrap().region_count, 2);
     }
 
     #[tokio::test]
