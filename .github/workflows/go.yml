@@ -65,3 +65,6 @@ jobs:
 
     - name: Test
       run: make test
+
+    - name: Rust MetadataPlane smoke
+      run: make fsmeta-rust-smoke

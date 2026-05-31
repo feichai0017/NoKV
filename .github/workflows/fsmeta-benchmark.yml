@@ -88,6 +88,54 @@ jobs:
             benchmark/data/fsmeta/ci/*.json
           if-no-files-found: ignore
 
+  fsmeta-rust-smoke:
+    name: Benchmark / fsmeta Rust smoke
+    if: github.event_name == 'push' || github.event_name == 'pull_request' || (github.event_name == 'workflow_dispatch' && github.event.inputs.profile == 'median')
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@v6
+        with:
+          go-version: "1.26.2"
+
+      - name: Run Rust distributed fsmeta smoke workload
+        env:
+          NOKV_FSMETA_BENCH_MODE: rust
+          NOKV_FSMETA_PROFILE: median
+          NOKV_FSMETA_WORKLOADS: mdtest-easy
+          NOKV_FSMETA_CLIENTS: "1"
+          NOKV_FSMETA_DIRS: "1"
+          NOKV_FSMETA_FILES_PER_DIR: "2"
+          NOKV_FSMETA_OUTPUT_DIR: benchmark/data/fsmeta/results
+          NOKV_FSMETA_RUST_LOG_DIR: benchmark/data/fsmeta/rust
+          NOKV_FSMETA_RUST_CARGO_PROFILE: debug
+          NOKV_FSMETA_RUST_ROUTE_STABILIZE_SECONDS: "1"
+          NOKV_FSMETA_TIMEOUT: 10m
+          NOKV_FSMETA_RESET_BETWEEN_WORKLOADS: "1"
+        run: make fsmeta-bench
+
+      - name: Collect Rust fsmeta diagnostics
+        if: always()
+        run: |
+          mkdir -p benchmark/data/fsmeta/rust
+          find benchmark/data/fsmeta/rust -maxdepth 1 -type f -print > benchmark/data/fsmeta/rust/files.txt || true
+
+      - name: Upload Rust fsmeta smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: fsmeta-rust-smoke-${{ github.run_id }}
+          path: |
+            benchmark/data/fsmeta/results/fsmeta_rust_*.csv
+            benchmark/data/fsmeta/results/fsmeta_rust_*.manifest.txt
+            benchmark/data/fsmeta/rust/*.txt
+            benchmark/data/fsmeta/rust/*.log
+            benchmark/data/fsmeta/rust/*.json
+          if-no-files-found: ignore
+
   fsmeta-long:
     name: Benchmark / fsmeta long
     # Full long/official fsmeta matrices are performance evidence, not a fast
