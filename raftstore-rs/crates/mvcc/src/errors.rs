@@ -79,14 +79,20 @@ pub fn locked(key: &[u8], lock: &LockRecord) -> kvpb::KeyError {
     }
 }
 
-pub fn write_conflict(key: &[u8], primary: &[u8], start_ts: u64, commit_ts: u64) -> kvpb::KeyError {
+pub fn write_conflict(
+    key: &[u8],
+    primary: &[u8],
+    conflict_ts: u64,
+    conflicting_start_ts: u64,
+    current_ts: u64,
+) -> kvpb::KeyError {
     kvpb::KeyError {
         write_conflict: Some(kvpb::WriteConflict {
             key: key.to_vec(),
             primary: primary.to_vec(),
-            conflict_ts: commit_ts,
-            commit_ts,
-            start_ts,
+            conflict_ts,
+            commit_ts: current_ts,
+            start_ts: conflicting_start_ts,
         }),
         ..Default::default()
     }

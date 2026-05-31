@@ -768,14 +768,6 @@ impl HoltMvccStore {
         Ok(None)
     }
 
-    fn first_write_after(
-        &self,
-        key: &[u8],
-        version: u64,
-    ) -> mvcc::Result<Option<(u64, mvcc::VersionedValue)>> {
-        self.first_write_matching(key, |commit_ts| commit_ts > version)
-    }
-
     fn first_write_after_or_at(
         &self,
         key: &[u8],
@@ -959,14 +951,15 @@ impl mvcc::KvEngine for HoltMvccStore {
                     continue;
                 }
             }
-            if let Some((commit_ts, _)) =
-                self.first_write_after(&mutation.key, req.start_version)?
+            if let Some((commit_ts, value)) =
+                self.first_write_after_or_at(&mutation.key, req.start_version)?
             {
                 errors.push(mvcc::errors::write_conflict(
                     &mutation.key,
                     &req.primary_lock,
-                    req.start_version,
                     commit_ts,
+                    value.start_version,
+                    req.start_version,
                 ));
                 continue;
             }
@@ -1378,15 +1371,16 @@ impl mvcc::KvEngine for HoltMvccStore {
                     ..Default::default()
                 });
             }
-            if let Some((commit_ts, _value)) =
+            if let Some((commit_ts, value)) =
                 self.first_write_after_or_at(&mutation.key, req.start_version)?
             {
                 return Ok(kvpb::TryAtomicMutateResponse {
                     error: Some(mvcc::errors::write_conflict(
                         &mutation.key,
                         primary,
-                        req.start_version,
                         commit_ts,
+                        value.start_version,
+                        req.start_version,
                     )),
                     ..Default::default()
                 });
@@ -2759,6 +2753,84 @@ mod tests {
             })
             .unwrap();
         assert!(got.not_found);
+    }
+
+    #[test]
+    fn holt_mvcc_prewrite_write_conflict_matches_go_fields_and_rollback_fence() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let key = b"prewrite-conflict-fields".to_vec();
+        assert!(store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: key.clone(),
+                    value: b"old".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: key.clone(),
+                start_version: 10,
+                lock_ttl: 10_000,
+                ..Default::default()
+            })
+            .unwrap()
+            .errors
+            .is_empty());
+        assert!(store
+            .commit(&kvpb::CommitRequest {
+                keys: vec![key.clone()],
+                start_version: 10,
+                commit_version: 20,
+            })
+            .unwrap()
+            .error
+            .is_none());
+
+        let conflict = store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: key.clone(),
+                    value: b"new".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: key,
+                start_version: 15,
+                lock_ttl: 10_000,
+                ..Default::default()
+            })
+            .unwrap();
+        let conflict = conflict.errors[0].write_conflict.as_ref().unwrap();
+        assert_eq!(conflict.conflict_ts, 20);
+        assert_eq!(conflict.start_ts, 10);
+        assert_eq!(conflict.commit_ts, 15);
+
+        let rollback_key = b"prewrite-rollback-fence".to_vec();
+        assert!(store
+            .batch_rollback(&kvpb::BatchRollbackRequest {
+                keys: vec![rollback_key.clone()],
+                start_version: 30,
+            })
+            .unwrap()
+            .error
+            .is_none());
+        let fenced = store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: rollback_key,
+                    value: b"new".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: b"prewrite-rollback-fence".to_vec(),
+                start_version: 30,
+                lock_ttl: 10_000,
+                ..Default::default()
+            })
+            .unwrap();
+        let fenced = fenced.errors[0].write_conflict.as_ref().unwrap();
+        assert_eq!(fenced.conflict_ts, 30);
+        assert_eq!(fenced.start_ts, 30);
+        assert_eq!(fenced.commit_ts, 30);
     }
 
     #[test]

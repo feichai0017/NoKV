@@ -233,6 +233,10 @@ The first slices are intentionally narrow:
   Rust `Prewrite` now rejects unsupported mutation ops like Go Percolator and
   preserves the no-partial-apply boundary when a request mixes valid mutations
   with an unsupported op.
+  Rust prewrite and 1PC atomic mutate write-conflict responses now match Go's
+  field semantics, and prewrite treats an existing rollback marker at the same
+  start timestamp as a conflict fence instead of allowing the transaction to be
+  resurrected.
   Rust 1PC atomic mutate now also mirrors Go Percolator validation and retry
   semantics: exact retries are idempotent, predicate read version `0` maps to
   the request start version, value-equals mismatches are retryable, unsupported

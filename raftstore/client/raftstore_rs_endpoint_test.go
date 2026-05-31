@@ -2086,7 +2086,11 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	})
 	require.NoError(t, err)
 	require.Nil(t, atomicConflict.GetRegionError())
-	require.NotNil(t, atomicConflict.GetResponse().GetError().GetWriteConflict())
+	writeConflict := atomicConflict.GetResponse().GetError().GetWriteConflict()
+	require.NotNil(t, writeConflict)
+	require.Equal(t, uint64(201), writeConflict.GetConflictTs())
+	require.Equal(t, uint64(200), writeConflict.GetStartTs())
+	require.Equal(t, uint64(200), writeConflict.GetCommitTs())
 
 	expiredKey := []byte("agent/expired")
 	expiredPrewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
