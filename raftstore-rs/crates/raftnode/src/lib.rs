@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nokv_mvcc::{KvEngine, MvccSnapshotEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
@@ -227,8 +227,21 @@ pub struct ApplyStatus {
     pub applied_index: u64,
 }
 
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RegionTrafficSnapshot {
+    pub read_ops: u64,
+    pub write_ops: u64,
+    pub write_bytes: u64,
+    pub atomic_ops: u64,
+    pub elapsed_secs: u64,
+}
+
 pub trait ApplyStatusProvider: Clone + Send + Sync + 'static {
     fn apply_status(&self) -> ApplyStatus;
+}
+
+pub trait RegionTrafficProvider: Clone + Send + Sync + 'static {
+    fn traffic_snapshot(&self) -> RegionTrafficSnapshot;
 }
 
 pub trait ApplyWatchProvider: Clone + Send + Sync + 'static {
@@ -273,6 +286,7 @@ struct AppliedKvInner<E> {
     applied_index: AtomicU64,
     engine: Mutex<E>,
     descriptor: Mutex<Option<metapb::RegionDescriptor>>,
+    traffic: RegionTrafficStats,
     watch: broadcast::Sender<kvpb::ApplyWatchEvent>,
 }
 
@@ -281,6 +295,87 @@ struct ApplyEvent {
     source: kvpb::ApplyWatchEventSource,
     commit_version: u64,
     keys: Vec<Vec<u8>>,
+    atomic: bool,
+}
+
+#[derive(Debug)]
+struct RegionTrafficStats {
+    inner: Mutex<RegionTrafficInner>,
+}
+
+#[derive(Debug)]
+struct RegionTrafficInner {
+    last: Instant,
+    read_ops: u64,
+    write_ops: u64,
+    write_bytes: u64,
+    atomic_ops: u64,
+}
+
+impl Default for RegionTrafficStats {
+    fn default() -> Self {
+        Self {
+            inner: Mutex::new(RegionTrafficInner {
+                last: Instant::now(),
+                read_ops: 0,
+                write_ops: 0,
+                write_bytes: 0,
+                atomic_ops: 0,
+            }),
+        }
+    }
+}
+
+impl RegionTrafficStats {
+    fn record_read(&self, ops: u64) {
+        if ops == 0 {
+            return;
+        }
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        inner.read_ops = inner.read_ops.saturating_add(ops);
+    }
+
+    fn record_apply(&self, keys: &[Vec<u8>], atomic: bool) {
+        if keys.is_empty() {
+            return;
+        }
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        inner.write_ops = inner.write_ops.saturating_add(1);
+        inner.write_bytes = inner
+            .write_bytes
+            .saturating_add(keys.iter().map(|key| key.len() as u64).sum::<u64>());
+        if atomic {
+            inner.atomic_ops = inner.atomic_ops.saturating_add(1);
+        }
+    }
+
+    fn snapshot(&self) -> RegionTrafficSnapshot {
+        let now = Instant::now();
+        let Ok(mut inner) = self.inner.lock() else {
+            return RegionTrafficSnapshot {
+                elapsed_secs: 1,
+                ..Default::default()
+            };
+        };
+        let elapsed_secs = now.duration_since(inner.last).as_secs().max(1);
+        let snapshot = RegionTrafficSnapshot {
+            read_ops: inner.read_ops,
+            write_ops: inner.write_ops,
+            write_bytes: inner.write_bytes,
+            atomic_ops: inner.atomic_ops,
+            elapsed_secs,
+        };
+        inner.last = now;
+        inner.read_ops = 0;
+        inner.write_ops = 0;
+        inner.write_bytes = 0;
+        inner.atomic_ops = 0;
+        snapshot
+    }
 }
 
 /// Region-local apply boundary used before the OpenRaft-backed implementation
@@ -327,6 +422,7 @@ impl<E> AppliedKvEngine<E> {
                 applied_index: AtomicU64::new(status.applied_index),
                 engine: Mutex::new(engine),
                 descriptor: Mutex::new(None),
+                traffic: RegionTrafficStats::default(),
                 watch: broadcast::channel(1024).0,
             }),
         }
@@ -385,6 +481,10 @@ impl<E> AppliedKvEngine<E> {
     pub fn subscribe(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
         self.inner.watch.subscribe()
     }
+
+    pub fn traffic_snapshot(&self) -> RegionTrafficSnapshot {
+        self.inner.traffic.snapshot()
+    }
 }
 
 impl<E> ApplyStatusProvider for AppliedKvEngine<E>
@@ -403,6 +503,25 @@ where
 {
     fn apply_status(&self) -> ApplyStatus {
         self.engine.status()
+    }
+}
+
+impl<E> RegionTrafficProvider for AppliedKvEngine<E>
+where
+    E: Clone + Send + Sync + 'static,
+{
+    fn traffic_snapshot(&self) -> RegionTrafficSnapshot {
+        self.traffic_snapshot()
+    }
+}
+
+impl<E, S> RegionTrafficProvider for PersistentAppliedKvEngine<E, S>
+where
+    E: Clone + Send + Sync + 'static,
+    S: RegionMetadataSink,
+{
+    fn traffic_snapshot(&self) -> RegionTrafficSnapshot {
+        self.engine.traffic_snapshot()
     }
 }
 
@@ -531,9 +650,27 @@ where
         };
         if let Some((term, index)) = applied_status {
             for event in events {
-                self.publish_apply(index, term, event.source, event.commit_version, event.keys);
+                self.publish_apply(
+                    index,
+                    term,
+                    event.source,
+                    event.commit_version,
+                    event.keys,
+                    event.atomic,
+                );
             }
         }
+        let read_ops = req
+            .requests
+            .iter()
+            .filter(|request| {
+                matches!(
+                    raftpb::CmdType::try_from(request.cmd_type),
+                    Ok(raftpb::CmdType::CmdGet | raftpb::CmdType::CmdScan)
+                )
+            })
+            .count() as u64;
+        self.inner.traffic.record_read(read_ops);
         Ok(raftpb::RaftCmdResponse {
             header: req.header.clone(),
             responses,
@@ -566,6 +703,7 @@ where
                         source: kvpb::ApplyWatchEventSource::Commit,
                         commit_version: inner.commit_version,
                         keys: inner.keys.clone(),
+                        atomic: false,
                     });
                 (ResponseCmd::Commit(response), true, event)
             }
@@ -583,6 +721,7 @@ where
                     source: kvpb::ApplyWatchEventSource::ResolveLock,
                     commit_version: inner.commit_version,
                     keys: inner.keys.clone(),
+                    atomic: false,
                 });
                 (ResponseCmd::ResolveLock(response), true, event)
             }
@@ -615,6 +754,7 @@ where
                         .iter()
                         .map(|mutation| mutation.key.clone())
                         .collect(),
+                    atomic: true,
                 });
                 (ResponseCmd::TryAtomicMutate(response), true, event)
             }
@@ -630,6 +770,7 @@ where
                     source: kvpb::ApplyWatchEventSource::Commit,
                     commit_version: inner.commit_version,
                     keys: inner.watch_keys.clone(),
+                    atomic: false,
                 });
                 (ResponseCmd::InstallPreparedMvcc(response), true, event)
             }
@@ -711,10 +852,12 @@ where
         source: kvpb::ApplyWatchEventSource,
         commit_version: u64,
         keys: Vec<Vec<u8>>,
+        atomic: bool,
     ) {
         if keys.is_empty() {
             return;
         }
+        self.inner.traffic.record_apply(&keys, atomic);
         let _ = self.inner.watch.send(kvpb::ApplyWatchEvent {
             region_id: self.inner.region_id,
             term,
@@ -964,15 +1107,21 @@ where
     E: KvEngine,
 {
     fn get(&self, req: &kvpb::GetRequest) -> nokv_mvcc::Result<kvpb::GetResponse> {
-        self.read(|engine| engine.get(req))
+        let response = self.read(|engine| engine.get(req))?;
+        self.inner.traffic.record_read(1);
+        Ok(response)
     }
 
     fn batch_get(&self, req: &kvpb::BatchGetRequest) -> nokv_mvcc::Result<kvpb::BatchGetResponse> {
-        self.read(|engine| engine.batch_get(req))
+        let response = self.read(|engine| engine.batch_get(req))?;
+        self.inner.traffic.record_read(req.requests.len() as u64);
+        Ok(response)
     }
 
     fn scan(&self, req: &kvpb::ScanRequest) -> nokv_mvcc::Result<kvpb::ScanResponse> {
-        self.read(|engine| engine.scan(req))
+        let response = self.read(|engine| engine.scan(req))?;
+        self.inner.traffic.record_read(1);
+        Ok(response)
     }
 
     fn prewrite(&self, req: &kvpb::PrewriteRequest) -> nokv_mvcc::Result<kvpb::PrewriteResponse> {
@@ -989,6 +1138,7 @@ where
                 kvpb::ApplyWatchEventSource::Commit,
                 req.commit_version,
                 req.keys.clone(),
+                false,
             );
         }
         Ok(result)
@@ -1014,6 +1164,7 @@ where
                 kvpb::ApplyWatchEventSource::ResolveLock,
                 req.commit_version,
                 req.keys.clone(),
+                false,
             );
         }
         Ok(result)
@@ -1054,6 +1205,7 @@ where
                     .iter()
                     .map(|mutation| mutation.key.clone())
                     .collect(),
+                true,
             );
         }
         Ok(result)
@@ -1071,6 +1223,7 @@ where
                 kvpb::ApplyWatchEventSource::Commit,
                 req.commit_version,
                 req.watch_keys.clone(),
+                false,
             );
         }
         Ok(result)
@@ -1419,6 +1572,15 @@ where
 {
     fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
         self.apply_engine.subscribe_apply()
+    }
+}
+
+impl<E> RegionTrafficProvider for OpenRaftRegion<E>
+where
+    E: RegionTrafficProvider,
+{
+    fn traffic_snapshot(&self) -> RegionTrafficSnapshot {
+        self.apply_engine.traffic_snapshot()
     }
 }
 
@@ -2492,6 +2654,38 @@ mod tests {
 
         assert!(rejected.error.is_some());
         assert!(watch.try_recv().is_err());
+    }
+
+    #[test]
+    fn applied_kv_engine_traffic_snapshot_drains_counters() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        engine
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 2,
+                ..Default::default()
+            })
+            .unwrap();
+        engine
+            .get(&kvpb::GetRequest {
+                key: b"k".to_vec(),
+                version: 2,
+            })
+            .unwrap();
+
+        let snapshot = engine.traffic_snapshot();
+        assert_eq!(snapshot.read_ops, 1);
+        assert_eq!(snapshot.write_ops, 1);
+        assert_eq!(snapshot.write_bytes, 1);
+        assert_eq!(snapshot.atomic_ops, 1);
+        assert!(snapshot.elapsed_secs >= 1);
+        assert_eq!(engine.traffic_snapshot().read_ops, 0);
     }
 
     #[tokio::test]

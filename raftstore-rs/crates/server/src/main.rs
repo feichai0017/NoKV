@@ -13,8 +13,8 @@ use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::{
     AppliedKvEngine, ApplyStatusProvider, OpenRaftRegion, PersistentAppliedKvEngine,
-    RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog,
-    TonicRaftNetworkFactory,
+    RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
+    SegmentedEntryLog, TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
     apply_status_from_holt, openraft_region_service_pair, root_event_transition_id,
@@ -1679,7 +1679,7 @@ fn spawn_multi_region_coordinator_heartbeat<E>(
     root_events: Option<HoltMvccStore>,
     range_controller: Option<HoltRangeController>,
 ) where
-    E: RegionSnapshotEngine + Send + Sync + 'static,
+    E: RegionSnapshotEngine + RegionTrafficProvider + Send + Sync + 'static,
 {
     let Some(config) = config else {
         return;
@@ -1705,7 +1705,7 @@ async fn run_multi_region_coordinator_heartbeat<E>(
     root_events: Option<HoltMvccStore>,
     range_controller: Option<HoltRangeController>,
 ) where
-    E: RegionSnapshotEngine + Send + Sync + 'static,
+    E: RegionSnapshotEngine + RegionTrafficProvider + Send + Sync + 'static,
 {
     let mut ticker = tokio::time::interval(config.interval);
     let admin_endpoint = local_admin_endpoint(addr);
@@ -1950,7 +1950,7 @@ fn coordinator_heartbeat_request<E>(
     root_events: Option<&HoltMvccStore>,
 ) -> coordpb::StoreHeartbeatRequest
 where
-    E: RegionSnapshotEngine,
+    E: RegionSnapshotEngine + RegionTrafficProvider,
 {
     coordinator_heartbeat_request_for_regions(
         identity.store_id,
@@ -1967,7 +1967,7 @@ fn coordinator_heartbeat_request_for_hosted_regions<E>(
     root_events: Option<&HoltMvccStore>,
 ) -> Result<coordpb::StoreHeartbeatRequest, String>
 where
-    E: RegionSnapshotEngine,
+    E: RegionSnapshotEngine + RegionTrafficProvider,
 {
     let regions = registry.snapshot()?;
     Ok(coordinator_heartbeat_request_for_regions(
@@ -1985,7 +1985,7 @@ fn coordinator_heartbeat_request_for_regions<E>(
     root_events: Option<&HoltMvccStore>,
 ) -> coordpb::StoreHeartbeatRequest
 where
-    E: RegionSnapshotEngine,
+    E: RegionSnapshotEngine + RegionTrafficProvider,
 {
     let pending_admin = root_events
         .map(topology_catalog_has_pending_admin_work)
@@ -2007,8 +2007,13 @@ where
             leader_num += 1;
             leader_region_ids.push(status.region_id);
         }
+        let traffic = region.traffic_snapshot();
         region_stats.push(coordpb::RegionRuntimeStats {
             region_id: status.region_id,
+            read_qps: traffic.read_ops / traffic.elapsed_secs,
+            write_qps: traffic.write_ops / traffic.elapsed_secs,
+            write_bytes_per_sec: traffic.write_bytes / traffic.elapsed_secs,
+            atomic_mutate_qps: traffic.atomic_ops / traffic.elapsed_secs,
             leader_store_id: if leader { identity.store_id } else { 0 },
             pending_admin,
             ..Default::default()

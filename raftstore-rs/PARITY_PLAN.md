@@ -170,8 +170,11 @@ The first slices are intentionally narrow:
 - The standalone server has an optional coordinator heartbeat path behind
   `NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR`. It reports the existing
   `StoreHeartbeat` wire shape with store identity, client/raft address,
-  region count, leader count, leader region ids, and minimal per-region runtime
-  stats. Coordinator-returned leader-transfer operations now execute through
+  region count, leader count, leader region ids, and per-region runtime stats.
+  Region stats now drain Rust-side read, write, write-byte, and atomic-mutate
+  counters into the existing Go heartbeat fields, so the coordinator can see
+  live traffic on Rust-hosted regions. Coordinator-returned leader-transfer
+  operations now execute through
   the local `RaftAdmin.TransferLeader` service path. Holt-backed single-store
   split and merge operations also execute through the same scheduler path:
   split requires the planned root event before local mutation and merge removes

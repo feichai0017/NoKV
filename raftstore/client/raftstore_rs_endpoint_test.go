@@ -165,6 +165,56 @@ func TestRustRaftstoreEndpointReportsCoordinatorHeartbeat(t *testing.T) {
 	require.Equal(t, uint64(1), heartbeat.GetRegionStats()[0].GetRegionId())
 	require.Equal(t, uint64(11), heartbeat.GetRegionStats()[0].GetLeaderStoreId())
 	require.False(t, heartbeat.GetRegionStats()[0].GetPendingAdmin())
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	cli, err := New(Config{
+		RegionResolver: &mockRegionResolver{region: rustRaftstoreRegion(1, 11, 101, nil, nil)},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 11,
+			Addr:    storeAddr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+	handled, err := cli.TryAtomicMutate(ctx, []byte("agent/heartbeat-stats"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("agent/heartbeat-stats"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 19,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("agent/heartbeat-stats"),
+		Value: []byte("value"),
+	}}, 20, 21)
+	require.NoError(t, err)
+	require.True(t, handled)
+	got, err := cli.Get(ctx, []byte("agent/heartbeat-stats"), 21)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+
+	var sawWrite, sawRead bool
+	require.Eventually(t, func() bool {
+		for {
+			select {
+			case heartbeat = <-heartbeatCh:
+				for _, stat := range heartbeat.GetRegionStats() {
+					if stat.GetRegionId() != 1 {
+						continue
+					}
+					sawWrite = sawWrite ||
+						stat.GetWriteQps() > 0 &&
+							stat.GetAtomicMutateQps() > 0 &&
+							stat.GetWriteBytesPerSec() >= uint64(len("agent/heartbeat-stats"))
+					sawRead = sawRead || stat.GetReadQps() > 0
+				}
+			default:
+				return sawWrite && sawRead
+			}
+		}
+	}, 5*time.Second, 50*time.Millisecond)
 }
 
 func TestRustRaftstoreEndpointMultiRegionStartupRoutesAndHeartbeats(t *testing.T) {
