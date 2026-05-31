@@ -265,7 +265,7 @@ impl MvccStore {
 
     pub fn commit(&self, req: &kvpb::CommitRequest) -> Result<kvpb::CommitResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
-        if let Some(err) = validate_commit_version(req.start_version, req.commit_version) {
+        if let Some(err) = validation::commit_version(req.start_version, req.commit_version) {
             return Ok(kvpb::CommitResponse { error: Some(err) });
         }
         let mut locks = Vec::new();
@@ -359,7 +359,7 @@ impl MvccStore {
     ) -> Result<kvpb::ResolveLockResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         if req.commit_version != 0 {
-            if let Some(err) = validate_commit_version(req.start_version, req.commit_version) {
+            if let Some(err) = validation::commit_version(req.start_version, req.commit_version) {
                 return Ok(kvpb::ResolveLockResponse {
                     error: Some(err),
                     ..Default::default()
@@ -549,7 +549,7 @@ impl MvccStore {
         req: &kvpb::TryAtomicMutateRequest,
     ) -> Result<kvpb::TryAtomicMutateResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
-        if let Some(error) = validate_commit_version(req.start_version, req.commit_version) {
+        if let Some(error) = validation::commit_version(req.start_version, req.commit_version) {
             return Ok(kvpb::TryAtomicMutateResponse {
                 error: Some(error),
                 ..Default::default()
@@ -1185,13 +1185,6 @@ fn lock_expire_time(lock: &LockRecord) -> u64 {
         return 0;
     }
     lock.start_time.saturating_add(lock.ttl)
-}
-
-fn validate_commit_version(start_version: u64, commit_version: u64) -> Option<kvpb::KeyError> {
-    (commit_version <= start_version).then(|| kvpb::KeyError {
-        abort: "commit version must be greater than start version".to_owned(),
-        ..Default::default()
-    })
 }
 
 fn maintenance_abort(message: &str) -> kvpb::KeyError {

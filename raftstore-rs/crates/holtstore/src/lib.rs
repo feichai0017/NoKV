@@ -1004,7 +1004,7 @@ impl mvcc::KvEngine for HoltMvccStore {
 
     fn commit(&self, req: &kvpb::CommitRequest) -> mvcc::Result<kvpb::CommitResponse> {
         let _guard = self.lock()?;
-        if let Some(err) = validate_commit_version(req.start_version, req.commit_version) {
+        if let Some(err) = mvcc::validation::commit_version(req.start_version, req.commit_version) {
             return Ok(kvpb::CommitResponse { error: Some(err) });
         }
         let mut locks = Vec::new();
@@ -1113,7 +1113,9 @@ impl mvcc::KvEngine for HoltMvccStore {
     ) -> mvcc::Result<kvpb::ResolveLockResponse> {
         let _guard = self.lock()?;
         if req.commit_version != 0 {
-            if let Some(err) = validate_commit_version(req.start_version, req.commit_version) {
+            if let Some(err) =
+                mvcc::validation::commit_version(req.start_version, req.commit_version)
+            {
                 return Ok(kvpb::ResolveLockResponse {
                     error: Some(err),
                     ..Default::default()
@@ -1322,7 +1324,8 @@ impl mvcc::KvEngine for HoltMvccStore {
         req: &kvpb::TryAtomicMutateRequest,
     ) -> mvcc::Result<kvpb::TryAtomicMutateResponse> {
         let _guard = self.lock()?;
-        if let Some(error) = validate_commit_version(req.start_version, req.commit_version) {
+        if let Some(error) = mvcc::validation::commit_version(req.start_version, req.commit_version)
+        {
             return Ok(kvpb::TryAtomicMutateResponse {
                 error: Some(error),
                 ..Default::default()
@@ -1808,13 +1811,6 @@ fn lock_expire_time(lock: &mvcc::LockRecord) -> u64 {
         return 0;
     }
     lock.start_time.saturating_add(lock.ttl)
-}
-
-fn validate_commit_version(start_version: u64, commit_version: u64) -> Option<kvpb::KeyError> {
-    (commit_version <= start_version).then(|| kvpb::KeyError {
-        abort: "commit version must be greater than start version".to_owned(),
-        ..Default::default()
-    })
 }
 
 const REGION_DESCRIPTOR_PREFIX: &[u8] = b"descriptor/";

@@ -26,6 +26,13 @@ pub fn prewrite_mutation(mutation: &kvpb::Mutation) -> Option<kvpb::KeyError> {
     }
 }
 
+pub fn commit_version(start_version: u64, commit_version: u64) -> Option<kvpb::KeyError> {
+    (commit_version <= start_version).then(|| kvpb::KeyError {
+        abort: "commit version must be greater than start version".to_owned(),
+        ..Default::default()
+    })
+}
+
 pub fn atomic_predicate_observation(
     predicate: &kvpb::AtomicPredicate,
     observed: Option<&[u8]>,
