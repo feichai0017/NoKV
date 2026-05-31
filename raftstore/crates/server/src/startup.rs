@@ -1,5 +1,6 @@
 use std::collections::{BTreeSet, HashMap};
 use std::net::SocketAddr;
+use std::path::PathBuf;
 
 use nokv_raftstore_server::PeerEndpointCatalog;
 
@@ -44,6 +45,57 @@ impl ServerArgs {
             }
         }
         Ok(Self { metrics_addr })
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StorageBackend {
+    Holt(PathBuf),
+    Memory,
+}
+
+impl StorageBackend {
+    pub(crate) fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+        Self::from_values(
+            std::env::var("NOKV_RAFTSTORE_BACKEND").ok(),
+            std::env::var("NOKV_RAFTSTORE_HOLT_DIR").ok(),
+        )
+    }
+
+    pub(crate) fn from_values(
+        backend: Option<String>,
+        holt_dir: Option<String>,
+    ) -> Result<Self, Box<dyn std::error::Error>> {
+        let backend = backend
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+            .unwrap_or("holt");
+        match backend {
+            "holt" => {
+                let dir = holt_dir
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .ok_or("NOKV_RAFTSTORE_HOLT_DIR is required for Holt raftstore storage")?;
+                Ok(StorageBackend::Holt(PathBuf::from(dir)))
+            }
+            "memory" => {
+                if holt_dir
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|value| !value.is_empty())
+                    .is_some()
+                {
+                    return Err("NOKV_RAFTSTORE_BACKEND=memory must not be combined with NOKV_RAFTSTORE_HOLT_DIR".into());
+                }
+                Ok(StorageBackend::Memory)
+            }
+            other => Err(format!(
+                "unsupported NOKV_RAFTSTORE_BACKEND {other:?}: expected holt or memory"
+            )
+            .into()),
+        }
     }
 }
 

@@ -35,8 +35,9 @@ The Rust workspace keeps responsibilities small:
 
 ## Running Locally
 
-The server defaults to an in-memory backend for lightweight local tests. Set
-`NOKV_RAFTSTORE_HOLT_DIR` to use Holt-backed state-machine storage.
+The server defaults to the Holt-backed state-machine store and requires an
+explicit `NOKV_RAFTSTORE_HOLT_DIR`. The in-memory backend is only for targeted
+tests and must be requested with `NOKV_RAFTSTORE_BACKEND=memory`.
 
 ```bash
 NOKV_RAFTSTORE_ADDR=127.0.0.1:23880 \
@@ -44,6 +45,8 @@ NOKV_RAFTSTORE_REGION_ID=1 \
 NOKV_RAFTSTORE_STORE_ID=1 \
 NOKV_RAFTSTORE_PEER_ID=1 \
 NOKV_RAFTSTORE_BOOTSTRAP=true \
+NOKV_RAFTSTORE_HOLT_DIR=/tmp/nokv-raftstore-holt \
+NOKV_RAFTSTORE_LOG_DIR=/tmp/nokv-raftstore-log \
 NOKV_RAFTSTORE_PEER_ENDPOINTS=2=127.0.0.1:23881,3=127.0.0.1:23882 \
 cargo run --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server
 ```
@@ -56,7 +59,8 @@ Useful environment variables:
 
 - `NOKV_RAFTSTORE_ADDR`: bind address, default `127.0.0.1:23880`.
 - `NOKV_RAFTSTORE_ADVERTISE_ADDR`: address published to coordinator/OpenRaft.
-- `NOKV_RAFTSTORE_HOLT_DIR`: enables persistent Holt-backed storage.
+- `NOKV_RAFTSTORE_BACKEND`: storage backend, default `holt`; use `memory` only for tests.
+- `NOKV_RAFTSTORE_HOLT_DIR`: persistent Holt state-machine directory, required for `holt`.
 - `NOKV_RAFTSTORE_LOG_DIR`: overrides the Raft log directory.
 - `NOKV_RAFTSTORE_COORDINATOR_ADDR`: comma-separated coordinator endpoints.
 - `NOKV_RAFTSTORE_REGIONS`: multi-region process identity list,

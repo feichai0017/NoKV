@@ -28,6 +28,7 @@ use super::scheduler_operations::{
 };
 use super::startup::{
     validate_startup_region_ranges, RegionKeyRange, RegionRangeCatalog, ServerArgs, ServerIdentity,
+    StorageBackend,
 };
 use nokv_holtstore::HoltMetadataStore;
 use nokv_metastore::MemoryMetadataStore;
@@ -75,6 +76,36 @@ fn server_args_parse_metrics_addr_from_compose_extra() {
 fn server_args_reject_missing_metrics_addr_value() {
     let err = ServerArgs::parse(vec!["--metrics-addr".to_owned()]).unwrap_err();
     assert!(err.to_string().contains("requires a listen address"));
+}
+
+#[test]
+fn storage_backend_defaults_to_holt_and_requires_dir() {
+    let err = StorageBackend::from_values(None, None).unwrap_err();
+    assert!(err.to_string().contains("NOKV_RAFTSTORE_HOLT_DIR"));
+
+    assert_eq!(
+        StorageBackend::from_values(None, Some("/tmp/nokv-holt".to_owned())).unwrap(),
+        StorageBackend::Holt(PathBuf::from("/tmp/nokv-holt"))
+    );
+}
+
+#[test]
+fn storage_backend_memory_is_explicit_test_mode() {
+    assert_eq!(
+        StorageBackend::from_values(Some("memory".to_owned()), None).unwrap(),
+        StorageBackend::Memory
+    );
+
+    let err =
+        StorageBackend::from_values(Some("memory".to_owned()), Some("/tmp/nokv-holt".to_owned()))
+            .unwrap_err();
+    assert!(err.to_string().contains("must not be combined"));
+}
+
+#[test]
+fn storage_backend_rejects_unknown_backend() {
+    let err = StorageBackend::from_values(Some("pebble".to_owned()), None).unwrap_err();
+    assert!(err.to_string().contains("expected holt or memory"));
 }
 
 #[derive(Clone, Default)]
