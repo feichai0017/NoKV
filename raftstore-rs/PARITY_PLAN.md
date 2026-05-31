@@ -328,18 +328,14 @@ Known gaps:
   coverage for coordinator-backed store discovery, key routing, admin
   descriptor publication, pending descriptor retry, blocked descriptor
   recovery after Rust process restart, and startup root publication for
-  coordinator-backed routing; coordinator-owned process lifecycle, operator
-  resolution for blocked events, split/merge scheduler operation execution,
-  and remaining `RaftAdmin` RPC wiring are still being built out. Unsupported
-  split/merge scheduler operations are no longer silently treated as consumed:
-  the server validates their required fields and logs an explicit unsupported
-  outcome with operation identifiers. Holt-backed Rust stores also retain those
-  unsupported scheduler operations in a pending catalog keyed by the full
-  operation identity, so different split keys or merge sources do not overwrite
-  each other. Scheduler operations that should be executable but currently fail
-  at the local admin boundary, such as a transient leader-transfer RPC failure,
-  are also persisted into the same pending catalog instead of being dropped
-  after one heartbeat attempt. The Rust pending topology retry loop now also
+  coordinator-backed routing; coordinator-owned process lifecycle and operator
+  resolution for blocked events are still being built out. Holt-backed
+  split/merge scheduler operations now execute through the range controller
+  when it is configured. Scheduler operations that fail at the local admin
+  boundary, such as a transient leader-transfer RPC failure or a split/merge
+  operation observed before its local range controller is available, are
+  persisted into the same pending catalog instead of being dropped after one
+  heartbeat attempt. The Rust pending topology retry loop now also
   replays pending scheduler operations through the local admin endpoint and
   removes them from Holt after an applied or permanently invalid result.
   Failed retries now persist an attempt counter, stop retrying after the same
@@ -389,13 +385,16 @@ Known gaps:
   which is the routing prerequisite for dynamic child-region registration after
   split apply and source-region removal after merge apply.
   Coordinator heartbeats now read from the same mutable hosted-region model
-  instead of a startup-only region list, so future split-created child regions
-  can be advertised or removed without restarting the process. The single-region server
+  instead of a startup-only region list, so split-created child regions can be
+  advertised or removed without restarting the process. The single-region server
   startup path now also uses the same multi-region service and heartbeat
   assembly, so dynamic region registration applies to the default endpoint
-  instead of only to explicit multi-region startup. Multi-peer split bootstrap,
-  multi-peer merge, coordinator-owned lifecycle coverage, and default compose
-  cutover are still pending.
+  instead of only to explicit multi-region startup. Multi-peer split bootstrap
+  no longer blocks on immediate child quorum election; each local child is
+  registered first and background election retries take over once all child
+  peers are reachable. The Go tagged harness covers multi-peer split and
+  merge after `AddPeer`, including restart of the split child. Coordinator-owned
+  lifecycle coverage and default compose cutover are still pending.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. Non-bootstrap Rust peers no longer persist a default descriptor,
