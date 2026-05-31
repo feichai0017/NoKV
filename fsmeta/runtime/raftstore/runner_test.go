@@ -49,6 +49,14 @@ func (f *fakeCommitTimestampKV) MutateWithCommitTimestamp(ctx context.Context, _
 	return ts, nil
 }
 
+type fakeAtomicMutateKV struct {
+	fakeRunnerKV
+}
+
+func (f *fakeAtomicMutateKV) TryAtomicMutate(context.Context, []byte, []*kvrpcpb.AtomicPredicate, []*kvrpcpb.Mutation, uint64, uint64) (bool, error) {
+	return true, nil
+}
+
 type fakeRunnerTSO struct {
 	resp  *coordpb.TsoResponse
 	err   error
@@ -154,6 +162,14 @@ func TestRunnerTryAtomicMutateRecordsUnsupportedKV(t *testing.T) {
 	require.False(t, handled)
 	stats := runner.Stats()
 	require.Equal(t, uint64(1), stats["atomic_runner_unsupported_total"])
+}
+
+func TestRunnerDoesNotAdvertiseReadOrderedAtomicMutate(t *testing.T) {
+	runner, err := NewRunner(&fakeAtomicMutateKV{}, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 10, Count: 2}})
+	require.NoError(t, err)
+
+	_, ok := any(runner).(backend.ReadOrderedAtomicMutator)
+	require.False(t, ok)
 }
 
 func TestRunnerStatsExposeTSOCoalescer(t *testing.T) {

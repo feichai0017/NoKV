@@ -184,6 +184,13 @@ func (r *Runner) Stats() map[string]any {
 // TryAtomicMutate delegates to the region-local one-phase mutation path when the
 // underlying KV client supports it. handled=false means callers should keep
 // the regular Percolator 2PC path.
+//
+// Runner intentionally does not implement backend.ReadOrderedAtomicMutator. The
+// raftstore RPC can apply a one-phase command, but fsmeta preallocates commit_ts
+// before the command reaches Raft. Without a distributed read barrier, another
+// gateway can read at a higher timestamp before this command applies and then
+// miss a later-successful one-phase write. Keep fsmeta on Percolator 2PC until
+// that read-order boundary is explicit.
 func (r *Runner) TryAtomicMutate(ctx context.Context, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
 	onePhase, ok := r.kv.(atomicMutateOnePhase)
 	if !ok {
