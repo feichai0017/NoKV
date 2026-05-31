@@ -361,6 +361,36 @@ func TestRustMetadataPlaneSurvivesRaftstoreRestart(t *testing.T) {
 		},
 	})
 	require.NoError(t, err, "raftstore logs:\n%s", first.logs.String())
+	watch, err := runtime.Watcher.Subscribe(ctx, observe.WatchRequest{
+		Mount:              "vol",
+		RootInode:          model.RootInode,
+		BackPressureWindow: 16,
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", first.logs.String())
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "watch-before-restart-a.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 13,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", first.logs.String())
+	resumeCursor := requireWatchEvent(t, watch).Cursor
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "watch-before-restart-b.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 17,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err, "raftstore logs:\n%s", first.logs.String())
+	watch.Close()
 	require.NoError(t, runtime.Close())
 	first.stop()
 
@@ -384,6 +414,18 @@ func TestRustMetadataPlaneSurvivesRaftstoreRestart(t *testing.T) {
 	require.NoError(t, err, "first raftstore logs:\n%s\nsecond raftstore logs:\n%s", first.logs.String(), second.logs.String())
 	require.Equal(t, created.Dentry.Inode, lookup.Dentry.Inode)
 	require.Equal(t, created.Inode.Inode, lookup.Inode.Inode)
+
+	resumedWatch, err := reopened.Watcher.Subscribe(ctx, observe.WatchRequest{
+		Mount:              "vol",
+		RootInode:          model.RootInode,
+		ResumeCursor:       resumeCursor,
+		BackPressureWindow: 16,
+	})
+	require.NoError(t, err, "first raftstore logs:\n%s\nsecond raftstore logs:\n%s", first.logs.String(), second.logs.String())
+	defer resumedWatch.Close()
+	replayed := requireWatchEvent(t, resumedWatch)
+	require.Greater(t, replayed.Cursor.Index, resumeCursor.Index)
+	require.Equal(t, observe.WatchEventSourceCommit, replayed.Source)
 
 	after, err := reopened.Executor.Create(ctx, model.CreateRequest{
 		Mount:  "vol",
