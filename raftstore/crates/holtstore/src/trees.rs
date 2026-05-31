@@ -6,15 +6,13 @@ use crate::{Error, Result};
 
 pub const DATA_TREE: &str = "data";
 pub const WRITE_TREE: &str = "write";
-pub const LOCK_TREE: &str = "lock";
 pub const REGION_META_TREE: &str = "region_meta";
 pub const APPLY_STATE_TREE: &str = "apply_state";
 pub const WATCH_APPLY_TREE: &str = "watch_apply";
 
-pub(crate) const REQUIRED_TREES: [&str; 6] = [
+pub(crate) const REQUIRED_TREES: [&str; 5] = [
     DATA_TREE,
     WRITE_TREE,
-    LOCK_TREE,
     REGION_META_TREE,
     APPLY_STATE_TREE,
     WATCH_APPLY_TREE,

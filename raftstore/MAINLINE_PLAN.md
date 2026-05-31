@@ -32,7 +32,9 @@ generic distributed KV transaction layer by accident.
 
 Status: implemented in the current mainline. `fsmeta/backend.Store` exposes
 `CommitMetadata`, Rust exposes `MetadataPlane.CommitMetadata`, and fsmeta write
-paths no longer depend on the old StoreKV/Percolator-shaped API.
+paths no longer depend on the old StoreKV/Percolator-shaped API. The Rust
+state-machine core now keeps only metadata-native command/versioned-value
+semantics.
 
 - Define the Rust write command around fsmeta backend needs: request id,
   mount/region context, predicate set, mutation set, and watch/snapshot

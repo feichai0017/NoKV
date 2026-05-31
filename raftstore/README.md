@@ -24,8 +24,8 @@ needed by fsmeta.
 The Rust workspace keeps responsibilities small:
 
 - `nokv-proto`: Rust bindings generated from the repository `pb/*.proto` files.
-- `nokv-mvcc`: legacy StoreKV/MVCC compatibility scaffolding. Do not extend it
-  as the long-term fsmeta transaction model.
+- `nokv-mvcc`: metadata command, versioned-value, key-error, and snapshot
+  primitives shared by in-memory tests and Holt-backed state-machine storage.
 - `nokv-holtstore`: Holt multi-tree state-machine layout and recovery state.
 - `nokv-raftlog`: append-only segmented Raft log.
 - `nokv-raftnode`: OpenRaft boundary, proposals, apply, snapshots, and

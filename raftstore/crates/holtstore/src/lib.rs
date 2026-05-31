@@ -5,20 +5,17 @@
 
 mod codec;
 mod metadata;
-#[path = "mvcc.rs"]
-mod mvcc_engine;
 mod region_meta;
 mod scheduler_state;
 mod snapshot;
 mod store;
 mod trees;
 mod types;
+mod versions;
 mod watch_apply;
 
 pub use store::{HoltMvccStore, HoltStore};
-pub use trees::{
-    APPLY_STATE_TREE, DATA_TREE, LOCK_TREE, REGION_META_TREE, WATCH_APPLY_TREE, WRITE_TREE,
-};
+pub use trees::{APPLY_STATE_TREE, DATA_TREE, REGION_META_TREE, WATCH_APPLY_TREE, WRITE_TREE};
 pub use types::{
     BlockedRootEvent, BlockedSchedulerOperation, Error, PendingRootEvent,
     PendingSchedulerOperation, RegionApplyState, Result,

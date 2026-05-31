@@ -1,7 +1,7 @@
 use nokv_mvcc as mvcc;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
-use crate::mvcc_engine::apply_committed;
+use crate::versions::apply_committed;
 use crate::HoltMvccStore;
 
 impl mvcc::MetadataEngine for HoltMvccStore {
@@ -10,14 +10,6 @@ impl mvcc::MetadataEngine for HoltMvccStore {
         req: &metadatapb::MetadataGetRequest,
     ) -> mvcc::Result<metadatapb::MetadataGetResponse> {
         let _guard = self.lock()?;
-        if let Some(lock) = self.get_lock(&req.key)? {
-            if lock.start_version <= req.version {
-                return Ok(metadatapb::MetadataGetResponse {
-                    error: Some(mvcc::errors::metadata_locked(&req.key, &lock)),
-                    ..Default::default()
-                });
-            }
-        }
         Ok(match self.read_committed(&req.key, req.version)? {
             Some((_commit, value)) => {
                 if mvcc::value_is_expired(value.expires_at) {
@@ -82,14 +74,6 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             {
                 continue;
             }
-            if let Some(lock) = self.get_lock(&key)? {
-                if lock.start_version <= read_version {
-                    return Ok(metadatapb::MetadataScanResponse {
-                        error: Some(mvcc::errors::metadata_locked(&key, &lock)),
-                        ..Default::default()
-                    });
-                }
-            }
             if let Some((_commit_version, value)) = self.read_committed(&key, read_version)? {
                 if mvcc::value_is_expired(value.expires_at) {
                     continue;
@@ -138,14 +122,6 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             } else {
                 predicate.read_version
             };
-            if let Some(lock) = self.get_lock(&predicate.key)? {
-                if lock.start_version <= read_version {
-                    return Ok(metadata_apply_error(
-                        commit_version,
-                        mvcc::errors::metadata_locked(&predicate.key, &lock),
-                    ));
-                }
-            }
             let observed = self
                 .read_committed(&predicate.key, read_version)?
                 .and_then(|(_, value)| value.value);
@@ -164,12 +140,6 @@ impl mvcc::MetadataEngine for HoltMvccStore {
         for mutation in &command.mutations {
             if let Some(error) = mvcc::validation::metadata_command_mutation(mutation) {
                 return Ok(metadata_apply_error(commit_version, error));
-            }
-            if let Some(lock) = self.get_lock(&mutation.key)? {
-                return Ok(metadata_apply_error(
-                    commit_version,
-                    mvcc::errors::metadata_locked(&mutation.key, &lock),
-                ));
             }
             if let Some((commit_ts, value)) =
                 self.first_write_after_or_at(&mutation.key, command.read_version)?

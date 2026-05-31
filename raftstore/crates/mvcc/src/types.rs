@@ -1,7 +1,6 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 #[derive(Debug, thiserror::Error)]
@@ -16,31 +15,32 @@ pub enum Error {
 
 pub type Result<T> = std::result::Result<T, Error>;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ValueKind {
+    Put = 0,
+    Delete = 1,
+}
+
+impl ValueKind {
+    pub fn from_i32(raw: i32) -> Self {
+        match raw {
+            1 => Self::Delete,
+            _ => Self::Put,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VersionedValue {
-    pub kind: kvpb::mutation::Op,
+    pub kind: ValueKind,
     pub start_version: u64,
     pub value: Option<Vec<u8>>,
     pub expires_at: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LockRecord {
-    pub primary: Vec<u8>,
-    pub start_version: u64,
-    pub start_time: u64,
-    pub ttl: u64,
-    pub min_commit_ts: u64,
-    pub op: kvpb::mutation::Op,
-    pub value: Vec<u8>,
-    pub expires_at: u64,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MvccSnapshot {
     pub writes: Vec<MvccSnapshotWrite>,
-    pub locks: Vec<MvccSnapshotLock>,
-    pub rollbacks: Vec<MvccSnapshotRollback>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -50,23 +50,9 @@ pub struct MvccSnapshotWrite {
     pub value: VersionedValue,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MvccSnapshotLock {
-    pub key: Vec<u8>,
-    pub lock: LockRecord,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MvccSnapshotRollback {
-    pub key: Vec<u8>,
-    pub start_version: u64,
-}
-
 #[derive(Debug, Default)]
 pub(crate) struct Inner {
     pub(crate) writes: BTreeMap<Vec<u8>, BTreeMap<u64, VersionedValue>>,
-    pub(crate) locks: BTreeMap<Vec<u8>, LockRecord>,
-    pub(crate) rollbacks: BTreeSet<(Vec<u8>, u64)>,
 }
 
 /// In-memory metadata MVCC implementation used by tests and memory-backed

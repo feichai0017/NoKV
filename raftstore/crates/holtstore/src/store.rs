@@ -5,8 +5,7 @@ use holt::{Tree, TreeConfig, DB};
 use nokv_mvcc as mvcc;
 
 use crate::trees::{
-    APPLY_STATE_TREE, DATA_TREE, LOCK_TREE, REGION_META_TREE, REQUIRED_TREES, WATCH_APPLY_TREE,
-    WRITE_TREE,
+    APPLY_STATE_TREE, DATA_TREE, REGION_META_TREE, REQUIRED_TREES, WATCH_APPLY_TREE, WRITE_TREE,
 };
 use crate::Result;
 
@@ -49,10 +48,6 @@ impl HoltStore {
 
     pub fn write(&self) -> Result<Tree> {
         self.tree(WRITE_TREE)
-    }
-
-    pub fn lock(&self) -> Result<Tree> {
-        self.tree(LOCK_TREE)
     }
 
     pub fn region_meta(&self) -> Result<Tree> {

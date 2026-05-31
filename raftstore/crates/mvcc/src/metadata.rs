@@ -1,10 +1,9 @@
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 use crate::{
-    blocking_lock, errors, read_committed, scan_limit, scan_read_version, validation,
-    value_is_expired, write_by_start_version, Error, Inner, MetadataApplyResult, MetadataEngine,
-    MvccStore, Result, VersionedValue,
+    errors, read_committed, scan_limit, scan_read_version, validation, value_is_expired,
+    write_by_start_version, Error, Inner, MetadataApplyResult, MetadataEngine, MvccStore, Result,
+    ValueKind, VersionedValue,
 };
 
 impl MvccStore {
@@ -13,12 +12,6 @@ impl MvccStore {
         req: &metadatapb::MetadataGetRequest,
     ) -> Result<metadatapb::MetadataGetResponse> {
         let inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
-        if let Some(lock) = blocking_lock(&inner, &req.key, req.version) {
-            return Ok(metadatapb::MetadataGetResponse {
-                error: Some(errors::metadata_locked(&req.key, lock)),
-                ..Default::default()
-            });
-        }
         Ok(match read_committed(&inner, &req.key, req.version) {
             Some(value) => {
                 if value_is_expired(value.expires_at) {
@@ -82,12 +75,6 @@ impl MvccStore {
                 || (!req.include_start && key == &req.start_key)
             {
                 continue;
-            }
-            if let Some(lock) = blocking_lock(&inner, key, read_version) {
-                return Ok(metadatapb::MetadataScanResponse {
-                    error: Some(errors::metadata_locked(key, lock)),
-                    ..Default::default()
-                });
             }
             if let Some(value) = read_committed(&inner, key, read_version) {
                 if value_is_expired(value.expires_at) {
@@ -175,13 +162,6 @@ fn commit_metadata_inner(
         } else {
             predicate.read_version
         };
-        if let Some(lock) = blocking_lock(inner, &predicate.key, read_version) {
-            return metadata_error(
-                command,
-                commit_version,
-                errors::metadata_locked(&predicate.key, lock),
-            );
-        }
         let observed =
             read_committed(inner, &predicate.key, read_version).and_then(|value| value.value);
         if let Some(error) =
@@ -198,13 +178,6 @@ fn commit_metadata_inner(
     for mutation in &command.mutations {
         if let Some(error) = validation::metadata_command_mutation(mutation) {
             return metadata_error(command, commit_version, error);
-        }
-        if let Some(lock) = inner.locks.get(&mutation.key) {
-            return metadata_error(
-                command,
-                commit_version,
-                errors::metadata_locked(&mutation.key, lock),
-            );
         }
         if let Some((commit_ts, value)) = inner
             .writes
@@ -242,7 +215,6 @@ fn commit_metadata_inner(
             .entry(mutation.key.clone())
             .or_default()
             .insert(commit_version, value);
-        inner.locks.remove(&mutation.key);
     }
     MetadataApplyResult {
         commit_version,
@@ -292,13 +264,13 @@ pub fn metadata_mutation_value(
     let op = match metadatapb::metadata_mutation::Op::try_from(mutation.op)
         .unwrap_or(metadatapb::metadata_mutation::Op::Put)
     {
-        metadatapb::metadata_mutation::Op::Put => kvpb::mutation::Op::Put,
-        metadatapb::metadata_mutation::Op::Delete => kvpb::mutation::Op::Delete,
+        metadatapb::metadata_mutation::Op::Put => ValueKind::Put,
+        metadatapb::metadata_mutation::Op::Delete => ValueKind::Delete,
     };
     VersionedValue {
         kind: op,
         start_version,
-        value: (op == kvpb::mutation::Op::Put).then(|| mutation.value.clone()),
+        value: (op == ValueKind::Put).then(|| mutation.value.clone()),
         expires_at: mutation.expires_at,
     }
 }
