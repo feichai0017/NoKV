@@ -456,6 +456,16 @@ impl<E> HostedRegionRegistry<E> {
         Ok(())
     }
 
+    fn get(&self, region_id: u64) -> Result<Option<(ServerIdentity, OpenRaftRegion<E>)>, String>
+    where
+        E: Clone,
+    {
+        self.regions
+            .read()
+            .map_err(|_| "hosted region registry lock poisoned".to_owned())
+            .map(|regions| regions.get(&region_id).cloned())
+    }
+
     fn snapshot(&self) -> Result<Vec<(ServerIdentity, OpenRaftRegion<E>)>, String>
     where
         E: Clone,
@@ -464,6 +474,312 @@ impl<E> HostedRegionRegistry<E> {
             .read()
             .map_err(|_| "hosted region registry lock poisoned".to_owned())
             .map(|regions| regions.values().cloned().collect())
+    }
+}
+
+type HoltApplyEngine = PersistentAppliedKvEngine<HoltMvccStore, HoltRegionMetadataSink>;
+type HoltRegion = OpenRaftRegion<HoltApplyEngine>;
+
+#[derive(Clone)]
+struct HoltSplitController {
+    store_id: u64,
+    addr: SocketAddr,
+    persistent_root: PathBuf,
+    coordinator: Option<CoordinatorHeartbeatConfig>,
+    mvcc: HoltMvccStore,
+    transport: nokv_raftnode::TonicRaftTransportRegistry,
+    store_services: MultiRegionStoreKvService<HoltRegion>,
+    admin_services: MultiRegionRaftAdminService<HoltRegion, HoltRegionMetadataSink>,
+    hosted_regions: HostedRegionRegistry<HoltApplyEngine>,
+    peer_endpoints: PeerEndpointCatalog,
+    topology_publisher: Arc<dyn TopologyPublisher>,
+}
+
+impl HoltSplitController {
+    async fn execute_split(
+        &self,
+        operation: &coordpb::SchedulerOperation,
+    ) -> Result<SchedulerOperationOutcome, tonic::Status> {
+        let child = operation
+            .split_child
+            .as_ref()
+            .ok_or_else(|| tonic::Status::invalid_argument("split child descriptor is required"))?;
+        if child.region_id == 0 || operation.region_id == 0 || operation.split_key.is_empty() {
+            return Ok(SchedulerOperationOutcome::Invalid {
+                reason: "split requires region, split key, and child descriptor",
+            });
+        }
+        if self
+            .hosted_regions
+            .get(child.region_id)
+            .map_err(internal_status)?
+            .is_some()
+        {
+            return Ok(SchedulerOperationOutcome::Applied);
+        }
+        let (_identity, parent) = self
+            .hosted_regions
+            .get(operation.region_id)
+            .map_err(internal_status)?
+            .ok_or_else(|| {
+                tonic::Status::failed_precondition(format!(
+                    "split parent region {} is not hosted",
+                    operation.region_id
+                ))
+            })?;
+        let runtime = parent.raft_runtime_status();
+        if !runtime.leader {
+            return Err(tonic::Status::failed_precondition(format!(
+                "split parent region {} is not leader",
+                operation.region_id
+            )));
+        }
+        let parent_descriptor = parent
+            .region_descriptor()
+            .map_err(|err| tonic::Status::internal(err.to_string()))?
+            .ok_or_else(|| tonic::Status::failed_precondition("split parent descriptor missing"))?;
+        let (left, right) =
+            build_split_descriptors(&parent_descriptor, &operation.split_key, child)?;
+        let child_peer = right
+            .peers
+            .iter()
+            .find(|peer| peer.store_id == self.store_id)
+            .cloned()
+            .ok_or_else(|| {
+                tonic::Status::failed_precondition(format!(
+                    "split child region {} has no peer on store {}",
+                    right.region_id, self.store_id
+                ))
+            })?;
+        if right.peers.len() != 1 {
+            return Err(tonic::Status::unimplemented(
+                "multi-peer split child bootstrap is not implemented in raftstore-rs yet",
+            ));
+        }
+
+        self.publish_split_event(
+            metapb::RootEventKind::RegionSplitPlanned,
+            &left,
+            &right,
+            true,
+        )
+        .await?;
+        parent
+            .propose_region_descriptor(&left)
+            .await
+            .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
+        self.open_split_child_region(
+            ServerIdentity {
+                region_id: right.region_id,
+                store_id: child_peer.store_id,
+                peer_id: child_peer.peer_id,
+                bootstrap: true,
+            },
+            right.clone(),
+        )
+        .await?;
+        self.publish_split_event(
+            metapb::RootEventKind::RegionSplitCommitted,
+            &left,
+            &right,
+            false,
+        )
+        .await?;
+        Ok(SchedulerOperationOutcome::Applied)
+    }
+
+    async fn publish_split_event(
+        &self,
+        kind: metapb::RootEventKind,
+        left: &metapb::RegionDescriptor,
+        right: &metapb::RegionDescriptor,
+        require_published: bool,
+    ) -> Result<(), tonic::Status> {
+        let Some(config) = &self.coordinator else {
+            return Ok(());
+        };
+        let event = split_root_event(kind, left, right);
+        let outcome =
+            publish_root_event_with_pending(&config.endpoints, Some(&self.mvcc), event).await;
+        match outcome.publish_state() {
+            adminpb::ExecutionPublishState::TerminalPublished => Ok(()),
+            adminpb::ExecutionPublishState::TerminalPending
+            | adminpb::ExecutionPublishState::TerminalBlocked
+                if !require_published =>
+            {
+                Ok(())
+            }
+            adminpb::ExecutionPublishState::TerminalPending
+            | adminpb::ExecutionPublishState::TerminalBlocked => Err(tonic::Status::unavailable(
+                format!("split root event not published: {}", outcome.last_error()),
+            )),
+            adminpb::ExecutionPublishState::TerminalFailed => {
+                Err(tonic::Status::internal(outcome.last_error().to_owned()))
+            }
+            adminpb::ExecutionPublishState::Unspecified
+            | adminpb::ExecutionPublishState::NotRequired
+            | adminpb::ExecutionPublishState::PlannedPublished
+                if !require_published =>
+            {
+                Ok(())
+            }
+            adminpb::ExecutionPublishState::Unspecified
+            | adminpb::ExecutionPublishState::NotRequired
+            | adminpb::ExecutionPublishState::PlannedPublished => {
+                Err(tonic::Status::internal(format!(
+                    "split root event reached invalid publish state {:?}",
+                    outcome.publish_state()
+                )))
+            }
+        }
+    }
+
+    async fn open_split_child_region(
+        &self,
+        identity: ServerIdentity,
+        descriptor: metapb::RegionDescriptor,
+    ) -> Result<(), tonic::Status> {
+        self.mvcc
+            .put_region_descriptor(&descriptor)
+            .and_then(|_| self.mvcc.checkpoint())
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
+        let apply_status = self
+            .mvcc
+            .get_region_apply_state(descriptor.region_id)
+            .map_err(|err| tonic::Status::internal(err.to_string()))?
+            .map(apply_status_from_holt)
+            .unwrap_or(nokv_raftnode::ApplyStatus {
+                region_id: descriptor.region_id,
+                term: 1,
+                applied_index: 0,
+            });
+        let engine = AppliedKvEngine::with_status(apply_status, self.mvcc.clone());
+        engine
+            .set_region_descriptor(descriptor.clone())
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
+        let engine =
+            PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(self.mvcc.clone()));
+        let log_dir = region_log_dir(
+            self.persistent_root.join("raftlog"),
+            identity.region_id,
+            true,
+        );
+        let region = open_openraft_region(identity, self.addr, log_dir, engine)
+            .await
+            .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
+        self.transport
+            .register(identity.region_id, region.raft_handle());
+        let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)
+            .map_err(|err| tonic::Status::invalid_argument(err.to_string()))?;
+        let (store, admin) = openraft_region_service_pair(
+            region.clone(),
+            admission,
+            self.peer_endpoints.clone(),
+            HoltRegionMetadataSink::new(self.mvcc.clone()),
+            self.topology_publisher.clone(),
+            Arc::new(self.mvcc.clone()),
+        );
+        self.store_services
+            .insert_region(identity.region_id, store)?;
+        self.admin_services
+            .insert_region(identity.region_id, admin)?;
+        self.hosted_regions
+            .insert(identity, region)
+            .map_err(internal_status)?;
+        Ok(())
+    }
+}
+
+fn internal_status(message: impl ToString) -> tonic::Status {
+    tonic::Status::internal(message.to_string())
+}
+
+fn build_split_descriptors(
+    parent: &metapb::RegionDescriptor,
+    split_key: &[u8],
+    child: &metapb::RegionDescriptor,
+) -> Result<(metapb::RegionDescriptor, metapb::RegionDescriptor), tonic::Status> {
+    if parent.region_id == 0 || child.region_id == 0 {
+        return Err(tonic::Status::invalid_argument(
+            "split parent and child region ids are required",
+        ));
+    }
+    if split_key.is_empty()
+        || split_key <= parent.start_key.as_slice()
+        || (!parent.end_key.is_empty() && split_key >= parent.end_key.as_slice())
+    {
+        return Err(tonic::Status::invalid_argument(
+            "split key must be inside parent range",
+        ));
+    }
+    let Some(parent_epoch) = parent.epoch.clone() else {
+        return Err(tonic::Status::invalid_argument(
+            "split parent epoch is required",
+        ));
+    };
+    let mut left = parent.clone();
+    left.end_key = split_key.to_vec();
+    let epoch = left.epoch.get_or_insert_with(Default::default);
+    epoch.version = epoch.version.saturating_add(1);
+    left.hash.clear();
+    append_split_lineage(&mut left, parent, &parent_epoch);
+
+    let mut right = child.clone();
+    if right.start_key.is_empty() {
+        right.start_key = split_key.to_vec();
+    }
+    if right.start_key != split_key {
+        return Err(tonic::Status::invalid_argument(
+            "split child start key must equal split key",
+        ));
+    }
+    if right.end_key != parent.end_key {
+        return Err(tonic::Status::invalid_argument(
+            "split child end key must equal original parent end key",
+        ));
+    }
+    if right.epoch.is_none() {
+        right.epoch = Some(parent_epoch.clone());
+    }
+    if right.peers.is_empty() {
+        return Err(tonic::Status::invalid_argument(
+            "split child peers are required",
+        ));
+    }
+    right.hash.clear();
+    append_split_lineage(&mut right, parent, &parent_epoch);
+    Ok((left, right))
+}
+
+fn append_split_lineage(
+    descriptor: &mut metapb::RegionDescriptor,
+    parent: &metapb::RegionDescriptor,
+    parent_epoch: &metapb::RegionEpoch,
+) {
+    descriptor.lineage.push(metapb::DescriptorLineageRef {
+        region_id: parent.region_id,
+        epoch: Some(parent_epoch.clone()),
+        hash: parent.hash.clone(),
+        kind: metapb::DescriptorLineageKind::SplitParent as i32,
+    });
+}
+
+fn split_root_event(
+    kind: metapb::RootEventKind,
+    left: &metapb::RegionDescriptor,
+    right: &metapb::RegionDescriptor,
+) -> metapb::RootEvent {
+    metapb::RootEvent {
+        kind: kind as i32,
+        payload: Some(metapb::root_event::Payload::RangeSplit(
+            metapb::RootRangeSplit {
+                parent_region_id: left.region_id,
+                split_key: right.start_key.clone(),
+                left: Some(left.clone()),
+                right: Some(right.clone()),
+                ..Default::default()
+            },
+        )),
     }
 }
 
@@ -547,21 +863,32 @@ async fn serve_holt_regions(
         Some(mvcc.clone()),
     );
     let hosted_region_registry = HostedRegionRegistry::new(hosted_regions)?;
+    let store_router = MultiRegionStoreKvService::new(store_services)?;
+    let admin_router = MultiRegionRaftAdminService::new(admin_services)?
+        .with_restart_diagnostics(Arc::new(mvcc.clone()));
+    let split_controller = HoltSplitController {
+        store_id: identities[0].store_id,
+        addr,
+        persistent_root: persistent_root.clone(),
+        coordinator: coordinator.clone(),
+        mvcc: mvcc.clone(),
+        transport: transport.clone(),
+        store_services: store_router.clone(),
+        admin_services: admin_router.clone(),
+        hosted_regions: hosted_region_registry.clone(),
+        peer_endpoints: peer_endpoints.clone(),
+        topology_publisher: topology_publisher.clone(),
+    };
     spawn_multi_region_coordinator_heartbeat(
         coordinator.clone(),
         identities[0].store_id,
         addr,
         hosted_region_registry,
         Some(mvcc.clone()),
+        Some(split_controller.clone()),
     );
-    spawn_pending_topology_retries(coordinator, mvcc.clone(), addr);
-    serve_with_multi_region_services(
-        addr,
-        MultiRegionStoreKvService::new(store_services)?,
-        MultiRegionRaftAdminService::new(admin_services)?.with_restart_diagnostics(Arc::new(mvcc)),
-        transport,
-    )
-    .await?;
+    spawn_pending_topology_retries(coordinator, mvcc.clone(), addr, Some(split_controller));
+    serve_with_multi_region_services(addr, store_router, admin_router, transport).await?;
     Ok(())
 }
 
@@ -621,6 +948,7 @@ async fn serve_memory_regions(
         identities[0].store_id,
         addr,
         hosted_region_registry,
+        None,
         None,
     );
     serve_with_multi_region_services(
@@ -878,12 +1206,19 @@ fn spawn_pending_topology_retries(
     config: Option<CoordinatorHeartbeatConfig>,
     pending_store: HoltMvccStore,
     addr: SocketAddr,
+    split_controller: Option<HoltSplitController>,
 ) {
     let Some(config) = config else {
         return;
     };
     tokio::spawn(async move {
-        run_pending_topology_retries(config, pending_store, local_admin_endpoint(addr)).await;
+        run_pending_topology_retries(
+            config,
+            pending_store,
+            local_admin_endpoint(addr),
+            split_controller,
+        )
+        .await;
     });
 }
 
@@ -954,12 +1289,18 @@ async fn run_pending_topology_retries(
     config: CoordinatorHeartbeatConfig,
     pending_store: HoltMvccStore,
     admin_endpoint: String,
+    split_controller: Option<HoltSplitController>,
 ) {
     let mut ticker = tokio::time::interval(config.interval);
     loop {
         ticker.tick().await;
         retry_pending_topology_events(&config.endpoints, &pending_store).await;
-        retry_pending_scheduler_operations(&admin_endpoint, &pending_store).await;
+        retry_pending_scheduler_operations(
+            &admin_endpoint,
+            &pending_store,
+            split_controller.as_ref(),
+        )
+        .await;
     }
 }
 
@@ -1016,7 +1357,11 @@ async fn retry_pending_topology_events(endpoints: &[String], pending_store: &Hol
     }
 }
 
-async fn retry_pending_scheduler_operations(admin_endpoint: &str, pending_store: &HoltMvccStore) {
+async fn retry_pending_scheduler_operations(
+    admin_endpoint: &str,
+    pending_store: &HoltMvccStore,
+    split_controller: Option<&HoltSplitController>,
+) {
     let pending = match pending_store.pending_scheduler_operations() {
         Ok(pending) => pending,
         Err(err) => {
@@ -1025,7 +1370,7 @@ async fn retry_pending_scheduler_operations(admin_endpoint: &str, pending_store:
         }
     };
     for item in pending {
-        match execute_scheduler_operation(admin_endpoint, &item.operation).await {
+        match execute_scheduler_operation(admin_endpoint, split_controller, &item.operation).await {
             Ok(SchedulerOperationOutcome::Applied)
             | Ok(SchedulerOperationOutcome::Invalid { .. }) => {
                 if let Err(err) = pending_store.delete_pending_scheduler_operation(&item.operation)
@@ -1061,6 +1406,7 @@ fn spawn_multi_region_coordinator_heartbeat<E>(
     addr: SocketAddr,
     regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
+    split_controller: Option<HoltSplitController>,
 ) where
     E: RegionSnapshotEngine + Send + Sync + 'static,
 {
@@ -1068,7 +1414,15 @@ fn spawn_multi_region_coordinator_heartbeat<E>(
         return;
     };
     tokio::spawn(async move {
-        run_multi_region_coordinator_heartbeat(config, store_id, addr, regions, root_events).await;
+        run_multi_region_coordinator_heartbeat(
+            config,
+            store_id,
+            addr,
+            regions,
+            root_events,
+            split_controller,
+        )
+        .await;
     });
 }
 
@@ -1078,6 +1432,7 @@ async fn run_multi_region_coordinator_heartbeat<E>(
     addr: SocketAddr,
     regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
+    split_controller: Option<HoltSplitController>,
 ) where
     E: RegionSnapshotEngine + Send + Sync + 'static,
 {
@@ -1103,7 +1458,12 @@ async fn run_multi_region_coordinator_heartbeat<E>(
                     record_scheduler_operation_outcome(
                         root_events.as_ref(),
                         &operation,
-                        execute_scheduler_operation(&admin_endpoint, &operation).await,
+                        execute_scheduler_operation(
+                            &admin_endpoint,
+                            split_controller.as_ref(),
+                            &operation,
+                        )
+                        .await,
                     );
                 }
             }
@@ -1237,6 +1597,7 @@ enum SchedulerOperationOutcome {
 
 async fn execute_scheduler_operation(
     admin_endpoint: &str,
+    split_controller: Option<&HoltSplitController>,
     operation: &coordpb::SchedulerOperation,
 ) -> Result<SchedulerOperationOutcome, tonic::Status> {
     let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
@@ -1274,6 +1635,9 @@ async fn execute_scheduler_operation(
                 return Ok(SchedulerOperationOutcome::Invalid {
                     reason: "split requires region, split key, and child descriptor",
                 });
+            }
+            if let Some(controller) = split_controller {
+                return controller.execute_split(operation).await;
             }
             Ok(SchedulerOperationOutcome::Unsupported {
                 kind,
@@ -1850,6 +2214,7 @@ mod tests {
 
         let outcome = execute_scheduler_operation(
             &local_admin_endpoint(addr),
+            None,
             &coordpb::SchedulerOperation {
                 r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
                 region_id: 7,
@@ -1931,6 +2296,7 @@ mod tests {
     async fn scheduler_operation_reports_unsupported_split_without_dialing_admin() {
         let outcome = execute_scheduler_operation(
             "http://127.0.0.1:1",
+            None,
             &coordpb::SchedulerOperation {
                 r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
                 region_id: 7,
@@ -1958,6 +2324,7 @@ mod tests {
     async fn scheduler_operation_reports_invalid_split_before_admin_rpc() {
         let outcome = execute_scheduler_operation(
             "http://127.0.0.1:1",
+            None,
             &coordpb::SchedulerOperation {
                 r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
                 region_id: 7,
@@ -1979,6 +2346,7 @@ mod tests {
     async fn scheduler_operation_reports_unsupported_merge_without_dialing_admin() {
         let outcome = execute_scheduler_operation(
             "http://127.0.0.1:1",
+            None,
             &coordpb::SchedulerOperation {
                 r#type: coordpb::SchedulerOperationType::MergeRegion as i32,
                 region_id: 7,
@@ -2066,7 +2434,7 @@ mod tests {
             .record_pending_scheduler_operation(&operation)
             .unwrap();
 
-        retry_pending_scheduler_operations(&local_admin_endpoint(addr), &store).await;
+        retry_pending_scheduler_operations(&local_admin_endpoint(addr), &store, None).await;
 
         assert!(store.pending_scheduler_operations().unwrap().is_empty());
         let captured = transfers.lock().unwrap();

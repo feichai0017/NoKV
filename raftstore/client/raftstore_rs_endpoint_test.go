@@ -835,10 +835,11 @@ func TestRustRaftstoreEndpointAppliesCoordinatorLeaderTransfer(t *testing.T) {
 	}, 5*time.Second, 50*time.Millisecond)
 }
 
-func TestRustRaftstoreEndpointKeepsUnsupportedSplitSchedulerOperationPendingAcrossRestart(t *testing.T) {
+func TestRustRaftstoreEndpointAppliesCoordinatorSplitRegion(t *testing.T) {
 	heartbeatCh := make(chan *coordpb.StoreHeartbeatRequest, 32)
 	operationCh := make(chan *coordpb.SchedulerOperation, 1)
-	coordAddr, stopCoord := startRustRaftstoreCoordinatorCaptureWithOperations(t, heartbeatCh, operationCh)
+	rootEventCh := make(chan *metapb.RootEvent, 16)
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorCaptureWithOperationsAndRootEvents(t, heartbeatCh, operationCh, rootEventCh)
 	defer stopCoord()
 
 	storeAddr := reserveLocalAddr(t)
@@ -852,6 +853,7 @@ func TestRustRaftstoreEndpointKeepsUnsupportedSplitSchedulerOperationPendingAcro
 		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
 	}
 	stopStore := startRustRaftstoreProcessAt(t, storeAddr, storeDir, env)
+	defer stopStore()
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
 	defer cancel()
@@ -866,6 +868,31 @@ func TestRustRaftstoreEndpointKeepsUnsupportedSplitSchedulerOperationPendingAcro
 		}
 	}, 5*time.Second, 50*time.Millisecond)
 
+	meta := rustRaftstoreSingleRegion()
+	cli, err := New(Config{
+		RegionResolver: &mockRegionResolver{region: meta},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 1,
+			Addr:    storeAddr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	handled, err := cli.TryAtomicMutate(ctx, []byte("workspace/before-split"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("workspace/before-split"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 9,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("workspace/before-split"),
+		Value: []byte("before"),
+	}}, 10, 11)
+	require.NoError(t, err)
+	require.True(t, handled)
+	require.NoError(t, cli.Close())
+
 	operationCh <- &coordpb.SchedulerOperation{
 		Type:       coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION,
 		RegionId:   1,
@@ -874,16 +901,61 @@ func TestRustRaftstoreEndpointKeepsUnsupportedSplitSchedulerOperationPendingAcro
 	}
 	admin, closeAdmin, err := adminclient.Dial(ctx, storeAddr)
 	require.NoError(t, err)
-	requireRustRaftstorePendingSplitSchedulerOperation(t, ctx, admin)
-	require.NoError(t, closeAdmin())
-	stopStore()
-
-	stopStore = startRustRaftstoreProcessAt(t, storeAddr, storeDir, env)
-	defer stopStore()
-	admin, closeAdmin, err = adminclient.Dial(ctx, storeAddr)
-	require.NoError(t, err)
 	defer func() { require.NoError(t, closeAdmin()) }()
-	requireRustRaftstorePendingSplitSchedulerOperation(t, ctx, admin)
+	require.Eventually(t, func() bool {
+		status, statusErr := admin.RegionRuntimeStatus(ctx, &adminpb.RegionRuntimeStatusRequest{RegionId: 2})
+		return statusErr == nil &&
+			status.GetKnown() &&
+			status.GetHosted() &&
+			status.GetLeader() &&
+			status.GetLocalPeerId() == 2
+	}, 5*time.Second, 50*time.Millisecond)
+
+	left := rustRaftstoreRegionAtEpoch(1, 1, 1, 2, 1, nil, []byte("m"))
+	right := rustRaftstoreRegion(2, 1, 2, []byte("m"), nil)
+	cli, err = New(Config{
+		RegionResolver: &mockRegionResolver{regions: []*metapb.RegionDescriptor{left, right}},
+		StoreResolver: staticStoreResolver{{
+			StoreID: 1,
+			Addr:    storeAddr,
+			State:   coordpb.StoreState_STORE_STATE_UP,
+		}},
+		DialOptions: []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:       RetryPolicy{MaxAttempts: 1},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+
+	got, err := cli.Get(ctx, []byte("workspace/before-split"), 11)
+	require.NoError(t, err)
+	require.False(t, got.GetNotFound())
+	require.Equal(t, []byte("before"), got.GetValue())
+	handled, err = cli.TryAtomicMutate(ctx, []byte("workspace/after-split"), []*kvrpcpb.AtomicPredicate{{
+		Key:         []byte("workspace/after-split"),
+		Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+		ReadVersion: 19,
+	}}, []*kvrpcpb.Mutation{{
+		Op:    kvrpcpb.Mutation_Put,
+		Key:   []byte("workspace/after-split"),
+		Value: []byte("after"),
+	}}, 20, 21)
+	require.NoError(t, err)
+	require.True(t, handled)
+
+	require.Eventually(t, func() bool {
+		select {
+		case heartbeat := <-heartbeatCh:
+			return heartbeat.GetStoreId() == 1 &&
+				heartbeat.GetRegionNum() == 2 &&
+				heartbeat.GetLeaderNum() == 2
+		default:
+			return false
+		}
+	}, 5*time.Second, 50*time.Millisecond)
+	execution, err := admin.ExecutionStatus(ctx, &adminpb.ExecutionStatusRequest{})
+	require.NoError(t, err)
+	require.Zero(t, execution.GetRestart().GetPendingSchedulerOperationCount())
+	requireRustRaftstoreSplitRootEvents(t, rootEventCh)
 }
 
 func TestRustRaftstoreEndpointHoltMembershipSurvivesRestart(t *testing.T) {
@@ -1261,6 +1333,7 @@ type rustRaftstoreCoordinatorCapture struct {
 	coordpb.UnimplementedCoordinatorServer
 	heartbeats chan<- *coordpb.StoreHeartbeatRequest
 	operations <-chan *coordpb.SchedulerOperation
+	rootEvents chan<- *metapb.RootEvent
 }
 
 func (s *rustRaftstoreCoordinatorCapture) StoreHeartbeat(_ context.Context, req *coordpb.StoreHeartbeatRequest) (*coordpb.StoreHeartbeatResponse, error) {
@@ -1279,7 +1352,13 @@ func (s *rustRaftstoreCoordinatorCapture) StoreHeartbeat(_ context.Context, req 
 	return resp, nil
 }
 
-func (s *rustRaftstoreCoordinatorCapture) PublishRootEvent(context.Context, *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+func (s *rustRaftstoreCoordinatorCapture) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+	if s.rootEvents != nil && req.GetEvent() != nil {
+		select {
+		case s.rootEvents <- proto.Clone(req.GetEvent()).(*metapb.RootEvent):
+		default:
+		}
+	}
 	return &coordpb.PublishRootEventResponse{Accepted: true}, nil
 }
 
@@ -1288,6 +1367,10 @@ func startRustRaftstoreCoordinatorCapture(t *testing.T, heartbeats chan<- *coord
 }
 
 func startRustRaftstoreCoordinatorCaptureWithOperations(t *testing.T, heartbeats chan<- *coordpb.StoreHeartbeatRequest, operations <-chan *coordpb.SchedulerOperation) (string, func()) {
+	return startRustRaftstoreCoordinatorCaptureWithOperationsAndRootEvents(t, heartbeats, operations, nil)
+}
+
+func startRustRaftstoreCoordinatorCaptureWithOperationsAndRootEvents(t *testing.T, heartbeats chan<- *coordpb.StoreHeartbeatRequest, operations <-chan *coordpb.SchedulerOperation, rootEvents chan<- *metapb.RootEvent) (string, func()) {
 	t.Helper()
 	lis, err := net.Listen("tcp", "127.0.0.1:0")
 	require.NoError(t, err)
@@ -1295,6 +1378,7 @@ func startRustRaftstoreCoordinatorCaptureWithOperations(t *testing.T, heartbeats
 	coordpb.RegisterCoordinatorServer(server, &rustRaftstoreCoordinatorCapture{
 		heartbeats: heartbeats,
 		operations: operations,
+		rootEvents: rootEvents,
 	})
 	go func() {
 		if serveErr := server.Serve(lis); serveErr != nil && !errors.Is(serveErr, grpc.ErrServerStopped) {
@@ -1386,11 +1470,15 @@ func rustRaftstoreSingleRegion() *metapb.RegionDescriptor {
 }
 
 func rustRaftstoreRegion(regionID, storeID, peerID uint64, startKey, endKey []byte) *metapb.RegionDescriptor {
+	return rustRaftstoreRegionAtEpoch(regionID, storeID, peerID, 1, 1, startKey, endKey)
+}
+
+func rustRaftstoreRegionAtEpoch(regionID, storeID, peerID, version, confVersion uint64, startKey, endKey []byte) *metapb.RegionDescriptor {
 	return &metapb.RegionDescriptor{
 		RegionId: regionID,
 		StartKey: append([]byte(nil), startKey...),
 		EndKey:   append([]byte(nil), endKey...),
-		Epoch:    &metapb.RegionEpoch{Version: 1, ConfVersion: 1},
+		Epoch:    &metapb.RegionEpoch{Version: version, ConfVersion: confVersion},
 		Peers:    []*metapb.RegionPeer{{StoreId: storeID, PeerId: peerID}},
 	}
 }
@@ -1493,28 +1581,34 @@ func waitForRustRaftstoreLeaderPeer(t *testing.T, ctx context.Context, addrs map
 	}, 5*time.Second, 100*time.Millisecond)
 }
 
-func requireRustRaftstorePendingSplitSchedulerOperation(t *testing.T, ctx context.Context, admin adminclient.Client) {
+func requireRustRaftstoreSplitRootEvents(t *testing.T, rootEvents <-chan *metapb.RootEvent) {
 	t.Helper()
+	var planned, committed *metapb.RootEvent
 	require.Eventually(t, func() bool {
-		execution, err := admin.ExecutionStatus(ctx, &adminpb.ExecutionStatusRequest{})
-		if err != nil {
-			return false
-		}
-		if execution.GetRestart().GetPendingSchedulerOperationCount() != 1 {
-			return false
-		}
-		for _, status := range execution.GetTopology() {
-			if status.GetTransitionId() == "split:1:6d" &&
-				status.GetRegionId() == 1 &&
-				status.GetAction() == "range split" &&
-				status.GetOutcome() == adminpb.ExecutionTopologyOutcome_EXECUTION_TOPOLOGY_OUTCOME_QUEUED &&
-				status.GetPublish() == adminpb.ExecutionPublishState_EXECUTION_PUBLISH_STATE_NOT_REQUIRED &&
-				status.GetLastError() == "scheduler operation pending" {
-				return true
+		for {
+			select {
+			case event := <-rootEvents:
+				switch event.GetKind() {
+				case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_PLANNED:
+					planned = event
+				case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED:
+					committed = event
+				}
+			default:
+				return planned != nil && committed != nil
 			}
 		}
-		return false
 	}, 5*time.Second, 50*time.Millisecond)
+	for _, event := range []*metapb.RootEvent{planned, committed} {
+		split := event.GetRangeSplit()
+		require.NotNil(t, split)
+		require.Equal(t, uint64(1), split.GetParentRegionId())
+		require.Equal(t, []byte("m"), split.GetSplitKey())
+		require.Equal(t, uint64(1), split.GetLeft().GetRegionId())
+		require.Equal(t, []byte("m"), split.GetLeft().GetEndKey())
+		require.Equal(t, uint64(2), split.GetRight().GetRegionId())
+		require.Equal(t, []byte("m"), split.GetRight().GetStartKey())
+	}
 }
 
 func reserveLocalAddr(t *testing.T) string {

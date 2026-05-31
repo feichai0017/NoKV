@@ -346,19 +346,22 @@ Known gaps:
   aggregate store heartbeat for the process. Multi-region bootstrap now
   requires explicit non-overlapping key ranges before publishing those startup
   descriptors, and the Go tagged harness covers routing through a real
-  coordinator using the published descriptors. Unsupported coordinator split
-  operations are persisted as pending Holt scheduler diagnostics and the Go
-  tagged harness now verifies that the pending record survives a Rust endpoint
-  restart instead of being silently consumed. The multi-region StoreKV/RaftAdmin
-  router now uses an in-process mutable region registry, which is the routing
-  prerequisite for dynamic child-region registration after split apply.
+  coordinator using the published descriptors. Holt-backed single-store split
+  execution is now wired through coordinator scheduler operations: the Rust
+  endpoint requires the planned root event before local mutation, proposes the
+  left descriptor through the parent OpenRaft region, opens the right child as a
+  new local OpenRaft region, publishes the committed split event, and routes
+  right-range reads/writes through the dynamically registered child. The
+  multi-region StoreKV/RaftAdmin router now uses an in-process mutable region
+  registry, which is the routing prerequisite for dynamic child-region
+  registration after split apply.
   Coordinator heartbeats now read from the same mutable hosted-region model
   instead of a startup-only region list, so future split-created child regions
   can be advertised without restarting the process. The single-region server
   startup path now also uses the same multi-region service and heartbeat
-  assembly, so dynamic region registration will apply to the default endpoint
-  instead of only to explicit multi-region startup.
-  Coordinator-owned lifecycle, split/merge execution, and default compose
+  assembly, so dynamic region registration applies to the default endpoint
+  instead of only to explicit multi-region startup. Multi-peer split bootstrap,
+  merge execution, coordinator-owned lifecycle coverage, and default compose
   cutover are still pending.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
