@@ -559,31 +559,32 @@ where
             (raftpb::CmdType::CmdPrewrite, Some(RequestCmd::Prewrite(inner))) => {
                 (ResponseCmd::Prewrite(engine.prewrite(inner)?), true, None)
             }
-            (raftpb::CmdType::CmdCommit, Some(RequestCmd::Commit(inner))) => (
-                ResponseCmd::Commit(engine.commit(inner)?),
-                true,
-                Some(ApplyEvent {
-                    source: kvpb::ApplyWatchEventSource::Commit,
-                    commit_version: inner.commit_version,
-                    keys: inner.keys.clone(),
-                }),
-            ),
+            (raftpb::CmdType::CmdCommit, Some(RequestCmd::Commit(inner))) => {
+                let response = engine.commit(inner)?;
+                let event =
+                    (response.error.is_none() && !inner.keys.is_empty()).then(|| ApplyEvent {
+                        source: kvpb::ApplyWatchEventSource::Commit,
+                        commit_version: inner.commit_version,
+                        keys: inner.keys.clone(),
+                    });
+                (ResponseCmd::Commit(response), true, event)
+            }
             (raftpb::CmdType::CmdBatchRollback, Some(RequestCmd::BatchRollback(inner))) => (
                 ResponseCmd::BatchRollback(engine.batch_rollback(inner)?),
                 true,
                 None,
             ),
             (raftpb::CmdType::CmdResolveLock, Some(RequestCmd::ResolveLock(inner))) => {
-                let event = (inner.commit_version != 0).then(|| ApplyEvent {
+                let response = engine.resolve_lock(inner)?;
+                let event = (response.error.is_none()
+                    && inner.commit_version != 0
+                    && !inner.keys.is_empty())
+                .then(|| ApplyEvent {
                     source: kvpb::ApplyWatchEventSource::ResolveLock,
                     commit_version: inner.commit_version,
                     keys: inner.keys.clone(),
                 });
-                (
-                    ResponseCmd::ResolveLock(engine.resolve_lock(inner)?),
-                    true,
-                    event,
-                )
+                (ResponseCmd::ResolveLock(response), true, event)
             }
             (raftpb::CmdType::CmdCheckTxnStatus, Some(RequestCmd::CheckTxnStatus(inner))) => (
                 ResponseCmd::CheckTxnStatus(engine.check_txn_status(inner)?),
@@ -601,43 +602,36 @@ where
                 None,
             ),
             (raftpb::CmdType::CmdTryAtomicMutate, Some(RequestCmd::TryAtomicMutate(inner))) => {
-                let keys = inner
-                    .mutations
-                    .iter()
-                    .map(|mutation| mutation.key.clone())
-                    .collect::<Vec<_>>();
-                (
-                    ResponseCmd::TryAtomicMutate(engine.try_atomic_mutate(inner)?),
-                    true,
-                    Some(ApplyEvent {
-                        source: kvpb::ApplyWatchEventSource::Commit,
-                        commit_version: inner.commit_version,
-                        keys,
-                    }),
-                )
+                let response = engine.try_atomic_mutate(inner)?;
+                let event = (response.error.is_none()
+                    && !response.fallback_to_two_phase_commit
+                    && inner.commit_version != 0
+                    && !inner.mutations.is_empty())
+                .then(|| ApplyEvent {
+                    source: kvpb::ApplyWatchEventSource::Commit,
+                    commit_version: inner.commit_version,
+                    keys: inner
+                        .mutations
+                        .iter()
+                        .map(|mutation| mutation.key.clone())
+                        .collect(),
+                });
+                (ResponseCmd::TryAtomicMutate(response), true, event)
             }
             (
                 raftpb::CmdType::CmdInstallPreparedMvcc,
                 Some(RequestCmd::InstallPreparedMvcc(inner)),
             ) => {
-                let keys = if inner.watch_keys.is_empty() {
-                    inner
-                        .entries
-                        .iter()
-                        .map(|entry| entry.key.clone())
-                        .collect::<Vec<_>>()
-                } else {
-                    inner.watch_keys.clone()
-                };
-                (
-                    ResponseCmd::InstallPreparedMvcc(engine.install_prepared(inner)?),
-                    true,
-                    Some(ApplyEvent {
-                        source: kvpb::ApplyWatchEventSource::Commit,
-                        commit_version: inner.commit_version,
-                        keys,
-                    }),
-                )
+                let response = engine.install_prepared(inner)?;
+                let event = (response.error.is_none()
+                    && inner.commit_version != 0
+                    && !inner.watch_keys.is_empty())
+                .then(|| ApplyEvent {
+                    source: kvpb::ApplyWatchEventSource::Commit,
+                    commit_version: inner.commit_version,
+                    keys: inner.watch_keys.clone(),
+                });
+                (ResponseCmd::InstallPreparedMvcc(response), true, event)
             }
             _ => {
                 return Err(invalid_raft_command(
@@ -988,13 +982,15 @@ where
 
     fn commit(&self, req: &kvpb::CommitRequest) -> nokv_mvcc::Result<kvpb::CommitResponse> {
         let (term, index, result) = self.apply(|engine| engine.commit(req))?;
-        self.publish_apply(
-            index,
-            term,
-            kvpb::ApplyWatchEventSource::Commit,
-            req.commit_version,
-            req.keys.clone(),
-        );
+        if result.error.is_none() && !req.keys.is_empty() {
+            self.publish_apply(
+                index,
+                term,
+                kvpb::ApplyWatchEventSource::Commit,
+                req.commit_version,
+                req.keys.clone(),
+            );
+        }
         Ok(result)
     }
 
@@ -1011,7 +1007,7 @@ where
         req: &kvpb::ResolveLockRequest,
     ) -> nokv_mvcc::Result<kvpb::ResolveLockResponse> {
         let (term, index, result) = self.apply(|engine| engine.resolve_lock(req))?;
-        if req.commit_version != 0 {
+        if result.error.is_none() && req.commit_version != 0 && !req.keys.is_empty() {
             self.publish_apply(
                 index,
                 term,
@@ -1043,19 +1039,23 @@ where
         &self,
         req: &kvpb::TryAtomicMutateRequest,
     ) -> nokv_mvcc::Result<kvpb::TryAtomicMutateResponse> {
-        let keys = req
-            .mutations
-            .iter()
-            .map(|mutation| mutation.key.clone())
-            .collect::<Vec<_>>();
         let (term, index, result) = self.apply(|engine| engine.try_atomic_mutate(req))?;
-        self.publish_apply(
-            index,
-            term,
-            kvpb::ApplyWatchEventSource::Commit,
-            req.commit_version,
-            keys,
-        );
+        if result.error.is_none()
+            && !result.fallback_to_two_phase_commit
+            && req.commit_version != 0
+            && !req.mutations.is_empty()
+        {
+            self.publish_apply(
+                index,
+                term,
+                kvpb::ApplyWatchEventSource::Commit,
+                req.commit_version,
+                req.mutations
+                    .iter()
+                    .map(|mutation| mutation.key.clone())
+                    .collect(),
+            );
+        }
         Ok(result)
     }
 
@@ -1063,22 +1063,16 @@ where
         &self,
         req: &kvpb::InstallPreparedMvccEntriesRequest,
     ) -> nokv_mvcc::Result<kvpb::InstallPreparedMvccEntriesResponse> {
-        let keys = if req.watch_keys.is_empty() {
-            req.entries
-                .iter()
-                .map(|entry| entry.key.clone())
-                .collect::<Vec<_>>()
-        } else {
-            req.watch_keys.clone()
-        };
         let (term, index, result) = self.apply(|engine| engine.install_prepared(req))?;
-        self.publish_apply(
-            index,
-            term,
-            kvpb::ApplyWatchEventSource::Commit,
-            req.commit_version,
-            keys,
-        );
+        if result.error.is_none() && req.commit_version != 0 && !req.watch_keys.is_empty() {
+            self.publish_apply(
+                index,
+                term,
+                kvpb::ApplyWatchEventSource::Commit,
+                req.commit_version,
+                req.watch_keys.clone(),
+            );
+        }
         Ok(result)
     }
 
@@ -2453,6 +2447,53 @@ mod tests {
         assert_eq!(event.keys, vec![b"k".to_vec()]);
     }
 
+    #[test]
+    fn applied_kv_engine_suppresses_watch_events_for_failed_writes() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        let mut watch = engine.subscribe();
+        engine
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                predicates: vec![kvpb::AtomicPredicate {
+                    key: b"k".to_vec(),
+                    kind: kvpb::AtomicPredicateKind::NotExists as i32,
+                    read_version: 1,
+                    ..Default::default()
+                }],
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v1".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 1,
+                commit_version: 2,
+            })
+            .unwrap();
+        assert_eq!(watch.try_recv().unwrap().keys, vec![b"k".to_vec()]);
+
+        let rejected = engine
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                predicates: vec![kvpb::AtomicPredicate {
+                    key: b"k".to_vec(),
+                    kind: kvpb::AtomicPredicateKind::NotExists as i32,
+                    read_version: 2,
+                    ..Default::default()
+                }],
+                mutations: vec![kvpb::Mutation {
+                    key: b"k".to_vec(),
+                    value: b"v2".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 3,
+                commit_version: 4,
+            })
+            .unwrap();
+
+        assert!(rejected.error.is_some());
+        assert!(watch.try_recv().is_err());
+    }
+
     #[tokio::test]
     async fn applied_kv_engine_executes_existing_raft_command_payload() {
         let engine = AppliedKvEngine::new(7, MvccStore::new());
@@ -2501,6 +2542,81 @@ mod tests {
         };
         assert_eq!(out.value, b"v".to_vec());
         assert_eq!(engine.status().applied_index, 1);
+    }
+
+    #[tokio::test]
+    async fn raft_command_suppresses_watch_events_for_failed_atomic_mutate() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        let mut watch = engine.subscribe();
+        engine
+            .execute_raft_command(&raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    ..Default::default()
+                }),
+                requests: vec![raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                        kvpb::TryAtomicMutateRequest {
+                            predicates: vec![kvpb::AtomicPredicate {
+                                key: b"k".to_vec(),
+                                kind: kvpb::AtomicPredicateKind::NotExists as i32,
+                                read_version: 1,
+                                ..Default::default()
+                            }],
+                            mutations: vec![kvpb::Mutation {
+                                key: b"k".to_vec(),
+                                value: b"v1".to_vec(),
+                                op: kvpb::mutation::Op::Put as i32,
+                                ..Default::default()
+                            }],
+                            start_version: 1,
+                            commit_version: 2,
+                        },
+                    )),
+                }],
+            })
+            .await
+            .unwrap();
+        assert_eq!(watch.try_recv().unwrap().keys, vec![b"k".to_vec()]);
+
+        let response = engine
+            .execute_raft_command(&raftpb::RaftCmdRequest {
+                header: Some(raftpb::CmdHeader {
+                    region_id: 7,
+                    ..Default::default()
+                }),
+                requests: vec![raftpb::Request {
+                    cmd_type: raftpb::CmdType::CmdTryAtomicMutate as i32,
+                    cmd: Some(raftpb::request::Cmd::TryAtomicMutate(
+                        kvpb::TryAtomicMutateRequest {
+                            predicates: vec![kvpb::AtomicPredicate {
+                                key: b"k".to_vec(),
+                                kind: kvpb::AtomicPredicateKind::NotExists as i32,
+                                read_version: 2,
+                                ..Default::default()
+                            }],
+                            mutations: vec![kvpb::Mutation {
+                                key: b"k".to_vec(),
+                                value: b"v2".to_vec(),
+                                op: kvpb::mutation::Op::Put as i32,
+                                ..Default::default()
+                            }],
+                            start_version: 3,
+                            commit_version: 4,
+                        },
+                    )),
+                }],
+            })
+            .await
+            .unwrap();
+
+        let Some(raftpb::response::Cmd::TryAtomicMutate(out)) = response.responses[0].cmd.as_ref()
+        else {
+            panic!("missing atomic mutate response");
+        };
+        assert!(out.error.is_some());
+        assert!(watch.try_recv().is_err());
     }
 
     #[tokio::test]

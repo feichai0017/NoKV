@@ -214,7 +214,9 @@ The first slices are intentionally narrow:
   `ExecutionStatus` aggregates hosted-region readiness and topology diagnostics.
   `WatchApply` now mirrors Go's prefix projection more closely: buffer 0 maps
   to the default watch buffer, emitted events contain only matching keys, and
-  large key sets are split into bounded messages.
+  large key sets are split into bounded messages. Apply-watch emission also now
+  follows the Go observer boundary: failed commit/resolve/atomic/install
+  responses and atomic fallback responses do not publish visibility events.
   `StoreKV` admission now derives the leader/follower decision from the live
   runtime status instead of trusting the service bootstrap flag, so stale
   leader endpoints reject writes with `NotLeader` and follower-prefer reads keep
