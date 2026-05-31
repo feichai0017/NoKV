@@ -1,46 +1,6 @@
-#[cfg(test)]
-use nokv_proto::nokv::kv::v1 as kvpb;
-#[cfg(test)]
-use nokv_proto::nokv::raft::v1 as raftpb;
-#[cfg(test)]
-use tonic::Status;
-
-#[cfg(test)]
-use crate::admission::RegionAdmission;
 use crate::{
     DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE, DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE,
 };
-
-#[cfg(test)]
-pub(crate) fn trim_scan_response_to_region(
-    admission: &RegionAdmission,
-    response: &mut kvpb::ScanResponse,
-) {
-    response
-        .kvs
-        .retain(|kv| admission.key_in_range(kv.key.as_slice()));
-}
-
-#[cfg(test)]
-pub(crate) fn header_from_context(context: &kvpb::Context) -> raftpb::CmdHeader {
-    let peer = context.peer.as_ref();
-    raftpb::CmdHeader {
-        region_id: context.region_id,
-        region_epoch: context.region_epoch.clone(),
-        peer_id: peer.map(|peer| peer.peer_id).unwrap_or_default(),
-        read_consistency: context.read_consistency,
-        read_preference: context.read_preference,
-        max_stale_read_index: context.max_stale_read_index,
-        max_stale_read_ms: context.max_stale_read_ms,
-        store_id: peer.map(|peer| peer.store_id).unwrap_or_default(),
-        ..Default::default()
-    }
-}
-
-#[cfg(test)]
-pub(crate) fn raft_payload_error(operation: &str, detail: &str) -> Status {
-    Status::internal(format!("{operation} raft payload error: {detail}"))
-}
 
 pub(crate) fn matching_apply_watch_keys(keys: &[Vec<u8>], prefix: &[u8]) -> Vec<Vec<u8>> {
     keys.iter()

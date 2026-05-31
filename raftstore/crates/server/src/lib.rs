@@ -1,8 +1,6 @@
 //! Tonic services for the Rust raftstore metadata data plane.
 //!
 //! This crate owns the external gRPC boundary for the metadata-native path.
-//! StoreKV remains compiled only as an internal compatibility test surface while
-//! the Rust state-machine and replication layers converge on MetadataPlane.
 
 mod admin;
 mod admission;
@@ -14,8 +12,6 @@ mod metadata_plane;
 mod publisher;
 mod region_router;
 mod serve;
-#[cfg(test)]
-mod store_kv_compat;
 mod topology;
 mod wire_helpers;
 

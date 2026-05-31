@@ -129,18 +129,6 @@ impl RegionAdmission {
         self.admit_keys(context, keys, true, AdmissionRole::Read)
     }
 
-    #[cfg(test)]
-    pub(crate) fn admit_leader_optional_keys<'a, I>(
-        &self,
-        context: Option<&kvpb::Context>,
-        keys: I,
-    ) -> Result<Option<errorpb::RegionError>, Status>
-    where
-        I: IntoIterator<Item = &'a [u8]>,
-    {
-        self.admit_keys(context, keys, true, AdmissionRole::LeaderOnly)
-    }
-
     pub(crate) fn admit_leader_required_keys<'a, I>(
         &self,
         context: Option<&kvpb::Context>,

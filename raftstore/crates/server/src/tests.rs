@@ -2,10 +2,8 @@ use super::*;
 use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
 use crate::serve::serve_with_openraft_metadata_region_admission_and_peer_endpoints;
-use crate::store_kv_compat::StoreKvService;
 use crate::wire_helpers::chunk_apply_watch_keys;
 use adminpb::raft_admin_server::RaftAdmin;
-use kvpb::store_kv_server::StoreKv;
 use metadatapb::metadata_plane_server::MetadataPlane;
 use nokv_holtstore::HoltMvccStore;
 use nokv_mvcc::{KvEngine, MvccStore};
@@ -17,7 +15,7 @@ use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
     ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplayRequest, BasicNode,
-    MetadataReadExecutor, RaftCommandExecutor, RegionMetadataSink,
+    MetadataReadExecutor, RegionMetadataSink,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -140,21 +138,6 @@ impl TopologyPublisher for FailedTopologyPublisher {
     }
 }
 
-fn context(admission: &RegionAdmission) -> kvpb::Context {
-    kvpb::Context {
-        region_id: admission.region_id,
-        region_epoch: Some(metapb::RegionEpoch {
-            version: admission.epoch_version,
-            conf_version: admission.epoch_conf_version,
-        }),
-        peer: Some(metapb::RegionPeer {
-            store_id: admission.store_id,
-            peer_id: admission.peer_id,
-        }),
-        ..Default::default()
-    }
-}
-
 fn metadata_context(admission: &RegionAdmission) -> metadatapb::MetadataContext {
     metadatapb::MetadataContext {
         region_id: admission.region_id,
@@ -194,10 +177,6 @@ fn metadata_put_request(
             ..Default::default()
         }),
     }
-}
-
-fn default_context() -> kvpb::Context {
-    context(&RegionAdmission::default())
 }
 
 fn open_persistent_holt_engine(
@@ -269,16 +248,6 @@ impl FixedRuntimeEngine {
 
     fn set_region_descriptor(&self, descriptor: metapb::RegionDescriptor) {
         self.inner.set_region_descriptor(descriptor).unwrap();
-    }
-}
-
-impl RaftCommandExecutor for FixedRuntimeEngine {
-    fn execute_raft_command<'a>(
-        &'a self,
-        req: &'a raftpb::RaftCmdRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
-    {
-        self.inner.execute_raft_command(req)
     }
 }
 
@@ -456,24 +425,6 @@ impl AppliedRegionDescriptorProvider for MetadataOnlyEngine {
 }
 
 #[tokio::test]
-async fn get_returns_not_found_from_empty_store() {
-    let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
-    let response = service
-        .get(Request::new(kvpb::KvGetRequest {
-            context: Some(default_context()),
-            request: Some(kvpb::GetRequest {
-                key: b"missing".to_vec(),
-                version: 1,
-            }),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner();
-    assert!(response.response.unwrap().not_found);
-}
-
-#[tokio::test]
 async fn metadata_plane_read_does_not_require_legacy_raft_command_executor() {
     let admission = RegionAdmission {
         region_id: 7,
@@ -517,27 +468,25 @@ async fn metadata_plane_read_does_not_require_legacy_raft_command_executor() {
 }
 
 #[tokio::test]
-async fn service_can_run_against_holt_mvcc_engine() {
+async fn metadata_plane_can_run_against_holt_engine() {
     let engine = nokv_raftnode::AppliedKvEngine::new(
         1,
         nokv_holtstore::HoltMvccStore::open_memory().unwrap(),
     );
-    let service = StoreKvService::new(engine.clone());
+    let admission = RegionAdmission::default();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        engine.clone(),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
     let response = service
-        .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
-            context: Some(default_context()),
-            request: Some(kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"k".to_vec(),
-                    value: b"v".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                commit_version: 2,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }))
+        .commit_metadata(Request::new(metadata_put_request(
+            &admission,
+            b"k".to_vec(),
+            b"v".to_vec(),
+            1,
+            2,
+        )))
         .await
         .unwrap()
         .into_inner();
@@ -546,7 +495,7 @@ async fn service_can_run_against_holt_mvcc_engine() {
         "unexpected region error: {:?}",
         response.region_error
     );
-    assert_eq!(response.response.unwrap().applied_keys, 1);
+    assert_eq!(response.result.unwrap().applied_mutations, 1);
     assert_eq!(engine.status().applied_index, 1);
 }
 
@@ -613,7 +562,7 @@ async fn metadata_admission_refreshes_from_applied_region_descriptor() {
 }
 
 #[tokio::test]
-async fn service_can_run_against_openraft_region() {
+async fn metadata_plane_can_run_against_openraft_region() {
     let dir = tempfile::tempdir().unwrap();
     let log = nokv_raftnode::SegmentedEntryLog::open(1, dir.path()).unwrap();
     let state_machine = nokv_raftnode::RegionStateMachine::new(
@@ -627,28 +576,26 @@ async fn service_can_run_against_openraft_region() {
     )
     .await
     .unwrap();
-    let service = StoreKvService::new(region.clone());
+    let admission = RegionAdmission::default();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        region.clone(),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
 
     let response = service
-        .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
-            context: Some(default_context()),
-            request: Some(kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"k".to_vec(),
-                    value: b"v".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                commit_version: 2,
-                ..Default::default()
-            }),
-            ..Default::default()
-        }))
+        .commit_metadata(Request::new(metadata_put_request(
+            &admission,
+            b"k".to_vec(),
+            b"v".to_vec(),
+            1,
+            2,
+        )))
         .await
         .unwrap()
         .into_inner();
 
-    assert_eq!(response.response.unwrap().applied_keys, 1);
+    assert_eq!(response.result.unwrap().applied_mutations, 1);
     assert_eq!(region.apply_status().applied_index, 2);
 }
 
@@ -1193,271 +1140,34 @@ async fn holt_snapshot_installed_peer_survives_openraft_restart() {
 }
 
 #[tokio::test]
-async fn transaction_rpcs_round_trip_through_service() {
-    let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
-    let context = default_context();
-
-    let prewrite = service
-        .prewrite(Request::new(kvpb::KvPrewriteRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::PrewriteRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"txn/a".to_vec(),
-                    value: b"va".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                primary_lock: b"txn/a".to_vec(),
-                start_version: 10,
-                lock_ttl: 10_000,
-                ..Default::default()
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert!(prewrite.errors.is_empty());
-
-    let heartbeat = service
-        .txn_heart_beat(Request::new(kvpb::KvTxnHeartBeatRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::TxnHeartBeatRequest {
-                primary_key: b"txn/a".to_vec(),
-                start_version: 10,
-                ttl_extension: 100,
-                ..Default::default()
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert!(heartbeat.error.is_none());
-    assert!(heartbeat.lock_ttl >= 100);
-
-    let status = service
-        .check_txn_status(Request::new(kvpb::KvCheckTxnStatusRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::CheckTxnStatusRequest {
-                primary_key: b"txn/a".to_vec(),
-                lock_ts: 10,
-                current_ts: 11,
-                caller_start_ts: 11,
-                current_time: 0,
-                rollback_if_not_exist: true,
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert!(status.error.is_none());
-    assert_eq!(
-        status.action,
-        kvpb::CheckTxnStatusAction::CheckTxnStatusMinCommitTsPushed as i32
-    );
-
-    let commit = service
-        .commit(Request::new(kvpb::KvCommitRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::CommitRequest {
-                keys: vec![b"txn/a".to_vec()],
-                start_version: 10,
-                commit_version: 20,
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert!(commit.error.is_none());
-
-    let batch_get = service
-        .batch_get(Request::new(kvpb::KvBatchGetRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::BatchGetRequest {
-                requests: vec![
-                    kvpb::GetRequest {
-                        key: b"txn/a".to_vec(),
-                        version: 20,
-                    },
-                    kvpb::GetRequest {
-                        key: b"txn/missing".to_vec(),
-                        version: 20,
-                    },
-                ],
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert_eq!(batch_get.responses[0].value, b"va".to_vec());
-    assert!(batch_get.responses[1].not_found);
-
-    let scan = service
-        .scan(Request::new(kvpb::KvScanRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::ScanRequest {
-                start_key: b"txn/".to_vec(),
-                limit: 10,
-                version: 20,
-                include_start: true,
-                ..Default::default()
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert_eq!(scan.kvs.len(), 1);
-    assert_eq!(scan.kvs[0].key, b"txn/a".to_vec());
-
-    service
-        .prewrite(Request::new(kvpb::KvPrewriteRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::PrewriteRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"txn/rollback".to_vec(),
-                    value: b"discard".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                primary_lock: b"txn/rollback".to_vec(),
-                start_version: 30,
-                lock_ttl: 10,
-                ..Default::default()
-            }),
-        }))
-        .await
-        .unwrap();
-    let rollback = service
-        .batch_rollback(Request::new(kvpb::KvBatchRollbackRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::BatchRollbackRequest {
-                keys: vec![b"txn/rollback".to_vec()],
-                start_version: 30,
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert!(rollback.error.is_none());
-
-    service
-        .prewrite(Request::new(kvpb::KvPrewriteRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::PrewriteRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: b"txn/resolve".to_vec(),
-                    value: b"resolved".to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                primary_lock: b"txn/resolve".to_vec(),
-                start_version: 40,
-                lock_ttl: 10,
-                ..Default::default()
-            }),
-        }))
-        .await
-        .unwrap();
-    let resolved = service
-        .resolve_lock(Request::new(kvpb::KvResolveLockRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::ResolveLockRequest {
-                start_version: 40,
-                commit_version: 50,
-                keys: vec![b"txn/resolve".to_vec()],
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert_eq!(resolved.resolved_locks, 1);
-
-    let install = service
-        .install_prepared_mvcc_entries(Request::new(kvpb::KvInstallPreparedMvccEntriesRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::InstallPreparedMvccEntriesRequest {
-                routing_key: b"txn/prepared".to_vec(),
-                commit_version: 60,
-                entries: vec![kvpb::PreparedMvccEntry {
-                    column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
-                    key: b"txn/prepared".to_vec(),
-                    version: 60,
-                    value: b"prepared".to_vec(),
-                    has_value: true,
-                    ..Default::default()
-                }],
-                watch_keys: vec![b"txn/prepared".to_vec()],
-                ..Default::default()
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert_eq!(install.applied_entries, 1);
-    assert_eq!(install.commit_version, 60);
-
-    let prepared = service
-        .get(Request::new(kvpb::KvGetRequest {
-            context: Some(context),
-            request: Some(kvpb::GetRequest {
-                key: b"txn/prepared".to_vec(),
-                version: 60,
-            }),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert_eq!(prepared.value, b"prepared".to_vec());
-}
-
-#[tokio::test]
 async fn batch_get_empty_does_not_require_region_admission() {
     let admission = RegionAdmission {
         leader: false,
         ..Default::default()
     };
-    let service = StoreKvService::with_admission(
+    let service = MetadataPlaneService::with_admission_state_and_execution(
         FixedRuntimeEngine::follower(admission.region_id, admission.peer_id, 99),
-        admission.clone(),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
     );
 
     let response = service
-        .batch_get(Request::new(kvpb::KvBatchGetRequest {
-            context: Some(kvpb::Context {
+        .batch_get(Request::new(metadatapb::MetadataBatchGetRequest {
+            context: Some(metadatapb::MetadataContext {
                 region_id: admission.region_id,
                 ..Default::default()
             }),
-            request: Some(kvpb::BatchGetRequest::default()),
+            requests: Vec::new(),
         }))
         .await
         .unwrap()
         .into_inner();
     assert!(response.region_error.is_none());
-    assert!(response.response.unwrap().responses.is_empty());
+    assert!(response.responses.is_empty());
 
     let missing_context = service
-        .batch_get(Request::new(kvpb::KvBatchGetRequest {
-            request: Some(kvpb::BatchGetRequest::default()),
+        .batch_get(Request::new(metadatapb::MetadataBatchGetRequest {
+            requests: Vec::new(),
             ..Default::default()
         }))
         .await;
@@ -1468,96 +1178,48 @@ async fn batch_get_empty_does_not_require_region_admission() {
 }
 
 #[tokio::test]
-async fn install_prepared_rejects_malformed_batch_without_partial_apply() {
-    let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
-    let context = default_context();
-
-    let install = service
-        .install_prepared_mvcc_entries(Request::new(kvpb::KvInstallPreparedMvccEntriesRequest {
-            context: Some(context.clone()),
-            request: Some(kvpb::InstallPreparedMvccEntriesRequest {
-                routing_key: b"txn/prepared-a".to_vec(),
-                commit_version: 70,
-                entries: vec![
-                    kvpb::PreparedMvccEntry {
-                        column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
-                        key: b"txn/prepared-a".to_vec(),
-                        version: 70,
-                        value: b"value".to_vec(),
-                        has_value: true,
-                        ..Default::default()
-                    },
-                    kvpb::PreparedMvccEntry {
-                        column_family: kvpb::prepared_mvcc_entry::ColumnFamily::Default as i32,
-                        key: b"txn/prepared-b".to_vec(),
-                        version: 71,
-                        value: b"must-not-apply".to_vec(),
-                        has_value: true,
-                        ..Default::default()
-                    },
-                ],
-                ..Default::default()
-            }),
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert!(install.error.unwrap().abort.contains("version"));
-
-    let prepared = service
-        .get(Request::new(kvpb::KvGetRequest {
-            context: Some(context),
-            request: Some(kvpb::GetRequest {
-                key: b"txn/prepared-a".to_vec(),
-                version: 70,
-            }),
-            ..Default::default()
-        }))
-        .await
-        .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
-    assert!(prepared.not_found);
-}
-
-#[tokio::test]
 async fn watch_apply_streams_matching_apply_events() {
     let engine = nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new());
-    let service = StoreKvService::new(engine.clone());
+    let admission = RegionAdmission::default();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        engine,
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
     let mut stream = service
-        .watch_apply(Request::new(kvpb::ApplyWatchRequest {
+        .watch_apply(Request::new(metadatapb::MetadataWatchApplyRequest {
             key_prefix: b"prefix/".to_vec(),
             buffer: 4,
+            ..Default::default()
         }))
         .await
         .unwrap()
         .into_inner();
 
     service
-        .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
-            context: Some(default_context()),
-            request: Some(kvpb::TryAtomicMutateRequest {
+        .commit_metadata(Request::new(metadatapb::MetadataCommitRequest {
+            context: Some(metadata_context(&admission)),
+            command: Some(metadatapb::MetadataCommand {
+                request_id: b"watch-commit".to_vec(),
+                read_version: 8,
+                commit_version: 9,
                 mutations: vec![
-                    kvpb::Mutation {
+                    metadatapb::MetadataMutation {
                         key: b"prefix/k".to_vec(),
                         value: b"v".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
+                        op: metadatapb::metadata_mutation::Op::Put as i32,
                         ..Default::default()
                     },
-                    kvpb::Mutation {
+                    metadatapb::MetadataMutation {
                         key: b"other/k".to_vec(),
                         value: b"ignored".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
+                        op: metadatapb::metadata_mutation::Op::Put as i32,
                         ..Default::default()
                     },
                 ],
-                commit_version: 9,
+                watch_keys: vec![b"prefix/k".to_vec(), b"other/k".to_vec()],
                 ..Default::default()
             }),
-            ..Default::default()
         }))
         .await
         .unwrap();
@@ -1613,13 +1275,15 @@ fn holt_region_metadata_sink_replays_watch_history_after_reopen() {
 
 #[tokio::test]
 async fn get_requires_context() {
-    let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::leader(1, 1),
+        RegionAdmissionState::new(RegionAdmission::default()),
+        ExecutionRuntime::default(),
+    );
     let err = service
-        .get(Request::new(kvpb::KvGetRequest {
-            request: Some(kvpb::GetRequest {
-                key: b"k".to_vec(),
-                version: 1,
-            }),
+        .get(Request::new(metadatapb::MetadataGetRequest {
+            key: b"k".to_vec(),
+            version: 1,
             ..Default::default()
         }))
         .await
@@ -1629,37 +1293,41 @@ async fn get_requires_context() {
 
 #[tokio::test]
 async fn get_rejects_region_not_found() {
-    let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
-    let mut ctx = default_context();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::leader(1, 1),
+        RegionAdmissionState::new(RegionAdmission::default()),
+        ExecutionRuntime::default(),
+    );
+    let mut ctx = metadata_context(&RegionAdmission::default());
     ctx.region_id = 99;
     let response = service
-        .get(Request::new(kvpb::KvGetRequest {
+        .get(Request::new(metadatapb::MetadataGetRequest {
             context: Some(ctx),
-            request: Some(kvpb::GetRequest {
-                key: b"k".to_vec(),
-                version: 1,
-            }),
+            key: b"k".to_vec(),
+            version: 1,
         }))
         .await
         .unwrap()
         .into_inner();
     let region_error = response.region_error.unwrap();
     assert!(region_error.region_not_found.is_some());
-    assert!(response.response.is_none());
+    assert!(response.kv.is_none());
 }
 
 #[tokio::test]
 async fn get_rejects_store_not_match() {
-    let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
-    let mut ctx = default_context();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::leader(1, 1),
+        RegionAdmissionState::new(RegionAdmission::default()),
+        ExecutionRuntime::default(),
+    );
+    let mut ctx = metadata_context(&RegionAdmission::default());
     ctx.peer.as_mut().unwrap().store_id = 999;
     let response = service
-        .get(Request::new(kvpb::KvGetRequest {
+        .get(Request::new(metadatapb::MetadataGetRequest {
             context: Some(ctx),
-            request: Some(kvpb::GetRequest {
-                key: b"k".to_vec(),
-                version: 1,
-            }),
+            key: b"k".to_vec(),
+            version: 1,
         }))
         .await
         .unwrap()
@@ -1667,21 +1335,23 @@ async fn get_rejects_store_not_match() {
     let mismatch = response.region_error.unwrap().store_not_match.unwrap();
     assert_eq!(mismatch.request_store_id, 999);
     assert_eq!(mismatch.actual_store_id, 1);
-    assert!(response.response.is_none());
+    assert!(response.kv.is_none());
 }
 
 #[tokio::test]
 async fn get_rejects_epoch_not_match() {
-    let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
-    let mut ctx = default_context();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::leader(1, 1),
+        RegionAdmissionState::new(RegionAdmission::default()),
+        ExecutionRuntime::default(),
+    );
+    let mut ctx = metadata_context(&RegionAdmission::default());
     ctx.region_epoch.as_mut().unwrap().version = 99;
     let response = service
-        .get(Request::new(kvpb::KvGetRequest {
+        .get(Request::new(metadatapb::MetadataGetRequest {
             context: Some(ctx),
-            request: Some(kvpb::GetRequest {
-                key: b"k".to_vec(),
-                version: 1,
-            }),
+            key: b"k".to_vec(),
+            version: 1,
         }))
         .await
         .unwrap()
@@ -1689,7 +1359,7 @@ async fn get_rejects_epoch_not_match() {
     let mismatch = response.region_error.unwrap().epoch_not_match.unwrap();
     assert_eq!(mismatch.current_epoch.unwrap().version, 1);
     assert_eq!(mismatch.regions.len(), 1);
-    assert!(response.response.is_none());
+    assert!(response.kv.is_none());
 }
 
 #[tokio::test]
@@ -1707,17 +1377,16 @@ async fn get_rejects_key_not_in_region() {
         leader: true,
         hosted: true,
     };
-    let service = StoreKvService::with_admission(
-        nokv_raftnode::AppliedKvEngine::new(10, MvccStore::new()),
-        admission.clone(),
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::leader(10, 77),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
     );
     let response = service
-        .get(Request::new(kvpb::KvGetRequest {
-            context: Some(context(&admission)),
-            request: Some(kvpb::GetRequest {
-                key: b"z".to_vec(),
-                version: 1,
-            }),
+        .get(Request::new(metadatapb::MetadataGetRequest {
+            context: Some(metadata_context(&admission)),
+            key: b"z".to_vec(),
+            version: 1,
         }))
         .await
         .unwrap()
@@ -1727,7 +1396,7 @@ async fn get_rejects_key_not_in_region() {
     assert_eq!(out.region_id, 10);
     assert_eq!(out.start_key, b"a".to_vec());
     assert_eq!(out.end_key, b"m".to_vec());
-    assert!(response.response.is_none());
+    assert!(response.kv.is_none());
 }
 
 #[tokio::test]
@@ -1736,23 +1405,24 @@ async fn scan_rejects_not_leader() {
         leader: false,
         ..Default::default()
     };
-    let service =
-        StoreKvService::with_admission(FixedRuntimeEngine::follower(1, 1, 0), admission.clone());
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::follower(1, 1, 0),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
     let response = service
-        .scan(Request::new(kvpb::KvScanRequest {
-            context: Some(context(&admission)),
-            request: Some(kvpb::ScanRequest {
-                start_key: b"k".to_vec(),
-                limit: 1,
-                version: 1,
-                ..Default::default()
-            }),
+        .scan(Request::new(metadatapb::MetadataScanRequest {
+            context: Some(metadata_context(&admission)),
+            start_key: b"k".to_vec(),
+            limit: 1,
+            version: 1,
+            ..Default::default()
         }))
         .await
         .unwrap()
         .into_inner();
     assert!(response.region_error.unwrap().not_leader.is_some());
-    assert!(response.response.is_none());
+    assert!(response.kvs.is_empty());
 }
 
 #[tokio::test]
@@ -1782,25 +1452,24 @@ async fn scan_trims_keys_outside_region_end() {
         end_key: b"m".to_vec(),
         ..Default::default()
     };
-    let service =
-        StoreKvService::with_admission(nokv_raftnode::AppliedKvEngine::new(1, store), admission);
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        nokv_raftnode::AppliedKvEngine::new(1, store),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
 
     let scan = service
-        .scan(Request::new(kvpb::KvScanRequest {
-            context: Some(default_context()),
-            request: Some(kvpb::ScanRequest {
-                start_key: b"a".to_vec(),
-                limit: 10,
-                version: 20,
-                include_start: true,
-                ..Default::default()
-            }),
+        .scan(Request::new(metadatapb::MetadataScanRequest {
+            context: Some(metadata_context(&admission)),
+            start_key: b"a".to_vec(),
+            limit: 10,
+            version: 20,
+            include_start: true,
+            ..Default::default()
         }))
         .await
         .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
+        .into_inner();
 
     let keys = scan
         .kvs
@@ -1830,23 +1499,24 @@ async fn scan_zero_limit_matches_go_default_limit() {
             })
             .unwrap();
     }
-    let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, store));
+    let admission = RegionAdmission::default();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        nokv_raftnode::AppliedKvEngine::new(1, store),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
 
     let scan = service
-        .scan(Request::new(kvpb::KvScanRequest {
-            context: Some(default_context()),
-            request: Some(kvpb::ScanRequest {
-                start_key: b"scan-limit/".to_vec(),
-                version: 20,
-                include_start: true,
-                ..Default::default()
-            }),
+        .scan(Request::new(metadatapb::MetadataScanRequest {
+            context: Some(metadata_context(&admission)),
+            start_key: b"scan-limit/".to_vec(),
+            version: 20,
+            include_start: true,
+            ..Default::default()
         }))
         .await
         .unwrap()
-        .into_inner()
-        .response
-        .unwrap();
+        .into_inner();
 
     assert_eq!(scan.kvs.len(), 1);
     assert_eq!(scan.kvs[0].key, b"scan-limit/a".to_vec());
@@ -1952,16 +1622,19 @@ async fn writes_remain_leader_only_when_follower_prefer_is_set() {
 
 #[tokio::test]
 async fn scan_rejects_reverse_scan() {
-    let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
+    let admission = RegionAdmission::default();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        FixedRuntimeEngine::leader(1, 1),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
     let err = service
-        .scan(Request::new(kvpb::KvScanRequest {
-            context: Some(default_context()),
-            request: Some(kvpb::ScanRequest {
-                start_key: b"k".to_vec(),
-                limit: 1,
-                reverse: true,
-                ..Default::default()
-            }),
+        .scan(Request::new(metadatapb::MetadataScanRequest {
+            context: Some(metadata_context(&admission)),
+            start_key: b"k".to_vec(),
+            limit: 1,
+            reverse: true,
+            ..Default::default()
         }))
         .await
         .unwrap_err();

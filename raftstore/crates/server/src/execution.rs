@@ -79,32 +79,6 @@ impl ExecutionRuntime {
         }
     }
 
-    #[cfg(test)]
-    pub(crate) fn record_invalid(
-        &self,
-        class: adminpb::ExecutionAdmissionClass,
-        context: Option<&kvpb::Context>,
-        detail: impl Into<String>,
-    ) {
-        let status = adminpb::ExecutionAdmissionStatus {
-            observed: true,
-            class: class as i32,
-            reason: adminpb::ExecutionAdmissionReason::Invalid as i32,
-            accepted: false,
-            region_id: context.map(|context| context.region_id).unwrap_or_default(),
-            peer_id: context
-                .and_then(|context| context.peer.as_ref())
-                .map(|peer| peer.peer_id)
-                .unwrap_or_default(),
-            request_id: 0,
-            detail: detail.into(),
-            at_unix_nano: now_unix_nano(),
-        };
-        if let Ok(mut last) = self.last_admission.lock() {
-            *last = status;
-        }
-    }
-
     pub(crate) fn snapshot(&self) -> Result<adminpb::ExecutionAdmissionStatus, Status> {
         self.last_admission
             .lock()
