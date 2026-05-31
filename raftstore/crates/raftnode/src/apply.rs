@@ -1,7 +1,6 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::time::Instant;
 
 use nokv_mvcc::{KvEngine, MetadataEngine, MvccSnapshotEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
@@ -11,9 +10,15 @@ use nokv_proto::nokv::raft::v1 as raftpb;
 use prost::Message;
 use tokio::sync::broadcast;
 
+use crate::metadata::{
+    encode_metadata_response, metadata_command_watch_keys, metadata_get_response_from_kv,
+    metadata_key_error_from_kv, metadata_scan_response_from_kv,
+};
+use crate::traffic::{RegionTrafficProvider, RegionTrafficSnapshot, RegionTrafficStats};
+use crate::watch::{
+    ApplyEvent, ApplyHistory, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest,
+};
 use crate::{Error, OpenRaftEntry, ProposalPayloadKind, RegionId};
-
-const DEFAULT_APPLY_HISTORY_LIMIT: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedProposal {
@@ -30,42 +35,8 @@ pub struct ApplyStatus {
     pub applied_index: u64,
 }
 
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
-pub struct RegionTrafficSnapshot {
-    pub read_ops: u64,
-    pub write_ops: u64,
-    pub write_bytes: u64,
-    pub atomic_ops: u64,
-    pub elapsed_secs: u64,
-}
-
 pub trait ApplyStatusProvider: Clone + Send + Sync + 'static {
     fn apply_status(&self) -> ApplyStatus;
-}
-
-pub trait RegionTrafficProvider: Clone + Send + Sync + 'static {
-    fn traffic_snapshot(&self) -> RegionTrafficSnapshot;
-}
-
-pub trait ApplyWatchProvider: Clone + Send + Sync + 'static {
-    fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent>;
-
-    fn replay_apply(&self, request: ApplyWatchReplayRequest)
-        -> nokv_mvcc::Result<ApplyWatchReplay>;
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ApplyWatchReplayRequest {
-    pub region_id: u64,
-    pub term: u64,
-    pub index: u64,
-    pub key_prefix: Vec<u8>,
-}
-
-#[derive(Debug, Clone, Default, PartialEq)]
-pub struct ApplyWatchReplay {
-    pub events: Vec<kvpb::ApplyWatchEvent>,
-    pub expired: bool,
 }
 
 pub trait RaftCommandExecutor: Clone + Send + Sync + 'static {
@@ -157,160 +128,6 @@ struct AppliedKvInner<E> {
     traffic: RegionTrafficStats,
     watch: broadcast::Sender<kvpb::ApplyWatchEvent>,
     history: Mutex<ApplyHistory>,
-}
-
-#[derive(Debug)]
-struct ApplyEvent {
-    source: kvpb::ApplyWatchEventSource,
-    commit_version: u64,
-    keys: Vec<Vec<u8>>,
-    atomic: bool,
-}
-
-#[derive(Debug)]
-struct RegionTrafficStats {
-    inner: Mutex<RegionTrafficInner>,
-}
-
-#[derive(Debug)]
-struct RegionTrafficInner {
-    last: Instant,
-    read_ops: u64,
-    write_ops: u64,
-    write_bytes: u64,
-    atomic_ops: u64,
-}
-
-#[derive(Debug)]
-struct ApplyHistory {
-    limit: usize,
-    events: VecDeque<kvpb::ApplyWatchEvent>,
-    truncated: bool,
-}
-
-impl Default for ApplyHistory {
-    fn default() -> Self {
-        Self {
-            limit: DEFAULT_APPLY_HISTORY_LIMIT,
-            events: VecDeque::with_capacity(DEFAULT_APPLY_HISTORY_LIMIT),
-            truncated: false,
-        }
-    }
-}
-
-impl ApplyHistory {
-    fn remember(&mut self, event: kvpb::ApplyWatchEvent) {
-        if self.limit == 0 {
-            return;
-        }
-        while self.events.len() >= self.limit {
-            self.events.pop_front();
-            self.truncated = true;
-        }
-        self.events.push_back(event);
-    }
-
-    fn replay(&self, request: &ApplyWatchReplayRequest, applied_index: u64) -> ApplyWatchReplay {
-        if request.region_id == 0 {
-            return ApplyWatchReplay::default();
-        }
-        if self.events.is_empty() {
-            return ApplyWatchReplay {
-                events: Vec::new(),
-                expired: applied_index > request.index,
-            };
-        }
-        let Some(first) = self.events.front() else {
-            return ApplyWatchReplay::default();
-        };
-        if self.truncated
-            && (request.term != 0 || request.index != 0)
-            && apply_event_after_cursor(first, request.term, request.index)
-        {
-            return ApplyWatchReplay {
-                events: Vec::new(),
-                expired: true,
-            };
-        }
-        let events = self
-            .events
-            .iter()
-            .filter(|event| event.region_id == request.region_id)
-            .filter(|event| apply_event_after_cursor(event, request.term, request.index))
-            .filter(|event| apply_event_matches_prefix(event, &request.key_prefix))
-            .cloned()
-            .collect();
-        ApplyWatchReplay {
-            events,
-            expired: false,
-        }
-    }
-}
-
-impl Default for RegionTrafficStats {
-    fn default() -> Self {
-        Self {
-            inner: Mutex::new(RegionTrafficInner {
-                last: Instant::now(),
-                read_ops: 0,
-                write_ops: 0,
-                write_bytes: 0,
-                atomic_ops: 0,
-            }),
-        }
-    }
-}
-
-impl RegionTrafficStats {
-    fn record_read(&self, ops: u64) {
-        if ops == 0 {
-            return;
-        }
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
-        inner.read_ops = inner.read_ops.saturating_add(ops);
-    }
-
-    fn record_apply(&self, keys: &[Vec<u8>], atomic: bool) {
-        if keys.is_empty() {
-            return;
-        }
-        let Ok(mut inner) = self.inner.lock() else {
-            return;
-        };
-        inner.write_ops = inner.write_ops.saturating_add(1);
-        inner.write_bytes = inner
-            .write_bytes
-            .saturating_add(keys.iter().map(|key| key.len() as u64).sum::<u64>());
-        if atomic {
-            inner.atomic_ops = inner.atomic_ops.saturating_add(1);
-        }
-    }
-
-    fn snapshot(&self) -> RegionTrafficSnapshot {
-        let now = Instant::now();
-        let Ok(mut inner) = self.inner.lock() else {
-            return RegionTrafficSnapshot {
-                elapsed_secs: 1,
-                ..Default::default()
-            };
-        };
-        let elapsed_secs = now.duration_since(inner.last).as_secs().max(1);
-        let snapshot = RegionTrafficSnapshot {
-            read_ops: inner.read_ops,
-            write_ops: inner.write_ops,
-            write_bytes: inner.write_bytes,
-            atomic_ops: inner.atomic_ops,
-            elapsed_secs,
-        };
-        inner.last = now;
-        inner.read_ops = 0;
-        inner.write_ops = 0;
-        inner.write_bytes = 0;
-        inner.atomic_ops = 0;
-        snapshot
-    }
 }
 
 /// Region-local apply boundary used before the OpenRaft-backed implementation
@@ -1685,111 +1502,12 @@ fn region_peer_store_ids_for_apply(
     Ok(stores)
 }
 
-fn metadata_command_watch_keys(command: &metadatapb::MetadataCommand) -> Vec<Vec<u8>> {
-    if !command.watch_keys.is_empty() {
-        return command.watch_keys.clone();
-    }
-    command
-        .mutations
-        .iter()
-        .map(|mutation| mutation.key.clone())
-        .collect()
-}
-
-fn apply_event_matches_prefix(event: &kvpb::ApplyWatchEvent, prefix: &[u8]) -> bool {
-    if prefix.is_empty() {
-        return true;
-    }
-    event.keys.iter().any(|key| key.starts_with(prefix))
-}
-
-fn apply_event_after_cursor(event: &kvpb::ApplyWatchEvent, term: u64, index: u64) -> bool {
-    if term == 0 {
-        return event.index > index;
-    }
-    event.term > term || (event.term == term && event.index > index)
-}
-
-fn metadata_key_error_from_kv(error: kvpb::KeyError) -> metadatapb::MetadataKeyError {
-    metadatapb::MetadataKeyError {
-        locked: error.locked.map(|locked| metadatapb::MetadataLocked {
-            primary_lock: locked.primary_lock,
-            key: locked.key,
-            lock_version: locked.lock_version,
-            lock_ttl: locked.lock_ttl,
-        }),
-        write_conflict: error
-            .write_conflict
-            .map(|conflict| metadatapb::MetadataWriteConflict {
-                key: conflict.key,
-                primary: conflict.primary,
-                conflict_ts: conflict.conflict_ts,
-                commit_ts: conflict.commit_ts,
-                start_ts: conflict.start_ts,
-            }),
-        already_exists: error
-            .already_exists
-            .map(|exists| metadatapb::MetadataKeyAlreadyExists { key: exists.key }),
-        retryable: error.retryable,
-        abort: error.abort,
-    }
-}
-
-fn metadata_get_response_from_kv(response: kvpb::GetResponse) -> metadatapb::MetadataGetResponse {
-    metadatapb::MetadataGetResponse {
-        kv: (!response.not_found && response.error.is_none()).then(|| metadatapb::MetadataKv {
-            value: response.value,
-            expires_at: response.expires_at,
-            ..Default::default()
-        }),
-        not_found: response.not_found,
-        error: response.error.map(metadata_key_error_from_kv),
-        region_error: None,
-    }
-}
-
-fn metadata_scan_response_from_kv(
-    response: kvpb::ScanResponse,
-) -> metadatapb::MetadataScanResponse {
-    metadatapb::MetadataScanResponse {
-        kvs: response
-            .kvs
-            .into_iter()
-            .map(|kv| metadatapb::MetadataKv {
-                key: kv.key,
-                value: kv.value,
-                version: kv.version,
-                expires_at: kv.expires_at,
-            })
-            .collect(),
-        error: response.error.map(metadata_key_error_from_kv),
-        region_error: None,
-    }
-}
-
 fn encode_raft_response(response: &raftpb::RaftCmdResponse) -> nokv_mvcc::Result<Vec<u8>> {
     let mut payload = Vec::with_capacity(response.encoded_len());
     response
         .encode(&mut payload)
         .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
     Ok(payload)
-}
-
-fn encode_metadata_response(
-    response: &metadatapb::MetadataCommitResponse,
-) -> nokv_mvcc::Result<Vec<u8>> {
-    let mut payload = Vec::with_capacity(response.encoded_len());
-    response
-        .encode(&mut payload)
-        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
-    Ok(payload)
-}
-
-pub(crate) fn decode_metadata_response(
-    payload: &[u8],
-) -> nokv_mvcc::Result<metadatapb::MetadataCommitResponse> {
-    metadatapb::MetadataCommitResponse::decode(payload)
-        .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
 }
 
 pub(crate) fn decode_raft_response(payload: &[u8]) -> nokv_mvcc::Result<raftpb::RaftCmdResponse> {

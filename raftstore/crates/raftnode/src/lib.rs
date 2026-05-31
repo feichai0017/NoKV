@@ -12,25 +12,27 @@ mod apply;
 mod error;
 mod log_codec;
 mod log_store;
+mod metadata;
 mod network;
 mod proposal;
 mod region;
 mod region_storage;
 mod snapshot;
 mod tonic_transport;
+mod traffic;
 mod transport_codec;
+mod watch;
 
-pub(crate) use apply::decode_metadata_response;
 pub(crate) use apply::decode_raft_response;
 pub use apply::{
-    AppliedKvEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider, ApplyWatchProvider,
-    ApplyWatchReplay, ApplyWatchReplayRequest, MetadataCommandExecutor, MetadataReadExecutor,
-    PersistentAppliedKvEngine, RaftCommandExecutor, RegionApplyEngine, RegionDescriptorCatalog,
-    RegionMetadataSink, RegionSnapshotEngine, RegionTrafficProvider, RegionTrafficSnapshot,
+    AppliedKvEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider, MetadataCommandExecutor,
+    MetadataReadExecutor, PersistentAppliedKvEngine, RaftCommandExecutor, RegionApplyEngine,
+    RegionDescriptorCatalog, RegionMetadataSink, RegionSnapshotEngine,
 };
 pub use error::Error;
 pub use log_codec::{decode_log_entry, encode_log_entry};
 pub use log_store::{RaftEntryLog, SegmentedEntryLog};
+pub(crate) use metadata::decode_metadata_response;
 pub use network::{
     EncodedRaftNetworkFactory, EncodedRaftNetworkRegistry, MemoryRaftNetworkFactory,
     MemoryRaftNetworkRegistry,
@@ -45,12 +47,14 @@ pub use tonic_transport::{
     RaftTransportServer, TonicRaftNetworkFactory, TonicRaftTransportRegistry,
     TonicRaftTransportService,
 };
+pub use traffic::{RegionTrafficProvider, RegionTrafficSnapshot};
 pub use transport_codec::{
     decode_append_entries_request, decode_append_entries_response, decode_install_snapshot_request,
     decode_install_snapshot_response, decode_vote_request, decode_vote_response,
     encode_append_entries_request, encode_append_entries_response, encode_install_snapshot_request,
     encode_install_snapshot_response, encode_vote_request, encode_vote_response,
 };
+pub use watch::{ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
 
 openraft::declare_raft_types!(
     pub RaftStoreConfig:
