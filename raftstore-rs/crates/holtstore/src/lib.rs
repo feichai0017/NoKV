@@ -1020,25 +1020,30 @@ impl mvcc::KvEngine for HoltMvccStore {
                 {
                     if value.kind == kvpb::mutation::Op::Rollback {
                         return Ok(kvpb::CommitResponse {
-                            error: Some(kvpb::KeyError {
-                                abort: "transaction already rolled back".to_owned(),
-                                ..Default::default()
-                            }),
+                            error: Some(mvcc::errors::txn_already_rolled_back()),
                         });
                     }
                     continue;
                 }
                 return Ok(kvpb::CommitResponse {
-                    error: Some(kvpb::KeyError {
-                        abort: "transaction lock not found".to_owned(),
-                        ..Default::default()
-                    }),
+                    error: Some(mvcc::errors::txn_lock_not_found()),
                 });
             };
             if lock.start_version != req.start_version {
                 return Ok(kvpb::CommitResponse {
                     error: Some(mvcc::errors::locked(key, &lock)),
                 });
+            }
+            if let Some((_commit_version, value)) =
+                self.write_by_start_version(key, req.start_version)?
+            {
+                if value.kind == kvpb::mutation::Op::Rollback {
+                    return Ok(kvpb::CommitResponse {
+                        error: Some(mvcc::errors::txn_already_rolled_back()),
+                    });
+                }
+                locks.push((key.clone(), lock.clone(), true));
+                continue;
             }
             if req.commit_version < lock.min_commit_ts {
                 return Ok(kvpb::CommitResponse {
@@ -1049,12 +1054,14 @@ impl mvcc::KvEngine for HoltMvccStore {
                     )),
                 });
             }
-            locks.push((key.clone(), lock));
+            locks.push((key.clone(), lock, false));
         }
         self.atomic(|batch| {
-            for (key, lock) in &locks {
-                let value = lock_value(lock);
-                apply_committed(batch, key, req.commit_version, &value);
+            for (key, lock, committed) in &locks {
+                if !committed {
+                    let value = lock_value(lock);
+                    apply_committed(batch, key, req.commit_version, &value);
+                }
                 batch.delete(LOCK_TREE, key);
             }
         })?;
@@ -2418,7 +2425,11 @@ mod tests {
                 commit_version: 20,
             })
             .unwrap();
-        assert_abort_contains(missing_lock.error, "lock not found");
+        assert!(missing_lock
+            .error
+            .unwrap()
+            .retryable
+            .contains("lock not found"));
 
         store
             .prewrite(&kvpb::PrewriteRequest {
@@ -2834,6 +2845,93 @@ mod tests {
     }
 
     #[test]
+    fn holt_mvcc_commit_matches_go_missing_lock_and_lingering_lock_boundaries() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let missing = store
+            .commit(&kvpb::CommitRequest {
+                keys: vec![b"commit-missing-lock".to_vec()],
+                start_version: 10,
+                commit_version: 20,
+            })
+            .unwrap();
+        assert!(missing.error.unwrap().retryable.contains("lock not found"));
+
+        let rollback_key = b"commit-rolled-back".to_vec();
+        assert!(store
+            .batch_rollback(&kvpb::BatchRollbackRequest {
+                keys: vec![rollback_key.clone()],
+                start_version: 30,
+            })
+            .unwrap()
+            .error
+            .is_none());
+        let rolled_back = store
+            .commit(&kvpb::CommitRequest {
+                keys: vec![rollback_key],
+                start_version: 30,
+                commit_version: 40,
+            })
+            .unwrap();
+        assert!(rolled_back
+            .error
+            .unwrap()
+            .retryable
+            .contains("transaction already rolled back"));
+
+        let lingering = b"commit-lingering-lock".to_vec();
+        store
+            .install_mvcc_snapshot(mvcc::MvccSnapshot {
+                writes: vec![mvcc::MvccSnapshotWrite {
+                    key: lingering.clone(),
+                    commit_version: 50,
+                    value: mvcc::VersionedValue {
+                        kind: kvpb::mutation::Op::Put,
+                        start_version: 45,
+                        value: Some(b"committed".to_vec()),
+                        expires_at: 0,
+                    },
+                }],
+                locks: vec![mvcc::MvccSnapshotLock {
+                    key: lingering.clone(),
+                    lock: mvcc::LockRecord {
+                        primary: lingering.clone(),
+                        start_version: 45,
+                        start_time: 1,
+                        ttl: 10_000,
+                        min_commit_ts: 0,
+                        op: kvpb::mutation::Op::Put,
+                        value: b"stale-lock".to_vec(),
+                        expires_at: 0,
+                    },
+                }],
+                rollbacks: Vec::new(),
+            })
+            .unwrap();
+        assert!(store
+            .commit(&kvpb::CommitRequest {
+                keys: vec![lingering.clone()],
+                start_version: 45,
+                commit_version: 60,
+            })
+            .unwrap()
+            .error
+            .is_none());
+        let snapshot = store.export_mvcc_snapshot().unwrap();
+        assert!(snapshot.locks.is_empty());
+        assert!(snapshot
+            .writes
+            .iter()
+            .all(|write| write.commit_version != 60));
+        let got = store
+            .get(&kvpb::GetRequest {
+                key: lingering,
+                version: 70,
+            })
+            .unwrap();
+        assert_eq!(got.value, b"committed");
+    }
+
+    #[test]
     fn holt_mvcc_rollback_marker_does_not_hide_older_visible_put() {
         let store = HoltMvccStore::open_memory().unwrap();
         store
@@ -3035,7 +3133,7 @@ mod tests {
                 commit_version: 40,
             })
             .unwrap();
-        assert!(rolled_back.error.unwrap().abort.contains("rolled back"));
+        assert!(rolled_back.error.unwrap().retryable.contains("rolled back"));
     }
 
     #[test]
@@ -3077,7 +3175,7 @@ mod tests {
                 commit_version: 20,
             })
             .unwrap();
-        assert!(committed.error.unwrap().abort.contains("rolled back"));
+        assert!(committed.error.unwrap().retryable.contains("rolled back"));
     }
 
     #[test]

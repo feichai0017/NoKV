@@ -1878,6 +1878,22 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Nil(t, emptyCommit.GetRegionError())
 	require.Contains(t, emptyCommit.GetResponse().GetError().GetAbort(), "empty key in commit")
 
+	missingCommit, err := raw.Commit(ctx, &kvrpcpb.KvCommitRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.CommitRequest{
+			Keys:          [][]byte{[]byte("agent/missing-commit-lock")},
+			StartVersion:  95,
+			CommitVersion: 96,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, missingCommit.GetRegionError())
+	require.Contains(t, missingCommit.GetResponse().GetError().GetRetryable(), "lock not found")
+
 	emptyRollback, err := raw.BatchRollback(ctx, &kvrpcpb.KvBatchRollbackRequest{
 		Context: &kvrpcpb.Context{
 			RegionId:    meta.GetRegionId(),
@@ -1892,6 +1908,37 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.NoError(t, err)
 	require.Nil(t, emptyRollback.GetRegionError())
 	require.Contains(t, emptyRollback.GetResponse().GetError().GetAbort(), "empty key in rollback")
+
+	rollbackCommitKey := []byte("agent/commit-after-rollback")
+	rolledBack, err := raw.BatchRollback(ctx, &kvrpcpb.KvBatchRollbackRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.BatchRollbackRequest{
+			Keys:         [][]byte{rollbackCommitKey},
+			StartVersion: 97,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, rolledBack.GetRegionError())
+	require.Nil(t, rolledBack.GetResponse().GetError())
+	commitRolledBack, err := raw.Commit(ctx, &kvrpcpb.KvCommitRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.CommitRequest{
+			Keys:          [][]byte{rollbackCommitKey},
+			StartVersion:  97,
+			CommitVersion: 98,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, commitRolledBack.GetRegionError())
+	require.Contains(t, commitRolledBack.GetResponse().GetError().GetRetryable(), "transaction already rolled back")
 
 	emptyHeartbeat, err := raw.TxnHeartBeat(ctx, &kvrpcpb.KvTxnHeartBeatRequest{
 		Context: &kvrpcpb.Context{

@@ -51,6 +51,14 @@ pub fn txn_heartbeat_primary_mismatch() -> kvpb::KeyError {
     abort("percolator: heartbeat primary key does not match lock primary")
 }
 
+pub fn txn_already_rolled_back() -> kvpb::KeyError {
+    retryable("percolator: transaction already rolled back")
+}
+
+pub fn txn_lock_not_found() -> kvpb::KeyError {
+    retryable("percolator: lock not found")
+}
+
 pub fn abort(message: &str) -> kvpb::KeyError {
     kvpb::KeyError {
         abort: message.to_owned(),

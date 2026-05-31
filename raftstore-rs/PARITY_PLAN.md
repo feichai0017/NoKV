@@ -237,6 +237,10 @@ The first slices are intentionally narrow:
   field semantics, and prewrite treats an existing rollback marker at the same
   start timestamp as a conflict fence instead of allowing the transaction to be
   resurrected.
+  Rust `Commit` now also mirrors Go's retryable error boundary for missing
+  locks and already-rolled-back transactions, and handles the lingering-lock
+  crash window by deleting the stale lock without writing a second commit
+  version.
   Rust 1PC atomic mutate now also mirrors Go Percolator validation and retry
   semantics: exact retries are idempotent, predicate read version `0` maps to
   the request start version, value-equals mismatches are retryable, unsupported
