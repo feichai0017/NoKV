@@ -7,7 +7,6 @@ use nokv_metastore::MemoryMetadataStore;
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
-use nokv_proto::nokv::raft::v1 as raftpb;
 use openraft::{
     error::{Fatal, InitializeError, RPCError, RaftError, Unreachable},
     network::{RPCOption, RaftNetwork, RaftNetworkFactory},
@@ -16,7 +15,7 @@ use openraft::{
 use tokio::sync::broadcast;
 
 use crate::{
-    decode_metadata_response, AppliedMetadataEngine, AppliedProposal, ApplyStatus,
+    decode_metadata_response, AdminCommand, AppliedMetadataEngine, AppliedProposal, ApplyStatus,
     ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode,
     Error, MetadataCommandExecutor, MetadataReadExecutor, MetadataRetentionExecutor, NodeId,
     Proposal, RaftStoreConfig, RegionId, RegionLogStorage, RegionSnapshotEngine,
@@ -325,7 +324,7 @@ where
     pub async fn propose_admin_command(
         &self,
         region_id: RegionId,
-        command: &raftpb::AdminCommand,
+        command: &AdminCommand,
     ) -> Result<(), Error> {
         self.propose(Proposal::from_admin_command(region_id, command)?)
             .await

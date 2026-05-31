@@ -2,9 +2,8 @@ use std::collections::BTreeSet;
 
 use nokv_metastore::MetadataEngine;
 use nokv_proto::nokv::meta::v1 as metapb;
-use nokv_proto::nokv::raft::v1 as raftpb;
 
-use crate::RegionId;
+use crate::{AdminCommand, AdminCommandType, MergeCommand, RegionId, SplitCommand};
 
 use super::{invalid_raft_command, AppliedMetadataEngine};
 
@@ -16,26 +15,23 @@ where
         &self,
         term: u64,
         index: u64,
-        command: raftpb::AdminCommand,
+        command: AdminCommand,
     ) -> nokv_metastore::Result<()> {
-        let kind = raftpb::admin_command::Type::try_from(command.r#type)
-            .unwrap_or(raftpb::admin_command::Type::Unknown);
+        let kind = AdminCommandType::try_from(command.r#type).unwrap_or(AdminCommandType::Unknown);
         match kind {
-            raftpb::admin_command::Type::Split => {
+            AdminCommandType::Split => {
                 let split = command
                     .split
                     .ok_or_else(|| invalid_raft_command("split admin payload is required"))?;
                 self.apply_split_command_at(term, index, split)
             }
-            raftpb::admin_command::Type::Merge => {
+            AdminCommandType::Merge => {
                 let merge = command
                     .merge
                     .ok_or_else(|| invalid_raft_command("merge admin payload is required"))?;
                 self.apply_merge_command_at(term, index, merge)
             }
-            raftpb::admin_command::Type::Unknown => {
-                Err(invalid_raft_command("unknown admin command type"))
-            }
+            AdminCommandType::Unknown => Err(invalid_raft_command("unknown admin command type")),
         }
     }
 
@@ -43,7 +39,7 @@ where
         &self,
         term: u64,
         index: u64,
-        split: raftpb::SplitCommand,
+        split: SplitCommand,
     ) -> nokv_metastore::Result<()> {
         if split.parent_region_id != self.inner.region_id {
             return Err(invalid_raft_command(
@@ -112,7 +108,7 @@ where
         &self,
         term: u64,
         index: u64,
-        merge: raftpb::MergeCommand,
+        merge: MergeCommand,
     ) -> nokv_metastore::Result<()> {
         if merge.target_region_id != self.inner.region_id {
             return Err(invalid_raft_command(

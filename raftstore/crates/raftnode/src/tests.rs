@@ -5,7 +5,6 @@ use std::time::Duration;
 use nokv_metastore::MemoryMetadataStore;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
-use nokv_proto::nokv::raft::v1 as raftpb;
 use prost::Message;
 use std::sync::{Arc, Mutex};
 
@@ -1170,9 +1169,9 @@ fn applied_engine_applies_split_admin_command_to_parent_descriptor() {
             ..Default::default()
         })
         .unwrap();
-    let command = raftpb::AdminCommand {
-        r#type: raftpb::admin_command::Type::Split as i32,
-        split: Some(raftpb::SplitCommand {
+    let command = AdminCommand {
+        r#type: AdminCommandType::Split as i32,
+        split: Some(SplitCommand {
             parent_region_id: 7,
             split_key: b"m".to_vec(),
             child: Some(metapb::RegionDescriptor {
@@ -1245,9 +1244,9 @@ fn persistent_applied_engine_saves_split_parent_and_child_descriptors() {
             ..Default::default()
         })
         .unwrap();
-    let command = raftpb::AdminCommand {
-        r#type: raftpb::admin_command::Type::Split as i32,
-        split: Some(raftpb::SplitCommand {
+    let command = AdminCommand {
+        r#type: AdminCommandType::Split as i32,
+        split: Some(SplitCommand {
             parent_region_id: 7,
             split_key: b"m".to_vec(),
             child: Some(metapb::RegionDescriptor {
@@ -1330,9 +1329,9 @@ fn applied_engine_applies_merge_admin_command_to_target_descriptor() {
             ..Default::default()
         })
         .unwrap();
-    let command = raftpb::AdminCommand {
-        r#type: raftpb::admin_command::Type::Merge as i32,
-        merge: Some(raftpb::MergeCommand {
+    let command = AdminCommand {
+        r#type: AdminCommandType::Merge as i32,
+        merge: Some(MergeCommand {
             target_region_id: 7,
             source_region_id: 8,
         }),
@@ -1412,9 +1411,9 @@ fn applied_engine_uses_region_descriptor_catalog_for_merge_admin_command() {
             descriptors: BTreeMap::from([(source.region_id, source)]),
         }))
         .unwrap();
-    let command = raftpb::AdminCommand {
-        r#type: raftpb::admin_command::Type::Merge as i32,
-        merge: Some(raftpb::MergeCommand {
+    let command = AdminCommand {
+        r#type: AdminCommandType::Merge as i32,
+        merge: Some(MergeCommand {
             target_region_id: 7,
             source_region_id: 8,
         }),
@@ -1466,9 +1465,9 @@ fn applied_engine_replays_merge_admin_command_after_source_retired() {
             ..Default::default()
         })
         .unwrap();
-    let command = raftpb::AdminCommand {
-        r#type: raftpb::admin_command::Type::Merge as i32,
-        merge: Some(raftpb::MergeCommand {
+    let command = AdminCommand {
+        r#type: AdminCommandType::Merge as i32,
+        merge: Some(MergeCommand {
             target_region_id: 7,
             source_region_id: 8,
         }),
@@ -1515,9 +1514,9 @@ fn applied_engine_rejects_merge_admin_command_without_source_descriptor() {
             ..Default::default()
         })
         .unwrap();
-    let command = raftpb::AdminCommand {
-        r#type: raftpb::admin_command::Type::Merge as i32,
-        merge: Some(raftpb::MergeCommand {
+    let command = AdminCommand {
+        r#type: AdminCommandType::Merge as i32,
+        merge: Some(MergeCommand {
             target_region_id: 7,
             source_region_id: 8,
         }),
@@ -1581,9 +1580,9 @@ fn applied_engine_keeps_source_descriptor_when_merge_validation_fails() {
             ..Default::default()
         })
         .unwrap();
-    let command = raftpb::AdminCommand {
-        r#type: raftpb::admin_command::Type::Merge as i32,
-        merge: Some(raftpb::MergeCommand {
+    let command = AdminCommand {
+        r#type: AdminCommandType::Merge as i32,
+        merge: Some(MergeCommand {
             target_region_id: 7,
             source_region_id: 8,
         }),
@@ -1658,9 +1657,9 @@ fn persistent_applied_engine_saves_merged_target_without_retired_source() {
             ..Default::default()
         })
         .unwrap();
-    let command = raftpb::AdminCommand {
-        r#type: raftpb::admin_command::Type::Merge as i32,
-        merge: Some(raftpb::MergeCommand {
+    let command = AdminCommand {
+        r#type: AdminCommandType::Merge as i32,
+        merge: Some(MergeCommand {
             target_region_id: 7,
             source_region_id: 8,
         }),

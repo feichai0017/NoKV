@@ -6,8 +6,10 @@ use nokv_holtstore::HoltMetadataStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
-use nokv_proto::nokv::raft::v1 as raftpb;
-use nokv_raftnode::{AppliedMetadataEngine, BasicNode, PersistentAppliedMetadataEngine};
+use nokv_raftnode::{
+    AdminCommand, AdminCommandType, AppliedMetadataEngine, BasicNode, MergeCommand,
+    PersistentAppliedMetadataEngine, SplitCommand,
+};
 use nokv_raftstore_server::{
     apply_status_from_holt, openraft_metadata_service_pair, HoltRegionMetadataSink,
     MultiRegionMetadataPlaneService, MultiRegionRaftAdminService, PeerEndpointCatalog,
@@ -100,14 +102,14 @@ impl HoltRangeController {
             true,
         )
         .await?;
-        let split_command = raftpb::AdminCommand {
-            r#type: raftpb::admin_command::Type::Split as i32,
-            split: Some(raftpb::SplitCommand {
+        let split_command = AdminCommand {
+            r#type: AdminCommandType::Split as i32,
+            split: Some(SplitCommand {
                 parent_region_id: operation.region_id,
                 split_key: operation.split_key.clone(),
                 child: Some(right.clone()),
             }),
-            ..Default::default()
+            merge: None,
         };
         parent
             .propose_admin_command(operation.region_id, &split_command)
@@ -268,13 +270,13 @@ impl HoltRangeController {
             true,
         )
         .await?;
-        let merge_command = raftpb::AdminCommand {
-            r#type: raftpb::admin_command::Type::Merge as i32,
-            merge: Some(raftpb::MergeCommand {
+        let merge_command = AdminCommand {
+            r#type: AdminCommandType::Merge as i32,
+            split: None,
+            merge: Some(MergeCommand {
                 target_region_id: operation.region_id,
                 source_region_id: operation.source_region_id,
             }),
-            ..Default::default()
         };
         target
             .propose_admin_command(operation.region_id, &merge_command)

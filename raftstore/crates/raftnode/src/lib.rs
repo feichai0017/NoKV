@@ -7,6 +7,7 @@
 pub type NodeId = u64;
 pub type RegionId = u64;
 
+mod admin_command;
 mod apply;
 mod error;
 mod log_codec;
@@ -22,6 +23,7 @@ mod traffic;
 mod transport_codec;
 mod watch;
 
+pub use admin_command::{AdminCommand, AdminCommandType, MergeCommand, SplitCommand};
 pub use apply::{
     AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
     MetadataCommandExecutor, MetadataReadExecutor, MetadataRetentionExecutor,

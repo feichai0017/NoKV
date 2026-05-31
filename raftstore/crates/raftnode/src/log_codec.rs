@@ -236,10 +236,9 @@ pub(crate) fn decode_membership_payload(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::RaftStoreConfig;
+    use crate::{AdminCommand, AdminCommandType, RaftStoreConfig, SplitCommand};
     use nokv_proto::nokv::meta::v1 as metapb;
     use nokv_proto::nokv::metadata::v1 as metadatapb;
-    use nokv_proto::nokv::raft::v1 as raftpb;
     use nokv_raftlog::SegmentedRaftLog;
 
     fn log_id(term: u64, index: u64) -> LogId<NodeId> {
@@ -327,9 +326,9 @@ mod tests {
 
     #[test]
     fn admin_command_entry_round_trips_through_raftlog_record() {
-        let command = raftpb::AdminCommand {
-            r#type: raftpb::admin_command::Type::Split as i32,
-            split: Some(raftpb::SplitCommand {
+        let command = AdminCommand {
+            r#type: AdminCommandType::Split as i32,
+            split: Some(SplitCommand {
                 parent_region_id: 7,
                 split_key: b"m".to_vec(),
                 child: Some(metapb::RegionDescriptor {
