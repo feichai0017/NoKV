@@ -13,9 +13,9 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExecutorUpdateInodeUsesAtomicMutateWithValuePredicates(t *testing.T) {
+func TestExecutorUpdateInodeUsesMetadataPredicateCommitWithValuePredicates(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
 	seedInode(t, runner.fakeRunner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, Mode: 0o644, LinkCount: 1})
 	executor, err := newTestExecutor(runner)
@@ -31,11 +31,11 @@ func TestExecutorUpdateInodeUsesAtomicMutateWithValuePredicates(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, uint32(0o600), updated.Mode)
-	require.Len(t, runner.atomicCalls, 1)
+	require.Len(t, runner.predicateCalls, 1)
 	require.Empty(t, base.mutations)
-	requireAtomicStatUint(t, executor.Stats(), model.OperationUpdateInode, "success_total", 1)
-	require.Equal(t, backend.PredicateValueEquals, runner.atomicCalls[0].predicates[0].Kind)
-	require.Equal(t, backend.PredicateValueEquals, runner.atomicCalls[0].predicates[1].Kind)
+	requireMetadataPredicateStatUint(t, executor.Stats(), model.OperationUpdateInode, "success_total", 1)
+	require.Equal(t, backend.PredicateValueEquals, runner.predicateCalls[0].predicates[0].Kind)
+	require.Equal(t, backend.PredicateValueEquals, runner.predicateCalls[0].predicates[1].Kind)
 
 	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
@@ -43,9 +43,9 @@ func TestExecutorUpdateInodeUsesAtomicMutateWithValuePredicates(t *testing.T) {
 	require.Equal(t, uint32(0o600), stored.Mode)
 }
 
-func TestExecutorUpdateInodeSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
+func TestExecutorUpdateInodeSkipsMetadataPredicateCommitWhenQuotaMutates(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
 	seedInode(t, runner.fakeRunner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, Size: 1024, LinkCount: 1})
 	quotaKey, err := layout.EncodeUsageKey(testMountIdentity, 7)
@@ -63,9 +63,9 @@ func TestExecutorUpdateInodeSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 		Size:    2048,
 	})
 	require.NoError(t, err)
-	require.Empty(t, runner.atomicCalls)
+	require.Empty(t, runner.predicateCalls)
 	require.Len(t, base.mutations, 1)
-	requireAtomicStatUint(t, executor.Stats(), model.OperationUpdateInode, "skip_total", 1)
+	requireMetadataPredicateStatUint(t, executor.Stats(), model.OperationUpdateInode, "skip_total", 1)
 }
 
 func TestExecutorUpdateInodeVisibleCommitReadsCreateOverlay(t *testing.T) {

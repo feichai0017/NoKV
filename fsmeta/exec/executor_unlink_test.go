@@ -56,7 +56,7 @@ func TestExecutorUnlinkRemovesDentry(t *testing.T) {
 
 func TestExecutorRemoveRemovesDentry(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
 	seedInode(t, runner.fakeRunner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, LinkCount: 1})
 	executor, err := newTestExecutor(runner)
@@ -79,16 +79,16 @@ func TestExecutorRemoveRemovesDentry(t *testing.T) {
 	})
 	require.ErrorIs(t, err, model.ErrNotFound)
 	require.Empty(t, base.mutations)
-	require.Len(t, runner.atomicCalls, 1)
-	require.Len(t, runner.atomicCalls[0].mutations, 3)
-	require.Equal(t, backend.MutationDelete, runner.atomicCalls[0].mutations[0].Op)
-	require.Equal(t, backend.MutationDelete, runner.atomicCalls[0].mutations[1].Op)
-	requireAtomicStatUint(t, executor.Stats(), model.OperationRemove, "success_total", 1)
+	require.Len(t, runner.predicateCalls, 1)
+	require.Len(t, runner.predicateCalls[0].mutations, 3)
+	require.Equal(t, backend.MutationDelete, runner.predicateCalls[0].mutations[0].Op)
+	require.Equal(t, backend.MutationDelete, runner.predicateCalls[0].mutations[1].Op)
+	requireMetadataPredicateStatUint(t, executor.Stats(), model.OperationRemove, "success_total", 1)
 }
 
-func TestExecutorUnlinkUsesAtomicMutateWithValuePredicates(t *testing.T) {
+func TestExecutorUnlinkUsesMetadataPredicateCommitWithValuePredicates(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
 	seedInode(t, runner.fakeRunner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, LinkCount: 1})
 	executor, err := newTestExecutor(runner)
@@ -97,11 +97,11 @@ func TestExecutorUnlinkUsesAtomicMutateWithValuePredicates(t *testing.T) {
 	err = executor.Unlink(context.Background(), model.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
 	require.NoError(t, err)
 
-	require.Len(t, runner.atomicCalls, 1)
+	require.Len(t, runner.predicateCalls, 1)
 	require.Empty(t, base.mutations)
-	requireAtomicStatUint(t, executor.Stats(), model.OperationUnlink, "success_total", 1)
-	require.Equal(t, backend.PredicateValueEquals, runner.atomicCalls[0].predicates[0].Kind)
-	require.Equal(t, backend.PredicateValueEquals, runner.atomicCalls[0].predicates[1].Kind)
+	requireMetadataPredicateStatUint(t, executor.Stats(), model.OperationUnlink, "success_total", 1)
+	require.Equal(t, backend.PredicateValueEquals, runner.predicateCalls[0].predicates[0].Kind)
+	require.Equal(t, backend.PredicateValueEquals, runner.predicateCalls[0].predicates[1].Kind)
 	_, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.False(t, ok)

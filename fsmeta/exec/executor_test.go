@@ -39,7 +39,7 @@ type fakeRunner struct {
 	actualCommitVersion uint64
 }
 
-type atomicMutateCall struct {
+type metadataPredicateCommitCall struct {
 	primary       []byte
 	predicates    []*backend.Predicate
 	mutations     []*backend.Mutation
@@ -47,16 +47,10 @@ type atomicMutateCall struct {
 	commitVersion uint64
 }
 
-type fakeAtomicRunner struct {
+type fakePredicateRunner struct {
 	*fakeRunner
-	handled     bool
-	err         error
-	atomicCalls []atomicMutateCall
-}
-
-type fakeSpeculativeAtomicRunner struct {
-	*fakeRunner
-	atomicCalls []atomicMutateCall
+	err            error
+	predicateCalls []metadataPredicateCommitCall
 }
 
 var testMountIdentity = model.MountIdentity{MountID: "vol", MountKeyID: 1}
@@ -93,16 +87,16 @@ func requireStatUint(t *testing.T, stats map[string]any, key string, want uint64
 	require.Equal(t, want, got)
 }
 
-func requireAtomicStatUint(t *testing.T, stats map[string]any, kind model.OperationKind, key string, want uint64) {
+func requireMetadataPredicateStatUint(t *testing.T, stats map[string]any, kind model.OperationKind, key string, want uint64) {
 	t.Helper()
-	raw, ok := stats["atomic_one_phase"]
-	require.True(t, ok, "missing atomic_one_phase stats")
+	raw, ok := stats["metadata_predicate_commit"]
+	require.True(t, ok, "missing metadata_predicate_commit stats")
 	byOp, ok := raw.(map[string]any)
-	require.Truef(t, ok, "atomic_one_phase has type %T", raw)
+	require.Truef(t, ok, "metadata_predicate_commit has type %T", raw)
 	rawOp, ok := byOp[string(kind)]
-	require.Truef(t, ok, "missing atomic_one_phase stats for %s", kind)
+	require.Truef(t, ok, "missing metadata_predicate_commit stats for %s", kind)
 	opStats, ok := rawOp.(map[string]uint64)
-	require.Truef(t, ok, "atomic_one_phase[%s] has type %T", kind, rawOp)
+	require.Truef(t, ok, "metadata_predicate_commit[%s] has type %T", kind, rawOp)
 	require.Equal(t, want, opStats[key])
 }
 
@@ -1113,19 +1107,16 @@ func (r *fakeRunner) applyMutations(primary []byte, mutations []*backend.Mutatio
 	return commitVersion, nil
 }
 
-func (r *fakeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
-	r.atomicCalls = append(r.atomicCalls, atomicMutateCall{
+func (r *fakePredicateRunner) TryMetadataPredicateCommit(_ context.Context, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
+	r.predicateCalls = append(r.predicateCalls, metadataPredicateCommitCall{
 		primary:       cloneBytes(primary),
-		predicates:    cloneAtomicPredicates(predicates),
+		predicates:    cloneMetadataPredicates(predicates),
 		mutations:     cloneMutations(mutations),
 		startVersion:  startVersion,
 		commitVersion: commitVersion,
 	})
 	if r.err != nil {
 		return true, r.err
-	}
-	if !r.handled {
-		return false, nil
 	}
 	for _, pred := range predicates {
 		if pred == nil {
@@ -1172,11 +1163,7 @@ func (r *fakeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, pr
 	return true, nil
 }
 
-func (r *fakeAtomicRunner) AtomicMutatePreservesReadOrder() bool {
-	return true
-}
-
-func (r *fakeAtomicRunner) CommitMetadata(_ context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
+func (r *fakePredicateRunner) CommitMetadata(_ context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
 	commitVersion := command.CommitVersion
 	if commitVersion == 0 {
 		commitVersion = command.ReadVersion + 1
@@ -1188,33 +1175,15 @@ func (r *fakeAtomicRunner) CommitMetadata(_ context.Context, command backend.Met
 	if len(command.Predicates) == 0 {
 		return r.fakeRunner.CommitMetadata(context.Background(), command)
 	}
-	handled, err := r.TryAtomicMutate(context.Background(), primary, command.Predicates, command.Mutations, command.ReadVersion, commitVersion)
+	_, err := r.TryMetadataPredicateCommit(context.Background(), primary, command.Predicates, command.Mutations, command.ReadVersion, commitVersion)
 	if err != nil {
 		return backend.MetadataCommitResult{}, err
-	}
-	if !handled {
-		return r.fakeRunner.CommitMetadata(context.Background(), command)
 	}
 	return backend.MetadataCommitResult{
 		CommitVersion:    commitVersion,
 		Index:            commitVersion,
 		AppliedMutations: uint64(len(command.Mutations)),
 	}, nil
-}
-
-func (r *fakeSpeculativeAtomicRunner) TryAtomicMutate(_ context.Context, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
-	r.atomicCalls = append(r.atomicCalls, atomicMutateCall{
-		primary:       cloneBytes(primary),
-		predicates:    cloneAtomicPredicates(predicates),
-		mutations:     cloneMutations(mutations),
-		startVersion:  startVersion,
-		commitVersion: commitVersion,
-	})
-	return true, nil
-}
-
-func (r *fakeSpeculativeAtomicRunner) CommitMetadata(_ context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
-	return r.fakeRunner.CommitMetadata(context.Background(), command)
 }
 
 func seedDentry(t *testing.T, runner *fakeRunner, mount model.MountID, parent model.InodeID, name string, inode model.InodeID) {

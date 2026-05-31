@@ -17,19 +17,14 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
-func (e *Executor) mutateWithAtomicOnePhase(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
-	stats := e.atomicOnePhaseCounters(kind)
-	if stats != nil && !stats.allowAttempt() {
-		stats.skipTotal.Add(1)
-		return e.commitMetadataCommand(ctx, mount, primary, nil, mutations, startVersion, commitVersion)
-	}
+func (e *Executor) commitWithMetadataPredicates(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+	stats := e.metadataPredicateCounters(kind)
 	if stats != nil {
 		stats.attemptTotal.Add(1)
 	}
 	err := e.commitMetadataCommand(ctx, mount, primary, predicates, mutations, startVersion, commitVersion)
 	if err == nil && stats != nil {
 		stats.successTotal.Add(1)
-		stats.recordSuccess()
 	}
 	return err
 }
@@ -51,7 +46,7 @@ func (e *Executor) commitMetadataCommandWithVersion(ctx context.Context, mount m
 		PrimaryKey:    cloneBytes(primary),
 		ReadVersion:   startVersion,
 		CommitVersion: commandCommitVersion,
-		Predicates:    cloneAtomicPredicates(predicates),
+		Predicates:    cloneMetadataPredicates(predicates),
 		Mutations:     cloneMutations(mutations),
 		WatchKeys:     metadataCommandWatchKeys(mutations),
 	})
@@ -95,35 +90,18 @@ func metadataCommandPrimary(mutations []*backend.Mutation) []byte {
 	return nil
 }
 
-const (
-	atomicOnePhaseBackoffAfter = 16
-	atomicOnePhaseProbeEvery   = 128
-)
-
-func (s *atomicOnePhaseCounters) allowAttempt() bool {
-	if s == nil {
-		return true
-	}
-	if s.consecutiveFallbacks.Load() < atomicOnePhaseBackoffAfter {
-		return true
-	}
-	// Back off after repeated backend misses, but keep probing periodically so a
-	// live backend upgrade or configuration change can re-enable the fast path.
-	return s.backoffSkipTotal.Add(1)%atomicOnePhaseProbeEvery == 0
-}
-
-func (e *Executor) mutateWithoutAtomicOnePhase(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
-	if stats := e.atomicOnePhaseCounters(kind); stats != nil {
+func (e *Executor) commitWithoutMetadataPredicates(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+	if stats := e.metadataPredicateCounters(kind); stats != nil {
 		stats.skipTotal.Add(1)
 	}
 	return e.commitMetadataCommand(ctx, mount, primary, nil, mutations, startVersion, commitVersion)
 }
 
-func (e *Executor) atomicOnePhaseCounters(kind model.OperationKind) *atomicOnePhaseCounters {
+func (e *Executor) metadataPredicateCounters(kind model.OperationKind) *metadataPredicateCounters {
 	if e == nil {
 		return nil
 	}
-	return e.atomicOnePhase[kind]
+	return e.metadataPredicates[kind]
 }
 
 // GetReadVersion returns an ephemeral MVCC read version. It is intentionally
@@ -372,7 +350,7 @@ func cloneMutations(in []*backend.Mutation) []*backend.Mutation {
 	return out
 }
 
-func cloneAtomicPredicates(in []*backend.Predicate) []*backend.Predicate {
+func cloneMetadataPredicates(in []*backend.Predicate) []*backend.Predicate {
 	out := make([]*backend.Predicate, 0, len(in))
 	for _, pred := range in {
 		if pred == nil {
@@ -425,11 +403,11 @@ func isRetryableRouteRefresh(err error) bool {
 	}
 }
 
-func atomicNotExists(key []byte) *backend.Predicate {
+func metadataNotExistsPredicate(key []byte) *backend.Predicate {
 	return &backend.Predicate{Key: cloneBytes(key), Kind: backend.PredicateNotExists}
 }
 
-func atomicValueEquals(key, value []byte) *backend.Predicate {
+func metadataValueEqualsPredicate(key, value []byte) *backend.Predicate {
 	return &backend.Predicate{
 		Key:           cloneBytes(key),
 		Kind:          backend.PredicateValueEquals,

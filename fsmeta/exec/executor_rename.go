@@ -179,9 +179,9 @@ func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 			return err
 		}
 		if len(mutations) == len(predicates) {
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}
@@ -218,7 +218,7 @@ func (e *Executor) RenameReplace(ctx context.Context, req model.RenameReplaceReq
 		if err != nil {
 			return fmt.Errorf("prepare rename replace: %w", err)
 		}
-		if err := e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
+		if err := e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
 			return fmt.Errorf("commit rename replace: %w", err)
 		}
 		result = nextResult
@@ -566,12 +566,12 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.Opera
 		mutations = append(mutations, quotaMutations...)
 	}
 	predicates := []*backend.Predicate{
-		atomicValueEquals(plan.ReadKeys[0], sourceDentryValue),
-		atomicNotExists(plan.ReadKeys[1]),
-		atomicValueEquals(fromParent.key, fromParent.value),
+		metadataValueEqualsPredicate(plan.ReadKeys[0], sourceDentryValue),
+		metadataNotExistsPredicate(plan.ReadKeys[1]),
+		metadataValueEqualsPredicate(fromParent.key, fromParent.value),
 	}
 	if move.fromParent != move.toParent {
-		predicates = append(predicates, atomicValueEquals(toParent.key, toParent.value))
+		predicates = append(predicates, metadataValueEqualsPredicate(toParent.key, toParent.value))
 	}
 	return mutations, predicates, nil
 }

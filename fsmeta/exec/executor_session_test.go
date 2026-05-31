@@ -201,9 +201,9 @@ func TestExecutorWriteSessionLifecycle(t *testing.T) {
 	require.NotContains(t, runner.data, string(ownerKey))
 }
 
-func TestExecutorWriteSessionLifecycleUsesAtomicMutateWithValuePredicates(t *testing.T) {
+func TestExecutorWriteSessionLifecycleUsesMetadataPredicateCommitWithValuePredicates(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	seedInode(t, runner.fakeRunner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, LinkCount: 1})
 	now := time.Unix(0, 100)
 	executor, err := newTestExecutor(runner, WithClock(func() time.Time { return now }))
@@ -226,19 +226,19 @@ func TestExecutorWriteSessionLifecycleUsesAtomicMutateWithValuePredicates(t *tes
 	err = executor.CloseWriteSession(context.Background(), model.CloseWriteSessionRequest{Mount: "vol", Inode: 22, Session: "writer-1"})
 	require.NoError(t, err)
 
-	require.Len(t, runner.atomicCalls, 3)
+	require.Len(t, runner.predicateCalls, 3)
 	require.Empty(t, base.mutations)
 	stats := executor.Stats()
-	requireAtomicStatUint(t, stats, model.OperationOpenWriteSession, "success_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationHeartbeatSession, "success_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCloseSession, "success_total", 1)
-	require.Equal(t, backend.PredicateValueEquals, runner.atomicCalls[1].predicates[0].Kind)
-	require.Equal(t, backend.PredicateValueEquals, runner.atomicCalls[2].predicates[0].Kind)
+	requireMetadataPredicateStatUint(t, stats, model.OperationOpenWriteSession, "success_total", 1)
+	requireMetadataPredicateStatUint(t, stats, model.OperationHeartbeatSession, "success_total", 1)
+	requireMetadataPredicateStatUint(t, stats, model.OperationCloseSession, "success_total", 1)
+	require.Equal(t, backend.PredicateValueEquals, runner.predicateCalls[1].predicates[0].Kind)
+	require.Equal(t, backend.PredicateValueEquals, runner.predicateCalls[2].predicates[0].Kind)
 }
 
-func TestExecutorOpenWriteSessionUsesAtomicMutateForStaleSessionCleanup(t *testing.T) {
+func TestExecutorOpenWriteSessionUsesMetadataPredicateCommitForStaleSessionCleanup(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	seedInode(t, runner.fakeRunner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, LinkCount: 1})
 	oldRecord := model.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
 	oldValue, err := layout.EncodeSessionValue(oldRecord)
@@ -260,11 +260,11 @@ func TestExecutorOpenWriteSessionUsesAtomicMutateForStaleSessionCleanup(t *testi
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.atomicCalls, 1)
+	require.Len(t, runner.predicateCalls, 1)
 	require.Empty(t, base.mutations)
 	require.NotContains(t, runner.data, string(oldSessionKey))
-	requireAtomicStatUint(t, executor.Stats(), model.OperationOpenWriteSession, "success_total", 1)
-	require.Equal(t, backend.PredicateValueEquals, runner.atomicCalls[0].predicates[2].Kind)
+	requireMetadataPredicateStatUint(t, executor.Stats(), model.OperationOpenWriteSession, "success_total", 1)
+	require.Equal(t, backend.PredicateValueEquals, runner.predicateCalls[0].predicates[2].Kind)
 }
 
 func TestExecutorWriteSessionRejectsNonPositiveTTL(t *testing.T) {

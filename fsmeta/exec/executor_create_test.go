@@ -395,9 +395,9 @@ func TestExecutorCreateRequiresInodeAllocator(t *testing.T) {
 	require.ErrorIs(t, err, errInodeAllocatorRequired)
 }
 
-func TestExecutorCreateUsesAtomicMutateOnePhaseWhenHandled(t *testing.T) {
+func TestExecutorCreateUsesMetadataPredicateCommit(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}))
 	require.NoError(t, err)
 
@@ -409,13 +409,11 @@ func TestExecutorCreateUsesAtomicMutateOnePhaseWhenHandled(t *testing.T) {
 	require.NoError(t, err)
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "fallback_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "skip_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 0)
-	require.Len(t, runner.atomicCalls, 1)
-	call := runner.atomicCalls[0]
+	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "attempt_total", 1)
+	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "success_total", 1)
+	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "skip_total", 0)
+	require.Len(t, runner.predicateCalls, 1)
+	call := runner.predicateCalls[0]
 	require.Equal(t, plan.PrimaryKey, call.primary)
 	require.Equal(t, uint64(1), call.startVersion)
 	require.Equal(t, uint64(2), call.commitVersion)
@@ -440,55 +438,7 @@ func TestExecutorCreateUsesAtomicMutateOnePhaseWhenHandled(t *testing.T) {
 	require.Equal(t, model.InodeID(22), record.Inode)
 }
 
-func TestExecutorCreateSkipsSpeculativeAtomicMutateWithoutReadOrdering(t *testing.T) {
-	base := newFakeRunner()
-	runner := &fakeSpeculativeAtomicRunner{fakeRunner: base}
-	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}))
-	require.NoError(t, err)
-
-	_, err = executor.Create(context.Background(), model.CreateRequest{
-		Mount:  "vol",
-		Parent: model.RootInode,
-		Name:   "file",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
-	})
-	require.NoError(t, err)
-
-	require.Empty(t, runner.atomicCalls)
-	require.Len(t, base.mutations, 1)
-	stats := executor.Stats()
-	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 0)
-}
-
-func TestExecutorCreateFallsBackWhenAtomicMutateNotHandled(t *testing.T) {
-	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
-	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}))
-	require.NoError(t, err)
-
-	_, err = executor.Create(context.Background(), model.CreateRequest{
-		Mount:  "vol",
-		Parent: model.RootInode,
-		Name:   "file",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
-	})
-	require.NoError(t, err)
-
-	require.Len(t, runner.atomicCalls, 1)
-	stats := executor.Stats()
-	requireStatUint(t, stats, "create_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "fallback_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "skip_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 0)
-	require.Len(t, base.mutations, 1)
-	require.Len(t, base.mutations[0], 3)
-}
-
-func TestExecutorCreateRecordsUnsupportedAtomicRunner(t *testing.T) {
+func TestExecutorCreateUsesMetadataPredicatesWithDefaultRunner(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}))
 	require.NoError(t, err)
@@ -503,18 +453,16 @@ func TestExecutorCreateRecordsUnsupportedAtomicRunner(t *testing.T) {
 
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "fallback_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "skip_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 0)
+	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "attempt_total", 1)
+	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "success_total", 1)
+	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "skip_total", 0)
 	require.Len(t, runner.mutations, 1)
 }
 
-func TestExecutorCreateSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
+func TestExecutorCreateSkipsMetadataPredicateCommitWhenQuotaMutates(t *testing.T) {
 	base := newFakeRunner()
 	seedDirectory(t, base, "vol", 7)
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	quotaKey, err := layout.EncodeUsageKey(testMountIdentity, 0)
 	require.NoError(t, err)
 	quota := &fakeQuotaResolver{mutation: &backend.Mutation{Op: backend.MutationPut, Key: quotaKey, Value: []byte("usage")}}
@@ -529,17 +477,15 @@ func TestExecutorCreateSkipsAtomicMutateWhenQuotaMutates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Quota reservation adds an extra key, so Create must use the full 2PC
-	// path until AtomicMutate can prove all fsmeta and quota keys share one
-	// atomic local apply group.
+	// Quota reservation adds an extra key outside Create's compiled predicate
+	// set, so Create records a predicate-commit skip and submits the full
+	// metadata command without generated dentry/inode predicates.
 	stats := executor.Stats()
 	requireStatUint(t, stats, "create_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "attempt_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "success_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "fallback_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "skip_total", 1)
-	requireAtomicStatUint(t, stats, model.OperationCreate, "runner_unsupported_total", 0)
-	require.Empty(t, runner.atomicCalls)
+	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "attempt_total", 0)
+	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "success_total", 0)
+	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "skip_total", 1)
+	require.Empty(t, runner.predicateCalls)
 	require.Len(t, base.mutations, 1)
 	require.Len(t, base.mutations[0], 4)
 	require.Equal(t, quotaKey, base.mutations[0][3].Key)

@@ -50,14 +50,10 @@ type visibleDirectoryReadCounters struct {
 	outputRows  atomic.Uint64
 }
 
-type atomicOnePhaseCounters struct {
-	attemptTotal           atomic.Uint64
-	skipTotal              atomic.Uint64
-	backoffSkipTotal       atomic.Uint64
-	runnerUnsupportedTotal atomic.Uint64
-	fallbackTotal          atomic.Uint64
-	successTotal           atomic.Uint64
-	consecutiveFallbacks   atomic.Uint64
+type metadataPredicateCounters struct {
+	attemptTotal atomic.Uint64
+	skipTotal    atomic.Uint64
+	successTotal atomic.Uint64
 }
 
 // Stats returns executor counters suitable for expvar export.
@@ -73,7 +69,7 @@ func (e *Executor) Stats() map[string]any {
 			"visible_admission":          visibleAdmissionStats(nil, false),
 			"visible_commit":             visibleCommitStats(nil, false),
 			"visible_directory_read":     visibleDirectoryReadStats(nil),
-			"atomic_one_phase":           atomicOnePhaseStats(nil),
+			"metadata_predicate_commit":  metadataPredicateStats(nil),
 		}
 	}
 	out := map[string]any{
@@ -86,7 +82,7 @@ func (e *Executor) Stats() map[string]any {
 		"visible_admission":          visibleAdmissionStats(&e.visibleAdmission, e.visibleAuthority != nil),
 		"visible_commit":             visibleCommitStats(&e.visibleCommit, e.visibleCommitter != nil),
 		"visible_directory_read":     visibleDirectoryReadStats(&e.visibleDirectoryRead),
-		"atomic_one_phase":           atomicOnePhaseStats(e.atomicOnePhase),
+		"metadata_predicate_commit":  metadataPredicateStats(e.metadataPredicates),
 	}
 	if stats, ok := e.runner.(backend.StatsProvider); ok {
 		out["runner"] = stats.Stats()
@@ -238,7 +234,7 @@ func visibleAdmissionSlowReasonStats(counters *visibleAdmissionCounters) map[str
 	}
 }
 
-var atomicOnePhaseKinds = [...]model.OperationKind{
+var metadataPredicateKinds = [...]model.OperationKind{
 	model.OperationCreate,
 	model.OperationUpdateInode,
 	model.OperationRename,
@@ -250,45 +246,37 @@ var atomicOnePhaseKinds = [...]model.OperationKind{
 	model.OperationCloseSession,
 }
 
-func newAtomicOnePhaseCounters() map[model.OperationKind]*atomicOnePhaseCounters {
-	out := make(map[model.OperationKind]*atomicOnePhaseCounters, len(atomicOnePhaseKinds))
-	for _, kind := range atomicOnePhaseKinds {
-		out[kind] = &atomicOnePhaseCounters{}
+func newMetadataPredicateCounters() map[model.OperationKind]*metadataPredicateCounters {
+	out := make(map[model.OperationKind]*metadataPredicateCounters, len(metadataPredicateKinds))
+	for _, kind := range metadataPredicateKinds {
+		out[kind] = &metadataPredicateCounters{}
 	}
 	return out
 }
 
-func atomicOnePhaseStats(counters map[model.OperationKind]*atomicOnePhaseCounters) map[string]any {
-	out := make(map[string]any, len(atomicOnePhaseKinds))
-	for _, kind := range atomicOnePhaseKinds {
-		var stats *atomicOnePhaseCounters
+func metadataPredicateStats(counters map[model.OperationKind]*metadataPredicateCounters) map[string]any {
+	out := make(map[string]any, len(metadataPredicateKinds))
+	for _, kind := range metadataPredicateKinds {
+		var stats *metadataPredicateCounters
 		if counters != nil {
 			stats = counters[kind]
 		}
-		out[string(kind)] = atomicOnePhaseStatsFor(stats)
+		out[string(kind)] = metadataPredicateStatsFor(stats)
 	}
 	return out
 }
 
-func atomicOnePhaseStatsFor(stats *atomicOnePhaseCounters) map[string]uint64 {
+func metadataPredicateStatsFor(stats *metadataPredicateCounters) map[string]uint64 {
 	if stats == nil {
 		return map[string]uint64{
-			"attempt_total":            0,
-			"skip_total":               0,
-			"backoff_skip_total":       0,
-			"runner_unsupported_total": 0,
-			"fallback_total":           0,
-			"success_total":            0,
-			"consecutive_fallbacks":    0,
+			"attempt_total": 0,
+			"skip_total":    0,
+			"success_total": 0,
 		}
 	}
 	return map[string]uint64{
-		"attempt_total":            stats.attemptTotal.Load(),
-		"skip_total":               stats.skipTotal.Load(),
-		"backoff_skip_total":       stats.backoffSkipTotal.Load(),
-		"runner_unsupported_total": stats.runnerUnsupportedTotal.Load(),
-		"fallback_total":           stats.fallbackTotal.Load(),
-		"success_total":            stats.successTotal.Load(),
-		"consecutive_fallbacks":    stats.consecutiveFallbacks.Load(),
+		"attempt_total": stats.attemptTotal.Load(),
+		"skip_total":    stats.skipTotal.Load(),
+		"success_total": stats.successTotal.Load(),
 	}
 }

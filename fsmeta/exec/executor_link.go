@@ -229,14 +229,14 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 			// the correctness boundary that prevents overwriting a concurrent
 			// UpdateInode with an older inode body.
 			predicates := []*backend.Predicate{
-				atomicValueEquals(plan.ReadKeys[0], sourceDentryValue),
-				atomicNotExists(plan.ReadKeys[1]),
-				atomicValueEquals(inodeKey, oldInodeValue),
-				atomicValueEquals(parent.key, parent.value),
+				metadataValueEqualsPredicate(plan.ReadKeys[0], sourceDentryValue),
+				metadataNotExistsPredicate(plan.ReadKeys[1]),
+				metadataValueEqualsPredicate(inodeKey, oldInodeValue),
+				metadataValueEqualsPredicate(parent.key, parent.value),
 			}
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}

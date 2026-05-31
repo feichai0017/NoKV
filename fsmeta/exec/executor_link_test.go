@@ -74,9 +74,9 @@ func TestExecutorLinkVisibleCommitServesOverlay(t *testing.T) {
 	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
 }
 
-func TestExecutorLinkUsesAtomicMutateWithValuePredicates(t *testing.T) {
+func TestExecutorLinkUsesMetadataPredicateCommitWithValuePredicates(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "file", 22)
 	seedDirectory(t, runner.fakeRunner, "vol", 8)
 	seedInode(t, runner.fakeRunner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, Size: 4096, LinkCount: 1})
@@ -92,12 +92,12 @@ func TestExecutorLinkUsesAtomicMutateWithValuePredicates(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.atomicCalls, 1)
+	require.Len(t, runner.predicateCalls, 1)
 	require.Empty(t, base.mutations)
-	requireAtomicStatUint(t, executor.Stats(), model.OperationLink, "success_total", 1)
-	require.Equal(t, backend.PredicateValueEquals, runner.atomicCalls[0].predicates[0].Kind)
-	require.Equal(t, backend.PredicateNotExists, runner.atomicCalls[0].predicates[1].Kind)
-	require.Equal(t, backend.PredicateValueEquals, runner.atomicCalls[0].predicates[2].Kind)
+	requireMetadataPredicateStatUint(t, executor.Stats(), model.OperationLink, "success_total", 1)
+	require.Equal(t, backend.PredicateValueEquals, runner.predicateCalls[0].predicates[0].Kind)
+	require.Equal(t, backend.PredicateNotExists, runner.predicateCalls[0].predicates[1].Kind)
+	require.Equal(t, backend.PredicateValueEquals, runner.predicateCalls[0].predicates[2].Kind)
 	inode, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
 	require.True(t, ok)

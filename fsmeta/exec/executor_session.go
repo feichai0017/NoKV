@@ -271,9 +271,9 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSess
 			if err != nil {
 				return err
 			}
-			predicates = append(predicates, atomicValueEquals(plan.ReadKeys[1], existingValue))
+			predicates = append(predicates, metadataValueEqualsPredicate(plan.ReadKeys[1], existingValue))
 		} else {
-			predicates = append(predicates, atomicNotExists(plan.ReadKeys[1]))
+			predicates = append(predicates, metadataNotExistsPredicate(plan.ReadKeys[1]))
 		}
 		mutations := make([]*backend.Mutation, 0, 3)
 		if owner, ok, err := e.readSessionByKey(ctx, mount, plan.ReadKeys[2], startVersion); err != nil {
@@ -286,7 +286,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSess
 			if err != nil {
 				return err
 			}
-			predicates = append(predicates, atomicValueEquals(plan.ReadKeys[2], ownerValue))
+			predicates = append(predicates, metadataValueEqualsPredicate(plan.ReadKeys[2], ownerValue))
 			staleSessionKey, err := layout.EncodeSessionKey(mount, owner.Inode, owner.Session)
 			if err != nil {
 				return err
@@ -295,12 +295,12 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSess
 				if value, ok, err := e.runner.Get(ctx, staleSessionKey, startVersion); err != nil {
 					return err
 				} else if ok && bytes.Equal(value, ownerValue) {
-					predicates = append(predicates, atomicValueEquals(staleSessionKey, ownerValue))
+					predicates = append(predicates, metadataValueEqualsPredicate(staleSessionKey, ownerValue))
 					mutations = append(mutations, &backend.Mutation{Op: backend.MutationDelete, Key: staleSessionKey})
 				}
 			}
 		} else {
-			predicates = append(predicates, atomicNotExists(plan.ReadKeys[2]))
+			predicates = append(predicates, metadataNotExistsPredicate(plan.ReadKeys[2]))
 		}
 		value, err := layout.EncodeSessionValue(candidate)
 		if err != nil {
@@ -310,12 +310,12 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSess
 			&backend.Mutation{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[0]), Value: value},
 			&backend.Mutation{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		)
-		predicates = append(predicates, atomicValueEquals(inodeKey, inodeValue))
+		predicates = append(predicates, metadataValueEqualsPredicate(inodeKey, inodeValue))
 		// Open is a value-sensitive admission path: the session-id key, owner
 		// key, inode key, and any stale cleanup key must still match the values
 		// read above. Value predicates make the 1PC attempt a real CAS instead
 		// of an existence-only overwrite.
-		if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+		if err := e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		record = candidate
@@ -392,10 +392,10 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req model.Heartbea
 			{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[1]), Value: value},
 		}
 		predicates := []*backend.Predicate{
-			atomicValueEquals(plan.ReadKeys[0], sessionValue),
-			atomicValueEquals(plan.ReadKeys[1], ownerValue),
+			metadataValueEqualsPredicate(plan.ReadKeys[0], sessionValue),
+			metadataValueEqualsPredicate(plan.ReadKeys[1], ownerValue),
 		}
-		if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+		if err := e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		record = candidate
@@ -442,7 +442,7 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req model.CloseWriteSe
 			return err
 		}
 		mutations := []*backend.Mutation{{Op: backend.MutationDelete, Key: cloneBytes(plan.MutateKeys[0])}}
-		predicates := []*backend.Predicate{atomicValueEquals(plan.ReadKeys[0], sessionValue)}
+		predicates := []*backend.Predicate{metadataValueEqualsPredicate(plan.ReadKeys[0], sessionValue)}
 		ownerKey, err := layout.EncodeInodeSessionKey(mount, session.Inode)
 		if err != nil {
 			return err
@@ -454,10 +454,10 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req model.CloseWriteSe
 			if err != nil {
 				return err
 			}
-			predicates = append(predicates, atomicValueEquals(ownerKey, ownerValue))
+			predicates = append(predicates, metadataValueEqualsPredicate(ownerKey, ownerValue))
 			mutations = append(mutations, &backend.Mutation{Op: backend.MutationDelete, Key: ownerKey})
 		}
-		return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+		return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}

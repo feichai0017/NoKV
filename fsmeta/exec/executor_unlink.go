@@ -123,7 +123,7 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 			Key: cloneBytes(plan.MutateKeys[0]),
 		}}
 		attemptResult := model.RemoveResult{RemovedDentry: record}
-		predicates := []*backend.Predicate{atomicValueEquals(plan.PrimaryKey, dentryValue)}
+		predicates := []*backend.Predicate{metadataValueEqualsPredicate(plan.PrimaryKey, dentryValue)}
 		parent, err := e.readDirectoryInode(ctx, mount, req.Parent, startVersion)
 		if err != nil {
 			return err
@@ -136,7 +136,7 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 		if err != nil {
 			return err
 		}
-		predicates = append(predicates, atomicValueEquals(parent.key, parent.value))
+		predicates = append(predicates, metadataValueEqualsPredicate(parent.key, parent.value))
 		if inode, ok, err := e.readInode(ctx, mount, record.Inode, startVersion); err != nil {
 			return err
 		} else if ok {
@@ -152,7 +152,7 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 			if err != nil {
 				return err
 			}
-			predicates = append(predicates, atomicValueEquals(inodeKey, oldInodeValue))
+			predicates = append(predicates, metadataValueEqualsPredicate(inodeKey, oldInodeValue))
 			if inode.LinkCount <= 1 {
 				attemptResult.InodeDeleted = true
 				mutations = append(mutations, &backend.Mutation{Op: backend.MutationDelete, Key: inodeKey})
@@ -179,9 +179,9 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 		result = attemptResult
 		mutations = append(mutations, &backend.Mutation{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[1]), Value: parentValue})
 		if len(mutations) == len(predicates) {
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return model.RemoveResult{}, err
 	}
@@ -287,14 +287,14 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 		}
 		mutations = append(mutations, quotaMutations...)
 		predicates := []*backend.Predicate{
-			atomicValueEquals(parent.key, parent.value),
-			atomicValueEquals(plan.PrimaryKey, dentryValue),
-			atomicValueEquals(inodeKey, inodeValue),
+			metadataValueEqualsPredicate(parent.key, parent.value),
+			metadataValueEqualsPredicate(plan.PrimaryKey, dentryValue),
+			metadataValueEqualsPredicate(inodeKey, inodeValue),
 		}
 		if len(quotaMutations) == 0 {
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}

@@ -184,13 +184,13 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 		}
 		if sizeDelta == 0 || len(mutations) == 1 {
 			predicates := []*backend.Predicate{
-				atomicValueEquals(plan.ReadKeys[0], dentryValue),
-				atomicValueEquals(plan.MutateKeys[0], oldInodeValue),
+				metadataValueEqualsPredicate(plan.ReadKeys[0], dentryValue),
+				metadataValueEqualsPredicate(plan.MutateKeys[0], oldInodeValue),
 			}
-			if err := e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+			if err := e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
 				return err
 			}
-		} else if err := e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
+		} else if err := e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
 			return err
 		}
 		updated = inode

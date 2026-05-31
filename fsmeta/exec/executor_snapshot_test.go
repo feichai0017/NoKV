@@ -187,9 +187,9 @@ func TestExecutorRenameMovesDentryWithoutSubtreeHandoff(t *testing.T) {
 	require.Equal(t, 1, authority.calls)
 }
 
-func TestExecutorRenameUsesAtomicMutateWithoutSubtreeHandoff(t *testing.T) {
+func TestExecutorRenameUsesMetadataPredicateCommitWithoutSubtreeHandoff(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: true}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	seedDentry(t, runner.fakeRunner, "vol", 7, "old", 22)
 	seedDirectory(t, runner.fakeRunner, "vol", 8)
 	seedInode(t, runner.fakeRunner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, LinkCount: 1})
@@ -215,11 +215,11 @@ func TestExecutorRenameUsesAtomicMutateWithoutSubtreeHandoff(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	require.Len(t, runner.atomicCalls, 1)
+	require.Len(t, runner.predicateCalls, 1)
 	require.Empty(t, base.mutations)
 	require.Empty(t, publisher.starts)
 	require.Empty(t, publisher.completes)
-	requireAtomicStatUint(t, executor.Stats(), model.OperationRename, "success_total", 1)
+	requireMetadataPredicateStatUint(t, executor.Stats(), model.OperationRename, "success_total", 1)
 	record, err := executor.Lookup(context.Background(), model.LookupRequest{Mount: "vol", Parent: 8, Name: "new"})
 	require.NoError(t, err)
 	require.Equal(t, model.InodeID(22), record.Inode)

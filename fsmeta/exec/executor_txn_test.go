@@ -269,9 +269,9 @@ func TestTxnRetryBudgetCoversRetryableStartTSLoss(t *testing.T) {
 	require.True(t, canRetryTxnAttempt(maxTxnContentionRetries+1, time.Now(), err, 50))
 }
 
-func TestExecutorMetadataCommitDoesNotBackOffAfterBackendFallback(t *testing.T) {
+func TestExecutorMetadataPredicateCommitRecordsEveryAttempt(t *testing.T) {
 	base := newFakeRunner()
-	runner := &fakeAtomicRunner{fakeRunner: base, handled: false}
+	runner := &fakePredicateRunner{fakeRunner: base}
 	authority := &fakeAuthorityResolver{same: true}
 	resolver := &fakeMountResolver{records: map[model.MountID]MountAdmission{
 		"vol": {MountID: "vol", MountKeyID: 1, RootInode: model.RootInode, SchemaVersion: 1},
@@ -280,7 +280,7 @@ func TestExecutorMetadataCommitDoesNotBackOffAfterBackendFallback(t *testing.T) 
 	require.NoError(t, err)
 
 	seedDirectory(t, runner.fakeRunner, "vol", 8)
-	total := atomicOnePhaseBackoffAfter + 3
+	total := 20
 	for i := range total {
 		oldName := fmt.Sprintf("old-%d", i)
 		newName := fmt.Sprintf("new-%d", i)
@@ -295,11 +295,8 @@ func TestExecutorMetadataCommitDoesNotBackOffAfterBackendFallback(t *testing.T) 
 		require.NoError(t, err)
 	}
 
-	require.Len(t, runner.atomicCalls, total)
+	require.Len(t, runner.predicateCalls, total)
 	stats := executor.Stats()
-	requireAtomicStatUint(t, stats, model.OperationRename, "attempt_total", uint64(total))
-	requireAtomicStatUint(t, stats, model.OperationRename, "success_total", uint64(total))
-	requireAtomicStatUint(t, stats, model.OperationRename, "fallback_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationRename, "skip_total", 0)
-	requireAtomicStatUint(t, stats, model.OperationRename, "backoff_skip_total", 0)
+	requireMetadataPredicateStatUint(t, stats, model.OperationRename, "attempt_total", uint64(total))
+	requireMetadataPredicateStatUint(t, stats, model.OperationRename, "success_total", uint64(total))
 }

@@ -138,9 +138,9 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 			},
 		}
 		predicates := []*backend.Predicate{
-			atomicValueEquals(parent.key, parent.value),
-			atomicNotExists(plan.MutateKeys[1]),
-			atomicNotExists(plan.MutateKeys[2]),
+			metadataValueEqualsPredicate(parent.key, parent.value),
+			metadataNotExistsPredicate(plan.MutateKeys[1]),
+			metadataNotExistsPredicate(plan.MutateKeys[2]),
 		}
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 			Mount:      req.Mount,
@@ -156,9 +156,9 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 		if len(quotaMutations) == 0 {
 			// One-phase counters are per transaction attempt, not per logical
 			// Create, so contention retries and admission misses stay visible.
-			return e.mutateWithAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
+			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
 		}
-		return e.mutateWithoutAtomicOnePhase(ctx, plan.Kind, mount, plan.PrimaryKey, all, startVersion, commitVersion)
+		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, all, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return model.CreateResult{}, err
 	}

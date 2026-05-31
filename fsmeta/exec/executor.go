@@ -95,7 +95,7 @@ type Executor struct {
 	visibleCommit           visibleCommitCounters
 	visibleDirectoryRead    visibleDirectoryReadCounters
 	visibleSeq              atomic.Uint64
-	atomicOnePhase          map[model.OperationKind]*atomicOnePhaseCounters
+	metadataPredicates      map[model.OperationKind]*metadataPredicateCounters
 }
 
 // Option configures an Executor.
@@ -180,10 +180,10 @@ func New(runner backend.Store, opts ...Option) (*Executor, error) {
 		return nil, errRunnerRequired
 	}
 	executor := &Executor{
-		runner:          runner,
-		lockTTL:         defaultLockTTL,
-		visibleClientID: newVisibleClientID(),
-		atomicOnePhase:  newAtomicOnePhaseCounters(),
+		runner:             runner,
+		lockTTL:            defaultLockTTL,
+		visibleClientID:    newVisibleClientID(),
+		metadataPredicates: newMetadataPredicateCounters(),
 	}
 	for _, opt := range opts {
 		if opt != nil {

@@ -48,9 +48,3 @@ func (s *visibleAdmissionCounters) recordSlow(reason compile.SlowReason) {
 		s.slowUnknownTotal.Add(1)
 	}
 }
-
-// recordSuccess clears the fallback streak after the backend accepts a
-// one-phase mutation for this operation kind.
-func (s *atomicOnePhaseCounters) recordSuccess() {
-	s.consecutiveFallbacks.Store(0)
-}
