@@ -137,7 +137,7 @@ func TestRunnerMapsMetadataKeyError(t *testing.T) {
 		WatchKeys:   [][]byte{[]byte("k")},
 	})
 	require.Error(t, err)
-	require.True(t, nokverrors.HasKeyErrorKind(err, nokverrors.KindAlreadyExists))
+	require.True(t, nokverrors.IsKind(err, nokverrors.KindAlreadyExists))
 }
 
 func TestCoordinatorRouteProviderUsesLeaderHintFromCoordinator(t *testing.T) {

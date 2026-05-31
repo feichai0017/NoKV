@@ -11,7 +11,6 @@ import (
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
-	kvrpcpb "github.com/feichai0017/NoKV/pb/kv"
 	metadatapb "github.com/feichai0017/NoKV/pb/metadata"
 )
 
@@ -390,43 +389,38 @@ func keyError(err *metadatapb.MetadataKeyError) error {
 	if err == nil {
 		return nil
 	}
-	keyErr := &kvrpcpb.KeyError{}
-	hasDetail := false
 	if retryable := err.GetRetryable(); retryable != "" {
-		keyErr.Retryable = retryable
-		hasDetail = true
+		return nokverrors.New(nokverrors.KindRetryable, retryable)
 	}
 	if abort := err.GetAbort(); abort != "" {
-		keyErr.Abort = abort
-		hasDetail = true
+		return nokverrors.New(nokverrors.KindAborted, abort)
 	}
 	if exists := err.GetAlreadyExists(); exists != nil {
-		keyErr.AlreadyExists = &kvrpcpb.KeyAlreadyExists{Key: cloneBytes(exists.GetKey())}
-		hasDetail = true
+		msg := fmt.Sprintf("fsmeta/runtime/raftstore: metadata key already exists: %q", exists.GetKey())
+		return nokverrors.New(nokverrors.KindAlreadyExists, msg)
 	}
 	if conflict := err.GetWriteConflict(); conflict != nil {
-		keyErr.WriteConflict = &kvrpcpb.WriteConflict{
-			Key:        cloneBytes(conflict.GetKey()),
-			Primary:    cloneBytes(conflict.GetPrimary()),
-			ConflictTs: conflict.GetConflictTs(),
-			CommitTs:   conflict.GetCommitTs(),
-			StartTs:    conflict.GetStartTs(),
-		}
-		hasDetail = true
+		msg := fmt.Sprintf(
+			"fsmeta/runtime/raftstore: metadata write conflict key=%q primary=%q start=%d conflict=%d commit=%d",
+			conflict.GetKey(),
+			conflict.GetPrimary(),
+			conflict.GetStartTs(),
+			conflict.GetConflictTs(),
+			conflict.GetCommitTs(),
+		)
+		return nokverrors.New(nokverrors.KindWriteConflict, msg)
 	}
 	if locked := err.GetLocked(); locked != nil {
-		keyErr.Locked = &kvrpcpb.Locked{
-			PrimaryLock: cloneBytes(locked.GetPrimaryLock()),
-			Key:         cloneBytes(locked.GetKey()),
-			LockVersion: locked.GetLockVersion(),
-			LockTtl:     locked.GetLockTtl(),
-		}
-		hasDetail = true
+		msg := fmt.Sprintf(
+			"fsmeta/runtime/raftstore: metadata lock conflict key=%q primary=%q version=%d ttl=%d",
+			locked.GetKey(),
+			locked.GetPrimaryLock(),
+			locked.GetLockVersion(),
+			locked.GetLockTtl(),
+		)
+		return nokverrors.New(nokverrors.KindLockConflict, msg)
 	}
-	if !hasDetail {
-		return nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: empty metadata key error")
-	}
-	return nokverrors.NewTxnKeyError(keyErr)
+	return nokverrors.New(nokverrors.KindProtocolViolation, "fsmeta/runtime/raftstore: empty metadata key error")
 }
 
 func cloneByteSlices(src [][]byte) [][]byte {

@@ -399,7 +399,7 @@ func translateMutateError(err error) error {
 	if errors.Is(err, model.ErrExists) {
 		return err
 	}
-	if nokverrors.HasKeyErrorKind(err, nokverrors.KindAlreadyExists) {
+	if nokverrors.IsKind(err, nokverrors.KindAlreadyExists) {
 		return fmt.Errorf("%w: %v", model.ErrExists, err)
 	}
 	return err
