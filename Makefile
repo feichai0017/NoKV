@@ -196,7 +196,7 @@ fsmeta-bench:
 
 fsmeta-rust-smoke:
 	@echo "Running fsmeta Rust MetadataPlane smoke gate..."
-	go test -tags rust_raftstore -count=1 ./fsmeta/runtime/raftstore -run 'TestRustMetadataPlane(FsmetaRuntimeEndToEnd|PassesFSMetaContract|RouteSurvivesCoordinatorRebuild|SurvivesRaftstoreRestart)'
+	go test -tags rust_raftstore -count=1 ./fsmeta/runtime/raftstore
 
 docker-down:
 	@echo "Stopping Docker Compose..."
