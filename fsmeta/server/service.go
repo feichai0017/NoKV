@@ -46,7 +46,7 @@ type visibleSnapshotRetirer interface {
 }
 
 // Service exposes NoKV-native filesystem metadata operations over gRPC.
-// It is intentionally a thin transport layer; all transaction semantics stay in
+// It is intentionally a thin transport layer; all commit semantics stay in
 // the Executor implementation.
 type Service struct {
 	fsmetapb.UnimplementedFSMetadataServer

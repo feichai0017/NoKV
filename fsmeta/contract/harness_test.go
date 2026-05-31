@@ -84,15 +84,15 @@ type versionedValue struct {
 	deleted bool
 }
 
-type versionedTxnError struct {
+type versionedCommitError struct {
 	errors []nokverrors.MetadataKeyIssue
 }
 
-func (e versionedTxnError) Error() string {
-	return "fsmeta/contract: transaction contention"
+func (e versionedCommitError) Error() string {
+	return "fsmeta/contract: commit contention"
 }
 
-func (e versionedTxnError) KeyErrors() []nokverrors.MetadataKeyIssue {
+func (e versionedCommitError) KeyErrors() []nokverrors.MetadataKeyIssue {
 	return e.errors
 }
 
@@ -220,7 +220,7 @@ func (r *versionedRunner) applyMutations(primary []byte, mutations []*backend.Mu
 	defer r.mu.Unlock()
 	// The contract fake has no lock table, so it models min-commit push by
 	// placing late commits after any timestamp that was
-	// allocated while the transaction was in flight.
+	// allocated while the commit attempt was in flight.
 	effectiveCommitVersion := commitVersion
 	if allowCommitPush && r.latestObservedTS >= effectiveCommitVersion {
 		effectiveCommitVersion = r.latestObservedTS + 1
@@ -230,7 +230,7 @@ func (r *versionedRunner) applyMutations(primary []byte, mutations []*backend.Mu
 	}
 	for _, mut := range mutations {
 		if latest, ok := r.latestVersionLocked(mut.Key); ok && latest > startVersion {
-			return 0, versionedTxnError{errors: []nokverrors.MetadataKeyIssue{{
+			return 0, versionedCommitError{errors: []nokverrors.MetadataKeyIssue{{
 				Kind:             nokverrors.KindCommitTsExpired,
 				Key:              append([]byte(nil), mut.Key...),
 				CommitVersion:    commitVersion,

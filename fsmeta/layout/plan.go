@@ -7,14 +7,14 @@ import "github.com/feichai0017/NoKV/fsmeta/model"
 
 // fsmeta operation plans define semantic key boundaries only. The executor
 // owns value interpretation, conflict handling, and operation-specific checks;
-// the transaction runner owns timestamps, retries, and MVCC mutation encoding.
+// the backend commit path owns timestamps, retries, and mutation encoding.
 //
 // RenameSubtree moves only the subtree-root dentry. Descendants reference
 // parent inode IDs, so they remain reachable without descendant key rewrites.
 
 // OperationPlan describes the key set one metadata operation will touch.
 //
-// It is intentionally value-only. The transaction runner decides timestamps,
+// It is intentionally value-only. The backend commit path decides timestamps,
 // retries, and mutation encoding; fsmeta only defines the semantic key boundary.
 type OperationPlan struct {
 	Kind         model.OperationKind

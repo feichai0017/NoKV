@@ -171,8 +171,8 @@ type OpenWriteSessionRequest struct {
 	Inode   InodeID
 	Session SessionID
 	// TTL is a requested lease duration. The executor derives the persisted
-	// absolute expiry from its own clock inside the successful transaction
-	// attempt, so caller clock skew and queueing delay cannot shorten a lease.
+	// absolute expiry from its own clock inside the successful commit attempt,
+	// so caller clock skew and queueing delay cannot shorten a lease.
 	TTL time.Duration
 }
 
