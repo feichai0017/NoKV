@@ -47,13 +47,14 @@ type RegionStats struct {
 
 // Operation represents a control-plane decision to be executed by store runtime.
 type Operation struct {
-	Type         OperationType
-	Region       uint64
-	Source       uint64
-	Target       uint64
-	SplitKey     []byte
-	SplitChild   topology.Descriptor
-	SourceRegion uint64
+	Type           OperationType
+	Region         uint64
+	Source         uint64
+	Target         uint64
+	SplitKey       []byte
+	SplitChild     topology.Descriptor
+	SourceRegion   uint64
+	RetentionFloor uint64
 }
 
 // OperationType identifies one store-control operation kind.
@@ -64,6 +65,7 @@ const (
 	OperationLeaderTransfer
 	OperationSplitRegion
 	OperationMergeRegion
+	OperationPruneMetadataVersions
 )
 
 func (t OperationType) String() string {
@@ -74,6 +76,8 @@ func (t OperationType) String() string {
 		return "split-region"
 	case OperationMergeRegion:
 		return "merge-region"
+	case OperationPruneMetadataVersions:
+		return "prune-metadata-versions"
 	default:
 		return "none"
 	}

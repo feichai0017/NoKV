@@ -338,6 +338,15 @@ func TestFromPBOperationValidation(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, OperationMergeRegion, op.Type)
 	require.Equal(t, uint64(2), op.SourceRegion)
+
+	op, ok = fromPBOperation(&coordpb.SchedulerOperation{
+		Type:           coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS,
+		RegionId:       1,
+		RetentionFloor: 42,
+	})
+	require.True(t, ok)
+	require.Equal(t, OperationPruneMetadataVersions, op.Type)
+	require.Equal(t, uint64(42), op.RetentionFloor)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch, peers []metaregion.Peer) topology.Descriptor {

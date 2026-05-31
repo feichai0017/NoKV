@@ -48,6 +48,7 @@ fn server_args_reject_missing_metrics_addr_value() {
 #[derive(Clone, Default)]
 struct CaptureRaftAdmin {
     transfers: Arc<Mutex<Vec<adminpb::TransferLeaderRequest>>>,
+    prunes: Arc<Mutex<Vec<adminpb::PruneMetadataVersionsRequest>>>,
 }
 
 #[tonic::async_trait]
@@ -102,11 +103,15 @@ impl adminpb::raft_admin_server::RaftAdmin for CaptureRaftAdmin {
 
     async fn prune_metadata_versions(
         &self,
-        _request: Request<adminpb::PruneMetadataVersionsRequest>,
+        request: Request<adminpb::PruneMetadataVersionsRequest>,
     ) -> Result<Response<adminpb::PruneMetadataVersionsResponse>, Status> {
-        Err(Status::unimplemented(
-            "metadata retention is not used by this test",
-        ))
+        let request = request.into_inner();
+        self.prunes.lock().unwrap().push(request.clone());
+        Ok(Response::new(adminpb::PruneMetadataVersionsResponse {
+            retention_floor: request.retention_floor,
+            pruned_versions: 3,
+            retained_anchor_versions: 1,
+        }))
     }
 }
 
@@ -399,6 +404,41 @@ async fn scheduler_operation_executes_leader_transfer_via_admin_rpc() {
     assert_eq!(captured.len(), 1);
     assert_eq!(captured[0].region_id, 7);
     assert_eq!(captured[0].peer_id, 202);
+    handle.abort();
+}
+
+#[tokio::test]
+async fn scheduler_operation_executes_metadata_retention_prune_via_admin_rpc() {
+    let addr = reserve_loopback_addr();
+    let admin = CaptureRaftAdmin::default();
+    let prunes = admin.prunes.clone();
+    let handle = tokio::spawn(async move {
+        tonic::transport::Server::builder()
+            .add_service(adminpb::raft_admin_server::RaftAdminServer::new(admin))
+            .serve(addr)
+            .await
+            .unwrap();
+    });
+    wait_for_server(addr).await;
+
+    let outcome = execute_scheduler_operation(
+        &local_admin_endpoint(addr),
+        None,
+        &coordpb::SchedulerOperation {
+            r#type: coordpb::SchedulerOperationType::PruneMetadataVersions as i32,
+            region_id: 7,
+            retention_floor: 42,
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+
+    assert_eq!(outcome, SchedulerOperationOutcome::Applied);
+    let captured = prunes.lock().unwrap();
+    assert_eq!(captured.len(), 1);
+    assert_eq!(captured[0].region_id, 7);
+    assert_eq!(captured[0].retention_floor, 42);
     handle.abort();
 }
 

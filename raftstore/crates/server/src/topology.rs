@@ -63,6 +63,12 @@ pub(crate) fn scheduler_operation_transition_id(operation: &coordpb::SchedulerOp
                 operation.region_id, operation.source_region_id
             )
         }
+        coordpb::SchedulerOperationType::PruneMetadataVersions => {
+            format!(
+                "metadata-prune:{}:{}",
+                operation.region_id, operation.retention_floor
+            )
+        }
         coordpb::SchedulerOperationType::None => {
             format!("scheduler:{}:{}", operation.r#type, operation.region_id)
         }
@@ -76,6 +82,7 @@ pub(crate) fn scheduler_operation_action(operation: &coordpb::SchedulerOperation
         coordpb::SchedulerOperationType::LeaderTransfer => "leader transfer",
         coordpb::SchedulerOperationType::SplitRegion => "range split",
         coordpb::SchedulerOperationType::MergeRegion => "range merge",
+        coordpb::SchedulerOperationType::PruneMetadataVersions => "metadata retention prune",
         coordpb::SchedulerOperationType::None => "scheduler operation",
     }
 }

@@ -17,6 +17,7 @@ func TestOperationTypeString(t *testing.T) {
 	}{
 		{name: "none", in: OperationNone, want: "none"},
 		{name: "leader transfer", in: OperationLeaderTransfer, want: "leader-transfer"},
+		{name: "metadata retention prune", in: OperationPruneMetadataVersions, want: "prune-metadata-versions"},
 		{name: "unknown", in: OperationType(255), want: "none"},
 	}
 

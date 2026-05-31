@@ -540,6 +540,24 @@ pub(crate) async fn execute_scheduler_operation(
                 reason: "merge execution is not implemented in raftstore yet",
             })
         }
+        coordpb::SchedulerOperationType::PruneMetadataVersions => {
+            if operation.region_id == 0 || operation.retention_floor == 0 {
+                return Ok(SchedulerOperationOutcome::Invalid {
+                    reason: "metadata prune requires region and retention floor",
+                });
+            }
+            let mut client =
+                adminpb::raft_admin_client::RaftAdminClient::connect(admin_endpoint.to_owned())
+                    .await
+                    .map_err(|err| tonic::Status::unavailable(err.to_string()))?;
+            client
+                .prune_metadata_versions(adminpb::PruneMetadataVersionsRequest {
+                    region_id: operation.region_id,
+                    retention_floor: operation.retention_floor,
+                })
+                .await?;
+            Ok(SchedulerOperationOutcome::Applied)
+        }
         coordpb::SchedulerOperationType::None => Ok(SchedulerOperationOutcome::Invalid {
             reason: "scheduler operation type is none",
         }),

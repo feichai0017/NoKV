@@ -100,9 +100,10 @@ snapshot epoch publish/retire are wired. Durable apply-history replay for
 watch resume is wired through the Holt `watch_apply` tree. The data plane now
 has a metadata retention primitive that prunes per-key MVCC history below a
 rooted snapshot floor while keeping the floor anchor version needed by reads at
-or above that floor, and RaftAdmin exposes `PruneMetadataVersions` for rooted
-retention enforcement. The coordinator/root-driven scheduling loop is still
-remaining work.
+or above that floor. RaftAdmin exposes `PruneMetadataVersions`, and coordinator
+heartbeats now derive metadata-retention prune operations from the rooted
+snapshot-retention floor so pruning is driven by root truth rather than local
+best effort.
 
 - Strong reads use leader freshness or a documented ReadIndex-equivalent signal.
 - Follower reads stay disabled until there is an explicit freshness proof.

@@ -692,6 +692,58 @@ func TestServiceStoreHeartbeatAndGetRegionByKey(t *testing.T) {
 	require.Zero(t, getResp.GetRequiredDescriptorRevision())
 }
 
+func TestServiceStoreHeartbeatReturnsMetadataRetentionPruneOperations(t *testing.T) {
+	storage := &fakeStorage{
+		snapshot: rootview.Snapshot{
+			Stores: map[uint64]rootstate.StoreMembership{
+				1: {
+					StoreID:  1,
+					State:    rootstate.StoreMembershipActive,
+					JoinedAt: rootstate.Cursor{Term: 1, Index: 1},
+				},
+			},
+			SnapshotEpochs: map[string]rootstate.SnapshotEpoch{
+				"vol/1/33": {
+					SnapshotID:  "vol/1/33",
+					Mount:       "vol",
+					MountKeyID:  1,
+					RootInode:   1,
+					ReadVersion: 33,
+				},
+				"other/1/41": {
+					SnapshotID:  "other/1/41",
+					Mount:       "other",
+					MountKeyID:  2,
+					RootInode:   1,
+					ReadVersion: 41,
+				},
+			},
+			Descriptors: make(map[uint64]topology.Descriptor),
+		},
+	}
+	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), storage)
+	require.NoError(t, svc.ReloadFromStorage())
+
+	resp, err := svc.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
+		StoreId: 1,
+		RegionStats: []*coordpb.RegionRuntimeStats{
+			{RegionId: 11},
+			{RegionId: 11},
+			{RegionId: 12},
+		},
+	})
+	require.NoError(t, err)
+	require.True(t, resp.GetAccepted())
+
+	require.Len(t, resp.GetOperations(), 2)
+	require.Equal(t, coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS, resp.GetOperations()[0].GetType())
+	require.Equal(t, uint64(11), resp.GetOperations()[0].GetRegionId())
+	require.Equal(t, uint64(33), resp.GetOperations()[0].GetRetentionFloor())
+	require.Equal(t, coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS, resp.GetOperations()[1].GetType())
+	require.Equal(t, uint64(12), resp.GetOperations()[1].GetRegionId())
+	require.Equal(t, uint64(33), resp.GetOperations()[1].GetRetentionFloor())
+}
+
 func TestServiceGetStoreMarksStaleHeartbeatDown(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 	svc.ConfigureStoreHeartbeatTTL(5 * time.Second)

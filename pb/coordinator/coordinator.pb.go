@@ -180,10 +180,11 @@ func (SubtreeAuthorityState) EnumDescriptor() ([]byte, []int) {
 type SchedulerOperationType int32
 
 const (
-	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_NONE            SchedulerOperationType = 0
-	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER SchedulerOperationType = 1
-	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION    SchedulerOperationType = 2
-	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_MERGE_REGION    SchedulerOperationType = 3
+	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_NONE                    SchedulerOperationType = 0
+	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER         SchedulerOperationType = 1
+	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION            SchedulerOperationType = 2
+	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_MERGE_REGION            SchedulerOperationType = 3
+	SchedulerOperationType_SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS SchedulerOperationType = 4
 )
 
 // Enum value maps for SchedulerOperationType.
@@ -193,12 +194,14 @@ var (
 		1: "SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER",
 		2: "SCHEDULER_OPERATION_TYPE_SPLIT_REGION",
 		3: "SCHEDULER_OPERATION_TYPE_MERGE_REGION",
+		4: "SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS",
 	}
 	SchedulerOperationType_value = map[string]int32{
-		"SCHEDULER_OPERATION_TYPE_NONE":            0,
-		"SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER": 1,
-		"SCHEDULER_OPERATION_TYPE_SPLIT_REGION":    2,
-		"SCHEDULER_OPERATION_TYPE_MERGE_REGION":    3,
+		"SCHEDULER_OPERATION_TYPE_NONE":                    0,
+		"SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER":         1,
+		"SCHEDULER_OPERATION_TYPE_SPLIT_REGION":            2,
+		"SCHEDULER_OPERATION_TYPE_MERGE_REGION":            3,
+		"SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS": 4,
 	}
 )
 
@@ -2501,6 +2504,7 @@ type SchedulerOperation struct {
 	SplitKey       []byte                 `protobuf:"bytes,5,opt,name=split_key,json=splitKey,proto3" json:"split_key,omitempty"`
 	SplitChild     *meta.RegionDescriptor `protobuf:"bytes,6,opt,name=split_child,json=splitChild,proto3" json:"split_child,omitempty"`
 	SourceRegionId uint64                 `protobuf:"varint,7,opt,name=source_region_id,json=sourceRegionId,proto3" json:"source_region_id,omitempty"`
+	RetentionFloor uint64                 `protobuf:"varint,8,opt,name=retention_floor,json=retentionFloor,proto3" json:"retention_floor,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
 }
@@ -2580,6 +2584,13 @@ func (x *SchedulerOperation) GetSplitChild() *meta.RegionDescriptor {
 func (x *SchedulerOperation) GetSourceRegionId() uint64 {
 	if x != nil {
 		return x.SourceRegionId
+	}
+	return 0
+}
+
+func (x *SchedulerOperation) GetRetentionFloor() uint64 {
+	if x != nil {
+		return x.RetentionFloor
 	}
 	return 0
 }
@@ -4024,7 +4035,7 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x17WatchRootEventsResponse\x121\n" +
 	"\x05token\x18\x01 \x01(\v2\x1b.nokv.meta.v1.RootTailTokenR\x05token\x128\n" +
 	"\x06events\x18\x02 \x03(\v2 .nokv.meta.v1.RootCommittedEventR\x06events\x12-\n" +
-	"\x12bootstrap_required\x18\x03 \x01(\bR\x11bootstrapRequired\"\xc6\x02\n" +
+	"\x12bootstrap_required\x18\x03 \x01(\bR\x11bootstrapRequired\"\xef\x02\n" +
 	"\x12SchedulerOperation\x12?\n" +
 	"\x04type\x18\x01 \x01(\x0e2+.nokv.coordinator.v1.SchedulerOperationTypeR\x04type\x12\x1b\n" +
 	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12$\n" +
@@ -4033,7 +4044,8 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\tsplit_key\x18\x05 \x01(\fR\bsplitKey\x12?\n" +
 	"\vsplit_child\x18\x06 \x01(\v2\x1e.nokv.meta.v1.RegionDescriptorR\n" +
 	"splitChild\x12(\n" +
-	"\x10source_region_id\x18\a \x01(\x04R\x0esourceRegionId\"}\n" +
+	"\x10source_region_id\x18\a \x01(\x04R\x0esourceRegionId\x12'\n" +
+	"\x0fretention_floor\x18\b \x01(\x04R\x0eretentionFloor\"}\n" +
 	"\x16StoreHeartbeatResponse\x12\x1a\n" +
 	"\baccepted\x18\x01 \x01(\bR\baccepted\x12G\n" +
 	"\n" +
@@ -4150,12 +4162,13 @@ const file_coordinator_coordinator_proto_rawDesc = "" +
 	"\x15SubtreeAuthorityState\x12#\n" +
 	"\x1fSUBTREE_AUTHORITY_STATE_UNKNOWN\x10\x00\x12\"\n" +
 	"\x1eSUBTREE_AUTHORITY_STATE_ACTIVE\x10\x01\x12#\n" +
-	"\x1fSUBTREE_AUTHORITY_STATE_HANDOFF\x10\x02*\xbf\x01\n" +
+	"\x1fSUBTREE_AUTHORITY_STATE_HANDOFF\x10\x02*\xf5\x01\n" +
 	"\x16SchedulerOperationType\x12!\n" +
 	"\x1dSCHEDULER_OPERATION_TYPE_NONE\x10\x00\x12,\n" +
 	"(SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER\x10\x01\x12)\n" +
 	"%SCHEDULER_OPERATION_TYPE_SPLIT_REGION\x10\x02\x12)\n" +
-	"%SCHEDULER_OPERATION_TYPE_MERGE_REGION\x10\x03*t\n" +
+	"%SCHEDULER_OPERATION_TYPE_MERGE_REGION\x10\x03\x124\n" +
+	"0SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS\x10\x04*t\n" +
 	"\x0eTransitionKind\x12\x1f\n" +
 	"\x1bTRANSITION_KIND_UNSPECIFIED\x10\x00\x12\x1f\n" +
 	"\x1bTRANSITION_KIND_PEER_CHANGE\x10\x01\x12 \n" +

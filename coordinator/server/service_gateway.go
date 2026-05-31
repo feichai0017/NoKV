@@ -32,6 +32,7 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 	if req == nil {
 		return nil, statusInvalidArgument("store heartbeat request is nil")
 	}
+	regionStats := regionStatsFromPB(req.GetRegionStats())
 	err := s.cluster.UpsertStoreHeartbeat(catalog.StoreStats{
 		StoreID:           req.GetStoreId(),
 		ClientAddr:        req.GetClientAddr(),
@@ -41,7 +42,7 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 		Capacity:          req.GetCapacity(),
 		Available:         req.GetAvailable(),
 		DroppedOperations: req.GetDroppedOperations(),
-		RegionStats:       regionStatsFromPB(req.GetRegionStats()),
+		RegionStats:       regionStats,
 	})
 	if err != nil {
 		if errors.Is(err, catalog.ErrInvalidStoreID) {
@@ -58,6 +59,7 @@ func (s *Service) StoreHeartbeat(ctx context.Context, req *coordpb.StoreHeartbea
 	// subsequent report wins.
 	s.cluster.RecordRegionLeaders(req.GetStoreId(), req.GetLeaderRegionIds())
 	operations := s.grantScopedStoreOperations(ctx, req.GetStoreId())
+	operations = append(operations, s.metadataRetentionOperations(ctx, regionStats)...)
 	return &coordpb.StoreHeartbeatResponse{
 		Accepted:   true,
 		Operations: operations,

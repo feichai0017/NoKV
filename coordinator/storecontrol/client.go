@@ -190,6 +190,15 @@ func fromPBOperation(op *coordpb.SchedulerOperation) (Operation, bool) {
 			Region:       op.GetRegionId(),
 			SourceRegion: op.GetSourceRegionId(),
 		}, true
+	case coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS:
+		if op.GetRegionId() == 0 || op.GetRetentionFloor() == 0 {
+			return Operation{}, false
+		}
+		return Operation{
+			Type:           OperationPruneMetadataVersions,
+			Region:         op.GetRegionId(),
+			RetentionFloor: op.GetRetentionFloor(),
+		}, true
 	default:
 		return Operation{}, false
 	}
