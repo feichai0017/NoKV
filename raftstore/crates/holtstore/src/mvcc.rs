@@ -1,12 +1,17 @@
+#[cfg(test)]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use holt::RangeEntry;
 use nokv_mvcc as mvcc;
 use nokv_proto::nokv::kv::v1 as kvpb;
 
-use crate::codec::{decode_lock, decode_value, encode_lock, encode_value};
+#[cfg(test)]
+use crate::codec::encode_lock;
+use crate::codec::{decode_lock, decode_value, encode_value};
 use crate::store::to_backend_error;
-use crate::trees::{decode_write_key, write_key, write_prefix, DATA_TREE, LOCK_TREE, WRITE_TREE};
+#[cfg(test)]
+use crate::trees::LOCK_TREE;
+use crate::trees::{decode_write_key, write_key, write_prefix, DATA_TREE, WRITE_TREE};
 use crate::HoltMvccStore;
 
 impl HoltMvccStore {
@@ -123,6 +128,7 @@ impl HoltMvccStore {
         Ok(best)
     }
 
+    #[cfg(test)]
     fn atomic_mutate_already_applied(
         &self,
         req: &kvpb::TryAtomicMutateRequest,
@@ -161,8 +167,9 @@ impl HoltMvccStore {
     }
 }
 
-impl mvcc::KvEngine for HoltMvccStore {
-    fn get(&self, req: &kvpb::GetRequest) -> mvcc::Result<kvpb::GetResponse> {
+#[cfg(test)]
+impl HoltMvccStore {
+    pub(crate) fn get(&self, req: &kvpb::GetRequest) -> mvcc::Result<kvpb::GetResponse> {
         let _guard = self.lock()?;
         if let Some(lock) = self.get_lock(&req.key)? {
             if lock.start_version <= req.version {
@@ -195,15 +202,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         })
     }
 
-    fn batch_get(&self, req: &kvpb::BatchGetRequest) -> mvcc::Result<kvpb::BatchGetResponse> {
-        let mut responses = Vec::with_capacity(req.requests.len());
-        for get in &req.requests {
-            responses.push(self.get(get)?);
-        }
-        Ok(kvpb::BatchGetResponse { responses })
-    }
-
-    fn scan(&self, req: &kvpb::ScanRequest) -> mvcc::Result<kvpb::ScanResponse> {
+    pub(crate) fn scan(&self, req: &kvpb::ScanRequest) -> mvcc::Result<kvpb::ScanResponse> {
         let _guard = self.lock()?;
         let read_version = mvcc::scan_read_version(req.version);
         let limit = mvcc::scan_limit(req.limit);
@@ -257,7 +256,10 @@ impl mvcc::KvEngine for HoltMvccStore {
         })
     }
 
-    fn prewrite(&self, req: &kvpb::PrewriteRequest) -> mvcc::Result<kvpb::PrewriteResponse> {
+    pub(crate) fn prewrite(
+        &self,
+        req: &kvpb::PrewriteRequest,
+    ) -> mvcc::Result<kvpb::PrewriteResponse> {
         let _guard = self.lock()?;
         let mut errors = Vec::new();
         for mutation in &req.mutations {
@@ -322,7 +324,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         Ok(kvpb::PrewriteResponse::default())
     }
 
-    fn commit(&self, req: &kvpb::CommitRequest) -> mvcc::Result<kvpb::CommitResponse> {
+    pub(crate) fn commit(&self, req: &kvpb::CommitRequest) -> mvcc::Result<kvpb::CommitResponse> {
         let _guard = self.lock()?;
         if let Some(err) = mvcc::validation::commit_version(req.start_version, req.commit_version) {
             return Ok(kvpb::CommitResponse { error: Some(err) });
@@ -388,7 +390,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         Ok(kvpb::CommitResponse::default())
     }
 
-    fn batch_rollback(
+    pub(crate) fn batch_rollback(
         &self,
         req: &kvpb::BatchRollbackRequest,
     ) -> mvcc::Result<kvpb::BatchRollbackResponse> {
@@ -427,7 +429,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         Ok(kvpb::BatchRollbackResponse::default())
     }
 
-    fn resolve_lock(
+    pub(crate) fn resolve_lock(
         &self,
         req: &kvpb::ResolveLockRequest,
     ) -> mvcc::Result<kvpb::ResolveLockResponse> {
@@ -500,7 +502,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         })
     }
 
-    fn check_txn_status(
+    pub(crate) fn check_txn_status(
         &self,
         req: &kvpb::CheckTxnStatusRequest,
     ) -> mvcc::Result<kvpb::CheckTxnStatusResponse> {
@@ -580,7 +582,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         Ok(kvpb::CheckTxnStatusResponse::default())
     }
 
-    fn txn_heartbeat(
+    pub(crate) fn txn_heartbeat(
         &self,
         req: &kvpb::TxnHeartBeatRequest,
     ) -> mvcc::Result<kvpb::TxnHeartBeatResponse> {
@@ -657,7 +659,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         })
     }
 
-    fn try_atomic_mutate(
+    pub(crate) fn try_atomic_mutate(
         &self,
         req: &kvpb::TryAtomicMutateRequest,
     ) -> mvcc::Result<kvpb::TryAtomicMutateResponse> {
@@ -772,7 +774,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         })
     }
 
-    fn install_prepared(
+    pub(crate) fn install_prepared(
         &self,
         req: &kvpb::InstallPreparedMvccEntriesRequest,
     ) -> mvcc::Result<kvpb::InstallPreparedMvccEntriesResponse> {
@@ -818,7 +820,7 @@ impl mvcc::KvEngine for HoltMvccStore {
         })
     }
 
-    fn mvcc_maintenance(
+    pub(crate) fn mvcc_maintenance(
         &self,
         req: &kvpb::MvccMaintenanceRequest,
     ) -> mvcc::Result<kvpb::MvccMaintenanceResponse> {
@@ -843,6 +845,7 @@ impl mvcc::KvEngine for HoltMvccStore {
     }
 }
 
+#[cfg(test)]
 fn lock_value(lock: &mvcc::LockRecord) -> mvcc::VersionedValue {
     let value = match lock.op {
         kvpb::mutation::Op::Put | kvpb::mutation::Op::Lock => Some(lock.value.clone()),
@@ -856,6 +859,7 @@ fn lock_value(lock: &mvcc::LockRecord) -> mvcc::VersionedValue {
     }
 }
 
+#[cfg(test)]
 fn mutation_value(mutation: &kvpb::Mutation, start_version: u64) -> mvcc::VersionedValue {
     let op = kvpb::mutation::Op::try_from(mutation.op).unwrap_or(kvpb::mutation::Op::Put);
     let value = match op {
@@ -870,6 +874,7 @@ fn mutation_value(mutation: &kvpb::Mutation, start_version: u64) -> mvcc::Versio
     }
 }
 
+#[cfg(test)]
 fn rollback_value(start_version: u64) -> mvcc::VersionedValue {
     mvcc::VersionedValue {
         kind: kvpb::mutation::Op::Rollback,
@@ -900,6 +905,7 @@ pub(crate) fn apply_committed(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn current_physical_time_millis() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -907,6 +913,7 @@ pub(crate) fn current_physical_time_millis() -> u64 {
         .as_millis() as u64
 }
 
+#[cfg(test)]
 fn is_lock_expired(lock: &mvcc::LockRecord, current_time: u64) -> bool {
     lock.ttl != 0
         && lock.start_time != 0
@@ -915,6 +922,7 @@ fn is_lock_expired(lock: &mvcc::LockRecord, current_time: u64) -> bool {
         && current_time - lock.start_time >= lock.ttl
 }
 
+#[cfg(test)]
 fn lock_expire_time(lock: &mvcc::LockRecord) -> u64 {
     if lock.start_time == 0 || lock.ttl == 0 {
         return 0;

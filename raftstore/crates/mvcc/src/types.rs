@@ -69,42 +69,11 @@ pub(crate) struct Inner {
     pub(crate) rollbacks: BTreeSet<(Vec<u8>, u64)>,
 }
 
-/// In-memory MVCC implementation used by the first Rust raftstore service
-/// slice and by tests. The Holt-backed implementation will reuse the same
-/// request semantics and move persistence below this boundary.
+/// In-memory metadata MVCC implementation used by tests and memory-backed
+/// raftstore regions.
 #[derive(Debug, Clone, Default)]
 pub struct MvccStore {
     pub(crate) inner: Arc<Mutex<Inner>>,
-}
-
-pub trait KvEngine: Clone + Send + Sync + 'static {
-    fn get(&self, req: &kvpb::GetRequest) -> Result<kvpb::GetResponse>;
-    fn batch_get(&self, req: &kvpb::BatchGetRequest) -> Result<kvpb::BatchGetResponse>;
-    fn scan(&self, req: &kvpb::ScanRequest) -> Result<kvpb::ScanResponse>;
-    fn prewrite(&self, req: &kvpb::PrewriteRequest) -> Result<kvpb::PrewriteResponse>;
-    fn commit(&self, req: &kvpb::CommitRequest) -> Result<kvpb::CommitResponse>;
-    fn batch_rollback(
-        &self,
-        req: &kvpb::BatchRollbackRequest,
-    ) -> Result<kvpb::BatchRollbackResponse>;
-    fn resolve_lock(&self, req: &kvpb::ResolveLockRequest) -> Result<kvpb::ResolveLockResponse>;
-    fn check_txn_status(
-        &self,
-        req: &kvpb::CheckTxnStatusRequest,
-    ) -> Result<kvpb::CheckTxnStatusResponse>;
-    fn txn_heartbeat(&self, req: &kvpb::TxnHeartBeatRequest) -> Result<kvpb::TxnHeartBeatResponse>;
-    fn try_atomic_mutate(
-        &self,
-        req: &kvpb::TryAtomicMutateRequest,
-    ) -> Result<kvpb::TryAtomicMutateResponse>;
-    fn install_prepared(
-        &self,
-        req: &kvpb::InstallPreparedMvccEntriesRequest,
-    ) -> Result<kvpb::InstallPreparedMvccEntriesResponse>;
-    fn mvcc_maintenance(
-        &self,
-        req: &kvpb::MvccMaintenanceRequest,
-    ) -> Result<kvpb::MvccMaintenanceResponse>;
 }
 
 #[derive(Debug, Clone, PartialEq)]

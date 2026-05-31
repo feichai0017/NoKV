@@ -1,6 +1,6 @@
 use super::*;
 use crate::mvcc_engine::current_physical_time_millis;
-use mvcc::{KvEngine, MvccSnapshotEngine};
+use mvcc::MvccSnapshotEngine;
 use nokv_mvcc as mvcc;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::kv::v1 as kvpb;

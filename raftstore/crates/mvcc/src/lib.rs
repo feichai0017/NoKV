@@ -1,7 +1,8 @@
-//! MVCC and Percolator-compatible metadata operations for Rust raftstore.
+//! Metadata MVCC primitives for Rust raftstore.
 //!
-//! The crate owns the storage-level transaction semantics that `StoreKV` exposes
-//! over gRPC. It intentionally does not know fsmeta inode/dentry semantics.
+//! The crate owns metadata read, write, snapshot, and key-error semantics shared
+//! by in-memory tests and Holt-backed state-machine storage. It intentionally
+//! does not know fsmeta inode/dentry semantics or raftstore topology.
 
 mod atomic;
 pub mod errors;
@@ -18,9 +19,8 @@ pub mod validation;
 pub use snapshot::{decode_mvcc_snapshot, encode_mvcc_snapshot};
 pub use store::{scan_limit, scan_read_version, value_is_expired};
 pub use types::{
-    Error, KvEngine, LockRecord, MetadataApplyResult, MetadataEngine, MvccSnapshot,
-    MvccSnapshotEngine, MvccSnapshotLock, MvccSnapshotRollback, MvccSnapshotWrite, MvccStore,
-    Result, VersionedValue,
+    Error, LockRecord, MetadataApplyResult, MetadataEngine, MvccSnapshot, MvccSnapshotEngine,
+    MvccSnapshotLock, MvccSnapshotRollback, MvccSnapshotWrite, MvccStore, Result, VersionedValue,
 };
 
 pub use metadata::{

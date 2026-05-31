@@ -2,76 +2,11 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use nokv_proto::nokv::kv::v1 as kvpb;
 
-use crate::{Inner, KvEngine, LockRecord, MvccStore, Result, VersionedValue};
+use crate::{Inner, LockRecord, MvccStore, VersionedValue};
 
 impl MvccStore {
     pub fn new() -> Self {
         Self::default()
-    }
-}
-
-impl KvEngine for MvccStore {
-    fn get(&self, req: &kvpb::GetRequest) -> Result<kvpb::GetResponse> {
-        self.get(req)
-    }
-
-    fn batch_get(&self, req: &kvpb::BatchGetRequest) -> Result<kvpb::BatchGetResponse> {
-        self.batch_get(req)
-    }
-
-    fn scan(&self, req: &kvpb::ScanRequest) -> Result<kvpb::ScanResponse> {
-        self.scan(req)
-    }
-
-    fn prewrite(&self, req: &kvpb::PrewriteRequest) -> Result<kvpb::PrewriteResponse> {
-        self.prewrite(req)
-    }
-
-    fn commit(&self, req: &kvpb::CommitRequest) -> Result<kvpb::CommitResponse> {
-        self.commit(req)
-    }
-
-    fn batch_rollback(
-        &self,
-        req: &kvpb::BatchRollbackRequest,
-    ) -> Result<kvpb::BatchRollbackResponse> {
-        self.batch_rollback(req)
-    }
-
-    fn resolve_lock(&self, req: &kvpb::ResolveLockRequest) -> Result<kvpb::ResolveLockResponse> {
-        self.resolve_lock(req)
-    }
-
-    fn check_txn_status(
-        &self,
-        req: &kvpb::CheckTxnStatusRequest,
-    ) -> Result<kvpb::CheckTxnStatusResponse> {
-        self.check_txn_status(req)
-    }
-
-    fn txn_heartbeat(&self, req: &kvpb::TxnHeartBeatRequest) -> Result<kvpb::TxnHeartBeatResponse> {
-        self.txn_heartbeat(req)
-    }
-
-    fn try_atomic_mutate(
-        &self,
-        req: &kvpb::TryAtomicMutateRequest,
-    ) -> Result<kvpb::TryAtomicMutateResponse> {
-        self.try_atomic_mutate(req)
-    }
-
-    fn install_prepared(
-        &self,
-        req: &kvpb::InstallPreparedMvccEntriesRequest,
-    ) -> Result<kvpb::InstallPreparedMvccEntriesResponse> {
-        self.install_prepared(req)
-    }
-
-    fn mvcc_maintenance(
-        &self,
-        req: &kvpb::MvccMaintenanceRequest,
-    ) -> Result<kvpb::MvccMaintenanceResponse> {
-        self.mvcc_maintenance(req)
     }
 }
 
