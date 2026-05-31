@@ -36,13 +36,8 @@ pub use region_router::{
     MultiRegionStoreKvService,
 };
 pub use serve::{
-    openraft_region_service_pair, serve, serve_with_engine,
-    serve_with_openraft_region_admission_and_peer_endpoints,
-    serve_with_openraft_region_admission_peer_endpoints_and_descriptor_sink,
-    serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_and_topology_publisher,
+    openraft_region_service_pair, serve_with_openraft_region_admission_and_peer_endpoints,
     serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics,
-    serve_with_openraft_region_and_admission, serve_with_region_engine,
-    serve_with_region_engine_and_admission,
 };
 pub use service::StoreKvService;
 pub use topology::root_event_transition_id;
