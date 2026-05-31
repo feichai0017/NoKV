@@ -11,6 +11,7 @@ mod execution;
 mod metadata;
 mod metadata_plane;
 mod metadata_router;
+mod metadata_watch;
 mod peer_endpoint_catalog;
 mod publisher;
 mod region_registry;
