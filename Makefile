@@ -191,7 +191,7 @@ docker-dev-up:
 	docker compose up -d --build
 
 fsmeta-bench:
-	@echo "Running local fsmeta benchmark matrix..."
+	@echo "Running fsmeta benchmark matrix (mode=$${NOKV_FSMETA_BENCH_MODE:-local})..."
 	NOKV_FSMETA_BENCH_MODE=$${NOKV_FSMETA_BENCH_MODE:-local} ./scripts/run_fsmeta_benchmarks.sh
 
 fsmeta-rust-smoke:
