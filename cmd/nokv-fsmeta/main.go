@@ -16,7 +16,6 @@ import (
 	"syscall"
 
 	coordclient "github.com/feichai0017/NoKV/coordinator/client"
-	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/feichai0017/NoKV/fsmeta/observe"
 	fsmetalocal "github.com/feichai0017/NoKV/fsmeta/runtime/local"
@@ -67,17 +66,11 @@ func main() {
 		runtimeKind         = flag.String("runtime", "local", "fsmeta runtime: local or raftstore")
 		coordinatorAddr     = flag.String("coordinator-addr", "", "coordinator gRPC address for raftstore runtime")
 		bootstrapMount      = flag.String("bootstrap-mount", "", "optional mount id whose root inode should be bootstrapped on raftstore runtime startup")
-		_                   = flag.Int("affinity-buckets", layout.DefaultAffinityBucketCount, "accepted for compatibility with older fsmeta demo scripts; local layout owns bucket selection")
 		lockTTL             = flag.Duration("lock-ttl", 0, "fsmeta lock TTL; zero uses the fsmeta default")
-		sessionCleanupLimit = flag.Uint("session-cleanup-limit", 0, "accepted for compatibility with older fsmeta demo scripts; local runtime has no background session cleaner")
 	)
 	flag.Parse()
 	if *lockTTL < 0 {
 		fatalf("lock-ttl must be non-negative")
-		return
-	}
-	if *sessionCleanupLimit > uint(model.MaxSessionExpireLimit) {
-		fatalf("session-cleanup-limit exceeds maximum %d", model.MaxSessionExpireLimit)
 		return
 	}
 	localMount, err := localMountIdentity(*localMountID, *localMountKeyID)
