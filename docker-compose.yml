@@ -14,7 +14,7 @@
 #   docker compose up -d --build
 #
 # Rust raftstore parity path:
-#   NOKV_RAFTSTORE_IMPL=rust docker compose up -d --build
+#   NOKV_RAFTSTORE_IMPL=rust NOKV_FSMETA_MOUNT_RAFT_ATOMIC=true docker compose up -d --build
 #
 # Architecture:
 #   Truth plane:     3× meta-root  (replicated raft, quorum of 2 — tolerates 1 peer loss)
@@ -344,6 +344,7 @@ services:
       - "--addr=0.0.0.0:8090"
       - "--coordinator-addr=nokv-coordinator-1:2379,nokv-coordinator-2:2379,nokv-coordinator-3:2379"
       - "--affinity-buckets=16"
+      - "--raftstore-mount-raft-atomic=${NOKV_FSMETA_MOUNT_RAFT_ATOMIC:-false}"
       - "--metrics-addr=0.0.0.0:9400"
       - "--peras-holder-id=${NOKV_FSMETA_PERAS_HOLDER_ID:-fsmeta-compose-holder}"
       - "--peras-authority-ttl=${NOKV_FSMETA_PERAS_AUTHORITY_TTL:-5m}"
