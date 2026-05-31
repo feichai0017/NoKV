@@ -161,7 +161,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	if mountTTL == 0 {
 		mountTTL = defaultMountTTL
 	}
-	mounts := &mountCache{coord: coord, ttl: mountTTL}
+	mounts := &mountCache{coord: coord, roots: newRootBootstrapper(runner, nil), ttl: mountTTL}
 	quotaTTL := opts.QuotaTTL
 	if quotaTTL == 0 {
 		quotaTTL = defaultQuotaTTL

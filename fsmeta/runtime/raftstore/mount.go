@@ -25,6 +25,7 @@ type mountLookup interface {
 // admission flips immediately.
 type mountCache struct {
 	coord mountLookup
+	roots mountRootInitializer
 	ttl   time.Duration
 	now   func() time.Time
 
@@ -58,6 +59,9 @@ func (c *mountCache) ResolveMount(ctx context.Context, mount model.MountID) (fsm
 		return fsmetaexec.MountAdmission{}, err
 	}
 	record, err := mountFromProto(resp)
+	if err == nil && !record.Retired && c.roots != nil {
+		err = c.roots.EnsureMountRoot(ctx, record)
+	}
 	if err == nil {
 		c.put(mount, now, record, nil)
 	}

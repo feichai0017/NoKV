@@ -5,9 +5,11 @@ package raftstore
 
 import (
 	"context"
+	"errors"
 	"testing"
 	"time"
 
+	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
 	fsmetawatch "github.com/feichai0017/NoKV/fsmeta/exec/watch"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/feichai0017/NoKV/fsmeta/observe"
@@ -24,6 +26,18 @@ type fakeMountLookup struct {
 func (c *fakeMountLookup) GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
 	c.calls++
 	return c.resp, c.err
+}
+
+type fakeMountRootInitializer struct {
+	calls  int
+	mounts []fsmetaexec.MountAdmission
+	err    error
+}
+
+func (i *fakeMountRootInitializer) EnsureMountRoot(_ context.Context, mount fsmetaexec.MountAdmission) error {
+	i.calls++
+	i.mounts = append(i.mounts, mount)
+	return i.err
 }
 
 func TestMountCacheReturnsActiveMount(t *testing.T) {
@@ -52,6 +66,64 @@ func TestMountCacheReturnsActiveMount(t *testing.T) {
 	require.Equal(t, first, second)
 	require.Equal(t, model.MountID("vol"), first.MountID)
 	require.False(t, first.Retired)
+}
+
+func TestMountCacheSeedsActiveMountRootBeforeCaching(t *testing.T) {
+	lookup := &fakeMountLookup{
+		resp: &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
+			MountId:       "vol",
+			MountKeyId:    1,
+			RootInode:     1,
+			SchemaVersion: 1,
+			State:         coordpb.MountState_MOUNT_STATE_ACTIVE,
+		}},
+	}
+	roots := &fakeMountRootInitializer{}
+	cache := &mountCache{
+		coord: lookup,
+		roots: roots,
+		ttl:   time.Minute,
+		now:   func() time.Time { return time.Unix(100, 0) },
+	}
+
+	first, err := cache.ResolveMount(context.Background(), model.MountID("vol"))
+	require.NoError(t, err)
+	second, err := cache.ResolveMount(context.Background(), model.MountID("vol"))
+	require.NoError(t, err)
+
+	require.Equal(t, 1, lookup.calls)
+	require.Equal(t, 1, roots.calls)
+	require.Equal(t, []fsmetaexec.MountAdmission{first}, roots.mounts)
+	require.Equal(t, first, second)
+}
+
+func TestMountCacheDoesNotCacheRootSeedFailure(t *testing.T) {
+	want := errors.New("root seed failed")
+	lookup := &fakeMountLookup{
+		resp: &coordpb.GetMountResponse{Mount: &coordpb.MountInfo{
+			MountId:       "vol",
+			MountKeyId:    1,
+			RootInode:     1,
+			SchemaVersion: 1,
+			State:         coordpb.MountState_MOUNT_STATE_ACTIVE,
+		}},
+	}
+	roots := &fakeMountRootInitializer{err: want}
+	cache := &mountCache{
+		coord: lookup,
+		roots: roots,
+		ttl:   time.Minute,
+		now:   func() time.Time { return time.Unix(100, 0) },
+	}
+
+	_, err := cache.ResolveMount(context.Background(), model.MountID("vol"))
+	require.ErrorIs(t, err, want)
+	roots.err = nil
+	_, err = cache.ResolveMount(context.Background(), model.MountID("vol"))
+	require.NoError(t, err)
+
+	require.Equal(t, 2, lookup.calls)
+	require.Equal(t, 2, roots.calls)
 }
 
 func TestMountCacheRefreshesAfterTTL(t *testing.T) {
