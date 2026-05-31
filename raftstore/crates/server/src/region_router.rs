@@ -13,7 +13,9 @@ use nokv_proto::nokv::error::v1 as errorpb;
 #[cfg(test)]
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
-use nokv_raftnode::{ApplyWatchProvider, MetadataCommandExecutor, RaftCommandExecutor};
+#[cfg(test)]
+use nokv_raftnode::RaftCommandExecutor;
+use nokv_raftnode::{ApplyWatchProvider, MetadataCommandExecutor, MetadataReadExecutor};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status};
 
@@ -402,7 +404,7 @@ where
     E: AppliedRegionDescriptorProvider
         + ApplyWatchProvider
         + MetadataCommandExecutor
-        + RaftCommandExecutor
+        + MetadataReadExecutor
         + RaftRuntimeStatusProvider,
 {
     async fn get(
@@ -664,7 +666,7 @@ where
     E: AppliedRegionDescriptorProvider
         + ApplyWatchProvider
         + MetadataCommandExecutor
-        + RaftCommandExecutor
+        + MetadataReadExecutor
         + RaftRuntimeStatusProvider,
     S: AppliedRegionDescriptorProvider + RaftMembershipAdmin + RaftRuntimeStatusProvider,
     D: RegionDescriptorSink,
@@ -719,6 +721,35 @@ mod tests {
         ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
         {
             self.inner.execute_raft_command(req)
+        }
+    }
+
+    impl MetadataReadExecutor for FixedRuntimeEngine {
+        fn execute_metadata_get<'a>(
+            &'a self,
+            req: &'a metadatapb::MetadataGetRequest,
+        ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>>
+               + Send
+               + 'a {
+            self.inner.execute_metadata_get(req)
+        }
+
+        fn execute_metadata_batch_get<'a>(
+            &'a self,
+            req: &'a metadatapb::MetadataBatchGetRequest,
+        ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
+               + Send
+               + 'a {
+            self.inner.execute_metadata_batch_get(req)
+        }
+
+        fn execute_metadata_scan<'a>(
+            &'a self,
+            req: &'a metadatapb::MetadataScanRequest,
+        ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>>
+               + Send
+               + 'a {
+            self.inner.execute_metadata_scan(req)
         }
     }
 

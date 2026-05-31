@@ -1,12 +1,17 @@
+#[cfg(test)]
 use nokv_proto::nokv::kv::v1 as kvpb;
+#[cfg(test)]
 use nokv_proto::nokv::raft::v1 as raftpb;
+#[cfg(test)]
 use tonic::Status;
 
+#[cfg(test)]
 use crate::admission::RegionAdmission;
 use crate::{
     DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE, DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE,
 };
 
+#[cfg(test)]
 pub(crate) fn trim_scan_response_to_region(
     admission: &RegionAdmission,
     response: &mut kvpb::ScanResponse,
@@ -16,6 +21,7 @@ pub(crate) fn trim_scan_response_to_region(
         .retain(|kv| admission.key_in_range(kv.key.as_slice()));
 }
 
+#[cfg(test)]
 pub(crate) fn header_from_context(context: &kvpb::Context) -> raftpb::CmdHeader {
     let peer = context.peer.as_ref();
     raftpb::CmdHeader {
@@ -31,6 +37,7 @@ pub(crate) fn header_from_context(context: &kvpb::Context) -> raftpb::CmdHeader 
     }
 }
 
+#[cfg(test)]
 pub(crate) fn raft_payload_error(operation: &str, detail: &str) -> Status {
     Status::internal(format!("{operation} raft payload error: {detail}"))
 }

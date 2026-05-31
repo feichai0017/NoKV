@@ -24,9 +24,9 @@ pub(crate) use apply::decode_metadata_response;
 pub(crate) use apply::decode_raft_response;
 pub use apply::{
     AppliedKvEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider, ApplyWatchProvider,
-    ApplyWatchReplay, ApplyWatchReplayRequest, MetadataCommandExecutor, PersistentAppliedKvEngine,
-    RaftCommandExecutor, RegionApplyEngine, RegionDescriptorCatalog, RegionMetadataSink,
-    RegionSnapshotEngine, RegionTrafficProvider, RegionTrafficSnapshot,
+    ApplyWatchReplay, ApplyWatchReplayRequest, MetadataCommandExecutor, MetadataReadExecutor,
+    PersistentAppliedKvEngine, RaftCommandExecutor, RegionApplyEngine, RegionDescriptorCatalog,
+    RegionMetadataSink, RegionSnapshotEngine, RegionTrafficProvider, RegionTrafficSnapshot,
 };
 pub use error::Error;
 pub use log_codec::{decode_log_entry, encode_log_entry};

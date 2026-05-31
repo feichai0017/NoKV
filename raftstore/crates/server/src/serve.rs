@@ -2,7 +2,9 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use nokv_raftnode::{MetadataCommandExecutor, RaftCommandExecutor, RegionSnapshotEngine};
+#[cfg(test)]
+use nokv_raftnode::RaftCommandExecutor;
+use nokv_raftnode::{MetadataCommandExecutor, MetadataReadExecutor, RegionSnapshotEngine};
 
 use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
@@ -26,7 +28,7 @@ pub async fn serve_with_openraft_region_admission_and_peer_endpoints<E>(
     peer_endpoints: PeerEndpointCatalog,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + MetadataReadExecutor + RaftCommandExecutor,
 {
     serve_with_openraft_region_admission_peer_endpoints_descriptor_sink_topology_publisher_and_restart_diagnostics(
         addr,
@@ -54,7 +56,7 @@ pub fn openraft_region_service_pair<E, D>(
     RaftAdminService<nokv_raftnode::OpenRaftRegion<E>, D>,
 )
 where
-    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + MetadataReadExecutor + RaftCommandExecutor,
     D: RegionDescriptorSink,
 {
     let execution = ExecutionRuntime::default();
@@ -88,7 +90,7 @@ pub fn openraft_metadata_service_pair<E, D>(
     RaftAdminService<nokv_raftnode::OpenRaftRegion<E>, D>,
 )
 where
-    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + MetadataReadExecutor,
     D: RegionDescriptorSink,
 {
     let execution = ExecutionRuntime::default();
@@ -117,7 +119,7 @@ fn openraft_metadata_service_pair_with_execution<E, D>(
     RaftAdminService<nokv_raftnode::OpenRaftRegion<E>, D>,
 )
 where
-    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + MetadataReadExecutor,
     D: RegionDescriptorSink,
 {
     let metadata = MetadataPlaneService::with_admission_state_and_execution(
@@ -152,7 +154,7 @@ pub async fn serve_with_openraft_region_admission_peer_endpoints_descriptor_sink
     restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: RegionSnapshotEngine + MetadataCommandExecutor + RaftCommandExecutor,
+    E: RegionSnapshotEngine + MetadataCommandExecutor + MetadataReadExecutor + RaftCommandExecutor,
     D: RegionDescriptorSink,
 {
     let transport = nokv_raftnode::TonicRaftTransportRegistry::default();

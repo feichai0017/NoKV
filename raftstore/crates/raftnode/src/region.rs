@@ -19,9 +19,9 @@ use tokio::sync::broadcast;
 use crate::{
     decode_metadata_response, decode_raft_response, AppliedKvEngine, AppliedProposal, ApplyStatus,
     ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode,
-    Error, MetadataCommandExecutor, NodeId, Proposal, RaftCommandExecutor, RaftStoreConfig,
-    RegionId, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
-    RegionTrafficSnapshot,
+    Error, MetadataCommandExecutor, MetadataReadExecutor, NodeId, Proposal, RaftCommandExecutor,
+    RaftStoreConfig, RegionId, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine,
+    RegionTrafficProvider, RegionTrafficSnapshot,
 };
 
 #[derive(Clone)]
@@ -461,10 +461,89 @@ where
     }
 }
 
+impl<E> MetadataReadExecutor for OpenRaftRegion<E>
+where
+    E: RegionSnapshotEngine + MetadataReadExecutor,
+{
+    fn execute_metadata_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a
+    {
+        async move {
+            let context = req.context.as_ref();
+            if let Some(region_error) = self.metadata_read_gate(context).await? {
+                return Ok(metadatapb::MetadataGetResponse {
+                    region_error: Some(region_error),
+                    ..Default::default()
+                });
+            }
+            self.apply_engine.execute_metadata_get(req).await
+        }
+    }
+
+    fn execute_metadata_batch_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataBatchGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
+           + Send
+           + 'a {
+        async move {
+            let context = req.context.as_ref();
+            if let Some(region_error) = self.metadata_read_gate(context).await? {
+                return Ok(metadatapb::MetadataBatchGetResponse {
+                    region_error: Some(region_error),
+                    ..Default::default()
+                });
+            }
+            self.apply_engine.execute_metadata_batch_get(req).await
+        }
+    }
+
+    fn execute_metadata_scan<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataScanRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
+    {
+        async move {
+            let context = req.context.as_ref();
+            if let Some(region_error) = self.metadata_read_gate(context).await? {
+                return Ok(metadatapb::MetadataScanResponse {
+                    region_error: Some(region_error),
+                    ..Default::default()
+                });
+            }
+            self.apply_engine.execute_metadata_scan(req).await
+        }
+    }
+}
+
 impl<E> OpenRaftRegion<E>
 where
     E: RegionSnapshotEngine,
 {
+    async fn metadata_read_gate(
+        &self,
+        context: Option<&metadatapb::MetadataContext>,
+    ) -> nokv_mvcc::Result<Option<errorpb::RegionError>> {
+        self.ensure_metadata_read_region(context)?;
+        if metadata_read_consistency(context) == metadatapb::ReadConsistency::BoundedStale {
+            if self.metadata_bounded_stale_read_admissible(context) {
+                return Ok(None);
+            }
+            return Ok(Some(stale_metadata_region_error()));
+        }
+        if let Err(err) = ensure_linearizable_for_read(&self.raft).await {
+            if let Error::NotLeader { leader_id } = err {
+                return self
+                    .not_leader_metadata_region_error(context, leader_id)
+                    .map(Some);
+            }
+            return Err(nokv_mvcc::Error::Backend(err.to_string()));
+        }
+        Ok(None)
+    }
+
     fn not_leader_raft_response(
         &self,
         req: &raftpb::RaftCmdRequest,
@@ -547,6 +626,67 @@ where
         }
         true
     }
+
+    fn ensure_metadata_read_region(
+        &self,
+        context: Option<&metadatapb::MetadataContext>,
+    ) -> nokv_mvcc::Result<()> {
+        let requested_region_id = context.map(|context| context.region_id).unwrap_or_default();
+        let applied_region_id = self.apply_engine.apply_status().region_id;
+        if requested_region_id != 0 && requested_region_id != applied_region_id {
+            return Err(nokv_mvcc::Error::Backend(
+                Error::LogRegionMismatch {
+                    record_region_id: applied_region_id,
+                    proposal_region_id: requested_region_id,
+                }
+                .to_string(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn metadata_bounded_stale_read_admissible(
+        &self,
+        context: Option<&metadatapb::MetadataContext>,
+    ) -> bool {
+        if context.is_none() {
+            return false;
+        }
+        let status = self.apply_engine.apply_status();
+        if status.applied_index == 0 {
+            return false;
+        }
+        let metrics = self.raft_handle().metrics();
+        let metrics = metrics.borrow();
+        let last_log_index = metrics.last_log_index.unwrap_or_default();
+        last_log_index == status.applied_index
+    }
+
+    fn not_leader_metadata_region_error(
+        &self,
+        context: Option<&metadatapb::MetadataContext>,
+        leader_id: Option<NodeId>,
+    ) -> nokv_mvcc::Result<errorpb::RegionError> {
+        let descriptor = self.apply_engine.region_descriptor()?;
+        let region_id = descriptor
+            .as_ref()
+            .map(|descriptor| descriptor.region_id)
+            .or_else(|| context.map(|context| context.region_id))
+            .unwrap_or_else(|| self.apply_engine.apply_status().region_id);
+        let leader = leader_id.and_then(|leader_id| {
+            descriptor.as_ref().and_then(|descriptor| {
+                descriptor
+                    .peers
+                    .iter()
+                    .find(|peer| peer.peer_id == leader_id)
+                    .cloned()
+            })
+        });
+        Ok(errorpb::RegionError {
+            not_leader: Some(errorpb::NotLeader { region_id, leader }),
+            ..Default::default()
+        })
+    }
 }
 
 fn raft_command_is_read_only(req: &raftpb::RaftCmdRequest) -> bool {
@@ -566,6 +706,14 @@ fn read_consistency(req: &raftpb::RaftCmdRequest) -> kvpb::ReadConsistency {
         .unwrap_or(kvpb::ReadConsistency::Strong)
 }
 
+fn metadata_read_consistency(
+    context: Option<&metadatapb::MetadataContext>,
+) -> metadatapb::ReadConsistency {
+    context
+        .and_then(|context| metadatapb::ReadConsistency::try_from(context.read_consistency).ok())
+        .unwrap_or(metadatapb::ReadConsistency::Strong)
+}
+
 fn stale_command_raft_response(req: &raftpb::RaftCmdRequest) -> raftpb::RaftCmdResponse {
     raftpb::RaftCmdResponse {
         header: req.header.clone(),
@@ -574,6 +722,13 @@ fn stale_command_raft_response(req: &raftpb::RaftCmdRequest) -> raftpb::RaftCmdR
             stale_command: Some(errorpb::StaleCommand {}),
             ..Default::default()
         }),
+    }
+}
+
+fn stale_metadata_region_error() -> errorpb::RegionError {
+    errorpb::RegionError {
+        stale_command: Some(errorpb::StaleCommand {}),
+        ..Default::default()
     }
 }
 

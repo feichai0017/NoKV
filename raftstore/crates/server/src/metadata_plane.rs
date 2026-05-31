@@ -2,19 +2,15 @@ use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
-use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
-    ApplyWatchProvider, ApplyWatchReplayRequest, MetadataCommandExecutor, RaftCommandExecutor,
+    ApplyWatchProvider, ApplyWatchReplayRequest, MetadataCommandExecutor, MetadataReadExecutor,
 };
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::{Request, Response, Status};
 
 use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
-use crate::wire_helpers::{
-    chunk_apply_watch_keys, header_from_context, matching_apply_watch_keys, raft_payload_error,
-    trim_scan_response_to_region,
-};
+use crate::wire_helpers::{chunk_apply_watch_keys, matching_apply_watch_keys};
 use crate::{
     internal_error, AppliedRegionDescriptorProvider, RaftRuntimeStatusProvider,
     DEFAULT_APPLY_WATCH_BUFFER,
@@ -71,7 +67,7 @@ where
     E: AppliedRegionDescriptorProvider
         + ApplyWatchProvider
         + MetadataCommandExecutor
-        + RaftCommandExecutor
+        + MetadataReadExecutor
         + RaftRuntimeStatusProvider,
 {
     async fn get(
@@ -94,23 +90,12 @@ where
                 ..Default::default()
             }));
         }
-        let cmd = self
-            .execute_raft_request(
-                &kv_context,
-                raftpb::Request {
-                    cmd_type: raftpb::CmdType::CmdGet as i32,
-                    cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
-                        key: request.key,
-                        version: request.version,
-                    })),
-                },
-                "metadata get",
-            )
-            .await?;
-        let raftpb::response::Cmd::Get(response) = cmd else {
-            return Err(raft_payload_error("metadata get", "unexpected get payload"));
-        };
-        Ok(Response::new(metadata_get_response_from_kv(response)))
+        let response = self
+            .engine
+            .execute_metadata_get(&request)
+            .await
+            .map_err(internal_error)?;
+        Ok(Response::new(response))
     }
 
     async fn batch_get(
@@ -140,49 +125,12 @@ where
                 ..Default::default()
             }));
         }
-        let command = raftpb::RaftCmdRequest {
-            header: Some(header_from_context(&kv_context)),
-            requests: request
-                .requests
-                .iter()
-                .map(|req| raftpb::Request {
-                    cmd_type: raftpb::CmdType::CmdGet as i32,
-                    cmd: Some(raftpb::request::Cmd::Get(kvpb::GetRequest {
-                        key: req.key.clone(),
-                        version: req.version,
-                    })),
-                })
-                .collect(),
-        };
-        let command_response = self
+        let response = self
             .engine
-            .execute_raft_command(&command)
+            .execute_metadata_batch_get(&request)
             .await
             .map_err(internal_error)?;
-        if let Some(region_error) = command_response.region_error {
-            return Ok(Response::new(metadatapb::MetadataBatchGetResponse {
-                region_error: Some(region_error),
-                ..Default::default()
-            }));
-        }
-        let mut responses = Vec::with_capacity(command_response.responses.len());
-        for response in command_response.responses {
-            match response.cmd {
-                Some(raftpb::response::Cmd::Get(response)) => {
-                    responses.push(metadata_get_response_from_kv(response))
-                }
-                _ => {
-                    return Err(raft_payload_error(
-                        "metadata batch get",
-                        "unexpected get payload",
-                    ))
-                }
-            }
-        }
-        Ok(Response::new(metadatapb::MetadataBatchGetResponse {
-            responses,
-            region_error: None,
-        }))
+        Ok(Response::new(response))
     }
 
     async fn scan(
@@ -212,30 +160,17 @@ where
                 ..Default::default()
             }));
         }
-        let cmd = self
-            .execute_raft_request(
-                &kv_context,
-                raftpb::Request {
-                    cmd_type: raftpb::CmdType::CmdScan as i32,
-                    cmd: Some(raftpb::request::Cmd::Scan(kvpb::ScanRequest {
-                        start_key: request.start_key,
-                        limit: request.limit,
-                        version: request.version,
-                        include_start: request.include_start,
-                        reverse: false,
-                    })),
-                },
-                "metadata scan",
-            )
-            .await?;
-        let raftpb::response::Cmd::Scan(mut response) = cmd else {
-            return Err(raft_payload_error(
-                "metadata scan",
-                "unexpected scan payload",
-            ));
-        };
-        trim_scan_response_to_region(&admission, &mut response);
-        Ok(Response::new(metadata_scan_response_from_kv(response)))
+        let mut response = self
+            .engine
+            .execute_metadata_scan(&request)
+            .await
+            .map_err(internal_error)?;
+        if response.region_error.is_none() && response.error.is_none() {
+            response
+                .kvs
+                .retain(|kv| admission.key_in_range(kv.key.as_slice()));
+        }
+        Ok(Response::new(response))
     }
 
     async fn commit_metadata(
@@ -401,40 +336,6 @@ fn apply_watch_cursor_after(candidate: (u64, u64), cursor: (u64, u64)) -> bool {
     candidate.0 > cursor.0 || (candidate.0 == cursor.0 && candidate.1 > cursor.1)
 }
 
-impl<E> MetadataPlaneService<E>
-where
-    E: RaftCommandExecutor,
-{
-    async fn execute_raft_request(
-        &self,
-        context: &kvpb::Context,
-        request: raftpb::Request,
-        operation: &str,
-    ) -> Result<raftpb::response::Cmd, Status> {
-        let response = self
-            .engine
-            .execute_raft_command(&raftpb::RaftCmdRequest {
-                header: Some(header_from_context(context)),
-                requests: vec![request],
-            })
-            .await
-            .map_err(internal_error)?;
-        if response.region_error.is_some() {
-            return Err(raft_payload_error(operation, "unexpected region error"));
-        }
-        let mut responses = response.responses.into_iter();
-        let Some(response) = responses.next() else {
-            return Err(raft_payload_error(operation, "missing raft response"));
-        };
-        if responses.next().is_some() {
-            return Err(raft_payload_error(operation, "multiple raft responses"));
-        }
-        response
-            .cmd
-            .ok_or_else(|| raft_payload_error(operation, "missing raft payload"))
-    }
-}
-
 fn kv_context_from_required_metadata(
     context: Option<&metadatapb::MetadataContext>,
 ) -> Result<kvpb::Context, Status> {
@@ -463,63 +364,6 @@ fn kv_context_from_metadata(context: &metadatapb::MetadataContext) -> kvpb::Cont
             metadatapb::ReadPreference::FollowerPrefer => kvpb::ReadPreference::FollowerPrefer,
         } as i32,
         ..Default::default()
-    }
-}
-
-fn metadata_get_response_from_kv(response: kvpb::GetResponse) -> metadatapb::MetadataGetResponse {
-    metadatapb::MetadataGetResponse {
-        kv: (!response.not_found && response.error.is_none()).then(|| metadatapb::MetadataKv {
-            value: response.value,
-            expires_at: response.expires_at,
-            ..Default::default()
-        }),
-        not_found: response.not_found,
-        error: response.error.map(metadata_key_error_from_kv),
-        region_error: None,
-    }
-}
-
-fn metadata_scan_response_from_kv(
-    response: kvpb::ScanResponse,
-) -> metadatapb::MetadataScanResponse {
-    metadatapb::MetadataScanResponse {
-        kvs: response
-            .kvs
-            .into_iter()
-            .map(|kv| metadatapb::MetadataKv {
-                key: kv.key,
-                value: kv.value,
-                version: kv.version,
-                expires_at: kv.expires_at,
-            })
-            .collect(),
-        error: response.error.map(metadata_key_error_from_kv),
-        region_error: None,
-    }
-}
-
-fn metadata_key_error_from_kv(error: kvpb::KeyError) -> metadatapb::MetadataKeyError {
-    metadatapb::MetadataKeyError {
-        locked: error.locked.map(|locked| metadatapb::MetadataLocked {
-            primary_lock: locked.primary_lock,
-            key: locked.key,
-            lock_version: locked.lock_version,
-            lock_ttl: locked.lock_ttl,
-        }),
-        write_conflict: error
-            .write_conflict
-            .map(|conflict| metadatapb::MetadataWriteConflict {
-                key: conflict.key,
-                primary: conflict.primary,
-                conflict_ts: conflict.conflict_ts,
-                commit_ts: conflict.commit_ts,
-                start_ts: conflict.start_ts,
-            }),
-        already_exists: error
-            .already_exists
-            .map(|exists| metadatapb::MetadataKeyAlreadyExists { key: exists.key }),
-        retryable: error.retryable,
-        abort: error.abort,
     }
 }
 

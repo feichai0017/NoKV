@@ -84,6 +84,25 @@ pub trait MetadataCommandExecutor: Clone + Send + Sync + 'static {
            + 'a;
 }
 
+pub trait MetadataReadExecutor: Clone + Send + Sync + 'static {
+    fn execute_metadata_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a;
+
+    fn execute_metadata_batch_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataBatchGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
+           + Send
+           + 'a;
+
+    fn execute_metadata_scan<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataScanRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a;
+}
+
 pub trait RegionApplyEngine: ApplyStatusProvider + ApplyWatchProvider {
     fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
     where
@@ -626,6 +645,72 @@ where
         req: &metadatapb::MetadataCommitRequest,
     ) -> nokv_mvcc::Result<metadatapb::MetadataCommitResponse> {
         self.execute_metadata_command_at(req, None)
+    }
+
+    fn execute_metadata_get_inner(
+        &self,
+        req: &metadatapb::MetadataGetRequest,
+    ) -> nokv_mvcc::Result<metadatapb::MetadataGetResponse> {
+        let response = self.read(|engine| {
+            engine.get(&kvpb::GetRequest {
+                key: req.key.clone(),
+                version: req.version,
+            })
+        })?;
+        self.inner.traffic.record_read(1);
+        Ok(metadata_get_response_from_kv(response))
+    }
+
+    fn execute_metadata_batch_get_inner(
+        &self,
+        req: &metadatapb::MetadataBatchGetRequest,
+    ) -> nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse> {
+        if req.requests.is_empty() {
+            return Ok(metadatapb::MetadataBatchGetResponse::default());
+        }
+        let response = self.read(|engine| {
+            engine.batch_get(&kvpb::BatchGetRequest {
+                requests: req
+                    .requests
+                    .iter()
+                    .map(|request| kvpb::GetRequest {
+                        key: request.key.clone(),
+                        version: request.version,
+                    })
+                    .collect(),
+            })
+        })?;
+        self.inner.traffic.record_read(req.requests.len() as u64);
+        Ok(metadatapb::MetadataBatchGetResponse {
+            responses: response
+                .responses
+                .into_iter()
+                .map(metadata_get_response_from_kv)
+                .collect(),
+            region_error: None,
+        })
+    }
+
+    fn execute_metadata_scan_inner(
+        &self,
+        req: &metadatapb::MetadataScanRequest,
+    ) -> nokv_mvcc::Result<metadatapb::MetadataScanResponse> {
+        if req.reverse {
+            return Err(invalid_raft_command(
+                "metadata reverse scans are not supported",
+            ));
+        }
+        let response = self.read(|engine| {
+            engine.scan(&kvpb::ScanRequest {
+                start_key: req.start_key.clone(),
+                limit: req.limit,
+                version: req.version,
+                include_start: req.include_start,
+                reverse: false,
+            })
+        })?;
+        self.inner.traffic.record_read(1);
+        Ok(metadata_scan_response_from_kv(response))
     }
 
     pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
@@ -1205,6 +1290,36 @@ where
     }
 }
 
+impl<E> MetadataReadExecutor for AppliedKvEngine<E>
+where
+    E: KvEngine + MetadataEngine,
+{
+    fn execute_metadata_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a
+    {
+        async move { self.execute_metadata_get_inner(req) }
+    }
+
+    fn execute_metadata_batch_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataBatchGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
+           + Send
+           + 'a {
+        async move { self.execute_metadata_batch_get_inner(req) }
+    }
+
+    fn execute_metadata_scan<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataScanRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
+    {
+        async move { self.execute_metadata_scan_inner(req) }
+    }
+}
+
 impl<E, S> RaftCommandExecutor for PersistentAppliedKvEngine<E, S>
 where
     E: KvEngine + MetadataEngine,
@@ -1241,6 +1356,37 @@ where
             self.persist_if_advanced(before)?;
             Ok(response)
         }
+    }
+}
+
+impl<E, S> MetadataReadExecutor for PersistentAppliedKvEngine<E, S>
+where
+    E: KvEngine + MetadataEngine,
+    S: RegionMetadataSink,
+{
+    fn execute_metadata_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a
+    {
+        async move { self.engine.execute_metadata_get(req).await }
+    }
+
+    fn execute_metadata_batch_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataBatchGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
+           + Send
+           + 'a {
+        async move { self.engine.execute_metadata_batch_get(req).await }
+    }
+
+    fn execute_metadata_scan<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataScanRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
+    {
+        async move { self.engine.execute_metadata_scan(req).await }
     }
 }
 
@@ -1586,6 +1732,38 @@ fn metadata_key_error_from_kv(error: kvpb::KeyError) -> metadatapb::MetadataKeyE
             .map(|exists| metadatapb::MetadataKeyAlreadyExists { key: exists.key }),
         retryable: error.retryable,
         abort: error.abort,
+    }
+}
+
+fn metadata_get_response_from_kv(response: kvpb::GetResponse) -> metadatapb::MetadataGetResponse {
+    metadatapb::MetadataGetResponse {
+        kv: (!response.not_found && response.error.is_none()).then(|| metadatapb::MetadataKv {
+            value: response.value,
+            expires_at: response.expires_at,
+            ..Default::default()
+        }),
+        not_found: response.not_found,
+        error: response.error.map(metadata_key_error_from_kv),
+        region_error: None,
+    }
+}
+
+fn metadata_scan_response_from_kv(
+    response: kvpb::ScanResponse,
+) -> metadatapb::MetadataScanResponse {
+    metadatapb::MetadataScanResponse {
+        kvs: response
+            .kvs
+            .into_iter()
+            .map(|kv| metadatapb::MetadataKv {
+                key: kv.key,
+                value: kv.value,
+                version: kv.version,
+                expires_at: kv.expires_at,
+            })
+            .collect(),
+        error: response.error.map(metadata_key_error_from_kv),
+        region_error: None,
     }
 }
 

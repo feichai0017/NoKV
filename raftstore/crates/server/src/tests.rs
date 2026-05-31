@@ -6,16 +6,18 @@ use crate::store_kv_compat::StoreKvService;
 use crate::wire_helpers::chunk_apply_watch_keys;
 use adminpb::raft_admin_server::RaftAdmin;
 use kvpb::store_kv_server::StoreKv;
+use metadatapb::metadata_plane_server::MetadataPlane;
 use nokv_holtstore::HoltMvccStore;
 use nokv_mvcc::{KvEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
     ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplayRequest, BasicNode,
-    RaftCommandExecutor, RegionMetadataSink,
+    MetadataReadExecutor, RaftCommandExecutor, RegionMetadataSink,
 };
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -239,6 +241,33 @@ impl RaftCommandExecutor for FixedRuntimeEngine {
     }
 }
 
+impl MetadataReadExecutor for FixedRuntimeEngine {
+    fn execute_metadata_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a
+    {
+        self.inner.execute_metadata_get(req)
+    }
+
+    fn execute_metadata_batch_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataBatchGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
+           + Send
+           + 'a {
+        self.inner.execute_metadata_batch_get(req)
+    }
+
+    fn execute_metadata_scan<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataScanRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
+    {
+        self.inner.execute_metadata_scan(req)
+    }
+}
+
 impl ApplyStatusProvider for FixedRuntimeEngine {
     fn apply_status(&self) -> nokv_raftnode::ApplyStatus {
         self.inner.apply_status()
@@ -270,6 +299,110 @@ impl AppliedRegionDescriptorProvider for FixedRuntimeEngine {
     }
 }
 
+#[derive(Debug, Clone)]
+struct MetadataOnlyEngine {
+    inner: nokv_raftnode::AppliedKvEngine<MvccStore>,
+    runtime: RaftRuntimeStatus,
+}
+
+impl MetadataOnlyEngine {
+    fn leader(region_id: u64, local_peer_id: u64) -> Self {
+        let inner = nokv_raftnode::AppliedKvEngine::new(region_id, MvccStore::new());
+        inner
+            .set_region_descriptor(metapb::RegionDescriptor {
+                region_id,
+                epoch: Some(metapb::RegionEpoch {
+                    version: 1,
+                    conf_version: 1,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: local_peer_id,
+                    peer_id: local_peer_id,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        Self {
+            inner,
+            runtime: RaftRuntimeStatus {
+                local_peer_id,
+                leader_peer_id: local_peer_id,
+                leader: true,
+                hosted: true,
+            },
+        }
+    }
+}
+
+impl MetadataReadExecutor for MetadataOnlyEngine {
+    fn execute_metadata_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a
+    {
+        self.inner.execute_metadata_get(req)
+    }
+
+    fn execute_metadata_batch_get<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataBatchGetRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
+           + Send
+           + 'a {
+        self.inner.execute_metadata_batch_get(req)
+    }
+
+    fn execute_metadata_scan<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataScanRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
+    {
+        self.inner.execute_metadata_scan(req)
+    }
+}
+
+impl nokv_raftnode::MetadataCommandExecutor for MetadataOnlyEngine {
+    fn execute_metadata_command<'a>(
+        &'a self,
+        req: &'a metadatapb::MetadataCommitRequest,
+    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+           + Send
+           + 'a {
+        self.inner.execute_metadata_command(req)
+    }
+}
+
+impl ApplyStatusProvider for MetadataOnlyEngine {
+    fn apply_status(&self) -> nokv_raftnode::ApplyStatus {
+        self.inner.apply_status()
+    }
+}
+
+impl ApplyWatchProvider for MetadataOnlyEngine {
+    fn subscribe_apply(&self) -> tokio::sync::broadcast::Receiver<kvpb::ApplyWatchEvent> {
+        self.inner.subscribe_apply()
+    }
+
+    fn replay_apply(
+        &self,
+        request: nokv_raftnode::ApplyWatchReplayRequest,
+    ) -> nokv_mvcc::Result<nokv_raftnode::ApplyWatchReplay> {
+        self.inner.replay_apply(request)
+    }
+}
+
+impl RaftRuntimeStatusProvider for MetadataOnlyEngine {
+    fn raft_runtime_status(&self) -> RaftRuntimeStatus {
+        self.runtime
+    }
+}
+
+impl AppliedRegionDescriptorProvider for MetadataOnlyEngine {
+    fn applied_region_descriptor(&self) -> Result<Option<metapb::RegionDescriptor>, Status> {
+        self.inner.region_descriptor().map_err(internal_error)
+    }
+}
+
 #[tokio::test]
 async fn get_returns_not_found_from_empty_store() {
     let service = StoreKvService::new(nokv_raftnode::AppliedKvEngine::new(1, MvccStore::new()));
@@ -286,6 +419,49 @@ async fn get_returns_not_found_from_empty_store() {
         .unwrap()
         .into_inner();
     assert!(response.response.unwrap().not_found);
+}
+
+#[tokio::test]
+async fn metadata_plane_read_does_not_require_legacy_raft_command_executor() {
+    let admission = RegionAdmission {
+        region_id: 7,
+        store_id: 2,
+        peer_id: 2,
+        epoch_version: 1,
+        epoch_conf_version: 1,
+        leader: true,
+        leader_peer_id: 2,
+        peers: BTreeMap::from([(2, 2)]),
+        ..Default::default()
+    };
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        MetadataOnlyEngine::leader(admission.region_id, admission.peer_id),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
+
+    let response = service
+        .get(Request::new(metadatapb::MetadataGetRequest {
+            context: Some(metadatapb::MetadataContext {
+                region_id: admission.region_id,
+                region_epoch: Some(metapb::RegionEpoch {
+                    version: admission.epoch_version,
+                    conf_version: admission.epoch_conf_version,
+                }),
+                peer: Some(metapb::RegionPeer {
+                    store_id: admission.store_id,
+                    peer_id: admission.peer_id,
+                }),
+                ..Default::default()
+            }),
+            key: b"missing".to_vec(),
+            version: 1,
+        }))
+        .await
+        .unwrap()
+        .into_inner();
+    assert!(response.region_error.is_none());
+    assert!(response.not_found);
 }
 
 #[tokio::test]
