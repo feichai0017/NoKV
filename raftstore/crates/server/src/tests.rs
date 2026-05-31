@@ -6,7 +6,7 @@ use crate::wire_helpers::chunk_apply_watch_keys;
 use adminpb::raft_admin_server::RaftAdmin;
 use metadatapb::metadata_plane_server::MetadataPlane;
 use nokv_holtstore::HoltMvccStore;
-use nokv_mvcc::{KvEngine, MvccStore};
+use nokv_mvcc::{MetadataEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
@@ -1068,10 +1068,13 @@ async fn holt_snapshot_installed_peer_survives_openraft_restart() {
     );
     assert_eq!(
         joining_store
-            .get(&kvpb::GetRequest {
+            .get_metadata(&metadatapb::MetadataGetRequest {
                 key: b"k8".to_vec(),
                 version: 9,
+                ..Default::default()
             })
+            .unwrap()
+            .kv
             .unwrap()
             .value,
         b"v8".to_vec()
@@ -1120,10 +1123,13 @@ async fn holt_snapshot_installed_peer_survives_openraft_restart() {
         .unwrap();
     assert_eq!(
         restarted_store
-            .get(&kvpb::GetRequest {
+            .get_metadata(&metadatapb::MetadataGetRequest {
                 key: b"after-snapshot-restart".to_vec(),
                 version: 9,
+                ..Default::default()
             })
+            .unwrap()
+            .kv
             .unwrap()
             .value,
         b"ok".to_vec()
@@ -1493,36 +1499,32 @@ async fn scan_rejects_not_leader() {
 
 #[tokio::test]
 async fn scan_trims_keys_outside_region_end() {
-    let store = MvccStore::new();
-    for (key, value) in [
-        (b"ak".as_slice(), b"value-a".as_slice()),
-        (b"bk".as_slice(), b"value-b".as_slice()),
-        (b"mz".as_slice(), b"value-z".as_slice()),
-    ] {
-        store
-            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: key.to_vec(),
-                    value: value.to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                commit_version: 20,
-                ..Default::default()
-            })
-            .unwrap();
-    }
-
     let admission = RegionAdmission {
         start_key: b"a".to_vec(),
         end_key: b"m".to_vec(),
         ..Default::default()
     };
     let service = MetadataPlaneService::with_admission_state_and_execution(
-        nokv_raftnode::AppliedMetadataEngine::new(1, store),
+        nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new()),
         RegionAdmissionState::new(admission.clone()),
         ExecutionRuntime::default(),
     );
+    for (key, value) in [
+        (b"ak".as_slice(), b"value-a".as_slice()),
+        (b"bk".as_slice(), b"value-b".as_slice()),
+        (b"mz".as_slice(), b"value-z".as_slice()),
+    ] {
+        service
+            .commit_metadata(Request::new(metadata_put_request(
+                &admission,
+                key.to_vec(),
+                value.to_vec(),
+                19,
+                20,
+            )))
+            .await
+            .unwrap();
+    }
 
     let scan = service
         .scan(Request::new(metadatapb::MetadataScanRequest {
@@ -1547,30 +1549,27 @@ async fn scan_trims_keys_outside_region_end() {
 
 #[tokio::test]
 async fn scan_zero_limit_matches_go_default_limit() {
-    let store = MvccStore::new();
+    let admission = RegionAdmission::default();
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new()),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
     for (key, value) in [
         (b"scan-limit/a".as_slice(), b"value-a".as_slice()),
         (b"scan-limit/b".as_slice(), b"value-b".as_slice()),
     ] {
-        store
-            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
-                mutations: vec![kvpb::Mutation {
-                    key: key.to_vec(),
-                    value: value.to_vec(),
-                    op: kvpb::mutation::Op::Put as i32,
-                    ..Default::default()
-                }],
-                commit_version: 20,
-                ..Default::default()
-            })
+        service
+            .commit_metadata(Request::new(metadata_put_request(
+                &admission,
+                key.to_vec(),
+                value.to_vec(),
+                19,
+                20,
+            )))
+            .await
             .unwrap();
     }
-    let admission = RegionAdmission::default();
-    let service = MetadataPlaneService::with_admission_state_and_execution(
-        nokv_raftnode::AppliedMetadataEngine::new(1, store),
-        RegionAdmissionState::new(admission.clone()),
-        ExecutionRuntime::default(),
-    );
 
     let scan = service
         .scan(Request::new(metadatapb::MetadataScanRequest {
