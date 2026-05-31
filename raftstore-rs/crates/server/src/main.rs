@@ -553,17 +553,7 @@ impl HoltRangeController {
             build_split_descriptors(&parent_descriptor, &operation.split_key, child)?;
         ensure_single_peer_transition("split parent", &left)?;
         ensure_single_peer_transition("split child", &right)?;
-        let child_peer = right
-            .peers
-            .iter()
-            .find(|peer| peer.store_id == self.store_id)
-            .cloned()
-            .ok_or_else(|| {
-                tonic::Status::failed_precondition(format!(
-                    "split child region {} has no peer on store {}",
-                    right.region_id, self.store_id
-                ))
-            })?;
+        local_peer_for_store(&right, self.store_id)?;
 
         self.publish_split_event(
             metapb::RootEventKind::RegionSplitPlanned,
@@ -585,16 +575,7 @@ impl HoltRangeController {
             .propose_admin_command(operation.region_id, &split_command)
             .await
             .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
-        self.open_split_child_region(
-            ServerIdentity {
-                region_id: right.region_id,
-                store_id: child_peer.store_id,
-                peer_id: child_peer.peer_id,
-                bootstrap: true,
-            },
-            right.clone(),
-        )
-        .await?;
+        self.reconcile_local_region_descriptors().await?;
         self.publish_split_event(
             metapb::RootEventKind::RegionSplitCommitted,
             &left,
@@ -603,6 +584,56 @@ impl HoltRangeController {
         )
         .await?;
         Ok(SchedulerOperationOutcome::Applied)
+    }
+
+    async fn reconcile_local_region_descriptors(&self) -> Result<(), tonic::Status> {
+        let descriptors = self
+            .mvcc
+            .region_descriptors()
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
+        for descriptor in descriptors {
+            self.open_missing_local_region_descriptor(descriptor)
+                .await?;
+        }
+        Ok(())
+    }
+
+    async fn open_missing_local_region_descriptor(
+        &self,
+        descriptor: metapb::RegionDescriptor,
+    ) -> Result<(), tonic::Status> {
+        if descriptor.region_id == 0
+            || self
+                .hosted_regions
+                .get(descriptor.region_id)
+                .map_err(internal_status)?
+                .is_some()
+        {
+            return Ok(());
+        }
+        let peer = match local_peer_for_store(&descriptor, self.store_id) {
+            Ok(peer) => peer,
+            Err(err) if err.code() == tonic::Code::FailedPrecondition => return Ok(()),
+            Err(err) => return Err(err),
+        };
+        if descriptor.peers.len() != 1 {
+            tracing::debug!(
+                region_id = descriptor.region_id,
+                peer_count = descriptor.peers.len(),
+                "rust raftstore skipped multi-peer region descriptor reconcile until child peer lifecycle is implemented"
+            );
+            return Ok(());
+        }
+        self.open_split_child_region(
+            ServerIdentity {
+                region_id: descriptor.region_id,
+                store_id: peer.store_id,
+                peer_id: peer.peer_id,
+                bootstrap: true,
+            },
+            descriptor,
+        )
+        .await
     }
 
     async fn execute_merge(
@@ -863,6 +894,23 @@ fn ensure_single_peer_transition(
         descriptor.region_id,
         descriptor.peers.len()
     )))
+}
+
+fn local_peer_for_store(
+    descriptor: &metapb::RegionDescriptor,
+    store_id: u64,
+) -> Result<metapb::RegionPeer, tonic::Status> {
+    descriptor
+        .peers
+        .iter()
+        .find(|peer| peer.store_id == store_id)
+        .cloned()
+        .ok_or_else(|| {
+            tonic::Status::failed_precondition(format!(
+                "region {} has no peer on store {}",
+                descriptor.region_id, store_id
+            ))
+        })
 }
 
 fn internal_status(message: impl ToString) -> tonic::Status {
@@ -1806,6 +1854,14 @@ async fn run_multi_region_coordinator_heartbeat<E>(
     let admin_endpoint = local_admin_endpoint(addr);
     loop {
         ticker.tick().await;
+        if let Some(controller) = range_controller.as_ref() {
+            if let Err(err) = controller.reconcile_local_region_descriptors().await {
+                tracing::debug!(
+                    error = %err,
+                    "rust raftstore local region descriptor reconcile failed"
+                );
+            }
+        }
         let request = match coordinator_heartbeat_request_for_hosted_regions(
             store_id,
             addr,
