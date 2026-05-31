@@ -637,18 +637,94 @@ where
                             });
                         }
                         ProposalPayloadKind::AdminCommand => {
-                            let _command = proposal
+                            let command = proposal
                                 .decode_admin_command()
                                 .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
-                            return Err(nokv_mvcc::Error::Backend(
-                                "admin command proposal apply is not implemented".to_owned(),
-                            ));
+                            self.apply_admin_command_at(term, index, command)?;
+                            applied.push(AppliedProposal {
+                                region_id: proposal.region_id,
+                                index,
+                                term,
+                                payload: Vec::new(),
+                            });
                         }
                     }
                 }
             }
         }
         Ok(applied)
+    }
+
+    fn apply_admin_command_at(
+        &self,
+        term: u64,
+        index: u64,
+        command: raftpb::AdminCommand,
+    ) -> nokv_mvcc::Result<()> {
+        let kind = raftpb::admin_command::Type::try_from(command.r#type)
+            .unwrap_or(raftpb::admin_command::Type::Unknown);
+        match kind {
+            raftpb::admin_command::Type::Split => {
+                let split = command
+                    .split
+                    .ok_or_else(|| invalid_raft_command("split admin payload is required"))?;
+                self.apply_split_command_at(term, index, split)
+            }
+            raftpb::admin_command::Type::Merge => Err(nokv_mvcc::Error::Backend(
+                "merge admin command apply is not implemented".to_owned(),
+            )),
+            raftpb::admin_command::Type::Unknown => {
+                Err(invalid_raft_command("unknown admin command type"))
+            }
+        }
+    }
+
+    fn apply_split_command_at(
+        &self,
+        term: u64,
+        index: u64,
+        split: raftpb::SplitCommand,
+    ) -> nokv_mvcc::Result<()> {
+        if split.parent_region_id != self.inner.region_id {
+            return Err(invalid_raft_command(
+                "split parent region does not match apply region",
+            ));
+        }
+        if split.split_key.is_empty() {
+            return Err(invalid_raft_command("split key is required"));
+        }
+        let mut descriptor = self.region_descriptor()?.ok_or_else(|| {
+            invalid_raft_command("split parent descriptor must be installed before apply")
+        })?;
+        if split.split_key <= descriptor.start_key
+            || (!descriptor.end_key.is_empty() && split.split_key >= descriptor.end_key)
+        {
+            return Err(invalid_raft_command(
+                "split key must be inside parent descriptor range",
+            ));
+        }
+        let child = split
+            .child
+            .ok_or_else(|| invalid_raft_command("split child descriptor is required"))?;
+        if child.region_id == 0 {
+            return Err(invalid_raft_command("split child region id is required"));
+        }
+        if !child.start_key.is_empty() && child.start_key != split.split_key {
+            return Err(invalid_raft_command(
+                "split child start key must equal split key",
+            ));
+        }
+        if child.end_key != descriptor.end_key {
+            return Err(invalid_raft_command(
+                "split child end key must equal original parent end key",
+            ));
+        }
+
+        descriptor.end_key = split.split_key;
+        let epoch = descriptor.epoch.get_or_insert_with(Default::default);
+        epoch.version = epoch.version.saturating_add(1);
+        descriptor.hash.clear();
+        self.apply_region_descriptor_at(term, index, descriptor)
     }
 
     fn execute_raft_command_at(
@@ -3039,6 +3115,68 @@ mod tests {
                 applied_index: 42,
             }]
         );
+    }
+
+    #[test]
+    fn applied_engine_applies_split_admin_command_to_parent_descriptor() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        engine
+            .set_region_descriptor(metapb::RegionDescriptor {
+                region_id: 7,
+                end_key: b"z".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 3,
+                    conf_version: 1,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 1,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Split as i32,
+            split: Some(raftpb::SplitCommand {
+                parent_region_id: 7,
+                split_key: b"m".to_vec(),
+                child: Some(metapb::RegionDescriptor {
+                    region_id: 8,
+                    start_key: b"m".to_vec(),
+                    end_key: b"z".to_vec(),
+                    peers: vec![metapb::RegionPeer {
+                        store_id: 1,
+                        peer_id: 8,
+                    }],
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+
+        let applied = engine
+            .apply_openraft_entries([OpenRaftEntry {
+                log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+                payload: openraft::EntryPayload::Normal(
+                    Proposal::from_admin_command(7, &command).unwrap(),
+                ),
+            }])
+            .unwrap();
+
+        let descriptor = engine.region_descriptor().unwrap().unwrap();
+        assert_eq!(descriptor.region_id, 7);
+        assert_eq!(descriptor.end_key, b"m");
+        assert_eq!(descriptor.epoch.unwrap().version, 4);
+        assert_eq!(
+            engine.status(),
+            ApplyStatus {
+                region_id: 7,
+                term: 5,
+                applied_index: 42,
+            }
+        );
+        assert_eq!(applied.len(), 1);
+        assert!(applied[0].payload.is_empty());
     }
 
     #[tokio::test]
