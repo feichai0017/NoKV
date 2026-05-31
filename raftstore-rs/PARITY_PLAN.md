@@ -556,6 +556,7 @@ Gate:
 
 ```bash
 cargo test --manifest-path raftstore-rs/Cargo.toml --workspace
+cargo build --manifest-path raftstore-rs/Cargo.toml --bins
 go test -tags rust_raftstore -run TestRustRaftstoreEndpointClientAtomicMutateGetAndWatch -count=1 ./raftstore/client
 go test -count=1 ./raftstore/client ./raftstore/admin
 go test -count=1 ./fsmeta/runtime/raftstore ./fsmeta/contract ./fsmeta/integration
@@ -698,6 +699,7 @@ Gate:
 go test -count=1 ./fsmeta/backend ./fsmeta/exec ./fsmeta/runtime/raftstore
 go test -count=1 ./fsmeta/contract ./fsmeta/integration
 cargo test --manifest-path raftstore-rs/Cargo.toml --workspace
+cargo build --manifest-path raftstore-rs/Cargo.toml --bins
 ```
 
 ## Phase 8: Default Cutover

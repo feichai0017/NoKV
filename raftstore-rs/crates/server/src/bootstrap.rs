@@ -1103,7 +1103,19 @@ pub(crate) fn spawn_recovered_region_leadership_retries<E>(
     for (identity, region) in regions {
         tokio::spawn(async move {
             for attempt in 1..=50 {
-                match region.elect_and_wait(identity.peer_id).await {
+                let voter_count = region
+                    .raft_handle()
+                    .metrics()
+                    .borrow()
+                    .membership_config
+                    .voter_ids()
+                    .count();
+                let election = if voter_count <= 1 {
+                    region.elect_and_wait(identity.peer_id).await
+                } else {
+                    region.wait_for_leader(identity.peer_id).await
+                };
+                match election {
                     Ok(()) => match region.ensure_linearizable().await {
                         Ok(()) => return,
                         Err(err) => {
@@ -1120,9 +1132,10 @@ pub(crate) fn spawn_recovered_region_leadership_retries<E>(
                         tracing::debug!(
                             region_id = identity.region_id,
                             peer_id = identity.peer_id,
+                            voter_count,
                             attempt,
                             error = %err,
-                            "rust raftstore recovered region election failed"
+                            "rust raftstore recovered region leadership wait failed"
                         );
                     }
                 }
