@@ -27,14 +27,20 @@ validation.
 | root truth | `go test ./meta/root/...` |
 | coordinator | `go test ./coordinator/...` |
 | Rust data plane | `cargo test --manifest-path raftstore/Cargo.toml --workspace` |
+| fsmeta over Rust data plane | `make fsmeta-rust-smoke` |
 
 ## Benchmarks
 
-The main benchmark target is local fsmeta:
+The stable benchmark target is local fsmeta:
 
 ```bash
 NOKV_FSMETA_BENCH_MODE=local make fsmeta-bench
 ```
+
+The Docker Compose benchmark path is also local fsmeta today. Use
+`make fsmeta-rust-smoke` for the current Rust distributed data-plane gate until
+the distributed benchmark launcher starts `meta-root`, `coordinator`,
+`raftstore`, and `nokv-fsmeta --runtime=raftstore` as one harness.
 
 Do not claim a performance improvement without a before/after workload result
 and the command used to produce it.

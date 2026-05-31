@@ -131,6 +131,7 @@ cargo test --manifest-path raftstore/Cargo.toml -p nokv-raftnode -p nokv-raftsto
 Gate:
 
 ```bash
+make fsmeta-rust-smoke
 cargo test --manifest-path raftstore/Cargo.toml --workspace
 go test -tags rust_raftstore -count=1 ./fsmeta/runtime/raftstore
 make lint

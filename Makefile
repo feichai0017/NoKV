@@ -13,7 +13,7 @@ RAFTSTORE_MANIFEST := raftstore/Cargo.toml
 .PHONY: install-tla-tools test-tla-smoke test-tla-nightly
 .PHONY: tlc-eunomia tlc-eunomiamultidim tlc-mountlifecycle tlc-subtreeauthority tlc-root-replay-watch tlc-fsmeta-namespace
 .PHONY: tlc-leaseonly-counterexample tlc-leasestart-counterexample tlc-tokenonly-counterexample tlc-chubbyfenced-counterexample tlc-subtreewithoutfrontiercoverage-counterexample tlc-subtreewithoutseal-counterexample tlc-contrast-models
-.PHONY: docker-up docker-dev-up docker-down fsmeta-bench
+.PHONY: docker-up docker-dev-up docker-down fsmeta-bench fsmeta-rust-smoke
 
 help:
 	@echo "NoKV Development Commands:"
@@ -31,6 +31,7 @@ help:
 	@echo "  make proto              - Format .proto files and regenerate Go protobuf code"
 	@echo "  make proto-check        - Verify proto format, lint, and generated code"
 	@echo "  make fsmeta-bench       - Run the local fsmeta benchmark matrix"
+	@echo "  make fsmeta-rust-smoke  - Run fsmeta against the Rust MetadataPlane e2e gate"
 	@echo "  make docker-up          - Start the local fsmeta demo container"
 	@echo "  make docker-dev-up      - Build and start the local fsmeta demo container"
 	@echo "  make docker-down        - Stop Docker Compose and remove volumes"
@@ -192,6 +193,10 @@ docker-dev-up:
 fsmeta-bench:
 	@echo "Running local fsmeta benchmark matrix..."
 	NOKV_FSMETA_BENCH_MODE=$${NOKV_FSMETA_BENCH_MODE:-local} ./scripts/run_fsmeta_benchmarks.sh
+
+fsmeta-rust-smoke:
+	@echo "Running fsmeta Rust MetadataPlane smoke gate..."
+	go test -tags rust_raftstore -count=1 ./fsmeta/runtime/raftstore -run 'TestRustMetadataPlane(FsmetaRuntimeEndToEnd|PassesFSMetaContract)'
 
 docker-down:
 	@echo "Stopping Docker Compose..."
