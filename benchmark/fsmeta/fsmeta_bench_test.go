@@ -26,7 +26,9 @@ import (
 	metawire "github.com/feichai0017/NoKV/meta/wire"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/status"
 )
 
 const benchEnvKey = "NOKV_FSMETA_BENCH"
@@ -114,19 +116,13 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 	if strings.TrimSpace(*fsmetaCoordAddr) == "" || strings.TrimSpace(*fsmetaMount) == "" {
 		return
 	}
+	mountID := strings.TrimSpace(*fsmetaMount)
 	coordRPC, err := coordclient.NewGRPCClient(ctx, *fsmetaCoordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	if err != nil {
 		t.Fatalf("dial coordinator for mount bootstrap: %v", err)
 	}
 	defer func() { _ = coordRPC.Close() }()
-	resp, err := coordRPC.GetMount(ctx, &coordpb.GetMountRequest{MountId: strings.TrimSpace(*fsmetaMount)})
-	if err != nil {
-		t.Fatalf("get benchmark mount: %v", err)
-	}
-	if resp != nil && !resp.GetNotFound() {
-		if resp.GetMount().GetState() == coordpb.MountState_MOUNT_STATE_RETIRED {
-			t.Fatalf("benchmark mount %q is retired", *fsmetaMount)
-		}
+	if benchmarkMountReady(t, ctx, coordRPC, mountID) {
 		return
 	}
 	alloc, err := coordRPC.AllocID(ctx, &coordpb.AllocIDRequest{Count: 1})
@@ -138,9 +134,13 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 	}
 	mountKeyID := alloc.GetFirstId()
 	publishResp, err := coordRPC.PublishRootEvent(ctx, &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.MountRegistered(strings.TrimSpace(*fsmetaMount), mountKeyID, uint64(model.RootInode), 1)),
+		Event: metawire.RootEventToProto(rootevent.MountRegistered(mountID, mountKeyID, uint64(model.RootInode), 1)),
 	})
 	if err != nil {
+		if isBenchmarkMountRegistrationConflict(err) {
+			waitForBenchmarkMountCatalog(t, ctx, coordRPC, mountID)
+			return
+		}
 		t.Fatalf("register benchmark mount: %v", err)
 	}
 	if publishResp == nil || !publishResp.GetAccepted() {
@@ -149,6 +149,56 @@ func ensureBenchmarkMount(t *testing.T, ctx context.Context) {
 	// MountRegistered materializes the root subtree authority in rooted truth;
 	// publishing a second explicit declaration would not be idempotent after
 	// the frontier advances during a long benchmark run.
+}
+
+func benchmarkMountReady(t *testing.T, ctx context.Context, coordRPC coordclient.Client, mountID string) bool {
+	t.Helper()
+	resp, err := coordRPC.GetMount(ctx, &coordpb.GetMountRequest{MountId: mountID})
+	if err != nil {
+		t.Fatalf("get benchmark mount: %v", err)
+	}
+	if resp == nil || resp.GetNotFound() {
+		return false
+	}
+	if resp.GetMount().GetState() == coordpb.MountState_MOUNT_STATE_RETIRED {
+		t.Fatalf("benchmark mount %q is retired", mountID)
+	}
+	return true
+}
+
+func waitForBenchmarkMountCatalog(t *testing.T, ctx context.Context, coordRPC coordclient.Client, mountID string) {
+	t.Helper()
+	deadline := time.Now().Add(*fsmetaMountWait)
+	for {
+		if benchmarkMountReady(t, ctx, coordRPC, mountID) {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("timed out waiting for benchmark mount %q after rooted registration conflict", mountID)
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatalf("wait for benchmark mount catalog: %v", ctx.Err())
+		case <-time.After(100 * time.Millisecond):
+		}
+	}
+}
+
+func isBenchmarkMountRegistrationConflict(err error) bool {
+	st, ok := status.FromError(err)
+	return ok &&
+		st.Code() == codes.FailedPrecondition &&
+		strings.Contains(st.Message(), "mount registration conflicts with rooted truth")
+}
+
+func TestBenchmarkMountRegistrationConflictClassification(t *testing.T) {
+	err := status.Error(codes.FailedPrecondition, "coordinator/catalog: mount registration conflicts with rooted truth")
+	if !isBenchmarkMountRegistrationConflict(err) {
+		t.Fatalf("expected mount registration conflict to be retryable")
+	}
+	if isBenchmarkMountRegistrationConflict(status.Error(codes.InvalidArgument, "coordinator/catalog: mount registration conflicts with rooted truth")) {
+		t.Fatalf("invalid-argument conflict text must not be treated as retryable")
+	}
 }
 
 func openBenchmarkClient(t *testing.T, ctx context.Context) (workload.MetadataClient, func()) {
