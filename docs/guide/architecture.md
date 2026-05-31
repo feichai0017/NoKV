@@ -9,16 +9,17 @@ NoKV is organized as a three-layer metadata system:
 
 1. `fsmeta` owns inode, dentry, workspace namespace, watch, snapshot, session,
    quota, and artifact-style metadata semantics.
-2. The distributed execution layer (`meta/root`, `coordinator`, `raftstore`,
-   `txn`) owns rooted authority, routing, TSO, replicated execution, MVCC
-   transactions, and recovery facts.
+2. The distributed execution layer (`meta/root`, `coordinator`, `raftstore-rs`)
+   owns rooted authority, routing, mount-scoped Raft execution, and recovery
+   facts. The legacy Go `raftstore` + Percolator path remains only as the old
+   baseline while the Rust path is being cut over.
 3. `storage/*` owns ordered key/value persistence. Pebble is the default
    implementation in this repo. Holt is the owned backend target that should
    plug in at the same `storage/kv` boundary.
 
 Pebble and Holt replace only the physical ordered-KV substrate. NoKV keeps its
-own MVCC internal-key encoding (`txn/storage`), transaction protocols
-(`txn/mvcc`, `txn/percolator`), raft execution, and fsmeta inode/dentry model.
+own fsmeta inode/dentry model, semantic compiler, and distributed control
+plane above the storage backend.
 
 ## Package Layout
 
@@ -32,16 +33,19 @@ fsmeta/
   runtime/raftstore/
 
 txn/
-  storage/        # MVCC internal keys, column families, entries, timestamps
-  mvcc/           # MVCC read/write planning
-  percolator/     # 2PC transaction protocol
+  storage/        # legacy/local MVCC internal keys and timestamp encoding
+  mvcc/           # legacy/local MVCC read/write planning
+  percolator/     # legacy 2PC baseline, not the Rust fsmeta mainline
   latch/
 
 raftstore/
-  kv/             # StoreKV apply bridge to MVCC/percolator/prepared install
+  kv/             # legacy Go StoreKV apply bridge
   store/          # peer lifecycle and routing inside one store process
   peer/           # raft peer runtime
   snapshot/       # internal MVCC-entry snapshot payloads for peer bootstrap
+
+raftstore-rs/
+  crates/         # Rust mount-scoped fsmeta Raft data plane
 
 storage/
   kv/             # ordered KV contract
@@ -71,10 +75,12 @@ flowchart LR
     Client["Client / fsmeta API"] --> Exec["fsmeta/exec"]
     Exec --> Backend["fsmeta/backend.Store"]
     Backend --> Local["runtime/local"] --> LocalDB["local.DB"]
-    Backend --> Raft["runtime/raftstore"] --> StoreKV["raftstore/kv"]
-    StoreKV --> Txn["txn/mvcc + txn/percolator"]
+    Backend --> Raft["runtime/raftstore"] --> RustRaft["raftstore-rs mount group"]
+    Raft -. "legacy baseline" .-> StoreKV["Go raftstore/kv"]
+    StoreKV -. "legacy" .-> Txn["txn/mvcc + txn/percolator"]
     LocalDB --> MVCC["txn/storage internal keys"]
-    Txn --> MVCC
+    Txn -. "legacy" .-> MVCC
+    RustRaft --> KV
     MVCC --> KV["storage/kv ordered bytes"]
     KV --> Pebble["storage/pebble"]
     KV -. "same contract" .-> Holt["storage/holt target"]
@@ -88,7 +94,8 @@ The important boundary is between `fsmeta/backend` and `storage/kv`:
   batch, snapshot, sync, close, and small stats.
 
 Keeping both contracts separate lets NoKV swap the physical engine without
-changing fsmeta semantics or distributed transaction behavior.
+changing fsmeta semantics. The distributed fsmeta mainline should use
+mount-scoped Raft commands rather than the legacy Percolator hot path.
 
 ## Storage Backend Contract
 
@@ -135,12 +142,15 @@ The distributed path keeps these responsibilities separate:
 
 - `meta/root` is rooted truth for topology, authority, grants, seals, and
   lifecycle facts.
-- `coordinator` is a rebuildable serving plane for routing, TSO, and store
-  discovery.
-- `raftstore` hosts replicated region execution and applies StoreKV commands.
-- `txn/*` owns MVCC and transaction semantics.
-- `fsmeta/runtime/raftstore` adapts fsmeta execution to StoreKV/MVCC. Raftstore
-  itself must not understand inode/dentry semantics.
+- `coordinator` is a rebuildable serving plane for routing, store discovery,
+  mount admission, and admin scheduling.
+- `raftstore-rs` is the target replicated data plane: one Raft group per mount
+  by default, applying compiled fsmeta predicates and mutations.
+- `fsmeta/runtime/raftstore` adapts fsmeta execution to the distributed data
+  plane. It owns routing and endpoint wiring; the data plane must not import
+  fsmeta semantic packages.
+- Go `raftstore` plus `txn/percolator` is the legacy baseline and should not
+  receive new distributed fsmeta features after the Rust path passes the gates.
 
 `raftstore/snapshot` is an internal MVCC-entry snapshot format for raft peer
 bootstrap and raft snapshot apply. It is not a generic migration feature and it

@@ -46,7 +46,7 @@ All three consume the **same** rooted truth in `meta/root` and the **same** nati
 |---|---|
 | Complete reference (primitives + lifecycle + deployment) | [fsmeta](./fsmeta) |
 | Rooted truth kernel (`meta/root`) | [Rooted Truth](./rooted_truth) |
-| Coordinator (route / TSO / heartbeats / WatchRootEvents stream) | [Coordinator](./coordinator) |
+| Coordinator (route / heartbeats / WatchRootEvents stream) | [Coordinator](./coordinator) |
 | Snapshot / authority / quota lifecycle | [Recovery](./recovery) |
 
 ### 🏛️ Distributed runtime — the layer below fsmeta
@@ -56,7 +56,7 @@ All three consume the **same** rooted truth in `meta/root` and the **same** nati
 | Raftstore overview (store / peer / admin) | [Raftstore](./raftstore) |
 | Control plane ↔ execution plane contract | [Control & Execution Protocols](./control_and_execution_protocols) |
 | Recovery model | [Recovery](./recovery) |
-| Percolator MVCC 2PC + AssertionNotExist | [Percolator](./percolator) |
+| Legacy Percolator MVCC 2PC baseline | [Percolator](./percolator) |
 | Runtime call chains (sequence diagrams) | [Runtime](./runtime) |
 
 ### 🔧 Storage backend internals — the foundation
@@ -110,9 +110,9 @@ stable fsmeta product contract.
 Layer 1  fsmeta            ← workspace namespace primitives
    │
 Layer 2  meta/root         ← rooted authority truth
-         coordinator       ← routing, TSO, store discovery, root-event publish
-         raftstore         ← per-region Raft + apply observer
-         percolator        ← 2PC + MVCC + AssertionNotExist + commit-ts retry
+         coordinator       ← routing, store discovery, root-event publish
+         raftstore-rs      ← mount-scoped Raft data plane
+         raftstore/txn     ← legacy Go baseline during cutover
    │
 Layer 3  storage           ← ordered KV (Pebble default, Holt target) + low-level runtime support
 
@@ -126,7 +126,7 @@ contract and should move under `experimental/` as they are cleaned up.
 2. **Layer separation enforced.** The fsmeta executor consumes the narrow
    `fsmeta/backend.Store` contract; runtime adapters own local or raftstore
    wiring; lower layers do not import fsmeta.
-3. **Multi-gateway-safe.** Quota fences are rooted truth; usage counters are data-plane keys updated in the same Percolator transaction as metadata mutations. Subtree handoff uses rooted events plus runtime repair.
+3. **Multi-gateway-safe.** Quota fences are rooted truth; usage counters are data-plane keys updated in the same committed fsmeta mutation command. Subtree handoff uses rooted events plus runtime repair.
 4. **Root-event driven lifecycle.** `coordinator.WatchRootEvents` pushes mount retire / quota fence / pending handoff changes after bootstrap; the monitor interval is reconnect backoff.
 
 ---

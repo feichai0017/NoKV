@@ -5,7 +5,10 @@ SPDX-License-Identifier: Apache-2.0
 
 # Percolator Distributed Transaction Design
 
-This document explains NoKV's distributed transaction path implemented by `txn/percolator/` and executed through `raftstore`.
+This document explains NoKV's legacy distributed transaction path implemented by
+`txn/percolator/` and executed through the Go `raftstore`. The Rust fsmeta
+mainline is moving to mount-scoped Raft commands, where a mount group's Raft log
+serializes compiled fsmeta predicates and mutations without Percolator locks.
 
 The scope here is the current code path:
 

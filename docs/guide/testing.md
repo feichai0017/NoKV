@@ -16,6 +16,7 @@ go test -count=1 ./local/... ./txn/...
 go test -count=1 ./raftstore/kv ./raftstore/mvcc ./raftstore/store ./raftstore/server ./raftstore/admin
 go test -count=1 ./fsmeta/backend ./fsmeta/exec ./fsmeta/runtime/local ./fsmeta/runtime/raftstore ./fsmeta/contract ./fsmeta/integration
 go test -count=1 ./cmd/nokv ./cmd/nokv-fsmeta
+cargo test --manifest-path raftstore-rs/Cargo.toml --workspace
 ```
 
 ## Ownership Checks
@@ -23,9 +24,9 @@ go test -count=1 ./cmd/nokv ./cmd/nokv-fsmeta
 | Layer | Primary tests |
 | --- | --- |
 | Storage backend | `storage/kv`, `storage/pebble`, `storage/memory`; add `storage/holt` here when wired |
-| MVCC storage encoding | `txn/storage`, `txn/mvcc`, `txn/percolator` |
+| MVCC storage encoding | `txn/storage`, `txn/mvcc`, `txn/percolator` for local and legacy Go paths |
 | Local runtime | `local/...`, `fsmeta/runtime/local` |
-| Distributed runtime | `raftstore/kv`, `raftstore/store`, `raftstore/server`, `raftstore/admin`, `fsmeta/runtime/raftstore` |
+| Distributed runtime | `raftstore-rs`, `fsmeta/runtime/raftstore`; Go `raftstore/*` remains the legacy baseline during cutover |
 | fsmeta semantics | `fsmeta/exec`, `fsmeta/contract`, `fsmeta/integration` |
 | CLI wiring | `cmd/nokv`, `cmd/nokv-fsmeta` |
 | Package boundaries | `make lint` |

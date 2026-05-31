@@ -1,13 +1,16 @@
 # raftstore-rs
 
-This workspace is the Rust data-plane replacement track for NoKV raftstore.
+This workspace is the Rust data-plane replacement track for NoKV's distributed
+fsmeta runtime.
 
-The first slice keeps the existing Go protobuf contract and intentionally does
-not introduce new external APIs. `nokv-proto` generates Rust bindings from the
-repository `pb/*.proto` files, `nokv-mvcc` implements the current `StoreKV`
-transaction semantics for single-node tests, `nokv-holtstore` fixes the future
-Holt multi-tree layout, `nokv-raftlog` owns the append-only Raft WAL format, and
-`nokv-raftstore-server` exposes the compatible tonic services.
+The mainline target is mount-scoped fsmeta Raft: one Raft group per mount by
+default, with Go `fsmeta/exec` still owning namespace semantics and Rust owning
+replicated execution. `nokv-proto` generates Rust bindings from the repository
+`pb/*.proto` files, `nokv-holtstore` fixes the future Holt multi-tree layout,
+`nokv-raftlog` owns the append-only Raft WAL format, and
+`nokv-raftstore-server` exposes the tonic services used by the fsmeta runtime.
+The existing `nokv-mvcc` Percolator-compatible code is legacy scaffolding from
+the older StoreKV parity track and should not be extended as the Rust v1 target.
 
 The server binary uses an in-memory MVCC engine by default for compatibility
 tests. Set `NOKV_RUST_RAFTSTORE_HOLT_DIR=/path/to/store` to run the same
@@ -22,9 +25,9 @@ descriptor through the `region_meta` tree so the admission boundary has a
 durable metadata source before OpenRaft owns topology changes.
 
 The repository Docker image builds the same binary at
-`/usr/local/bin/nokv-raftstore-server`. Docker compose still starts the Go
-store path by default until the Rust data plane passes the compose fsmeta smoke
-and benchmark gates.
+`/usr/local/bin/nokv-raftstore-server`. Docker compose still starts the Go store
+path by default until the Rust mount-scoped data plane passes the compose
+fsmeta smoke, fault, and benchmark gates.
 Set `NOKV_RAFTSTORE_IMPL=rust` when running docker compose to use the Rust
 store launcher in opt-in parity runs. The image also includes
 `serve-rust-store.sh` and `join-rust-raftstore-peers.sh` for config-driven Rust
@@ -121,8 +124,9 @@ multi-region bootstrap when an explicit range is missing or when configured
 ranges overlap.
 
 OpenRaft replication, membership changes, snapshots, and WatchApply delivery are
-staged behind these boundaries. Experimental Peras witness services and legacy
-migration/SST paths are outside v1.
+staged behind these boundaries. Experimental Peras witness services, legacy
+migration/SST paths, and full Percolator parity are outside the Rust v1
+mainline.
 The current `raftnode` crate already accepts the existing `RaftCmdRequest`
 payload shape for local apply, and `StoreKV` handlers execute through that
 boundary. The future replicated proposal path can therefore carry the Go
@@ -141,8 +145,8 @@ command rather than once per inner request. Holt mode wraps the apply engine
 with an apply-status sink so successful writes persist the latest region apply
 status for restart bootstrap.
 
-See [PARITY_PLAN.md](PARITY_PLAN.md) for the full Go `raftstore` parity plan and
-the cutover rule: keep the workspace named `raftstore-rs` while the Go
+See [MAINLINE_PLAN.md](MAINLINE_PLAN.md) for the mount-scoped fsmeta Raft plan
+and the cutover rule: keep the workspace named `raftstore-rs` while the Go
 implementation still exists, then rename it to `raftstore` after the Go package
 is removed.
 

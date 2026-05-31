@@ -46,36 +46,44 @@ sequenceDiagram
     participant Exec as fsmeta/exec
     participant Adapter as fsmeta/runtime/raftstore
     participant Coord as coordinator
-    participant Store as raftstore/kv
-    participant Raft as raftstore peer
-    participant Txn as txn/mvcc + percolator
-    participant KV as storage/kv
+    participant Store as raftstore-rs mount group
+    participant Raft as OpenRaft
+    participant KV as Holt / Pebble trees
 
     App->>Exec: metadata request
-    Exec->>Adapter: backend mutations
-    Adapter->>Coord: route / TSO as needed
-    Adapter->>Store: region RPC
+    Exec->>Adapter: compiled predicates + mutations
+    Adapter->>Coord: mount route / leader endpoint
+    Adapter->>Store: mount-scoped mutation command
     Store->>Raft: propose command
     Raft->>Store: apply committed command
-    Store->>Txn: MVCC / Percolator operation
-    Txn->>KV: local ordered-KV storage
+    Store->>KV: atomic state-machine batch
 ```
 
-The distributed path adds rooted routing, TSO, Raft replication, and MVCC
-transaction coordination. It still stores the final bytes through the same
-storage backend contract on each store.
+The target distributed path adds rooted routing and Raft replication, but does
+not require Percolator on the fsmeta hot path. A mount is the default Raft group
+unit. The committed Raft apply frontier becomes the fsmeta version observed by
+reads, watches, and snapshot tokens.
+
+The old Go `raftstore` path still exists as a legacy baseline during cutover.
+That path uses StoreKV RPCs plus `txn/percolator`; new Rust data-plane work
+should move toward mount-scoped fsmeta commands instead of extending the legacy
+transaction model.
 
 ## 3. Internal Key Shape
 
-NoKV keeps MVCC and column-family semantics above the storage engine:
+NoKV keeps local and legacy MVCC column-family semantics above the storage
+engine:
 
 ```text
 <column-family><user-key><descending timestamp>
 ```
 
-`txn/storage` owns this encoding. Pebble and Holt receive opaque ordered bytes.
-They must preserve byte ordering and snapshot consistency, but they must not
-interpret fsmeta, MVCC, raftstore, or protobuf semantics.
+`txn/storage` owns this encoding for the local runtime and the old Go
+Percolator path. Pebble and Holt receive opaque ordered bytes. They must
+preserve byte ordering and snapshot consistency, but they must not interpret
+fsmeta, MVCC, raftstore, or protobuf semantics. The Rust fsmeta data plane may
+use Holt multi-tree layout internally, but that layout is still below the
+fsmeta semantic boundary.
 
 ## 4. Storage Backend Requirements
 
@@ -109,5 +117,7 @@ snapshot code. Ownership rules are independent from the physical backend:
 The old mainline storage-engine path owned WAL, memtable, flush, compaction,
 manifest, range filters, and SST migration. Those concerns now belong to the
 physical backend implementation. For Pebble they live inside Pebble. For Holt
-they should live inside Holt. NoKV's mainline owns metadata semantics, MVCC
-encoding, distributed execution, and the storage backend contract.
+they should live inside Holt. NoKV's mainline owns metadata semantics,
+distributed execution, and the storage backend contract. Legacy
+MVCC/Percolator remains only where the local runtime or old Go raftstore still
+needs it during the transition.

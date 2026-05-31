@@ -10,7 +10,7 @@ SPDX-License-Identifier: Apache-2.0
 - Topic: NoKV's workspace namespace metadata substrate.
 - Core objects: Mount, Inode, Dentry, SubtreeAuthority, SnapshotEpoch, QuotaFence, UsageCounter.
 - Default local call chain: `fsmeta/runtime/local -> fsmeta/exec -> fsmeta/backend.Store -> local MVCC`.
-- Distributed call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> fsmeta/backend.Store implemented by fsmeta/runtime/raftstore -> raftstore + txn/percolator + coordinator/meta-root`.
+- Distributed target call chain: `fsmeta/client -> fsmeta/server -> fsmeta/exec -> fsmeta/runtime/raftstore -> coordinator route -> raftstore-rs mount Raft group`.
 - Experimental Peras call chain: `fsmeta/exec -> Peras visible runtime -> witness quorum + segment install`.
 - Code contract: wire is in `pb/fsmeta/fsmeta.proto`, the executor is in `fsmeta/exec`, local runtime is `fsmeta/runtime/local.Open`, and the scale-out adapter is `fsmeta/runtime/raftstore.Open`.
 
@@ -91,7 +91,12 @@ raftstore KV RPC/proto mutations inside the adapter package.
 
 The default product runtime is `fsmeta/runtime/local.Open`. It wires one embedded database, one local mount admission record, a local inode allocator, a durable MVCC runner, and local watch/snapshot adapters. This is the path for demos, agent workspace integrations, and small deployments.
 
-The scale-out runtime is `fsmeta/runtime/raftstore.Open`. It wires coordinator, raftstore client, TSO, watch source, mount/quota cache, snapshot publisher, and subtree handoff publisher. It exists for DFS-scale metadata and multi-node agent platforms.
+The scale-out runtime is `fsmeta/runtime/raftstore.Open`. Its target data plane
+is a Rust mount-scoped Raft group: fsmeta compiles namespace operations into
+backend predicates and mutations, the runtime routes them through the
+coordinator, and Rust applies the full mutation group atomically at the
+committed Raft frontier. The old Go StoreKV/Percolator path remains only as the
+legacy baseline while this cutover is in progress.
 
 Peras is an experimental runtime path for visible-before-durable metadata execution. A Peras write may return at a **visible** boundary before the **durable** boundary is reached by witness quorum plus segment install into raftstore. That mechanism should not be required to understand the stable fsmeta API.
 
@@ -99,9 +104,10 @@ The layering constraints are:
 
 - `Executor` does not directly know about raft region / store routing.
 - `fsmeta/runtime/local` is the default embedded adapter.
-- `fsmeta/runtime/raftstore` is the scale-out adapter; it owns the raftstore wiring.
+- `fsmeta/runtime/raftstore` is the scale-out adapter; it owns distributed routing and endpoint wiring.
 - `meta/root` does not store high-frequency inode/dentry data — only lifecycle / authority truth.
-- `raftstore` and `percolator` don't understand fsmeta operations; they provide transactions and apply observation. Existing Peras install support is being isolated behind the experimental boundary.
+- `raftstore-rs` does not understand fsmeta operations; it executes compiled predicates and mutations inside mount-scoped Raft commands.
+- Go `raftstore` and `txn/percolator` are legacy distributed-KV machinery and should not receive new fsmeta features after the Rust path is green.
 - Raftstore peer bootstrap snapshots and concrete storage diagnostics are
   operational capabilities of the distributed runtime. They are not part of the
   generic fsmeta backend contract.
@@ -119,13 +125,18 @@ Strict semantics: if any inode is missing or fails to decode, the whole page ret
 
 ### WatchSubtree
 
-`WatchSubtree` subscribes to an fsmeta key prefix and externally exposes a `(region_id, term, index)` cursor and a `commit_version`. Event sources include:
+`WatchSubtree` subscribes to an fsmeta key prefix and externally exposes a
+`(region_id, term, index)` cursor and a `commit_version`. On the legacy Go
+StoreKV path, event sources include:
 
 - a successful `CMD_COMMIT`;
 - `CMD_RESOLVE_LOCK` with `commit_version != 0`;
 - a successful `CMD_INSTALL_PREPARED_MVCC` carrying `watch_keys`.
 
 `CMD_PREWRITE`, rollback, and diagnostic commands do not produce visible events.
+On the Rust mount-scoped path, watch events are emitted after the committed
+fsmeta mutation command applies; lock-resolution events disappear because the
+hot path no longer uses Percolator locks.
 
 v1 already supports:
 
@@ -205,7 +216,10 @@ instead of producing stale quota counters or stale `ReadDirPlus` pages.
 
 ### Quota Fence
 
-The quota fence is rooted truth; the usage counter is a data-plane key. The write path packs the usage counter mutation and the dentry/inode mutation into the same Percolator transaction.
+The quota fence is rooted truth; the usage counter is a data-plane key. The
+mount-scoped Raft path packs the usage counter mutation and the dentry/inode
+mutation into the same committed fsmeta mutation command. The legacy Go path
+does the same grouping through one Percolator transaction.
 
 This solves two problems:
 
