@@ -57,6 +57,12 @@ type Options struct {
 	// a live transaction that is only delayed in the commit path.
 	LockTTL time.Duration
 
+	// MountRaftAtomicMutate enables the Rust mount-scoped Raft write contract:
+	// one-phase mutations are admitted through Raft and are read-ordered before
+	// the RPC returns. Leave this false for the legacy Go raftstore/Percolator
+	// runtime.
+	MountRaftAtomicMutate bool
+
 	// AffinityBuckets is the fsmeta key-placement bucket count used when
 	// choosing Create inode IDs. The local engine receives only generic key
 	// shape hints; this value belongs to fsmeta placement policy.
@@ -77,9 +83,17 @@ type Runtime struct {
 	QuotaResolver     fsmetaexec.QuotaResolver
 	SessionCleaner    interface{ Stats() map[string]any }
 	ExtensionStats    []ExtensionStats
+	CommitContract    string
 
 	close func() error
 	once  sync.Once
+}
+
+func raftstoreCommitContract(mountRaftAtomicMutate bool) string {
+	if mountRaftAtomicMutate {
+		return "fsmeta commit contract: raftstore backend uses mount-scoped Raft atomic mutations; each successful write is read-ordered by the applied Raft frontier"
+	}
+	return "fsmeta commit contract: raftstore backend uses durable MVCC/Percolator by default; mount-scoped Raft atomic mutations must be enabled explicitly"
 }
 
 // Close releases watch streams, raftstore connections, the mount monitor, and
@@ -140,7 +154,9 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		_ = coord.Close()
 		return nil, fmt.Errorf("dial raftstore: %w", err)
 	}
-	runner, err := NewRunner(kv, coord)
+	runner, err := NewRunnerWithOptions(kv, coord, RunnerOptions{
+		ReadOrderedAtomicMutate: opts.MountRaftAtomicMutate,
+	})
 	if err != nil {
 		_ = kv.Close()
 		_ = coord.Close()
@@ -233,6 +249,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		QuotaResolver:     quotas,
 		SessionCleaner:    sessions,
 		ExtensionStats:    extensionStats,
+		CommitContract:    raftstoreCommitContract(opts.MountRaftAtomicMutate),
 	}
 	rt.close = func() error {
 		var first error

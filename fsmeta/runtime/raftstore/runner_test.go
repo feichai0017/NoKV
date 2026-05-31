@@ -164,12 +164,30 @@ func TestRunnerTryAtomicMutateRecordsUnsupportedKV(t *testing.T) {
 	require.Equal(t, uint64(1), stats["atomic_runner_unsupported_total"])
 }
 
-func TestRunnerDoesNotAdvertiseReadOrderedAtomicMutate(t *testing.T) {
+func TestRunnerDoesNotEnableReadOrderedAtomicMutateByDefault(t *testing.T) {
 	runner, err := NewRunner(&fakeAtomicMutateKV{}, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 10, Count: 2}})
 	require.NoError(t, err)
 
-	_, ok := any(runner).(backend.ReadOrderedAtomicMutator)
-	require.False(t, ok)
+	onePhase, ok := any(runner).(backend.ReadOrderedAtomicMutator)
+	require.True(t, ok)
+	require.False(t, onePhase.AtomicMutatePreservesReadOrder())
+
+	stats := runner.Stats()
+	require.Equal(t, false, stats["read_ordered_atomic_mutate"])
+}
+
+func TestRunnerEnablesReadOrderedAtomicMutateWithExplicitOption(t *testing.T) {
+	runner, err := NewRunnerWithOptions(&fakeAtomicMutateKV{}, &fakeRunnerTSO{resp: &coordpb.TsoResponse{Timestamp: 10, Count: 2}}, RunnerOptions{
+		ReadOrderedAtomicMutate: true,
+	})
+	require.NoError(t, err)
+
+	onePhase, ok := any(runner).(backend.ReadOrderedAtomicMutator)
+	require.True(t, ok)
+	require.True(t, onePhase.AtomicMutatePreservesReadOrder())
+
+	stats := runner.Stats()
+	require.Equal(t, true, stats["read_ordered_atomic_mutate"])
 }
 
 func TestRunnerStatsExposeTSOCoalescer(t *testing.T) {
@@ -206,3 +224,4 @@ func TestRunnerMutateAllocatesCommitTimestampAfterPrewrite(t *testing.T) {
 var _ KVClient = (*fakeRunnerKV)(nil)
 var _ TSOClient = (*fakeRunnerTSO)(nil)
 var _ backend.Store = (*Runner)(nil)
+var _ backend.ReadOrderedAtomicMutator = (*Runner)(nil)

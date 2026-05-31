@@ -27,3 +27,8 @@ func TestOpenRejectsNegativeLockTTL(t *testing.T) {
 	})
 	require.ErrorIs(t, err, errLockTTLInvalid)
 }
+
+func TestRaftstoreCommitContractNamesAtomicBoundary(t *testing.T) {
+	require.Contains(t, raftstoreCommitContract(false), "durable MVCC/Percolator")
+	require.Contains(t, raftstoreCommitContract(true), "mount-scoped Raft atomic mutations")
+}

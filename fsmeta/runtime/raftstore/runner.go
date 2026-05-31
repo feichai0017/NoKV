@@ -43,20 +43,40 @@ type TSOClient interface {
 type Runner struct {
 	kv                           KVClient
 	tso                          *tsoCoalescer
+	readOrderedAtomicMutate      bool
 	atomicRunnerUnsupportedTotal atomic.Uint64
+}
+
+// RunnerOptions configures the raftstore backend adapter.
+type RunnerOptions struct {
+	// ReadOrderedAtomicMutate allows fsmeta to consume raftstore's one-phase
+	// mutation RPC. Set this only for data planes that make a successful
+	// TryAtomicMutate visible to every read at version >= commitVersion before
+	// the RPC returns, such as the Rust mount-scoped Raft mainline.
+	ReadOrderedAtomicMutate bool
 }
 
 // NewRunner constructs a backend.Store backed by raftstore KV RPCs and
 // coordinator TSO. Both dependencies are explicit because timestamps do not
 // belong to the KV data path.
 func NewRunner(kv KVClient, tso TSOClient) (*Runner, error) {
+	return NewRunnerWithOptions(kv, tso, RunnerOptions{})
+}
+
+// NewRunnerWithOptions constructs a backend.Store with explicit raftstore
+// fsmeta capability flags.
+func NewRunnerWithOptions(kv KVClient, tso TSOClient, opts RunnerOptions) (*Runner, error) {
 	if kv == nil {
 		return nil, errKVClientRequired
 	}
 	if tso == nil {
 		return nil, errTSOClientRequired
 	}
-	return &Runner{kv: kv, tso: newTSOCoalescer(tso, defaultTSOCoalescerConfig())}, nil
+	return &Runner{
+		kv:                      kv,
+		tso:                     newTSOCoalescer(tso, defaultTSOCoalescerConfig()),
+		readOrderedAtomicMutate: opts.ReadOrderedAtomicMutate,
+	}, nil
 }
 
 // ReserveTimestamp reserves count consecutive timestamps from coordinator TSO.
@@ -167,10 +187,12 @@ func (r *Runner) Stats() map[string]any {
 	if r == nil {
 		return map[string]any{
 			"atomic_runner_unsupported_total": uint64(0),
+			"read_ordered_atomic_mutate":      false,
 		}
 	}
 	out := map[string]any{
 		"atomic_runner_unsupported_total": r.atomicRunnerUnsupportedTotal.Load(),
+		"read_ordered_atomic_mutate":      r.readOrderedAtomicMutate,
 	}
 	if r.tso != nil {
 		out["tso"] = r.tso.Stats()
@@ -184,13 +206,6 @@ func (r *Runner) Stats() map[string]any {
 // TryAtomicMutate delegates to the region-local one-phase mutation path when the
 // underlying KV client supports it. handled=false means callers should keep
 // the regular Percolator 2PC path.
-//
-// Runner intentionally does not implement backend.ReadOrderedAtomicMutator. The
-// raftstore RPC can apply a one-phase command, but fsmeta preallocates commit_ts
-// before the command reaches Raft. Without a distributed read barrier, another
-// gateway can read at a higher timestamp before this command applies and then
-// miss a later-successful one-phase write. Keep fsmeta on Percolator 2PC until
-// that read-order boundary is explicit.
 func (r *Runner) TryAtomicMutate(ctx context.Context, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (bool, error) {
 	onePhase, ok := r.kv.(atomicMutateOnePhase)
 	if !ok {
@@ -206,6 +221,15 @@ func (r *Runner) TryAtomicMutate(ctx context.Context, primary []byte, predicates
 		return false, err
 	}
 	return onePhase.TryAtomicMutate(ctx, primary, wirePredicates, wireMutations, startVersion, commitVersion)
+}
+
+// AtomicMutatePreservesReadOrder reports whether the configured raftstore data
+// plane can safely publish one-phase fsmeta writes. The legacy Go raftstore path
+// must leave this false: it can apply the RPC atomically inside one region, but
+// it does not make the preallocated commit timestamp a distributed read-order
+// barrier for other gateways.
+func (r *Runner) AtomicMutatePreservesReadOrder() bool {
+	return r != nil && r.readOrderedAtomicMutate
 }
 
 func mutationsToProto(mutations []*backend.Mutation) ([]*kvrpcpb.Mutation, error) {

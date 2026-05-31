@@ -81,6 +81,7 @@ func main() {
 		localRootInode                  = flag.Uint64("local-root-inode", uint64(model.RootInode), "root inode for --backend=local")
 		affinityBuckets                 = flag.Int("affinity-buckets", layout.DefaultAffinityBucketCount, "fsmeta placement bucket count used to choose Create inode IDs")
 		lockTTL                         = flag.Duration("lock-ttl", 0, "Percolator primary-lock TTL for fsmeta mutations; zero uses the fsmeta default")
+		mountRaftAtomicMutate           = flag.Bool("raftstore-mount-raft-atomic", false, "enable read-ordered one-phase fsmeta mutations for the Rust mount-scoped Raft data plane")
 		sessionCleanupInterval          = flag.Duration("session-cleanup-interval", 30*time.Second, "interval for expired write-session cleanup; choose about half the smallest expected session TTL; negative disables")
 		sessionCleanupLimit             = flag.Uint("session-cleanup-limit", 0, "maximum session records scanned per mount per cleanup pass; zero uses fsmeta default")
 		experimentalPeras               = flag.Bool("experimental-peras", false, "enable the experimental Peras visible-commit runtime for --backend=raftstore")
@@ -177,6 +178,7 @@ func main() {
 			CoordinatorAddr:        *coordAddr,
 			AffinityBuckets:        *affinityBuckets,
 			LockTTL:                *lockTTL,
+			MountRaftAtomicMutate:  *mountRaftAtomicMutate,
 			SessionCleanupInterval: *sessionCleanupInterval,
 			SessionCleanupLimit:    uint32(*sessionCleanupLimit),
 			Extension:              extension,
@@ -272,6 +274,10 @@ func openConfiguredRuntime(ctx context.Context, opts configuredRuntimeOptions) (
 }
 
 func raftstoreServerRuntime(rt *fsmetaraftstore.Runtime) *fsmetaServerRuntime {
+	contractLog := "fsmeta commit contract: raftstore backend uses durable MVCC/Percolator by default; mount-scoped Raft atomic mutations must be enabled explicitly"
+	if rt != nil && rt.CommitContract != "" {
+		contractLog = rt.CommitContract
+	}
 	return &fsmetaServerRuntime{
 		executor: rt.Executor,
 		watcher:  rt.Watcher,
@@ -299,7 +305,7 @@ func raftstoreServerRuntime(rt *fsmetaraftstore.Runtime) *fsmetaServerRuntime {
 			}
 		},
 		startupSummary: "fsmeta backend: raftstore",
-		contractLog:    "fsmeta commit contract: raftstore backend uses durable MVCC by default; experimental extensions must be enabled explicitly",
+		contractLog:    contractLog,
 	}
 }
 
