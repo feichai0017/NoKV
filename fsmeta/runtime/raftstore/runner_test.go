@@ -359,6 +359,87 @@ func TestCoordinatorRouteProviderIgnoresLeaderHintRemovedFromDescriptor(t *testi
 	require.Equal(t, uint64(11), route.Context.GetPeer().GetPeerId())
 }
 
+func TestCoordinatorRouteProviderFallsBackWhenLeaderStoreIsDown(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	metadatapb.RegisterMetadataPlaneServer(server, &fakeMetadataPlaneServer{})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.GracefulStop)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	coordinator := &fakeCoordinatorClient{
+		region: &coordpb.GetRegionByKeyResponse{
+			RegionDescriptor: &metapb.RegionDescriptor{
+				RegionId: 9,
+				Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 3},
+				Peers: []*metapb.RegionPeer{
+					{StoreId: 1, PeerId: 11},
+					{StoreId: 2, PeerId: 22},
+				},
+			},
+			LeaderPeer: &metapb.RegionPeer{StoreId: 2, PeerId: 22},
+		},
+		stores: map[uint64]*coordpb.GetStoreResponse{
+			1: {
+				Store: &coordpb.StoreInfo{
+					StoreId:    1,
+					ClientAddr: "passthrough:///store-1",
+					State:      coordpb.StoreState_STORE_STATE_UP,
+				},
+			},
+			2: {
+				Store: &coordpb.StoreInfo{
+					StoreId:    2,
+					ClientAddr: "passthrough:///store-2",
+					State:      coordpb.StoreState_STORE_STATE_DOWN,
+				},
+			},
+		},
+	}
+	provider, err := NewCoordinatorRouteProvider(coordinator, CoordinatorRouteProviderOptions{
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
+
+	route, err := provider.RouteForKey(context.Background(), []byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), route.Context.GetPeer().GetStoreId())
+	require.Equal(t, uint64(11), route.Context.GetPeer().GetPeerId())
+}
+
+func TestCoordinatorRouteProviderRejectsRegionWithoutRoutablePeer(t *testing.T) {
+	coordinator := &fakeCoordinatorClient{
+		region: &coordpb.GetRegionByKeyResponse{
+			RegionDescriptor: &metapb.RegionDescriptor{
+				RegionId: 9,
+				Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 3},
+				Peers: []*metapb.RegionPeer{
+					{StoreId: 1, PeerId: 11},
+					{StoreId: 2, PeerId: 22},
+				},
+			},
+			LeaderPeer: &metapb.RegionPeer{StoreId: 2, PeerId: 22},
+		},
+		stores: map[uint64]*coordpb.GetStoreResponse{
+			1: {Store: &coordpb.StoreInfo{StoreId: 1, State: coordpb.StoreState_STORE_STATE_DOWN}},
+			2: {Store: &coordpb.StoreInfo{StoreId: 2, State: coordpb.StoreState_STORE_STATE_DOWN}},
+		},
+	}
+	provider, err := NewCoordinatorRouteProvider(coordinator, CoordinatorRouteProviderOptions{})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
+
+	_, err = provider.RouteForKey(context.Background(), []byte("k"))
+	require.Error(t, err)
+	require.True(t, nokverrors.IsKind(err, nokverrors.KindRouteUnavailable))
+}
+
 func TestMountResolverRejectsUnregisteredMount(t *testing.T) {
 	coordinator := fakeRouteCoordinator()
 	coordinator.mount = &coordpb.GetMountResponse{NotFound: true}

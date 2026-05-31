@@ -5,7 +5,6 @@ package raftstore
 
 import (
 	"context"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -90,32 +89,41 @@ func (p *CoordinatorRouteProvider) RouteForKey(ctx context.Context, key []byte) 
 	if resp.GetNotFound() || resp.GetRegionDescriptor() == nil {
 		return MetadataRoute{}, nokverrors.New(nokverrors.KindRouteUnavailable, "fsmeta/runtime/raftstore: no region route for metadata key")
 	}
-	peer := chooseServingPeer(resp.GetRegionDescriptor(), resp.GetLeaderPeer(), p.leaderHint(resp.GetRegionDescriptor().GetRegionId()))
-	if peer == nil {
+	peers := servingPeerCandidates(resp.GetRegionDescriptor(), resp.GetLeaderPeer(), p.leaderHint(resp.GetRegionDescriptor().GetRegionId()))
+	if len(peers) == 0 {
 		return MetadataRoute{}, nokverrors.New(nokverrors.KindRouteUnavailable, "fsmeta/runtime/raftstore: metadata region has no serving peer")
 	}
-	storeResp, err := p.coordinator.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: peer.GetStoreId()})
-	if err != nil {
-		return MetadataRoute{}, err
+	var lastErr error
+	for _, peer := range peers {
+		storeResp, err := p.coordinator.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: peer.GetStoreId()})
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		store := storeResp.GetStore()
+		if storeResp.GetNotFound() || store == nil || store.GetState() != coordpb.StoreState_STORE_STATE_UP || strings.TrimSpace(store.GetClientAddr()) == "" {
+			continue
+		}
+		client, err := p.clientForStore(ctx, store.GetClientAddr())
+		if err != nil {
+			lastErr = err
+			continue
+		}
+		return MetadataRoute{
+			Context: &metadatapb.MetadataContext{
+				RegionId:        resp.GetRegionDescriptor().GetRegionId(),
+				RegionEpoch:     resp.GetRegionDescriptor().GetEpoch(),
+				Peer:            peer,
+				ReadConsistency: metadatapb.ReadConsistency_READ_CONSISTENCY_STRONG,
+				ReadPreference:  metadatapb.ReadPreference_READ_PREFERENCE_LEADER_ONLY,
+			},
+			Client: client,
+		}, nil
 	}
-	store := storeResp.GetStore()
-	if storeResp.GetNotFound() || store == nil || store.GetState() != coordpb.StoreState_STORE_STATE_UP || strings.TrimSpace(store.GetClientAddr()) == "" {
-		return MetadataRoute{}, nokverrors.New(nokverrors.KindRouteUnavailable, fmt.Sprintf("fsmeta/runtime/raftstore: metadata store %d is not routable", peer.GetStoreId()))
+	if lastErr != nil {
+		return MetadataRoute{}, lastErr
 	}
-	client, err := p.clientForStore(ctx, store.GetClientAddr())
-	if err != nil {
-		return MetadataRoute{}, err
-	}
-	return MetadataRoute{
-		Context: &metadatapb.MetadataContext{
-			RegionId:        resp.GetRegionDescriptor().GetRegionId(),
-			RegionEpoch:     resp.GetRegionDescriptor().GetEpoch(),
-			Peer:            peer,
-			ReadConsistency: metadatapb.ReadConsistency_READ_CONSISTENCY_STRONG,
-			ReadPreference:  metadatapb.ReadPreference_READ_PREFERENCE_LEADER_ONLY,
-		},
-		Client: client,
-	}, nil
+	return MetadataRoute{}, nokverrors.New(nokverrors.KindRouteUnavailable, "fsmeta/runtime/raftstore: metadata region has no routable peer")
 }
 
 func (p *CoordinatorRouteProvider) ObserveRegionError(_ context.Context, _ []byte, _ MetadataRoute, err *errorpb.RegionError) {
@@ -203,19 +211,32 @@ func normalizeStoreTarget(addr string) string {
 	return "dns:///" + addr
 }
 
-func chooseServingPeer(desc *metapb.RegionDescriptor, leader, hint *metapb.RegionPeer) *metapb.RegionPeer {
-	if descriptorHasPeer(desc, leader) {
-		return cloneRegionPeer(leader)
+func servingPeerCandidates(desc *metapb.RegionDescriptor, leader, hint *metapb.RegionPeer) []*metapb.RegionPeer {
+	var out []*metapb.RegionPeer
+	add := func(peer *metapb.RegionPeer) {
+		if !descriptorHasPeer(desc, peer) || peerInCandidateList(out, peer) {
+			return
+		}
+		out = append(out, cloneRegionPeer(peer))
 	}
-	if descriptorHasPeer(desc, hint) {
-		return cloneRegionPeer(hint)
-	}
+	add(leader)
+	add(hint)
 	for _, peer := range desc.GetPeers() {
-		if peer.GetStoreId() != 0 && peer.GetPeerId() != 0 {
-			return cloneRegionPeer(peer)
+		add(peer)
+	}
+	return out
+}
+
+func peerInCandidateList(peers []*metapb.RegionPeer, peer *metapb.RegionPeer) bool {
+	if peer == nil {
+		return false
+	}
+	for _, candidate := range peers {
+		if candidate.GetStoreId() == peer.GetStoreId() && candidate.GetPeerId() == peer.GetPeerId() {
+			return true
 		}
 	}
-	return nil
+	return false
 }
 
 func descriptorHasPeer(desc *metapb.RegionDescriptor, peer *metapb.RegionPeer) bool {
