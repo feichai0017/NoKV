@@ -74,6 +74,7 @@ pub struct Proposal {
 pub enum ProposalPayload {
     RaftCommand(Vec<u8>),
     RegionDescriptor(Vec<u8>),
+    AdminCommand(Vec<u8>),
 }
 
 impl Proposal {
@@ -108,10 +109,25 @@ impl Proposal {
         })
     }
 
+    pub fn from_admin_command(
+        region_id: RegionId,
+        command: &raftpb::AdminCommand,
+    ) -> Result<Self, Error> {
+        if region_id == 0 {
+            return Err(Error::MissingRegionHeader);
+        }
+        let mut payload = Vec::with_capacity(command.encoded_len());
+        command.encode(&mut payload)?;
+        Ok(Self {
+            region_id,
+            payload: ProposalPayload::AdminCommand(payload),
+        })
+    }
+
     pub fn decode_raft_command(&self) -> Result<raftpb::RaftCmdRequest, Error> {
         let ProposalPayload::RaftCommand(payload) = &self.payload else {
             return Err(Error::InvalidLogPayload(
-                "region descriptor proposal cannot decode as raft command".to_owned(),
+                "non-raft-command proposal cannot decode as raft command".to_owned(),
             ));
         };
         let req = raftpb::RaftCmdRequest::decode(payload.as_slice())?;
@@ -145,18 +161,28 @@ impl Proposal {
         Ok(descriptor)
     }
 
+    pub fn decode_admin_command(&self) -> Result<raftpb::AdminCommand, Error> {
+        let ProposalPayload::AdminCommand(payload) = &self.payload else {
+            return Err(Error::InvalidLogPayload(
+                "non-admin-command proposal cannot decode as admin command".to_owned(),
+            ));
+        };
+        Ok(raftpb::AdminCommand::decode(payload.as_slice())?)
+    }
+
     pub(crate) fn payload_kind(&self) -> ProposalPayloadKind {
         match &self.payload {
             ProposalPayload::RaftCommand(_) => ProposalPayloadKind::RaftCommand,
             ProposalPayload::RegionDescriptor(_) => ProposalPayloadKind::RegionDescriptor,
+            ProposalPayload::AdminCommand(_) => ProposalPayloadKind::AdminCommand,
         }
     }
 
     pub(crate) fn payload_bytes(&self) -> &[u8] {
         match &self.payload {
-            ProposalPayload::RaftCommand(payload) | ProposalPayload::RegionDescriptor(payload) => {
-                payload
-            }
+            ProposalPayload::RaftCommand(payload)
+            | ProposalPayload::RegionDescriptor(payload)
+            | ProposalPayload::AdminCommand(payload) => payload,
         }
     }
 }
@@ -165,6 +191,7 @@ impl Proposal {
 pub(crate) enum ProposalPayloadKind {
     RaftCommand,
     RegionDescriptor,
+    AdminCommand,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -608,6 +635,14 @@ where
                                 term,
                                 payload: Vec::new(),
                             });
+                        }
+                        ProposalPayloadKind::AdminCommand => {
+                            let _command = proposal
+                                .decode_admin_command()
+                                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+                            return Err(nokv_mvcc::Error::Backend(
+                                "admin command proposal apply is not implemented".to_owned(),
+                            ));
                         }
                     }
                 }

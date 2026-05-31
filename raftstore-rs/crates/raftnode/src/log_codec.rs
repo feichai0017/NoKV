@@ -14,6 +14,7 @@ const PAYLOAD_NORMAL: u32 = 2;
 const PAYLOAD_MEMBERSHIP: u32 = 3;
 const NORMAL_RAFT_COMMAND: u32 = 1;
 const NORMAL_REGION_DESCRIPTOR: u32 = 2;
+const NORMAL_ADMIN_COMMAND: u32 = 3;
 
 #[derive(Clone, PartialEq, Message)]
 struct PersistedEntry {
@@ -115,6 +116,7 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
                 NORMAL_REGION_DESCRIPTOR => {
                     ProposalPayload::RegionDescriptor(persisted.normal_payload)
                 }
+                NORMAL_ADMIN_COMMAND => ProposalPayload::AdminCommand(persisted.normal_payload),
                 other => {
                     return Err(Error::InvalidLogPayload(format!(
                         "unsupported normal proposal kind {other}",
@@ -131,6 +133,9 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
                 }
                 ProposalPayloadKind::RegionDescriptor => {
                     proposal.decode_region_descriptor()?;
+                }
+                ProposalPayloadKind::AdminCommand => {
+                    proposal.decode_admin_command()?;
                 }
             }
             EntryPayload::Normal(proposal)
@@ -161,6 +166,7 @@ fn encode_normal_kind(kind: ProposalPayloadKind) -> u32 {
     match kind {
         ProposalPayloadKind::RaftCommand => NORMAL_RAFT_COMMAND,
         ProposalPayloadKind::RegionDescriptor => NORMAL_REGION_DESCRIPTOR,
+        ProposalPayloadKind::AdminCommand => NORMAL_ADMIN_COMMAND,
     }
 }
 
@@ -306,6 +312,40 @@ mod tests {
 
         let decoded = decode_log_entry(&encode_log_entry(7, &entry).unwrap()).unwrap();
         assert_eq!(decoded.log_id.index, 12);
+        assert_eq!(
+            decoded.payload,
+            EntryPayload::<RaftStoreConfig>::Normal(proposal)
+        );
+    }
+
+    #[test]
+    fn admin_command_entry_round_trips_through_raftlog_record() {
+        let command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Split as i32,
+            split: Some(raftpb::SplitCommand {
+                parent_region_id: 7,
+                split_key: b"m".to_vec(),
+                child: Some(metapb::RegionDescriptor {
+                    region_id: 8,
+                    start_key: b"m".to_vec(),
+                    peers: vec![metapb::RegionPeer {
+                        store_id: 1,
+                        peer_id: 8,
+                    }],
+                    ..Default::default()
+                }),
+            }),
+            ..Default::default()
+        };
+        let proposal = Proposal::from_admin_command(7, &command).unwrap();
+        let entry = OpenRaftEntry {
+            log_id: log_id(3, 13),
+            payload: EntryPayload::Normal(proposal.clone()),
+        };
+
+        let decoded = decode_log_entry(&encode_log_entry(7, &entry).unwrap()).unwrap();
+
+        assert_eq!(decoded.log_id.index, 13);
         assert_eq!(
             decoded.payload,
             EntryPayload::<RaftStoreConfig>::Normal(proposal)
