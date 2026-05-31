@@ -5,7 +5,6 @@ use std::time::Duration;
 
 use nokv_mvcc::MvccStore;
 use nokv_proto::nokv::error::v1 as errorpb;
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
@@ -366,7 +365,7 @@ impl<E> ApplyWatchProvider for OpenRaftRegion<E>
 where
     E: ApplyWatchProvider,
 {
-    fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
+    fn subscribe_apply(&self) -> broadcast::Receiver<metadatapb::MetadataApplyWatchEvent> {
         self.apply_engine.subscribe_apply()
     }
 

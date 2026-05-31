@@ -1,12 +1,12 @@
 use std::collections::VecDeque;
 
-use nokv_proto::nokv::kv::v1 as kvpb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use tokio::sync::broadcast;
 
 const DEFAULT_APPLY_HISTORY_LIMIT: usize = 4096;
 
 pub trait ApplyWatchProvider: Clone + Send + Sync + 'static {
-    fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent>;
+    fn subscribe_apply(&self) -> broadcast::Receiver<metadatapb::MetadataApplyWatchEvent>;
 
     fn replay_apply(&self, request: ApplyWatchReplayRequest)
         -> nokv_mvcc::Result<ApplyWatchReplay>;
@@ -22,14 +22,14 @@ pub struct ApplyWatchReplayRequest {
 
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct ApplyWatchReplay {
-    pub events: Vec<kvpb::ApplyWatchEvent>,
+    pub events: Vec<metadatapb::MetadataApplyWatchEvent>,
     pub expired: bool,
 }
 
 #[derive(Debug)]
 pub(crate) struct ApplyHistory {
     limit: usize,
-    events: VecDeque<kvpb::ApplyWatchEvent>,
+    events: VecDeque<metadatapb::MetadataApplyWatchEvent>,
     truncated: bool,
 }
 
@@ -44,7 +44,7 @@ impl Default for ApplyHistory {
 }
 
 impl ApplyHistory {
-    pub(crate) fn remember(&mut self, event: kvpb::ApplyWatchEvent) {
+    pub(crate) fn remember(&mut self, event: metadatapb::MetadataApplyWatchEvent) {
         if self.limit == 0 {
             return;
         }
@@ -96,14 +96,18 @@ impl ApplyHistory {
     }
 }
 
-fn apply_event_matches_prefix(event: &kvpb::ApplyWatchEvent, prefix: &[u8]) -> bool {
+fn apply_event_matches_prefix(event: &metadatapb::MetadataApplyWatchEvent, prefix: &[u8]) -> bool {
     if prefix.is_empty() {
         return true;
     }
     event.keys.iter().any(|key| key.starts_with(prefix))
 }
 
-fn apply_event_after_cursor(event: &kvpb::ApplyWatchEvent, term: u64, index: u64) -> bool {
+fn apply_event_after_cursor(
+    event: &metadatapb::MetadataApplyWatchEvent,
+    term: u64,
+    index: u64,
+) -> bool {
     if term == 0 {
         return event.index > index;
     }

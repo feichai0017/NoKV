@@ -1,6 +1,5 @@
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_raftnode::{
     ApplyWatchProvider, ApplyWatchReplayRequest, MetadataCommandExecutor, MetadataReadExecutor,
@@ -285,7 +284,7 @@ where
 async fn send_metadata_apply_event(
     tx: &tokio::sync::mpsc::Sender<Result<metadatapb::MetadataWatchApplyResponse, Status>>,
     request: &metadatapb::MetadataWatchApplyRequest,
-    event: &kvpb::ApplyWatchEvent,
+    event: &metadatapb::MetadataApplyWatchEvent,
 ) -> Result<(), ()> {
     let keys = matching_apply_watch_keys(&event.keys, &request.key_prefix);
     for chunk in chunk_apply_watch_keys(keys) {
@@ -294,7 +293,7 @@ async fn send_metadata_apply_event(
                 region_id: event.region_id,
                 term: event.term,
                 index: event.index,
-                source: metadatapb::MetadataApplyWatchEventSource::Commit as i32,
+                source: event.source,
                 commit_version: event.commit_version,
                 keys: chunk,
             }),
@@ -307,7 +306,7 @@ async fn send_metadata_apply_event(
 
 fn advance_apply_watch_cursor(
     current: Option<(u64, u64)>,
-    event: &kvpb::ApplyWatchEvent,
+    event: &metadatapb::MetadataApplyWatchEvent,
 ) -> Option<(u64, u64)> {
     let event_cursor = (event.term, event.index);
     match current {
@@ -317,7 +316,7 @@ fn advance_apply_watch_cursor(
 }
 
 fn apply_watch_event_at_or_before(
-    event: &kvpb::ApplyWatchEvent,
+    event: &metadatapb::MetadataApplyWatchEvent,
     cursor: Option<(u64, u64)>,
 ) -> bool {
     let Some(cursor) = cursor else {

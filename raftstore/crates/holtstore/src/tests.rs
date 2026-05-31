@@ -5,6 +5,7 @@ use nokv_mvcc as mvcc;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 fn assert_abort_contains(error: Option<kvpb::KeyError>, needle: &str) {
     let err = error.expect("expected key error");
@@ -35,7 +36,7 @@ fn stores_data_tree_values() {
 #[test]
 fn watch_apply_events_survive_reopen_and_replay_after_cursor() {
     let dir = tempfile::tempdir().unwrap();
-    let event1 = kvpb::ApplyWatchEvent {
+    let event1 = metadatapb::MetadataApplyWatchEvent {
         region_id: 7,
         term: 2,
         index: 10,
@@ -43,7 +44,7 @@ fn watch_apply_events_survive_reopen_and_replay_after_cursor() {
         keys: vec![b"artifact/a".to_vec()],
         ..Default::default()
     };
-    let event2 = kvpb::ApplyWatchEvent {
+    let event2 = metadatapb::MetadataApplyWatchEvent {
         region_id: 7,
         term: 2,
         index: 11,

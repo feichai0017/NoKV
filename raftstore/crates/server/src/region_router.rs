@@ -480,7 +480,6 @@ mod tests {
     use crate::{RaftRuntimeStatus, RegionAdmission};
     use nokv_mvcc::MvccStore;
     use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdmin;
-    use nokv_proto::nokv::kv::v1 as kvpb;
     use nokv_proto::nokv::meta::v1 as metapb;
     use nokv_proto::nokv::metadata::v1::metadata_plane_server::MetadataPlane;
     use nokv_raftnode::{ApplyStatusProvider, BasicNode};
@@ -556,7 +555,9 @@ mod tests {
     }
 
     impl ApplyWatchProvider for FixedRuntimeEngine {
-        fn subscribe_apply(&self) -> tokio::sync::broadcast::Receiver<kvpb::ApplyWatchEvent> {
+        fn subscribe_apply(
+            &self,
+        ) -> tokio::sync::broadcast::Receiver<metadatapb::MetadataApplyWatchEvent> {
             self.inner.subscribe_apply()
         }
 

@@ -2,7 +2,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nokv_mvcc::{MetadataEngine, MvccStore};
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use tokio::sync::broadcast;
@@ -79,7 +78,10 @@ pub trait RegionSnapshotEngine: RegionApplyEngine {
 pub trait RegionMetadataSink: Clone + Send + Sync + 'static {
     fn save_apply_status(&self, status: &ApplyStatus) -> nokv_mvcc::Result<()>;
 
-    fn save_apply_watch_event(&self, _event: &kvpb::ApplyWatchEvent) -> nokv_mvcc::Result<()> {
+    fn save_apply_watch_event(
+        &self,
+        _event: &metadatapb::MetadataApplyWatchEvent,
+    ) -> nokv_mvcc::Result<()> {
         Ok(())
     }
 
@@ -115,7 +117,7 @@ struct AppliedMetadataInner<E> {
     topology_descriptors: Mutex<Vec<metapb::RegionDescriptor>>,
     topology_catalog: Mutex<Option<Arc<dyn RegionDescriptorCatalog>>>,
     traffic: RegionTrafficStats,
-    watch: broadcast::Sender<kvpb::ApplyWatchEvent>,
+    watch: broadcast::Sender<metadatapb::MetadataApplyWatchEvent>,
     history: Mutex<ApplyHistory>,
 }
 
@@ -331,7 +333,7 @@ impl<E> AppliedMetadataEngine<E> {
         }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
+    pub fn subscribe(&self) -> broadcast::Receiver<metadatapb::MetadataApplyWatchEvent> {
         self.inner.watch.subscribe()
     }
 
@@ -399,7 +401,7 @@ impl<E> ApplyWatchProvider for AppliedMetadataEngine<E>
 where
     E: Clone + Send + Sync + 'static,
 {
-    fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
+    fn subscribe_apply(&self) -> broadcast::Receiver<metadatapb::MetadataApplyWatchEvent> {
         self.subscribe()
     }
 
@@ -416,7 +418,7 @@ where
     E: Clone + Send + Sync + 'static,
     S: RegionMetadataSink,
 {
-    fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
+    fn subscribe_apply(&self) -> broadcast::Receiver<metadatapb::MetadataApplyWatchEvent> {
         self.engine.subscribe()
     }
 
@@ -549,7 +551,7 @@ where
         &self,
         index: u64,
         term: u64,
-        source: kvpb::ApplyWatchEventSource,
+        source: metadatapb::MetadataApplyWatchEventSource,
         commit_version: u64,
         keys: Vec<Vec<u8>>,
         atomic: bool,
@@ -558,7 +560,7 @@ where
             return;
         }
         self.inner.traffic.record_apply(&keys, atomic);
-        let event = kvpb::ApplyWatchEvent {
+        let event = metadatapb::MetadataApplyWatchEvent {
             region_id: self.inner.region_id,
             term,
             index,

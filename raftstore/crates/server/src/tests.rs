@@ -9,7 +9,6 @@ use nokv_holtstore::HoltMvccStore;
 use nokv_mvcc::{MetadataEngine, MvccStore};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_raftnode::{
@@ -301,7 +300,9 @@ impl ApplyStatusProvider for FixedRuntimeEngine {
 }
 
 impl ApplyWatchProvider for FixedRuntimeEngine {
-    fn subscribe_apply(&self) -> tokio::sync::broadcast::Receiver<kvpb::ApplyWatchEvent> {
+    fn subscribe_apply(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<metadatapb::MetadataApplyWatchEvent> {
         self.inner.subscribe_apply()
     }
 
@@ -405,7 +406,9 @@ impl ApplyStatusProvider for MetadataOnlyEngine {
 }
 
 impl ApplyWatchProvider for MetadataOnlyEngine {
-    fn subscribe_apply(&self) -> tokio::sync::broadcast::Receiver<kvpb::ApplyWatchEvent> {
+    fn subscribe_apply(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<metadatapb::MetadataApplyWatchEvent> {
         self.inner.subscribe_apply()
     }
 
@@ -1316,7 +1319,7 @@ fn apply_watch_chunks_large_key_sets() {
 #[test]
 fn holt_region_metadata_sink_replays_watch_history_after_reopen() {
     let dir = tempfile::tempdir().unwrap();
-    let event = kvpb::ApplyWatchEvent {
+    let event = metadatapb::MetadataApplyWatchEvent {
         region_id: 7,
         term: 2,
         index: 10,

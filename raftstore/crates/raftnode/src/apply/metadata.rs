@@ -1,5 +1,4 @@
 use nokv_mvcc::MetadataEngine;
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 use crate::metadata::metadata_command_watch_keys;
@@ -59,7 +58,7 @@ where
                 self.publish_apply(
                     index,
                     term,
-                    kvpb::ApplyWatchEventSource::Commit,
+                    metadatapb::MetadataApplyWatchEventSource::Commit,
                     commit_version,
                     watch_keys,
                     true,

@@ -1,6 +1,6 @@
 use nokv_holtstore::{HoltMvccStore, RegionApplyState, DEFAULT_WATCH_APPLY_REPLAY_LIMIT};
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_raftnode::{ApplyWatchReplay, ApplyWatchReplayRequest, RegionMetadataSink};
 use tonic::Status;
 
@@ -30,7 +30,10 @@ impl RegionMetadataSink for HoltRegionMetadataSink {
             .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
     }
 
-    fn save_apply_watch_event(&self, event: &kvpb::ApplyWatchEvent) -> nokv_mvcc::Result<()> {
+    fn save_apply_watch_event(
+        &self,
+        event: &metadatapb::MetadataApplyWatchEvent,
+    ) -> nokv_mvcc::Result<()> {
         self.store
             .put_watch_apply_event(event)
             .and_then(|_| self.store.checkpoint())
