@@ -492,6 +492,35 @@ impl<E> AppliedKvEngine<E> {
         Ok(())
     }
 
+    fn take_topology_descriptor(
+        &self,
+        region_id: RegionId,
+    ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+        let mut descriptors = self.inner.topology_descriptors.lock().map_err(|_| {
+            nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
+        })?;
+        let Some(index) = descriptors
+            .iter()
+            .position(|descriptor| descriptor.region_id == region_id)
+        else {
+            return Ok(None);
+        };
+        Ok(Some(descriptors.remove(index)))
+    }
+
+    fn topology_descriptor(
+        &self,
+        region_id: RegionId,
+    ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+        let descriptors = self.inner.topology_descriptors.lock().map_err(|_| {
+            nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
+        })?;
+        Ok(descriptors
+            .iter()
+            .find(|descriptor| descriptor.region_id == region_id)
+            .cloned())
+    }
+
     fn topology_descriptors(&self) -> nokv_mvcc::Result<Vec<metapb::RegionDescriptor>> {
         self.inner
             .topology_descriptors
@@ -724,9 +753,12 @@ where
                     .ok_or_else(|| invalid_raft_command("split admin payload is required"))?;
                 self.apply_split_command_at(term, index, split)
             }
-            raftpb::admin_command::Type::Merge => Err(nokv_mvcc::Error::Backend(
-                "merge admin command apply is not implemented".to_owned(),
-            )),
+            raftpb::admin_command::Type::Merge => {
+                let merge = command
+                    .merge
+                    .ok_or_else(|| invalid_raft_command("merge admin payload is required"))?;
+                self.apply_merge_command_at(term, index, merge)
+            }
             raftpb::admin_command::Type::Unknown => {
                 Err(invalid_raft_command("unknown admin command type"))
             }
@@ -799,6 +831,47 @@ where
             push_split_lineage_once(&mut child, parent.region_id, parent_epoch, &parent_hash);
         }
         self.record_topology_descriptor(child)?;
+        self.apply_region_descriptor_at(term, index, descriptor)
+    }
+
+    fn apply_merge_command_at(
+        &self,
+        term: u64,
+        index: u64,
+        merge: raftpb::MergeCommand,
+    ) -> nokv_mvcc::Result<()> {
+        if merge.target_region_id != self.inner.region_id {
+            return Err(invalid_raft_command(
+                "merge target region does not match apply region",
+            ));
+        }
+        if merge.target_region_id == 0 || merge.source_region_id == 0 {
+            return Err(invalid_raft_command(
+                "merge target and source region ids are required",
+            ));
+        }
+        if merge.target_region_id == merge.source_region_id {
+            return Err(invalid_raft_command(
+                "merge source region must differ from target region",
+            ));
+        }
+
+        let target = self.region_descriptor()?.ok_or_else(|| {
+            invalid_raft_command("merge target descriptor must be installed before apply")
+        })?;
+        if merge_source_already_absorbed(&target, merge.source_region_id) {
+            let _ = self.take_topology_descriptor(merge.source_region_id)?;
+            self.record_applied_status(term, index);
+            return Ok(());
+        }
+
+        let source = self
+            .topology_descriptor(merge.source_region_id)?
+            .ok_or_else(|| {
+                invalid_raft_command("merge source descriptor must be available before apply")
+            })?;
+        let descriptor = build_merge_descriptor_for_apply(&target, &source)?;
+        let _ = self.take_topology_descriptor(merge.source_region_id)?;
         self.apply_region_descriptor_at(term, index, descriptor)
     }
 
@@ -1267,6 +1340,110 @@ fn push_split_lineage_once(
         hash: parent_hash.to_vec(),
         kind,
     });
+}
+
+fn build_merge_descriptor_for_apply(
+    target: &metapb::RegionDescriptor,
+    source: &metapb::RegionDescriptor,
+) -> nokv_mvcc::Result<metapb::RegionDescriptor> {
+    if target.region_id == 0 || source.region_id == 0 {
+        return Err(invalid_raft_command(
+            "merge target and source region ids are required",
+        ));
+    }
+    if target.end_key != source.start_key {
+        return Err(invalid_raft_command(
+            "merge source must be the target's right sibling",
+        ));
+    }
+    ensure_merge_store_coverage_for_apply(target, source)?;
+    let source_epoch = source
+        .epoch
+        .clone()
+        .ok_or_else(|| invalid_raft_command("merge source epoch is required"))?;
+    let target_epoch = target
+        .epoch
+        .clone()
+        .ok_or_else(|| invalid_raft_command("merge target epoch is required"))?;
+
+    let mut descriptor = target.clone();
+    descriptor.end_key = source.end_key.clone();
+    let epoch = descriptor.epoch.get_or_insert(target_epoch);
+    epoch.version = epoch.version.saturating_add(1);
+    descriptor.hash.clear();
+    push_merge_lineage_once(
+        &mut descriptor,
+        source.region_id,
+        source_epoch,
+        &source.hash,
+    );
+    Ok(descriptor)
+}
+
+fn push_merge_lineage_once(
+    descriptor: &mut metapb::RegionDescriptor,
+    source_region_id: RegionId,
+    source_epoch: metapb::RegionEpoch,
+    source_hash: &[u8],
+) {
+    let kind = metapb::DescriptorLineageKind::MergeSource as i32;
+    if descriptor
+        .lineage
+        .iter()
+        .any(|lineage| lineage.region_id == source_region_id && lineage.kind == kind)
+    {
+        return;
+    }
+    descriptor.lineage.push(metapb::DescriptorLineageRef {
+        region_id: source_region_id,
+        epoch: Some(source_epoch),
+        hash: source_hash.to_vec(),
+        kind,
+    });
+}
+
+fn merge_source_already_absorbed(
+    target: &metapb::RegionDescriptor,
+    source_region_id: RegionId,
+) -> bool {
+    target.lineage.iter().any(|lineage| {
+        lineage.region_id == source_region_id
+            && lineage.kind == metapb::DescriptorLineageKind::MergeSource as i32
+    })
+}
+
+fn ensure_merge_store_coverage_for_apply(
+    target: &metapb::RegionDescriptor,
+    source: &metapb::RegionDescriptor,
+) -> nokv_mvcc::Result<()> {
+    let target_stores = region_peer_store_ids_for_apply(target)?;
+    let source_stores = region_peer_store_ids_for_apply(source)?;
+    if target_stores == source_stores {
+        return Ok(());
+    }
+    Err(invalid_raft_command(
+        "merge target and source must cover the same store set",
+    ))
+}
+
+fn region_peer_store_ids_for_apply(
+    descriptor: &metapb::RegionDescriptor,
+) -> nokv_mvcc::Result<BTreeSet<u64>> {
+    let mut stores = BTreeSet::new();
+    for peer in &descriptor.peers {
+        if peer.store_id == 0 || peer.peer_id == 0 {
+            return Err(invalid_raft_command("merge descriptor has an invalid peer"));
+        }
+        if !stores.insert(peer.store_id) {
+            return Err(invalid_raft_command(
+                "merge descriptor has duplicate peer stores",
+            ));
+        }
+    }
+    if stores.is_empty() {
+        return Err(invalid_raft_command("merge descriptor has no peers"));
+    }
+    Ok(stores)
 }
 
 fn encode_raft_response(response: &raftpb::RaftCmdResponse) -> nokv_mvcc::Result<Vec<u8>> {
@@ -3357,6 +3534,351 @@ mod tests {
         assert_eq!(saved[1].region_id, 8);
         assert_eq!(saved[1].start_key, b"m");
         assert_eq!(saved[1].end_key, b"z");
+    }
+
+    #[test]
+    fn applied_engine_applies_merge_admin_command_to_target_descriptor() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        engine
+            .set_region_descriptor(metapb::RegionDescriptor {
+                region_id: 7,
+                start_key: b"a".to_vec(),
+                end_key: b"m".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 3,
+                    conf_version: 2,
+                }),
+                peers: vec![
+                    metapb::RegionPeer {
+                        store_id: 1,
+                        peer_id: 11,
+                    },
+                    metapb::RegionPeer {
+                        store_id: 2,
+                        peer_id: 12,
+                    },
+                ],
+                ..Default::default()
+            })
+            .unwrap();
+        engine
+            .record_topology_descriptor(metapb::RegionDescriptor {
+                region_id: 8,
+                start_key: b"m".to_vec(),
+                end_key: b"z".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 4,
+                    conf_version: 2,
+                }),
+                peers: vec![
+                    metapb::RegionPeer {
+                        store_id: 1,
+                        peer_id: 21,
+                    },
+                    metapb::RegionPeer {
+                        store_id: 2,
+                        peer_id: 22,
+                    },
+                ],
+                hash: b"source-hash".to_vec(),
+                ..Default::default()
+            })
+            .unwrap();
+        let command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Merge as i32,
+            merge: Some(raftpb::MergeCommand {
+                target_region_id: 7,
+                source_region_id: 8,
+            }),
+            ..Default::default()
+        };
+
+        let applied = engine
+            .apply_openraft_entries([OpenRaftEntry {
+                log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+                payload: openraft::EntryPayload::Normal(
+                    Proposal::from_admin_command(7, &command).unwrap(),
+                ),
+            }])
+            .unwrap();
+
+        let descriptor = engine.region_descriptor().unwrap().unwrap();
+        assert_eq!(descriptor.region_id, 7);
+        assert_eq!(descriptor.start_key, b"a");
+        assert_eq!(descriptor.end_key, b"z");
+        assert_eq!(descriptor.epoch.unwrap().version, 4);
+        assert!(descriptor.hash.is_empty());
+        assert_eq!(descriptor.lineage.len(), 1);
+        assert_eq!(descriptor.lineage[0].region_id, 8);
+        assert_eq!(descriptor.lineage[0].hash, b"source-hash");
+        assert_eq!(
+            descriptor.lineage[0].kind,
+            metapb::DescriptorLineageKind::MergeSource as i32
+        );
+        assert!(engine.topology_descriptors().unwrap().is_empty());
+        assert_eq!(
+            engine.status(),
+            ApplyStatus {
+                region_id: 7,
+                term: 5,
+                applied_index: 42,
+            }
+        );
+        assert_eq!(applied.len(), 1);
+        assert!(applied[0].payload.is_empty());
+    }
+
+    #[test]
+    fn applied_engine_replays_merge_admin_command_after_source_retired() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        engine
+            .set_region_descriptor(metapb::RegionDescriptor {
+                region_id: 7,
+                start_key: b"a".to_vec(),
+                end_key: b"z".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 4,
+                    conf_version: 2,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 11,
+                }],
+                lineage: vec![metapb::DescriptorLineageRef {
+                    region_id: 8,
+                    epoch: Some(metapb::RegionEpoch {
+                        version: 4,
+                        conf_version: 2,
+                    }),
+                    kind: metapb::DescriptorLineageKind::MergeSource as i32,
+                    ..Default::default()
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Merge as i32,
+            merge: Some(raftpb::MergeCommand {
+                target_region_id: 7,
+                source_region_id: 8,
+            }),
+            ..Default::default()
+        };
+
+        engine
+            .apply_openraft_entries([OpenRaftEntry {
+                log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(6, 1), 43),
+                payload: openraft::EntryPayload::Normal(
+                    Proposal::from_admin_command(7, &command).unwrap(),
+                ),
+            }])
+            .unwrap();
+
+        let descriptor = engine.region_descriptor().unwrap().unwrap();
+        assert_eq!(descriptor.lineage.len(), 1);
+        assert_eq!(
+            engine.status(),
+            ApplyStatus {
+                region_id: 7,
+                term: 6,
+                applied_index: 43,
+            }
+        );
+    }
+
+    #[test]
+    fn applied_engine_rejects_merge_admin_command_without_source_descriptor() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        engine
+            .set_region_descriptor(metapb::RegionDescriptor {
+                region_id: 7,
+                start_key: b"a".to_vec(),
+                end_key: b"m".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 3,
+                    conf_version: 1,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 11,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Merge as i32,
+            merge: Some(raftpb::MergeCommand {
+                target_region_id: 7,
+                source_region_id: 8,
+            }),
+            ..Default::default()
+        };
+
+        let err = engine
+            .apply_openraft_entries([OpenRaftEntry {
+                log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+                payload: openraft::EntryPayload::Normal(
+                    Proposal::from_admin_command(7, &command).unwrap(),
+                ),
+            }])
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("merge source descriptor must be available before apply"));
+        assert_eq!(
+            engine.status(),
+            ApplyStatus {
+                region_id: 7,
+                term: 1,
+                applied_index: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn applied_engine_keeps_source_descriptor_when_merge_validation_fails() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        engine
+            .set_region_descriptor(metapb::RegionDescriptor {
+                region_id: 7,
+                start_key: b"a".to_vec(),
+                end_key: b"m".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 3,
+                    conf_version: 1,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 11,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        engine
+            .record_topology_descriptor(metapb::RegionDescriptor {
+                region_id: 8,
+                start_key: b"n".to_vec(),
+                end_key: b"z".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 4,
+                    conf_version: 1,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 21,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Merge as i32,
+            merge: Some(raftpb::MergeCommand {
+                target_region_id: 7,
+                source_region_id: 8,
+            }),
+            ..Default::default()
+        };
+
+        let err = engine
+            .apply_openraft_entries([OpenRaftEntry {
+                log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+                payload: openraft::EntryPayload::Normal(
+                    Proposal::from_admin_command(7, &command).unwrap(),
+                ),
+            }])
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("merge source must be the target's right sibling"));
+        let topology = engine.topology_descriptors().unwrap();
+        assert_eq!(topology.len(), 1);
+        assert_eq!(topology[0].region_id, 8);
+        assert_eq!(
+            engine.status(),
+            ApplyStatus {
+                region_id: 7,
+                term: 1,
+                applied_index: 0,
+            }
+        );
+    }
+
+    #[test]
+    fn persistent_applied_engine_saves_merged_target_without_retired_source() {
+        let sink = RecordingRegionMetadataSink::default();
+        let descriptors = sink.descriptors.clone();
+        let statuses = sink.statuses.clone();
+        let engine =
+            PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);
+        engine
+            .inner()
+            .set_region_descriptor(metapb::RegionDescriptor {
+                region_id: 7,
+                start_key: b"a".to_vec(),
+                end_key: b"m".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 3,
+                    conf_version: 2,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 11,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        engine
+            .inner()
+            .record_topology_descriptor(metapb::RegionDescriptor {
+                region_id: 8,
+                start_key: b"m".to_vec(),
+                end_key: b"z".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 4,
+                    conf_version: 2,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 21,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Merge as i32,
+            merge: Some(raftpb::MergeCommand {
+                target_region_id: 7,
+                source_region_id: 8,
+            }),
+            ..Default::default()
+        };
+
+        engine
+            .apply_openraft_entries([OpenRaftEntry {
+                log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+                payload: openraft::EntryPayload::Normal(
+                    Proposal::from_admin_command(7, &command).unwrap(),
+                ),
+            }])
+            .unwrap();
+
+        let saved = descriptors.lock().unwrap().clone();
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].region_id, 7);
+        assert_eq!(saved[0].start_key, b"a");
+        assert_eq!(saved[0].end_key, b"z");
+        assert_eq!(saved[0].lineage.len(), 1);
+        assert_eq!(saved[0].lineage[0].region_id, 8);
+        assert_eq!(
+            statuses.lock().unwrap().as_slice(),
+            &[ApplyStatus {
+                region_id: 7,
+                term: 5,
+                applied_index: 42,
+            }]
+        );
     }
 
     #[tokio::test]
