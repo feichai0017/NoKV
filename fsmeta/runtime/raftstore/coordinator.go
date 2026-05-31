@@ -219,8 +219,8 @@ func servingPeerCandidates(desc *metapb.RegionDescriptor, leader, hint *metapb.R
 		}
 		out = append(out, cloneRegionPeer(peer))
 	}
-	add(leader)
 	add(hint)
+	add(leader)
 	for _, peer := range desc.GetPeers() {
 		add(peer)
 	}
