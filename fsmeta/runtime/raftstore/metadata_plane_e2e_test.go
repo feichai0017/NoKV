@@ -21,10 +21,11 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 
 	"github.com/feichai0017/NoKV/coordinator/catalog"
-	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/idalloc"
+	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
 	"github.com/feichai0017/NoKV/fsmeta/model"
+	"github.com/feichai0017/NoKV/fsmeta/observe"
 	metaregion "github.com/feichai0017/NoKV/meta/region"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	"github.com/feichai0017/NoKV/meta/topology"
@@ -104,6 +105,14 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 	require.Len(t, entries, 1)
 	require.Equal(t, "artifact.json", entries[0].Dentry.Name)
 
+	watch, err := runtime.Watcher.Subscribe(ctx, observe.WatchRequest{
+		Mount:              "vol",
+		RootInode:          model.RootInode,
+		BackPressureWindow: 16,
+	})
+	require.NoError(t, err)
+	defer watch.Close()
+
 	removed, err := runtime.Executor.Remove(ctx, model.RemoveRequest{
 		Mount:  "vol",
 		Parent: model.RootInode,
@@ -113,6 +122,8 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 	require.True(t, removed.InodeDeleted)
 	require.Equal(t, created.Dentry.Inode, removed.RemovedDentry.Inode)
 	require.Equal(t, created.Inode.Inode, removed.OldInode.Inode)
+	removeEvent := requireWatchEvent(t, watch)
+	require.Equal(t, observe.WatchEventSourceCommit, removeEvent.Source)
 
 	_, err = runtime.Executor.LookupPlus(ctx, model.LookupRequest{
 		Mount:  "vol",
@@ -120,6 +131,41 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 		Name:   "artifact.json",
 	})
 	require.ErrorIs(t, err, model.ErrNotFound)
+
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "artifact2.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 7,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err)
+
+	resume, err := runtime.Watcher.Subscribe(ctx, observe.WatchRequest{
+		Mount:              "vol",
+		RootInode:          model.RootInode,
+		ResumeCursor:       removeEvent.Cursor,
+		BackPressureWindow: 16,
+	})
+	require.NoError(t, err)
+	defer resume.Close()
+	replayed := requireWatchEvent(t, resume)
+	require.Equal(t, observe.WatchEventSourceCommit, replayed.Source)
+	require.Greater(t, replayed.Cursor.Index, removeEvent.Cursor.Index)
+}
+
+func requireWatchEvent(t *testing.T, sub observe.WatchSubscription) observe.WatchEvent {
+	t.Helper()
+	select {
+	case event := <-sub.Events():
+		return event
+	case <-time.After(10 * time.Second):
+		t.Fatal("timed out waiting for fsmeta watch event")
+	}
+	return observe.WatchEvent{}
 }
 
 func repoRootFromThisFile(t *testing.T) string {

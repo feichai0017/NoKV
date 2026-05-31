@@ -1,4 +1,4 @@
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, VecDeque};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -12,6 +12,8 @@ use prost::Message;
 use tokio::sync::broadcast;
 
 use crate::{Error, OpenRaftEntry, ProposalPayloadKind, RegionId};
+
+const DEFAULT_APPLY_HISTORY_LIMIT: usize = 4096;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AppliedProposal {
@@ -47,6 +49,23 @@ pub trait RegionTrafficProvider: Clone + Send + Sync + 'static {
 
 pub trait ApplyWatchProvider: Clone + Send + Sync + 'static {
     fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent>;
+
+    fn replay_apply(&self, request: ApplyWatchReplayRequest)
+        -> nokv_mvcc::Result<ApplyWatchReplay>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ApplyWatchReplayRequest {
+    pub region_id: u64,
+    pub term: u64,
+    pub index: u64,
+    pub key_prefix: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct ApplyWatchReplay {
+    pub events: Vec<kvpb::ApplyWatchEvent>,
+    pub expired: bool,
 }
 
 pub trait RaftCommandExecutor: Clone + Send + Sync + 'static {
@@ -81,6 +100,17 @@ pub trait RegionSnapshotEngine: RegionApplyEngine {
 pub trait RegionMetadataSink: Clone + Send + Sync + 'static {
     fn save_apply_status(&self, status: &ApplyStatus) -> nokv_mvcc::Result<()>;
 
+    fn save_apply_watch_event(&self, _event: &kvpb::ApplyWatchEvent) -> nokv_mvcc::Result<()> {
+        Ok(())
+    }
+
+    fn replay_apply_watch(
+        &self,
+        _request: &ApplyWatchReplayRequest,
+    ) -> nokv_mvcc::Result<Option<ApplyWatchReplay>> {
+        Ok(None)
+    }
+
     fn save_region_descriptor(
         &self,
         _descriptor: &metapb::RegionDescriptor,
@@ -107,6 +137,7 @@ struct AppliedKvInner<E> {
     topology_catalog: Mutex<Option<Arc<dyn RegionDescriptorCatalog>>>,
     traffic: RegionTrafficStats,
     watch: broadcast::Sender<kvpb::ApplyWatchEvent>,
+    history: Mutex<ApplyHistory>,
 }
 
 #[derive(Debug)]
@@ -129,6 +160,72 @@ struct RegionTrafficInner {
     write_ops: u64,
     write_bytes: u64,
     atomic_ops: u64,
+}
+
+#[derive(Debug)]
+struct ApplyHistory {
+    limit: usize,
+    events: VecDeque<kvpb::ApplyWatchEvent>,
+    truncated: bool,
+}
+
+impl Default for ApplyHistory {
+    fn default() -> Self {
+        Self {
+            limit: DEFAULT_APPLY_HISTORY_LIMIT,
+            events: VecDeque::with_capacity(DEFAULT_APPLY_HISTORY_LIMIT),
+            truncated: false,
+        }
+    }
+}
+
+impl ApplyHistory {
+    fn remember(&mut self, event: kvpb::ApplyWatchEvent) {
+        if self.limit == 0 {
+            return;
+        }
+        while self.events.len() >= self.limit {
+            self.events.pop_front();
+            self.truncated = true;
+        }
+        self.events.push_back(event);
+    }
+
+    fn replay(&self, request: &ApplyWatchReplayRequest, applied_index: u64) -> ApplyWatchReplay {
+        if request.region_id == 0 {
+            return ApplyWatchReplay::default();
+        }
+        if self.events.is_empty() {
+            return ApplyWatchReplay {
+                events: Vec::new(),
+                expired: applied_index > request.index,
+            };
+        }
+        let Some(first) = self.events.front() else {
+            return ApplyWatchReplay::default();
+        };
+        if self.truncated
+            && (request.term != 0 || request.index != 0)
+            && apply_event_after_cursor(first, request.term, request.index)
+        {
+            return ApplyWatchReplay {
+                events: Vec::new(),
+                expired: true,
+            };
+        }
+        let events = self
+            .events
+            .iter()
+            .filter(|event| event.region_id == request.region_id)
+            .filter(|event| apply_event_after_cursor(event, request.term, request.index))
+            .filter(|event| apply_event_matches_prefix(event, &request.key_prefix))
+            .cloned()
+            .collect();
+        ApplyWatchReplay {
+            events,
+            expired: false,
+        }
+    }
 }
 
 impl Default for RegionTrafficStats {
@@ -245,6 +342,7 @@ impl<E> AppliedKvEngine<E> {
                 topology_catalog: Mutex::new(None),
                 traffic: RegionTrafficStats::default(),
                 watch: broadcast::channel(1024).0,
+                history: Mutex::new(ApplyHistory::default()),
             }),
         }
     }
@@ -412,6 +510,23 @@ impl<E> AppliedKvEngine<E> {
         self.inner.watch.subscribe()
     }
 
+    pub fn replay_apply(
+        &self,
+        request: ApplyWatchReplayRequest,
+    ) -> nokv_mvcc::Result<ApplyWatchReplay> {
+        if request.region_id != 0 && request.region_id != self.inner.region_id {
+            return Ok(ApplyWatchReplay {
+                events: Vec::new(),
+                expired: true,
+            });
+        }
+        let history =
+            self.inner.history.lock().map_err(|_| {
+                nokv_mvcc::Error::Backend("apply history mutex poisoned".to_owned())
+            })?;
+        Ok(history.replay(&request, self.inner.applied_index.load(Ordering::Acquire)))
+    }
+
     pub fn traffic_snapshot(&self) -> RegionTrafficSnapshot {
         self.inner.traffic.snapshot()
     }
@@ -462,6 +577,13 @@ where
     fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
         self.subscribe()
     }
+
+    fn replay_apply(
+        &self,
+        request: ApplyWatchReplayRequest,
+    ) -> nokv_mvcc::Result<ApplyWatchReplay> {
+        self.replay_apply(request)
+    }
 }
 
 impl<E, S> ApplyWatchProvider for PersistentAppliedKvEngine<E, S>
@@ -471,6 +593,20 @@ where
 {
     fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
         self.engine.subscribe()
+    }
+
+    fn replay_apply(
+        &self,
+        request: ApplyWatchReplayRequest,
+    ) -> nokv_mvcc::Result<ApplyWatchReplay> {
+        let replay = self.engine.replay_apply(request.clone())?;
+        if !replay.expired {
+            return Ok(replay);
+        }
+        self.sink
+            .replay_apply_watch(&request)?
+            .map(Ok)
+            .unwrap_or(Ok(replay))
     }
 }
 
@@ -1027,14 +1163,18 @@ where
             return;
         }
         self.inner.traffic.record_apply(&keys, atomic);
-        let _ = self.inner.watch.send(kvpb::ApplyWatchEvent {
+        let event = kvpb::ApplyWatchEvent {
             region_id: self.inner.region_id,
             term,
             index,
             source: source as i32,
             commit_version,
             keys,
-        });
+        };
+        if let Ok(mut history) = self.inner.history.lock() {
+            history.remember(event.clone());
+        }
+        let _ = self.inner.watch.send(event);
     }
 }
 
@@ -1122,6 +1262,15 @@ where
     fn persist_if_advanced(&self, before: u64) -> nokv_mvcc::Result<()> {
         let status = self.engine.status();
         if status.applied_index != before {
+            let replay = self.engine.replay_apply(ApplyWatchReplayRequest {
+                region_id: status.region_id,
+                term: 0,
+                index: before,
+                key_prefix: Vec::new(),
+            })?;
+            for event in &replay.events {
+                self.sink.save_apply_watch_event(event)?;
+            }
             if let Some(descriptor) = self.engine.region_descriptor()? {
                 self.sink.save_region_descriptor(&descriptor)?;
             }
@@ -1399,6 +1548,20 @@ fn metadata_command_watch_keys(command: &metadatapb::MetadataCommand) -> Vec<Vec
         .iter()
         .map(|mutation| mutation.key.clone())
         .collect()
+}
+
+fn apply_event_matches_prefix(event: &kvpb::ApplyWatchEvent, prefix: &[u8]) -> bool {
+    if prefix.is_empty() {
+        return true;
+    }
+    event.keys.iter().any(|key| key.starts_with(prefix))
+}
+
+fn apply_event_after_cursor(event: &kvpb::ApplyWatchEvent, term: u64, index: u64) -> bool {
+    if term == 0 {
+        return event.index > index;
+    }
+    event.term > term || (event.term == term && event.index > index)
 }
 
 fn metadata_key_error_from_kv(error: kvpb::KeyError) -> metadatapb::MetadataKeyError {

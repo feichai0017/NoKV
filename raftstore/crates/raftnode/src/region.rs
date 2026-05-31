@@ -18,9 +18,10 @@ use tokio::sync::broadcast;
 
 use crate::{
     decode_metadata_response, decode_raft_response, AppliedKvEngine, AppliedProposal, ApplyStatus,
-    ApplyStatusProvider, ApplyWatchProvider, BasicNode, Error, MetadataCommandExecutor, NodeId,
-    Proposal, RaftCommandExecutor, RaftStoreConfig, RegionId, RegionLogStorage,
-    RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider, RegionTrafficSnapshot,
+    ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode,
+    Error, MetadataCommandExecutor, NodeId, Proposal, RaftCommandExecutor, RaftStoreConfig,
+    RegionId, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
+    RegionTrafficSnapshot,
 };
 
 #[derive(Clone)]
@@ -367,6 +368,13 @@ where
 {
     fn subscribe_apply(&self) -> broadcast::Receiver<kvpb::ApplyWatchEvent> {
         self.apply_engine.subscribe_apply()
+    }
+
+    fn replay_apply(
+        &self,
+        request: ApplyWatchReplayRequest,
+    ) -> nokv_mvcc::Result<ApplyWatchReplay> {
+        self.apply_engine.replay_apply(request)
     }
 }
 

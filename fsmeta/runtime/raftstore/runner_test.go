@@ -295,18 +295,51 @@ func TestWatcherStreamsMetadataApplyEvents(t *testing.T) {
 	}
 }
 
-func TestWatcherRejectsResumeUntilApplyHistoryExists(t *testing.T) {
-	mounts, err := NewMountResolver(fakeRouteCoordinator())
+func TestWatcherSendsResumeCursorToMetadataPlane(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	seen := make(chan *metadatapb.MetadataWatchApplyRequest, 1)
+	metadatapb.RegisterMetadataPlaneServer(server, &fakeMetadataPlaneServer{
+		watchApply: func(req *metadatapb.MetadataWatchApplyRequest, stream grpc.ServerStreamingServer[metadatapb.MetadataWatchApplyResponse]) error {
+			seen <- req
+			return nil
+		},
+	})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.GracefulStop)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	coordinator := fakeRouteCoordinator()
+	provider, err := NewCoordinatorRouteProvider(coordinator, CoordinatorRouteProviderOptions{
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
 	require.NoError(t, err)
-	watcher, err := NewWatcher(StaticRouteProvider{
-		Context: &metadatapb.MetadataContext{RegionId: 7},
-		Client:  &fakeMetadataPlaneClient{},
-	}, mounts)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
+	mounts, err := NewMountResolver(coordinator)
 	require.NoError(t, err)
-	_, err = watcher.Subscribe(context.Background(), observe.WatchRequest{
+	watcher, err := NewWatcher(provider, mounts)
+	require.NoError(t, err)
+	sub, err := watcher.Subscribe(context.Background(), observe.WatchRequest{
+		Mount:        "vol",
+		RootInode:    model.RootInode,
 		ResumeCursor: observe.WatchCursor{RegionID: 7, Term: 1, Index: 10},
 	})
-	require.ErrorIs(t, err, model.ErrWatchCursorExpired)
+	require.NoError(t, err)
+	defer sub.Close()
+
+	select {
+	case req := <-seen:
+		require.Equal(t, uint64(7), req.GetResumeRegionId())
+		require.Equal(t, uint64(1), req.GetResumeTerm())
+		require.Equal(t, uint64(10), req.GetResumeIndex())
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for metadata apply watch request")
+	}
 }
 
 func TestSnapshotPublisherPublishesAndRetiresRootEvents(t *testing.T) {

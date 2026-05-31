@@ -12,6 +12,7 @@ mod snapshot;
 mod store;
 mod trees;
 mod types;
+mod watch_apply;
 
 pub use store::{HoltMvccStore, HoltStore};
 pub use trees::{
@@ -21,6 +22,7 @@ pub use types::{
     BlockedRootEvent, BlockedSchedulerOperation, Error, PendingRootEvent,
     PendingSchedulerOperation, RegionApplyState, Result,
 };
+pub use watch_apply::DEFAULT_WATCH_APPLY_REPLAY_LIMIT;
 
 #[cfg(test)]
 mod tests;

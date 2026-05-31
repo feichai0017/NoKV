@@ -51,6 +51,7 @@ pub(crate) const PENDING_ROOT_EVENT_PREFIX: &[u8] = b"pending-root-event/";
 pub(crate) const BLOCKED_ROOT_EVENT_PREFIX: &[u8] = b"blocked-root-event/";
 pub(crate) const PENDING_SCHEDULER_OPERATION_PREFIX: &[u8] = b"pending-scheduler-operation/";
 pub(crate) const BLOCKED_SCHEDULER_OPERATION_PREFIX: &[u8] = b"blocked-scheduler-operation/";
+pub(crate) const WATCH_APPLY_EVENT_PREFIX: &[u8] = b"event/";
 
 pub(crate) fn region_descriptor_key(region_id: u64) -> Vec<u8> {
     region_meta_key(REGION_DESCRIPTOR_PREFIX, region_id)
@@ -127,5 +128,28 @@ pub(crate) fn region_meta_key(prefix: &[u8], region_id: u64) -> Vec<u8> {
     let mut key = Vec::with_capacity(prefix.len() + 8);
     key.extend_from_slice(prefix);
     key.extend_from_slice(&region_id.to_be_bytes());
+    key
+}
+
+pub(crate) fn watch_apply_region_prefix(region_id: u64) -> Vec<u8> {
+    let mut key = Vec::with_capacity(WATCH_APPLY_EVENT_PREFIX.len() + 8);
+    key.extend_from_slice(WATCH_APPLY_EVENT_PREFIX);
+    key.extend_from_slice(&region_id.to_be_bytes());
+    key
+}
+
+pub(crate) fn watch_apply_event_key(
+    region_id: u64,
+    term: u64,
+    index: u64,
+    commit_version: u64,
+    encoded_event: &[u8],
+) -> Vec<u8> {
+    let mut key = watch_apply_region_prefix(region_id);
+    key.extend_from_slice(&term.to_be_bytes());
+    key.extend_from_slice(&index.to_be_bytes());
+    key.extend_from_slice(&commit_version.to_be_bytes());
+    key.extend_from_slice(&(encoded_event.len() as u32).to_be_bytes());
+    key.extend_from_slice(encoded_event);
     key
 }

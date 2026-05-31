@@ -166,6 +166,9 @@ enum MetadataApplyWatchEventSource {
 message MetadataWatchApplyRequest {
   bytes key_prefix = 1;
   uint32 buffer = 2;
+  uint64 resume_region_id = 3;
+  uint64 resume_term = 4;
+  uint64 resume_index = 5;
 }
 
 message MetadataApplyWatchEvent {

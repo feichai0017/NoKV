@@ -730,6 +730,13 @@ mod tests {
         fn subscribe_apply(&self) -> tokio::sync::broadcast::Receiver<kvpb::ApplyWatchEvent> {
             self.inner.subscribe_apply()
         }
+
+        fn replay_apply(
+            &self,
+            request: nokv_raftnode::ApplyWatchReplayRequest,
+        ) -> nokv_mvcc::Result<nokv_raftnode::ApplyWatchReplay> {
+            self.inner.replay_apply(request)
+        }
     }
 
     impl RaftRuntimeStatusProvider for FixedRuntimeEngine {

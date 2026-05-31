@@ -1486,11 +1486,14 @@ func (x *MetadataCommitResponse) GetRegionError() *error1.RegionError {
 }
 
 type MetadataWatchApplyRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	KeyPrefix     []byte                 `protobuf:"bytes,1,opt,name=key_prefix,json=keyPrefix,proto3" json:"key_prefix,omitempty"`
-	Buffer        uint32                 `protobuf:"varint,2,opt,name=buffer,proto3" json:"buffer,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state          protoimpl.MessageState `protogen:"open.v1"`
+	KeyPrefix      []byte                 `protobuf:"bytes,1,opt,name=key_prefix,json=keyPrefix,proto3" json:"key_prefix,omitempty"`
+	Buffer         uint32                 `protobuf:"varint,2,opt,name=buffer,proto3" json:"buffer,omitempty"`
+	ResumeRegionId uint64                 `protobuf:"varint,3,opt,name=resume_region_id,json=resumeRegionId,proto3" json:"resume_region_id,omitempty"`
+	ResumeTerm     uint64                 `protobuf:"varint,4,opt,name=resume_term,json=resumeTerm,proto3" json:"resume_term,omitempty"`
+	ResumeIndex    uint64                 `protobuf:"varint,5,opt,name=resume_index,json=resumeIndex,proto3" json:"resume_index,omitempty"`
+	unknownFields  protoimpl.UnknownFields
+	sizeCache      protoimpl.SizeCache
 }
 
 func (x *MetadataWatchApplyRequest) Reset() {
@@ -1533,6 +1536,27 @@ func (x *MetadataWatchApplyRequest) GetKeyPrefix() []byte {
 func (x *MetadataWatchApplyRequest) GetBuffer() uint32 {
 	if x != nil {
 		return x.Buffer
+	}
+	return 0
+}
+
+func (x *MetadataWatchApplyRequest) GetResumeRegionId() uint64 {
+	if x != nil {
+		return x.ResumeRegionId
+	}
+	return 0
+}
+
+func (x *MetadataWatchApplyRequest) GetResumeTerm() uint64 {
+	if x != nil {
+		return x.ResumeTerm
+	}
+	return 0
+}
+
+func (x *MetadataWatchApplyRequest) GetResumeIndex() uint64 {
+	if x != nil {
+		return x.ResumeIndex
 	}
 	return 0
 }
@@ -1781,11 +1805,15 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\x16MetadataCommitResponse\x12>\n" +
 	"\x06result\x18\x01 \x01(\v2&.nokv.metadata.v1.MetadataCommitResultR\x06result\x128\n" +
 	"\x05error\x18\x02 \x01(\v2\".nokv.metadata.v1.MetadataKeyErrorR\x05error\x12=\n" +
-	"\fregion_error\x18\x03 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError\"R\n" +
+	"\fregion_error\x18\x03 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError\"\xc0\x01\n" +
 	"\x19MetadataWatchApplyRequest\x12\x1d\n" +
 	"\n" +
 	"key_prefix\x18\x01 \x01(\fR\tkeyPrefix\x12\x16\n" +
-	"\x06buffer\x18\x02 \x01(\rR\x06buffer\"\xe4\x01\n" +
+	"\x06buffer\x18\x02 \x01(\rR\x06buffer\x12(\n" +
+	"\x10resume_region_id\x18\x03 \x01(\x04R\x0eresumeRegionId\x12\x1f\n" +
+	"\vresume_term\x18\x04 \x01(\x04R\n" +
+	"resumeTerm\x12!\n" +
+	"\fresume_index\x18\x05 \x01(\x04R\vresumeIndex\"\xe4\x01\n" +
 	"\x17MetadataApplyWatchEvent\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x12\n" +
 	"\x04term\x18\x02 \x01(\x04R\x04term\x12\x14\n" +

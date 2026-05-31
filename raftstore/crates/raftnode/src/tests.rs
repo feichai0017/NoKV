@@ -14,6 +14,7 @@ use std::sync::{Arc, Mutex};
 struct RecordingRegionMetadataSink {
     statuses: Arc<Mutex<Vec<ApplyStatus>>>,
     descriptors: Arc<Mutex<Vec<metapb::RegionDescriptor>>>,
+    events: Arc<Mutex<Vec<kvpb::ApplyWatchEvent>>>,
 }
 
 impl RegionMetadataSink for RecordingRegionMetadataSink {
@@ -27,6 +28,11 @@ impl RegionMetadataSink for RecordingRegionMetadataSink {
         descriptor: &metapb::RegionDescriptor,
     ) -> nokv_mvcc::Result<()> {
         self.descriptors.lock().unwrap().push(descriptor.clone());
+        Ok(())
+    }
+
+    fn save_apply_watch_event(&self, event: &kvpb::ApplyWatchEvent) -> nokv_mvcc::Result<()> {
+        self.events.lock().unwrap().push(event.clone());
         Ok(())
     }
 }
@@ -962,6 +968,43 @@ fn applied_kv_engine_publishes_watch_events_for_writes() {
 }
 
 #[test]
+fn applied_kv_engine_replays_watch_events_after_cursor() {
+    let engine = AppliedKvEngine::new(7, MvccStore::new());
+    for (key, commit_version) in [
+        (b"k/a".to_vec(), 2),
+        (b"k/b".to_vec(), 3),
+        (b"z".to_vec(), 4),
+    ] {
+        engine
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key,
+                    value: b"v".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                commit_version,
+                ..Default::default()
+            })
+            .unwrap();
+    }
+
+    let replay = engine
+        .replay_apply(ApplyWatchReplayRequest {
+            region_id: 7,
+            term: 1,
+            index: 1,
+            key_prefix: b"k/".to_vec(),
+        })
+        .unwrap();
+
+    assert!(!replay.expired);
+    assert_eq!(replay.events.len(), 1);
+    assert_eq!(replay.events[0].index, 2);
+    assert_eq!(replay.events[0].keys, vec![b"k/b".to_vec()]);
+}
+
+#[test]
 fn applied_kv_engine_suppresses_watch_events_for_failed_writes() {
     let engine = AppliedKvEngine::new(7, MvccStore::new());
     let mut watch = engine.subscribe();
@@ -1270,6 +1313,7 @@ fn apply_openraft_entry_uses_committed_log_status() {
 async fn persistent_applied_engine_saves_status_after_write_command() {
     let sink = RecordingRegionMetadataSink::default();
     let statuses = sink.statuses.clone();
+    let events = sink.events.clone();
     let engine = PersistentAppliedKvEngine::new(AppliedKvEngine::new(7, MvccStore::new()), sink);
 
     engine
@@ -1304,6 +1348,10 @@ async fn persistent_applied_engine_saves_status_after_write_command() {
             term: 1,
             applied_index: 1,
         }]
+    );
+    assert_eq!(
+        events.lock().unwrap().as_slice()[0].keys,
+        vec![b"k".to_vec()]
     );
 }
 

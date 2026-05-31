@@ -1,6 +1,7 @@
-use nokv_holtstore::{HoltMvccStore, RegionApplyState};
+use nokv_holtstore::{HoltMvccStore, RegionApplyState, DEFAULT_WATCH_APPLY_REPLAY_LIMIT};
+use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
-use nokv_raftnode::RegionMetadataSink;
+use nokv_raftnode::{ApplyWatchReplay, ApplyWatchReplayRequest, RegionMetadataSink};
 use tonic::Status;
 
 /// Persists OpenRaft region metadata into Holt metadata trees.
@@ -27,6 +28,43 @@ impl RegionMetadataSink for HoltRegionMetadataSink {
             })
             .and_then(|_| self.store.checkpoint())
             .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
+    }
+
+    fn save_apply_watch_event(&self, event: &kvpb::ApplyWatchEvent) -> nokv_mvcc::Result<()> {
+        self.store
+            .put_watch_apply_event(event)
+            .and_then(|_| self.store.checkpoint())
+            .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
+    }
+
+    fn replay_apply_watch(
+        &self,
+        request: &ApplyWatchReplayRequest,
+    ) -> nokv_mvcc::Result<Option<ApplyWatchReplay>> {
+        if request.region_id == 0 {
+            return Ok(Some(ApplyWatchReplay::default()));
+        }
+        let first = self
+            .store
+            .first_watch_apply_event(request.region_id)
+            .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+        if first.is_none() {
+            return Ok(None);
+        }
+        let events = self
+            .store
+            .watch_apply_events_after(
+                request.region_id,
+                request.term,
+                request.index,
+                &request.key_prefix,
+                DEFAULT_WATCH_APPLY_REPLAY_LIMIT,
+            )
+            .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+        Ok(Some(ApplyWatchReplay {
+            events,
+            expired: false,
+        }))
     }
 
     fn save_region_descriptor(

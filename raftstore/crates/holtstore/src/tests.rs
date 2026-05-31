@@ -33,6 +33,43 @@ fn stores_data_tree_values() {
 }
 
 #[test]
+fn watch_apply_events_survive_reopen_and_replay_after_cursor() {
+    let dir = tempfile::tempdir().unwrap();
+    let event1 = kvpb::ApplyWatchEvent {
+        region_id: 7,
+        term: 2,
+        index: 10,
+        commit_version: 100,
+        keys: vec![b"artifact/a".to_vec()],
+        ..Default::default()
+    };
+    let event2 = kvpb::ApplyWatchEvent {
+        region_id: 7,
+        term: 2,
+        index: 11,
+        commit_version: 101,
+        keys: vec![b"artifact/b".to_vec()],
+        ..Default::default()
+    };
+    {
+        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        store.put_watch_apply_event(&event1).unwrap();
+        store.put_watch_apply_event(&event2).unwrap();
+        store.checkpoint().unwrap();
+    }
+
+    let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+    assert_eq!(
+        reopened.first_watch_apply_event(7).unwrap().unwrap().index,
+        10
+    );
+    let replay = reopened
+        .watch_apply_events_after(7, 2, 10, b"artifact/", 16)
+        .unwrap();
+    assert_eq!(replay, vec![event2]);
+}
+
+#[test]
 fn applies_cross_tree_atomic_batch() {
     let store = HoltStore::open_memory().unwrap();
     let applied = store

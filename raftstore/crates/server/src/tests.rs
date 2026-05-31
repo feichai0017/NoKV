@@ -10,7 +10,10 @@ use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
-use nokv_raftnode::{ApplyStatusProvider, ApplyWatchProvider, BasicNode, RaftCommandExecutor};
+use nokv_raftnode::{
+    ApplyStatusProvider, ApplyWatchProvider, ApplyWatchReplayRequest, BasicNode,
+    RaftCommandExecutor, RegionMetadataSink,
+};
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -242,6 +245,13 @@ impl ApplyStatusProvider for FixedRuntimeEngine {
 impl ApplyWatchProvider for FixedRuntimeEngine {
     fn subscribe_apply(&self) -> tokio::sync::broadcast::Receiver<kvpb::ApplyWatchEvent> {
         self.inner.subscribe_apply()
+    }
+
+    fn replay_apply(
+        &self,
+        request: nokv_raftnode::ApplyWatchReplayRequest,
+    ) -> nokv_mvcc::Result<nokv_raftnode::ApplyWatchReplay> {
+        self.inner.replay_apply(request)
     }
 }
 
@@ -1348,6 +1358,38 @@ fn apply_watch_chunks_large_key_sets() {
     assert_eq!(chunks.len(), 2);
     assert_eq!(chunks[0].len(), DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE);
     assert_eq!(chunks[1].len(), 7);
+}
+
+#[test]
+fn holt_region_metadata_sink_replays_watch_history_after_reopen() {
+    let dir = tempfile::tempdir().unwrap();
+    let event = kvpb::ApplyWatchEvent {
+        region_id: 7,
+        term: 2,
+        index: 10,
+        commit_version: 99,
+        keys: vec![b"artifact/a".to_vec()],
+        ..Default::default()
+    };
+    {
+        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        let sink = HoltRegionMetadataSink::new(store);
+        sink.save_apply_watch_event(&event).unwrap();
+    }
+
+    let reopened = HoltRegionMetadataSink::new(HoltMvccStore::open_file(dir.path()).unwrap());
+    let replay = reopened
+        .replay_apply_watch(&ApplyWatchReplayRequest {
+            region_id: 7,
+            term: 2,
+            index: 9,
+            key_prefix: b"artifact/".to_vec(),
+        })
+        .unwrap()
+        .unwrap();
+
+    assert!(!replay.expired);
+    assert_eq!(replay.events, vec![event]);
 }
 
 #[tokio::test]

@@ -19,8 +19,7 @@ import (
 const defaultWatchBuffer = 256
 
 // Watcher adapts Rust MetadataPlane apply notifications into fsmeta watch
-// streams. Resume replay is deliberately not claimed until raftstore exposes a
-// durable apply-history cursor.
+// streams.
 type Watcher struct {
 	routes RouteProvider
 	mounts fsmetaexec.MountResolver
@@ -49,10 +48,6 @@ func (w *Watcher) Subscribe(ctx context.Context, req observe.WatchRequest) (obse
 	if ctx == nil {
 		ctx = context.Background()
 	}
-	if req.ResumeCursor.RegionID != 0 {
-		w.expired.Add(1)
-		return nil, model.ErrWatchCursorExpired
-	}
 	prefix, err := w.watchPrefix(ctx, req)
 	if err != nil {
 		return nil, err
@@ -67,8 +62,11 @@ func (w *Watcher) Subscribe(ctx context.Context, req observe.WatchRequest) (obse
 	}
 	subCtx, cancel := context.WithCancel(ctx)
 	stream, err := route.Client.WatchApply(subCtx, &metadatapb.MetadataWatchApplyRequest{
-		KeyPrefix: cloneBytes(prefix),
-		Buffer:    buffer,
+		KeyPrefix:      cloneBytes(prefix),
+		Buffer:         buffer,
+		ResumeRegionId: req.ResumeCursor.RegionID,
+		ResumeTerm:     req.ResumeCursor.Term,
+		ResumeIndex:    req.ResumeCursor.Index,
 	})
 	if err != nil {
 		cancel()
@@ -77,6 +75,7 @@ func (w *Watcher) Subscribe(ctx context.Context, req observe.WatchRequest) (obse
 	sub := &metadataWatchSubscription{
 		events: make(chan observe.WatchEvent, buffer),
 		cancel: cancel,
+		ready:  req.ResumeCursor,
 	}
 	w.subscriptions.Add(1)
 	go w.pump(sub, stream)
@@ -178,6 +177,7 @@ func metadataWatchSource(source metadatapb.MetadataApplyWatchEventSource) observ
 type metadataWatchSubscription struct {
 	events chan observe.WatchEvent
 	cancel context.CancelFunc
+	ready  observe.WatchCursor
 	once   sync.Once
 
 	mu  sync.Mutex
@@ -192,7 +192,10 @@ func (s *metadataWatchSubscription) Events() <-chan observe.WatchEvent {
 }
 
 func (s *metadataWatchSubscription) ReadyCursor() observe.WatchCursor {
-	return observe.WatchCursor{}
+	if s == nil {
+		return observe.WatchCursor{}
+	}
+	return s.ready
 }
 
 func (s *metadataWatchSubscription) Ack(observe.WatchCursor) {}
