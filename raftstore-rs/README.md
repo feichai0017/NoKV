@@ -26,9 +26,10 @@ The repository Docker image builds the same binary at
 store path by default until the Rust data plane passes the compose fsmeta smoke
 and benchmark gates.
 The image also includes `serve-rust-store.sh` and
-`join-rust-raftstore-peers.sh` for one-region Rust parity runs; they translate
-NoKV config files into the current Rust environment variables and drive the
-existing `RaftAdmin AddPeer` wire contract through `nokv raft-admin`.
+`join-rust-raftstore-peers.sh` for config-driven Rust parity runs. The launcher
+can start one configured region or every region hosted by a store process; the
+join script drives the existing `RaftAdmin AddPeer` wire contract through
+`nokv raft-admin`.
 
 Standalone multi-process tests can start a seed peer with the default bootstrap
 mode and start joining peers with explicit identity plus bootstrap disabled:
@@ -65,7 +66,16 @@ PATH="$PWD/build:$PWD/raftstore-rs/target/debug:$PATH" \
   --region-id 1000 --store-id 1 --workdir artifacts/rust-store-1
 ```
 
-After all peers for that region are serving, run:
+To host every configured region for one store in a single Rust process, use
+`--all-regions` instead of `--region-id`:
+
+```bash
+PATH="$PWD/build:$PWD/raftstore-rs/target/debug:$PATH" \
+  scripts/ops/serve-rust-store.sh --config raft_config.example.json \
+  --store-id 1 --all-regions --workdir artifacts/rust-store-1
+```
+
+After all peers for the selected region set are serving, run:
 
 ```bash
 PATH="$PWD/build:$PATH" \

@@ -285,9 +285,11 @@ The first slices are intentionally narrow:
 - The Go CLI now exposes `nokv raft-admin add-peer`, `remove-peer`,
   `transfer-leader`, and `region-status` over the existing `RaftAdmin` service.
   The Docker image also packages `serve-rust-store.sh` and
-  `join-rust-raftstore-peers.sh` so one-region Rust parity runs can derive
-  identity, peer endpoints, and AddPeer calls from the normal NoKV config
-  instead of hand-written environment variables.
+  `join-rust-raftstore-peers.sh` so Rust parity runs can derive identity,
+  hosted-region sets, key ranges, peer endpoints, and AddPeer calls from the
+  normal NoKV config instead of hand-written environment variables. The Rust
+  launcher can start one configured region or every region hosted by a store
+  process.
 - Rust coordinator publication and heartbeat now accept comma-separated
   endpoint lists like the Go deployment config and try endpoints in order,
   keeping `InvalidArgument`/permanent root validation failures terminal while
@@ -421,7 +423,7 @@ Known gaps:
   before state-machine mutation in the current unit coverage.
 - Go fsmeta and raftstore client Rust-endpoint tests remain behind the
   `rust_raftstore` build tag until the Rust data plane is the default runtime.
-- The Docker image can carry the Rust server binary and one-region Rust
+- The Docker image can carry the Rust server binary and config-driven Rust
   launcher/join scripts, but compose default cutover is still pending
   coordinator-managed multi-region lifecycle wiring and benchmark validation.
 - Rust follower reads are intentionally not served locally yet. The service
