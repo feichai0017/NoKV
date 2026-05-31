@@ -3,14 +3,16 @@
 //! This crate owns the external gRPC boundary for the metadata-native path.
 
 mod admin;
+mod admin_router;
 mod admission;
 mod admission_state;
 mod diagnostics;
 mod execution;
 mod metadata;
 mod metadata_plane;
+mod metadata_router;
 mod publisher;
-mod region_router;
+mod region_registry;
 mod serve;
 mod topology;
 mod wire_helpers;
@@ -20,20 +22,18 @@ pub use admin::{
     AppliedRegionDescriptorProvider, EmptyApplyStatus, PeerEndpointCatalog, RaftAdminService,
     RaftMembershipAdmin, RaftRuntimeStatus, RaftRuntimeStatusProvider,
 };
+pub use admin_router::MultiRegionRaftAdminService;
 pub use admission::RegionAdmission;
 pub use diagnostics::{EmptyRestartDiagnostics, RestartDiagnosticsProvider};
 pub use metadata::{
     apply_status_from_holt, EmptyRegionDescriptorSink, HoltRegionMetadataSink, RegionDescriptorSink,
 };
 pub use metadata_plane::MetadataPlaneService;
+pub use metadata_router::MultiRegionMetadataPlaneService;
 pub use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdminServer;
 pub use nokv_proto::nokv::metadata::v1::metadata_plane_server::MetadataPlaneServer;
 pub use publisher::{EmptyTopologyPublisher, TopologyPublishOutcome, TopologyPublisher};
-pub use region_router::{
-    serve_with_metadata_region_services, MultiRegionMetadataPlaneService,
-    MultiRegionRaftAdminService,
-};
-pub use serve::openraft_metadata_service_pair;
+pub use serve::{openraft_metadata_service_pair, serve_with_metadata_region_services};
 pub use topology::root_event_transition_id;
 
 pub(crate) const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;
@@ -44,5 +44,7 @@ pub(crate) fn internal_error(err: nokv_metastore::Error) -> tonic::Status {
     tonic::Status::internal(err.to_string())
 }
 
+#[cfg(test)]
+mod router_tests;
 #[cfg(test)]
 mod tests;
