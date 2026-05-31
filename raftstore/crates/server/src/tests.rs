@@ -2,7 +2,7 @@ use super::*;
 use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
 use crate::serve::serve_with_openraft_metadata_region_admission_and_peer_endpoints;
-use crate::wire_helpers::chunk_apply_watch_keys;
+use crate::watch_wire::chunk_apply_watch_keys;
 use adminpb::raft_admin_server::RaftAdmin;
 use metadatapb::metadata_plane_server::MetadataPlane;
 use nokv_holtstore::HoltMetadataStore;

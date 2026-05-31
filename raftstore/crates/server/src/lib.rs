@@ -17,7 +17,7 @@ mod region_registry;
 mod region_runtime;
 mod serve;
 mod topology;
-mod wire_helpers;
+mod watch_wire;
 
 pub(crate) use admin::push_missing_topology_status;
 pub use admin::RaftAdminService;

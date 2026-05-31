@@ -9,7 +9,7 @@ use tonic::{Request, Response, Status};
 
 use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
-use crate::wire_helpers::{chunk_apply_watch_keys, matching_apply_watch_keys};
+use crate::watch_wire::{chunk_apply_watch_keys, matching_apply_watch_keys};
 use crate::{
     internal_error, AppliedRegionDescriptorProvider, RaftRuntimeStatusProvider,
     DEFAULT_APPLY_WATCH_BUFFER,
