@@ -515,6 +515,29 @@ OpenRaft types must stay inside `raftnode`. Holt types must stay inside
 `holtstore`. The service crate should only see NoKV-owned traits and generated
 protobuf structs.
 
+## Current Module Layout
+
+The workspace keeps the current crate set and splits large files by ownership
+instead of adding generic helper crates:
+
+- `nokv-mvcc`: MVCC types, in-memory store, read path, Percolator transaction
+  path, atomic mutate, prepared-entry install, maintenance, validation, and
+  snapshot codec.
+- `nokv-holtstore`: Holt store construction, tree names and key encoding, MVCC
+  engine implementation, region metadata, scheduler state, watch-apply state,
+  durable value codec, and snapshot export/install.
+- `nokv-raftnode`: proposal payloads, apply engine, snapshot payload/status
+  codec, OpenRaft region lifecycle, log codec/store, OpenRaft storage,
+  in-memory/tonic transport, and transport codec.
+- `nokv-raftstore-server`: gRPC `StoreKV` service, `RaftAdmin` service, region
+  routing, admission, execution diagnostics, metadata sinks, topology publisher,
+  serve helpers, and the binary startup/bootstrap/coordinator modules.
+
+This layout is intentionally TiKV-like in responsibility boundaries but not in
+crate count. New shared code should stay in the module that owns the semantic
+boundary; do not introduce `common`, `store-core`, or `utils` crates for the
+current parity work.
+
 ## Phase 0: Wire Contract and Harness
 
 Goal: make incompatibility visible before replication work begins.
