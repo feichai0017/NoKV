@@ -14,8 +14,8 @@ use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
 use nokv_raftnode::{
     AppliedKvEngine, ApplyStatusProvider, BasicNode, OpenRaftRegion, PersistentAppliedKvEngine,
-    RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
-    SegmentedEntryLog, TonicRaftNetworkFactory,
+    RegionDescriptorCatalog, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine,
+    RegionTrafficProvider, SegmentedEntryLog, TonicRaftNetworkFactory,
 };
 use nokv_raftstore_server::{
     apply_status_from_holt, openraft_region_service_pair, root_event_transition_id,
@@ -492,6 +492,35 @@ type HoltApplyEngine = PersistentAppliedKvEngine<HoltMvccStore, HoltRegionMetada
 type HoltRegion = OpenRaftRegion<HoltApplyEngine>;
 
 #[derive(Clone)]
+struct HoltRegionDescriptorCatalog {
+    store: HoltMvccStore,
+}
+
+impl HoltRegionDescriptorCatalog {
+    fn new(store: HoltMvccStore) -> Self {
+        Self { store }
+    }
+}
+
+impl std::fmt::Debug for HoltRegionDescriptorCatalog {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("HoltRegionDescriptorCatalog")
+            .finish_non_exhaustive()
+    }
+}
+
+impl RegionDescriptorCatalog for HoltRegionDescriptorCatalog {
+    fn region_descriptor(
+        &self,
+        region_id: u64,
+    ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+        self.store
+            .get_region_descriptor(region_id)
+            .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
+    }
+}
+
+#[derive(Clone)]
 struct HoltRangeController {
     store_id: u64,
     addr: SocketAddr,
@@ -724,8 +753,16 @@ impl HoltRangeController {
             true,
         )
         .await?;
+        let merge_command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Merge as i32,
+            merge: Some(raftpb::MergeCommand {
+                target_region_id: operation.region_id,
+                source_region_id: operation.source_region_id,
+            }),
+            ..Default::default()
+        };
         target
-            .propose_region_descriptor(&merged)
+            .propose_admin_command(operation.region_id, &merge_command)
             .await
             .map_err(|err| tonic::Status::failed_precondition(err.to_string()))?;
         self.reconcile_local_region_descriptors().await?;
@@ -854,6 +891,11 @@ impl HoltRangeController {
                 applied_index: 0,
             });
         let engine = AppliedKvEngine::with_status(apply_status, self.mvcc.clone());
+        engine
+            .set_region_descriptor_catalog(Arc::new(HoltRegionDescriptorCatalog::new(
+                self.mvcc.clone(),
+            )))
+            .map_err(|err| tonic::Status::internal(err.to_string()))?;
         engine
             .set_region_descriptor(descriptor.clone())
             .map_err(|err| tonic::Status::internal(err.to_string()))?;
@@ -1267,6 +1309,9 @@ async fn serve_holt_regions(
                 applied_index: 0,
             });
         let engine = AppliedKvEngine::with_status(apply_status, mvcc.clone());
+        engine.set_region_descriptor_catalog(Arc::new(HoltRegionDescriptorCatalog::new(
+            mvcc.clone(),
+        )))?;
         engine.set_region_descriptor(descriptor.clone())?;
         let engine =
             PersistentAppliedKvEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));

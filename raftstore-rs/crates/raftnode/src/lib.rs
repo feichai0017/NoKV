@@ -306,6 +306,13 @@ pub trait RegionMetadataSink: Clone + Send + Sync + 'static {
     }
 }
 
+pub trait RegionDescriptorCatalog: std::fmt::Debug + Send + Sync + 'static {
+    fn region_descriptor(
+        &self,
+        region_id: RegionId,
+    ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>>;
+}
+
 #[derive(Debug)]
 struct AppliedKvInner<E> {
     region_id: RegionId,
@@ -314,6 +321,7 @@ struct AppliedKvInner<E> {
     engine: Mutex<E>,
     descriptor: Mutex<Option<metapb::RegionDescriptor>>,
     topology_descriptors: Mutex<Vec<metapb::RegionDescriptor>>,
+    topology_catalog: Mutex<Option<Arc<dyn RegionDescriptorCatalog>>>,
     traffic: RegionTrafficStats,
     watch: broadcast::Sender<kvpb::ApplyWatchEvent>,
 }
@@ -451,6 +459,7 @@ impl<E> AppliedKvEngine<E> {
                 engine: Mutex::new(engine),
                 descriptor: Mutex::new(None),
                 topology_descriptors: Mutex::new(Vec::new()),
+                topology_catalog: Mutex::new(None),
                 traffic: RegionTrafficStats::default(),
                 watch: broadcast::channel(1024).0,
             }),
@@ -466,6 +475,17 @@ impl<E> AppliedKvEngine<E> {
             nokv_mvcc::Error::Backend("region descriptor mutex poisoned".to_owned())
         })?;
         *current = Some(descriptor);
+        Ok(())
+    }
+
+    pub fn set_region_descriptor_catalog(
+        &self,
+        catalog: Arc<dyn RegionDescriptorCatalog>,
+    ) -> nokv_mvcc::Result<()> {
+        let mut current = self.inner.topology_catalog.lock().map_err(|_| {
+            nokv_mvcc::Error::Backend("region descriptor catalog mutex poisoned".to_owned())
+        })?;
+        *current = Some(catalog);
         Ok(())
     }
 
@@ -512,13 +532,30 @@ impl<E> AppliedKvEngine<E> {
         &self,
         region_id: RegionId,
     ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
-        let descriptors = self.inner.topology_descriptors.lock().map_err(|_| {
-            nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
-        })?;
-        Ok(descriptors
-            .iter()
-            .find(|descriptor| descriptor.region_id == region_id)
-            .cloned())
+        let descriptor = {
+            let descriptors = self.inner.topology_descriptors.lock().map_err(|_| {
+                nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
+            })?;
+            descriptors
+                .iter()
+                .find(|descriptor| descriptor.region_id == region_id)
+                .cloned()
+        };
+        if descriptor.is_some() {
+            return Ok(descriptor);
+        }
+        let catalog = self
+            .inner
+            .topology_catalog
+            .lock()
+            .map_err(|_| {
+                nokv_mvcc::Error::Backend("region descriptor catalog mutex poisoned".to_owned())
+            })?
+            .clone();
+        match catalog {
+            Some(catalog) => catalog.region_descriptor(region_id),
+            None => Ok(None),
+        }
     }
 
     fn topology_descriptors(&self) -> nokv_mvcc::Result<Vec<metapb::RegionDescriptor>> {
@@ -2141,6 +2178,20 @@ mod tests {
         }
     }
 
+    #[derive(Debug, Default)]
+    struct StaticRegionDescriptorCatalog {
+        descriptors: BTreeMap<RegionId, metapb::RegionDescriptor>,
+    }
+
+    impl RegionDescriptorCatalog for StaticRegionDescriptorCatalog {
+        fn region_descriptor(
+            &self,
+            region_id: RegionId,
+        ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+            Ok(self.descriptors.get(&region_id).cloned())
+        }
+    }
+
     #[tokio::test]
     async fn openraft_region_bootstraps_single_node_and_applies_proposal() {
         let dir = tempfile::tempdir().unwrap();
@@ -3626,6 +3677,70 @@ mod tests {
         );
         assert_eq!(applied.len(), 1);
         assert!(applied[0].payload.is_empty());
+    }
+
+    #[test]
+    fn applied_engine_uses_region_descriptor_catalog_for_merge_admin_command() {
+        let engine = AppliedKvEngine::new(7, MvccStore::new());
+        engine
+            .set_region_descriptor(metapb::RegionDescriptor {
+                region_id: 7,
+                start_key: b"a".to_vec(),
+                end_key: b"m".to_vec(),
+                epoch: Some(metapb::RegionEpoch {
+                    version: 3,
+                    conf_version: 2,
+                }),
+                peers: vec![metapb::RegionPeer {
+                    store_id: 1,
+                    peer_id: 11,
+                }],
+                ..Default::default()
+            })
+            .unwrap();
+        let source = metapb::RegionDescriptor {
+            region_id: 8,
+            start_key: b"m".to_vec(),
+            end_key: b"z".to_vec(),
+            epoch: Some(metapb::RegionEpoch {
+                version: 4,
+                conf_version: 2,
+            }),
+            peers: vec![metapb::RegionPeer {
+                store_id: 1,
+                peer_id: 21,
+            }],
+            ..Default::default()
+        };
+        engine
+            .set_region_descriptor_catalog(Arc::new(StaticRegionDescriptorCatalog {
+                descriptors: BTreeMap::from([(source.region_id, source)]),
+            }))
+            .unwrap();
+        let command = raftpb::AdminCommand {
+            r#type: raftpb::admin_command::Type::Merge as i32,
+            merge: Some(raftpb::MergeCommand {
+                target_region_id: 7,
+                source_region_id: 8,
+            }),
+            ..Default::default()
+        };
+
+        engine
+            .apply_openraft_entries([OpenRaftEntry {
+                log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+                payload: openraft::EntryPayload::Normal(
+                    Proposal::from_admin_command(7, &command).unwrap(),
+                ),
+            }])
+            .unwrap();
+
+        let descriptor = engine.region_descriptor().unwrap().unwrap();
+        assert_eq!(descriptor.region_id, 7);
+        assert_eq!(descriptor.end_key, b"z");
+        assert_eq!(descriptor.lineage.len(), 1);
+        assert_eq!(descriptor.lineage[0].region_id, 8);
+        assert!(engine.topology_descriptors().unwrap().is_empty());
     }
 
     #[test]
