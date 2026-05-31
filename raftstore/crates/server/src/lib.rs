@@ -11,17 +11,16 @@ mod execution;
 mod metadata;
 mod metadata_plane;
 mod metadata_router;
+mod peer_endpoint_catalog;
 mod publisher;
 mod region_registry;
+mod region_runtime;
 mod serve;
 mod topology;
 mod wire_helpers;
 
 pub(crate) use admin::push_missing_topology_status;
-pub use admin::{
-    AppliedRegionDescriptorProvider, EmptyApplyStatus, PeerEndpointCatalog, RaftAdminService,
-    RaftMembershipAdmin, RaftRuntimeStatus, RaftRuntimeStatusProvider,
-};
+pub use admin::RaftAdminService;
 pub use admin_router::MultiRegionRaftAdminService;
 pub use admission::RegionAdmission;
 pub use diagnostics::{EmptyRestartDiagnostics, RestartDiagnosticsProvider};
@@ -32,7 +31,12 @@ pub use metadata_plane::MetadataPlaneService;
 pub use metadata_router::MultiRegionMetadataPlaneService;
 pub use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdminServer;
 pub use nokv_proto::nokv::metadata::v1::metadata_plane_server::MetadataPlaneServer;
+pub use peer_endpoint_catalog::PeerEndpointCatalog;
 pub use publisher::{EmptyTopologyPublisher, TopologyPublishOutcome, TopologyPublisher};
+pub use region_runtime::{
+    AppliedRegionDescriptorProvider, EmptyApplyStatus, RaftMembershipAdmin, RaftRuntimeStatus,
+    RaftRuntimeStatusProvider,
+};
 pub use serve::{openraft_metadata_service_pair, serve_with_metadata_region_services};
 pub use topology::root_event_transition_id;
 
