@@ -1156,6 +1156,12 @@ impl mvcc::KvEngine for HoltMvccStore {
         if let Some(lock) = self.get_lock(&req.primary_key)? {
             if lock.start_version == req.lock_ts {
                 if is_lock_expired(&lock, req.current_time) {
+                    if req.primary_key.is_empty() {
+                        return Ok(kvpb::CheckTxnStatusResponse {
+                            error: Some(mvcc::empty_rollback_key_error()),
+                            ..Default::default()
+                        });
+                    }
                     self.atomic(|batch| {
                         batch.delete(LOCK_TREE, &req.primary_key);
                         let value = rollback_value(req.lock_ts);
@@ -1204,6 +1210,12 @@ impl mvcc::KvEngine for HoltMvccStore {
             });
         }
         if req.rollback_if_not_exist {
+            if req.primary_key.is_empty() {
+                return Ok(kvpb::CheckTxnStatusResponse {
+                    error: Some(mvcc::empty_rollback_key_error()),
+                    ..Default::default()
+                });
+            }
             self.atomic(|batch| {
                 let value = rollback_value(req.lock_ts);
                 apply_committed(batch, &req.primary_key, req.lock_ts, &value);
@@ -2768,6 +2780,27 @@ mod tests {
             })
             .unwrap();
         assert!(committed.error.unwrap().abort.contains("rolled back"));
+    }
+
+    #[test]
+    fn holt_mvcc_check_txn_status_empty_primary_rollback_aborts_without_marker() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let status = store
+            .check_txn_status(&kvpb::CheckTxnStatusRequest {
+                primary_key: Vec::new(),
+                lock_ts: 10,
+                current_time: 1,
+                rollback_if_not_exist: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_abort_contains(status.error, "empty key in rollback");
+
+        let snapshot = store.export_mvcc_snapshot().unwrap();
+        assert!(snapshot
+            .rollbacks
+            .iter()
+            .all(|rollback| !rollback.key.is_empty()));
     }
 
     #[test]

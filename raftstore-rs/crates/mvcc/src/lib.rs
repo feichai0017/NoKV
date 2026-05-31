@@ -406,6 +406,12 @@ impl MvccStore {
         if let Some(lock) = inner.locks.get(&req.primary_key).cloned() {
             if lock.start_version == req.lock_ts {
                 if is_lock_expired(&lock, req.current_time) {
+                    if req.primary_key.is_empty() {
+                        return Ok(kvpb::CheckTxnStatusResponse {
+                            error: Some(empty_rollback_key_error()),
+                            ..Default::default()
+                        });
+                    }
                     inner.locks.remove(&req.primary_key);
                     apply_rollback(&mut inner, &req.primary_key, req.lock_ts);
                     return Ok(kvpb::CheckTxnStatusResponse {
@@ -450,6 +456,12 @@ impl MvccStore {
             });
         }
         if req.rollback_if_not_exist {
+            if req.primary_key.is_empty() {
+                return Ok(kvpb::CheckTxnStatusResponse {
+                    error: Some(empty_rollback_key_error()),
+                    ..Default::default()
+                });
+            }
             apply_rollback(&mut inner, &req.primary_key, req.lock_ts);
             return Ok(kvpb::CheckTxnStatusResponse {
                 action: kvpb::CheckTxnStatusAction::CheckTxnStatusLockNotExistRollback as i32,
@@ -1837,6 +1849,27 @@ mod tests {
             })
             .unwrap();
         assert!(committed.error.unwrap().abort.contains("rolled back"));
+    }
+
+    #[test]
+    fn check_txn_status_empty_primary_rollback_aborts_without_marker() {
+        let store = MvccStore::new();
+        let status = store
+            .check_txn_status(&kvpb::CheckTxnStatusRequest {
+                primary_key: Vec::new(),
+                lock_ts: 10,
+                current_time: 1,
+                rollback_if_not_exist: true,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_abort_contains(status.error, "empty key in rollback");
+
+        let snapshot = store.export_mvcc_snapshot().unwrap();
+        assert!(snapshot
+            .rollbacks
+            .iter()
+            .all(|rollback| !rollback.key.is_empty()));
     }
 
     #[test]

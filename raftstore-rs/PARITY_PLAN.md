@@ -224,6 +224,9 @@ The first slices are intentionally narrow:
   missing primary key, start version, TTL extension, current time, and
   primary-lock mismatch instead of collapsing them into a generic invalid
   heartbeat error.
+  Rust `CheckTxnStatus` now also preserves Go's empty-key rollback boundary:
+  `rollback_if_not_exist` on an empty primary returns `empty key in rollback`
+  without creating an empty-key rollback marker.
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.
