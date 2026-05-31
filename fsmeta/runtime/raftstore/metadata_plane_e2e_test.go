@@ -509,6 +509,8 @@ func TestRustMetadataPlaneRejectsRemovedPeer(t *testing.T) {
 	binary := buildRustRaftstoreServer(t, ctx, repo)
 	addr1 := freeTCPAddr(t)
 	addr2 := freeTCPAddr(t)
+	peer2HoltDir := filepath.Join(t.TempDir(), "peer2-holt")
+	peer2RaftLogDir := filepath.Join(t.TempDir(), "peer2-raftlog")
 	peerEndpoints := map[uint64]string{1: addr1, 2: addr2}
 	_ = startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
 		addr:          addr1,
@@ -519,6 +521,8 @@ func TestRustMetadataPlaneRejectsRemovedPeer(t *testing.T) {
 	})
 	peer2 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
 		addr:          addr2,
+		holtDir:       peer2HoltDir,
+		raftLogDir:    peer2RaftLogDir,
 		storeID:       2,
 		peerID:        2,
 		bootstrap:     false,
@@ -571,7 +575,6 @@ func TestRustMetadataPlaneRejectsRemovedPeer(t *testing.T) {
 	heartbeatRustStoreAs(t, ctx, coordinator, 1, addr1, true)
 
 	metadata2, closeMetadata2 := rustMetadataClient(t, addr2)
-	defer closeMetadata2()
 	staleResp, err := metadata2.CommitMetadata(ctx, &metadatapb.MetadataCommitRequest{
 		Context: &metadatapb.MetadataContext{
 			RegionId:    1,
@@ -594,6 +597,46 @@ func TestRustMetadataPlaneRejectsRemovedPeer(t *testing.T) {
 	require.NoError(t, err, "peer2 raftstore logs:\n%s", peer2.logs.String())
 	require.NotNil(t, staleResp.GetRegionError(), "removed peer accepted stale write")
 	require.Nil(t, staleResp.GetResult(), "removed peer returned a successful commit result")
+	closeMetadata2()
+
+	peer2.stop()
+	restartedPeer2 := startRustRaftstoreServerWithConfig(t, ctx, binary, repo, rustRaftstoreStartConfig{
+		addr:          addr2,
+		holtDir:       peer2HoltDir,
+		raftLogDir:    peer2RaftLogDir,
+		storeID:       2,
+		peerID:        2,
+		bootstrap:     false,
+		peerEndpoints: peerEndpoints,
+	})
+	waitForRustAdmin(t, ctx, addr2)
+	waitForRustRegionStatus(t, ctx, addr2, func(status *adminpb.RegionRuntimeStatusResponse) bool {
+		return !status.GetHosted()
+	})
+	restartedMetadata2, closeRestartedMetadata2 := rustMetadataClient(t, addr2)
+	defer closeRestartedMetadata2()
+	restartedStaleResp, err := restartedMetadata2.CommitMetadata(ctx, &metadatapb.MetadataCommitRequest{
+		Context: &metadatapb.MetadataContext{
+			RegionId:    1,
+			RegionEpoch: &metapb.RegionEpoch{Version: 1, ConfVersion: removeResp.GetRegion().GetEpoch().GetConfVersion()},
+			Peer:        &metapb.RegionPeer{StoreId: 2, PeerId: 2},
+		},
+		Command: &metadatapb.MetadataCommand{
+			RequestId:     []byte("removed-peer-restart-write"),
+			PrimaryKey:    []byte("removed-peer-restart-write"),
+			ReadVersion:   12,
+			CommitVersion: 13,
+			Mutations: []*metadatapb.MetadataMutation{{
+				Op:    metadatapb.MetadataMutation_PUT,
+				Key:   []byte("removed-peer-restart-write"),
+				Value: []byte("must-not-apply"),
+			}},
+			WatchKeys: [][]byte{[]byte("removed-peer-restart-write")},
+		},
+	})
+	require.NoError(t, err, "restarted peer2 raftstore logs:\n%s", restartedPeer2.logs.String())
+	require.NotNil(t, restartedStaleResp.GetRegionError(), "restarted removed peer accepted stale write")
+	require.Nil(t, restartedStaleResp.GetResult(), "restarted removed peer returned a successful commit result")
 
 	runtime, err := Open(ctx, Options{
 		Coordinator:    coordinator,
