@@ -26,12 +26,16 @@ use tonic::{Request, Response, Status};
 
 mod admission;
 mod execution;
+mod region_router;
 mod topology;
 
 pub use adminpb::raft_admin_server::RaftAdminServer;
 pub use admission::RegionAdmission;
 use execution::ExecutionRuntime;
 pub use kvpb::store_kv_server::StoreKvServer;
+pub use region_router::{
+    serve_with_multi_region_services, MultiRegionRaftAdminService, MultiRegionStoreKvService,
+};
 pub use topology::root_event_transition_id;
 use topology::{
     peer_change_transition_id, scheduler_operation_action, scheduler_operation_transition_id,
@@ -1741,7 +1745,7 @@ where
     }
 }
 
-fn push_missing_topology_status(
+pub(crate) fn push_missing_topology_status(
     topology: &mut Vec<adminpb::ExecutionTopologyStatus>,
     status: adminpb::ExecutionTopologyStatus,
 ) {

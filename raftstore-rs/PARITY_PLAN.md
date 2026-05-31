@@ -204,6 +204,11 @@ The first slices are intentionally narrow:
   StoreKV and RaftAdmin now share one mutable admission state, so successful
   membership changes immediately advance the StoreKV epoch/peer gate instead
   of leaving reads and writes on a stale startup descriptor.
+  The server crate now also has multi-region StoreKV/RaftAdmin routers that
+  preserve the existing protobuf contract while selecting a hosted region by
+  `Context.region_id` or admin `region_id`. Region-scoped requests still pass
+  through the per-region admission and runtime-status gates; process-scoped
+  `ExecutionStatus` aggregates hosted-region readiness and topology diagnostics.
   `WatchApply` now mirrors Go's prefix projection more closely: buffer 0 maps
   to the default watch buffer, emitted events contain only matching keys, and
   large key sets are split into bounded messages.
@@ -333,8 +338,10 @@ Known gaps:
   `RaftAdmin AddPeer`. When a coordinator endpoint is configured, startup
   publishes the store membership and bootstrap region descriptor needed for
   coordinator-backed routing. Config-driven one-region process launch and
-  AddPeer joining now have ops scripts; automatic multi-region process
-  lifecycle wiring is still being built out.
+  AddPeer joining now have ops scripts, and the server crate has a multi-region
+  service routing boundary. Automatic multi-region process lifecycle wiring
+  that opens, registers, and supervises multiple OpenRaft groups from
+  coordinator topology is still being built out.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. Non-bootstrap Rust peers no longer persist a default descriptor,

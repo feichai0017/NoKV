@@ -1,0 +1,782 @@
+//! Multi-region StoreKV/RaftAdmin routing for a single Rust raftstore process.
+//!
+//! The router preserves the existing protobuf contract and only selects the
+//! hosted region runtime. Authority, epoch, leader, and key-range checks remain
+//! owned by each per-region service.
+
+use std::collections::BTreeMap;
+use std::net::SocketAddr;
+use std::sync::Arc;
+
+use nokv_proto::nokv::admin::v1 as adminpb;
+use nokv_proto::nokv::error::v1 as errorpb;
+use nokv_proto::nokv::kv::v1 as kvpb;
+use nokv_raftnode::{ApplyWatchProvider, RaftCommandExecutor};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tonic::{Request, Response, Status};
+
+use crate::{
+    push_missing_topology_status, AppliedRegionDescriptorProvider, EmptyRegionDescriptorSink,
+    EmptyRestartDiagnostics, RaftAdminService, RaftMembershipAdmin, RaftRuntimeStatusProvider,
+    RegionDescriptorSink, RestartDiagnosticsProvider, StoreKvService, DEFAULT_APPLY_WATCH_BUFFER,
+};
+
+enum RegionServiceLookup<'a, T> {
+    Hosted(&'a T),
+    Missing(errorpb::RegionError),
+}
+
+fn store_region_lookup<'a, T>(
+    regions: &'a BTreeMap<u64, T>,
+    context: Option<&kvpb::Context>,
+) -> Result<RegionServiceLookup<'a, T>, Status> {
+    let context = context.ok_or_else(|| Status::invalid_argument("context is required"))?;
+    if context.region_id == 0 {
+        return Err(Status::invalid_argument("region id is required"));
+    }
+    match regions.get(&context.region_id) {
+        Some(region) => Ok(RegionServiceLookup::Hosted(region)),
+        None => Ok(RegionServiceLookup::Missing(region_not_found_error(
+            context.region_id,
+        ))),
+    }
+}
+
+fn admin_region_lookup<T>(regions: &BTreeMap<u64, T>, region_id: u64) -> Result<&T, Status> {
+    regions.get(&region_id).ok_or_else(|| {
+        Status::failed_precondition(format!(
+            "region {region_id} is not hosted by this raft admin"
+        ))
+    })
+}
+
+fn region_not_found_error(region_id: u64) -> errorpb::RegionError {
+    errorpb::RegionError {
+        region_not_found: Some(errorpb::RegionNotFound { region_id }),
+        ..Default::default()
+    }
+}
+
+fn validate_region_service_id(region_id: u64) -> Result<(), Status> {
+    if region_id == 0 {
+        return Err(Status::invalid_argument("region_id is required"));
+    }
+    Ok(())
+}
+
+fn collect_region_services<T>(
+    regions: impl IntoIterator<Item = (u64, T)>,
+) -> Result<BTreeMap<u64, T>, Status> {
+    let mut out = BTreeMap::new();
+    for (region_id, region) in regions {
+        validate_region_service_id(region_id)?;
+        if out.insert(region_id, region).is_some() {
+            return Err(Status::invalid_argument(format!(
+                "duplicate region_id {region_id}"
+            )));
+        }
+    }
+    Ok(out)
+}
+
+/// StoreKV service router for a process that hosts more than one region.
+///
+/// The wire contract stays unchanged: callers still send the existing
+/// `Context.region_id`, and the server selects the matching hosted region
+/// before the per-region admission gate performs epoch, leader, and key-range
+/// checks.
+#[derive(Clone)]
+pub struct MultiRegionStoreKvService<E> {
+    regions: Arc<BTreeMap<u64, StoreKvService<E>>>,
+}
+
+impl<E> MultiRegionStoreKvService<E> {
+    pub fn new(
+        regions: impl IntoIterator<Item = (u64, StoreKvService<E>)>,
+    ) -> Result<Self, Status> {
+        let regions = collect_region_services(regions)?;
+        Ok(Self {
+            regions: Arc::new(regions),
+        })
+    }
+
+    fn service_for_context(
+        &self,
+        context: Option<&kvpb::Context>,
+    ) -> Result<RegionServiceLookup<'_, StoreKvService<E>>, Status> {
+        store_region_lookup(&self.regions, context)
+    }
+}
+
+macro_rules! delegate_store_kv_request {
+    ($self:expr, $request:expr, $method:ident, $response_type:ident) => {{
+        let request = $request.into_inner();
+        match $self.service_for_context(request.context.as_ref())? {
+            RegionServiceLookup::Hosted(service) => service.$method(Request::new(request)).await,
+            RegionServiceLookup::Missing(region_error) => Ok(Response::new(kvpb::$response_type {
+                response: None,
+                region_error: Some(region_error),
+            })),
+        }
+    }};
+}
+
+#[tonic::async_trait]
+impl<E> kvpb::store_kv_server::StoreKv for MultiRegionStoreKvService<E>
+where
+    E: AppliedRegionDescriptorProvider
+        + ApplyWatchProvider
+        + RaftCommandExecutor
+        + RaftRuntimeStatusProvider,
+{
+    async fn get(
+        &self,
+        request: Request<kvpb::KvGetRequest>,
+    ) -> Result<Response<kvpb::KvGetResponse>, Status> {
+        delegate_store_kv_request!(self, request, get, KvGetResponse)
+    }
+
+    async fn batch_get(
+        &self,
+        request: Request<kvpb::KvBatchGetRequest>,
+    ) -> Result<Response<kvpb::KvBatchGetResponse>, Status> {
+        delegate_store_kv_request!(self, request, batch_get, KvBatchGetResponse)
+    }
+
+    async fn scan(
+        &self,
+        request: Request<kvpb::KvScanRequest>,
+    ) -> Result<Response<kvpb::KvScanResponse>, Status> {
+        delegate_store_kv_request!(self, request, scan, KvScanResponse)
+    }
+
+    async fn prewrite(
+        &self,
+        request: Request<kvpb::KvPrewriteRequest>,
+    ) -> Result<Response<kvpb::KvPrewriteResponse>, Status> {
+        delegate_store_kv_request!(self, request, prewrite, KvPrewriteResponse)
+    }
+
+    async fn commit(
+        &self,
+        request: Request<kvpb::KvCommitRequest>,
+    ) -> Result<Response<kvpb::KvCommitResponse>, Status> {
+        delegate_store_kv_request!(self, request, commit, KvCommitResponse)
+    }
+
+    async fn batch_rollback(
+        &self,
+        request: Request<kvpb::KvBatchRollbackRequest>,
+    ) -> Result<Response<kvpb::KvBatchRollbackResponse>, Status> {
+        delegate_store_kv_request!(self, request, batch_rollback, KvBatchRollbackResponse)
+    }
+
+    async fn resolve_lock(
+        &self,
+        request: Request<kvpb::KvResolveLockRequest>,
+    ) -> Result<Response<kvpb::KvResolveLockResponse>, Status> {
+        delegate_store_kv_request!(self, request, resolve_lock, KvResolveLockResponse)
+    }
+
+    async fn check_txn_status(
+        &self,
+        request: Request<kvpb::KvCheckTxnStatusRequest>,
+    ) -> Result<Response<kvpb::KvCheckTxnStatusResponse>, Status> {
+        delegate_store_kv_request!(self, request, check_txn_status, KvCheckTxnStatusResponse)
+    }
+
+    async fn txn_heart_beat(
+        &self,
+        request: Request<kvpb::KvTxnHeartBeatRequest>,
+    ) -> Result<Response<kvpb::KvTxnHeartBeatResponse>, Status> {
+        delegate_store_kv_request!(self, request, txn_heart_beat, KvTxnHeartBeatResponse)
+    }
+
+    async fn try_atomic_mutate(
+        &self,
+        request: Request<kvpb::KvTryAtomicMutateRequest>,
+    ) -> Result<Response<kvpb::KvTryAtomicMutateResponse>, Status> {
+        delegate_store_kv_request!(self, request, try_atomic_mutate, KvTryAtomicMutateResponse)
+    }
+
+    async fn install_prepared_mvcc_entries(
+        &self,
+        request: Request<kvpb::KvInstallPreparedMvccEntriesRequest>,
+    ) -> Result<Response<kvpb::KvInstallPreparedMvccEntriesResponse>, Status> {
+        delegate_store_kv_request!(
+            self,
+            request,
+            install_prepared_mvcc_entries,
+            KvInstallPreparedMvccEntriesResponse
+        )
+    }
+
+    type WatchApplyStream = ReceiverStream<Result<kvpb::ApplyWatchResponse, Status>>;
+
+    async fn watch_apply(
+        &self,
+        request: Request<kvpb::ApplyWatchRequest>,
+    ) -> Result<Response<Self::WatchApplyStream>, Status> {
+        let request = request.into_inner();
+        let buffer = if request.buffer == 0 {
+            DEFAULT_APPLY_WATCH_BUFFER
+        } else {
+            request.buffer as usize
+        };
+        let (tx, rx) = tokio::sync::mpsc::channel(buffer);
+        for service in self.regions.values().cloned() {
+            let tx = tx.clone();
+            let request = request.clone();
+            tokio::spawn(async move {
+                let response = service.watch_apply(Request::new(request)).await;
+                let mut stream = match response {
+                    Ok(response) => response.into_inner(),
+                    Err(err) => {
+                        let _ = tx.send(Err(err)).await;
+                        return;
+                    }
+                };
+                while let Some(item) = stream.next().await {
+                    if tx.send(item).await.is_err() {
+                        return;
+                    }
+                }
+            });
+        }
+        drop(tx);
+        Ok(Response::new(ReceiverStream::new(rx)))
+    }
+}
+
+/// RaftAdmin service router for a process that hosts more than one region.
+///
+/// Region-scoped admin requests are routed by the request `region_id`.
+/// Process-scoped diagnostics are aggregated across hosted regions so the
+/// existing `ExecutionStatus` response can describe multi-region readiness
+/// without changing the protobuf contract.
+#[derive(Clone)]
+pub struct MultiRegionRaftAdminService<S, D = EmptyRegionDescriptorSink> {
+    regions: Arc<BTreeMap<u64, RaftAdminService<S, D>>>,
+    restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
+}
+
+impl<S, D> MultiRegionRaftAdminService<S, D> {
+    pub fn new(
+        regions: impl IntoIterator<Item = (u64, RaftAdminService<S, D>)>,
+    ) -> Result<Self, Status> {
+        let regions = collect_region_services(regions)?;
+        Ok(Self {
+            regions: Arc::new(regions),
+            restart_diagnostics: Arc::new(EmptyRestartDiagnostics),
+        })
+    }
+
+    pub fn with_restart_diagnostics(
+        mut self,
+        restart_diagnostics: Arc<dyn RestartDiagnosticsProvider>,
+    ) -> Self {
+        self.restart_diagnostics = restart_diagnostics;
+        self
+    }
+
+    fn service_for_region(&self, region_id: u64) -> Result<&RaftAdminService<S, D>, Status> {
+        admin_region_lookup(&self.regions, region_id)
+    }
+}
+
+#[tonic::async_trait]
+impl<S, D> adminpb::raft_admin_server::RaftAdmin for MultiRegionRaftAdminService<S, D>
+where
+    S: AppliedRegionDescriptorProvider + RaftMembershipAdmin + RaftRuntimeStatusProvider,
+    D: RegionDescriptorSink,
+{
+    async fn add_peer(
+        &self,
+        request: Request<adminpb::AddPeerRequest>,
+    ) -> Result<Response<adminpb::AddPeerResponse>, Status> {
+        let request = request.into_inner();
+        if request.region_id == 0 || request.store_id == 0 || request.peer_id == 0 {
+            return Err(Status::invalid_argument(
+                "region_id, store_id, and peer_id are required",
+            ));
+        }
+        self.service_for_region(request.region_id)?
+            .add_peer(Request::new(request))
+            .await
+    }
+
+    async fn remove_peer(
+        &self,
+        request: Request<adminpb::RemovePeerRequest>,
+    ) -> Result<Response<adminpb::RemovePeerResponse>, Status> {
+        let request = request.into_inner();
+        if request.region_id == 0 || request.peer_id == 0 {
+            return Err(Status::invalid_argument(
+                "region_id and peer_id are required",
+            ));
+        }
+        self.service_for_region(request.region_id)?
+            .remove_peer(Request::new(request))
+            .await
+    }
+
+    async fn transfer_leader(
+        &self,
+        request: Request<adminpb::TransferLeaderRequest>,
+    ) -> Result<Response<adminpb::TransferLeaderResponse>, Status> {
+        let request = request.into_inner();
+        if request.region_id == 0 || request.peer_id == 0 {
+            return Err(Status::invalid_argument(
+                "region_id and peer_id are required",
+            ));
+        }
+        self.service_for_region(request.region_id)?
+            .transfer_leader(Request::new(request))
+            .await
+    }
+
+    async fn region_runtime_status(
+        &self,
+        request: Request<adminpb::RegionRuntimeStatusRequest>,
+    ) -> Result<Response<adminpb::RegionRuntimeStatusResponse>, Status> {
+        let request = request.into_inner();
+        if request.region_id == 0 {
+            return Err(Status::invalid_argument("region_id is required"));
+        }
+        let Some(service) = self.regions.get(&request.region_id) else {
+            return Ok(Response::new(
+                adminpb::RegionRuntimeStatusResponse::default(),
+            ));
+        };
+        service.region_runtime_status(Request::new(request)).await
+    }
+
+    async fn execution_status(
+        &self,
+        _request: Request<adminpb::ExecutionStatusRequest>,
+    ) -> Result<Response<adminpb::ExecutionStatusResponse>, Status> {
+        let mut last_admission = None;
+        let mut restart = adminpb::ExecutionRestartStatus {
+            state: adminpb::ExecutionRestartState::Ready as i32,
+            ..Default::default()
+        };
+        let mut topology = Vec::new();
+
+        for service in self.regions.values() {
+            let status = service.status.apply_status();
+            let runtime = service.status.raft_runtime_status();
+            let hosted = status.region_id != 0 && runtime.hosted;
+            if hosted {
+                restart.region_count += 1;
+                restart.raft_group_count += 1;
+            } else {
+                restart.state = adminpb::ExecutionRestartState::Degraded as i32;
+            }
+            merge_last_admission(&mut last_admission, Some(service.execution.snapshot()?));
+            for status in service.execution.topology_snapshot()? {
+                push_missing_topology_status(&mut topology, status);
+            }
+        }
+        if self.regions.is_empty() {
+            restart.state = adminpb::ExecutionRestartState::Degraded as i32;
+        }
+        restart.pending_root_event_count = self.restart_diagnostics.pending_root_event_count()?;
+        restart.blocked_root_event_count = self.restart_diagnostics.blocked_root_event_count()?;
+        restart.pending_scheduler_operation_count = self
+            .restart_diagnostics
+            .pending_scheduler_operation_count()?;
+        for blocked in self.restart_diagnostics.blocked_topology_statuses()? {
+            push_missing_topology_status(&mut topology, blocked);
+        }
+        for pending in self.restart_diagnostics.pending_topology_statuses()? {
+            push_missing_topology_status(&mut topology, pending);
+        }
+        Ok(Response::new(adminpb::ExecutionStatusResponse {
+            last_admission,
+            restart: Some(restart),
+            topology,
+        }))
+    }
+}
+
+fn merge_last_admission(
+    current: &mut Option<adminpb::ExecutionAdmissionStatus>,
+    next: Option<adminpb::ExecutionAdmissionStatus>,
+) {
+    let Some(next) = next else {
+        return;
+    };
+    if !next.observed {
+        return;
+    }
+    let replace = current
+        .as_ref()
+        .map(|current| !current.observed || current.at_unix_nano <= next.at_unix_nano)
+        .unwrap_or(true);
+    if replace {
+        *current = Some(next);
+    }
+}
+
+pub async fn serve_with_multi_region_services<E, S, D>(
+    addr: SocketAddr,
+    store_service: MultiRegionStoreKvService<E>,
+    admin_service: MultiRegionRaftAdminService<S, D>,
+    transport: nokv_raftnode::TonicRaftTransportRegistry,
+) -> Result<(), tonic::transport::Error>
+where
+    E: AppliedRegionDescriptorProvider
+        + ApplyWatchProvider
+        + RaftCommandExecutor
+        + RaftRuntimeStatusProvider,
+    S: AppliedRegionDescriptorProvider + RaftMembershipAdmin + RaftRuntimeStatusProvider,
+    D: RegionDescriptorSink,
+{
+    tonic::transport::Server::builder()
+        .add_service(crate::StoreKvServer::new(store_service))
+        .add_service(crate::RaftAdminServer::new(admin_service))
+        .add_service(nokv_raftnode::RaftTransportServer::new(transport.service()))
+        .serve(addr)
+        .await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{RaftRuntimeStatus, RegionAdmission};
+    use nokv_mvcc::MvccStore;
+    use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdmin;
+    use nokv_proto::nokv::kv::v1::store_kv_server::StoreKv;
+    use nokv_proto::nokv::meta::v1 as metapb;
+    use nokv_proto::nokv::raft::v1 as raftpb;
+    use nokv_raftnode::{ApplyStatusProvider, BasicNode};
+
+    #[derive(Debug, Clone)]
+    struct FixedRuntimeEngine {
+        inner: nokv_raftnode::AppliedKvEngine<MvccStore>,
+        runtime: RaftRuntimeStatus,
+    }
+
+    impl FixedRuntimeEngine {
+        fn leader(region_id: u64, local_peer_id: u64) -> Self {
+            Self {
+                inner: nokv_raftnode::AppliedKvEngine::new(region_id, MvccStore::new()),
+                runtime: RaftRuntimeStatus {
+                    local_peer_id,
+                    leader_peer_id: local_peer_id,
+                    leader: true,
+                    hosted: true,
+                },
+            }
+        }
+
+        fn set_region_descriptor(&self, descriptor: metapb::RegionDescriptor) {
+            self.inner.set_region_descriptor(descriptor).unwrap();
+        }
+    }
+
+    impl RaftCommandExecutor for FixedRuntimeEngine {
+        fn execute_raft_command<'a>(
+            &'a self,
+            req: &'a raftpb::RaftCmdRequest,
+        ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
+        {
+            self.inner.execute_raft_command(req)
+        }
+    }
+
+    impl ApplyStatusProvider for FixedRuntimeEngine {
+        fn apply_status(&self) -> nokv_raftnode::ApplyStatus {
+            self.inner.apply_status()
+        }
+    }
+
+    impl ApplyWatchProvider for FixedRuntimeEngine {
+        fn subscribe_apply(&self) -> tokio::sync::broadcast::Receiver<kvpb::ApplyWatchEvent> {
+            self.inner.subscribe_apply()
+        }
+    }
+
+    impl RaftRuntimeStatusProvider for FixedRuntimeEngine {
+        fn raft_runtime_status(&self) -> RaftRuntimeStatus {
+            self.runtime
+        }
+    }
+
+    impl AppliedRegionDescriptorProvider for FixedRuntimeEngine {
+        fn applied_region_descriptor(&self) -> Result<Option<metapb::RegionDescriptor>, Status> {
+            self.inner
+                .region_descriptor()
+                .map_err(|err| Status::internal(err.to_string()))
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct NoopAdminStatus;
+
+    impl ApplyStatusProvider for NoopAdminStatus {
+        fn apply_status(&self) -> nokv_raftnode::ApplyStatus {
+            nokv_raftnode::ApplyStatus {
+                region_id: 1,
+                term: 1,
+                applied_index: 1,
+            }
+        }
+    }
+
+    impl RaftRuntimeStatusProvider for NoopAdminStatus {
+        fn raft_runtime_status(&self) -> RaftRuntimeStatus {
+            RaftRuntimeStatus {
+                local_peer_id: 1,
+                leader_peer_id: 1,
+                leader: true,
+                hosted: true,
+            }
+        }
+    }
+
+    impl AppliedRegionDescriptorProvider for NoopAdminStatus {}
+
+    #[tonic::async_trait]
+    impl RaftMembershipAdmin for NoopAdminStatus {
+        async fn add_voter(&self, _peer_id: u64, _node: BasicNode) -> Result<(), Status> {
+            Ok(())
+        }
+
+        async fn remove_voter(&self, _peer_id: u64) -> Result<(), Status> {
+            Ok(())
+        }
+
+        async fn transfer_leader(&self, _peer_id: u64) -> Result<(), Status> {
+            Ok(())
+        }
+
+        async fn propose_region_descriptor(
+            &self,
+            _descriptor: &metapb::RegionDescriptor,
+        ) -> Result<(), Status> {
+            Ok(())
+        }
+    }
+
+    fn context(admission: &RegionAdmission) -> kvpb::Context {
+        kvpb::Context {
+            region_id: admission.region_id,
+            region_epoch: Some(metapb::RegionEpoch {
+                version: admission.epoch_version,
+                conf_version: admission.epoch_conf_version,
+            }),
+            peer: Some(metapb::RegionPeer {
+                store_id: admission.store_id,
+                peer_id: admission.peer_id,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn test_region_descriptor(
+        region_id: u64,
+        store_id: u64,
+        peer_id: u64,
+        start_key: &[u8],
+        end_key: &[u8],
+    ) -> metapb::RegionDescriptor {
+        metapb::RegionDescriptor {
+            region_id,
+            start_key: start_key.to_vec(),
+            end_key: end_key.to_vec(),
+            epoch: Some(metapb::RegionEpoch {
+                version: 1,
+                conf_version: 1,
+            }),
+            peers: vec![metapb::RegionPeer { store_id, peer_id }],
+            ..Default::default()
+        }
+    }
+
+    #[tokio::test]
+    async fn store_kv_routes_by_context_region() {
+        let descriptor1 = test_region_descriptor(1, 1, 10, b"", b"m");
+        let descriptor2 = test_region_descriptor(2, 1, 20, b"m", b"");
+        let admission1 = RegionAdmission::from_descriptor(&descriptor1, true).unwrap();
+        let admission2 = RegionAdmission::from_descriptor(&descriptor2, true).unwrap();
+        let engine1 = FixedRuntimeEngine::leader(1, 10);
+        let engine2 = FixedRuntimeEngine::leader(2, 20);
+        engine1.set_region_descriptor(descriptor1);
+        engine2.set_region_descriptor(descriptor2);
+        let service = MultiRegionStoreKvService::new([
+            (
+                1,
+                StoreKvService::with_admission(engine1, admission1.clone()),
+            ),
+            (
+                2,
+                StoreKvService::with_admission(engine2, admission2.clone()),
+            ),
+        ])
+        .unwrap();
+
+        let key = b"m-artifact".to_vec();
+        let put = service
+            .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
+                context: Some(context(&admission2)),
+                request: Some(kvpb::TryAtomicMutateRequest {
+                    mutations: vec![kvpb::Mutation {
+                        key: key.clone(),
+                        value: b"region-2".to_vec(),
+                        op: kvpb::mutation::Op::Put as i32,
+                        ..Default::default()
+                    }],
+                    commit_version: 11,
+                    ..Default::default()
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert!(
+            put.region_error.is_none(),
+            "unexpected region error: {:?}",
+            put.region_error
+        );
+        assert_eq!(put.response.unwrap().applied_keys, 1);
+
+        let get = service
+            .get(Request::new(kvpb::KvGetRequest {
+                context: Some(context(&admission2)),
+                request: Some(kvpb::GetRequest {
+                    key: key.clone(),
+                    version: 11,
+                }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        let value = get.response.unwrap();
+        assert_eq!(value.value, b"region-2");
+        assert!(!value.not_found);
+
+        let wrong_region = service
+            .get(Request::new(kvpb::KvGetRequest {
+                context: Some(context(&RegionAdmission {
+                    region_id: 99,
+                    store_id: 1,
+                    peer_id: 99,
+                    ..admission1
+                })),
+                request: Some(kvpb::GetRequest { key, version: 11 }),
+                ..Default::default()
+            }))
+            .await
+            .unwrap()
+            .into_inner();
+        assert_eq!(
+            wrong_region
+                .region_error
+                .unwrap()
+                .region_not_found
+                .unwrap()
+                .region_id,
+            99
+        );
+    }
+
+    #[tokio::test]
+    async fn admin_routes_region_scoped_membership() {
+        let admission1 =
+            RegionAdmission::from_descriptor(&test_region_descriptor(1, 1, 10, b"", b"m"), true)
+                .unwrap();
+        let admission2 =
+            RegionAdmission::from_descriptor(&test_region_descriptor(2, 1, 20, b"m", b""), true)
+                .unwrap();
+        let service = MultiRegionRaftAdminService::new([
+            (
+                1,
+                RaftAdminService::with_admission(NoopAdminStatus, admission1),
+            ),
+            (
+                2,
+                RaftAdminService::with_admission(NoopAdminStatus, admission2),
+            ),
+        ])
+        .unwrap();
+
+        let added = service
+            .add_peer(Request::new(adminpb::AddPeerRequest {
+                region_id: 2,
+                store_id: 3,
+                peer_id: 30,
+            }))
+            .await
+            .unwrap()
+            .into_inner()
+            .region
+            .unwrap();
+        assert_eq!(added.region_id, 2);
+        assert_eq!(added.epoch.unwrap().conf_version, 2);
+        assert!(added
+            .peers
+            .iter()
+            .any(|peer| peer.store_id == 3 && peer.peer_id == 30));
+
+        let missing = service
+            .remove_peer(Request::new(adminpb::RemovePeerRequest {
+                region_id: 3,
+                peer_id: 30,
+            }))
+            .await
+            .unwrap_err();
+        assert_eq!(missing.code(), tonic::Code::FailedPrecondition);
+        assert!(missing.message().contains("region 3"));
+    }
+
+    #[tokio::test]
+    async fn admin_execution_status_counts_process_diagnostics_once() {
+        let admission1 =
+            RegionAdmission::from_descriptor(&test_region_descriptor(1, 1, 10, b"", b"m"), true)
+                .unwrap();
+        let admission2 =
+            RegionAdmission::from_descriptor(&test_region_descriptor(2, 1, 20, b"m", b""), true)
+                .unwrap();
+        let diagnostics = nokv_holtstore::HoltMvccStore::open_memory().unwrap();
+        diagnostics
+            .enqueue_pending_root_event(&metapb::RootEvent {
+                kind: metapb::RootEventKind::PeerAdded as i32,
+                payload: Some(metapb::root_event::Payload::PeerChange(
+                    metapb::RootPeerChange {
+                        region_id: 2,
+                        store_id: 3,
+                        peer_id: 30,
+                        ..Default::default()
+                    },
+                )),
+            })
+            .unwrap();
+        let service = MultiRegionRaftAdminService::new([
+            (
+                1,
+                RaftAdminService::with_admission(NoopAdminStatus, admission1),
+            ),
+            (
+                2,
+                RaftAdminService::with_admission(NoopAdminStatus, admission2),
+            ),
+        ])
+        .unwrap()
+        .with_restart_diagnostics(Arc::new(diagnostics));
+
+        let status = service
+            .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
+            .await
+            .unwrap()
+            .into_inner();
+        let restart = status.restart.unwrap();
+        assert_eq!(restart.region_count, 2);
+        assert_eq!(restart.raft_group_count, 2);
+        assert_eq!(restart.pending_root_event_count, 1);
+        assert_eq!(status.topology.len(), 1);
+        assert_eq!(status.topology[0].transition_id, "peer:2:add:3:30");
+    }
+}
