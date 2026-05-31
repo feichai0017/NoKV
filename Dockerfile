@@ -24,7 +24,6 @@ RUN apt-get update \
     && apt-get install -y --no-install-recommends protobuf-compiler ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY pb ./pb
-COPY third_party/holt ./third_party/holt
 COPY raftstore ./raftstore
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \

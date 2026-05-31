@@ -52,7 +52,6 @@ Package boundaries follow ownership of truth, not convenience.
 | `pb/`, `*/wire/` | Proto definitions and conversion glue. | Leak protobuf structs into semantic cores when a domain type exists. |
 | `metrics/` | Reusable metric value types. | Own subsystem state. |
 | `utils/` | Domain-neutral helpers shared by multiple non-test packages. | Import domain packages or hide fsmeta/root/coordinator/raftstore semantics. |
-| `third_party/holt/` | Pinned external Holt source checkout for Rust data-plane work. | Be imported directly by Go runtime code or become the public storage contract. |
 | `cmd/` | Binary assembly, flags, env, and config wiring. | Contain core protocol, semantic, or storage logic. |
 
 Deleted package trees are intentionally not compatibility surfaces:

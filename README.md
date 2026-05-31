@@ -44,7 +44,6 @@ The main package boundaries are:
 | `coordinator` | Routing, TSO, store discovery, root-event publish, and serving-plane rebuild. |
 | `raftstore` | Rust replacement data plane using OpenRaft and Holt multi-tree storage. |
 | `pb` | Public protobuf wire contracts. |
-| `third_party/holt` | Pinned Holt source checkout used by the Rust data-plane work. |
 
 ## fsmeta
 

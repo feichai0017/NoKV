@@ -94,14 +94,6 @@ func TestEvaluateCatchesForbiddenBoundaries(t *testing.T) {
 			wantImport:  ModulePath + "/fsmeta/model",
 			wantPackage: ModulePath + "/utils",
 		},
-		{
-			name:        "go runtime importing third-party holt checkout",
-			pkg:         ModulePath + "/fsmeta/runtime/local",
-			imports:     []string{ModulePath + "/third_party/holt"},
-			wantRule:    "third-party holt checkout is Rust-adapter-only",
-			wantImport:  ModulePath + "/third_party/holt",
-			wantPackage: ModulePath + "/fsmeta/runtime/local",
-		},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

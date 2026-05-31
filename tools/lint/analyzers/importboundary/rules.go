@@ -137,13 +137,6 @@ var Rules = []Rule{
 			ModulePath + "/pb",
 		},
 	},
-	{
-		Name:          "third-party holt checkout is Rust-adapter-only",
-		PackagePrefix: ModulePath,
-		Forbidden: []string{
-			ModulePath + "/third_party/holt",
-		},
-	},
 }
 
 // Violation describes one (package, import) pair that broke a Rule.
