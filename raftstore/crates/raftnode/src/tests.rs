@@ -2,7 +2,7 @@ use super::*;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use nokv_mvcc::MvccStore;
+use nokv_metastore::MemoryMetadataStore;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_proto::nokv::raft::v1 as raftpb;
@@ -17,7 +17,7 @@ struct RecordingRegionMetadataSink {
 }
 
 impl RegionMetadataSink for RecordingRegionMetadataSink {
-    fn save_apply_status(&self, status: &ApplyStatus) -> nokv_mvcc::Result<()> {
+    fn save_apply_status(&self, status: &ApplyStatus) -> nokv_metastore::Result<()> {
         self.statuses.lock().unwrap().push(status.clone());
         Ok(())
     }
@@ -25,7 +25,7 @@ impl RegionMetadataSink for RecordingRegionMetadataSink {
     fn save_region_descriptor(
         &self,
         descriptor: &metapb::RegionDescriptor,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         self.descriptors.lock().unwrap().push(descriptor.clone());
         Ok(())
     }
@@ -33,7 +33,7 @@ impl RegionMetadataSink for RecordingRegionMetadataSink {
     fn save_apply_watch_event(
         &self,
         event: &metadatapb::MetadataApplyWatchEvent,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         self.events.lock().unwrap().push(event.clone());
         Ok(())
     }
@@ -48,7 +48,7 @@ impl RegionDescriptorCatalog for StaticRegionDescriptorCatalog {
     fn region_descriptor(
         &self,
         region_id: RegionId,
-    ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+    ) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>> {
         Ok(self.descriptors.get(&region_id).cloned())
     }
 }
@@ -106,7 +106,7 @@ async fn execute_metadata_put<E>(
     value: impl Into<Vec<u8>>,
     read_version: u64,
     commit_version: u64,
-) -> nokv_mvcc::Result<metadatapb::MetadataCommitResponse>
+) -> nokv_metastore::Result<metadatapb::MetadataCommitResponse>
 where
     E: MetadataCommandExecutor,
 {
@@ -145,7 +145,8 @@ async fn openraft_region_bootstraps_single_node_and_applies_proposal() {
     let dir = tempfile::tempdir().unwrap();
     let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
     let log_store = RegionLogStorage::new(log);
-    let state_machine = RegionStateMachine::new(AppliedMetadataEngine::new(7, MvccStore::new()));
+    let state_machine =
+        RegionStateMachine::new(AppliedMetadataEngine::new(7, MemoryMetadataStore::new()));
     let raft = OpenRaftRegion::bootstrap_single_node(1, 7, log_store, state_machine)
         .await
         .unwrap();
@@ -165,7 +166,8 @@ async fn openraft_region_serves_read_without_advancing_apply_index() {
     let dir = tempfile::tempdir().unwrap();
     let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
     let log_store = RegionLogStorage::new(log);
-    let state_machine = RegionStateMachine::new(AppliedMetadataEngine::new(7, MvccStore::new()));
+    let state_machine =
+        RegionStateMachine::new(AppliedMetadataEngine::new(7, MemoryMetadataStore::new()));
     let raft = OpenRaftRegion::bootstrap_single_node(1, 7, log_store, state_machine)
         .await
         .unwrap();
@@ -187,7 +189,7 @@ async fn openraft_region_serves_read_without_advancing_apply_index() {
 
 #[tokio::test]
 async fn applied_metadata_engine_executes_metadata_command_payload() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let response = engine
         .execute_metadata_command(&metadatapb::MetadataCommitRequest {
             context: Some(metadatapb::MetadataContext {
@@ -235,7 +237,7 @@ async fn openraft_region_restart_write_returns_client_response() {
         let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
         let log_store = RegionLogStorage::new(log);
         let state_machine =
-            RegionStateMachine::new(AppliedMetadataEngine::new(7, MvccStore::new()));
+            RegionStateMachine::new(AppliedMetadataEngine::new(7, MemoryMetadataStore::new()));
         let raft = OpenRaftRegion::bootstrap_single_node(1, 7, log_store, state_machine)
             .await
             .unwrap();
@@ -247,8 +249,10 @@ async fn openraft_region_restart_write_returns_client_response() {
 
     let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
     let log_store = RegionLogStorage::new(log);
-    let state_machine =
-        RegionStateMachine::new(AppliedMetadataEngine::with_status(status, MvccStore::new()));
+    let state_machine = RegionStateMachine::new(AppliedMetadataEngine::with_status(
+        status,
+        MemoryMetadataStore::new(),
+    ));
     let raft = OpenRaftRegion::bootstrap_single_node(1, 7, log_store, state_machine)
         .await
         .unwrap();
@@ -271,7 +275,7 @@ async fn openraft_region_replicates_proposal_to_memory_peers() {
         let dir = tempfile::tempdir().unwrap();
         let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
         let log_store = RegionLogStorage::new(log);
-        let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+        let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
         let state_machine = RegionStateMachine::new(engine.clone());
         let region = OpenRaftRegion::open_with_network(
             node_id,
@@ -331,7 +335,7 @@ async fn openraft_region_adds_voter_and_replicates_to_new_peer() {
         let dir = tempfile::tempdir().unwrap();
         let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
         let log_store = RegionLogStorage::new(log);
-        let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+        let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
         let state_machine = RegionStateMachine::new(engine.clone());
         let region = OpenRaftRegion::open_with_network(
             node_id,
@@ -397,7 +401,7 @@ async fn openraft_region_target_peer_can_take_leadership() {
     let leader_dir = tempfile::tempdir().unwrap();
     let follower_dir = tempfile::tempdir().unwrap();
 
-    let leader_engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let leader_engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let leader = OpenRaftRegion::open_with_network(
         1,
         7,
@@ -409,7 +413,7 @@ async fn openraft_region_target_peer_can_take_leadership() {
     .unwrap();
     registry.register(1, leader.raft_handle());
 
-    let follower_engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let follower_engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let follower = OpenRaftRegion::open_with_network(
         2,
         7,
@@ -465,7 +469,7 @@ async fn openraft_region_restarts_after_membership_change_without_single_node_vo
     let leader_dir = tempfile::tempdir().unwrap();
     let follower_dir = tempfile::tempdir().unwrap();
 
-    let leader_engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let leader_engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let leader = OpenRaftRegion::open_with_network(
         1,
         7,
@@ -477,7 +481,7 @@ async fn openraft_region_restarts_after_membership_change_without_single_node_vo
     .unwrap();
     registry.register(1, leader.raft_handle());
 
-    let follower_engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let follower_engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let follower = OpenRaftRegion::open_with_network(
         2,
         7,
@@ -534,7 +538,7 @@ async fn openraft_region_restarts_after_membership_change_without_single_node_vo
 
     let restarted_registry = MemoryRaftNetworkRegistry::default();
     let restarted_leader_engine =
-        AppliedMetadataEngine::with_status(leader_status, MvccStore::new());
+        AppliedMetadataEngine::with_status(leader_status, MemoryMetadataStore::new());
     let restarted_leader = OpenRaftRegion::bootstrap_single_node_with_network(
         1,
         7,
@@ -548,7 +552,7 @@ async fn openraft_region_restarts_after_membership_change_without_single_node_vo
     restarted_registry.register(1, restarted_leader.raft_handle());
 
     let restarted_follower_engine =
-        AppliedMetadataEngine::with_status(follower_status, MvccStore::new());
+        AppliedMetadataEngine::with_status(follower_status, MemoryMetadataStore::new());
     let restarted_follower = OpenRaftRegion::open_with_network(
         2,
         7,
@@ -606,7 +610,7 @@ async fn openraft_region_catches_up_joining_peer_from_snapshot() {
     let leader_dir = tempfile::tempdir().unwrap();
     let leader_log = SegmentedEntryLog::open(7, leader_dir.path()).unwrap();
     let leader_log_store = RegionLogStorage::new(leader_log);
-    let leader_engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let leader_engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let leader = OpenRaftRegion::open_with_network_for_test(
         1,
         7,
@@ -682,7 +686,7 @@ async fn openraft_region_catches_up_joining_peer_from_snapshot() {
     let joining_dir = tempfile::tempdir().unwrap();
     let joining_log = SegmentedEntryLog::open(7, joining_dir.path()).unwrap();
     let joining_log_store = RegionLogStorage::new(joining_log);
-    let joining_engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let joining_engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let joining = OpenRaftRegion::open_with_network_for_test(
         2,
         7,
@@ -736,7 +740,7 @@ fn proposal_rejects_region_mismatch() {
 
 #[tokio::test]
 async fn applied_metadata_engine_advances_index_only_for_writes() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     assert_eq!(engine.status().applied_index, 0);
 
     let get = engine
@@ -760,7 +764,7 @@ async fn applied_metadata_engine_can_start_from_persisted_status() {
             term: 3,
             applied_index: 41,
         },
-        MvccStore::new(),
+        MemoryMetadataStore::new(),
     );
     assert_eq!(
         engine.status(),
@@ -778,7 +782,7 @@ async fn applied_metadata_engine_can_start_from_persisted_status() {
 
 #[tokio::test]
 async fn applied_metadata_engine_publishes_watch_events_for_writes() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let mut watch = engine.subscribe();
     execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
         .await
@@ -792,7 +796,7 @@ async fn applied_metadata_engine_publishes_watch_events_for_writes() {
 
 #[tokio::test]
 async fn applied_metadata_engine_replays_watch_events_after_cursor() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     for (key, commit_version) in [
         (b"k/a".to_vec(), 2),
         (b"k/b".to_vec(), 3),
@@ -828,7 +832,7 @@ async fn applied_metadata_engine_replays_watch_events_after_cursor() {
 
 #[tokio::test]
 async fn applied_metadata_engine_suppresses_watch_events_for_failed_writes() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let mut watch = engine.subscribe();
     engine
         .execute_metadata_command(&metadatapb::MetadataCommitRequest {
@@ -895,7 +899,7 @@ async fn applied_metadata_engine_suppresses_watch_events_for_failed_writes() {
 
 #[tokio::test]
 async fn applied_metadata_engine_traffic_snapshot_drains_counters() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
         .await
         .unwrap();
@@ -915,7 +919,7 @@ async fn applied_metadata_engine_traffic_snapshot_drains_counters() {
 
 #[tokio::test]
 async fn applied_metadata_engine_executes_metadata_command_payload_and_reads_back() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let response = execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
         .await
         .unwrap();
@@ -931,7 +935,7 @@ async fn applied_metadata_engine_executes_metadata_command_payload_and_reads_bac
 
 #[tokio::test]
 async fn metadata_command_suppresses_watch_events_for_failed_mutation() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let mut watch = engine.subscribe();
     engine
         .execute_metadata_command(&metadatapb::MetadataCommitRequest {
@@ -998,7 +1002,7 @@ async fn metadata_command_suppresses_watch_events_for_failed_mutation() {
 
 #[tokio::test]
 async fn metadata_command_with_multiple_writes_advances_index_once() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let mut watch = engine.subscribe();
 
     engine
@@ -1039,7 +1043,7 @@ async fn metadata_command_with_multiple_writes_advances_index_once() {
 
 #[test]
 fn apply_openraft_entry_uses_committed_log_status() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let mut watch = engine.subscribe();
     let entry = OpenRaftEntry {
         log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
@@ -1073,8 +1077,10 @@ async fn persistent_applied_engine_saves_status_after_metadata_command() {
     let sink = RecordingRegionMetadataSink::default();
     let statuses = sink.statuses.clone();
     let events = sink.events.clone();
-    let engine =
-        PersistentAppliedMetadataEngine::new(AppliedMetadataEngine::new(7, MvccStore::new()), sink);
+    let engine = PersistentAppliedMetadataEngine::new(
+        AppliedMetadataEngine::new(7, MemoryMetadataStore::new()),
+        sink,
+    );
 
     execute_metadata_put(&engine, 7, 1, b"k", b"v", 1, 2)
         .await
@@ -1099,8 +1105,10 @@ fn persistent_applied_engine_saves_descriptor_after_descriptor_entry() {
     let sink = RecordingRegionMetadataSink::default();
     let descriptors = sink.descriptors.clone();
     let statuses = sink.statuses.clone();
-    let engine =
-        PersistentAppliedMetadataEngine::new(AppliedMetadataEngine::new(7, MvccStore::new()), sink);
+    let engine = PersistentAppliedMetadataEngine::new(
+        AppliedMetadataEngine::new(7, MemoryMetadataStore::new()),
+        sink,
+    );
     let descriptor = metapb::RegionDescriptor {
         region_id: 7,
         epoch: Some(metapb::RegionEpoch {
@@ -1146,7 +1154,7 @@ fn persistent_applied_engine_saves_descriptor_after_descriptor_entry() {
 
 #[test]
 fn applied_engine_applies_split_admin_command_to_parent_descriptor() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     engine
         .set_region_descriptor(metapb::RegionDescriptor {
             region_id: 7,
@@ -1217,8 +1225,10 @@ fn applied_engine_applies_split_admin_command_to_parent_descriptor() {
 fn persistent_applied_engine_saves_split_parent_and_child_descriptors() {
     let sink = RecordingRegionMetadataSink::default();
     let descriptors = sink.descriptors.clone();
-    let engine =
-        PersistentAppliedMetadataEngine::new(AppliedMetadataEngine::new(7, MvccStore::new()), sink);
+    let engine = PersistentAppliedMetadataEngine::new(
+        AppliedMetadataEngine::new(7, MemoryMetadataStore::new()),
+        sink,
+    );
     engine
         .inner()
         .set_region_descriptor(metapb::RegionDescriptor {
@@ -1274,7 +1284,7 @@ fn persistent_applied_engine_saves_split_parent_and_child_descriptors() {
 
 #[test]
 fn applied_engine_applies_merge_admin_command_to_target_descriptor() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     engine
         .set_region_descriptor(metapb::RegionDescriptor {
             region_id: 7,
@@ -1366,7 +1376,7 @@ fn applied_engine_applies_merge_admin_command_to_target_descriptor() {
 
 #[test]
 fn applied_engine_uses_region_descriptor_catalog_for_merge_admin_command() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     engine
         .set_region_descriptor(metapb::RegionDescriptor {
             region_id: 7,
@@ -1430,7 +1440,7 @@ fn applied_engine_uses_region_descriptor_catalog_for_merge_admin_command() {
 
 #[test]
 fn applied_engine_replays_merge_admin_command_after_source_retired() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     engine
         .set_region_descriptor(metapb::RegionDescriptor {
             region_id: 7,
@@ -1488,7 +1498,7 @@ fn applied_engine_replays_merge_admin_command_after_source_retired() {
 
 #[test]
 fn applied_engine_rejects_merge_admin_command_without_source_descriptor() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     engine
         .set_region_descriptor(metapb::RegionDescriptor {
             region_id: 7,
@@ -1538,7 +1548,7 @@ fn applied_engine_rejects_merge_admin_command_without_source_descriptor() {
 
 #[test]
 fn applied_engine_keeps_source_descriptor_when_merge_validation_fails() {
-    let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     engine
         .set_region_descriptor(metapb::RegionDescriptor {
             region_id: 7,
@@ -1610,8 +1620,10 @@ fn persistent_applied_engine_saves_merged_target_without_retired_source() {
     let sink = RecordingRegionMetadataSink::default();
     let descriptors = sink.descriptors.clone();
     let statuses = sink.statuses.clone();
-    let engine =
-        PersistentAppliedMetadataEngine::new(AppliedMetadataEngine::new(7, MvccStore::new()), sink);
+    let engine = PersistentAppliedMetadataEngine::new(
+        AppliedMetadataEngine::new(7, MemoryMetadataStore::new()),
+        sink,
+    );
     engine
         .inner()
         .set_region_descriptor(metapb::RegionDescriptor {
@@ -1685,8 +1697,10 @@ fn persistent_applied_engine_saves_merged_target_without_retired_source() {
 async fn persistent_applied_engine_does_not_save_status_after_read_command() {
     let sink = RecordingRegionMetadataSink::default();
     let statuses = sink.statuses.clone();
-    let engine =
-        PersistentAppliedMetadataEngine::new(AppliedMetadataEngine::new(7, MvccStore::new()), sink);
+    let engine = PersistentAppliedMetadataEngine::new(
+        AppliedMetadataEngine::new(7, MemoryMetadataStore::new()),
+        sink,
+    );
 
     engine
         .execute_metadata_get(&metadata_get_request(7, b"k", 1))

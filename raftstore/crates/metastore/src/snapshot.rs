@@ -1,34 +1,34 @@
 use prost::Message;
 
 use crate::{
-    Error, Inner, MvccSnapshot, MvccSnapshotEngine, MvccSnapshotWrite, MvccStore, Result,
-    ValueKind, VersionedValue,
+    Error, Inner, MemoryMetadataStore, MetadataSnapshot, MetadataSnapshotEngine,
+    MetadataSnapshotWrite, Result, ValueKind, VersionedValue,
 };
 
-impl MvccStore {
-    pub fn export_snapshot(&self) -> Result<MvccSnapshot> {
+impl MemoryMetadataStore {
+    pub fn export_snapshot(&self) -> Result<MetadataSnapshot> {
         let inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         Ok(snapshot_from_inner(&inner))
     }
 
-    pub fn install_snapshot(&self, snapshot: MvccSnapshot) -> Result<()> {
+    pub fn install_snapshot(&self, snapshot: MetadataSnapshot) -> Result<()> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         *inner = inner_from_snapshot(snapshot)?;
         Ok(())
     }
 }
 
-impl MvccSnapshotEngine for MvccStore {
-    fn export_mvcc_snapshot(&self) -> Result<MvccSnapshot> {
+impl MetadataSnapshotEngine for MemoryMetadataStore {
+    fn export_metadata_snapshot(&self) -> Result<MetadataSnapshot> {
         self.export_snapshot()
     }
 
-    fn install_mvcc_snapshot(&self, snapshot: MvccSnapshot) -> Result<()> {
+    fn install_metadata_snapshot(&self, snapshot: MetadataSnapshot) -> Result<()> {
         self.install_snapshot(snapshot)
     }
 }
 
-pub fn encode_mvcc_snapshot(snapshot: &MvccSnapshot) -> Vec<u8> {
+pub fn encode_metadata_snapshot(snapshot: &MetadataSnapshot) -> Vec<u8> {
     let payload = SnapshotPayload {
         writes: snapshot
             .writes
@@ -47,11 +47,11 @@ pub fn encode_mvcc_snapshot(snapshot: &MvccSnapshot) -> Vec<u8> {
     payload.encode_to_vec()
 }
 
-pub fn decode_mvcc_snapshot(bytes: &[u8]) -> Result<MvccSnapshot> {
+pub fn decode_metadata_snapshot(bytes: &[u8]) -> Result<MetadataSnapshot> {
     let payload = SnapshotPayload::decode(bytes).map_err(|err| Error::Decode(err.to_string()))?;
     let mut writes = Vec::with_capacity(payload.writes.len());
     for write in payload.writes {
-        writes.push(MvccSnapshotWrite {
+        writes.push(MetadataSnapshotWrite {
             key: write.key,
             commit_version: write.commit_version,
             value: VersionedValue {
@@ -62,17 +62,17 @@ pub fn decode_mvcc_snapshot(bytes: &[u8]) -> Result<MvccSnapshot> {
             },
         });
     }
-    Ok(MvccSnapshot { writes })
+    Ok(MetadataSnapshot { writes })
 }
 
-fn snapshot_from_inner(inner: &Inner) -> MvccSnapshot {
+fn snapshot_from_inner(inner: &Inner) -> MetadataSnapshot {
     let writes = inner
         .writes
         .iter()
         .flat_map(|(key, versions)| {
             versions
                 .iter()
-                .map(|(commit_version, value)| MvccSnapshotWrite {
+                .map(|(commit_version, value)| MetadataSnapshotWrite {
                     key: key.clone(),
                     commit_version: *commit_version,
                     value: value.clone(),
@@ -80,10 +80,10 @@ fn snapshot_from_inner(inner: &Inner) -> MvccSnapshot {
                 .collect::<Vec<_>>()
         })
         .collect();
-    MvccSnapshot { writes }
+    MetadataSnapshot { writes }
 }
 
-fn inner_from_snapshot(snapshot: MvccSnapshot) -> Result<Inner> {
+fn inner_from_snapshot(snapshot: MetadataSnapshot) -> Result<Inner> {
     let mut inner = Inner::default();
     for write in snapshot.writes {
         inner

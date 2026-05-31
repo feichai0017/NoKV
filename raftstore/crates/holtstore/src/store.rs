@@ -2,7 +2,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use holt::{Tree, TreeConfig, DB};
-use nokv_mvcc as mvcc;
+use nokv_metastore as metastore;
 
 use crate::trees::{
     APPLY_STATE_TREE, DATA_TREE, REGION_META_TREE, REQUIRED_TREES, WATCH_APPLY_TREE, WRITE_TREE,
@@ -84,12 +84,12 @@ impl HoltStore {
 }
 
 #[derive(Clone)]
-pub struct HoltMvccStore {
+pub struct HoltMetadataStore {
     pub(crate) store: HoltStore,
     pub(crate) gate: Arc<Mutex<()>>,
 }
 
-impl HoltMvccStore {
+impl HoltMetadataStore {
     pub fn open_memory() -> Result<Self> {
         Ok(Self::new(HoltStore::open_memory()?))
     }
@@ -109,22 +109,22 @@ impl HoltMvccStore {
         self.store.checkpoint()
     }
 
-    pub(crate) fn lock(&self) -> mvcc::Result<std::sync::MutexGuard<'_, ()>> {
+    pub(crate) fn lock(&self) -> metastore::Result<std::sync::MutexGuard<'_, ()>> {
         self.gate
             .lock()
-            .map_err(|_| mvcc::Error::Backend("holt mvcc mutex poisoned".to_owned()))
+            .map_err(|_| metastore::Error::Backend("holt metadata store mutex poisoned".to_owned()))
     }
 
-    pub(crate) fn atomic<F>(&self, build: F) -> mvcc::Result<bool>
+    pub(crate) fn atomic<F>(&self, build: F) -> metastore::Result<bool>
     where
         F: FnOnce(&mut holt::DBAtomicBatch),
     {
         self.store
             .atomic(build)
-            .map_err(|err| mvcc::Error::Backend(err.to_string()))
+            .map_err(|err| metastore::Error::Backend(err.to_string()))
     }
 }
 
-pub(crate) fn to_backend_error(err: impl std::fmt::Display) -> mvcc::Error {
-    mvcc::Error::Backend(err.to_string())
+pub(crate) fn to_backend_error(err: impl std::fmt::Display) -> metastore::Error {
+    metastore::Error::Backend(err.to_string())
 }

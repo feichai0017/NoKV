@@ -5,8 +5,8 @@ use crate::serve::serve_with_openraft_metadata_region_admission_and_peer_endpoin
 use crate::wire_helpers::chunk_apply_watch_keys;
 use adminpb::raft_admin_server::RaftAdmin;
 use metadatapb::metadata_plane_server::MetadataPlane;
-use nokv_holtstore::HoltMvccStore;
-use nokv_mvcc::{MetadataEngine, MvccStore};
+use nokv_holtstore::HoltMetadataStore;
+use nokv_metastore::{MemoryMetadataStore, MetadataEngine};
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
@@ -181,13 +181,13 @@ fn open_persistent_holt_engine(
     path: &Path,
     region_id: u64,
 ) -> (
-    nokv_holtstore::HoltMvccStore,
+    nokv_holtstore::HoltMetadataStore,
     nokv_raftnode::PersistentAppliedMetadataEngine<
-        nokv_holtstore::HoltMvccStore,
+        nokv_holtstore::HoltMetadataStore,
         HoltRegionMetadataSink,
     >,
 ) {
-    let store = nokv_holtstore::HoltMvccStore::open_file(path).unwrap();
+    let store = nokv_holtstore::HoltMetadataStore::open_file(path).unwrap();
     let status = store
         .get_region_apply_state(region_id)
         .unwrap()
@@ -209,14 +209,14 @@ fn open_persistent_holt_engine(
 
 #[derive(Debug, Clone)]
 struct FixedRuntimeEngine {
-    inner: nokv_raftnode::AppliedMetadataEngine<MvccStore>,
+    inner: nokv_raftnode::AppliedMetadataEngine<MemoryMetadataStore>,
     runtime: RaftRuntimeStatus,
 }
 
 impl FixedRuntimeEngine {
     fn leader(region_id: u64, local_peer_id: u64) -> Self {
         Self {
-            inner: nokv_raftnode::AppliedMetadataEngine::new(region_id, MvccStore::new()),
+            inner: nokv_raftnode::AppliedMetadataEngine::new(region_id, MemoryMetadataStore::new()),
             runtime: RaftRuntimeStatus {
                 local_peer_id,
                 leader_peer_id: local_peer_id,
@@ -228,7 +228,7 @@ impl FixedRuntimeEngine {
 
     fn follower(region_id: u64, local_peer_id: u64, leader_peer_id: u64) -> Self {
         Self {
-            inner: nokv_raftnode::AppliedMetadataEngine::new(region_id, MvccStore::new()),
+            inner: nokv_raftnode::AppliedMetadataEngine::new(region_id, MemoryMetadataStore::new()),
             runtime: RaftRuntimeStatus {
                 local_peer_id,
                 leader_peer_id,
@@ -240,7 +240,7 @@ impl FixedRuntimeEngine {
 
     fn unhosted(region_id: u64, local_peer_id: u64) -> Self {
         Self {
-            inner: nokv_raftnode::AppliedMetadataEngine::new(region_id, MvccStore::new()),
+            inner: nokv_raftnode::AppliedMetadataEngine::new(region_id, MemoryMetadataStore::new()),
             runtime: RaftRuntimeStatus {
                 local_peer_id,
                 leader_peer_id: 0,
@@ -259,16 +259,18 @@ impl MetadataReadExecutor for FixedRuntimeEngine {
     fn execute_metadata_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataGetRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a
-    {
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataGetResponse>>
+           + Send
+           + 'a {
         self.inner.execute_metadata_get(req)
     }
 
     fn execute_metadata_batch_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataBatchGetRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<metadatapb::MetadataBatchGetResponse>,
+    > + Send
            + 'a {
         self.inner.execute_metadata_batch_get(req)
     }
@@ -276,8 +278,9 @@ impl MetadataReadExecutor for FixedRuntimeEngine {
     fn execute_metadata_scan<'a>(
         &'a self,
         req: &'a metadatapb::MetadataScanRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
-    {
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>>
+           + Send
+           + 'a {
         self.inner.execute_metadata_scan(req)
     }
 }
@@ -286,7 +289,7 @@ impl nokv_raftnode::MetadataCommandExecutor for FixedRuntimeEngine {
     fn execute_metadata_command<'a>(
         &'a self,
         req: &'a metadatapb::MetadataCommitRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataCommitResponse>>
            + Send
            + 'a {
         self.inner.execute_metadata_command(req)
@@ -309,7 +312,7 @@ impl ApplyWatchProvider for FixedRuntimeEngine {
     fn replay_apply(
         &self,
         request: nokv_raftnode::ApplyWatchReplayRequest,
-    ) -> nokv_mvcc::Result<nokv_raftnode::ApplyWatchReplay> {
+    ) -> nokv_metastore::Result<nokv_raftnode::ApplyWatchReplay> {
         self.inner.replay_apply(request)
     }
 }
@@ -328,13 +331,14 @@ impl AppliedRegionDescriptorProvider for FixedRuntimeEngine {
 
 #[derive(Debug, Clone)]
 struct MetadataOnlyEngine {
-    inner: nokv_raftnode::AppliedMetadataEngine<MvccStore>,
+    inner: nokv_raftnode::AppliedMetadataEngine<MemoryMetadataStore>,
     runtime: RaftRuntimeStatus,
 }
 
 impl MetadataOnlyEngine {
     fn leader(region_id: u64, local_peer_id: u64) -> Self {
-        let inner = nokv_raftnode::AppliedMetadataEngine::new(region_id, MvccStore::new());
+        let inner =
+            nokv_raftnode::AppliedMetadataEngine::new(region_id, MemoryMetadataStore::new());
         inner
             .set_region_descriptor(metapb::RegionDescriptor {
                 region_id,
@@ -365,16 +369,18 @@ impl MetadataReadExecutor for MetadataOnlyEngine {
     fn execute_metadata_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataGetRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a
-    {
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataGetResponse>>
+           + Send
+           + 'a {
         self.inner.execute_metadata_get(req)
     }
 
     fn execute_metadata_batch_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataBatchGetRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<metadatapb::MetadataBatchGetResponse>,
+    > + Send
            + 'a {
         self.inner.execute_metadata_batch_get(req)
     }
@@ -382,8 +388,9 @@ impl MetadataReadExecutor for MetadataOnlyEngine {
     fn execute_metadata_scan<'a>(
         &'a self,
         req: &'a metadatapb::MetadataScanRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
-    {
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>>
+           + Send
+           + 'a {
         self.inner.execute_metadata_scan(req)
     }
 }
@@ -392,7 +399,7 @@ impl nokv_raftnode::MetadataCommandExecutor for MetadataOnlyEngine {
     fn execute_metadata_command<'a>(
         &'a self,
         req: &'a metadatapb::MetadataCommitRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataCommitResponse>>
            + Send
            + 'a {
         self.inner.execute_metadata_command(req)
@@ -415,7 +422,7 @@ impl ApplyWatchProvider for MetadataOnlyEngine {
     fn replay_apply(
         &self,
         request: nokv_raftnode::ApplyWatchReplayRequest,
-    ) -> nokv_mvcc::Result<nokv_raftnode::ApplyWatchReplay> {
+    ) -> nokv_metastore::Result<nokv_raftnode::ApplyWatchReplay> {
         self.inner.replay_apply(request)
     }
 }
@@ -479,7 +486,7 @@ async fn metadata_plane_read_does_not_require_legacy_raft_command_executor() {
 async fn metadata_plane_can_run_against_holt_engine() {
     let engine = nokv_raftnode::AppliedMetadataEngine::new(
         1,
-        nokv_holtstore::HoltMvccStore::open_memory().unwrap(),
+        nokv_holtstore::HoltMetadataStore::open_memory().unwrap(),
     );
     let admission = RegionAdmission::default();
     let service = MetadataPlaneService::with_admission_state_and_execution(
@@ -574,7 +581,7 @@ async fn metadata_plane_can_run_against_openraft_region() {
     let dir = tempfile::tempdir().unwrap();
     let log = nokv_raftnode::SegmentedEntryLog::open(1, dir.path()).unwrap();
     let state_machine = nokv_raftnode::RegionStateMachine::new(
-        nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new()),
+        nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
     );
     let region = nokv_raftnode::OpenRaftRegion::bootstrap_single_node(
         1,
@@ -628,7 +635,7 @@ async fn server_mounts_openraft_transport_for_metadata_replication() {
         let addr = *addrs.get(&node_id).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
-        let engine = nokv_raftnode::AppliedMetadataEngine::new(7, MvccStore::new());
+        let engine = nokv_raftnode::AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
         let region = nokv_raftnode::OpenRaftRegion::open_with_network(
             node_id,
             7,
@@ -814,7 +821,7 @@ async fn bounded_stale_follower_prefer_read_serves_local_openraft_state() {
         let addr = *addrs.get(&node_id).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
-        let engine = nokv_raftnode::AppliedMetadataEngine::new(7, MvccStore::new());
+        let engine = nokv_raftnode::AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
         let region = nokv_raftnode::OpenRaftRegion::open_with_network(
             node_id,
             7,
@@ -972,7 +979,7 @@ async fn holt_snapshot_installed_peer_survives_openraft_restart() {
     let registry = nokv_raftnode::MemoryRaftNetworkRegistry::default();
     let leader_log_dir = tempfile::tempdir().unwrap();
     let leader_log = nokv_raftnode::SegmentedEntryLog::open(7, leader_log_dir.path()).unwrap();
-    let leader_engine = nokv_raftnode::AppliedMetadataEngine::new(7, MvccStore::new());
+    let leader_engine = nokv_raftnode::AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     let leader = nokv_raftnode::OpenRaftRegion::open_with_network(
         1,
         7,
@@ -1182,7 +1189,7 @@ async fn batch_get_empty_does_not_require_region_admission() {
 
 #[tokio::test]
 async fn watch_apply_streams_matching_apply_events() {
-    let engine = nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new());
+    let engine = nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new());
     let admission = RegionAdmission::default();
     let service = MetadataPlaneService::with_admission_state_and_execution(
         engine,
@@ -1235,7 +1242,7 @@ async fn watch_apply_streams_matching_apply_events() {
 
 #[tokio::test]
 async fn watch_apply_replays_after_resume_cursor() {
-    let engine = nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new());
+    let engine = nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new());
     let admission = RegionAdmission::default();
     let service = MetadataPlaneService::with_admission_state_and_execution(
         engine,
@@ -1328,12 +1335,12 @@ fn holt_region_metadata_sink_replays_watch_history_after_reopen() {
         ..Default::default()
     };
     {
-        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
         let sink = HoltRegionMetadataSink::new(store);
         sink.save_apply_watch_event(&event).unwrap();
     }
 
-    let reopened = HoltRegionMetadataSink::new(HoltMvccStore::open_file(dir.path()).unwrap());
+    let reopened = HoltRegionMetadataSink::new(HoltMetadataStore::open_file(dir.path()).unwrap());
     let replay = reopened
         .replay_apply_watch(&ApplyWatchReplayRequest {
             region_id: 7,
@@ -1508,7 +1515,7 @@ async fn scan_trims_keys_outside_region_end() {
         ..Default::default()
     };
     let service = MetadataPlaneService::with_admission_state_and_execution(
-        nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new()),
+        nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
         RegionAdmissionState::new(admission.clone()),
         ExecutionRuntime::default(),
     );
@@ -1554,7 +1561,7 @@ async fn scan_trims_keys_outside_region_end() {
 async fn scan_zero_limit_matches_go_default_limit() {
     let admission = RegionAdmission::default();
     let service = MetadataPlaneService::with_admission_state_and_execution(
-        nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new()),
+        nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
         RegionAdmissionState::new(admission.clone()),
         ExecutionRuntime::default(),
     );
@@ -1710,7 +1717,7 @@ async fn scan_rejects_reverse_scan() {
 }
 
 #[tokio::test]
-async fn admin_membership_is_explicitly_not_wired() {
+async fn admin_membership_requires_replicated_region_runtime() {
     let service = RaftAdminService::new(EmptyApplyStatus);
     let err = service
         .add_peer(Request::new(adminpb::AddPeerRequest {
@@ -1819,7 +1826,7 @@ async fn admin_add_peer_records_failed_topology_publish_without_failing_change()
 
 #[tokio::test]
 async fn execution_status_reports_holt_root_event_catalog_counts() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     let event = metapb::RootEvent {
         kind: metapb::RootEventKind::PeerAdded as i32,
         payload: Some(metapb::root_event::Payload::PeerChange(
@@ -1980,7 +1987,7 @@ async fn admin_adds_and_removes_openraft_voter() {
         let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
         let log_store = nokv_raftnode::RegionLogStorage::new(log);
         let state_machine = nokv_raftnode::RegionStateMachine::new(
-            nokv_raftnode::AppliedMetadataEngine::new(7, MvccStore::new()),
+            nokv_raftnode::AppliedMetadataEngine::new(7, MemoryMetadataStore::new()),
         );
         let region = nokv_raftnode::OpenRaftRegion::open_with_network(
             node_id,
@@ -2012,7 +2019,7 @@ async fn admin_adds_and_removes_openraft_voter() {
     };
     let peer_endpoints = PeerEndpointCatalog::new();
     let descriptor_dir = tempfile::tempdir().unwrap();
-    let descriptor_store = HoltMvccStore::open_file(descriptor_dir.path()).unwrap();
+    let descriptor_store = HoltMetadataStore::open_file(descriptor_dir.path()).unwrap();
     let topology_publisher = CaptureTopologyPublisher::default();
     let published_topology = topology_publisher.events.clone();
     let service =
@@ -2241,7 +2248,7 @@ async fn admin_adds_and_removes_openraft_voter() {
 
 #[tokio::test]
 async fn admin_runtime_status_reports_apply_index() {
-    let engine = nokv_raftnode::AppliedMetadataEngine::new(11, MvccStore::new());
+    let engine = nokv_raftnode::AppliedMetadataEngine::new(11, MemoryMetadataStore::new());
     engine
         .execute_metadata_command(&metadatapb::MetadataCommitRequest {
             context: Some(metadatapb::MetadataContext {
@@ -2282,7 +2289,7 @@ async fn admin_runtime_status_reports_unhosted_joining_peer() {
     let dir = tempfile::tempdir().unwrap();
     let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
     let state_machine = nokv_raftnode::RegionStateMachine::new(
-        nokv_raftnode::AppliedMetadataEngine::new(7, MvccStore::new()),
+        nokv_raftnode::AppliedMetadataEngine::new(7, MemoryMetadataStore::new()),
     );
     let region = nokv_raftnode::OpenRaftRegion::open_with_network(
         2,
@@ -2325,7 +2332,7 @@ async fn admin_execution_status_reports_unhosted_joining_peer_degraded() {
     let dir = tempfile::tempdir().unwrap();
     let log = nokv_raftnode::SegmentedEntryLog::open(7, dir.path()).unwrap();
     let state_machine = nokv_raftnode::RegionStateMachine::new(
-        nokv_raftnode::AppliedMetadataEngine::new(7, MvccStore::new()),
+        nokv_raftnode::AppliedMetadataEngine::new(7, MemoryMetadataStore::new()),
     );
     let region = nokv_raftnode::OpenRaftRegion::open_with_network(
         2,
@@ -2366,7 +2373,7 @@ async fn admin_execution_status_reports_unhosted_joining_peer_degraded() {
 async fn admin_runtime_status_requires_region_id() {
     let service = RaftAdminService::new(nokv_raftnode::AppliedMetadataEngine::new(
         11,
-        MvccStore::new(),
+        MemoryMetadataStore::new(),
     ));
     let err = service
         .region_runtime_status(Request::new(adminpb::RegionRuntimeStatusRequest {
@@ -2381,7 +2388,7 @@ async fn admin_runtime_status_requires_region_id() {
 async fn admin_execution_status_reports_default_admission() {
     let service = RaftAdminService::new(nokv_raftnode::AppliedMetadataEngine::new(
         11,
-        MvccStore::new(),
+        MemoryMetadataStore::new(),
     ));
     let response = service
         .execution_status(Request::new(adminpb::ExecutionStatusRequest {}))
@@ -2413,7 +2420,7 @@ async fn admin_execution_status_reports_metadata_admission() {
         execution.clone(),
     );
     let admin_service = RaftAdminService::with_admission_and_execution(
-        nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new()),
+        nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
         admission.clone(),
         execution,
     );
@@ -2470,7 +2477,7 @@ async fn metadata_admission_rejects_unhosted_runtime() {
         execution.clone(),
     );
     let admin_service = RaftAdminService::with_admission_and_execution(
-        nokv_raftnode::AppliedMetadataEngine::new(1, MvccStore::new()),
+        nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
         admission.clone(),
         execution,
     );

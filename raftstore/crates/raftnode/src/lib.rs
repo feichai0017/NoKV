@@ -1,9 +1,8 @@
 //! OpenRaft boundary for Rust raftstore.
 //!
 //! The crate intentionally exposes a small NoKV-owned trait instead of leaking
-//! OpenRaft types into server, MVCC, or proto-facing code. The concrete
-//! OpenRaft-backed implementation will fill this boundary as region replication
-//! is brought up.
+//! OpenRaft types into server, metadata store, or proto-facing code. The concrete
+//! OpenRaft-backed implementation stays behind this boundary.
 
 pub type NodeId = u64;
 pub type RegionId = u64;

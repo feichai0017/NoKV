@@ -478,7 +478,7 @@ mod tests {
     use crate::admission_state::RegionAdmissionState;
     use crate::execution::ExecutionRuntime;
     use crate::{RaftRuntimeStatus, RegionAdmission};
-    use nokv_mvcc::MvccStore;
+    use nokv_metastore::MemoryMetadataStore;
     use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdmin;
     use nokv_proto::nokv::meta::v1 as metapb;
     use nokv_proto::nokv::metadata::v1::metadata_plane_server::MetadataPlane;
@@ -486,14 +486,17 @@ mod tests {
 
     #[derive(Debug, Clone)]
     struct FixedRuntimeEngine {
-        inner: nokv_raftnode::AppliedMetadataEngine<MvccStore>,
+        inner: nokv_raftnode::AppliedMetadataEngine<MemoryMetadataStore>,
         runtime: RaftRuntimeStatus,
     }
 
     impl FixedRuntimeEngine {
         fn leader(region_id: u64, local_peer_id: u64) -> Self {
             Self {
-                inner: nokv_raftnode::AppliedMetadataEngine::new(region_id, MvccStore::new()),
+                inner: nokv_raftnode::AppliedMetadataEngine::new(
+                    region_id,
+                    MemoryMetadataStore::new(),
+                ),
                 runtime: RaftRuntimeStatus {
                     local_peer_id,
                     leader_peer_id: local_peer_id,
@@ -512,7 +515,7 @@ mod tests {
         fn execute_metadata_get<'a>(
             &'a self,
             req: &'a metadatapb::MetadataGetRequest,
-        ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>>
+        ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataGetResponse>>
                + Send
                + 'a {
             self.inner.execute_metadata_get(req)
@@ -521,8 +524,9 @@ mod tests {
         fn execute_metadata_batch_get<'a>(
             &'a self,
             req: &'a metadatapb::MetadataBatchGetRequest,
-        ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
-               + Send
+        ) -> impl std::future::Future<
+            Output = nokv_metastore::Result<metadatapb::MetadataBatchGetResponse>,
+        > + Send
                + 'a {
             self.inner.execute_metadata_batch_get(req)
         }
@@ -530,8 +534,9 @@ mod tests {
         fn execute_metadata_scan<'a>(
             &'a self,
             req: &'a metadatapb::MetadataScanRequest,
-        ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>>
-               + Send
+        ) -> impl std::future::Future<
+            Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>,
+        > + Send
                + 'a {
             self.inner.execute_metadata_scan(req)
         }
@@ -541,8 +546,9 @@ mod tests {
         fn execute_metadata_command<'a>(
             &'a self,
             req: &'a metadatapb::MetadataCommitRequest,
-        ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
-               + Send
+        ) -> impl std::future::Future<
+            Output = nokv_metastore::Result<metadatapb::MetadataCommitResponse>,
+        > + Send
                + 'a {
             self.inner.execute_metadata_command(req)
         }
@@ -564,7 +570,7 @@ mod tests {
         fn replay_apply(
             &self,
             request: nokv_raftnode::ApplyWatchReplayRequest,
-        ) -> nokv_mvcc::Result<nokv_raftnode::ApplyWatchReplay> {
+        ) -> nokv_metastore::Result<nokv_raftnode::ApplyWatchReplay> {
             self.inner.replay_apply(request)
         }
     }
@@ -854,7 +860,7 @@ mod tests {
         let admission2 =
             RegionAdmission::from_descriptor(&test_region_descriptor(2, 1, 20, b"m", b""), true)
                 .unwrap();
-        let diagnostics = nokv_holtstore::HoltMvccStore::open_memory().unwrap();
+        let diagnostics = nokv_holtstore::HoltMetadataStore::open_memory().unwrap();
         diagnostics
             .enqueue_pending_root_event(&metapb::RootEvent {
                 kind: metapb::RootEventKind::PeerAdded as i32,

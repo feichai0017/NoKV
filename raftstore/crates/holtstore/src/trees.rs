@@ -1,4 +1,4 @@
-use nokv_mvcc as mvcc;
+use nokv_metastore as metastore;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use prost::Message;
 
@@ -31,7 +31,7 @@ pub(crate) fn write_key(key: &[u8], commit_ts: u64) -> Vec<u8> {
     out
 }
 
-pub(crate) fn decode_write_key(key: &[u8]) -> mvcc::Result<Option<(Vec<u8>, u64)>> {
+pub(crate) fn decode_write_key(key: &[u8]) -> metastore::Result<Option<(Vec<u8>, u64)>> {
     if key.len() < 12 {
         return Ok(None);
     }

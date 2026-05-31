@@ -1,18 +1,18 @@
-use nokv_mvcc as mvcc;
+use nokv_metastore as metastore;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 use crate::versions::apply_committed;
-use crate::HoltMvccStore;
+use crate::HoltMetadataStore;
 
-impl mvcc::MetadataEngine for HoltMvccStore {
+impl metastore::MetadataEngine for HoltMetadataStore {
     fn get_metadata(
         &self,
         req: &metadatapb::MetadataGetRequest,
-    ) -> mvcc::Result<metadatapb::MetadataGetResponse> {
+    ) -> metastore::Result<metadatapb::MetadataGetResponse> {
         let _guard = self.lock()?;
         Ok(match self.read_committed(&req.key, req.version)? {
             Some((_commit, value)) => {
-                if mvcc::value_is_expired(value.expires_at) {
+                if metastore::value_is_expired(value.expires_at) {
                     return Ok(metadatapb::MetadataGetResponse {
                         not_found: true,
                         ..Default::default()
@@ -41,7 +41,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
     fn batch_get_metadata(
         &self,
         req: &metadatapb::MetadataBatchGetRequest,
-    ) -> mvcc::Result<metadatapb::MetadataBatchGetResponse> {
+    ) -> metastore::Result<metadatapb::MetadataBatchGetResponse> {
         if req.requests.is_empty() {
             return Ok(metadatapb::MetadataBatchGetResponse::default());
         }
@@ -58,15 +58,15 @@ impl mvcc::MetadataEngine for HoltMvccStore {
     fn scan_metadata(
         &self,
         req: &metadatapb::MetadataScanRequest,
-    ) -> mvcc::Result<metadatapb::MetadataScanResponse> {
+    ) -> metastore::Result<metadatapb::MetadataScanResponse> {
         if req.reverse {
-            return Err(mvcc::Error::Backend(
+            return Err(metastore::Error::Backend(
                 "metadata reverse scans are not supported".to_owned(),
             ));
         }
         let _guard = self.lock()?;
-        let read_version = mvcc::scan_read_version(req.version);
-        let limit = mvcc::scan_limit(req.limit);
+        let read_version = metastore::scan_read_version(req.version);
+        let limit = metastore::scan_limit(req.limit);
         let mut kvs = Vec::new();
         for key in self.scan_write_user_keys()? {
             if key.as_slice() < req.start_key.as_slice()
@@ -75,7 +75,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
                 continue;
             }
             if let Some((_commit_version, value)) = self.read_committed(&key, read_version)? {
-                if mvcc::value_is_expired(value.expires_at) {
+                if metastore::value_is_expired(value.expires_at) {
                     continue;
                 }
                 let expires_at = value.expires_at;
@@ -102,15 +102,15 @@ impl mvcc::MetadataEngine for HoltMvccStore {
         &self,
         command: &metadatapb::MetadataCommand,
         commit_version: u64,
-    ) -> mvcc::Result<mvcc::MetadataApplyResult> {
+    ) -> metastore::Result<metastore::MetadataApplyResult> {
         let _guard = self.lock()?;
         if let Some(error) =
-            mvcc::validation::metadata_commit_version(command.read_version, commit_version)
+            metastore::validation::metadata_commit_version(command.read_version, commit_version)
         {
             return Ok(metadata_apply_error(commit_version, error));
         }
         if self.metadata_already_applied(command, commit_version)? {
-            return Ok(mvcc::MetadataApplyResult {
+            return Ok(metastore::MetadataApplyResult {
                 commit_version,
                 applied_mutations: command.mutations.len() as u64,
                 error: None,
@@ -125,7 +125,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             let observed = self
                 .read_committed(&predicate.key, read_version)?
                 .and_then(|(_, value)| value.value);
-            if let Some(error) = mvcc::validation::metadata_command_predicate_observation(
+            if let Some(error) = metastore::validation::metadata_command_predicate_observation(
                 predicate,
                 observed.as_deref(),
             ) {
@@ -138,7 +138,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             .map(|mutation| mutation.key.as_slice())
             .unwrap_or_default();
         for mutation in &command.mutations {
-            if let Some(error) = mvcc::validation::metadata_command_mutation(mutation) {
+            if let Some(error) = metastore::validation::metadata_command_mutation(mutation) {
                 return Ok(metadata_apply_error(commit_version, error));
             }
             if let Some((commit_ts, value)) =
@@ -146,7 +146,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             {
                 return Ok(metadata_apply_error(
                     commit_version,
-                    mvcc::errors::metadata_write_conflict(
+                    metastore::errors::metadata_write_conflict(
                         &mutation.key,
                         primary,
                         commit_ts,
@@ -163,7 +163,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             {
                 return Ok(metadata_apply_error(
                     commit_version,
-                    mvcc::errors::metadata_already_exists(&mutation.key),
+                    metastore::errors::metadata_already_exists(&mutation.key),
                 ));
             }
         }
@@ -173,7 +173,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
             .map(|mutation| {
                 (
                     mutation.key.clone(),
-                    mvcc::metadata_mutation_value(mutation, command.read_version),
+                    metastore::metadata_mutation_value(mutation, command.read_version),
                 )
             })
             .collect::<Vec<_>>();
@@ -182,7 +182,7 @@ impl mvcc::MetadataEngine for HoltMvccStore {
                 apply_committed(batch, key, commit_version, value);
             }
         })?;
-        Ok(mvcc::MetadataApplyResult {
+        Ok(metastore::MetadataApplyResult {
             commit_version,
             applied_mutations: command.mutations.len() as u64,
             error: None,
@@ -190,12 +190,12 @@ impl mvcc::MetadataEngine for HoltMvccStore {
     }
 }
 
-impl HoltMvccStore {
+impl HoltMetadataStore {
     fn metadata_already_applied(
         &self,
         command: &metadatapb::MetadataCommand,
         commit_version: u64,
-    ) -> mvcc::Result<bool> {
+    ) -> metastore::Result<bool> {
         let mut any_present = false;
         let mut all_present = true;
         for mutation in &command.mutations {
@@ -207,7 +207,7 @@ impl HoltMvccStore {
             };
             any_present = true;
             if existing_commit != commit_version
-                || !mvcc::metadata_mutation_matches_value(mutation, &value)
+                || !metastore::metadata_mutation_matches_value(mutation, &value)
             {
                 return Ok(false);
             }
@@ -219,8 +219,8 @@ impl HoltMvccStore {
 fn metadata_apply_error(
     commit_version: u64,
     error: metadatapb::MetadataKeyError,
-) -> mvcc::MetadataApplyResult {
-    mvcc::MetadataApplyResult {
+) -> metastore::MetadataApplyResult {
+    metastore::MetadataApplyResult {
         commit_version,
         applied_mutations: 0,
         error: Some(error),

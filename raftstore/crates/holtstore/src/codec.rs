@@ -1,8 +1,8 @@
-use nokv_mvcc as mvcc;
+use nokv_metastore as metastore;
 
 use crate::{Error, RegionApplyState, Result};
 
-pub(crate) fn encode_value(value: &mvcc::VersionedValue) -> Vec<u8> {
+pub(crate) fn encode_value(value: &metastore::VersionedValue) -> Vec<u8> {
     let bytes = value.value.as_deref().unwrap_or_default();
     let mut out = Vec::with_capacity(1 + 4 + 8 + 8 + 4 + bytes.len());
     out.push(1);
@@ -14,13 +14,13 @@ pub(crate) fn encode_value(value: &mvcc::VersionedValue) -> Vec<u8> {
     out
 }
 
-pub(crate) fn decode_value(bytes: &[u8]) -> mvcc::Result<mvcc::VersionedValue> {
+pub(crate) fn decode_value(bytes: &[u8]) -> metastore::Result<metastore::VersionedValue> {
     if bytes.len() < 25 {
-        return Err(mvcc::Error::Decode("short mvcc value".to_owned()));
+        return Err(metastore::Error::Decode("short metadata value".to_owned()));
     }
     if bytes[0] != 1 {
-        return Err(mvcc::Error::Decode(
-            "unsupported mvcc value version".to_owned(),
+        return Err(metastore::Error::Decode(
+            "unsupported metadata value version".to_owned(),
         ));
     }
     let kind_raw = i32::from_be_bytes(bytes[1..5].try_into().unwrap());
@@ -28,13 +28,15 @@ pub(crate) fn decode_value(bytes: &[u8]) -> mvcc::Result<mvcc::VersionedValue> {
     let expires_at = u64::from_be_bytes(bytes[13..21].try_into().unwrap());
     let len = u32::from_be_bytes(bytes[21..25].try_into().unwrap()) as usize;
     if bytes.len() != 25 + len {
-        return Err(mvcc::Error::Decode("invalid mvcc value length".to_owned()));
+        return Err(metastore::Error::Decode(
+            "invalid metadata value length".to_owned(),
+        ));
     }
-    let kind = mvcc::ValueKind::from_i32(kind_raw);
-    Ok(mvcc::VersionedValue {
+    let kind = metastore::ValueKind::from_i32(kind_raw);
+    Ok(metastore::VersionedValue {
         kind,
         start_version,
-        value: (kind == mvcc::ValueKind::Put).then(|| bytes[25..].to_vec()),
+        value: (kind == metastore::ValueKind::Put).then(|| bytes[25..].to_vec()),
         expires_at,
     })
 }

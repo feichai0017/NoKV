@@ -3,7 +3,7 @@ use nokv_proto::nokv::metadata::v1 as metadatapb;
 use prost::Message;
 
 use crate::trees::{watch_apply_event_key, watch_apply_region_prefix};
-use crate::{HoltMvccStore, HoltStore, Result};
+use crate::{HoltMetadataStore, HoltStore, Result};
 
 pub const DEFAULT_WATCH_APPLY_REPLAY_LIMIT: usize = 4096;
 
@@ -72,7 +72,7 @@ impl HoltStore {
     }
 }
 
-impl HoltMvccStore {
+impl HoltMetadataStore {
     pub fn put_watch_apply_event(&self, event: &metadatapb::MetadataApplyWatchEvent) -> Result<()> {
         self.store.put_watch_apply_event(event)
     }

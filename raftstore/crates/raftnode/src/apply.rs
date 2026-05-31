@@ -1,7 +1,7 @@
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use nokv_mvcc::{MetadataEngine, MvccStore};
+use nokv_metastore::{MemoryMetadataStore, MetadataEngine};
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use tokio::sync::broadcast;
@@ -38,7 +38,7 @@ pub trait MetadataCommandExecutor: Clone + Send + Sync + 'static {
     fn execute_metadata_command<'a>(
         &'a self,
         req: &'a metadatapb::MetadataCommitRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataCommitResponse>>
            + Send
            + 'a;
 }
@@ -47,55 +47,60 @@ pub trait MetadataReadExecutor: Clone + Send + Sync + 'static {
     fn execute_metadata_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataGetRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a;
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataGetResponse>>
+           + Send
+           + 'a;
 
     fn execute_metadata_batch_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataBatchGetRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<metadatapb::MetadataBatchGetResponse>,
+    > + Send
            + 'a;
 
     fn execute_metadata_scan<'a>(
         &'a self,
         req: &'a metadatapb::MetadataScanRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a;
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>>
+           + Send
+           + 'a;
 }
 
 pub trait RegionApplyEngine: ApplyStatusProvider + ApplyWatchProvider {
-    fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    fn apply_openraft_entries<I>(&self, entries: I) -> nokv_metastore::Result<Vec<AppliedProposal>>
     where
         I: IntoIterator<Item = OpenRaftEntry>;
 }
 
 pub trait RegionSnapshotEngine: RegionApplyEngine {
-    fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>>;
+    fn region_descriptor(&self) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>>;
 
-    fn export_region_snapshot(&self) -> nokv_mvcc::Result<Vec<u8>>;
-    fn install_region_snapshot(&self, snapshot: &[u8]) -> nokv_mvcc::Result<ApplyStatus>;
+    fn export_region_snapshot(&self) -> nokv_metastore::Result<Vec<u8>>;
+    fn install_region_snapshot(&self, snapshot: &[u8]) -> nokv_metastore::Result<ApplyStatus>;
 }
 
 pub trait RegionMetadataSink: Clone + Send + Sync + 'static {
-    fn save_apply_status(&self, status: &ApplyStatus) -> nokv_mvcc::Result<()>;
+    fn save_apply_status(&self, status: &ApplyStatus) -> nokv_metastore::Result<()>;
 
     fn save_apply_watch_event(
         &self,
         _event: &metadatapb::MetadataApplyWatchEvent,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         Ok(())
     }
 
     fn replay_apply_watch(
         &self,
         _request: &ApplyWatchReplayRequest,
-    ) -> nokv_mvcc::Result<Option<ApplyWatchReplay>> {
+    ) -> nokv_metastore::Result<Option<ApplyWatchReplay>> {
         Ok(None)
     }
 
     fn save_region_descriptor(
         &self,
         _descriptor: &metapb::RegionDescriptor,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         Ok(())
     }
 }
@@ -104,7 +109,7 @@ pub trait RegionDescriptorCatalog: std::fmt::Debug + Send + Sync + 'static {
     fn region_descriptor(
         &self,
         region_id: RegionId,
-    ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>>;
+    ) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>>;
 }
 
 #[derive(Debug)]
@@ -125,7 +130,7 @@ struct AppliedMetadataInner<E> {
 /// is complete. Reads go through the current state-machine view; writes advance
 /// a monotonically increasing applied index under the region apply mutex.
 #[derive(Debug, Clone)]
-pub struct AppliedMetadataEngine<E = MvccStore> {
+pub struct AppliedMetadataEngine<E = MemoryMetadataStore> {
     inner: Arc<AppliedMetadataInner<E>>,
 }
 
@@ -177,10 +182,10 @@ impl<E> AppliedMetadataEngine<E> {
     pub fn set_region_descriptor(
         &self,
         descriptor: metapb::RegionDescriptor,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         self.validate_region_descriptor(&descriptor)?;
         let mut current = self.inner.descriptor.lock().map_err(|_| {
-            nokv_mvcc::Error::Backend("region descriptor mutex poisoned".to_owned())
+            nokv_metastore::Error::Backend("region descriptor mutex poisoned".to_owned())
         })?;
         *current = Some(descriptor);
         Ok(())
@@ -189,32 +194,34 @@ impl<E> AppliedMetadataEngine<E> {
     pub fn set_region_descriptor_catalog(
         &self,
         catalog: Arc<dyn RegionDescriptorCatalog>,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         let mut current = self.inner.topology_catalog.lock().map_err(|_| {
-            nokv_mvcc::Error::Backend("region descriptor catalog mutex poisoned".to_owned())
+            nokv_metastore::Error::Backend("region descriptor catalog mutex poisoned".to_owned())
         })?;
         *current = Some(catalog);
         Ok(())
     }
 
-    pub fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+    pub fn region_descriptor(&self) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>> {
         self.inner
             .descriptor
             .lock()
-            .map_err(|_| nokv_mvcc::Error::Backend("region descriptor mutex poisoned".to_owned()))
+            .map_err(|_| {
+                nokv_metastore::Error::Backend("region descriptor mutex poisoned".to_owned())
+            })
             .map(|descriptor| descriptor.clone())
     }
 
     pub(crate) fn record_topology_descriptor(
         &self,
         descriptor: metapb::RegionDescriptor,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         self.validate_topology_descriptor(&descriptor)?;
         self.inner
             .topology_descriptors
             .lock()
             .map_err(|_| {
-                nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
+                nokv_metastore::Error::Backend("topology descriptor mutex poisoned".to_owned())
             })?
             .push(descriptor);
         Ok(())
@@ -223,9 +230,9 @@ impl<E> AppliedMetadataEngine<E> {
     fn take_topology_descriptor(
         &self,
         region_id: RegionId,
-    ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+    ) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>> {
         let mut descriptors = self.inner.topology_descriptors.lock().map_err(|_| {
-            nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
+            nokv_metastore::Error::Backend("topology descriptor mutex poisoned".to_owned())
         })?;
         let Some(index) = descriptors
             .iter()
@@ -239,10 +246,10 @@ impl<E> AppliedMetadataEngine<E> {
     fn topology_descriptor(
         &self,
         region_id: RegionId,
-    ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+    ) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>> {
         let descriptor = {
             let descriptors = self.inner.topology_descriptors.lock().map_err(|_| {
-                nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
+                nokv_metastore::Error::Backend("topology descriptor mutex poisoned".to_owned())
             })?;
             descriptors
                 .iter()
@@ -257,7 +264,9 @@ impl<E> AppliedMetadataEngine<E> {
             .topology_catalog
             .lock()
             .map_err(|_| {
-                nokv_mvcc::Error::Backend("region descriptor catalog mutex poisoned".to_owned())
+                nokv_metastore::Error::Backend(
+                    "region descriptor catalog mutex poisoned".to_owned(),
+                )
             })?
             .clone();
         match catalog {
@@ -266,20 +275,24 @@ impl<E> AppliedMetadataEngine<E> {
         }
     }
 
-    pub(crate) fn topology_descriptors(&self) -> nokv_mvcc::Result<Vec<metapb::RegionDescriptor>> {
-        self.inner
-            .topology_descriptors
-            .lock()
-            .map_err(|_| nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned()))
-            .map(|descriptors| descriptors.clone())
-    }
-
-    fn clear_topology_descriptors(&self) -> nokv_mvcc::Result<()> {
+    pub(crate) fn topology_descriptors(
+        &self,
+    ) -> nokv_metastore::Result<Vec<metapb::RegionDescriptor>> {
         self.inner
             .topology_descriptors
             .lock()
             .map_err(|_| {
-                nokv_mvcc::Error::Backend("topology descriptor mutex poisoned".to_owned())
+                nokv_metastore::Error::Backend("topology descriptor mutex poisoned".to_owned())
+            })
+            .map(|descriptors| descriptors.clone())
+    }
+
+    fn clear_topology_descriptors(&self) -> nokv_metastore::Result<()> {
+        self.inner
+            .topology_descriptors
+            .lock()
+            .map_err(|_| {
+                nokv_metastore::Error::Backend("topology descriptor mutex poisoned".to_owned())
             })?
             .clear();
         Ok(())
@@ -288,9 +301,9 @@ impl<E> AppliedMetadataEngine<E> {
     fn validate_region_descriptor(
         &self,
         descriptor: &metapb::RegionDescriptor,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         if descriptor.region_id != self.inner.region_id {
-            return Err(nokv_mvcc::Error::Backend(
+            return Err(nokv_metastore::Error::Backend(
                 Error::LogRegionMismatch {
                     record_region_id: self.inner.region_id,
                     proposal_region_id: descriptor.region_id,
@@ -299,7 +312,7 @@ impl<E> AppliedMetadataEngine<E> {
             ));
         }
         if descriptor.epoch.is_none() {
-            return Err(nokv_mvcc::Error::Backend(
+            return Err(nokv_metastore::Error::Backend(
                 Error::InvalidRegionDescriptor("region descriptor epoch is required".to_owned())
                     .to_string(),
             ));
@@ -310,14 +323,14 @@ impl<E> AppliedMetadataEngine<E> {
     fn validate_topology_descriptor(
         &self,
         descriptor: &metapb::RegionDescriptor,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         if descriptor.region_id == 0 {
-            return Err(nokv_mvcc::Error::Backend(
+            return Err(nokv_metastore::Error::Backend(
                 "topology descriptor region id is required".to_owned(),
             ));
         }
         if descriptor.peers.is_empty() {
-            return Err(nokv_mvcc::Error::Backend(format!(
+            return Err(nokv_metastore::Error::Backend(format!(
                 "topology descriptor for region {} has no peers",
                 descriptor.region_id
             )));
@@ -340,17 +353,16 @@ impl<E> AppliedMetadataEngine<E> {
     pub fn replay_apply(
         &self,
         request: ApplyWatchReplayRequest,
-    ) -> nokv_mvcc::Result<ApplyWatchReplay> {
+    ) -> nokv_metastore::Result<ApplyWatchReplay> {
         if request.region_id != 0 && request.region_id != self.inner.region_id {
             return Ok(ApplyWatchReplay {
                 events: Vec::new(),
                 expired: true,
             });
         }
-        let history =
-            self.inner.history.lock().map_err(|_| {
-                nokv_mvcc::Error::Backend("apply history mutex poisoned".to_owned())
-            })?;
+        let history = self.inner.history.lock().map_err(|_| {
+            nokv_metastore::Error::Backend("apply history mutex poisoned".to_owned())
+        })?;
         Ok(history.replay(&request, self.inner.applied_index.load(Ordering::Acquire)))
     }
 
@@ -408,7 +420,7 @@ where
     fn replay_apply(
         &self,
         request: ApplyWatchReplayRequest,
-    ) -> nokv_mvcc::Result<ApplyWatchReplay> {
+    ) -> nokv_metastore::Result<ApplyWatchReplay> {
         self.replay_apply(request)
     }
 }
@@ -425,7 +437,7 @@ where
     fn replay_apply(
         &self,
         request: ApplyWatchReplayRequest,
-    ) -> nokv_mvcc::Result<ApplyWatchReplay> {
+    ) -> nokv_metastore::Result<ApplyWatchReplay> {
         let replay = self.engine.replay_apply(request.clone())?;
         if !replay.expired {
             return Ok(replay);
@@ -441,7 +453,10 @@ impl<E> AppliedMetadataEngine<E>
 where
     E: MetadataEngine,
 {
-    pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    pub fn apply_openraft_entries<I>(
+        &self,
+        entries: I,
+    ) -> nokv_metastore::Result<Vec<AppliedProposal>>
     where
         I: IntoIterator<Item = OpenRaftEntry>,
     {
@@ -461,7 +476,7 @@ where
                 }
                 openraft::EntryPayload::Normal(proposal) => {
                     if proposal.region_id != self.inner.region_id {
-                        return Err(nokv_mvcc::Error::Backend(
+                        return Err(nokv_metastore::Error::Backend(
                             Error::LogRegionMismatch {
                                 record_region_id: self.inner.region_id,
                                 proposal_region_id: proposal.region_id,
@@ -473,7 +488,7 @@ where
                         ProposalPayloadKind::MetadataCommand => {
                             let req = proposal
                                 .decode_metadata_command()
-                                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+                                .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))?;
                             let response =
                                 self.execute_metadata_command_at(&req, Some((term, index)))?;
                             applied.push(AppliedProposal {
@@ -486,7 +501,7 @@ where
                         ProposalPayloadKind::RegionDescriptor => {
                             let descriptor = proposal
                                 .decode_region_descriptor()
-                                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+                                .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))?;
                             self.apply_region_descriptor_at(term, index, descriptor)?;
                             applied.push(AppliedProposal {
                                 region_id: proposal.region_id,
@@ -498,7 +513,7 @@ where
                         ProposalPayloadKind::AdminCommand => {
                             let command = proposal
                                 .decode_admin_command()
-                                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+                                .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))?;
                             self.apply_admin_command_at(term, index, command)?;
                             applied.push(AppliedProposal {
                                 region_id: proposal.region_id,
@@ -519,7 +534,7 @@ where
         term: u64,
         index: u64,
         descriptor: metapb::RegionDescriptor,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         self.set_region_descriptor(descriptor)?;
         self.record_applied_status(term, index);
         Ok(())
@@ -580,7 +595,10 @@ where
     E: MetadataEngine,
     S: RegionMetadataSink,
 {
-    pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    pub fn apply_openraft_entries<I>(
+        &self,
+        entries: I,
+    ) -> nokv_metastore::Result<Vec<AppliedProposal>>
     where
         I: IntoIterator<Item = OpenRaftEntry>,
     {
@@ -590,7 +608,7 @@ where
         Ok(applied)
     }
 
-    fn persist_if_advanced(&self, before: u64) -> nokv_mvcc::Result<()> {
+    fn persist_if_advanced(&self, before: u64) -> nokv_metastore::Result<()> {
         let status = self.engine.status();
         if status.applied_index != before {
             let replay = self.engine.replay_apply(ApplyWatchReplayRequest {
@@ -622,7 +640,7 @@ impl<E> RegionApplyEngine for AppliedMetadataEngine<E>
 where
     E: MetadataEngine,
 {
-    fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    fn apply_openraft_entries<I>(&self, entries: I) -> nokv_metastore::Result<Vec<AppliedProposal>>
     where
         I: IntoIterator<Item = OpenRaftEntry>,
     {
@@ -635,7 +653,7 @@ where
     E: MetadataEngine,
     S: RegionMetadataSink,
 {
-    fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
+    fn apply_openraft_entries<I>(&self, entries: I) -> nokv_metastore::Result<Vec<AppliedProposal>>
     where
         I: IntoIterator<Item = OpenRaftEntry>,
     {
@@ -643,6 +661,6 @@ where
     }
 }
 
-fn invalid_raft_command(detail: &str) -> nokv_mvcc::Error {
-    nokv_mvcc::Error::Backend(format!("invalid raft command: {detail}"))
+fn invalid_raft_command(detail: &str) -> nokv_metastore::Error {
+    nokv_metastore::Error::Backend(format!("invalid raft command: {detail}"))
 }

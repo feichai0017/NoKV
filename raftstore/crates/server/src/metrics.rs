@@ -2,7 +2,7 @@
 
 use std::net::SocketAddr;
 
-use nokv_holtstore::HoltMvccStore;
+use nokv_holtstore::HoltMetadataStore;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_raftnode::{RegionSnapshotEngine, RegionTrafficProvider};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -16,7 +16,7 @@ pub(super) fn spawn_metrics_server<E>(
     store_id: u64,
     advertised_addr: String,
     registry: HostedRegionRegistry<E>,
-    root_events: Option<HoltMvccStore>,
+    root_events: Option<HoltMetadataStore>,
 ) where
     E: Clone + RegionSnapshotEngine + RegionTrafficProvider + Send + Sync + 'static,
 {
@@ -43,7 +43,7 @@ async fn run_metrics_server<E>(
     store_id: u64,
     advertised_addr: String,
     registry: HostedRegionRegistry<E>,
-    root_events: Option<HoltMvccStore>,
+    root_events: Option<HoltMetadataStore>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>>
 where
     E: Clone + RegionSnapshotEngine + RegionTrafficProvider + Send + Sync + 'static,
@@ -88,7 +88,7 @@ fn metrics_payload<E>(
     store_id: u64,
     advertised_addr: &str,
     registry: &HostedRegionRegistry<E>,
-    root_events: Option<&HoltMvccStore>,
+    root_events: Option<&HoltMetadataStore>,
 ) -> String
 where
     E: Clone + RegionSnapshotEngine + RegionTrafficProvider,

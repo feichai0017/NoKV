@@ -1,6 +1,6 @@
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
-use crate::{decode_mvcc_snapshot, encode_mvcc_snapshot, MvccStore};
+use crate::{decode_metadata_snapshot, encode_metadata_snapshot, MemoryMetadataStore};
 
 fn put_command(
     key: impl Into<Vec<u8>>,
@@ -30,7 +30,7 @@ fn put_command(
 
 #[test]
 fn metadata_command_applies_put_and_reads_by_version() {
-    let store = MvccStore::new();
+    let store = MemoryMetadataStore::new();
     let result = store
         .commit_metadata(&put_command(b"k", b"v1", 10), 11)
         .unwrap();
@@ -59,7 +59,7 @@ fn metadata_command_applies_put_and_reads_by_version() {
 
 #[test]
 fn metadata_predicate_failure_does_not_partially_apply() {
-    let store = MvccStore::new();
+    let store = MemoryMetadataStore::new();
     store
         .commit_metadata(&put_command(b"k", b"v1", 10), 11)
         .unwrap();
@@ -81,7 +81,7 @@ fn metadata_predicate_failure_does_not_partially_apply() {
 
 #[test]
 fn metadata_snapshot_round_trips_committed_versions() {
-    let store = MvccStore::new();
+    let store = MemoryMetadataStore::new();
     store
         .commit_metadata(&put_command(b"a", b"v1", 10), 11)
         .unwrap();
@@ -90,9 +90,9 @@ fn metadata_snapshot_round_trips_committed_versions() {
         .unwrap();
 
     let snapshot = store.export_snapshot().unwrap();
-    let restored = MvccStore::new();
+    let restored = MemoryMetadataStore::new();
     restored
-        .install_snapshot(decode_mvcc_snapshot(&encode_mvcc_snapshot(&snapshot)).unwrap())
+        .install_snapshot(decode_metadata_snapshot(&encode_metadata_snapshot(&snapshot)).unwrap())
         .unwrap();
 
     let scan = restored

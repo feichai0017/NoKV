@@ -1,6 +1,6 @@
 use super::*;
-use mvcc::{MetadataEngine, MvccSnapshotEngine};
-use nokv_mvcc as mvcc;
+use metastore::{MetadataEngine, MetadataSnapshotEngine};
+use nokv_metastore as metastore;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
@@ -42,13 +42,13 @@ fn watch_apply_events_survive_reopen_and_replay_after_cursor() {
         ..Default::default()
     };
     {
-        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
         store.put_watch_apply_event(&event1).unwrap();
         store.put_watch_apply_event(&event2).unwrap();
         store.checkpoint().unwrap();
     }
 
-    let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+    let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
     assert_eq!(
         reopened.first_watch_apply_event(7).unwrap().unwrap().index,
         10
@@ -185,13 +185,13 @@ fn pending_root_events_survive_reopen_and_delete() {
         )),
     };
     {
-        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
         assert_eq!(store.enqueue_pending_root_event(&event).unwrap(), 1);
         assert_eq!(store.enqueue_pending_root_event(&event).unwrap(), 2);
         store.checkpoint().unwrap();
     }
 
-    let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+    let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
     let pending = reopened.pending_root_events().unwrap();
     assert_eq!(pending.len(), 2);
     assert_eq!(pending[0].sequence, 1);
@@ -222,7 +222,7 @@ fn blocked_root_events_survive_reopen_and_advance_sequence() {
         )),
     };
     {
-        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
         let sequence = store.enqueue_pending_root_event(&event).unwrap();
         store
             .block_pending_root_event(sequence, &event, "peer:42:add:7:9", "catalog precondition")
@@ -230,7 +230,7 @@ fn blocked_root_events_survive_reopen_and_advance_sequence() {
         store.checkpoint().unwrap();
     }
 
-    let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+    let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
     assert!(reopened.pending_root_events().unwrap().is_empty());
     let blocked = reopened.blocked_root_events().unwrap();
     assert_eq!(blocked.len(), 1);
@@ -261,13 +261,13 @@ fn pending_scheduler_operations_survive_reopen_and_delete() {
         ..Default::default()
     };
     {
-        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
         store.record_pending_scheduler_operation(&split).unwrap();
         store.record_pending_scheduler_operation(&merge).unwrap();
         store.checkpoint().unwrap();
     }
 
-    let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+    let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
     let pending = reopened.pending_scheduler_operations().unwrap();
     assert_eq!(pending.len(), 2);
     assert_eq!(pending[0].operation, split);
@@ -284,7 +284,7 @@ fn pending_scheduler_operations_survive_reopen_and_delete() {
 
 #[test]
 fn pending_scheduler_operations_dedupe_by_full_operation_identity() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     let split_m = coordpb::SchedulerOperation {
         r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
         region_id: 42,
@@ -338,7 +338,7 @@ fn pending_scheduler_operation_attempts_survive_reopen() {
         ..Default::default()
     };
     {
-        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
         store
             .record_pending_scheduler_operation(&operation)
             .unwrap();
@@ -360,7 +360,7 @@ fn pending_scheduler_operation_attempts_survive_reopen() {
         store.checkpoint().unwrap();
     }
 
-    let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+    let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
     let pending = reopened.pending_scheduler_operations().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].operation, operation);
@@ -381,7 +381,7 @@ fn blocked_scheduler_operations_survive_reopen_and_clear_pending() {
         ..Default::default()
     };
     {
-        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
         store
             .record_pending_scheduler_operation(&operation)
             .unwrap();
@@ -391,7 +391,7 @@ fn blocked_scheduler_operations_survive_reopen_and_clear_pending() {
         store.checkpoint().unwrap();
     }
 
-    let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+    let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
     assert!(reopened.pending_scheduler_operations().unwrap().is_empty());
     let blocked = reopened.blocked_scheduler_operations().unwrap();
     assert_eq!(blocked.len(), 1);
@@ -431,7 +431,7 @@ fn metadata_put_command(
 fn holt_metadata_command_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     {
-        let store = HoltMvccStore::open_file(dir.path()).unwrap();
+        let store = HoltMetadataStore::open_file(dir.path()).unwrap();
         let result = store
             .commit_metadata(&metadata_put_command(b"artifact/a", b"v1", 10), 11)
             .unwrap();
@@ -439,7 +439,7 @@ fn holt_metadata_command_survives_reopen() {
         store.checkpoint().unwrap();
     }
 
-    let reopened = HoltMvccStore::open_file(dir.path()).unwrap();
+    let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
     let got = reopened
         .get_metadata(&metadatapb::MetadataGetRequest {
             key: b"artifact/a".to_vec(),
@@ -452,7 +452,7 @@ fn holt_metadata_command_survives_reopen() {
 
 #[test]
 fn holt_metadata_predicate_failure_does_not_partially_apply() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     store
         .commit_metadata(&metadata_put_command(b"artifact/a", b"v1", 10), 11)
         .unwrap();
@@ -474,17 +474,17 @@ fn holt_metadata_predicate_failure_does_not_partially_apply() {
 
 #[test]
 fn holt_metadata_snapshot_replaces_write_tree() {
-    let source = HoltMvccStore::open_memory().unwrap();
+    let source = HoltMetadataStore::open_memory().unwrap();
     source
         .commit_metadata(&metadata_put_command(b"artifact/a", b"v1", 10), 11)
         .unwrap();
-    let snapshot = source.export_mvcc_snapshot().unwrap();
+    let snapshot = source.export_metadata_snapshot().unwrap();
 
-    let target = HoltMvccStore::open_memory().unwrap();
+    let target = HoltMetadataStore::open_memory().unwrap();
     target
         .commit_metadata(&metadata_put_command(b"artifact/old", b"old", 20), 21)
         .unwrap();
-    target.install_mvcc_snapshot(snapshot).unwrap();
+    target.install_metadata_snapshot(snapshot).unwrap();
 
     assert!(
         target

@@ -1,14 +1,14 @@
 use holt::RangeEntry;
-use nokv_mvcc as mvcc;
+use nokv_metastore as metastore;
 
 use crate::codec::decode_value;
 use crate::store::to_backend_error;
 use crate::trees::{decode_write_key, DATA_TREE, WRITE_TREE};
 use crate::versions::apply_committed;
-use crate::HoltMvccStore;
+use crate::HoltMetadataStore;
 
-impl mvcc::MvccSnapshotEngine for HoltMvccStore {
-    fn export_mvcc_snapshot(&self) -> mvcc::Result<mvcc::MvccSnapshot> {
+impl metastore::MetadataSnapshotEngine for HoltMetadataStore {
+    fn export_metadata_snapshot(&self) -> metastore::Result<metastore::MetadataSnapshot> {
         let _guard = self.lock()?;
         let mut writes = Vec::new();
         for entry in self.store.write().map_err(to_backend_error)?.range() {
@@ -19,7 +19,7 @@ impl mvcc::MvccSnapshotEngine for HoltMvccStore {
             let Some((user_key, commit_version)) = decode_write_key(&key)? else {
                 continue;
             };
-            writes.push(mvcc::MvccSnapshotWrite {
+            writes.push(metastore::MetadataSnapshotWrite {
                 key: user_key,
                 commit_version,
                 value: decode_value(&value)?,
@@ -31,10 +31,13 @@ impl mvcc::MvccSnapshotEngine for HoltMvccStore {
                 .then(left.commit_version.cmp(&right.commit_version))
         });
 
-        Ok(mvcc::MvccSnapshot { writes })
+        Ok(metastore::MetadataSnapshot { writes })
     }
 
-    fn install_mvcc_snapshot(&self, snapshot: mvcc::MvccSnapshot) -> mvcc::Result<()> {
+    fn install_metadata_snapshot(
+        &self,
+        snapshot: metastore::MetadataSnapshot,
+    ) -> metastore::Result<()> {
         let _guard = self.lock()?;
         let mut writes = snapshot.writes;
         writes.sort_by(|left, right| {

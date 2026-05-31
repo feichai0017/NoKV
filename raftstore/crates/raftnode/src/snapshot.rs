@@ -5,14 +5,17 @@ use crate::{ApplyStatus, RegionId};
 
 pub(crate) fn decode_region_snapshot_payload(
     snapshot: &[u8],
-) -> nokv_mvcc::Result<RegionSnapshotPayload> {
-    RegionSnapshotPayload::decode(snapshot).map_err(|err| nokv_mvcc::Error::Decode(err.to_string()))
+) -> nokv_metastore::Result<RegionSnapshotPayload> {
+    RegionSnapshotPayload::decode(snapshot)
+        .map_err(|err| nokv_metastore::Error::Decode(err.to_string()))
 }
 
-pub(crate) fn decode_region_snapshot_status(snapshot: &[u8]) -> nokv_mvcc::Result<ApplyStatus> {
+pub(crate) fn decode_region_snapshot_status(
+    snapshot: &[u8],
+) -> nokv_metastore::Result<ApplyStatus> {
     let payload = decode_region_snapshot_payload(snapshot)?;
     if payload.format_version != 1 {
-        return Err(nokv_mvcc::Error::Decode(format!(
+        return Err(nokv_metastore::Error::Decode(format!(
             "unsupported region snapshot format {}",
             payload.format_version
         )));
@@ -35,7 +38,7 @@ pub(crate) struct RegionSnapshotPayload {
     #[prost(uint64, tag = "4")]
     pub(crate) applied_index: u64,
     #[prost(bytes = "vec", tag = "5")]
-    pub(crate) mvcc_snapshot: Vec<u8>,
+    pub(crate) metadata_snapshot: Vec<u8>,
     #[prost(message, optional, tag = "6")]
     pub(crate) region_descriptor: Option<metapb::RegionDescriptor>,
 }

@@ -1,8 +1,8 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::{Inner, MvccStore, VersionedValue};
+use crate::{Inner, MemoryMetadataStore, VersionedValue};
 
-impl MvccStore {
+impl MemoryMetadataStore {
     pub fn new() -> Self {
         Self::default()
     }

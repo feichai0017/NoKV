@@ -4,7 +4,7 @@ use prost::Message;
 
 use crate::codec::{decode_apply_state, encode_apply_state};
 use crate::trees::{region_apply_state_key, region_descriptor_key, REGION_DESCRIPTOR_PREFIX};
-use crate::{Error, HoltMvccStore, HoltStore, RegionApplyState, Result};
+use crate::{Error, HoltMetadataStore, HoltStore, RegionApplyState, Result};
 
 impl HoltStore {
     pub fn put_region_descriptor(&self, descriptor: &metapb::RegionDescriptor) -> Result<()> {
@@ -79,7 +79,7 @@ impl HoltStore {
     }
 }
 
-impl HoltMvccStore {
+impl HoltMetadataStore {
     pub fn put_region_descriptor(&self, descriptor: &metapb::RegionDescriptor) -> Result<()> {
         self.store.put_region_descriptor(descriptor)
     }

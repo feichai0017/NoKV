@@ -1,5 +1,5 @@
 use nokv_holtstore::{
-    BlockedRootEvent, BlockedSchedulerOperation, HoltMvccStore, PendingRootEvent,
+    BlockedRootEvent, BlockedSchedulerOperation, HoltMetadataStore, PendingRootEvent,
     PendingSchedulerOperation,
 };
 use nokv_proto::nokv::admin::v1 as adminpb;
@@ -37,7 +37,7 @@ pub struct EmptyRestartDiagnostics;
 
 impl RestartDiagnosticsProvider for EmptyRestartDiagnostics {}
 
-impl RestartDiagnosticsProvider for HoltMvccStore {
+impl RestartDiagnosticsProvider for HoltMetadataStore {
     fn pending_root_event_count(&self) -> Result<u64, Status> {
         self.pending_root_events()
             .map(|events| events.len() as u64)

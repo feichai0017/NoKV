@@ -2,11 +2,11 @@ use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 use crate::{
     errors, read_committed, scan_limit, scan_read_version, validation, value_is_expired,
-    write_by_start_version, Error, Inner, MetadataApplyResult, MetadataEngine, MvccStore, Result,
-    ValueKind, VersionedValue,
+    write_by_start_version, Error, Inner, MemoryMetadataStore, MetadataApplyResult, MetadataEngine,
+    Result, ValueKind, VersionedValue,
 };
 
-impl MvccStore {
+impl MemoryMetadataStore {
     pub fn get_metadata(
         &self,
         req: &metadatapb::MetadataGetRequest,
@@ -110,26 +110,26 @@ impl MvccStore {
     }
 }
 
-impl MetadataEngine for MvccStore {
+impl MetadataEngine for MemoryMetadataStore {
     fn get_metadata(
         &self,
         req: &metadatapb::MetadataGetRequest,
     ) -> Result<metadatapb::MetadataGetResponse> {
-        MvccStore::get_metadata(self, req)
+        MemoryMetadataStore::get_metadata(self, req)
     }
 
     fn batch_get_metadata(
         &self,
         req: &metadatapb::MetadataBatchGetRequest,
     ) -> Result<metadatapb::MetadataBatchGetResponse> {
-        MvccStore::batch_get_metadata(self, req)
+        MemoryMetadataStore::batch_get_metadata(self, req)
     }
 
     fn scan_metadata(
         &self,
         req: &metadatapb::MetadataScanRequest,
     ) -> Result<metadatapb::MetadataScanResponse> {
-        MvccStore::scan_metadata(self, req)
+        MemoryMetadataStore::scan_metadata(self, req)
     }
 
     fn commit_metadata(
@@ -137,7 +137,7 @@ impl MetadataEngine for MvccStore {
         command: &metadatapb::MetadataCommand,
         commit_version: u64,
     ) -> Result<MetadataApplyResult> {
-        MvccStore::commit_metadata(self, command, commit_version)
+        MemoryMetadataStore::commit_metadata(self, command, commit_version)
     }
 }
 

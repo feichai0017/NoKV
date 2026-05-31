@@ -3,7 +3,7 @@ use std::error::Error as StdError;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nokv_mvcc::MvccStore;
+use nokv_metastore::MemoryMetadataStore;
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
@@ -24,7 +24,7 @@ use crate::{
 };
 
 #[derive(Clone)]
-pub struct OpenRaftRegion<E = AppliedMetadataEngine<MvccStore>> {
+pub struct OpenRaftRegion<E = AppliedMetadataEngine<MemoryMetadataStore>> {
     node_id: NodeId,
     raft: Raft<RaftStoreConfig>,
     apply_engine: E,
@@ -195,7 +195,7 @@ where
         self.raft.clone()
     }
 
-    pub fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+    pub fn region_descriptor(&self) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>> {
         self.apply_engine.region_descriptor()
     }
 
@@ -372,7 +372,7 @@ where
     fn replay_apply(
         &self,
         request: ApplyWatchReplayRequest,
-    ) -> nokv_mvcc::Result<ApplyWatchReplay> {
+    ) -> nokv_metastore::Result<ApplyWatchReplay> {
         self.apply_engine.replay_apply(request)
     }
 }
@@ -393,18 +393,18 @@ where
     fn execute_metadata_command<'a>(
         &'a self,
         req: &'a metadatapb::MetadataCommitRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataCommitResponse>>
            + Send
            + 'a {
         async move {
             let proposal = Proposal::from_metadata_command(req)
-                .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))?;
+                .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))?;
             let applied = match self.propose(proposal).await {
                 Ok(applied) => applied,
                 Err(Error::NotLeader { leader_id }) => {
                     return Ok(self.not_leader_metadata_response(req, leader_id))
                 }
-                Err(err) => return Err(nokv_mvcc::Error::Backend(err.to_string())),
+                Err(err) => return Err(nokv_metastore::Error::Backend(err.to_string())),
             };
             decode_metadata_response(&applied.payload)
         }
@@ -418,8 +418,9 @@ where
     fn execute_metadata_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataGetRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataGetResponse>> + Send + 'a
-    {
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataGetResponse>>
+           + Send
+           + 'a {
         async move {
             let context = req.context.as_ref();
             if let Some(region_error) = self.metadata_read_gate(context).await? {
@@ -435,8 +436,9 @@ where
     fn execute_metadata_batch_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataBatchGetRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataBatchGetResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metastore::Result<metadatapb::MetadataBatchGetResponse>,
+    > + Send
            + 'a {
         async move {
             let context = req.context.as_ref();
@@ -453,8 +455,9 @@ where
     fn execute_metadata_scan<'a>(
         &'a self,
         req: &'a metadatapb::MetadataScanRequest,
-    ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataScanResponse>> + Send + 'a
-    {
+    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>>
+           + Send
+           + 'a {
         async move {
             let context = req.context.as_ref();
             if let Some(region_error) = self.metadata_read_gate(context).await? {
@@ -475,7 +478,7 @@ where
     async fn metadata_read_gate(
         &self,
         context: Option<&metadatapb::MetadataContext>,
-    ) -> nokv_mvcc::Result<Option<errorpb::RegionError>> {
+    ) -> nokv_metastore::Result<Option<errorpb::RegionError>> {
         self.ensure_metadata_read_region(context)?;
         if metadata_read_consistency(context) == metadatapb::ReadConsistency::BoundedStale {
             if self.metadata_bounded_stale_read_admissible(context) {
@@ -489,7 +492,7 @@ where
                     .not_leader_metadata_region_error(context, leader_id)
                     .map(Some);
             }
-            return Err(nokv_mvcc::Error::Backend(err.to_string()));
+            return Err(nokv_metastore::Error::Backend(err.to_string()));
         }
         Ok(None)
     }
@@ -526,11 +529,11 @@ where
     fn ensure_metadata_read_region(
         &self,
         context: Option<&metadatapb::MetadataContext>,
-    ) -> nokv_mvcc::Result<()> {
+    ) -> nokv_metastore::Result<()> {
         let requested_region_id = context.map(|context| context.region_id).unwrap_or_default();
         let applied_region_id = self.apply_engine.apply_status().region_id;
         if requested_region_id != 0 && requested_region_id != applied_region_id {
-            return Err(nokv_mvcc::Error::Backend(
+            return Err(nokv_metastore::Error::Backend(
                 Error::LogRegionMismatch {
                     record_region_id: applied_region_id,
                     proposal_region_id: requested_region_id,
@@ -562,7 +565,7 @@ where
         &self,
         context: Option<&metadatapb::MetadataContext>,
         leader_id: Option<NodeId>,
-    ) -> nokv_mvcc::Result<errorpb::RegionError> {
+    ) -> nokv_metastore::Result<errorpb::RegionError> {
         let descriptor = self.apply_engine.region_descriptor()?;
         let region_id = descriptor
             .as_ref()

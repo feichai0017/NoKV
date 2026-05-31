@@ -1,6 +1,6 @@
 use super::*;
-use nokv_holtstore::HoltMvccStore;
-use nokv_mvcc::MvccStore;
+use nokv_holtstore::HoltMetadataStore;
+use nokv_metastore::MemoryMetadataStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
@@ -527,7 +527,7 @@ async fn scheduler_operation_reports_unsupported_merge_without_dialing_admin() {
 
 #[test]
 fn unsupported_scheduler_operation_records_pending_holt_diagnostic() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     let operation = coordpb::SchedulerOperation {
         r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
         region_id: 7,
@@ -548,7 +548,7 @@ fn unsupported_scheduler_operation_records_pending_holt_diagnostic() {
 
 #[test]
 fn failed_scheduler_operation_records_pending_holt_diagnostic() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     let operation = coordpb::SchedulerOperation {
         r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
         region_id: 7,
@@ -581,7 +581,7 @@ async fn pending_scheduler_operation_retries_and_deletes_after_apply() {
             .unwrap();
     });
     wait_for_server(addr).await;
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     let operation = coordpb::SchedulerOperation {
         r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
         region_id: 7,
@@ -605,7 +605,7 @@ async fn pending_scheduler_operation_retries_and_deletes_after_apply() {
 
 #[tokio::test]
 async fn pending_scheduler_operation_tracks_attempts_and_expires() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     let operation = coordpb::SchedulerOperation {
         r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
         region_id: 7,
@@ -655,7 +655,7 @@ async fn non_bootstrap_start_opens_joining_peer_without_initializing_membership(
         identity,
         "127.0.0.1:0",
         dir.path().to_path_buf(),
-        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -672,7 +672,7 @@ async fn non_bootstrap_start_opens_joining_peer_without_initializing_membership(
 
 #[test]
 fn non_bootstrap_holt_start_does_not_persist_default_descriptor() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     let identity = ServerIdentity {
         region_id: 7,
         store_id: 2,
@@ -688,7 +688,7 @@ fn non_bootstrap_holt_start_does_not_persist_default_descriptor() {
 
 #[test]
 fn bootstrap_holt_start_persists_default_descriptor() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     let identity = ServerIdentity {
         region_id: 7,
         store_id: 1,
@@ -704,7 +704,7 @@ fn bootstrap_holt_start_persists_default_descriptor() {
 
 #[test]
 fn recover_holt_hosted_identities_adds_persisted_local_regions() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     store
         .put_region_descriptor(&metapb::RegionDescriptor {
             region_id: 2,
@@ -763,7 +763,7 @@ async fn coordinator_heartbeat_reports_local_leader_region() {
         identity,
         &addr.to_string(),
         dir.path().to_path_buf(),
-        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -797,7 +797,7 @@ async fn coordinator_heartbeat_uses_advertised_dns_addr() {
         identity,
         advertised_addr,
         dir.path().to_path_buf(),
-        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -829,7 +829,7 @@ async fn coordinator_heartbeat_reports_multiple_local_regions_once() {
         identity1,
         &addr.to_string(),
         dir.path().join("region-7"),
-        AppliedMetadataEngine::new(identity1.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity1.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -837,7 +837,7 @@ async fn coordinator_heartbeat_reports_multiple_local_regions_once() {
         identity2,
         &addr.to_string(),
         dir.path().join("region-8"),
-        AppliedMetadataEngine::new(identity2.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity2.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -880,7 +880,7 @@ async fn coordinator_heartbeat_reads_regions_inserted_after_registry_creation() 
         identity1,
         &addr.to_string(),
         dir.path().join("region-7"),
-        AppliedMetadataEngine::new(identity1.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity1.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -888,7 +888,7 @@ async fn coordinator_heartbeat_reads_regions_inserted_after_registry_creation() 
         identity2,
         &addr.to_string(),
         dir.path().join("region-8"),
-        AppliedMetadataEngine::new(identity2.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity2.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -915,7 +915,7 @@ async fn coordinator_heartbeat_marks_pending_admin_for_unpublished_root_events()
         bootstrap: true,
     };
     let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     store
         .enqueue_pending_root_event(&metapb::RootEvent {
             kind: metapb::RootEventKind::PeerAdded as i32,
@@ -934,7 +934,7 @@ async fn coordinator_heartbeat_marks_pending_admin_for_unpublished_root_events()
         identity,
         &addr.to_string(),
         dir.path().to_path_buf(),
-        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -955,7 +955,7 @@ async fn coordinator_heartbeat_marks_pending_admin_for_pending_scheduler_operati
         bootstrap: true,
     };
     let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     store
         .record_pending_scheduler_operation(&coordpb::SchedulerOperation {
             r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
@@ -972,7 +972,7 @@ async fn coordinator_heartbeat_marks_pending_admin_for_pending_scheduler_operati
         identity,
         &addr.to_string(),
         dir.path().to_path_buf(),
-        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -993,7 +993,7 @@ async fn coordinator_heartbeat_marks_pending_admin_for_blocked_scheduler_operati
         bootstrap: true,
     };
     let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     store
         .block_pending_scheduler_operation(
             &coordpb::SchedulerOperation {
@@ -1014,7 +1014,7 @@ async fn coordinator_heartbeat_marks_pending_admin_for_blocked_scheduler_operati
         identity,
         &addr.to_string(),
         dir.path().to_path_buf(),
-        AppliedMetadataEngine::new(identity.region_id, MvccStore::new()),
+        AppliedMetadataEngine::new(identity.region_id, MemoryMetadataStore::new()),
     )
     .await
     .unwrap();
@@ -1329,7 +1329,7 @@ fn descriptor_membership_nodes_use_local_addr_and_configured_remote_endpoints() 
 
 #[test]
 fn recover_holt_hosted_identities_marks_multi_peer_descriptor_non_bootstrap() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     store
         .put_region_descriptor(&metapb::RegionDescriptor {
             region_id: 2,
@@ -1371,7 +1371,7 @@ fn recover_holt_hosted_identities_marks_multi_peer_descriptor_non_bootstrap() {
 
 #[test]
 fn recover_holt_hosted_identities_skips_merged_source_descriptor() {
-    let store = HoltMvccStore::open_memory().unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
     let mut merged = default_region_descriptor(ServerIdentity {
         region_id: 1,
         store_id: 7,
@@ -1474,7 +1474,7 @@ fn recovered_descriptor_membership_init_only_runs_on_first_local_peer() {
 #[tokio::test]
 async fn split_child_multi_peer_bootstrap_does_not_block_on_immediate_quorum() {
     let dir = tempfile::tempdir().unwrap();
-    let mvcc = HoltMvccStore::open_memory().unwrap();
+    let metadata_store = HoltMetadataStore::open_memory().unwrap();
     let peer_endpoints = PeerEndpointCatalog::require_configured();
     peer_endpoints
         .insert_peer(202, "http://127.0.0.1:30202")
@@ -1487,7 +1487,7 @@ async fn split_child_multi_peer_bootstrap_does_not_block_on_immediate_quorum() {
         advertised_addr: "127.0.0.1:30101".to_owned(),
         persistent_root: dir.path().to_path_buf(),
         coordinator: None,
-        mvcc: mvcc.clone(),
+        metadata_store: metadata_store.clone(),
         transport: nokv_raftnode::TonicRaftTransportRegistry::default(),
         metadata_services,
         admin_services,
@@ -1530,7 +1530,12 @@ async fn split_child_multi_peer_bootstrap_does_not_block_on_immediate_quorum() {
     result.unwrap().unwrap();
     assert!(hosted_regions.get(8).unwrap().is_some());
     assert_eq!(
-        mvcc.get_region_descriptor(8).unwrap().unwrap().peers.len(),
+        metadata_store
+            .get_region_descriptor(8)
+            .unwrap()
+            .unwrap()
+            .peers
+            .len(),
         2
     );
 }

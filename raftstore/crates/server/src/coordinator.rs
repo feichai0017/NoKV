@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use nokv_holtstore::HoltMvccStore;
+use nokv_holtstore::HoltMetadataStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
@@ -67,7 +67,7 @@ pub(crate) fn coordinator_endpoint(addr: &str) -> String {
 #[derive(Clone)]
 pub(crate) struct CoordinatorTopologyPublisher {
     pub(crate) endpoints: Vec<String>,
-    pub(crate) pending_store: Option<HoltMvccStore>,
+    pub(crate) pending_store: Option<HoltMetadataStore>,
 }
 
 #[tonic::async_trait]
@@ -134,7 +134,7 @@ impl CoordinatorTopologyPublisher {
 
 pub(crate) async fn publish_root_event_with_pending(
     endpoints: &[String],
-    pending_store: Option<&HoltMvccStore>,
+    pending_store: Option<&HoltMetadataStore>,
     event: metapb::RootEvent,
 ) -> TopologyPublishOutcome {
     let sequence = match pending_store {
@@ -316,7 +316,7 @@ pub(crate) fn root_event_status_metadata(
 
 pub(crate) fn spawn_pending_topology_retries(
     config: Option<CoordinatorHeartbeatConfig>,
-    pending_store: HoltMvccStore,
+    pending_store: HoltMetadataStore,
     addr: SocketAddr,
     range_controller: Option<HoltRangeController>,
 ) {
@@ -338,7 +338,7 @@ pub(crate) fn spawn_startup_root_publication_for_regions(
     config: Option<CoordinatorHeartbeatConfig>,
     identities: Vec<ServerIdentity>,
     descriptors: Vec<metapb::RegionDescriptor>,
-    pending_store: Option<HoltMvccStore>,
+    pending_store: Option<HoltMetadataStore>,
 ) {
     let Some(config) = config else {
         return;
@@ -400,7 +400,7 @@ pub(crate) fn startup_root_events_for_regions(
 
 pub(crate) async fn run_pending_topology_retries(
     config: CoordinatorHeartbeatConfig,
-    pending_store: HoltMvccStore,
+    pending_store: HoltMetadataStore,
     admin_endpoint: String,
     range_controller: Option<HoltRangeController>,
 ) {
@@ -419,7 +419,7 @@ pub(crate) async fn run_pending_topology_retries(
 
 pub(crate) async fn retry_pending_topology_events(
     endpoints: &[String],
-    pending_store: &HoltMvccStore,
+    pending_store: &HoltMetadataStore,
 ) {
     let pending = match pending_store.pending_root_events() {
         Ok(pending) => pending,
@@ -475,7 +475,7 @@ pub(crate) async fn retry_pending_topology_events(
 
 pub(crate) async fn retry_pending_scheduler_operations(
     admin_endpoint: &str,
-    pending_store: &HoltMvccStore,
+    pending_store: &HoltMetadataStore,
     range_controller: Option<&HoltRangeController>,
 ) {
     let pending = match pending_store.pending_scheduler_operations() {
@@ -579,7 +579,7 @@ pub(crate) async fn retry_pending_scheduler_operations(
 }
 
 pub(crate) fn record_pending_scheduler_operation_attempt(
-    store: &HoltMvccStore,
+    store: &HoltMetadataStore,
     operation: &coordpb::SchedulerOperation,
 ) -> Result<u32, String> {
     store
@@ -593,7 +593,7 @@ pub(crate) fn spawn_multi_region_coordinator_heartbeat<E>(
     addr: SocketAddr,
     advertised_addr: String,
     regions: HostedRegionRegistry<E>,
-    root_events: Option<HoltMvccStore>,
+    root_events: Option<HoltMetadataStore>,
     range_controller: Option<HoltRangeController>,
 ) where
     E: RegionSnapshotEngine + RegionTrafficProvider + Send + Sync + 'static,
@@ -621,7 +621,7 @@ pub(crate) async fn run_multi_region_coordinator_heartbeat<E>(
     addr: SocketAddr,
     advertised_addr: String,
     regions: HostedRegionRegistry<E>,
-    root_events: Option<HoltMvccStore>,
+    root_events: Option<HoltMetadataStore>,
     range_controller: Option<HoltRangeController>,
 ) where
     E: RegionSnapshotEngine + RegionTrafficProvider + Send + Sync + 'static,
@@ -673,7 +673,7 @@ pub(crate) async fn run_multi_region_coordinator_heartbeat<E>(
 }
 
 pub(crate) fn record_scheduler_operation_outcome(
-    store: Option<&HoltMvccStore>,
+    store: Option<&HoltMetadataStore>,
     operation: &coordpb::SchedulerOperation,
     outcome: Result<SchedulerOperationOutcome, tonic::Status>,
 ) {
@@ -765,7 +765,7 @@ where
 }
 
 pub(crate) fn record_pending_scheduler_operation(
-    store: Option<&HoltMvccStore>,
+    store: Option<&HoltMetadataStore>,
     operation: &coordpb::SchedulerOperation,
 ) {
     let Some(store) = store else {
@@ -875,7 +875,7 @@ pub(crate) fn coordinator_heartbeat_request<E>(
     identity: ServerIdentity,
     addr: &str,
     region: &OpenRaftRegion<E>,
-    root_events: Option<&HoltMvccStore>,
+    root_events: Option<&HoltMetadataStore>,
 ) -> coordpb::StoreHeartbeatRequest
 where
     E: RegionSnapshotEngine + RegionTrafficProvider,
@@ -892,7 +892,7 @@ pub(crate) fn coordinator_heartbeat_request_for_hosted_regions<E>(
     store_id: u64,
     addr: &str,
     registry: &HostedRegionRegistry<E>,
-    root_events: Option<&HoltMvccStore>,
+    root_events: Option<&HoltMetadataStore>,
 ) -> Result<coordpb::StoreHeartbeatRequest, String>
 where
     E: RegionSnapshotEngine + RegionTrafficProvider,
@@ -910,7 +910,7 @@ pub(crate) fn coordinator_heartbeat_request_for_regions<E>(
     store_id: u64,
     addr: &str,
     regions: &[(ServerIdentity, OpenRaftRegion<E>)],
-    root_events: Option<&HoltMvccStore>,
+    root_events: Option<&HoltMetadataStore>,
 ) -> coordpb::StoreHeartbeatRequest
 where
     E: RegionSnapshotEngine + RegionTrafficProvider,
@@ -959,7 +959,7 @@ where
     }
 }
 
-pub(crate) fn topology_catalog_has_pending_admin_work(store: &HoltMvccStore) -> bool {
+pub(crate) fn topology_catalog_has_pending_admin_work(store: &HoltMetadataStore) -> bool {
     let pending = store
         .pending_root_events()
         .map(|events| !events.is_empty())

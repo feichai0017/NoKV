@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
-use nokv_holtstore::HoltMvccStore;
-use nokv_mvcc::MvccStore;
+use nokv_holtstore::HoltMetadataStore;
+use nokv_metastore::MemoryMetadataStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
@@ -107,16 +107,16 @@ impl<E> HostedRegionRegistry<E> {
 }
 
 pub(crate) type HoltApplyEngine =
-    PersistentAppliedMetadataEngine<HoltMvccStore, HoltRegionMetadataSink>;
+    PersistentAppliedMetadataEngine<HoltMetadataStore, HoltRegionMetadataSink>;
 pub(crate) type HoltRegion = OpenRaftRegion<HoltApplyEngine>;
 
 #[derive(Clone)]
 pub(crate) struct HoltRegionDescriptorCatalog {
-    store: HoltMvccStore,
+    store: HoltMetadataStore,
 }
 
 impl HoltRegionDescriptorCatalog {
-    pub(crate) fn new(store: HoltMvccStore) -> Self {
+    pub(crate) fn new(store: HoltMetadataStore) -> Self {
         Self { store }
     }
 }
@@ -132,10 +132,10 @@ impl RegionDescriptorCatalog for HoltRegionDescriptorCatalog {
     fn region_descriptor(
         &self,
         region_id: u64,
-    ) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
+    ) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>> {
         self.store
             .get_region_descriptor(region_id)
-            .map_err(|err| nokv_mvcc::Error::Backend(err.to_string()))
+            .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))
     }
 }
 
@@ -145,7 +145,7 @@ pub(crate) struct HoltRangeController {
     pub(crate) advertised_addr: String,
     pub(crate) persistent_root: PathBuf,
     pub(crate) coordinator: Option<CoordinatorHeartbeatConfig>,
-    pub(crate) mvcc: HoltMvccStore,
+    pub(crate) metadata_store: HoltMetadataStore,
     pub(crate) transport: nokv_raftnode::TonicRaftTransportRegistry,
     pub(crate) metadata_services: MultiRegionMetadataPlaneService<HoltRegion>,
     pub(crate) admin_services: MultiRegionRaftAdminService<HoltRegion, HoltRegionMetadataSink>,
@@ -237,7 +237,7 @@ impl HoltRangeController {
 
     pub(crate) async fn reconcile_local_region_descriptors(&self) -> Result<(), tonic::Status> {
         let descriptors = self
-            .mvcc
+            .metadata_store
             .region_descriptors()
             .map_err(|err| tonic::Status::internal(err.to_string()))?;
         let merged_sources = merged_source_region_ids_for_store(&descriptors, self.store_id);
@@ -413,7 +413,8 @@ impl HoltRangeController {
         };
         let event = split_root_event(kind, left, right);
         let outcome =
-            publish_root_event_with_pending(&config.endpoints, Some(&self.mvcc), event).await;
+            publish_root_event_with_pending(&config.endpoints, Some(&self.metadata_store), event)
+                .await;
         match outcome.publish_state() {
             adminpb::ExecutionPublishState::TerminalPublished => Ok(()),
             adminpb::ExecutionPublishState::TerminalPending
@@ -460,7 +461,8 @@ impl HoltRangeController {
         };
         let event = merge_root_event(kind, left_region_id, right_region_id, merged);
         let outcome =
-            publish_root_event_with_pending(&config.endpoints, Some(&self.mvcc), event).await;
+            publish_root_event_with_pending(&config.endpoints, Some(&self.metadata_store), event)
+                .await;
         match outcome.publish_state() {
             adminpb::ExecutionPublishState::TerminalPublished => Ok(()),
             adminpb::ExecutionPublishState::TerminalPending
@@ -500,12 +502,12 @@ impl HoltRangeController {
         descriptor: metapb::RegionDescriptor,
         membership_init: Option<BTreeMap<u64, BasicNode>>,
     ) -> Result<(), tonic::Status> {
-        self.mvcc
+        self.metadata_store
             .put_region_descriptor(&descriptor)
-            .and_then(|_| self.mvcc.checkpoint())
+            .and_then(|_| self.metadata_store.checkpoint())
             .map_err(|err| tonic::Status::internal(err.to_string()))?;
         let apply_status = self
-            .mvcc
+            .metadata_store
             .get_region_apply_state(descriptor.region_id)
             .map_err(|err| tonic::Status::internal(err.to_string()))?
             .map(apply_status_from_holt)
@@ -514,10 +516,10 @@ impl HoltRangeController {
                 term: 1,
                 applied_index: 0,
             });
-        let engine = AppliedMetadataEngine::with_status(apply_status, self.mvcc.clone());
+        let engine = AppliedMetadataEngine::with_status(apply_status, self.metadata_store.clone());
         engine
             .set_region_descriptor_catalog(Arc::new(HoltRegionDescriptorCatalog::new(
-                self.mvcc.clone(),
+                self.metadata_store.clone(),
             )))
             .map_err(|err| tonic::Status::internal(err.to_string()))?;
         engine
@@ -525,7 +527,7 @@ impl HoltRangeController {
             .map_err(|err| tonic::Status::internal(err.to_string()))?;
         let engine = PersistentAppliedMetadataEngine::new(
             engine,
-            HoltRegionMetadataSink::new(self.mvcc.clone()),
+            HoltRegionMetadataSink::new(self.metadata_store.clone()),
         );
         let log_dir = region_log_dir(
             self.persistent_root.join("raftlog"),
@@ -568,9 +570,9 @@ impl HoltRangeController {
             region.clone(),
             admission,
             self.peer_endpoints.clone(),
-            HoltRegionMetadataSink::new(self.mvcc.clone()),
+            HoltRegionMetadataSink::new(self.metadata_store.clone()),
             self.topology_publisher.clone(),
-            Arc::new(self.mvcc.clone()),
+            Arc::new(self.metadata_store.clone()),
         );
         self.metadata_services
             .insert_region(identity.region_id, metadata)?;
@@ -593,7 +595,7 @@ impl HoltRangeController {
         self.metadata_services.remove_region(region_id)?;
         self.admin_services.remove_region(region_id)?;
         self.transport.unregister(region_id);
-        self.mvcc
+        self.metadata_store
             .delete_region_descriptor(region_id)
             .map_err(|err| tonic::Status::internal(err.to_string()))?;
         if let Some((_identity, region)) = removed {
@@ -901,7 +903,7 @@ pub(crate) fn merge_root_event(
 
 fn coordinator_topology_publisher(
     config: Option<CoordinatorHeartbeatConfig>,
-    pending_store: Option<HoltMvccStore>,
+    pending_store: Option<HoltMetadataStore>,
 ) -> Arc<dyn TopologyPublisher> {
     config
         .map(|config| {
@@ -924,21 +926,21 @@ pub(crate) async fn serve_holt_regions(
     metrics_addr: Option<SocketAddr>,
     temp_log_dir: &mut Option<tempfile::TempDir>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let mvcc = HoltMvccStore::open_file(&persistent_root)?;
+    let metadata_store = HoltMetadataStore::open_file(&persistent_root)?;
     let configured_region_ids = identities
         .iter()
         .map(|identity| identity.region_id)
         .collect::<HashSet<_>>();
-    let identities = recover_holt_hosted_identities(&mvcc, identities)?;
+    let identities = recover_holt_hosted_identities(&metadata_store, identities)?;
     tracing::info!(
         %addr,
         %advertised_addr,
         path = %persistent_root.display(),
         region_count = identities.len(),
-        "starting raftstore server with multi-region Holt MVCC"
+        "starting raftstore server with multi-region Holt metadata store"
     );
     let topology_publisher =
-        coordinator_topology_publisher(coordinator.clone(), Some(mvcc.clone()));
+        coordinator_topology_publisher(coordinator.clone(), Some(metadata_store.clone()));
     let mut metadata_services = Vec::with_capacity(identities.len());
     let mut admin_services = Vec::with_capacity(identities.len());
     let mut hosted_regions = Vec::with_capacity(identities.len());
@@ -948,10 +950,13 @@ pub(crate) async fn serve_holt_regions(
     let multi_region = true;
 
     for identity in identities.iter().copied() {
-        let descriptor =
-            startup_region_descriptor(&mvcc, identity, region_ranges.get(identity.region_id))?;
+        let descriptor = startup_region_descriptor(
+            &metadata_store,
+            identity,
+            region_ranges.get(identity.region_id),
+        )?;
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
-        let apply_status = mvcc
+        let apply_status = metadata_store
             .get_region_apply_state(descriptor.region_id)?
             .map(apply_status_from_holt)
             .unwrap_or(nokv_raftnode::ApplyStatus {
@@ -959,13 +964,15 @@ pub(crate) async fn serve_holt_regions(
                 term: 1,
                 applied_index: 0,
             });
-        let engine = AppliedMetadataEngine::with_status(apply_status, mvcc.clone());
+        let engine = AppliedMetadataEngine::with_status(apply_status, metadata_store.clone());
         engine.set_region_descriptor_catalog(Arc::new(HoltRegionDescriptorCatalog::new(
-            mvcc.clone(),
+            metadata_store.clone(),
         )))?;
         engine.set_region_descriptor(descriptor.clone())?;
-        let engine =
-            PersistentAppliedMetadataEngine::new(engine, HoltRegionMetadataSink::new(mvcc.clone()));
+        let engine = PersistentAppliedMetadataEngine::new(
+            engine,
+            HoltRegionMetadataSink::new(metadata_store.clone()),
+        );
         let log_dir =
             raft_log_dir_for_region(Some(&persistent_root), identity, multi_region, temp_log_dir)?;
         let region = open_openraft_region(identity, &advertised_addr, log_dir, engine).await?;
@@ -983,7 +990,7 @@ pub(crate) async fn serve_holt_regions(
             region.clone(),
             admission,
             peer_endpoints.clone(),
-            HoltRegionMetadataSink::new(mvcc.clone()),
+            HoltRegionMetadataSink::new(metadata_store.clone()),
             topology_publisher.clone(),
             Arc::new(EmptyRestartDiagnostics),
         );
@@ -999,26 +1006,26 @@ pub(crate) async fn serve_holt_regions(
         coordinator.clone(),
         identities.clone(),
         startup_descriptors,
-        Some(mvcc.clone()),
+        Some(metadata_store.clone()),
     );
     let hosted_region_registry = HostedRegionRegistry::new(hosted_regions)?;
     spawn_recovered_region_leadership_retries(recovered_leadership);
     let metadata_router = MultiRegionMetadataPlaneService::new(metadata_services)?;
     let admin_router = MultiRegionRaftAdminService::new(admin_services)?
-        .with_restart_diagnostics(Arc::new(mvcc.clone()));
+        .with_restart_diagnostics(Arc::new(metadata_store.clone()));
     spawn_metrics_server(
         metrics_addr,
         identities[0].store_id,
         advertised_addr.clone(),
         hosted_region_registry.clone(),
-        Some(mvcc.clone()),
+        Some(metadata_store.clone()),
     );
     let range_controller = HoltRangeController {
         store_id: identities[0].store_id,
         advertised_addr: advertised_addr.clone(),
         persistent_root: persistent_root.clone(),
         coordinator: coordinator.clone(),
-        mvcc: mvcc.clone(),
+        metadata_store: metadata_store.clone(),
         transport: transport.clone(),
         metadata_services: metadata_router.clone(),
         admin_services: admin_router.clone(),
@@ -1032,16 +1039,21 @@ pub(crate) async fn serve_holt_regions(
         addr,
         advertised_addr,
         hosted_region_registry,
-        Some(mvcc.clone()),
+        Some(metadata_store.clone()),
         Some(range_controller.clone()),
     );
-    spawn_pending_topology_retries(coordinator, mvcc.clone(), addr, Some(range_controller));
+    spawn_pending_topology_retries(
+        coordinator,
+        metadata_store.clone(),
+        addr,
+        Some(range_controller),
+    );
     serve_with_metadata_region_services(addr, metadata_router, admin_router, transport).await?;
     Ok(())
 }
 
 pub(crate) fn recover_holt_hosted_identities(
-    store: &HoltMvccStore,
+    store: &HoltMetadataStore,
     configured: Vec<ServerIdentity>,
 ) -> Result<Vec<ServerIdentity>, Box<dyn std::error::Error>> {
     let Some(first) = configured.first().copied() else {
@@ -1167,7 +1179,7 @@ pub(crate) async fn serve_memory_regions(
         %addr,
         %advertised_addr,
         region_count = identities.len(),
-        "starting raftstore server with multi-region in-memory MVCC"
+        "starting raftstore server with multi-region in-memory metadata store"
     );
     let topology_publisher = coordinator_topology_publisher(coordinator.clone(), None);
     let mut metadata_services = Vec::with_capacity(identities.len());
@@ -1178,7 +1190,7 @@ pub(crate) async fn serve_memory_regions(
     let multi_region = identities.len() > 1;
 
     for identity in identities.iter().copied() {
-        let engine = AppliedMetadataEngine::new(identity.region_id, MvccStore::new());
+        let engine = AppliedMetadataEngine::new(identity.region_id, MemoryMetadataStore::new());
         let descriptor =
             default_region_descriptor_with_range(identity, region_ranges.get(identity.region_id));
         engine.set_region_descriptor(descriptor.clone())?;
@@ -1329,7 +1341,7 @@ pub(crate) fn default_region_descriptor_with_range(
 }
 
 pub(crate) fn startup_region_descriptor(
-    store: &HoltMvccStore,
+    store: &HoltMetadataStore,
     identity: ServerIdentity,
     range: Option<&RegionKeyRange>,
 ) -> nokv_holtstore::Result<metapb::RegionDescriptor> {

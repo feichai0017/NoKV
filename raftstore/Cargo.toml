@@ -1,7 +1,7 @@
 [workspace]
 members = [
     "crates/proto",
-    "crates/mvcc",
+    "crates/metastore",
     "crates/holtstore",
     "crates/raftlog",
     "crates/raftnode",
@@ -22,7 +22,7 @@ crc32fast = "1.4"
 futures-core = "0.3"
 holt = { version = "0.4.1", default-features = false }
 nokv-holtstore = { path = "crates/holtstore" }
-nokv-mvcc = { path = "crates/mvcc" }
+nokv-metastore = { path = "crates/metastore" }
 nokv-proto = { path = "crates/proto" }
 nokv-raftlog = { path = "crates/raftlog" }
 nokv-raftnode = { path = "crates/raftnode" }

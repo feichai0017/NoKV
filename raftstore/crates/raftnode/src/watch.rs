@@ -8,8 +8,10 @@ const DEFAULT_APPLY_HISTORY_LIMIT: usize = 4096;
 pub trait ApplyWatchProvider: Clone + Send + Sync + 'static {
     fn subscribe_apply(&self) -> broadcast::Receiver<metadatapb::MetadataApplyWatchEvent>;
 
-    fn replay_apply(&self, request: ApplyWatchReplayRequest)
-        -> nokv_mvcc::Result<ApplyWatchReplay>;
+    fn replay_apply(
+        &self,
+        request: ApplyWatchReplayRequest,
+    ) -> nokv_metastore::Result<ApplyWatchReplay>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

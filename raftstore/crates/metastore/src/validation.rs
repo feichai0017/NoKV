@@ -1,4 +1,4 @@
-//! Validation shared by in-memory and Holt-backed MVCC implementations.
+//! Validation shared by in-memory and Holt-backed metadata-store implementations.
 
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 

@@ -424,7 +424,7 @@ fn snapshot_id(last_log_id: Option<LogId<NodeId>>, payload: &[u8]) -> String {
 mod tests {
     use super::*;
     use crate::{AppliedMetadataEngine, MetadataReadExecutor, Proposal};
-    use nokv_mvcc::MvccStore;
+    use nokv_metastore::MemoryMetadataStore;
     use nokv_proto::nokv::metadata::v1 as metadatapb;
     use openraft::{storage::RaftLogStorageExt, CommittedLeaderId, EntryPayload, LogId};
     use std::collections::{BTreeMap, BTreeSet};
@@ -645,7 +645,7 @@ mod tests {
 
     #[tokio::test]
     async fn region_state_machine_applies_entries() {
-        let engine = AppliedMetadataEngine::new(7, MvccStore::default());
+        let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::default());
         let mut state_machine = RegionStateMachine::new(engine);
         let entries = vec![
             normal_entry(7, 1, b"a", b"1"),
@@ -659,7 +659,7 @@ mod tests {
 
     #[tokio::test]
     async fn region_state_machine_builds_and_installs_snapshot() {
-        let engine = AppliedMetadataEngine::new(7, MvccStore::default());
+        let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::default());
         let mut state_machine = RegionStateMachine::new(engine.clone());
         state_machine
             .apply(vec![
@@ -674,7 +674,7 @@ mod tests {
         assert_eq!(snapshot.meta.last_log_id.unwrap(), log_id(3, 2));
         assert!(!snapshot.snapshot.get_ref().is_empty());
 
-        let restored = AppliedMetadataEngine::new(7, MvccStore::default());
+        let restored = AppliedMetadataEngine::new(7, MemoryMetadataStore::default());
         let mut restored_state_machine = RegionStateMachine::new(restored.clone());
         restored_state_machine
             .install_snapshot(&snapshot.meta, snapshot.snapshot)
@@ -705,7 +705,7 @@ mod tests {
 
     #[tokio::test]
     async fn region_state_machine_rejects_stale_snapshot_install() {
-        let old_engine = AppliedMetadataEngine::new(7, MvccStore::default());
+        let old_engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::default());
         let mut old_state_machine = RegionStateMachine::new(old_engine);
         old_state_machine
             .apply(vec![normal_entry(7, 1, b"a", b"1")])
@@ -714,7 +714,7 @@ mod tests {
         let mut old_builder = old_state_machine.get_snapshot_builder().await;
         let old_snapshot = old_builder.build_snapshot().await.unwrap();
 
-        let current_engine = AppliedMetadataEngine::new(7, MvccStore::default());
+        let current_engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::default());
         let mut current_state_machine = RegionStateMachine::new(current_engine);
         current_state_machine
             .apply(vec![
@@ -733,7 +733,7 @@ mod tests {
 
     #[tokio::test]
     async fn region_state_machine_rejects_corrupt_snapshot_without_mutation() {
-        let source_engine = AppliedMetadataEngine::new(7, MvccStore::default());
+        let source_engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::default());
         let mut source_state_machine = RegionStateMachine::new(source_engine);
         source_state_machine
             .apply(vec![normal_entry(7, 1, b"a", b"1")])
@@ -742,7 +742,7 @@ mod tests {
         let mut builder = source_state_machine.get_snapshot_builder().await;
         let snapshot = builder.build_snapshot().await.unwrap();
 
-        let restored = AppliedMetadataEngine::new(7, MvccStore::default());
+        let restored = AppliedMetadataEngine::new(7, MemoryMetadataStore::default());
         let mut restored_state_machine = RegionStateMachine::new(restored.clone());
         let err = restored_state_machine
             .install_snapshot(

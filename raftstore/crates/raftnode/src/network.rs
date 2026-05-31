@@ -271,7 +271,7 @@ where
 mod tests {
     use std::collections::BTreeMap;
 
-    use nokv_mvcc::MvccStore;
+    use nokv_metastore::MemoryMetadataStore;
     use nokv_proto::nokv::metadata::v1 as metadatapb;
 
     use super::*;
@@ -291,7 +291,7 @@ mod tests {
             let dir = tempfile::tempdir().unwrap();
             let log = crate::SegmentedEntryLog::open(7, dir.path()).unwrap();
             let log_store = RegionLogStorage::new(log);
-            let engine = AppliedMetadataEngine::new(7, MvccStore::new());
+            let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
             let region = OpenRaftRegion::open_with_network(
                 node_id,
                 7,

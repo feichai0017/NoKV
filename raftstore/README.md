@@ -16,15 +16,15 @@ fsmeta semantic API
 Go remains responsible for `fsmeta`, `meta/root`, `coordinator`, protobuf
 definitions, and binary wiring. Rust owns replicated execution: OpenRaft
 regions, proposal/apply, the segmented Raft log, Holt-backed state-machine
-storage, snapshots, apply notifications, and the compatibility service surface
-needed by fsmeta.
+storage, snapshots, apply notifications, and the MetadataPlane/RaftAdmin
+service surface used by fsmeta.
 
 ## Workspace
 
 The Rust workspace keeps responsibilities small:
 
 - `nokv-proto`: Rust bindings generated from the repository `pb/*.proto` files.
-- `nokv-mvcc`: metadata command, versioned-value, key-error, and snapshot
+- `nokv-metastore`: metadata command, versioned-value, key-error, and snapshot
   primitives shared by in-memory tests and Holt-backed state-machine storage.
 - `nokv-holtstore`: Holt multi-tree state-machine layout and recovery state.
 - `nokv-raftlog`: append-only segmented Raft log.

@@ -5,11 +5,11 @@ use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("mvcc store mutex poisoned")]
+    #[error("metadata store mutex poisoned")]
     Poisoned,
-    #[error("mvcc backend error: {0}")]
+    #[error("metadata backend error: {0}")]
     Backend(String),
-    #[error("mvcc decode error: {0}")]
+    #[error("metadata decode error: {0}")]
     Decode(String),
 }
 
@@ -39,12 +39,12 @@ pub struct VersionedValue {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MvccSnapshot {
-    pub writes: Vec<MvccSnapshotWrite>,
+pub struct MetadataSnapshot {
+    pub writes: Vec<MetadataSnapshotWrite>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MvccSnapshotWrite {
+pub struct MetadataSnapshotWrite {
     pub key: Vec<u8>,
     pub commit_version: u64,
     pub value: VersionedValue,
@@ -55,10 +55,10 @@ pub(crate) struct Inner {
     pub(crate) writes: BTreeMap<Vec<u8>, BTreeMap<u64, VersionedValue>>,
 }
 
-/// In-memory metadata MVCC implementation used by tests and memory-backed
+/// In-memory metadata-store implementation used by tests and memory-backed
 /// raftstore regions.
 #[derive(Debug, Clone, Default)]
-pub struct MvccStore {
+pub struct MemoryMetadataStore {
     pub(crate) inner: Arc<Mutex<Inner>>,
 }
 
@@ -92,7 +92,7 @@ pub trait MetadataEngine: Clone + Send + Sync + 'static {
     ) -> Result<MetadataApplyResult>;
 }
 
-pub trait MvccSnapshotEngine: Clone + Send + Sync + 'static {
-    fn export_mvcc_snapshot(&self) -> Result<MvccSnapshot>;
-    fn install_mvcc_snapshot(&self, snapshot: MvccSnapshot) -> Result<()>;
+pub trait MetadataSnapshotEngine: Clone + Send + Sync + 'static {
+    fn export_metadata_snapshot(&self) -> Result<MetadataSnapshot>;
+    fn install_metadata_snapshot(&self, snapshot: MetadataSnapshot) -> Result<()>;
 }

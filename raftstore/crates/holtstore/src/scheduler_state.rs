@@ -10,8 +10,8 @@ use crate::trees::{
     PENDING_SCHEDULER_OPERATION_PREFIX, REGION_META_TREE,
 };
 use crate::{
-    BlockedRootEvent, BlockedSchedulerOperation, Error, HoltMvccStore, HoltStore, PendingRootEvent,
-    PendingSchedulerOperation, Result,
+    BlockedRootEvent, BlockedSchedulerOperation, Error, HoltMetadataStore, HoltStore,
+    PendingRootEvent, PendingSchedulerOperation, Result,
 };
 
 #[derive(Clone, PartialEq, Message)]
@@ -289,7 +289,7 @@ impl HoltStore {
     }
 }
 
-impl HoltMvccStore {
+impl HoltMetadataStore {
     pub fn enqueue_pending_root_event(&self, event: &metapb::RootEvent) -> Result<u64> {
         let _guard = self
             .gate

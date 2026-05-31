@@ -40,7 +40,7 @@ pub(crate) const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;
 pub(crate) const DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE: usize = 512;
 pub(crate) const DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE: usize = 512 * 1024;
 
-pub(crate) fn internal_error(err: nokv_mvcc::Error) -> tonic::Status {
+pub(crate) fn internal_error(err: nokv_metastore::Error) -> tonic::Status {
     tonic::Status::internal(err.to_string())
 }
 
