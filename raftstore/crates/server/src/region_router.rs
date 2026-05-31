@@ -1,8 +1,6 @@
 //! Multi-region MetadataPlane/RaftAdmin routing for a single Rust raftstore process.
 //!
-//! The main server path routes metadata-native requests. StoreKV routing remains
-//! in this module only as a compatibility test surface while fsmeta migrates to
-//! the MetadataPlane contract.
+//! The main server path routes metadata-native requests and admin calls.
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
@@ -10,17 +8,11 @@ use std::sync::{Arc, RwLock};
 
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::error::v1 as errorpb;
-#[cfg(test)]
-use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
-#[cfg(test)]
-use nokv_raftnode::RaftCommandExecutor;
 use nokv_raftnode::{ApplyWatchProvider, MetadataCommandExecutor, MetadataReadExecutor};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status};
 
-#[cfg(test)]
-use crate::store_kv_compat::StoreKvService;
 use crate::{
     push_missing_topology_status, AppliedRegionDescriptorProvider, EmptyRegionDescriptorSink,
     EmptyRestartDiagnostics, MetadataPlaneService, RaftAdminService, RaftMembershipAdmin,
@@ -103,26 +95,6 @@ fn region_service_registry_poisoned() -> Status {
     Status::internal("region service registry lock poisoned")
 }
 
-#[cfg(test)]
-fn store_region_lookup<T>(
-    regions: &RegionServiceRegistry<T>,
-    context: Option<&kvpb::Context>,
-) -> Result<RegionServiceLookup<T>, Status>
-where
-    T: Clone,
-{
-    let context = context.ok_or_else(|| Status::invalid_argument("context is required"))?;
-    if context.region_id == 0 {
-        return Err(Status::invalid_argument("region id is required"));
-    }
-    match regions.get_region(context.region_id)? {
-        Some(region) => Ok(RegionServiceLookup::Hosted(region)),
-        None => Ok(RegionServiceLookup::Missing(region_not_found_error(
-            context.region_id,
-        ))),
-    }
-}
-
 fn metadata_region_lookup<T>(
     regions: &RegionServiceRegistry<T>,
     context: Option<&metadatapb::MetadataContext>,
@@ -165,185 +137,6 @@ fn validate_region_service_id(region_id: u64) -> Result<(), Status> {
         return Err(Status::invalid_argument("region_id is required"));
     }
     Ok(())
-}
-
-/// StoreKV service router for a process that hosts more than one region.
-///
-/// The wire contract stays unchanged: callers still send the existing
-/// `Context.region_id`, and the server selects the matching hosted region
-/// before the per-region admission gate performs epoch, leader, and key-range
-/// checks.
-#[cfg(test)]
-#[derive(Clone)]
-pub struct MultiRegionStoreKvService<E> {
-    regions: RegionServiceRegistry<StoreKvService<E>>,
-}
-
-#[cfg(test)]
-impl<E> MultiRegionStoreKvService<E> {
-    pub fn new(
-        regions: impl IntoIterator<Item = (u64, StoreKvService<E>)>,
-    ) -> Result<Self, Status> {
-        Ok(Self {
-            regions: RegionServiceRegistry::new(regions)?,
-        })
-    }
-
-    pub fn insert_region(&self, region_id: u64, service: StoreKvService<E>) -> Result<(), Status> {
-        self.regions.insert_region(region_id, service)
-    }
-
-    fn service_for_context(
-        &self,
-        context: Option<&kvpb::Context>,
-    ) -> Result<RegionServiceLookup<StoreKvService<E>>, Status>
-    where
-        StoreKvService<E>: Clone,
-    {
-        store_region_lookup(&self.regions, context)
-    }
-}
-
-#[cfg(test)]
-macro_rules! delegate_store_kv_request {
-    ($self:expr, $request:expr, $method:ident, $response_type:ident) => {{
-        let request = $request.into_inner();
-        match $self.service_for_context(request.context.as_ref())? {
-            RegionServiceLookup::Hosted(service) => service.$method(Request::new(request)).await,
-            RegionServiceLookup::Missing(region_error) => Ok(Response::new(kvpb::$response_type {
-                response: None,
-                region_error: Some(region_error),
-            })),
-        }
-    }};
-}
-
-#[cfg(test)]
-#[tonic::async_trait]
-impl<E> kvpb::store_kv_server::StoreKv for MultiRegionStoreKvService<E>
-where
-    E: AppliedRegionDescriptorProvider
-        + ApplyWatchProvider
-        + RaftCommandExecutor
-        + RaftRuntimeStatusProvider,
-{
-    async fn get(
-        &self,
-        request: Request<kvpb::KvGetRequest>,
-    ) -> Result<Response<kvpb::KvGetResponse>, Status> {
-        delegate_store_kv_request!(self, request, get, KvGetResponse)
-    }
-
-    async fn batch_get(
-        &self,
-        request: Request<kvpb::KvBatchGetRequest>,
-    ) -> Result<Response<kvpb::KvBatchGetResponse>, Status> {
-        delegate_store_kv_request!(self, request, batch_get, KvBatchGetResponse)
-    }
-
-    async fn scan(
-        &self,
-        request: Request<kvpb::KvScanRequest>,
-    ) -> Result<Response<kvpb::KvScanResponse>, Status> {
-        delegate_store_kv_request!(self, request, scan, KvScanResponse)
-    }
-
-    async fn prewrite(
-        &self,
-        request: Request<kvpb::KvPrewriteRequest>,
-    ) -> Result<Response<kvpb::KvPrewriteResponse>, Status> {
-        delegate_store_kv_request!(self, request, prewrite, KvPrewriteResponse)
-    }
-
-    async fn commit(
-        &self,
-        request: Request<kvpb::KvCommitRequest>,
-    ) -> Result<Response<kvpb::KvCommitResponse>, Status> {
-        delegate_store_kv_request!(self, request, commit, KvCommitResponse)
-    }
-
-    async fn batch_rollback(
-        &self,
-        request: Request<kvpb::KvBatchRollbackRequest>,
-    ) -> Result<Response<kvpb::KvBatchRollbackResponse>, Status> {
-        delegate_store_kv_request!(self, request, batch_rollback, KvBatchRollbackResponse)
-    }
-
-    async fn resolve_lock(
-        &self,
-        request: Request<kvpb::KvResolveLockRequest>,
-    ) -> Result<Response<kvpb::KvResolveLockResponse>, Status> {
-        delegate_store_kv_request!(self, request, resolve_lock, KvResolveLockResponse)
-    }
-
-    async fn check_txn_status(
-        &self,
-        request: Request<kvpb::KvCheckTxnStatusRequest>,
-    ) -> Result<Response<kvpb::KvCheckTxnStatusResponse>, Status> {
-        delegate_store_kv_request!(self, request, check_txn_status, KvCheckTxnStatusResponse)
-    }
-
-    async fn txn_heart_beat(
-        &self,
-        request: Request<kvpb::KvTxnHeartBeatRequest>,
-    ) -> Result<Response<kvpb::KvTxnHeartBeatResponse>, Status> {
-        delegate_store_kv_request!(self, request, txn_heart_beat, KvTxnHeartBeatResponse)
-    }
-
-    async fn try_atomic_mutate(
-        &self,
-        request: Request<kvpb::KvTryAtomicMutateRequest>,
-    ) -> Result<Response<kvpb::KvTryAtomicMutateResponse>, Status> {
-        delegate_store_kv_request!(self, request, try_atomic_mutate, KvTryAtomicMutateResponse)
-    }
-
-    async fn install_prepared_mvcc_entries(
-        &self,
-        request: Request<kvpb::KvInstallPreparedMvccEntriesRequest>,
-    ) -> Result<Response<kvpb::KvInstallPreparedMvccEntriesResponse>, Status> {
-        delegate_store_kv_request!(
-            self,
-            request,
-            install_prepared_mvcc_entries,
-            KvInstallPreparedMvccEntriesResponse
-        )
-    }
-
-    type WatchApplyStream = ReceiverStream<Result<kvpb::ApplyWatchResponse, Status>>;
-
-    async fn watch_apply(
-        &self,
-        request: Request<kvpb::ApplyWatchRequest>,
-    ) -> Result<Response<Self::WatchApplyStream>, Status> {
-        let request = request.into_inner();
-        let buffer = if request.buffer == 0 {
-            DEFAULT_APPLY_WATCH_BUFFER
-        } else {
-            request.buffer as usize
-        };
-        let (tx, rx) = tokio::sync::mpsc::channel(buffer);
-        for service in self.regions.values()? {
-            let tx = tx.clone();
-            let request = request.clone();
-            tokio::spawn(async move {
-                let response = service.watch_apply(Request::new(request)).await;
-                let mut stream = match response {
-                    Ok(response) => response.into_inner(),
-                    Err(err) => {
-                        let _ = tx.send(Err(err)).await;
-                        return;
-                    }
-                };
-                while let Some(item) = stream.next().await {
-                    if tx.send(item).await.is_err() {
-                        return;
-                    }
-                }
-            });
-        }
-        drop(tx);
-        Ok(Response::new(ReceiverStream::new(rx)))
-    }
 }
 
 #[derive(Clone)]
@@ -682,12 +475,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::admission_state::RegionAdmissionState;
+    use crate::execution::ExecutionRuntime;
     use crate::{RaftRuntimeStatus, RegionAdmission};
     use nokv_mvcc::MvccStore;
     use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdmin;
-    use nokv_proto::nokv::kv::v1::store_kv_server::StoreKv;
+    use nokv_proto::nokv::kv::v1 as kvpb;
     use nokv_proto::nokv::meta::v1 as metapb;
-    use nokv_proto::nokv::raft::v1 as raftpb;
+    use nokv_proto::nokv::metadata::v1::metadata_plane_server::MetadataPlane;
     use nokv_raftnode::{ApplyStatusProvider, BasicNode};
 
     #[derive(Debug, Clone)]
@@ -711,16 +506,6 @@ mod tests {
 
         fn set_region_descriptor(&self, descriptor: metapb::RegionDescriptor) {
             self.inner.set_region_descriptor(descriptor).unwrap();
-        }
-    }
-
-    impl RaftCommandExecutor for FixedRuntimeEngine {
-        fn execute_raft_command<'a>(
-            &'a self,
-            req: &'a raftpb::RaftCmdRequest,
-        ) -> impl std::future::Future<Output = nokv_mvcc::Result<raftpb::RaftCmdResponse>> + Send + 'a
-        {
-            self.inner.execute_raft_command(req)
         }
     }
 
@@ -750,6 +535,17 @@ mod tests {
                + Send
                + 'a {
             self.inner.execute_metadata_scan(req)
+        }
+    }
+
+    impl MetadataCommandExecutor for FixedRuntimeEngine {
+        fn execute_metadata_command<'a>(
+            &'a self,
+            req: &'a metadatapb::MetadataCommitRequest,
+        ) -> impl std::future::Future<Output = nokv_mvcc::Result<metadatapb::MetadataCommitResponse>>
+               + Send
+               + 'a {
+            self.inner.execute_metadata_command(req)
         }
     }
 
@@ -834,8 +630,8 @@ mod tests {
         }
     }
 
-    fn context(admission: &RegionAdmission) -> kvpb::Context {
-        kvpb::Context {
+    fn metadata_context(admission: &RegionAdmission) -> metadatapb::MetadataContext {
+        metadatapb::MetadataContext {
             region_id: admission.region_id,
             region_epoch: Some(metapb::RegionEpoch {
                 version: admission.epoch_version,
@@ -847,6 +643,17 @@ mod tests {
             }),
             ..Default::default()
         }
+    }
+
+    fn metadata_service(
+        engine: FixedRuntimeEngine,
+        admission: RegionAdmission,
+    ) -> MetadataPlaneService<FixedRuntimeEngine> {
+        MetadataPlaneService::with_admission_state_and_execution(
+            engine,
+            RegionAdmissionState::new(admission),
+            ExecutionRuntime::default(),
+        )
     }
 
     fn test_region_descriptor(
@@ -870,7 +677,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_kv_routes_by_context_region() {
+    async fn metadata_plane_routes_by_context_region() {
         let descriptor1 = test_region_descriptor(1, 1, 10, b"", b"m");
         let descriptor2 = test_region_descriptor(2, 1, 20, b"m", b"");
         let admission1 = RegionAdmission::from_descriptor(&descriptor1, true).unwrap();
@@ -879,70 +686,35 @@ mod tests {
         let engine2 = FixedRuntimeEngine::leader(2, 20);
         engine1.set_region_descriptor(descriptor1);
         engine2.set_region_descriptor(descriptor2);
-        let service = MultiRegionStoreKvService::new([
-            (
-                1,
-                StoreKvService::with_admission(engine1, admission1.clone()),
-            ),
-            (
-                2,
-                StoreKvService::with_admission(engine2, admission2.clone()),
-            ),
+        let service = MultiRegionMetadataPlaneService::new([
+            (1, metadata_service(engine1, admission1.clone())),
+            (2, metadata_service(engine2, admission2.clone())),
         ])
         .unwrap();
 
         let key = b"m-artifact".to_vec();
-        let put = service
-            .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
-                context: Some(context(&admission2)),
-                request: Some(kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: key.clone(),
-                        value: b"region-2".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 11,
-                    ..Default::default()
-                }),
-                ..Default::default()
-            }))
-            .await
-            .unwrap()
-            .into_inner();
-        assert!(
-            put.region_error.is_none(),
-            "unexpected region error: {:?}",
-            put.region_error
-        );
-        assert_eq!(put.response.unwrap().applied_keys, 1);
-
         let get = service
-            .get(Request::new(kvpb::KvGetRequest {
-                context: Some(context(&admission2)),
-                request: Some(kvpb::GetRequest {
-                    key: key.clone(),
-                    version: 11,
-                }),
-                ..Default::default()
+            .get(Request::new(metadatapb::MetadataGetRequest {
+                context: Some(metadata_context(&admission2)),
+                key: key.clone(),
+                version: 11,
             }))
             .await
             .unwrap()
             .into_inner();
-        let value = get.response.unwrap();
-        assert_eq!(value.value, b"region-2");
-        assert!(!value.not_found);
+        assert!(get.region_error.is_none());
+        assert!(get.not_found);
 
         let wrong_region = service
-            .get(Request::new(kvpb::KvGetRequest {
-                context: Some(context(&RegionAdmission {
+            .get(Request::new(metadatapb::MetadataGetRequest {
+                context: Some(metadata_context(&RegionAdmission {
                     region_id: 99,
                     store_id: 1,
                     peer_id: 99,
                     ..admission1
                 })),
-                request: Some(kvpb::GetRequest { key, version: 11 }),
-                ..Default::default()
+                key,
+                version: 11,
             }))
             .await
             .unwrap()
@@ -959,7 +731,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn store_kv_routes_region_inserted_after_construction() {
+    async fn metadata_plane_routes_region_inserted_after_construction() {
         let descriptor1 = test_region_descriptor(1, 1, 10, b"", b"m");
         let descriptor2 = test_region_descriptor(2, 1, 20, b"m", b"");
         let admission1 = RegionAdmission::from_descriptor(&descriptor1, true).unwrap();
@@ -968,44 +740,29 @@ mod tests {
         let engine2 = FixedRuntimeEngine::leader(2, 20);
         engine1.set_region_descriptor(descriptor1);
         engine2.set_region_descriptor(descriptor2);
-        let service = MultiRegionStoreKvService::new([(
-            1,
-            StoreKvService::with_admission(engine1, admission1),
-        )])
-        .unwrap();
+        let service =
+            MultiRegionMetadataPlaneService::new([(1, metadata_service(engine1, admission1))])
+                .unwrap();
 
         service
-            .insert_region(
-                2,
-                StoreKvService::with_admission(engine2, admission2.clone()),
-            )
+            .insert_region(2, metadata_service(engine2, admission2.clone()))
             .unwrap();
 
-        let key = b"m-dynamic".to_vec();
-        let put = service
-            .try_atomic_mutate(Request::new(kvpb::KvTryAtomicMutateRequest {
-                context: Some(context(&admission2)),
-                request: Some(kvpb::TryAtomicMutateRequest {
-                    mutations: vec![kvpb::Mutation {
-                        key: key.clone(),
-                        value: b"dynamic-region".to_vec(),
-                        op: kvpb::mutation::Op::Put as i32,
-                        ..Default::default()
-                    }],
-                    commit_version: 21,
-                    ..Default::default()
-                }),
-                ..Default::default()
+        let response = service
+            .get(Request::new(metadatapb::MetadataGetRequest {
+                context: Some(metadata_context(&admission2)),
+                key: b"m-dynamic".to_vec(),
+                version: 21,
             }))
             .await
             .unwrap()
             .into_inner();
-        assert!(put.region_error.is_none());
-        assert_eq!(put.response.unwrap().applied_keys, 1);
+        assert!(response.region_error.is_none());
+        assert!(response.not_found);
 
         let duplicate = service.insert_region(
             2,
-            StoreKvService::with_admission(FixedRuntimeEngine::leader(2, 20), admission2.clone()),
+            metadata_service(FixedRuntimeEngine::leader(2, 20), admission2.clone()),
         );
         assert_eq!(duplicate.unwrap_err().code(), tonic::Code::InvalidArgument);
     }
