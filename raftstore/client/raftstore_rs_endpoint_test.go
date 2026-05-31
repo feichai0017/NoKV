@@ -1893,6 +1893,83 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Nil(t, emptyCheckStatus.GetRegionError())
 	require.Contains(t, emptyCheckStatus.GetResponse().GetError().GetAbort(), "empty key in rollback")
 
+	resolveKey := []byte("agent/raw-resolve")
+	resolvePrewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.PrewriteRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   resolveKey,
+				Value: []byte("resolve-value"),
+			}},
+			PrimaryLock:  resolveKey,
+			StartVersion: 220,
+			LockTtl:      10_000,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, resolvePrewrite.GetRegionError())
+	require.Empty(t, resolvePrewrite.GetResponse().GetErrors())
+
+	emptyResolve, err := raw.ResolveLock(ctx, &kvrpcpb.KvResolveLockRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.ResolveLockRequest{
+			StartVersion:  220,
+			CommitVersion: 221,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, emptyResolve.GetRegionError())
+	require.Nil(t, emptyResolve.GetResponse().GetError())
+	require.Equal(t, uint64(0), emptyResolve.GetResponse().GetResolvedLocks())
+
+	duplicateResolve, err := raw.ResolveLock(ctx, &kvrpcpb.KvResolveLockRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.ResolveLockRequest{
+			Keys:          [][]byte{nil, resolveKey, resolveKey},
+			StartVersion:  220,
+			CommitVersion: 221,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, duplicateResolve.GetRegionError())
+	require.Nil(t, duplicateResolve.GetResponse().GetError())
+	require.Equal(t, uint64(1), duplicateResolve.GetResponse().GetResolvedLocks())
+
+	resolveRetry, err := raw.ResolveLock(ctx, &kvrpcpb.KvResolveLockRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.ResolveLockRequest{
+			Keys:          [][]byte{resolveKey},
+			StartVersion:  220,
+			CommitVersion: 221,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, resolveRetry.GetRegionError())
+	require.Nil(t, resolveRetry.GetResponse().GetError())
+	require.Equal(t, uint64(0), resolveRetry.GetResponse().GetResolvedLocks())
+
+	resolved, err := cli.Get(ctx, resolveKey, 222)
+	require.NoError(t, err)
+	require.False(t, resolved.GetNotFound())
+	require.Equal(t, []byte("resolve-value"), resolved.GetValue())
+
 	atomicRequest := &kvrpcpb.KvTryAtomicMutateRequest{
 		Context: &kvrpcpb.Context{
 			RegionId:    meta.GetRegionId(),

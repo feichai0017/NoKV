@@ -848,21 +848,6 @@ impl HoltMvccStore {
         }
         Ok(keys.into_iter().collect())
     }
-
-    fn scan_locks_by_start(&self, start_version: u64) -> mvcc::Result<Vec<Vec<u8>>> {
-        let mut keys = Vec::new();
-        for entry in self.store.lock().map_err(to_backend_error)?.range() {
-            let entry = entry.map_err(to_backend_error)?;
-            let RangeEntry::Key { key, value, .. } = entry else {
-                continue;
-            };
-            let lock = decode_lock(&value)?;
-            if lock.start_version == start_version {
-                keys.push(key);
-            }
-        }
-        Ok(keys)
-    }
 }
 
 impl mvcc::KvEngine for HoltMvccStore {
@@ -1135,11 +1120,7 @@ impl mvcc::KvEngine for HoltMvccStore {
                 });
             }
         }
-        let keys = if req.keys.is_empty() {
-            self.scan_locks_by_start(req.start_version)?
-        } else {
-            req.keys.clone()
-        };
+        let keys = mvcc::validation::resolve_lock_keys(req);
         let mut locks = Vec::new();
         for key in keys {
             let Some(lock) = self.get_lock(&key)? else {
@@ -2678,6 +2659,65 @@ mod tests {
             })
             .unwrap();
         assert_abort_contains(unsupported.error, "unsupported mutation op");
+    }
+
+    #[test]
+    fn holt_mvcc_resolve_lock_matches_go_key_set_boundary() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let key = b"resolve-key-boundary".to_vec();
+        let prewrite = store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: key.clone(),
+                    value: b"resolve-value".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: key.clone(),
+                start_version: 40,
+                lock_ttl: 10_000,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(prewrite.errors.is_empty());
+
+        let empty = store
+            .resolve_lock(&kvpb::ResolveLockRequest {
+                start_version: 40,
+                commit_version: 50,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(empty.error.is_none());
+        assert_eq!(empty.resolved_locks, 0);
+
+        let duplicate = store
+            .resolve_lock(&kvpb::ResolveLockRequest {
+                keys: vec![Vec::new(), key.clone(), key.clone()],
+                start_version: 40,
+                commit_version: 50,
+            })
+            .unwrap();
+        assert!(duplicate.error.is_none());
+        assert_eq!(duplicate.resolved_locks, 1);
+
+        let retry = store
+            .resolve_lock(&kvpb::ResolveLockRequest {
+                keys: vec![key.clone()],
+                start_version: 40,
+                commit_version: 50,
+            })
+            .unwrap();
+        assert!(retry.error.is_none());
+        assert_eq!(retry.resolved_locks, 0);
+
+        let got = store
+            .get(&kvpb::GetRequest {
+                key: key.clone(),
+                version: 60,
+            })
+            .unwrap();
+        assert_eq!(got.value, b"resolve-value");
     }
 
     #[test]

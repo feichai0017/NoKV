@@ -227,6 +227,9 @@ The first slices are intentionally narrow:
   Rust `CheckTxnStatus` now also preserves Go's empty-key rollback boundary:
   `rollback_if_not_exist` on an empty primary returns `empty key in rollback`
   without creating an empty-key rollback marker.
+  Rust `ResolveLock` now matches Go's key-set boundary: an empty key list is a
+  no-op, empty keys inside an explicit list are skipped, and duplicate keys are
+  resolved once for count and apply semantics.
   Rust 1PC atomic mutate now also mirrors Go Percolator validation and retry
   semantics: exact retries are idempotent, predicate read version `0` maps to
   the request start version, value-equals mismatches are retryable, unsupported

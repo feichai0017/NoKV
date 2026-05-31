@@ -348,16 +348,6 @@ impl MvccStore {
         req: &kvpb::ResolveLockRequest,
     ) -> Result<kvpb::ResolveLockResponse> {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
-        let keys: Vec<Vec<u8>> = if req.keys.is_empty() {
-            inner
-                .locks
-                .iter()
-                .filter(|(_, lock)| lock.start_version == req.start_version)
-                .map(|(key, _)| key.clone())
-                .collect()
-        } else {
-            req.keys.clone()
-        };
         if req.commit_version != 0 {
             if let Some(err) = validate_commit_version(req.start_version, req.commit_version) {
                 return Ok(kvpb::ResolveLockResponse {
@@ -366,6 +356,7 @@ impl MvccStore {
                 });
             }
         }
+        let keys = validation::resolve_lock_keys(req);
         let mut locks = Vec::new();
         for key in keys {
             let Some(lock) = inner.locks.get(&key).cloned() else {
@@ -1604,6 +1595,65 @@ mod tests {
             })
             .unwrap();
         assert_abort_contains(unsupported.error, "unsupported mutation op");
+    }
+
+    #[test]
+    fn resolve_lock_matches_go_key_set_boundary() {
+        let store = MvccStore::new();
+        let key = b"resolve-key-boundary".to_vec();
+        let prewrite = store
+            .prewrite(&kvpb::PrewriteRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: key.clone(),
+                    value: b"resolve-value".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                primary_lock: key.clone(),
+                start_version: 40,
+                lock_ttl: 10_000,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(prewrite.errors.is_empty());
+
+        let empty = store
+            .resolve_lock(&kvpb::ResolveLockRequest {
+                start_version: 40,
+                commit_version: 50,
+                ..Default::default()
+            })
+            .unwrap();
+        assert!(empty.error.is_none());
+        assert_eq!(empty.resolved_locks, 0);
+
+        let duplicate = store
+            .resolve_lock(&kvpb::ResolveLockRequest {
+                keys: vec![Vec::new(), key.clone(), key.clone()],
+                start_version: 40,
+                commit_version: 50,
+            })
+            .unwrap();
+        assert!(duplicate.error.is_none());
+        assert_eq!(duplicate.resolved_locks, 1);
+
+        let retry = store
+            .resolve_lock(&kvpb::ResolveLockRequest {
+                keys: vec![key.clone()],
+                start_version: 40,
+                commit_version: 50,
+            })
+            .unwrap();
+        assert!(retry.error.is_none());
+        assert_eq!(retry.resolved_locks, 0);
+
+        let got = store
+            .get(&kvpb::GetRequest {
+                key: key.clone(),
+                version: 60,
+            })
+            .unwrap();
+        assert_eq!(got.value, b"resolve-value");
     }
 
     #[test]

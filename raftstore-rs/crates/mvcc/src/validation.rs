@@ -1,5 +1,7 @@
 //! Validation shared by in-memory and Holt-backed MVCC implementations.
 
+use std::collections::HashSet;
+
 use nokv_proto::nokv::kv::v1 as kvpb;
 
 use crate::{errors, VersionedValue};
@@ -50,4 +52,16 @@ pub fn atomic_mutation_matches_value(mutation: &kvpb::Mutation, value: &Versione
         kvpb::mutation::Op::Delete => value.value.is_none(),
         _ => false,
     }
+}
+
+pub fn resolve_lock_keys(req: &kvpb::ResolveLockRequest) -> Vec<Vec<u8>> {
+    let mut keys = Vec::with_capacity(req.keys.len());
+    let mut seen = HashSet::with_capacity(req.keys.len());
+    for key in &req.keys {
+        if key.is_empty() || !seen.insert(key.clone()) {
+            continue;
+        }
+        keys.push(key.clone());
+    }
+    keys
 }
