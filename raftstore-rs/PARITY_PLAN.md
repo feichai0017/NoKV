@@ -227,6 +227,11 @@ The first slices are intentionally narrow:
   Rust `CheckTxnStatus` now also preserves Go's empty-key rollback boundary:
   `rollback_if_not_exist` on an empty primary returns `empty key in rollback`
   without creating an empty-key rollback marker.
+  Rust 1PC atomic mutate now also mirrors Go Percolator validation and retry
+  semantics: exact retries are idempotent, predicate read version `0` maps to
+  the request start version, value-equals mismatches are retryable, unsupported
+  atomic mutation ops abort, and mutation keys still respect live-lock and
+  write-conflict checks before applying.
   Rust `MVCCMaintenance` now validates the whole tombstone batch before
   applying it and reports requested tombstones rather than only keys that
   existed locally, matching the Go raft apply boundary.

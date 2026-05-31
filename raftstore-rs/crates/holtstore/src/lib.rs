@@ -776,6 +776,14 @@ impl HoltMvccStore {
         self.first_write_matching(key, |commit_ts| commit_ts > version)
     }
 
+    fn first_write_after_or_at(
+        &self,
+        key: &[u8],
+        version: u64,
+    ) -> mvcc::Result<Option<(u64, mvcc::VersionedValue)>> {
+        self.first_write_matching(key, |commit_ts| commit_ts >= version)
+    }
+
     fn first_write_matching(
         &self,
         key: &[u8],
@@ -802,6 +810,29 @@ impl HoltMvccStore {
             }
         }
         Ok(best)
+    }
+
+    fn atomic_mutate_already_applied(
+        &self,
+        req: &kvpb::TryAtomicMutateRequest,
+    ) -> mvcc::Result<bool> {
+        let mut any_present = false;
+        let mut all_present = true;
+        for mutation in &req.mutations {
+            let Some((commit_version, value)) =
+                self.write_by_start_version(&mutation.key, req.start_version)?
+            else {
+                all_present = false;
+                continue;
+            };
+            any_present = true;
+            if commit_version != req.commit_version
+                || !mvcc::validation::atomic_mutation_matches_value(mutation, &value)
+            {
+                return Ok(false);
+            }
+        }
+        Ok(any_present && all_present)
     }
 
     fn scan_write_user_keys(&self) -> mvcc::Result<Vec<Vec<u8>>> {
@@ -1310,6 +1341,12 @@ impl mvcc::KvEngine for HoltMvccStore {
         req: &kvpb::TryAtomicMutateRequest,
     ) -> mvcc::Result<kvpb::TryAtomicMutateResponse> {
         let _guard = self.lock()?;
+        if self.atomic_mutate_already_applied(req)? {
+            return Ok(kvpb::TryAtomicMutateResponse {
+                applied_keys: req.mutations.len() as u64,
+                ..Default::default()
+            });
+        }
         for predicate in &req.predicates {
             if predicate.key.is_empty() {
                 return Ok(kvpb::TryAtomicMutateResponse {
@@ -1317,8 +1354,13 @@ impl mvcc::KvEngine for HoltMvccStore {
                     ..Default::default()
                 });
             }
+            let read_version = if predicate.read_version == 0 {
+                req.start_version
+            } else {
+                predicate.read_version
+            };
             if let Some(lock) = self.get_lock(&predicate.key)? {
-                if lock.start_version <= predicate.read_version {
+                if lock.start_version <= read_version {
                     return Ok(kvpb::TryAtomicMutateResponse {
                         error: Some(mvcc::errors::locked(&predicate.key, &lock)),
                         ..Default::default()
@@ -1326,20 +1368,59 @@ impl mvcc::KvEngine for HoltMvccStore {
                 }
             }
             let observed = self
-                .read_committed(&predicate.key, predicate.read_version)?
+                .read_committed(&predicate.key, read_version)?
                 .and_then(|(_, value)| value.value);
-            if !mvcc::predicate_matches(predicate, observed.as_deref()) {
+            if let Some(error) =
+                mvcc::validation::atomic_predicate_observation(predicate, observed.as_deref())
+            {
                 return Ok(kvpb::TryAtomicMutateResponse {
-                    error: Some(mvcc::errors::predicate(predicate)),
+                    error: Some(error),
                     ..Default::default()
                 });
             }
         }
-        if req.mutations.iter().any(|mutation| mutation.key.is_empty()) {
-            return Ok(kvpb::TryAtomicMutateResponse {
-                error: Some(mvcc::errors::empty_mutation_key()),
-                ..Default::default()
-            });
+        let primary = req
+            .mutations
+            .first()
+            .map(|mutation| mutation.key.as_slice())
+            .unwrap_or_default();
+        for mutation in &req.mutations {
+            if let Some(error) = mvcc::validation::atomic_mutation(mutation) {
+                return Ok(kvpb::TryAtomicMutateResponse {
+                    error: Some(error),
+                    ..Default::default()
+                });
+            }
+            if let Some(lock) = self.get_lock(&mutation.key)? {
+                return Ok(kvpb::TryAtomicMutateResponse {
+                    error: Some(mvcc::errors::locked(&mutation.key, &lock)),
+                    ..Default::default()
+                });
+            }
+            if let Some((commit_ts, _value)) =
+                self.first_write_after_or_at(&mutation.key, req.start_version)?
+            {
+                return Ok(kvpb::TryAtomicMutateResponse {
+                    error: Some(mvcc::errors::write_conflict(
+                        &mutation.key,
+                        primary,
+                        req.start_version,
+                        commit_ts,
+                    )),
+                    ..Default::default()
+                });
+            }
+            if mutation.assertion_not_exist
+                && self
+                    .read_committed(&mutation.key, req.start_version)?
+                    .and_then(|(_, value)| value.value)
+                    .is_some()
+            {
+                return Ok(kvpb::TryAtomicMutateResponse {
+                    error: Some(mvcc::errors::already_exists(&mutation.key)),
+                    ..Default::default()
+                });
+            }
         }
         let values = req
             .mutations
@@ -2533,6 +2614,70 @@ mod tests {
             })
             .unwrap();
         assert!(second.error.unwrap().already_exists.is_some());
+    }
+
+    #[test]
+    fn holt_mvcc_atomic_mutate_matches_go_validation_and_idempotency() {
+        let store = HoltMvccStore::open_memory().unwrap();
+        let request = kvpb::TryAtomicMutateRequest {
+            predicates: vec![kvpb::AtomicPredicate {
+                key: b"atomic-idempotent".to_vec(),
+                kind: kvpb::AtomicPredicateKind::NotExists as i32,
+                ..Default::default()
+            }],
+            mutations: vec![kvpb::Mutation {
+                key: b"atomic-idempotent".to_vec(),
+                value: b"v1".to_vec(),
+                op: kvpb::mutation::Op::Put as i32,
+                ..Default::default()
+            }],
+            start_version: 10,
+            commit_version: 11,
+        };
+        let first = store.try_atomic_mutate(&request).unwrap();
+        assert_eq!(first.applied_keys, 1);
+        let retry = store.try_atomic_mutate(&request).unwrap();
+        assert_eq!(retry.applied_keys, 1);
+        assert!(retry.error.is_none());
+
+        let mismatch = store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                predicates: vec![kvpb::AtomicPredicate {
+                    key: b"atomic-idempotent".to_vec(),
+                    kind: kvpb::AtomicPredicateKind::ValueEquals as i32,
+                    expected_value: b"old".to_vec(),
+                    read_version: 11,
+                }],
+                mutations: vec![kvpb::Mutation {
+                    key: b"atomic-idempotent".to_vec(),
+                    value: b"bad".to_vec(),
+                    op: kvpb::mutation::Op::Put as i32,
+                    ..Default::default()
+                }],
+                start_version: 12,
+                commit_version: 13,
+            })
+            .unwrap();
+        assert!(mismatch
+            .error
+            .unwrap()
+            .retryable
+            .contains("atomic predicate mismatch"));
+
+        let unsupported = store
+            .try_atomic_mutate(&kvpb::TryAtomicMutateRequest {
+                mutations: vec![kvpb::Mutation {
+                    key: b"atomic-lock".to_vec(),
+                    value: b"bad".to_vec(),
+                    op: kvpb::mutation::Op::Lock as i32,
+                    ..Default::default()
+                }],
+                start_version: 14,
+                commit_version: 15,
+                ..Default::default()
+            })
+            .unwrap();
+        assert_abort_contains(unsupported.error, "unsupported mutation op");
     }
 
     #[test]

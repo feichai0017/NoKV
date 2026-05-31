@@ -16,6 +16,21 @@ pub fn empty_rollback_key() -> kvpb::KeyError {
     abort("percolator: empty key in rollback")
 }
 
+pub fn unsupported_mutation_op(op: i32) -> kvpb::KeyError {
+    abort(&format!(
+        "percolator: unsupported mutation op: {}",
+        mutation_op_name(op)
+    ))
+}
+
+pub fn invalid_atomic_mutate() -> kvpb::KeyError {
+    abort("percolator: invalid atomic mutate")
+}
+
+pub fn atomic_predicate_mismatch() -> kvpb::KeyError {
+    retryable("percolator: atomic predicate mismatch")
+}
+
 pub fn txn_heartbeat_validation(req: &kvpb::TxnHeartBeatRequest) -> Option<kvpb::KeyError> {
     if req.primary_key.is_empty() {
         return Some(abort("percolator: heartbeat primary key is required"));
@@ -43,15 +58,10 @@ pub fn abort(message: &str) -> kvpb::KeyError {
     }
 }
 
-pub fn predicate(predicate: &kvpb::AtomicPredicate) -> kvpb::KeyError {
-    match kvpb::AtomicPredicateKind::try_from(predicate.kind)
-        .unwrap_or(kvpb::AtomicPredicateKind::NotExists)
-    {
-        kvpb::AtomicPredicateKind::NotExists => already_exists(&predicate.key),
-        _ => kvpb::KeyError {
-            abort: "atomic predicate rejected".to_owned(),
-            ..Default::default()
-        },
+pub fn retryable(message: &str) -> kvpb::KeyError {
+    kvpb::KeyError {
+        retryable: message.to_owned(),
+        ..Default::default()
     }
 }
 
@@ -97,5 +107,15 @@ pub fn commit_ts_expired(key: &[u8], commit_ts: u64, min_commit_ts: u64) -> kvpb
             min_commit_ts,
         }),
         ..Default::default()
+    }
+}
+
+fn mutation_op_name(op: i32) -> String {
+    match kvpb::mutation::Op::try_from(op) {
+        Ok(kvpb::mutation::Op::Put) => "Put".to_owned(),
+        Ok(kvpb::mutation::Op::Delete) => "Delete".to_owned(),
+        Ok(kvpb::mutation::Op::Lock) => "Lock".to_owned(),
+        Ok(kvpb::mutation::Op::Rollback) => "Rollback".to_owned(),
+        Err(_) => op.to_string(),
     }
 }

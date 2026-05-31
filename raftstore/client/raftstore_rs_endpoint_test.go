@@ -1893,6 +1893,92 @@ func testRustRaftstoreEndpointClientTransactionSurface(t *testing.T, addr string
 	require.Nil(t, emptyCheckStatus.GetRegionError())
 	require.Contains(t, emptyCheckStatus.GetResponse().GetError().GetAbort(), "empty key in rollback")
 
+	atomicRequest := &kvrpcpb.KvTryAtomicMutateRequest{
+		Context: &kvrpcpb.Context{
+			RegionId:    meta.GetRegionId(),
+			RegionEpoch: meta.GetEpoch(),
+			Peer:        meta.GetPeers()[0],
+		},
+		Request: &kvrpcpb.TryAtomicMutateRequest{
+			Predicates: []*kvrpcpb.AtomicPredicate{{
+				Key:  []byte("agent/raw-atomic"),
+				Kind: kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+			}},
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   []byte("agent/raw-atomic"),
+				Value: []byte("atomic-v1"),
+			}},
+			StartVersion:  200,
+			CommitVersion: 201,
+		},
+	}
+	atomic, err := raw.TryAtomicMutate(ctx, atomicRequest)
+	require.NoError(t, err)
+	require.Nil(t, atomic.GetRegionError())
+	require.Nil(t, atomic.GetResponse().GetError())
+	require.Equal(t, uint64(1), atomic.GetResponse().GetAppliedKeys())
+
+	atomicRetry, err := raw.TryAtomicMutate(ctx, atomicRequest)
+	require.NoError(t, err)
+	require.Nil(t, atomicRetry.GetRegionError())
+	require.Nil(t, atomicRetry.GetResponse().GetError())
+	require.Equal(t, uint64(1), atomicRetry.GetResponse().GetAppliedKeys())
+
+	atomicMismatch, err := raw.TryAtomicMutate(ctx, &kvrpcpb.KvTryAtomicMutateRequest{
+		Context: atomicRequest.GetContext(),
+		Request: &kvrpcpb.TryAtomicMutateRequest{
+			Predicates: []*kvrpcpb.AtomicPredicate{{
+				Key:           []byte("agent/raw-atomic"),
+				Kind:          kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_VALUE_EQUALS,
+				ExpectedValue: []byte("old"),
+				ReadVersion:   201,
+			}},
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   []byte("agent/raw-atomic"),
+				Value: []byte("atomic-v2"),
+			}},
+			StartVersion:  202,
+			CommitVersion: 203,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, atomicMismatch.GetRegionError())
+	require.Contains(t, atomicMismatch.GetResponse().GetError().GetRetryable(), "atomic predicate mismatch")
+
+	atomicUnsupported, err := raw.TryAtomicMutate(ctx, &kvrpcpb.KvTryAtomicMutateRequest{
+		Context: atomicRequest.GetContext(),
+		Request: &kvrpcpb.TryAtomicMutateRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Lock,
+				Key:   []byte("agent/raw-atomic-lock"),
+				Value: []byte("bad"),
+			}},
+			StartVersion:  204,
+			CommitVersion: 205,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, atomicUnsupported.GetRegionError())
+	require.Contains(t, atomicUnsupported.GetResponse().GetError().GetAbort(), "unsupported mutation op")
+
+	atomicConflict, err := raw.TryAtomicMutate(ctx, &kvrpcpb.KvTryAtomicMutateRequest{
+		Context: atomicRequest.GetContext(),
+		Request: &kvrpcpb.TryAtomicMutateRequest{
+			Mutations: []*kvrpcpb.Mutation{{
+				Op:    kvrpcpb.Mutation_Put,
+				Key:   []byte("agent/raw-atomic"),
+				Value: []byte("atomic-conflict"),
+			}},
+			StartVersion:  200,
+			CommitVersion: 206,
+		},
+	})
+	require.NoError(t, err)
+	require.Nil(t, atomicConflict.GetRegionError())
+	require.NotNil(t, atomicConflict.GetResponse().GetError().GetWriteConflict())
+
 	expiredKey := []byte("agent/expired")
 	expiredPrewrite, err := raw.Prewrite(ctx, &kvrpcpb.KvPrewriteRequest{
 		Context: &kvrpcpb.Context{
