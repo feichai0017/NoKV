@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::sync::{Arc, Mutex};
 
 use nokv_proto::nokv::kv::v1 as kvpb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -104,6 +105,21 @@ pub trait KvEngine: Clone + Send + Sync + 'static {
         &self,
         req: &kvpb::MvccMaintenanceRequest,
     ) -> Result<kvpb::MvccMaintenanceResponse>;
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct MetadataApplyResult {
+    pub commit_version: u64,
+    pub applied_mutations: u64,
+    pub error: Option<kvpb::KeyError>,
+}
+
+pub trait MetadataEngine: Clone + Send + Sync + 'static {
+    fn commit_metadata(
+        &self,
+        command: &metadatapb::MetadataCommand,
+        commit_version: u64,
+    ) -> Result<MetadataApplyResult>;
 }
 
 pub trait MvccSnapshotEngine: Clone + Send + Sync + 'static {

@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
-use nokv_mvcc::{KvEngine, MvccSnapshotEngine, MvccStore};
+use nokv_mvcc::{KvEngine, MetadataEngine, MvccSnapshotEngine, MvccStore};
 use nokv_proto::nokv::kv::v1 as kvpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
@@ -476,7 +476,7 @@ where
 
 impl<E> AppliedKvEngine<E>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
 {
     fn execute_raft_command_inner(
         &self,
@@ -801,13 +801,12 @@ where
                 "metadata command commit_version must be greater than read_version",
             ));
         }
-        let atomic = metadata_command_to_atomic_mutate(command, commit_version)?;
         let response = {
             let engine =
                 self.inner.engine.lock().map_err(|_| {
                     nokv_mvcc::Error::Backend("region apply mutex poisoned".to_owned())
                 })?;
-            engine.try_atomic_mutate(&atomic)?
+            engine.commit_metadata(command, commit_version)?
         };
 
         let applied_status = if let Some((term, index)) = forced_status {
@@ -818,7 +817,7 @@ where
         } else {
             None
         };
-        if response.error.is_none() && !response.fallback_to_two_phase_commit {
+        if response.error.is_none() {
             if let Some((term, index)) = applied_status {
                 let watch_keys = metadata_command_watch_keys(command);
                 self.publish_apply(
@@ -837,10 +836,8 @@ where
                 region_id: self.inner.region_id,
                 term: applied_status.map(|(term, _)| term).unwrap_or_default(),
                 index: applied_status.map(|(_, index)| index).unwrap_or_default(),
-                applied_mutations: if response.error.is_none()
-                    && !response.fallback_to_two_phase_commit
-                {
-                    response.applied_keys
+                applied_mutations: if response.error.is_none() {
+                    response.applied_mutations
                 } else {
                     0
                 },
@@ -1043,7 +1040,7 @@ where
 
 impl<E> RaftCommandExecutor for AppliedKvEngine<E>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
 {
     fn execute_raft_command<'a>(
         &'a self,
@@ -1056,7 +1053,7 @@ where
 
 impl<E> MetadataCommandExecutor for AppliedKvEngine<E>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
 {
     fn execute_metadata_command<'a>(
         &'a self,
@@ -1070,7 +1067,7 @@ where
 
 impl<E, S> RaftCommandExecutor for PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
     S: RegionMetadataSink,
 {
     fn execute_raft_command<'a>(
@@ -1089,7 +1086,7 @@ where
 
 impl<E, S> MetadataCommandExecutor for PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
     S: RegionMetadataSink,
 {
     fn execute_metadata_command<'a>(
@@ -1109,7 +1106,7 @@ where
 
 impl<E, S> PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
     S: RegionMetadataSink,
 {
     pub fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
@@ -1143,7 +1140,7 @@ where
 
 impl<E> RegionSnapshotEngine for AppliedKvEngine<E>
 where
-    E: KvEngine + MvccSnapshotEngine,
+    E: KvEngine + MetadataEngine + MvccSnapshotEngine,
 {
     fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
         AppliedKvEngine::region_descriptor(self)
@@ -1217,7 +1214,7 @@ where
 
 impl<E, S> RegionSnapshotEngine for PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine + MvccSnapshotEngine,
+    E: KvEngine + MetadataEngine + MvccSnapshotEngine,
     S: RegionMetadataSink,
 {
     fn region_descriptor(&self) -> nokv_mvcc::Result<Option<metapb::RegionDescriptor>> {
@@ -1240,7 +1237,7 @@ where
 
 impl<E> RegionApplyEngine for AppliedKvEngine<E>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
 {
     fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
     where
@@ -1252,7 +1249,7 @@ where
 
 impl<E, S> RegionApplyEngine for PersistentAppliedKvEngine<E, S>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
     S: RegionMetadataSink,
 {
     fn apply_openraft_entries<I>(&self, entries: I) -> nokv_mvcc::Result<Vec<AppliedProposal>>
@@ -1393,64 +1390,6 @@ fn region_peer_store_ids_for_apply(
     Ok(stores)
 }
 
-fn metadata_command_to_atomic_mutate(
-    command: &metadatapb::MetadataCommand,
-    commit_version: u64,
-) -> nokv_mvcc::Result<kvpb::TryAtomicMutateRequest> {
-    let predicates = command
-        .predicates
-        .iter()
-        .map(metadata_predicate_to_atomic)
-        .collect::<nokv_mvcc::Result<Vec<_>>>()?;
-    let mutations = command
-        .mutations
-        .iter()
-        .map(metadata_mutation_to_kv)
-        .collect::<nokv_mvcc::Result<Vec<_>>>()?;
-    Ok(kvpb::TryAtomicMutateRequest {
-        predicates,
-        mutations,
-        start_version: command.read_version,
-        commit_version,
-    })
-}
-
-fn metadata_predicate_to_atomic(
-    predicate: &metadatapb::MetadataPredicate,
-) -> nokv_mvcc::Result<kvpb::AtomicPredicate> {
-    let kind = match metadatapb::MetadataPredicateKind::try_from(predicate.kind)
-        .unwrap_or(metadatapb::MetadataPredicateKind::NotExists)
-    {
-        metadatapb::MetadataPredicateKind::NotExists => kvpb::AtomicPredicateKind::NotExists,
-        metadatapb::MetadataPredicateKind::Exists => kvpb::AtomicPredicateKind::Exists,
-        metadatapb::MetadataPredicateKind::ValueEquals => kvpb::AtomicPredicateKind::ValueEquals,
-    };
-    Ok(kvpb::AtomicPredicate {
-        key: predicate.key.clone(),
-        kind: kind as i32,
-        read_version: predicate.read_version,
-        expected_value: predicate.expected_value.clone(),
-    })
-}
-
-fn metadata_mutation_to_kv(
-    mutation: &metadatapb::MetadataMutation,
-) -> nokv_mvcc::Result<kvpb::Mutation> {
-    let op = match metadatapb::metadata_mutation::Op::try_from(mutation.op)
-        .unwrap_or(metadatapb::metadata_mutation::Op::Put)
-    {
-        metadatapb::metadata_mutation::Op::Put => kvpb::mutation::Op::Put,
-        metadatapb::metadata_mutation::Op::Delete => kvpb::mutation::Op::Delete,
-    };
-    Ok(kvpb::Mutation {
-        op: op as i32,
-        key: mutation.key.clone(),
-        value: mutation.value.clone(),
-        assertion_not_exist: mutation.assertion_not_exist,
-        expires_at: mutation.expires_at,
-    })
-}
-
 fn metadata_command_watch_keys(command: &metadatapb::MetadataCommand) -> Vec<Vec<u8>> {
     if !command.watch_keys.is_empty() {
         return command.watch_keys.clone();
@@ -1521,7 +1460,7 @@ use crate::snapshot::{decode_region_snapshot_payload, RegionSnapshotPayload};
 
 impl<E> KvEngine for AppliedKvEngine<E>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
 {
     fn get(&self, req: &kvpb::GetRequest) -> nokv_mvcc::Result<kvpb::GetResponse> {
         let response = self.read(|engine| engine.get(req))?;

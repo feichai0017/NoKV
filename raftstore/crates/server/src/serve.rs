@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 use std::sync::Arc;
 
-use nokv_mvcc::{KvEngine, MvccStore};
+use nokv_mvcc::{KvEngine, MetadataEngine, MvccStore};
 use nokv_raftnode::{
     ApplyStatusProvider, ApplyWatchProvider, MetadataCommandExecutor, RaftCommandExecutor,
     RegionSnapshotEngine,
@@ -26,7 +26,7 @@ pub async fn serve_with_engine<E>(
     engine: E,
 ) -> Result<(), tonic::transport::Error>
 where
-    E: KvEngine,
+    E: KvEngine + MetadataEngine,
 {
     serve_with_region_engine(addr, nokv_raftnode::AppliedKvEngine::new(1, engine)).await
 }
