@@ -352,6 +352,9 @@ Known gaps:
   restart instead of being silently consumed. The multi-region StoreKV/RaftAdmin
   router now uses an in-process mutable region registry, which is the routing
   prerequisite for dynamic child-region registration after split apply.
+  Coordinator heartbeats now read from the same mutable hosted-region model
+  instead of a startup-only region list, so future split-created child regions
+  can be advertised without restarting the process.
   Coordinator-owned lifecycle, split/merge execution, and default compose
   cutover are still pending.
 - Region metadata has a Holt persistence point for descriptors and apply-state

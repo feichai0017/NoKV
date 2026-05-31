@@ -1,9 +1,9 @@
 //! Standalone Rust raftstore server entrypoint for local compatibility tests.
 
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::net::SocketAddr;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use nokv_holtstore::HoltMvccStore;
@@ -492,6 +492,52 @@ struct CoordinatorTopologyPublisher {
     pending_store: Option<HoltMvccStore>,
 }
 
+#[derive(Clone)]
+struct HostedRegionRegistry<E> {
+    regions: Arc<RwLock<BTreeMap<u64, (ServerIdentity, OpenRaftRegion<E>)>>>,
+}
+
+impl<E> HostedRegionRegistry<E> {
+    fn new(
+        regions: impl IntoIterator<Item = (ServerIdentity, OpenRaftRegion<E>)>,
+    ) -> Result<Self, String> {
+        let registry = Self {
+            regions: Arc::new(RwLock::new(BTreeMap::new())),
+        };
+        for (identity, region) in regions {
+            registry.insert(identity, region)?;
+        }
+        Ok(registry)
+    }
+
+    fn insert(&self, identity: ServerIdentity, region: OpenRaftRegion<E>) -> Result<(), String> {
+        if identity.region_id == 0 {
+            return Err("hosted region id is required".to_owned());
+        }
+        let mut regions = self
+            .regions
+            .write()
+            .map_err(|_| "hosted region registry lock poisoned".to_owned())?;
+        if regions
+            .insert(identity.region_id, (identity, region))
+            .is_some()
+        {
+            return Err(format!("duplicate hosted region {}", identity.region_id));
+        }
+        Ok(())
+    }
+
+    fn snapshot(&self) -> Result<Vec<(ServerIdentity, OpenRaftRegion<E>)>, String>
+    where
+        E: Clone,
+    {
+        self.regions
+            .read()
+            .map_err(|_| "hosted region registry lock poisoned".to_owned())
+            .map(|regions| regions.values().cloned().collect())
+    }
+}
+
 fn coordinator_topology_publisher(
     config: Option<CoordinatorHeartbeatConfig>,
     pending_store: Option<HoltMvccStore>,
@@ -571,11 +617,12 @@ async fn serve_holt_regions(
         startup_descriptors,
         Some(mvcc.clone()),
     );
+    let hosted_region_registry = HostedRegionRegistry::new(hosted_regions)?;
     spawn_multi_region_coordinator_heartbeat(
         coordinator.clone(),
         identities[0].store_id,
         addr,
-        hosted_regions,
+        hosted_region_registry,
         Some(mvcc.clone()),
     );
     spawn_pending_topology_retries(coordinator, mvcc.clone(), addr);
@@ -639,11 +686,12 @@ async fn serve_memory_regions(
         startup_descriptors,
         None,
     );
+    let hosted_region_registry = HostedRegionRegistry::new(hosted_regions)?;
     spawn_multi_region_coordinator_heartbeat(
         coordinator,
         identities[0].store_id,
         addr,
-        hosted_regions,
+        hosted_region_registry,
         None,
     );
     serve_with_multi_region_services(
@@ -1125,7 +1173,7 @@ fn spawn_multi_region_coordinator_heartbeat<E>(
     config: Option<CoordinatorHeartbeatConfig>,
     store_id: u64,
     addr: SocketAddr,
-    regions: Vec<(ServerIdentity, OpenRaftRegion<E>)>,
+    regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
 ) where
     E: RegionSnapshotEngine + Send + Sync + 'static,
@@ -1173,7 +1221,7 @@ async fn run_multi_region_coordinator_heartbeat<E>(
     config: CoordinatorHeartbeatConfig,
     store_id: u64,
     addr: SocketAddr,
-    regions: Vec<(ServerIdentity, OpenRaftRegion<E>)>,
+    regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMvccStore>,
 ) where
     E: RegionSnapshotEngine + Send + Sync + 'static,
@@ -1182,12 +1230,18 @@ async fn run_multi_region_coordinator_heartbeat<E>(
     let admin_endpoint = local_admin_endpoint(addr);
     loop {
         ticker.tick().await;
-        let request = coordinator_heartbeat_request_for_regions(
+        let request = match coordinator_heartbeat_request_for_hosted_regions(
             store_id,
             addr,
             &regions,
             root_events.as_ref(),
-        );
+        ) {
+            Ok(request) => request,
+            Err(err) => {
+                tracing::debug!(error = %err, "rust raftstore hosted region snapshot failed");
+                continue;
+            }
+        };
         match send_store_heartbeat(&config.endpoints, request).await {
             Ok(operations) => {
                 for operation in operations {
@@ -1411,6 +1465,24 @@ where
         &[(identity, region.clone())],
         root_events,
     )
+}
+
+fn coordinator_heartbeat_request_for_hosted_regions<E>(
+    store_id: u64,
+    addr: SocketAddr,
+    registry: &HostedRegionRegistry<E>,
+    root_events: Option<&HoltMvccStore>,
+) -> Result<coordpb::StoreHeartbeatRequest, String>
+where
+    E: RegionSnapshotEngine,
+{
+    let regions = registry.snapshot()?;
+    Ok(coordinator_heartbeat_request_for_regions(
+        store_id,
+        addr,
+        &regions,
+        root_events,
+    ))
 }
 
 fn coordinator_heartbeat_request_for_regions<E>(
@@ -2308,6 +2380,50 @@ mod tests {
         assert_eq!(req.region_stats[0].leader_store_id, 11);
         assert_eq!(req.region_stats[1].region_id, 8);
         assert_eq!(req.region_stats[1].leader_store_id, 11);
+    }
+
+    #[tokio::test]
+    async fn coordinator_heartbeat_reads_regions_inserted_after_registry_creation() {
+        let dir = tempfile::tempdir().unwrap();
+        let identity1 = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+        let identity2 = ServerIdentity {
+            region_id: 8,
+            store_id: 11,
+            peer_id: 102,
+            bootstrap: true,
+        };
+        let addr: SocketAddr = "127.0.0.1:23880".parse().unwrap();
+        let region1 = open_openraft_region(
+            identity1,
+            addr,
+            dir.path().join("region-7"),
+            AppliedKvEngine::new(identity1.region_id, MvccStore::new()),
+        )
+        .await
+        .unwrap();
+        let region2 = open_openraft_region(
+            identity2,
+            addr,
+            dir.path().join("region-8"),
+            AppliedKvEngine::new(identity2.region_id, MvccStore::new()),
+        )
+        .await
+        .unwrap();
+        let registry = HostedRegionRegistry::new([(identity1, region1)]).unwrap();
+
+        registry.insert(identity2, region2).unwrap();
+        let req =
+            coordinator_heartbeat_request_for_hosted_regions(11, addr, &registry, None).unwrap();
+
+        assert_eq!(req.region_num, 2);
+        assert_eq!(req.leader_num, 2);
+        assert_eq!(req.leader_region_ids, vec![7, 8]);
+        assert_eq!(req.region_stats.len(), 2);
     }
 
     #[tokio::test]
