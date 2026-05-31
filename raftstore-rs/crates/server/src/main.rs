@@ -32,6 +32,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .unwrap_or_else(|_| "127.0.0.1:23880".to_owned())
         .parse::<SocketAddr>()?;
     let identities = ServerIdentity::from_env_list()?;
+    let region_ranges = RegionRangeCatalog::from_env()?;
+    validate_startup_region_ranges(&identities, &region_ranges)?;
     let coordinator = coordinator_heartbeat_config_from_env()?;
     let peer_endpoints = peer_endpoint_catalog_from_env()?;
     let mut temp_log_dir = None;
@@ -42,6 +44,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 identities,
                 coordinator,
                 peer_endpoints,
+                region_ranges,
                 PathBuf::from(path),
                 &mut temp_log_dir,
             )
@@ -52,6 +55,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 identities,
                 coordinator,
                 peer_endpoints,
+                region_ranges,
                 &mut temp_log_dir,
             )
             .await?;
@@ -64,7 +68,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let path = PathBuf::from(path);
         let log_dir = raft_log_dir(Some(path.clone()), &mut temp_log_dir)?;
         let mvcc = HoltMvccStore::open_file(path)?;
-        let descriptor = startup_region_descriptor(&mvcc, identity)?;
+        let descriptor =
+            startup_region_descriptor(&mvcc, identity, region_ranges.get(identity.region_id))?;
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
         let apply_status = mvcc
             .get_region_apply_state(descriptor.region_id)?
@@ -108,7 +113,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         tracing::info!(%addr, "starting rust raftstore server with in-memory MVCC");
         let log_dir = raft_log_dir(None, &mut temp_log_dir)?;
         let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
-        let descriptor = default_region_descriptor(identity);
+        let descriptor =
+            default_region_descriptor_with_range(identity, region_ranges.get(identity.region_id));
         engine.set_region_descriptor(descriptor.clone())?;
         let region = open_openraft_region(identity, addr, log_dir, engine).await?;
         spawn_startup_root_publication(coordinator.clone(), identity, descriptor.clone(), None);
@@ -125,6 +131,142 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         .await?;
     }
     Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct RegionKeyRange {
+    start_key: Vec<u8>,
+    end_key: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct RegionRangeCatalog {
+    ranges: HashMap<u64, RegionKeyRange>,
+}
+
+impl RegionRangeCatalog {
+    fn from_env() -> Result<Self, Box<dyn std::error::Error>> {
+        let Ok(raw) = std::env::var("NOKV_RUST_RAFTSTORE_REGION_RANGES") else {
+            return Ok(Self::default());
+        };
+        Self::parse(&raw)
+    }
+
+    fn parse(raw: &str) -> Result<Self, Box<dyn std::error::Error>> {
+        let mut ranges = HashMap::new();
+        for item in raw
+            .split(',')
+            .map(str::trim)
+            .filter(|item| !item.is_empty())
+        {
+            let (region_id, range) = item.split_once('=').ok_or_else(|| {
+                format!("invalid NOKV_RUST_RAFTSTORE_REGION_RANGES entry {item:?}: expected region_id=start_hex:end_hex")
+            })?;
+            let region_id = parse_required_nonzero_u64(
+                "NOKV_RUST_RAFTSTORE_REGION_RANGES region_id",
+                Some(region_id.to_owned()),
+                0,
+            )?;
+            let range = parse_region_key_range(range)?;
+            if ranges.insert(region_id, range).is_some() {
+                return Err(format!(
+                    "duplicate region_id {region_id} in NOKV_RUST_RAFTSTORE_REGION_RANGES"
+                )
+                .into());
+            }
+        }
+        Ok(Self { ranges })
+    }
+
+    fn get(&self, region_id: u64) -> Option<&RegionKeyRange> {
+        self.ranges.get(&region_id)
+    }
+}
+
+fn parse_region_key_range(raw: &str) -> Result<RegionKeyRange, Box<dyn std::error::Error>> {
+    let (start, end) = raw
+        .split_once(':')
+        .ok_or_else(|| format!("invalid region range {raw:?}: expected start_hex:end_hex"))?;
+    let range = RegionKeyRange {
+        start_key: decode_hex_key(start)?,
+        end_key: decode_hex_key(end)?,
+    };
+    if !range.end_key.is_empty() && range.start_key >= range.end_key {
+        return Err(
+            format!("invalid region range {raw:?}: start key must be less than end key").into(),
+        );
+    }
+    Ok(range)
+}
+
+fn decode_hex_key(raw: &str) -> Result<Vec<u8>, Box<dyn std::error::Error>> {
+    let raw = raw.trim();
+    if raw.is_empty() {
+        return Ok(Vec::new());
+    }
+    if raw.len() % 2 != 0 {
+        return Err(format!("hex key {raw:?} must have an even number of digits").into());
+    }
+    let mut out = Vec::with_capacity(raw.len() / 2);
+    for pair in raw.as_bytes().chunks_exact(2) {
+        let hi = hex_digit(pair[0])?;
+        let lo = hex_digit(pair[1])?;
+        out.push((hi << 4) | lo);
+    }
+    Ok(out)
+}
+
+fn hex_digit(byte: u8) -> Result<u8, Box<dyn std::error::Error>> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(format!("invalid hex digit {:?}", byte as char).into()),
+    }
+}
+
+fn validate_startup_region_ranges(
+    identities: &[ServerIdentity],
+    ranges: &RegionRangeCatalog,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if identities.len() <= 1 {
+        return Ok(());
+    }
+    let mut explicit = Vec::new();
+    for identity in identities {
+        if !identity.bootstrap {
+            continue;
+        }
+        let range = ranges.get(identity.region_id).ok_or_else(|| {
+            format!(
+                "multi-region bootstrap requires NOKV_RUST_RAFTSTORE_REGION_RANGES for region {}",
+                identity.region_id
+            )
+        })?;
+        explicit.push((identity.region_id, range));
+    }
+    for left in 0..explicit.len() {
+        for right in (left + 1)..explicit.len() {
+            let (left_id, left_range) = explicit[left];
+            let (right_id, right_range) = explicit[right];
+            if region_ranges_overlap(left_range, right_range) {
+                return Err(format!(
+                    "region ranges overlap in NOKV_RUST_RAFTSTORE_REGION_RANGES: region {left_id} overlaps region {right_id}"
+                )
+                .into());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn region_ranges_overlap(left: &RegionKeyRange, right: &RegionKeyRange) -> bool {
+    range_start_before_end(&left.start_key, &right.end_key)
+        && range_start_before_end(&right.start_key, &left.end_key)
+}
+
+fn range_start_before_end(start: &[u8], end: &[u8]) -> bool {
+    end.is_empty() || start < end
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -369,6 +511,7 @@ async fn serve_holt_regions(
     identities: Vec<ServerIdentity>,
     coordinator: Option<CoordinatorHeartbeatConfig>,
     peer_endpoints: PeerEndpointCatalog,
+    region_ranges: RegionRangeCatalog,
     persistent_root: PathBuf,
     temp_log_dir: &mut Option<tempfile::TempDir>,
 ) -> Result<(), Box<dyn std::error::Error>> {
@@ -389,7 +532,8 @@ async fn serve_holt_regions(
     let multi_region = identities.len() > 1;
 
     for identity in identities.iter().copied() {
-        let descriptor = startup_region_descriptor(&mvcc, identity)?;
+        let descriptor =
+            startup_region_descriptor(&mvcc, identity, region_ranges.get(identity.region_id))?;
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
         let apply_status = mvcc
             .get_region_apply_state(descriptor.region_id)?
@@ -450,6 +594,7 @@ async fn serve_memory_regions(
     identities: Vec<ServerIdentity>,
     coordinator: Option<CoordinatorHeartbeatConfig>,
     peer_endpoints: PeerEndpointCatalog,
+    region_ranges: RegionRangeCatalog,
     temp_log_dir: &mut Option<tempfile::TempDir>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     tracing::info!(
@@ -467,7 +612,8 @@ async fn serve_memory_regions(
 
     for identity in identities.iter().copied() {
         let engine = AppliedKvEngine::new(identity.region_id, MvccStore::new());
-        let descriptor = default_region_descriptor(identity);
+        let descriptor =
+            default_region_descriptor_with_range(identity, region_ranges.get(identity.region_id));
         engine.set_region_descriptor(descriptor.clone())?;
         let admission = RegionAdmission::from_descriptor(&descriptor, identity.bootstrap)?;
         let log_dir = raft_log_dir_for_region(None, identity, multi_region, temp_log_dir)?;
@@ -1412,8 +1558,19 @@ fn region_log_dir(root: PathBuf, region_id: u64, multi_region: bool) -> PathBuf 
 }
 
 fn default_region_descriptor(identity: ServerIdentity) -> metapb::RegionDescriptor {
+    default_region_descriptor_with_range(identity, None)
+}
+
+fn default_region_descriptor_with_range(
+    identity: ServerIdentity,
+    range: Option<&RegionKeyRange>,
+) -> metapb::RegionDescriptor {
     metapb::RegionDescriptor {
         region_id: identity.region_id,
+        start_key: range
+            .map(|range| range.start_key.clone())
+            .unwrap_or_default(),
+        end_key: range.map(|range| range.end_key.clone()).unwrap_or_default(),
         epoch: Some(metapb::RegionEpoch {
             version: 1,
             conf_version: 1,
@@ -1429,8 +1586,9 @@ fn default_region_descriptor(identity: ServerIdentity) -> metapb::RegionDescript
 fn startup_region_descriptor(
     store: &HoltMvccStore,
     identity: ServerIdentity,
+    range: Option<&RegionKeyRange>,
 ) -> nokv_holtstore::Result<metapb::RegionDescriptor> {
-    let default = default_region_descriptor(identity);
+    let default = default_region_descriptor_with_range(identity, range);
     if identity.bootstrap {
         return store.load_or_bootstrap_region_descriptor(&default);
     }
@@ -1569,6 +1727,53 @@ mod tests {
     fn server_identity_rejects_multi_region_duplicate_peer() {
         let err = ServerIdentity::from_region_list("7:11:101:true,8:11:101:true").unwrap_err();
         assert!(err.to_string().contains("duplicate peer_id 101"));
+    }
+
+    #[test]
+    fn region_range_catalog_parses_hex_bounds() {
+        let ranges = RegionRangeCatalog::parse("7=:6d, 8=6d:").unwrap();
+
+        assert_eq!(
+            ranges.get(7).unwrap(),
+            &RegionKeyRange {
+                start_key: Vec::new(),
+                end_key: b"m".to_vec(),
+            }
+        );
+        assert_eq!(
+            ranges.get(8).unwrap(),
+            &RegionKeyRange {
+                start_key: b"m".to_vec(),
+                end_key: Vec::new(),
+            }
+        );
+    }
+
+    #[test]
+    fn region_range_catalog_rejects_invalid_hex() {
+        let err = RegionRangeCatalog::parse("7=0:6d").unwrap_err();
+        assert!(err.to_string().contains("even number"));
+    }
+
+    #[test]
+    fn multi_region_bootstrap_requires_explicit_range() {
+        let identities = ServerIdentity::from_region_list("7:11:101:true,8:11:102:true").unwrap();
+        let err = validate_startup_region_ranges(&identities, &RegionRangeCatalog::default())
+            .unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("requires NOKV_RUST_RAFTSTORE_REGION_RANGES"));
+    }
+
+    #[test]
+    fn multi_region_bootstrap_rejects_overlapping_ranges() {
+        let identities = ServerIdentity::from_region_list("7:11:101:true,8:11:102:true").unwrap();
+        let ranges = RegionRangeCatalog::parse("7=:6d,8=61:").unwrap();
+
+        let err = validate_startup_region_ranges(&identities, &ranges).unwrap_err();
+
+        assert!(err.to_string().contains("region 7 overlaps region 8"));
     }
 
     #[test]
@@ -1999,7 +2204,7 @@ mod tests {
             bootstrap: false,
         };
 
-        let descriptor = startup_region_descriptor(&store, identity).unwrap();
+        let descriptor = startup_region_descriptor(&store, identity, None).unwrap();
 
         assert_eq!(descriptor, default_region_descriptor(identity));
         assert!(store.get_region_descriptor(7).unwrap().is_none());
@@ -2015,7 +2220,7 @@ mod tests {
             bootstrap: true,
         };
 
-        let descriptor = startup_region_descriptor(&store, identity).unwrap();
+        let descriptor = startup_region_descriptor(&store, identity, None).unwrap();
 
         assert_eq!(descriptor, default_region_descriptor(identity));
         assert_eq!(store.get_region_descriptor(7).unwrap().unwrap(), descriptor);
@@ -2278,6 +2483,26 @@ mod tests {
             })
             .collect::<Vec<_>>();
         assert_eq!(bootstrapped, vec![7, 8]);
+    }
+
+    #[test]
+    fn default_region_descriptor_uses_configured_range() {
+        let identity = ServerIdentity {
+            region_id: 7,
+            store_id: 11,
+            peer_id: 101,
+            bootstrap: true,
+        };
+        let descriptor = default_region_descriptor_with_range(
+            identity,
+            Some(&RegionKeyRange {
+                start_key: b"a".to_vec(),
+                end_key: b"z".to_vec(),
+            }),
+        );
+
+        assert_eq!(descriptor.start_key, b"a");
+        assert_eq!(descriptor.end_key, b"z");
     }
 
     #[test]

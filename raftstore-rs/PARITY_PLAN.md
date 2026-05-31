@@ -343,9 +343,11 @@ Known gaps:
   startup path that opens several local OpenRaft groups in one process, isolates
   each region's raftlog directory, publishes store membership once, publishes
   one bootstrap descriptor per bootstrapped region, and sends a single
-  aggregate store heartbeat for the process. Coordinator-owned lifecycle,
-  topology bootstrap, split/merge execution, and default compose cutover are
-  still pending.
+  aggregate store heartbeat for the process. Multi-region bootstrap now
+  requires explicit non-overlapping key ranges before publishing those startup
+  descriptors, and the Go tagged harness covers routing through a real
+  coordinator using the published descriptors. Coordinator-owned lifecycle,
+  split/merge execution, and default compose cutover are still pending.
 - Region metadata has a Holt persistence point for descriptors and apply-state
   records, and Holt server mode persists apply status after successful write
   commands. Non-bootstrap Rust peers no longer persist a default descriptor,

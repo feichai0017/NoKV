@@ -175,6 +175,7 @@ func TestRustRaftstoreEndpointMultiRegionStartupRoutesAndHeartbeats(t *testing.T
 	storeAddr := reserveLocalAddr(t)
 	stopStore := startRustRaftstoreProcessAt(t, storeAddr, "", []string{
 		"NOKV_RUST_RAFTSTORE_REGIONS=1:11:101:true,2:11:102:true",
+		"NOKV_RUST_RAFTSTORE_REGION_RANGES=1=:6d,2=6d:",
 		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
 		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
 	})
@@ -247,6 +248,75 @@ func TestRustRaftstoreEndpointMultiRegionStartupRoutesAndHeartbeats(t *testing.T
 		require.True(t, status.GetKnown())
 		require.True(t, status.GetHosted())
 		require.True(t, status.GetLeader())
+	}
+}
+
+func TestRustRaftstoreEndpointMultiRegionStartupRoutesThroughCoordinator(t *testing.T) {
+	svc := coordserver.NewService(coordcatalog.NewCluster(), coordidalloc.NewIDAllocator(1), coordtso.NewAllocator(1))
+	coordAddr, stopCoord := startRustRaftstoreCoordinatorService(t, svc)
+	defer stopCoord()
+
+	storeAddr := reserveLocalAddr(t)
+	stopStore := startRustRaftstoreProcessAt(t, storeAddr, "", []string{
+		"NOKV_RUST_RAFTSTORE_REGIONS=1:11:101:true,2:11:102:true",
+		"NOKV_RUST_RAFTSTORE_REGION_RANGES=1=:6d,2=6d:",
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_ADDR=" + coordAddr,
+		"NOKV_RUST_RAFTSTORE_COORDINATOR_HEARTBEAT_MS=50",
+	})
+	defer stopStore()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	require.Eventually(t, func() bool {
+		store, err := svc.GetStore(ctx, &coordpb.GetStoreRequest{StoreId: 11})
+		if err != nil ||
+			store.GetNotFound() ||
+			store.GetStore().GetClientAddr() != storeAddr ||
+			store.GetStore().GetRegionNum() != 2 {
+			return false
+		}
+		left, err := svc.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: []byte("agent/a")})
+		if err != nil || left.GetNotFound() || left.GetRegionDescriptor().GetRegionId() != 1 {
+			return false
+		}
+		right, err := svc.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{Key: []byte("workspace/z")})
+		return err == nil && !right.GetNotFound() && right.GetRegionDescriptor().GetRegionId() == 2
+	}, 5*time.Second, 50*time.Millisecond)
+
+	coord, err := coordclient.NewGRPCClient(ctx, coordAddr, grpc.WithTransportCredentials(insecure.NewCredentials()))
+	require.NoError(t, err)
+	cli, err := New(Config{
+		RegionResolver: coord,
+		StoreResolver:  coord,
+		DialOptions:    []grpc.DialOption{grpc.WithTransportCredentials(insecure.NewCredentials())},
+		Retry:          RetryPolicy{MaxAttempts: 3},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, cli.Close()) })
+
+	for _, tc := range []struct {
+		key        []byte
+		value      []byte
+		commitVers uint64
+	}{
+		{key: []byte("agent/a"), value: []byte("r1"), commitVers: 10},
+		{key: []byte("workspace/z"), value: []byte("r2"), commitVers: 12},
+	} {
+		handled, err := cli.TryAtomicMutate(ctx, tc.key, []*kvrpcpb.AtomicPredicate{{
+			Key:         tc.key,
+			Kind:        kvrpcpb.AtomicPredicateKind_ATOMIC_PREDICATE_KIND_NOT_EXISTS,
+			ReadVersion: tc.commitVers - 1,
+		}}, []*kvrpcpb.Mutation{{
+			Op:    kvrpcpb.Mutation_Put,
+			Key:   tc.key,
+			Value: tc.value,
+		}}, tc.commitVers-2, tc.commitVers)
+		require.NoError(t, err)
+		require.True(t, handled)
+		got, err := cli.Get(ctx, tc.key, tc.commitVers)
+		require.NoError(t, err)
+		require.False(t, got.GetNotFound())
+		require.Equal(t, tc.value, got.GetValue())
 	}
 }
 

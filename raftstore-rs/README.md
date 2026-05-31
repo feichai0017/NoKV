@@ -82,6 +82,23 @@ coordinator endpoint lists are accepted; heartbeat and topology publication try
 the configured endpoints until one succeeds or a permanent root validation
 failure is returned.
 
+A single process can host several bootstrapped regions by setting
+`NOKV_RUST_RAFTSTORE_REGIONS` to comma-separated
+`region_id:store_id:peer_id:bootstrap` entries. Multi-region bootstrap also
+requires `NOKV_RUST_RAFTSTORE_REGION_RANGES`, with hex-encoded
+`region_id=start_hex:end_hex` entries, so the startup descriptors published to
+the coordinator are non-overlapping:
+
+```bash
+NOKV_RUST_RAFTSTORE_REGIONS=1:11:101:true,2:11:102:true \
+NOKV_RUST_RAFTSTORE_REGION_RANGES=1=:6d,2=6d: \
+cargo run --manifest-path raftstore-rs/Cargo.toml -p nokv-raftstore-server
+```
+
+Empty start or end means the first or last keyspace boundary. The server rejects
+multi-region bootstrap when an explicit range is missing or when configured
+ranges overlap.
+
 OpenRaft replication, membership changes, snapshots, and WatchApply delivery are
 staged behind these boundaries. Experimental Peras witness services and legacy
 migration/SST paths are outside v1.
