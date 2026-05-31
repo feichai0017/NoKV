@@ -40,7 +40,7 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
 
-	runtime, logs := openRustMetadataPlaneRuntime(t, ctx)
+	runtime, logs, coordinator := openRustMetadataPlaneRuntime(t, ctx)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 
 	created, err := runtime.Executor.Create(ctx, model.CreateRequest{
@@ -126,13 +126,136 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 	replayed := requireWatchEvent(t, resume)
 	require.Equal(t, observe.WatchEventSourceCommit, replayed.Source)
 	require.Greater(t, replayed.Cursor.Index, removeEvent.Cursor.Index)
+
+	stage, err := runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "stage.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 11,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err)
+	final, err := runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "final.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 19,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err)
+	replace, err := runtime.Executor.RenameReplace(ctx, model.RenameReplaceRequest{
+		Mount:      "vol",
+		FromParent: model.RootInode,
+		FromName:   "stage.json",
+		ToParent:   model.RootInode,
+		ToName:     "final.json",
+	})
+	require.NoError(t, err)
+	require.True(t, replace.Replaced)
+	require.True(t, replace.OldInodeDeleted)
+	require.Equal(t, final.Dentry.Inode, replace.OldDentry.Inode)
+	require.Equal(t, final.Inode.Inode, replace.OldInode.Inode)
+	replacedLookup, err := runtime.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "final.json",
+	})
+	require.NoError(t, err)
+	require.Equal(t, stage.Dentry.Inode, replacedLookup.Dentry.Inode)
+	require.Equal(t, stage.Inode.Inode, replacedLookup.Inode.Inode)
+	_, err = runtime.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "stage.json",
+	})
+	require.ErrorIs(t, err, model.ErrNotFound)
+
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "empty-dir",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeDirectory,
+			Mode: 0o755,
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, runtime.Executor.RemoveDirectory(ctx, model.RemoveDirectoryRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "empty-dir",
+	}))
+	_, err = runtime.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "empty-dir",
+	})
+	require.ErrorIs(t, err, model.ErrNotFound)
+
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "snapshot-before.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 31,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err)
+	token, err := runtime.Executor.SnapshotSubtree(ctx, model.SnapshotSubtreeRequest{
+		Mount:     "vol",
+		RootInode: model.RootInode,
+	})
+	require.NoError(t, err)
+	require.NoError(t, runtime.Snapshot.PublishSnapshotSubtree(ctx, token))
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "snapshot-after.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 37,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err)
+	snapshotEntries, err := runtime.Executor.ReadDirPlus(ctx, model.ReadDirRequest{
+		Mount:           "vol",
+		Parent:          model.RootInode,
+		Limit:           64,
+		SnapshotVersion: token.ReadVersion,
+	})
+	require.NoError(t, err)
+	require.True(t, containsDentryName(snapshotEntries, "snapshot-before.json"))
+	require.False(t, containsDentryName(snapshotEntries, "snapshot-after.json"))
+	require.NoError(t, runtime.Snapshot.RetireSnapshotSubtree(ctx, token))
+
+	publishRootEvent(t, coordinator, rootevent.MountRetired("vol"))
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "after-retire.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 1,
+			Mode: 0o644,
+		},
+	})
+	require.ErrorIs(t, err, model.ErrMountRetired)
 }
 
 func TestRustMetadataPlanePassesFSMetaContract(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 
-	runtime, logs := openRustMetadataPlaneRuntime(t, ctx)
+	runtime, logs, _ := openRustMetadataPlaneRuntime(t, ctx)
 	t.Cleanup(func() { require.NoError(t, runtime.Close()) })
 
 	mapped, err := contract.NewInodeMappingExecutor(runtime.Executor)
@@ -142,7 +265,7 @@ func TestRustMetadataPlanePassesFSMetaContract(t *testing.T) {
 	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
 }
 
-func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, *bytes.Buffer) {
+func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, *bytes.Buffer, *coordserver.Service) {
 	t.Helper()
 	repo := repoRootFromThisFile(t)
 	binary := buildRustRaftstoreServer(t, ctx, repo)
@@ -175,7 +298,7 @@ func openRustMetadataPlaneRuntime(t *testing.T, ctx context.Context) (*Runtime, 
 		BootstrapMount: "vol",
 	})
 	require.NoError(t, err, "raftstore logs:\n%s", logs.String())
-	return runtime, logs
+	return runtime, logs, coordinator
 }
 
 func requireWatchEvent(t *testing.T, sub observe.WatchSubscription) observe.WatchEvent {
@@ -187,6 +310,15 @@ func requireWatchEvent(t *testing.T, sub observe.WatchSubscription) observe.Watc
 		t.Fatal("timed out waiting for fsmeta watch event")
 	}
 	return observe.WatchEvent{}
+}
+
+func containsDentryName(entries []model.DentryAttrPair, name string) bool {
+	for _, entry := range entries {
+		if entry.Dentry.Name == name {
+			return true
+		}
+	}
+	return false
 }
 
 func repoRootFromThisFile(t *testing.T) string {
