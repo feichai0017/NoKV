@@ -9,6 +9,12 @@ pub struct RaftNodeMetricsSnapshot {
     pub proposal_commands_max: u64,
     pub proposal_ns_total: u64,
     pub proposal_ns_max: u64,
+    pub read_barrier_requests_total: u64,
+    pub read_barrier_shared_total: u64,
+    pub read_barrier_executions_total: u64,
+    pub read_barrier_errors_total: u64,
+    pub read_barrier_ns_total: u64,
+    pub read_barrier_ns_max: u64,
     pub log_append_calls_total: u64,
     pub log_entries_total: u64,
     pub log_entries_max: u64,
@@ -54,6 +60,12 @@ pub(crate) struct RaftNodeMetrics {
     proposal_commands_max: AtomicU64,
     proposal_ns_total: AtomicU64,
     proposal_ns_max: AtomicU64,
+    read_barrier_requests_total: AtomicU64,
+    read_barrier_shared_total: AtomicU64,
+    read_barrier_executions_total: AtomicU64,
+    read_barrier_errors_total: AtomicU64,
+    read_barrier_ns_total: AtomicU64,
+    read_barrier_ns_max: AtomicU64,
     log_append_calls_total: AtomicU64,
     log_entries_total: AtomicU64,
     log_entries_max: AtomicU64,
@@ -101,6 +113,12 @@ pub fn raftnode_metrics_snapshot() -> RaftNodeMetricsSnapshot {
         proposal_commands_max: load(&metrics.proposal_commands_max),
         proposal_ns_total: load(&metrics.proposal_ns_total),
         proposal_ns_max: load(&metrics.proposal_ns_max),
+        read_barrier_requests_total: load(&metrics.read_barrier_requests_total),
+        read_barrier_shared_total: load(&metrics.read_barrier_shared_total),
+        read_barrier_executions_total: load(&metrics.read_barrier_executions_total),
+        read_barrier_errors_total: load(&metrics.read_barrier_errors_total),
+        read_barrier_ns_total: load(&metrics.read_barrier_ns_total),
+        read_barrier_ns_max: load(&metrics.read_barrier_ns_max),
         log_append_calls_total: load(&metrics.log_append_calls_total),
         log_entries_total: load(&metrics.log_entries_total),
         log_entries_max: load(&metrics.log_entries_max),
@@ -161,6 +179,35 @@ pub(crate) fn record_proposal(commands: u64, duration: Duration) {
     record_duration(
         &metrics.proposal_ns_total,
         &metrics.proposal_ns_max,
+        duration,
+    );
+}
+
+pub(crate) fn record_read_barrier_request() {
+    raftnode_metrics()
+        .read_barrier_requests_total
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_read_barrier_shared() {
+    raftnode_metrics()
+        .read_barrier_shared_total
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_read_barrier_execution(duration: Duration, ok: bool) {
+    let metrics = raftnode_metrics();
+    metrics
+        .read_barrier_executions_total
+        .fetch_add(1, Ordering::Relaxed);
+    if !ok {
+        metrics
+            .read_barrier_errors_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
+    record_duration(
+        &metrics.read_barrier_ns_total,
+        &metrics.read_barrier_ns_max,
         duration,
     );
 }
@@ -302,6 +349,12 @@ impl Default for RaftNodeMetrics {
             proposal_commands_max: AtomicU64::new(0),
             proposal_ns_total: AtomicU64::new(0),
             proposal_ns_max: AtomicU64::new(0),
+            read_barrier_requests_total: AtomicU64::new(0),
+            read_barrier_shared_total: AtomicU64::new(0),
+            read_barrier_executions_total: AtomicU64::new(0),
+            read_barrier_errors_total: AtomicU64::new(0),
+            read_barrier_ns_total: AtomicU64::new(0),
+            read_barrier_ns_max: AtomicU64::new(0),
             log_append_calls_total: AtomicU64::new(0),
             log_entries_total: AtomicU64::new(0),
             log_entries_max: AtomicU64::new(0),

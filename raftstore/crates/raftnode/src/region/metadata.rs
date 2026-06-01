@@ -1,14 +1,10 @@
-use std::time::Duration;
-
 use nokv_proto::nokv::error::v1 as errorpb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
-use openraft::Raft;
 
-use super::{openraft_check_leader_error, OpenRaftRegion};
+use super::OpenRaftRegion;
 use crate::{
     decode_metadata_response, decode_metadata_response_batch, Error, MetadataCommandExecutor,
-    MetadataReadExecutor, MetadataRetentionExecutor, NodeId, Proposal, RaftStoreConfig,
-    RegionSnapshotEngine,
+    MetadataReadExecutor, MetadataRetentionExecutor, NodeId, Proposal, RegionSnapshotEngine,
 };
 
 impl<E> MetadataCommandExecutor for OpenRaftRegion<E>
@@ -169,7 +165,11 @@ where
             }
             return Ok(Some(stale_metadata_region_error()));
         }
-        if let Err(err) = ensure_linearizable_for_read(&self.raft).await {
+        if let Err(err) = self
+            .read_barrier
+            .ensure_linearizable(self.raft.clone())
+            .await
+        {
             if let Error::NotLeader { leader_id } = err {
                 return self
                     .not_leader_metadata_region_error(context, leader_id)
@@ -284,27 +284,4 @@ fn stale_metadata_region_error() -> errorpb::RegionError {
         stale_command: Some(errorpb::StaleCommand {}),
         ..Default::default()
     }
-}
-
-async fn ensure_linearizable_for_read(raft: &Raft<RaftStoreConfig>) -> Result<(), Error> {
-    let mut last_error = None;
-    for attempt in 1..=50 {
-        match raft.ensure_linearizable().await {
-            Ok(_) => return Ok(()),
-            Err(err) => {
-                let err = openraft_check_leader_error(err);
-                if matches!(err, Error::NotLeader { leader_id: Some(_) }) {
-                    return Err(err);
-                }
-                last_error = Some(err);
-                if attempt < 50 {
-                    tokio::time::sleep(Duration::from_millis(100)).await;
-                }
-            }
-        }
-    }
-    let err = last_error
-        .map(|err| err.to_string())
-        .unwrap_or_else(|| "linearizable read did not complete".to_owned());
-    Err(Error::OpenRaft(err))
 }

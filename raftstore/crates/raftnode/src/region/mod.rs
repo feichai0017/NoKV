@@ -22,14 +22,17 @@ use crate::{
 
 mod bootstrap_network;
 mod metadata;
+mod read_barrier;
 
 use bootstrap_network::BootstrapNetworkFactory;
+use read_barrier::ReadBarrier;
 
 #[derive(Clone)]
 pub struct OpenRaftRegion<E = AppliedMetadataEngine<MemoryMetadataStore>> {
     node_id: NodeId,
     raft: Raft<RaftStoreConfig>,
     apply_engine: E,
+    read_barrier: ReadBarrier,
 }
 
 impl<E> OpenRaftRegion<E>
@@ -97,6 +100,7 @@ where
             node_id,
             raft,
             apply_engine,
+            read_barrier: ReadBarrier::default(),
         })
     }
 
