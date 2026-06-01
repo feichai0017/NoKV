@@ -22,6 +22,7 @@ type Executor interface {
 	UpdateInode(ctx context.Context, req model.UpdateInodeRequest) (model.InodeRecord, error)
 	Lookup(ctx context.Context, req model.LookupRequest) (model.DentryRecord, error)
 	LookupPlus(ctx context.Context, req model.LookupRequest) (model.DentryAttrPair, error)
+	LookupPath(ctx context.Context, req model.LookupPathRequest) (model.DentryAttrPair, error)
 	GetAttr(ctx context.Context, req model.GetAttrRequest) (model.InodeRecord, error)
 	BatchGetAttr(ctx context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error)
 	ReadDir(ctx context.Context, req model.ReadDirRequest) ([]model.DentryRecord, error)
@@ -144,6 +145,20 @@ func (s *Service) LookupPlus(ctx context.Context, req *fsmetapb.LookupRequest) (
 		return nil, rpcError(err)
 	}
 	return &fsmetapb.LookupPlusResponse{Entry: pairToProto(pair)}, nil
+}
+
+func (s *Service) LookupPath(ctx context.Context, req *fsmetapb.LookupPathRequest) (*fsmetapb.LookupPathResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, rpcInvalidArgument("fsmeta lookup path request is required")
+	}
+	pair, err := s.executor.LookupPath(ctx, lookupPathRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.LookupPathResponse{Entry: pairToProto(pair)}, nil
 }
 
 func (s *Service) GetAttr(ctx context.Context, req *fsmetapb.GetAttrRequest) (*fsmetapb.GetAttrResponse, error) {

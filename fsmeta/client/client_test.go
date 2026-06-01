@@ -81,6 +81,27 @@ func (e *fakeExecutor) LookupPlus(ctx context.Context, req model.LookupRequest) 
 	}, nil
 }
 
+func (e *fakeExecutor) LookupPath(_ context.Context, req model.LookupPathRequest) (model.DentryAttrPair, error) {
+	if e.err != nil {
+		return model.DentryAttrPair{}, e.err
+	}
+	return model.DentryAttrPair{
+		Dentry: model.DentryRecord{
+			Parent: req.RootInode,
+			Name:   req.Path,
+			Inode:  42,
+			Type:   model.InodeTypeFile,
+		},
+		Inode: model.InodeRecord{
+			Inode:     42,
+			Type:      model.InodeTypeFile,
+			Size:      4096,
+			Mode:      0o644,
+			LinkCount: 1,
+		},
+	}, nil
+}
+
 func (e *fakeExecutor) GetAttr(_ context.Context, req model.GetAttrRequest) (model.InodeRecord, error) {
 	if e.err != nil {
 		return model.InodeRecord{}, e.err
@@ -346,6 +367,15 @@ func TestTypedClientRoundTrip(t *testing.T) {
 			LinkCount: 1,
 		},
 	}, pair)
+
+	pathPair, err := cli.LookupPath(context.Background(), model.LookupPathRequest{
+		Mount:           "vol",
+		RootInode:       model.RootInode,
+		Path:            "checkpoint",
+		SnapshotVersion: 99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, pair, pathPair)
 
 	attr, err := cli.GetAttr(context.Background(), model.GetAttrRequest{
 		Mount:           "vol",

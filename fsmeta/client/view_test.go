@@ -6,6 +6,7 @@ package client
 import (
 	"context"
 	"fmt"
+	"strings"
 	"testing"
 
 	"github.com/feichai0017/NoKV/fsmeta/model"
@@ -120,6 +121,26 @@ func (f *viewFake) RemoveDirectory(_ context.Context, req model.RemoveDirectoryR
 	return nil
 }
 
+type pathLookupViewFake struct {
+	*viewFake
+	lookupPathReqs []model.LookupPathRequest
+}
+
+func (f *pathLookupViewFake) LookupPath(_ context.Context, req model.LookupPathRequest) (model.DentryAttrPair, error) {
+	f.lookupPathReqs = append(f.lookupPathReqs, req)
+	parent := req.RootInode
+	var current model.DentryAttrPair
+	for _, part := range strings.Split(req.Path, "/") {
+		pair, ok := f.dentry[viewDentryKey(parent, part)]
+		if !ok {
+			return model.DentryAttrPair{}, model.ErrNotFound
+		}
+		current = pair
+		parent = pair.Inode.Inode
+	}
+	return current, nil
+}
+
 func TestCreateViewEnforcesScopedReadAndWriteRules(t *testing.T) {
 	backend := newViewFake()
 	view, err := CreateView(context.Background(), backend, model.CreateViewRequest{
@@ -153,6 +174,30 @@ func TestCreateViewEnforcesScopedReadAndWriteRules(t *testing.T) {
 	require.Equal(t, model.InodeID(3), backend.created[0].Parent)
 	require.Equal(t, "new", backend.created[0].Name)
 	require.Equal(t, created.Inode.Inode, backend.created[0].Attrs.InodeRecord(created.Inode.Inode).Inode)
+}
+
+func TestViewUsesLookupPathWhenBackendSupportsIt(t *testing.T) {
+	backend := &pathLookupViewFake{viewFake: newViewFake()}
+	view, err := CreateView(context.Background(), backend, model.CreateViewRequest{
+		Mount:     "vol",
+		RootInode: model.RootInode,
+		AccessRules: []model.ViewAccessRule{{
+			Prefix: "input",
+			Mode:   model.ViewAccessReadOnly,
+		}},
+	})
+	require.NoError(t, err)
+
+	pair, err := view.LookupPlus(context.Background(), "input/file")
+	require.NoError(t, err)
+	require.Equal(t, model.InodeID(5), pair.Inode.Inode)
+	require.NotEmpty(t, backend.lookupPathReqs)
+	require.Equal(t, model.LookupPathRequest{
+		Mount:     "vol",
+		RootInode: model.RootInode,
+		Path:      "input/file",
+	}, backend.lookupPathReqs[len(backend.lookupPathReqs)-1])
+	require.Empty(t, backend.lookupVersions)
 }
 
 func TestSnapshotViewBindsReadsAndRejectsMutations(t *testing.T) {

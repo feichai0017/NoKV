@@ -27,6 +27,7 @@ type fakeExecutor struct {
 	createReq        model.CreateRequest
 	createInode      model.InodeRecord
 	updateReq        model.UpdateInodeRequest
+	lookupPathReq    model.LookupPathRequest
 	getAttrReq       model.GetAttrRequest
 	batchGetAttrReq  model.BatchGetAttrRequest
 	readDirReq       model.ReadDirRequest
@@ -103,6 +104,17 @@ func (e *fakeExecutor) LookupPlus(ctx context.Context, req model.LookupRequest) 
 			Mode:      0o644,
 			LinkCount: 1,
 		},
+	}, nil
+}
+
+func (e *fakeExecutor) LookupPath(_ context.Context, req model.LookupPathRequest) (model.DentryAttrPair, error) {
+	e.lookupPathReq = req
+	if e.err != nil {
+		return model.DentryAttrPair{}, e.err
+	}
+	return model.DentryAttrPair{
+		Dentry: model.DentryRecord{Parent: req.RootInode, Name: req.Path, Inode: 42, Type: model.InodeTypeFile},
+		Inode:  model.InodeRecord{Inode: 42, Type: model.InodeTypeFile, Size: 4096, Mode: 0o644, LinkCount: 1},
 	}, nil
 }
 
@@ -355,6 +367,21 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(42), lookupPlus.GetEntry().GetDentry().GetInode())
 	require.Equal(t, uint64(4096), lookupPlus.GetEntry().GetInode().GetSize())
+
+	lookupPath, err := client.LookupPath(context.Background(), &fsmetapb.LookupPathRequest{
+		Mount:           "vol",
+		RootInode:       uint64(model.RootInode),
+		Path:            "checkpoint",
+		SnapshotVersion: 99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), lookupPath.GetEntry().GetDentry().GetInode())
+	require.Equal(t, model.LookupPathRequest{
+		Mount:           "vol",
+		RootInode:       model.RootInode,
+		Path:            "checkpoint",
+		SnapshotVersion: 99,
+	}, executor.lookupPathReq)
 
 	attr, err := client.GetAttr(context.Background(), &fsmetapb.GetAttrRequest{
 		Mount:           "vol",

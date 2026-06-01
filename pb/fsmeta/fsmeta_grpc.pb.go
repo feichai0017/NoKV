@@ -28,6 +28,7 @@ const (
 	FSMetadata_UpdateInode_FullMethodName           = "/nokv.fsmeta.v1.FSMetadata/UpdateInode"
 	FSMetadata_Lookup_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Lookup"
 	FSMetadata_LookupPlus_FullMethodName            = "/nokv.fsmeta.v1.FSMetadata/LookupPlus"
+	FSMetadata_LookupPath_FullMethodName            = "/nokv.fsmeta.v1.FSMetadata/LookupPath"
 	FSMetadata_GetAttr_FullMethodName               = "/nokv.fsmeta.v1.FSMetadata/GetAttr"
 	FSMetadata_BatchGetAttr_FullMethodName          = "/nokv.fsmeta.v1.FSMetadata/BatchGetAttr"
 	FSMetadata_ReadDir_FullMethodName               = "/nokv.fsmeta.v1.FSMetadata/ReadDir"
@@ -58,6 +59,7 @@ type FSMetadataClient interface {
 	UpdateInode(ctx context.Context, in *UpdateInodeRequest, opts ...grpc.CallOption) (*UpdateInodeResponse, error)
 	Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupResponse, error)
 	LookupPlus(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupPlusResponse, error)
+	LookupPath(ctx context.Context, in *LookupPathRequest, opts ...grpc.CallOption) (*LookupPathResponse, error)
 	GetAttr(ctx context.Context, in *GetAttrRequest, opts ...grpc.CallOption) (*GetAttrResponse, error)
 	BatchGetAttr(ctx context.Context, in *BatchGetAttrRequest, opts ...grpc.CallOption) (*BatchGetAttrResponse, error)
 	ReadDir(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirResponse, error)
@@ -122,6 +124,16 @@ func (c *fSMetadataClient) LookupPlus(ctx context.Context, in *LookupRequest, op
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LookupPlusResponse)
 	err := c.cc.Invoke(ctx, FSMetadata_LookupPlus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) LookupPath(ctx context.Context, in *LookupPathRequest, opts ...grpc.CallOption) (*LookupPathResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(LookupPathResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_LookupPath_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -339,6 +351,7 @@ type FSMetadataServer interface {
 	UpdateInode(context.Context, *UpdateInodeRequest) (*UpdateInodeResponse, error)
 	Lookup(context.Context, *LookupRequest) (*LookupResponse, error)
 	LookupPlus(context.Context, *LookupRequest) (*LookupPlusResponse, error)
+	LookupPath(context.Context, *LookupPathRequest) (*LookupPathResponse, error)
 	GetAttr(context.Context, *GetAttrRequest) (*GetAttrResponse, error)
 	BatchGetAttr(context.Context, *BatchGetAttrRequest) (*BatchGetAttrResponse, error)
 	ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error)
@@ -379,6 +392,9 @@ func (UnimplementedFSMetadataServer) Lookup(context.Context, *LookupRequest) (*L
 }
 func (UnimplementedFSMetadataServer) LookupPlus(context.Context, *LookupRequest) (*LookupPlusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method LookupPlus not implemented")
+}
+func (UnimplementedFSMetadataServer) LookupPath(context.Context, *LookupPathRequest) (*LookupPathResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method LookupPath not implemented")
 }
 func (UnimplementedFSMetadataServer) GetAttr(context.Context, *GetAttrRequest) (*GetAttrResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method GetAttr not implemented")
@@ -528,6 +544,24 @@ func _FSMetadata_LookupPlus_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FSMetadataServer).LookupPlus(ctx, req.(*LookupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_LookupPath_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(LookupPathRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).LookupPath(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_LookupPath_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).LookupPath(ctx, req.(*LookupPathRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -903,6 +937,10 @@ var FSMetadata_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LookupPlus",
 			Handler:    _FSMetadata_LookupPlus_Handler,
+		},
+		{
+			MethodName: "LookupPath",
+			Handler:    _FSMetadata_LookupPath_Handler,
 		},
 		{
 			MethodName: "GetAttr",

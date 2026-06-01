@@ -47,6 +47,7 @@ type Client interface {
 	UpdateInode(ctx context.Context, req model.UpdateInodeRequest) (model.InodeRecord, error)
 	Lookup(ctx context.Context, req model.LookupRequest) (model.DentryRecord, error)
 	LookupPlus(ctx context.Context, req model.LookupRequest) (model.DentryAttrPair, error)
+	LookupPath(ctx context.Context, req model.LookupPathRequest) (model.DentryAttrPair, error)
 	GetAttr(ctx context.Context, req model.GetAttrRequest) (model.InodeRecord, error)
 	BatchGetAttr(ctx context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error)
 	ReadDir(ctx context.Context, req model.ReadDirRequest) ([]model.DentryRecord, error)
@@ -207,6 +208,21 @@ func (c *GRPCClient) LookupPlus(ctx context.Context, req model.LookupRequest) (m
 		}
 	}
 	resp, err := c.rpc.LookupPlus(ctx, lookupRequestToProto(req))
+	if err != nil {
+		return model.DentryAttrPair{}, translateRPCError(err)
+	}
+	pair := pairFromProto(resp.GetEntry())
+	if req.SnapshotVersion == 0 {
+		c.lookup.Put(req.Mount, pair.Dentry)
+	}
+	return pair, nil
+}
+
+func (c *GRPCClient) LookupPath(ctx context.Context, req model.LookupPathRequest) (model.DentryAttrPair, error) {
+	if err := c.requireRPC(); err != nil {
+		return model.DentryAttrPair{}, err
+	}
+	resp, err := c.rpc.LookupPath(ctx, lookupPathRequestToProto(req))
 	if err != nil {
 		return model.DentryAttrPair{}, translateRPCError(err)
 	}

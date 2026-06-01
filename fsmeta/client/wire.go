@@ -55,6 +55,15 @@ func lookupRequestToProto(req model.LookupRequest) *fsmetapb.LookupRequest {
 	}
 }
 
+func lookupPathRequestToProto(req model.LookupPathRequest) *fsmetapb.LookupPathRequest {
+	return &fsmetapb.LookupPathRequest{
+		Mount:           string(req.Mount),
+		RootInode:       uint64(req.RootInode),
+		Path:            req.Path,
+		SnapshotVersion: req.SnapshotVersion,
+	}
+}
+
 func getAttrRequestToProto(req model.GetAttrRequest) *fsmetapb.GetAttrRequest {
 	return &fsmetapb.GetAttrRequest{
 		Mount:           string(req.Mount),

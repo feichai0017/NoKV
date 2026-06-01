@@ -18,7 +18,7 @@ The public wire API is in `pb/fsmeta/fsmeta.proto`; the domain types are in
 | RPC | Semantics |
 |---|---|
 | `Create` | Atomically creates a dentry and inode. |
-| `Lookup` / `LookupPlus` | Reads a dentry, optionally fused with inode attributes. |
+| `Lookup` / `LookupPlus` / `LookupPath` | Reads a dentry, optionally fused with inode attributes; `LookupPath` resolves a relative path through the derived path index when possible and validates against canonical dentries. |
 | `GetAttr` / `BatchGetAttr` | Reads inode attributes directly by inode ID for FUSE low-level style clients. |
 | `ReadDir` / `ReadDirPlus` | Reads a directory page, optionally fused with inode attributes. |
 | `UpdateInode` | Updates mutable inode metadata and bounded opaque attrs. |

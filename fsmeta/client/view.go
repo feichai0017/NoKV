@@ -29,6 +29,10 @@ type ViewBackend interface {
 	RemoveDirectory(context.Context, model.RemoveDirectoryRequest) error
 }
 
+type viewPathLookupBackend interface {
+	LookupPath(context.Context, model.LookupPathRequest) (model.DentryAttrPair, error)
+}
+
 // ViewReadDirRequest addresses one directory path relative to a view root.
 type ViewReadDirRequest struct {
 	Path       string
@@ -391,6 +395,19 @@ func (v *ScopedView) resolvePath(ctx context.Context, relPath string) (model.Den
 	}
 	if normalized == "" {
 		return model.DentryAttrPair{}, model.ErrInvalidRequest
+	}
+	if fast, ok := v.backend.(viewPathLookupBackend); ok {
+		current, err := fast.LookupPath(ctx, model.LookupPathRequest{
+			Mount:           v.desc.Ref.Mount,
+			RootInode:       v.desc.RootInode,
+			Path:            normalized,
+			SnapshotVersion: v.desc.SnapshotVersion,
+		})
+		if err != nil {
+			return model.DentryAttrPair{}, err
+		}
+		v.rememberInode(current.Inode.Inode)
+		return current, nil
 	}
 	parent := v.desc.RootInode
 	var current model.DentryAttrPair
