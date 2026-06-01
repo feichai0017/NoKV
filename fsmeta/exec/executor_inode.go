@@ -106,15 +106,19 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 			Key:   cloneBytes(plan.ReadKeys[0]),
 			Value: dentryValue,
 		})
+		watchEvent, err := dentryUpdateWatchEvent(mount, req.Parent, req.Name, req.Inode)
+		if err != nil {
+			return err
+		}
 		if len(quotaMutations) == 0 {
 			predicates := []*backend.Predicate{
 				metadataValueEqualsPredicate(plan.ReadKeys[0], dentry.value),
 				metadataValueEqualsPredicate(plan.MutateKeys[0], oldInodeValue),
 			}
-			if err := e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion); err != nil {
+			if err := e.commitWithMetadataPredicatesAndWatch(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, []backend.WatchEvent{watchEvent}, startVersion, commitVersion); err != nil {
 				return err
 			}
-		} else if err := e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion); err != nil {
+		} else if err := e.commitWithoutMetadataPredicatesAndWatch(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, []backend.WatchEvent{watchEvent}, startVersion, commitVersion); err != nil {
 			return err
 		}
 		updated = inode

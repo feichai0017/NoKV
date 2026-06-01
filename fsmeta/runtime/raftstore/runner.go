@@ -308,6 +308,7 @@ func metadataCommandToProto(command backend.MetadataCommand) *metadatapb.Metadat
 		Mutations:        metadataMutationsToProto(command.Mutations),
 		WatchKeys:        cloneByteSlices(command.WatchKeys),
 		WatchKeyRefs:     metadataWatchRefsToProto(command.WatchRefs, command.WatchKeys),
+		WatchEvents:      metadataWatchEventsToProto(command.WatchEvents),
 	}
 }
 
@@ -370,6 +371,47 @@ func metadataWatchRefsToProto(refs []backend.KeyRef, fallback [][]byte) []*metad
 		})
 	}
 	return out
+}
+
+func metadataWatchEventsToProto(events []backend.WatchEvent) []*metadatapb.MetadataWatchEvent {
+	out := make([]*metadatapb.MetadataWatchEvent, 0, len(events))
+	for _, event := range events {
+		if len(event.Key) == 0 {
+			continue
+		}
+		out = append(out, &metadatapb.MetadataWatchEvent{
+			KeyFamily: metadataFamilyToProto(metadataFamilyOrKey(event.Family, event.Key)),
+			Key:       cloneBytes(event.Key),
+			Operation: metadataWatchOperationToProto(event.Operation),
+			Parent:    event.Parent,
+			Name:      event.Name,
+			Inode:     event.Inode,
+			OldParent: event.OldParent,
+			OldName:   event.OldName,
+			NewParent: event.NewParent,
+			NewName:   event.NewName,
+		})
+	}
+	return out
+}
+
+func metadataWatchOperationToProto(op backend.WatchOperation) metadatapb.MetadataWatchOperation {
+	switch op {
+	case backend.WatchOperationCreate:
+		return metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_CREATE
+	case backend.WatchOperationUpdate:
+		return metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_UPDATE
+	case backend.WatchOperationDelete:
+		return metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_DELETE
+	case backend.WatchOperationRename:
+		return metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_RENAME
+	case backend.WatchOperationReplace:
+		return metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_REPLACE
+	case backend.WatchOperationLink:
+		return metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_LINK
+	default:
+		return metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_UNSPECIFIED
+	}
 }
 
 func metadataPredicateKindToProto(kind backend.PredicateKind) metadatapb.MetadataPredicateKind {

@@ -148,6 +148,27 @@ enum WatchEventSource {
   reserved "WATCH_EVENT_SOURCE_RESOLVE_LOCK";
 }
 
+enum WatchOperation {
+  WATCH_OPERATION_UNSPECIFIED = 0;
+  WATCH_OPERATION_CREATE = 1;
+  WATCH_OPERATION_UPDATE = 2;
+  WATCH_OPERATION_DELETE = 3;
+  WATCH_OPERATION_RENAME = 4;
+  WATCH_OPERATION_REPLACE = 5;
+  WATCH_OPERATION_LINK = 6;
+}
+
+message NamespaceWatchEvent {
+  WatchOperation operation = 1;
+  uint64 parent = 2;
+  string name = 3;
+  uint64 inode = 4;
+  uint64 old_parent = 5;
+  string old_name = 6;
+  uint64 new_parent = 7;
+  string new_name = 8;
+}
+
 message WatchSubtreeRequest {
   string mount = 1;
   uint64 root_inode = 2;
@@ -162,6 +183,7 @@ message WatchEvent {
   uint64 commit_version = 2;
   WatchEventSource source = 3;
   bytes key = 4;
+  NamespaceWatchEvent namespace = 5;
 }
 
 message WatchAck {

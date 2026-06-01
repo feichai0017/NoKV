@@ -795,6 +795,32 @@ async fn applied_metadata_engine_publishes_watch_events_for_writes() {
 }
 
 #[tokio::test]
+async fn applied_metadata_engine_publishes_typed_watch_events() {
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
+    let mut watch = engine.subscribe();
+    let mut request = metadata_put_request(7, 1, b"k", b"v", 1, 2);
+    request.command.as_mut().unwrap().watch_events = vec![metadatapb::MetadataWatchEvent {
+        key: b"k".to_vec(),
+        operation: metadatapb::MetadataWatchOperation::Create as i32,
+        parent: 1,
+        name: "k".to_owned(),
+        inode: 42,
+        ..Default::default()
+    }];
+    engine.execute_metadata_command(&request).await.unwrap();
+    let event = watch.try_recv().unwrap();
+    assert_eq!(event.keys, vec![b"k".to_vec()]);
+    assert_eq!(event.watch_events.len(), 1);
+    assert_eq!(
+        event.watch_events[0].operation,
+        metadatapb::MetadataWatchOperation::Create as i32
+    );
+    assert_eq!(event.watch_events[0].parent, 1);
+    assert_eq!(event.watch_events[0].name, "k");
+    assert_eq!(event.watch_events[0].inode, 42);
+}
+
+#[tokio::test]
 async fn applied_metadata_engine_replays_watch_events_after_cursor() {
     let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
     for (key, commit_version) in [

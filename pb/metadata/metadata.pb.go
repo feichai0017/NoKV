@@ -251,6 +251,67 @@ func (MetadataPredicateKind) EnumDescriptor() ([]byte, []int) {
 	return file_metadata_metadata_proto_rawDescGZIP(), []int{3}
 }
 
+type MetadataWatchOperation int32
+
+const (
+	MetadataWatchOperation_METADATA_WATCH_OPERATION_UNSPECIFIED MetadataWatchOperation = 0
+	MetadataWatchOperation_METADATA_WATCH_OPERATION_CREATE      MetadataWatchOperation = 1
+	MetadataWatchOperation_METADATA_WATCH_OPERATION_UPDATE      MetadataWatchOperation = 2
+	MetadataWatchOperation_METADATA_WATCH_OPERATION_DELETE      MetadataWatchOperation = 3
+	MetadataWatchOperation_METADATA_WATCH_OPERATION_RENAME      MetadataWatchOperation = 4
+	MetadataWatchOperation_METADATA_WATCH_OPERATION_REPLACE     MetadataWatchOperation = 5
+	MetadataWatchOperation_METADATA_WATCH_OPERATION_LINK        MetadataWatchOperation = 6
+)
+
+// Enum value maps for MetadataWatchOperation.
+var (
+	MetadataWatchOperation_name = map[int32]string{
+		0: "METADATA_WATCH_OPERATION_UNSPECIFIED",
+		1: "METADATA_WATCH_OPERATION_CREATE",
+		2: "METADATA_WATCH_OPERATION_UPDATE",
+		3: "METADATA_WATCH_OPERATION_DELETE",
+		4: "METADATA_WATCH_OPERATION_RENAME",
+		5: "METADATA_WATCH_OPERATION_REPLACE",
+		6: "METADATA_WATCH_OPERATION_LINK",
+	}
+	MetadataWatchOperation_value = map[string]int32{
+		"METADATA_WATCH_OPERATION_UNSPECIFIED": 0,
+		"METADATA_WATCH_OPERATION_CREATE":      1,
+		"METADATA_WATCH_OPERATION_UPDATE":      2,
+		"METADATA_WATCH_OPERATION_DELETE":      3,
+		"METADATA_WATCH_OPERATION_RENAME":      4,
+		"METADATA_WATCH_OPERATION_REPLACE":     5,
+		"METADATA_WATCH_OPERATION_LINK":        6,
+	}
+)
+
+func (x MetadataWatchOperation) Enum() *MetadataWatchOperation {
+	p := new(MetadataWatchOperation)
+	*p = x
+	return p
+}
+
+func (x MetadataWatchOperation) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (MetadataWatchOperation) Descriptor() protoreflect.EnumDescriptor {
+	return file_metadata_metadata_proto_enumTypes[4].Descriptor()
+}
+
+func (MetadataWatchOperation) Type() protoreflect.EnumType {
+	return &file_metadata_metadata_proto_enumTypes[4]
+}
+
+func (x MetadataWatchOperation) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use MetadataWatchOperation.Descriptor instead.
+func (MetadataWatchOperation) EnumDescriptor() ([]byte, []int) {
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{4}
+}
+
 type MetadataApplyWatchEventSource int32
 
 const (
@@ -281,11 +342,11 @@ func (x MetadataApplyWatchEventSource) String() string {
 }
 
 func (MetadataApplyWatchEventSource) Descriptor() protoreflect.EnumDescriptor {
-	return file_metadata_metadata_proto_enumTypes[4].Descriptor()
+	return file_metadata_metadata_proto_enumTypes[5].Descriptor()
 }
 
 func (MetadataApplyWatchEventSource) Type() protoreflect.EnumType {
-	return &file_metadata_metadata_proto_enumTypes[4]
+	return &file_metadata_metadata_proto_enumTypes[5]
 }
 
 func (x MetadataApplyWatchEventSource) Number() protoreflect.EnumNumber {
@@ -294,7 +355,7 @@ func (x MetadataApplyWatchEventSource) Number() protoreflect.EnumNumber {
 
 // Deprecated: Use MetadataApplyWatchEventSource.Descriptor instead.
 func (MetadataApplyWatchEventSource) EnumDescriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{4}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{5}
 }
 
 type MetadataMutation_Op int32
@@ -327,11 +388,11 @@ func (x MetadataMutation_Op) String() string {
 }
 
 func (MetadataMutation_Op) Descriptor() protoreflect.EnumDescriptor {
-	return file_metadata_metadata_proto_enumTypes[5].Descriptor()
+	return file_metadata_metadata_proto_enumTypes[6].Descriptor()
 }
 
 func (MetadataMutation_Op) Type() protoreflect.EnumType {
-	return &file_metadata_metadata_proto_enumTypes[5]
+	return &file_metadata_metadata_proto_enumTypes[6]
 }
 
 func (x MetadataMutation_Op) Number() protoreflect.EnumNumber {
@@ -1203,6 +1264,122 @@ func (x *MetadataWatchKey) GetKey() []byte {
 	return nil
 }
 
+type MetadataWatchEvent struct {
+	state         protoimpl.MessageState `protogen:"open.v1"`
+	KeyFamily     MetadataFamily         `protobuf:"varint,1,opt,name=key_family,json=keyFamily,proto3,enum=nokv.metadata.v1.MetadataFamily" json:"key_family,omitempty"`
+	Key           []byte                 `protobuf:"bytes,2,opt,name=key,proto3" json:"key,omitempty"`
+	Operation     MetadataWatchOperation `protobuf:"varint,3,opt,name=operation,proto3,enum=nokv.metadata.v1.MetadataWatchOperation" json:"operation,omitempty"`
+	Parent        uint64                 `protobuf:"varint,4,opt,name=parent,proto3" json:"parent,omitempty"`
+	Name          string                 `protobuf:"bytes,5,opt,name=name,proto3" json:"name,omitempty"`
+	Inode         uint64                 `protobuf:"varint,6,opt,name=inode,proto3" json:"inode,omitempty"`
+	OldParent     uint64                 `protobuf:"varint,7,opt,name=old_parent,json=oldParent,proto3" json:"old_parent,omitempty"`
+	OldName       string                 `protobuf:"bytes,8,opt,name=old_name,json=oldName,proto3" json:"old_name,omitempty"`
+	NewParent     uint64                 `protobuf:"varint,9,opt,name=new_parent,json=newParent,proto3" json:"new_parent,omitempty"`
+	NewName       string                 `protobuf:"bytes,10,opt,name=new_name,json=newName,proto3" json:"new_name,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *MetadataWatchEvent) Reset() {
+	*x = MetadataWatchEvent{}
+	mi := &file_metadata_metadata_proto_msgTypes[13]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *MetadataWatchEvent) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*MetadataWatchEvent) ProtoMessage() {}
+
+func (x *MetadataWatchEvent) ProtoReflect() protoreflect.Message {
+	mi := &file_metadata_metadata_proto_msgTypes[13]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use MetadataWatchEvent.ProtoReflect.Descriptor instead.
+func (*MetadataWatchEvent) Descriptor() ([]byte, []int) {
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{13}
+}
+
+func (x *MetadataWatchEvent) GetKeyFamily() MetadataFamily {
+	if x != nil {
+		return x.KeyFamily
+	}
+	return MetadataFamily_METADATA_FAMILY_UNSPECIFIED
+}
+
+func (x *MetadataWatchEvent) GetKey() []byte {
+	if x != nil {
+		return x.Key
+	}
+	return nil
+}
+
+func (x *MetadataWatchEvent) GetOperation() MetadataWatchOperation {
+	if x != nil {
+		return x.Operation
+	}
+	return MetadataWatchOperation_METADATA_WATCH_OPERATION_UNSPECIFIED
+}
+
+func (x *MetadataWatchEvent) GetParent() uint64 {
+	if x != nil {
+		return x.Parent
+	}
+	return 0
+}
+
+func (x *MetadataWatchEvent) GetName() string {
+	if x != nil {
+		return x.Name
+	}
+	return ""
+}
+
+func (x *MetadataWatchEvent) GetInode() uint64 {
+	if x != nil {
+		return x.Inode
+	}
+	return 0
+}
+
+func (x *MetadataWatchEvent) GetOldParent() uint64 {
+	if x != nil {
+		return x.OldParent
+	}
+	return 0
+}
+
+func (x *MetadataWatchEvent) GetOldName() string {
+	if x != nil {
+		return x.OldName
+	}
+	return ""
+}
+
+func (x *MetadataWatchEvent) GetNewParent() uint64 {
+	if x != nil {
+		return x.NewParent
+	}
+	return 0
+}
+
+func (x *MetadataWatchEvent) GetNewName() string {
+	if x != nil {
+		return x.NewName
+	}
+	return ""
+}
+
 type MetadataCommand struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	RequestId        []byte                 `protobuf:"bytes,1,opt,name=request_id,json=requestId,proto3" json:"request_id,omitempty"`
@@ -1216,13 +1393,14 @@ type MetadataCommand struct {
 	CommitVersion    uint64                 `protobuf:"varint,9,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
 	PrimaryKeyFamily MetadataFamily         `protobuf:"varint,10,opt,name=primary_key_family,json=primaryKeyFamily,proto3,enum=nokv.metadata.v1.MetadataFamily" json:"primary_key_family,omitempty"`
 	WatchKeyRefs     []*MetadataWatchKey    `protobuf:"bytes,11,rep,name=watch_key_refs,json=watchKeyRefs,proto3" json:"watch_key_refs,omitempty"`
+	WatchEvents      []*MetadataWatchEvent  `protobuf:"bytes,12,rep,name=watch_events,json=watchEvents,proto3" json:"watch_events,omitempty"`
 	unknownFields    protoimpl.UnknownFields
 	sizeCache        protoimpl.SizeCache
 }
 
 func (x *MetadataCommand) Reset() {
 	*x = MetadataCommand{}
-	mi := &file_metadata_metadata_proto_msgTypes[13]
+	mi := &file_metadata_metadata_proto_msgTypes[14]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1234,7 +1412,7 @@ func (x *MetadataCommand) String() string {
 func (*MetadataCommand) ProtoMessage() {}
 
 func (x *MetadataCommand) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[13]
+	mi := &file_metadata_metadata_proto_msgTypes[14]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1247,7 +1425,7 @@ func (x *MetadataCommand) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataCommand.ProtoReflect.Descriptor instead.
 func (*MetadataCommand) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{13}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{14}
 }
 
 func (x *MetadataCommand) GetRequestId() []byte {
@@ -1327,6 +1505,13 @@ func (x *MetadataCommand) GetWatchKeyRefs() []*MetadataWatchKey {
 	return nil
 }
 
+func (x *MetadataCommand) GetWatchEvents() []*MetadataWatchEvent {
+	if x != nil {
+		return x.WatchEvents
+	}
+	return nil
+}
+
 type MetadataCommitResult struct {
 	state            protoimpl.MessageState `protogen:"open.v1"`
 	CommitVersion    uint64                 `protobuf:"varint,1,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
@@ -1340,7 +1525,7 @@ type MetadataCommitResult struct {
 
 func (x *MetadataCommitResult) Reset() {
 	*x = MetadataCommitResult{}
-	mi := &file_metadata_metadata_proto_msgTypes[14]
+	mi := &file_metadata_metadata_proto_msgTypes[15]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1352,7 +1537,7 @@ func (x *MetadataCommitResult) String() string {
 func (*MetadataCommitResult) ProtoMessage() {}
 
 func (x *MetadataCommitResult) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[14]
+	mi := &file_metadata_metadata_proto_msgTypes[15]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1365,7 +1550,7 @@ func (x *MetadataCommitResult) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataCommitResult.ProtoReflect.Descriptor instead.
 func (*MetadataCommitResult) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{14}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{15}
 }
 
 func (x *MetadataCommitResult) GetCommitVersion() uint64 {
@@ -1413,7 +1598,7 @@ type MetadataCommitRequest struct {
 
 func (x *MetadataCommitRequest) Reset() {
 	*x = MetadataCommitRequest{}
-	mi := &file_metadata_metadata_proto_msgTypes[15]
+	mi := &file_metadata_metadata_proto_msgTypes[16]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1425,7 +1610,7 @@ func (x *MetadataCommitRequest) String() string {
 func (*MetadataCommitRequest) ProtoMessage() {}
 
 func (x *MetadataCommitRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[15]
+	mi := &file_metadata_metadata_proto_msgTypes[16]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1438,7 +1623,7 @@ func (x *MetadataCommitRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataCommitRequest.ProtoReflect.Descriptor instead.
 func (*MetadataCommitRequest) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{15}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{16}
 }
 
 func (x *MetadataCommitRequest) GetContext() *MetadataContext {
@@ -1466,7 +1651,7 @@ type MetadataCommitResponse struct {
 
 func (x *MetadataCommitResponse) Reset() {
 	*x = MetadataCommitResponse{}
-	mi := &file_metadata_metadata_proto_msgTypes[16]
+	mi := &file_metadata_metadata_proto_msgTypes[17]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1478,7 +1663,7 @@ func (x *MetadataCommitResponse) String() string {
 func (*MetadataCommitResponse) ProtoMessage() {}
 
 func (x *MetadataCommitResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[16]
+	mi := &file_metadata_metadata_proto_msgTypes[17]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1491,7 +1676,7 @@ func (x *MetadataCommitResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataCommitResponse.ProtoReflect.Descriptor instead.
 func (*MetadataCommitResponse) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{16}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{17}
 }
 
 func (x *MetadataCommitResponse) GetResult() *MetadataCommitResult {
@@ -1528,7 +1713,7 @@ type MetadataWatchApplyRequest struct {
 
 func (x *MetadataWatchApplyRequest) Reset() {
 	*x = MetadataWatchApplyRequest{}
-	mi := &file_metadata_metadata_proto_msgTypes[17]
+	mi := &file_metadata_metadata_proto_msgTypes[18]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1540,7 +1725,7 @@ func (x *MetadataWatchApplyRequest) String() string {
 func (*MetadataWatchApplyRequest) ProtoMessage() {}
 
 func (x *MetadataWatchApplyRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[17]
+	mi := &file_metadata_metadata_proto_msgTypes[18]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1553,7 +1738,7 @@ func (x *MetadataWatchApplyRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataWatchApplyRequest.ProtoReflect.Descriptor instead.
 func (*MetadataWatchApplyRequest) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{17}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{18}
 }
 
 func (x *MetadataWatchApplyRequest) GetKeyPrefix() []byte {
@@ -1599,13 +1784,14 @@ type MetadataApplyWatchEvent struct {
 	Source        MetadataApplyWatchEventSource `protobuf:"varint,4,opt,name=source,proto3,enum=nokv.metadata.v1.MetadataApplyWatchEventSource" json:"source,omitempty"`
 	CommitVersion uint64                        `protobuf:"varint,5,opt,name=commit_version,json=commitVersion,proto3" json:"commit_version,omitempty"`
 	Keys          [][]byte                      `protobuf:"bytes,6,rep,name=keys,proto3" json:"keys,omitempty"`
+	WatchEvents   []*MetadataWatchEvent         `protobuf:"bytes,7,rep,name=watch_events,json=watchEvents,proto3" json:"watch_events,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
 
 func (x *MetadataApplyWatchEvent) Reset() {
 	*x = MetadataApplyWatchEvent{}
-	mi := &file_metadata_metadata_proto_msgTypes[18]
+	mi := &file_metadata_metadata_proto_msgTypes[19]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1617,7 +1803,7 @@ func (x *MetadataApplyWatchEvent) String() string {
 func (*MetadataApplyWatchEvent) ProtoMessage() {}
 
 func (x *MetadataApplyWatchEvent) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[18]
+	mi := &file_metadata_metadata_proto_msgTypes[19]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1630,7 +1816,7 @@ func (x *MetadataApplyWatchEvent) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataApplyWatchEvent.ProtoReflect.Descriptor instead.
 func (*MetadataApplyWatchEvent) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{18}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{19}
 }
 
 func (x *MetadataApplyWatchEvent) GetRegionId() uint64 {
@@ -1675,6 +1861,13 @@ func (x *MetadataApplyWatchEvent) GetKeys() [][]byte {
 	return nil
 }
 
+func (x *MetadataApplyWatchEvent) GetWatchEvents() []*MetadataWatchEvent {
+	if x != nil {
+		return x.WatchEvents
+	}
+	return nil
+}
+
 type MetadataWatchApplyResponse struct {
 	state         protoimpl.MessageState   `protogen:"open.v1"`
 	Event         *MetadataApplyWatchEvent `protobuf:"bytes,1,opt,name=event,proto3" json:"event,omitempty"`
@@ -1685,7 +1878,7 @@ type MetadataWatchApplyResponse struct {
 
 func (x *MetadataWatchApplyResponse) Reset() {
 	*x = MetadataWatchApplyResponse{}
-	mi := &file_metadata_metadata_proto_msgTypes[19]
+	mi := &file_metadata_metadata_proto_msgTypes[20]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -1697,7 +1890,7 @@ func (x *MetadataWatchApplyResponse) String() string {
 func (*MetadataWatchApplyResponse) ProtoMessage() {}
 
 func (x *MetadataWatchApplyResponse) ProtoReflect() protoreflect.Message {
-	mi := &file_metadata_metadata_proto_msgTypes[19]
+	mi := &file_metadata_metadata_proto_msgTypes[20]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -1710,7 +1903,7 @@ func (x *MetadataWatchApplyResponse) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use MetadataWatchApplyResponse.ProtoReflect.Descriptor instead.
 func (*MetadataWatchApplyResponse) Descriptor() ([]byte, []int) {
-	return file_metadata_metadata_proto_rawDescGZIP(), []int{19}
+	return file_metadata_metadata_proto_rawDescGZIP(), []int{20}
 }
 
 func (x *MetadataWatchApplyResponse) GetEvent() *MetadataApplyWatchEvent {
@@ -1806,7 +1999,22 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\x10MetadataWatchKey\x12?\n" +
 	"\n" +
 	"key_family\x18\x01 \x01(\x0e2 .nokv.metadata.v1.MetadataFamilyR\tkeyFamily\x12\x10\n" +
-	"\x03key\x18\x02 \x01(\fR\x03key\"\x93\x04\n" +
+	"\x03key\x18\x02 \x01(\fR\x03key\"\xe5\x02\n" +
+	"\x12MetadataWatchEvent\x12?\n" +
+	"\n" +
+	"key_family\x18\x01 \x01(\x0e2 .nokv.metadata.v1.MetadataFamilyR\tkeyFamily\x12\x10\n" +
+	"\x03key\x18\x02 \x01(\fR\x03key\x12F\n" +
+	"\toperation\x18\x03 \x01(\x0e2(.nokv.metadata.v1.MetadataWatchOperationR\toperation\x12\x16\n" +
+	"\x06parent\x18\x04 \x01(\x04R\x06parent\x12\x12\n" +
+	"\x04name\x18\x05 \x01(\tR\x04name\x12\x14\n" +
+	"\x05inode\x18\x06 \x01(\x04R\x05inode\x12\x1d\n" +
+	"\n" +
+	"old_parent\x18\a \x01(\x04R\toldParent\x12\x19\n" +
+	"\bold_name\x18\b \x01(\tR\aoldName\x12\x1d\n" +
+	"\n" +
+	"new_parent\x18\t \x01(\x04R\tnewParent\x12\x19\n" +
+	"\bnew_name\x18\n" +
+	" \x01(\tR\anewName\"\xdc\x04\n" +
 	"\x0fMetadataCommand\x12\x1d\n" +
 	"\n" +
 	"request_id\x18\x01 \x01(\fR\trequestId\x12\x14\n" +
@@ -1825,7 +2033,8 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\x0ecommit_version\x18\t \x01(\x04R\rcommitVersion\x12N\n" +
 	"\x12primary_key_family\x18\n" +
 	" \x01(\x0e2 .nokv.metadata.v1.MetadataFamilyR\x10primaryKeyFamily\x12H\n" +
-	"\x0ewatch_key_refs\x18\v \x03(\v2\".nokv.metadata.v1.MetadataWatchKeyR\fwatchKeyRefs\"\xb1\x01\n" +
+	"\x0ewatch_key_refs\x18\v \x03(\v2\".nokv.metadata.v1.MetadataWatchKeyR\fwatchKeyRefs\x12G\n" +
+	"\fwatch_events\x18\f \x03(\v2$.nokv.metadata.v1.MetadataWatchEventR\vwatchEvents\"\xb1\x01\n" +
 	"\x14MetadataCommitResult\x12%\n" +
 	"\x0ecommit_version\x18\x01 \x01(\x04R\rcommitVersion\x12\x1b\n" +
 	"\tregion_id\x18\x02 \x01(\x04R\bregionId\x12\x12\n" +
@@ -1846,14 +2055,15 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\x10resume_region_id\x18\x03 \x01(\x04R\x0eresumeRegionId\x12\x1f\n" +
 	"\vresume_term\x18\x04 \x01(\x04R\n" +
 	"resumeTerm\x12!\n" +
-	"\fresume_index\x18\x05 \x01(\x04R\vresumeIndex\"\xe4\x01\n" +
+	"\fresume_index\x18\x05 \x01(\x04R\vresumeIndex\"\xad\x02\n" +
 	"\x17MetadataApplyWatchEvent\x12\x1b\n" +
 	"\tregion_id\x18\x01 \x01(\x04R\bregionId\x12\x12\n" +
 	"\x04term\x18\x02 \x01(\x04R\x04term\x12\x14\n" +
 	"\x05index\x18\x03 \x01(\x04R\x05index\x12G\n" +
 	"\x06source\x18\x04 \x01(\x0e2/.nokv.metadata.v1.MetadataApplyWatchEventSourceR\x06source\x12%\n" +
 	"\x0ecommit_version\x18\x05 \x01(\x04R\rcommitVersion\x12\x12\n" +
-	"\x04keys\x18\x06 \x03(\fR\x04keys\"\x84\x01\n" +
+	"\x04keys\x18\x06 \x03(\fR\x04keys\x12G\n" +
+	"\fwatch_events\x18\a \x03(\v2$.nokv.metadata.v1.MetadataWatchEventR\vwatchEvents\"\x84\x01\n" +
 	"\x1aMetadataWatchApplyResponse\x12?\n" +
 	"\x05event\x18\x01 \x01(\v2).nokv.metadata.v1.MetadataApplyWatchEventR\x05event\x12%\n" +
 	"\x0edropped_events\x18\x02 \x01(\x04R\rdroppedEvents*R\n" +
@@ -1882,7 +2092,15 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\"METADATA_PREDICATE_KIND_NOT_EXISTS\x10\x00\x12\"\n" +
 	"\x1eMETADATA_PREDICATE_KIND_EXISTS\x10\x01\x12(\n" +
 	"$METADATA_PREDICATE_KIND_VALUE_EQUALS\x10\x02\x12(\n" +
-	"$METADATA_PREDICATE_KIND_PREFIX_EMPTY\x10\x03*\x80\x01\n" +
+	"$METADATA_PREDICATE_KIND_PREFIX_EMPTY\x10\x03*\x9f\x02\n" +
+	"\x16MetadataWatchOperation\x12(\n" +
+	"$METADATA_WATCH_OPERATION_UNSPECIFIED\x10\x00\x12#\n" +
+	"\x1fMETADATA_WATCH_OPERATION_CREATE\x10\x01\x12#\n" +
+	"\x1fMETADATA_WATCH_OPERATION_UPDATE\x10\x02\x12#\n" +
+	"\x1fMETADATA_WATCH_OPERATION_DELETE\x10\x03\x12#\n" +
+	"\x1fMETADATA_WATCH_OPERATION_RENAME\x10\x04\x12$\n" +
+	" METADATA_WATCH_OPERATION_REPLACE\x10\x05\x12!\n" +
+	"\x1dMETADATA_WATCH_OPERATION_LINK\x10\x06*\x80\x01\n" +
 	"\x1dMetadataApplyWatchEventSource\x121\n" +
 	"-METADATA_APPLY_WATCH_EVENT_SOURCE_UNSPECIFIED\x10\x00\x12,\n" +
 	"(METADATA_APPLY_WATCH_EVENT_SOURCE_COMMIT\x10\x012\xed\x03\n" +
@@ -1906,91 +2124,97 @@ func file_metadata_metadata_proto_rawDescGZIP() []byte {
 	return file_metadata_metadata_proto_rawDescData
 }
 
-var file_metadata_metadata_proto_enumTypes = make([]protoimpl.EnumInfo, 6)
-var file_metadata_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 20)
+var file_metadata_metadata_proto_enumTypes = make([]protoimpl.EnumInfo, 7)
+var file_metadata_metadata_proto_msgTypes = make([]protoimpl.MessageInfo, 21)
 var file_metadata_metadata_proto_goTypes = []any{
 	(ReadConsistency)(0),               // 0: nokv.metadata.v1.ReadConsistency
 	(ReadPreference)(0),                // 1: nokv.metadata.v1.ReadPreference
 	(MetadataFamily)(0),                // 2: nokv.metadata.v1.MetadataFamily
 	(MetadataPredicateKind)(0),         // 3: nokv.metadata.v1.MetadataPredicateKind
-	(MetadataApplyWatchEventSource)(0), // 4: nokv.metadata.v1.MetadataApplyWatchEventSource
-	(MetadataMutation_Op)(0),           // 5: nokv.metadata.v1.MetadataMutation.Op
-	(*MetadataContext)(nil),            // 6: nokv.metadata.v1.MetadataContext
-	(*MetadataKV)(nil),                 // 7: nokv.metadata.v1.MetadataKV
-	(*MetadataKeyError)(nil),           // 8: nokv.metadata.v1.MetadataKeyError
-	(*MetadataKeyAlreadyExists)(nil),   // 9: nokv.metadata.v1.MetadataKeyAlreadyExists
-	(*MetadataGetRequest)(nil),         // 10: nokv.metadata.v1.MetadataGetRequest
-	(*MetadataGetResponse)(nil),        // 11: nokv.metadata.v1.MetadataGetResponse
-	(*MetadataBatchGetRequest)(nil),    // 12: nokv.metadata.v1.MetadataBatchGetRequest
-	(*MetadataBatchGetResponse)(nil),   // 13: nokv.metadata.v1.MetadataBatchGetResponse
-	(*MetadataScanRequest)(nil),        // 14: nokv.metadata.v1.MetadataScanRequest
-	(*MetadataScanResponse)(nil),       // 15: nokv.metadata.v1.MetadataScanResponse
-	(*MetadataPredicate)(nil),          // 16: nokv.metadata.v1.MetadataPredicate
-	(*MetadataMutation)(nil),           // 17: nokv.metadata.v1.MetadataMutation
-	(*MetadataWatchKey)(nil),           // 18: nokv.metadata.v1.MetadataWatchKey
-	(*MetadataCommand)(nil),            // 19: nokv.metadata.v1.MetadataCommand
-	(*MetadataCommitResult)(nil),       // 20: nokv.metadata.v1.MetadataCommitResult
-	(*MetadataCommitRequest)(nil),      // 21: nokv.metadata.v1.MetadataCommitRequest
-	(*MetadataCommitResponse)(nil),     // 22: nokv.metadata.v1.MetadataCommitResponse
-	(*MetadataWatchApplyRequest)(nil),  // 23: nokv.metadata.v1.MetadataWatchApplyRequest
-	(*MetadataApplyWatchEvent)(nil),    // 24: nokv.metadata.v1.MetadataApplyWatchEvent
-	(*MetadataWatchApplyResponse)(nil), // 25: nokv.metadata.v1.MetadataWatchApplyResponse
-	(*meta.RegionEpoch)(nil),           // 26: nokv.meta.v1.RegionEpoch
-	(*meta.RegionPeer)(nil),            // 27: nokv.meta.v1.RegionPeer
-	(*error1.RegionError)(nil),         // 28: nokv.error.v1.RegionError
+	(MetadataWatchOperation)(0),        // 4: nokv.metadata.v1.MetadataWatchOperation
+	(MetadataApplyWatchEventSource)(0), // 5: nokv.metadata.v1.MetadataApplyWatchEventSource
+	(MetadataMutation_Op)(0),           // 6: nokv.metadata.v1.MetadataMutation.Op
+	(*MetadataContext)(nil),            // 7: nokv.metadata.v1.MetadataContext
+	(*MetadataKV)(nil),                 // 8: nokv.metadata.v1.MetadataKV
+	(*MetadataKeyError)(nil),           // 9: nokv.metadata.v1.MetadataKeyError
+	(*MetadataKeyAlreadyExists)(nil),   // 10: nokv.metadata.v1.MetadataKeyAlreadyExists
+	(*MetadataGetRequest)(nil),         // 11: nokv.metadata.v1.MetadataGetRequest
+	(*MetadataGetResponse)(nil),        // 12: nokv.metadata.v1.MetadataGetResponse
+	(*MetadataBatchGetRequest)(nil),    // 13: nokv.metadata.v1.MetadataBatchGetRequest
+	(*MetadataBatchGetResponse)(nil),   // 14: nokv.metadata.v1.MetadataBatchGetResponse
+	(*MetadataScanRequest)(nil),        // 15: nokv.metadata.v1.MetadataScanRequest
+	(*MetadataScanResponse)(nil),       // 16: nokv.metadata.v1.MetadataScanResponse
+	(*MetadataPredicate)(nil),          // 17: nokv.metadata.v1.MetadataPredicate
+	(*MetadataMutation)(nil),           // 18: nokv.metadata.v1.MetadataMutation
+	(*MetadataWatchKey)(nil),           // 19: nokv.metadata.v1.MetadataWatchKey
+	(*MetadataWatchEvent)(nil),         // 20: nokv.metadata.v1.MetadataWatchEvent
+	(*MetadataCommand)(nil),            // 21: nokv.metadata.v1.MetadataCommand
+	(*MetadataCommitResult)(nil),       // 22: nokv.metadata.v1.MetadataCommitResult
+	(*MetadataCommitRequest)(nil),      // 23: nokv.metadata.v1.MetadataCommitRequest
+	(*MetadataCommitResponse)(nil),     // 24: nokv.metadata.v1.MetadataCommitResponse
+	(*MetadataWatchApplyRequest)(nil),  // 25: nokv.metadata.v1.MetadataWatchApplyRequest
+	(*MetadataApplyWatchEvent)(nil),    // 26: nokv.metadata.v1.MetadataApplyWatchEvent
+	(*MetadataWatchApplyResponse)(nil), // 27: nokv.metadata.v1.MetadataWatchApplyResponse
+	(*meta.RegionEpoch)(nil),           // 28: nokv.meta.v1.RegionEpoch
+	(*meta.RegionPeer)(nil),            // 29: nokv.meta.v1.RegionPeer
+	(*error1.RegionError)(nil),         // 30: nokv.error.v1.RegionError
 }
 var file_metadata_metadata_proto_depIdxs = []int32{
-	26, // 0: nokv.metadata.v1.MetadataContext.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
-	27, // 1: nokv.metadata.v1.MetadataContext.peer:type_name -> nokv.meta.v1.RegionPeer
+	28, // 0: nokv.metadata.v1.MetadataContext.region_epoch:type_name -> nokv.meta.v1.RegionEpoch
+	29, // 1: nokv.metadata.v1.MetadataContext.peer:type_name -> nokv.meta.v1.RegionPeer
 	0,  // 2: nokv.metadata.v1.MetadataContext.read_consistency:type_name -> nokv.metadata.v1.ReadConsistency
 	1,  // 3: nokv.metadata.v1.MetadataContext.read_preference:type_name -> nokv.metadata.v1.ReadPreference
 	2,  // 4: nokv.metadata.v1.MetadataKV.key_family:type_name -> nokv.metadata.v1.MetadataFamily
-	9,  // 5: nokv.metadata.v1.MetadataKeyError.already_exists:type_name -> nokv.metadata.v1.MetadataKeyAlreadyExists
-	6,  // 6: nokv.metadata.v1.MetadataGetRequest.context:type_name -> nokv.metadata.v1.MetadataContext
+	10, // 5: nokv.metadata.v1.MetadataKeyError.already_exists:type_name -> nokv.metadata.v1.MetadataKeyAlreadyExists
+	7,  // 6: nokv.metadata.v1.MetadataGetRequest.context:type_name -> nokv.metadata.v1.MetadataContext
 	2,  // 7: nokv.metadata.v1.MetadataGetRequest.key_family:type_name -> nokv.metadata.v1.MetadataFamily
-	7,  // 8: nokv.metadata.v1.MetadataGetResponse.kv:type_name -> nokv.metadata.v1.MetadataKV
-	8,  // 9: nokv.metadata.v1.MetadataGetResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
-	28, // 10: nokv.metadata.v1.MetadataGetResponse.region_error:type_name -> nokv.error.v1.RegionError
-	6,  // 11: nokv.metadata.v1.MetadataBatchGetRequest.context:type_name -> nokv.metadata.v1.MetadataContext
-	10, // 12: nokv.metadata.v1.MetadataBatchGetRequest.requests:type_name -> nokv.metadata.v1.MetadataGetRequest
-	11, // 13: nokv.metadata.v1.MetadataBatchGetResponse.responses:type_name -> nokv.metadata.v1.MetadataGetResponse
-	28, // 14: nokv.metadata.v1.MetadataBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
-	6,  // 15: nokv.metadata.v1.MetadataScanRequest.context:type_name -> nokv.metadata.v1.MetadataContext
+	8,  // 8: nokv.metadata.v1.MetadataGetResponse.kv:type_name -> nokv.metadata.v1.MetadataKV
+	9,  // 9: nokv.metadata.v1.MetadataGetResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
+	30, // 10: nokv.metadata.v1.MetadataGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	7,  // 11: nokv.metadata.v1.MetadataBatchGetRequest.context:type_name -> nokv.metadata.v1.MetadataContext
+	11, // 12: nokv.metadata.v1.MetadataBatchGetRequest.requests:type_name -> nokv.metadata.v1.MetadataGetRequest
+	12, // 13: nokv.metadata.v1.MetadataBatchGetResponse.responses:type_name -> nokv.metadata.v1.MetadataGetResponse
+	30, // 14: nokv.metadata.v1.MetadataBatchGetResponse.region_error:type_name -> nokv.error.v1.RegionError
+	7,  // 15: nokv.metadata.v1.MetadataScanRequest.context:type_name -> nokv.metadata.v1.MetadataContext
 	2,  // 16: nokv.metadata.v1.MetadataScanRequest.key_family:type_name -> nokv.metadata.v1.MetadataFamily
-	7,  // 17: nokv.metadata.v1.MetadataScanResponse.kvs:type_name -> nokv.metadata.v1.MetadataKV
-	8,  // 18: nokv.metadata.v1.MetadataScanResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
-	28, // 19: nokv.metadata.v1.MetadataScanResponse.region_error:type_name -> nokv.error.v1.RegionError
+	8,  // 17: nokv.metadata.v1.MetadataScanResponse.kvs:type_name -> nokv.metadata.v1.MetadataKV
+	9,  // 18: nokv.metadata.v1.MetadataScanResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
+	30, // 19: nokv.metadata.v1.MetadataScanResponse.region_error:type_name -> nokv.error.v1.RegionError
 	3,  // 20: nokv.metadata.v1.MetadataPredicate.kind:type_name -> nokv.metadata.v1.MetadataPredicateKind
 	2,  // 21: nokv.metadata.v1.MetadataPredicate.key_family:type_name -> nokv.metadata.v1.MetadataFamily
-	5,  // 22: nokv.metadata.v1.MetadataMutation.op:type_name -> nokv.metadata.v1.MetadataMutation.Op
+	6,  // 22: nokv.metadata.v1.MetadataMutation.op:type_name -> nokv.metadata.v1.MetadataMutation.Op
 	2,  // 23: nokv.metadata.v1.MetadataMutation.key_family:type_name -> nokv.metadata.v1.MetadataFamily
 	2,  // 24: nokv.metadata.v1.MetadataWatchKey.key_family:type_name -> nokv.metadata.v1.MetadataFamily
-	16, // 25: nokv.metadata.v1.MetadataCommand.predicates:type_name -> nokv.metadata.v1.MetadataPredicate
-	17, // 26: nokv.metadata.v1.MetadataCommand.mutations:type_name -> nokv.metadata.v1.MetadataMutation
-	2,  // 27: nokv.metadata.v1.MetadataCommand.primary_key_family:type_name -> nokv.metadata.v1.MetadataFamily
-	18, // 28: nokv.metadata.v1.MetadataCommand.watch_key_refs:type_name -> nokv.metadata.v1.MetadataWatchKey
-	6,  // 29: nokv.metadata.v1.MetadataCommitRequest.context:type_name -> nokv.metadata.v1.MetadataContext
-	19, // 30: nokv.metadata.v1.MetadataCommitRequest.command:type_name -> nokv.metadata.v1.MetadataCommand
-	20, // 31: nokv.metadata.v1.MetadataCommitResponse.result:type_name -> nokv.metadata.v1.MetadataCommitResult
-	8,  // 32: nokv.metadata.v1.MetadataCommitResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
-	28, // 33: nokv.metadata.v1.MetadataCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
-	4,  // 34: nokv.metadata.v1.MetadataApplyWatchEvent.source:type_name -> nokv.metadata.v1.MetadataApplyWatchEventSource
-	24, // 35: nokv.metadata.v1.MetadataWatchApplyResponse.event:type_name -> nokv.metadata.v1.MetadataApplyWatchEvent
-	10, // 36: nokv.metadata.v1.MetadataPlane.Get:input_type -> nokv.metadata.v1.MetadataGetRequest
-	12, // 37: nokv.metadata.v1.MetadataPlane.BatchGet:input_type -> nokv.metadata.v1.MetadataBatchGetRequest
-	14, // 38: nokv.metadata.v1.MetadataPlane.Scan:input_type -> nokv.metadata.v1.MetadataScanRequest
-	21, // 39: nokv.metadata.v1.MetadataPlane.CommitMetadata:input_type -> nokv.metadata.v1.MetadataCommitRequest
-	23, // 40: nokv.metadata.v1.MetadataPlane.WatchApply:input_type -> nokv.metadata.v1.MetadataWatchApplyRequest
-	11, // 41: nokv.metadata.v1.MetadataPlane.Get:output_type -> nokv.metadata.v1.MetadataGetResponse
-	13, // 42: nokv.metadata.v1.MetadataPlane.BatchGet:output_type -> nokv.metadata.v1.MetadataBatchGetResponse
-	15, // 43: nokv.metadata.v1.MetadataPlane.Scan:output_type -> nokv.metadata.v1.MetadataScanResponse
-	22, // 44: nokv.metadata.v1.MetadataPlane.CommitMetadata:output_type -> nokv.metadata.v1.MetadataCommitResponse
-	25, // 45: nokv.metadata.v1.MetadataPlane.WatchApply:output_type -> nokv.metadata.v1.MetadataWatchApplyResponse
-	41, // [41:46] is the sub-list for method output_type
-	36, // [36:41] is the sub-list for method input_type
-	36, // [36:36] is the sub-list for extension type_name
-	36, // [36:36] is the sub-list for extension extendee
-	0,  // [0:36] is the sub-list for field type_name
+	2,  // 25: nokv.metadata.v1.MetadataWatchEvent.key_family:type_name -> nokv.metadata.v1.MetadataFamily
+	4,  // 26: nokv.metadata.v1.MetadataWatchEvent.operation:type_name -> nokv.metadata.v1.MetadataWatchOperation
+	17, // 27: nokv.metadata.v1.MetadataCommand.predicates:type_name -> nokv.metadata.v1.MetadataPredicate
+	18, // 28: nokv.metadata.v1.MetadataCommand.mutations:type_name -> nokv.metadata.v1.MetadataMutation
+	2,  // 29: nokv.metadata.v1.MetadataCommand.primary_key_family:type_name -> nokv.metadata.v1.MetadataFamily
+	19, // 30: nokv.metadata.v1.MetadataCommand.watch_key_refs:type_name -> nokv.metadata.v1.MetadataWatchKey
+	20, // 31: nokv.metadata.v1.MetadataCommand.watch_events:type_name -> nokv.metadata.v1.MetadataWatchEvent
+	7,  // 32: nokv.metadata.v1.MetadataCommitRequest.context:type_name -> nokv.metadata.v1.MetadataContext
+	21, // 33: nokv.metadata.v1.MetadataCommitRequest.command:type_name -> nokv.metadata.v1.MetadataCommand
+	22, // 34: nokv.metadata.v1.MetadataCommitResponse.result:type_name -> nokv.metadata.v1.MetadataCommitResult
+	9,  // 35: nokv.metadata.v1.MetadataCommitResponse.error:type_name -> nokv.metadata.v1.MetadataKeyError
+	30, // 36: nokv.metadata.v1.MetadataCommitResponse.region_error:type_name -> nokv.error.v1.RegionError
+	5,  // 37: nokv.metadata.v1.MetadataApplyWatchEvent.source:type_name -> nokv.metadata.v1.MetadataApplyWatchEventSource
+	20, // 38: nokv.metadata.v1.MetadataApplyWatchEvent.watch_events:type_name -> nokv.metadata.v1.MetadataWatchEvent
+	26, // 39: nokv.metadata.v1.MetadataWatchApplyResponse.event:type_name -> nokv.metadata.v1.MetadataApplyWatchEvent
+	11, // 40: nokv.metadata.v1.MetadataPlane.Get:input_type -> nokv.metadata.v1.MetadataGetRequest
+	13, // 41: nokv.metadata.v1.MetadataPlane.BatchGet:input_type -> nokv.metadata.v1.MetadataBatchGetRequest
+	15, // 42: nokv.metadata.v1.MetadataPlane.Scan:input_type -> nokv.metadata.v1.MetadataScanRequest
+	23, // 43: nokv.metadata.v1.MetadataPlane.CommitMetadata:input_type -> nokv.metadata.v1.MetadataCommitRequest
+	25, // 44: nokv.metadata.v1.MetadataPlane.WatchApply:input_type -> nokv.metadata.v1.MetadataWatchApplyRequest
+	12, // 45: nokv.metadata.v1.MetadataPlane.Get:output_type -> nokv.metadata.v1.MetadataGetResponse
+	14, // 46: nokv.metadata.v1.MetadataPlane.BatchGet:output_type -> nokv.metadata.v1.MetadataBatchGetResponse
+	16, // 47: nokv.metadata.v1.MetadataPlane.Scan:output_type -> nokv.metadata.v1.MetadataScanResponse
+	24, // 48: nokv.metadata.v1.MetadataPlane.CommitMetadata:output_type -> nokv.metadata.v1.MetadataCommitResponse
+	27, // 49: nokv.metadata.v1.MetadataPlane.WatchApply:output_type -> nokv.metadata.v1.MetadataWatchApplyResponse
+	45, // [45:50] is the sub-list for method output_type
+	40, // [40:45] is the sub-list for method input_type
+	40, // [40:40] is the sub-list for extension type_name
+	40, // [40:40] is the sub-list for extension extendee
+	0,  // [0:40] is the sub-list for field type_name
 }
 
 func init() { file_metadata_metadata_proto_init() }
@@ -2003,8 +2227,8 @@ func file_metadata_metadata_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_metadata_metadata_proto_rawDesc), len(file_metadata_metadata_proto_rawDesc)),
-			NumEnums:      6,
-			NumMessages:   20,
+			NumEnums:      7,
+			NumMessages:   21,
 			NumExtensions: 0,
 			NumServices:   1,
 		},

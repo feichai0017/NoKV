@@ -373,6 +373,7 @@ where
         source: metadatapb::MetadataApplyWatchEventSource,
         commit_version: u64,
         keys: Vec<Vec<u8>>,
+        watch_events: Vec<metadatapb::MetadataWatchEvent>,
         atomic: bool,
     ) {
         if keys.is_empty() {
@@ -386,6 +387,7 @@ where
             source: source as i32,
             commit_version,
             keys,
+            watch_events,
         };
         if let Ok(mut history) = self.inner.history.lock() {
             history.remember(event.clone());

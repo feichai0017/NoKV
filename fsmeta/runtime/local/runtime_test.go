@@ -189,7 +189,7 @@ func TestLocalRuntimePublishesWatchEvents(t *testing.T) {
 	require.NoError(t, err)
 	defer sub.Close()
 
-	_, err = rt.Executor.Create(ctx, model.CreateRequest{
+	created, err := rt.Executor.Create(ctx, model.CreateRequest{
 		Mount:  "vol",
 		Parent: model.RootInode,
 		Name:   "watched",
@@ -204,6 +204,12 @@ func TestLocalRuntimePublishesWatchEvents(t *testing.T) {
 	require.Equal(t, observe.WatchEventSourceCommit, evt.Source)
 	require.Equal(t, localWatchTerm, evt.Cursor.Term)
 	require.NotZero(t, evt.Cursor.Index)
+	require.Equal(t, observe.NamespaceEvent{
+		Operation: observe.WatchOperationCreate,
+		Parent:    model.RootInode,
+		Name:      "watched",
+		Inode:     created.Inode.Inode,
+	}, evt.Namespace)
 
 	stats := rt.Watcher.Stats()
 	require.GreaterOrEqual(t, stats["events_total"].(uint64), uint64(1))

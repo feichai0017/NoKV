@@ -60,14 +60,14 @@ func (w *Watcher) Subscribe(ctx context.Context, req observe.WatchRequest) (obse
 	return w.Router.Subscribe(ctx, req)
 }
 
-// ObserveMutation publishes one replayable local watch cursor after a mutation
-// group has been durably applied.
-func (w *Watcher) ObserveMutation(commitVersion uint64, mutations []*backend.Mutation) {
+// ObserveMetadataCommand publishes one replayable local watch cursor after a
+// metadata command has been durably applied.
+func (w *Watcher) ObserveMetadataCommand(commitVersion uint64, command backend.MetadataCommand) {
 	if w == nil || w.Router == nil || commitVersion == 0 {
 		return
 	}
-	keys := mutationWatchKeys(mutations)
-	if len(keys) == 0 {
+	events := commandWatchEvents(command)
+	if len(events) == 0 {
 		return
 	}
 	cursor := observe.WatchCursor{
@@ -75,12 +75,13 @@ func (w *Watcher) ObserveMutation(commitVersion uint64, mutations []*backend.Mut
 		Term:     localWatchTerm,
 		Index:    w.next.Add(1),
 	}
-	for _, key := range keys {
+	for _, event := range events {
 		w.Publish(observe.WatchEvent{
 			Cursor:        cursor,
 			CommitVersion: commitVersion,
 			Source:        observe.WatchEventSourceCommit,
-			Key:           key,
+			Key:           cloneBytes(event.Key),
+			Namespace:     watchEventNamespace(event),
 		})
 	}
 }
@@ -128,6 +129,58 @@ func mutationWatchKeys(mutations []*backend.Mutation) [][]byte {
 		keys = append(keys, cloneBytes(key))
 	}
 	return keys
+}
+
+func commandWatchEvents(command backend.MetadataCommand) []backend.WatchEvent {
+	if len(command.WatchEvents) != 0 {
+		out := make([]backend.WatchEvent, 0, len(command.WatchEvents))
+		for _, event := range command.WatchEvents {
+			if len(event.Key) == 0 {
+				continue
+			}
+			event.Key = cloneBytes(event.Key)
+			out = append(out, event)
+		}
+		return out
+	}
+	keys := mutationWatchKeys(command.Mutations)
+	out := make([]backend.WatchEvent, 0, len(keys))
+	for _, key := range keys {
+		out = append(out, backend.WatchEvent{Key: key})
+	}
+	return out
+}
+
+func watchEventNamespace(event backend.WatchEvent) observe.NamespaceEvent {
+	return observe.NamespaceEvent{
+		Operation: observeWatchOperation(event.Operation),
+		Parent:    model.InodeID(event.Parent),
+		Name:      event.Name,
+		Inode:     model.InodeID(event.Inode),
+		OldParent: model.InodeID(event.OldParent),
+		OldName:   event.OldName,
+		NewParent: model.InodeID(event.NewParent),
+		NewName:   event.NewName,
+	}
+}
+
+func observeWatchOperation(op backend.WatchOperation) observe.WatchOperation {
+	switch op {
+	case backend.WatchOperationCreate:
+		return observe.WatchOperationCreate
+	case backend.WatchOperationUpdate:
+		return observe.WatchOperationUpdate
+	case backend.WatchOperationDelete:
+		return observe.WatchOperationDelete
+	case backend.WatchOperationRename:
+		return observe.WatchOperationRename
+	case backend.WatchOperationReplace:
+		return observe.WatchOperationReplace
+	case backend.WatchOperationLink:
+		return observe.WatchOperationLink
+	default:
+		return observe.WatchOperationUnspecified
+	}
 }
 
 func copyStats(src map[string]any) map[string]any {

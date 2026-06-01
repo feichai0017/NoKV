@@ -19,11 +19,15 @@ import (
 )
 
 func (e *Executor) commitWithMetadataPredicates(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+	return e.commitWithMetadataPredicatesAndWatch(ctx, kind, mount, primary, predicates, mutations, nil, startVersion, commitVersion)
+}
+
+func (e *Executor) commitWithMetadataPredicatesAndWatch(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, watchEvents []backend.WatchEvent, startVersion, commitVersion uint64) error {
 	stats := e.metadataPredicateCounters(kind)
 	if stats != nil {
 		stats.attemptTotal.Add(1)
 	}
-	err := e.commitMetadataCommand(ctx, mount, primary, predicates, mutations, startVersion, commitVersion)
+	err := e.commitMetadataCommandWithWatch(ctx, mount, primary, predicates, mutations, watchEvents, startVersion, commitVersion)
 	if err == nil && stats != nil {
 		stats.successTotal.Add(1)
 	}
@@ -31,17 +35,22 @@ func (e *Executor) commitWithMetadataPredicates(ctx context.Context, kind model.
 }
 
 func (e *Executor) commitMetadataCommand(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
-	_, err := e.commitMetadataCommandWithVersion(ctx, mount, primary, predicates, mutations, startVersion, 0, commitVersion)
+	return e.commitMetadataCommandWithWatch(ctx, mount, primary, predicates, mutations, nil, startVersion, commitVersion)
+}
+
+func (e *Executor) commitMetadataCommandWithWatch(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, watchEvents []backend.WatchEvent, startVersion, commitVersion uint64) error {
+	_, err := e.commitMetadataCommandWithVersionAndWatch(ctx, mount, primary, predicates, mutations, watchEvents, startVersion, 0, commitVersion)
 	return err
 }
 
-func (e *Executor) commitMetadataCommandAt(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commitVersion uint64) (backend.MetadataCommitResult, error) {
-	return e.commitMetadataCommandWithVersion(ctx, mount, primary, predicates, mutations, startVersion, commitVersion, commitVersion)
+func (e *Executor) commitMetadataCommandAtWithWatch(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, watchEvents []backend.WatchEvent, startVersion, commitVersion uint64) (backend.MetadataCommitResult, error) {
+	return e.commitMetadataCommandWithVersionAndWatch(ctx, mount, primary, predicates, mutations, watchEvents, startVersion, commitVersion, commitVersion)
 }
 
-func (e *Executor) commitMetadataCommandWithVersion(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commandCommitVersion, requestIDCommitVersion uint64) (backend.MetadataCommitResult, error) {
+func (e *Executor) commitMetadataCommandWithVersionAndWatch(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, watchEvents []backend.WatchEvent, startVersion, commandCommitVersion, requestIDCommitVersion uint64) (backend.MetadataCommitResult, error) {
 	clonedPredicates := cloneMetadataPredicates(predicates)
 	clonedMutations := cloneMutations(mutations)
+	clonedWatchEvents := cloneWatchEvents(watchEvents)
 	return e.runner.CommitMetadata(ctx, backend.MetadataCommand{
 		RequestID:     metadataCommandRequestID(mount, primary, startVersion, requestIDCommitVersion),
 		Mount:         string(mount.MountID),
@@ -54,6 +63,7 @@ func (e *Executor) commitMetadataCommandWithVersion(ctx context.Context, mount m
 		Mutations:     clonedMutations,
 		WatchKeys:     metadataCommandWatchKeys(clonedMutations),
 		WatchRefs:     metadataCommandWatchRefs(clonedMutations),
+		WatchEvents:   clonedWatchEvents,
 	})
 }
 
@@ -106,6 +116,18 @@ func metadataCommandWatchRefs(mutations []*backend.Mutation) []backend.KeyRef {
 	return refs
 }
 
+func cloneWatchEvents(events []backend.WatchEvent) []backend.WatchEvent {
+	if len(events) == 0 {
+		return nil
+	}
+	out := make([]backend.WatchEvent, 0, len(events))
+	for _, event := range events {
+		event.Key = cloneBytes(event.Key)
+		out = append(out, event)
+	}
+	return out
+}
+
 func metadataCommandPrimary(mutations []*backend.Mutation) []byte {
 	for _, mut := range mutations {
 		if mut != nil && len(mut.Key) != 0 {
@@ -115,11 +137,11 @@ func metadataCommandPrimary(mutations []*backend.Mutation) []byte {
 	return nil
 }
 
-func (e *Executor) commitWithoutMetadataPredicates(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64) error {
+func (e *Executor) commitWithoutMetadataPredicatesAndWatch(ctx context.Context, kind model.OperationKind, mount model.MountIdentity, primary []byte, mutations []*backend.Mutation, watchEvents []backend.WatchEvent, startVersion, commitVersion uint64) error {
 	if stats := e.metadataPredicateCounters(kind); stats != nil {
 		stats.skipTotal.Add(1)
 	}
-	return e.commitMetadataCommand(ctx, mount, primary, nil, mutations, startVersion, commitVersion)
+	return e.commitMetadataCommandWithWatch(ctx, mount, primary, nil, mutations, watchEvents, startVersion, commitVersion)
 }
 
 func (e *Executor) metadataPredicateCounters(kind model.OperationKind) *metadataPredicateCounters {

@@ -140,6 +140,29 @@ message MetadataWatchKey {
   bytes key = 2;
 }
 
+enum MetadataWatchOperation {
+  METADATA_WATCH_OPERATION_UNSPECIFIED = 0;
+  METADATA_WATCH_OPERATION_CREATE = 1;
+  METADATA_WATCH_OPERATION_UPDATE = 2;
+  METADATA_WATCH_OPERATION_DELETE = 3;
+  METADATA_WATCH_OPERATION_RENAME = 4;
+  METADATA_WATCH_OPERATION_REPLACE = 5;
+  METADATA_WATCH_OPERATION_LINK = 6;
+}
+
+message MetadataWatchEvent {
+  MetadataFamily key_family = 1;
+  bytes key = 2;
+  MetadataWatchOperation operation = 3;
+  uint64 parent = 4;
+  string name = 5;
+  uint64 inode = 6;
+  uint64 old_parent = 7;
+  string old_name = 8;
+  uint64 new_parent = 9;
+  string new_name = 10;
+}
+
 message MetadataCommand {
   bytes request_id = 1;
   string mount = 2;
@@ -152,6 +175,7 @@ message MetadataCommand {
   uint64 commit_version = 9;
   MetadataFamily primary_key_family = 10;
   repeated MetadataWatchKey watch_key_refs = 11;
+  repeated MetadataWatchEvent watch_events = 12;
 }
 
 message MetadataCommitResult {
@@ -193,6 +217,7 @@ message MetadataApplyWatchEvent {
   MetadataApplyWatchEventSource source = 4;
   uint64 commit_version = 5;
   repeated bytes keys = 6;
+  repeated MetadataWatchEvent watch_events = 7;
 }
 
 message MetadataWatchApplyResponse {

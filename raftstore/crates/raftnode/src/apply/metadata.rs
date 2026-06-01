@@ -2,7 +2,7 @@ use nokv_metadata_state::MetadataEngine;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use std::time::Instant;
 
-use crate::metadata_wire::metadata_command_watch_keys;
+use crate::metadata_wire::{metadata_command_watch_events, metadata_command_watch_keys};
 
 use super::{
     invalid_raft_command, AppliedMetadataEngine, MetadataCommandExecutor, MetadataReadExecutor,
@@ -85,6 +85,7 @@ where
             None
         };
         let mut watch_keys = Vec::new();
+        let mut watch_events = Vec::new();
         let mut watch_commit_version = 0;
         let mut responses = Vec::with_capacity(commands.len());
         for ((command, commit_version), result) in commands
@@ -97,6 +98,16 @@ where
                 for key in metadata_command_watch_keys(command) {
                     if !watch_keys.contains(&key) {
                         watch_keys.push(key);
+                    }
+                }
+                for event in metadata_command_watch_events(command) {
+                    if !watch_events
+                        .iter()
+                        .any(|existing: &metadatapb::MetadataWatchEvent| {
+                            existing.key == event.key && existing.operation == event.operation
+                        })
+                    {
+                        watch_events.push(event);
                     }
                 }
             }
@@ -124,6 +135,7 @@ where
                     metadatapb::MetadataApplyWatchEventSource::Commit,
                     watch_commit_version,
                     watch_keys,
+                    watch_events,
                     true,
                 );
             }

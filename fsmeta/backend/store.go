@@ -39,6 +39,37 @@ type KeyRef struct {
 	Key    []byte
 }
 
+// WatchOperation identifies the namespace operation represented by a watch
+// projection. It is storage neutral; runtimes attach the commit/apply cursor.
+type WatchOperation uint8
+
+const (
+	WatchOperationUnspecified WatchOperation = iota
+	WatchOperationCreate
+	WatchOperationUpdate
+	WatchOperationDelete
+	WatchOperationRename
+	WatchOperationReplace
+	WatchOperationLink
+)
+
+// WatchEvent is the semantic fsmeta watch projection attached to a
+// MetadataCommand. Key identifies the physical watch key used for prefix
+// routing; the parent/name/inode fields are the namespace payload delivered to
+// users.
+type WatchEvent struct {
+	Family    MetadataFamily
+	Key       []byte
+	Operation WatchOperation
+	Parent    uint64
+	Name      string
+	Inode     uint64
+	OldParent uint64
+	OldName   string
+	NewParent uint64
+	NewName   string
+}
+
 // MutationOp names a versioned metadata write operation.
 type MutationOp uint8
 
@@ -93,6 +124,7 @@ type MetadataCommand struct {
 	Mutations     []*Mutation
 	WatchKeys     [][]byte
 	WatchRefs     []KeyRef
+	WatchEvents   []WatchEvent
 }
 
 // MetadataCommitResult describes the committed data-plane frontier for a

@@ -402,6 +402,43 @@ func watchEventToProto(evt observe.WatchEvent) *fsmetapb.WatchEvent {
 		CommitVersion: evt.CommitVersion,
 		Source:        watchEventSourceToProto(evt.Source),
 		Key:           append([]byte(nil), evt.Key...),
+		Namespace:     namespaceWatchEventToProto(evt.Namespace),
+	}
+}
+
+func namespaceWatchEventToProto(evt observe.NamespaceEvent) *fsmetapb.NamespaceWatchEvent {
+	if evt.Operation == observe.WatchOperationUnspecified && evt.Parent == 0 && evt.Name == "" && evt.Inode == 0 &&
+		evt.OldParent == 0 && evt.OldName == "" && evt.NewParent == 0 && evt.NewName == "" {
+		return nil
+	}
+	return &fsmetapb.NamespaceWatchEvent{
+		Operation: watchOperationToProto(evt.Operation),
+		Parent:    uint64(evt.Parent),
+		Name:      evt.Name,
+		Inode:     uint64(evt.Inode),
+		OldParent: uint64(evt.OldParent),
+		OldName:   evt.OldName,
+		NewParent: uint64(evt.NewParent),
+		NewName:   evt.NewName,
+	}
+}
+
+func watchOperationToProto(op observe.WatchOperation) fsmetapb.WatchOperation {
+	switch op {
+	case observe.WatchOperationCreate:
+		return fsmetapb.WatchOperation_WATCH_OPERATION_CREATE
+	case observe.WatchOperationUpdate:
+		return fsmetapb.WatchOperation_WATCH_OPERATION_UPDATE
+	case observe.WatchOperationDelete:
+		return fsmetapb.WatchOperation_WATCH_OPERATION_DELETE
+	case observe.WatchOperationRename:
+		return fsmetapb.WatchOperation_WATCH_OPERATION_RENAME
+	case observe.WatchOperationReplace:
+		return fsmetapb.WatchOperation_WATCH_OPERATION_REPLACE
+	case observe.WatchOperationLink:
+		return fsmetapb.WatchOperation_WATCH_OPERATION_LINK
+	default:
+		return fsmetapb.WatchOperation_WATCH_OPERATION_UNSPECIFIED
 	}
 }
 

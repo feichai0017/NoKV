@@ -142,6 +142,7 @@ func (w *Watcher) pump(sub *metadataWatchSubscription, stream metadatapb.Metadat
 			Term:     evt.GetTerm(),
 			Index:    evt.GetIndex(),
 		}
+		typedByKey := metadataWatchEventsByKey(evt.GetWatchEvents())
 		for _, key := range evt.GetKeys() {
 			if len(key) == 0 {
 				continue
@@ -151,6 +152,7 @@ func (w *Watcher) pump(sub *metadataWatchSubscription, stream metadatapb.Metadat
 				CommitVersion: evt.GetCommitVersion(),
 				Source:        source,
 				Key:           cloneBytes(key),
+				Namespace:     typedByKey[string(key)],
 			}
 			select {
 			case sub.events <- watchEvent:
@@ -162,6 +164,45 @@ func (w *Watcher) pump(sub *metadataWatchSubscription, stream metadatapb.Metadat
 				return
 			}
 		}
+	}
+}
+
+func metadataWatchEventsByKey(events []*metadatapb.MetadataWatchEvent) map[string]observe.NamespaceEvent {
+	out := make(map[string]observe.NamespaceEvent, len(events))
+	for _, event := range events {
+		if event == nil || len(event.GetKey()) == 0 {
+			continue
+		}
+		out[string(event.GetKey())] = observe.NamespaceEvent{
+			Operation: metadataWatchOperation(event.GetOperation()),
+			Parent:    model.InodeID(event.GetParent()),
+			Name:      event.GetName(),
+			Inode:     model.InodeID(event.GetInode()),
+			OldParent: model.InodeID(event.GetOldParent()),
+			OldName:   event.GetOldName(),
+			NewParent: model.InodeID(event.GetNewParent()),
+			NewName:   event.GetNewName(),
+		}
+	}
+	return out
+}
+
+func metadataWatchOperation(op metadatapb.MetadataWatchOperation) observe.WatchOperation {
+	switch op {
+	case metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_CREATE:
+		return observe.WatchOperationCreate
+	case metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_UPDATE:
+		return observe.WatchOperationUpdate
+	case metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_DELETE:
+		return observe.WatchOperationDelete
+	case metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_RENAME:
+		return observe.WatchOperationRename
+	case metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_REPLACE:
+		return observe.WatchOperationReplace
+	case metadatapb.MetadataWatchOperation_METADATA_WATCH_OPERATION_LINK:
+		return observe.WatchOperationLink
+	default:
+		return observe.WatchOperationUnspecified
 	}
 }
 

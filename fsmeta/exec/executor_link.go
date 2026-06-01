@@ -137,6 +137,15 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 			return err
 		}
 		mutations = append(mutations, quotaMutations...)
+		sourceWatch, err := dentryWatchEvent(mount, backend.WatchOperationUpdate, record)
+		if err != nil {
+			return err
+		}
+		linkWatch, err := dentryWatchEvent(mount, backend.WatchOperationLink, newDentry)
+		if err != nil {
+			return err
+		}
+		watchEvents := []backend.WatchEvent{sourceWatch, linkWatch}
 		if len(quotaMutations) == 0 {
 			// Link is safe on 1PC only when the source dentry and inode still
 			// equal the records read by this attempt. These value predicates are
@@ -149,9 +158,9 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 				metadataValueEqualsPredicate(parent.key, parent.value),
 				metadataNotExistsPredicate(parentLink.Key),
 			}
-			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
+			return e.commitWithMetadataPredicatesAndWatch(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, watchEvents, startVersion, commitVersion)
 		}
-		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.commitWithoutMetadataPredicatesAndWatch(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, watchEvents, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}

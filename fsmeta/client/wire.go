@@ -375,6 +375,42 @@ func watchEventFromProto(pb *fsmetapb.WatchEvent) observe.WatchEvent {
 		CommitVersion: pb.GetCommitVersion(),
 		Source:        watchEventSourceFromProto(pb.GetSource()),
 		Key:           append([]byte(nil), pb.GetKey()...),
+		Namespace:     namespaceWatchEventFromProto(pb.GetNamespace()),
+	}
+}
+
+func namespaceWatchEventFromProto(pb *fsmetapb.NamespaceWatchEvent) observe.NamespaceEvent {
+	if pb == nil {
+		return observe.NamespaceEvent{}
+	}
+	return observe.NamespaceEvent{
+		Operation: watchOperationFromProto(pb.GetOperation()),
+		Parent:    model.InodeID(pb.GetParent()),
+		Name:      pb.GetName(),
+		Inode:     model.InodeID(pb.GetInode()),
+		OldParent: model.InodeID(pb.GetOldParent()),
+		OldName:   pb.GetOldName(),
+		NewParent: model.InodeID(pb.GetNewParent()),
+		NewName:   pb.GetNewName(),
+	}
+}
+
+func watchOperationFromProto(op fsmetapb.WatchOperation) observe.WatchOperation {
+	switch op {
+	case fsmetapb.WatchOperation_WATCH_OPERATION_CREATE:
+		return observe.WatchOperationCreate
+	case fsmetapb.WatchOperation_WATCH_OPERATION_UPDATE:
+		return observe.WatchOperationUpdate
+	case fsmetapb.WatchOperation_WATCH_OPERATION_DELETE:
+		return observe.WatchOperationDelete
+	case fsmetapb.WatchOperation_WATCH_OPERATION_RENAME:
+		return observe.WatchOperationRename
+	case fsmetapb.WatchOperation_WATCH_OPERATION_REPLACE:
+		return observe.WatchOperationReplace
+	case fsmetapb.WatchOperation_WATCH_OPERATION_LINK:
+		return observe.WatchOperationLink
+	default:
+		return observe.WatchOperationUnspecified
 	}
 }
 

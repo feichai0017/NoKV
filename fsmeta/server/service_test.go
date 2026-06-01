@@ -629,12 +629,22 @@ func TestGRPCServiceWatchSubtree(t *testing.T) {
 		CommitVersion: 44,
 		Source:        observe.WatchEventSourceCommit,
 		Key:           []byte("fsm/a"),
+		Namespace: observe.NamespaceEvent{
+			Operation: observe.WatchOperationCreate,
+			Parent:    1,
+			Name:      "a",
+			Inode:     7,
+		},
 	}
 	watcher.sub.events <- evt
 	resp, err := stream.Recv()
 	require.NoError(t, err)
 	require.Equal(t, uint64(44), resp.GetEvent().GetCommitVersion())
 	require.Equal(t, []byte("fsm/a"), resp.GetEvent().GetKey())
+	require.Equal(t, fsmetapb.WatchOperation_WATCH_OPERATION_CREATE, resp.GetEvent().GetNamespace().GetOperation())
+	require.Equal(t, uint64(1), resp.GetEvent().GetNamespace().GetParent())
+	require.Equal(t, "a", resp.GetEvent().GetNamespace().GetName())
+	require.Equal(t, uint64(7), resp.GetEvent().GetNamespace().GetInode())
 
 	require.NoError(t, stream.Send(&fsmetapb.WatchAckOrSubscribe{
 		Body: &fsmetapb.WatchAckOrSubscribe_Ack{Ack: &fsmetapb.WatchAck{Cursor: resp.GetEvent().GetRaftCursor()}},

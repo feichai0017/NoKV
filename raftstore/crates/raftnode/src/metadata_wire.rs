@@ -8,6 +8,14 @@ struct PersistedMetadataResponseBatch {
 }
 
 pub(crate) fn metadata_command_watch_keys(command: &metadatapb::MetadataCommand) -> Vec<Vec<u8>> {
+    if !command.watch_events.is_empty() {
+        return command
+            .watch_events
+            .iter()
+            .map(|event| event.key.clone())
+            .filter(|key| !key.is_empty())
+            .collect();
+    }
     if !command.watch_key_refs.is_empty() {
         return command
             .watch_key_refs
@@ -22,6 +30,17 @@ pub(crate) fn metadata_command_watch_keys(command: &metadatapb::MetadataCommand)
         .mutations
         .iter()
         .map(|mutation| mutation.key.clone())
+        .collect()
+}
+
+pub(crate) fn metadata_command_watch_events(
+    command: &metadatapb::MetadataCommand,
+) -> Vec<metadatapb::MetadataWatchEvent> {
+    command
+        .watch_events
+        .iter()
+        .filter(|event| !event.key.is_empty())
+        .cloned()
         .collect()
 }
 

@@ -3,7 +3,10 @@ use nokv_raftnode::{ApplyWatchProvider, ApplyWatchReplayRequest};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 
-use crate::watch_wire::{chunk_apply_watch_keys, matching_apply_watch_keys};
+use crate::watch_wire::{
+    chunk_apply_watch_keys, matching_apply_watch_events, matching_apply_watch_keys,
+    watch_events_for_keys,
+};
 use crate::{internal_error, DEFAULT_APPLY_WATCH_BUFFER};
 
 pub(crate) type MetadataWatchApplyStream =
@@ -90,8 +93,15 @@ async fn send_metadata_apply_event(
     request: &metadatapb::MetadataWatchApplyRequest,
     event: &metadatapb::MetadataApplyWatchEvent,
 ) -> Result<(), ()> {
-    let keys = matching_apply_watch_keys(&event.keys, &request.key_prefix);
+    let mut keys = matching_apply_watch_keys(&event.keys, &request.key_prefix);
+    let matching_events = matching_apply_watch_events(&event.watch_events, &request.key_prefix);
+    for typed in &matching_events {
+        if !typed.key.is_empty() && !keys.contains(&typed.key) {
+            keys.push(typed.key.clone());
+        }
+    }
     for chunk in chunk_apply_watch_keys(keys) {
+        let watch_events = watch_events_for_keys(&matching_events, &chunk);
         let response = metadatapb::MetadataWatchApplyResponse {
             event: Some(metadatapb::MetadataApplyWatchEvent {
                 region_id: event.region_id,
@@ -100,6 +110,7 @@ async fn send_metadata_apply_event(
                 source: event.source,
                 commit_version: event.commit_version,
                 keys: chunk,
+                watch_events,
             }),
             dropped_events: 0,
         };

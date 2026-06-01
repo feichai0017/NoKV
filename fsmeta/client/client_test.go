@@ -598,6 +598,12 @@ func TestTypedClientWatchSubtree(t *testing.T) {
 		CommitVersion: 90,
 		Source:        observe.WatchEventSourceCommit,
 		Key:           []byte("fsm/checkpoint"),
+		Namespace: observe.NamespaceEvent{
+			Operation: observe.WatchOperationCreate,
+			Parent:    1,
+			Name:      "checkpoint",
+			Inode:     99,
+		},
 	}
 	watcher.sub.events <- evt
 	got, err := stream.Recv()

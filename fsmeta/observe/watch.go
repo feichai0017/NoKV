@@ -18,6 +18,33 @@ const (
 	WatchEventSourceCommit WatchEventSource = iota + 1
 )
 
+// WatchOperation describes the namespace mutation represented by a watch event.
+type WatchOperation uint8
+
+const (
+	WatchOperationUnspecified WatchOperation = iota
+	WatchOperationCreate
+	WatchOperationUpdate
+	WatchOperationDelete
+	WatchOperationRename
+	WatchOperationReplace
+	WatchOperationLink
+)
+
+// NamespaceEvent is the semantic payload for FUSE invalidation and agent event
+// consumers. Key remains available for diagnostics and prefix routing; this
+// payload is the stable user-facing namespace meaning.
+type NamespaceEvent struct {
+	Operation WatchOperation
+	Parent    model.InodeID
+	Name      string
+	Inode     model.InodeID
+	OldParent model.InodeID
+	OldName   string
+	NewParent model.InodeID
+	NewName   string
+}
+
 // ApplyEvent is the fsmeta watch router's input event. Runtime adapters convert
 // their storage-engine apply notifications into this neutral shape before
 // publishing through fsmeta/exec/watch.Router.
@@ -53,6 +80,7 @@ type WatchEvent struct {
 	CommitVersion uint64
 	Source        WatchEventSource
 	Key           []byte
+	Namespace     NamespaceEvent
 }
 
 // WatchSubscription is one live fsmeta watch stream.

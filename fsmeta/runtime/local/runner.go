@@ -42,7 +42,7 @@ type Runner struct {
 }
 
 type mutationObserver interface {
-	ObserveMutation(commitVersion uint64, mutations []*backend.Mutation)
+	ObserveMetadataCommand(commitVersion uint64, command backend.MetadataCommand)
 }
 
 type localWrite struct {
@@ -205,7 +205,7 @@ func (r *Runner) CommitMetadata(ctx context.Context, command backend.MetadataCom
 		return backend.MetadataCommitResult{}, err
 	}
 	if observer != nil {
-		observer.ObserveMutation(commitVersion, command.Mutations)
+		observer.ObserveMetadataCommand(commitVersion, command)
 	}
 	return backend.MetadataCommitResult{
 		CommitVersion:    commitVersion,

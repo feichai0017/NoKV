@@ -104,6 +104,12 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 	require.Equal(t, created.Inode.Inode, removed.OldInode.Inode)
 	removeEvent := requireWatchEvent(t, watch)
 	require.Equal(t, observe.WatchEventSourceCommit, removeEvent.Source)
+	require.Equal(t, observe.NamespaceEvent{
+		Operation: observe.WatchOperationDelete,
+		Parent:    model.RootInode,
+		Name:      "artifact.json",
+		Inode:     created.Inode.Inode,
+	}, removeEvent.Namespace)
 
 	_, err = runtime.Executor.LookupPlus(ctx, model.LookupRequest{
 		Mount:  "vol",
@@ -135,6 +141,8 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 	replayed := requireWatchEvent(t, resume)
 	require.Equal(t, observe.WatchEventSourceCommit, replayed.Source)
 	require.Greater(t, replayed.Cursor.Index, removeEvent.Cursor.Index)
+	require.Equal(t, observe.WatchOperationCreate, replayed.Namespace.Operation)
+	require.Equal(t, "artifact2.json", replayed.Namespace.Name)
 
 	stage, err := runtime.Executor.Create(ctx, model.CreateRequest{
 		Mount:  "vol",
@@ -657,7 +665,10 @@ func TestRustMetadataPlaneSurvivesRaftstoreRestart(t *testing.T) {
 		},
 	})
 	require.NoError(t, err, "raftstore logs:\n%s", first.logs.String())
-	resumeCursor := requireWatchEvent(t, watch).Cursor
+	firstWatch := requireWatchEvent(t, watch)
+	require.Equal(t, observe.WatchOperationCreate, firstWatch.Namespace.Operation)
+	require.Equal(t, "watch-before-restart-a.json", firstWatch.Namespace.Name)
+	resumeCursor := firstWatch.Cursor
 	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
 		Mount:  "vol",
 		Parent: model.RootInode,
@@ -705,6 +716,8 @@ func TestRustMetadataPlaneSurvivesRaftstoreRestart(t *testing.T) {
 	replayed := requireWatchEvent(t, resumedWatch)
 	require.Greater(t, replayed.Cursor.Index, resumeCursor.Index)
 	require.Equal(t, observe.WatchEventSourceCommit, replayed.Source)
+	require.Equal(t, observe.WatchOperationCreate, replayed.Namespace.Operation)
+	require.Equal(t, "watch-before-restart-b.json", replayed.Namespace.Name)
 
 	after, err := reopened.Executor.Create(ctx, model.CreateRequest{
 		Mount:  "vol",

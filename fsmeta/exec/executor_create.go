@@ -45,6 +45,10 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 		Inode:  inodeID,
 		Type:   inode.Type,
 	}
+	watchEvent, err := dentryWatchEvent(mount, backend.WatchOperationCreate, dentry)
+	if err != nil {
+		return model.CreateResult{}, err
+	}
 	inodeValue := delta.WriteEffects[2].Value
 	e.createTotal.Add(1)
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -108,9 +112,9 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 		if len(quotaMutations) == 0 {
 			// One-phase counters are per commit attempt, not per logical
 			// Create, so contention retries and admission misses stay visible.
-			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, all, startVersion, commitVersion)
+			return e.commitWithMetadataPredicatesAndWatch(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, all, []backend.WatchEvent{watchEvent}, startVersion, commitVersion)
 		}
-		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, all, startVersion, commitVersion)
+		return e.commitWithoutMetadataPredicatesAndWatch(ctx, plan.Kind, mount, plan.PrimaryKey, all, []backend.WatchEvent{watchEvent}, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return model.CreateResult{}, err
 	}

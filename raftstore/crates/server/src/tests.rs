@@ -1429,6 +1429,24 @@ async fn watch_apply_streams_matching_apply_events() {
                     },
                 ],
                 watch_keys: vec![b"prefix/k".to_vec(), b"other/k".to_vec()],
+                watch_events: vec![
+                    metadatapb::MetadataWatchEvent {
+                        key: b"prefix/k".to_vec(),
+                        operation: metadatapb::MetadataWatchOperation::Create as i32,
+                        parent: 1,
+                        name: "k".to_owned(),
+                        inode: 99,
+                        ..Default::default()
+                    },
+                    metadatapb::MetadataWatchEvent {
+                        key: b"other/k".to_vec(),
+                        operation: metadatapb::MetadataWatchOperation::Create as i32,
+                        parent: 2,
+                        name: "k".to_owned(),
+                        inode: 100,
+                        ..Default::default()
+                    },
+                ],
                 ..Default::default()
             }),
         }))
@@ -1439,6 +1457,14 @@ async fn watch_apply_streams_matching_apply_events() {
     let event = response.event.unwrap();
     assert_eq!(event.commit_version, 9);
     assert_eq!(event.keys, vec![b"prefix/k".to_vec()]);
+    assert_eq!(event.watch_events.len(), 1);
+    assert_eq!(
+        event.watch_events[0].operation,
+        metadatapb::MetadataWatchOperation::Create as i32
+    );
+    assert_eq!(event.watch_events[0].parent, 1);
+    assert_eq!(event.watch_events[0].name, "k");
+    assert_eq!(event.watch_events[0].inode, 99);
 }
 
 #[tokio::test]
