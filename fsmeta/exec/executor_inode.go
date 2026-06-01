@@ -12,81 +12,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
-func (e *Executor) tryVisibleUpdateInode(ctx context.Context, program compile.UpdateInodeProgram, mount model.MountIdentity, req model.UpdateInodeRequest) (model.InodeRecord, bool, error) {
-	delta := program.Compiled.Delta
-	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
-		return model.InodeRecord{}, false, nil
-	}
-	plan := delta.Plan
-	view := e.newVisibleReadView(ctx)
-	dentry, err := view.readDentry(plan.ReadKeys[0])
-	if err != nil {
-		return model.InodeRecord{}, false, err
-	}
-	if dentry.Inode != req.Inode {
-		return model.InodeRecord{}, false, model.ErrInvalidRequest
-	}
-	inode, ok, err := view.readInode(mount, req.Inode)
-	if err != nil {
-		return model.InodeRecord{}, false, err
-	}
-	if !ok {
-		return model.InodeRecord{}, false, model.ErrNotFound
-	}
-	if dentry.Type != inode.Type {
-		return model.InodeRecord{}, false, model.ErrInvalidValue
-	}
-	if inode.LinkCount != 1 {
-		return model.InodeRecord{}, false, model.ErrInvalidRequest
-	}
-	sizeDelta := int64(0)
-	if req.SetSize {
-		sizeDelta = inodeSizeChange(inode.Size, req.Size)
-		if sizeDelta != 0 {
-			quotaOK, err := e.visibleQuotaAllowsCommit(ctx, []QuotaChange{{
-				Mount:      req.Mount,
-				MountKeyID: mount.MountKeyID,
-				Scope:      req.Parent,
-				Bytes:      sizeDelta,
-			}})
-			if err != nil {
-				return model.InodeRecord{}, false, err
-			}
-			if !quotaOK {
-				return model.InodeRecord{}, false, nil
-			}
-		}
-	}
-	if req.SetMode {
-		inode.Mode = req.Mode
-	}
-	if req.SetSize {
-		inode.Size = req.Size
-	}
-	if req.SetUpdatedUnixNs {
-		inode.UpdatedUnixNs = req.UpdatedUnixNs
-	}
-	if req.SetOpaqueAttrs {
-		inode.OpaqueAttrs = append([]byte(nil), req.OpaqueAttrs...)
-	}
-	value, err := layout.EncodeInodeValue(inode)
-	if err != nil {
-		return model.InodeRecord{}, false, err
-	}
-	concrete, err := view.materializeVisibleCompiledOp(program.Compiled, []compile.WriteEffect{visiblePutEffect(plan.MutateKeys[0], value)})
-	if err != nil {
-		return model.InodeRecord{}, false, err
-	}
-	committed, err := e.tryVisibleCommitAfterRead(ctx, view, concrete)
-	if err != nil {
-		return model.InodeRecord{}, committed, err
-	}
-	if !committed {
-		return model.InodeRecord{}, false, nil
-	}
-	return inode, true, nil
-}
-
 // UpdateInode updates mutable inode attributes and applies the size quota delta
 // in the same metadata command. The parent field is required because quota is
 // directory-scoped by parent inode.
@@ -96,7 +21,7 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 		return model.InodeRecord{}, err
 	}
 	mount := mountRecord.Identity()
-	program, err := compile.CompileUpdateInodeProgram(req, mount, compile.WithQuotaMode(e.visibleQuotaMode()))
+	program, err := compile.CompileUpdateInodeProgram(req, mount, compile.WithQuotaMode(e.quotaMode()))
 	if err != nil {
 		return model.InodeRecord{}, err
 	}
@@ -104,12 +29,6 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 	plan := delta.Plan
 	if !req.SetSize && !req.SetMode && !req.SetUpdatedUnixNs && !req.SetOpaqueAttrs {
 		return model.InodeRecord{}, model.ErrInvalidRequest
-	}
-	if updated, committed, err := e.tryVisibleUpdateInode(ctx, program, mount, req); committed || err != nil {
-		if err != nil {
-			return model.InodeRecord{}, err
-		}
-		return updated, nil
 	}
 	var updated model.InodeRecord
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {

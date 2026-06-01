@@ -37,45 +37,6 @@ func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
 	require.Equal(t, []uint64{token.ReadVersion}, runner.batchVersions)
 }
 
-func TestExecutorSnapshotSubtreeFlushesVisibleBeforeToken(t *testing.T) {
-	runner := newFakeRunner()
-	flusher := &fakeVisibleFlusher{}
-	executor, err := newTestExecutor(runner,
-		WithVisibleCommitter(flusher),
-	)
-	require.NoError(t, err)
-
-	token, err := executor.SnapshotSubtree(context.Background(), model.SnapshotSubtreeRequest{
-		Mount:     "vol",
-		RootInode: 7,
-	})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), token.ReadVersion)
-	require.Equal(t, 1, flusher.flushCalls)
-}
-
-func TestExecutorSnapshotSubtreeUsesVisibleCaptureWhenAvailable(t *testing.T) {
-	runner := newFakeRunner()
-	ref := testSnapshotEvidenceRef(3, 0xaa)
-	capturer := &fakeVisibleSnapshotCapturer{capture: true, segmentRefs: []model.SnapshotEvidenceRef{ref}}
-	executor, err := newTestExecutor(runner,
-		WithVisibleCommitter(capturer),
-	)
-	require.NoError(t, err)
-
-	token, err := executor.SnapshotSubtree(context.Background(), model.SnapshotSubtreeRequest{
-		Mount:     "vol",
-		RootInode: 7,
-	})
-	require.NoError(t, err)
-	require.Equal(t, uint64(1), token.ReadVersion)
-	require.Equal(t, []uint64{1}, capturer.captureVersions)
-	require.Len(t, capturer.captureScopes, 1)
-	require.Equal(t, []model.InodeID{7}, capturer.captureScopes[0].Parents)
-	require.Equal(t, []model.SnapshotEvidenceRef{ref}, token.RuntimeEvidence)
-	require.Equal(t, 0, capturer.flushCalls)
-}
-
 func TestExecutorResolveSnapshotSubtreeTokenAllowsRetiredMount(t *testing.T) {
 	runner := newFakeRunner()
 	resolver := &fakeMountResolver{records: map[model.MountID]MountAdmission{
@@ -105,18 +66,6 @@ func TestExecutorResolveSnapshotSubtreeTokenRejectsInvalidVisibleRef(t *testing.
 		RuntimeEvidence: []model.SnapshotEvidenceRef{{EpochID: 1}},
 	})
 	require.ErrorIs(t, err, model.ErrInvalidRequest)
-}
-
-func testSnapshotEvidenceRef(epoch uint64, seed byte) model.SnapshotEvidenceRef {
-	var root [32]byte
-	var digest [32]byte
-	root[0] = seed
-	digest[0] = seed + 1
-	return model.SnapshotEvidenceRef{
-		EpochID:       epoch,
-		EvidenceRoot:  root,
-		PayloadDigest: digest,
-	}
 }
 
 func TestExecutorReadDirPlusRetriesLiveLockAtSnapshotVersion(t *testing.T) {

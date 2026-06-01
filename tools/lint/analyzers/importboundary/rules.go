@@ -115,15 +115,6 @@ var Rules = []Rule{
 		Forbidden: []string{
 			ModulePath + "/coordinator/client",
 			ModulePath + "/coordinator/server",
-			ModulePath + "/coordinator/storecontrol",
-		},
-	},
-	{
-		Name:          "coordinator storecontrol stays out of scheduling and service",
-		PackagePrefix: ModulePath + "/coordinator/storecontrol",
-		Forbidden: []string{
-			ModulePath + "/coordinator/scheduling",
-			ModulePath + "/coordinator/server",
 		},
 	},
 	{

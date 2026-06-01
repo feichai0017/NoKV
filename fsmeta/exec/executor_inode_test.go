@@ -68,100 +68,6 @@ func TestExecutorUpdateInodeSkipsMetadataPredicateCommitWhenQuotaMutates(t *test
 	requireMetadataPredicateStatUint(t, executor.Stats(), model.OperationUpdateInode, "skip_total", 1)
 }
 
-func TestExecutorUpdateInodeVisibleCommitReadsCreateOverlay(t *testing.T) {
-	runner := newFakeRunner()
-	seedDirectory(t, runner, "vol", 7)
-	committer := newTestVisibleCommitter(t, runner)
-	inode := testInodeForParentBucket(t, 7, 7)
-	executor, err := newTestExecutor(
-		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleCommitter(committer),
-	)
-	require.NoError(t, err)
-
-	created, err := executor.Create(context.Background(), model.CreateRequest{
-		Mount:  "vol",
-		Parent: 7,
-		Name:   "file",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile, Mode: 0o644},
-	})
-	require.NoError(t, err)
-
-	updated, err := executor.UpdateInode(context.Background(), model.UpdateInodeRequest{
-		Mount:            "vol",
-		Parent:           7,
-		Inode:            created.Inode.Inode,
-		Name:             "file",
-		SetSize:          true,
-		Size:             8192,
-		SetMode:          true,
-		Mode:             0o600,
-		SetUpdatedUnixNs: true,
-		UpdatedUnixNs:    42,
-	})
-	require.NoError(t, err)
-
-	require.Equal(t, uint32(0o600), updated.Mode)
-	require.Equal(t, uint64(8192), updated.Size)
-	require.Equal(t, int64(42), updated.UpdatedUnixNs)
-	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, created.Inode.Inode, 99)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, updated, stored)
-	require.Empty(t, runner.mutations, "create+update should stay inside visible overlay")
-
-	stats := executor.Stats()
-	requireVisibleCommitStatUint(t, stats, "attempt_total", 2)
-	requireVisibleCommitStatUint(t, stats, "success_total", 2)
-}
-
-func TestExecutorUpdateInodeVisibleRechecksObservedValue(t *testing.T) {
-	runner := newFakeRunner()
-	seedDentry(t, runner, "vol", 7, "file", 22)
-	seedInode(t, runner, "vol", model.InodeRecord{
-		Inode:     22,
-		Type:      model.InodeTypeFile,
-		LinkCount: 1,
-		Size:      1024,
-	})
-	changed := false
-	committer := &fakeVisibleCommitter{
-		beforeAdmission: func() {
-			if changed {
-				return
-			}
-			changed = true
-			seedInode(t, runner, "vol", model.InodeRecord{
-				Inode:     22,
-				Type:      model.InodeTypeFile,
-				LinkCount: 1,
-				Size:      4096,
-			})
-		},
-	}
-	executor, err := newTestExecutor(
-		runner,
-		WithVisibleCommitter(committer),
-	)
-	require.NoError(t, err)
-
-	updated, err := executor.UpdateInode(context.Background(), model.UpdateInodeRequest{
-		Mount:   "vol",
-		Parent:  7,
-		Inode:   22,
-		Name:    "file",
-		SetSize: true,
-		Size:    2048,
-	})
-	require.NoError(t, err)
-
-	require.Equal(t, uint64(2048), updated.Size)
-	require.Zero(t, committer.calls, "stale observed value must reject the visible admission before commit")
-	require.Len(t, runner.mutations, 1, "rejected visible admission should fall back to the ordinary commit path")
-	requireVisibleCommitStatUint(t, executor.Stats(), "skip_predicate_total", 1)
-}
-
 func TestExecutorUpdateInodeUpdatesMutableFieldsAndQuota(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "file", 22)
@@ -251,18 +157,6 @@ func TestExecutorUpdateInodeRejectsDentryTypeMismatch(t *testing.T) {
 func BenchmarkExecutorUpdateInodeDefaultPath(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner)
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchmarkExecutorUpdateInode(b, runner, executor)
-}
-
-func BenchmarkExecutorUpdateInodeVisibleCommit(b *testing.B) {
-	runner := newFakeRunner()
-	executor, err := newTestExecutor(
-		runner,
-		WithVisibleCommitter(noopVisibleCommitter{}),
-	)
 	if err != nil {
 		b.Fatal(err)
 	}

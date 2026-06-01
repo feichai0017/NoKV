@@ -7,30 +7,8 @@ import (
 	"sync/atomic"
 
 	"github.com/feichai0017/NoKV/fsmeta/backend"
-	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
-
-type visibleCommitCounters struct {
-	attemptTotal           atomic.Uint64
-	successTotal           atomic.Uint64
-	errorTotal             atomic.Uint64
-	skipIneligibleTotal    atomic.Uint64
-	skipNonConcreteTotal   atomic.Uint64
-	skipPlacementTotal     atomic.Uint64
-	skipPredicateTotal     atomic.Uint64
-	latencyTotalNanosecond atomic.Uint64
-	latencyMaxNanosecond   atomic.Uint64
-}
-
-type visibleDirectoryReadCounters struct {
-	total       atomic.Uint64
-	visibleOnly atomic.Uint64
-	dirIndex    atomic.Uint64
-	baseRows    atomic.Uint64
-	visibleRows atomic.Uint64
-	outputRows  atomic.Uint64
-}
 
 type metadataPredicateCounters struct {
 	attemptTotal atomic.Uint64
@@ -47,9 +25,7 @@ func (e *Executor) Stats() map[string]any {
 			"commit_retries_total":         uint64(0),
 			"commit_retry_exhausted_total": uint64(0),
 			"create_total":                 uint64(0),
-			"commit_contract":              commitContractStats(false),
-			"visible_commit":               visibleCommitStats(nil, false),
-			"visible_directory_read":       visibleDirectoryReadStats(nil),
+			"commit_contract":              commitContractStats(),
 			"metadata_predicate_commit":    metadataPredicateStats(nil),
 		}
 	}
@@ -59,16 +35,11 @@ func (e *Executor) Stats() map[string]any {
 		"commit_retries_total":         e.commitRetriesTotal.Load(),
 		"commit_retry_exhausted_total": e.commitRetryExhaustedTotal.Load(),
 		"create_total":                 e.createTotal.Load(),
-		"commit_contract":              commitContractStats(e.visibleCommitter != nil),
-		"visible_commit":               visibleCommitStats(&e.visibleCommit, e.visibleCommitter != nil),
-		"visible_directory_read":       visibleDirectoryReadStats(&e.visibleDirectoryRead),
+		"commit_contract":              commitContractStats(),
 		"metadata_predicate_commit":    metadataPredicateStats(e.metadataPredicates),
 	}
 	if stats, ok := e.runner.(backend.StatsProvider); ok {
 		out["runner"] = stats.Stats()
-	}
-	if stats, ok := e.visibleCommitter.(backend.StatsProvider); ok {
-		out["visible_committer"] = stats.Stats()
 	}
 	if stats, ok := e.inodes.(backend.StatsProvider); ok {
 		out["inode_allocator"] = stats.Stats()
@@ -76,89 +47,11 @@ func (e *Executor) Stats() map[string]any {
 	return out
 }
 
-func visibleDirectoryReadStats(counters *visibleDirectoryReadCounters) map[string]any {
-	if counters == nil {
-		return map[string]any{
-			"total":        uint64(0),
-			"visible_only": uint64(0),
-			"dir_index":    uint64(0),
-			"base_rows":    uint64(0),
-			"visible_rows": uint64(0),
-			"output_rows":  uint64(0),
-		}
-	}
-	return map[string]any{
-		"total":        counters.total.Load(),
-		"visible_only": counters.visibleOnly.Load(),
-		"dir_index":    counters.dirIndex.Load(),
-		"base_rows":    counters.baseRows.Load(),
-		"visible_rows": counters.visibleRows.Load(),
-		"output_rows":  counters.outputRows.Load(),
-	}
-}
-
-func commitContractStats(visibleEnabled bool) map[string]any {
-	if visibleEnabled {
-		return map[string]any{
-			"default_write_path":        "visible_commit",
-			"successful_write_boundary": "visible",
-			"durable_boundary":          "witness_quorum_plus_raftstore_segment_install",
-		}
-	}
+func commitContractStats() map[string]any {
 	return map[string]any{
 		"default_write_path":        "backend_commit",
 		"successful_write_boundary": "durable",
 		"durable_boundary":          "backend_commit",
-	}
-}
-
-func (s *visibleDirectoryReadCounters) record(stats compile.DirectoryReadStats) {
-	s.total.Add(1)
-	if stats.UsedOverlayOnly {
-		s.visibleOnly.Add(1)
-	}
-	if stats.UsedDirIndex {
-		s.dirIndex.Add(1)
-	}
-	s.baseRows.Add(uint64(stats.BaseRows))
-	s.visibleRows.Add(uint64(stats.OverlayRows))
-	s.outputRows.Add(uint64(stats.OutputRows))
-}
-
-func visibleCommitStats(counters *visibleCommitCounters, enabled bool) map[string]any {
-	if counters == nil {
-		return map[string]any{
-			"enabled":                    enabled,
-			"attempt_total":              uint64(0),
-			"success_total":              uint64(0),
-			"error_total":                uint64(0),
-			"skip_ineligible_total":      uint64(0),
-			"skip_non_concrete_total":    uint64(0),
-			"skip_placement_total":       uint64(0),
-			"skip_predicate_total":       uint64(0),
-			"latency_total_nanosecond":   uint64(0),
-			"latency_max_nanosecond":     uint64(0),
-			"latency_average_nanosecond": uint64(0),
-		}
-	}
-	attempts := counters.attemptTotal.Load()
-	latency := counters.latencyTotalNanosecond.Load()
-	average := uint64(0)
-	if attempts > 0 {
-		average = latency / attempts
-	}
-	return map[string]any{
-		"enabled":                    enabled,
-		"attempt_total":              attempts,
-		"success_total":              counters.successTotal.Load(),
-		"error_total":                counters.errorTotal.Load(),
-		"skip_ineligible_total":      counters.skipIneligibleTotal.Load(),
-		"skip_non_concrete_total":    counters.skipNonConcreteTotal.Load(),
-		"skip_placement_total":       counters.skipPlacementTotal.Load(),
-		"skip_predicate_total":       counters.skipPredicateTotal.Load(),
-		"latency_total_nanosecond":   latency,
-		"latency_max_nanosecond":     counters.latencyMaxNanosecond.Load(),
-		"latency_average_nanosecond": average,
 	}
 }
 

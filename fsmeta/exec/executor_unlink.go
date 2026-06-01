@@ -18,93 +18,9 @@ type removeDentryRequest struct {
 	Name   string
 }
 
-func (e *Executor) tryVisibleRemoveDentry(ctx context.Context, compiled compile.CompiledOp, mount model.MountIdentity, req removeDentryRequest) (model.RemoveResult, bool, error) {
-	delta := compiled.Delta
-	plan := delta.Plan
-	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
-		return model.RemoveResult{}, false, nil
-	}
-	view := e.newVisibleReadView(ctx)
-	record, err := view.readDentry(plan.PrimaryKey)
-	if err != nil {
-		return model.RemoveResult{}, false, err
-	}
-	inode, ok, err := view.readInode(mount, record.Inode)
-	if err != nil {
-		return model.RemoveResult{}, false, err
-	}
-	if !ok {
-		return model.RemoveResult{}, false, nil
-	}
-	if inode.Type == model.InodeTypeDirectory {
-		return model.RemoveResult{}, false, model.ErrInvalidRequest
-	}
-	parent, err := readVisibleDirectoryInode(view, mount, req.Parent)
-	if err != nil {
-		return model.RemoveResult{}, false, err
-	}
-	parent, err = decrementDirectoryChildCount(parent)
-	if err != nil {
-		return model.RemoveResult{}, false, err
-	}
-	quotaOK, err := e.visibleQuotaAllowsCommit(ctx, []QuotaChange{{
-		Mount:      req.Mount,
-		MountKeyID: mount.MountKeyID,
-		Scope:      req.Parent,
-		Bytes:      -inodeSizeDelta(inode.Size),
-		Inodes:     -1,
-	}})
-	if err != nil {
-		return model.RemoveResult{}, false, err
-	}
-	if !quotaOK {
-		return model.RemoveResult{}, false, nil
-	}
-	inodeKey, err := layout.EncodeInodeKey(mount, inode.Inode)
-	if err != nil {
-		return model.RemoveResult{}, false, err
-	}
-	result := model.RemoveResult{
-		RemovedDentry: record,
-		OldInode:      inode,
-		InodeDeleted:  inode.LinkCount <= 1,
-	}
-	effects := []compile.WriteEffect{visibleDeleteEffect(plan.MutateKeys[0])}
-	if result.InodeDeleted {
-		effects = append(effects, visibleDeleteEffect(inodeKey))
-	} else {
-		inode.LinkCount--
-		inodeValue, err := layout.EncodeInodeValue(inode)
-		if err != nil {
-			return model.RemoveResult{}, false, err
-		}
-		effects = append(effects, visiblePutEffect(inodeKey, inodeValue))
-	}
-	parentValue, err := layout.EncodeInodeValue(parent)
-	if err != nil {
-		return model.RemoveResult{}, false, err
-	}
-	effects = append(effects, visiblePutEffect(plan.MutateKeys[1], parentValue))
-	concrete, err := view.materializeVisibleCompiledOp(compiled, effects)
-	if err != nil {
-		return model.RemoveResult{}, false, err
-	}
-	committed, err := e.tryVisibleCommitAfterRead(ctx, view, concrete)
-	if err != nil || !committed {
-		return model.RemoveResult{}, committed, err
-	}
-	return result, true, nil
-}
-
 func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, compiled compile.CompiledOp, req removeDentryRequest) (model.RemoveResult, error) {
 	delta := compiled.Delta
 	plan := delta.Plan
-	if result, committed, err := e.tryVisibleRemoveDentry(ctx, compiled, mount, req); committed || err != nil {
-		if err != nil {
-			return model.RemoveResult{}, err
-		}
-		return result, nil
-	}
 	var result model.RemoveResult
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.PrimaryKey, startVersion)
@@ -193,7 +109,7 @@ func (e *Executor) Unlink(ctx context.Context, req model.UnlinkRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	program, err := compile.CompileUnlinkProgram(req, mount, compile.WithQuotaMode(e.visibleQuotaMode()))
+	program, err := compile.CompileUnlinkProgram(req, mount, compile.WithQuotaMode(e.quotaMode()))
 	if err != nil {
 		return err
 	}
@@ -216,12 +132,6 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 	}
 	delta := program.Compiled.Delta
 	plan := delta.Plan
-	if committed, err := e.tryVisibleRemoveDirectory(ctx, program.Compiled, mount, req); committed || err != nil {
-		if err != nil {
-			return err
-		}
-		return nil
-	}
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		parent, err := e.readDirectoryInode(ctx, mount, req.Parent, startVersion)
 		if err != nil {
@@ -295,70 +205,6 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 	return nil
 }
 
-func (e *Executor) tryVisibleRemoveDirectory(ctx context.Context, compiled compile.CompiledOp, mount model.MountIdentity, req model.RemoveDirectoryRequest) (bool, error) {
-	delta := compiled.Delta
-	plan := delta.Plan
-	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
-		return false, nil
-	}
-	view := e.newVisibleReadView(ctx)
-	parent, err := readVisibleDirectoryInode(view, mount, req.Parent)
-	if err != nil {
-		return false, err
-	}
-	parent, err = decrementDirectoryChildCount(parent)
-	if err != nil {
-		return false, err
-	}
-	record, err := view.readDentry(plan.PrimaryKey)
-	if err != nil {
-		return false, err
-	}
-	if record.Type != model.InodeTypeDirectory {
-		return false, model.ErrInvalidRequest
-	}
-	inode, ok, err := view.readInode(mount, record.Inode)
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return false, model.ErrNotFound
-	}
-	if inode.Type != model.InodeTypeDirectory || inode.ChildCount != 0 || inode.Inode == model.RootInode {
-		return false, model.ErrInvalidRequest
-	}
-	quotaOK, err := e.visibleQuotaAllowsCommit(ctx, []QuotaChange{{
-		Mount:      req.Mount,
-		MountKeyID: mount.MountKeyID,
-		Scope:      req.Parent,
-		Bytes:      -inodeSizeDelta(inode.Size),
-		Inodes:     -1,
-	}})
-	if err != nil {
-		return false, err
-	}
-	if !quotaOK {
-		return false, nil
-	}
-	parentValue, err := layout.EncodeInodeValue(parent)
-	if err != nil {
-		return false, err
-	}
-	inodeKey, err := layout.EncodeInodeKey(mount, inode.Inode)
-	if err != nil {
-		return false, err
-	}
-	concrete, err := view.materializeVisibleCompiledOp(compiled, []compile.WriteEffect{
-		visiblePutEffect(plan.MutateKeys[0], parentValue),
-		visibleDeleteEffect(plan.MutateKeys[1]),
-		visibleDeleteEffect(inodeKey),
-	})
-	if err != nil {
-		return false, err
-	}
-	return e.tryVisibleCommitAfterRead(ctx, view, concrete)
-}
-
 // Remove is the product-facing primitive for removing one non-directory
 // namespace entry. Directory removal needs a separate directory-emptiness
 // contract, so v1 keeps directory targets invalid instead of orphaning children.
@@ -368,7 +214,7 @@ func (e *Executor) Remove(ctx context.Context, req model.RemoveRequest) (model.R
 		return model.RemoveResult{}, err
 	}
 	mount := mountRecord.Identity()
-	program, err := compile.CompileRemoveProgram(req, mount, compile.WithQuotaMode(e.visibleQuotaMode()))
+	program, err := compile.CompileRemoveProgram(req, mount, compile.WithQuotaMode(e.quotaMode()))
 	if err != nil {
 		return model.RemoveResult{}, err
 	}

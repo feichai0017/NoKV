@@ -5,6 +5,6 @@
 //
 // The package owns no distributed authority. It provides one local mount
 // admission record, a local inode allocator, a durable backend.Store over
-// Pebble, and local watch/snapshot adapters so fsmeta/exec can run without
+// Badger, and local watch/snapshot adapters so fsmeta/exec can run without
 // coordinator, root, or raftstore.
 package local

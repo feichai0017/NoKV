@@ -181,13 +181,10 @@ func (e *Executor) reserveTimestampWithRetry(ctx context.Context, count uint64, 
 }
 
 func (e *Executor) withCommitRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error, scopes ...compile.AuthorityScope) error {
-	if err := e.flushVisible(ctx); err != nil {
-		return err
-	}
-	return e.withCommitRetryNoVisibleFlush(ctx, run)
+	return e.withCommitRetryLoop(ctx, run)
 }
 
-func (e *Executor) withCommitRetryNoVisibleFlush(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
+func (e *Executor) withCommitRetryLoop(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
 	var last error
 	started := time.Now()
 	for attempt := 0; ; attempt++ {

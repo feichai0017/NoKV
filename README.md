@@ -10,7 +10,7 @@ namespace services.
 
 The product core is `fsmeta`: a filesystem-shaped metadata model with inode,
 dentry, watch, snapshot, quota, session, atomic publish, remove, and subtree
-move semantics. The local demo runtime uses Pebble directly. The distributed
+move semantics. The local demo runtime uses Badger directly. The distributed
 track keeps `meta/root` and `coordinator` in Go and develops the replicated
 data plane in `raftstore` over Holt.
 
@@ -26,7 +26,7 @@ application / SDK
   -> fsmeta API
   -> fsmeta/exec semantic compiler and executor
   -> fsmeta/backend metadata command contract
-  -> fsmeta/runtime/local       # local Pebble demo path
+  -> fsmeta/runtime/local       # local Badger demo path
   -> meta/root + coordinator    # distributed truth/control plane
   -> raftstore               # Rust/Holt distributed data-plane target
 ```
@@ -39,7 +39,7 @@ The main package boundaries are:
 | `fsmeta/layout` | Ordered namespace key layout and value codecs. |
 | `fsmeta/backend` | Metadata command backend contract consumed by fsmeta execution. |
 | `fsmeta/exec` | Semantic executor and compiler for namespace operations. |
-| `fsmeta/runtime/local` | Embedded Pebble-backed fsmeta runtime for demos and tests. |
+| `fsmeta/runtime/local` | Embedded Badger-backed fsmeta runtime for demos and tests. |
 | `meta/root` | Rooted truth for topology, authority, lifecycle facts, grants, and seals. |
 | `coordinator` | Routing, TSO, store discovery, root-event publish, and serving-plane rebuild. |
 | `raftstore` | Rust replacement data plane using OpenRaft and Holt multi-tree storage. |
@@ -77,7 +77,7 @@ large artifact bodies.
 
 ## Local Demo Runtime
 
-The default runnable path is the local Pebble-backed fsmeta server:
+The default runnable path is the local Badger-backed fsmeta server:
 
 ```sh
 go run ./cmd/nokv-fsmeta \
@@ -87,6 +87,10 @@ go run ./cmd/nokv-fsmeta \
   --local-mount-id default \
   --local-mount-key-id 1
 ```
+
+The local runtime disables Badger `SyncWrites` by default for demo throughput.
+It preserves fsmeta MVCC and restart semantics, but strict power-loss durability
+requires opening the runtime with Badger sync writes enabled.
 
 Library usage:
 

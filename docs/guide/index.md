@@ -10,7 +10,7 @@ workspaces, artifact stores, DFS frontends, and object namespace layers.
 
 The current repository is intentionally smaller than previous iterations:
 
-- `fsmeta` owns the namespace model, layout, compiler, executor, local Pebble
+- `fsmeta` owns the namespace model, layout, compiler, executor, local Badger
   runtime, server, and client.
 - `meta/root` owns rooted lifecycle and authority truth.
 - `coordinator` owns rebuildable routing, TSO, discovery, and scheduling views.
@@ -40,9 +40,9 @@ Application / SDK
   -> fsmeta API
   -> fsmeta/exec
   -> fsmeta/backend
-  -> fsmeta/runtime/local  -> Pebble
+  -> fsmeta/runtime/local  -> Badger
   -> coordinator + meta/root + raftstore  -> Holt
 ```
 
-NoKV keeps namespace semantics above the storage engine. Pebble and Holt are
+NoKV keeps namespace semantics above the storage engine. Badger and Holt are
 persistence choices; they do not own the inode/dentry model or workspace API.

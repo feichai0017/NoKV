@@ -69,10 +69,6 @@ type SubtreeAuthorityResolver interface {
 	SameAuthority(context.Context, model.MountID, model.InodeID, model.InodeID) (bool, error)
 }
 
-type VisibleQuotaAdmitter interface {
-	AllowVisibleQuota(context.Context, []QuotaChange) (bool, error)
-}
-
 // Executor interprets fsmeta operation plans against a backend.Store.
 type Executor struct {
 	runner                    backend.Store
@@ -81,8 +77,6 @@ type Executor struct {
 	quotas                    QuotaResolver
 	subtrees                  SubtreeHandoffPublisher
 	authorities               SubtreeAuthorityResolver
-	visibleCommitter          VisibleCommitter
-	visibleClientID           string
 	lockTTL                   uint64
 	now                       func() time.Time
 	readRetriesTotal          atomic.Uint64
@@ -90,9 +84,6 @@ type Executor struct {
 	commitRetriesTotal        atomic.Uint64
 	commitRetryExhaustedTotal atomic.Uint64
 	createTotal               atomic.Uint64
-	visibleCommit             visibleCommitCounters
-	visibleDirectoryRead      visibleDirectoryReadCounters
-	visibleSeq                atomic.Uint64
 	metadataPredicates        map[model.OperationKind]*metadataPredicateCounters
 }
 
@@ -156,14 +147,6 @@ func WithSubtreeAuthorityResolver(resolver SubtreeAuthorityResolver) Option {
 	}
 }
 
-// WithVisibleCommitter enables visible commits. This option is intentionally
-// explicit so production callers choose the visible-commit contract.
-func WithVisibleCommitter(committer VisibleCommitter) Option {
-	return func(e *Executor) {
-		e.visibleCommitter = committer
-	}
-}
-
 // New constructs an fsmeta executor.
 func New(runner backend.Store, opts ...Option) (*Executor, error) {
 	if runner == nil {
@@ -172,7 +155,6 @@ func New(runner backend.Store, opts ...Option) (*Executor, error) {
 	executor := &Executor{
 		runner:             runner,
 		lockTTL:            defaultLockTTL,
-		visibleClientID:    newVisibleClientID(),
 		metadataPredicates: newMetadataPredicateCounters(),
 	}
 	for _, opt := range opts {

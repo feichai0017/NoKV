@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	cpebble "github.com/cockroachdb/pebble"
+	badger "github.com/dgraph-io/badger/v4"
 
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	fsmetaexec "github.com/feichai0017/NoKV/fsmeta/exec"
@@ -17,9 +17,9 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
-// Runtime is a complete fsmeta runtime backed by one embedded Pebble DB.
+// Runtime is a complete fsmeta runtime backed by one embedded Badger DB.
 type Runtime struct {
-	DB        *cpebble.DB
+	DB        *badger.DB
 	Runner    *Runner
 	Executor  *fsmetaexec.Executor
 	Mounts    *MountCatalog
@@ -43,7 +43,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	closeDB := false
 	if db == nil {
 		var err error
-		db, err = cpebble.Open(localPebbleDir(opts.WorkDir), localDBOptions(opts))
+		db, err = badger.Open(localDBOptions(opts))
 		if err != nil {
 			return nil, err
 		}
@@ -115,8 +115,8 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 	}, nil
 }
 
-func localPebbleDir(workDir string) string {
-	return filepath.Join(workDir, "storage")
+func localBadgerDir(workDir string) string {
+	return filepath.Join(workDir, "badger")
 }
 
 // Close releases the runtime-owned DB. Caller-owned DB handles are left open.

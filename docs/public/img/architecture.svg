@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1400" height="900" viewBox="0 0 1400 900" role="img" aria-labelledby="title desc">
   <title id="title">NoKV Architecture</title>
-  <desc id="desc">fsmeta semantic layer over local Pebble demo runtime and Rust raftstore distributed target.</desc>
+  <desc id="desc">fsmeta semantic layer over local Badger demo runtime and Rust raftstore distributed target.</desc>
   <style>
     .bg { fill: #0b1220; }
     .box { fill: #111827; stroke: #38bdf8; stroke-width: 2; rx: 18; }
@@ -31,7 +31,7 @@
   <rect x="120" y="400" width="520" height="170" class="box2"/>
   <text x="380" y="455" text-anchor="middle" class="label">local demo runtime</text>
   <text x="380" y="495" text-anchor="middle" class="small">one-process fsmeta backend</text>
-  <text x="380" y="528" text-anchor="middle" class="mono">fsmeta/runtime/local → Pebble</text>
+  <text x="380" y="528" text-anchor="middle" class="mono">fsmeta/runtime/local → Badger</text>
 
   <rect x="760" y="400" width="520" height="170" class="box2"/>
   <text x="1020" y="455" text-anchor="middle" class="label">distributed target</text>
@@ -42,7 +42,7 @@
   <line x1="1020" y1="570" x2="1020" y2="650" class="line"/>
 
   <rect x="190" y="670" width="380" height="120" class="box3"/>
-  <text x="380" y="720" text-anchor="middle" class="label">Pebble</text>
+  <text x="380" y="720" text-anchor="middle" class="label">Badger</text>
   <text x="380" y="755" text-anchor="middle" class="small">local fsmeta persistence</text>
 
   <rect x="830" y="670" width="380" height="120" class="box3"/>

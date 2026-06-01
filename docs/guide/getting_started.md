@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Getting Started
 
-This guide starts the local Pebble-backed fsmeta runtime. The distributed Rust
+This guide starts the local Badger-backed fsmeta runtime. The distributed Rust
 data plane lives in `raftstore`; it is available through the `raftstore`
 runtime but is not the default Compose demo path yet.
 
@@ -41,7 +41,7 @@ docker compose logs -f
 docker compose down -v
 ```
 
-This starts one `nokv-fsmeta` service backed by a Pebble workdir in the
+This starts one `nokv-fsmeta` service backed by a Badger workdir in the
 `fsmeta-data` volume.
 
 ## Distributed Entrypoints

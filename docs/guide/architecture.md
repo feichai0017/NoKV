@@ -24,7 +24,7 @@ Layer 2: distributed metadata control and execution
   raftstore   Rust/OpenRaft/Holt data-plane target
 
 Layer 3: concrete persistence
-  Pebble directly inside fsmeta/runtime/local for local demos
+  Badger directly inside fsmeta/runtime/local for local demos
   Holt multi-tree inside raftstore for the distributed target
 ```
 
@@ -41,7 +41,7 @@ flowchart LR
     API --> Exec["fsmeta/exec"]
     Exec --> Backend["fsmeta/backend.Store"]
     Backend --> Local["fsmeta/runtime/local"]
-    Local --> Pebble["Pebble DB"]
+    Local --> Badger["Badger DB"]
     Backend -. "distributed target" .-> Coord["coordinator route + TSO"]
     Coord -.-> Root["meta/root truth"]
     Coord -.-> Rust["raftstore"]
@@ -51,12 +51,12 @@ flowchart LR
 `fsmeta/backend.Store` is the key boundary. It exposes timestamped reads,
 scans, and `MetadataCommand` commits. A command carries predicates, mutations,
 and watch projection keys under one metadata commit boundary. It does not
-expose Pebble, Holt, Raft, protobuf, migration, or SST concepts.
+expose Badger, Holt, Raft, protobuf, migration, or SST concepts.
 
 ## Local Runtime
 
 `fsmeta/runtime/local` is a one-process implementation of the fsmeta backend
-contract. It stores versioned fsmeta records directly in Pebble and is intended
+contract. It stores versioned fsmeta records directly in Badger and is intended
 for demos, tests, small agent workspaces, and product iteration.
 
 The local path is not a generic KV database. It is a local implementation of

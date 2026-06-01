@@ -26,7 +26,6 @@ on:
       - "proto/**"
       - "raftstore/**"
       - "scripts/run_fsmeta_benchmarks.sh"
-      - "utils/**"
   workflow_dispatch:
     inputs:
       profile:

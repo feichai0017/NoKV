@@ -57,16 +57,16 @@ func fatalf(format string, args ...any) {
 
 func main() {
 	var (
-		addr                = flag.String("addr", "127.0.0.1:8090", "listen address for FSMetadata gRPC server")
-		metricsAddr         = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
-		localWorkDir        = flag.String("local-work-dir", "nokv-fsmeta-local", "Pebble work directory for the local fsmeta demo runtime")
-		localMountID        = flag.String("local-mount-id", "default", "single mount id admitted by the local runtime")
-		localMountKeyID     = flag.Uint64("local-mount-key-id", 1, "single mount key id admitted by the local runtime")
-		localRootInode      = flag.Uint64("local-root-inode", uint64(model.RootInode), "root inode for the local runtime")
-		runtimeKind         = flag.String("runtime", "local", "fsmeta runtime: local or raftstore")
-		coordinatorAddr     = flag.String("coordinator-addr", "", "coordinator gRPC address for raftstore runtime")
-		bootstrapMount      = flag.String("bootstrap-mount", "", "optional mount id whose root inode should be bootstrapped on raftstore runtime startup")
-		lockTTL             = flag.Duration("lock-ttl", 0, "fsmeta lock TTL; zero uses the fsmeta default")
+		addr            = flag.String("addr", "127.0.0.1:8090", "listen address for FSMetadata gRPC server")
+		metricsAddr     = flag.String("metrics-addr", "", "optional HTTP address to expose /debug/vars expvar endpoint")
+		localWorkDir    = flag.String("local-work-dir", "nokv-fsmeta-local", "Badger work directory for the local fsmeta demo runtime")
+		localMountID    = flag.String("local-mount-id", "default", "single mount id admitted by the local runtime")
+		localMountKeyID = flag.Uint64("local-mount-key-id", 1, "single mount key id admitted by the local runtime")
+		localRootInode  = flag.Uint64("local-root-inode", uint64(model.RootInode), "root inode for the local runtime")
+		runtimeKind     = flag.String("runtime", "local", "fsmeta runtime: local or raftstore")
+		coordinatorAddr = flag.String("coordinator-addr", "", "coordinator gRPC address for raftstore runtime")
+		bootstrapMount  = flag.String("bootstrap-mount", "", "optional mount id whose root inode should be bootstrapped on raftstore runtime startup")
+		lockTTL         = flag.Duration("lock-ttl", 0, "fsmeta lock TTL; zero uses the fsmeta default")
 	)
 	flag.Parse()
 	if *lockTTL < 0 {
@@ -189,7 +189,7 @@ func openConfiguredRaftstoreRuntime(ctx context.Context, opts configuredRuntimeO
 }
 
 func localServerRuntime(rt *fsmetalocal.Runtime, opts fsmetalocal.Options) *fsmetaServerRuntime {
-	contractLog := "fsmeta commit contract: local backend uses a Pebble-backed one-node MVCC store; successful metadata writes are durable after the local apply group completes"
+	contractLog := "fsmeta commit contract: local backend uses a Badger-backed one-node MVCC store; successful metadata writes complete after the local Badger transaction commits"
 	return &fsmetaServerRuntime{
 		executor: rt.Executor,
 		watcher:  rt.Watcher,
@@ -202,7 +202,7 @@ func localServerRuntime(rt *fsmetalocal.Runtime, opts fsmetalocal.Options) *fsme
 			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return rt.Watcher.Stats() }))
 			publishExpvarOnce("nokv_fsmeta_local_snapshot", expvar.Func(func() any { return rt.Snapshots.Stats() }))
 		},
-		startupSummary: fmt.Sprintf("fsmeta backend: local pebble work_dir=%q mount=%q mount_key_id=%d", opts.WorkDir, opts.Mount.MountID, opts.Mount.MountKeyID),
+		startupSummary: fmt.Sprintf("fsmeta backend: local badger work_dir=%q mount=%q mount_key_id=%d", opts.WorkDir, opts.Mount.MountID, opts.Mount.MountKeyID),
 		contractLog:    contractLog,
 	}
 }
@@ -260,9 +260,10 @@ func localExecutorStats(rt *fsmetalocal.Runtime) map[string]any {
 
 func localCommitContractStats() map[string]any {
 	return map[string]any{
-		"default_write_path":        "local_pebble_mvcc",
-		"successful_write_boundary": "durable",
-		"durable_boundary":          "pebble_apply_group",
+		"default_write_path":           "local_badger_mvcc",
+		"successful_write_boundary":    "badger_transaction_commit",
+		"power_loss_durable_default":   false,
+		"strict_sync_requires_db_opts": true,
 	}
 }
 

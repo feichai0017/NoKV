@@ -13,95 +13,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
-func (e *Executor) tryVisibleLink(ctx context.Context, program compile.LinkProgram, mount model.MountIdentity, req model.LinkRequest) (bool, error) {
-	compiled := program.Compiled
-	delta := compiled.Delta
-	plan := delta.Plan
-	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
-		return false, nil
-	}
-	view := e.newVisibleReadView(ctx)
-	record, err := view.readDentry(plan.ReadKeys[0])
-	if err != nil {
-		return false, err
-	}
-	if record.Type == model.InodeTypeDirectory {
-		return false, model.ErrInvalidRequest
-	}
-	if !e.visibleNotExistsKnown(delta.Authority, plan.ReadKeys[1], e.visiblePredicateIndex()) {
-		if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
-			return false, model.ErrExists
-		} else if !errors.Is(err, model.ErrNotFound) {
-			return false, err
-		}
-	}
-	inode, ok, err := view.readInode(mount, record.Inode)
-	if err != nil {
-		return false, err
-	}
-	if !ok {
-		return false, model.ErrNotFound
-	}
-	if inode.Type == model.InodeTypeDirectory || inode.LinkCount == ^uint32(0) {
-		return false, model.ErrInvalidRequest
-	}
-	if inode.LinkCount == 0 {
-		inode.LinkCount = 1
-	}
-	parent, err := readVisibleDirectoryInode(view, mount, req.ToParent)
-	if err != nil {
-		return false, err
-	}
-	parent, err = incrementDirectoryChildCount(parent)
-	if err != nil {
-		return false, err
-	}
-	quotaOK, err := e.visibleQuotaAllowsCommit(ctx, []QuotaChange{{
-		Mount:      req.Mount,
-		MountKeyID: mount.MountKeyID,
-		Scope:      req.ToParent,
-		Bytes:      inodeSizeDelta(inode.Size),
-		Inodes:     1,
-	}})
-	if err != nil {
-		return false, err
-	}
-	if !quotaOK {
-		return false, nil
-	}
-	inode.LinkCount++
-	dentryValue, err := layout.EncodeDentryValue(model.DentryRecord{
-		Parent: req.ToParent,
-		Name:   req.ToName,
-		Inode:  record.Inode,
-		Type:   record.Type,
-	})
-	if err != nil {
-		return false, err
-	}
-	inodeKey, err := layout.EncodeInodeKey(mount, inode.Inode)
-	if err != nil {
-		return false, err
-	}
-	inodeValue, err := layout.EncodeInodeValue(inode)
-	if err != nil {
-		return false, err
-	}
-	parentValue, err := layout.EncodeInodeValue(parent)
-	if err != nil {
-		return false, err
-	}
-	concrete, err := view.materializeVisibleCompiledOp(compiled, []compile.WriteEffect{
-		visiblePutEffect(plan.ReadKeys[1], dentryValue),
-		visiblePutEffect(inodeKey, inodeValue),
-		visiblePutEffect(plan.MutateKeys[1], parentValue),
-	})
-	if err != nil {
-		return false, err
-	}
-	return e.tryVisibleCommitAfterRead(ctx, view, concrete)
-}
-
 // Link creates a second dentry for an existing non-directory inode and bumps
 // the inode link count in the same metadata command.
 func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
@@ -110,19 +21,12 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 		return err
 	}
 	mount := mountRecord.Identity()
-	program, err := compile.CompileLinkProgram(req, mount, compile.WithQuotaMode(e.visibleQuotaMode()))
+	program, err := compile.CompileLinkProgram(req, mount, compile.WithQuotaMode(e.quotaMode()))
 	if err != nil {
 		return err
 	}
 	delta := program.Compiled.Delta
 	plan := delta.Plan
-	if committed, err := e.tryVisibleLink(ctx, program, mount, req); committed || err != nil {
-		if err != nil {
-			return err
-		}
-		e.forgetVisibleEmptyDirectory(mount, req.ToParent)
-		return nil
-	}
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
@@ -237,6 +141,5 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 	}, delta.Authority); err != nil {
 		return err
 	}
-	e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 	return nil
 }

@@ -118,15 +118,18 @@ func TestOpenConfiguredRuntimeLocalCommitContract(t *testing.T) {
 			t.Fatalf("close local runtime: %v", err)
 		}
 	}()
-	if !strings.Contains(rt.contractLog, "Pebble-backed one-node MVCC store") {
+	if !strings.Contains(rt.contractLog, "Badger-backed one-node MVCC store") {
 		t.Fatalf("unexpected local contract log: %s", rt.contractLog)
 	}
 	contract := localCommitContractStats()
-	if got := contract["default_write_path"]; got != "local_pebble_mvcc" {
+	if got := contract["default_write_path"]; got != "local_badger_mvcc" {
 		t.Fatalf("default write path got %v", got)
 	}
-	if got := contract["successful_write_boundary"]; got != "durable" {
+	if got := contract["successful_write_boundary"]; got != "badger_transaction_commit" {
 		t.Fatalf("successful write boundary got %v", got)
+	}
+	if got := contract["power_loss_durable_default"]; got != false {
+		t.Fatalf("power loss durable default got %v", got)
 	}
 }
 

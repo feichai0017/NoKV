@@ -25,5 +25,5 @@ The local server exposes expvar and pprof through `--metrics-addr`.
 curl http://127.0.0.1:9400/debug/vars
 ```
 
-Do not put Pebble or Holt-specific internals into generic fsmeta stats unless
+Do not put Badger or Holt-specific internals into generic fsmeta stats unless
 the field has the same meaning across backends.

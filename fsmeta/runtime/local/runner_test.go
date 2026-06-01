@@ -9,7 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	cpebble "github.com/cockroachdb/pebble"
+	badger "github.com/dgraph-io/badger/v4"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
@@ -56,7 +56,7 @@ func TestRunnerProvidesSnapshotReads(t *testing.T) {
 	require.Equal(t, []byte("one"), rows[0].Value)
 }
 
-func TestRunnerCommitMetadataHandlesMultiKeyPebbleBatch(t *testing.T) {
+func TestRunnerCommitMetadataHandlesMultiKeyBadgerTransaction(t *testing.T) {
 	db := openTestDB(t, t.TempDir(), nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
@@ -369,7 +369,7 @@ func TestRunnerCommitMetadataRejectsValuePredicateMismatch(t *testing.T) {
 	require.Equal(t, uint64(1), runner.Stats()["metadata_predicate_rejected_total"])
 }
 
-func TestRunnerCommitMetadataHandlesPredicateFreeMultiKeyPebbleBatch(t *testing.T) {
+func TestRunnerCommitMetadataHandlesPredicateFreeMultiKeyBadgerTransaction(t *testing.T) {
 	db := openTestDB(t, "", nil)
 	defer func() { require.NoError(t, db.Close()) }()
 	runner, err := NewRunner(db)
@@ -474,15 +474,24 @@ func TestRunnerRestartsAboveObservedTimestamp(t *testing.T) {
 	require.Greater(t, next, start+1)
 }
 
-func openTestDB(t *testing.T, dir string, opts *cpebble.Options) *cpebble.DB {
+func openTestDB(t *testing.T, dir string, opts *badger.Options) *badger.DB {
 	t.Helper()
-	if opts == nil {
-		opts = &cpebble.Options{}
-	}
 	if dir == "" {
 		dir = t.TempDir()
 	}
-	db, err := cpebble.Open(dir, opts)
+	cfg := badger.DefaultOptions(dir).
+		WithLogger(nil).
+		WithSyncWrites(false)
+	if opts != nil {
+		cfg = *opts
+		if cfg.Dir == "" {
+			cfg.Dir = dir
+		}
+		if cfg.ValueDir == "" {
+			cfg.ValueDir = cfg.Dir
+		}
+	}
+	db, err := badger.Open(cfg)
 	require.NoError(t, err)
 	return db
 }

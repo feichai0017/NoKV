@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use nokv_raftnode::{
-    OpenRaftRegion, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, SegmentedEntryLog,
-    TonicRaftNetworkFactory,
+    OpenRaftRegion, RegionLogFlushOptions, RegionLogStorage, RegionSnapshotEngine,
+    RegionStateMachine, SegmentedEntryLog, TonicRaftNetworkFactory,
 };
 
 use crate::startup::ServerIdentity;
@@ -18,12 +18,13 @@ where
     E: RegionSnapshotEngine,
 {
     let log = SegmentedEntryLog::open(identity.region_id, log_dir)?;
+    let log_options = raft_log_flush_options_from_env()?;
     let state_machine = RegionStateMachine::new(engine);
     if identity.bootstrap {
         return Ok(OpenRaftRegion::bootstrap_single_node_with_network(
             identity.peer_id,
             identity.region_id,
-            RegionLogStorage::new(log),
+            RegionLogStorage::new_with_options(log, log_options),
             state_machine,
             TonicRaftNetworkFactory::new(identity.region_id),
             addr.to_owned(),
@@ -33,11 +34,36 @@ where
     Ok(OpenRaftRegion::open_with_network(
         identity.peer_id,
         identity.region_id,
-        RegionLogStorage::new(log),
+        RegionLogStorage::new_with_options(log, log_options),
         state_machine,
         TonicRaftNetworkFactory::new(identity.region_id),
     )
     .await?)
+}
+
+pub(crate) fn raft_log_flush_options_from_env(
+) -> Result<RegionLogFlushOptions, Box<dyn std::error::Error>> {
+    let mode = std::env::var("NOKV_RAFTSTORE_RAFTLOG_SYNC")
+        .unwrap_or_else(|_| "buffered".to_owned())
+        .to_ascii_lowercase();
+    match mode.as_str() {
+        "buffered" | "none" | "off" | "false" => Ok(RegionLogFlushOptions::buffered()),
+        "group" | "group_commit" | "fsync" => {
+            let delay = match std::env::var("NOKV_RAFTSTORE_RAFTLOG_GROUP_COMMIT_MS") {
+                Ok(raw) => Duration::from_millis(raw.parse::<u64>().map_err(|_| {
+                    format!(
+                        "NOKV_RAFTSTORE_RAFTLOG_GROUP_COMMIT_MS must be a non-negative integer, got {raw:?}"
+                    )
+                })?),
+                Err(_) => RegionLogFlushOptions::default().group_commit_delay,
+            };
+            Ok(RegionLogFlushOptions::group_commit(delay))
+        }
+        other => Err(format!(
+            "unsupported NOKV_RAFTSTORE_RAFTLOG_SYNC {other:?}: expected buffered or group"
+        )
+        .into()),
+    }
 }
 
 pub(crate) fn raft_log_dir_for_region(

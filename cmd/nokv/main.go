@@ -52,7 +52,7 @@ func printUsage(w io.Writer) {
 	  raftstore-add-peer     Add one peer through the Rust RaftAdmin service
 
 	Other binaries:
-	  nokv-fsmeta                         Start the local Pebble fsmeta gateway
+	  nokv-fsmeta                         Start the local Badger fsmeta gateway
 	  cargo run -p nokv-raftstore-server  Start the Rust distributed data plane
 
 Run "nokv <command> -h" for command-specific flags.`)

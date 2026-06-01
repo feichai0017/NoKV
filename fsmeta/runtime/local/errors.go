@@ -12,7 +12,7 @@ import (
 
 var (
 	errWorkDirRequired           = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: work dir is required")
-	errDBRequired                = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: pebble DB is required")
+	errDBRequired                = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: badger DB is required")
 	errMountRequired             = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: mount identity is required")
 	errTimestampCount            = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: timestamp count must be > 0")
 	errCommitVersion             = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/local: commit version must be greater than start version")

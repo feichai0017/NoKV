@@ -41,10 +41,6 @@ type Executor interface {
 	ExpireWriteSessions(ctx context.Context, req model.ExpireWriteSessionsRequest) (model.ExpireWriteSessionsResult, error)
 }
 
-type visibleSnapshotRetirer interface {
-	RetireVisibleSnapshot(version uint64)
-}
-
 // Service exposes NoKV-native filesystem metadata operations over gRPC.
 // It is intentionally a thin transport layer; all commit semantics stay in
 // the Executor implementation.
@@ -302,9 +298,6 @@ func (s *Service) RetireSnapshotSubtree(ctx context.Context, req *fsmetapb.Retir
 	}
 	if err := s.snapshot.RetireSnapshotSubtree(ctx, token); err != nil {
 		return nil, rpcError(err)
-	}
-	if retirer, ok := s.executor.(visibleSnapshotRetirer); ok {
-		retirer.RetireVisibleSnapshot(token.ReadVersion)
 	}
 	return &fsmetapb.RetireSnapshotSubtreeResponse{}, nil
 }

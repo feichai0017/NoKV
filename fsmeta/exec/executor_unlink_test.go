@@ -123,74 +123,6 @@ func TestExecutorUnlinkDecrementsMultiLinkInode(t *testing.T) {
 	require.Equal(t, uint32(1), inode.LinkCount)
 }
 
-func TestExecutorUnlinkVisibleCommitServesOverlay(t *testing.T) {
-	runner := newFakeRunner()
-	inode := testInodeForParentBucket(t, 7, 7)
-	seedDentry(t, runner, "vol", 7, "file", inode)
-	seedInode(t, runner, "vol", model.InodeRecord{Inode: inode, Type: model.InodeTypeFile, Size: 4096, LinkCount: 2})
-	committer := newTestVisibleCommitter(t, runner)
-	executor, err := newTestExecutor(
-		runner,
-		WithVisibleCommitter(committer),
-	)
-	require.NoError(t, err)
-
-	err = executor.Unlink(context.Background(), model.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
-	require.NoError(t, err)
-
-	require.Empty(t, runner.mutations)
-	_, err = executor.Lookup(context.Background(), model.LookupRequest{Mount: "vol", Parent: 7, Name: "file"})
-	require.ErrorIs(t, err, model.ErrNotFound)
-	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, inode, 99)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, uint32(1), stored.LinkCount)
-	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
-}
-
-func TestExecutorUnlinkLastReferenceVisibleCommitDeletesInode(t *testing.T) {
-	runner := newFakeRunner()
-	inode := testInodeForParentBucket(t, 7, 7)
-	seedDentry(t, runner, "vol", 7, "file", inode)
-	seedInode(t, runner, "vol", model.InodeRecord{Inode: inode, Type: model.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestVisibleCommitter(t, runner)
-	executor, err := newTestExecutor(
-		runner,
-		WithVisibleCommitter(committer),
-	)
-	require.NoError(t, err)
-
-	err = executor.Unlink(context.Background(), model.UnlinkRequest{Mount: "vol", Parent: 7, Name: "file"})
-	require.NoError(t, err)
-
-	require.Empty(t, runner.mutations)
-	_, err = executor.Lookup(context.Background(), model.LookupRequest{Mount: "vol", Parent: 7, Name: "file"})
-	require.ErrorIs(t, err, model.ErrNotFound)
-	_, ok, err := executor.readInode(context.Background(), testMountIdentity, inode, 99)
-	require.NoError(t, err)
-	require.False(t, ok)
-	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
-}
-
-func TestExecutorUnlinkRejectsDirectoryBeforeVisibleCommit(t *testing.T) {
-	runner := newFakeRunner()
-	inode := testInodeForParentBucket(t, 7, 7)
-	seedDentryType(t, runner, "vol", 7, "dir", inode, model.InodeTypeDirectory)
-	seedInode(t, runner, "vol", model.InodeRecord{Inode: inode, Type: model.InodeTypeDirectory, Mode: 0o755, LinkCount: 1})
-	committer := newTestVisibleCommitter(t, runner)
-	executor, err := newTestExecutor(
-		runner,
-		WithVisibleCommitter(committer),
-	)
-	require.NoError(t, err)
-
-	err = executor.Unlink(context.Background(), model.UnlinkRequest{Mount: "vol", Parent: 7, Name: "dir"})
-	require.ErrorIs(t, err, model.ErrInvalidRequest)
-
-	require.Empty(t, runner.mutations)
-	require.Equal(t, uint64(0), committer.Stats()["commit_total"])
-}
-
 func TestExecutorUnlinkRejectsDirectoryOnCommitPath(t *testing.T) {
 	runner := newFakeRunner()
 	inode := testInodeForParentBucket(t, 7, 7)
@@ -293,39 +225,6 @@ func TestExecutorRemoveDirectoryRejectsNonEmptyDirectory(t *testing.T) {
 	require.Equal(t, inode, record.Inode)
 }
 
-func TestExecutorRemoveDirectoryVisibleCommitServesOverlay(t *testing.T) {
-	runner := newFakeRunner()
-	inode := testInodeForParentBucket(t, 7, 7)
-	seedDentryType(t, runner, "vol", 7, "dir", inode, model.InodeTypeDirectory)
-	seedInode(t, runner, "vol", model.InodeRecord{
-		Inode:     inode,
-		Type:      model.InodeTypeDirectory,
-		Mode:      0o755,
-		LinkCount: 1,
-	})
-	committer := newTestVisibleCommitter(t, runner)
-	executor, err := newTestExecutor(
-		runner,
-		WithVisibleCommitter(committer),
-	)
-	require.NoError(t, err)
-
-	err = executor.RemoveDirectory(context.Background(), model.RemoveDirectoryRequest{Mount: "vol", Parent: 7, Name: "dir"})
-	require.NoError(t, err)
-
-	require.Empty(t, runner.mutations)
-	_, err = executor.Lookup(context.Background(), model.LookupRequest{Mount: "vol", Parent: 7, Name: "dir"})
-	require.ErrorIs(t, err, model.ErrNotFound)
-	_, ok, err := executor.readInode(context.Background(), testMountIdentity, inode, 99)
-	require.NoError(t, err)
-	require.False(t, ok)
-	parent, ok, err := executor.readInode(context.Background(), testMountIdentity, 7, 99)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Zero(t, parent.ChildCount)
-	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
-}
-
 func TestExecutorUnlinkMissingDentry(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner)
@@ -343,18 +242,6 @@ func TestExecutorUnlinkMissingDentry(t *testing.T) {
 func BenchmarkExecutorUnlinkDefaultPath(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner)
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchmarkExecutorUnlink(b, runner, executor)
-}
-
-func BenchmarkExecutorUnlinkVisibleCommit(b *testing.B) {
-	runner := newFakeRunner()
-	executor, err := newTestExecutor(
-		runner,
-		WithVisibleCommitter(noopVisibleCommitter{}),
-	)
 	if err != nil {
 		b.Fatal(err)
 	}

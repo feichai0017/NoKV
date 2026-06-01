@@ -95,23 +95,20 @@ func (r *Router) Subscribe(ctx context.Context, req observe.WatchRequest) (obser
 	return sub, nil
 }
 
-// Publish fans one key event out to matching subscribers. Durable storage
-// events are kept for resume replay; visible events are live-only because
-// their replay boundary is the later durable segment frontier.
+// Publish fans one committed key event out to matching subscribers. Events are
+// kept for resume replay under their raft apply cursor.
 func (r *Router) Publish(evt observe.WatchEvent) {
 	if r == nil || len(evt.Key) == 0 {
 		return
 	}
 	r.mu.Lock()
-	if eventIsReplayable(evt) {
-		id := eventID(evt)
-		history := r.regionLocked(evt.Cursor.RegionID)
-		if history.remembered(id) {
-			r.mu.Unlock()
-			return
-		}
-		history.remember(id, cloneEvent(evt))
+	id := eventID(evt)
+	history := r.regionLocked(evt.Cursor.RegionID)
+	if history.remembered(id) {
+		r.mu.Unlock()
+		return
 	}
+	history.remember(id, cloneEvent(evt))
 	subs := make([]*Subscription, 0, len(r.subs))
 	for _, sub := range r.subs {
 		subs = append(subs, sub)
@@ -120,17 +117,9 @@ func (r *Router) Publish(evt observe.WatchEvent) {
 	r.published.Add(1)
 	for _, sub := range subs {
 		if bytes.HasPrefix(evt.Key, sub.prefix) {
-			if eventIsReplayable(evt) {
-				sub.enqueue(evt)
-			} else {
-				sub.enqueueLive(evt)
-			}
+			sub.enqueue(evt)
 		}
 	}
-}
-
-func eventIsReplayable(evt observe.WatchEvent) bool {
-	return evt.Source != observe.WatchEventSourceRuntimeVisible
 }
 
 // OnApply publishes one storage-apply event after the runtime adapter has
@@ -360,31 +349,6 @@ func (s *Subscription) enqueue(evt observe.WatchEvent) {
 	}
 	s.outstanding++
 	s.pending[evt.Cursor]++
-	s.mu.Unlock()
-
-	select {
-	case s.events <- cloneEvent(evt):
-		if s.router != nil {
-			s.router.delivered.Add(1)
-		}
-	default:
-		s.closeWith(model.ErrWatchOverflow)
-		if s.router != nil {
-			s.router.dropped.Add(1)
-			s.router.overflow.Add(1)
-		}
-	}
-}
-
-func (s *Subscription) enqueueLive(evt observe.WatchEvent) {
-	if s == nil {
-		return
-	}
-	s.mu.Lock()
-	if s.closed {
-		s.mu.Unlock()
-		return
-	}
 	s.mu.Unlock()
 
 	select {

@@ -42,20 +42,6 @@ func (e *Executor) readDirectoryInode(ctx context.Context, mount model.MountIden
 	}, nil
 }
 
-func readVisibleDirectoryInode(view *visibleReadView, mount model.MountIdentity, inode model.InodeID) (model.InodeRecord, error) {
-	record, ok, err := view.readInode(mount, inode)
-	if err != nil {
-		return model.InodeRecord{}, err
-	}
-	if !ok {
-		return model.InodeRecord{}, model.ErrNotFound
-	}
-	if record.Type != model.InodeTypeDirectory {
-		return model.InodeRecord{}, model.ErrInvalidRequest
-	}
-	return record, nil
-}
-
 func incrementDirectoryChildCount(record model.InodeRecord) (model.InodeRecord, error) {
 	if record.Type != model.InodeTypeDirectory || record.ChildCount == ^uint64(0) {
 		return model.InodeRecord{}, model.ErrInvalidRequest

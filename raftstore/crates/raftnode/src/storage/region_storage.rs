@@ -1,5 +1,4 @@
 use std::fmt::Debug;
-use std::io;
 use std::ops::RangeBounds;
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Instant;
@@ -16,18 +15,25 @@ use crate::{
     RegionSnapshotEngine, SegmentedEntryLog,
 };
 
-use super::decode_region_snapshot_status;
+use super::{decode_region_snapshot_status, RegionLogFlushOptions, RegionLogFlusher};
 
 pub struct RegionLogStorage {
     log: Arc<Mutex<SegmentedEntryLog>>,
+    flusher: RegionLogFlusher,
     vote: Option<Vote<NodeId>>,
     committed: Option<LogId<NodeId>>,
 }
 
 impl RegionLogStorage {
     pub fn new(log: SegmentedEntryLog) -> Self {
+        Self::new_with_options(log, RegionLogFlushOptions::default())
+    }
+
+    pub fn new_with_options(log: SegmentedEntryLog, options: RegionLogFlushOptions) -> Self {
+        let log = Arc::new(Mutex::new(log));
         Self {
-            log: Arc::new(Mutex::new(log)),
+            flusher: RegionLogFlusher::new(log.clone(), options),
+            log,
             vote: None,
             committed: None,
         }
@@ -185,6 +191,7 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
     }
 
     async fn save_vote(&mut self, vote: &Vote<NodeId>) -> Result<(), StorageError<NodeId>> {
+        self.flusher.flush_now(ErrorVerb::Write).await?;
         self.lock_storage_log(ErrorVerb::Write)?
             .save_vote(*vote)
             .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
@@ -208,6 +215,7 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
         &mut self,
         committed: Option<LogId<NodeId>>,
     ) -> Result<(), StorageError<NodeId>> {
+        self.flusher.flush_now(ErrorVerb::Write).await?;
         self.lock_storage_log(ErrorVerb::Write)?
             .save_committed(committed)
             .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
@@ -237,32 +245,11 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
         I::IntoIter: OptionalSend,
     {
         let entries = entries.into_iter().collect::<Vec<_>>();
-        let entry_count = entries.len() as u64;
-        let result = self.lock_storage_log(ErrorVerb::Write).and_then(|mut log| {
-            let append_started = Instant::now();
-            log.append_entries(&entries)
-                .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
-            let append_duration = append_started.elapsed();
-            let sync_started = Instant::now();
-            log.sync()
-                .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
-            metrics::record_log_append(entry_count, append_duration, sync_started.elapsed());
-            Ok(())
-        });
-        match result {
-            Ok(()) => {
-                callback.log_io_completed(Ok(()));
-                Ok(())
-            }
-            Err(err) => {
-                let message = err.to_string();
-                callback.log_io_completed(Err(io::Error::other(message.clone())));
-                Err(storage_error(ErrorVerb::Write, message))
-            }
-        }
+        self.flusher.append_entries(&entries, callback)
     }
 
     async fn truncate(&mut self, log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
+        self.flusher.flush_now(ErrorVerb::Delete).await?;
         self.lock_storage_log(ErrorVerb::Delete)
             .and_then(|mut log| {
                 log.truncate_since(log_id)
@@ -272,6 +259,7 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
     }
 
     async fn purge(&mut self, log_id: LogId<NodeId>) -> Result<(), StorageError<NodeId>> {
+        self.flusher.flush_now(ErrorVerb::Delete).await?;
         self.lock_storage_log(ErrorVerb::Delete)
             .and_then(|mut log| {
                 log.purge_upto(log_id)

@@ -20,6 +20,13 @@ pub struct RaftNodeMetricsSnapshot {
     pub log_entries_max: u64,
     pub log_append_ns_total: u64,
     pub log_append_ns_max: u64,
+    pub log_flush_skipped_total: u64,
+    pub log_group_flush_calls_total: u64,
+    pub log_group_flush_entries_total: u64,
+    pub log_group_flush_entries_max: u64,
+    pub log_group_flush_callbacks_total: u64,
+    pub log_group_flush_callbacks_max: u64,
+    pub log_group_flush_errors_total: u64,
     pub log_sync_ns_total: u64,
     pub log_sync_ns_max: u64,
     pub state_machine_apply_calls_total: u64,
@@ -71,6 +78,13 @@ pub(crate) struct RaftNodeMetrics {
     log_entries_max: AtomicU64,
     log_append_ns_total: AtomicU64,
     log_append_ns_max: AtomicU64,
+    log_flush_skipped_total: AtomicU64,
+    log_group_flush_calls_total: AtomicU64,
+    log_group_flush_entries_total: AtomicU64,
+    log_group_flush_entries_max: AtomicU64,
+    log_group_flush_callbacks_total: AtomicU64,
+    log_group_flush_callbacks_max: AtomicU64,
+    log_group_flush_errors_total: AtomicU64,
     log_sync_ns_total: AtomicU64,
     log_sync_ns_max: AtomicU64,
     state_machine_apply_calls_total: AtomicU64,
@@ -124,6 +138,13 @@ pub fn raftnode_metrics_snapshot() -> RaftNodeMetricsSnapshot {
         log_entries_max: load(&metrics.log_entries_max),
         log_append_ns_total: load(&metrics.log_append_ns_total),
         log_append_ns_max: load(&metrics.log_append_ns_max),
+        log_flush_skipped_total: load(&metrics.log_flush_skipped_total),
+        log_group_flush_calls_total: load(&metrics.log_group_flush_calls_total),
+        log_group_flush_entries_total: load(&metrics.log_group_flush_entries_total),
+        log_group_flush_entries_max: load(&metrics.log_group_flush_entries_max),
+        log_group_flush_callbacks_total: load(&metrics.log_group_flush_callbacks_total),
+        log_group_flush_callbacks_max: load(&metrics.log_group_flush_callbacks_max),
+        log_group_flush_errors_total: load(&metrics.log_group_flush_errors_total),
         log_sync_ns_total: load(&metrics.log_sync_ns_total),
         log_sync_ns_max: load(&metrics.log_sync_ns_max),
         state_machine_apply_calls_total: load(&metrics.state_machine_apply_calls_total),
@@ -212,7 +233,7 @@ pub(crate) fn record_read_barrier_execution(duration: Duration, ok: bool) {
     );
 }
 
-pub(crate) fn record_log_append(entries: u64, append_duration: Duration, sync_duration: Duration) {
+pub(crate) fn record_log_append(entries: u64, append_duration: Duration) {
     let metrics = raftnode_metrics();
     metrics
         .log_append_calls_total
@@ -226,6 +247,48 @@ pub(crate) fn record_log_append(entries: u64, append_duration: Duration, sync_du
         &metrics.log_append_ns_max,
         append_duration,
     );
+}
+
+pub(crate) fn record_log_flush_skipped(_entries: u64) {
+    let metrics = raftnode_metrics();
+    metrics
+        .log_flush_skipped_total
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_log_group_flush(callbacks: u64, entries: u64, sync_duration: Duration) {
+    let metrics = raftnode_metrics();
+    record_log_group_flush_inner(metrics, callbacks, entries, sync_duration, false);
+}
+
+pub(crate) fn record_log_group_flush_error(callbacks: u64, entries: u64, sync_duration: Duration) {
+    let metrics = raftnode_metrics();
+    record_log_group_flush_inner(metrics, callbacks, entries, sync_duration, true);
+}
+
+fn record_log_group_flush_inner(
+    metrics: &RaftNodeMetrics,
+    callbacks: u64,
+    entries: u64,
+    sync_duration: Duration,
+    error: bool,
+) {
+    metrics
+        .log_group_flush_calls_total
+        .fetch_add(1, Ordering::Relaxed);
+    metrics
+        .log_group_flush_entries_total
+        .fetch_add(entries, Ordering::Relaxed);
+    metrics
+        .log_group_flush_callbacks_total
+        .fetch_add(callbacks, Ordering::Relaxed);
+    record_max(&metrics.log_group_flush_entries_max, entries);
+    record_max(&metrics.log_group_flush_callbacks_max, callbacks);
+    if error {
+        metrics
+            .log_group_flush_errors_total
+            .fetch_add(1, Ordering::Relaxed);
+    }
     record_duration(
         &metrics.log_sync_ns_total,
         &metrics.log_sync_ns_max,
@@ -360,6 +423,13 @@ impl Default for RaftNodeMetrics {
             log_entries_max: AtomicU64::new(0),
             log_append_ns_total: AtomicU64::new(0),
             log_append_ns_max: AtomicU64::new(0),
+            log_flush_skipped_total: AtomicU64::new(0),
+            log_group_flush_calls_total: AtomicU64::new(0),
+            log_group_flush_entries_total: AtomicU64::new(0),
+            log_group_flush_entries_max: AtomicU64::new(0),
+            log_group_flush_callbacks_total: AtomicU64::new(0),
+            log_group_flush_callbacks_max: AtomicU64::new(0),
+            log_group_flush_errors_total: AtomicU64::new(0),
             log_sync_ns_total: AtomicU64::new(0),
             log_sync_ns_max: AtomicU64::new(0),
             state_machine_apply_calls_total: AtomicU64::new(0),

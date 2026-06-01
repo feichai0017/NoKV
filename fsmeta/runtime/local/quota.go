@@ -50,14 +50,7 @@ func (q *QuotaLedger) ReserveQuota(ctx context.Context, runner backend.Store, ch
 	return nil, nil
 }
 
-// AllowVisibleQuota keeps QuotaLedger compatible with executors that can
-// admit visible writes. The local runtime does not wire a visible committer,
-// but unlimited quota still has no durable counter side effects.
-func (q *QuotaLedger) AllowVisibleQuota(context.Context, []fsmetaexec.QuotaChange) (bool, error) {
-	return true, nil
-}
-
-// ReadQuotaUsage derives local unlimited-quota diagnostics from visible dentries
+// ReadQuotaUsage derives local unlimited-quota diagnostics from dentries
 // instead of forcing every metadata write to update a mount-wide counter key.
 func (q *QuotaLedger) ReadQuotaUsage(ctx context.Context, runner backend.Store, mount model.MountIdentity, scope model.InodeID, version uint64) (model.UsageRecord, bool, error) {
 	if q == nil || runner == nil {

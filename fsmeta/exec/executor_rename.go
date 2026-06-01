@@ -14,92 +14,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
-func (e *Executor) tryVisibleRename(ctx context.Context, compiled compile.CompiledOp, move renameMove) (bool, error) {
-	delta := compiled.Delta
-	plan := delta.Plan
-	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
-		return false, nil
-	}
-	view := e.newVisibleReadView(ctx)
-	record, err := view.readDentry(plan.ReadKeys[0])
-	if err != nil {
-		return false, err
-	}
-	sourceFromVisible := view.observedKeyFromVisibleOverlay(plan.ReadKeys[0])
-	if !e.visibleNotExistsKnown(delta.Authority, plan.ReadKeys[1], e.visiblePredicateIndex()) {
-		if _, err := view.readDentry(plan.ReadKeys[1]); err == nil {
-			return false, model.ErrExists
-		} else if !errors.Is(err, model.ErrNotFound) {
-			return false, err
-		}
-	}
-	if !sourceFromVisible {
-		if view.observedVisibleOverlay() {
-			return false, errVisibleOverlayFallbackUnsafe
-		}
-		return false, nil
-	}
-	fromParent, err := readVisibleDirectoryInode(view, move.identity, move.fromParent)
-	if err != nil {
-		return false, err
-	}
-	toParent := fromParent
-	if move.fromParent != move.toParent {
-		fromParent, err = decrementDirectoryChildCount(fromParent)
-		if err != nil {
-			return false, err
-		}
-		toParent, err = readVisibleDirectoryInode(view, move.identity, move.toParent)
-		if err != nil {
-			return false, err
-		}
-		toParent, err = incrementDirectoryChildCount(toParent)
-		if err != nil {
-			return false, err
-		}
-	}
-	if move.fromParent != move.toParent {
-		if inode, ok, err := view.readInode(move.identity, record.Inode); err != nil {
-			return false, err
-		} else if ok {
-			quotaOK, err := e.visibleQuotaAllowsCommit(ctx, []QuotaChange{
-				{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.fromParent, Bytes: -inodeSizeDelta(inode.Size), Inodes: -1},
-				{Mount: move.mount, MountKeyID: move.identity.MountKeyID, Scope: move.toParent, Bytes: inodeSizeDelta(inode.Size), Inodes: 1},
-			})
-			if err != nil {
-				return false, err
-			}
-			if !quotaOK {
-				return false, nil
-			}
-		}
-	}
-	record.Parent = move.toParent
-	record.Name = move.toName
-	value, err := layout.EncodeDentryValue(record)
-	if err != nil {
-		return false, err
-	}
-	fromParentValue, err := layout.EncodeInodeValue(fromParent)
-	if err != nil {
-		return false, err
-	}
-	toParentValue, err := layout.EncodeInodeValue(toParent)
-	if err != nil {
-		return false, err
-	}
-	concrete, err := view.materializeVisibleCompiledOp(compiled, []compile.WriteEffect{
-		visibleDeleteEffect(plan.MutateKeys[0]),
-		visiblePutEffect(plan.MutateKeys[1], value),
-		visiblePutEffect(plan.MutateKeys[2], fromParentValue),
-		visiblePutEffect(plan.MutateKeys[3], toParentValue),
-	})
-	if err != nil {
-		return false, err
-	}
-	return e.tryVisibleCommitAfterRead(ctx, view, concrete)
-}
-
 type renameMove struct {
 	mount      model.MountID
 	identity   model.MountIdentity
@@ -163,13 +77,6 @@ func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 	move := renameMoveFromRename(req, mount)
 	var movedSize uint64
 	var movedInode bool
-	if committed, err := e.tryVisibleRename(ctx, program.Compiled, move); committed || err != nil {
-		if err != nil {
-			return err
-		}
-		e.forgetVisibleEmptyDirectory(mount, req.ToParent)
-		return nil
-	}
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		mutations, predicates, err := e.prepareRenameMutations(ctx, plan, move, startVersion, &movedSize, &movedInode)
 		if err != nil {
@@ -182,7 +89,6 @@ func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 	}, delta.Authority); err != nil {
 		return err
 	}
-	e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 	return nil
 }
 
@@ -220,7 +126,6 @@ func (e *Executor) RenameReplace(ctx context.Context, req model.RenameReplaceReq
 	}, delta.Authority); err != nil {
 		return model.RenameReplaceResult{}, err
 	}
-	e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 	return result, nil
 }
 
@@ -284,7 +189,6 @@ func (e *Executor) RenameSubtree(ctx context.Context, req model.RenameSubtreeReq
 	if handoffStarted && committedAt == 0 {
 		return errSubtreeHandoffWithoutFrontier
 	}
-	e.forgetVisibleEmptyDirectory(mount, req.ToParent)
 	return nil
 }
 

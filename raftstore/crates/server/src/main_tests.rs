@@ -95,7 +95,7 @@ fn storage_backend_memory_is_explicit_test_mode() {
 
 #[test]
 fn storage_backend_rejects_unknown_backend() {
-    let err = StorageBackend::from_values(Some("pebble".to_owned()), None).unwrap_err();
+    let err = StorageBackend::from_values(Some("rocksdb".to_owned()), None).unwrap_err();
     assert!(err.to_string().contains("expected holt or memory"));
 }
 

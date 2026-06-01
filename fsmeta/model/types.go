@@ -76,20 +76,14 @@ type DentryAttrPair struct {
 	Inode  InodeRecord
 }
 
-// SnapshotEvidenceRef identifies one runtime-visible artifact retained by a
+// SnapshotEvidenceRef identifies one runtime artifact retained by a
 // SnapshotSubtreeToken. The payload bytes are intentionally not part of the
 // public token; another gateway can use the runtime evidence to prove that the
-// visible snapshot frontier is still recoverable.
+// snapshot frontier is still recoverable.
 type SnapshotEvidenceRef struct {
 	EpochID       uint64
 	EvidenceRoot  [32]byte
 	PayloadDigest [32]byte
-}
-
-// VisibleSnapshotCapture is the runtime-internal evidence returned when a
-// visible snapshot has been made durable without forcing immediate install.
-type VisibleSnapshotCapture struct {
-	Evidence []SnapshotEvidenceRef
 }
 
 // Valid reports whether ref can address durable runtime snapshot evidence.

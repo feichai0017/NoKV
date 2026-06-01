@@ -1,11 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::Duration;
 
 use nokv_metadata_state::MemoryMetadataStore;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use openraft::{storage::RaftLogStorageExt, CommittedLeaderId, EntryPayload, LogId};
 
 use super::*;
-use crate::{AppliedMetadataEngine, MetadataReadExecutor, Proposal};
+use crate::{AppliedMetadataEngine, MetadataReadExecutor, Proposal, RegionLogFlushOptions};
 
 fn log_id(term: u64, index: u64) -> LogId<NodeId> {
     LogId::new(CommittedLeaderId::new(term, 1), index)
@@ -74,6 +75,42 @@ async fn region_log_storage_appends_and_reads_entries() {
     let read = reader.try_get_log_entries(2..3).await.unwrap();
     assert_eq!(read.len(), 1);
     assert_eq!(read[0].log_id.index, 2);
+}
+
+#[tokio::test]
+async fn region_log_storage_defaults_to_buffered_log_flush() {
+    let before = crate::metrics::raftnode_metrics_snapshot();
+    let dir = tempfile::tempdir().unwrap();
+    let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+    let mut storage = RegionLogStorage::new(log);
+
+    storage
+        .blocking_append(vec![normal_entry(7, 1, b"a", b"1")])
+        .await
+        .unwrap();
+
+    let after = crate::metrics::raftnode_metrics_snapshot();
+    assert!(after.log_flush_skipped_total > before.log_flush_skipped_total);
+}
+
+#[tokio::test]
+async fn region_log_storage_group_commit_flushes_before_callback() {
+    let before = crate::metrics::raftnode_metrics_snapshot();
+    let dir = tempfile::tempdir().unwrap();
+    let log = SegmentedEntryLog::open(7, dir.path()).unwrap();
+    let mut storage = RegionLogStorage::new_with_options(
+        log,
+        RegionLogFlushOptions::group_commit(Duration::from_millis(1)),
+    );
+
+    storage
+        .blocking_append(vec![normal_entry(7, 1, b"a", b"1")])
+        .await
+        .unwrap();
+
+    let after = crate::metrics::raftnode_metrics_snapshot();
+    assert!(after.log_group_flush_calls_total > before.log_group_flush_calls_total);
+    assert!(after.log_group_flush_callbacks_total > before.log_group_flush_callbacks_total);
 }
 
 #[tokio::test]

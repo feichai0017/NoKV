@@ -207,7 +207,7 @@ fn metadata_batch_json(metrics: MetadataBatchMetricsSnapshot) -> String {
 
 fn raftnode_json(metrics: RaftNodeMetricsSnapshot) -> String {
     format!(
-        "{{\"proposals_total\":{},\"proposal_commands_total\":{},\"proposal_commands_max\":{},\"proposal_ns_total\":{},\"proposal_ns_max\":{},\"read_barrier_requests_total\":{},\"read_barrier_shared_total\":{},\"read_barrier_executions_total\":{},\"read_barrier_errors_total\":{},\"read_barrier_ns_total\":{},\"read_barrier_ns_max\":{},\"log_append_calls_total\":{},\"log_entries_total\":{},\"log_entries_max\":{},\"log_append_ns_total\":{},\"log_append_ns_max\":{},\"log_sync_ns_total\":{},\"log_sync_ns_max\":{},\"state_machine_apply_calls_total\":{},\"state_machine_apply_entries_total\":{},\"state_machine_apply_entries_max\":{},\"state_machine_apply_ns_total\":{},\"state_machine_apply_ns_max\":{},\"metadata_apply_batches_total\":{},\"metadata_apply_commands_total\":{},\"metadata_apply_commands_max\":{},\"metadata_apply_ns_total\":{},\"metadata_apply_ns_max\":{},\"append_entries_client_calls_total\":{},\"append_entries_client_entries_total\":{},\"append_entries_client_entries_max\":{},\"append_entries_client_ns_total\":{},\"append_entries_client_ns_max\":{},\"append_entries_client_empty_calls_total\":{},\"append_entries_client_empty_ns_total\":{},\"append_entries_client_data_calls_total\":{},\"append_entries_client_data_ns_total\":{},\"append_entries_client_error_calls_total\":{},\"append_entries_client_error_ns_total\":{},\"append_entries_server_calls_total\":{},\"append_entries_server_entries_total\":{},\"append_entries_server_entries_max\":{},\"append_entries_server_ns_total\":{},\"append_entries_server_ns_max\":{},\"append_entries_server_empty_calls_total\":{},\"append_entries_server_empty_ns_total\":{},\"append_entries_server_data_calls_total\":{},\"append_entries_server_data_ns_total\":{}}}",
+        "{{\"proposals_total\":{},\"proposal_commands_total\":{},\"proposal_commands_max\":{},\"proposal_ns_total\":{},\"proposal_ns_max\":{},\"read_barrier_requests_total\":{},\"read_barrier_shared_total\":{},\"read_barrier_executions_total\":{},\"read_barrier_errors_total\":{},\"read_barrier_ns_total\":{},\"read_barrier_ns_max\":{},\"log_append_calls_total\":{},\"log_entries_total\":{},\"log_entries_max\":{},\"log_append_ns_total\":{},\"log_append_ns_max\":{},\"log_flush_skipped_total\":{},\"log_group_flush_calls_total\":{},\"log_group_flush_entries_total\":{},\"log_group_flush_entries_max\":{},\"log_group_flush_callbacks_total\":{},\"log_group_flush_callbacks_max\":{},\"log_group_flush_errors_total\":{},\"log_sync_ns_total\":{},\"log_sync_ns_max\":{},\"state_machine_apply_calls_total\":{},\"state_machine_apply_entries_total\":{},\"state_machine_apply_entries_max\":{},\"state_machine_apply_ns_total\":{},\"state_machine_apply_ns_max\":{},\"metadata_apply_batches_total\":{},\"metadata_apply_commands_total\":{},\"metadata_apply_commands_max\":{},\"metadata_apply_ns_total\":{},\"metadata_apply_ns_max\":{},\"append_entries_client_calls_total\":{},\"append_entries_client_entries_total\":{},\"append_entries_client_entries_max\":{},\"append_entries_client_ns_total\":{},\"append_entries_client_ns_max\":{},\"append_entries_client_empty_calls_total\":{},\"append_entries_client_empty_ns_total\":{},\"append_entries_client_data_calls_total\":{},\"append_entries_client_data_ns_total\":{},\"append_entries_client_error_calls_total\":{},\"append_entries_client_error_ns_total\":{},\"append_entries_server_calls_total\":{},\"append_entries_server_entries_total\":{},\"append_entries_server_entries_max\":{},\"append_entries_server_ns_total\":{},\"append_entries_server_ns_max\":{},\"append_entries_server_empty_calls_total\":{},\"append_entries_server_empty_ns_total\":{},\"append_entries_server_data_calls_total\":{},\"append_entries_server_data_ns_total\":{}}}",
         metrics.proposals_total,
         metrics.proposal_commands_total,
         metrics.proposal_commands_max,
@@ -224,6 +224,13 @@ fn raftnode_json(metrics: RaftNodeMetricsSnapshot) -> String {
         metrics.log_entries_max,
         metrics.log_append_ns_total,
         metrics.log_append_ns_max,
+        metrics.log_flush_skipped_total,
+        metrics.log_group_flush_calls_total,
+        metrics.log_group_flush_entries_total,
+        metrics.log_group_flush_entries_max,
+        metrics.log_group_flush_callbacks_total,
+        metrics.log_group_flush_callbacks_max,
+        metrics.log_group_flush_errors_total,
         metrics.log_sync_ns_total,
         metrics.log_sync_ns_max,
         metrics.state_machine_apply_calls_total,
@@ -337,6 +344,13 @@ mod tests {
                 log_entries_max: 1,
                 log_append_ns_total: 30,
                 log_append_ns_max: 20,
+                log_flush_skipped_total: 3,
+                log_group_flush_calls_total: 4,
+                log_group_flush_entries_total: 8,
+                log_group_flush_entries_max: 5,
+                log_group_flush_callbacks_total: 6,
+                log_group_flush_callbacks_max: 3,
+                log_group_flush_errors_total: 1,
                 log_sync_ns_total: 40,
                 log_sync_ns_max: 25,
                 state_machine_apply_calls_total: 2,
@@ -400,6 +414,9 @@ mod tests {
         assert!(payload.contains("\"proposal_commands_total\":5"));
         assert!(payload.contains("\"read_barrier_requests_total\":6"));
         assert!(payload.contains("\"read_barrier_shared_total\":4"));
+        assert!(payload.contains("\"log_flush_skipped_total\":3"));
+        assert!(payload.contains("\"log_group_flush_calls_total\":4"));
+        assert!(payload.contains("\"log_group_flush_errors_total\":1"));
         assert!(payload.contains("\"append_entries_client_calls_total\":3"));
         assert!(payload.contains("\"append_entries_client_empty_calls_total\":1"));
         assert!(payload.contains("\"append_entries_client_data_calls_total\":2"));

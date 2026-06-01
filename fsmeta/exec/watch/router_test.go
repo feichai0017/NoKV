@@ -124,45 +124,6 @@ func TestRouterDeduplicatesReplicatedApplyEvents(t *testing.T) {
 	}
 }
 
-func TestRouterPublishesVisibleEventsLiveOnly(t *testing.T) {
-	router := NewRouter()
-	sub, err := router.Subscribe(context.Background(), observe.WatchRequest{
-		KeyPrefix:          []byte("k/"),
-		BackPressureWindow: 1,
-	})
-	require.NoError(t, err)
-	defer sub.Close()
-
-	visible := observe.WatchEvent{
-		Cursor: observe.WatchCursor{
-			Term:  9,
-			Index: 1,
-		},
-		Source: observe.WatchEventSourceRuntimeVisible,
-		Key:    []byte("k/a"),
-	}
-	router.Publish(visible)
-	require.Equal(t, visible, <-sub.Events())
-
-	next := visible
-	next.Cursor.Index = 2
-	next.Key = []byte("k/b")
-	router.Publish(next)
-	require.Equal(t, next, <-sub.Events())
-	require.NoError(t, sub.Err())
-
-	stats := router.Stats()
-	require.Equal(t, 0, stats["regions"])
-	require.Equal(t, 0, stats["recent_events"])
-
-	replay, err := router.Subscribe(context.Background(), observe.WatchRequest{
-		KeyPrefix:    []byte("k/"),
-		ResumeCursor: observe.WatchCursor{RegionID: 1, Term: 1, Index: 1},
-	})
-	require.ErrorIs(t, err, model.ErrWatchCursorExpired)
-	require.Nil(t, replay)
-}
-
 func TestRouterStatsTracksPublishedAndSubscribers(t *testing.T) {
 	router := NewRouter()
 	require.Equal(t, map[string]any{

@@ -79,14 +79,6 @@ func TestEvaluateCatchesForbiddenBoundaries(t *testing.T) {
 			wantPackage: ModulePath + "/coordinator/scheduling",
 		},
 		{
-			name:        "storecontrol reaching into scheduling",
-			pkg:         ModulePath + "/coordinator/storecontrol",
-			imports:     []string{ModulePath + "/coordinator/scheduling"},
-			wantRule:    "coordinator storecontrol stays out of scheduling and service",
-			wantImport:  ModulePath + "/coordinator/scheduling",
-			wantPackage: ModulePath + "/coordinator/storecontrol",
-		},
-		{
 			name:        "utils importing fsmeta",
 			pkg:         ModulePath + "/utils",
 			imports:     []string{ModulePath + "/fsmeta/model"},
@@ -121,13 +113,6 @@ func TestEvaluateHonorsScopes(t *testing.T) {
 			name:    "fsmeta client outside fsmeta exec scope",
 			pkg:     ModulePath + "/fsmeta/client",
 			imports: []string{ModulePath + "/pb/fsmeta"},
-		},
-		{
-			name: "storecontrol importing client is allowed",
-			pkg:  ModulePath + "/coordinator/storecontrol",
-			imports: []string{
-				ModulePath + "/coordinator/client",
-			},
 		},
 	}
 	for _, tc := range cases {

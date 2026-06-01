@@ -23,7 +23,7 @@ validation.
 | Area | Tests |
 |---|---|
 | fsmeta semantics | `go test ./fsmeta/model ./fsmeta/layout ./fsmeta/exec ./fsmeta/contract` |
-| local Pebble runtime | `go test ./fsmeta/runtime/local ./cmd/nokv-fsmeta` |
+| local Badger runtime | `go test ./fsmeta/runtime/local ./cmd/nokv-fsmeta` |
 | root truth | `go test ./meta/root/...` |
 | coordinator | `go test ./coordinator/...` |
 | Rust data plane | `cargo test --manifest-path raftstore/Cargo.toml --workspace` |

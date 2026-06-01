@@ -23,36 +23,10 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req model.SnapshotSubtre
 		return model.SnapshotSubtreeToken{}, err
 	}
 	delta := program.Compiled.Delta
-	if capturer, ok := e.visibleCommitter.(VisibleSnapshotCapturer); ok {
-		version, err := e.reserveReadVersion(ctx)
-		if err != nil {
-			return model.SnapshotSubtreeToken{}, err
-		}
-		capture, captured, err := capturer.CaptureVisibleSnapshot(ctx, version, delta.Authority)
-		if err != nil {
-			return model.SnapshotSubtreeToken{}, err
-		}
-		if captured {
-			return model.SnapshotSubtreeToken{
-				Mount:           req.Mount,
-				MountKeyID:      mountRecord.MountKeyID,
-				RootInode:       req.RootInode,
-				ReadVersion:     version,
-				RuntimeEvidence: append([]model.SnapshotEvidenceRef(nil), capture.Evidence...),
-			}, nil
-		}
-	}
-	if err := e.flushVisible(ctx); err != nil {
-		return model.SnapshotSubtreeToken{}, err
-	}
+	_ = delta
 	version, err := e.reserveReadVersion(ctx)
 	if err != nil {
 		return model.SnapshotSubtreeToken{}, err
-	}
-	if capturer, ok := e.visibleCommitter.(InstalledVisibleSnapshotCapturer); ok {
-		if err := capturer.CaptureInstalledVisibleSnapshot(version); err != nil {
-			return model.SnapshotSubtreeToken{}, err
-		}
 	}
 	return model.SnapshotSubtreeToken{
 		Mount:       req.Mount,
@@ -77,15 +51,4 @@ func (e *Executor) ResolveSnapshotSubtreeToken(ctx context.Context, token model.
 	}
 	token.MountKeyID = record.MountKeyID
 	return token.Clone(), nil
-}
-
-func (e *Executor) RetireVisibleSnapshot(version uint64) {
-	if e == nil || version == 0 {
-		return
-	}
-	retirer, ok := e.visibleCommitter.(visibleSnapshotRetirer)
-	if !ok {
-		return
-	}
-	retirer.RetireVisibleSnapshot(version)
 }

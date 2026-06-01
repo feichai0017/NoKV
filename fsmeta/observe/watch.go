@@ -16,7 +16,6 @@ type WatchEventSource uint8
 
 const (
 	WatchEventSourceCommit WatchEventSource = iota + 1
-	WatchEventSourceRuntimeVisible
 )
 
 // ApplyEvent is the fsmeta watch router's input event. Runtime adapters convert

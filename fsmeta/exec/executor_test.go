@@ -10,16 +10,13 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
-	"sync"
 	"testing"
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
-	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	"github.com/feichai0017/NoKV/fsmeta/proof"
 	"github.com/stretchr/testify/require"
 )
 
@@ -100,28 +97,6 @@ func requireMetadataPredicateStatUint(t *testing.T, stats map[string]any, kind m
 	require.Equal(t, want, opStats[key])
 }
 
-func requireVisibleCommitStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
-	t.Helper()
-	raw, ok := stats["visible_commit"]
-	require.True(t, ok, "missing visible_commit stats")
-	visibleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "visible_commit has type %T", raw)
-	got, ok := visibleStats[key].(uint64)
-	require.Truef(t, ok, "visible_commit[%s] has type %T", key, visibleStats[key])
-	require.Equal(t, want, got)
-}
-
-func requireVisibleCommitStatBool(t *testing.T, stats map[string]any, key string, want bool) {
-	t.Helper()
-	raw, ok := stats["visible_commit"]
-	require.True(t, ok, "missing visible_commit stats")
-	visibleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "visible_commit has type %T", raw)
-	got, ok := visibleStats[key].(bool)
-	require.Truef(t, ok, "visible_commit[%s] has type %T", key, visibleStats[key])
-	require.Equal(t, want, got)
-}
-
 func metadataLockedError(mount model.MountID, parent model.InodeID, name string) error {
 	key, err := layout.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
 	if err != nil {
@@ -148,57 +123,6 @@ type fakeAuthorityResolver struct {
 	calls int
 }
 
-type fakeVisibleCommitter struct {
-	err             error
-	beforeAdmission func()
-	calls           int
-	ids             []VisibleOperationID
-	deltas          []compile.SemanticDelta
-}
-
-type testVersionAllocator interface {
-	ReserveTimestamp(context.Context, uint64) (uint64, error)
-}
-
-type testVisibleCommitter struct {
-	versions  testVersionAllocator
-	submitErr error
-
-	mu               sync.Mutex
-	rows             map[string]VisibleOverlayKV
-	generation       uint64
-	commitTotal      uint64
-	knownKeys        map[string]bool
-	emptyDirs        map[string]struct{}
-	emptyBaseDirs    map[string]struct{}
-	emptySessionDirs map[string]struct{}
-}
-
-type fakeVisibleFlusher struct {
-	fakeVisibleCommitter
-	flushCalls int
-}
-
-type fakeVisibleSnapshotCapturer struct {
-	fakeVisibleFlusher
-	capture         bool
-	segmentRefs     []model.SnapshotEvidenceRef
-	err             error
-	captureVersions []uint64
-	captureScopes   []compile.AuthorityScope
-}
-
-type noopVisibleCommitter struct{}
-
-type scanOverlayCommitter struct {
-	noopVisibleCommitter
-	rows             []VisibleOverlayKV
-	values           map[string]VisibleOverlayKV
-	directoryPresent bool
-}
-
-var _ VisibleOverlayReader = scanOverlayCommitter{}
-
 type fakeSubtreePublisher struct {
 	starts      []subtreePublishCall
 	completes   []subtreePublishCall
@@ -208,11 +132,9 @@ type fakeSubtreePublisher struct {
 }
 
 type fakeQuotaResolver struct {
-	err                error
-	changes            [][]QuotaChange
-	mutation           *backend.Mutation
-	allowVisibleCommit bool
-	visibleChecks      [][]QuotaChange
+	err      error
+	changes  [][]QuotaChange
+	mutation *backend.Mutation
 }
 
 type fakeInodeAllocator struct {
@@ -238,25 +160,6 @@ func testInodeForParentBucket(t *testing.T, parent model.InodeID, exclude ...mod
 		}
 	}
 	t.Fatalf("no inode found for parent bucket %d", target)
-	return 0
-}
-
-func testInodeForDifferentBucket(t *testing.T, parent model.InodeID, exclude ...model.InodeID) model.InodeID {
-	t.Helper()
-	target := layout.BucketForInodeID(parent)
-	excluded := make(map[model.InodeID]struct{}, len(exclude))
-	for _, id := range exclude {
-		excluded[id] = struct{}{}
-	}
-	for id := model.InodeID(2); id < 1_000_000; id++ {
-		if _, ok := excluded[id]; ok {
-			continue
-		}
-		if layout.BucketForInodeID(id) != target {
-			return id
-		}
-	}
-	t.Fatalf("no inode found outside parent bucket %d", target)
 	return 0
 }
 
@@ -293,14 +196,6 @@ func (q *fakeQuotaResolver) ReserveQuota(_ context.Context, _ backend.Store, cha
 		return []*backend.Mutation{cloneMutation(q.mutation)}, nil
 	}
 	return nil, nil
-}
-
-func (q *fakeQuotaResolver) AllowVisibleQuota(_ context.Context, changes []QuotaChange) (bool, error) {
-	q.visibleChecks = append(q.visibleChecks, append([]QuotaChange(nil), changes...))
-	if q.err != nil {
-		return false, q.err
-	}
-	return q.allowVisibleCommit, nil
 }
 
 func (p *fakeSubtreePublisher) StartSubtreeHandoff(_ context.Context, mount model.MountID, root model.InodeID, frontier uint64) error {
@@ -343,520 +238,6 @@ func (r *fakeAuthorityResolver) SameAuthority(context.Context, model.MountID, mo
 		return false, r.err
 	}
 	return r.same, nil
-}
-
-func (c *fakeVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOperationID, op compile.MaterializedOp, admission VisibleAdmissionFunc) (VisibleAck, error) {
-	if c.beforeAdmission != nil {
-		c.beforeAdmission()
-	}
-	admitted, err := admitVisibleForTest(ctx, op, admission, proof.ProofFrontier{EpochID: 1, Sequence: id.Seq})
-	if err != nil {
-		return VisibleAck{}, err
-	}
-	op = admitted
-	c.calls++
-	c.ids = append(c.ids, id)
-	c.deltas = append(c.deltas, op.Delta)
-	if c.err != nil {
-		return VisibleAck{}, c.err
-	}
-	return VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
-}
-
-func (c *testVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOperationID, op compile.MaterializedOp, admission VisibleAdmissionFunc) (VisibleAck, error) {
-	if c == nil {
-		return VisibleAck{}, ErrVisibleAdmissionRejected
-	}
-	admitted, err := admitVisibleForTest(ctx, op, admission, proof.ProofFrontier{EpochID: 1, Sequence: id.Seq})
-	if err != nil {
-		return VisibleAck{}, err
-	}
-	op = admitted
-	if c.submitErr != nil {
-		return VisibleAck{}, c.submitErr
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	c.applyVisibleDeltaLocked(op.Delta)
-	c.commitTotal++
-	return VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
-}
-
-func (c *testVisibleCommitter) Flush(ctx context.Context) error {
-	return c.FlushDurable(ctx)
-}
-
-func (c *testVisibleCommitter) FlushDurable(ctx context.Context) error {
-	if c == nil || c.versions == nil {
-		return ErrVisibleAdmissionRejected
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if len(c.rows) == 0 {
-		return nil
-	}
-	if _, err := c.versions.ReserveTimestamp(ctx, uint64(len(c.rows))); err != nil {
-		return err
-	}
-	c.rows = make(map[string]VisibleOverlayKV)
-	c.generation++
-	return nil
-}
-
-func (c *testVisibleCommitter) GetVisibleOverlay(key []byte) ([]byte, bool, bool) {
-	if c == nil {
-		return nil, false, false
-	}
-	value, deleted, ok := c.GetVisibleOverlayView(key)
-	return cloneTestBytes(value), deleted, ok
-}
-
-func (c *testVisibleCommitter) GetVisibleOverlayView(key []byte) ([]byte, bool, bool) {
-	if c == nil {
-		return nil, false, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	row, ok := c.rows[string(key)]
-	if !ok {
-		return nil, false, false
-	}
-	return row.Value, row.Delete, true
-}
-
-func (c *testVisibleCommitter) CaptureVisibleOverlayRead() (uint64, uint64) {
-	if c == nil {
-		return 0, 0
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return c.generation, 0
-}
-
-func (c *testVisibleCommitter) GetVisibleOverlayViewAt(overlayGeneration, _ uint64, key []byte) ([]byte, bool, bool) {
-	if c == nil {
-		return nil, false, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if overlayGeneration != c.generation {
-		return nil, false, false
-	}
-	row, ok := c.rows[string(key)]
-	if !ok {
-		return nil, false, false
-	}
-	return row.Value, row.Delete, true
-}
-
-func (c *testVisibleCommitter) ScanVisibleOverlay(start []byte, limit uint32) []VisibleOverlayKV {
-	if c == nil {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return scanVisibleRowsForTest(c.rows, nil, start, limit)
-}
-
-func (c *testVisibleCommitter) ScanVisibleDirectoryAt(overlayGeneration, _ uint64, prefix, start []byte, limit uint32) []VisibleOverlayKV {
-	if c == nil {
-		return nil
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if overlayGeneration != c.generation {
-		return nil
-	}
-	return scanVisibleRowsForTest(c.rows, prefix, start, limit)
-}
-
-func (c *testVisibleCommitter) HasVisibleDirectoryOverlay(prefix []byte) bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	for _, row := range c.rows {
-		if bytes.HasPrefix(row.Key, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func (c *testVisibleCommitter) KeyState(key []byte) (bool, bool) {
-	if c == nil {
-		return false, false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	row, ok := c.rows[string(key)]
-	if ok {
-		return !row.Delete, true
-	}
-	present, ok := c.knownKeys[string(key)]
-	if ok {
-		return present, true
-	}
-	parts, ok := layout.InspectKey(key)
-	if !ok || parts.Kind != layout.KeyKindSession {
-		return false, false
-	}
-	mount := model.MountIdentity{MountID: testMountIdentity.MountID, MountKeyID: parts.MountKeyID}
-	if _, ok := c.emptySessionDirs[visibleDirectoryFactKey(mount, parts.Inode)]; ok {
-		return false, true
-	}
-	return false, false
-}
-
-func (c *testVisibleCommitter) DirectoryEmpty(mount model.MountIdentity, inode model.InodeID) bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.emptyDirs[visibleDirectoryFactKey(mount, inode)]
-	return ok
-}
-
-func (c *testVisibleCommitter) DirectoryBaseEmpty(mount model.MountIdentity, inode model.InodeID) bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.emptyBaseDirs[visibleDirectoryFactKey(mount, inode)]
-	return ok
-}
-
-func (c *testVisibleCommitter) SessionNamespaceEmpty(mount model.MountIdentity, inode model.InodeID) bool {
-	if c == nil {
-		return false
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	_, ok := c.emptySessionDirs[visibleDirectoryFactKey(mount, inode)]
-	return ok
-}
-
-func (c *testVisibleCommitter) RememberKey(key []byte, present bool) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.knownKeys == nil {
-		c.knownKeys = make(map[string]bool)
-	}
-	c.knownKeys[string(key)] = present
-}
-
-func (c *testVisibleCommitter) RememberEmptyDirectory(mount model.MountIdentity, inode model.InodeID) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.emptyDirs == nil {
-		c.emptyDirs = make(map[string]struct{})
-	}
-	if c.emptyBaseDirs == nil {
-		c.emptyBaseDirs = make(map[string]struct{})
-	}
-	c.emptyDirs[visibleDirectoryFactKey(mount, inode)] = struct{}{}
-	c.emptyBaseDirs[visibleDirectoryFactKey(mount, inode)] = struct{}{}
-}
-
-func (c *testVisibleCommitter) ForgetEmptyDirectory(mount model.MountIdentity, inode model.InodeID) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	delete(c.emptyDirs, visibleDirectoryFactKey(mount, inode))
-}
-
-func (c *testVisibleCommitter) RememberEmptySessionNamespace(mount model.MountIdentity, inode model.InodeID) {
-	if c == nil {
-		return
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	if c.emptySessionDirs == nil {
-		c.emptySessionDirs = make(map[string]struct{})
-	}
-	c.emptySessionDirs[visibleDirectoryFactKey(mount, inode)] = struct{}{}
-}
-
-func (c *testVisibleCommitter) Stats() map[string]any {
-	if c == nil {
-		return map[string]any{"commit_total": uint64(0)}
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return map[string]any{"commit_total": c.commitTotal}
-}
-
-func (f *fakeVisibleFlusher) FlushDurable(context.Context) error {
-	f.flushCalls++
-	return nil
-}
-
-func (f *fakeVisibleSnapshotCapturer) CaptureVisibleSnapshot(_ context.Context, version uint64, scope compile.AuthorityScope) (model.VisibleSnapshotCapture, bool, error) {
-	f.captureVersions = append(f.captureVersions, version)
-	f.captureScopes = append(f.captureScopes, cloneTestAuthorityScope(scope))
-	if f.err != nil {
-		return model.VisibleSnapshotCapture{}, false, f.err
-	}
-	return model.VisibleSnapshotCapture{Evidence: append([]model.SnapshotEvidenceRef(nil), f.segmentRefs...)}, f.capture, nil
-}
-
-func cloneTestAuthorityScope(scope compile.AuthorityScope) compile.AuthorityScope {
-	out := scope
-	out.Buckets = append([]layout.AffinityBucket(nil), scope.Buckets...)
-	out.Parents = append([]model.InodeID(nil), scope.Parents...)
-	out.Inodes = append([]model.InodeID(nil), scope.Inodes...)
-	return out
-}
-
-func (noopVisibleCommitter) SubmitVisible(_ context.Context, id VisibleOperationID, _ compile.MaterializedOp, _ VisibleAdmissionFunc) (VisibleAck, error) {
-	return VisibleAck{EpochID: 1, OpID: id, HolderID: "holder-a"}, nil
-}
-
-func (c scanOverlayCommitter) GetVisibleOverlay(key []byte) ([]byte, bool, bool) {
-	value, deleted, ok := c.GetVisibleOverlayView(key)
-	if !ok {
-		return nil, false, false
-	}
-	return append([]byte(nil), value...), deleted, true
-}
-
-func (c scanOverlayCommitter) GetVisibleOverlayView(key []byte) ([]byte, bool, bool) {
-	if c.values == nil {
-		return nil, false, false
-	}
-	row, ok := c.values[string(key)]
-	if !ok {
-		return nil, false, false
-	}
-	return row.Value, row.Delete, true
-}
-
-func overlayValueForTest(key, value []byte) VisibleOverlayKV {
-	return VisibleOverlayKV{
-		Key:   append([]byte(nil), key...),
-		Value: append([]byte(nil), value...),
-	}
-}
-
-func overlayDeleteForTest(key []byte) VisibleOverlayKV {
-	return VisibleOverlayKV{
-		Key:    append([]byte(nil), key...),
-		Delete: true,
-	}
-}
-
-func overlayMapForTest(rows ...VisibleOverlayKV) map[string]VisibleOverlayKV {
-	out := make(map[string]VisibleOverlayKV, len(rows))
-	for _, row := range rows {
-		out[string(row.Key)] = row
-	}
-	return out
-}
-
-func dentryValueForTest(t *testing.T, parent model.InodeID, name string, inode model.InodeID, typ model.InodeType) []byte {
-	t.Helper()
-	value, err := layout.EncodeDentryValue(model.DentryRecord{
-		Parent: parent,
-		Name:   name,
-		Inode:  inode,
-		Type:   typ,
-	})
-	require.NoError(t, err)
-	return value
-}
-
-func inodeValueForTest(t *testing.T, record model.InodeRecord) []byte {
-	t.Helper()
-	value, err := layout.EncodeInodeValue(record)
-	require.NoError(t, err)
-	return value
-}
-
-func dentryKeyForTest(t *testing.T, mount model.MountID, parent model.InodeID, name string) []byte {
-	t.Helper()
-	key, err := layout.EncodeDentryKey(testMountIdentityFor(mount), parent, name)
-	require.NoError(t, err)
-	return key
-}
-
-func inodeKeyForTest(t *testing.T, mount model.MountID, inode model.InodeID) []byte {
-	t.Helper()
-	key, err := layout.EncodeInodeKey(testMountIdentityFor(mount), inode)
-	require.NoError(t, err)
-	return key
-}
-
-func (c scanOverlayCommitter) ScanVisibleOverlay(start []byte, limit uint32) []VisibleOverlayKV {
-	out := make([]VisibleOverlayKV, 0, len(c.rows))
-	for _, row := range c.rows {
-		if bytes.Compare(row.Key, start) < 0 {
-			continue
-		}
-		out = append(out, row)
-		if uint32(len(out)) == limit {
-			break
-		}
-	}
-	return out
-}
-
-func (c scanOverlayCommitter) ScanVisibleDirectory(prefix, start []byte, limit uint32) []VisibleOverlayKV {
-	out := make([]VisibleOverlayKV, 0, len(c.rows))
-	for _, row := range c.rows {
-		if !bytes.HasPrefix(row.Key, prefix) || bytes.Compare(row.Key, start) < 0 {
-			continue
-		}
-		out = append(out, row)
-		if uint32(len(out)) == limit {
-			break
-		}
-	}
-	return out
-}
-
-func (c scanOverlayCommitter) HasVisibleDirectoryOverlay(prefix []byte) bool {
-	if c.directoryPresent {
-		return true
-	}
-	for _, row := range c.rows {
-		if bytes.HasPrefix(row.Key, prefix) {
-			return true
-		}
-	}
-	return false
-}
-
-func admitVisibleForTest(ctx context.Context, op compile.MaterializedOp, admission VisibleAdmissionFunc, frontier proof.ProofFrontier) (compile.MaterializedOp, error) {
-	if op.Delta.Eligibility != compile.EligibilityVisibleCommit {
-		return compile.MaterializedOp{}, ErrVisibleIneligibleOperation
-	}
-	if admission == nil {
-		return op, nil
-	}
-	result, ok, err := admission(ctx, op, VisibleAdmissionContext{ProofFrontier: frontier})
-	if err != nil {
-		return compile.MaterializedOp{}, err
-	}
-	if !ok {
-		return compile.MaterializedOp{}, ErrVisibleAdmissionRejected
-	}
-	op.PredicateProofs = append([]proof.PredicateProof(nil), result.PredicateProofs...)
-	op.GuardProofs = append([]proof.GuardProof(nil), result.GuardProofs...)
-	return op, nil
-}
-
-func (c *testVisibleCommitter) applyVisibleDeltaLocked(delta compile.SemanticDelta) {
-	if c.rows == nil {
-		c.rows = make(map[string]VisibleOverlayKV)
-	}
-	for _, effect := range delta.WriteEffects {
-		key := string(effect.Key)
-		switch effect.Kind {
-		case compile.EffectPut, compile.EffectDerivedPut:
-			c.rows[key] = VisibleOverlayKV{Key: cloneTestBytes(effect.Key), Value: cloneTestBytes(effect.Value)}
-		case compile.EffectDelete, compile.EffectDerivedDelete:
-			c.rows[key] = VisibleOverlayKV{Key: cloneTestBytes(effect.Key), Delete: true}
-		}
-	}
-	c.rememberDerivedFactsLocked(delta)
-	c.generation++
-}
-
-func (c *testVisibleCommitter) rememberDerivedFactsLocked(delta compile.SemanticDelta) {
-	switch delta.Kind {
-	case model.OperationCreate:
-		if len(delta.WriteEffects) < 3 {
-			return
-		}
-		effect := delta.WriteEffects[2]
-		if effect.Kind != compile.EffectPut {
-			return
-		}
-		c.rememberNewInodeFactsLocked(effect.Key, effect.Value)
-	}
-}
-
-func (c *testVisibleCommitter) rememberNewInodeFactsLocked(key, value []byte) {
-	parts, ok := layout.InspectKey(key)
-	if !ok || parts.Kind != layout.KeyKindInode {
-		return
-	}
-	inode, err := layout.DecodeInodeValue(value)
-	if err != nil {
-		return
-	}
-	mount := model.MountIdentity{MountID: testMountIdentity.MountID, MountKeyID: parts.MountKeyID}
-	if inode.Type == model.InodeTypeDirectory {
-		if c.emptyDirs == nil {
-			c.emptyDirs = make(map[string]struct{})
-		}
-		if c.emptyBaseDirs == nil {
-			c.emptyBaseDirs = make(map[string]struct{})
-		}
-		factKey := visibleDirectoryFactKey(mount, parts.Inode)
-		c.emptyDirs[factKey] = struct{}{}
-		c.emptyBaseDirs[factKey] = struct{}{}
-	}
-	if c.emptySessionDirs == nil {
-		c.emptySessionDirs = make(map[string]struct{})
-	}
-	c.emptySessionDirs[visibleDirectoryFactKey(mount, parts.Inode)] = struct{}{}
-	if c.knownKeys == nil {
-		c.knownKeys = make(map[string]bool)
-	}
-	if ownerKey, err := layout.EncodeInodeSessionKey(mount, parts.Inode); err == nil {
-		c.knownKeys[string(ownerKey)] = false
-	}
-}
-
-func scanVisibleRowsForTest(rows map[string]VisibleOverlayKV, prefix, start []byte, limit uint32) []VisibleOverlayKV {
-	if len(rows) == 0 || limit == 0 {
-		return nil
-	}
-	keys := make([]string, 0, len(rows))
-	for key, row := range rows {
-		if len(prefix) != 0 && !bytes.HasPrefix(row.Key, prefix) {
-			continue
-		}
-		if bytes.Compare(row.Key, start) < 0 {
-			continue
-		}
-		keys = append(keys, key)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return bytes.Compare(rows[keys[i]].Key, rows[keys[j]].Key) < 0
-	})
-	out := make([]VisibleOverlayKV, 0, min(len(keys), int(limit)))
-	for _, key := range keys {
-		row := rows[key]
-		out = append(out, VisibleOverlayKV{Key: cloneTestBytes(row.Key), Value: cloneTestBytes(row.Value), Delete: row.Delete})
-		if uint32(len(out)) == limit {
-			break
-		}
-	}
-	return out
-}
-
-func visibleDirectoryFactKey(mount model.MountIdentity, inode model.InodeID) string {
-	return fmt.Sprintf("%s/%d/%d", mount.MountID, mount.MountKeyID, inode)
-}
-
-func cloneTestBytes(src []byte) []byte {
-	if src == nil {
-		return nil
-	}
-	return append([]byte(nil), src...)
 }
 
 func newFakeRunner() *fakeRunner {
@@ -1222,18 +603,6 @@ func (e fakeMetadataKeyError) KeyErrors() []nokverrors.MetadataKeyIssue {
 	return e.errors
 }
 
-func newTestVisibleCommitter(t testing.TB, versions testVersionAllocator) *testVisibleCommitter {
-	t.Helper()
-	return &testVisibleCommitter{
-		versions:         versions,
-		rows:             make(map[string]VisibleOverlayKV),
-		knownKeys:        make(map[string]bool),
-		emptyDirs:        make(map[string]struct{}),
-		emptyBaseDirs:    make(map[string]struct{}),
-		emptySessionDirs: make(map[string]struct{}),
-	}
-}
-
 func benchmarkExecutorCreate(b *testing.B, executor *Executor) {
 	ctx := context.Background()
 	var seq uint64
@@ -1252,7 +621,7 @@ func benchmarkExecutorCreate(b *testing.B, executor *Executor) {
 	}
 }
 
-func benchmarkExecutorCheckpointStorm(b *testing.B, executor *Executor, flusher interface{ FlushDurable(context.Context) error }, files int) {
+func benchmarkExecutorCheckpointStorm(b *testing.B, executor *Executor, files int) {
 	ctx := context.Background()
 	var batch uint64
 	var ops uint64
@@ -1276,11 +645,6 @@ func benchmarkExecutorCheckpointStorm(b *testing.B, executor *Executor, flusher 
 				Name:   prefix + strconv.Itoa(i),
 				Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
 			}); err != nil {
-				b.Fatal(err)
-			}
-		}
-		if flusher != nil {
-			if err := flusher.FlushDurable(ctx); err != nil {
 				b.Fatal(err)
 			}
 		}

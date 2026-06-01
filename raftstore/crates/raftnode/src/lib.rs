@@ -33,7 +33,10 @@ pub use openraft::BasicNode;
 pub(crate) use proposal::ProposalPayloadKind;
 pub use proposal::{Proposal, ProposalPayload};
 pub use region::OpenRaftRegion;
-pub use storage::{RegionLogStorage, RegionSnapshotBuilder, RegionStateMachine};
+pub use storage::{
+    RegionLogFlushOptions, RegionLogStorage, RegionLogSyncPolicy, RegionSnapshotBuilder,
+    RegionStateMachine,
+};
 pub use traffic::{RegionTrafficProvider, RegionTrafficSnapshot};
 pub use transport::{
     decode_append_entries_request, decode_append_entries_response, decode_install_snapshot_request,

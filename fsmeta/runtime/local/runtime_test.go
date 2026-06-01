@@ -55,14 +55,14 @@ func TestOpenCreateLookupSurvivesRestart(t *testing.T) {
 	require.Greater(t, next.Inode.Inode, created.Inode.Inode)
 }
 
-func TestOpenUsesStorageBackendDirByDefault(t *testing.T) {
+func TestOpenUsesBadgerBackendDirByDefault(t *testing.T) {
 	ctx := context.Background()
 	workDir := t.TempDir()
 	rt, err := Open(ctx, Options{WorkDir: workDir, Mount: testMount()})
 	require.NoError(t, err)
 	defer func() { require.NoError(t, rt.Close()) }()
 
-	require.DirExists(t, filepath.Join(workDir, "storage"))
+	require.DirExists(t, filepath.Join(workDir, "badger"))
 }
 
 func TestLocalInodeAllocatorChoosesWorkspaceShard(t *testing.T) {

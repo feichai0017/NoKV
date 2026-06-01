@@ -82,10 +82,11 @@ commit version. Runtime packages own concrete commit mechanics.
 ## Local Runtime
 
 `fsmeta/runtime/local` is the default runnable implementation. It stores
-versioned fsmeta records directly in Pebble and implements the backend contract
+versioned fsmeta records directly in Badger and implements the backend contract
 inside the runtime package. This keeps the local path easy to reason about:
 there is no separate generic local KV database and no external transaction
-engine layer.
+engine layer. Badger `SyncWrites` is disabled by default for local demo
+throughput; strict power-loss durability requires explicit Badger options.
 
 ## Distributed Target
 

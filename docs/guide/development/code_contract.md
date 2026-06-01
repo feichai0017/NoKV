@@ -38,12 +38,12 @@ Package boundaries follow ownership of truth, not convenience.
 
 | Package | Owns | Must Not Do |
 | --- | --- | --- |
-| `fsmeta/model/` | Storage-engine-neutral namespace model: mount, inode, dentry, session, quota, watch, snapshot, operation request/result types, and validation. | Import key layout, protobuf, coordinator, root, raftstore, Pebble, Holt, or runtime packages. |
-| `fsmeta/layout/` | Ordered fsmeta key layout, value codecs, key-family kinds, placement ranges, and operation key plans. | Own high-level namespace semantics, import protobuf, coordinator, root, raftstore, Pebble, Holt, or runtime packages. |
-| `fsmeta/backend/` | Storage-engine-neutral metadata command contract consumed by `fsmeta/exec`. | Import protobuf, concrete runtimes, coordinator, root, raftstore, Pebble, Holt, migration, SST, or storage-engine diagnostics. |
+| `fsmeta/model/` | Storage-engine-neutral namespace model: mount, inode, dentry, session, quota, watch, snapshot, operation request/result types, and validation. | Import key layout, protobuf, coordinator, root, raftstore, Badger, Holt, or runtime packages. |
+| `fsmeta/layout/` | Ordered fsmeta key layout, value codecs, key-family kinds, placement ranges, and operation key plans. | Own high-level namespace semantics, import protobuf, coordinator, root, raftstore, Badger, Holt, or runtime packages. |
+| `fsmeta/backend/` | Storage-engine-neutral metadata command contract consumed by `fsmeta/exec`. | Import protobuf, concrete runtimes, coordinator, root, raftstore, Badger, Holt, migration, SST, or storage-engine diagnostics. |
 | `fsmeta/observe/` | Runtime-neutral watch and snapshot observation surfaces. | Own namespace model objects, protobuf conversion, concrete runtimes, or backend clients. |
-| `fsmeta/exec/` | Semantic compiler, executor, visible-read helpers, and runtime-neutral holder logic over `fsmeta/backend`. | Import protobuf, coordinator, root, raftstore, Pebble, Holt, or concrete runtime packages. |
-| `fsmeta/runtime/local/` | Pebble-backed one-process fsmeta backend for demos, tests, and small deployments. | Become a generic KV database, import coordinator/root, or reinterpret compiler semantics outside the executor contract. |
+| `fsmeta/exec/` | Semantic compiler, executor, visible-read helpers, and runtime-neutral holder logic over `fsmeta/backend`. | Import protobuf, coordinator, root, raftstore, Badger, Holt, or concrete runtime packages. |
+| `fsmeta/runtime/local/` | Badger-backed one-process fsmeta backend for demos, tests, and small deployments. | Become a generic KV database, import coordinator/root, or reinterpret compiler semantics outside the executor contract. |
 | `fsmeta/runtime/raftstore/` | Distributed fsmeta runtime adapter: coordinator-backed route/TSO/ID/mount resolution, MetadataPlane calls, watch apply streams, and rooted snapshot publication. | Own root truth, own topology, import Holt, reinterpret fsmeta semantics, or bypass coordinator routing and rooted lifecycle state. |
 | `fsmeta/server/`, `fsmeta/client/` | gRPC server/client boundary and protobuf conversion. | Put semantic execution or persistence logic in wire conversion code. |
 | `meta/root/` | Rooted truth for topology, authority, lifecycle events, grants, and seals. | Import coordinator service/client packages or fsmeta execution packages. |
@@ -51,7 +51,6 @@ Package boundaries follow ownership of truth, not convenience.
 | `raftstore/` | Rust distributed data-plane target: OpenRaft isolation, mount-scoped replicated execution, raft log, Holt state-machine storage, snapshots, apply notifications, and the MetadataPlane/RaftAdmin/RaftTransport boundary. | Import Go fsmeta semantic packages, redesign public protobuf without a wire-compatibility plan, expose StoreKV/Percolator as a new mainline API, or revive deleted Go raftstore/txn/local/storage/experimental paths. |
 | `pb/`, `*/wire/` | Proto definitions and conversion glue. | Leak protobuf structs into semantic cores when a domain type exists. |
 | `metrics/` | Reusable metric value types. | Own subsystem state. |
-| `utils/` | Domain-neutral helpers shared by multiple non-test packages. | Import domain packages or hide fsmeta/root/coordinator/raftstore semantics. |
 | `cmd/` | Binary assembly, flags, env, and config wiring. | Contain core protocol, semantic, or storage logic. |
 
 Deleted package trees are intentionally not compatibility surfaces:
@@ -74,12 +73,13 @@ stating:
 - which lower-layer packages it may import;
 - which higher-layer packages must not import it.
 
-## Shared Helpers and `utils`
+## Shared Helpers
 
 Before adding helper code, check the standard library and existing repository
 packages.
 
-Use `utils/` only when all of these are true:
+Do not add catch-all helper packages by default. Reintroduce a top-level
+`utils/` package only when all of these are true:
 
 - the helper is domain-neutral;
 - at least two non-test packages use it, or the second use is part of the same

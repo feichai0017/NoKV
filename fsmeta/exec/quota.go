@@ -8,6 +8,7 @@ import (
 	"math"
 
 	"github.com/feichai0017/NoKV/fsmeta/backend"
+	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
@@ -47,4 +48,11 @@ func inodeSizeChange(oldSize, newSize uint64) int64 {
 		return inodeSizeDelta(newSize - oldSize)
 	}
 	return -inodeSizeDelta(oldSize - newSize)
+}
+
+func (e *Executor) quotaMode() compile.QuotaMode {
+	if e != nil && e.quotas != nil {
+		return compile.QuotaModeShared
+	}
+	return compile.QuotaModeNone
 }

@@ -7,11 +7,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	stderrors "errors"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	cpebble "github.com/cockroachdb/pebble"
+	badger "github.com/dgraph-io/badger/v4"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
@@ -26,10 +27,9 @@ const (
 	localWriteDelete byte = 2
 )
 
-// Runner adapts a Pebble DB to backend.Store with one-node MVCC commits.
+// Runner adapts a Badger DB to backend.Store with one-node MVCC commits.
 type Runner struct {
-	db        *cpebble.DB
-	writeOpts *cpebble.WriteOptions
+	db *badger.DB
 
 	mu               sync.Mutex
 	nextTS           uint64
@@ -56,12 +56,12 @@ type localMetadataCommandRecord struct {
 	AppliedMutations uint64
 }
 
-// NewRunner constructs a local fsmeta backend over a Pebble DB.
-func NewRunner(db *cpebble.DB) (*Runner, error) {
+// NewRunner constructs a local fsmeta backend over a Badger DB.
+func NewRunner(db *badger.DB) (*Runner, error) {
 	if db == nil {
 		return nil, errDBRequired
 	}
-	r := &Runner{db: db, writeOpts: cpebble.Sync}
+	r := &Runner{db: db}
 	maxVersion, err := r.maxObservedVersion()
 	if err != nil {
 		return nil, err
@@ -151,8 +151,8 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 }
 
 // CommitMetadata validates predicates and applies the metadata mutation group
-// under one local Pebble batch. RequestID is optional, but when present it
-// provides durable idempotency for retried metadata commands.
+// under one local Badger transaction. RequestID is optional, but when present
+// it provides durable idempotency for retried metadata commands.
 func (r *Runner) CommitMetadata(ctx context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
 	if err := ctxErr(ctx); err != nil {
 		return backend.MetadataCommitResult{}, err
@@ -188,7 +188,7 @@ func (r *Runner) Stats() map[string]any {
 			"latest_observed":                   uint64(0),
 			"metadata_commit_total":             uint64(0),
 			"metadata_predicate_rejected_total": uint64(0),
-			"storage":                           "pebble",
+			"storage":                           "badger",
 		}
 	}
 	r.mu.Lock()
@@ -200,46 +200,57 @@ func (r *Runner) Stats() map[string]any {
 		"latest_observed":                   observed,
 		"metadata_commit_total":             r.metadataCommitTotal.Load(),
 		"metadata_predicate_rejected_total": r.metadataPredicateRejectedTotal.Load(),
-		"storage":                           "pebble",
+		"storage":                           "badger",
 	}
 }
 
 func (r *Runner) applyMetadataCommand(command backend.MetadataCommand) (uint64, uint64, mutationObserver, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if len(command.RequestID) != 0 {
-		record, ok, err := r.readMetadataCommandRecordLocked(command.RequestID)
-		if err != nil {
-			return 0, 0, nil, metadataRetryable(err)
+	var duplicate localMetadataCommandRecord
+	var duplicateFound bool
+	var commitVersion uint64
+	err := r.db.Update(func(txn *badger.Txn) error {
+		if len(command.RequestID) != 0 {
+			record, ok, err := r.readMetadataCommandRecordTxn(txn, command.RequestID)
+			if err != nil {
+				return metadataRetryable(err)
+			}
+			if ok {
+				duplicate = record
+				duplicateFound = true
+				return nil
+			}
 		}
-		if ok {
-			return record.CommitVersion, record.AppliedMutations, nil, nil
+		commitVersion = command.CommitVersion
+		allowCommitPush := true
+		if commitVersion == 0 {
+			commitVersion = command.ReadVersion + 1
+		} else {
+			allowCommitPush = false
 		}
-	}
-	commitVersion := command.CommitVersion
-	allowCommitPush := true
-	if commitVersion == 0 {
-		commitVersion = command.ReadVersion + 1
-	} else {
-		allowCommitPush = false
-	}
-	if commitVersion <= command.ReadVersion {
-		return 0, 0, nil, metadataAbort(errCommitVersion)
-	}
-	commitVersion = r.reserveMutationCommitVersionLocked(commitVersion, allowCommitPush)
-	if err := r.validateMetadataPredicatesLocked(command.Predicates, command.ReadVersion); err != nil {
-		r.metadataPredicateRejectedTotal.Add(1)
+		if commitVersion <= command.ReadVersion {
+			return metadataAbort(errCommitVersion)
+		}
+		commitVersion = r.reserveMutationCommitVersionLocked(commitVersion, allowCommitPush)
+		if err := r.validateMetadataPredicatesTxn(txn, command.Predicates, command.ReadVersion); err != nil {
+			r.metadataPredicateRejectedTotal.Add(1)
+			return err
+		}
+		primary := command.PrimaryKey
+		if len(primary) == 0 {
+			primary = metadataCommandPrimary(command.Mutations)
+		}
+		if err := r.validateMutationsTxn(txn, primary, command.Mutations, command.ReadVersion, commitVersion, true); err != nil {
+			return err
+		}
+		return r.applyMetadataCommandTxn(txn, command, commitVersion)
+	})
+	if err != nil {
 		return 0, 0, nil, err
 	}
-	primary := command.PrimaryKey
-	if len(primary) == 0 {
-		primary = metadataCommandPrimary(command.Mutations)
-	}
-	if err := r.validateMutationsLocked(primary, command.Mutations, command.ReadVersion, commitVersion, true); err != nil {
-		return 0, 0, nil, err
-	}
-	if err := r.applyMetadataCommandBatchLocked(command, commitVersion); err != nil {
-		return 0, 0, nil, err
+	if duplicateFound {
+		return duplicate.CommitVersion, duplicate.AppliedMutations, nil, nil
 	}
 	applied := uint64(len(command.Mutations))
 	r.metadataCommitTotal.Add(1)
@@ -276,7 +287,7 @@ func (r *Runner) completeMetadataApplyLocked(commitVersion uint64) mutationObser
 	return r.observer
 }
 
-func (r *Runner) validateMetadataPredicatesLocked(predicates []*backend.Predicate, startVersion uint64) error {
+func (r *Runner) validateMetadataPredicatesTxn(txn *badger.Txn, predicates []*backend.Predicate, startVersion uint64) error {
 	for _, pred := range predicates {
 		if pred == nil || len(pred.Key) == 0 {
 			return metadataAbort(errInvalidMetadataPredicate)
@@ -285,7 +296,7 @@ func (r *Runner) validateMetadataPredicatesLocked(predicates []*backend.Predicat
 		if readVersion == 0 {
 			readVersion = startVersion
 		}
-		value, exists, err := r.readValueLocked(pred.Key, readVersion)
+		value, exists, err := r.readValueTxn(txn, pred.Key, readVersion)
 		if err != nil {
 			return metadataRetryable(err)
 		}
@@ -309,7 +320,7 @@ func (r *Runner) validateMetadataPredicatesLocked(predicates []*backend.Predicat
 	return nil
 }
 
-func (r *Runner) validateMutationsLocked(primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowMissingDeletePrimary bool) error {
+func (r *Runner) validateMutationsTxn(txn *badger.Txn, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowMissingDeletePrimary bool) error {
 	for _, mut := range mutations {
 		if mut == nil {
 			continue
@@ -318,7 +329,7 @@ func (r *Runner) validateMutationsLocked(primary []byte, mutations []*backend.Mu
 		if len(key) == 0 {
 			return metadataAbort(errEmptyMutationKey)
 		}
-		latest, ok, err := r.latestWriteVersionLocked(key)
+		latest, ok, err := r.latestWriteVersionTxn(txn, key)
 		if err != nil {
 			return metadataRetryable(err)
 		}
@@ -326,19 +337,19 @@ func (r *Runner) validateMutationsLocked(primary []byte, mutations []*backend.Mu
 			return metadataCommitExpired(key, commitVersion, latest+1)
 		}
 		if mut.AssertionNotExist {
-			if _, ok, err := r.readValueLocked(key, startVersion); err != nil {
+			if _, ok, err := r.readValueTxn(txn, key, startVersion); err != nil {
 				return metadataRetryable(err)
 			} else if ok {
 				return metadataAlreadyExists(key)
 			}
-			if _, ok, err := r.readValueLocked(key, localMaxVersion); err != nil {
+			if _, ok, err := r.readValueTxn(txn, key, localMaxVersion); err != nil {
 				return metadataRetryable(err)
 			} else if ok {
 				return metadataAlreadyExists(key)
 			}
 		}
 		if bytes.Equal(key, primary) && mut.Op == backend.MutationDelete && !allowMissingDeletePrimary {
-			if _, ok, err := r.readValueLocked(key, localMaxVersion); err != nil {
+			if _, ok, err := r.readValueTxn(txn, key, localMaxVersion); err != nil {
 				return metadataRetryable(err)
 			} else if !ok {
 				return metadataKeyError(nokverrors.MetadataKeyIssue{Kind: nokverrors.KindRetryable, Message: errKeyNotFound.Error()})
@@ -353,9 +364,7 @@ func (r *Runner) validateMutationsLocked(primary []byte, mutations []*backend.Mu
 	return nil
 }
 
-func (r *Runner) applyMetadataCommandBatchLocked(command backend.MetadataCommand, commitVersion uint64) error {
-	batch := r.db.NewBatch()
-	defer func() { _ = batch.Close() }()
+func (r *Runner) applyMetadataCommandTxn(txn *badger.Txn, command backend.MetadataCommand, commitVersion uint64) error {
 	for _, mut := range command.Mutations {
 		if mut == nil {
 			continue
@@ -364,7 +373,7 @@ func (r *Runner) applyMetadataCommandBatchLocked(command backend.MetadataCommand
 		if err != nil {
 			return err
 		}
-		if err := batch.Set(encodeLocalWriteKey(mut.Key, commitVersion), encodeLocalWrite(write), nil); err != nil {
+		if err := txn.Set(encodeLocalWriteKey(mut.Key, commitVersion), encodeLocalWrite(write)); err != nil {
 			return err
 		}
 	}
@@ -373,22 +382,25 @@ func (r *Runner) applyMetadataCommandBatchLocked(command backend.MetadataCommand
 			CommitVersion:    commitVersion,
 			AppliedMutations: uint64(len(command.Mutations)),
 		}
-		if err := batch.Set(encodeLocalMetadataCommandKey(command.RequestID), encodeLocalMetadataCommandRecord(record), nil); err != nil {
+		if err := txn.Set(encodeLocalMetadataCommandKey(command.RequestID), encodeLocalMetadataCommandRecord(record)); err != nil {
 			return err
 		}
 	}
-	return batch.Commit(r.writeOpts)
+	return nil
 }
 
-func (r *Runner) readMetadataCommandRecordLocked(requestID []byte) (localMetadataCommandRecord, bool, error) {
-	value, closer, err := r.db.Get(encodeLocalMetadataCommandKey(requestID))
-	if err == cpebble.ErrNotFound {
+func (r *Runner) readMetadataCommandRecordTxn(txn *badger.Txn, requestID []byte) (localMetadataCommandRecord, bool, error) {
+	item, err := txn.Get(encodeLocalMetadataCommandKey(requestID))
+	if stderrors.Is(err, badger.ErrKeyNotFound) {
 		return localMetadataCommandRecord{}, false, nil
 	}
 	if err != nil {
 		return localMetadataCommandRecord{}, false, err
 	}
-	defer func() { _ = closer.Close() }()
+	value, err := item.ValueCopy(nil)
+	if err != nil {
+		return localMetadataCommandRecord{}, false, err
+	}
 	record, err := decodeLocalMetadataCommandRecord(value)
 	if err != nil {
 		return localMetadataCommandRecord{}, false, err
@@ -399,11 +411,18 @@ func (r *Runner) readMetadataCommandRecordLocked(requestID []byte) (localMetadat
 func (r *Runner) readValue(key []byte, readVersion uint64) ([]byte, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.readValueLocked(key, readVersion)
+	var value []byte
+	var ok bool
+	err := r.db.View(func(txn *badger.Txn) error {
+		var readErr error
+		value, ok, readErr = r.readValueTxn(txn, key, readVersion)
+		return readErr
+	})
+	return value, ok, err
 }
 
-func (r *Runner) readValueLocked(key []byte, readVersion uint64) ([]byte, bool, error) {
-	write, ok, err := r.writeForReadLocked(key, readVersion)
+func (r *Runner) readValueTxn(txn *badger.Txn, key []byte, readVersion uint64) ([]byte, bool, error) {
+	write, ok, err := r.writeForReadTxn(txn, key, readVersion)
 	if err != nil || !ok {
 		return nil, false, err
 	}
@@ -416,22 +435,20 @@ func (r *Runner) readValueLocked(key []byte, readVersion uint64) ([]byte, bool, 
 	return cloneBytes(write.Value), true, nil
 }
 
-func (r *Runner) writeForReadLocked(key []byte, readVersion uint64) (localWrite, bool, error) {
-	iter, err := r.db.NewIter(nil)
-	if err != nil {
-		return localWrite{}, false, err
-	}
-	defer func() { _ = iter.Close() }()
+func (r *Runner) writeForReadTxn(txn *badger.Txn, key []byte, readVersion uint64) (localWrite, bool, error) {
+	iter := txn.NewIterator(localIteratorOptions(true))
+	defer iter.Close()
 	seek := encodeLocalWriteKey(key, readVersion)
-	for valid := iter.SeekGE(seek); valid; valid = iter.Next() {
-		prefix, userKey, commitVersion, ok := decodeLocalVersionedKey(iter.Key())
+	for iter.Seek(seek); iter.Valid(); iter.Next() {
+		item := iter.Item()
+		prefix, userKey, commitVersion, ok := decodeLocalVersionedKey(item.Key())
 		if !ok || prefix != localWriteKeyPrefix || !bytes.Equal(userKey, key) {
 			break
 		}
 		if commitVersion > readVersion {
 			continue
 		}
-		raw, err := iter.ValueAndErr()
+		raw, err := item.ValueCopy(nil)
 		if err != nil {
 			return localWrite{}, false, err
 		}
@@ -441,13 +458,13 @@ func (r *Runner) writeForReadLocked(key []byte, readVersion uint64) (localWrite,
 		}
 		return write, true, nil
 	}
-	return localWrite{}, false, iter.Error()
+	return localWrite{}, false, nil
 }
 
-func (r *Runner) latestWriteVersionLocked(key []byte) (uint64, bool, error) {
+func (r *Runner) latestWriteVersionTxn(txn *badger.Txn, key []byte) (uint64, bool, error) {
 	var latest uint64
 	var found bool
-	err := r.scanWritesLocked(key, func(_ localWrite, commitVersion uint64) bool {
+	err := r.scanWritesTxn(txn, key, func(_ localWrite, commitVersion uint64) bool {
 		if !found || commitVersion > latest {
 			latest = commitVersion
 			found = true
@@ -457,18 +474,16 @@ func (r *Runner) latestWriteVersionLocked(key []byte) (uint64, bool, error) {
 	return latest, found, err
 }
 
-func (r *Runner) scanWritesLocked(key []byte, fn func(localWrite, uint64) bool) error {
-	iter, err := r.db.NewIter(nil)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = iter.Close() }()
-	for valid := iter.SeekGE(encodeLocalWriteKey(key, localMaxVersion)); valid; valid = iter.Next() {
-		prefix, userKey, commitVersion, ok := decodeLocalVersionedKey(iter.Key())
+func (r *Runner) scanWritesTxn(txn *badger.Txn, key []byte, fn func(localWrite, uint64) bool) error {
+	iter := txn.NewIterator(localIteratorOptions(true))
+	defer iter.Close()
+	for iter.Seek(encodeLocalWriteKey(key, localMaxVersion)); iter.Valid(); iter.Next() {
+		item := iter.Item()
+		prefix, userKey, commitVersion, ok := decodeLocalVersionedKey(item.Key())
 		if !ok || prefix != localWriteKeyPrefix || !bytes.Equal(userKey, key) {
 			break
 		}
-		raw, err := iter.ValueAndErr()
+		raw, err := item.ValueCopy(nil)
 		if err != nil {
 			return err
 		}
@@ -480,33 +495,30 @@ func (r *Runner) scanWritesLocked(key []byte, fn func(localWrite, uint64) bool) 
 			break
 		}
 	}
-	return iter.Error()
+	return nil
 }
 
 func (r *Runner) scanUserKeys(startKey []byte, fn func([]byte) (bool, error)) error {
 	r.mu.Lock()
-	iter, err := r.db.NewIter(nil)
-	if err != nil {
-		r.mu.Unlock()
-		return err
-	}
 	var keys [][]byte
-	var lastUserKey []byte
-	for valid := iter.SeekGE(encodeLocalWriteKey(startKey, localMaxVersion)); valid; valid = iter.Next() {
-		prefix, userKey, _, ok := decodeLocalVersionedKey(iter.Key())
-		if !ok || prefix != localWriteKeyPrefix {
-			break
+	err := r.db.View(func(txn *badger.Txn) error {
+		iter := txn.NewIterator(localIteratorOptions(false))
+		defer iter.Close()
+		var lastUserKey []byte
+		for iter.Seek(encodeLocalWriteKey(startKey, localMaxVersion)); iter.Valid(); iter.Next() {
+			item := iter.Item()
+			prefix, userKey, _, ok := decodeLocalVersionedKey(item.Key())
+			if !ok || prefix != localWriteKeyPrefix {
+				break
+			}
+			if bytes.Equal(userKey, lastUserKey) {
+				continue
+			}
+			lastUserKey = cloneBytes(userKey)
+			keys = append(keys, cloneBytes(userKey))
 		}
-		if bytes.Equal(userKey, lastUserKey) {
-			continue
-		}
-		lastUserKey = cloneBytes(userKey)
-		keys = append(keys, cloneBytes(userKey))
-	}
-	err = iter.Error()
-	if closeErr := iter.Close(); err == nil {
-		err = closeErr
-	}
+		return nil
+	})
 	r.mu.Unlock()
 	if err != nil {
 		return err
@@ -521,22 +533,28 @@ func (r *Runner) scanUserKeys(startKey []byte, fn func([]byte) (bool, error)) er
 }
 
 func (r *Runner) maxObservedVersion() (uint64, error) {
-	iter, err := r.db.NewIter(nil)
-	if err != nil {
-		return 0, err
-	}
-	defer func() { _ = iter.Close() }()
 	var maxVersion uint64
-	for valid := iter.First(); valid; valid = iter.Next() {
-		prefix, _, version, ok := decodeLocalVersionedKey(iter.Key())
-		if !ok || prefix != localWriteKeyPrefix {
-			continue
+	err := r.db.View(func(txn *badger.Txn) error {
+		iter := txn.NewIterator(localIteratorOptions(false))
+		defer iter.Close()
+		for iter.Rewind(); iter.Valid(); iter.Next() {
+			prefix, _, version, ok := decodeLocalVersionedKey(iter.Item().Key())
+			if !ok || prefix != localWriteKeyPrefix {
+				continue
+			}
+			if version != localMaxVersion && version > maxVersion {
+				maxVersion = version
+			}
 		}
-		if version != localMaxVersion && version > maxVersion {
-			maxVersion = version
-		}
-	}
-	return maxVersion, iter.Error()
+		return nil
+	})
+	return maxVersion, err
+}
+
+func localIteratorOptions(prefetchValues bool) badger.IteratorOptions {
+	opts := badger.DefaultIteratorOptions
+	opts.PrefetchValues = prefetchValues
+	return opts
 }
 
 func writeForMutation(mut *backend.Mutation, startVersion uint64) (localWrite, error) {

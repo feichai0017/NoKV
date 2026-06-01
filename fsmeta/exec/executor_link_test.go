@@ -40,39 +40,6 @@ func TestExecutorLinkCreatesDentryAndIncrementsLinkCount(t *testing.T) {
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 8, Bytes: 4096, Inodes: 1}}}, quota.changes)
 }
 
-func TestExecutorLinkVisibleCommitServesOverlay(t *testing.T) {
-	runner := newFakeRunner()
-	inode := testInodeForParentBucket(t, 8, 8)
-	seedDentry(t, runner, "vol", 7, "file", inode)
-	seedDirectory(t, runner, "vol", 8)
-	seedInode(t, runner, "vol", model.InodeRecord{Inode: inode, Type: model.InodeTypeFile, Size: 4096, LinkCount: 1})
-	committer := newTestVisibleCommitter(t, runner)
-	executor, err := newTestExecutor(
-		runner,
-		WithVisibleCommitter(committer),
-	)
-	require.NoError(t, err)
-
-	err = executor.Link(context.Background(), model.LinkRequest{
-		Mount:      "vol",
-		FromParent: 7,
-		FromName:   "file",
-		ToParent:   8,
-		ToName:     "alias",
-	})
-	require.NoError(t, err)
-
-	require.Empty(t, runner.mutations)
-	record, err := executor.Lookup(context.Background(), model.LookupRequest{Mount: "vol", Parent: 8, Name: "alias"})
-	require.NoError(t, err)
-	require.Equal(t, inode, record.Inode)
-	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, inode, 99)
-	require.NoError(t, err)
-	require.True(t, ok)
-	require.Equal(t, uint32(2), stored.LinkCount)
-	require.Equal(t, uint64(1), committer.Stats()["commit_total"])
-}
-
 func TestExecutorLinkUsesMetadataPredicateCommitWithValuePredicates(t *testing.T) {
 	base := newFakeRunner()
 	runner := &fakePredicateRunner{fakeRunner: base}
@@ -125,18 +92,6 @@ func TestExecutorLinkRejectsDirectory(t *testing.T) {
 func BenchmarkExecutorLinkDefaultPath(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner)
-	if err != nil {
-		b.Fatal(err)
-	}
-	benchmarkExecutorLink(b, runner, executor)
-}
-
-func BenchmarkExecutorLinkVisibleCommit(b *testing.B) {
-	runner := newFakeRunner()
-	executor, err := newTestExecutor(
-		runner,
-		WithVisibleCommitter(noopVisibleCommitter{}),
-	)
 	if err != nil {
 		b.Fatal(err)
 	}

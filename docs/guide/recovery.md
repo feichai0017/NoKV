@@ -9,10 +9,14 @@ NoKV now has two active recovery scopes.
 
 ## Local fsmeta
 
-`fsmeta/runtime/local` stores versioned metadata records in Pebble. Recovery is
-Pebble reopen plus fsmeta snapshot/watch registry reconstruction owned by the
+`fsmeta/runtime/local` stores versioned metadata records in Badger. Recovery is
+Badger reopen plus fsmeta snapshot/watch registry reconstruction owned by the
 local runtime. There is no separate NoKV WAL, generic local DB facade, or
 external two-phase recovery path on the local demo runtime.
+
+The default local runtime does not enable Badger sync writes. It is suitable for
+demo and benchmark runs; strict power-loss durability requires explicit Badger
+options with sync writes enabled.
 
 ## Rooted Truth
 

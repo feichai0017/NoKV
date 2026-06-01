@@ -12,35 +12,6 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
-func (e *Executor) tryVisibleCreate(ctx context.Context, program compile.CreateProgram, mount model.MountIdentity, req model.CreateRequest, dentryValue, inodeValue []byte) (bool, error) {
-	delta := program.Compiled.Delta
-	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
-		return false, nil
-	}
-	view := e.newVisibleReadView(ctx)
-	parent, err := readVisibleDirectoryInode(view, mount, req.Parent)
-	if err != nil {
-		return false, err
-	}
-	parent, err = incrementDirectoryChildCount(parent)
-	if err != nil {
-		return false, err
-	}
-	parentValue, err := layout.EncodeInodeValue(parent)
-	if err != nil {
-		return false, err
-	}
-	concrete, err := view.materializeVisibleCompiledOp(program.Compiled, []compile.WriteEffect{
-		visiblePutEffect(delta.Plan.MutateKeys[0], parentValue),
-		visiblePutEffect(delta.Plan.MutateKeys[1], dentryValue),
-		visiblePutEffect(delta.Plan.MutateKeys[2], inodeValue),
-	})
-	if err != nil {
-		return false, err
-	}
-	return e.tryVisibleCommitAfterRead(ctx, view, concrete)
-}
-
 // Create creates one dentry and its inode record in one metadata command.
 func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.CreateResult, error) {
 	if e.inodes == nil {
@@ -61,7 +32,7 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 	if err != nil {
 		return model.CreateResult{}, err
 	}
-	program, err := compile.CompileCreateProgram(req, mount, inodeID, compile.WithQuotaMode(e.visibleQuotaMode()))
+	program, err := compile.CompileCreateProgram(req, mount, inodeID, compile.WithQuotaMode(e.quotaMode()))
 	if err != nil {
 		return model.CreateResult{}, err
 	}
@@ -77,31 +48,6 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 	dentryValue := delta.WriteEffects[1].Value
 	inodeValue := delta.WriteEffects[2].Value
 	e.createTotal.Add(1)
-	quotaChanges := []QuotaChange{{
-		Mount:      req.Mount,
-		MountKeyID: mount.MountKeyID,
-		Scope:      req.Parent,
-		Bytes:      inodeSizeDelta(inode.Size),
-		Inodes:     1,
-	}}
-	quotaOK := true
-	if e.visibleCommitter != nil && delta.Eligibility == compile.EligibilityVisibleCommit {
-		var err error
-		quotaOK, err = e.visibleQuotaAllowsCommit(ctx, quotaChanges)
-		if err != nil {
-			return model.CreateResult{}, err
-		}
-	}
-	if quotaOK {
-		if committed, err := e.tryVisibleCreate(ctx, program, mount, req, dentryValue, inodeValue); committed || err != nil {
-			if err != nil {
-				return model.CreateResult{}, err
-			}
-			e.rememberVisibleCreate(mount, plan, inode)
-			e.forgetVisibleEmptyDirectory(mount, req.Parent)
-			return model.CreateResult{Dentry: dentry, Inode: inode}, nil
-		}
-	}
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
 		parent, err := e.readDirectoryInode(ctx, mount, req.Parent, startVersion)
 		if err != nil {
@@ -159,7 +105,5 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 	}, delta.Authority); err != nil {
 		return model.CreateResult{}, err
 	}
-	e.rememberVisibleCreate(mount, plan, inode)
-	e.forgetVisibleEmptyDirectory(mount, req.Parent)
 	return model.CreateResult{Dentry: dentry, Inode: inode}, nil
 }
