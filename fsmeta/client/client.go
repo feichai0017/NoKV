@@ -178,15 +178,19 @@ func (c *GRPCClient) Lookup(ctx context.Context, req model.LookupRequest) (model
 	if err := c.requireRPC(); err != nil {
 		return model.DentryRecord{}, err
 	}
-	if record, ok := c.lookup.Get(req.Mount, req.Parent, req.Name); ok {
-		return record, nil
+	if req.SnapshotVersion == 0 {
+		if record, ok := c.lookup.Get(req.Mount, req.Parent, req.Name); ok {
+			return record, nil
+		}
 	}
 	resp, err := c.rpc.Lookup(ctx, lookupRequestToProto(req))
 	if err != nil {
 		return model.DentryRecord{}, translateRPCError(err)
 	}
 	record := dentryFromProto(resp.GetDentry())
-	c.lookup.Put(req.Mount, record)
+	if req.SnapshotVersion == 0 {
+		c.lookup.Put(req.Mount, record)
+	}
 	return record, nil
 }
 
@@ -194,12 +198,22 @@ func (c *GRPCClient) LookupPlus(ctx context.Context, req model.LookupRequest) (m
 	if err := c.requireRPC(); err != nil {
 		return model.DentryAttrPair{}, err
 	}
+	if req.SnapshotVersion == 0 {
+		if record, ok := c.lookup.Get(req.Mount, req.Parent, req.Name); ok {
+			attr, err := c.GetAttr(ctx, model.GetAttrRequest{Mount: req.Mount, Inode: record.Inode})
+			if err == nil {
+				return model.DentryAttrPair{Dentry: record, Inode: attr}, nil
+			}
+		}
+	}
 	resp, err := c.rpc.LookupPlus(ctx, lookupRequestToProto(req))
 	if err != nil {
 		return model.DentryAttrPair{}, translateRPCError(err)
 	}
 	pair := pairFromProto(resp.GetEntry())
-	c.lookup.Put(req.Mount, pair.Dentry)
+	if req.SnapshotVersion == 0 {
+		c.lookup.Put(req.Mount, pair.Dentry)
+	}
 	return pair, nil
 }
 

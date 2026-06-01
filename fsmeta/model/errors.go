@@ -13,6 +13,7 @@ var (
 	ErrInvalidRequest       = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid request")
 	ErrInvalidValue         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid value")
 	ErrInvalidPageSize      = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta: invalid page size")
+	ErrViewAccessDenied     = nokverrors.New(nokverrors.KindAborted, "fsmeta: view access denied")
 	ErrExists               = nokverrors.New(nokverrors.KindAlreadyExists, "fsmeta: entry exists")
 	ErrNotFound             = nokverrors.New(nokverrors.KindNotFound, "fsmeta: entry not found")
 	ErrMountNotRegistered   = nokverrors.New(nokverrors.KindNotFound, "fsmeta: mount is not registered")

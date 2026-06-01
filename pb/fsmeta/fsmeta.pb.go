@@ -854,12 +854,13 @@ func (x *UpdateInodeResponse) GetInode() *InodeRecord {
 }
 
 type LookupRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Mount         string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
-	Parent        uint64                 `protobuf:"varint,2,opt,name=parent,proto3" json:"parent,omitempty"`
-	Name          string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
+	state           protoimpl.MessageState `protogen:"open.v1"`
+	Mount           string                 `protobuf:"bytes,1,opt,name=mount,proto3" json:"mount,omitempty"`
+	Parent          uint64                 `protobuf:"varint,2,opt,name=parent,proto3" json:"parent,omitempty"`
+	Name            string                 `protobuf:"bytes,3,opt,name=name,proto3" json:"name,omitempty"`
+	SnapshotVersion uint64                 `protobuf:"varint,4,opt,name=snapshot_version,json=snapshotVersion,proto3" json:"snapshot_version,omitempty"`
+	unknownFields   protoimpl.UnknownFields
+	sizeCache       protoimpl.SizeCache
 }
 
 func (x *LookupRequest) Reset() {
@@ -911,6 +912,13 @@ func (x *LookupRequest) GetName() string {
 		return x.Name
 	}
 	return ""
+}
+
+func (x *LookupRequest) GetSnapshotVersion() uint64 {
+	if x != nil {
+		return x.SnapshotVersion
+	}
+	return 0
 }
 
 type LookupResponse struct {
@@ -3830,11 +3838,12 @@ const file_fsmeta_fsmeta_proto_rawDesc = "" +
 	"\x10set_opaque_attrs\x18\v \x01(\bR\x0esetOpaqueAttrs\x12!\n" +
 	"\fopaque_attrs\x18\f \x01(\fR\vopaqueAttrs\"H\n" +
 	"\x13UpdateInodeResponse\x121\n" +
-	"\x05inode\x18\x01 \x01(\v2\x1b.nokv.fsmeta.v1.InodeRecordR\x05inode\"Q\n" +
+	"\x05inode\x18\x01 \x01(\v2\x1b.nokv.fsmeta.v1.InodeRecordR\x05inode\"|\n" +
 	"\rLookupRequest\x12\x14\n" +
 	"\x05mount\x18\x01 \x01(\tR\x05mount\x12\x16\n" +
 	"\x06parent\x18\x02 \x01(\x04R\x06parent\x12\x12\n" +
-	"\x04name\x18\x03 \x01(\tR\x04name\"F\n" +
+	"\x04name\x18\x03 \x01(\tR\x04name\x12)\n" +
+	"\x10snapshot_version\x18\x04 \x01(\x04R\x0fsnapshotVersion\"F\n" +
 	"\x0eLookupResponse\x124\n" +
 	"\x06dentry\x18\x01 \x01(\v2\x1c.nokv.fsmeta.v1.DentryRecordR\x06dentry\"J\n" +
 	"\x12LookupPlusResponse\x124\n" +

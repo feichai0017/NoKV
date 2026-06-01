@@ -57,9 +57,10 @@ func updateInodeRequestFromProto(req *fsmetapb.UpdateInodeRequest) model.UpdateI
 
 func lookupRequestFromProto(req *fsmetapb.LookupRequest) model.LookupRequest {
 	return model.LookupRequest{
-		Mount:  model.MountID(req.GetMount()),
-		Parent: model.InodeID(req.GetParent()),
-		Name:   req.GetName(),
+		Mount:           model.MountID(req.GetMount()),
+		Parent:          model.InodeID(req.GetParent()),
+		Name:            req.GetName(),
+		SnapshotVersion: req.GetSnapshotVersion(),
 	}
 }
 

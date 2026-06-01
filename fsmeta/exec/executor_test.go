@@ -25,6 +25,7 @@ type fakeRunner struct {
 	data                map[string][]byte
 	mutations           [][]*backend.Mutation
 	getCalls            int
+	getVersions         []uint64
 	scanVersions        []uint64
 	batchVersions       []uint64
 	scanErrs            []error
@@ -270,8 +271,9 @@ func (r *fakeRunner) ReserveTimestamp(_ context.Context, count uint64) (uint64, 
 	return first, nil
 }
 
-func (r *fakeRunner) Get(_ context.Context, key []byte, _ uint64) ([]byte, bool, error) {
+func (r *fakeRunner) Get(_ context.Context, key []byte, version uint64) ([]byte, bool, error) {
 	r.getCalls++
+	r.getVersions = append(r.getVersions, version)
 	value, ok := r.data[string(key)]
 	if !ok {
 		return nil, false, nil

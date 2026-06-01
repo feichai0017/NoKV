@@ -30,18 +30,19 @@ func (e *Executor) Lookup(ctx context.Context, req model.LookupRequest) (model.D
 	if err != nil {
 		return model.DentryRecord{}, err
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return model.DentryRecord{}, err
-	}
-	value, ok, err := e.runner.Get(ctx, program.Plan.PrimaryKey, version)
-	if err != nil {
-		return model.DentryRecord{}, err
-	}
-	if !ok {
-		return model.DentryRecord{}, model.ErrNotFound
-	}
-	return layout.DecodeDentryValue(value)
+	var record model.DentryRecord
+	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
+		value, ok, err := e.runner.Get(ctx, program.Plan.PrimaryKey, version)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return model.ErrNotFound
+		}
+		record, err = layout.DecodeDentryValue(value)
+		return err
+	})
+	return record, err
 }
 
 // GetAttr returns inode attributes by inode ID. This is the FUSE low-level
@@ -135,25 +136,27 @@ func (e *Executor) LookupPlus(ctx context.Context, req model.LookupRequest) (mod
 	if err != nil {
 		return model.DentryAttrPair{}, err
 	}
-	version, err := e.reserveReadVersion(ctx)
-	if err != nil {
-		return model.DentryAttrPair{}, err
-	}
-	value, ok, err := e.runner.Get(ctx, program.Plan.PrimaryKey, version)
-	if err != nil {
-		return model.DentryAttrPair{}, err
-	}
-	if !ok {
-		return model.DentryAttrPair{}, model.ErrNotFound
-	}
-	dentry, projection, _, projectionOK, err := layout.DecodeDentryValueWithProjection(value)
-	if err != nil {
-		return model.DentryAttrPair{}, err
-	}
-	if projectionOK && dentryProjectionUsable(dentry, projection) {
-		return model.DentryAttrPair{Dentry: dentry, Inode: projection}, nil
-	}
-	return e.readLookupPlusInode(ctx, mount, dentry, version)
+	var pair model.DentryAttrPair
+	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
+		value, ok, err := e.runner.Get(ctx, program.Plan.PrimaryKey, version)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return model.ErrNotFound
+		}
+		dentry, projection, _, projectionOK, err := layout.DecodeDentryValueWithProjection(value)
+		if err != nil {
+			return err
+		}
+		if projectionOK && dentryProjectionUsable(dentry, projection) {
+			pair = model.DentryAttrPair{Dentry: dentry, Inode: projection}
+			return nil
+		}
+		pair, err = e.readLookupPlusInode(ctx, mount, dentry, version)
+		return err
+	})
+	return pair, err
 }
 
 func (e *Executor) readLookupPlusInode(ctx context.Context, mount model.MountIdentity, dentry model.DentryRecord, version uint64) (model.DentryAttrPair, error) {

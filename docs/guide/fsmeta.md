@@ -31,6 +31,7 @@ The public wire API is in `pb/fsmeta/fsmeta.proto`; the domain types are in
 | `RemoveDirectory` | Deletes one empty directory after an atomic empty-dir check. |
 | `SnapshotSubtree` / `RetireSnapshotSubtree` | Publishes and retires MVCC read-version tokens. |
 | `WatchSubtree` | Prefix-scoped change stream with cursor, ack, replay, and overflow handling. |
+| `client.CreateView` / `CreateReadOnlySnapshotView` | Client-side sub-agent capability over a subtree; rules are relative path prefixes and snapshot views reject all mutation. |
 | Writer sessions | Open, heartbeat, close, and expire exclusive writer leases. |
 | Quota usage | Persistent usage counters plus rooted quota fences. |
 
@@ -125,3 +126,10 @@ checkpoints, memory objects, tool outputs, and staged publish. The inode/dentry
 model is intentionally familiar: it gives hierarchical discovery, atomic
 publish, snapshots, and watches without forcing every application to rebuild a
 filesystem metadata layer on top of Redis, SQL tables, or raw object keys.
+
+Scoped views are client-side capabilities for sub-agents. A view has one mount,
+one root inode, and longest-prefix access rules over relative paths; no matching
+rule means deny. Read-only snapshot views bind the same path API to a snapshot
+read version, so `/workspace/input` style mounts can be exposed without giving
+the child agent a mutable full-mount client. The underlying fsmeta service still
+owns namespace truth; views do not create another root/control-plane authority.

@@ -82,9 +82,10 @@ type UpdateInodeRequest struct {
 }
 
 type LookupRequest struct {
-	Mount  MountID
-	Parent InodeID
-	Name   string
+	Mount           MountID
+	Parent          InodeID
+	Name            string
+	SnapshotVersion uint64
 }
 
 type GetAttrRequest struct {

@@ -61,6 +61,28 @@ func TestExecutorLookupReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, model.ErrNotFound)
 }
 
+func TestExecutorLookupPlusUsesSnapshotVersion(t *testing.T) {
+	runner := newFakeRunner()
+	seedDentry(t, runner, "vol", model.RootInode, "file", 42)
+	seedInode(t, runner, "vol", model.InodeRecord{
+		Inode:     42,
+		Type:      model.InodeTypeFile,
+		LinkCount: 1,
+	})
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	pair, err := executor.LookupPlus(context.Background(), model.LookupRequest{
+		Mount:           "vol",
+		Parent:          model.RootInode,
+		Name:            "file",
+		SnapshotVersion: 77,
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.InodeID(42), pair.Inode.Inode)
+	require.Equal(t, []uint64{77, 77}, runner.getVersions)
+}
+
 func TestExecutorGetAttrReturnsInodeByID(t *testing.T) {
 	runner := newFakeRunner()
 	seedInode(t, runner, "vol", model.InodeRecord{

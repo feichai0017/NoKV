@@ -88,6 +88,7 @@ message LookupRequest {
   string mount = 1;
   uint64 parent = 2;
   string name = 3;
+  uint64 snapshot_version = 4;
 }
 
 message LookupResponse {
