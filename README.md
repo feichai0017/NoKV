@@ -58,6 +58,7 @@ Core primitives:
 |---|---|
 | `Create` | Atomically creates a dentry and inode. |
 | `Lookup` / `LookupPlus` | Reads a dentry, optionally fused with inode attributes. |
+| `GetAttr` / `BatchGetAttr` | Reads inode attributes directly by inode ID. |
 | `ReadDir` / `ReadDirPlus` | Reads a directory page, optionally fused with inode attrs. |
 | `UpdateInode` | Updates mutable inode metadata and bounded opaque attrs. |
 | `Rename` | Moves one namespace entry when the destination does not exist. |

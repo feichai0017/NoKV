@@ -108,6 +108,32 @@ func (m *inodeMappingExecutor) Lookup(ctx context.Context, req model.LookupReque
 	return m.translateDentryRecord(record), nil
 }
 
+func (m *inodeMappingExecutor) GetAttr(ctx context.Context, req model.GetAttrRequest) (model.InodeRecord, error) {
+	req.Inode = m.actualInode(req.Inode)
+	record, err := m.base.GetAttr(ctx, req)
+	if err != nil {
+		return model.InodeRecord{}, err
+	}
+	return m.translateInodeRecord(record), nil
+}
+
+func (m *inodeMappingExecutor) BatchGetAttr(ctx context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error) {
+	actualInodes := make([]model.InodeID, 0, len(req.Inodes))
+	for _, inode := range req.Inodes {
+		actualInodes = append(actualInodes, m.actualInode(inode))
+	}
+	req.Inodes = actualInodes
+	records, err := m.base.BatchGetAttr(ctx, req)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.InodeRecord, 0, len(records))
+	for _, record := range records {
+		out = append(out, m.translateInodeRecord(record))
+	}
+	return out, nil
+}
+
 func (m *inodeMappingExecutor) ReadDirPlus(ctx context.Context, req model.ReadDirRequest) ([]model.DentryAttrPair, error) {
 	req.Parent = m.actualInode(req.Parent)
 	pairs, err := m.base.ReadDirPlus(ctx, req)

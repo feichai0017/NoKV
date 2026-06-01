@@ -63,6 +63,32 @@ func lookupRequestFromProto(req *fsmetapb.LookupRequest) model.LookupRequest {
 	}
 }
 
+func getAttrRequestFromProto(req *fsmetapb.GetAttrRequest) model.GetAttrRequest {
+	if req == nil {
+		return model.GetAttrRequest{}
+	}
+	return model.GetAttrRequest{
+		Mount:           model.MountID(req.GetMount()),
+		Inode:           model.InodeID(req.GetInode()),
+		SnapshotVersion: req.GetSnapshotVersion(),
+	}
+}
+
+func batchGetAttrRequestFromProto(req *fsmetapb.BatchGetAttrRequest) model.BatchGetAttrRequest {
+	if req == nil {
+		return model.BatchGetAttrRequest{}
+	}
+	inodes := make([]model.InodeID, 0, len(req.GetInodes()))
+	for _, inode := range req.GetInodes() {
+		inodes = append(inodes, model.InodeID(inode))
+	}
+	return model.BatchGetAttrRequest{
+		Mount:           model.MountID(req.GetMount()),
+		Inodes:          inodes,
+		SnapshotVersion: req.GetSnapshotVersion(),
+	}
+}
+
 func readDirRequestFromProto(req *fsmetapb.ReadDirRequest) model.ReadDirRequest {
 	return model.ReadDirRequest{
 		Mount:           model.MountID(req.GetMount()),

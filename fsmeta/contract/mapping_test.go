@@ -330,6 +330,30 @@ func (f *fakeExternalExecutor) Lookup(_ context.Context, req model.LookupRequest
 	return dentry, nil
 }
 
+func (f *fakeExternalExecutor) GetAttr(_ context.Context, req model.GetAttrRequest) (model.InodeRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	inode, ok := f.inodes[req.Inode]
+	if !ok {
+		return model.InodeRecord{}, model.ErrNotFound
+	}
+	return inode, nil
+}
+
+func (f *fakeExternalExecutor) BatchGetAttr(_ context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	records := make([]model.InodeRecord, 0, len(req.Inodes))
+	for _, id := range req.Inodes {
+		inode, ok := f.inodes[id]
+		if !ok {
+			return nil, model.ErrNotFound
+		}
+		records = append(records, inode)
+	}
+	return records, nil
+}
+
 func (f *fakeExternalExecutor) ReadDirPlus(_ context.Context, req model.ReadDirRequest) ([]model.DentryAttrPair, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()

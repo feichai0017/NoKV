@@ -101,6 +101,14 @@ func (unavailableCreateExecutor) Lookup(context.Context, model.LookupRequest) (m
 	return model.DentryRecord{}, model.ErrInvalidRequest
 }
 
+func (unavailableCreateExecutor) GetAttr(context.Context, model.GetAttrRequest) (model.InodeRecord, error) {
+	return model.InodeRecord{}, model.ErrInvalidRequest
+}
+
+func (unavailableCreateExecutor) BatchGetAttr(context.Context, model.BatchGetAttrRequest) ([]model.InodeRecord, error) {
+	return nil, model.ErrInvalidRequest
+}
+
 func (unavailableCreateExecutor) ReadDirPlus(context.Context, model.ReadDirRequest) ([]model.DentryAttrPair, error) {
 	return nil, model.ErrInvalidRequest
 }

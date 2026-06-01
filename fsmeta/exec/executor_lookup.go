@@ -44,6 +44,85 @@ func (e *Executor) Lookup(ctx context.Context, req model.LookupRequest) (model.D
 	return layout.DecodeDentryValue(value)
 }
 
+// GetAttr returns inode attributes by inode ID. This is the FUSE low-level
+// lookup path and deliberately avoids dentry scans.
+func (e *Executor) GetAttr(ctx context.Context, req model.GetAttrRequest) (model.InodeRecord, error) {
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return model.InodeRecord{}, err
+	}
+	mount := mountRecord.Identity()
+	program, err := compile.CompileGetAttrReadProgram(mount, req.Inode)
+	if err != nil {
+		return model.InodeRecord{}, err
+	}
+	var record model.InodeRecord
+	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
+		value, ok, err := e.runner.Get(ctx, program.Key, version)
+		if err != nil {
+			return err
+		}
+		if !ok {
+			return model.ErrNotFound
+		}
+		inode, err := layout.DecodeInodeValue(value)
+		if err != nil {
+			return err
+		}
+		if inode.Inode != req.Inode {
+			return fmt.Errorf("%w: requested inode=%d value inode=%d", model.ErrInvalidValue, req.Inode, inode.Inode)
+		}
+		record = inode
+		return nil
+	})
+	return record, err
+}
+
+// BatchGetAttr returns inode attributes in request order at one read version.
+func (e *Executor) BatchGetAttr(ctx context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error) {
+	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
+	if err != nil {
+		return nil, err
+	}
+	if len(req.Inodes) == 0 {
+		return []model.InodeRecord{}, nil
+	}
+	mount := mountRecord.Identity()
+	keys := make([][]byte, len(req.Inodes))
+	for i, inode := range req.Inodes {
+		program, err := compile.CompileGetAttrReadProgram(mount, inode)
+		if err != nil {
+			return nil, err
+		}
+		keys[i] = program.Key
+	}
+	var out []model.InodeRecord
+	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
+		values, err := e.runner.BatchGet(ctx, keys, version)
+		if err != nil {
+			return err
+		}
+		records := make([]model.InodeRecord, len(req.Inodes))
+		for i, inodeID := range req.Inodes {
+			value, ok := values[string(keys[i])]
+			if !ok {
+				return fmt.Errorf("%w: inode %d", model.ErrNotFound, inodeID)
+			}
+			inode, err := layout.DecodeInodeValue(value)
+			if err != nil {
+				return err
+			}
+			if inode.Inode != inodeID {
+				return fmt.Errorf("%w: requested inode=%d value inode=%d", model.ErrInvalidValue, inodeID, inode.Inode)
+			}
+			records[i] = inode
+		}
+		out = records
+		return nil
+	})
+	return out, err
+}
+
 // LookupPlus returns one dentry and its inode attributes at the same read
 // version.
 func (e *Executor) LookupPlus(ctx context.Context, req model.LookupRequest) (model.DentryAttrPair, error) {

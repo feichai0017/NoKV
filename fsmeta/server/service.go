@@ -22,6 +22,8 @@ type Executor interface {
 	UpdateInode(ctx context.Context, req model.UpdateInodeRequest) (model.InodeRecord, error)
 	Lookup(ctx context.Context, req model.LookupRequest) (model.DentryRecord, error)
 	LookupPlus(ctx context.Context, req model.LookupRequest) (model.DentryAttrPair, error)
+	GetAttr(ctx context.Context, req model.GetAttrRequest) (model.InodeRecord, error)
+	BatchGetAttr(ctx context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error)
 	ReadDir(ctx context.Context, req model.ReadDirRequest) ([]model.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req model.ReadDirRequest) ([]model.DentryAttrPair, error)
 	GetReadVersion(ctx context.Context, req model.ReadVersionRequest) (uint64, error)
@@ -142,6 +144,38 @@ func (s *Service) LookupPlus(ctx context.Context, req *fsmetapb.LookupRequest) (
 		return nil, rpcError(err)
 	}
 	return &fsmetapb.LookupPlusResponse{Entry: pairToProto(pair)}, nil
+}
+
+func (s *Service) GetAttr(ctx context.Context, req *fsmetapb.GetAttrRequest) (*fsmetapb.GetAttrResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, rpcInvalidArgument("fsmeta getattr request is required")
+	}
+	inode, err := s.executor.GetAttr(ctx, getAttrRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	return &fsmetapb.GetAttrResponse{Inode: inodeToProto(inode)}, nil
+}
+
+func (s *Service) BatchGetAttr(ctx context.Context, req *fsmetapb.BatchGetAttrRequest) (*fsmetapb.BatchGetAttrResponse, error) {
+	if err := s.requireExecutor(); err != nil {
+		return nil, err
+	}
+	if req == nil {
+		return nil, rpcInvalidArgument("fsmeta batch getattr request is required")
+	}
+	inodes, err := s.executor.BatchGetAttr(ctx, batchGetAttrRequestFromProto(req))
+	if err != nil {
+		return nil, rpcError(err)
+	}
+	resp := &fsmetapb.BatchGetAttrResponse{Inodes: make([]*fsmetapb.InodeRecord, 0, len(inodes))}
+	for _, inode := range inodes {
+		resp.Inodes = append(resp.Inodes, inodeToProto(inode))
+	}
+	return resp, nil
 }
 
 func (s *Service) ReadDir(ctx context.Context, req *fsmetapb.ReadDirRequest) (*fsmetapb.ReadDirResponse, error) {

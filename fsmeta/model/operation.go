@@ -87,6 +87,18 @@ type LookupRequest struct {
 	Name   string
 }
 
+type GetAttrRequest struct {
+	Mount           MountID
+	Inode           InodeID
+	SnapshotVersion uint64
+}
+
+type BatchGetAttrRequest struct {
+	Mount           MountID
+	Inodes          []InodeID
+	SnapshotVersion uint64
+}
+
 type ReadDirRequest struct {
 	Mount           MountID
 	Parent          InodeID

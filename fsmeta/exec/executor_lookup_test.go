@@ -61,6 +61,62 @@ func TestExecutorLookupReturnsNotFound(t *testing.T) {
 	require.ErrorIs(t, err, model.ErrNotFound)
 }
 
+func TestExecutorGetAttrReturnsInodeByID(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", model.InodeRecord{
+		Inode:     42,
+		Type:      model.InodeTypeFile,
+		Size:      4096,
+		Mode:      0o644,
+		LinkCount: 1,
+	})
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	record, err := executor.GetAttr(context.Background(), model.GetAttrRequest{
+		Mount: "vol",
+		Inode: 42,
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.InodeRecord{
+		Inode:     42,
+		Type:      model.InodeTypeFile,
+		Size:      4096,
+		Mode:      0o644,
+		LinkCount: 1,
+	}, record)
+}
+
+func TestExecutorBatchGetAttrPreservesRequestOrder(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", model.InodeRecord{Inode: 42, Type: model.InodeTypeFile, Size: 4096, LinkCount: 1})
+	seedInode(t, runner, "vol", model.InodeRecord{Inode: 43, Type: model.InodeTypeDirectory, Mode: 0o755, LinkCount: 1})
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	records, err := executor.BatchGetAttr(context.Background(), model.BatchGetAttrRequest{
+		Mount:  "vol",
+		Inodes: []model.InodeID{43, 42},
+	})
+	require.NoError(t, err)
+	require.Equal(t, []model.InodeRecord{
+		{Inode: 43, Type: model.InodeTypeDirectory, Mode: 0o755, LinkCount: 1},
+		{Inode: 42, Type: model.InodeTypeFile, Size: 4096, LinkCount: 1},
+	}, records)
+	require.Equal(t, []uint64{1}, runner.batchVersions)
+}
+
+func TestExecutorBatchGetAttrReturnsEmptyForEmptyInput(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	records, err := executor.BatchGetAttr(context.Background(), model.BatchGetAttrRequest{Mount: "vol"})
+	require.NoError(t, err)
+	require.Empty(t, records)
+	require.Empty(t, runner.batchVersions)
+}
+
 func TestExecutorReadDirConsumesPlanCursorAndLimit(t *testing.T) {
 	runner := newFakeRunner()
 	seedDentry(t, runner, "vol", 7, "a", 21)

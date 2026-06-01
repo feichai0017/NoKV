@@ -27,6 +27,8 @@ type fakeExecutor struct {
 	createReq        model.CreateRequest
 	createInode      model.InodeRecord
 	updateReq        model.UpdateInodeRequest
+	getAttrReq       model.GetAttrRequest
+	batchGetAttrReq  model.BatchGetAttrRequest
 	readDirReq       model.ReadDirRequest
 	readVersionReq   model.ReadVersionRequest
 	snapshotReq      model.SnapshotSubtreeRequest
@@ -102,6 +104,38 @@ func (e *fakeExecutor) LookupPlus(ctx context.Context, req model.LookupRequest) 
 			LinkCount: 1,
 		},
 	}, nil
+}
+
+func (e *fakeExecutor) GetAttr(_ context.Context, req model.GetAttrRequest) (model.InodeRecord, error) {
+	e.getAttrReq = req
+	if e.err != nil {
+		return model.InodeRecord{}, e.err
+	}
+	return model.InodeRecord{
+		Inode:     req.Inode,
+		Type:      model.InodeTypeFile,
+		Size:      4096,
+		Mode:      0o644,
+		LinkCount: 1,
+	}, nil
+}
+
+func (e *fakeExecutor) BatchGetAttr(_ context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error) {
+	e.batchGetAttrReq = req
+	if e.err != nil {
+		return nil, e.err
+	}
+	out := make([]model.InodeRecord, 0, len(req.Inodes))
+	for _, inode := range req.Inodes {
+		out = append(out, model.InodeRecord{
+			Inode:     inode,
+			Type:      model.InodeTypeFile,
+			Size:      4096,
+			Mode:      0o644,
+			LinkCount: 1,
+		})
+	}
+	return out, nil
 }
 
 func (e *fakeExecutor) ReadDir(_ context.Context, req model.ReadDirRequest) ([]model.DentryRecord, error) {
@@ -321,6 +355,24 @@ func TestGRPCServiceCreateAndReadDirPlus(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, uint64(42), lookupPlus.GetEntry().GetDentry().GetInode())
 	require.Equal(t, uint64(4096), lookupPlus.GetEntry().GetInode().GetSize())
+
+	attr, err := client.GetAttr(context.Background(), &fsmetapb.GetAttrRequest{
+		Mount:           "vol",
+		Inode:           42,
+		SnapshotVersion: 99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(42), attr.GetInode().GetInode())
+	require.Equal(t, model.GetAttrRequest{Mount: "vol", Inode: 42, SnapshotVersion: 99}, executor.getAttrReq)
+
+	batchAttr, err := client.BatchGetAttr(context.Background(), &fsmetapb.BatchGetAttrRequest{
+		Mount:           "vol",
+		Inodes:          []uint64{42, 43},
+		SnapshotVersion: 99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []uint64{42, 43}, []uint64{batchAttr.GetInodes()[0].GetInode(), batchAttr.GetInodes()[1].GetInode()})
+	require.Equal(t, model.BatchGetAttrRequest{Mount: "vol", Inodes: []model.InodeID{42, 43}, SnapshotVersion: 99}, executor.batchGetAttrReq)
 }
 
 func TestGRPCServiceReadDirAndMutationRPCs(t *testing.T) {

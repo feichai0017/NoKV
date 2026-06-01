@@ -81,6 +81,36 @@ func (e *fakeExecutor) LookupPlus(ctx context.Context, req model.LookupRequest) 
 	}, nil
 }
 
+func (e *fakeExecutor) GetAttr(_ context.Context, req model.GetAttrRequest) (model.InodeRecord, error) {
+	if e.err != nil {
+		return model.InodeRecord{}, e.err
+	}
+	return model.InodeRecord{
+		Inode:     req.Inode,
+		Type:      model.InodeTypeFile,
+		Size:      4096,
+		Mode:      0o644,
+		LinkCount: 1,
+	}, nil
+}
+
+func (e *fakeExecutor) BatchGetAttr(_ context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error) {
+	if e.err != nil {
+		return nil, e.err
+	}
+	out := make([]model.InodeRecord, 0, len(req.Inodes))
+	for _, inode := range req.Inodes {
+		out = append(out, model.InodeRecord{
+			Inode:     inode,
+			Type:      model.InodeTypeFile,
+			Size:      4096,
+			Mode:      0o644,
+			LinkCount: 1,
+		})
+	}
+	return out, nil
+}
+
 func (e *fakeExecutor) ReadDir(context.Context, model.ReadDirRequest) ([]model.DentryRecord, error) {
 	if e.err != nil {
 		return nil, e.err
@@ -316,6 +346,31 @@ func TestTypedClientRoundTrip(t *testing.T) {
 			LinkCount: 1,
 		},
 	}, pair)
+
+	attr, err := cli.GetAttr(context.Background(), model.GetAttrRequest{
+		Mount:           "vol",
+		Inode:           42,
+		SnapshotVersion: 99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.InodeRecord{
+		Inode:     42,
+		Type:      model.InodeTypeFile,
+		Size:      4096,
+		Mode:      0o644,
+		LinkCount: 1,
+	}, attr)
+
+	attrs, err := cli.BatchGetAttr(context.Background(), model.BatchGetAttrRequest{
+		Mount:           "vol",
+		Inodes:          []model.InodeID{42, 43},
+		SnapshotVersion: 99,
+	})
+	require.NoError(t, err)
+	require.Equal(t, []model.InodeRecord{
+		{Inode: 42, Type: model.InodeTypeFile, Size: 4096, Mode: 0o644, LinkCount: 1},
+		{Inode: 43, Type: model.InodeTypeFile, Size: 4096, Mode: 0o644, LinkCount: 1},
+	}, attrs)
 
 	records, err := cli.ReadDir(context.Background(), model.ReadDirRequest{
 		Mount:      "vol",

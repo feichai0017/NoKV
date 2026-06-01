@@ -47,6 +47,8 @@ type Client interface {
 	UpdateInode(ctx context.Context, req model.UpdateInodeRequest) (model.InodeRecord, error)
 	Lookup(ctx context.Context, req model.LookupRequest) (model.DentryRecord, error)
 	LookupPlus(ctx context.Context, req model.LookupRequest) (model.DentryAttrPair, error)
+	GetAttr(ctx context.Context, req model.GetAttrRequest) (model.InodeRecord, error)
+	BatchGetAttr(ctx context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error)
 	ReadDir(ctx context.Context, req model.ReadDirRequest) ([]model.DentryRecord, error)
 	ReadDirPlus(ctx context.Context, req model.ReadDirRequest) ([]model.DentryAttrPair, error)
 	WatchSubtree(ctx context.Context, req observe.WatchRequest) (WatchSubscription, error)
@@ -199,6 +201,32 @@ func (c *GRPCClient) LookupPlus(ctx context.Context, req model.LookupRequest) (m
 	pair := pairFromProto(resp.GetEntry())
 	c.lookup.Put(req.Mount, pair.Dentry)
 	return pair, nil
+}
+
+func (c *GRPCClient) GetAttr(ctx context.Context, req model.GetAttrRequest) (model.InodeRecord, error) {
+	if err := c.requireRPC(); err != nil {
+		return model.InodeRecord{}, err
+	}
+	resp, err := c.rpc.GetAttr(ctx, getAttrRequestToProto(req))
+	if err != nil {
+		return model.InodeRecord{}, translateRPCError(err)
+	}
+	return inodeFromProto(resp.GetInode()), nil
+}
+
+func (c *GRPCClient) BatchGetAttr(ctx context.Context, req model.BatchGetAttrRequest) ([]model.InodeRecord, error) {
+	if err := c.requireRPC(); err != nil {
+		return nil, err
+	}
+	resp, err := c.rpc.BatchGetAttr(ctx, batchGetAttrRequestToProto(req))
+	if err != nil {
+		return nil, translateRPCError(err)
+	}
+	out := make([]model.InodeRecord, 0, len(resp.GetInodes()))
+	for _, inode := range resp.GetInodes() {
+		out = append(out, inodeFromProto(inode))
+	}
+	return out, nil
 }
 
 func (c *GRPCClient) ReadDir(ctx context.Context, req model.ReadDirRequest) ([]model.DentryRecord, error) {

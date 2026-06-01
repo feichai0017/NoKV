@@ -54,6 +54,26 @@ func lookupRequestToProto(req model.LookupRequest) *fsmetapb.LookupRequest {
 	}
 }
 
+func getAttrRequestToProto(req model.GetAttrRequest) *fsmetapb.GetAttrRequest {
+	return &fsmetapb.GetAttrRequest{
+		Mount:           string(req.Mount),
+		Inode:           uint64(req.Inode),
+		SnapshotVersion: req.SnapshotVersion,
+	}
+}
+
+func batchGetAttrRequestToProto(req model.BatchGetAttrRequest) *fsmetapb.BatchGetAttrRequest {
+	inodes := make([]uint64, 0, len(req.Inodes))
+	for _, inode := range req.Inodes {
+		inodes = append(inodes, uint64(inode))
+	}
+	return &fsmetapb.BatchGetAttrRequest{
+		Mount:           string(req.Mount),
+		Inodes:          inodes,
+		SnapshotVersion: req.SnapshotVersion,
+	}
+}
+
 func readDirRequestToProto(req model.ReadDirRequest) *fsmetapb.ReadDirRequest {
 	return &fsmetapb.ReadDirRequest{
 		Mount:           string(req.Mount),

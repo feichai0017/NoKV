@@ -103,7 +103,11 @@ func chooseOperation(rng *rand.Rand, state *Model, names []string, sessions []mo
 		}
 	case 69, 70:
 		return Operation{Kind: OpExpireSessions, Mount: state.Mount, Limit: 16}
-	case 71, 72, 73:
+	case 71, 72:
+		return getAttrOperation(rng, state, names)
+	case 73:
+		return batchGetAttrOperation(state)
+	case 74, 75, 76:
 		ref := *nextSnapshotRef
 		*nextSnapshotRef++
 		return Operation{Kind: OpSnapshotSubtree, Mount: state.Mount, Parent: state.Root, SnapshotRef: ref}
@@ -143,6 +147,24 @@ func lookupOperation(rng *rand.Rand, state *Model, names []string) Operation {
 		name = existing[rng.Intn(len(existing))].Name
 	}
 	return Operation{Kind: OpLookup, Mount: state.Mount, Parent: state.Root, Name: name}
+}
+
+func getAttrOperation(rng *rand.Rand, state *Model, names []string) Operation {
+	inode := model.InodeID(1 + rng.Intn(64))
+	if existing := state.ExistingDentries(); len(existing) > 0 && rng.Intn(100) < 80 {
+		inode = existing[rng.Intn(len(existing))].Inode
+	}
+	return Operation{Kind: OpGetAttr, Mount: state.Mount, Parent: state.Root, Name: names[rng.Intn(len(names))], Inode: inode}
+}
+
+func batchGetAttrOperation(state *Model) Operation {
+	inodes := make([]model.InodeID, 0)
+	for _, dentry := range state.ExistingDentries() {
+		if dentry.Parent == state.Root {
+			inodes = append(inodes, dentry.Inode)
+		}
+	}
+	return Operation{Kind: OpBatchGetAttr, Mount: state.Mount, Parent: state.Root, Inodes: inodes}
 }
 
 func readDirPlusOperation(rng *rand.Rand, state *Model, names []string) Operation {

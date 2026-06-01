@@ -28,6 +28,8 @@ const (
 	FSMetadata_UpdateInode_FullMethodName           = "/nokv.fsmeta.v1.FSMetadata/UpdateInode"
 	FSMetadata_Lookup_FullMethodName                = "/nokv.fsmeta.v1.FSMetadata/Lookup"
 	FSMetadata_LookupPlus_FullMethodName            = "/nokv.fsmeta.v1.FSMetadata/LookupPlus"
+	FSMetadata_GetAttr_FullMethodName               = "/nokv.fsmeta.v1.FSMetadata/GetAttr"
+	FSMetadata_BatchGetAttr_FullMethodName          = "/nokv.fsmeta.v1.FSMetadata/BatchGetAttr"
 	FSMetadata_ReadDir_FullMethodName               = "/nokv.fsmeta.v1.FSMetadata/ReadDir"
 	FSMetadata_ReadDirPlus_FullMethodName           = "/nokv.fsmeta.v1.FSMetadata/ReadDirPlus"
 	FSMetadata_WatchSubtree_FullMethodName          = "/nokv.fsmeta.v1.FSMetadata/WatchSubtree"
@@ -56,6 +58,8 @@ type FSMetadataClient interface {
 	UpdateInode(ctx context.Context, in *UpdateInodeRequest, opts ...grpc.CallOption) (*UpdateInodeResponse, error)
 	Lookup(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupResponse, error)
 	LookupPlus(ctx context.Context, in *LookupRequest, opts ...grpc.CallOption) (*LookupPlusResponse, error)
+	GetAttr(ctx context.Context, in *GetAttrRequest, opts ...grpc.CallOption) (*GetAttrResponse, error)
+	BatchGetAttr(ctx context.Context, in *BatchGetAttrRequest, opts ...grpc.CallOption) (*BatchGetAttrResponse, error)
 	ReadDir(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirResponse, error)
 	ReadDirPlus(ctx context.Context, in *ReadDirRequest, opts ...grpc.CallOption) (*ReadDirPlusResponse, error)
 	WatchSubtree(ctx context.Context, opts ...grpc.CallOption) (grpc.BidiStreamingClient[WatchAckOrSubscribe, WatchSubtreeResponse], error)
@@ -118,6 +122,26 @@ func (c *fSMetadataClient) LookupPlus(ctx context.Context, in *LookupRequest, op
 	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
 	out := new(LookupPlusResponse)
 	err := c.cc.Invoke(ctx, FSMetadata_LookupPlus_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) GetAttr(ctx context.Context, in *GetAttrRequest, opts ...grpc.CallOption) (*GetAttrResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(GetAttrResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_GetAttr_FullMethodName, in, out, cOpts...)
+	if err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func (c *fSMetadataClient) BatchGetAttr(ctx context.Context, in *BatchGetAttrRequest, opts ...grpc.CallOption) (*BatchGetAttrResponse, error) {
+	cOpts := append([]grpc.CallOption{grpc.StaticMethod()}, opts...)
+	out := new(BatchGetAttrResponse)
+	err := c.cc.Invoke(ctx, FSMetadata_BatchGetAttr_FullMethodName, in, out, cOpts...)
 	if err != nil {
 		return nil, err
 	}
@@ -315,6 +339,8 @@ type FSMetadataServer interface {
 	UpdateInode(context.Context, *UpdateInodeRequest) (*UpdateInodeResponse, error)
 	Lookup(context.Context, *LookupRequest) (*LookupResponse, error)
 	LookupPlus(context.Context, *LookupRequest) (*LookupPlusResponse, error)
+	GetAttr(context.Context, *GetAttrRequest) (*GetAttrResponse, error)
+	BatchGetAttr(context.Context, *BatchGetAttrRequest) (*BatchGetAttrResponse, error)
 	ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error)
 	ReadDirPlus(context.Context, *ReadDirRequest) (*ReadDirPlusResponse, error)
 	WatchSubtree(grpc.BidiStreamingServer[WatchAckOrSubscribe, WatchSubtreeResponse]) error
@@ -353,6 +379,12 @@ func (UnimplementedFSMetadataServer) Lookup(context.Context, *LookupRequest) (*L
 }
 func (UnimplementedFSMetadataServer) LookupPlus(context.Context, *LookupRequest) (*LookupPlusResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method LookupPlus not implemented")
+}
+func (UnimplementedFSMetadataServer) GetAttr(context.Context, *GetAttrRequest) (*GetAttrResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method GetAttr not implemented")
+}
+func (UnimplementedFSMetadataServer) BatchGetAttr(context.Context, *BatchGetAttrRequest) (*BatchGetAttrResponse, error) {
+	return nil, status.Error(codes.Unimplemented, "method BatchGetAttr not implemented")
 }
 func (UnimplementedFSMetadataServer) ReadDir(context.Context, *ReadDirRequest) (*ReadDirResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "method ReadDir not implemented")
@@ -496,6 +528,42 @@ func _FSMetadata_LookupPlus_Handler(srv interface{}, ctx context.Context, dec fu
 	}
 	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
 		return srv.(FSMetadataServer).LookupPlus(ctx, req.(*LookupRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_GetAttr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(GetAttrRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).GetAttr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_GetAttr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).GetAttr(ctx, req.(*GetAttrRequest))
+	}
+	return interceptor(ctx, in, info, handler)
+}
+
+func _FSMetadata_BatchGetAttr_Handler(srv interface{}, ctx context.Context, dec func(interface{}) error, interceptor grpc.UnaryServerInterceptor) (interface{}, error) {
+	in := new(BatchGetAttrRequest)
+	if err := dec(in); err != nil {
+		return nil, err
+	}
+	if interceptor == nil {
+		return srv.(FSMetadataServer).BatchGetAttr(ctx, in)
+	}
+	info := &grpc.UnaryServerInfo{
+		Server:     srv,
+		FullMethod: FSMetadata_BatchGetAttr_FullMethodName,
+	}
+	handler := func(ctx context.Context, req interface{}) (interface{}, error) {
+		return srv.(FSMetadataServer).BatchGetAttr(ctx, req.(*BatchGetAttrRequest))
 	}
 	return interceptor(ctx, in, info, handler)
 }
@@ -835,6 +903,14 @@ var FSMetadata_ServiceDesc = grpc.ServiceDesc{
 		{
 			MethodName: "LookupPlus",
 			Handler:    _FSMetadata_LookupPlus_Handler,
+		},
+		{
+			MethodName: "GetAttr",
+			Handler:    _FSMetadata_GetAttr_Handler,
+		},
+		{
+			MethodName: "BatchGetAttr",
+			Handler:    _FSMetadata_BatchGetAttr_Handler,
 		},
 		{
 			MethodName: "ReadDir",

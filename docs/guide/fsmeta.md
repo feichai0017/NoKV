@@ -19,6 +19,7 @@ The public wire API is in `pb/fsmeta/fsmeta.proto`; the domain types are in
 |---|---|
 | `Create` | Atomically creates a dentry and inode. |
 | `Lookup` / `LookupPlus` | Reads a dentry, optionally fused with inode attributes. |
+| `GetAttr` / `BatchGetAttr` | Reads inode attributes directly by inode ID for FUSE low-level style clients. |
 | `ReadDir` / `ReadDirPlus` | Reads a directory page, optionally fused with inode attributes. |
 | `UpdateInode` | Updates mutable inode metadata and bounded opaque attrs. |
 | `Rename` | Moves one namespace entry when the destination does not exist. |
@@ -53,6 +54,7 @@ families are:
 | mount | mount-local metadata anchor |
 | inode | inode attributes |
 | dentry | parent/name to inode mapping |
+| parent | reverse child inode to parent/name link index |
 | chunk | reserved body-reference layout, not a data-plane API |
 | session | writer session and inode-owner records |
 | usage | quota accounting |

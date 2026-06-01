@@ -21,6 +21,8 @@ const (
 	OpCreate           OperationKind = "create"
 	OpUpdateInode      OperationKind = "update_inode"
 	OpLookup           OperationKind = "lookup"
+	OpGetAttr          OperationKind = "getattr"
+	OpBatchGetAttr     OperationKind = "batch_getattr"
 	OpReadDirPlus      OperationKind = "readdir_plus"
 	OpSnapshotSubtree  OperationKind = "snapshot_subtree"
 	OpRename           OperationKind = "rename"
@@ -48,6 +50,7 @@ type Operation struct {
 	Parent      model.InodeID
 	Name        string
 	Inode       model.InodeID
+	Inodes      []model.InodeID
 	Type        model.InodeType
 	Size        uint64
 	Mode        uint32
@@ -64,8 +67,8 @@ type Operation struct {
 }
 
 func (op Operation) String() string {
-	return fmt.Sprintf("%s mount=%s parent=%d name=%q inode=%d from=(%d,%q) to=(%d,%q) session=%q start_after=%q limit=%d advance_ns=%d snapshot=%d",
-		op.Kind, op.Mount, op.Parent, op.Name, op.Inode, op.FromParent, op.FromName, op.ToParent, op.ToName, op.Session, op.StartAfter, op.Limit, op.AdvanceNs, op.SnapshotRef)
+	return fmt.Sprintf("%s mount=%s parent=%d name=%q inode=%d inodes=%v from=(%d,%q) to=(%d,%q) session=%q start_after=%q limit=%d advance_ns=%d snapshot=%d",
+		op.Kind, op.Mount, op.Parent, op.Name, op.Inode, op.Inodes, op.FromParent, op.FromName, op.ToParent, op.ToName, op.Session, op.StartAfter, op.Limit, op.AdvanceNs, op.SnapshotRef)
 }
 
 // Result is the comparable response shape returned by both the reference model
@@ -76,6 +79,7 @@ type Result struct {
 	Pairs         []model.DentryAttrPair
 	Token         model.SnapshotSubtreeToken
 	Inode         model.InodeRecord
+	Inodes        []model.InodeRecord
 	RenameReplace model.RenameReplaceResult
 	Remove        model.RemoveResult
 	Session       model.SessionRecord
@@ -150,6 +154,10 @@ func (m *Model) Apply(op Operation) Result {
 		return m.updateInode(op)
 	case OpLookup:
 		return m.lookup(op)
+	case OpGetAttr:
+		return m.getAttr(op)
+	case OpBatchGetAttr:
+		return m.batchGetAttr(op)
 	case OpReadDirPlus:
 		return m.readDirPlus(op)
 	case OpRename, OpRenameSubtree:
@@ -299,6 +307,26 @@ func (m *Model) lookup(op Operation) Result {
 		return Result{Err: model.ErrNotFound}
 	}
 	return Result{Dentry: record}
+}
+
+func (m *Model) getAttr(op Operation) Result {
+	inode, ok := m.inodes[op.Inode]
+	if !ok {
+		return Result{Err: model.ErrNotFound}
+	}
+	return Result{Inode: inode}
+}
+
+func (m *Model) batchGetAttr(op Operation) Result {
+	inodes := make([]model.InodeRecord, 0, len(op.Inodes))
+	for _, id := range op.Inodes {
+		inode, ok := m.inodes[id]
+		if !ok {
+			return Result{Err: model.ErrNotFound}
+		}
+		inodes = append(inodes, inode)
+	}
+	return Result{Inodes: inodes}
 }
 
 func (m *Model) readDirPlus(op Operation) Result {

@@ -18,6 +18,8 @@ type Executor interface {
 	Create(context.Context, model.CreateRequest) (model.CreateResult, error)
 	UpdateInode(context.Context, model.UpdateInodeRequest) (model.InodeRecord, error)
 	Lookup(context.Context, model.LookupRequest) (model.DentryRecord, error)
+	GetAttr(context.Context, model.GetAttrRequest) (model.InodeRecord, error)
+	BatchGetAttr(context.Context, model.BatchGetAttrRequest) ([]model.InodeRecord, error)
 	ReadDirPlus(context.Context, model.ReadDirRequest) ([]model.DentryAttrPair, error)
 	SnapshotSubtree(context.Context, model.SnapshotSubtreeRequest) (model.SnapshotSubtreeToken, error)
 	Rename(context.Context, model.RenameRequest) error
@@ -119,6 +121,18 @@ func execute(ctx context.Context, exec Executor, state *Model, op Operation) Res
 			Name:   op.Name,
 		})
 		return Result{Err: err, Dentry: dentry}
+	case OpGetAttr:
+		inode, err := exec.GetAttr(ctx, model.GetAttrRequest{
+			Mount: op.Mount,
+			Inode: op.Inode,
+		})
+		return Result{Err: err, Inode: inode}
+	case OpBatchGetAttr:
+		records, err := exec.BatchGetAttr(ctx, model.BatchGetAttrRequest{
+			Mount:  op.Mount,
+			Inodes: append([]model.InodeID(nil), op.Inodes...),
+		})
+		return Result{Err: err, Inodes: records}
 	case OpReadDirPlus:
 		pairs, err := exec.ReadDirPlus(ctx, model.ReadDirRequest{
 			Mount:           op.Mount,
@@ -238,6 +252,9 @@ func compareResult(got, want Result) error {
 	}
 	if !reflect.DeepEqual(got.Inode, want.Inode) {
 		return fmt.Errorf("inode mismatch: got %+v want %+v", got.Inode, want.Inode)
+	}
+	if !reflect.DeepEqual(got.Inodes, want.Inodes) {
+		return fmt.Errorf("inodes mismatch: got %+v want %+v", got.Inodes, want.Inodes)
 	}
 	if !reflect.DeepEqual(got.RenameReplace, want.RenameReplace) {
 		return fmt.Errorf("rename replace mismatch: got %+v want %+v", got.RenameReplace, want.RenameReplace)
