@@ -151,15 +151,22 @@ func (p *CoordinatorRouteProvider) RouteForKey(ctx context.Context, key []byte) 
 	return MetadataRoute{}, nokverrors.New(nokverrors.KindRouteUnavailable, "fsmeta/runtime/raftstore: metadata region has no routable peer")
 }
 
-func (p *CoordinatorRouteProvider) ObserveRegionError(_ context.Context, _ []byte, _ MetadataRoute, err *errorpb.RegionError) {
-	if p == nil || err == nil || err.GetNotLeader() == nil || err.GetNotLeader().GetLeader() == nil {
+func (p *CoordinatorRouteProvider) ObserveRegionError(_ context.Context, _ []byte, route MetadataRoute, err *errorpb.RegionError) {
+	if p == nil || err == nil {
+		return
+	}
+	if epoch := err.GetEpochNotMatch(); epoch != nil {
+		regionID := route.Context.GetRegionId()
+		p.mu.Lock()
+		p.invalidateRegionLocked(regionID)
+		p.mu.Unlock()
 		return
 	}
 	notLeader := err.GetNotLeader()
-	leader := cloneRegionPeer(notLeader.GetLeader())
-	if leader == nil {
+	if notLeader == nil || notLeader.GetLeader() == nil {
 		return
 	}
+	leader := cloneRegionPeer(notLeader.GetLeader())
 	p.mu.Lock()
 	p.leaderHints[notLeader.GetRegionId()] = leader
 	p.invalidateRegionLocked(notLeader.GetRegionId())

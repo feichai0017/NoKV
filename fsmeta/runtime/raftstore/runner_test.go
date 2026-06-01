@@ -562,6 +562,70 @@ func TestCoordinatorRouteProviderInvalidatesCachedRouteOnNotLeader(t *testing.T)
 	require.Equal(t, uint64(1), coordinator.storeCallCount(2))
 }
 
+func TestCoordinatorRouteProviderInvalidatesCachedRouteOnEpochMismatch(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	metadatapb.RegisterMetadataPlaneServer(server, &fakeMetadataPlaneServer{})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.GracefulStop)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	coordinator := &fakeCoordinatorClient{
+		region: &coordpb.GetRegionByKeyResponse{
+			RegionDescriptor: &metapb.RegionDescriptor{
+				RegionId: 9,
+				Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 1},
+				Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 11}},
+			},
+			LeaderPeer: &metapb.RegionPeer{StoreId: 1, PeerId: 11},
+		},
+		stores: map[uint64]*coordpb.GetStoreResponse{
+			1: {
+				Store: &coordpb.StoreInfo{
+					StoreId:    1,
+					ClientAddr: "passthrough:///store-1",
+					State:      coordpb.StoreState_STORE_STATE_UP,
+				},
+			},
+		},
+	}
+	provider, err := NewCoordinatorRouteProvider(coordinator, CoordinatorRouteProviderOptions{
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
+
+	route, err := provider.RouteForKey(context.Background(), []byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), route.Context.GetRegionEpoch().GetConfVersion())
+
+	coordinator.mu.Lock()
+	coordinator.region = &coordpb.GetRegionByKeyResponse{
+		RegionDescriptor: &metapb.RegionDescriptor{
+			RegionId: 9,
+			Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 3},
+			Peers:    []*metapb.RegionPeer{{StoreId: 1, PeerId: 11}},
+		},
+		LeaderPeer: &metapb.RegionPeer{StoreId: 1, PeerId: 11},
+	}
+	coordinator.mu.Unlock()
+	provider.ObserveRegionError(context.Background(), []byte("k"), route, &errorpb.RegionError{
+		EpochNotMatch: &errorpb.EpochNotMatch{
+			CurrentEpoch: &metapb.RegionEpoch{Version: 2, ConfVersion: 3},
+		},
+	})
+
+	route, err = provider.RouteForKey(context.Background(), []byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(3), route.Context.GetRegionEpoch().GetConfVersion())
+	require.Equal(t, uint64(2), coordinator.regionCallCount())
+}
+
 func TestCoordinatorRouteProviderIgnoresLeaderHintRemovedFromDescriptor(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
