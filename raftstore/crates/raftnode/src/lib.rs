@@ -10,22 +10,22 @@ pub type RegionId = u64;
 mod apply;
 mod error;
 mod log;
-mod metadata_payload;
+mod metadata_wire;
 mod proposal;
 mod region;
 mod storage;
 mod traffic;
 mod transport;
-mod watch;
 
 pub use apply::{
-    AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
-    MetadataCommandExecutor, MetadataReadExecutor, MetadataRetentionExecutor,
-    PersistentAppliedMetadataEngine, RegionApplyEngine, RegionMetadataSink, RegionSnapshotEngine,
+    AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider, ApplyWatchProvider,
+    ApplyWatchReplay, ApplyWatchReplayRequest, MetadataCommandExecutor, MetadataReadExecutor,
+    MetadataRetentionExecutor, PersistentAppliedMetadataEngine, RegionApplyEngine,
+    RegionMetadataSink, RegionSnapshotEngine,
 };
 pub use error::Error;
 pub use log::{decode_log_entry, encode_log_entry, RaftEntryLog, SegmentedEntryLog};
-pub(crate) use metadata_payload::decode_metadata_response;
+pub(crate) use metadata_wire::decode_metadata_response;
 pub use openraft::BasicNode;
 pub(crate) use proposal::ProposalPayloadKind;
 pub use proposal::{Proposal, ProposalPayload};
@@ -41,7 +41,6 @@ pub use transport::{
     MemoryRaftNetworkRegistry, RaftTransportServer, TonicRaftNetworkFactory,
     TonicRaftTransportRegistry, TonicRaftTransportService,
 };
-pub use watch::{ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
 
 openraft::declare_raft_types!(
     pub RaftStoreConfig:

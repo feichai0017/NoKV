@@ -8,23 +8,23 @@ use openraft::{
 use crate::{BasicNode, NodeId, RaftStoreConfig};
 
 #[derive(Clone, Default)]
-pub(super) struct NoopNetworkFactory;
+pub(super) struct BootstrapNetworkFactory;
 
-pub(super) struct NoopNetwork;
+pub(super) struct BootstrapNetwork;
 
 #[derive(Debug, thiserror::Error)]
 #[error("single-node raft network has no remote peers")]
-struct NoopNetworkError;
+struct BootstrapNetworkError;
 
-impl RaftNetworkFactory<RaftStoreConfig> for NoopNetworkFactory {
-    type Network = NoopNetwork;
+impl RaftNetworkFactory<RaftStoreConfig> for BootstrapNetworkFactory {
+    type Network = BootstrapNetwork;
 
     async fn new_client(&mut self, _target: NodeId, _node: &BasicNode) -> Self::Network {
-        NoopNetwork
+        BootstrapNetwork
     }
 }
 
-impl RaftNetwork<RaftStoreConfig> for NoopNetwork {
+impl RaftNetwork<RaftStoreConfig> for BootstrapNetwork {
     async fn append_entries(
         &mut self,
         _rpc: openraft::raft::AppendEntriesRequest<RaftStoreConfig>,
@@ -63,5 +63,5 @@ where
     N: openraft::Node,
     E: StdError,
 {
-    RPCError::Unreachable(Unreachable::new(&NoopNetworkError))
+    RPCError::Unreachable(Unreachable::new(&BootstrapNetworkError))
 }

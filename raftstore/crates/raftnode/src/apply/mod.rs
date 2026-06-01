@@ -6,20 +6,23 @@ use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use tokio::sync::broadcast;
 
-use crate::metadata_payload::encode_metadata_response;
+use crate::metadata_wire::encode_metadata_response;
 use crate::traffic::{RegionTrafficProvider, RegionTrafficSnapshot, RegionTrafficStats};
-use crate::watch::{ApplyHistory, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
 use crate::{Error, OpenRaftEntry, ProposalPayloadKind, RegionId};
 
 mod metadata;
 mod snapshot;
 mod types;
+mod watch;
 
 pub use types::{
     AppliedProposal, ApplyStatus, ApplyStatusProvider, MetadataCommandExecutor,
     MetadataReadExecutor, MetadataRetentionExecutor, RegionApplyEngine, RegionMetadataSink,
     RegionSnapshotEngine,
 };
+pub use watch::{ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
+
+use watch::ApplyHistory;
 
 #[derive(Debug)]
 struct AppliedMetadataInner<E> {

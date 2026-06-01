@@ -1,7 +1,7 @@
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
-use crate::watch::{ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
+use super::{ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
 use crate::{OpenRaftEntry, RegionId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]

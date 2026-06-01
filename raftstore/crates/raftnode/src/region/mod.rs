@@ -20,9 +20,10 @@ use crate::{
     RegionTrafficSnapshot,
 };
 
-mod metadata_api;
-mod single_node_network;
-use single_node_network::NoopNetworkFactory;
+mod bootstrap_network;
+mod metadata;
+
+use bootstrap_network::BootstrapNetworkFactory;
 
 #[derive(Clone)]
 pub struct OpenRaftRegion<E = AppliedMetadataEngine<MemoryMetadataStore>> {
@@ -148,7 +149,7 @@ where
             region_id,
             log_store,
             state_machine,
-            NoopNetworkFactory,
+            BootstrapNetworkFactory,
             format!("local-{node_id}"),
         )
         .await

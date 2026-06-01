@@ -1,7 +1,7 @@
 use nokv_metadata_state::MetadataEngine;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
-use crate::metadata_payload::metadata_command_watch_keys;
+use crate::metadata_wire::metadata_command_watch_keys;
 
 use super::{
     invalid_raft_command, AppliedMetadataEngine, MetadataCommandExecutor, MetadataReadExecutor,
