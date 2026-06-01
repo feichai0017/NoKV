@@ -137,6 +137,30 @@ func TestExecutorRetriesRouteUnavailable(t *testing.T) {
 	require.Equal(t, uint64(0), executor.Stats()["commit_retry_exhausted_total"])
 }
 
+func TestExecutorRetriesNotLeaderRouteRefresh(t *testing.T) {
+	runner := newFakeRunner()
+	runner.mutateErrs = []error{
+		nokverrors.New(nokverrors.KindNotLeader, "metadata route points at old leader"),
+		nil,
+	}
+	allocator := &fakeInodeAllocator{ids: []model.InodeID{22}}
+	executor, err := newTestExecutor(runner, WithInodeAllocator(allocator))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "file",
+		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
+	})
+	require.NoError(t, err)
+	require.Len(t, runner.mutations, 1)
+	require.Equal(t, 1, allocator.calls)
+	require.Equal(t, uint64(5), runner.nextTS)
+	require.Equal(t, uint64(1), executor.Stats()["commit_retries_total"])
+	require.Equal(t, uint64(0), executor.Stats()["commit_retry_exhausted_total"])
+}
+
 func TestExecutorRetriesWriteConflict(t *testing.T) {
 	runner := newFakeRunner()
 	runner.mutateErrs = []error{

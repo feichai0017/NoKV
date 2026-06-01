@@ -473,7 +473,8 @@ func isRetryableRouteRefresh(err error) bool {
 	switch nokverrors.KindOf(err) {
 	case nokverrors.KindRouteUnavailable,
 		nokverrors.KindRegionRouting,
-		nokverrors.KindStaleEpoch:
+		nokverrors.KindStaleEpoch,
+		nokverrors.KindNotLeader:
 		return true
 	default:
 		return false
