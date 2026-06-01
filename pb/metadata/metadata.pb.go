@@ -901,14 +901,18 @@ func (x *MetadataBatchGetResponse) GetRegionError() *error1.RegionError {
 }
 
 type MetadataScanRequest struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Context       *MetadataContext       `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
-	StartKey      []byte                 `protobuf:"bytes,2,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
-	Limit         uint32                 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
-	Version       uint64                 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
-	IncludeStart  bool                   `protobuf:"varint,5,opt,name=include_start,json=includeStart,proto3" json:"include_start,omitempty"`
-	Reverse       bool                   `protobuf:"varint,6,opt,name=reverse,proto3" json:"reverse,omitempty"`
-	KeyFamily     MetadataFamily         `protobuf:"varint,7,opt,name=key_family,json=keyFamily,proto3,enum=nokv.metadata.v1.MetadataFamily" json:"key_family,omitempty"`
+	state        protoimpl.MessageState `protogen:"open.v1"`
+	Context      *MetadataContext       `protobuf:"bytes,1,opt,name=context,proto3" json:"context,omitempty"`
+	StartKey     []byte                 `protobuf:"bytes,2,opt,name=start_key,json=startKey,proto3" json:"start_key,omitempty"`
+	Limit        uint32                 `protobuf:"varint,3,opt,name=limit,proto3" json:"limit,omitempty"`
+	Version      uint64                 `protobuf:"varint,4,opt,name=version,proto3" json:"version,omitempty"`
+	IncludeStart bool                   `protobuf:"varint,5,opt,name=include_start,json=includeStart,proto3" json:"include_start,omitempty"`
+	Reverse      bool                   `protobuf:"varint,6,opt,name=reverse,proto3" json:"reverse,omitempty"`
+	KeyFamily    MetadataFamily         `protobuf:"varint,7,opt,name=key_family,json=keyFamily,proto3,enum=nokv.metadata.v1.MetadataFamily" json:"key_family,omitempty"`
+	// prefix_key bounds scans to one storage-neutral fsmeta key prefix. It lets
+	// tree-backed engines use native prefix iterators instead of scanning an
+	// entire metadata family.
+	PrefixKey     []byte `protobuf:"bytes,8,opt,name=prefix_key,json=prefixKey,proto3" json:"prefix_key,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -990,6 +994,13 @@ func (x *MetadataScanRequest) GetKeyFamily() MetadataFamily {
 		return x.KeyFamily
 	}
 	return MetadataFamily_METADATA_FAMILY_UNSPECIFIED
+}
+
+func (x *MetadataScanRequest) GetPrefixKey() []byte {
+	if x != nil {
+		return x.PrefixKey
+	}
+	return nil
 }
 
 type MetadataScanResponse struct {
@@ -1973,7 +1984,7 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\brequests\x18\x02 \x03(\v2$.nokv.metadata.v1.MetadataGetRequestR\brequests\"\x9e\x01\n" +
 	"\x18MetadataBatchGetResponse\x12C\n" +
 	"\tresponses\x18\x01 \x03(\v2%.nokv.metadata.v1.MetadataGetResponseR\tresponses\x12=\n" +
-	"\fregion_error\x18\x02 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError\"\x9f\x02\n" +
+	"\fregion_error\x18\x02 \x01(\v2\x1a.nokv.error.v1.RegionErrorR\vregionError\"\xbe\x02\n" +
 	"\x13MetadataScanRequest\x12;\n" +
 	"\acontext\x18\x01 \x01(\v2!.nokv.metadata.v1.MetadataContextR\acontext\x12\x1b\n" +
 	"\tstart_key\x18\x02 \x01(\fR\bstartKey\x12\x14\n" +
@@ -1982,7 +1993,9 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\rinclude_start\x18\x05 \x01(\bR\fincludeStart\x12\x18\n" +
 	"\areverse\x18\x06 \x01(\bR\areverse\x12?\n" +
 	"\n" +
-	"key_family\x18\a \x01(\x0e2 .nokv.metadata.v1.MetadataFamilyR\tkeyFamily\"\xbf\x01\n" +
+	"key_family\x18\a \x01(\x0e2 .nokv.metadata.v1.MetadataFamilyR\tkeyFamily\x12\x1d\n" +
+	"\n" +
+	"prefix_key\x18\b \x01(\fR\tprefixKey\"\xbf\x01\n" +
 	"\x14MetadataScanResponse\x12.\n" +
 	"\x03kvs\x18\x01 \x03(\v2\x1c.nokv.metadata.v1.MetadataKVR\x03kvs\x128\n" +
 	"\x05error\x18\x02 \x01(\v2\".nokv.metadata.v1.MetadataKeyErrorR\x05error\x12=\n" +

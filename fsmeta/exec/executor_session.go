@@ -278,7 +278,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 			if remaining == 0 {
 				break
 			}
-			kvs, err := e.runner.Scan(ctx, scanPrefix, remaining, startVersion)
+			kvs, err := e.runner.Scan(ctx, scanPrefix, scanPrefix, remaining, startVersion)
 			if err != nil {
 				return err
 			}

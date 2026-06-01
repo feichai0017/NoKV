@@ -302,7 +302,7 @@ func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, version uint64) 
 	return out, nil
 }
 
-func (r *fakeRunner) Scan(_ context.Context, startKey []byte, limit uint32, version uint64) ([]backend.KV, error) {
+func (r *fakeRunner) Scan(_ context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error) {
 	r.scanVersions = append(r.scanVersions, version)
 	if len(r.scanErrs) > 0 {
 		err := r.scanErrs[0]
@@ -313,7 +313,7 @@ func (r *fakeRunner) Scan(_ context.Context, startKey []byte, limit uint32, vers
 	}
 	keys := make([][]byte, 0, len(r.data))
 	for key := range r.data {
-		if bytes.Compare([]byte(key), startKey) >= 0 {
+		if bytes.Compare([]byte(key), startKey) >= 0 && (len(prefix) == 0 || bytes.HasPrefix([]byte(key), prefix)) {
 			keys = append(keys, []byte(key))
 		}
 	}

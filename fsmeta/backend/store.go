@@ -150,7 +150,11 @@ type Store interface {
 	ReserveTimestamp(ctx context.Context, count uint64) (uint64, error)
 	Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
 	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
-	Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]KV, error)
+	// Scan returns visible keys starting at startKey. When prefix is non-empty,
+	// the scan is bounded to keys under that prefix; callers that know a
+	// directory/session/path scope should pass it so physical engines can use
+	// native prefix iterators.
+	Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]KV, error)
 	CommitMetadata(ctx context.Context, command MetadataCommand) (MetadataCommitResult, error)
 }
 

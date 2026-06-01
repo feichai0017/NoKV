@@ -49,11 +49,39 @@ func TestRunnerProvidesSnapshotReads(t *testing.T) {
 	require.True(t, ok)
 	require.Equal(t, []byte("one"), value)
 
-	rows, err := runner.Scan(ctx, []byte("a"), 8, commit)
+	rows, err := runner.Scan(ctx, []byte("a"), nil, 8, commit)
 	require.NoError(t, err)
 	require.Len(t, rows, 1)
 	require.Equal(t, key, rows[0].Key)
 	require.Equal(t, []byte("one"), rows[0].Value)
+}
+
+func TestRunnerScanHonorsPrefix(t *testing.T) {
+	db := openTestDB(t, "", nil)
+	defer func() { require.NoError(t, db.Close()) }()
+	runner, err := NewRunner(db)
+	require.NoError(t, err)
+
+	ctx := context.Background()
+	start, err := runner.ReserveTimestamp(ctx, 2)
+	require.NoError(t, err)
+	result, err := runner.CommitMetadata(ctx, backend.MetadataCommand{
+		PrimaryKey:    []byte("a/1"),
+		ReadVersion:   start,
+		CommitVersion: start + 1,
+		Mutations: []*backend.Mutation{
+			{Op: backend.MutationPut, Key: []byte("a/1"), Value: []byte("one")},
+			{Op: backend.MutationPut, Key: []byte("a/2"), Value: []byte("two")},
+			{Op: backend.MutationPut, Key: []byte("b/1"), Value: []byte("other")},
+		},
+	})
+	require.NoError(t, err)
+
+	rows, err := runner.Scan(ctx, []byte("a/"), []byte("a/"), 8, result.CommitVersion)
+	require.NoError(t, err)
+	require.Len(t, rows, 2)
+	require.Equal(t, []byte("a/1"), rows[0].Key)
+	require.Equal(t, []byte("a/2"), rows[1].Key)
 }
 
 func TestRunnerCommitMetadataHandlesMultiKeyBadgerTransaction(t *testing.T) {

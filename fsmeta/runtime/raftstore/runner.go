@@ -162,27 +162,32 @@ func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	return nil, lastErr
 }
 
-func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]backend.KV, error) {
+func (r *Runner) Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error) {
 	if limit == 0 {
 		return nil, nil
 	}
+	routeKey := startKey
+	if len(routeKey) == 0 && len(prefix) != 0 {
+		routeKey = prefix
+	}
 	var lastErr error
 	for attempt := 0; attempt < maxRouteAttempts; attempt++ {
-		route, err := r.routes.RouteForKey(ctx, startKey)
+		route, err := r.routes.RouteForKey(ctx, routeKey)
 		if err != nil {
 			return nil, err
 		}
 		resp, err := route.Client.Scan(ctx, &metadatapb.MetadataScanRequest{
 			Context:   route.Context,
 			StartKey:  cloneBytes(startKey),
+			PrefixKey: cloneBytes(prefix),
 			Limit:     limit,
 			Version:   version,
-			KeyFamily: metadataFamilyToProto(metadataFamilyForKey(startKey)),
+			KeyFamily: metadataFamilyToProto(metadataFamilyOrKey(metadataFamilyForKey(prefix), startKey)),
 		})
 		if err != nil {
 			if shouldRetryRouteCall(ctx, err, attempt) {
 				lastErr = err
-				r.observeRouteFailure(ctx, startKey, route, err)
+				r.observeRouteFailure(ctx, routeKey, route, err)
 				continue
 			}
 			return nil, err
@@ -192,7 +197,7 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 			if !canRetryRouteError(lastErr) || attempt == maxRouteAttempts-1 {
 				return nil, lastErr
 			}
-			r.observeRegionError(ctx, startKey, route, routeErr)
+			r.observeRegionError(ctx, routeKey, route, routeErr)
 			continue
 		}
 		if err := keyError(resp.GetError()); err != nil {

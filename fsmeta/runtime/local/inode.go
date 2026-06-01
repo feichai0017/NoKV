@@ -109,8 +109,12 @@ func maxInodeInStore(runner *Runner, mount model.MountIdentity) (model.InodeID, 
 	if runner == nil {
 		return 0, nil
 	}
+	prefix, err := layout.EncodeMountPrefix(mount)
+	if err != nil {
+		return 0, err
+	}
 	var maxInode model.InodeID
-	err := runner.scanUserKeys(nil, func(userKey []byte) (bool, error) {
+	err = runner.scanUserKeys(prefix, prefix, func(userKey []byte) (bool, error) {
 		parts, ok := layout.InspectKey(userKey)
 		if ok && parts.MountKeyID == mount.MountKeyID && parts.Kind == layout.KeyKindInode && parts.Inode > maxInode {
 			maxInode = parts.Inode

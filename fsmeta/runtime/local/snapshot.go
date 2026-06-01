@@ -210,7 +210,7 @@ func (r *SnapshotRegistry) load(ctx context.Context) error {
 		return err
 	}
 	var loaded uint64
-	err = r.runner.scanUserKeys(prefix, func(userKey []byte) (bool, error) {
+	err = r.runner.scanUserKeys(prefix, prefix, func(userKey []byte) (bool, error) {
 		if err := ctxErr(ctx); err != nil {
 			return false, err
 		}

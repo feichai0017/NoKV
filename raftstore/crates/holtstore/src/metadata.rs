@@ -74,17 +74,23 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         let limit = metadata_state::scan_limit(req.limit);
         let mut kvs = Vec::new();
         let mut keys = Vec::new();
-        for entry in self
-            .store
-            .current(family)
-            .map_err(to_backend_error)?
-            .range()
-        {
-            let entry = entry.map_err(to_backend_error)?;
-            let RangeEntry::Key { key, .. } = entry else {
-                continue;
-            };
-            keys.push(key);
+        let current = self.store.current(family).map_err(to_backend_error)?;
+        if req.prefix_key.is_empty() {
+            for entry in current.range() {
+                let entry = entry.map_err(to_backend_error)?;
+                let RangeEntry::Key { key, .. } = entry else {
+                    continue;
+                };
+                keys.push(key);
+            }
+        } else {
+            for entry in current.range().prefix(&req.prefix_key) {
+                let entry = entry.map_err(to_backend_error)?;
+                let RangeEntry::Key { key, .. } = entry else {
+                    continue;
+                };
+                keys.push(key);
+            }
         }
         if req.reverse {
             keys.reverse();

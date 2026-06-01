@@ -72,6 +72,9 @@ impl MemoryMetadataStore {
             keys.reverse();
         }
         for key in keys {
+            if !req.prefix_key.is_empty() && !key.starts_with(&req.prefix_key) {
+                continue;
+            }
             if !scan_key_matches_start(key, &req.start_key, req.include_start, req.reverse) {
                 continue;
             }

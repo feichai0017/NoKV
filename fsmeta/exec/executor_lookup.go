@@ -289,7 +289,7 @@ func (e *Executor) scanDentries(ctx context.Context, plan compile.DirectoryReadP
 }
 
 func (e *Executor) scanDentrySnapshots(ctx context.Context, plan compile.DirectoryReadPlan, version uint64) ([]dentrySnapshot, error) {
-	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
+	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Prefix, plan.Limit, version)
 	if err != nil {
 		return nil, err
 	}

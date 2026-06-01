@@ -155,6 +155,41 @@ fn metadata_snapshot_round_trips_committed_versions() {
 }
 
 #[test]
+fn metadata_scan_honors_prefix_key() {
+    let store = MemoryMetadataStore::new();
+    store
+        .commit_metadata(&put_command(b"a/1", b"v1", 10), 11)
+        .unwrap();
+    store
+        .commit_metadata(&put_command(b"a/2", b"v2", 20), 21)
+        .unwrap();
+    store
+        .commit_metadata(&put_command(b"b/1", b"other", 30), 31)
+        .unwrap();
+
+    let scan = store
+        .scan_metadata(&metadatapb::MetadataScanRequest {
+            start_key: b"a/".to_vec(),
+            prefix_key: b"a/".to_vec(),
+            limit: 10,
+            version: 31,
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        scan.kvs
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect::<Vec<_>>(),
+        vec![
+            (b"a/1".to_vec(), b"v1".to_vec()),
+            (b"a/2".to_vec(), b"v2".to_vec())
+        ]
+    );
+}
+
+#[test]
 fn metadata_snapshot_round_trips_retention_pin_versions() {
     let store = MemoryMetadataStore::new();
     store

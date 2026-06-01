@@ -656,6 +656,55 @@ fn holt_metadata_scan_uses_only_requested_family_current_tree() {
 }
 
 #[test]
+fn holt_metadata_scan_uses_current_tree_prefix() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    store
+        .commit_metadata(
+            &family_put_command(metadatapb::MetadataFamily::Dentry, b"a/1", b"v1", 10),
+            11,
+        )
+        .unwrap();
+    store
+        .commit_metadata(
+            &family_put_command(metadatapb::MetadataFamily::Dentry, b"a/2", b"v2", 20),
+            21,
+        )
+        .unwrap();
+    store
+        .commit_metadata(
+            &family_put_command(
+                metadatapb::MetadataFamily::Dentry,
+                b"b/1",
+                b"other",
+                30,
+            ),
+            31,
+        )
+        .unwrap();
+    let scan = store
+        .scan_metadata(&metadatapb::MetadataScanRequest {
+            key_family: metadatapb::MetadataFamily::Dentry as i32,
+            start_key: b"a/".to_vec(),
+            prefix_key: b"a/".to_vec(),
+            version: 31,
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        scan.kvs
+            .into_iter()
+            .map(|kv| (kv.key, kv.value))
+            .collect::<Vec<_>>(),
+        vec![
+            (b"a/1".to_vec(), b"v1".to_vec()),
+            (b"a/2".to_vec(), b"v2".to_vec())
+        ]
+    );
+}
+
+#[test]
 fn holt_metadata_predicate_failure_does_not_partially_apply() {
     let store = HoltMetadataStore::open_memory().unwrap();
     store

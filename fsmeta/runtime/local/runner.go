@@ -129,13 +129,14 @@ func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	return out, nil
 }
 
-// Scan returns up to limit visible key/value pairs starting at startKey.
-func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]backend.KV, error) {
+// Scan returns up to limit visible key/value pairs starting at startKey and
+// optionally bounded to prefix.
+func (r *Runner) Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error) {
 	if limit == 0 {
 		return nil, nil
 	}
 	out := make([]backend.KV, 0, limit)
-	err := r.scanUserKeys(startKey, func(userKey []byte) (bool, error) {
+	err := r.scanUserKeys(startKey, prefix, func(userKey []byte) (bool, error) {
 		if err := ctxErr(ctx); err != nil {
 			return false, err
 		}
@@ -565,17 +566,24 @@ func (r *Runner) scanWritesTxn(txn *badger.Txn, key []byte, fn func(localWrite, 
 	return nil
 }
 
-func (r *Runner) scanUserKeys(startKey []byte, fn func([]byte) (bool, error)) error {
+func (r *Runner) scanUserKeys(startKey, scanPrefix []byte, fn func([]byte) (bool, error)) error {
 	r.mu.Lock()
 	var keys [][]byte
 	err := r.db.View(func(txn *badger.Txn) error {
 		iter := txn.NewIterator(localIteratorOptions(false))
 		defer iter.Close()
 		var lastUserKey []byte
-		for iter.Seek(encodeLocalWriteKey(startKey, localMaxVersion)); iter.Valid(); iter.Next() {
+		seekKey := startKey
+		if len(scanPrefix) != 0 && (len(seekKey) == 0 || bytes.Compare(seekKey, scanPrefix) < 0) {
+			seekKey = scanPrefix
+		}
+		for iter.Seek(encodeLocalWriteKey(seekKey, localMaxVersion)); iter.Valid(); iter.Next() {
 			item := iter.Item()
 			prefix, userKey, _, ok := decodeLocalVersionedKey(item.Key())
 			if !ok || prefix != localWriteKeyPrefix {
+				break
+			}
+			if len(scanPrefix) != 0 && !bytes.HasPrefix(userKey, scanPrefix) {
 				break
 			}
 			if bytes.Equal(userKey, lastUserKey) {

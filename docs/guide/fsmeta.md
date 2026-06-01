@@ -79,7 +79,7 @@ type Store interface {
     ReserveTimestamp(ctx context.Context, count uint64) (uint64, error)
     Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
     BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
-    Scan(ctx context.Context, startKey []byte, limit uint32, version uint64) ([]backend.KV, error)
+    Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error)
     CommitMetadata(ctx context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error)
 }
 ```
@@ -89,6 +89,9 @@ backend-neutral predicates, mutations, watch keys, metadata families, and an
 optional explicit commit version. Runtime packages own concrete commit
 mechanics. Local runtimes may flatten families into one keyspace; the Rust
 distributed runtime maps them to Holt current trees plus a shared history tree.
+Prefix-bounded scans are part of the backend contract so directory, path,
+session, and audit reads can use storage-native prefix iterators instead of
+walking an entire metadata family.
 Dentry values can carry a small inode projection so `ReadDirPlus` can return
 common single-link file entries from the dentry scan alone. Directory entries
 and hard-linked files still fall back to inode reads until the parent index can

@@ -159,13 +159,16 @@ func (r *versionedRunner) BatchGet(_ context.Context, keys [][]byte, version uin
 	return out, nil
 }
 
-func (r *versionedRunner) Scan(_ context.Context, startKey []byte, limit uint32, version uint64) ([]backend.KV, error) {
+func (r *versionedRunner) Scan(_ context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	keys := make([][]byte, 0, len(r.data))
 	for key := range r.data {
 		raw := []byte(key)
 		if bytes.Compare(raw, startKey) < 0 {
+			continue
+		}
+		if len(prefix) != 0 && !bytes.HasPrefix(raw, prefix) {
 			continue
 		}
 		if _, ok := r.visibleLocked(raw, version); ok {

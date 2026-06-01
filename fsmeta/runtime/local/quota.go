@@ -99,7 +99,7 @@ func (q *QuotaLedger) deriveQuotaUsageFromDentries(ctx context.Context, runner b
 	var usage model.UsageRecord
 	start := append([]byte(nil), prefix...)
 	for {
-		rows, err := runner.Scan(ctx, start, 256, version)
+		rows, err := runner.Scan(ctx, start, prefix, 256, version)
 		if err != nil {
 			return model.UsageRecord{}, err
 		}

@@ -98,6 +98,10 @@ message MetadataScanRequest {
   bool include_start = 5;
   bool reverse = 6;
   MetadataFamily key_family = 7;
+  // prefix_key bounds scans to one storage-neutral fsmeta key prefix. It lets
+  // tree-backed engines use native prefix iterators instead of scanning an
+  // entire metadata family.
+  bytes prefix_key = 8;
 }
 
 message MetadataScanResponse {

@@ -20,6 +20,7 @@ import (
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/feichai0017/NoKV/fsmeta/observe"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
@@ -101,6 +102,37 @@ func TestRunnerBatchGetMapsResponseByRequestKey(t *testing.T) {
 	values, err := runner.BatchGet(context.Background(), [][]byte{[]byte("a"), []byte("b")}, 5)
 	require.NoError(t, err)
 	require.Equal(t, map[string][]byte{"a": []byte("va")}, values)
+}
+
+func TestRunnerScanSendsPrefixAndFamily(t *testing.T) {
+	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
+	prefix, err := layout.EncodeDentryPrefix(mount, model.RootInode)
+	require.NoError(t, err)
+	start := append(append([]byte(nil), prefix...), 'a')
+	var got *metadatapb.MetadataScanRequest
+	client := &fakeMetadataPlaneClient{
+		scan: func(_ context.Context, req *metadatapb.MetadataScanRequest) (*metadatapb.MetadataScanResponse, error) {
+			got = req
+			return &metadatapb.MetadataScanResponse{
+				Kvs: []*metadatapb.MetadataKV{{
+					Key:       append([]byte(nil), start...),
+					KeyFamily: metadatapb.MetadataFamily_METADATA_FAMILY_DENTRY,
+					Value:     []byte("v"),
+				}},
+			}, nil
+		},
+	}
+	runner := newTestRunner(t, client)
+
+	rows, err := runner.Scan(context.Background(), start, prefix, 8, 99)
+	require.NoError(t, err)
+	require.Len(t, rows, 1)
+	require.NotNil(t, got)
+	require.Equal(t, start, got.GetStartKey())
+	require.Equal(t, prefix, got.GetPrefixKey())
+	require.Equal(t, uint32(8), got.GetLimit())
+	require.Equal(t, uint64(99), got.GetVersion())
+	require.Equal(t, metadatapb.MetadataFamily_METADATA_FAMILY_DENTRY, got.GetKeyFamily())
 }
 
 func TestRunnerMapsRegionErrorToRetryableKind(t *testing.T) {

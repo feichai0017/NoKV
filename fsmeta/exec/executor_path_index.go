@@ -64,7 +64,7 @@ func (e *Executor) pathIndexPathForInode(ctx context.Context, mount model.MountI
 	if err != nil {
 		return "", false, err
 	}
-	kvs, err := e.runner.Scan(ctx, prefix, pathIndexScanLimit, version)
+	kvs, err := e.runner.Scan(ctx, prefix, prefix, pathIndexScanLimit, version)
 	if err != nil {
 		return "", false, err
 	}
