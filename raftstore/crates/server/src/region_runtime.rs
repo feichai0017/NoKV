@@ -247,11 +247,11 @@ impl MetadataRetentionExecutor for EmptyApplyStatus {
         &'a self,
         _retention_floor: u64,
     ) -> impl std::future::Future<
-        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+        Output = nokv_metadata_state::Result<nokv_metadata_state::MetadataRetentionResult>,
     > + Send
            + 'a {
         async move {
-            Err(nokv_metastore::Error::Backend(
+            Err(nokv_metadata_state::Error::Backend(
                 "metadata retention requires a hosted region".to_owned(),
             ))
         }

@@ -8,7 +8,7 @@ authors.workspace = true
 
 [dependencies]
 nokv-holtstore.workspace = true
-nokv-metastore.workspace = true
+nokv-metadata-state.workspace = true
 nokv-proto.workspace = true
 nokv-raftnode.workspace = true
 prost.workspace = true

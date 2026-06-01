@@ -1,6 +1,6 @@
 use std::collections::BTreeSet;
 
-use nokv_metastore::MetadataEngine;
+use nokv_metadata_state::MetadataEngine;
 use nokv_proto::nokv::meta::v1 as metapb;
 
 use crate::{AdminCommand, AdminCommandType, MergeCommand, RegionId, SplitCommand};
@@ -16,7 +16,7 @@ where
         term: u64,
         index: u64,
         command: AdminCommand,
-    ) -> nokv_metastore::Result<()> {
+    ) -> nokv_metadata_state::Result<()> {
         let kind = AdminCommandType::try_from(command.r#type).unwrap_or(AdminCommandType::Unknown);
         match kind {
             AdminCommandType::Split => {
@@ -40,7 +40,7 @@ where
         term: u64,
         index: u64,
         split: SplitCommand,
-    ) -> nokv_metastore::Result<()> {
+    ) -> nokv_metadata_state::Result<()> {
         if split.parent_region_id != self.inner.region_id {
             return Err(invalid_raft_command(
                 "split parent region does not match apply region",
@@ -109,7 +109,7 @@ where
         term: u64,
         index: u64,
         merge: MergeCommand,
-    ) -> nokv_metastore::Result<()> {
+    ) -> nokv_metadata_state::Result<()> {
         if merge.target_region_id != self.inner.region_id {
             return Err(invalid_raft_command(
                 "merge target region does not match apply region",
@@ -171,7 +171,7 @@ fn push_split_lineage_once(
 fn build_merge_descriptor_for_apply(
     target: &metapb::RegionDescriptor,
     source: &metapb::RegionDescriptor,
-) -> nokv_metastore::Result<metapb::RegionDescriptor> {
+) -> nokv_metadata_state::Result<metapb::RegionDescriptor> {
     if target.region_id == 0 || source.region_id == 0 {
         return Err(invalid_raft_command(
             "merge target and source region ids are required",
@@ -241,7 +241,7 @@ fn merge_source_already_absorbed(
 fn ensure_merge_store_coverage_for_apply(
     target: &metapb::RegionDescriptor,
     source: &metapb::RegionDescriptor,
-) -> nokv_metastore::Result<()> {
+) -> nokv_metadata_state::Result<()> {
     let target_stores = region_peer_store_ids_for_apply(target)?;
     let source_stores = region_peer_store_ids_for_apply(source)?;
     if target_stores == source_stores {
@@ -254,7 +254,7 @@ fn ensure_merge_store_coverage_for_apply(
 
 fn region_peer_store_ids_for_apply(
     descriptor: &metapb::RegionDescriptor,
-) -> nokv_metastore::Result<BTreeSet<u64>> {
+) -> nokv_metadata_state::Result<BTreeSet<u64>> {
     let mut stores = BTreeSet::new();
     for peer in &descriptor.peers {
         if peer.store_id == 0 || peer.peer_id == 0 {

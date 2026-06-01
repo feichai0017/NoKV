@@ -1,6 +1,6 @@
 use super::*;
-use metastore::{MetadataEngine, MetadataSnapshotEngine};
-use nokv_metastore as metastore;
+use metadata_state::{MetadataEngine, MetadataSnapshotEngine};
+use nokv_metadata_state as metadata_state;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;

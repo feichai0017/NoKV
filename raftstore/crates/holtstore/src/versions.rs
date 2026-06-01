@@ -1,5 +1,5 @@
 use holt::RangeEntry;
-use nokv_metastore as metastore;
+use nokv_metadata_state as metadata_state;
 
 use crate::codec::{decode_value, encode_value};
 use crate::store::to_backend_error;
@@ -11,7 +11,7 @@ impl HoltMetadataStore {
         &self,
         key: &[u8],
         version: u64,
-    ) -> metastore::Result<Option<(u64, metastore::VersionedValue)>> {
+    ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
         let prefix = write_prefix(key);
         let mut best = None;
         for entry in self
@@ -39,7 +39,7 @@ impl HoltMetadataStore {
         &self,
         key: &[u8],
         start_version: u64,
-    ) -> metastore::Result<Option<(u64, metastore::VersionedValue)>> {
+    ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
         let prefix = write_prefix(key);
         for entry in self
             .store
@@ -67,7 +67,7 @@ impl HoltMetadataStore {
         &self,
         key: &[u8],
         version: u64,
-    ) -> metastore::Result<Option<(u64, metastore::VersionedValue)>> {
+    ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
         let prefix = write_prefix(key);
         let mut best = None;
         for entry in self
@@ -91,7 +91,7 @@ impl HoltMetadataStore {
         Ok(best)
     }
 
-    pub(crate) fn scan_write_user_keys(&self) -> metastore::Result<Vec<Vec<u8>>> {
+    pub(crate) fn scan_write_user_keys(&self) -> metadata_state::Result<Vec<Vec<u8>>> {
         let mut keys = std::collections::BTreeSet::new();
         for entry in self.store.write().map_err(to_backend_error)?.range() {
             let entry = entry.map_err(to_backend_error)?;
@@ -110,17 +110,17 @@ pub(crate) fn apply_committed(
     batch: &mut holt::DBAtomicBatch,
     key: &[u8],
     commit_ts: u64,
-    value: &metastore::VersionedValue,
+    value: &metadata_state::VersionedValue,
 ) {
     let encoded = encode_value(value);
     batch.put(WRITE_TREE, &write_key(key, commit_ts), &encoded);
     match value.kind {
-        metastore::ValueKind::Put => {
+        metadata_state::ValueKind::Put => {
             if let Some(bytes) = &value.value {
                 batch.put(DATA_TREE, key, bytes);
             }
         }
-        metastore::ValueKind::Delete => {
+        metadata_state::ValueKind::Delete => {
             batch.delete(DATA_TREE, key);
         }
     }

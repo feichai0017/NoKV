@@ -17,18 +17,19 @@ where
     fn execute_metadata_command<'a>(
         &'a self,
         req: &'a metadatapb::MetadataCommitRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataCommitResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataCommitResponse>,
+    > + Send
            + 'a {
         async move {
             let proposal = Proposal::from_metadata_command(req)
-                .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))?;
+                .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))?;
             let applied = match self.propose(proposal).await {
                 Ok(applied) => applied,
                 Err(Error::NotLeader { leader_id }) => {
                     return Ok(self.not_leader_metadata_response(req, leader_id));
                 }
-                Err(err) => return Err(nokv_metastore::Error::Backend(err.to_string())),
+                Err(err) => return Err(nokv_metadata_state::Error::Backend(err.to_string())),
             };
             decode_metadata_response(&applied.payload)
         }
@@ -42,8 +43,9 @@ where
     fn execute_metadata_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataGetRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataGetResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataGetResponse>,
+    > + Send
            + 'a {
         async move {
             let context = req.context.as_ref();
@@ -61,7 +63,7 @@ where
         &'a self,
         req: &'a metadatapb::MetadataBatchGetRequest,
     ) -> impl std::future::Future<
-        Output = nokv_metastore::Result<metadatapb::MetadataBatchGetResponse>,
+        Output = nokv_metadata_state::Result<metadatapb::MetadataBatchGetResponse>,
     > + Send
            + 'a {
         async move {
@@ -79,8 +81,9 @@ where
     fn execute_metadata_scan<'a>(
         &'a self,
         req: &'a metadatapb::MetadataScanRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataScanResponse>,
+    > + Send
            + 'a {
         async move {
             let context = req.context.as_ref();
@@ -103,7 +106,7 @@ where
         &'a self,
         retention_floor: u64,
     ) -> impl std::future::Future<
-        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+        Output = nokv_metadata_state::Result<nokv_metadata_state::MetadataRetentionResult>,
     > + Send
            + 'a {
         async move {
@@ -121,7 +124,7 @@ where
     async fn metadata_read_gate(
         &self,
         context: Option<&metadatapb::MetadataContext>,
-    ) -> nokv_metastore::Result<Option<errorpb::RegionError>> {
+    ) -> nokv_metadata_state::Result<Option<errorpb::RegionError>> {
         self.ensure_metadata_read_region(context)?;
         if metadata_read_consistency(context) == metadatapb::ReadConsistency::BoundedStale {
             if self.metadata_bounded_stale_read_admissible(context) {
@@ -135,7 +138,7 @@ where
                     .not_leader_metadata_region_error(context, leader_id)
                     .map(Some);
             }
-            return Err(nokv_metastore::Error::Backend(err.to_string()));
+            return Err(nokv_metadata_state::Error::Backend(err.to_string()));
         }
         Ok(None)
     }
@@ -172,11 +175,11 @@ where
     fn ensure_metadata_read_region(
         &self,
         context: Option<&metadatapb::MetadataContext>,
-    ) -> nokv_metastore::Result<()> {
+    ) -> nokv_metadata_state::Result<()> {
         let requested_region_id = context.map(|context| context.region_id).unwrap_or_default();
         let applied_region_id = self.apply_engine.apply_status().region_id;
         if requested_region_id != 0 && requested_region_id != applied_region_id {
-            return Err(nokv_metastore::Error::Backend(
+            return Err(nokv_metadata_state::Error::Backend(
                 Error::LogRegionMismatch {
                     record_region_id: applied_region_id,
                     proposal_region_id: requested_region_id,
@@ -208,7 +211,7 @@ where
         &self,
         context: Option<&metadatapb::MetadataContext>,
         leader_id: Option<NodeId>,
-    ) -> nokv_metastore::Result<errorpb::RegionError> {
+    ) -> nokv_metadata_state::Result<errorpb::RegionError> {
         let descriptor = self.apply_engine.region_descriptor()?;
         let region_id = descriptor
             .as_ref()

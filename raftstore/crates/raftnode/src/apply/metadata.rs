@@ -1,7 +1,7 @@
-use nokv_metastore::MetadataEngine;
+use nokv_metadata_state::MetadataEngine;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
-use crate::metadata::metadata_command_watch_keys;
+use crate::metadata_payload::metadata_command_watch_keys;
 
 use super::{
     invalid_raft_command, AppliedMetadataEngine, MetadataCommandExecutor, MetadataReadExecutor,
@@ -16,7 +16,7 @@ where
         &self,
         req: &metadatapb::MetadataCommitRequest,
         forced_status: Option<(u64, u64)>,
-    ) -> nokv_metastore::Result<metadatapb::MetadataCommitResponse> {
+    ) -> nokv_metadata_state::Result<metadatapb::MetadataCommitResponse> {
         let command = req
             .command
             .as_ref()
@@ -38,7 +38,7 @@ where
         }
         let response = {
             let engine = self.inner.engine.lock().map_err(|_| {
-                nokv_metastore::Error::Backend("region apply mutex poisoned".to_owned())
+                nokv_metadata_state::Error::Backend("region apply mutex poisoned".to_owned())
             })?;
             engine.commit_metadata(command, commit_version)?
         };
@@ -84,14 +84,14 @@ where
     fn execute_metadata_command_inner(
         &self,
         req: &metadatapb::MetadataCommitRequest,
-    ) -> nokv_metastore::Result<metadatapb::MetadataCommitResponse> {
+    ) -> nokv_metadata_state::Result<metadatapb::MetadataCommitResponse> {
         self.execute_metadata_command_at(req, None)
     }
 
     fn execute_metadata_get_inner(
         &self,
         req: &metadatapb::MetadataGetRequest,
-    ) -> nokv_metastore::Result<metadatapb::MetadataGetResponse> {
+    ) -> nokv_metadata_state::Result<metadatapb::MetadataGetResponse> {
         let response = self.read(|engine| engine.get_metadata(req))?;
         self.inner.traffic.record_read(1);
         Ok(response)
@@ -100,7 +100,7 @@ where
     fn execute_metadata_batch_get_inner(
         &self,
         req: &metadatapb::MetadataBatchGetRequest,
-    ) -> nokv_metastore::Result<metadatapb::MetadataBatchGetResponse> {
+    ) -> nokv_metadata_state::Result<metadatapb::MetadataBatchGetResponse> {
         if req.requests.is_empty() {
             return Ok(metadatapb::MetadataBatchGetResponse::default());
         }
@@ -112,7 +112,7 @@ where
     fn execute_metadata_scan_inner(
         &self,
         req: &metadatapb::MetadataScanRequest,
-    ) -> nokv_metastore::Result<metadatapb::MetadataScanResponse> {
+    ) -> nokv_metadata_state::Result<metadatapb::MetadataScanResponse> {
         let response = self.read(|engine| engine.scan_metadata(req))?;
         self.inner.traffic.record_read(1);
         Ok(response)
@@ -120,10 +120,10 @@ where
 
     fn read<T>(
         &self,
-        f: impl FnOnce(&E) -> nokv_metastore::Result<T>,
-    ) -> nokv_metastore::Result<T> {
+        f: impl FnOnce(&E) -> nokv_metadata_state::Result<T>,
+    ) -> nokv_metadata_state::Result<T> {
         let engine = self.inner.engine.lock().map_err(|_| {
-            nokv_metastore::Error::Backend("region apply mutex poisoned".to_owned())
+            nokv_metadata_state::Error::Backend("region apply mutex poisoned".to_owned())
         })?;
         f(&engine)
     }
@@ -136,8 +136,9 @@ where
     fn execute_metadata_command<'a>(
         &'a self,
         req: &'a metadatapb::MetadataCommitRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataCommitResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataCommitResponse>,
+    > + Send
            + 'a {
         async move { self.execute_metadata_command_inner(req) }
     }
@@ -150,8 +151,9 @@ where
     fn execute_metadata_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataGetRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataGetResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataGetResponse>,
+    > + Send
            + 'a {
         async move { self.execute_metadata_get_inner(req) }
     }
@@ -160,7 +162,7 @@ where
         &'a self,
         req: &'a metadatapb::MetadataBatchGetRequest,
     ) -> impl std::future::Future<
-        Output = nokv_metastore::Result<metadatapb::MetadataBatchGetResponse>,
+        Output = nokv_metadata_state::Result<metadatapb::MetadataBatchGetResponse>,
     > + Send
            + 'a {
         async move { self.execute_metadata_batch_get_inner(req) }
@@ -169,8 +171,9 @@ where
     fn execute_metadata_scan<'a>(
         &'a self,
         req: &'a metadatapb::MetadataScanRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataScanResponse>,
+    > + Send
            + 'a {
         async move { self.execute_metadata_scan_inner(req) }
     }
@@ -184,8 +187,9 @@ where
     fn execute_metadata_command<'a>(
         &'a self,
         req: &'a metadatapb::MetadataCommitRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataCommitResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataCommitResponse>,
+    > + Send
            + 'a {
         async move {
             let before = self.engine.status().applied_index;
@@ -204,8 +208,9 @@ where
     fn execute_metadata_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataGetRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataGetResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataGetResponse>,
+    > + Send
            + 'a {
         async move { self.engine.execute_metadata_get(req).await }
     }
@@ -214,7 +219,7 @@ where
         &'a self,
         req: &'a metadatapb::MetadataBatchGetRequest,
     ) -> impl std::future::Future<
-        Output = nokv_metastore::Result<metadatapb::MetadataBatchGetResponse>,
+        Output = nokv_metadata_state::Result<metadatapb::MetadataBatchGetResponse>,
     > + Send
            + 'a {
         async move { self.engine.execute_metadata_batch_get(req).await }
@@ -223,8 +228,9 @@ where
     fn execute_metadata_scan<'a>(
         &'a self,
         req: &'a metadatapb::MetadataScanRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataScanResponse>,
+    > + Send
            + 'a {
         async move { self.engine.execute_metadata_scan(req).await }
     }

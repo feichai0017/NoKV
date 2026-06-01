@@ -31,7 +31,7 @@ use super::startup::{
     StorageBackend,
 };
 use nokv_holtstore::HoltMetadataStore;
-use nokv_metastore::MemoryMetadataStore;
+use nokv_metadata_state::MemoryMetadataStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;

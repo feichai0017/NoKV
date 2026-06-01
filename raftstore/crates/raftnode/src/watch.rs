@@ -11,7 +11,7 @@ pub trait ApplyWatchProvider: Clone + Send + Sync + 'static {
     fn replay_apply(
         &self,
         request: ApplyWatchReplayRequest,
-    ) -> nokv_metastore::Result<ApplyWatchReplay>;
+    ) -> nokv_metadata_state::Result<ApplyWatchReplay>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

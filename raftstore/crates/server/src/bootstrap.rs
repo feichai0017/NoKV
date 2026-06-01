@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use nokv_holtstore::HoltMetadataStore;
-use nokv_metastore::MemoryMetadataStore;
+use nokv_metadata_state::MemoryMetadataStore;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::{AppliedMetadataEngine, BasicNode, PersistentAppliedMetadataEngine};
 use nokv_raftstore_server::{

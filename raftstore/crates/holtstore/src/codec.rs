@@ -1,8 +1,8 @@
-use nokv_metastore as metastore;
+use nokv_metadata_state as metadata_state;
 
 use crate::{Error, RegionApplyState, Result};
 
-pub(crate) fn encode_value(value: &metastore::VersionedValue) -> Vec<u8> {
+pub(crate) fn encode_value(value: &metadata_state::VersionedValue) -> Vec<u8> {
     let bytes = value.value.as_deref().unwrap_or_default();
     let mut out = Vec::with_capacity(1 + 4 + 8 + 8 + 4 + bytes.len());
     out.push(1);
@@ -14,12 +14,14 @@ pub(crate) fn encode_value(value: &metastore::VersionedValue) -> Vec<u8> {
     out
 }
 
-pub(crate) fn decode_value(bytes: &[u8]) -> metastore::Result<metastore::VersionedValue> {
+pub(crate) fn decode_value(bytes: &[u8]) -> metadata_state::Result<metadata_state::VersionedValue> {
     if bytes.len() < 25 {
-        return Err(metastore::Error::Decode("short metadata value".to_owned()));
+        return Err(metadata_state::Error::Decode(
+            "short metadata value".to_owned(),
+        ));
     }
     if bytes[0] != 1 {
-        return Err(metastore::Error::Decode(
+        return Err(metadata_state::Error::Decode(
             "unsupported metadata value version".to_owned(),
         ));
     }
@@ -28,15 +30,15 @@ pub(crate) fn decode_value(bytes: &[u8]) -> metastore::Result<metastore::Version
     let expires_at = u64::from_be_bytes(bytes[13..21].try_into().unwrap());
     let len = u32::from_be_bytes(bytes[21..25].try_into().unwrap()) as usize;
     if bytes.len() != 25 + len {
-        return Err(metastore::Error::Decode(
+        return Err(metadata_state::Error::Decode(
             "invalid metadata value length".to_owned(),
         ));
     }
-    let kind = metastore::ValueKind::from_i32(kind_raw);
-    Ok(metastore::VersionedValue {
+    let kind = metadata_state::ValueKind::from_i32(kind_raw);
+    Ok(metadata_state::VersionedValue {
         kind,
         start_version,
-        value: (kind == metastore::ValueKind::Put).then(|| bytes[25..].to_vec()),
+        value: (kind == metadata_state::ValueKind::Put).then(|| bytes[25..].to_vec()),
         expires_at,
     })
 }

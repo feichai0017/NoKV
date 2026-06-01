@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::time::Duration;
 
-use nokv_metastore::MemoryMetadataStore;
+use nokv_metadata_state::MemoryMetadataStore;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use tokio::task::JoinHandle;
 

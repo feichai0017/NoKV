@@ -17,7 +17,10 @@ impl HoltRegionMetadataSink {
 }
 
 impl RegionMetadataSink for HoltRegionMetadataSink {
-    fn save_apply_status(&self, status: &nokv_raftnode::ApplyStatus) -> nokv_metastore::Result<()> {
+    fn save_apply_status(
+        &self,
+        status: &nokv_raftnode::ApplyStatus,
+    ) -> nokv_metadata_state::Result<()> {
         self.store
             .put_region_apply_state(&RegionApplyState {
                 region_id: status.region_id,
@@ -26,29 +29,29 @@ impl RegionMetadataSink for HoltRegionMetadataSink {
                 truncated_term: 0,
                 truncated_index: 0,
             })
-            .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))
+            .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))
     }
 
     fn save_apply_watch_event(
         &self,
         event: &metadatapb::MetadataApplyWatchEvent,
-    ) -> nokv_metastore::Result<()> {
+    ) -> nokv_metadata_state::Result<()> {
         self.store
             .put_watch_apply_event(event)
-            .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))
+            .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))
     }
 
     fn replay_apply_watch(
         &self,
         request: &ApplyWatchReplayRequest,
-    ) -> nokv_metastore::Result<Option<ApplyWatchReplay>> {
+    ) -> nokv_metadata_state::Result<Option<ApplyWatchReplay>> {
         if request.region_id == 0 {
             return Ok(Some(ApplyWatchReplay::default()));
         }
         let first = self
             .store
             .first_watch_apply_event(request.region_id)
-            .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))?;
+            .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))?;
         if first.is_none() {
             return Ok(None);
         }
@@ -61,7 +64,7 @@ impl RegionMetadataSink for HoltRegionMetadataSink {
                 &request.key_prefix,
                 DEFAULT_WATCH_APPLY_REPLAY_LIMIT,
             )
-            .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))?;
+            .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))?;
         Ok(Some(ApplyWatchReplay {
             events,
             expired: false,
@@ -71,11 +74,11 @@ impl RegionMetadataSink for HoltRegionMetadataSink {
     fn save_region_descriptor(
         &self,
         descriptor: &metapb::RegionDescriptor,
-    ) -> nokv_metastore::Result<()> {
+    ) -> nokv_metadata_state::Result<()> {
         self.store
             .put_region_descriptor(descriptor)
             .and_then(|_| self.store.checkpoint())
-            .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))
+            .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))
     }
 }
 

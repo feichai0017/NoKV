@@ -1,5 +1,5 @@
 use holt::RangeEntry;
-use nokv_metastore as metastore;
+use nokv_metadata_state as metadata_state;
 
 use crate::codec::decode_value;
 use crate::store::to_backend_error;
@@ -7,8 +7,8 @@ use crate::trees::{decode_write_key, DATA_TREE, WRITE_TREE};
 use crate::versions::apply_committed;
 use crate::HoltMetadataStore;
 
-impl metastore::MetadataSnapshotEngine for HoltMetadataStore {
-    fn export_metadata_snapshot(&self) -> metastore::Result<metastore::MetadataSnapshot> {
+impl metadata_state::MetadataSnapshotEngine for HoltMetadataStore {
+    fn export_metadata_snapshot(&self) -> metadata_state::Result<metadata_state::MetadataSnapshot> {
         let _guard = self.lock()?;
         let mut writes = Vec::new();
         for entry in self.store.write().map_err(to_backend_error)?.range() {
@@ -19,7 +19,7 @@ impl metastore::MetadataSnapshotEngine for HoltMetadataStore {
             let Some((user_key, commit_version)) = decode_write_key(&key)? else {
                 continue;
             };
-            writes.push(metastore::MetadataSnapshotWrite {
+            writes.push(metadata_state::MetadataSnapshotWrite {
                 key: user_key,
                 commit_version,
                 value: decode_value(&value)?,
@@ -31,13 +31,13 @@ impl metastore::MetadataSnapshotEngine for HoltMetadataStore {
                 .then(left.commit_version.cmp(&right.commit_version))
         });
 
-        Ok(metastore::MetadataSnapshot { writes })
+        Ok(metadata_state::MetadataSnapshot { writes })
     }
 
     fn install_metadata_snapshot(
         &self,
-        snapshot: metastore::MetadataSnapshot,
-    ) -> metastore::Result<()> {
+        snapshot: metadata_state::MetadataSnapshot,
+    ) -> metadata_state::Result<()> {
         let _guard = self.lock()?;
         let mut writes = snapshot.writes;
         writes.sort_by(|left, right| {

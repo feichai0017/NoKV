@@ -110,9 +110,9 @@ impl RegionDescriptorCatalog for HoltRegionDescriptorCatalog {
     fn region_descriptor(
         &self,
         region_id: u64,
-    ) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>> {
+    ) -> nokv_metadata_state::Result<Option<metapb::RegionDescriptor>> {
         self.store
             .get_region_descriptor(region_id)
-            .map_err(|err| nokv_metastore::Error::Backend(err.to_string()))
+            .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))
     }
 }

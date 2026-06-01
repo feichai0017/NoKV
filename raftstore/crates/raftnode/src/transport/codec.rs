@@ -8,7 +8,7 @@ use openraft::{
 };
 use prost::Message;
 
-use crate::log_codec::{
+use crate::log::{
     decode_log_entry, decode_membership_payload, encode_log_entry, encode_membership_payload,
 };
 use crate::{Error, NodeId, RaftStoreConfig, RegionId};

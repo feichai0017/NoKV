@@ -1,4 +1,4 @@
-//! Metadata-store primitives for Rust raftstore.
+//! Metadata state primitives for Rust raftstore.
 //!
 //! The crate owns metadata read, write, snapshot, and key-error semantics shared
 //! by in-memory tests and Holt-backed state-machine storage. It intentionally

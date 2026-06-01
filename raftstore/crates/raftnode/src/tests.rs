@@ -2,7 +2,7 @@ use super::*;
 use std::collections::BTreeMap;
 use std::time::Duration;
 
-use nokv_metastore::MemoryMetadataStore;
+use nokv_metadata_state::MemoryMetadataStore;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use prost::Message;
@@ -16,7 +16,7 @@ struct RecordingRegionMetadataSink {
 }
 
 impl RegionMetadataSink for RecordingRegionMetadataSink {
-    fn save_apply_status(&self, status: &ApplyStatus) -> nokv_metastore::Result<()> {
+    fn save_apply_status(&self, status: &ApplyStatus) -> nokv_metadata_state::Result<()> {
         self.statuses.lock().unwrap().push(status.clone());
         Ok(())
     }
@@ -24,7 +24,7 @@ impl RegionMetadataSink for RecordingRegionMetadataSink {
     fn save_region_descriptor(
         &self,
         descriptor: &metapb::RegionDescriptor,
-    ) -> nokv_metastore::Result<()> {
+    ) -> nokv_metadata_state::Result<()> {
         self.descriptors.lock().unwrap().push(descriptor.clone());
         Ok(())
     }
@@ -32,7 +32,7 @@ impl RegionMetadataSink for RecordingRegionMetadataSink {
     fn save_apply_watch_event(
         &self,
         event: &metadatapb::MetadataApplyWatchEvent,
-    ) -> nokv_metastore::Result<()> {
+    ) -> nokv_metadata_state::Result<()> {
         self.events.lock().unwrap().push(event.clone());
         Ok(())
     }
@@ -47,7 +47,7 @@ impl RegionDescriptorCatalog for StaticRegionDescriptorCatalog {
     fn region_descriptor(
         &self,
         region_id: RegionId,
-    ) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>> {
+    ) -> nokv_metadata_state::Result<Option<metapb::RegionDescriptor>> {
         Ok(self.descriptors.get(&region_id).cloned())
     }
 }
@@ -105,7 +105,7 @@ async fn execute_metadata_put<E>(
     value: impl Into<Vec<u8>>,
     read_version: u64,
     commit_version: u64,
-) -> nokv_metastore::Result<metadatapb::MetadataCommitResponse>
+) -> nokv_metadata_state::Result<metadatapb::MetadataCommitResponse>
 where
     E: MetadataCommandExecutor,
 {

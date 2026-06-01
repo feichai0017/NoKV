@@ -942,7 +942,7 @@ name = "nokv-holtstore"
 version = "0.1.0"
 dependencies = [
  "holt",
- "nokv-metastore",
+ "nokv-metadata-state",
  "nokv-proto",
  "prost",
  "tempfile",
@@ -950,7 +950,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "nokv-metastore"
+name = "nokv-metadata-state"
 version = "0.1.0"
 dependencies = [
  "nokv-proto",
@@ -983,7 +983,7 @@ name = "nokv-raftnode"
 version = "0.1.0"
 dependencies = [
  "crc32fast",
- "nokv-metastore",
+ "nokv-metadata-state",
  "nokv-proto",
  "nokv-raftlog",
  "openraft",
@@ -999,7 +999,7 @@ name = "nokv-raftstore-server"
 version = "0.1.0"
 dependencies = [
  "nokv-holtstore",
- "nokv-metastore",
+ "nokv-metadata-state",
  "nokv-proto",
  "nokv-raftnode",
  "prost",

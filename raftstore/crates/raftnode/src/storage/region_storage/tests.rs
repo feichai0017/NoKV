@@ -1,6 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
-use nokv_metastore::MemoryMetadataStore;
+use nokv_metadata_state::MemoryMetadataStore;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use openraft::{storage::RaftLogStorageExt, CommittedLeaderId, EntryPayload, LogId};
 

@@ -10,17 +10,13 @@ pub type RegionId = u64;
 mod admin_command;
 mod apply;
 mod error;
-mod log_codec;
-mod log_store;
-mod metadata;
-mod network;
+mod log;
+mod metadata_payload;
 mod proposal;
 mod region;
-mod region_storage;
-mod snapshot;
-mod tonic_transport;
+mod storage;
 mod traffic;
-mod transport_codec;
+mod transport;
 mod watch;
 
 pub use admin_command::{AdminCommand, AdminCommandType, MergeCommand, SplitCommand};
@@ -31,29 +27,22 @@ pub use apply::{
     RegionMetadataSink, RegionSnapshotEngine,
 };
 pub use error::Error;
-pub use log_codec::{decode_log_entry, encode_log_entry};
-pub use log_store::{RaftEntryLog, SegmentedEntryLog};
-pub(crate) use metadata::decode_metadata_response;
-pub use network::{
-    EncodedRaftNetworkFactory, EncodedRaftNetworkRegistry, MemoryRaftNetworkFactory,
-    MemoryRaftNetworkRegistry,
-};
+pub use log::{decode_log_entry, encode_log_entry, RaftEntryLog, SegmentedEntryLog};
+pub(crate) use metadata_payload::decode_metadata_response;
 pub use openraft::BasicNode;
 pub(crate) use proposal::ProposalPayloadKind;
 pub use proposal::{Proposal, ProposalPayload};
 pub use region::OpenRaftRegion;
-pub use region_storage::{RegionLogStorage, RegionSnapshotBuilder, RegionStateMachine};
-pub(crate) use snapshot::decode_region_snapshot_status;
-pub use tonic_transport::{
-    RaftTransportServer, TonicRaftNetworkFactory, TonicRaftTransportRegistry,
-    TonicRaftTransportService,
-};
+pub use storage::{RegionLogStorage, RegionSnapshotBuilder, RegionStateMachine};
 pub use traffic::{RegionTrafficProvider, RegionTrafficSnapshot};
-pub use transport_codec::{
+pub use transport::{
     decode_append_entries_request, decode_append_entries_response, decode_install_snapshot_request,
     decode_install_snapshot_response, decode_vote_request, decode_vote_response,
     encode_append_entries_request, encode_append_entries_response, encode_install_snapshot_request,
     encode_install_snapshot_response, encode_vote_request, encode_vote_response,
+    EncodedRaftNetworkFactory, EncodedRaftNetworkRegistry, MemoryRaftNetworkFactory,
+    MemoryRaftNetworkRegistry, RaftTransportServer, TonicRaftNetworkFactory,
+    TonicRaftTransportRegistry, TonicRaftTransportService,
 };
 pub use watch::{ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
 

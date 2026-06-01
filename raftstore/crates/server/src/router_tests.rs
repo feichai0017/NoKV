@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nokv_metastore::MemoryMetadataStore;
+use nokv_metadata_state::MemoryMetadataStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdmin;
 use nokv_proto::nokv::meta::v1 as metapb;
@@ -48,8 +48,9 @@ impl MetadataReadExecutor for FixedRuntimeEngine {
     fn execute_metadata_get<'a>(
         &'a self,
         req: &'a metadatapb::MetadataGetRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataGetResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataGetResponse>,
+    > + Send
            + 'a {
         self.inner.execute_metadata_get(req)
     }
@@ -58,7 +59,7 @@ impl MetadataReadExecutor for FixedRuntimeEngine {
         &'a self,
         req: &'a metadatapb::MetadataBatchGetRequest,
     ) -> impl std::future::Future<
-        Output = nokv_metastore::Result<metadatapb::MetadataBatchGetResponse>,
+        Output = nokv_metadata_state::Result<metadatapb::MetadataBatchGetResponse>,
     > + Send
            + 'a {
         self.inner.execute_metadata_batch_get(req)
@@ -67,8 +68,9 @@ impl MetadataReadExecutor for FixedRuntimeEngine {
     fn execute_metadata_scan<'a>(
         &'a self,
         req: &'a metadatapb::MetadataScanRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataScanResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataScanResponse>,
+    > + Send
            + 'a {
         self.inner.execute_metadata_scan(req)
     }
@@ -78,8 +80,9 @@ impl MetadataCommandExecutor for FixedRuntimeEngine {
     fn execute_metadata_command<'a>(
         &'a self,
         req: &'a metadatapb::MetadataCommitRequest,
-    ) -> impl std::future::Future<Output = nokv_metastore::Result<metadatapb::MetadataCommitResponse>>
-           + Send
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<metadatapb::MetadataCommitResponse>,
+    > + Send
            + 'a {
         self.inner.execute_metadata_command(req)
     }
@@ -90,7 +93,7 @@ impl MetadataRetentionExecutor for FixedRuntimeEngine {
         &'a self,
         retention_floor: u64,
     ) -> impl std::future::Future<
-        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+        Output = nokv_metadata_state::Result<nokv_metadata_state::MetadataRetentionResult>,
     > + Send
            + 'a {
         self.inner.prune_metadata_versions(retention_floor)
@@ -113,7 +116,7 @@ impl ApplyWatchProvider for FixedRuntimeEngine {
     fn replay_apply(
         &self,
         request: nokv_raftnode::ApplyWatchReplayRequest,
-    ) -> nokv_metastore::Result<nokv_raftnode::ApplyWatchReplay> {
+    ) -> nokv_metadata_state::Result<nokv_raftnode::ApplyWatchReplay> {
         self.inner.replay_apply(request)
     }
 }
@@ -163,11 +166,11 @@ impl MetadataRetentionExecutor for NoopAdminStatus {
         &'a self,
         retention_floor: u64,
     ) -> impl std::future::Future<
-        Output = nokv_metastore::Result<nokv_metastore::MetadataRetentionResult>,
+        Output = nokv_metadata_state::Result<nokv_metadata_state::MetadataRetentionResult>,
     > + Send
            + 'a {
         async move {
-            Ok(nokv_metastore::MetadataRetentionResult {
+            Ok(nokv_metadata_state::MetadataRetentionResult {
                 retention_floor,
                 ..Default::default()
             })

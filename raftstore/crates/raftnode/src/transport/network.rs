@@ -271,7 +271,7 @@ where
 mod tests {
     use std::collections::BTreeMap;
 
-    use nokv_metastore::MemoryMetadataStore;
+    use nokv_metadata_state::MemoryMetadataStore;
     use nokv_proto::nokv::metadata::v1 as metadatapb;
 
     use super::*;

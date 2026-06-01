@@ -8,7 +8,7 @@ mod admission;
 mod admission_state;
 mod diagnostics;
 mod execution;
-mod metadata;
+mod holt_region_sink;
 mod metadata_plane;
 mod metadata_router;
 mod metadata_watch;
@@ -25,7 +25,7 @@ pub use admin::RaftAdminService;
 pub use admin_router::MultiRegionRaftAdminService;
 pub use admission::RegionAdmission;
 pub use diagnostics::{EmptyRestartDiagnostics, RestartDiagnosticsProvider};
-pub use metadata::{
+pub use holt_region_sink::{
     apply_status_from_holt, EmptyRegionDescriptorSink, HoltRegionMetadataSink, RegionDescriptorSink,
 };
 pub use metadata_plane::MetadataPlaneService;
@@ -45,7 +45,7 @@ pub(crate) const DEFAULT_APPLY_WATCH_BUFFER: usize = 256;
 pub(crate) const DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE: usize = 512;
 pub(crate) const DEFAULT_APPLY_WATCH_MAX_KEY_BYTES_PER_MESSAGE: usize = 512 * 1024;
 
-pub(crate) fn internal_error(err: nokv_metastore::Error) -> tonic::Status {
+pub(crate) fn internal_error(err: nokv_metadata_state::Error) -> tonic::Status {
     tonic::Status::internal(err.to_string())
 }
 

@@ -3,7 +3,7 @@ use std::error::Error as StdError;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nokv_metastore::MemoryMetadataStore;
+use nokv_metadata_state::MemoryMetadataStore;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use openraft::{
@@ -196,7 +196,9 @@ where
         self.raft.clone()
     }
 
-    pub fn region_descriptor(&self) -> nokv_metastore::Result<Option<metapb::RegionDescriptor>> {
+    pub fn region_descriptor(
+        &self,
+    ) -> nokv_metadata_state::Result<Option<metapb::RegionDescriptor>> {
         self.apply_engine.region_descriptor()
     }
 
@@ -373,7 +375,7 @@ where
     fn replay_apply(
         &self,
         request: ApplyWatchReplayRequest,
-    ) -> nokv_metastore::Result<ApplyWatchReplay> {
+    ) -> nokv_metadata_state::Result<ApplyWatchReplay> {
         self.apply_engine.replay_apply(request)
     }
 }

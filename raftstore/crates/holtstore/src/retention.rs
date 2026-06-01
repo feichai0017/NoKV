@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 
 use holt::RangeEntry;
-use nokv_metastore as metastore;
+use nokv_metadata_state as metadata_state;
 
 use crate::store::to_backend_error;
 use crate::trees::{decode_write_key, WRITE_TREE};
@@ -11,9 +11,9 @@ impl HoltMetadataStore {
     pub fn prune_metadata_versions(
         &self,
         retention_floor: u64,
-    ) -> metastore::Result<metastore::MetadataRetentionResult> {
+    ) -> metadata_state::Result<metadata_state::MetadataRetentionResult> {
         let _guard = self.lock()?;
-        let mut result = metastore::MetadataRetentionResult {
+        let mut result = metadata_state::MetadataRetentionResult {
             retention_floor,
             ..Default::default()
         };
@@ -64,11 +64,11 @@ impl HoltMetadataStore {
     }
 }
 
-impl metastore::MetadataRetentionEngine for HoltMetadataStore {
+impl metadata_state::MetadataRetentionEngine for HoltMetadataStore {
     fn prune_metadata_versions(
         &self,
         retention_floor: u64,
-    ) -> metastore::Result<metastore::MetadataRetentionResult> {
+    ) -> metadata_state::Result<metadata_state::MetadataRetentionResult> {
         HoltMetadataStore::prune_metadata_versions(self, retention_floor)
     }
 }

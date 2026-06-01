@@ -5,7 +5,8 @@ use std::path::{Path, PathBuf};
 
 use nokv_raftlog::{LogMarker, SegmentedRaftLog};
 
-use crate::{decode_log_entry, encode_log_entry, Error, NodeId, OpenRaftEntry, RegionId};
+use super::codec::{decode_log_entry, encode_log_entry};
+use crate::{Error, NodeId, OpenRaftEntry, RegionId};
 
 pub trait RaftEntryLog {
     fn append_entries(&mut self, entries: &[OpenRaftEntry]) -> Result<(), Error>;

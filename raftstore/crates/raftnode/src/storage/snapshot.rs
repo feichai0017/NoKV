@@ -5,17 +5,17 @@ use crate::{ApplyStatus, RegionId};
 
 pub(crate) fn decode_region_snapshot_payload(
     snapshot: &[u8],
-) -> nokv_metastore::Result<RegionSnapshotPayload> {
+) -> nokv_metadata_state::Result<RegionSnapshotPayload> {
     RegionSnapshotPayload::decode(snapshot)
-        .map_err(|err| nokv_metastore::Error::Decode(err.to_string()))
+        .map_err(|err| nokv_metadata_state::Error::Decode(err.to_string()))
 }
 
 pub(crate) fn decode_region_snapshot_status(
     snapshot: &[u8],
-) -> nokv_metastore::Result<ApplyStatus> {
+) -> nokv_metadata_state::Result<ApplyStatus> {
     let payload = decode_region_snapshot_payload(snapshot)?;
     if payload.format_version != 1 {
-        return Err(nokv_metastore::Error::Decode(format!(
+        return Err(nokv_metadata_state::Error::Decode(format!(
             "unsupported region snapshot format {}",
             payload.format_version
         )));

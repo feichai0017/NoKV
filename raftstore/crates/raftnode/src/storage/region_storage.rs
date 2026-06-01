@@ -11,9 +11,11 @@ use openraft::{
 };
 
 use crate::{
-    decode_region_snapshot_status, AppliedProposal, Error, NodeId, OpenRaftEntry, RaftEntryLog,
-    RaftStoreConfig, RegionSnapshotEngine, SegmentedEntryLog,
+    AppliedProposal, Error, NodeId, OpenRaftEntry, RaftEntryLog, RaftStoreConfig,
+    RegionSnapshotEngine, SegmentedEntryLog,
 };
+
+use super::decode_region_snapshot_status;
 
 pub struct RegionLogStorage {
     log: Arc<Mutex<SegmentedEntryLog>>,
