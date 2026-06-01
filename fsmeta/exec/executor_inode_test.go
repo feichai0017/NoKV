@@ -108,7 +108,7 @@ func TestExecutorUpdateInodeUpdatesMutableFieldsAndQuota(t *testing.T) {
 	require.Equal(t, int64(10), updated.CreatedUnixNs)
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096}}}, quota.changes)
 	require.Len(t, runner.mutations, 1)
-	require.Equal(t, quotaKey, runner.mutations[0][1].Key)
+	require.Contains(t, mutationKeys(runner.mutations[0]), string(quotaKey))
 
 	stored, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
 	require.NoError(t, err)
@@ -116,10 +116,64 @@ func TestExecutorUpdateInodeUpdatesMutableFieldsAndQuota(t *testing.T) {
 	require.Equal(t, updated, stored)
 }
 
-func TestExecutorUpdateInodeRejectsHardLinkedInode(t *testing.T) {
+func TestExecutorUpdateInodeUsesParentIndexForHardLinkedInode(t *testing.T) {
 	runner := newFakeRunner()
-	seedDentry(t, runner, "vol", 7, "file", 22)
+	seedDirectory(t, runner, "vol", 7)
+	seedDirectory(t, runner, "vol", 8)
+	seedDentry(t, runner, "vol", 7, "file-a", 22)
+	seedDentry(t, runner, "vol", 8, "file-b", 22)
 	seedInode(t, runner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, Size: 4096, LinkCount: 2})
+	quota := &fakeQuotaResolver{}
+	executor, err := newTestExecutor(runner, WithQuotaResolver(quota))
+	require.NoError(t, err)
+
+	updated, err := executor.UpdateInode(context.Background(), model.UpdateInodeRequest{
+		Mount:            "vol",
+		Parent:           7,
+		Inode:            22,
+		Name:             "file-a",
+		SetSize:          true,
+		Size:             8192,
+		SetMode:          true,
+		Mode:             0o600,
+		SetUpdatedUnixNs: true,
+		UpdatedUnixNs:    44,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(8192), updated.Size)
+	require.Equal(t, uint32(0o600), updated.Mode)
+	require.Equal(t, [][]QuotaChange{{
+		{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096},
+		{Mount: "vol", MountKeyID: 1, Scope: 8, Bytes: 4096},
+	}}, quota.changes)
+	require.Len(t, runner.mutations, 1)
+	require.Len(t, runner.mutations[0], 3)
+
+	for _, parent := range []model.InodeID{7, 8} {
+		name := "file-a"
+		if parent == 8 {
+			name = "file-b"
+		}
+		pair, err := executor.LookupPlus(context.Background(), model.LookupRequest{
+			Mount:  "vol",
+			Parent: parent,
+			Name:   name,
+		})
+		require.NoError(t, err)
+		require.Equal(t, updated, pair.Inode)
+	}
+}
+
+func TestExecutorUpdateInodeRejectsHardLinkedInodeMissingParentIndex(t *testing.T) {
+	runner := newFakeRunner()
+	seedDirectory(t, runner, "vol", 7)
+	seedDirectory(t, runner, "vol", 8)
+	seedDentry(t, runner, "vol", 7, "file-a", 22)
+	seedDentry(t, runner, "vol", 8, "file-b", 22)
+	seedInode(t, runner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, Size: 4096, LinkCount: 2})
+	parentKey, err := layout.EncodeParentIndexKey(testMountIdentity, 22, 8, "file-b")
+	require.NoError(t, err)
+	delete(runner.data, string(parentKey))
 	executor, err := newTestExecutor(runner)
 	require.NoError(t, err)
 
@@ -127,11 +181,11 @@ func TestExecutorUpdateInodeRejectsHardLinkedInode(t *testing.T) {
 		Mount:   "vol",
 		Parent:  7,
 		Inode:   22,
-		Name:    "file",
+		Name:    "file-a",
 		SetSize: true,
 		Size:    8192,
 	})
-	require.ErrorIs(t, err, model.ErrInvalidRequest)
+	require.ErrorIs(t, err, model.ErrInvalidValue)
 	require.Empty(t, runner.mutations)
 }
 
@@ -152,6 +206,16 @@ func TestExecutorUpdateInodeRejectsDentryTypeMismatch(t *testing.T) {
 	})
 	require.ErrorIs(t, err, model.ErrInvalidValue)
 	require.Empty(t, runner.mutations)
+}
+
+func mutationKeys(mutations []*backend.Mutation) []string {
+	keys := make([]string, 0, len(mutations))
+	for _, mutation := range mutations {
+		if mutation != nil {
+			keys = append(keys, string(mutation.Key))
+		}
+	}
+	return keys
 }
 
 func BenchmarkExecutorUpdateInodeDefaultPath(b *testing.B) {

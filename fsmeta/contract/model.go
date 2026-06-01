@@ -306,9 +306,6 @@ func (m *Model) updateInode(op Operation) Result {
 	if dentry.Type != inode.Type {
 		return Result{Err: model.ErrInvalidValue}
 	}
-	if inode.LinkCount != 1 {
-		return Result{Err: model.ErrInvalidRequest}
-	}
 	inode.Size = op.Size
 	inode.Mode = op.Mode
 	m.inodes[op.Inode] = inode

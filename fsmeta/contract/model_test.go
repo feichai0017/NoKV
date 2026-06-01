@@ -233,6 +233,44 @@ func TestModelLinkRenameUnlinkMaintainsLinkCounts(t *testing.T) {
 	require.NoError(t, state.CheckInvariants())
 }
 
+func TestModelUpdateInodeAllowsHardLinkedFiles(t *testing.T) {
+	state := NewModel("vol")
+	require.NoError(t, state.Apply(Operation{
+		Kind:   OpCreate,
+		Mount:  "vol",
+		Parent: state.Root,
+		Name:   "file",
+		Inode:  10,
+		Type:   model.InodeTypeFile,
+		Size:   4096,
+		Mode:   0o600,
+	}).Err)
+	require.NoError(t, state.Apply(Operation{
+		Kind:       OpLink,
+		Mount:      "vol",
+		FromParent: state.Root,
+		FromName:   "file",
+		ToParent:   state.Root,
+		ToName:     "alias",
+	}).Err)
+
+	result := state.Apply(Operation{
+		Kind:   OpUpdateInode,
+		Mount:  "vol",
+		Parent: state.Root,
+		Name:   "file",
+		Inode:  10,
+		Size:   8192,
+		Mode:   0o644,
+	})
+	require.NoError(t, result.Err)
+	require.Equal(t, uint32(2), result.Inode.LinkCount)
+	require.Equal(t, uint64(8192), result.Inode.Size)
+	require.Equal(t, uint32(0o644), result.Inode.Mode)
+	require.Equal(t, result.Inode, state.inodes[10])
+	require.NoError(t, state.CheckInvariants())
+}
+
 func TestModelRemoveReturnsDeletedEntryAndInode(t *testing.T) {
 	state := NewModel("vol")
 	require.NoError(t, state.Apply(Operation{

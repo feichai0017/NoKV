@@ -49,12 +49,6 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 		if dentry.record.Type != inode.Type {
 			return model.ErrInvalidValue
 		}
-		// fsmeta does not maintain an inode->parents reverse index. Updating a
-		// hard-linked inode would require invalidating and quota-adjusting every
-		// parent, so reject it rather than silently corrupting accounting.
-		if inode.LinkCount != 1 {
-			return model.ErrInvalidRequest
-		}
 		oldInodeValue, err := layout.EncodeInodeValue(inode)
 		if err != nil {
 			return err
@@ -77,10 +71,6 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 		if err != nil {
 			return err
 		}
-		dentryValue, err := encodeDentryValueForCommit(dentry.record, inode, true, commitVersion)
-		if err != nil {
-			return err
-		}
 		mutations := []*backend.Mutation{
 			{
 				Op:    backend.MutationPut,
@@ -88,33 +78,99 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 				Value: value,
 			},
 		}
-		var quotaMutations []*backend.Mutation
+		dentryPredicates := []*backend.Predicate{
+			metadataValueEqualsPredicate(plan.ReadKeys[0], dentry.value),
+		}
+		quotaChanges := []QuotaChange(nil)
 		if sizeDelta != 0 {
-			quotaMutations, err = e.reserveQuota(ctx, []QuotaChange{{
+			quotaChanges = []QuotaChange{{
 				Mount:      req.Mount,
 				MountKeyID: mount.MountKeyID,
 				Scope:      req.Parent,
 				Bytes:      sizeDelta,
-			}}, startVersion)
+			}}
+		}
+		if inode.LinkCount <= 1 {
+			dentryValue, err := encodeDentryValueForCommit(dentry.record, inode, true, commitVersion)
+			if err != nil {
+				return err
+			}
+			mutations = append(mutations, &backend.Mutation{
+				Op:    backend.MutationPut,
+				Key:   cloneBytes(plan.ReadKeys[0]),
+				Value: dentryValue,
+			})
+		} else {
+			links, err := e.scanParentLinks(ctx, mount, inode, startVersion)
+			if err != nil {
+				return err
+			}
+			if len(links) != int(inode.LinkCount) {
+				return model.ErrInvalidValue
+			}
+			seenRequestLink := false
+			dentryPredicates = dentryPredicates[:0]
+			if sizeDelta != 0 {
+				quotaChanges = make([]QuotaChange, 0, len(links))
+			}
+			for _, link := range links {
+				if link.record.Parent == req.Parent && link.record.Name == req.Name {
+					seenRequestLink = true
+				}
+				dentryKey, err := layout.EncodeDentryKey(mount, link.record.Parent, link.record.Name)
+				if err != nil {
+					return err
+				}
+				linkedDentry, err := e.readDentrySnapshot(ctx, dentryKey, startVersion)
+				if err != nil {
+					return err
+				}
+				if linkedDentry.record.Inode != inode.Inode || linkedDentry.record.Type != inode.Type {
+					return model.ErrInvalidValue
+				}
+				dentryValue, err := encodeDentryValueForCommit(linkedDentry.record, inode, true, commitVersion)
+				if err != nil {
+					return err
+				}
+				mutations = append(mutations, &backend.Mutation{
+					Op:    backend.MutationPut,
+					Key:   dentryKey,
+					Value: dentryValue,
+				})
+				dentryPredicates = append(dentryPredicates,
+					metadataValueEqualsPredicate(link.key, link.value),
+					metadataValueEqualsPredicate(dentryKey, linkedDentry.value),
+				)
+				if sizeDelta != 0 {
+					quotaChanges = append(quotaChanges, QuotaChange{
+						Mount:      req.Mount,
+						MountKeyID: mount.MountKeyID,
+						Scope:      link.record.Parent,
+						Bytes:      sizeDelta,
+					})
+				}
+			}
+			if !seenRequestLink {
+				return model.ErrInvalidRequest
+			}
+		}
+		var quotaMutations []*backend.Mutation
+		if len(quotaChanges) != 0 {
+			quotaMutations, err = e.reserveQuota(ctx, quotaChanges, startVersion)
 			if err != nil {
 				return err
 			}
 			mutations = append(mutations, quotaMutations...)
 		}
-		mutations = append(mutations, &backend.Mutation{
-			Op:    backend.MutationPut,
-			Key:   cloneBytes(plan.ReadKeys[0]),
-			Value: dentryValue,
-		})
 		watchEvent, err := dentryUpdateWatchEvent(mount, req.Parent, req.Name, req.Inode)
 		if err != nil {
 			return err
 		}
 		if len(quotaMutations) == 0 {
 			predicates := []*backend.Predicate{
-				metadataValueEqualsPredicate(plan.ReadKeys[0], dentry.value),
 				metadataValueEqualsPredicate(plan.MutateKeys[0], oldInodeValue),
 			}
+			predicates = append(predicates, dentryPredicates...)
 			if err := e.commitWithMetadataPredicatesAndWatch(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, []backend.WatchEvent{watchEvent}, startVersion, commitVersion); err != nil {
 				return err
 			}

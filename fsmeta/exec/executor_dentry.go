@@ -13,6 +13,13 @@ import (
 )
 
 const directoryParentIndexScanLimit uint32 = 2
+const parentIndexScanPageLimit uint32 = 256
+
+type parentLinkSnapshot struct {
+	key    []byte
+	record model.ParentLinkRecord
+	value  []byte
+}
 
 func encodeDentryValueForCommit(dentry model.DentryRecord, inode model.InodeRecord, haveInode bool, commitVersion uint64) ([]byte, error) {
 	if haveInode && dentryProjectionWritable(dentry, inode) {
@@ -87,6 +94,45 @@ func (e *Executor) directoryDentryProjectionMutation(ctx context.Context, mount 
 	}, metadataValueEqualsPredicate(dentryKey, dentry.value), nil
 }
 
+func (e *Executor) scanParentLinks(ctx context.Context, mount model.MountIdentity, inode model.InodeRecord, version uint64) ([]parentLinkSnapshot, error) {
+	prefix, err := layout.EncodeParentIndexPrefix(mount, inode.Inode)
+	if err != nil {
+		return nil, err
+	}
+	start := cloneBytes(prefix)
+	links := make([]parentLinkSnapshot, 0, inode.LinkCount)
+	for {
+		kvs, err := e.runner.Scan(ctx, start, prefix, parentIndexScanPageLimit, version)
+		if err != nil {
+			return nil, err
+		}
+		if len(kvs) == 0 {
+			return links, nil
+		}
+		for _, kv := range kvs {
+			if !bytes.HasPrefix(kv.Key, prefix) {
+				return links, nil
+			}
+			record, err := layout.DecodeParentLinkValue(kv.Value)
+			if err != nil {
+				return nil, err
+			}
+			if record.Child != inode.Inode || record.Type != inode.Type {
+				return nil, model.ErrInvalidValue
+			}
+			links = append(links, parentLinkSnapshot{
+				key:    cloneBytes(kv.Key),
+				record: record,
+				value:  cloneBytes(kv.Value),
+			})
+		}
+		if len(kvs) < int(parentIndexScanPageLimit) {
+			return links, nil
+		}
+		start = nextMetadataScanKey(kvs[len(kvs)-1].Key)
+	}
+}
+
 func parentIndexPutMutation(mount model.MountIdentity, dentry model.DentryRecord, assertionNotExist bool) (*backend.Mutation, error) {
 	key, err := layout.EncodeParentIndexKey(mount, dentry.Inode, dentry.Parent, dentry.Name)
 	if err != nil {
@@ -116,4 +162,10 @@ func parentIndexDeleteMutation(mount model.MountIdentity, dentry model.DentryRec
 		return nil, err
 	}
 	return &backend.Mutation{Family: backend.MetadataFamilyParent, Op: backend.MutationDelete, Key: key}, nil
+}
+
+func nextMetadataScanKey(key []byte) []byte {
+	next := make([]byte, 0, len(key)+1)
+	next = append(next, key...)
+	return append(next, 0)
 }
