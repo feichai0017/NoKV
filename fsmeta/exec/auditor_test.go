@@ -27,6 +27,7 @@ func TestAuditMountReportsHealthyNamespace(t *testing.T) {
 	require.Equal(t, uint64(10), report.ReadVersion)
 	require.Equal(t, uint64(2), report.Inodes)
 	require.Equal(t, uint64(1), report.Dentries)
+	require.Equal(t, uint64(1), report.ParentLinks)
 }
 
 func TestAuditMountReportsDentryMissingInode(t *testing.T) {
@@ -90,6 +91,51 @@ func TestAuditMountReportsDentryTypeMismatch(t *testing.T) {
 	require.False(t, report.OK())
 	require.Len(t, report.Issues, 1)
 	require.Equal(t, AuditDentryTypeMismatch, report.Issues[0].Kind)
+}
+
+func TestAuditMountReportsMissingParentLink(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", model.InodeRecord{Inode: model.RootInode, Type: model.InodeTypeDirectory, LinkCount: 1})
+	seedInode(t, runner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, LinkCount: 1})
+	seedDentry(t, runner, "vol", model.RootInode, "file", 22)
+	parentKey, err := layout.EncodeParentIndexKey(testMountIdentity, 22, model.RootInode, "file")
+	require.NoError(t, err)
+	delete(runner.data, string(parentKey))
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	report, err := executor.AuditMount(context.Background(), "vol", 10, AuditOptions{})
+	require.NoError(t, err)
+	require.False(t, report.OK())
+	require.Len(t, report.Issues, 1)
+	require.Equal(t, AuditDentryMissingParent, report.Issues[0].Kind)
+	require.Equal(t, model.InodeID(22), report.Issues[0].Inode)
+	require.Equal(t, "file", report.Issues[0].Name)
+}
+
+func TestAuditMountReportsDanglingParentLink(t *testing.T) {
+	runner := newFakeRunner()
+	seedInode(t, runner, "vol", model.InodeRecord{Inode: model.RootInode, Type: model.InodeTypeDirectory, LinkCount: 1})
+	seedInode(t, runner, "vol", model.InodeRecord{Inode: 22, Type: model.InodeTypeFile, LinkCount: 1})
+	parentKey, err := layout.EncodeParentIndexKey(testMountIdentity, 22, model.RootInode, "missing")
+	require.NoError(t, err)
+	parentValue, err := layout.EncodeParentLinkValue(model.ParentLinkRecord{
+		Child:  22,
+		Parent: model.RootInode,
+		Name:   "missing",
+		Type:   model.InodeTypeFile,
+	})
+	require.NoError(t, err)
+	runner.data[string(parentKey)] = parentValue
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	report, err := executor.AuditMount(context.Background(), "vol", 10, AuditOptions{})
+	require.NoError(t, err)
+	require.False(t, report.OK())
+	require.Len(t, report.Issues, 2)
+	require.Equal(t, AuditParentLinkDangling, report.Issues[0].Kind)
+	require.Equal(t, AuditInodeUnreferenced, report.Issues[1].Kind)
 }
 
 func TestAuditMountLimitsIssues(t *testing.T) {

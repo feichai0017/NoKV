@@ -215,6 +215,40 @@ func TestRustMetadataPlaneFsmetaRuntimeEndToEnd(t *testing.T) {
 	})
 	require.ErrorIs(t, err, model.ErrNotFound)
 
+	nonEmpty, err := runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "non-empty-dir",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeDirectory,
+			Mode: 0o755,
+		},
+	})
+	require.NoError(t, err)
+	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
+		Mount:  "vol",
+		Parent: nonEmpty.Inode.Inode,
+		Name:   "child.json",
+		Attrs: model.CreateAttrs{
+			Type: model.InodeTypeFile,
+			Size: 23,
+			Mode: 0o644,
+		},
+	})
+	require.NoError(t, err)
+	err = runtime.Executor.RemoveDirectory(ctx, model.RemoveDirectoryRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "non-empty-dir",
+	})
+	require.ErrorIs(t, err, model.ErrInvalidRequest)
+	_, err = runtime.Executor.LookupPlus(ctx, model.LookupRequest{
+		Mount:  "vol",
+		Parent: nonEmpty.Inode.Inode,
+		Name:   "child.json",
+	})
+	require.NoError(t, err)
+
 	_, err = runtime.Executor.Create(ctx, model.CreateRequest{
 		Mount:  "vol",
 		Parent: model.RootInode,

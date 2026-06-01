@@ -31,6 +31,7 @@ const (
 	OpLink             OperationKind = "link"
 	OpUnlink           OperationKind = "unlink"
 	OpRemove           OperationKind = "remove"
+	OpRemoveDirectory  OperationKind = "remove_directory"
 	OpOpenWriteSession OperationKind = "open_write_session"
 	OpHeartbeatSession OperationKind = "heartbeat_write_session"
 	OpCloseSession     OperationKind = "close_write_session"
@@ -170,6 +171,8 @@ func (m *Model) Apply(op Operation) Result {
 		return m.unlink(op)
 	case OpRemove:
 		return m.remove(op)
+	case OpRemoveDirectory:
+		return m.removeDirectory(op)
 	case OpOpenWriteSession:
 		return m.openWriteSession(op)
 	case OpHeartbeatSession:
@@ -230,6 +233,17 @@ func (m *Model) ExistingFileDentries() []model.DentryRecord {
 	out := all[:0]
 	for _, record := range all {
 		if record.Type == model.InodeTypeFile {
+			out = append(out, record)
+		}
+	}
+	return out
+}
+
+func (m *Model) ExistingDirectoryDentries() []model.DentryRecord {
+	all := m.ExistingDentries()
+	out := all[:0]
+	for _, record := range all {
+		if record.Type == model.InodeTypeDirectory {
 			out = append(out, record)
 		}
 	}
@@ -483,6 +497,32 @@ func (m *Model) unlink(op Operation) Result {
 func (m *Model) remove(op Operation) Result {
 	result, err := m.removeDentry(op)
 	return Result{Err: err, Remove: result}
+}
+
+func (m *Model) removeDirectory(op Operation) Result {
+	key := dentryKey{parent: op.Parent, name: op.Name}
+	record, ok := m.dentries[key]
+	if !ok {
+		return Result{Err: model.ErrNotFound}
+	}
+	if record.Type != model.InodeTypeDirectory {
+		return Result{Err: model.ErrInvalidRequest}
+	}
+	inode, ok := m.inodes[record.Inode]
+	if !ok {
+		return Result{Err: model.ErrNotFound}
+	}
+	if inode.Type != model.InodeTypeDirectory || inode.Inode == m.Root {
+		return Result{Err: model.ErrInvalidRequest}
+	}
+	for child := range m.dentries {
+		if child.parent == inode.Inode {
+			return Result{Err: model.ErrInvalidRequest}
+		}
+	}
+	delete(m.dentries, key)
+	delete(m.inodes, inode.Inode)
+	return Result{}
 }
 
 func (m *Model) removeDentry(op Operation) (model.RemoveResult, error) {

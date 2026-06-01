@@ -155,22 +155,6 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 	delta := program.Compiled.Delta
 	plan := delta.Plan
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
-		parent, err := e.readDirectoryInode(ctx, mount, req.Parent, startVersion)
-		if err != nil {
-			return err
-		}
-		nextParent, err := decrementDirectoryChildCount(parent.record)
-		if err != nil {
-			return err
-		}
-		parentValue, err := layout.EncodeInodeValue(nextParent)
-		if err != nil {
-			return err
-		}
-		parentProjection, parentProjectionPredicate, err := e.directoryDentryProjectionMutation(ctx, mount, nextParent, startVersion, commitVersion)
-		if err != nil {
-			return err
-		}
 		dentry, err := e.readDentrySnapshot(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
 			return err
@@ -188,6 +172,22 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 		}
 		if inode.Type != model.InodeTypeDirectory || inode.ChildCount != 0 || inode.Inode == model.RootInode {
 			return model.ErrInvalidRequest
+		}
+		parent, err := e.readDirectoryInode(ctx, mount, req.Parent, startVersion)
+		if err != nil {
+			return err
+		}
+		nextParent, err := decrementDirectoryChildCount(parent.record)
+		if err != nil {
+			return err
+		}
+		parentValue, err := layout.EncodeInodeValue(nextParent)
+		if err != nil {
+			return err
+		}
+		parentProjection, parentProjectionPredicate, err := e.directoryDentryProjectionMutation(ctx, mount, nextParent, startVersion, commitVersion)
+		if err != nil {
+			return err
 		}
 		childDentryPrefix, err := layout.EncodeDentryPrefix(mount, inode.Inode)
 		if err != nil {

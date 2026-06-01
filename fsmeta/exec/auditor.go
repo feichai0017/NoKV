@@ -18,16 +18,19 @@ const defaultAuditBatchSize uint32 = 256
 type AuditIssueKind string
 
 const (
-	AuditInvalidKey          AuditIssueKind = "invalid_key"
-	AuditInvalidValue        AuditIssueKind = "invalid_value"
-	AuditInodeKeyMismatch    AuditIssueKind = "inode_key_mismatch"
-	AuditDentryKeyMismatch   AuditIssueKind = "dentry_key_mismatch"
-	AuditDentryMissingInode  AuditIssueKind = "dentry_missing_inode"
-	AuditDentryTypeMismatch  AuditIssueKind = "dentry_type_mismatch"
-	AuditInodeUnreferenced   AuditIssueKind = "inode_unreferenced"
-	AuditLinkCountMismatch   AuditIssueKind = "link_count_mismatch"
-	AuditRootMissing         AuditIssueKind = "root_missing"
-	AuditIssueLimitExhausted AuditIssueKind = "issue_limit_exhausted"
+	AuditInvalidKey            AuditIssueKind = "invalid_key"
+	AuditInvalidValue          AuditIssueKind = "invalid_value"
+	AuditInodeKeyMismatch      AuditIssueKind = "inode_key_mismatch"
+	AuditDentryKeyMismatch     AuditIssueKind = "dentry_key_mismatch"
+	AuditDentryMissingInode    AuditIssueKind = "dentry_missing_inode"
+	AuditDentryMissingParent   AuditIssueKind = "dentry_missing_parent_link"
+	AuditDentryTypeMismatch    AuditIssueKind = "dentry_type_mismatch"
+	AuditInodeUnreferenced     AuditIssueKind = "inode_unreferenced"
+	AuditLinkCountMismatch     AuditIssueKind = "link_count_mismatch"
+	AuditParentLinkDangling    AuditIssueKind = "parent_link_dangling"
+	AuditParentLinkKeyMismatch AuditIssueKind = "parent_link_key_mismatch"
+	AuditRootMissing           AuditIssueKind = "root_missing"
+	AuditIssueLimitExhausted   AuditIssueKind = "issue_limit_exhausted"
 )
 
 // AuditIssue is one detected metadata inconsistency. It is diagnostic state;
@@ -58,6 +61,7 @@ type AuditReport struct {
 	ReadVersion uint64
 	Inodes      uint64
 	Dentries    uint64
+	ParentLinks uint64
 	Issues      []AuditIssue
 }
 
@@ -102,6 +106,8 @@ func (e *Executor) AuditMount(ctx context.Context, mount model.MountID, readVers
 	report := AuditReport{Mount: mount, ReadVersion: readVersion}
 	inodes := make(map[model.InodeID]model.InodeRecord)
 	dentries := make([]model.DentryRecord, 0)
+	dentryByName := make(map[auditDentryKey]model.DentryRecord)
+	parentLinks := make(map[auditDentryKey][]model.ParentLinkRecord)
 	refs := make(map[model.InodeID]uint32)
 	addIssue := func(issue AuditIssue) bool {
 		if opt.MaxIssues > 0 && len(report.Issues) >= opt.MaxIssues {
@@ -128,7 +134,7 @@ func (e *Executor) AuditMount(ctx context.Context, mount model.MountID, readVers
 		advanced := false
 		for _, row := range rows {
 			if len(end) > 0 && bytes.Compare(row.Key, end) >= 0 {
-				finishAuditReport(inodes, dentries, refs, rootInode, addIssue)
+				finishAuditReport(inodes, dentries, dentryByName, parentLinks, refs, rootInode, addIssue)
 				return report, nil
 			}
 			kind, err := layout.KeyKindOf(row.Key)
@@ -165,10 +171,34 @@ func (e *Executor) AuditMount(ctx context.Context, mount model.MountID, readVers
 				}
 				report.Dentries++
 				dentries = append(dentries, record)
+				dentryByName[auditDentryKey{parent: record.Parent, name: record.Name}] = record
 				refs[record.Inode]++
 				expected, err := layout.EncodeDentryKey(identity, record.Parent, record.Name)
 				if err != nil || !bytes.Equal(expected, row.Key) {
 					if !addIssue(AuditIssue{Kind: AuditDentryKeyMismatch, Key: row.Key, Parent: record.Parent, Name: record.Name, Inode: record.Inode}) {
+						return report, nil
+					}
+				}
+			case layout.KeyKindParent:
+				record, err := layout.DecodeParentLinkValue(row.Value)
+				if err != nil {
+					if !addIssue(AuditIssue{Kind: AuditInvalidValue, Key: row.Key, Detail: err.Error()}) {
+						return report, nil
+					}
+					continue
+				}
+				report.ParentLinks++
+				parentKey := auditDentryKey{parent: record.Parent, name: record.Name}
+				parentLinks[parentKey] = append(parentLinks[parentKey], record)
+				expected, err := layout.EncodeParentIndexKey(identity, record.Child, record.Parent, record.Name)
+				if err != nil || !bytes.Equal(expected, row.Key) {
+					if !addIssue(AuditIssue{
+						Kind:   AuditParentLinkKeyMismatch,
+						Key:    row.Key,
+						Inode:  record.Child,
+						Parent: record.Parent,
+						Name:   record.Name,
+					}) {
 						return report, nil
 					}
 				}
@@ -180,11 +210,24 @@ func (e *Executor) AuditMount(ctx context.Context, mount model.MountID, readVers
 			break
 		}
 	}
-	finishAuditReport(inodes, dentries, refs, rootInode, addIssue)
+	finishAuditReport(inodes, dentries, dentryByName, parentLinks, refs, rootInode, addIssue)
 	return report, nil
 }
 
-func finishAuditReport(inodes map[model.InodeID]model.InodeRecord, dentries []model.DentryRecord, refs map[model.InodeID]uint32, rootInode model.InodeID, addIssue func(AuditIssue) bool) {
+type auditDentryKey struct {
+	parent model.InodeID
+	name   string
+}
+
+func finishAuditReport(
+	inodes map[model.InodeID]model.InodeRecord,
+	dentries []model.DentryRecord,
+	dentryByName map[auditDentryKey]model.DentryRecord,
+	parentLinks map[auditDentryKey][]model.ParentLinkRecord,
+	refs map[model.InodeID]uint32,
+	rootInode model.InodeID,
+	addIssue func(AuditIssue) bool,
+) {
 	if _, ok := inodes[rootInode]; !ok {
 		if !addIssue(AuditIssue{Kind: AuditRootMissing, Inode: rootInode}) {
 			return
@@ -209,6 +252,46 @@ func finishAuditReport(inodes map[model.InodeID]model.InodeRecord, dentries []mo
 				return
 			}
 		}
+		if !hasMatchingParentLink(parentLinks[auditDentryKey{parent: dentry.Parent, name: dentry.Name}], dentry) {
+			if !addIssue(AuditIssue{
+				Kind:   AuditDentryMissingParent,
+				Parent: dentry.Parent,
+				Name:   dentry.Name,
+				Inode:  dentry.Inode,
+			}) {
+				return
+			}
+		}
+	}
+	for key, links := range parentLinks {
+		dentry, ok := dentryByName[key]
+		if !ok {
+			for _, link := range links {
+				if !addIssue(AuditIssue{
+					Kind:   AuditParentLinkDangling,
+					Inode:  link.Child,
+					Parent: link.Parent,
+					Name:   link.Name,
+					Detail: "missing dentry",
+				}) {
+					return
+				}
+			}
+			continue
+		}
+		for _, link := range links {
+			if link.Child != dentry.Inode || link.Type != dentry.Type {
+				if !addIssue(AuditIssue{
+					Kind:   AuditParentLinkDangling,
+					Inode:  link.Child,
+					Parent: link.Parent,
+					Name:   link.Name,
+					Detail: fmt.Sprintf("dentry inode=%d type=%s", dentry.Inode, dentry.Type),
+				}) {
+					return
+				}
+			}
+		}
 	}
 	for inodeID, inode := range inodes {
 		if inodeID == rootInode {
@@ -230,4 +313,13 @@ func finishAuditReport(inodes map[model.InodeID]model.InodeRecord, dentries []mo
 			}
 		}
 	}
+}
+
+func hasMatchingParentLink(links []model.ParentLinkRecord, dentry model.DentryRecord) bool {
+	for _, link := range links {
+		if link.Child == dentry.Inode && link.Parent == dentry.Parent && link.Name == dentry.Name && link.Type == dentry.Type {
+			return true
+		}
+	}
+	return false
 }

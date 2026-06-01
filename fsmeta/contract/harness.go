@@ -28,6 +28,7 @@ type Executor interface {
 	Link(context.Context, model.LinkRequest) error
 	Unlink(context.Context, model.UnlinkRequest) error
 	Remove(context.Context, model.RemoveRequest) (model.RemoveResult, error)
+	RemoveDirectory(context.Context, model.RemoveDirectoryRequest) error
 	OpenWriteSession(context.Context, model.OpenWriteSessionRequest) (model.SessionRecord, error)
 	HeartbeatWriteSession(context.Context, model.HeartbeatWriteSessionRequest) (model.SessionRecord, error)
 	CloseWriteSession(context.Context, model.CloseWriteSessionRequest) error
@@ -198,6 +199,13 @@ func execute(ctx context.Context, exec Executor, state *Model, op Operation) Res
 			Name:   op.Name,
 		})
 		return Result{Err: err, Remove: result}
+	case OpRemoveDirectory:
+		err := exec.RemoveDirectory(ctx, model.RemoveDirectoryRequest{
+			Mount:  op.Mount,
+			Parent: op.Parent,
+			Name:   op.Name,
+		})
+		return Result{Err: err}
 	case OpOpenWriteSession:
 		session, err := exec.OpenWriteSession(ctx, model.OpenWriteSessionRequest{
 			Mount:   op.Mount,

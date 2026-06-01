@@ -423,6 +423,27 @@ func (f *fakeExternalExecutor) Remove(_ context.Context, req model.RemoveRequest
 	return result, nil
 }
 
+func (f *fakeExternalExecutor) RemoveDirectory(_ context.Context, req model.RemoveDirectoryRequest) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	key := [2]any{req.Parent, req.Name}
+	dentry, ok := f.dentries[key]
+	if !ok {
+		return model.ErrNotFound
+	}
+	if dentry.Type != model.InodeTypeDirectory {
+		return model.ErrInvalidRequest
+	}
+	for child := range f.dentries {
+		if child[0] == dentry.Inode {
+			return model.ErrInvalidRequest
+		}
+	}
+	delete(f.dentries, key)
+	delete(f.inodes, dentry.Inode)
+	return nil
+}
+
 func (f *fakeExternalExecutor) OpenWriteSession(context.Context, model.OpenWriteSessionRequest) (model.SessionRecord, error) {
 	return model.SessionRecord{}, errors.New("not implemented")
 }

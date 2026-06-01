@@ -535,6 +535,16 @@ func seedDentryType(t *testing.T, runner *fakeRunner, mount model.MountID, paren
 	})
 	require.NoError(t, err)
 	runner.data[string(key)] = value
+	parentKey, err := layout.EncodeParentIndexKey(testMountIdentityFor(mount), inode, parent, name)
+	require.NoError(t, err)
+	parentValue, err := layout.EncodeParentLinkValue(model.ParentLinkRecord{
+		Child:  inode,
+		Parent: parent,
+		Name:   name,
+		Type:   typ,
+	})
+	require.NoError(t, err)
+	runner.data[string(parentKey)] = parentValue
 }
 
 func seedInode(t *testing.T, runner *fakeRunner, mount model.MountID, record model.InodeRecord) {

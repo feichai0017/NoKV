@@ -208,6 +208,11 @@ func (m *inodeMappingExecutor) Remove(ctx context.Context, req model.RemoveReque
 	return result, nil
 }
 
+func (m *inodeMappingExecutor) RemoveDirectory(ctx context.Context, req model.RemoveDirectoryRequest) error {
+	req.Parent = m.actualInode(req.Parent)
+	return m.base.RemoveDirectory(ctx, req)
+}
+
 func (m *inodeMappingExecutor) OpenWriteSession(ctx context.Context, req model.OpenWriteSessionRequest) (model.SessionRecord, error) {
 	req.Inode = m.actualInode(req.Inode)
 	record, err := m.base.OpenWriteSession(ctx, req)

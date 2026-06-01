@@ -118,6 +118,49 @@ fn metadata_predicate_failure_does_not_partially_apply() {
 }
 
 #[test]
+fn metadata_prefix_empty_failure_does_not_partially_apply() {
+    let store = MemoryMetadataStore::new();
+    store
+        .commit_metadata(&put_command(b"dir/child", b"v1", 10), 11)
+        .unwrap();
+
+    let failed = store
+        .commit_metadata(
+            &metadatapb::MetadataCommand {
+                request_id: b"remove-dir".to_vec(),
+                read_version: 11,
+                predicates: vec![metadatapb::MetadataPredicate {
+                    key: b"dir/".to_vec(),
+                    kind: metadatapb::MetadataPredicateKind::PrefixEmpty as i32,
+                    read_version: 11,
+                    ..Default::default()
+                }],
+                mutations: vec![metadatapb::MetadataMutation {
+                    op: metadatapb::metadata_mutation::Op::Put as i32,
+                    key: b"side-effect".to_vec(),
+                    value: b"bad".to_vec(),
+                    ..Default::default()
+                }],
+                ..Default::default()
+            },
+            12,
+        )
+        .unwrap();
+
+    assert!(failed.error.is_some());
+    assert!(
+        store
+            .get_metadata(&metadatapb::MetadataGetRequest {
+                key: b"side-effect".to_vec(),
+                version: 12,
+                ..Default::default()
+            })
+            .unwrap()
+            .not_found
+    );
+}
+
+#[test]
 fn metadata_snapshot_round_trips_committed_versions() {
     let store = MemoryMetadataStore::new();
     store

@@ -63,7 +63,9 @@ func chooseOperation(rng *rand.Rand, state *Model, names []string, sessions []mo
 		return unlinkOperation(rng, state, names)
 	case 48, 49, 50:
 		return removeOperation(rng, state, names)
-	case 51, 52, 53:
+	case 51:
+		return removeDirectoryOperation(rng, state, names)
+	case 52, 53:
 		return updateOperation(rng, state, names)
 	case 55, 56, 57, 58, 59:
 		if len(files) == 0 {
@@ -266,6 +268,14 @@ func removeOperation(rng *rand.Rand, state *Model, names []string) Operation {
 	op := unlinkOperation(rng, state, names)
 	op.Kind = OpRemove
 	return op
+}
+
+func removeDirectoryOperation(rng *rand.Rand, state *Model, names []string) Operation {
+	name := names[rng.Intn(len(names))]
+	if directories := state.ExistingDirectoryDentries(); len(directories) > 0 && rng.Intn(100) < 85 {
+		name = directories[rng.Intn(len(directories))].Name
+	}
+	return Operation{Kind: OpRemoveDirectory, Mount: state.Mount, Parent: state.Root, Name: name}
 }
 
 func updateOperation(rng *rand.Rand, state *Model, names []string) Operation {

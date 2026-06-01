@@ -141,6 +141,10 @@ func (unavailableCreateExecutor) Remove(context.Context, model.RemoveRequest) (m
 	return model.RemoveResult{}, model.ErrInvalidRequest
 }
 
+func (unavailableCreateExecutor) RemoveDirectory(context.Context, model.RemoveDirectoryRequest) error {
+	return model.ErrInvalidRequest
+}
+
 func (unavailableCreateExecutor) OpenWriteSession(context.Context, model.OpenWriteSessionRequest) (model.SessionRecord, error) {
 	return model.SessionRecord{}, model.ErrInvalidRequest
 }
