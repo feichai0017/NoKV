@@ -19,6 +19,7 @@ func TestClientErrorsExposeStableKinds(t *testing.T) {
 		errDirectoryReaderRequired,
 		errWatchClientRequired,
 		errStagedPublishClientRequired,
+		errArtifactClientRequired,
 		errWatchStreamNotConfigured,
 		errWatchSessionNotConfigured,
 		errRPCClientNotConfigured,

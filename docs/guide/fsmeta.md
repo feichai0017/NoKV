@@ -60,8 +60,13 @@ families are:
 | usage | quota accounting |
 | snapshot | local snapshot registry |
 
-`InodeRecord.OpaqueAttrs` is caller-owned bytes capped at 16 KiB. Use it for
-compact body references, checksums, media types, or small descriptors.
+`InodeRecord.OpaqueAttrs` is caller-owned bytes capped at 16 KiB. Artifact
+publishers should use the canonical `fsmeta/model.BodyDescriptor` JSON shape:
+`producer`, `digest_uri`, `size`, `content_type`, `body_ref`, and `generation`.
+The client helper `PublishArtifact` writes this descriptor into a staged inode
+and then atomically renames or replaces the final namespace entry. `Remove` and
+`RenameReplace` return the old inode metadata, so callers can decode the old
+descriptor and retry external body GC after namespace mutation succeeds.
 
 ## Execution Boundary
 
