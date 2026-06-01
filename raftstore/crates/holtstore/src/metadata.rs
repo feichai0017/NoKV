@@ -1,8 +1,11 @@
+use holt::RangeEntry;
 use nokv_metadata_state as metadata_state;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use std::time::{Duration, Instant};
 
 use crate::metrics;
+use crate::store::to_backend_error;
+use crate::trees::family_from_i32;
 use crate::versions::apply_committed;
 use crate::HoltMetadataStore;
 
@@ -12,8 +15,9 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         req: &metadatapb::MetadataGetRequest,
     ) -> metadata_state::Result<metadatapb::MetadataGetResponse> {
         let _guard = self.lock()?;
-        Ok(match self.read_committed(&req.key, req.version)? {
-            Some((_commit, value)) => {
+        let family = family_from_i32(req.key_family);
+        Ok(match self.read_committed(family, &req.key, req.version)? {
+            Some((commit, value)) => {
                 if metadata_state::value_is_expired(value.expires_at) {
                     return Ok(metadatapb::MetadataGetResponse {
                         not_found: true,
@@ -25,9 +29,11 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
                 let not_found = bytes.is_none();
                 metadatapb::MetadataGetResponse {
                     kv: bytes.map(|value| metadatapb::MetadataKv {
+                        key: req.key.clone(),
+                        key_family: family as i32,
                         value,
+                        version: commit,
                         expires_at,
-                        ..Default::default()
                     }),
                     not_found,
                     ..Default::default()
@@ -62,13 +68,27 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         req: &metadatapb::MetadataScanRequest,
     ) -> metadata_state::Result<metadatapb::MetadataScanResponse> {
         let _guard = self.lock()?;
+        let family = family_from_i32(req.key_family);
         let read_version = metadata_state::scan_read_version(req.version);
         let limit = metadata_state::scan_limit(req.limit);
         let mut kvs = Vec::new();
-        let mut keys = self.scan_write_user_keys()?;
+        let mut keys = Vec::new();
+        for entry in self
+            .store
+            .current(family)
+            .map_err(to_backend_error)?
+            .range()
+        {
+            let entry = entry.map_err(to_backend_error)?;
+            let RangeEntry::Key { key, .. } = entry else {
+                continue;
+            };
+            keys.push(key);
+        }
         if req.reverse {
             keys.reverse();
         }
+        let mut visited = 0_u64;
         for key in keys {
             if !metadata_state::scan_key_matches_start(
                 &key,
@@ -78,7 +98,10 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
             ) {
                 continue;
             }
-            if let Some((_commit_version, value)) = self.read_committed(&key, read_version)? {
+            visited += 1;
+            if let Some((commit_version, value)) =
+                self.read_committed(family, &key, read_version)?
+            {
                 if metadata_state::value_is_expired(value.expires_at) {
                     continue;
                 }
@@ -86,8 +109,9 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
                 if let Some(bytes) = value.value {
                     kvs.push(metadatapb::MetadataKv {
                         key,
+                        key_family: family as i32,
                         value: bytes,
-                        version: read_version,
+                        version: commit_version,
                         expires_at,
                     });
                     if kvs.len() >= limit {
@@ -96,6 +120,7 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
                 }
             }
         }
+        metrics::record_metadata_scan(visited, kvs.len() as u64);
         Ok(metadatapb::MetadataScanResponse {
             kvs,
             ..Default::default()
@@ -137,8 +162,8 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         if !pending.is_empty() {
             let atomic_started = Instant::now();
             self.atomic(|batch| {
-                for (key, commit_version, value) in &pending {
-                    apply_committed(batch, key, *commit_version, value);
+                for (family, key, commit_version, value) in &pending {
+                    apply_committed(batch, *family, key, *commit_version, value);
                 }
             })?;
             atomic_duration = atomic_started.elapsed();
@@ -159,7 +184,12 @@ impl HoltMetadataStore {
         &self,
         command: &metadatapb::MetadataCommand,
         commit_version: u64,
-        pending: &mut Vec<(Vec<u8>, u64, metadata_state::VersionedValue)>,
+        pending: &mut Vec<(
+            metadatapb::MetadataFamily,
+            Vec<u8>,
+            u64,
+            metadata_state::VersionedValue,
+        )>,
     ) -> metadata_state::Result<metadata_state::MetadataApplyResult> {
         if let Some(error) = metadata_state::validation::metadata_commit_version(
             command.read_version,
@@ -181,7 +211,12 @@ impl HoltMetadataStore {
                 predicate.read_version
             };
             let observed = self
-                .read_committed_with_pending(&predicate.key, read_version, pending)?
+                .read_committed_with_pending(
+                    family_from_i32(predicate.key_family),
+                    &predicate.key,
+                    read_version,
+                    pending,
+                )?
                 .and_then(|(_, value)| value.value);
             if let Some(error) = metadata_state::validation::metadata_command_predicate_observation(
                 predicate,
@@ -195,6 +230,7 @@ impl HoltMetadataStore {
                 return Ok(metadata_apply_error(commit_version, error));
             }
             if let Some((commit_ts, _)) = self.first_write_after_or_at_with_pending(
+                family_from_i32(mutation.key_family),
                 &mutation.key,
                 command.read_version,
                 pending,
@@ -210,7 +246,12 @@ impl HoltMetadataStore {
             }
             if mutation.assertion_not_exist
                 && self
-                    .read_committed_with_pending(&mutation.key, command.read_version, pending)?
+                    .read_committed_with_pending(
+                        family_from_i32(mutation.key_family),
+                        &mutation.key,
+                        command.read_version,
+                        pending,
+                    )?
                     .and_then(|(_, value)| value.value)
                     .is_some()
             {
@@ -222,6 +263,7 @@ impl HoltMetadataStore {
         }
         pending.extend(command.mutations.iter().map(|mutation| {
             (
+                family_from_i32(mutation.key_family),
                 mutation.key.clone(),
                 commit_version,
                 metadata_state::metadata_mutation_value(mutation, command.read_version),
@@ -236,13 +278,20 @@ impl HoltMetadataStore {
 
     fn read_committed_with_pending(
         &self,
+        family: metadatapb::MetadataFamily,
         key: &[u8],
         version: u64,
-        pending: &[(Vec<u8>, u64, metadata_state::VersionedValue)],
+        pending: &[(
+            metadatapb::MetadataFamily,
+            Vec<u8>,
+            u64,
+            metadata_state::VersionedValue,
+        )],
     ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
-        let mut best = self.read_committed(key, version)?;
-        for (pending_key, commit_version, value) in pending {
-            if pending_key.as_slice() == key
+        let mut best = self.read_committed(family, key, version)?;
+        for (pending_family, pending_key, commit_version, value) in pending {
+            if *pending_family == family
+                && pending_key.as_slice() == key
                 && *commit_version <= version
                 && best.as_ref().is_none_or(|(ts, _)| *commit_version > *ts)
             {
@@ -254,13 +303,20 @@ impl HoltMetadataStore {
 
     fn first_write_after_or_at_with_pending(
         &self,
+        family: metadatapb::MetadataFamily,
         key: &[u8],
         version: u64,
-        pending: &[(Vec<u8>, u64, metadata_state::VersionedValue)],
+        pending: &[(
+            metadatapb::MetadataFamily,
+            Vec<u8>,
+            u64,
+            metadata_state::VersionedValue,
+        )],
     ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
-        let mut best = self.first_write_after_or_at(key, version)?;
-        for (pending_key, commit_version, value) in pending {
-            if pending_key.as_slice() == key
+        let mut best = self.first_write_after_or_at(family, key, version)?;
+        for (pending_family, pending_key, commit_version, value) in pending {
+            if *pending_family == family
+                && pending_key.as_slice() == key
                 && *commit_version >= version
                 && best.as_ref().is_none_or(|(ts, _)| *commit_version < *ts)
             {
@@ -278,8 +334,11 @@ impl HoltMetadataStore {
         let mut any_present = false;
         let mut all_present = true;
         for mutation in &command.mutations {
-            let Some((existing_commit, value)) =
-                self.write_by_start_version(&mutation.key, command.read_version)?
+            let Some((existing_commit, value)) = self.write_by_start_version(
+                family_from_i32(mutation.key_family),
+                &mutation.key,
+                command.read_version,
+            )?
             else {
                 all_present = false;
                 continue;

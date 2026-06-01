@@ -42,7 +42,7 @@ The main package boundaries are:
 | `fsmeta/runtime/local` | Embedded Badger-backed fsmeta runtime for demos and tests. |
 | `meta/root` | Rooted truth for topology, authority, lifecycle facts, grants, and seals. |
 | `coordinator` | Routing, TSO, store discovery, root-event publish, and serving-plane rebuild. |
-| `raftstore` | Rust replacement data plane using OpenRaft and Holt multi-tree storage. |
+| `raftstore` | Rust replacement data plane using OpenRaft and Holt family current/history trees. |
 | `pb` | Public protobuf wire contracts. |
 
 ## fsmeta

@@ -1,47 +1,119 @@
 use nokv_metadata_state as metadata_state;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 use prost::Message;
 
 use crate::{Error, Result};
 
-pub const DATA_TREE: &str = "data";
-pub const WRITE_TREE: &str = "write";
+pub const DEFAULT_CURRENT_TREE: &str = "default_current";
+pub const MOUNT_CURRENT_TREE: &str = "mount_current";
+pub const INODE_CURRENT_TREE: &str = "inode_current";
+pub const DENTRY_CURRENT_TREE: &str = "dentry_current";
+pub const PARENT_CURRENT_TREE: &str = "parent_current";
+pub const CHUNK_CURRENT_TREE: &str = "chunk_current";
+pub const SESSION_CURRENT_TREE: &str = "session_current";
+pub const QUOTA_CURRENT_TREE: &str = "quota_current";
+pub const SNAPSHOT_CURRENT_TREE: &str = "snapshot_current";
+pub const PATH_INDEX_CURRENT_TREE: &str = "path_index_current";
+pub const WATCH_CURRENT_TREE: &str = "watch_current";
+pub const COMMAND_DEDUPE_CURRENT_TREE: &str = "command_dedupe_current";
+pub const SEGMENT_CURRENT_TREE: &str = "segment_current";
+pub const HISTORY_TREE: &str = "history";
 pub const REGION_META_TREE: &str = "region_meta";
 pub const APPLY_STATE_TREE: &str = "apply_state";
 pub const WATCH_APPLY_TREE: &str = "watch_apply";
 
-pub(crate) const REQUIRED_TREES: [&str; 5] = [
-    DATA_TREE,
-    WRITE_TREE,
+pub(crate) const CURRENT_TREES: [&str; 13] = [
+    DEFAULT_CURRENT_TREE,
+    MOUNT_CURRENT_TREE,
+    INODE_CURRENT_TREE,
+    DENTRY_CURRENT_TREE,
+    PARENT_CURRENT_TREE,
+    CHUNK_CURRENT_TREE,
+    SESSION_CURRENT_TREE,
+    QUOTA_CURRENT_TREE,
+    SNAPSHOT_CURRENT_TREE,
+    PATH_INDEX_CURRENT_TREE,
+    WATCH_CURRENT_TREE,
+    COMMAND_DEDUPE_CURRENT_TREE,
+    SEGMENT_CURRENT_TREE,
+];
+
+pub(crate) const REQUIRED_TREES: [&str; 17] = [
+    DEFAULT_CURRENT_TREE,
+    MOUNT_CURRENT_TREE,
+    INODE_CURRENT_TREE,
+    DENTRY_CURRENT_TREE,
+    PARENT_CURRENT_TREE,
+    CHUNK_CURRENT_TREE,
+    SESSION_CURRENT_TREE,
+    QUOTA_CURRENT_TREE,
+    SNAPSHOT_CURRENT_TREE,
+    PATH_INDEX_CURRENT_TREE,
+    WATCH_CURRENT_TREE,
+    COMMAND_DEDUPE_CURRENT_TREE,
+    SEGMENT_CURRENT_TREE,
+    HISTORY_TREE,
     REGION_META_TREE,
     APPLY_STATE_TREE,
     WATCH_APPLY_TREE,
 ];
 
-pub(crate) fn write_prefix(key: &[u8]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(4 + key.len());
+pub(crate) fn current_tree_for_family(family: metadatapb::MetadataFamily) -> &'static str {
+    match family {
+        metadatapb::MetadataFamily::Mount => MOUNT_CURRENT_TREE,
+        metadatapb::MetadataFamily::Inode => INODE_CURRENT_TREE,
+        metadatapb::MetadataFamily::Dentry => DENTRY_CURRENT_TREE,
+        metadatapb::MetadataFamily::Parent => PARENT_CURRENT_TREE,
+        metadatapb::MetadataFamily::Chunk => CHUNK_CURRENT_TREE,
+        metadatapb::MetadataFamily::Session => SESSION_CURRENT_TREE,
+        metadatapb::MetadataFamily::Quota => QUOTA_CURRENT_TREE,
+        metadatapb::MetadataFamily::Snapshot => SNAPSHOT_CURRENT_TREE,
+        metadatapb::MetadataFamily::PathIndex => PATH_INDEX_CURRENT_TREE,
+        metadatapb::MetadataFamily::Watch => WATCH_CURRENT_TREE,
+        metadatapb::MetadataFamily::CommandDedupe => COMMAND_DEDUPE_CURRENT_TREE,
+        metadatapb::MetadataFamily::Segment => SEGMENT_CURRENT_TREE,
+        metadatapb::MetadataFamily::Unspecified => DEFAULT_CURRENT_TREE,
+    }
+}
+
+pub(crate) fn family_from_i32(raw: i32) -> metadatapb::MetadataFamily {
+    metadatapb::MetadataFamily::try_from(raw).unwrap_or(metadatapb::MetadataFamily::Unspecified)
+}
+
+pub(crate) fn history_prefix(family: metadatapb::MetadataFamily, key: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8 + key.len());
+    out.extend_from_slice(&(family as i32).to_be_bytes());
     out.extend_from_slice(&(key.len() as u32).to_be_bytes());
     out.extend_from_slice(key);
     out
 }
 
-pub(crate) fn write_key(key: &[u8], commit_ts: u64) -> Vec<u8> {
-    let mut out = write_prefix(key);
+pub(crate) fn history_key(
+    family: metadatapb::MetadataFamily,
+    key: &[u8],
+    commit_ts: u64,
+) -> Vec<u8> {
+    let mut out = history_prefix(family, key);
     out.extend_from_slice(&(u64::MAX - commit_ts).to_be_bytes());
     out
 }
 
-pub(crate) fn decode_write_key(key: &[u8]) -> metadata_state::Result<Option<(Vec<u8>, u64)>> {
-    if key.len() < 12 {
+pub(crate) fn decode_history_key(
+    key: &[u8],
+) -> metadata_state::Result<Option<(metadatapb::MetadataFamily, Vec<u8>, u64)>> {
+    if key.len() < 16 {
         return Ok(None);
     }
-    let user_len = u32::from_be_bytes(key[0..4].try_into().unwrap()) as usize;
-    if key.len() != 4 + user_len + 8 {
+    let raw_family = i32::from_be_bytes(key[0..4].try_into().unwrap());
+    let family = family_from_i32(raw_family);
+    let user_len = u32::from_be_bytes(key[4..8].try_into().unwrap()) as usize;
+    if key.len() != 8 + user_len + 8 {
         return Ok(None);
     }
-    let user_key = key[4..4 + user_len].to_vec();
-    let inverted = u64::from_be_bytes(key[4 + user_len..].try_into().unwrap());
-    Ok(Some((user_key, u64::MAX - inverted)))
+    let user_key = key[8..8 + user_len].to_vec();
+    let inverted = u64::from_be_bytes(key[8 + user_len..].try_into().unwrap());
+    Ok(Some((family, user_key, u64::MAX - inverted)))
 }
 
 pub(crate) const REGION_DESCRIPTOR_PREFIX: &[u8] = b"descriptor/";

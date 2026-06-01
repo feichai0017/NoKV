@@ -21,6 +21,22 @@ enum ReadPreference {
   READ_PREFERENCE_FOLLOWER_PREFER = 1;
 }
 
+enum MetadataFamily {
+  METADATA_FAMILY_UNSPECIFIED = 0;
+  METADATA_FAMILY_MOUNT = 1;
+  METADATA_FAMILY_INODE = 2;
+  METADATA_FAMILY_DENTRY = 3;
+  METADATA_FAMILY_PARENT = 4;
+  METADATA_FAMILY_CHUNK = 5;
+  METADATA_FAMILY_SESSION = 6;
+  METADATA_FAMILY_QUOTA = 7;
+  METADATA_FAMILY_SNAPSHOT = 8;
+  METADATA_FAMILY_PATH_INDEX = 9;
+  METADATA_FAMILY_WATCH = 10;
+  METADATA_FAMILY_COMMAND_DEDUPE = 11;
+  METADATA_FAMILY_SEGMENT = 12;
+}
+
 message MetadataContext {
   uint64 region_id = 1;
   nokv.meta.v1.RegionEpoch region_epoch = 2;
@@ -34,6 +50,7 @@ message MetadataKV {
   bytes value = 2;
   uint64 version = 3;
   uint64 expires_at = 4;
+  MetadataFamily key_family = 5;
 }
 
 message MetadataKeyError {
@@ -53,6 +70,7 @@ message MetadataGetRequest {
   MetadataContext context = 1;
   bytes key = 2;
   uint64 version = 3;
+  MetadataFamily key_family = 4;
 }
 
 message MetadataGetResponse {
@@ -79,6 +97,7 @@ message MetadataScanRequest {
   uint64 version = 4;
   bool include_start = 5;
   bool reverse = 6;
+  MetadataFamily key_family = 7;
 }
 
 message MetadataScanResponse {
@@ -98,6 +117,7 @@ message MetadataPredicate {
   MetadataPredicateKind kind = 2;
   uint64 read_version = 3;
   bytes expected_value = 4;
+  MetadataFamily key_family = 5;
 }
 
 message MetadataMutation {
@@ -111,6 +131,12 @@ message MetadataMutation {
   bytes value = 3;
   bool assertion_not_exist = 4;
   uint64 expires_at = 5;
+  MetadataFamily key_family = 6;
+}
+
+message MetadataWatchKey {
+  MetadataFamily key_family = 1;
+  bytes key = 2;
 }
 
 message MetadataCommand {
@@ -123,6 +149,8 @@ message MetadataCommand {
   repeated MetadataMutation mutations = 7;
   repeated bytes watch_keys = 8;
   uint64 commit_version = 9;
+  MetadataFamily primary_key_family = 10;
+  repeated MetadataWatchKey watch_key_refs = 11;
 }
 
 message MetadataCommitResult {

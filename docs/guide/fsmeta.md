@@ -76,8 +76,10 @@ type Store interface {
 ```
 
 The executor compiles namespace operations into `MetadataCommand` objects:
-backend-neutral predicates, mutations, watch keys, and an optional explicit
-commit version. Runtime packages own concrete commit mechanics.
+backend-neutral predicates, mutations, watch keys, metadata families, and an
+optional explicit commit version. Runtime packages own concrete commit
+mechanics. Local runtimes may flatten families into one keyspace; the Rust
+distributed runtime maps them to Holt current trees plus a shared history tree.
 
 ## Local Runtime
 

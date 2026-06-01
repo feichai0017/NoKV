@@ -9,6 +9,7 @@ import (
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
 	errorpb "github.com/feichai0017/NoKV/pb/error"
 	metadatapb "github.com/feichai0017/NoKV/pb/metadata"
 	"google.golang.org/grpc/codes"
@@ -73,9 +74,10 @@ func (r *Runner) Get(ctx context.Context, key []byte, version uint64) ([]byte, b
 			return nil, false, err
 		}
 		resp, err := route.Client.Get(ctx, &metadatapb.MetadataGetRequest{
-			Context: route.Context,
-			Key:     cloneBytes(key),
-			Version: version,
+			Context:   route.Context,
+			Key:       cloneBytes(key),
+			Version:   version,
+			KeyFamily: metadataFamilyToProto(metadataFamilyForKey(key)),
 		})
 		if err != nil {
 			if shouldRetryRouteCall(ctx, err, attempt) {
@@ -112,8 +114,9 @@ func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	reqs := make([]*metadatapb.MetadataGetRequest, 0, len(keys))
 	for _, key := range keys {
 		reqs = append(reqs, &metadatapb.MetadataGetRequest{
-			Key:     cloneBytes(key),
-			Version: version,
+			Key:       cloneBytes(key),
+			Version:   version,
+			KeyFamily: metadataFamilyToProto(metadataFamilyForKey(key)),
 		})
 	}
 	var lastErr error
@@ -170,10 +173,11 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 			return nil, err
 		}
 		resp, err := route.Client.Scan(ctx, &metadatapb.MetadataScanRequest{
-			Context:  route.Context,
-			StartKey: cloneBytes(startKey),
-			Limit:    limit,
-			Version:  version,
+			Context:   route.Context,
+			StartKey:  cloneBytes(startKey),
+			Limit:     limit,
+			Version:   version,
+			KeyFamily: metadataFamilyToProto(metadataFamilyForKey(startKey)),
 		})
 		if err != nil {
 			if shouldRetryRouteCall(ctx, err, attempt) {
@@ -196,7 +200,11 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 		}
 		kvs := make([]backend.KV, 0, len(resp.GetKvs()))
 		for _, kv := range resp.GetKvs() {
-			kvs = append(kvs, backend.KV{Key: cloneBytes(kv.GetKey()), Value: cloneBytes(kv.GetValue())})
+			kvs = append(kvs, backend.KV{
+				Family: metadataFamilyFromProto(kv.GetKeyFamily()),
+				Key:    cloneBytes(kv.GetKey()),
+				Value:  cloneBytes(kv.GetValue()),
+			})
 		}
 		return kvs, nil
 	}
@@ -289,15 +297,17 @@ func canRetryRouteError(err error) bool {
 
 func metadataCommandToProto(command backend.MetadataCommand) *metadatapb.MetadataCommand {
 	return &metadatapb.MetadataCommand{
-		RequestId:     cloneBytes(command.RequestID),
-		Mount:         command.Mount,
-		MountKeyId:    command.MountKeyID,
-		PrimaryKey:    cloneBytes(command.PrimaryKey),
-		ReadVersion:   command.ReadVersion,
-		CommitVersion: command.CommitVersion,
-		Predicates:    metadataPredicatesToProto(command.Predicates),
-		Mutations:     metadataMutationsToProto(command.Mutations),
-		WatchKeys:     cloneByteSlices(command.WatchKeys),
+		RequestId:        cloneBytes(command.RequestID),
+		Mount:            command.Mount,
+		MountKeyId:       command.MountKeyID,
+		PrimaryKey:       cloneBytes(command.PrimaryKey),
+		PrimaryKeyFamily: metadataFamilyToProto(metadataFamilyOrKey(command.PrimaryFamily, command.PrimaryKey)),
+		ReadVersion:      command.ReadVersion,
+		CommitVersion:    command.CommitVersion,
+		Predicates:       metadataPredicatesToProto(command.Predicates),
+		Mutations:        metadataMutationsToProto(command.Mutations),
+		WatchKeys:        cloneByteSlices(command.WatchKeys),
+		WatchKeyRefs:     metadataWatchRefsToProto(command.WatchRefs, command.WatchKeys),
 	}
 }
 
@@ -309,6 +319,7 @@ func metadataPredicatesToProto(predicates []*backend.Predicate) []*metadatapb.Me
 		}
 		out = append(out, &metadatapb.MetadataPredicate{
 			Key:           cloneBytes(pred.Key),
+			KeyFamily:     metadataFamilyToProto(metadataFamilyOrKey(pred.Family, pred.Key)),
 			Kind:          metadataPredicateKindToProto(pred.Kind),
 			ReadVersion:   pred.ReadVersion,
 			ExpectedValue: cloneBytes(pred.ExpectedValue),
@@ -326,9 +337,36 @@ func metadataMutationsToProto(mutations []*backend.Mutation) []*metadatapb.Metad
 		out = append(out, &metadatapb.MetadataMutation{
 			Op:                metadataMutationOpToProto(mut.Op),
 			Key:               cloneBytes(mut.Key),
+			KeyFamily:         metadataFamilyToProto(metadataFamilyOrKey(mut.Family, mut.Key)),
 			Value:             cloneBytes(mut.Value),
 			AssertionNotExist: mut.AssertionNotExist,
 			ExpiresAt:         mut.ExpiresAt,
+		})
+	}
+	return out
+}
+
+func metadataWatchRefsToProto(refs []backend.KeyRef, fallback [][]byte) []*metadatapb.MetadataWatchKey {
+	out := make([]*metadatapb.MetadataWatchKey, 0, len(refs)+len(fallback))
+	if len(refs) != 0 {
+		for _, ref := range refs {
+			if len(ref.Key) == 0 {
+				continue
+			}
+			out = append(out, &metadatapb.MetadataWatchKey{
+				Key:       cloneBytes(ref.Key),
+				KeyFamily: metadataFamilyToProto(metadataFamilyOrKey(ref.Family, ref.Key)),
+			})
+		}
+		return out
+	}
+	for _, key := range fallback {
+		if len(key) == 0 {
+			continue
+		}
+		out = append(out, &metadatapb.MetadataWatchKey{
+			Key:       cloneBytes(key),
+			KeyFamily: metadataFamilyToProto(metadataFamilyForKey(key)),
 		})
 	}
 	return out
@@ -355,6 +393,102 @@ func metadataMutationOpToProto(op backend.MutationOp) metadatapb.MetadataMutatio
 		return metadatapb.MetadataMutation_DELETE
 	default:
 		return metadatapb.MetadataMutation_PUT
+	}
+}
+
+func metadataFamilyForKey(key []byte) backend.MetadataFamily {
+	kind, err := layout.KeyKindOf(key)
+	if err != nil {
+		return backend.MetadataFamilyUnspecified
+	}
+	switch kind {
+	case layout.KeyKindMount:
+		return backend.MetadataFamilyMount
+	case layout.KeyKindInode:
+		return backend.MetadataFamilyInode
+	case layout.KeyKindDentry:
+		return backend.MetadataFamilyDentry
+	case layout.KeyKindChunk:
+		return backend.MetadataFamilyChunk
+	case layout.KeyKindSession:
+		return backend.MetadataFamilySession
+	case layout.KeyKindUsage:
+		return backend.MetadataFamilyQuota
+	case layout.KeyKindSnapshot:
+		return backend.MetadataFamilySnapshot
+	case layout.KeyKindSegment:
+		return backend.MetadataFamilySegment
+	default:
+		return backend.MetadataFamilyUnspecified
+	}
+}
+
+func metadataFamilyOrKey(family backend.MetadataFamily, key []byte) backend.MetadataFamily {
+	if family != backend.MetadataFamilyUnspecified {
+		return family
+	}
+	return metadataFamilyForKey(key)
+}
+
+func metadataFamilyToProto(family backend.MetadataFamily) metadatapb.MetadataFamily {
+	switch family {
+	case backend.MetadataFamilyMount:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_MOUNT
+	case backend.MetadataFamilyInode:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_INODE
+	case backend.MetadataFamilyDentry:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_DENTRY
+	case backend.MetadataFamilyParent:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_PARENT
+	case backend.MetadataFamilyChunk:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_CHUNK
+	case backend.MetadataFamilySession:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_SESSION
+	case backend.MetadataFamilyQuota:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_QUOTA
+	case backend.MetadataFamilySnapshot:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_SNAPSHOT
+	case backend.MetadataFamilyPathIndex:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_PATH_INDEX
+	case backend.MetadataFamilyWatch:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_WATCH
+	case backend.MetadataFamilyCommandDedupe:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_COMMAND_DEDUPE
+	case backend.MetadataFamilySegment:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_SEGMENT
+	default:
+		return metadatapb.MetadataFamily_METADATA_FAMILY_UNSPECIFIED
+	}
+}
+
+func metadataFamilyFromProto(family metadatapb.MetadataFamily) backend.MetadataFamily {
+	switch family {
+	case metadatapb.MetadataFamily_METADATA_FAMILY_MOUNT:
+		return backend.MetadataFamilyMount
+	case metadatapb.MetadataFamily_METADATA_FAMILY_INODE:
+		return backend.MetadataFamilyInode
+	case metadatapb.MetadataFamily_METADATA_FAMILY_DENTRY:
+		return backend.MetadataFamilyDentry
+	case metadatapb.MetadataFamily_METADATA_FAMILY_PARENT:
+		return backend.MetadataFamilyParent
+	case metadatapb.MetadataFamily_METADATA_FAMILY_CHUNK:
+		return backend.MetadataFamilyChunk
+	case metadatapb.MetadataFamily_METADATA_FAMILY_SESSION:
+		return backend.MetadataFamilySession
+	case metadatapb.MetadataFamily_METADATA_FAMILY_QUOTA:
+		return backend.MetadataFamilyQuota
+	case metadatapb.MetadataFamily_METADATA_FAMILY_SNAPSHOT:
+		return backend.MetadataFamilySnapshot
+	case metadatapb.MetadataFamily_METADATA_FAMILY_PATH_INDEX:
+		return backend.MetadataFamilyPathIndex
+	case metadatapb.MetadataFamily_METADATA_FAMILY_WATCH:
+		return backend.MetadataFamilyWatch
+	case metadatapb.MetadataFamily_METADATA_FAMILY_COMMAND_DEDUPE:
+		return backend.MetadataFamilyCommandDedupe
+	case metadatapb.MetadataFamily_METADATA_FAMILY_SEGMENT:
+		return backend.MetadataFamilySegment
+	default:
+		return backend.MetadataFamilyUnspecified
 	}
 }
 

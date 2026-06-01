@@ -45,6 +45,7 @@ pub struct MetadataSnapshot {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MetadataSnapshotWrite {
+    pub family: i32,
     pub key: Vec<u8>,
     pub commit_version: u64,
     pub value: VersionedValue,

@@ -8,6 +8,13 @@ struct PersistedMetadataResponseBatch {
 }
 
 pub(crate) fn metadata_command_watch_keys(command: &metadatapb::MetadataCommand) -> Vec<Vec<u8>> {
+    if !command.watch_key_refs.is_empty() {
+        return command
+            .watch_key_refs
+            .iter()
+            .map(|key| key.key.clone())
+            .collect();
+    }
     if !command.watch_keys.is_empty() {
         return command.watch_keys.clone();
     }

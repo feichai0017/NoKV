@@ -4,7 +4,7 @@ use holt::RangeEntry;
 use nokv_metadata_state as metadata_state;
 
 use crate::store::to_backend_error;
-use crate::trees::{decode_write_key, WRITE_TREE};
+use crate::trees::{decode_history_key, HISTORY_TREE};
 use crate::HoltMetadataStore;
 
 impl HoltMetadataStore {
@@ -21,17 +21,17 @@ impl HoltMetadataStore {
             return Ok(result);
         }
 
-        let mut versions_by_key: BTreeMap<Vec<u8>, Vec<(u64, Vec<u8>)>> = BTreeMap::new();
-        for entry in self.store.write().map_err(to_backend_error)?.range() {
+        let mut versions_by_key: BTreeMap<(i32, Vec<u8>), Vec<(u64, Vec<u8>)>> = BTreeMap::new();
+        for entry in self.store.history().map_err(to_backend_error)?.range() {
             let entry = entry.map_err(to_backend_error)?;
             let RangeEntry::Key { key, .. } = entry else {
                 continue;
             };
-            let Some((user_key, commit_version)) = decode_write_key(&key)? else {
+            let Some((family, user_key, commit_version)) = decode_history_key(&key)? else {
                 continue;
             };
             versions_by_key
-                .entry(user_key)
+                .entry((family as i32, user_key))
                 .or_default()
                 .push((commit_version, key));
         }
@@ -56,7 +56,7 @@ impl HoltMetadataStore {
         if !prune_keys.is_empty() {
             self.atomic(|batch| {
                 for key in &prune_keys {
-                    batch.delete(WRITE_TREE, key);
+                    batch.delete(HISTORY_TREE, key);
                 }
             })?;
         }

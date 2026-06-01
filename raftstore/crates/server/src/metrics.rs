@@ -268,7 +268,7 @@ fn raftnode_json(metrics: RaftNodeMetricsSnapshot) -> String {
 
 fn holt_metadata_json(metrics: HoltMetadataMetricsSnapshot) -> String {
     format!(
-        "{{\"commit_batches_total\":{},\"commit_commands_total\":{},\"commit_commands_max\":{},\"commit_writes_total\":{},\"commit_writes_max\":{},\"prepare_ns_total\":{},\"prepare_ns_max\":{},\"atomic_ns_total\":{},\"atomic_ns_max\":{},\"total_ns_total\":{},\"total_ns_max\":{}}}",
+        "{{\"commit_batches_total\":{},\"commit_commands_total\":{},\"commit_commands_max\":{},\"commit_writes_total\":{},\"commit_writes_max\":{},\"prepare_ns_total\":{},\"prepare_ns_max\":{},\"atomic_ns_total\":{},\"atomic_ns_max\":{},\"total_ns_total\":{},\"total_ns_max\":{},\"scan_keys_visited_total\":{},\"scan_keys_returned_total\":{},\"current_hit_total\":{},\"history_lookup_total\":{}}}",
         metrics.commit_batches_total,
         metrics.commit_commands_total,
         metrics.commit_commands_max,
@@ -279,7 +279,11 @@ fn holt_metadata_json(metrics: HoltMetadataMetricsSnapshot) -> String {
         metrics.atomic_ns_total,
         metrics.atomic_ns_max,
         metrics.total_ns_total,
-        metrics.total_ns_max
+        metrics.total_ns_max,
+        metrics.scan_keys_visited_total,
+        metrics.scan_keys_returned_total,
+        metrics.current_hit_total,
+        metrics.history_lookup_total
     )
 }
 
@@ -396,6 +400,10 @@ mod tests {
                 atomic_ns_max: 9,
                 total_ns_total: 23,
                 total_ns_max: 17,
+                scan_keys_visited_total: 12,
+                scan_keys_returned_total: 10,
+                current_hit_total: 8,
+                history_lookup_total: 3,
             },
         );
 
@@ -421,6 +429,7 @@ mod tests {
         assert!(payload.contains("\"append_entries_client_empty_calls_total\":1"));
         assert!(payload.contains("\"append_entries_client_data_calls_total\":2"));
         assert!(payload.contains("\"commit_writes_total\":9"));
+        assert!(payload.contains("\"scan_keys_visited_total\":12"));
         assert!(payload.contains("\"pending_admin\":true"));
         assert!(payload.ends_with('\n'));
     }

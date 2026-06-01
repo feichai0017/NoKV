@@ -50,8 +50,10 @@ flowchart LR
 
 `fsmeta/backend.Store` is the key boundary. It exposes timestamped reads,
 scans, and `MetadataCommand` commits. A command carries predicates, mutations,
-and watch projection keys under one metadata commit boundary. It does not
-expose Badger, Holt, Raft, protobuf, migration, or SST concepts.
+watch projection keys, and a storage-neutral metadata family under one metadata
+commit boundary. Families let runtimes place inode, dentry, snapshot, watch,
+and command-dedupe records in different physical trees without exposing Badger,
+Holt, Raft, protobuf, migration, or SST concepts to fsmeta execution.
 
 ## Local Runtime
 
@@ -82,6 +84,11 @@ committed Raft frontier and streams apply-ordered watch events back to fsmeta.
 
 Holt is not imported by Go fsmeta code. It belongs under `raftstore`, where
 Rust can use Holt multi-tree storage directly for the replicated state machine.
+The distributed data plane maps metadata families to `*_current` Holt trees and
+keeps historical MVCC versions in a separate `history` tree. Latest reads and
+directory scans therefore hit family-local current trees; snapshot reads fall
+back to history only when the requested version predates the current record.
+
 If a future local Rust backend is needed, it should be added as a runtime
 adapter, not by leaking Holt-specific types into `fsmeta/model`, `layout`,
 `backend`, or `exec`.

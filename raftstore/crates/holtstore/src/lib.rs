@@ -18,7 +18,9 @@ mod watch_apply;
 
 pub use metrics::{holt_metadata_metrics_snapshot, HoltMetadataMetricsSnapshot};
 pub use store::{HoltMetadataStore, HoltStore};
-pub use trees::{APPLY_STATE_TREE, DATA_TREE, REGION_META_TREE, WATCH_APPLY_TREE, WRITE_TREE};
+pub use trees::{
+    APPLY_STATE_TREE, DEFAULT_CURRENT_TREE, HISTORY_TREE, REGION_META_TREE, WATCH_APPLY_TREE,
+};
 pub use types::{
     BlockedRootEvent, BlockedSchedulerOperation, Error, PendingRootEvent,
     PendingSchedulerOperation, RegionApplyState, Result,

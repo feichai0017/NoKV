@@ -357,6 +357,7 @@ mod tests {
                     }),
                     key: b"encoded-network".to_vec(),
                     version: 10,
+                    ..Default::default()
                 })
                 .await
                 .unwrap();

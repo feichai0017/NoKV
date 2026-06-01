@@ -3,9 +3,11 @@ use std::sync::{Arc, Mutex};
 
 use holt::{Tree, TreeConfig, DB};
 use nokv_metadata_state as metadata_state;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 use crate::trees::{
-    APPLY_STATE_TREE, DATA_TREE, REGION_META_TREE, REQUIRED_TREES, WATCH_APPLY_TREE, WRITE_TREE,
+    current_tree_for_family, APPLY_STATE_TREE, DEFAULT_CURRENT_TREE, HISTORY_TREE,
+    REGION_META_TREE, REQUIRED_TREES, WATCH_APPLY_TREE,
 };
 use crate::Result;
 
@@ -42,12 +44,16 @@ impl HoltStore {
         Ok(self.db.atomic(build)?)
     }
 
-    pub fn data(&self) -> Result<Tree> {
-        self.tree(DATA_TREE)
+    pub fn default_current(&self) -> Result<Tree> {
+        self.tree(DEFAULT_CURRENT_TREE)
     }
 
-    pub fn write(&self) -> Result<Tree> {
-        self.tree(WRITE_TREE)
+    pub fn current(&self, family: metadatapb::MetadataFamily) -> Result<Tree> {
+        self.tree(current_tree_for_family(family))
+    }
+
+    pub fn history(&self) -> Result<Tree> {
+        self.tree(HISTORY_TREE)
     }
 
     pub fn region_meta(&self) -> Result<Tree> {
@@ -63,12 +69,12 @@ impl HoltStore {
     }
 
     pub fn put_data(&self, key: &[u8], value: &[u8]) -> Result<()> {
-        self.data()?.put(key, value)?;
+        self.default_current()?.put(key, value)?;
         Ok(())
     }
 
     pub fn get_data(&self, key: &[u8]) -> Result<Option<Vec<u8>>> {
-        Ok(self.data()?.get(key)?)
+        Ok(self.default_current()?.get(key)?)
     }
 
     pub(crate) fn tree(&self, name: &str) -> Result<Tree> {

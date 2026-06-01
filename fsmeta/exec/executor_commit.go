@@ -14,6 +14,7 @@ import (
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
@@ -39,16 +40,20 @@ func (e *Executor) commitMetadataCommandAt(ctx context.Context, mount model.Moun
 }
 
 func (e *Executor) commitMetadataCommandWithVersion(ctx context.Context, mount model.MountIdentity, primary []byte, predicates []*backend.Predicate, mutations []*backend.Mutation, startVersion, commandCommitVersion, requestIDCommitVersion uint64) (backend.MetadataCommitResult, error) {
+	clonedPredicates := cloneMetadataPredicates(predicates)
+	clonedMutations := cloneMutations(mutations)
 	return e.runner.CommitMetadata(ctx, backend.MetadataCommand{
 		RequestID:     metadataCommandRequestID(mount, primary, startVersion, requestIDCommitVersion),
 		Mount:         string(mount.MountID),
 		MountKeyID:    uint64(mount.MountKeyID),
+		PrimaryFamily: metadataFamilyForKey(primary),
 		PrimaryKey:    cloneBytes(primary),
 		ReadVersion:   startVersion,
 		CommitVersion: commandCommitVersion,
-		Predicates:    cloneMetadataPredicates(predicates),
-		Mutations:     cloneMutations(mutations),
-		WatchKeys:     metadataCommandWatchKeys(mutations),
+		Predicates:    clonedPredicates,
+		Mutations:     clonedMutations,
+		WatchKeys:     metadataCommandWatchKeys(clonedMutations),
+		WatchRefs:     metadataCommandWatchRefs(clonedMutations),
 	})
 }
 
@@ -79,6 +84,26 @@ func metadataCommandWatchKeys(mutations []*backend.Mutation) [][]byte {
 		keys = append(keys, cloneBytes(mut.Key))
 	}
 	return keys
+}
+
+func metadataCommandWatchRefs(mutations []*backend.Mutation) []backend.KeyRef {
+	refs := make([]backend.KeyRef, 0, len(mutations))
+	seen := make(map[string]struct{}, len(mutations))
+	for _, mut := range mutations {
+		if mut == nil || len(mut.Key) == 0 {
+			continue
+		}
+		key := string(mut.Key)
+		if _, ok := seen[key]; ok {
+			continue
+		}
+		seen[key] = struct{}{}
+		refs = append(refs, backend.KeyRef{
+			Family: metadataFamilyForKey(mut.Key),
+			Key:    cloneBytes(mut.Key),
+		})
+	}
+	return refs
 }
 
 func metadataCommandPrimary(mutations []*backend.Mutation) []byte {
@@ -337,6 +362,7 @@ func cloneMutations(in []*backend.Mutation) []*backend.Mutation {
 			continue
 		}
 		out = append(out, &backend.Mutation{
+			Family:            metadataFamilyForKey(mut.Key),
 			Op:                mut.Op,
 			Key:               cloneBytes(mut.Key),
 			Value:             cloneBytes(mut.Value),
@@ -355,6 +381,7 @@ func cloneMetadataPredicates(in []*backend.Predicate) []*backend.Predicate {
 			continue
 		}
 		out = append(out, &backend.Predicate{
+			Family:        metadataFamilyForKey(pred.Key),
 			Key:           cloneBytes(pred.Key),
 			Kind:          pred.Kind,
 			ReadVersion:   pred.ReadVersion,
@@ -362,6 +389,33 @@ func cloneMetadataPredicates(in []*backend.Predicate) []*backend.Predicate {
 		})
 	}
 	return out
+}
+
+func metadataFamilyForKey(key []byte) backend.MetadataFamily {
+	kind, err := layout.KeyKindOf(key)
+	if err != nil {
+		return backend.MetadataFamilyUnspecified
+	}
+	switch kind {
+	case layout.KeyKindMount:
+		return backend.MetadataFamilyMount
+	case layout.KeyKindInode:
+		return backend.MetadataFamilyInode
+	case layout.KeyKindDentry:
+		return backend.MetadataFamilyDentry
+	case layout.KeyKindChunk:
+		return backend.MetadataFamilyChunk
+	case layout.KeyKindSession:
+		return backend.MetadataFamilySession
+	case layout.KeyKindUsage:
+		return backend.MetadataFamilyQuota
+	case layout.KeyKindSnapshot:
+		return backend.MetadataFamilySnapshot
+	case layout.KeyKindSegment:
+		return backend.MetadataFamilySegment
+	default:
+		return backend.MetadataFamilyUnspecified
+	}
 }
 
 func translateMutateError(err error) error {

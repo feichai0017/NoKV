@@ -8,8 +8,8 @@ use nokv_proto::nokv::metadata::v1 as metadatapb;
 #[test]
 fn opens_required_multi_tree_layout() {
     let store = HoltStore::open_memory().unwrap();
-    store.data().unwrap();
-    store.write().unwrap();
+    store.default_current().unwrap();
+    store.history().unwrap();
     store.region_meta().unwrap();
     store.apply_state().unwrap();
     store.watch_apply().unwrap();
@@ -64,12 +64,15 @@ fn applies_cross_tree_atomic_batch() {
     let store = HoltStore::open_memory().unwrap();
     let applied = store
         .atomic(|batch| {
-            batch.put(DATA_TREE, b"k", b"v");
+            batch.put(DEFAULT_CURRENT_TREE, b"k", b"v");
             batch.put(REGION_META_TREE, b"k", b"meta");
         })
         .unwrap();
     assert!(applied);
-    assert_eq!(store.data().unwrap().get(b"k").unwrap().unwrap(), b"v");
+    assert_eq!(
+        store.default_current().unwrap().get(b"k").unwrap().unwrap(),
+        b"v"
+    );
     assert_eq!(
         store.region_meta().unwrap().get(b"k").unwrap().unwrap(),
         b"meta"
@@ -442,6 +445,38 @@ fn metadata_overwrite_command(
     }
 }
 
+fn family_put_command(
+    family: metadatapb::MetadataFamily,
+    key: impl Into<Vec<u8>>,
+    value: impl Into<Vec<u8>>,
+    read_version: u64,
+) -> metadatapb::MetadataCommand {
+    let key = key.into();
+    let mut request_id = Vec::with_capacity(16);
+    request_id.extend_from_slice(&(family as i32 as u64).to_be_bytes());
+    request_id.extend_from_slice(&read_version.to_be_bytes());
+    metadatapb::MetadataCommand {
+        request_id,
+        read_version,
+        predicates: vec![metadatapb::MetadataPredicate {
+            key: key.clone(),
+            key_family: family as i32,
+            kind: metadatapb::MetadataPredicateKind::NotExists as i32,
+            read_version,
+            ..Default::default()
+        }],
+        mutations: vec![metadatapb::MetadataMutation {
+            op: metadatapb::metadata_mutation::Op::Put as i32,
+            key,
+            key_family: family as i32,
+            value: value.into(),
+            assertion_not_exist: true,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 #[test]
 fn holt_metadata_command_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
@@ -463,6 +498,94 @@ fn holt_metadata_command_survives_reopen() {
         })
         .unwrap();
     assert_eq!(got.kv.unwrap().value, b"v1");
+}
+
+#[test]
+fn holt_metadata_family_current_trees_keep_identical_keys_separate() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    store
+        .commit_metadata(
+            &family_put_command(metadatapb::MetadataFamily::Inode, b"same", b"inode", 10),
+            11,
+        )
+        .unwrap();
+    store
+        .commit_metadata(
+            &family_put_command(metadatapb::MetadataFamily::Dentry, b"same", b"dentry", 20),
+            21,
+        )
+        .unwrap();
+
+    let inode = store
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"same".to_vec(),
+            key_family: metadatapb::MetadataFamily::Inode as i32,
+            version: 21,
+            ..Default::default()
+        })
+        .unwrap();
+    let dentry = store
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"same".to_vec(),
+            key_family: metadatapb::MetadataFamily::Dentry as i32,
+            version: 21,
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(inode.kv.unwrap().value, b"inode");
+    assert_eq!(dentry.kv.unwrap().value, b"dentry");
+}
+
+#[test]
+fn holt_metadata_scan_uses_only_requested_family_current_tree() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    store
+        .commit_metadata(
+            &family_put_command(metadatapb::MetadataFamily::Inode, b"a", b"inode-a", 10),
+            11,
+        )
+        .unwrap();
+    store
+        .commit_metadata(
+            &family_put_command(metadatapb::MetadataFamily::Dentry, b"a", b"dentry-a", 20),
+            21,
+        )
+        .unwrap();
+    store
+        .commit_metadata(
+            &family_put_command(metadatapb::MetadataFamily::Dentry, b"b", b"dentry-b", 30),
+            31,
+        )
+        .unwrap();
+
+    let scan = store
+        .scan_metadata(&metadatapb::MetadataScanRequest {
+            key_family: metadatapb::MetadataFamily::Dentry as i32,
+            version: 31,
+            limit: 10,
+            ..Default::default()
+        })
+        .unwrap();
+
+    assert_eq!(
+        scan.kvs
+            .into_iter()
+            .map(|kv| (kv.key_family, kv.key, kv.value))
+            .collect::<Vec<_>>(),
+        vec![
+            (
+                metadatapb::MetadataFamily::Dentry as i32,
+                b"a".to_vec(),
+                b"dentry-a".to_vec()
+            ),
+            (
+                metadatapb::MetadataFamily::Dentry as i32,
+                b"b".to_vec(),
+                b"dentry-b".to_vec()
+            )
+        ]
+    );
 }
 
 #[test]

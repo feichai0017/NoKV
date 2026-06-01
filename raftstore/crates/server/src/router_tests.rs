@@ -268,6 +268,7 @@ async fn metadata_plane_routes_by_context_region() {
             context: Some(metadata_context(&admission2)),
             key: key.clone(),
             version: 11,
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -285,6 +286,7 @@ async fn metadata_plane_routes_by_context_region() {
             })),
             key,
             version: 11,
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -322,6 +324,7 @@ async fn metadata_plane_routes_region_inserted_after_construction() {
             context: Some(metadata_context(&admission2)),
             key: b"m-dynamic".to_vec(),
             version: 21,
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -354,6 +357,7 @@ async fn removed_metadata_region_is_not_routable() {
             context: Some(metadata_context(&admission)),
             key: b"m-removed".to_vec(),
             version: 21,
+            ..Default::default()
         }))
         .await
         .unwrap()

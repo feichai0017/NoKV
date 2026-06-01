@@ -563,6 +563,7 @@ async fn metadata_plane_read_uses_read_executor_boundary() {
             }),
             key: b"missing".to_vec(),
             version: 1,
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -887,6 +888,7 @@ async fn server_mounts_openraft_transport_for_metadata_replication() {
                     }),
                     key: b"server-transport".to_vec(),
                     version: 42,
+                    ..Default::default()
                 })
                 .await
                 .unwrap()
@@ -981,6 +983,7 @@ async fn server_mounts_openraft_transport_for_metadata_replication() {
                     }),
                     key: b"server-transport-after-transfer".to_vec(),
                     version: 43,
+                    ..Default::default()
                 })
                 .await
                 .unwrap()
@@ -1152,6 +1155,7 @@ async fn bounded_stale_follower_prefer_read_serves_local_openraft_state() {
             context: Some(follower_context.clone()),
             key: b"bounded-stale".to_vec(),
             version: 42,
+            ..Default::default()
         })
         .await
         .unwrap()
@@ -1608,6 +1612,7 @@ async fn get_rejects_region_not_found() {
             context: Some(ctx),
             key: b"k".to_vec(),
             version: 1,
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -1631,6 +1636,7 @@ async fn get_rejects_store_not_match() {
             context: Some(ctx),
             key: b"k".to_vec(),
             version: 1,
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -1655,6 +1661,7 @@ async fn get_rejects_epoch_not_match() {
             context: Some(ctx),
             key: b"k".to_vec(),
             version: 1,
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -1690,6 +1697,7 @@ async fn get_rejects_key_not_in_region() {
             context: Some(metadata_context(&admission)),
             key: b"z".to_vec(),
             version: 1,
+            ..Default::default()
         }))
         .await
         .unwrap()
@@ -1837,6 +1845,7 @@ async fn follower_prefer_read_returns_stale_for_leader_fallback() {
             context: Some(ctx),
             key: b"k".to_vec(),
             version: 1,
+            ..Default::default()
         }))
         .await
         .unwrap()

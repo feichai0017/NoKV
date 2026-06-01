@@ -15,6 +15,10 @@ pub struct HoltMetadataMetricsSnapshot {
     pub atomic_ns_max: u64,
     pub total_ns_total: u64,
     pub total_ns_max: u64,
+    pub scan_keys_visited_total: u64,
+    pub scan_keys_returned_total: u64,
+    pub current_hit_total: u64,
+    pub history_lookup_total: u64,
 }
 
 struct HoltMetadataMetrics {
@@ -29,6 +33,10 @@ struct HoltMetadataMetrics {
     atomic_ns_max: AtomicU64,
     total_ns_total: AtomicU64,
     total_ns_max: AtomicU64,
+    scan_keys_visited_total: AtomicU64,
+    scan_keys_returned_total: AtomicU64,
+    current_hit_total: AtomicU64,
+    history_lookup_total: AtomicU64,
 }
 
 pub fn holt_metadata_metrics_snapshot() -> HoltMetadataMetricsSnapshot {
@@ -45,6 +53,10 @@ pub fn holt_metadata_metrics_snapshot() -> HoltMetadataMetricsSnapshot {
         atomic_ns_max: load(&metrics.atomic_ns_max),
         total_ns_total: load(&metrics.total_ns_total),
         total_ns_max: load(&metrics.total_ns_max),
+        scan_keys_visited_total: load(&metrics.scan_keys_visited_total),
+        scan_keys_returned_total: load(&metrics.scan_keys_returned_total),
+        current_hit_total: load(&metrics.current_hit_total),
+        history_lookup_total: load(&metrics.history_lookup_total),
     }
 }
 
@@ -82,6 +94,28 @@ pub(crate) fn record_metadata_commit(
     );
 }
 
+pub(crate) fn record_metadata_scan(keys_visited: u64, keys_returned: u64) {
+    let metrics = holt_metadata_metrics();
+    metrics
+        .scan_keys_visited_total
+        .fetch_add(keys_visited, Ordering::Relaxed);
+    metrics
+        .scan_keys_returned_total
+        .fetch_add(keys_returned, Ordering::Relaxed);
+}
+
+pub(crate) fn record_current_hit() {
+    holt_metadata_metrics()
+        .current_hit_total
+        .fetch_add(1, Ordering::Relaxed);
+}
+
+pub(crate) fn record_history_lookup() {
+    holt_metadata_metrics()
+        .history_lookup_total
+        .fetch_add(1, Ordering::Relaxed);
+}
+
 fn holt_metadata_metrics() -> &'static HoltMetadataMetrics {
     static METRICS: OnceLock<HoltMetadataMetrics> = OnceLock::new();
     METRICS.get_or_init(HoltMetadataMetrics::default)
@@ -101,6 +135,10 @@ impl Default for HoltMetadataMetrics {
             atomic_ns_max: AtomicU64::new(0),
             total_ns_total: AtomicU64::new(0),
             total_ns_max: AtomicU64::new(0),
+            scan_keys_visited_total: AtomicU64::new(0),
+            scan_keys_returned_total: AtomicU64::new(0),
+            current_hit_total: AtomicU64::new(0),
+            history_lookup_total: AtomicU64::new(0),
         }
     }
 }

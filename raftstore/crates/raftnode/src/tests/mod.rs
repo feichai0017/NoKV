@@ -80,6 +80,7 @@ fn metadata_get_request(
         }),
         key: key.into(),
         version,
+        ..Default::default()
     }
 }
 
@@ -200,6 +201,7 @@ async fn applied_metadata_engine_executes_metadata_command_payload() {
                     ..Default::default()
                 }],
                 watch_keys: vec![b"k".to_vec()],
+                ..Default::default()
             }),
         })
         .await

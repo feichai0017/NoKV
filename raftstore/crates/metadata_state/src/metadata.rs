@@ -25,6 +25,8 @@ impl MemoryMetadataStore {
                 let not_found = bytes.is_none();
                 metadatapb::MetadataGetResponse {
                     kv: bytes.map(|value| metadatapb::MetadataKv {
+                        key: req.key.clone(),
+                        key_family: req.key_family,
                         value,
                         expires_at,
                         ..Default::default()
@@ -81,6 +83,7 @@ impl MemoryMetadataStore {
                 if let Some(bytes) = value.value {
                     kvs.push(metadatapb::MetadataKv {
                         key: key.clone(),
+                        key_family: req.key_family,
                         value: bytes,
                         version: read_version,
                         expires_at,

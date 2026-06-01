@@ -34,6 +34,7 @@ pub fn encode_metadata_snapshot(snapshot: &MetadataSnapshot) -> Vec<u8> {
             .writes
             .iter()
             .map(|write| SnapshotWrite {
+                family: write.family,
                 key: write.key.clone(),
                 commit_version: write.commit_version,
                 kind: write.value.kind as i32,
@@ -52,6 +53,7 @@ pub fn decode_metadata_snapshot(bytes: &[u8]) -> Result<MetadataSnapshot> {
     let mut writes = Vec::with_capacity(payload.writes.len());
     for write in payload.writes {
         writes.push(MetadataSnapshotWrite {
+            family: write.family,
             key: write.key,
             commit_version: write.commit_version,
             value: VersionedValue {
@@ -73,6 +75,7 @@ fn snapshot_from_inner(inner: &Inner) -> MetadataSnapshot {
             versions
                 .iter()
                 .map(|(commit_version, value)| MetadataSnapshotWrite {
+                    family: 0,
                     key: key.clone(),
                     commit_version: *commit_version,
                     value: value.clone(),
@@ -103,6 +106,8 @@ struct SnapshotPayload {
 
 #[derive(Clone, PartialEq, Message)]
 struct SnapshotWrite {
+    #[prost(int32, tag = "8")]
+    family: i32,
     #[prost(bytes = "vec", tag = "1")]
     key: Vec<u8>,
     #[prost(uint64, tag = "2")]

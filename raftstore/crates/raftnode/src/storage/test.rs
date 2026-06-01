@@ -305,6 +305,7 @@ async fn region_state_machine_builds_and_installs_snapshot() {
             }),
             key: b"b".to_vec(),
             version: 3,
+            ..Default::default()
         })
         .await
         .unwrap();
@@ -377,6 +378,7 @@ async fn region_state_machine_rejects_corrupt_snapshot_without_mutation() {
             }),
             key: b"a".to_vec(),
             version: 1,
+            ..Default::default()
         })
         .await
         .unwrap();

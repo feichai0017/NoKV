@@ -101,6 +101,7 @@ async fn tonic_raft_network_replicates_proposal_between_servers() {
                 }),
                 key: b"tonic-network".to_vec(),
                 version: 10,
+                ..Default::default()
             })
             .await
             .unwrap();
@@ -264,6 +265,7 @@ async fn tonic_raft_network_catches_up_joining_peer_from_snapshot() {
             }),
             key: b"k8".to_vec(),
             version: 9,
+            ..Default::default()
         })
         .await
         .unwrap();

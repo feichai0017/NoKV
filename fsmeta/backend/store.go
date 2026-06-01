@@ -7,8 +7,36 @@ import "context"
 
 // KV is the minimal ordered key/value tuple fsmeta consumes from backend scans.
 type KV struct {
-	Key   []byte
-	Value []byte
+	Family MetadataFamily
+	Key    []byte
+	Value  []byte
+}
+
+// MetadataFamily names a storage-engine-neutral metadata record family. The
+// family is part of the backend contract so physical engines can map namespace
+// records to native trees without learning fsmeta semantics.
+type MetadataFamily uint8
+
+const (
+	MetadataFamilyUnspecified MetadataFamily = iota
+	MetadataFamilyMount
+	MetadataFamilyInode
+	MetadataFamilyDentry
+	MetadataFamilyParent
+	MetadataFamilyChunk
+	MetadataFamilySession
+	MetadataFamilyQuota
+	MetadataFamilySnapshot
+	MetadataFamilyPathIndex
+	MetadataFamilyWatch
+	MetadataFamilyCommandDedupe
+	MetadataFamilySegment
+)
+
+// KeyRef is a metadata key annotated with its storage-neutral family.
+type KeyRef struct {
+	Family MetadataFamily
+	Key    []byte
 }
 
 // MutationOp names a versioned metadata write operation.
@@ -21,6 +49,7 @@ const (
 
 // Mutation describes one versioned metadata key mutation.
 type Mutation struct {
+	Family            MetadataFamily
 	Op                MutationOp
 	Key               []byte
 	Value             []byte
@@ -41,6 +70,7 @@ const (
 // Predicate describes a backend-validated read predicate for one-phase
 // metadata mutations.
 type Predicate struct {
+	Family        MetadataFamily
 	Key           []byte
 	Kind          PredicateKind
 	ReadVersion   uint64
@@ -54,12 +84,14 @@ type MetadataCommand struct {
 	RequestID     []byte
 	Mount         string
 	MountKeyID    uint64
+	PrimaryFamily MetadataFamily
 	PrimaryKey    []byte
 	ReadVersion   uint64
 	CommitVersion uint64
 	Predicates    []*Predicate
 	Mutations     []*Mutation
 	WatchKeys     [][]byte
+	WatchRefs     []KeyRef
 }
 
 // MetadataCommitResult describes the committed data-plane frontier for a

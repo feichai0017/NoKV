@@ -16,6 +16,7 @@ import (
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
 )
 
 const (
@@ -143,11 +144,42 @@ func (r *Runner) Scan(ctx context.Context, startKey []byte, limit uint32, versio
 			return false, err
 		}
 		if ok {
-			out = append(out, backend.KV{Key: cloneBytes(userKey), Value: value})
+			out = append(out, backend.KV{
+				Family: localMetadataFamilyForKey(userKey),
+				Key:    cloneBytes(userKey),
+				Value:  value,
+			})
 		}
 		return uint32(len(out)) < limit, nil
 	})
 	return out, err
+}
+
+func localMetadataFamilyForKey(key []byte) backend.MetadataFamily {
+	kind, err := layout.KeyKindOf(key)
+	if err != nil {
+		return backend.MetadataFamilyUnspecified
+	}
+	switch kind {
+	case layout.KeyKindMount:
+		return backend.MetadataFamilyMount
+	case layout.KeyKindInode:
+		return backend.MetadataFamilyInode
+	case layout.KeyKindDentry:
+		return backend.MetadataFamilyDentry
+	case layout.KeyKindChunk:
+		return backend.MetadataFamilyChunk
+	case layout.KeyKindSession:
+		return backend.MetadataFamilySession
+	case layout.KeyKindUsage:
+		return backend.MetadataFamilyQuota
+	case layout.KeyKindSnapshot:
+		return backend.MetadataFamilySnapshot
+	case layout.KeyKindSegment:
+		return backend.MetadataFamilySegment
+	default:
+		return backend.MetadataFamilyUnspecified
+	}
 }
 
 // CommitMetadata validates predicates and applies the metadata mutation group
