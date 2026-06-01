@@ -16,6 +16,7 @@ import (
 	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/proto"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	"github.com/feichai0017/NoKV/fsmeta/backend"
@@ -794,7 +795,18 @@ func TestWatcherSendsResumeCursorToMetadataPlane(t *testing.T) {
 
 func TestSnapshotPublisherPublishesAndRetiresRootEvents(t *testing.T) {
 	coordinator := fakeRouteCoordinator()
-	publisher, err := NewSnapshotPublisher(coordinator)
+	var committed []*metadatapb.MetadataCommand
+	runner := newTestRunner(t, &fakeMetadataPlaneClient{
+		commitMetadata: func(_ context.Context, req *metadatapb.MetadataCommitRequest) (*metadatapb.MetadataCommitResponse, error) {
+			committed = append(committed, proto.Clone(req.GetCommand()).(*metadatapb.MetadataCommand))
+			return &metadatapb.MetadataCommitResponse{Result: &metadatapb.MetadataCommitResult{
+				CommitVersion:    req.GetCommand().GetCommitVersion(),
+				RegionId:         7,
+				AppliedMutations: uint64(len(req.GetCommand().GetMutations())),
+			}}, nil
+		},
+	})
+	publisher, err := NewSnapshotPublisher(coordinator, runner)
 	require.NoError(t, err)
 	token := model.SnapshotSubtreeToken{
 		Mount:       "vol",
@@ -812,13 +824,20 @@ func TestSnapshotPublisherPublishesAndRetiresRootEvents(t *testing.T) {
 	require.Equal(t, rootevent.KindSnapshotEpochRetired, retired.Kind)
 	require.Equal(t, rootevent.SnapshotEpochID("vol", uint64(model.RootInode), 42), published.SnapshotEpoch.SnapshotID)
 	require.Equal(t, published.SnapshotEpoch.SnapshotID, retired.SnapshotEpoch.SnapshotID)
+	require.Len(t, committed, 2)
+	require.Len(t, committed[0].GetMutations(), 1)
+	require.Equal(t, metadatapb.MetadataFamily_METADATA_FAMILY_SNAPSHOT, committed[0].GetMutations()[0].GetKeyFamily())
+	require.Equal(t, uint64(42), committed[0].GetMutations()[0].GetRetentionPinVersion())
+	require.Len(t, committed[1].GetMutations(), 1)
+	require.Equal(t, metadatapb.MetadataMutation_DELETE, committed[1].GetMutations()[0].GetOp())
+	require.Zero(t, committed[1].GetMutations()[0].GetRetentionPinVersion())
 	stats := publisher.Stats()
 	require.Equal(t, uint64(1), stats["publish_total"])
 	require.Equal(t, uint64(1), stats["retire_total"])
 	require.Equal(t, uint64(0), stats["publish_error_total"])
 	require.Equal(t, uint64(0), stats["retire_error_total"])
 	require.Equal(t, uint64(0), stats["root_rejected_total"])
-	require.Equal(t, "root_snapshot_epoch", stats["durability_authority"])
+	require.Equal(t, "metadata_snapshot_pin+root_snapshot_epoch", stats["durability_authority"])
 }
 
 func newTestRunner(t *testing.T, client metadatapb.MetadataPlaneClient) *Runner {

@@ -47,6 +47,25 @@ fn overwrite_command(
     }
 }
 
+fn retention_pin_command(
+    key: impl Into<Vec<u8>>,
+    read_version: u64,
+    pin_version: u64,
+) -> metadatapb::MetadataCommand {
+    metadatapb::MetadataCommand {
+        request_id: read_version.to_be_bytes().to_vec(),
+        read_version,
+        mutations: vec![metadatapb::MetadataMutation {
+            op: metadatapb::metadata_mutation::Op::Put as i32,
+            key: key.into(),
+            value: b"snapshot-pin".to_vec(),
+            retention_pin_version: pin_version,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 #[test]
 fn metadata_command_applies_put_and_reads_by_version() {
     let store = MemoryMetadataStore::new();
@@ -133,6 +152,37 @@ fn metadata_snapshot_round_trips_committed_versions() {
             (b"b".to_vec(), b"v2".to_vec())
         ]
     );
+}
+
+#[test]
+fn metadata_snapshot_round_trips_retention_pin_versions() {
+    let store = MemoryMetadataStore::new();
+    store
+        .commit_metadata(&overwrite_command(b"k", b"v1", 10), 11)
+        .unwrap();
+    store
+        .commit_metadata(&overwrite_command(b"k", b"v2", 20), 21)
+        .unwrap();
+    store
+        .commit_metadata(&retention_pin_command(b"snapshot/15", 40, 15), 41)
+        .unwrap();
+
+    let snapshot = store.export_snapshot().unwrap();
+    let restored = MemoryMetadataStore::new();
+    restored
+        .install_snapshot(decode_metadata_snapshot(&encode_metadata_snapshot(&snapshot)).unwrap())
+        .unwrap();
+
+    let pruned = restored.prune_metadata_versions(20).unwrap();
+    assert_eq!(pruned.retention_floor, 15);
+    let snapshot_read = restored
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"k".to_vec(),
+            version: 15,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(snapshot_read.kv.unwrap().value, b"v1");
 }
 
 #[test]
@@ -236,4 +286,34 @@ fn metadata_retention_keeps_only_version_when_it_is_the_floor_anchor() {
         })
         .unwrap();
     assert_eq!(at_floor.kv.unwrap().value, b"v1");
+}
+
+#[test]
+fn metadata_retention_pin_clamps_requested_floor() {
+    let store = MemoryMetadataStore::new();
+    store
+        .commit_metadata(&overwrite_command(b"k", b"v1", 10), 11)
+        .unwrap();
+    store
+        .commit_metadata(&overwrite_command(b"k", b"v2", 20), 21)
+        .unwrap();
+    store
+        .commit_metadata(&overwrite_command(b"k", b"v3", 30), 31)
+        .unwrap();
+    store
+        .commit_metadata(&retention_pin_command(b"snapshot/15", 40, 15), 41)
+        .unwrap();
+
+    let pruned = store.prune_metadata_versions(30).unwrap();
+    assert_eq!(pruned.retention_floor, 15);
+    assert_eq!(pruned.pruned_versions, 0);
+
+    let snapshot_read = store
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"k".to_vec(),
+            version: 15,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(snapshot_read.kv.unwrap().value, b"v1");
 }

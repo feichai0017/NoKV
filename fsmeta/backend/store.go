@@ -80,12 +80,13 @@ const (
 
 // Mutation describes one versioned metadata key mutation.
 type Mutation struct {
-	Family            MetadataFamily
-	Op                MutationOp
-	Key               []byte
-	Value             []byte
-	AssertionNotExist bool
-	ExpiresAt         uint64
+	Family              MetadataFamily
+	Op                  MutationOp
+	Key                 []byte
+	Value               []byte
+	AssertionNotExist   bool
+	ExpiresAt           uint64
+	RetentionPinVersion uint64
 }
 
 // PredicateKind names a storage predicate a backend must validate under the

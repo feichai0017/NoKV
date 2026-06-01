@@ -133,6 +133,10 @@ message MetadataMutation {
   bool assertion_not_exist = 4;
   uint64 expires_at = 5;
   MetadataFamily key_family = 6;
+  // retention_pin_version marks this mutation as a live MVCC-retention pin
+  // when the mutation remains visible. It is storage-neutral evidence used by
+  // metadata engines before pruning historical versions.
+  uint64 retention_pin_version = 7;
 }
 
 message MetadataWatchKey {

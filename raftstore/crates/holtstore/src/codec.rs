@@ -4,11 +4,12 @@ use crate::{Error, RegionApplyState, Result};
 
 pub(crate) fn encode_value(value: &metadata_state::VersionedValue) -> Vec<u8> {
     let bytes = value.value.as_deref().unwrap_or_default();
-    let mut out = Vec::with_capacity(1 + 4 + 8 + 8 + 4 + bytes.len());
-    out.push(1);
+    let mut out = Vec::with_capacity(1 + 4 + 8 + 8 + 8 + 4 + bytes.len());
+    out.push(2);
     out.extend_from_slice(&(value.kind as i32).to_be_bytes());
     out.extend_from_slice(&value.start_version.to_be_bytes());
     out.extend_from_slice(&value.expires_at.to_be_bytes());
+    out.extend_from_slice(&value.retention_pin_version.to_be_bytes());
     out.extend_from_slice(&(bytes.len() as u32).to_be_bytes());
     out.extend_from_slice(bytes);
     out
@@ -20,7 +21,7 @@ pub(crate) fn decode_value(bytes: &[u8]) -> metadata_state::Result<metadata_stat
             "short metadata value".to_owned(),
         ));
     }
-    if bytes[0] != 1 {
+    if bytes[0] != 1 && bytes[0] != 2 {
         return Err(metadata_state::Error::Decode(
             "unsupported metadata value version".to_owned(),
         ));
@@ -28,8 +29,18 @@ pub(crate) fn decode_value(bytes: &[u8]) -> metadata_state::Result<metadata_stat
     let kind_raw = i32::from_be_bytes(bytes[1..5].try_into().unwrap());
     let start_version = u64::from_be_bytes(bytes[5..13].try_into().unwrap());
     let expires_at = u64::from_be_bytes(bytes[13..21].try_into().unwrap());
-    let len = u32::from_be_bytes(bytes[21..25].try_into().unwrap()) as usize;
-    if bytes.len() != 25 + len {
+    let (retention_pin_version, len_pos) = if bytes[0] == 2 {
+        if bytes.len() < 33 {
+            return Err(metadata_state::Error::Decode(
+                "short metadata value".to_owned(),
+            ));
+        }
+        (u64::from_be_bytes(bytes[21..29].try_into().unwrap()), 29)
+    } else {
+        (0, 21)
+    };
+    let len = u32::from_be_bytes(bytes[len_pos..len_pos + 4].try_into().unwrap()) as usize;
+    if bytes.len() != len_pos + 4 + len {
         return Err(metadata_state::Error::Decode(
             "invalid metadata value length".to_owned(),
         ));
@@ -38,8 +49,9 @@ pub(crate) fn decode_value(bytes: &[u8]) -> metadata_state::Result<metadata_stat
     Ok(metadata_state::VersionedValue {
         kind,
         start_version,
-        value: (kind == metadata_state::ValueKind::Put).then(|| bytes[25..].to_vec()),
+        value: (kind == metadata_state::ValueKind::Put).then(|| bytes[len_pos + 4..].to_vec()),
         expires_at,
+        retention_pin_version,
     })
 }
 

@@ -42,6 +42,7 @@ pub fn encode_metadata_snapshot(snapshot: &MetadataSnapshot) -> Vec<u8> {
                 has_value: write.value.value.is_some(),
                 value: write.value.value.clone().unwrap_or_default(),
                 expires_at: write.value.expires_at,
+                retention_pin_version: write.value.retention_pin_version,
             })
             .collect(),
     };
@@ -61,6 +62,7 @@ pub fn decode_metadata_snapshot(bytes: &[u8]) -> Result<MetadataSnapshot> {
                 start_version: write.start_version,
                 value: write.has_value.then_some(write.value),
                 expires_at: write.expires_at,
+                retention_pin_version: write.retention_pin_version,
             },
         });
     }
@@ -122,4 +124,6 @@ struct SnapshotWrite {
     value: Vec<u8>,
     #[prost(uint64, tag = "7")]
     expires_at: u64,
+    #[prost(uint64, tag = "9")]
+    retention_pin_version: u64,
 }

@@ -16,6 +16,7 @@ impl MetadataRetentionEngine for MemoryMetadataStore {
 }
 
 fn prune_inner(inner: &mut Inner, retention_floor: u64) -> MetadataRetentionResult {
+    let retention_floor = effective_retention_floor(inner, retention_floor);
     let mut result = MetadataRetentionResult {
         retention_floor,
         ..Default::default()
@@ -44,4 +45,21 @@ fn prune_inner(inner: &mut Inner, retention_floor: u64) -> MetadataRetentionResu
     }
 
     result
+}
+
+fn effective_retention_floor(inner: &Inner, requested_floor: u64) -> u64 {
+    if requested_floor == 0 {
+        return 0;
+    }
+    let mut floor = requested_floor;
+    for versions in inner.writes.values() {
+        let Some((_commit_version, value)) = versions.iter().next_back() else {
+            continue;
+        };
+        if value.kind != crate::ValueKind::Put || value.retention_pin_version == 0 {
+            continue;
+        }
+        floor = floor.min(value.retention_pin_version);
+    }
+    floor
 }

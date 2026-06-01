@@ -5,10 +5,13 @@ package raftstore
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
+	"github.com/feichai0017/NoKV/fsmeta/backend"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
@@ -16,11 +19,12 @@ import (
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
 )
 
-// SnapshotPublisher records distributed fsmeta snapshot epochs into rooted
-// truth through the coordinator. The data plane keeps MVCC versions; root owns
-// the cross-gateway retention claim.
+// SnapshotPublisher pins distributed fsmeta snapshot epochs in the data plane
+// before publishing them into rooted truth. The data-plane pin is the local GC
+// retention guard; root remains the cross-gateway publication index.
 type SnapshotPublisher struct {
 	coordinator CoordinatorClient
+	runner      backend.Store
 
 	publishTotal   atomic.Uint64
 	publishErrors  atomic.Uint64
@@ -31,11 +35,14 @@ type SnapshotPublisher struct {
 	rootRejected   atomic.Uint64
 }
 
-func NewSnapshotPublisher(coordinator CoordinatorClient) (*SnapshotPublisher, error) {
+func NewSnapshotPublisher(coordinator CoordinatorClient, runner backend.Store) (*SnapshotPublisher, error) {
 	if coordinator == nil {
 		return nil, errCoordinatorRequired
 	}
-	return &SnapshotPublisher{coordinator: coordinator}, nil
+	if runner == nil {
+		return nil, errBackendRequired
+	}
+	return &SnapshotPublisher{coordinator: coordinator, runner: runner}, nil
 }
 
 func (p *SnapshotPublisher) PublishSnapshotSubtree(ctx context.Context, token model.SnapshotSubtreeToken) error {
@@ -46,13 +53,21 @@ func (p *SnapshotPublisher) PublishSnapshotSubtree(ctx context.Context, token mo
 		return err
 	}
 	started := time.Now()
-	err := p.publish(ctx, rootevent.SnapshotEpochPublishedWithRuntimeEvidence(
-		string(token.Mount),
-		uint64(token.MountKeyID),
-		uint64(token.RootInode),
-		token.ReadVersion,
-		snapshotEvidenceRefsToRoot(token.RuntimeEvidence),
-	))
+	err := p.applySnapshotPin(ctx, token, backend.MutationPut)
+	if err == nil {
+		err = p.publish(ctx, rootevent.SnapshotEpochPublishedWithRuntimeEvidence(
+			string(token.Mount),
+			uint64(token.MountKeyID),
+			uint64(token.RootInode),
+			token.ReadVersion,
+			snapshotEvidenceRefsToRoot(token.RuntimeEvidence),
+		))
+		if err != nil {
+			if unpinErr := p.applySnapshotPin(ctx, token, backend.MutationDelete); unpinErr != nil {
+				err = errors.Join(err, unpinErr)
+			}
+		}
+	}
 	p.publishTotal.Add(1)
 	p.publishLatency.Add(uint64(time.Since(started)))
 	if err != nil {
@@ -69,17 +84,60 @@ func (p *SnapshotPublisher) RetireSnapshotSubtree(ctx context.Context, token mod
 		return err
 	}
 	started := time.Now()
-	err := p.publish(ctx, rootevent.SnapshotEpochRetired(
-		string(token.Mount),
-		uint64(token.MountKeyID),
-		uint64(token.RootInode),
-		token.ReadVersion,
-	))
+	err := p.applySnapshotPin(ctx, token, backend.MutationDelete)
+	if err == nil {
+		err = p.publish(ctx, rootevent.SnapshotEpochRetired(
+			string(token.Mount),
+			uint64(token.MountKeyID),
+			uint64(token.RootInode),
+			token.ReadVersion,
+		))
+	}
 	p.retireTotal.Add(1)
 	p.retireLatency.Add(uint64(time.Since(started)))
 	if err != nil {
 		p.retireErrors.Add(1)
 	}
+	return err
+}
+
+func (p *SnapshotPublisher) applySnapshotPin(ctx context.Context, token model.SnapshotSubtreeToken, op backend.MutationOp) error {
+	if p.runner == nil {
+		return errBackendRequired
+	}
+	mount := model.MountIdentity{MountID: token.Mount, MountKeyID: token.MountKeyID}
+	key, err := layout.EncodeSnapshotKey(mount, token.RootInode, token.ReadVersion)
+	if err != nil {
+		return err
+	}
+	var value []byte
+	var retentionPinVersion uint64
+	if op == backend.MutationPut {
+		value, err = layout.EncodeSnapshotValue(token)
+		if err != nil {
+			return err
+		}
+		retentionPinVersion = token.ReadVersion
+	}
+	startVersion, err := p.runner.ReserveTimestamp(ctx, 2)
+	if err != nil {
+		return err
+	}
+	_, err = p.runner.CommitMetadata(ctx, backend.MetadataCommand{
+		Mount:         string(token.Mount),
+		MountKeyID:    uint64(token.MountKeyID),
+		PrimaryKey:    cloneBytes(key),
+		ReadVersion:   startVersion,
+		CommitVersion: startVersion + 1,
+		Mutations: []*backend.Mutation{{
+			Family:              backend.MetadataFamilySnapshot,
+			Op:                  op,
+			Key:                 cloneBytes(key),
+			Value:               value,
+			RetentionPinVersion: retentionPinVersion,
+		}},
+		WatchRefs: []backend.KeyRef{{Family: backend.MetadataFamilySnapshot, Key: cloneBytes(key)}},
+	})
 	return err
 }
 
@@ -108,7 +166,7 @@ func (p *SnapshotPublisher) Stats() map[string]any {
 		"retire_latency_average_nanosecond":  averageUint64(p.retireLatency.Load(), retireTotal),
 		"root_rejected_total":                p.rootRejected.Load(),
 		"persistent":                         true,
-		"durability_authority":               "root_snapshot_epoch",
+		"durability_authority":               "metadata_snapshot_pin+root_snapshot_epoch",
 	}
 }
 

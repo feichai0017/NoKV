@@ -316,6 +316,7 @@ pub fn metadata_mutation_value(
         start_version,
         value: (op == ValueKind::Put).then(|| mutation.value.clone()),
         expires_at: mutation.expires_at,
+        retention_pin_version: mutation.retention_pin_version,
     }
 }
 
@@ -327,4 +328,5 @@ pub fn metadata_mutation_matches_value(
     value.kind == expected.kind
         && value.value == expected.value
         && value.expires_at == expected.expires_at
+        && value.retention_pin_version == expected.retention_pin_version
 }

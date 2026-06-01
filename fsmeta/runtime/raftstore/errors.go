@@ -11,4 +11,5 @@ var (
 	errTimestampSourceRequired = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: timestamp source is required")
 	errInvalidMetadataCommand  = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: invalid metadata command")
 	errCoordinatorRequired     = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: coordinator client is required")
+	errBackendRequired         = nokverrors.New(nokverrors.KindInvalidArgument, "fsmeta/runtime/raftstore: metadata backend is required")
 )

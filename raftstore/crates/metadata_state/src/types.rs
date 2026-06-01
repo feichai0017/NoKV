@@ -36,6 +36,7 @@ pub struct VersionedValue {
     pub start_version: u64,
     pub value: Option<Vec<u8>>,
     pub expires_at: u64,
+    pub retention_pin_version: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

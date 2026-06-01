@@ -336,12 +336,13 @@ func metadataMutationsToProto(mutations []*backend.Mutation) []*metadatapb.Metad
 			continue
 		}
 		out = append(out, &metadatapb.MetadataMutation{
-			Op:                metadataMutationOpToProto(mut.Op),
-			Key:               cloneBytes(mut.Key),
-			KeyFamily:         metadataFamilyToProto(metadataFamilyOrKey(mut.Family, mut.Key)),
-			Value:             cloneBytes(mut.Value),
-			AssertionNotExist: mut.AssertionNotExist,
-			ExpiresAt:         mut.ExpiresAt,
+			Op:                  metadataMutationOpToProto(mut.Op),
+			Key:                 cloneBytes(mut.Key),
+			KeyFamily:           metadataFamilyToProto(metadataFamilyOrKey(mut.Family, mut.Key)),
+			Value:               cloneBytes(mut.Value),
+			AssertionNotExist:   mut.AssertionNotExist,
+			ExpiresAt:           mut.ExpiresAt,
+			RetentionPinVersion: mut.RetentionPinVersion,
 		})
 	}
 	return out

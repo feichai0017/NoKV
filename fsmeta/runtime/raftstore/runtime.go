@@ -74,7 +74,7 @@ func Open(ctx context.Context, opts Options) (*Runtime, error) {
 		_ = routes.Close()
 		return nil, err
 	}
-	snapshot, err := NewSnapshotPublisher(opts.Coordinator)
+	snapshot, err := NewSnapshotPublisher(opts.Coordinator, runner)
 	if err != nil {
 		_ = routes.Close()
 		return nil, err

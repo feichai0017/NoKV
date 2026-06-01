@@ -1136,8 +1136,12 @@ type MetadataMutation struct {
 	AssertionNotExist bool                   `protobuf:"varint,4,opt,name=assertion_not_exist,json=assertionNotExist,proto3" json:"assertion_not_exist,omitempty"`
 	ExpiresAt         uint64                 `protobuf:"varint,5,opt,name=expires_at,json=expiresAt,proto3" json:"expires_at,omitempty"`
 	KeyFamily         MetadataFamily         `protobuf:"varint,6,opt,name=key_family,json=keyFamily,proto3,enum=nokv.metadata.v1.MetadataFamily" json:"key_family,omitempty"`
-	unknownFields     protoimpl.UnknownFields
-	sizeCache         protoimpl.SizeCache
+	// retention_pin_version marks this mutation as a live MVCC-retention pin
+	// when the mutation remains visible. It is storage-neutral evidence used by
+	// metadata engines before pruning historical versions.
+	RetentionPinVersion uint64 `protobuf:"varint,7,opt,name=retention_pin_version,json=retentionPinVersion,proto3" json:"retention_pin_version,omitempty"`
+	unknownFields       protoimpl.UnknownFields
+	sizeCache           protoimpl.SizeCache
 }
 
 func (x *MetadataMutation) Reset() {
@@ -1210,6 +1214,13 @@ func (x *MetadataMutation) GetKeyFamily() MetadataFamily {
 		return x.KeyFamily
 	}
 	return MetadataFamily_METADATA_FAMILY_UNSPECIFIED
+}
+
+func (x *MetadataMutation) GetRetentionPinVersion() uint64 {
+	if x != nil {
+		return x.RetentionPinVersion
+	}
+	return 0
 }
 
 type MetadataWatchKey struct {
@@ -1982,7 +1993,7 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\fread_version\x18\x03 \x01(\x04R\vreadVersion\x12%\n" +
 	"\x0eexpected_value\x18\x04 \x01(\fR\rexpectedValue\x12?\n" +
 	"\n" +
-	"key_family\x18\x05 \x01(\x0e2 .nokv.metadata.v1.MetadataFamilyR\tkeyFamily\"\x9c\x02\n" +
+	"key_family\x18\x05 \x01(\x0e2 .nokv.metadata.v1.MetadataFamilyR\tkeyFamily\"\xd0\x02\n" +
 	"\x10MetadataMutation\x125\n" +
 	"\x02op\x18\x01 \x01(\x0e2%.nokv.metadata.v1.MetadataMutation.OpR\x02op\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\fR\x03key\x12\x14\n" +
@@ -1991,7 +2002,8 @@ const file_metadata_metadata_proto_rawDesc = "" +
 	"\n" +
 	"expires_at\x18\x05 \x01(\x04R\texpiresAt\x12?\n" +
 	"\n" +
-	"key_family\x18\x06 \x01(\x0e2 .nokv.metadata.v1.MetadataFamilyR\tkeyFamily\"\x19\n" +
+	"key_family\x18\x06 \x01(\x0e2 .nokv.metadata.v1.MetadataFamilyR\tkeyFamily\x122\n" +
+	"\x15retention_pin_version\x18\a \x01(\x04R\x13retentionPinVersion\"\x19\n" +
 	"\x02Op\x12\a\n" +
 	"\x03PUT\x10\x00\x12\n" +
 	"\n" +

@@ -492,6 +492,26 @@ fn metadata_overwrite_command(
     }
 }
 
+fn metadata_retention_pin_command(
+    key: impl Into<Vec<u8>>,
+    read_version: u64,
+    pin_version: u64,
+) -> metadatapb::MetadataCommand {
+    metadatapb::MetadataCommand {
+        request_id: read_version.to_be_bytes().to_vec(),
+        read_version,
+        mutations: vec![metadatapb::MetadataMutation {
+            op: metadatapb::metadata_mutation::Op::Put as i32,
+            key: key.into(),
+            value: b"snapshot-pin".to_vec(),
+            key_family: metadatapb::MetadataFamily::Snapshot as i32,
+            retention_pin_version: pin_version,
+            ..Default::default()
+        }],
+        ..Default::default()
+    }
+}
+
 fn family_put_command(
     family: metadatapb::MetadataFamily,
     key: impl Into<Vec<u8>>,
@@ -774,6 +794,36 @@ fn holt_metadata_retention_prunes_only_versions_hidden_by_floor_anchor() {
 }
 
 #[test]
+fn holt_metadata_retention_pin_clamps_requested_floor() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v1", 10), 11)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v2", 20), 21)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v3", 30), 31)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_retention_pin_command(b"snapshot/15", 40, 15), 41)
+        .unwrap();
+
+    let pruned = store.prune_metadata_versions(30).unwrap();
+    assert_eq!(pruned.retention_floor, 15);
+    assert_eq!(pruned.pruned_versions, 0);
+
+    let snapshot_read = store
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"artifact/a".to_vec(),
+            version: 15,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(snapshot_read.kv.unwrap().value, b"v1");
+}
+
+#[test]
 fn holt_metadata_retention_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     {
@@ -809,4 +859,34 @@ fn holt_metadata_retention_survives_reopen() {
             .collect::<Vec<_>>(),
         vec![21, 31]
     );
+}
+
+#[test]
+fn holt_metadata_snapshot_round_trips_retention_pin_versions() {
+    let source = HoltMetadataStore::open_memory().unwrap();
+    source
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v1", 10), 11)
+        .unwrap();
+    source
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v2", 20), 21)
+        .unwrap();
+    source
+        .commit_metadata(&metadata_retention_pin_command(b"snapshot/15", 40, 15), 41)
+        .unwrap();
+
+    let target = HoltMetadataStore::open_memory().unwrap();
+    target
+        .install_metadata_snapshot(source.export_metadata_snapshot().unwrap())
+        .unwrap();
+
+    let pruned = target.prune_metadata_versions(20).unwrap();
+    assert_eq!(pruned.retention_floor, 15);
+    let snapshot_read = target
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"artifact/a".to_vec(),
+            version: 15,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(snapshot_read.kv.unwrap().value, b"v1");
 }

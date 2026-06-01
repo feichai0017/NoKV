@@ -7,8 +7,10 @@ use prost::Message;
 
 use crate::store::to_backend_error;
 use crate::trees::{
-    decode_history_key, watch_apply_retention_key, HISTORY_TREE, REGION_META_TREE, WATCH_APPLY_TREE,
+    decode_history_key, watch_apply_retention_key, CURRENT_TREES, HISTORY_TREE, REGION_META_TREE,
+    WATCH_APPLY_TREE,
 };
+use crate::versions::decode_current_value;
 use crate::watch_apply::encode_watch_apply_retention_cursor;
 use crate::HoltMetadataStore;
 
@@ -18,11 +20,12 @@ impl HoltMetadataStore {
         retention_floor: u64,
     ) -> metadata_state::Result<metadata_state::MetadataRetentionResult> {
         let _guard = self.lock()?;
+        let effective_floor = self.effective_retention_floor_locked(retention_floor)?;
         let mut result = metadata_state::MetadataRetentionResult {
-            retention_floor,
+            retention_floor: effective_floor,
             ..Default::default()
         };
-        if retention_floor == 0 {
+        if effective_floor == 0 {
             return Ok(result);
         }
 
@@ -43,14 +46,14 @@ impl HoltMetadataStore {
         // Keep one watch anchor per region so replay can distinguish a real
         // retained frontier from an unpruned history that simply starts later.
         let watch_prune = self
-            .watch_apply_prune_keys_locked(retention_floor)
+            .watch_apply_prune_keys_locked(effective_floor)
             .map_err(|err| metadata_state::Error::Backend(err.to_string()))?;
 
         let mut prune_keys = Vec::new();
         for versions in versions_by_key.values_mut() {
             versions.sort_by_key(|(commit_version, _)| *commit_version);
             let Some(anchor_version) = versions.iter().rev().find_map(|(commit_version, _)| {
-                (*commit_version <= retention_floor).then_some(*commit_version)
+                (*commit_version <= effective_floor).then_some(*commit_version)
             }) else {
                 continue;
             };
@@ -86,6 +89,37 @@ impl HoltMetadataStore {
             })?;
         }
         Ok(result)
+    }
+
+    fn effective_retention_floor_locked(
+        &self,
+        requested_floor: u64,
+    ) -> metadata_state::Result<u64> {
+        if requested_floor == 0 {
+            return Ok(0);
+        }
+        let mut floor = requested_floor;
+        for tree_name in CURRENT_TREES {
+            for entry in self
+                .store
+                .tree(tree_name)
+                .map_err(to_backend_error)?
+                .range()
+            {
+                let entry = entry.map_err(to_backend_error)?;
+                let RangeEntry::Key { value, .. } = entry else {
+                    continue;
+                };
+                let (_, current) = decode_current_value(&value)?;
+                if current.kind != metadata_state::ValueKind::Put
+                    || current.retention_pin_version == 0
+                {
+                    continue;
+                }
+                floor = floor.min(current.retention_pin_version);
+            }
+        }
+        Ok(floor)
     }
 
     fn watch_apply_prune_keys_locked(
