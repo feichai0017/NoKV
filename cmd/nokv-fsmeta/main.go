@@ -226,6 +226,7 @@ func raftstoreServerRuntime(rt *fsmetaraftstore.Runtime, coord *coordclient.GRPC
 		publishStats: func() {
 			publishExpvarOnce("nokv_fsmeta_executor", expvar.Func(func() any { return raftstoreExecutorStats(rt) }))
 			publishExpvarOnce("nokv_fsmeta_watch", expvar.Func(func() any { return rt.Watcher.Stats() }))
+			publishExpvarOnce("nokv_fsmeta_raftstore_snapshot", expvar.Func(func() any { return rt.Snapshot.Stats() }))
 		},
 		startupSummary: fmt.Sprintf("fsmeta backend: raftstore coordinator=%q bootstrap_mount=%q", opts.CoordinatorAddr, opts.Raftstore.BootstrapMount),
 		contractLog:    contractLog,

@@ -812,6 +812,13 @@ func TestSnapshotPublisherPublishesAndRetiresRootEvents(t *testing.T) {
 	require.Equal(t, rootevent.KindSnapshotEpochRetired, retired.Kind)
 	require.Equal(t, rootevent.SnapshotEpochID("vol", uint64(model.RootInode), 42), published.SnapshotEpoch.SnapshotID)
 	require.Equal(t, published.SnapshotEpoch.SnapshotID, retired.SnapshotEpoch.SnapshotID)
+	stats := publisher.Stats()
+	require.Equal(t, uint64(1), stats["publish_total"])
+	require.Equal(t, uint64(1), stats["retire_total"])
+	require.Equal(t, uint64(0), stats["publish_error_total"])
+	require.Equal(t, uint64(0), stats["retire_error_total"])
+	require.Equal(t, uint64(0), stats["root_rejected_total"])
+	require.Equal(t, "root_snapshot_epoch", stats["durability_authority"])
 }
 
 func newTestRunner(t *testing.T, client metadatapb.MetadataPlaneClient) *Runner {
