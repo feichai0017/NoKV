@@ -31,11 +31,21 @@ pub struct RaftNodeMetricsSnapshot {
     pub append_entries_client_entries_max: u64,
     pub append_entries_client_ns_total: u64,
     pub append_entries_client_ns_max: u64,
+    pub append_entries_client_empty_calls_total: u64,
+    pub append_entries_client_empty_ns_total: u64,
+    pub append_entries_client_data_calls_total: u64,
+    pub append_entries_client_data_ns_total: u64,
+    pub append_entries_client_error_calls_total: u64,
+    pub append_entries_client_error_ns_total: u64,
     pub append_entries_server_calls_total: u64,
     pub append_entries_server_entries_total: u64,
     pub append_entries_server_entries_max: u64,
     pub append_entries_server_ns_total: u64,
     pub append_entries_server_ns_max: u64,
+    pub append_entries_server_empty_calls_total: u64,
+    pub append_entries_server_empty_ns_total: u64,
+    pub append_entries_server_data_calls_total: u64,
+    pub append_entries_server_data_ns_total: u64,
 }
 
 pub(crate) struct RaftNodeMetrics {
@@ -66,11 +76,21 @@ pub(crate) struct RaftNodeMetrics {
     append_entries_client_entries_max: AtomicU64,
     append_entries_client_ns_total: AtomicU64,
     append_entries_client_ns_max: AtomicU64,
+    append_entries_client_empty_calls_total: AtomicU64,
+    append_entries_client_empty_ns_total: AtomicU64,
+    append_entries_client_data_calls_total: AtomicU64,
+    append_entries_client_data_ns_total: AtomicU64,
+    append_entries_client_error_calls_total: AtomicU64,
+    append_entries_client_error_ns_total: AtomicU64,
     append_entries_server_calls_total: AtomicU64,
     append_entries_server_entries_total: AtomicU64,
     append_entries_server_entries_max: AtomicU64,
     append_entries_server_ns_total: AtomicU64,
     append_entries_server_ns_max: AtomicU64,
+    append_entries_server_empty_calls_total: AtomicU64,
+    append_entries_server_empty_ns_total: AtomicU64,
+    append_entries_server_data_calls_total: AtomicU64,
+    append_entries_server_data_ns_total: AtomicU64,
 }
 
 pub fn raftnode_metrics_snapshot() -> RaftNodeMetricsSnapshot {
@@ -103,11 +123,31 @@ pub fn raftnode_metrics_snapshot() -> RaftNodeMetricsSnapshot {
         append_entries_client_entries_max: load(&metrics.append_entries_client_entries_max),
         append_entries_client_ns_total: load(&metrics.append_entries_client_ns_total),
         append_entries_client_ns_max: load(&metrics.append_entries_client_ns_max),
+        append_entries_client_empty_calls_total: load(
+            &metrics.append_entries_client_empty_calls_total,
+        ),
+        append_entries_client_empty_ns_total: load(&metrics.append_entries_client_empty_ns_total),
+        append_entries_client_data_calls_total: load(
+            &metrics.append_entries_client_data_calls_total,
+        ),
+        append_entries_client_data_ns_total: load(&metrics.append_entries_client_data_ns_total),
+        append_entries_client_error_calls_total: load(
+            &metrics.append_entries_client_error_calls_total,
+        ),
+        append_entries_client_error_ns_total: load(&metrics.append_entries_client_error_ns_total),
         append_entries_server_calls_total: load(&metrics.append_entries_server_calls_total),
         append_entries_server_entries_total: load(&metrics.append_entries_server_entries_total),
         append_entries_server_entries_max: load(&metrics.append_entries_server_entries_max),
         append_entries_server_ns_total: load(&metrics.append_entries_server_ns_total),
         append_entries_server_ns_max: load(&metrics.append_entries_server_ns_max),
+        append_entries_server_empty_calls_total: load(
+            &metrics.append_entries_server_empty_calls_total,
+        ),
+        append_entries_server_empty_ns_total: load(&metrics.append_entries_server_empty_ns_total),
+        append_entries_server_data_calls_total: load(
+            &metrics.append_entries_server_data_calls_total,
+        ),
+        append_entries_server_data_ns_total: load(&metrics.append_entries_server_data_ns_total),
     }
 }
 
@@ -178,7 +218,7 @@ pub(crate) fn record_metadata_apply(commands: u64, duration: Duration) {
     );
 }
 
-pub(crate) fn record_append_entries_client(entries: u64, duration: Duration) {
+pub(crate) fn record_append_entries_client(entries: u64, duration: Duration, ok: bool) {
     let metrics = raftnode_metrics();
     metrics
         .append_entries_client_calls_total
@@ -192,6 +232,29 @@ pub(crate) fn record_append_entries_client(entries: u64, duration: Duration) {
         &metrics.append_entries_client_ns_max,
         duration,
     );
+    let ns = duration_ns(duration);
+    if !ok {
+        metrics
+            .append_entries_client_error_calls_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .append_entries_client_error_ns_total
+            .fetch_add(ns, Ordering::Relaxed);
+    } else if entries == 0 {
+        metrics
+            .append_entries_client_empty_calls_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .append_entries_client_empty_ns_total
+            .fetch_add(ns, Ordering::Relaxed);
+    } else {
+        metrics
+            .append_entries_client_data_calls_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .append_entries_client_data_ns_total
+            .fetch_add(ns, Ordering::Relaxed);
+    }
 }
 
 pub(crate) fn record_append_entries_server(entries: u64, duration: Duration) {
@@ -208,6 +271,22 @@ pub(crate) fn record_append_entries_server(entries: u64, duration: Duration) {
         &metrics.append_entries_server_ns_max,
         duration,
     );
+    let ns = duration_ns(duration);
+    if entries == 0 {
+        metrics
+            .append_entries_server_empty_calls_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .append_entries_server_empty_ns_total
+            .fetch_add(ns, Ordering::Relaxed);
+    } else {
+        metrics
+            .append_entries_server_data_calls_total
+            .fetch_add(1, Ordering::Relaxed);
+        metrics
+            .append_entries_server_data_ns_total
+            .fetch_add(ns, Ordering::Relaxed);
+    }
 }
 
 fn raftnode_metrics() -> &'static RaftNodeMetrics {
@@ -245,11 +324,21 @@ impl Default for RaftNodeMetrics {
             append_entries_client_entries_max: AtomicU64::new(0),
             append_entries_client_ns_total: AtomicU64::new(0),
             append_entries_client_ns_max: AtomicU64::new(0),
+            append_entries_client_empty_calls_total: AtomicU64::new(0),
+            append_entries_client_empty_ns_total: AtomicU64::new(0),
+            append_entries_client_data_calls_total: AtomicU64::new(0),
+            append_entries_client_data_ns_total: AtomicU64::new(0),
+            append_entries_client_error_calls_total: AtomicU64::new(0),
+            append_entries_client_error_ns_total: AtomicU64::new(0),
             append_entries_server_calls_total: AtomicU64::new(0),
             append_entries_server_entries_total: AtomicU64::new(0),
             append_entries_server_entries_max: AtomicU64::new(0),
             append_entries_server_ns_total: AtomicU64::new(0),
             append_entries_server_ns_max: AtomicU64::new(0),
+            append_entries_server_empty_calls_total: AtomicU64::new(0),
+            append_entries_server_empty_ns_total: AtomicU64::new(0),
+            append_entries_server_data_calls_total: AtomicU64::new(0),
+            append_entries_server_data_ns_total: AtomicU64::new(0),
         }
     }
 }

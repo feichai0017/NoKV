@@ -313,9 +313,9 @@ impl RaftNetwork<RaftStoreConfig> for TonicRaftNetwork {
         let started = Instant::now();
         let response = self
             .call(APPEND_ENTRIES_PATH, "AppendEntries", payload)
-            .await
-            .map_err(rpc_error)?;
-        metrics::record_append_entries_client(entries, started.elapsed());
+            .await;
+        metrics::record_append_entries_client(entries, started.elapsed(), response.is_ok());
+        let response = response.map_err(rpc_error)?;
         decode_append_entries_response(&response.payload).map_err(rpc_error)
     }
 

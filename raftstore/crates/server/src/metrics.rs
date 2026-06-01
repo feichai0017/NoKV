@@ -185,13 +185,21 @@ fn json_escape(value: &str) -> String {
 
 fn metadata_batch_json(metrics: MetadataBatchMetricsSnapshot) -> String {
     format!(
-        "{{\"requests_total\":{},\"batches_total\":{},\"batch_commands_total\":{},\"batch_commands_max\":{},\"batch_wait_ns_total\":{},\"batch_wait_ns_max\":{},\"batch_execute_ns_total\":{},\"batch_execute_ns_max\":{}}}",
+        "{{\"requests_total\":{},\"queue_depth_current\":{},\"queue_depth_max\":{},\"enqueue_block_ns_total\":{},\"enqueue_block_ns_max\":{},\"batches_total\":{},\"batch_commands_total\":{},\"batch_commands_max\":{},\"batch_wait_ns_total\":{},\"batch_wait_ns_max\":{},\"inflight_batches_current\":{},\"inflight_batches_max\":{},\"pipeline_block_ns_total\":{},\"pipeline_block_ns_max\":{},\"batch_execute_ns_total\":{},\"batch_execute_ns_max\":{}}}",
         metrics.requests_total,
+        metrics.queue_depth_current,
+        metrics.queue_depth_max,
+        metrics.enqueue_block_ns_total,
+        metrics.enqueue_block_ns_max,
         metrics.batches_total,
         metrics.batch_commands_total,
         metrics.batch_commands_max,
         metrics.batch_wait_ns_total,
         metrics.batch_wait_ns_max,
+        metrics.inflight_batches_current,
+        metrics.inflight_batches_max,
+        metrics.pipeline_block_ns_total,
+        metrics.pipeline_block_ns_max,
         metrics.batch_execute_ns_total,
         metrics.batch_execute_ns_max
     )
@@ -199,7 +207,7 @@ fn metadata_batch_json(metrics: MetadataBatchMetricsSnapshot) -> String {
 
 fn raftnode_json(metrics: RaftNodeMetricsSnapshot) -> String {
     format!(
-        "{{\"proposals_total\":{},\"proposal_commands_total\":{},\"proposal_commands_max\":{},\"proposal_ns_total\":{},\"proposal_ns_max\":{},\"log_append_calls_total\":{},\"log_entries_total\":{},\"log_entries_max\":{},\"log_append_ns_total\":{},\"log_append_ns_max\":{},\"log_sync_ns_total\":{},\"log_sync_ns_max\":{},\"state_machine_apply_calls_total\":{},\"state_machine_apply_entries_total\":{},\"state_machine_apply_entries_max\":{},\"state_machine_apply_ns_total\":{},\"state_machine_apply_ns_max\":{},\"metadata_apply_batches_total\":{},\"metadata_apply_commands_total\":{},\"metadata_apply_commands_max\":{},\"metadata_apply_ns_total\":{},\"metadata_apply_ns_max\":{},\"append_entries_client_calls_total\":{},\"append_entries_client_entries_total\":{},\"append_entries_client_entries_max\":{},\"append_entries_client_ns_total\":{},\"append_entries_client_ns_max\":{},\"append_entries_server_calls_total\":{},\"append_entries_server_entries_total\":{},\"append_entries_server_entries_max\":{},\"append_entries_server_ns_total\":{},\"append_entries_server_ns_max\":{}}}",
+        "{{\"proposals_total\":{},\"proposal_commands_total\":{},\"proposal_commands_max\":{},\"proposal_ns_total\":{},\"proposal_ns_max\":{},\"log_append_calls_total\":{},\"log_entries_total\":{},\"log_entries_max\":{},\"log_append_ns_total\":{},\"log_append_ns_max\":{},\"log_sync_ns_total\":{},\"log_sync_ns_max\":{},\"state_machine_apply_calls_total\":{},\"state_machine_apply_entries_total\":{},\"state_machine_apply_entries_max\":{},\"state_machine_apply_ns_total\":{},\"state_machine_apply_ns_max\":{},\"metadata_apply_batches_total\":{},\"metadata_apply_commands_total\":{},\"metadata_apply_commands_max\":{},\"metadata_apply_ns_total\":{},\"metadata_apply_ns_max\":{},\"append_entries_client_calls_total\":{},\"append_entries_client_entries_total\":{},\"append_entries_client_entries_max\":{},\"append_entries_client_ns_total\":{},\"append_entries_client_ns_max\":{},\"append_entries_client_empty_calls_total\":{},\"append_entries_client_empty_ns_total\":{},\"append_entries_client_data_calls_total\":{},\"append_entries_client_data_ns_total\":{},\"append_entries_client_error_calls_total\":{},\"append_entries_client_error_ns_total\":{},\"append_entries_server_calls_total\":{},\"append_entries_server_entries_total\":{},\"append_entries_server_entries_max\":{},\"append_entries_server_ns_total\":{},\"append_entries_server_ns_max\":{},\"append_entries_server_empty_calls_total\":{},\"append_entries_server_empty_ns_total\":{},\"append_entries_server_data_calls_total\":{},\"append_entries_server_data_ns_total\":{}}}",
         metrics.proposals_total,
         metrics.proposal_commands_total,
         metrics.proposal_commands_max,
@@ -227,11 +235,21 @@ fn raftnode_json(metrics: RaftNodeMetricsSnapshot) -> String {
         metrics.append_entries_client_entries_max,
         metrics.append_entries_client_ns_total,
         metrics.append_entries_client_ns_max,
+        metrics.append_entries_client_empty_calls_total,
+        metrics.append_entries_client_empty_ns_total,
+        metrics.append_entries_client_data_calls_total,
+        metrics.append_entries_client_data_ns_total,
+        metrics.append_entries_client_error_calls_total,
+        metrics.append_entries_client_error_ns_total,
         metrics.append_entries_server_calls_total,
         metrics.append_entries_server_entries_total,
         metrics.append_entries_server_entries_max,
         metrics.append_entries_server_ns_total,
-        metrics.append_entries_server_ns_max
+        metrics.append_entries_server_ns_max,
+        metrics.append_entries_server_empty_calls_total,
+        metrics.append_entries_server_empty_ns_total,
+        metrics.append_entries_server_data_calls_total,
+        metrics.append_entries_server_data_ns_total
     )
 }
 
@@ -280,11 +298,19 @@ mod tests {
             },
             MetadataBatchMetricsSnapshot {
                 requests_total: 5,
+                queue_depth_current: 0,
+                queue_depth_max: 3,
+                enqueue_block_ns_total: 7,
+                enqueue_block_ns_max: 5,
                 batches_total: 2,
                 batch_commands_total: 5,
                 batch_commands_max: 4,
                 batch_wait_ns_total: 12,
                 batch_wait_ns_max: 9,
+                inflight_batches_current: 0,
+                inflight_batches_max: 2,
+                pipeline_block_ns_total: 4,
+                pipeline_block_ns_max: 3,
                 batch_execute_ns_total: 20,
                 batch_execute_ns_max: 15,
             },
@@ -316,11 +342,21 @@ mod tests {
                 append_entries_client_entries_max: 5,
                 append_entries_client_ns_total: 70,
                 append_entries_client_ns_max: 40,
+                append_entries_client_empty_calls_total: 1,
+                append_entries_client_empty_ns_total: 10,
+                append_entries_client_data_calls_total: 2,
+                append_entries_client_data_ns_total: 60,
+                append_entries_client_error_calls_total: 0,
+                append_entries_client_error_ns_total: 0,
                 append_entries_server_calls_total: 3,
                 append_entries_server_entries_total: 8,
                 append_entries_server_entries_max: 5,
                 append_entries_server_ns_total: 80,
                 append_entries_server_ns_max: 45,
+                append_entries_server_empty_calls_total: 1,
+                append_entries_server_empty_ns_total: 11,
+                append_entries_server_data_calls_total: 2,
+                append_entries_server_data_ns_total: 69,
             },
             HoltMetadataMetricsSnapshot {
                 commit_batches_total: 2,
@@ -345,9 +381,14 @@ mod tests {
         assert!(payload.contains("\"raftnode\""));
         assert!(payload.contains("\"holt_metadata\""));
         assert!(payload.contains("\"requests_total\":5"));
+        assert!(payload.contains("\"queue_depth_max\":3"));
         assert!(payload.contains("\"batch_commands_max\":4"));
+        assert!(payload.contains("\"inflight_batches_max\":2"));
+        assert!(payload.contains("\"pipeline_block_ns_total\":4"));
         assert!(payload.contains("\"proposal_commands_total\":5"));
         assert!(payload.contains("\"append_entries_client_calls_total\":3"));
+        assert!(payload.contains("\"append_entries_client_empty_calls_total\":1"));
+        assert!(payload.contains("\"append_entries_client_data_calls_total\":2"));
         assert!(payload.contains("\"commit_writes_total\":9"));
         assert!(payload.contains("\"pending_admin\":true"));
         assert!(payload.ends_with('\n'));
