@@ -378,6 +378,5 @@ func (e *Executor) readSessionByKey(ctx context.Context, mount model.MountIdenti
 func dentryProjectionUsable(dentry model.DentryRecord, projection model.InodeRecord) bool {
 	return dentry.Inode == projection.Inode &&
 		dentry.Type == projection.Type &&
-		projection.Type != model.InodeTypeDirectory &&
 		projection.LinkCount <= 1
 }

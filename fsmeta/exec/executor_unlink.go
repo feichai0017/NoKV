@@ -62,6 +62,16 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 			return err
 		}
 		predicates = append(predicates, metadataValueEqualsPredicate(parent.key, parent.value))
+		parentProjection, parentProjectionPredicate, err := e.directoryDentryProjectionMutation(ctx, mount, nextParent, startVersion, commitVersion)
+		if err != nil {
+			return err
+		}
+		if parentProjection != nil {
+			mutations = append(mutations, parentProjection)
+		}
+		if parentProjectionPredicate != nil {
+			predicates = append(predicates, parentProjectionPredicate)
+		}
 		if inode, ok, err := e.readInode(ctx, mount, record.Inode, startVersion); err != nil {
 			return err
 		} else if ok {
@@ -157,6 +167,10 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 		if err != nil {
 			return err
 		}
+		parentProjection, parentProjectionPredicate, err := e.directoryDentryProjectionMutation(ctx, mount, nextParent, startVersion, commitVersion)
+		if err != nil {
+			return err
+		}
 		dentry, err := e.readDentrySnapshot(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
 			return err
@@ -215,6 +229,9 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 			{Op: backend.MutationDelete, Key: inodeKey},
 			parentLinkDelete,
 		}
+		if parentProjection != nil {
+			mutations = append(mutations, parentProjection)
+		}
 		mutations = append(mutations, pathIndexDeletes...)
 		mutations = append(mutations, quotaMutations...)
 		predicates := []*backend.Predicate{
@@ -222,6 +239,9 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 			metadataValueEqualsPredicate(plan.PrimaryKey, dentry.value),
 			metadataValueEqualsPredicate(inodeKey, inodeValue),
 			metadataPrefixEmptyPredicate(childDentryPrefix),
+		}
+		if parentProjectionPredicate != nil {
+			predicates = append(predicates, parentProjectionPredicate)
 		}
 		return e.commitWithMetadataPredicatesAndWatch(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, []backend.WatchEvent{watchEvent}, startVersion, commitVersion)
 	}, delta.Authority); err != nil {

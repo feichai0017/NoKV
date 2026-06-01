@@ -260,13 +260,18 @@ func (e *Executor) prepareRenameReplaceMutations(ctx context.Context, plan layou
 	}
 	nextFromParent := fromParent.record
 	nextToParent := toParent.record
+	fromParentChanged := false
+	toParentChanged := false
 	switch {
 	case move.fromParent == move.toParent && destinationExisted:
 		nextFromParent, err = decrementDirectoryChildCount(nextFromParent)
+		fromParentChanged = err == nil
 	case move.fromParent != move.toParent:
 		nextFromParent, err = decrementDirectoryChildCount(nextFromParent)
+		fromParentChanged = err == nil
 		if err == nil && !destinationExisted {
 			nextToParent, err = incrementDirectoryChildCount(nextToParent)
+			toParentChanged = err == nil
 		}
 	}
 	if err != nil {
@@ -302,6 +307,24 @@ func (e *Executor) prepareRenameReplaceMutations(ctx context.Context, plan layou
 			Key: cloneBytes(plan.MutateKeys[0]),
 		},
 		putDestination,
+	}
+	if fromParentChanged {
+		projection, _, err := e.directoryDentryProjectionMutation(ctx, move.identity, nextFromParent, startVersion, commitVersion)
+		if err != nil {
+			return model.RenameReplaceResult{}, nil, nil, err
+		}
+		if projection != nil {
+			mutations = append(mutations, projection)
+		}
+	}
+	if toParentChanged {
+		projection, _, err := e.directoryDentryProjectionMutation(ctx, move.identity, nextToParent, startVersion, commitVersion)
+		if err != nil {
+			return model.RenameReplaceResult{}, nil, nil, err
+		}
+		if projection != nil {
+			mutations = append(mutations, projection)
+		}
 	}
 	sourceParentDelete, err := parentIndexDeleteMutation(move.identity, sourceDentry)
 	if err != nil {
@@ -447,12 +470,15 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.Opera
 		return nil, nil, nil, err
 	}
 	toParent := fromParent
+	fromParentChanged := false
+	toParentChanged := false
 	if move.fromParent != move.toParent {
 		nextFrom, err := decrementDirectoryChildCount(fromParent.record)
 		if err != nil {
 			return nil, nil, nil, err
 		}
 		fromParent.record = nextFrom
+		fromParentChanged = true
 		toParent, err = e.readDirectoryInode(ctx, move.identity, move.toParent, startVersion)
 		if err != nil {
 			return nil, nil, nil, err
@@ -462,6 +488,7 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.Opera
 			return nil, nil, nil, err
 		}
 		toParent.record = nextTo
+		toParentChanged = true
 	}
 	fromParentValue, err := layout.EncodeInodeValue(fromParent.record)
 	if err != nil {
@@ -482,6 +509,31 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.Opera
 			Value:             value,
 			AssertionNotExist: true,
 		},
+	}
+	projectionPredicates := make([]*backend.Predicate, 0, 2)
+	if fromParentChanged {
+		projection, predicate, err := e.directoryDentryProjectionMutation(ctx, move.identity, fromParent.record, startVersion, commitVersion)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if projection != nil {
+			mutations = append(mutations, projection)
+		}
+		if predicate != nil {
+			projectionPredicates = append(projectionPredicates, predicate)
+		}
+	}
+	if toParentChanged {
+		projection, predicate, err := e.directoryDentryProjectionMutation(ctx, move.identity, toParent.record, startVersion, commitVersion)
+		if err != nil {
+			return nil, nil, nil, err
+		}
+		if projection != nil {
+			mutations = append(mutations, projection)
+		}
+		if predicate != nil {
+			projectionPredicates = append(projectionPredicates, predicate)
+		}
 	}
 	sourceParentDelete, err := parentIndexDeleteMutation(move.identity, sourceRecord)
 	if err != nil {
@@ -529,6 +581,7 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.Opera
 	if move.fromParent != move.toParent {
 		predicates = append(predicates, metadataValueEqualsPredicate(toParent.key, toParent.value))
 	}
+	predicates = append(predicates, projectionPredicates...)
 	watchEvents, err := dentryRenameWatchEvents(move.identity, backend.WatchOperationRename, sourceRecord, record)
 	if err != nil {
 		return nil, nil, nil, err

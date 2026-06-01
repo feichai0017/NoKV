@@ -92,6 +92,13 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 			return err
 		}
 		mutations = append(mutations, parentLink)
+		parentProjection, parentProjectionPredicate, err := e.directoryDentryProjectionMutation(ctx, mount, nextParent, startVersion, commitVersion)
+		if err != nil {
+			return err
+		}
+		if parentProjection != nil {
+			mutations = append(mutations, parentProjection)
+		}
 		pathIndex, err := e.pathIndexPutMutations(ctx, mount, dentry, startVersion, commitVersion)
 		if err != nil {
 			return err
@@ -102,6 +109,9 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 			metadataNotExistsPredicate(plan.MutateKeys[1]),
 			metadataNotExistsPredicate(plan.MutateKeys[2]),
 			metadataNotExistsPredicate(parentLink.Key),
+		}
+		if parentProjectionPredicate != nil {
+			predicates = append(predicates, parentProjectionPredicate)
 		}
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 			Mount:      req.Mount,

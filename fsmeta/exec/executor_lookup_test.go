@@ -309,7 +309,7 @@ func TestExecutorReadDirPlusUsesDentryProjectionForSingleLinkFiles(t *testing.T)
 	requireStatUint(t, executor.Stats(), "readdirplus_projection_hit_total", 1)
 }
 
-func TestExecutorReadDirPlusFallsBackForDirectoryProjection(t *testing.T) {
+func TestExecutorReadDirPlusUsesDentryProjectionForDirectories(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{21}}))
 	require.NoError(t, err)
@@ -331,10 +331,43 @@ func TestExecutorReadDirPlusFallsBackForDirectoryProjection(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, pairs, 1)
 	require.Equal(t, model.InodeTypeDirectory, pairs[0].Inode.Type)
-	require.Len(t, runner.batchVersions, 1)
+	require.Empty(t, runner.batchVersions)
 	requireStatUint(t, executor.Stats(), "readdirplus_dentry_count", 1)
-	requireStatUint(t, executor.Stats(), "readdirplus_inode_batch_count", 1)
-	requireStatUint(t, executor.Stats(), "readdirplus_projection_hit_total", 0)
+	requireStatUint(t, executor.Stats(), "readdirplus_inode_batch_count", 0)
+	requireStatUint(t, executor.Stats(), "readdirplus_projection_hit_total", 1)
+}
+
+func TestExecutorReadDirPlusRefreshesDirectoryProjectionOnChildCreate(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{21, 22}}))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "dir",
+		Attrs:  model.CreateAttrs{Type: model.InodeTypeDirectory, Mode: 0o755},
+	})
+	require.NoError(t, err)
+	_, err = executor.Create(context.Background(), model.CreateRequest{
+		Mount:  "vol",
+		Parent: 21,
+		Name:   "file",
+		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile, Mode: 0o644},
+	})
+	require.NoError(t, err)
+	runner.batchVersions = nil
+
+	pairs, err := executor.ReadDirPlus(context.Background(), model.ReadDirRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Limit:  8,
+	})
+	require.NoError(t, err)
+	require.Len(t, pairs, 1)
+	require.Equal(t, model.DentryRecord{Parent: model.RootInode, Name: "dir", Inode: 21, Type: model.InodeTypeDirectory}, pairs[0].Dentry)
+	require.Equal(t, uint64(1), pairs[0].Inode.ChildCount)
+	require.Empty(t, runner.batchVersions)
 }
 
 func TestExecutorLookupPlusReturnsDentryAndAttrs(t *testing.T) {

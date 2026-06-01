@@ -92,10 +92,10 @@ distributed runtime maps them to Holt current trees plus a shared history tree.
 Prefix-bounded scans are part of the backend contract so directory, path,
 session, and audit reads can use storage-native prefix iterators instead of
 walking an entire metadata family.
-Dentry values can carry a small inode projection so `ReadDirPlus` can return
-common single-link file entries from the dentry scan alone. Directory entries
-and hard-linked files still fall back to inode reads until the parent index can
-prove projection freshness across all parents.
+Dentry values carry a small inode projection so `ReadDirPlus` can return common
+single-link files and directories from the dentry scan alone. Hard-linked files
+still fall back to inode reads until the parent index can prove projection
+freshness across all parents.
 
 The path family is deliberately derived, not canonical truth. It accelerates
 common artifact and checkpoint path lookups from a view root, but every hit is

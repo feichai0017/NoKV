@@ -126,6 +126,13 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 			return err
 		}
 		mutations = append(mutations, parentLink)
+		parentProjection, parentProjectionPredicate, err := e.directoryDentryProjectionMutation(ctx, mount, nextParent, startVersion, commitVersion)
+		if err != nil {
+			return err
+		}
+		if parentProjection != nil {
+			mutations = append(mutations, parentProjection)
+		}
 		pathIndex, err := e.pathIndexPutMutations(ctx, mount, newDentry, startVersion, commitVersion)
 		if err != nil {
 			return err
@@ -162,6 +169,9 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 				metadataValueEqualsPredicate(inodeKey, oldInodeValue),
 				metadataValueEqualsPredicate(parent.key, parent.value),
 				metadataNotExistsPredicate(parentLink.Key),
+			}
+			if parentProjectionPredicate != nil {
+				predicates = append(predicates, parentProjectionPredicate)
 			}
 			return e.commitWithMetadataPredicatesAndWatch(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, watchEvents, startVersion, commitVersion)
 		}
