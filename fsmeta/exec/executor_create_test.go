@@ -57,10 +57,16 @@ func TestExecutorCreateUsesMetadataPredicateCommit(t *testing.T) {
 	require.Equal(t, plan.MutateKeys[2], call.predicates[2].Key)
 	require.Equal(t, backend.PredicateNotExists, call.predicates[2].Kind)
 	require.Equal(t, backend.PredicateNotExists, call.predicates[3].Kind)
-	require.Len(t, call.mutations, 4)
+	require.Len(t, call.mutations, 6)
 	require.True(t, call.mutations[1].AssertionNotExist)
 	require.True(t, call.mutations[2].AssertionNotExist)
 	require.True(t, call.mutations[3].AssertionNotExist)
+	pathKind, err := layout.KeyKindOf(call.mutations[4].Key)
+	require.NoError(t, err)
+	require.Equal(t, layout.KeyKindPath, pathKind)
+	pathKind, err = layout.KeyKindOf(call.mutations[5].Key)
+	require.NoError(t, err)
+	require.Equal(t, layout.KeyKindPath, pathKind)
 	require.Empty(t, base.mutations)
 
 	record, err := executor.Lookup(context.Background(), model.LookupRequest{

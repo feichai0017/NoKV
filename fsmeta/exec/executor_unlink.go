@@ -41,6 +41,11 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 			return err
 		}
 		mutations = append(mutations, parentLinkDelete)
+		pathIndexDeletes, err := e.pathIndexDeleteMutations(ctx, mount, record, startVersion)
+		if err != nil {
+			return err
+		}
+		mutations = append(mutations, pathIndexDeletes...)
 		attemptResult := model.RemoveResult{RemovedDentry: record}
 		predicates := []*backend.Predicate{metadataValueEqualsPredicate(plan.PrimaryKey, dentry.value)}
 		var quotaMutations []*backend.Mutation
@@ -196,6 +201,10 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 		if err != nil {
 			return err
 		}
+		pathIndexDeletes, err := e.pathIndexDeleteMutations(ctx, mount, record, startVersion)
+		if err != nil {
+			return err
+		}
 		watchEvent, err := dentryWatchEvent(mount, backend.WatchOperationDelete, record)
 		if err != nil {
 			return err
@@ -206,6 +215,7 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 			{Op: backend.MutationDelete, Key: inodeKey},
 			parentLinkDelete,
 		}
+		mutations = append(mutations, pathIndexDeletes...)
 		mutations = append(mutations, quotaMutations...)
 		predicates := []*backend.Predicate{
 			metadataValueEqualsPredicate(parent.key, parent.value),

@@ -124,6 +124,46 @@ func ValidateRenameReplaceRequest(req RenameReplaceRequest) error {
 	return ValidateRenameRequest(RenameRequest(req))
 }
 
+func ValidateLookupPathRequest(req LookupPathRequest) error {
+	if err := ValidateMountID(req.Mount); err != nil {
+		return err
+	}
+	if err := ValidateInodeID(req.RootInode); err != nil {
+		return err
+	}
+	path, err := NormalizeViewPath(req.Path)
+	if err != nil {
+		return err
+	}
+	if path == "" {
+		return ErrInvalidRequest
+	}
+	return nil
+}
+
+func ValidatePathIndexRecord(record PathIndexRecord) error {
+	if err := ValidateInodeID(record.RootInode); err != nil {
+		return err
+	}
+	path, err := NormalizeViewPath(record.Path)
+	if err != nil {
+		return err
+	}
+	if path == "" || path != record.Path {
+		return ErrInvalidValue
+	}
+	if err := ValidateInodeID(record.Parent); err != nil {
+		return err
+	}
+	if err := ValidateName(record.Name); err != nil {
+		return err
+	}
+	if err := ValidateInodeID(record.Inode); err != nil {
+		return err
+	}
+	return ValidateInodeType(record.Type)
+}
+
 func NormalizeReadDirLimit(limit uint32) (uint32, error) {
 	if limit == 0 {
 		return DefaultReadDirLimit, nil

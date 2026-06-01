@@ -92,6 +92,11 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 			return err
 		}
 		mutations = append(mutations, parentLink)
+		pathIndex, err := e.pathIndexPutMutations(ctx, mount, dentry, startVersion, commitVersion)
+		if err != nil {
+			return err
+		}
+		mutations = append(mutations, pathIndex...)
 		predicates := []*backend.Predicate{
 			metadataValueEqualsPredicate(parent.key, parent.value),
 			metadataNotExistsPredicate(plan.MutateKeys[1]),

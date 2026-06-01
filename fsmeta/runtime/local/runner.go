@@ -177,6 +177,8 @@ func localMetadataFamilyForKey(key []byte) backend.MetadataFamily {
 		return backend.MetadataFamilyQuota
 	case layout.KeyKindSnapshot:
 		return backend.MetadataFamilySnapshot
+	case layout.KeyKindPath:
+		return backend.MetadataFamilyPathIndex
 	case layout.KeyKindSegment:
 		return backend.MetadataFamilySegment
 	default:

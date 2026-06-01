@@ -12,6 +12,7 @@ const (
 	OperationCreate           OperationKind = "create"
 	OperationUpdateInode      OperationKind = "update_inode"
 	OperationLookup           OperationKind = "lookup"
+	OperationLookupPath       OperationKind = "lookup_path"
 	OperationGetAttr          OperationKind = "getattr"
 	OperationReadDir          OperationKind = "readdir"
 	OperationReadSession      OperationKind = "read_session"
@@ -85,6 +86,13 @@ type LookupRequest struct {
 	Mount           MountID
 	Parent          InodeID
 	Name            string
+	SnapshotVersion uint64
+}
+
+type LookupPathRequest struct {
+	Mount           MountID
+	RootInode       InodeID
+	Path            string
 	SnapshotVersion uint64
 }
 

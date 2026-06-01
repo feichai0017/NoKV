@@ -27,6 +27,7 @@ import (
 //	  chunk   'c' : inode be64 | chunk index be64
 //	  session 's' : inode be64 | 0x01 | session bytes, or inode be64 | 0x00 for writer ownership
 //	  usage   'u' : quota scope inode be64; scope 0 is mount-wide usage
+//	  path    'a' : record-kind byte | root/child/path body
 //	  segment 'p' : record-kind byte | sealed segment root sha256
 //	  snapshot 'x' : root inode be64 | read version be64
 //
@@ -55,6 +56,7 @@ const (
 	KeyKindChunk    KeyKind = 'c'
 	KeyKindSession  KeyKind = 's'
 	KeyKindUsage    KeyKind = 'u'
+	KeyKindPath     KeyKind = 'a'
 	KeyKindSegment  KeyKind = 'p'
 	KeyKindSnapshot KeyKind = 'x'
 )
@@ -62,6 +64,9 @@ const (
 const (
 	SegmentRecordObject byte = 'o'
 	SegmentRecordIndex  byte = 'i'
+
+	PathRecordByPath  byte = 'p'
+	PathRecordByInode byte = 'i'
 )
 
 type KeyParts struct {
@@ -71,6 +76,10 @@ type KeyParts struct {
 	Parent              model.InodeID
 	Inode               model.InodeID
 	UsageScope          model.InodeID
+	PathRecord          byte
+	PathRoot            model.InodeID
+	PathInode           model.InodeID
+	Path                string
 	SegmentRecord       byte
 	SegmentRoot         [32]byte
 	SnapshotRoot        model.InodeID
@@ -93,6 +102,8 @@ func (k KeyKind) String() string {
 		return "session"
 	case KeyKindUsage:
 		return "usage"
+	case KeyKindPath:
+		return "path"
 	case KeyKindSegment:
 		return "segment"
 	case KeyKindSnapshot:
@@ -208,6 +219,69 @@ func EncodeParentIndexPrefix(mount model.MountIdentity, child model.InodeID) ([]
 	var body [8]byte
 	binary.BigEndian.PutUint64(body[:], uint64(child))
 	return encodeKey(mount, BucketForInodeID(child), KeyKindParent, body[:])
+}
+
+// EncodePathIndexKey returns the derived path->dentry index key for one view
+// root. Path is relative to root and must already describe a concrete entry.
+func EncodePathIndexKey(mount model.MountIdentity, root model.InodeID, path string) ([]byte, error) {
+	normalized, err := model.NormalizeViewPath(path)
+	if err != nil {
+		return nil, err
+	}
+	if normalized == "" {
+		return nil, model.ErrInvalidRequest
+	}
+	if normalized != path {
+		return nil, model.ErrInvalidRequest
+	}
+	if err := model.ValidateInodeID(root); err != nil {
+		return nil, err
+	}
+	body := make([]byte, 1+8, 1+8+len(path))
+	body[0] = PathRecordByPath
+	binary.BigEndian.PutUint64(body[1:9], uint64(root))
+	body = append(body, path...)
+	return encodeKey(mount, RootAffinityBucket, KeyKindPath, body)
+}
+
+// EncodePathIndexInodeKey returns the derived inode->path index key. It is a
+// secondary index used to find a directory's known path while maintaining
+// descendant path entries.
+func EncodePathIndexInodeKey(mount model.MountIdentity, inode, root model.InodeID, path string) ([]byte, error) {
+	normalized, err := model.NormalizeViewPath(path)
+	if err != nil {
+		return nil, err
+	}
+	if normalized == "" {
+		return nil, model.ErrInvalidRequest
+	}
+	if normalized != path {
+		return nil, model.ErrInvalidRequest
+	}
+	if err := model.ValidateInodeID(inode); err != nil {
+		return nil, err
+	}
+	if err := model.ValidateInodeID(root); err != nil {
+		return nil, err
+	}
+	body := make([]byte, 1+16, 1+16+len(path))
+	body[0] = PathRecordByInode
+	binary.BigEndian.PutUint64(body[1:9], uint64(inode))
+	binary.BigEndian.PutUint64(body[9:17], uint64(root))
+	body = append(body, path...)
+	return encodeKey(mount, BucketForInodeID(inode), KeyKindPath, body)
+}
+
+// EncodePathIndexInodePrefix returns the scan prefix for known paths of one
+// inode.
+func EncodePathIndexInodePrefix(mount model.MountIdentity, inode model.InodeID) ([]byte, error) {
+	if err := model.ValidateInodeID(inode); err != nil {
+		return nil, err
+	}
+	body := make([]byte, 9)
+	body[0] = PathRecordByInode
+	binary.BigEndian.PutUint64(body[1:], uint64(inode))
+	return encodeKey(mount, BucketForInodeID(inode), KeyKindPath, body)
 }
 
 // EncodeChunkKey returns the chunk mapping record key for inode/chunk.
@@ -338,7 +412,7 @@ func KeyKindOf(key []byte) (KeyKind, error) {
 	}
 	kind := KeyKind(key[pos])
 	switch kind {
-	case KeyKindMount, KeyKindInode, KeyKindDentry, KeyKindParent, KeyKindChunk, KeyKindSession, KeyKindUsage, KeyKindSegment, KeyKindSnapshot:
+	case KeyKindMount, KeyKindInode, KeyKindDentry, KeyKindParent, KeyKindChunk, KeyKindSession, KeyKindUsage, KeyKindPath, KeyKindSegment, KeyKindSnapshot:
 		return kind, nil
 	default:
 		return 0, ErrInvalidKeyKind
@@ -442,6 +516,30 @@ func InspectKey(key []byte) (KeyParts, bool) {
 		}
 		parts.UsageScope = model.InodeID(binary.BigEndian.Uint64(body[:8]))
 		return parts, true
+	case KeyKindPath:
+		if len(body) < 1 {
+			return KeyParts{}, false
+		}
+		parts.PathRecord = body[0]
+		switch body[0] {
+		case PathRecordByPath:
+			if len(body) <= 9 {
+				return KeyParts{}, false
+			}
+			parts.PathRoot = model.InodeID(binary.BigEndian.Uint64(body[1:9]))
+			parts.Path = string(body[9:])
+			return parts, parts.PathRoot != 0 && parts.Path != ""
+		case PathRecordByInode:
+			if len(body) <= 17 {
+				return KeyParts{}, false
+			}
+			parts.PathInode = model.InodeID(binary.BigEndian.Uint64(body[1:9]))
+			parts.PathRoot = model.InodeID(binary.BigEndian.Uint64(body[9:17]))
+			parts.Path = string(body[17:])
+			return parts, parts.PathInode != 0 && parts.PathRoot != 0 && parts.Path != ""
+		default:
+			return KeyParts{}, false
+		}
 	case KeyKindSegment:
 		if len(body) != 1+len(parts.SegmentRoot) {
 			return KeyParts{}, false

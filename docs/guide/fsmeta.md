@@ -56,6 +56,7 @@ families are:
 | inode | inode attributes |
 | dentry | parent/name to inode mapping |
 | parent | reverse child inode to parent/name link index |
+| path | derived path-to-dentry lookup index for agent workspace fast paths |
 | chunk | reserved body-reference layout, not a data-plane API |
 | session | writer session and inode-owner records |
 | usage | quota accounting |
@@ -92,6 +93,12 @@ Dentry values can carry a small inode projection so `ReadDirPlus` can return
 common single-link file entries from the dentry scan alone. Directory entries
 and hard-linked files still fall back to inode reads until the parent index can
 prove projection freshness across all parents.
+
+The path family is deliberately derived, not canonical truth. It accelerates
+common artifact and checkpoint path lookups from a view root, but every hit is
+validated against canonical dentry/inode state. Multi-component hits also
+validate the full canonical path, so stale descendant index entries left by a
+subtree rename cannot make an old path visible again.
 
 ## Local Runtime
 

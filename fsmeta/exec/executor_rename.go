@@ -319,6 +319,23 @@ func (e *Executor) prepareRenameReplaceMutations(ctx context.Context, plan layou
 		}
 		mutations = append(mutations, destinationParentDelete)
 	}
+	sourcePathDelete, err := e.pathIndexDeleteMutations(ctx, move.identity, sourceDentry, startVersion)
+	if err != nil {
+		return model.RenameReplaceResult{}, nil, nil, err
+	}
+	replacementPathPut, err := e.pathIndexPutMutations(ctx, move.identity, replacementDentry, startVersion, commitVersion)
+	if err != nil {
+		return model.RenameReplaceResult{}, nil, nil, err
+	}
+	mutations = append(mutations, sourcePathDelete...)
+	mutations = append(mutations, replacementPathPut...)
+	if destinationExisted && destinationDentry.Inode != replacementDentry.Inode {
+		destinationPathDelete, err := e.pathIndexDeleteMutations(ctx, move.identity, destinationDentry, startVersion)
+		if err != nil {
+			return model.RenameReplaceResult{}, nil, nil, err
+		}
+		mutations = append(mutations, destinationPathDelete...)
+	}
 	if move.fromParent == move.toParent {
 		mutations = append(mutations, &backend.Mutation{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[2]), Value: fromParentValue})
 	} else {
@@ -475,6 +492,16 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.Opera
 		return nil, nil, nil, err
 	}
 	mutations = append(mutations, sourceParentDelete, destinationParentPut)
+	sourcePathDelete, err := e.pathIndexDeleteMutations(ctx, move.identity, sourceRecord, startVersion)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	destinationPathPut, err := e.pathIndexPutMutations(ctx, move.identity, record, startVersion, commitVersion)
+	if err != nil {
+		return nil, nil, nil, err
+	}
+	mutations = append(mutations, sourcePathDelete...)
+	mutations = append(mutations, destinationPathPut...)
 	if move.fromParent == move.toParent {
 		mutations = append(mutations, &backend.Mutation{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[2]), Value: fromParentValue})
 	} else {

@@ -126,6 +126,11 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 			return err
 		}
 		mutations = append(mutations, parentLink)
+		pathIndex, err := e.pathIndexPutMutations(ctx, mount, newDentry, startVersion, commitVersion)
+		if err != nil {
+			return err
+		}
+		mutations = append(mutations, pathIndex...)
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 			Mount:      req.Mount,
 			MountKeyID: mount.MountKeyID,

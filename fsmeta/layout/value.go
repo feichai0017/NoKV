@@ -26,6 +26,9 @@ import (
 //	                inode be64 | type byte | optional projection
 //	  parent  'r' : child inode be64 | parent inode be64 |
 //	                name_len uvarint | name bytes | type byte
+//	  path    'a' : root inode be64 | path_len uvarint | path bytes |
+//	                parent inode be64 | name_len uvarint | name bytes |
+//	                inode be64 | type byte | dentry_version be64
 //
 //	dentry projection:
 //	  kind byte = 0x01 | inode_attr_version uvarint |
@@ -56,6 +59,7 @@ const (
 	ValueKindSession  ValueKind = 's'
 	ValueKindUsage    ValueKind = 'u'
 	ValueKindSnapshot ValueKind = 'x'
+	ValueKindPath     ValueKind = 'a'
 )
 
 const dentryProjectionInode byte = 1
@@ -225,6 +229,39 @@ func DecodeParentLinkValue(value []byte) (model.ParentLinkRecord, error) {
 	return record, nil
 }
 
+// EncodePathIndexValue returns the derived path-index value. It repeats the
+// indexed path and dentry identity so readers can validate stale derived keys
+// against canonical dentry state before using them.
+func EncodePathIndexValue(record model.PathIndexRecord) ([]byte, error) {
+	if err := model.ValidatePathIndexRecord(record); err != nil {
+		return nil, err
+	}
+	typ, err := encodeInodeType(record.Type)
+	if err != nil {
+		return nil, err
+	}
+	body := make([]byte, 0, 8+binary.MaxVarintLen64+len(record.Path)+8+binary.MaxVarintLen64+len(record.Name)+17)
+	body = binary.BigEndian.AppendUint64(body, uint64(record.RootInode))
+	body = binary.AppendUvarint(body, uint64(len(record.Path)))
+	body = append(body, record.Path...)
+	body = binary.BigEndian.AppendUint64(body, uint64(record.Parent))
+	body = binary.AppendUvarint(body, uint64(len(record.Name)))
+	body = append(body, record.Name...)
+	body = binary.BigEndian.AppendUint64(body, uint64(record.Inode))
+	body = append(body, typ)
+	body = binary.BigEndian.AppendUint64(body, record.DentryVersion)
+	return encodeValue(ValueKindPath, body), nil
+}
+
+// DecodePathIndexValue decodes one derived path-index value.
+func DecodePathIndexValue(value []byte) (model.PathIndexRecord, error) {
+	var record model.PathIndexRecord
+	if err := decodeValue(value, ValueKindPath, &record); err != nil {
+		return model.PathIndexRecord{}, err
+	}
+	return record, nil
+}
+
 // EncodeSessionValue returns the canonical value encoding for a session record.
 func EncodeSessionValue(record model.SessionRecord) ([]byte, error) {
 	if err := model.ValidateSessionID(record.Session); err != nil {
@@ -308,7 +345,7 @@ func ValueKindOf(value []byte) (ValueKind, error) {
 	}
 	kind := ValueKind(value[pos])
 	switch kind {
-	case ValueKindInode, ValueKindDentry, ValueKindParent, ValueKindSession, ValueKindUsage, ValueKindSnapshot:
+	case ValueKindInode, ValueKindDentry, ValueKindParent, ValueKindSession, ValueKindUsage, ValueKindSnapshot, ValueKindPath:
 		return kind, nil
 	default:
 		return 0, ErrInvalidValueKind
@@ -369,6 +406,16 @@ func decodeValue(value []byte, expected ValueKind, out any) error {
 			return model.ErrInvalidValue
 		}
 		decoded, err := decodeParentLinkBody(body)
+		if err != nil {
+			return err
+		}
+		*record = decoded
+	case ValueKindPath:
+		record, ok := out.(*model.PathIndexRecord)
+		if !ok {
+			return model.ErrInvalidValue
+		}
+		decoded, err := decodePathIndexBody(body)
 		if err != nil {
 			return err
 		}
@@ -560,6 +607,59 @@ func decodeParentLinkBody(body []byte) (model.ParentLinkRecord, error) {
 	}
 	if err := model.ValidateName(record.Name); err != nil {
 		return model.ParentLinkRecord{}, err
+	}
+	return record, nil
+}
+
+func decodePathIndexBody(body []byte) (model.PathIndexRecord, error) {
+	if len(body) < 8+1 {
+		return model.PathIndexRecord{}, model.ErrInvalidValue
+	}
+	record := model.PathIndexRecord{
+		RootInode: model.InodeID(binary.BigEndian.Uint64(body[:8])),
+	}
+	pos := 8
+	pathLen, n := binary.Uvarint(body[pos:])
+	if n <= 0 {
+		return model.PathIndexRecord{}, model.ErrInvalidValue
+	}
+	pos += n
+	if pathLen == 0 || pathLen > uint64(len(body)-pos) {
+		return model.PathIndexRecord{}, model.ErrInvalidValue
+	}
+	record.Path = string(body[pos : pos+int(pathLen)])
+	pos += int(pathLen)
+	if len(body)-pos < 8+1 {
+		return model.PathIndexRecord{}, model.ErrInvalidValue
+	}
+	record.Parent = model.InodeID(binary.BigEndian.Uint64(body[pos : pos+8]))
+	pos += 8
+	nameLen, n := binary.Uvarint(body[pos:])
+	if n <= 0 {
+		return model.PathIndexRecord{}, model.ErrInvalidValue
+	}
+	pos += n
+	remaining := uint64(len(body) - pos)
+	if nameLen == 0 || nameLen > remaining || remaining-nameLen != 17 {
+		return model.PathIndexRecord{}, model.ErrInvalidValue
+	}
+	record.Name = string(body[pos : pos+int(nameLen)])
+	pos += int(nameLen)
+	record.Inode = model.InodeID(binary.BigEndian.Uint64(body[pos : pos+8]))
+	pos += 8
+	typ, err := decodeInodeType(body[pos])
+	if err != nil {
+		return model.PathIndexRecord{}, err
+	}
+	record.Type = typ
+	pos++
+	record.DentryVersion = binary.BigEndian.Uint64(body[pos : pos+8])
+	pos += 8
+	if pos != len(body) {
+		return model.PathIndexRecord{}, model.ErrInvalidValue
+	}
+	if err := model.ValidatePathIndexRecord(record); err != nil {
+		return model.PathIndexRecord{}, err
 	}
 	return record, nil
 }

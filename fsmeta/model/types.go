@@ -67,6 +67,19 @@ type ParentLinkRecord struct {
 	Type   InodeType `json:"type,omitempty"`
 }
 
+// PathIndexRecord is a derived, non-authoritative path lookup entry. Canonical
+// truth remains the inode/dentry model; readers must validate the referenced
+// dentry before trusting this fast path.
+type PathIndexRecord struct {
+	RootInode     InodeID   `json:"root_inode"`
+	Path          string    `json:"path"`
+	Parent        InodeID   `json:"parent"`
+	Name          string    `json:"name"`
+	Inode         InodeID   `json:"inode"`
+	Type          InodeType `json:"type,omitempty"`
+	DentryVersion uint64    `json:"dentry_version,omitempty"`
+}
+
 // SessionRecord is the value stored under a writer/session key.
 type SessionRecord struct {
 	Session       SessionID `json:"session"`

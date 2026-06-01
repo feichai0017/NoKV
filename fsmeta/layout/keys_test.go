@@ -59,6 +59,37 @@ func TestParentIndexKeyRoundTrip(t *testing.T) {
 	require.True(t, bytes.HasPrefix(key, prefix))
 }
 
+func TestPathIndexKeyRoundTrip(t *testing.T) {
+	key, err := EncodePathIndexKey(testMount, model.RootInode, "runs/1/artifact.json")
+	require.NoError(t, err)
+
+	kind, err := KeyKindOf(key)
+	require.NoError(t, err)
+	require.Equal(t, KeyKindPath, kind)
+	require.Equal(t, "path", kind.String())
+
+	parts, ok := InspectKey(key)
+	require.True(t, ok)
+	require.Equal(t, RootAffinityBucket, parts.Bucket)
+	require.Equal(t, PathRecordByPath, parts.PathRecord)
+	require.Equal(t, model.RootInode, parts.PathRoot)
+	require.Equal(t, "runs/1/artifact.json", parts.Path)
+
+	inodeKey, err := EncodePathIndexInodeKey(testMount, 22, model.RootInode, "runs/1/artifact.json")
+	require.NoError(t, err)
+	parts, ok = InspectKey(inodeKey)
+	require.True(t, ok)
+	require.Equal(t, BucketForInodeID(22), parts.Bucket)
+	require.Equal(t, PathRecordByInode, parts.PathRecord)
+	require.Equal(t, model.InodeID(22), parts.PathInode)
+	require.Equal(t, model.RootInode, parts.PathRoot)
+	require.Equal(t, "runs/1/artifact.json", parts.Path)
+
+	prefix, err := EncodePathIndexInodePrefix(testMount, 22)
+	require.NoError(t, err)
+	require.True(t, bytes.HasPrefix(inodeKey, prefix))
+}
+
 func TestSegmentCatalogIndexKeyUsesRootedMountAndBucket(t *testing.T) {
 	var root [32]byte
 	root[0] = 7

@@ -91,6 +91,31 @@ func TestParentLinkValueRoundTrip(t *testing.T) {
 	require.Equal(t, record, decoded)
 }
 
+func TestPathIndexValueRoundTrip(t *testing.T) {
+	record := model.PathIndexRecord{
+		RootInode:     model.RootInode,
+		Path:          "runs/1/artifact.json",
+		Parent:        7,
+		Name:          "artifact.json",
+		Inode:         22,
+		Type:          model.InodeTypeFile,
+		DentryVersion: 99,
+	}
+	value, err := EncodePathIndexValue(record)
+	require.NoError(t, err)
+
+	kind, err := ValueKindOf(value)
+	require.NoError(t, err)
+	require.Equal(t, ValueKindPath, kind)
+
+	decoded, err := DecodePathIndexValue(value)
+	require.NoError(t, err)
+	require.Equal(t, record, decoded)
+
+	_, err = EncodePathIndexValue(model.PathIndexRecord{RootInode: model.RootInode, Path: "../bad"})
+	require.ErrorIs(t, err, model.ErrInvalidName)
+}
+
 func TestInodeValueRoundTrip(t *testing.T) {
 	value, err := EncodeInodeValue(model.InodeRecord{
 		Inode:       22,
