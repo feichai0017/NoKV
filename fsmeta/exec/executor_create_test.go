@@ -49,16 +49,18 @@ func TestExecutorCreateUsesMetadataPredicateCommit(t *testing.T) {
 	require.Equal(t, plan.PrimaryKey, call.primary)
 	require.Equal(t, uint64(1), call.startVersion)
 	require.Equal(t, uint64(2), call.commitVersion)
-	require.Len(t, call.predicates, 3)
+	require.Len(t, call.predicates, 4)
 	require.Equal(t, plan.ReadKeys[0], call.predicates[0].Key)
 	require.Equal(t, backend.PredicateValueEquals, call.predicates[0].Kind)
 	require.Equal(t, plan.MutateKeys[1], call.predicates[1].Key)
 	require.Equal(t, backend.PredicateNotExists, call.predicates[1].Kind)
 	require.Equal(t, plan.MutateKeys[2], call.predicates[2].Key)
 	require.Equal(t, backend.PredicateNotExists, call.predicates[2].Kind)
-	require.Len(t, call.mutations, 3)
+	require.Equal(t, backend.PredicateNotExists, call.predicates[3].Kind)
+	require.Len(t, call.mutations, 4)
 	require.True(t, call.mutations[1].AssertionNotExist)
 	require.True(t, call.mutations[2].AssertionNotExist)
+	require.True(t, call.mutations[3].AssertionNotExist)
 	require.Empty(t, base.mutations)
 
 	record, err := executor.Lookup(context.Background(), model.LookupRequest{
@@ -119,8 +121,8 @@ func TestExecutorCreateSkipsMetadataPredicateCommitWhenQuotaMutates(t *testing.T
 	requireMetadataPredicateStatUint(t, stats, model.OperationCreate, "skip_total", 1)
 	require.Empty(t, runner.predicateCalls)
 	require.Len(t, base.mutations, 1)
-	require.Len(t, base.mutations[0], 4)
-	require.Equal(t, quotaKey, base.mutations[0][3].Key)
+	require.Len(t, base.mutations[0], 5)
+	require.Equal(t, quotaKey, base.mutations[0][4].Key)
 }
 
 func TestExecutorCreateRejectsExistingDentry(t *testing.T) {
@@ -213,7 +215,7 @@ func TestExecutorCreateReservesQuotaInsideMutation(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, [][]QuotaChange{{{Mount: "vol", MountKeyID: 1, Scope: 7, Bytes: 4096, Inodes: 1}}}, quota.changes)
 	require.Len(t, runner.mutations, 1)
-	require.Equal(t, quotaKey, runner.mutations[0][3].Key)
+	require.Equal(t, quotaKey, runner.mutations[0][4].Key)
 }
 
 func TestExecutorCreateRejectsQuotaExceededBeforeMutation(t *testing.T) {

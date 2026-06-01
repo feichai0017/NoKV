@@ -380,6 +380,8 @@ func metadataPredicateKindToProto(kind backend.PredicateKind) metadatapb.Metadat
 		return metadatapb.MetadataPredicateKind_METADATA_PREDICATE_KIND_EXISTS
 	case backend.PredicateValueEquals:
 		return metadatapb.MetadataPredicateKind_METADATA_PREDICATE_KIND_VALUE_EQUALS
+	case backend.PredicatePrefixEmpty:
+		return metadatapb.MetadataPredicateKind_METADATA_PREDICATE_KIND_PREFIX_EMPTY
 	default:
 		return metadatapb.MetadataPredicateKind_METADATA_PREDICATE_KIND_NOT_EXISTS
 	}
@@ -408,6 +410,8 @@ func metadataFamilyForKey(key []byte) backend.MetadataFamily {
 		return backend.MetadataFamilyInode
 	case layout.KeyKindDentry:
 		return backend.MetadataFamilyDentry
+	case layout.KeyKindParent:
+		return backend.MetadataFamilyParent
 	case layout.KeyKindChunk:
 		return backend.MetadataFamilyChunk
 	case layout.KeyKindSession:

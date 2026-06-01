@@ -403,6 +403,8 @@ func metadataFamilyForKey(key []byte) backend.MetadataFamily {
 		return backend.MetadataFamilyInode
 	case layout.KeyKindDentry:
 		return backend.MetadataFamilyDentry
+	case layout.KeyKindParent:
+		return backend.MetadataFamilyParent
 	case layout.KeyKindChunk:
 		return backend.MetadataFamilyChunk
 	case layout.KeyKindSession:
@@ -456,6 +458,10 @@ func isRetryableRouteRefresh(err error) bool {
 
 func metadataNotExistsPredicate(key []byte) *backend.Predicate {
 	return &backend.Predicate{Key: cloneBytes(key), Kind: backend.PredicateNotExists}
+}
+
+func metadataPrefixEmptyPredicate(prefix []byte) *backend.Predicate {
+	return &backend.Predicate{Key: cloneBytes(prefix), Kind: backend.PredicatePrefixEmpty}
 }
 
 func metadataValueEqualsPredicate(key, value []byte) *backend.Predicate {

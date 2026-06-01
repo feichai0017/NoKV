@@ -33,6 +33,62 @@ func TestDentryValueRoundTrip(t *testing.T) {
 		Inode:  22,
 		Type:   model.InodeTypeFile,
 	}, record)
+
+	_, _, _, ok, err := DecodeDentryValueWithProjection(value)
+	require.NoError(t, err)
+	require.False(t, ok)
+}
+
+func TestDentryValueWithProjectionRoundTrip(t *testing.T) {
+	dentry := model.DentryRecord{
+		Parent: model.RootInode,
+		Name:   "file",
+		Inode:  22,
+		Type:   model.InodeTypeFile,
+	}
+	inode := model.InodeRecord{
+		Inode:         22,
+		Type:          model.InodeTypeFile,
+		Size:          4096,
+		Mode:          0o644,
+		LinkCount:     1,
+		CreatedUnixNs: 10,
+		UpdatedUnixNs: 20,
+		OpaqueAttrs:   []byte(`{"body_ref":"s3://bucket/checkpoint"}`),
+	}
+	value, err := EncodeDentryValueWithProjection(dentry, inode, 99)
+	require.NoError(t, err)
+
+	record, err := DecodeDentryValue(value)
+	require.NoError(t, err)
+	require.Equal(t, dentry, record)
+
+	record, projection, version, ok, err := DecodeDentryValueWithProjection(value)
+	require.NoError(t, err)
+	require.True(t, ok)
+	require.Equal(t, dentry, record)
+	require.Equal(t, inode, projection)
+	require.Equal(t, uint64(99), version)
+}
+
+func TestParentLinkValueRoundTrip(t *testing.T) {
+	record := model.ParentLinkRecord{
+		Child:  22,
+		Parent: model.RootInode,
+		Name:   "file",
+		Type:   model.InodeTypeFile,
+	}
+	value, err := EncodeParentLinkValue(record)
+	require.NoError(t, err)
+	require.Equal(t, "parent", ValueKindParent.String())
+
+	kind, err := ValueKindOf(value)
+	require.NoError(t, err)
+	require.Equal(t, ValueKindParent, kind)
+
+	decoded, err := DecodeParentLinkValue(value)
+	require.NoError(t, err)
+	require.Equal(t, record, decoded)
 }
 
 func TestInodeValueRoundTrip(t *testing.T) {

@@ -13,6 +13,13 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
+type dentrySnapshot struct {
+	record       model.DentryRecord
+	value        []byte
+	projection   model.InodeRecord
+	projectionOK bool
+}
+
 // Lookup returns the dentry record for parent/name.
 func (e *Executor) Lookup(ctx context.Context, req model.LookupRequest) (model.DentryRecord, error) {
 	mountRecord, err := e.resolveActiveMount(ctx, req.Mount)
@@ -60,9 +67,12 @@ func (e *Executor) LookupPlus(ctx context.Context, req model.LookupRequest) (mod
 	if !ok {
 		return model.DentryAttrPair{}, model.ErrNotFound
 	}
-	dentry, err := layout.DecodeDentryValue(value)
+	dentry, projection, _, projectionOK, err := layout.DecodeDentryValueWithProjection(value)
 	if err != nil {
 		return model.DentryAttrPair{}, err
+	}
+	if projectionOK && dentryProjectionUsable(dentry, projection) {
+		return model.DentryAttrPair{Dentry: dentry, Inode: projection}, nil
 	}
 	return e.readLookupPlusInode(ctx, mount, dentry, version)
 }
@@ -122,7 +132,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req model.ReadDirRequest) ([
 	}
 	var out []model.DentryAttrPair
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
-		dentries, err := e.scanDentries(ctx, plan, version)
+		dentries, err := e.scanDentrySnapshots(ctx, plan, version)
 		if err != nil {
 			return err
 		}
@@ -130,35 +140,50 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req model.ReadDirRequest) ([
 			out = []model.DentryAttrPair{}
 			return nil
 		}
-		inodeKeys, err := compile.CompileReadDirPlusInodeKeys(mount, dentries)
-		if err != nil {
-			return err
+		e.readDirPlusDentryCount.Add(uint64(len(dentries)))
+		pairs := make([]model.DentryAttrPair, len(dentries))
+		fallbackDentries := make([]model.DentryRecord, 0)
+		fallbackIndexes := make([]int, 0)
+		for i, dentry := range dentries {
+			if dentry.projectionOK && dentryProjectionUsable(dentry.record, dentry.projection) {
+				pairs[i] = model.DentryAttrPair{Dentry: dentry.record, Inode: dentry.projection}
+				e.readDirPlusProjectionHitTotal.Add(1)
+				continue
+			}
+			fallbackDentries = append(fallbackDentries, dentry.record)
+			fallbackIndexes = append(fallbackIndexes, i)
 		}
-		values, err := e.runner.BatchGet(ctx, inodeKeys, version)
-		if err != nil {
-			return err
-		}
-		pairs := make([]model.DentryAttrPair, 0, len(dentries))
-		for _, dentry := range dentries {
-			key, err := layout.EncodeInodeKey(mount, dentry.Inode)
+		if len(fallbackDentries) != 0 {
+			e.readDirPlusInodeBatchCount.Add(uint64(len(fallbackDentries)))
+			inodeKeys, err := compile.CompileReadDirPlusInodeKeys(mount, fallbackDentries)
 			if err != nil {
 				return err
 			}
-			value, ok := values[string(key)]
-			if !ok {
-				return fmt.Errorf("%w: inode %d", model.ErrNotFound, dentry.Inode)
-			}
-			inode, err := layout.DecodeInodeValue(value)
+			values, err := e.runner.BatchGet(ctx, inodeKeys, version)
 			if err != nil {
 				return err
 			}
-			if inode.Inode != dentry.Inode {
-				return fmt.Errorf("%w: dentry inode=%d value inode=%d", model.ErrInvalidValue, dentry.Inode, inode.Inode)
+			for i, dentry := range fallbackDentries {
+				key, err := layout.EncodeInodeKey(mount, dentry.Inode)
+				if err != nil {
+					return err
+				}
+				value, ok := values[string(key)]
+				if !ok {
+					return fmt.Errorf("%w: inode %d", model.ErrNotFound, dentry.Inode)
+				}
+				inode, err := layout.DecodeInodeValue(value)
+				if err != nil {
+					return err
+				}
+				if inode.Inode != dentry.Inode {
+					return fmt.Errorf("%w: dentry inode=%d value inode=%d", model.ErrInvalidValue, dentry.Inode, inode.Inode)
+				}
+				pairs[fallbackIndexes[i]] = model.DentryAttrPair{
+					Dentry: dentry,
+					Inode:  inode,
+				}
 			}
-			pairs = append(pairs, model.DentryAttrPair{
-				Dentry: dentry,
-				Inode:  inode,
-			})
 		}
 		out = pairs
 		return nil
@@ -170,33 +195,67 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req model.ReadDirRequest) ([
 }
 
 func (e *Executor) scanDentries(ctx context.Context, plan compile.DirectoryReadPlan, version uint64) ([]model.DentryRecord, error) {
+	snapshots, err := e.scanDentrySnapshots(ctx, plan, version)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]model.DentryRecord, 0, len(snapshots))
+	for _, snapshot := range snapshots {
+		out = append(out, snapshot.record)
+	}
+	return out, nil
+}
+
+func (e *Executor) scanDentrySnapshots(ctx context.Context, plan compile.DirectoryReadPlan, version uint64) ([]dentrySnapshot, error) {
 	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Limit, version)
 	if err != nil {
 		return nil, err
 	}
-	out := make([]model.DentryRecord, 0, len(kvs))
+	out := make([]dentrySnapshot, 0, len(kvs))
 	for _, kv := range kvs {
 		if !bytes.HasPrefix(kv.Key, plan.Prefix) {
 			break
 		}
-		record, err := layout.DecodeDentryValue(kv.Value)
+		record, projection, _, projectionOK, err := layout.DecodeDentryValueWithProjection(kv.Value)
 		if err != nil {
 			return nil, err
 		}
-		out = append(out, record)
+		out = append(out, dentrySnapshot{
+			record:       record,
+			value:        cloneBytes(kv.Value),
+			projection:   projection,
+			projectionOK: projectionOK,
+		})
 	}
 	return out, nil
 }
 
 func (e *Executor) readDentry(ctx context.Context, key []byte, version uint64) (model.DentryRecord, error) {
-	value, ok, err := e.runner.Get(ctx, key, version)
+	snapshot, err := e.readDentrySnapshot(ctx, key, version)
 	if err != nil {
 		return model.DentryRecord{}, err
 	}
-	if !ok {
-		return model.DentryRecord{}, model.ErrNotFound
+	return snapshot.record, nil
+}
+
+func (e *Executor) readDentrySnapshot(ctx context.Context, key []byte, version uint64) (dentrySnapshot, error) {
+	value, ok, err := e.runner.Get(ctx, key, version)
+	if err != nil {
+		return dentrySnapshot{}, err
 	}
-	return layout.DecodeDentryValue(value)
+	if !ok {
+		return dentrySnapshot{}, model.ErrNotFound
+	}
+	record, projection, _, projectionOK, err := layout.DecodeDentryValueWithProjection(value)
+	if err != nil {
+		return dentrySnapshot{}, err
+	}
+	return dentrySnapshot{
+		record:       record,
+		value:        cloneBytes(value),
+		projection:   projection,
+		projectionOK: projectionOK,
+	}, nil
 }
 
 func (e *Executor) readInode(ctx context.Context, mount model.MountIdentity, inodeID model.InodeID, version uint64) (model.InodeRecord, bool, error) {
@@ -232,4 +291,11 @@ func (e *Executor) readSessionByKey(ctx context.Context, mount model.MountIdenti
 		return model.SessionRecord{}, false, err
 	}
 	return record, true, nil
+}
+
+func dentryProjectionUsable(dentry model.DentryRecord, projection model.InodeRecord) bool {
+	return dentry.Inode == projection.Inode &&
+		dentry.Type == projection.Type &&
+		projection.Type != model.InodeTypeDirectory &&
+		projection.LinkCount <= 1
 }

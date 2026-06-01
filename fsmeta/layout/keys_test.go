@@ -37,6 +37,28 @@ func TestUsageKeyAllowsMountWideScope(t *testing.T) {
 	require.Equal(t, KeyKindUsage, kind)
 }
 
+func TestParentIndexKeyRoundTrip(t *testing.T) {
+	key, err := EncodeParentIndexKey(testMount, 22, model.RootInode, "file")
+	require.NoError(t, err)
+
+	kind, err := KeyKindOf(key)
+	require.NoError(t, err)
+	require.Equal(t, KeyKindParent, kind)
+	require.Equal(t, "parent", kind.String())
+
+	parts, ok := InspectKey(key)
+	require.True(t, ok)
+	require.Equal(t, testMount.MountKeyID, parts.MountKeyID)
+	require.Equal(t, BucketForInodeID(22), parts.Bucket)
+	require.Equal(t, KeyKindParent, parts.Kind)
+	require.Equal(t, model.InodeID(22), parts.Inode)
+	require.Equal(t, model.RootInode, parts.Parent)
+
+	prefix, err := EncodeParentIndexPrefix(testMount, 22)
+	require.NoError(t, err)
+	require.True(t, bytes.HasPrefix(key, prefix))
+}
+
 func TestSegmentCatalogIndexKeyUsesRootedMountAndBucket(t *testing.T) {
 	var root [32]byte
 	root[0] = 7

@@ -88,6 +88,9 @@ The distributed data plane maps metadata families to `*_current` Holt trees and
 keeps historical MVCC versions in a separate `history` tree. Latest reads and
 directory scans therefore hit family-local current trees; snapshot reads fall
 back to history only when the requested version predates the current record.
+For `ReadDirPlus`, dentry current values may include an inode projection. The
+executor uses it for single-link file entries and keeps directory/hardlink
+entries on the inode-read fallback path until parent-index freshness exists.
 
 If a future local Rust backend is needed, it should be added as a runtime
 adapter, not by leaking Holt-specific types into `fsmeta/model`, `layout`,

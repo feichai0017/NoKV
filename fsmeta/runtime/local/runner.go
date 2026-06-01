@@ -167,6 +167,8 @@ func localMetadataFamilyForKey(key []byte) backend.MetadataFamily {
 		return backend.MetadataFamilyInode
 	case layout.KeyKindDentry:
 		return backend.MetadataFamilyDentry
+	case layout.KeyKindParent:
+		return backend.MetadataFamilyParent
 	case layout.KeyKindChunk:
 		return backend.MetadataFamilyChunk
 	case layout.KeyKindSession:
@@ -345,11 +347,42 @@ func (r *Runner) validateMetadataPredicatesTxn(txn *badger.Txn, predicates []*ba
 			if !exists || !bytes.Equal(value, pred.ExpectedValue) {
 				return metadataRetryable(errMetadataPredicateMismatch)
 			}
+		case backend.PredicatePrefixEmpty:
+			empty, err := r.prefixEmptyTxn(txn, pred.Key, readVersion)
+			if err != nil {
+				return metadataRetryable(err)
+			}
+			if !empty {
+				return metadataAbort(errInvalidMetadataPredicate)
+			}
 		default:
 			return metadataAbort(errInvalidMetadataPredicate)
 		}
 	}
 	return nil
+}
+
+func (r *Runner) prefixEmptyTxn(txn *badger.Txn, prefix []byte, readVersion uint64) (bool, error) {
+	iter := txn.NewIterator(localIteratorOptions(false))
+	defer iter.Close()
+	var lastUserKey []byte
+	for iter.Seek(encodeLocalWriteKey(prefix, localMaxVersion)); iter.Valid(); iter.Next() {
+		item := iter.Item()
+		entryPrefix, userKey, _, ok := decodeLocalVersionedKey(item.Key())
+		if !ok || entryPrefix != localWriteKeyPrefix || !bytes.HasPrefix(userKey, prefix) {
+			break
+		}
+		if bytes.Equal(userKey, lastUserKey) {
+			continue
+		}
+		lastUserKey = cloneBytes(userKey)
+		if _, ok, err := r.readValueTxn(txn, userKey, readVersion); err != nil {
+			return false, err
+		} else if ok {
+			return false, nil
+		}
+	}
+	return true, nil
 }
 
 func (r *Runner) validateMutationsTxn(txn *badger.Txn, primary []byte, mutations []*backend.Mutation, startVersion, commitVersion uint64, allowMissingDeletePrimary bool) error {

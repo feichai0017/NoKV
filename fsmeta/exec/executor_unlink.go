@@ -23,20 +23,23 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 	plan := delta.Plan
 	var result model.RemoveResult
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
-		record, err := e.readDentry(ctx, plan.PrimaryKey, startVersion)
+		dentry, err := e.readDentrySnapshot(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
 			return err
 		}
-		dentryValue, err := layout.EncodeDentryValue(record)
-		if err != nil {
-			return err
-		}
+		record := dentry.record
 		mutations := []*backend.Mutation{{
 			Op:  backend.MutationDelete,
 			Key: cloneBytes(plan.MutateKeys[0]),
 		}}
+		parentLinkDelete, err := parentIndexDeleteMutation(mount, record)
+		if err != nil {
+			return err
+		}
+		mutations = append(mutations, parentLinkDelete)
 		attemptResult := model.RemoveResult{RemovedDentry: record}
-		predicates := []*backend.Predicate{metadataValueEqualsPredicate(plan.PrimaryKey, dentryValue)}
+		predicates := []*backend.Predicate{metadataValueEqualsPredicate(plan.PrimaryKey, dentry.value)}
+		var quotaMutations []*backend.Mutation
 		parent, err := e.readDirectoryInode(ctx, mount, req.Parent, startVersion)
 		if err != nil {
 			return err
@@ -77,7 +80,7 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 				}
 				mutations = append(mutations, &backend.Mutation{Op: backend.MutationPut, Key: inodeKey, Value: inodeValue})
 			}
-			quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
+			quotaMutations, err = e.reserveQuota(ctx, []QuotaChange{{
 				Mount:      req.Mount,
 				MountKeyID: mount.MountKeyID,
 				Scope:      req.Parent,
@@ -91,7 +94,7 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 		}
 		result = attemptResult
 		mutations = append(mutations, &backend.Mutation{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[1]), Value: parentValue})
-		if len(mutations) == len(predicates) {
+		if len(quotaMutations) == 0 {
 			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
 		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
@@ -145,16 +148,13 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 		if err != nil {
 			return err
 		}
-		record, err := e.readDentry(ctx, plan.PrimaryKey, startVersion)
+		dentry, err := e.readDentrySnapshot(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
 			return err
 		}
+		record := dentry.record
 		if record.Type != model.InodeTypeDirectory {
 			return model.ErrInvalidRequest
-		}
-		dentryValue, err := layout.EncodeDentryValue(record)
-		if err != nil {
-			return err
 		}
 		inode, ok, err := e.readInode(ctx, mount, record.Inode, startVersion)
 		if err != nil {
@@ -165,6 +165,10 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 		}
 		if inode.Type != model.InodeTypeDirectory || inode.ChildCount != 0 || inode.Inode == model.RootInode {
 			return model.ErrInvalidRequest
+		}
+		childDentryPrefix, err := layout.EncodeDentryPrefix(mount, inode.Inode)
+		if err != nil {
+			return err
 		}
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 			Mount:      req.Mount,
@@ -184,21 +188,24 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 		if err != nil {
 			return err
 		}
+		parentLinkDelete, err := parentIndexDeleteMutation(mount, record)
+		if err != nil {
+			return err
+		}
 		mutations := []*backend.Mutation{
 			{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[0]), Value: parentValue},
 			{Op: backend.MutationDelete, Key: cloneBytes(plan.MutateKeys[1])},
 			{Op: backend.MutationDelete, Key: inodeKey},
+			parentLinkDelete,
 		}
 		mutations = append(mutations, quotaMutations...)
 		predicates := []*backend.Predicate{
 			metadataValueEqualsPredicate(parent.key, parent.value),
-			metadataValueEqualsPredicate(plan.PrimaryKey, dentryValue),
+			metadataValueEqualsPredicate(plan.PrimaryKey, dentry.value),
 			metadataValueEqualsPredicate(inodeKey, inodeValue),
+			metadataPrefixEmptyPredicate(childDentryPrefix),
 		}
-		if len(quotaMutations) == 0 {
-			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
-		}
-		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
+		return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 	}, delta.Authority); err != nil {
 		return err
 	}

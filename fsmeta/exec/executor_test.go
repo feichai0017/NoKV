@@ -350,6 +350,10 @@ func (r *fakeRunner) CommitMetadata(_ context.Context, command backend.MetadataC
 			if !exists || !bytes.Equal(value, pred.ExpectedValue) {
 				return backend.MetadataCommitResult{}, model.ErrInvalidValue
 			}
+		case backend.PredicatePrefixEmpty:
+			if !fakePrefixEmpty(r.data, pred.Key) {
+				return backend.MetadataCommitResult{}, model.ErrInvalidRequest
+			}
 		default:
 			return backend.MetadataCommitResult{}, model.ErrInvalidRequest
 		}
@@ -446,6 +450,10 @@ func (r *fakePredicateRunner) TryMetadataPredicateCommit(_ context.Context, prim
 			if !exists || !bytes.Equal(r.data[string(pred.Key)], pred.ExpectedValue) {
 				return true, model.ErrInvalidValue
 			}
+		case backend.PredicatePrefixEmpty:
+			if !fakePrefixEmpty(r.data, pred.Key) {
+				return true, model.ErrInvalidRequest
+			}
 		default:
 			return true, model.ErrInvalidRequest
 		}
@@ -494,6 +502,15 @@ func (r *fakePredicateRunner) CommitMetadata(_ context.Context, command backend.
 		Index:            commitVersion,
 		AppliedMutations: uint64(len(command.Mutations)),
 	}, nil
+}
+
+func fakePrefixEmpty(data map[string][]byte, prefix []byte) bool {
+	for key := range data {
+		if bytes.HasPrefix([]byte(key), prefix) {
+			return false
+		}
+	}
+	return true
 }
 
 func seedDentry(t *testing.T, runner *fakeRunner, mount model.MountID, parent model.InodeID, name string, inode model.InodeID) {

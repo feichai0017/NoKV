@@ -20,23 +20,29 @@ type metadataPredicateCounters struct {
 func (e *Executor) Stats() map[string]any {
 	if e == nil {
 		return map[string]any{
-			"read_retries_total":           uint64(0),
-			"read_retry_exhausted_total":   uint64(0),
-			"commit_retries_total":         uint64(0),
-			"commit_retry_exhausted_total": uint64(0),
-			"create_total":                 uint64(0),
-			"commit_contract":              commitContractStats(),
-			"metadata_predicate_commit":    metadataPredicateStats(nil),
+			"read_retries_total":               uint64(0),
+			"read_retry_exhausted_total":       uint64(0),
+			"commit_retries_total":             uint64(0),
+			"commit_retry_exhausted_total":     uint64(0),
+			"create_total":                     uint64(0),
+			"readdirplus_dentry_count":         uint64(0),
+			"readdirplus_inode_batch_count":    uint64(0),
+			"readdirplus_projection_hit_total": uint64(0),
+			"commit_contract":                  commitContractStats(),
+			"metadata_predicate_commit":        metadataPredicateStats(nil),
 		}
 	}
 	out := map[string]any{
-		"read_retries_total":           e.readRetriesTotal.Load(),
-		"read_retry_exhausted_total":   e.readRetryExhaustedTotal.Load(),
-		"commit_retries_total":         e.commitRetriesTotal.Load(),
-		"commit_retry_exhausted_total": e.commitRetryExhaustedTotal.Load(),
-		"create_total":                 e.createTotal.Load(),
-		"commit_contract":              commitContractStats(),
-		"metadata_predicate_commit":    metadataPredicateStats(e.metadataPredicates),
+		"read_retries_total":               e.readRetriesTotal.Load(),
+		"read_retry_exhausted_total":       e.readRetryExhaustedTotal.Load(),
+		"commit_retries_total":             e.commitRetriesTotal.Load(),
+		"commit_retry_exhausted_total":     e.commitRetryExhaustedTotal.Load(),
+		"create_total":                     e.createTotal.Load(),
+		"readdirplus_dentry_count":         e.readDirPlusDentryCount.Load(),
+		"readdirplus_inode_batch_count":    e.readDirPlusInodeBatchCount.Load(),
+		"readdirplus_projection_hit_total": e.readDirPlusProjectionHitTotal.Load(),
+		"commit_contract":                  commitContractStats(),
+		"metadata_predicate_commit":        metadataPredicateStats(e.metadataPredicates),
 	}
 	if stats, ok := e.runner.(backend.StatsProvider); ok {
 		out["runner"] = stats.Stats()

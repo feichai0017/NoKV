@@ -45,7 +45,6 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 		Inode:  inodeID,
 		Type:   inode.Type,
 	}
-	dentryValue := delta.WriteEffects[1].Value
 	inodeValue := delta.WriteEffects[2].Value
 	e.createTotal.Add(1)
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
@@ -58,6 +57,10 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 			return err
 		}
 		parentValue, err := layout.EncodeInodeValue(nextParent)
+		if err != nil {
+			return err
+		}
+		dentryValue, err := encodeDentryValueForCommit(dentry, inode, true, commitVersion)
 		if err != nil {
 			return err
 		}
@@ -80,10 +83,16 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 				AssertionNotExist: true,
 			},
 		}
+		parentLink, err := parentIndexPutMutation(mount, dentry, true)
+		if err != nil {
+			return err
+		}
+		mutations = append(mutations, parentLink)
 		predicates := []*backend.Predicate{
 			metadataValueEqualsPredicate(parent.key, parent.value),
 			metadataNotExistsPredicate(plan.MutateKeys[1]),
 			metadataNotExistsPredicate(plan.MutateKeys[2]),
+			metadataNotExistsPredicate(parentLink.Key),
 		}
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 			Mount:      req.Mount,

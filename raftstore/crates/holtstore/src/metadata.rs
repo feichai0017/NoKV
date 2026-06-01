@@ -1,6 +1,7 @@
 use holt::RangeEntry;
 use nokv_metadata_state as metadata_state;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
+use std::collections::BTreeSet;
 use std::time::{Duration, Instant};
 
 use crate::metrics;
@@ -210,6 +211,22 @@ impl HoltMetadataStore {
             } else {
                 predicate.read_version
             };
+            if metadatapb::MetadataPredicateKind::try_from(predicate.kind)
+                == Ok(metadatapb::MetadataPredicateKind::PrefixEmpty)
+            {
+                if !self.prefix_empty_with_pending(
+                    family_from_i32(predicate.key_family),
+                    &predicate.key,
+                    read_version,
+                    pending,
+                )? {
+                    return Ok(metadata_apply_error(
+                        commit_version,
+                        metadata_state::errors::metadata_prefix_not_empty(),
+                    ));
+                }
+                continue;
+            }
             let observed = self
                 .read_committed_with_pending(
                     family_from_i32(predicate.key_family),
@@ -299,6 +316,50 @@ impl HoltMetadataStore {
             }
         }
         Ok(best)
+    }
+
+    fn prefix_empty_with_pending(
+        &self,
+        family: metadatapb::MetadataFamily,
+        prefix: &[u8],
+        version: u64,
+        pending: &[(
+            metadatapb::MetadataFamily,
+            Vec<u8>,
+            u64,
+            metadata_state::VersionedValue,
+        )],
+    ) -> metadata_state::Result<bool> {
+        let mut keys = BTreeSet::new();
+        for entry in self
+            .store
+            .current(family)
+            .map_err(to_backend_error)?
+            .range()
+        {
+            let entry = entry.map_err(to_backend_error)?;
+            let RangeEntry::Key { key, .. } = entry else {
+                continue;
+            };
+            if key.starts_with(prefix) {
+                keys.insert(key);
+            }
+        }
+        for (pending_family, pending_key, _, _) in pending {
+            if *pending_family == family && pending_key.starts_with(prefix) {
+                keys.insert(pending_key.clone());
+            }
+        }
+        for key in keys {
+            if self
+                .read_committed_with_pending(family, &key, version, pending)?
+                .and_then(|(_, value)| value.value)
+                .is_some()
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
     }
 
     fn first_write_after_or_at_with_pending(

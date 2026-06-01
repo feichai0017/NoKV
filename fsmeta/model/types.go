@@ -57,6 +57,16 @@ type DentryRecord struct {
 	Type   InodeType `json:"type,omitempty"`
 }
 
+// ParentLinkRecord is the reverse namespace link stored under parent_index.
+// The key is child_inode,parent_inode,name; the value repeats the link metadata
+// so recovery and scrub can validate the index without decoding key bytes only.
+type ParentLinkRecord struct {
+	Child  InodeID   `json:"child"`
+	Parent InodeID   `json:"parent"`
+	Name   string    `json:"name"`
+	Type   InodeType `json:"type,omitempty"`
+}
+
 // SessionRecord is the value stored under a writer/session key.
 type SessionRecord struct {
 	Session       SessionID `json:"session"`

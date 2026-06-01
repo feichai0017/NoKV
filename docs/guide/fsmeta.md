@@ -80,6 +80,10 @@ backend-neutral predicates, mutations, watch keys, metadata families, and an
 optional explicit commit version. Runtime packages own concrete commit
 mechanics. Local runtimes may flatten families into one keyspace; the Rust
 distributed runtime maps them to Holt current trees plus a shared history tree.
+Dentry values can carry a small inode projection so `ReadDirPlus` can return
+common single-link file entries from the dentry scan alone. Directory entries
+and hard-linked files still fall back to inode reads until the parent index can
+prove projection freshness across all parents.
 
 ## Local Runtime
 

@@ -65,6 +65,7 @@ const (
 	PredicateNotExists PredicateKind = iota
 	PredicateExists
 	PredicateValueEquals
+	PredicatePrefixEmpty
 )
 
 // Predicate describes a backend-validated read predicate for one-phase

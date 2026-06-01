@@ -42,6 +42,9 @@ pub fn metadata_command_predicate_observation(
         Ok(metadatapb::MetadataPredicateKind::ValueEquals) => (observed
             != Some(predicate.expected_value.as_slice()))
         .then(errors::metadata_predicate_mismatch),
+        Ok(metadatapb::MetadataPredicateKind::PrefixEmpty) => {
+            observed.is_some().then(errors::metadata_prefix_not_empty)
+        }
         Err(_) => Some(errors::metadata_invalid_mutate()),
     }
 }

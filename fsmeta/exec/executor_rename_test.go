@@ -43,10 +43,13 @@ func TestExecutorRenameSubtreeMovesDentry(t *testing.T) {
 		Type:   model.InodeTypeFile,
 	}, record)
 	require.Len(t, runner.mutations, 1)
-	require.Len(t, runner.mutations[0], 4)
+	require.Len(t, runner.mutations[0], 6)
 	require.Equal(t, backend.MutationDelete, runner.mutations[0][0].Op)
 	require.Equal(t, backend.MutationPut, runner.mutations[0][1].Op)
 	require.True(t, runner.mutations[0][1].AssertionNotExist)
+	require.Equal(t, backend.MutationDelete, runner.mutations[0][2].Op)
+	require.Equal(t, backend.MutationPut, runner.mutations[0][3].Op)
+	require.True(t, runner.mutations[0][3].AssertionNotExist)
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: model.RootInode, frontier: 2}}, publisher.starts)
 	require.Equal(t, []subtreePublishCall{{mount: "vol", root: model.RootInode, frontier: 2}}, publisher.completes)
 }

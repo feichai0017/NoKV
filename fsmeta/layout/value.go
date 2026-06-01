@@ -23,7 +23,13 @@ import (
 //	                updated_unix_ns be64 | opaque_len uvarint | opaque bytes |
 //	                child_count uvarint
 //	  dentry  'd' : parent inode be64 | name_len uvarint | name bytes |
-//	                inode be64 | type byte
+//	                inode be64 | type byte | optional projection
+//	  parent  'r' : child inode be64 | parent inode be64 |
+//	                name_len uvarint | name bytes | type byte
+//
+//	dentry projection:
+//	  kind byte = 0x01 | inode_attr_version uvarint |
+//	  inode_value_len uvarint | inode value bytes
 //	  session 's' : session_len uvarint | session bytes | inode be64 |
 //	                expires_unix_ns be64
 //	  usage   'u' : bytes be64 | inodes be64
@@ -46,10 +52,13 @@ type ValueKind byte
 const (
 	ValueKindInode    ValueKind = 'i'
 	ValueKindDentry   ValueKind = 'd'
+	ValueKindParent   ValueKind = 'r'
 	ValueKindSession  ValueKind = 's'
 	ValueKindUsage    ValueKind = 'u'
 	ValueKindSnapshot ValueKind = 'x'
 )
+
+const dentryProjectionInode byte = 1
 
 func (k ValueKind) String() string {
 	switch k {
@@ -57,6 +66,8 @@ func (k ValueKind) String() string {
 		return "inode"
 	case ValueKindDentry:
 		return "dentry"
+	case ValueKindParent:
+		return "parent"
 	case ValueKindSession:
 		return "session"
 	case ValueKindUsage:
@@ -105,6 +116,36 @@ func DecodeInodeValue(value []byte) (model.InodeRecord, error) {
 
 // EncodeDentryValue returns the canonical value encoding for a dentry record.
 func EncodeDentryValue(record model.DentryRecord) ([]byte, error) {
+	body, err := encodeDentryBody(record)
+	if err != nil {
+		return nil, err
+	}
+	return encodeValue(ValueKindDentry, body), nil
+}
+
+// EncodeDentryValueWithProjection returns a dentry value that carries a small
+// inode projection for ReadDirPlus-style reads. The canonical dentry remains the
+// first part of the value so ordinary dentry readers keep one source of truth.
+func EncodeDentryValueWithProjection(record model.DentryRecord, inode model.InodeRecord, inodeAttrVersion uint64) ([]byte, error) {
+	if record.Inode != inode.Inode || record.Type != inode.Type {
+		return nil, model.ErrInvalidValue
+	}
+	body, err := encodeDentryBody(record)
+	if err != nil {
+		return nil, err
+	}
+	inodeValue, err := EncodeInodeValue(inode)
+	if err != nil {
+		return nil, err
+	}
+	body = append(body, dentryProjectionInode)
+	body = binary.AppendUvarint(body, inodeAttrVersion)
+	body = binary.AppendUvarint(body, uint64(len(inodeValue)))
+	body = append(body, inodeValue...)
+	return encodeValue(ValueKindDentry, body), nil
+}
+
+func encodeDentryBody(record model.DentryRecord) ([]byte, error) {
 	if err := model.ValidateInodeID(record.Parent); err != nil {
 		return nil, err
 	}
@@ -118,7 +159,7 @@ func EncodeDentryValue(record model.DentryRecord) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	out := encodeValuePrefix(ValueKindDentry, 8+binary.MaxVarintLen64+len(record.Name)+8+1)
+	out := make([]byte, 0, 8+binary.MaxVarintLen64+len(record.Name)+8+1)
 	out = binary.BigEndian.AppendUint64(out, uint64(record.Parent))
 	out = binary.AppendUvarint(out, uint64(len(record.Name)))
 	out = append(out, record.Name...)
@@ -132,6 +173,54 @@ func DecodeDentryValue(value []byte) (model.DentryRecord, error) {
 	var record model.DentryRecord
 	if err := decodeValue(value, ValueKindDentry, &record); err != nil {
 		return model.DentryRecord{}, err
+	}
+	return record, nil
+}
+
+// DecodeDentryValueWithProjection decodes a dentry and its optional inode
+// projection. The bool is false for values written before projections were
+// introduced.
+func DecodeDentryValueWithProjection(value []byte) (model.DentryRecord, model.InodeRecord, uint64, bool, error) {
+	pos, err := decodeValueHeader(value)
+	if err != nil {
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, err
+	}
+	if pos >= len(value) || ValueKind(value[pos]) != ValueKindDentry {
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, ErrInvalidValueKind
+	}
+	return decodeDentryBodyWithProjection(value[pos+1:])
+}
+
+// EncodeParentLinkValue returns the canonical value encoding for a reverse
+// parent-index link record.
+func EncodeParentLinkValue(record model.ParentLinkRecord) ([]byte, error) {
+	if err := model.ValidateInodeID(record.Child); err != nil {
+		return nil, err
+	}
+	if err := model.ValidateInodeID(record.Parent); err != nil {
+		return nil, err
+	}
+	if err := model.ValidateName(record.Name); err != nil {
+		return nil, err
+	}
+	typ, err := encodeInodeType(record.Type)
+	if err != nil {
+		return nil, err
+	}
+	body := make([]byte, 0, 16+binary.MaxVarintLen64+len(record.Name)+1)
+	body = binary.BigEndian.AppendUint64(body, uint64(record.Child))
+	body = binary.BigEndian.AppendUint64(body, uint64(record.Parent))
+	body = binary.AppendUvarint(body, uint64(len(record.Name)))
+	body = append(body, record.Name...)
+	body = append(body, typ)
+	return encodeValue(ValueKindParent, body), nil
+}
+
+// DecodeParentLinkValue decodes a reverse parent-index link record.
+func DecodeParentLinkValue(value []byte) (model.ParentLinkRecord, error) {
+	var record model.ParentLinkRecord
+	if err := decodeValue(value, ValueKindParent, &record); err != nil {
+		return model.ParentLinkRecord{}, err
 	}
 	return record, nil
 }
@@ -219,7 +308,7 @@ func ValueKindOf(value []byte) (ValueKind, error) {
 	}
 	kind := ValueKind(value[pos])
 	switch kind {
-	case ValueKindInode, ValueKindDentry, ValueKindSession, ValueKindUsage, ValueKindSnapshot:
+	case ValueKindInode, ValueKindDentry, ValueKindParent, ValueKindSession, ValueKindUsage, ValueKindSnapshot:
 		return kind, nil
 	default:
 		return 0, ErrInvalidValueKind
@@ -269,7 +358,17 @@ func decodeValue(value []byte, expected ValueKind, out any) error {
 		if !ok {
 			return model.ErrInvalidValue
 		}
-		decoded, err := decodeDentryBody(body)
+		decoded, _, _, _, err := decodeDentryBodyWithProjection(body)
+		if err != nil {
+			return err
+		}
+		*record = decoded
+	case ValueKindParent:
+		record, ok := out.(*model.ParentLinkRecord)
+		if !ok {
+			return model.ErrInvalidValue
+		}
+		decoded, err := decodeParentLinkBody(body)
 		if err != nil {
 			return err
 		}
@@ -357,43 +456,110 @@ func decodeInodeBody(body []byte) (model.InodeRecord, error) {
 	return record, nil
 }
 
-func decodeDentryBody(body []byte) (model.DentryRecord, error) {
+func decodeDentryBodyWithProjection(body []byte) (model.DentryRecord, model.InodeRecord, uint64, bool, error) {
 	if len(body) < 8+1+8+1 {
-		return model.DentryRecord{}, model.ErrInvalidValue
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, model.ErrInvalidValue
 	}
 	parent := model.InodeID(binary.BigEndian.Uint64(body[:8]))
 	pos := 8
 	nameLen, n := binary.Uvarint(body[pos:])
 	if n <= 0 {
-		return model.DentryRecord{}, model.ErrInvalidValue
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, model.ErrInvalidValue
 	}
 	pos += n
 	remaining := uint64(len(body) - pos)
 	// Subtract first to avoid uint64 overflow when nameLen is near MaxUint64.
 	// Need: nameLen >= 1, remaining >= nameLen, and remaining-nameLen >= 8 (inode) + 1 (type) = 9.
 	if nameLen == 0 || nameLen > remaining || remaining-nameLen < 9 {
-		return model.DentryRecord{}, model.ErrInvalidValue
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, model.ErrInvalidValue
 	}
 	name := string(body[pos : pos+int(nameLen)])
 	pos += int(nameLen)
 	inode := model.InodeID(binary.BigEndian.Uint64(body[pos : pos+8]))
 	pos += 8
-	if pos != len(body)-1 {
-		return model.DentryRecord{}, model.ErrInvalidValue
-	}
 	typ, err := decodeInodeType(body[pos])
 	if err != nil {
-		return model.DentryRecord{}, err
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, err
 	}
+	pos++
 	record := model.DentryRecord{Parent: parent, Name: name, Inode: inode, Type: typ}
 	if err := model.ValidateInodeID(record.Parent); err != nil {
-		return model.DentryRecord{}, err
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, err
 	}
 	if err := model.ValidateName(record.Name); err != nil {
-		return model.DentryRecord{}, err
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, err
 	}
 	if err := model.ValidateInodeID(record.Inode); err != nil {
-		return model.DentryRecord{}, err
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, err
+	}
+	if pos == len(body) {
+		return record, model.InodeRecord{}, 0, false, nil
+	}
+	if body[pos] != dentryProjectionInode {
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, model.ErrInvalidValue
+	}
+	pos++
+	attrVersion, n := binary.Uvarint(body[pos:])
+	if n <= 0 {
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, model.ErrInvalidValue
+	}
+	pos += n
+	inodeValueLen, n := binary.Uvarint(body[pos:])
+	if n <= 0 {
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, model.ErrInvalidValue
+	}
+	pos += n
+	if inodeValueLen > uint64(len(body)-pos) {
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, model.ErrInvalidValue
+	}
+	inodeValue := body[pos : pos+int(inodeValueLen)]
+	pos += int(inodeValueLen)
+	if pos != len(body) {
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, model.ErrInvalidValue
+	}
+	projection, err := DecodeInodeValue(inodeValue)
+	if err != nil {
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, err
+	}
+	if projection.Inode != record.Inode || projection.Type != record.Type {
+		return model.DentryRecord{}, model.InodeRecord{}, 0, false, model.ErrInvalidValue
+	}
+	return record, projection, attrVersion, true, nil
+}
+
+func decodeParentLinkBody(body []byte) (model.ParentLinkRecord, error) {
+	if len(body) < 16+1+1 {
+		return model.ParentLinkRecord{}, model.ErrInvalidValue
+	}
+	record := model.ParentLinkRecord{
+		Child:  model.InodeID(binary.BigEndian.Uint64(body[:8])),
+		Parent: model.InodeID(binary.BigEndian.Uint64(body[8:16])),
+	}
+	pos := 16
+	nameLen, n := binary.Uvarint(body[pos:])
+	if n <= 0 {
+		return model.ParentLinkRecord{}, model.ErrInvalidValue
+	}
+	pos += n
+	remaining := uint64(len(body) - pos)
+	if nameLen == 0 || nameLen > remaining || remaining-nameLen != 1 {
+		return model.ParentLinkRecord{}, model.ErrInvalidValue
+	}
+	record.Name = string(body[pos : pos+int(nameLen)])
+	pos += int(nameLen)
+	typ, err := decodeInodeType(body[pos])
+	if err != nil {
+		return model.ParentLinkRecord{}, err
+	}
+	record.Type = typ
+	if err := model.ValidateInodeID(record.Child); err != nil {
+		return model.ParentLinkRecord{}, err
+	}
+	if err := model.ValidateInodeID(record.Parent); err != nil {
+		return model.ParentLinkRecord{}, err
+	}
+	if err := model.ValidateName(record.Name); err != nil {
+		return model.ParentLinkRecord{}, err
 	}
 	return record, nil
 }

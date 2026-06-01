@@ -23,6 +23,7 @@ import (
 //	  mount   'm' : empty
 //	  inode   'i' : inode be64
 //	  dentry  'd' : parent inode be64 | name bytes
+//	  parent  'r' : child inode be64 | parent inode be64 | name bytes
 //	  chunk   'c' : inode be64 | chunk index be64
 //	  session 's' : inode be64 | 0x01 | session bytes, or inode be64 | 0x00 for writer ownership
 //	  usage   'u' : quota scope inode be64; scope 0 is mount-wide usage
@@ -50,6 +51,7 @@ const (
 	KeyKindMount    KeyKind = 'm'
 	KeyKindInode    KeyKind = 'i'
 	KeyKindDentry   KeyKind = 'd'
+	KeyKindParent   KeyKind = 'r'
 	KeyKindChunk    KeyKind = 'c'
 	KeyKindSession  KeyKind = 's'
 	KeyKindUsage    KeyKind = 'u'
@@ -83,6 +85,8 @@ func (k KeyKind) String() string {
 		return "inode"
 	case KeyKindDentry:
 		return "dentry"
+	case KeyKindParent:
+		return "parent"
 	case KeyKindChunk:
 		return "chunk"
 	case KeyKindSession:
@@ -174,6 +178,36 @@ func EncodeDentryKey(mount model.MountIdentity, parent model.InodeID, name strin
 	out := encodeKeyPrefixForMountKeyID(mount.MountKeyID, BucketForInodeID(parent), KeyKindDentry, 8+len(name))
 	out = binary.BigEndian.AppendUint64(out, uint64(parent))
 	return append(out, name...), nil
+}
+
+// EncodeParentIndexKey returns the reverse link record for child->parent/name.
+func EncodeParentIndexKey(mount model.MountIdentity, child, parent model.InodeID, name string) ([]byte, error) {
+	if err := model.ValidateInodeID(child); err != nil {
+		return nil, err
+	}
+	if err := model.ValidateInodeID(parent); err != nil {
+		return nil, err
+	}
+	if err := model.ValidateName(name); err != nil {
+		return nil, err
+	}
+	if err := model.ValidateMountIdentity(mount); err != nil {
+		return nil, err
+	}
+	out := encodeKeyPrefixForMountKeyID(mount.MountKeyID, BucketForInodeID(child), KeyKindParent, 16+len(name))
+	out = binary.BigEndian.AppendUint64(out, uint64(child))
+	out = binary.BigEndian.AppendUint64(out, uint64(parent))
+	return append(out, name...), nil
+}
+
+// EncodeParentIndexPrefix returns the scan prefix for all parent links of one child inode.
+func EncodeParentIndexPrefix(mount model.MountIdentity, child model.InodeID) ([]byte, error) {
+	if err := model.ValidateInodeID(child); err != nil {
+		return nil, err
+	}
+	var body [8]byte
+	binary.BigEndian.PutUint64(body[:], uint64(child))
+	return encodeKey(mount, BucketForInodeID(child), KeyKindParent, body[:])
 }
 
 // EncodeChunkKey returns the chunk mapping record key for inode/chunk.
@@ -304,7 +338,7 @@ func KeyKindOf(key []byte) (KeyKind, error) {
 	}
 	kind := KeyKind(key[pos])
 	switch kind {
-	case KeyKindMount, KeyKindInode, KeyKindDentry, KeyKindChunk, KeyKindSession, KeyKindUsage, KeyKindSegment, KeyKindSnapshot:
+	case KeyKindMount, KeyKindInode, KeyKindDentry, KeyKindParent, KeyKindChunk, KeyKindSession, KeyKindUsage, KeyKindSegment, KeyKindSnapshot:
 		return kind, nil
 	default:
 		return 0, ErrInvalidKeyKind
@@ -377,6 +411,13 @@ func InspectKey(key []byte) (KeyParts, bool) {
 		}
 		parts.Parent = model.InodeID(binary.BigEndian.Uint64(body[:8]))
 		return parts, true
+	case KeyKindParent:
+		if len(body) <= 16 {
+			return KeyParts{}, false
+		}
+		parts.Inode = model.InodeID(binary.BigEndian.Uint64(body[:8]))
+		parts.Parent = model.InodeID(binary.BigEndian.Uint64(body[8:16]))
+		return parts, parts.Inode != 0 && parts.Parent != 0
 	case KeyKindInode:
 		if len(body) != 8 {
 			return KeyParts{}, false

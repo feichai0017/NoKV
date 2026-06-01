@@ -28,14 +28,11 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 	delta := program.Compiled.Delta
 	plan := delta.Plan
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
-		record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
+		sourceDentry, err := e.readDentrySnapshot(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err
 		}
-		sourceDentryValue, err := layout.EncodeDentryValue(record)
-		if err != nil {
-			return err
-		}
+		record := sourceDentry.record
 		if record.Type == model.InodeTypeDirectory {
 			return model.ErrInvalidRequest
 		}
@@ -60,6 +57,7 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 		if inode.LinkCount == 0 {
 			inode.LinkCount = 1
 		}
+		oldInode := inode
 		parent, err := e.readDirectoryInode(ctx, mount, req.ToParent, startVersion)
 		if err != nil {
 			return err
@@ -72,18 +70,23 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 		if err != nil {
 			return err
 		}
-		oldInodeValue, err := layout.EncodeInodeValue(inode)
+		oldInodeValue, err := layout.EncodeInodeValue(oldInode)
 		if err != nil {
 			return err
 		}
 		inode.LinkCount++
 
-		dentryValue, err := layout.EncodeDentryValue(model.DentryRecord{
+		newDentry := model.DentryRecord{
 			Parent: req.ToParent,
 			Name:   req.ToName,
 			Inode:  record.Inode,
 			Type:   record.Type,
-		})
+		}
+		dentryValue, err := encodeDentryValueForCommit(newDentry, inode, true, commitVersion)
+		if err != nil {
+			return err
+		}
+		sourceValue, err := encodeDentryValueForCommit(record, inode, true, commitVersion)
 		if err != nil {
 			return err
 		}
@@ -96,6 +99,11 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 			return err
 		}
 		mutations := []*backend.Mutation{
+			{
+				Op:    backend.MutationPut,
+				Key:   cloneBytes(plan.ReadKeys[0]),
+				Value: sourceValue,
+			},
 			{
 				Op:                backend.MutationPut,
 				Key:               cloneBytes(plan.ReadKeys[1]),
@@ -113,6 +121,11 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 				Value: parentValue,
 			},
 		}
+		parentLink, err := parentIndexPutMutation(mount, newDentry, true)
+		if err != nil {
+			return err
+		}
+		mutations = append(mutations, parentLink)
 		quotaMutations, err := e.reserveQuota(ctx, []QuotaChange{{
 			Mount:      req.Mount,
 			MountKeyID: mount.MountKeyID,
@@ -130,10 +143,11 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 			// the correctness boundary that prevents overwriting a concurrent
 			// UpdateInode with an older inode body.
 			predicates := []*backend.Predicate{
-				metadataValueEqualsPredicate(plan.ReadKeys[0], sourceDentryValue),
+				metadataValueEqualsPredicate(plan.ReadKeys[0], sourceDentry.value),
 				metadataNotExistsPredicate(plan.ReadKeys[1]),
 				metadataValueEqualsPredicate(inodeKey, oldInodeValue),
 				metadataValueEqualsPredicate(parent.key, parent.value),
+				metadataNotExistsPredicate(parentLink.Key),
 			}
 			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}

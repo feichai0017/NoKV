@@ -14,6 +14,10 @@ pub fn metadata_invalid_mutate() -> metadatapb::MetadataKeyError {
     metadata_abort("metadata: invalid mutate")
 }
 
+pub fn metadata_prefix_not_empty() -> metadatapb::MetadataKeyError {
+    metadata_abort("metadata: prefix is not empty")
+}
+
 pub fn metadata_predicate_mismatch() -> metadatapb::MetadataKeyError {
     metadata_retryable("metadata: predicate mismatch")
 }

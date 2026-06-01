@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/feichai0017/NoKV/fsmeta/backend"
+	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/stretchr/testify/require"
 )
@@ -46,7 +47,7 @@ func TestExecutorUnlinkRemovesDentry(t *testing.T) {
 	})
 	require.ErrorIs(t, err, model.ErrNotFound)
 	require.Len(t, runner.mutations, 1)
-	require.Len(t, runner.mutations[0], 3)
+	require.Len(t, runner.mutations[0], 4)
 	require.Equal(t, backend.MutationDelete, runner.mutations[0][0].Op)
 	require.Equal(t, backend.MutationDelete, runner.mutations[0][1].Op)
 	_, ok, err := executor.readInode(context.Background(), testMountIdentity, 22, 99)
@@ -80,7 +81,7 @@ func TestExecutorRemoveRemovesDentry(t *testing.T) {
 	require.ErrorIs(t, err, model.ErrNotFound)
 	require.Empty(t, base.mutations)
 	require.Len(t, runner.predicateCalls, 1)
-	require.Len(t, runner.predicateCalls[0].mutations, 3)
+	require.Len(t, runner.predicateCalls[0].mutations, 4)
 	require.Equal(t, backend.MutationDelete, runner.predicateCalls[0].mutations[0].Op)
 	require.Equal(t, backend.MutationDelete, runner.predicateCalls[0].mutations[1].Op)
 	requireMetadataPredicateStatUint(t, executor.Stats(), model.OperationRemove, "success_total", 1)
@@ -152,10 +153,11 @@ func TestExecutorRemoveRejectsDirectoryOnCommitPath(t *testing.T) {
 }
 
 func TestExecutorRemoveDirectoryRemovesEmptyDirectory(t *testing.T) {
-	runner := newFakeRunner()
+	base := newFakeRunner()
+	runner := &fakePredicateRunner{fakeRunner: base}
 	inode := testInodeForParentBucket(t, 7, 7)
-	seedDentryType(t, runner, "vol", 7, "dir", inode, model.InodeTypeDirectory)
-	seedInode(t, runner, "vol", model.InodeRecord{
+	seedDentryType(t, runner.fakeRunner, "vol", 7, "dir", inode, model.InodeTypeDirectory)
+	seedInode(t, runner.fakeRunner, "vol", model.InodeRecord{
 		Inode:     inode,
 		Type:      model.InodeTypeDirectory,
 		Mode:      0o755,
@@ -176,11 +178,23 @@ func TestExecutorRemoveDirectoryRemovesEmptyDirectory(t *testing.T) {
 	require.NoError(t, err)
 	require.True(t, ok)
 	require.Zero(t, parent.ChildCount)
-	require.Len(t, runner.mutations, 1)
-	require.Len(t, runner.mutations[0], 3)
-	require.Equal(t, backend.MutationPut, runner.mutations[0][0].Op)
-	require.Equal(t, backend.MutationDelete, runner.mutations[0][1].Op)
-	require.Equal(t, backend.MutationDelete, runner.mutations[0][2].Op)
+	require.Empty(t, base.mutations)
+	require.Len(t, runner.predicateCalls, 1)
+	require.Len(t, runner.predicateCalls[0].mutations, 4)
+	require.Equal(t, backend.MutationPut, runner.predicateCalls[0].mutations[0].Op)
+	require.Equal(t, backend.MutationDelete, runner.predicateCalls[0].mutations[1].Op)
+	require.Equal(t, backend.MutationDelete, runner.predicateCalls[0].mutations[2].Op)
+	require.Equal(t, backend.MutationDelete, runner.predicateCalls[0].mutations[3].Op)
+	var foundPrefixEmpty bool
+	wantPrefix, err := layout.EncodeDentryPrefix(testMountIdentity, inode)
+	require.NoError(t, err)
+	for _, pred := range runner.predicateCalls[0].predicates {
+		if pred.Kind == backend.PredicatePrefixEmpty {
+			require.Equal(t, wantPrefix, pred.Key)
+			foundPrefixEmpty = true
+		}
+	}
+	require.True(t, foundPrefixEmpty)
 }
 
 func TestExecutorRemoveDirectoryReservesNegativeQuota(t *testing.T) {

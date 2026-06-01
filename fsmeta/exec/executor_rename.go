@@ -78,11 +78,11 @@ func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 	var movedSize uint64
 	var movedInode bool
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
-		mutations, predicates, err := e.prepareRenameMutations(ctx, plan, move, startVersion, &movedSize, &movedInode)
+		mutations, predicates, err := e.prepareRenameMutations(ctx, plan, move, startVersion, commitVersion, &movedSize, &movedInode)
 		if err != nil {
 			return err
 		}
-		if len(mutations) == len(predicates) {
+		if len(predicates) != 0 {
 			return e.commitWithMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, predicates, mutations, startVersion, commitVersion)
 		}
 		return e.commitWithoutMetadataPredicates(ctx, plan.Kind, mount, plan.PrimaryKey, mutations, startVersion, commitVersion)
@@ -114,7 +114,7 @@ func (e *Executor) RenameReplace(ctx context.Context, req model.RenameReplaceReq
 	move := renameMoveFromRenameReplace(req, mount)
 	var result model.RenameReplaceResult
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
-		nextResult, mutations, err := e.prepareRenameReplaceMutations(ctx, plan, move, startVersion)
+		nextResult, mutations, err := e.prepareRenameReplaceMutations(ctx, plan, move, startVersion, commitVersion)
 		if err != nil {
 			return fmt.Errorf("prepare rename replace: %w", err)
 		}
@@ -153,7 +153,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req model.RenameSubtreeReq
 	var handoffStarted bool
 	move := renameMoveFromRenameSubtree(req, mount)
 	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
-		mutations, _, err := e.prepareRenameMutations(ctx, plan, move, startVersion, &movedSize, &movedInode)
+		mutations, _, err := e.prepareRenameMutations(ctx, plan, move, startVersion, commitVersion, &movedSize, &movedInode)
 		if err != nil {
 			return err
 		}
@@ -192,7 +192,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req model.RenameSubtreeReq
 	return nil
 }
 
-func (e *Executor) prepareRenameReplaceMutations(ctx context.Context, plan layout.OperationPlan, move renameMove, startVersion uint64) (model.RenameReplaceResult, []*backend.Mutation, error) {
+func (e *Executor) prepareRenameReplaceMutations(ctx context.Context, plan layout.OperationPlan, move renameMove, startVersion, commitVersion uint64) (model.RenameReplaceResult, []*backend.Mutation, error) {
 	sourceDentry, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
 	if err != nil {
 		return model.RenameReplaceResult{}, nil, fmt.Errorf("source dentry: %w", err)
@@ -276,7 +276,7 @@ func (e *Executor) prepareRenameReplaceMutations(ctx context.Context, plan layou
 	replacementDentry := sourceDentry
 	replacementDentry.Parent = move.toParent
 	replacementDentry.Name = move.toName
-	replacementValue, err := layout.EncodeDentryValue(replacementDentry)
+	replacementValue, err := encodeDentryValueForCommit(replacementDentry, sourceInode, true, commitVersion)
 	if err != nil {
 		return model.RenameReplaceResult{}, nil, err
 	}
@@ -302,6 +302,22 @@ func (e *Executor) prepareRenameReplaceMutations(ctx context.Context, plan layou
 			Key: cloneBytes(plan.MutateKeys[0]),
 		},
 		putDestination,
+	}
+	sourceParentDelete, err := parentIndexDeleteMutation(move.identity, sourceDentry)
+	if err != nil {
+		return model.RenameReplaceResult{}, nil, err
+	}
+	replacementParentPut, err := parentIndexPutMutation(move.identity, replacementDentry, !destinationExisted)
+	if err != nil {
+		return model.RenameReplaceResult{}, nil, err
+	}
+	mutations = append(mutations, sourceParentDelete, replacementParentPut)
+	if destinationExisted && destinationDentry.Inode != replacementDentry.Inode {
+		destinationParentDelete, err := parentIndexDeleteMutation(move.identity, destinationDentry)
+		if err != nil {
+			return model.RenameReplaceResult{}, nil, err
+		}
+		mutations = append(mutations, destinationParentDelete)
 	}
 	if move.fromParent == move.toParent {
 		mutations = append(mutations, &backend.Mutation{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[2]), Value: fromParentValue})
@@ -373,33 +389,33 @@ func validateRenameReplaceDentryInode(dentry model.DentryRecord, inode model.Ino
 	return nil
 }
 
-func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.OperationPlan, move renameMove, startVersion uint64, movedSize *uint64, movedInode *bool) ([]*backend.Mutation, []*backend.Predicate, error) {
-	record, err := e.readDentry(ctx, plan.ReadKeys[0], startVersion)
+func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.OperationPlan, move renameMove, startVersion, commitVersion uint64, movedSize *uint64, movedInode *bool) ([]*backend.Mutation, []*backend.Predicate, error) {
+	sourceDentry, err := e.readDentrySnapshot(ctx, plan.ReadKeys[0], startVersion)
 	if err != nil {
 		return nil, nil, err
 	}
-	sourceDentryValue, err := layout.EncodeDentryValue(record)
-	if err != nil {
-		return nil, nil, err
-	}
+	sourceRecord := sourceDentry.record
 	if _, err := e.readDentry(ctx, plan.ReadKeys[1], startVersion); err == nil {
 		return nil, nil, model.ErrExists
 	} else if !errors.Is(err, model.ErrNotFound) {
 		return nil, nil, err
 	}
+	record := sourceRecord
 	record.Parent = move.toParent
 	record.Name = move.toName
-	value, err := layout.EncodeDentryValue(record)
-	if err != nil {
-		return nil, nil, err
-	}
 	*movedSize = 0
 	*movedInode = false
-	if inode, ok, err := e.readInode(ctx, move.identity, record.Inode, startVersion); err != nil {
+	var inode model.InodeRecord
+	var inodeOK bool
+	if inode, inodeOK, err = e.readInode(ctx, move.identity, record.Inode, startVersion); err != nil {
 		return nil, nil, err
-	} else if ok {
+	} else if inodeOK {
 		*movedSize = inode.Size
 		*movedInode = true
+	}
+	value, err := encodeDentryValueForCommit(record, inode, inodeOK, commitVersion)
+	if err != nil {
+		return nil, nil, err
 	}
 	fromParent, err := e.readDirectoryInode(ctx, move.identity, move.fromParent, startVersion)
 	if err != nil {
@@ -442,6 +458,15 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.Opera
 			AssertionNotExist: true,
 		},
 	}
+	sourceParentDelete, err := parentIndexDeleteMutation(move.identity, sourceRecord)
+	if err != nil {
+		return nil, nil, err
+	}
+	destinationParentPut, err := parentIndexPutMutation(move.identity, record, true)
+	if err != nil {
+		return nil, nil, err
+	}
+	mutations = append(mutations, sourceParentDelete, destinationParentPut)
 	if move.fromParent == move.toParent {
 		mutations = append(mutations, &backend.Mutation{Op: backend.MutationPut, Key: cloneBytes(plan.MutateKeys[2]), Value: fromParentValue})
 	} else {
@@ -461,8 +486,9 @@ func (e *Executor) prepareRenameMutations(ctx context.Context, plan layout.Opera
 		mutations = append(mutations, quotaMutations...)
 	}
 	predicates := []*backend.Predicate{
-		metadataValueEqualsPredicate(plan.ReadKeys[0], sourceDentryValue),
+		metadataValueEqualsPredicate(plan.ReadKeys[0], sourceDentry.value),
 		metadataNotExistsPredicate(plan.ReadKeys[1]),
+		metadataNotExistsPredicate(destinationParentPut.Key),
 		metadataValueEqualsPredicate(fromParent.key, fromParent.value),
 	}
 	if move.fromParent != move.toParent {

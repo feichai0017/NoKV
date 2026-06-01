@@ -71,20 +71,23 @@ type SubtreeAuthorityResolver interface {
 
 // Executor interprets fsmeta operation plans against a backend.Store.
 type Executor struct {
-	runner                    backend.Store
-	inodes                    InodeAllocator
-	mounts                    MountResolver
-	quotas                    QuotaResolver
-	subtrees                  SubtreeHandoffPublisher
-	authorities               SubtreeAuthorityResolver
-	lockTTL                   uint64
-	now                       func() time.Time
-	readRetriesTotal          atomic.Uint64
-	readRetryExhaustedTotal   atomic.Uint64
-	commitRetriesTotal        atomic.Uint64
-	commitRetryExhaustedTotal atomic.Uint64
-	createTotal               atomic.Uint64
-	metadataPredicates        map[model.OperationKind]*metadataPredicateCounters
+	runner                        backend.Store
+	inodes                        InodeAllocator
+	mounts                        MountResolver
+	quotas                        QuotaResolver
+	subtrees                      SubtreeHandoffPublisher
+	authorities                   SubtreeAuthorityResolver
+	lockTTL                       uint64
+	now                           func() time.Time
+	readRetriesTotal              atomic.Uint64
+	readRetryExhaustedTotal       atomic.Uint64
+	commitRetriesTotal            atomic.Uint64
+	commitRetryExhaustedTotal     atomic.Uint64
+	createTotal                   atomic.Uint64
+	readDirPlusDentryCount        atomic.Uint64
+	readDirPlusInodeBatchCount    atomic.Uint64
+	readDirPlusProjectionHitTotal atomic.Uint64
+	metadataPredicates            map[model.OperationKind]*metadataPredicateCounters
 }
 
 // Option configures an Executor.

@@ -190,6 +190,18 @@ fn commit_metadata_inner(
         } else {
             predicate.read_version
         };
+        if metadatapb::MetadataPredicateKind::try_from(predicate.kind)
+            == Ok(metadatapb::MetadataPredicateKind::PrefixEmpty)
+        {
+            if !prefix_empty(inner, &predicate.key, read_version) {
+                return metadata_error(
+                    command,
+                    commit_version,
+                    errors::metadata_prefix_not_empty(),
+                );
+            }
+            continue;
+        }
         let observed =
             read_committed(inner, &predicate.key, read_version).and_then(|value| value.value);
         if let Some(error) =
@@ -272,6 +284,21 @@ fn metadata_already_applied(
         }
     }
     any_present && all_present
+}
+
+fn prefix_empty(inner: &Inner, prefix: &[u8], read_version: u64) -> bool {
+    for key in inner.writes.keys() {
+        if !key.starts_with(prefix) {
+            continue;
+        }
+        if read_committed(inner, key, read_version)
+            .and_then(|value| value.value)
+            .is_some()
+        {
+            return false;
+        }
+    }
+    true
 }
 
 pub fn metadata_mutation_value(
