@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::error::Error as StdError;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nokv_metadata_state::MemoryMetadataStore;
 use nokv_proto::nokv::meta::v1 as metapb;
@@ -14,10 +14,10 @@ use openraft::{
 use tokio::sync::broadcast;
 
 use crate::{
-    AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider, ApplyWatchProvider,
-    ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode, Error, NodeId, Proposal, RaftStoreConfig,
-    RegionId, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
-    RegionTrafficSnapshot,
+    metrics, AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
+    ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode, Error, NodeId,
+    Proposal, RaftStoreConfig, RegionId, RegionLogStorage, RegionSnapshotEngine,
+    RegionStateMachine, RegionTrafficProvider, RegionTrafficSnapshot,
 };
 
 mod bootstrap_network;
@@ -309,11 +309,14 @@ where
     }
 
     pub async fn propose(&self, proposal: Proposal) -> Result<AppliedProposal, Error> {
+        let command_count = proposal.metadata_command_count();
+        let started = Instant::now();
         let response = self
             .raft
             .client_write(proposal)
             .await
             .map_err(openraft_client_write_error)?;
+        metrics::record_proposal(command_count, started.elapsed());
         Ok(response.data)
     }
 

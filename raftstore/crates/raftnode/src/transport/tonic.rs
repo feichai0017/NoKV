@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::error::Error as StdErrorTrait;
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use openraft::{
     error::{RPCError, RaftError, Unreachable},
@@ -12,6 +13,7 @@ use tonic::codegen::*;
 use tonic::transport::Channel;
 use tonic::{Request, Response, Status};
 
+use crate::metrics;
 use crate::{
     decode_append_entries_request, decode_append_entries_response, decode_install_snapshot_request,
     decode_install_snapshot_response, decode_vote_request, decode_vote_response,
@@ -110,11 +112,14 @@ impl RaftTransport for TonicRaftTransportService {
         let (region_id, rpc) =
             decode_append_entries_request(&request.payload).map_err(invalid_transport_status)?;
         ensure_region_match(request.region_id, region_id)?;
+        let entries = rpc.entries.len() as u64;
+        let started = Instant::now();
         let response = self
             .target_raft(region_id)?
             .append_entries(rpc)
             .await
             .map_err(openraft_status)?;
+        metrics::record_append_entries_server(entries, started.elapsed());
         Ok(Response::new(RaftTransportResponse {
             payload: encode_append_entries_response(&response).map_err(invalid_transport_status)?,
         }))
@@ -303,11 +308,14 @@ impl RaftNetwork<RaftStoreConfig> for TonicRaftNetwork {
         openraft::raft::AppendEntriesResponse<NodeId>,
         RPCError<NodeId, BasicNode, RaftError<NodeId>>,
     > {
+        let entries = rpc.entries.len() as u64;
         let payload = encode_append_entries_request(self.region_id, &rpc).map_err(rpc_error)?;
+        let started = Instant::now();
         let response = self
             .call(APPEND_ENTRIES_PATH, "AppendEntries", payload)
             .await
             .map_err(rpc_error)?;
+        metrics::record_append_entries_client(entries, started.elapsed());
         decode_append_entries_response(&response.payload).map_err(rpc_error)
     }
 

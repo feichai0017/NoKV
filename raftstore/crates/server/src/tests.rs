@@ -314,6 +314,16 @@ impl nokv_raftnode::MetadataCommandExecutor for FixedRuntimeEngine {
            + 'a {
         self.inner.execute_metadata_command(req)
     }
+
+    fn execute_metadata_commands<'a>(
+        &'a self,
+        reqs: &'a [metadatapb::MetadataCommitRequest],
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<Vec<metadatapb::MetadataCommitResponse>>,
+    > + Send
+           + 'a {
+        self.inner.execute_metadata_commands(reqs)
+    }
 }
 
 impl MetadataRetentionExecutor for FixedRuntimeEngine {
@@ -461,6 +471,16 @@ impl nokv_raftnode::MetadataCommandExecutor for MetadataOnlyEngine {
            + 'a {
         self.inner.execute_metadata_command(req)
     }
+
+    fn execute_metadata_commands<'a>(
+        &'a self,
+        reqs: &'a [metadatapb::MetadataCommitRequest],
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<Vec<metadatapb::MetadataCommitResponse>>,
+    > + Send
+           + 'a {
+        self.inner.execute_metadata_commands(reqs)
+    }
 }
 
 impl MetadataRetentionExecutor for MetadataOnlyEngine {
@@ -581,6 +601,41 @@ async fn metadata_plane_can_run_against_holt_engine() {
     );
     assert_eq!(response.result.unwrap().applied_mutations, 1);
     assert_eq!(engine.status().applied_index, 1);
+}
+
+#[tokio::test]
+async fn metadata_plane_batches_concurrent_commits_into_one_apply_index() {
+    let admission = RegionAdmission::default();
+    let engine = FixedRuntimeEngine::leader(admission.region_id, admission.peer_id);
+    let service = MetadataPlaneService::with_admission_state_and_execution(
+        engine.clone(),
+        RegionAdmissionState::new(admission.clone()),
+        ExecutionRuntime::default(),
+    );
+
+    let first = service.commit_metadata(Request::new(metadata_put_request(
+        &admission,
+        b"k1".to_vec(),
+        b"v1".to_vec(),
+        1,
+        2,
+    )));
+    let second = service.commit_metadata(Request::new(metadata_put_request(
+        &admission,
+        b"k2".to_vec(),
+        b"v2".to_vec(),
+        2,
+        3,
+    )));
+    let (first, second) = tokio::join!(first, second);
+    let first = first.unwrap().into_inner();
+    let second = second.unwrap().into_inner();
+
+    assert!(first.region_error.is_none());
+    assert!(second.region_error.is_none());
+    assert_eq!(first.result.as_ref().unwrap().index, 1);
+    assert_eq!(second.result.as_ref().unwrap().index, 1);
+    assert_eq!(engine.inner.status().applied_index, 1);
 }
 
 #[tokio::test]

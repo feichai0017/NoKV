@@ -14,6 +14,7 @@ const PAYLOAD_NORMAL: u32 = 2;
 const PAYLOAD_MEMBERSHIP: u32 = 3;
 const NORMAL_REGION_DESCRIPTOR: u32 = 2;
 const NORMAL_METADATA_COMMAND: u32 = 4;
+const NORMAL_METADATA_COMMAND_BATCH: u32 = 5;
 
 #[derive(Clone, PartialEq, Message)]
 struct PersistedEntry {
@@ -117,6 +118,9 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
                 NORMAL_METADATA_COMMAND => {
                     ProposalPayload::MetadataCommand(persisted.normal_payload)
                 }
+                NORMAL_METADATA_COMMAND_BATCH => {
+                    ProposalPayload::MetadataCommandBatch(persisted.normal_payload)
+                }
                 other => {
                     return Err(Error::InvalidLogPayload(format!(
                         "unsupported normal proposal kind {other}",
@@ -130,6 +134,9 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
             match proposal.payload_kind() {
                 ProposalPayloadKind::MetadataCommand => {
                     proposal.decode_metadata_command()?;
+                }
+                ProposalPayloadKind::MetadataCommandBatch => {
+                    proposal.decode_metadata_command_batch()?;
                 }
                 ProposalPayloadKind::RegionDescriptor => {
                     proposal.decode_region_descriptor()?;
@@ -162,6 +169,7 @@ pub fn decode_log_entry(record: &LogEntry) -> Result<OpenRaftEntry, Error> {
 fn encode_normal_kind(kind: ProposalPayloadKind) -> u32 {
     match kind {
         ProposalPayloadKind::MetadataCommand => NORMAL_METADATA_COMMAND,
+        ProposalPayloadKind::MetadataCommandBatch => NORMAL_METADATA_COMMAND_BATCH,
         ProposalPayloadKind::RegionDescriptor => NORMAL_REGION_DESCRIPTOR,
     }
 }

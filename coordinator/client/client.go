@@ -259,13 +259,17 @@ func (c *GRPCClient) RemoveRegion(ctx context.Context, req *coordpb.RemoveRegion
 
 // GetRegionByKey forwards region lookup RPC.
 func (c *GRPCClient) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+	effectiveReq, err := c.getRegionByKeyRequestWithVerifierFloor(req)
+	if err != nil {
+		return nil, err
+	}
 	// Region lookup is a metadata authority read: standby coordinators can
 	// reject it with grant-not-held, so it must fail over like TSO/AllocID even
 	// though the RPC does not mutate user metadata.
 	return invokeDutyRPCValidated(ctx, c, rootproto.DutyRegionLookup, retryableWrite, func(coord coordpb.CoordinatorClient) (*coordpb.GetRegionByKeyResponse, error) {
-		return coord.GetRegionByKey(ctx, req)
+		return coord.GetRegionByKey(ctx, effectiveReq)
 	}, func(resp *coordpb.GetRegionByKeyResponse) error {
-		return c.validateGetRegionByKeyResponse(req, resp)
+		return c.validateGetRegionByKeyResponse(effectiveReq, resp)
 	})
 }
 
@@ -613,6 +617,47 @@ type metadataWitnessExpectation struct {
 	maxRootLag                 *uint64
 }
 
+func (c *GRPCClient) getRegionByKeyRequestWithVerifierFloor(req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyRequest, error) {
+	if req == nil || c == nil {
+		return req, nil
+	}
+	required := req.GetRequiredRootToken()
+	floor, err := c.metadataVerifierRootFloor()
+	if err != nil {
+		return nil, err
+	}
+	if metadataRootTokenSatisfied(required, floor) {
+		return req, nil
+	}
+	cloned := proto.Clone(req).(*coordpb.GetRegionByKeyRequest)
+	cloned.RequiredRootToken = proto.Clone(floor).(*coordpb.RootToken)
+	return cloned, nil
+}
+
+func (c *GRPCClient) metadataVerifierRootFloor() (*coordpb.RootToken, error) {
+	if c == nil {
+		return nil, nil
+	}
+	c.verifyMu.Lock()
+	defer c.verifyMu.Unlock()
+
+	var floor *coordpb.RootToken
+	if c.metadataAttached.hasCurrentToken && c.metadataAttached.currentToken != nil {
+		floor = proto.Clone(c.metadataAttached.currentToken).(*coordpb.RootToken)
+	}
+	storeState, err := c.loadVerifierStateLocked(rootproto.DutyRegionLookup)
+	if err != nil {
+		return nil, err
+	}
+	if !authorityRootTokenZero(storeState.MaxRootToken) {
+		stored := authorityRootTokenToCoordProto(storeState.MaxRootToken)
+		if !metadataRootTokenSatisfied(floor, stored) {
+			floor = stored
+		}
+	}
+	return floor, nil
+}
+
 func (c *GRPCClient) validateAllocIDResponse(req *coordpb.AllocIDRequest, resp *coordpb.AllocIDResponse) error {
 	if resp == nil {
 		return fmt.Errorf("%w: alloc id response is nil", errInvalidWitness)
@@ -632,7 +677,7 @@ func (c *GRPCClient) validateGetRegionByKeyResponse(req *coordpb.GetRegionByKeyR
 		return fmt.Errorf("%w: required_descriptor_revision=%d requested=%d", errInvalidWitness, resp.GetRequiredDescriptorRevision(), expectation.requiredDescriptorRevision)
 	}
 	if !metadataRootTokenSatisfied(resp.GetServedRootToken(), expectation.requiredRootToken) {
-		return fmt.Errorf("%w: served_root_token does not satisfy required_root_token", errInvalidWitness)
+		return fmt.Errorf("%w: served_root_token does not satisfy required_root_token", errStaleWitnessEra)
 	}
 	if !metadataRootTokenSatisfied(resp.GetCurrentRootToken(), resp.GetServedRootToken()) {
 		return fmt.Errorf("%w: current_root_token regressed behind served_root_token", errInvalidWitness)
@@ -996,7 +1041,7 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 	if c.metadataAttached.hasCurrentToken && !metadataRootTokenSatisfied(currentToken, c.metadataAttached.currentToken) {
 		return fmt.Errorf(
 			"%w: get_region_by_key era=0 current_root_token regressed behind attached floor",
-			errInvalidWitness,
+			errStaleWitnessEra,
 		)
 	}
 	storeState, err := c.loadVerifierStateLocked(rootproto.DutyRegionLookup)
@@ -1007,7 +1052,7 @@ func (c *GRPCClient) advanceAttachedMetadataFloor(resp *coordpb.GetRegionByKeyRe
 		!metadataRootTokenSatisfied(currentToken, authorityRootTokenToCoordProto(storeState.MaxRootToken)) {
 		return fmt.Errorf(
 			"%w: get_region_by_key era=0 current_root_token regressed behind durable verifier floor",
-			errInvalidWitness,
+			errStaleWitnessEra,
 		)
 	}
 	if currentToken != nil {
@@ -1031,7 +1076,7 @@ func (c *GRPCClient) advanceMetadataVerifierRootFloor(resp *coordpb.GetRegionByK
 	currentToken := resp.GetCurrentRootToken()
 	if !authorityRootTokenZero(storeState.MaxRootToken) &&
 		!metadataRootTokenSatisfied(currentToken, authorityRootTokenToCoordProto(storeState.MaxRootToken)) {
-		return fmt.Errorf("%w: get_region_by_key current_root_token regressed behind durable verifier floor", errInvalidWitness)
+		return fmt.Errorf("%w: get_region_by_key current_root_token regressed behind durable verifier floor", errStaleWitnessEra)
 	}
 	if currentToken != nil {
 		storeState.MaxRootToken = authorityRootTokenFromCoordProto(currentToken)

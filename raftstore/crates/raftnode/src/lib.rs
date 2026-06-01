@@ -11,6 +11,7 @@ mod apply;
 mod error;
 mod log;
 mod metadata_wire;
+mod metrics;
 mod proposal;
 mod region;
 mod storage;
@@ -26,6 +27,8 @@ pub use apply::{
 pub use error::Error;
 pub use log::{decode_log_entry, encode_log_entry, RaftEntryLog, SegmentedEntryLog};
 pub(crate) use metadata_wire::decode_metadata_response;
+pub(crate) use metadata_wire::decode_metadata_response_batch;
+pub use metrics::{raftnode_metrics_snapshot, RaftNodeMetricsSnapshot};
 pub use openraft::BasicNode;
 pub(crate) use proposal::ProposalPayloadKind;
 pub use proposal::{Proposal, ProposalPayload};

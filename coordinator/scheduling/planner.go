@@ -20,7 +20,7 @@ import (
 
 const (
 	defaultSchedulerCooldownTicks uint64 = 3
-	defaultMaxOperationsPerStore         = 1
+	defaultMaxOperationsPerStore  int    = 1
 )
 
 type PlanOptions struct {

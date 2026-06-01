@@ -1,6 +1,8 @@
 use nokv_metadata_state as metadata_state;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
+use std::time::{Duration, Instant};
 
+use crate::metrics;
 use crate::versions::apply_committed;
 use crate::HoltMetadataStore;
 
@@ -105,7 +107,60 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         command: &metadatapb::MetadataCommand,
         commit_version: u64,
     ) -> metadata_state::Result<metadata_state::MetadataApplyResult> {
+        let mut results =
+            self.commit_metadata_batch(std::slice::from_ref(command), &[commit_version])?;
+        Ok(results.remove(0))
+    }
+
+    fn commit_metadata_batch(
+        &self,
+        commands: &[metadatapb::MetadataCommand],
+        commit_versions: &[u64],
+    ) -> metadata_state::Result<Vec<metadata_state::MetadataApplyResult>> {
+        if commands.len() != commit_versions.len() {
+            return Err(metadata_state::Error::Backend(
+                "metadata command batch length mismatch".to_owned(),
+            ));
+        }
+        let started = Instant::now();
         let _guard = self.lock()?;
+        let mut results = Vec::with_capacity(commands.len());
+        let mut pending = Vec::new();
+        let prepare_started = Instant::now();
+        for (command, commit_version) in commands.iter().zip(commit_versions) {
+            let result = self.prepare_metadata_commit(command, *commit_version, &mut pending)?;
+            results.push(result);
+        }
+        let prepare_duration = prepare_started.elapsed();
+        let pending_writes = pending.len() as u64;
+        let mut atomic_duration = Duration::ZERO;
+        if !pending.is_empty() {
+            let atomic_started = Instant::now();
+            self.atomic(|batch| {
+                for (key, commit_version, value) in &pending {
+                    apply_committed(batch, key, *commit_version, value);
+                }
+            })?;
+            atomic_duration = atomic_started.elapsed();
+        }
+        metrics::record_metadata_commit(
+            commands.len() as u64,
+            pending_writes,
+            prepare_duration,
+            atomic_duration,
+            started.elapsed(),
+        );
+        Ok(results)
+    }
+}
+
+impl HoltMetadataStore {
+    fn prepare_metadata_commit(
+        &self,
+        command: &metadatapb::MetadataCommand,
+        commit_version: u64,
+        pending: &mut Vec<(Vec<u8>, u64, metadata_state::VersionedValue)>,
+    ) -> metadata_state::Result<metadata_state::MetadataApplyResult> {
         if let Some(error) = metadata_state::validation::metadata_commit_version(
             command.read_version,
             commit_version,
@@ -126,7 +181,7 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
                 predicate.read_version
             };
             let observed = self
-                .read_committed(&predicate.key, read_version)?
+                .read_committed_with_pending(&predicate.key, read_version, pending)?
                 .and_then(|(_, value)| value.value);
             if let Some(error) = metadata_state::validation::metadata_command_predicate_observation(
                 predicate,
@@ -139,9 +194,11 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
             if let Some(error) = metadata_state::validation::metadata_command_mutation(mutation) {
                 return Ok(metadata_apply_error(commit_version, error));
             }
-            if let Some((commit_ts, _)) =
-                self.first_write_after_or_at(&mutation.key, command.read_version)?
-            {
+            if let Some((commit_ts, _)) = self.first_write_after_or_at_with_pending(
+                &mutation.key,
+                command.read_version,
+                pending,
+            )? {
                 return Ok(metadata_apply_error(
                     commit_version,
                     metadata_state::errors::metadata_revision_conflict(
@@ -153,7 +210,7 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
             }
             if mutation.assertion_not_exist
                 && self
-                    .read_committed(&mutation.key, command.read_version)?
+                    .read_committed_with_pending(&mutation.key, command.read_version, pending)?
                     .and_then(|(_, value)| value.value)
                     .is_some()
             {
@@ -163,30 +220,56 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
                 ));
             }
         }
-        let values = command
-            .mutations
-            .iter()
-            .map(|mutation| {
-                (
-                    mutation.key.clone(),
-                    metadata_state::metadata_mutation_value(mutation, command.read_version),
-                )
-            })
-            .collect::<Vec<_>>();
-        self.atomic(|batch| {
-            for (key, value) in &values {
-                apply_committed(batch, key, commit_version, value);
-            }
-        })?;
+        pending.extend(command.mutations.iter().map(|mutation| {
+            (
+                mutation.key.clone(),
+                commit_version,
+                metadata_state::metadata_mutation_value(mutation, command.read_version),
+            )
+        }));
         Ok(metadata_state::MetadataApplyResult {
             commit_version,
             applied_mutations: command.mutations.len() as u64,
             error: None,
         })
     }
-}
 
-impl HoltMetadataStore {
+    fn read_committed_with_pending(
+        &self,
+        key: &[u8],
+        version: u64,
+        pending: &[(Vec<u8>, u64, metadata_state::VersionedValue)],
+    ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
+        let mut best = self.read_committed(key, version)?;
+        for (pending_key, commit_version, value) in pending {
+            if pending_key.as_slice() == key
+                && *commit_version <= version
+                && best.as_ref().is_none_or(|(ts, _)| *commit_version > *ts)
+            {
+                best = Some((*commit_version, value.clone()));
+            }
+        }
+        Ok(best)
+    }
+
+    fn first_write_after_or_at_with_pending(
+        &self,
+        key: &[u8],
+        version: u64,
+        pending: &[(Vec<u8>, u64, metadata_state::VersionedValue)],
+    ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
+        let mut best = self.first_write_after_or_at(key, version)?;
+        for (pending_key, commit_version, value) in pending {
+            if pending_key.as_slice() == key
+                && *commit_version >= version
+                && best.as_ref().is_none_or(|(ts, _)| *commit_version < *ts)
+            {
+                best = Some((*commit_version, value.clone()));
+            }
+        }
+        Ok(best)
+    }
+
     fn metadata_already_applied(
         &self,
         command: &metadatapb::MetadataCommand,

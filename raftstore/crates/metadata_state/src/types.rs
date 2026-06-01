@@ -97,6 +97,23 @@ pub trait MetadataEngine: Clone + Send + Sync + 'static {
         command: &metadatapb::MetadataCommand,
         commit_version: u64,
     ) -> Result<MetadataApplyResult>;
+
+    fn commit_metadata_batch(
+        &self,
+        commands: &[metadatapb::MetadataCommand],
+        commit_versions: &[u64],
+    ) -> Result<Vec<MetadataApplyResult>> {
+        if commands.len() != commit_versions.len() {
+            return Err(Error::Backend(
+                "metadata command batch length mismatch".to_owned(),
+            ));
+        }
+        commands
+            .iter()
+            .zip(commit_versions)
+            .map(|(command, commit_version)| self.commit_metadata(command, *commit_version))
+            .collect()
+    }
 }
 
 pub trait MetadataSnapshotEngine: Clone + Send + Sync + 'static {

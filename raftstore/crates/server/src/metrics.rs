@@ -2,14 +2,19 @@
 
 use std::net::SocketAddr;
 
-use nokv_holtstore::HoltMetadataStore;
+use nokv_holtstore::{
+    holt_metadata_metrics_snapshot, HoltMetadataMetricsSnapshot, HoltMetadataStore,
+};
 use nokv_proto::nokv::coordinator::v1 as coordpb;
-use nokv_raftnode::{RegionSnapshotEngine, RegionTrafficProvider};
+use nokv_raftnode::{
+    raftnode_metrics_snapshot, RaftNodeMetricsSnapshot, RegionSnapshotEngine, RegionTrafficProvider,
+};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
 use crate::coordinator::coordinator_heartbeat_request_for_hosted_regions;
 use crate::hosted_region::HostedRegionRegistry;
+use nokv_raftstore_server::{metadata_batch_metrics_snapshot, MetadataBatchMetricsSnapshot};
 
 pub(super) fn spawn_metrics_server<E>(
     metrics_addr: Option<SocketAddr>,
@@ -100,7 +105,12 @@ where
         root_events,
     );
     match heartbeat {
-        Ok(heartbeat) => metrics_payload_from_heartbeat(&heartbeat),
+        Ok(heartbeat) => metrics_payload_from_heartbeat(
+            &heartbeat,
+            metadata_batch_metrics_snapshot(),
+            raftnode_metrics_snapshot(),
+            holt_metadata_metrics_snapshot(),
+        ),
         Err(err) => format!(
             "{{\"nokv_raftstore\":{{\"store_id\":{store_id},\"error\":\"{}\"}}}}\n",
             json_escape(&err)
@@ -108,7 +118,12 @@ where
     }
 }
 
-fn metrics_payload_from_heartbeat(heartbeat: &coordpb::StoreHeartbeatRequest) -> String {
+fn metrics_payload_from_heartbeat(
+    heartbeat: &coordpb::StoreHeartbeatRequest,
+    metadata_batch: MetadataBatchMetricsSnapshot,
+    raftnode: RaftNodeMetricsSnapshot,
+    holt_metadata: HoltMetadataMetricsSnapshot,
+) -> String {
     let mut regions = String::new();
     for (index, stats) in heartbeat.region_stats.iter().enumerate() {
         if index > 0 {
@@ -126,13 +141,16 @@ fn metrics_payload_from_heartbeat(heartbeat: &coordpb::StoreHeartbeatRequest) ->
         ));
     }
     format!(
-        "{{\"nokv_raftstore\":{{\"store_id\":{},\"client_addr\":\"{}\",\"raft_addr\":\"{}\",\"region_num\":{},\"leader_num\":{},\"leader_region_ids\":{},\"regions\":[{}]}}}}\n",
+        "{{\"nokv_raftstore\":{{\"store_id\":{},\"client_addr\":\"{}\",\"raft_addr\":\"{}\",\"region_num\":{},\"leader_num\":{},\"leader_region_ids\":{},\"metadata_commit_batch\":{},\"raftnode\":{},\"holt_metadata\":{},\"regions\":[{}]}}}}\n",
         heartbeat.store_id,
         json_escape(&heartbeat.client_addr),
         json_escape(&heartbeat.raft_addr),
         heartbeat.region_num,
         heartbeat.leader_num,
         json_u64_array(&heartbeat.leader_region_ids),
+        metadata_batch_json(metadata_batch),
+        raftnode_json(raftnode),
+        holt_metadata_json(holt_metadata),
         regions
     )
 }
@@ -165,36 +183,172 @@ fn json_escape(value: &str) -> String {
     out
 }
 
+fn metadata_batch_json(metrics: MetadataBatchMetricsSnapshot) -> String {
+    format!(
+        "{{\"requests_total\":{},\"batches_total\":{},\"batch_commands_total\":{},\"batch_commands_max\":{},\"batch_wait_ns_total\":{},\"batch_wait_ns_max\":{},\"batch_execute_ns_total\":{},\"batch_execute_ns_max\":{}}}",
+        metrics.requests_total,
+        metrics.batches_total,
+        metrics.batch_commands_total,
+        metrics.batch_commands_max,
+        metrics.batch_wait_ns_total,
+        metrics.batch_wait_ns_max,
+        metrics.batch_execute_ns_total,
+        metrics.batch_execute_ns_max
+    )
+}
+
+fn raftnode_json(metrics: RaftNodeMetricsSnapshot) -> String {
+    format!(
+        "{{\"proposals_total\":{},\"proposal_commands_total\":{},\"proposal_commands_max\":{},\"proposal_ns_total\":{},\"proposal_ns_max\":{},\"log_append_calls_total\":{},\"log_entries_total\":{},\"log_entries_max\":{},\"log_append_ns_total\":{},\"log_append_ns_max\":{},\"log_sync_ns_total\":{},\"log_sync_ns_max\":{},\"state_machine_apply_calls_total\":{},\"state_machine_apply_entries_total\":{},\"state_machine_apply_entries_max\":{},\"state_machine_apply_ns_total\":{},\"state_machine_apply_ns_max\":{},\"metadata_apply_batches_total\":{},\"metadata_apply_commands_total\":{},\"metadata_apply_commands_max\":{},\"metadata_apply_ns_total\":{},\"metadata_apply_ns_max\":{},\"append_entries_client_calls_total\":{},\"append_entries_client_entries_total\":{},\"append_entries_client_entries_max\":{},\"append_entries_client_ns_total\":{},\"append_entries_client_ns_max\":{},\"append_entries_server_calls_total\":{},\"append_entries_server_entries_total\":{},\"append_entries_server_entries_max\":{},\"append_entries_server_ns_total\":{},\"append_entries_server_ns_max\":{}}}",
+        metrics.proposals_total,
+        metrics.proposal_commands_total,
+        metrics.proposal_commands_max,
+        metrics.proposal_ns_total,
+        metrics.proposal_ns_max,
+        metrics.log_append_calls_total,
+        metrics.log_entries_total,
+        metrics.log_entries_max,
+        metrics.log_append_ns_total,
+        metrics.log_append_ns_max,
+        metrics.log_sync_ns_total,
+        metrics.log_sync_ns_max,
+        metrics.state_machine_apply_calls_total,
+        metrics.state_machine_apply_entries_total,
+        metrics.state_machine_apply_entries_max,
+        metrics.state_machine_apply_ns_total,
+        metrics.state_machine_apply_ns_max,
+        metrics.metadata_apply_batches_total,
+        metrics.metadata_apply_commands_total,
+        metrics.metadata_apply_commands_max,
+        metrics.metadata_apply_ns_total,
+        metrics.metadata_apply_ns_max,
+        metrics.append_entries_client_calls_total,
+        metrics.append_entries_client_entries_total,
+        metrics.append_entries_client_entries_max,
+        metrics.append_entries_client_ns_total,
+        metrics.append_entries_client_ns_max,
+        metrics.append_entries_server_calls_total,
+        metrics.append_entries_server_entries_total,
+        metrics.append_entries_server_entries_max,
+        metrics.append_entries_server_ns_total,
+        metrics.append_entries_server_ns_max
+    )
+}
+
+fn holt_metadata_json(metrics: HoltMetadataMetricsSnapshot) -> String {
+    format!(
+        "{{\"commit_batches_total\":{},\"commit_commands_total\":{},\"commit_commands_max\":{},\"commit_writes_total\":{},\"commit_writes_max\":{},\"prepare_ns_total\":{},\"prepare_ns_max\":{},\"atomic_ns_total\":{},\"atomic_ns_max\":{},\"total_ns_total\":{},\"total_ns_max\":{}}}",
+        metrics.commit_batches_total,
+        metrics.commit_commands_total,
+        metrics.commit_commands_max,
+        metrics.commit_writes_total,
+        metrics.commit_writes_max,
+        metrics.prepare_ns_total,
+        metrics.prepare_ns_max,
+        metrics.atomic_ns_total,
+        metrics.atomic_ns_max,
+        metrics.total_ns_total,
+        metrics.total_ns_max
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn metrics_payload_uses_expvar_compatible_root_key() {
-        let payload = metrics_payload_from_heartbeat(&coordpb::StoreHeartbeatRequest {
-            store_id: 7,
-            region_num: 2,
-            leader_num: 1,
-            leader_region_ids: vec![11],
-            client_addr: "127.0.0.1:20170".to_owned(),
-            raft_addr: "127.0.0.1:20170".to_owned(),
-            region_stats: vec![coordpb::RegionRuntimeStats {
-                region_id: 11,
-                leader_store_id: 7,
-                read_qps: 3,
-                write_qps: 2,
-                write_bytes_per_sec: 128,
-                atomic_mutate_qps: 1,
-                pending_admin: true,
+        let payload = metrics_payload_from_heartbeat(
+            &coordpb::StoreHeartbeatRequest {
+                store_id: 7,
+                region_num: 2,
+                leader_num: 1,
+                leader_region_ids: vec![11],
+                client_addr: "127.0.0.1:20170".to_owned(),
+                raft_addr: "127.0.0.1:20170".to_owned(),
+                region_stats: vec![coordpb::RegionRuntimeStats {
+                    region_id: 11,
+                    leader_store_id: 7,
+                    read_qps: 3,
+                    write_qps: 2,
+                    write_bytes_per_sec: 128,
+                    atomic_mutate_qps: 1,
+                    pending_admin: true,
+                    ..Default::default()
+                }],
                 ..Default::default()
-            }],
-            ..Default::default()
-        });
+            },
+            MetadataBatchMetricsSnapshot {
+                requests_total: 5,
+                batches_total: 2,
+                batch_commands_total: 5,
+                batch_commands_max: 4,
+                batch_wait_ns_total: 12,
+                batch_wait_ns_max: 9,
+                batch_execute_ns_total: 20,
+                batch_execute_ns_max: 15,
+            },
+            RaftNodeMetricsSnapshot {
+                proposals_total: 2,
+                proposal_commands_total: 5,
+                proposal_commands_max: 4,
+                proposal_ns_total: 100,
+                proposal_ns_max: 90,
+                log_append_calls_total: 2,
+                log_entries_total: 2,
+                log_entries_max: 1,
+                log_append_ns_total: 30,
+                log_append_ns_max: 20,
+                log_sync_ns_total: 40,
+                log_sync_ns_max: 25,
+                state_machine_apply_calls_total: 2,
+                state_machine_apply_entries_total: 2,
+                state_machine_apply_entries_max: 1,
+                state_machine_apply_ns_total: 50,
+                state_machine_apply_ns_max: 30,
+                metadata_apply_batches_total: 2,
+                metadata_apply_commands_total: 5,
+                metadata_apply_commands_max: 4,
+                metadata_apply_ns_total: 60,
+                metadata_apply_ns_max: 35,
+                append_entries_client_calls_total: 3,
+                append_entries_client_entries_total: 8,
+                append_entries_client_entries_max: 5,
+                append_entries_client_ns_total: 70,
+                append_entries_client_ns_max: 40,
+                append_entries_server_calls_total: 3,
+                append_entries_server_entries_total: 8,
+                append_entries_server_entries_max: 5,
+                append_entries_server_ns_total: 80,
+                append_entries_server_ns_max: 45,
+            },
+            HoltMetadataMetricsSnapshot {
+                commit_batches_total: 2,
+                commit_commands_total: 5,
+                commit_commands_max: 4,
+                commit_writes_total: 9,
+                commit_writes_max: 7,
+                prepare_ns_total: 11,
+                prepare_ns_max: 8,
+                atomic_ns_total: 12,
+                atomic_ns_max: 9,
+                total_ns_total: 23,
+                total_ns_max: 17,
+            },
+        );
 
         assert!(payload.starts_with("{\"nokv_raftstore\""));
         assert!(payload.contains("\"store_id\":7"));
         assert!(payload.contains("\"region_num\":2"));
         assert!(payload.contains("\"leader_region_ids\":[11]"));
+        assert!(payload.contains("\"metadata_commit_batch\""));
+        assert!(payload.contains("\"raftnode\""));
+        assert!(payload.contains("\"holt_metadata\""));
+        assert!(payload.contains("\"requests_total\":5"));
+        assert!(payload.contains("\"batch_commands_max\":4"));
+        assert!(payload.contains("\"proposal_commands_total\":5"));
+        assert!(payload.contains("\"append_entries_client_calls_total\":3"));
+        assert!(payload.contains("\"commit_writes_total\":9"));
         assert!(payload.contains("\"pending_admin\":true"));
         assert!(payload.ends_with('\n'));
     }

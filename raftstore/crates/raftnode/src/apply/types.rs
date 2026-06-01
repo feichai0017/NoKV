@@ -32,6 +32,22 @@ pub trait MetadataCommandExecutor: Clone + Send + Sync + 'static {
         Output = nokv_metadata_state::Result<metadatapb::MetadataCommitResponse>,
     > + Send
            + 'a;
+
+    fn execute_metadata_commands<'a>(
+        &'a self,
+        reqs: &'a [metadatapb::MetadataCommitRequest],
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<Vec<metadatapb::MetadataCommitResponse>>,
+    > + Send
+           + 'a {
+        async move {
+            let mut responses = Vec::with_capacity(reqs.len());
+            for req in reqs {
+                responses.push(self.execute_metadata_command(req).await?);
+            }
+            Ok(responses)
+        }
+    }
 }
 
 pub trait MetadataReadExecutor: Clone + Send + Sync + 'static {

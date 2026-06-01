@@ -802,36 +802,32 @@ func TestGRPCClientRejectsInvalidTSOWitness(t *testing.T) {
 	require.Contains(t, err.Error(), "consumed_frontier=89 expected=90")
 }
 
-func TestGRPCClientRejectsInvalidMetadataWitness(t *testing.T) {
+func TestGRPCClientTreatsMetadataRequiredRootMissAsStaleWitness(t *testing.T) {
 	cli := newScriptedCoordinatorClient(t, []string{"metadata-invalid"}, map[string]*scriptedCoordinatorServer{
-		"metadata-invalid": {
-			getResponses: []*coordpb.GetRegionByKeyResponse{
-				{
-					RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 11, RootEpoch: 7},
-					ServedRootToken:            &coordpb.RootToken{Term: 1, Index: 4, Revision: 4},
-					CurrentRootToken:           &coordpb.RootToken{Term: 1, Index: 5, Revision: 5},
-					ServedFreshness:            coordpb.Freshness_FRESHNESS_BOUNDED,
-					RootLag:                    1,
-					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
-					DescriptorRevision:         7,
-					RequiredDescriptorRevision: 7,
-					Era:                        2,
-					ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
-					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
-				},
-			},
-		},
+		"metadata-invalid": {},
 	})
-
-	_, err := cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+	req := &coordpb.GetRegionByKeyRequest{
 		Key:                        []byte("m"),
 		Freshness:                  coordpb.Freshness_FRESHNESS_BOUNDED,
 		RequiredRootToken:          &coordpb.RootToken{Term: 1, Index: 5, Revision: 5},
 		RequiredDescriptorRevision: 7,
 		MaxRootLag:                 proto.Uint64(2),
+	}
+	err := cli.validateGetRegionByKeyResponse(req, &coordpb.GetRegionByKeyResponse{
+		RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 11, RootEpoch: 7},
+		ServedRootToken:            &coordpb.RootToken{Term: 1, Index: 4, Revision: 4},
+		CurrentRootToken:           &coordpb.RootToken{Term: 1, Index: 5, Revision: 5},
+		ServedFreshness:            coordpb.Freshness_FRESHNESS_BOUNDED,
+		RootLag:                    1,
+		CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_LAGGING,
+		DescriptorRevision:         7,
+		RequiredDescriptorRevision: 7,
+		Era:                        2,
+		ServingClass:               coordpb.ServingClass_SERVING_CLASS_BOUNDED_STALE,
+		SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_LAGGING,
 	})
 	require.Error(t, err)
-	require.True(t, IsInvalidWitness(err))
+	require.True(t, IsStaleWitnessEra(err))
 	require.Contains(t, err.Error(), "served_root_token does not satisfy required_root_token")
 }
 
@@ -1003,6 +999,77 @@ func TestGRPCClientRetriesStaleMetadataWitnessEraAcrossEndpoints(t *testing.T) {
 	require.Equal(t, 2, servers["fresh"].getCalls)
 }
 
+func TestGRPCClientRaisesRegionLookupRequiredRootTokenToVerifierFloor(t *testing.T) {
+	var staleSawRaisedFloor bool
+	servers := map[string]*scriptedCoordinatorServer{
+		"fresh": {
+			getResponses: []*coordpb.GetRegionByKeyResponse{
+				{
+					RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 11, RootEpoch: 10},
+					ServedRootToken:            &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
+					CurrentRootToken:           &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
+					ServedFreshness:            coordpb.Freshness_FRESHNESS_STRONG,
+					RootLag:                    0,
+					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
+					DescriptorRevision:         10,
+					RequiredDescriptorRevision: 8,
+					Era:                        0,
+					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
+					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
+					ServedByLeader:             true,
+				},
+				{
+					RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 12, RootEpoch: 11},
+					ServedRootToken:            &coordpb.RootToken{Term: 2, Index: 11, Revision: 11},
+					CurrentRootToken:           &coordpb.RootToken{Term: 2, Index: 11, Revision: 11},
+					ServedFreshness:            coordpb.Freshness_FRESHNESS_STRONG,
+					RootLag:                    0,
+					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
+					DescriptorRevision:         11,
+					RequiredDescriptorRevision: 8,
+					Era:                        0,
+					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
+					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
+					ServedByLeader:             true,
+				},
+			},
+		},
+		"stale": {
+			getHandler: func(_ context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+				staleSawRaisedFloor = req.GetRequiredRootToken().GetRevision() == 10
+				return nil, nokverrors.RPCStatusError(
+					nokverrors.KindStaleEpoch,
+					codes.FailedPrecondition,
+					"required rooted token not satisfied",
+					map[string]string{coordinatorReasonMetadata: "required_rooted_token"},
+				)
+			},
+		},
+	}
+	cli := newScriptedCoordinatorClient(t, []string{"fresh", "stale"}, servers)
+
+	resp, err := cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:                        []byte("m"),
+		Freshness:                  coordpb.Freshness_FRESHNESS_STRONG,
+		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
+		RequiredDescriptorRevision: 8,
+	})
+	require.NoError(t, err)
+	require.Equal(t, uint64(11), resp.GetRegionDescriptor().GetRegionId())
+
+	cli.markPreferredForDuty(rootproto.DutyRegionLookup, "passthrough:///stale")
+	resp, err = cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+		Key:                        []byte("m"),
+		Freshness:                  coordpb.Freshness_FRESHNESS_STRONG,
+		RequiredDescriptorRevision: 8,
+	})
+	require.NoError(t, err)
+	require.True(t, staleSawRaisedFloor)
+	require.Equal(t, uint64(12), resp.GetRegionDescriptor().GetRegionId())
+	require.Equal(t, 1, servers["stale"].getCalls)
+	require.Equal(t, 2, servers["fresh"].getCalls)
+}
+
 func TestGRPCClientAcceptsZeroEraMetadataWitnessAfterDetachedEra(t *testing.T) {
 	cli := newScriptedCoordinatorClient(t, []string{"mixed"}, map[string]*scriptedCoordinatorServer{
 		"mixed": {
@@ -1060,57 +1127,53 @@ func TestGRPCClientAcceptsZeroEraMetadataWitnessAfterDetachedEra(t *testing.T) {
 
 func TestGRPCClientRejectsZeroEraMetadataWitnessRegressingAttachedFrontier(t *testing.T) {
 	cli := newScriptedCoordinatorClient(t, []string{"mixed"}, map[string]*scriptedCoordinatorServer{
-		"mixed": {
-			getResponses: []*coordpb.GetRegionByKeyResponse{
-				{
-					RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 12, RootEpoch: 10},
-					ServedRootToken:            &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
-					CurrentRootToken:           &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
-					ServedFreshness:            coordpb.Freshness_FRESHNESS_STRONG,
-					RootLag:                    0,
-					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
-					DescriptorRevision:         10,
-					RequiredDescriptorRevision: 8,
-					Era:                        0,
-					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
-					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
-					ServedByLeader:             true,
-				},
-				{
-					RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 11, RootEpoch: 9},
-					ServedRootToken:            &coordpb.RootToken{Term: 2, Index: 9, Revision: 9},
-					CurrentRootToken:           &coordpb.RootToken{Term: 2, Index: 9, Revision: 9},
-					ServedFreshness:            coordpb.Freshness_FRESHNESS_STRONG,
-					RootLag:                    0,
-					CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
-					DescriptorRevision:         9,
-					RequiredDescriptorRevision: 8,
-					Era:                        0,
-					ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
-					SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
-					ServedByLeader:             true,
-				},
-			},
-		},
+		"mixed": {},
 	})
 
-	resp, err := cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+	firstReq := &coordpb.GetRegionByKeyRequest{
 		Key:                        []byte("m"),
 		Freshness:                  coordpb.Freshness_FRESHNESS_STRONG,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
 		RequiredDescriptorRevision: 8,
+	}
+	err := cli.validateGetRegionByKeyResponse(firstReq, &coordpb.GetRegionByKeyResponse{
+		RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 12, RootEpoch: 10},
+		ServedRootToken:            &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
+		CurrentRootToken:           &coordpb.RootToken{Term: 2, Index: 10, Revision: 10},
+		ServedFreshness:            coordpb.Freshness_FRESHNESS_STRONG,
+		RootLag:                    0,
+		CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
+		DescriptorRevision:         10,
+		RequiredDescriptorRevision: 8,
+		Era:                        0,
+		ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
+		SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
+		ServedByLeader:             true,
 	})
 	require.NoError(t, err)
-	require.Equal(t, uint64(12), resp.GetRegionDescriptor().GetRegionId())
 
-	_, err = cli.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{
+	secondReq := &coordpb.GetRegionByKeyRequest{
 		Key:                        []byte("m"),
 		Freshness:                  coordpb.Freshness_FRESHNESS_STRONG,
 		RequiredRootToken:          &coordpb.RootToken{Term: 2, Index: 9, Revision: 9},
 		RequiredDescriptorRevision: 8,
+	}
+	err = cli.validateGetRegionByKeyResponse(secondReq, &coordpb.GetRegionByKeyResponse{
+		RegionDescriptor:           &metapb.RegionDescriptor{RegionId: 11, RootEpoch: 9},
+		ServedRootToken:            &coordpb.RootToken{Term: 2, Index: 9, Revision: 9},
+		CurrentRootToken:           &coordpb.RootToken{Term: 2, Index: 9, Revision: 9},
+		ServedFreshness:            coordpb.Freshness_FRESHNESS_STRONG,
+		RootLag:                    0,
+		CatchUpState:               coordpb.CatchUpState_CATCH_UP_STATE_FRESH,
+		DescriptorRevision:         9,
+		RequiredDescriptorRevision: 8,
+		Era:                        0,
+		ServingClass:               coordpb.ServingClass_SERVING_CLASS_AUTHORITATIVE,
+		SyncHealth:                 coordpb.SyncHealth_SYNC_HEALTH_HEALTHY,
+		ServedByLeader:             true,
 	})
 	require.Error(t, err)
-	require.True(t, IsInvalidWitness(err))
+	require.True(t, IsStaleWitnessEra(err))
 	require.Contains(t, err.Error(), "current_root_token regressed behind attached floor")
 }
 
@@ -1442,6 +1505,8 @@ type scriptedCoordinatorServer struct {
 
 	getResponses []*coordpb.GetRegionByKeyResponse
 	getErrors    []error
+	getHandler   func(context.Context, *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error)
+	getRequests  []*coordpb.GetRegionByKeyRequest
 	getCalls     int
 }
 
@@ -1538,10 +1603,20 @@ func (s *scriptedCoordinatorServer) Tso(_ context.Context, _ *coordpb.TsoRequest
 	return resp, nil
 }
 
-func (s *scriptedCoordinatorServer) GetRegionByKey(_ context.Context, _ *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+func (s *scriptedCoordinatorServer) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.getCalls++
+	if req == nil {
+		s.getRequests = append(s.getRequests, nil)
+	} else {
+		s.getRequests = append(s.getRequests, proto.Clone(req).(*coordpb.GetRegionByKeyRequest))
+	}
+	if s.getHandler != nil {
+		resp, err := s.getHandler(ctx, req)
+		s.attachDefaultAuthorityEvidence(resp)
+		return resp, err
+	}
 	var err error
 	if len(s.getErrors) > 0 {
 		err = s.getErrors[0]

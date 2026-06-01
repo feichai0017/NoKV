@@ -5,6 +5,7 @@
 
 mod codec;
 mod metadata;
+mod metrics;
 mod region_meta;
 mod retention;
 mod scheduler_state;
@@ -15,6 +16,7 @@ mod types;
 mod versions;
 mod watch_apply;
 
+pub use metrics::{holt_metadata_metrics_snapshot, HoltMetadataMetricsSnapshot};
 pub use store::{HoltMetadataStore, HoltStore};
 pub use trees::{APPLY_STATE_TREE, DATA_TREE, REGION_META_TREE, WATCH_APPLY_TREE, WRITE_TREE};
 pub use types::{

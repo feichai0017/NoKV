@@ -6,7 +6,7 @@ use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use tokio::sync::broadcast;
 
-use crate::metadata_wire::encode_metadata_response;
+use crate::metadata_wire::{encode_metadata_response, encode_metadata_response_batch};
 use crate::traffic::{RegionTrafficProvider, RegionTrafficSnapshot, RegionTrafficStats};
 use crate::{Error, OpenRaftEntry, ProposalPayloadKind, RegionId};
 
@@ -295,6 +295,20 @@ where
                                 index,
                                 term,
                                 payload: encode_metadata_response(&response)?,
+                                descriptor_changed: false,
+                            });
+                        }
+                        ProposalPayloadKind::MetadataCommandBatch => {
+                            let reqs = proposal.decode_metadata_command_batch().map_err(|err| {
+                                nokv_metadata_state::Error::Backend(err.to_string())
+                            })?;
+                            let responses =
+                                self.execute_metadata_commands_at(&reqs, Some((term, index)))?;
+                            applied.push(AppliedProposal {
+                                region_id: proposal.region_id,
+                                index,
+                                term,
+                                payload: encode_metadata_response_batch(&responses)?,
                                 descriptor_changed: false,
                             });
                         }

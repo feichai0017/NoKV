@@ -434,6 +434,101 @@ func TestCoordinatorRouteProviderPrefersNotLeaderHintOverStaleCoordinatorLeader(
 	require.Equal(t, uint64(22), route.Context.GetPeer().GetPeerId())
 }
 
+func TestCoordinatorRouteProviderCachesResolvedRoute(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	metadatapb.RegisterMetadataPlaneServer(server, &fakeMetadataPlaneServer{})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.GracefulStop)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	coordinator := fakeRouteCoordinator()
+	provider, err := NewCoordinatorRouteProvider(coordinator, CoordinatorRouteProviderOptions{
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
+
+	first, err := provider.RouteForKey(context.Background(), []byte("k1"))
+	require.NoError(t, err)
+	second, err := provider.RouteForKey(context.Background(), []byte("k2"))
+	require.NoError(t, err)
+	require.Equal(t, first.Context.GetRegionId(), second.Context.GetRegionId())
+	require.Equal(t, uint64(1), coordinator.regionCallCount())
+	require.Equal(t, uint64(1), coordinator.storeCallCount(2))
+}
+
+func TestCoordinatorRouteProviderInvalidatesCachedRouteOnNotLeader(t *testing.T) {
+	listener := bufconn.Listen(1024 * 1024)
+	server := grpc.NewServer()
+	metadatapb.RegisterMetadataPlaneServer(server, &fakeMetadataPlaneServer{})
+	go func() { _ = server.Serve(listener) }()
+	t.Cleanup(server.GracefulStop)
+	t.Cleanup(func() { _ = listener.Close() })
+
+	coordinator := &fakeCoordinatorClient{
+		region: &coordpb.GetRegionByKeyResponse{
+			RegionDescriptor: &metapb.RegionDescriptor{
+				RegionId: 9,
+				Epoch:    &metapb.RegionEpoch{Version: 2, ConfVersion: 3},
+				Peers: []*metapb.RegionPeer{
+					{StoreId: 1, PeerId: 11},
+					{StoreId: 2, PeerId: 22},
+				},
+			},
+			LeaderPeer: &metapb.RegionPeer{StoreId: 1, PeerId: 11},
+		},
+		stores: map[uint64]*coordpb.GetStoreResponse{
+			1: {
+				Store: &coordpb.StoreInfo{
+					StoreId:    1,
+					ClientAddr: "passthrough:///store-1",
+					State:      coordpb.StoreState_STORE_STATE_UP,
+				},
+			},
+			2: {
+				Store: &coordpb.StoreInfo{
+					StoreId:    2,
+					ClientAddr: "passthrough:///store-2",
+					State:      coordpb.StoreState_STORE_STATE_UP,
+				},
+			},
+		},
+	}
+	provider, err := NewCoordinatorRouteProvider(coordinator, CoordinatorRouteProviderOptions{
+		DialOptions: []grpc.DialOption{
+			grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) {
+				return listener.Dial()
+			}),
+			grpc.WithTransportCredentials(insecure.NewCredentials()),
+		},
+	})
+	require.NoError(t, err)
+	t.Cleanup(func() { require.NoError(t, provider.Close()) })
+
+	route, err := provider.RouteForKey(context.Background(), []byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), route.Context.GetPeer().GetStoreId())
+	provider.ObserveRegionError(context.Background(), []byte("k"), route, &errorpb.RegionError{
+		NotLeader: &errorpb.NotLeader{
+			RegionId: 9,
+			Leader:   &metapb.RegionPeer{StoreId: 2, PeerId: 22},
+		},
+	})
+
+	route, err = provider.RouteForKey(context.Background(), []byte("k"))
+	require.NoError(t, err)
+	require.Equal(t, uint64(2), route.Context.GetPeer().GetStoreId())
+	require.Equal(t, uint64(2), coordinator.regionCallCount())
+	require.Equal(t, uint64(1), coordinator.storeCallCount(1))
+	require.Equal(t, uint64(1), coordinator.storeCallCount(2))
+}
+
 func TestCoordinatorRouteProviderIgnoresLeaderHintRemovedFromDescriptor(t *testing.T) {
 	listener := bufconn.Listen(1024 * 1024)
 	server := grpc.NewServer()
@@ -822,17 +917,32 @@ func (s *fakeMetadataPlaneServer) WatchApply(req *metadatapb.MetadataWatchApplyR
 }
 
 type fakeCoordinatorClient struct {
-	region    *coordpb.GetRegionByKeyResponse
-	stores    map[uint64]*coordpb.GetStoreResponse
-	mount     *coordpb.GetMountResponse
-	published []*metapb.RootEvent
+	mu             sync.Mutex
+	region         *coordpb.GetRegionByKeyResponse
+	stores         map[uint64]*coordpb.GetStoreResponse
+	mount          *coordpb.GetMountResponse
+	published      []*metapb.RootEvent
+	regionCalls    uint64
+	storeCallsByID map[uint64]uint64
+	nextAllocID    uint64
+	allocCalls     uint64
+	allocCounts    []uint64
 }
 
 func (c *fakeCoordinatorClient) GetRegionByKey(context.Context, *coordpb.GetRegionByKeyRequest) (*coordpb.GetRegionByKeyResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.regionCalls++
 	return c.region, nil
 }
 
 func (c *fakeCoordinatorClient) GetStore(_ context.Context, req *coordpb.GetStoreRequest) (*coordpb.GetStoreResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.storeCallsByID == nil {
+		c.storeCallsByID = make(map[uint64]uint64)
+	}
+	c.storeCallsByID[req.GetStoreId()]++
 	return c.stores[req.GetStoreId()], nil
 }
 
@@ -840,11 +950,26 @@ func (c *fakeCoordinatorClient) Tso(context.Context, *coordpb.TsoRequest) (*coor
 	return &coordpb.TsoResponse{Timestamp: 10, Count: 1}, nil
 }
 
-func (c *fakeCoordinatorClient) AllocID(context.Context, *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
-	return &coordpb.AllocIDResponse{FirstId: 100, Count: 1}, nil
+func (c *fakeCoordinatorClient) AllocID(_ context.Context, req *coordpb.AllocIDRequest) (*coordpb.AllocIDResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	count := req.GetCount()
+	if count == 0 {
+		count = 1
+	}
+	first := c.nextAllocID
+	if first == 0 {
+		first = 100
+	}
+	c.nextAllocID = first + count
+	c.allocCalls++
+	c.allocCounts = append(c.allocCounts, count)
+	return &coordpb.AllocIDResponse{FirstId: first, Count: count}, nil
 }
 
 func (c *fakeCoordinatorClient) GetMount(context.Context, *coordpb.GetMountRequest) (*coordpb.GetMountResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	if c.mount != nil {
 		return c.mount, nil
 	}
@@ -860,8 +985,34 @@ func (c *fakeCoordinatorClient) GetMount(context.Context, *coordpb.GetMountReque
 }
 
 func (c *fakeCoordinatorClient) PublishRootEvent(_ context.Context, req *coordpb.PublishRootEventRequest) (*coordpb.PublishRootEventResponse, error) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
 	c.published = append(c.published, req.GetEvent())
 	return &coordpb.PublishRootEventResponse{Accepted: true}, nil
+}
+
+func (c *fakeCoordinatorClient) regionCallCount() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.regionCalls
+}
+
+func (c *fakeCoordinatorClient) storeCallCount(storeID uint64) uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.storeCallsByID[storeID]
+}
+
+func (c *fakeCoordinatorClient) allocCallCount() uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.allocCalls
+}
+
+func (c *fakeCoordinatorClient) allocRequestCounts() []uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return append([]uint64(nil), c.allocCounts...)
 }
 
 func fakeRouteCoordinator() *fakeCoordinatorClient {

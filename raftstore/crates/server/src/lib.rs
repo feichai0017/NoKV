@@ -9,6 +9,7 @@ mod admission_state;
 mod diagnostics;
 mod execution;
 mod holt_region_sink;
+mod metadata_batcher;
 mod metadata_plane;
 mod metadata_router;
 mod metadata_watch;
@@ -28,6 +29,7 @@ pub use diagnostics::{EmptyRestartDiagnostics, RestartDiagnosticsProvider};
 pub use holt_region_sink::{
     apply_status_from_holt, EmptyRegionDescriptorSink, HoltRegionMetadataSink, RegionDescriptorSink,
 };
+pub use metadata_batcher::{metadata_batch_metrics_snapshot, MetadataBatchMetricsSnapshot};
 pub use metadata_plane::MetadataPlaneService;
 pub use metadata_router::MultiRegionMetadataPlaneService;
 pub use nokv_proto::nokv::admin::v1::raft_admin_server::RaftAdminServer;

@@ -2,6 +2,7 @@ use std::fmt::Debug;
 use std::io;
 use std::ops::RangeBounds;
 use std::sync::{Arc, Mutex, MutexGuard};
+use std::time::Instant;
 
 use openraft::{
     storage::{LogFlushed, RaftLogStorage, RaftStateMachine},
@@ -11,7 +12,7 @@ use openraft::{
 };
 
 use crate::{
-    AppliedProposal, Error, NodeId, OpenRaftEntry, RaftEntryLog, RaftStoreConfig,
+    metrics, AppliedProposal, Error, NodeId, OpenRaftEntry, RaftEntryLog, RaftStoreConfig,
     RegionSnapshotEngine, SegmentedEntryLog,
 };
 
@@ -236,10 +237,17 @@ impl RaftLogStorage<RaftStoreConfig> for RegionLogStorage {
         I::IntoIter: OptionalSend,
     {
         let entries = entries.into_iter().collect::<Vec<_>>();
+        let entry_count = entries.len() as u64;
         let result = self.lock_storage_log(ErrorVerb::Write).and_then(|mut log| {
+            let append_started = Instant::now();
             log.append_entries(&entries)
-                .and_then(|_| log.sync())
-                .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))
+                .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
+            let append_duration = append_started.elapsed();
+            let sync_started = Instant::now();
+            log.sync()
+                .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
+            metrics::record_log_append(entry_count, append_duration, sync_started.elapsed());
+            Ok(())
         });
         match result {
             Ok(()) => {
@@ -324,6 +332,8 @@ where
         I::IntoIter: OptionalSend,
     {
         let entries = entries.into_iter().collect::<Vec<_>>();
+        let entry_count = entries.len() as u64;
+        let apply_started = Instant::now();
         let mut membership = None;
         let last_applied = entries.last().map(|entry| entry.log_id);
         for entry in &entries {
@@ -335,6 +345,7 @@ where
             .engine
             .apply_openraft_entries(entries)
             .map_err(|err| storage_error(ErrorVerb::Write, err.to_string()))?;
+        metrics::record_state_machine_apply(entry_count, apply_started.elapsed());
         if let Some(membership) = membership {
             self.membership = membership;
         }

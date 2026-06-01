@@ -1,5 +1,6 @@
 use nokv_metadata_state::MetadataEngine;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
+use std::time::Instant;
 
 use crate::metadata_wire::metadata_command_watch_keys;
 
@@ -7,6 +8,7 @@ use super::{
     invalid_raft_command, AppliedMetadataEngine, MetadataCommandExecutor, MetadataReadExecutor,
     PersistentAppliedMetadataEngine, RegionMetadataSink,
 };
+use crate::metrics;
 
 impl<E> AppliedMetadataEngine<E>
 where
@@ -17,68 +19,116 @@ where
         req: &metadatapb::MetadataCommitRequest,
         forced_status: Option<(u64, u64)>,
     ) -> nokv_metadata_state::Result<metadatapb::MetadataCommitResponse> {
-        let command = req
-            .command
-            .as_ref()
-            .ok_or_else(|| invalid_raft_command("metadata command is required"))?;
-        if command.read_version == 0 {
-            return Err(invalid_raft_command(
-                "metadata command read_version is required",
-            ));
+        let mut responses =
+            self.execute_metadata_commands_at(std::slice::from_ref(req), forced_status)?;
+        Ok(responses.remove(0))
+    }
+
+    pub(super) fn execute_metadata_commands_at(
+        &self,
+        reqs: &[metadatapb::MetadataCommitRequest],
+        forced_status: Option<(u64, u64)>,
+    ) -> nokv_metadata_state::Result<Vec<metadatapb::MetadataCommitResponse>> {
+        if reqs.is_empty() {
+            return Ok(Vec::new());
         }
-        let commit_version = if command.commit_version == 0 {
-            command.read_version.saturating_add(1)
-        } else {
-            command.commit_version
-        };
-        if commit_version <= command.read_version {
-            return Err(invalid_raft_command(
-                "metadata command commit_version must be greater than read_version",
-            ));
+        let mut commands = Vec::with_capacity(reqs.len());
+        let mut commit_versions = Vec::with_capacity(reqs.len());
+        for req in reqs {
+            let command = req
+                .command
+                .as_ref()
+                .ok_or_else(|| invalid_raft_command("metadata command is required"))?;
+            if command.read_version == 0 {
+                return Err(invalid_raft_command(
+                    "metadata command read_version is required",
+                ));
+            }
+            let commit_version = if command.commit_version == 0 {
+                command.read_version.saturating_add(1)
+            } else {
+                command.commit_version
+            };
+            if commit_version <= command.read_version {
+                return Err(invalid_raft_command(
+                    "metadata command commit_version must be greater than read_version",
+                ));
+            }
+            commands.push(command.clone());
+            commit_versions.push(commit_version);
         }
-        let response = {
+        let apply_started = Instant::now();
+        let results = {
             let engine = self.inner.engine.lock().map_err(|_| {
                 nokv_metadata_state::Error::Backend("region apply mutex poisoned".to_owned())
             })?;
-            engine.commit_metadata(command, commit_version)?
+            engine.commit_metadata_batch(&commands, &commit_versions)?
         };
+        metrics::record_metadata_apply(commands.len() as u64, apply_started.elapsed());
+        if results.len() != commands.len() {
+            return Err(nokv_metadata_state::Error::Backend(
+                "metadata command batch response length mismatch".to_owned(),
+            ));
+        }
 
+        let should_advance = forced_status.is_some()
+            || commands
+                .iter()
+                .zip(&results)
+                .any(|(command, result)| result.error.is_none() && !command.mutations.is_empty());
         let applied_status = if let Some((term, index)) = forced_status {
             self.record_applied_status(term, index);
             Some((term, index))
-        } else if !command.mutations.is_empty() {
+        } else if should_advance {
             Some(self.advance_apply_index())
         } else {
             None
         };
-        if response.error.is_none() {
-            if let Some((term, index)) = applied_status {
-                let watch_keys = metadata_command_watch_keys(command);
+        let mut watch_keys = Vec::new();
+        let mut watch_commit_version = 0;
+        let mut responses = Vec::with_capacity(commands.len());
+        for ((command, commit_version), result) in commands
+            .iter()
+            .zip(commit_versions.iter().copied())
+            .zip(results.into_iter())
+        {
+            if result.error.is_none() {
+                watch_commit_version = watch_commit_version.max(commit_version);
+                for key in metadata_command_watch_keys(command) {
+                    if !watch_keys.contains(&key) {
+                        watch_keys.push(key);
+                    }
+                }
+            }
+            responses.push(metadatapb::MetadataCommitResponse {
+                result: Some(metadatapb::MetadataCommitResult {
+                    commit_version,
+                    region_id: self.inner.region_id,
+                    term: applied_status.map(|(term, _)| term).unwrap_or_default(),
+                    index: applied_status.map(|(_, index)| index).unwrap_or_default(),
+                    applied_mutations: if result.error.is_none() {
+                        result.applied_mutations
+                    } else {
+                        0
+                    },
+                }),
+                error: result.error,
+                region_error: None,
+            });
+        }
+        if let Some((term, index)) = applied_status {
+            if !watch_keys.is_empty() {
                 self.publish_apply(
                     index,
                     term,
                     metadatapb::MetadataApplyWatchEventSource::Commit,
-                    commit_version,
+                    watch_commit_version,
                     watch_keys,
                     true,
                 );
             }
         }
-        Ok(metadatapb::MetadataCommitResponse {
-            result: Some(metadatapb::MetadataCommitResult {
-                commit_version,
-                region_id: self.inner.region_id,
-                term: applied_status.map(|(term, _)| term).unwrap_or_default(),
-                index: applied_status.map(|(_, index)| index).unwrap_or_default(),
-                applied_mutations: if response.error.is_none() {
-                    response.applied_mutations
-                } else {
-                    0
-                },
-            }),
-            error: response.error,
-            region_error: None,
-        })
+        Ok(responses)
     }
 
     fn execute_metadata_command_inner(
@@ -142,6 +192,16 @@ where
            + 'a {
         async move { self.execute_metadata_command_inner(req) }
     }
+
+    fn execute_metadata_commands<'a>(
+        &'a self,
+        reqs: &'a [metadatapb::MetadataCommitRequest],
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<Vec<metadatapb::MetadataCommitResponse>>,
+    > + Send
+           + 'a {
+        async move { self.execute_metadata_commands_at(reqs, None) }
+    }
 }
 
 impl<E> MetadataReadExecutor for AppliedMetadataEngine<E>
@@ -196,6 +256,21 @@ where
             let response = self.engine.execute_metadata_command(req).await?;
             self.persist_if_advanced(before, false)?;
             Ok(response)
+        }
+    }
+
+    fn execute_metadata_commands<'a>(
+        &'a self,
+        reqs: &'a [metadatapb::MetadataCommitRequest],
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<Vec<metadatapb::MetadataCommitResponse>>,
+    > + Send
+           + 'a {
+        async move {
+            let before = self.engine.status().applied_index;
+            let responses = self.engine.execute_metadata_commands(reqs).await?;
+            self.persist_if_advanced(before, false)?;
+            Ok(responses)
         }
     }
 }

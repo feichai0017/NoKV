@@ -6,24 +6,31 @@ use tonic::{Request, Response, Status};
 
 use crate::admission_state::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
+use crate::metadata_batcher::MetadataCommitBatcher;
 use crate::metadata_watch::{metadata_watch_apply_stream, MetadataWatchApplyStream};
 use crate::{internal_error, AppliedRegionDescriptorProvider, RaftRuntimeStatusProvider};
 
 #[derive(Clone)]
 pub struct MetadataPlaneService<E> {
     engine: E,
+    commit_batcher: MetadataCommitBatcher<E>,
     admission: RegionAdmissionState,
     execution: ExecutionRuntime,
 }
 
-impl<E> MetadataPlaneService<E> {
+impl<E> MetadataPlaneService<E>
+where
+    E: MetadataCommandExecutor,
+{
     pub(crate) fn with_admission_state_and_execution(
         engine: E,
         admission: RegionAdmissionState,
         execution: ExecutionRuntime,
     ) -> Self {
+        let commit_batcher = MetadataCommitBatcher::new(engine.clone());
         Self {
             engine,
+            commit_batcher,
             admission,
             execution,
         }
@@ -185,8 +192,8 @@ where
             }));
         }
         let response = self
-            .engine
-            .execute_metadata_command(&request)
+            .commit_batcher
+            .execute(request)
             .await
             .map_err(internal_error)?;
         Ok(Response::new(response))

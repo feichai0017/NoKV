@@ -105,6 +105,26 @@ impl MemoryMetadataStore {
         let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
         Ok(commit_metadata_inner(&mut inner, command, commit_version))
     }
+
+    pub fn commit_metadata_batch(
+        &self,
+        commands: &[metadatapb::MetadataCommand],
+        commit_versions: &[u64],
+    ) -> Result<Vec<MetadataApplyResult>> {
+        if commands.len() != commit_versions.len() {
+            return Err(Error::Backend(
+                "metadata command batch length mismatch".to_owned(),
+            ));
+        }
+        let mut inner = self.inner.lock().map_err(|_| Error::Poisoned)?;
+        Ok(commands
+            .iter()
+            .zip(commit_versions)
+            .map(|(command, commit_version)| {
+                commit_metadata_inner(&mut inner, command, *commit_version)
+            })
+            .collect())
+    }
 }
 
 impl MetadataEngine for MemoryMetadataStore {
@@ -135,6 +155,14 @@ impl MetadataEngine for MemoryMetadataStore {
         commit_version: u64,
     ) -> Result<MetadataApplyResult> {
         MemoryMetadataStore::commit_metadata(self, command, commit_version)
+    }
+
+    fn commit_metadata_batch(
+        &self,
+        commands: &[metadatapb::MetadataCommand],
+        commit_versions: &[u64],
+    ) -> Result<Vec<MetadataApplyResult>> {
+        MemoryMetadataStore::commit_metadata_batch(self, commands, commit_versions)
     }
 }
 

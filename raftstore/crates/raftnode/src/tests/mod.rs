@@ -715,6 +715,19 @@ fn proposal_round_trips_metadata_command_payload() {
 }
 
 #[test]
+fn proposal_round_trips_metadata_command_batch_payload() {
+    let first = metadata_put_request(11, 7, b"k1", b"v1", 8, 9);
+    let second = metadata_put_request(11, 8, b"k2", b"v2", 9, 10);
+    let proposal = Proposal::from_metadata_command_batch(&[first.clone(), second.clone()]).unwrap();
+
+    assert_eq!(proposal.region_id, 11);
+    assert_eq!(
+        proposal.decode_metadata_command_batch().unwrap(),
+        vec![first, second]
+    );
+}
+
+#[test]
 fn proposal_rejects_region_mismatch() {
     let command = metadata_put_request(11, 7, b"k", b"v", 8, 9);
     let mut proposal = Proposal::from_metadata_command(&command).unwrap();
@@ -1055,6 +1068,38 @@ fn apply_openraft_entry_uses_committed_log_status() {
     let response =
         metadatapb::MetadataCommitResponse::decode(applied[0].payload.as_slice()).unwrap();
     assert_eq!(response.result.unwrap().applied_mutations, 1);
+}
+
+#[test]
+fn apply_openraft_entry_batches_metadata_commands_under_one_log_index() {
+    let engine = AppliedMetadataEngine::new(7, MemoryMetadataStore::new());
+    let mut watch = engine.subscribe();
+    let first = metadata_put_request(7, 55, b"k1", b"v1", 8, 9);
+    let second = metadata_put_request(7, 56, b"k2", b"v2", 9, 10);
+    let entry = OpenRaftEntry {
+        log_id: openraft::LogId::new(openraft::CommittedLeaderId::new(5, 1), 42),
+        payload: openraft::EntryPayload::Normal(
+            Proposal::from_metadata_command_batch(&[first, second]).unwrap(),
+        ),
+    };
+
+    let applied = engine.apply_openraft_entries([entry]).unwrap();
+
+    assert_eq!(applied.len(), 1);
+    let event = watch.try_recv().unwrap();
+    assert_eq!(event.term, 5);
+    assert_eq!(event.index, 42);
+    assert_eq!(event.commit_version, 10);
+    assert_eq!(event.keys, vec![b"k1".to_vec(), b"k2".to_vec()]);
+    assert!(watch.try_recv().is_err());
+
+    let responses = crate::metadata_wire::decode_metadata_response_batch(&applied[0].payload)
+        .expect("batch response should decode");
+    assert_eq!(responses.len(), 2);
+    assert!(responses.iter().all(|resp| {
+        let result = resp.result.as_ref().unwrap();
+        result.term == 5 && result.index == 42 && result.applied_mutations == 1
+    }));
 }
 
 #[tokio::test]

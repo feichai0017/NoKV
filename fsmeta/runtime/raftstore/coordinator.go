@@ -4,6 +4,7 @@
 package raftstore
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"strings"
@@ -42,6 +43,7 @@ type CoordinatorRouteProvider struct {
 
 	mu          sync.Mutex
 	clients     map[string]storeClient
+	routeCache  []cachedMetadataRoute
 	leaderHints map[uint64]*metapb.RegionPeer
 	failedPeers map[uint64]map[string]time.Time
 }
@@ -49,6 +51,15 @@ type CoordinatorRouteProvider struct {
 type storeClient struct {
 	conn   *grpc.ClientConn
 	client metadatapb.MetadataPlaneClient
+}
+
+type cachedMetadataRoute struct {
+	startKey  []byte
+	endKey    []byte
+	regionID  uint64
+	context   *metadatapb.MetadataContext
+	storeAddr string
+	client    metadatapb.MetadataPlaneClient
 }
 
 type CoordinatorRouteProviderOptions struct {
@@ -81,6 +92,9 @@ func NewCoordinatorRouteProvider(coordinator CoordinatorClient, opts Coordinator
 func (p *CoordinatorRouteProvider) RouteForKey(ctx context.Context, key []byte) (MetadataRoute, error) {
 	if p == nil || p.coordinator == nil {
 		return MetadataRoute{}, errRouteProviderRequired
+	}
+	if route, ok := p.cachedRouteForKey(key, time.Now()); ok {
+		return route, nil
 	}
 	resp, err := p.coordinator.GetRegionByKey(ctx, &coordpb.GetRegionByKeyRequest{
 		Key:       cloneBytes(key),
@@ -117,7 +131,7 @@ func (p *CoordinatorRouteProvider) RouteForKey(ctx context.Context, key []byte) 
 			lastErr = err
 			continue
 		}
-		return MetadataRoute{
+		route := MetadataRoute{
 			Context: &metadatapb.MetadataContext{
 				RegionId:        regionID,
 				RegionEpoch:     resp.GetRegionDescriptor().GetEpoch(),
@@ -127,7 +141,9 @@ func (p *CoordinatorRouteProvider) RouteForKey(ctx context.Context, key []byte) 
 			},
 			StoreAddr: store.GetClientAddr(),
 			Client:    client,
-		}, nil
+		}
+		p.cacheRoute(resp.GetRegionDescriptor(), route)
+		return route, nil
 	}
 	if lastErr != nil {
 		return MetadataRoute{}, lastErr
@@ -146,6 +162,7 @@ func (p *CoordinatorRouteProvider) ObserveRegionError(_ context.Context, _ []byt
 	}
 	p.mu.Lock()
 	p.leaderHints[notLeader.GetRegionId()] = leader
+	p.invalidateRegionLocked(notLeader.GetRegionId())
 	p.mu.Unlock()
 }
 
@@ -168,6 +185,7 @@ func (p *CoordinatorRouteProvider) ObserveRouteFailure(_ context.Context, _ []by
 		p.failedPeers[regionID] = make(map[string]time.Time)
 	}
 	p.failedPeers[regionID][peerKey] = time.Now().Add(p.dialTimeout)
+	p.invalidateRegionLocked(regionID)
 	if target != "" {
 		if cached, ok := p.clients[target]; ok {
 			staleConn = cached.conn
@@ -187,6 +205,7 @@ func (p *CoordinatorRouteProvider) Close() error {
 	p.mu.Lock()
 	clients := p.clients
 	p.clients = make(map[string]storeClient)
+	p.routeCache = nil
 	p.mu.Unlock()
 	var first error
 	for _, client := range clients {
@@ -200,6 +219,60 @@ func (p *CoordinatorRouteProvider) Close() error {
 	return first
 }
 
+func (p *CoordinatorRouteProvider) cachedRouteForKey(key []byte, now time.Time) (MetadataRoute, bool) {
+	if p == nil {
+		return MetadataRoute{}, false
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	for _, cached := range p.routeCache {
+		if !cached.containsKey(key) || cached.context == nil || cached.context.GetPeer() == nil {
+			continue
+		}
+		peerKey := routePeerFailureKey(cached.context.GetPeer())
+		if p.peerFailureActiveLocked(cached.regionID, peerKey, now) {
+			continue
+		}
+		return cached.toRoute(), true
+	}
+	return MetadataRoute{}, false
+}
+
+func (p *CoordinatorRouteProvider) cacheRoute(desc *metapb.RegionDescriptor, route MetadataRoute) {
+	if p == nil || desc == nil || route.Context == nil || route.Client == nil {
+		return
+	}
+	regionID := desc.GetRegionId()
+	if regionID == 0 {
+		return
+	}
+	cached := cachedMetadataRoute{
+		startKey:  cloneBytes(desc.GetStartKey()),
+		endKey:    cloneBytes(desc.GetEndKey()),
+		regionID:  regionID,
+		context:   cloneMetadataContext(route.Context),
+		storeAddr: route.StoreAddr,
+		client:    route.Client,
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.invalidateRegionLocked(regionID)
+	p.routeCache = append(p.routeCache, cached)
+}
+
+func (p *CoordinatorRouteProvider) invalidateRegionLocked(regionID uint64) {
+	if regionID == 0 || len(p.routeCache) == 0 {
+		return
+	}
+	out := p.routeCache[:0]
+	for _, cached := range p.routeCache {
+		if cached.regionID != regionID {
+			out = append(out, cached)
+		}
+	}
+	p.routeCache = out
+}
+
 func (p *CoordinatorRouteProvider) peerFailureActive(regionID uint64, peer *metapb.RegionPeer, now time.Time) bool {
 	key := routePeerFailureKey(peer)
 	if p == nil || regionID == 0 || key == "" {
@@ -207,22 +280,47 @@ func (p *CoordinatorRouteProvider) peerFailureActive(regionID uint64, peer *meta
 	}
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	return p.peerFailureActiveLocked(regionID, key, now)
+}
+
+func (p *CoordinatorRouteProvider) peerFailureActiveLocked(regionID uint64, peerKey string, now time.Time) bool {
+	if p == nil || regionID == 0 || peerKey == "" {
+		return false
+	}
 	failed := p.failedPeers[regionID]
 	if len(failed) == 0 {
 		return false
 	}
-	until, ok := failed[key]
+	until, ok := failed[peerKey]
 	if !ok {
 		return false
 	}
 	if !now.Before(until) {
-		delete(failed, key)
+		delete(failed, peerKey)
 		if len(failed) == 0 {
 			delete(p.failedPeers, regionID)
 		}
 		return false
 	}
 	return true
+}
+
+func (r cachedMetadataRoute) containsKey(key []byte) bool {
+	if len(r.startKey) != 0 && bytes.Compare(key, r.startKey) < 0 {
+		return false
+	}
+	if len(r.endKey) != 0 && bytes.Compare(key, r.endKey) >= 0 {
+		return false
+	}
+	return true
+}
+
+func (r cachedMetadataRoute) toRoute() MetadataRoute {
+	return MetadataRoute{
+		Context:   cloneMetadataContext(r.context),
+		StoreAddr: r.storeAddr,
+		Client:    r.client,
+	}
 }
 
 func (p *CoordinatorRouteProvider) leaderHint(regionID uint64) *metapb.RegionPeer {

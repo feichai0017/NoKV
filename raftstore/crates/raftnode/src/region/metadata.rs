@@ -6,8 +6,9 @@ use openraft::Raft;
 
 use super::{openraft_check_leader_error, OpenRaftRegion};
 use crate::{
-    decode_metadata_response, Error, MetadataCommandExecutor, MetadataReadExecutor,
-    MetadataRetentionExecutor, NodeId, Proposal, RaftStoreConfig, RegionSnapshotEngine,
+    decode_metadata_response, decode_metadata_response_batch, Error, MetadataCommandExecutor,
+    MetadataReadExecutor, MetadataRetentionExecutor, NodeId, Proposal, RaftStoreConfig,
+    RegionSnapshotEngine,
 };
 
 impl<E> MetadataCommandExecutor for OpenRaftRegion<E>
@@ -32,6 +33,42 @@ where
                 Err(err) => return Err(nokv_metadata_state::Error::Backend(err.to_string())),
             };
             decode_metadata_response(&applied.payload)
+        }
+    }
+
+    fn execute_metadata_commands<'a>(
+        &'a self,
+        reqs: &'a [metadatapb::MetadataCommitRequest],
+    ) -> impl std::future::Future<
+        Output = nokv_metadata_state::Result<Vec<metadatapb::MetadataCommitResponse>>,
+    > + Send
+           + 'a {
+        async move {
+            if reqs.is_empty() {
+                return Ok(Vec::new());
+            }
+            if reqs.len() == 1 {
+                return Ok(vec![self.execute_metadata_command(&reqs[0]).await?]);
+            }
+            let proposal = Proposal::from_metadata_command_batch(reqs)
+                .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))?;
+            let applied = match self.propose(proposal).await {
+                Ok(applied) => applied,
+                Err(Error::NotLeader { leader_id }) => {
+                    return Ok(reqs
+                        .iter()
+                        .map(|req| self.not_leader_metadata_response(req, leader_id))
+                        .collect());
+                }
+                Err(err) => return Err(nokv_metadata_state::Error::Backend(err.to_string())),
+            };
+            let responses = decode_metadata_response_batch(&applied.payload)?;
+            if responses.len() != reqs.len() {
+                return Err(nokv_metadata_state::Error::Backend(
+                    "metadata batch response length mismatch".to_owned(),
+                ));
+            }
+            Ok(responses)
         }
     }
 }
