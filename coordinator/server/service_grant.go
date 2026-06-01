@@ -51,47 +51,14 @@ func (s *Service) grantScopedStoreOperations(ctx context.Context, storeID uint64
 	return s.storeControlOperations(ctx, storeID)
 }
 
-func (s *Service) storeControlOperations(ctx context.Context, storeID uint64) []*coordpb.SchedulerOperation {
+func (s *Service) storeControlOperations(_ context.Context, storeID uint64) []*coordpb.SchedulerOperation {
 	if s == nil || s.cluster == nil || storeID == 0 {
 		return nil
 	}
-	opts := scheduling.PlanOptions{
-		NextID: s.schedulerNextID(ctx),
-	}
 	if s.scheduler != nil {
-		return s.scheduler.PlanStoreOperationsWithOptions(storeID, s.cluster.Snapshot(), opts)
+		return s.scheduler.PlanStoreOperationsWithOptions(storeID, s.cluster.Snapshot(), scheduling.PlanOptions{})
 	}
-	return scheduling.PlanStoreOperationsWithOptions(storeID, s.cluster.Snapshot(), opts)
-}
-
-func (s *Service) ConfigureSchedulerSplitBoundaries(boundaries [][]byte) {
-	if s == nil {
-		return
-	}
-	if s.scheduler == nil {
-		s.scheduler = scheduling.NewPlanner(scheduling.PlanOptions{})
-	}
-	s.scheduler.ConfigureOptions(scheduling.PlanOptions{
-		SplitKey: scheduling.SplitKeyFromBoundaries(boundaries),
-	})
-}
-
-func (s *Service) schedulerNextID(ctx context.Context) func() (uint64, bool) {
-	return func() (uint64, bool) {
-		if s == nil {
-			return 0, false
-		}
-		if s.coordinatorGrantEnabled() {
-			if err := s.ensureGrant(ctx, rootproto.DutyAllocID); err != nil {
-				return 0, false
-			}
-		}
-		id, err := s.reserveIDs(ctx, 1)
-		if err != nil {
-			return 0, false
-		}
-		return id, true
-	}
+	return scheduling.PlanStoreOperationsWithOptions(storeID, s.cluster.Snapshot(), scheduling.PlanOptions{})
 }
 
 // RunGrantLoop keeps the local coordinator grant renewed while ctx

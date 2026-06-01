@@ -34,27 +34,24 @@ import (
 )
 
 type fakeStorage struct {
-	mu                          sync.Mutex
-	eventCalls                  int
-	saveCalls                   int
-	loadCalls                   int
-	campaignCalls               int
-	sealCalls                   int
-	reattachCalls               int
-	eventErr                    error
-	saveErr                     error
-	loadErr                     error
-	campaignErr                 error
-	sealErr                     error
-	applyVisibleAuthorityErr    error
-	lastID                      uint64
-	lastTS                      uint64
-	leader                      bool
-	leaderID                    uint64
-	lastEvent                   rootevent.Event
-	lastVisibleAuthorityCommand rootproto.VisibleAuthorityCommand
-	applyVisibleAuthorityCalls  int
-	snapshot                    rootview.Snapshot
+	mu            sync.Mutex
+	eventCalls    int
+	saveCalls     int
+	loadCalls     int
+	campaignCalls int
+	sealCalls     int
+	reattachCalls int
+	eventErr      error
+	saveErr       error
+	loadErr       error
+	campaignErr   error
+	sealErr       error
+	lastID        uint64
+	lastTS        uint64
+	leader        bool
+	leaderID      uint64
+	lastEvent     rootevent.Event
+	snapshot      rootview.Snapshot
 }
 
 func TestTranslateGrantErrorsAsGrantNotHeld(t *testing.T) {
@@ -197,26 +194,6 @@ func removeTestGrant(grants []rootproto.AuthorityGrant, grantID string) []rootpr
 	return grants
 }
 
-func upsertTestVisibleGrant(grants []rootproto.VisibleAuthorityGrant, grant rootproto.VisibleAuthorityGrant) []rootproto.VisibleAuthorityGrant {
-	for i := range grants {
-		if grants[i].GrantID == grant.GrantID {
-			grants[i] = rootproto.CloneVisibleAuthorityGrant(grant)
-			return grants
-		}
-	}
-	return append(grants, rootproto.CloneVisibleAuthorityGrant(grant))
-}
-
-func removeTestVisibleGrant(grants []rootproto.VisibleAuthorityGrant, grantID string) []rootproto.VisibleAuthorityGrant {
-	for i := 0; i < len(grants); i++ {
-		if grants[i].GrantID == grantID {
-			grants = append(grants[:i], grants[i+1:]...)
-			i--
-		}
-	}
-	return grants
-}
-
 func (f *fakeStorage) loadCallCount() int {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -268,14 +245,13 @@ func (f *fakeStorage) AppendRootEvent(_ context.Context, event rootevent.Event) 
 			),
 			LastCommitted: rootstate.Cursor{Term: 1, Index: uint64(f.eventCalls)},
 		},
-		Stores:              rootstate.CloneStoreMemberships(f.snapshot.Stores),
-		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(f.snapshot.SnapshotEpochs),
-		Mounts:              rootstate.CloneMounts(f.snapshot.Mounts),
-		Subtrees:            rootstate.CloneSubtreeAuthorities(f.snapshot.Subtrees),
-		Quotas:              rootstate.CloneQuotaFences(f.snapshot.Quotas),
-		Descriptors:         rootCloneDescriptorsForTest(f.snapshot.Descriptors),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(f.snapshot.PendingRangeChanges),
+		Stores:             rootstate.CloneStoreMemberships(f.snapshot.Stores),
+		SnapshotEpochs:     rootstate.CloneSnapshotEpochs(f.snapshot.SnapshotEpochs),
+		Mounts:             rootstate.CloneMounts(f.snapshot.Mounts),
+		Subtrees:           rootstate.CloneSubtreeAuthorities(f.snapshot.Subtrees),
+		Quotas:             rootstate.CloneQuotaFences(f.snapshot.Quotas),
+		Descriptors:        rootCloneDescriptorsForTest(f.snapshot.Descriptors),
+		PendingPeerChanges: rootstate.ClonePendingPeerChanges(f.snapshot.PendingPeerChanges),
 	}
 	rootstate.ApplyEventToSnapshot(&snapshot, snapshot.State.LastCommitted, event)
 	f.snapshot = rootview.SnapshotFromRoot(snapshot)
@@ -437,69 +413,6 @@ func (f *fakeStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCommand) 
 	default:
 		return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
-}
-
-func (f *fakeStorage) ApplyVisibleAuthority(_ context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	f.applyVisibleAuthorityCalls++
-	f.lastVisibleAuthorityCommand = cmd
-	if f.applyVisibleAuthorityErr != nil {
-		return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, f.applyVisibleAuthorityErr
-	}
-	switch cmd.Kind {
-	case rootproto.VisibleAuthorityActAcquire:
-		holderID := strings.TrimSpace(cmd.HolderID)
-		if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
-			return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-		}
-		if active, ok := f.visibleAuthorityState().ActiveVisibleGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
-			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
-				return f.visibleAuthorityState(), active, nil
-			}
-			return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
-		}
-		epoch := f.snapshot.VisibleAuthorityEpoch + 1
-		grantID := strings.TrimSpace(cmd.GrantID)
-		if grantID == "" {
-			grantID = fmt.Sprintf("%s/%d", holderID, epoch)
-		}
-		grant := rootproto.VisibleAuthorityGrant{
-			GrantID:           grantID,
-			EpochID:           epoch,
-			HolderID:          holderID,
-			Scope:             rootproto.CloneVisibleAuthorityScope(cmd.Scope),
-			ExpiresUnixNano:   cmd.ExpiresUnixNano,
-			PredecessorDigest: cmd.PredecessorDigest,
-			QuotaCreditBytes:  cmd.QuotaCreditBytes,
-			QuotaCreditInodes: cmd.QuotaCreditInodes,
-		}
-		f.snapshot.ActiveVisibleGrants = upsertTestVisibleGrant(f.snapshot.ActiveVisibleGrants, grant)
-		if grant.EpochID > f.snapshot.VisibleAuthorityEpoch {
-			f.snapshot.VisibleAuthorityEpoch = grant.EpochID
-		}
-		f.advanceRootToken()
-		return f.visibleAuthorityState(), grant, nil
-	case rootproto.VisibleAuthorityActRetire:
-		grantID := strings.TrimSpace(cmd.GrantID)
-		holderID := strings.TrimSpace(cmd.HolderID)
-		active, ok := f.snapshot.ActiveVisibleGrantByID(grantID)
-		if !ok {
-			return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, nil
-		}
-		if active.HolderID != holderID {
-			return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
-		}
-		f.snapshot.ActiveVisibleGrants = removeTestVisibleGrant(f.snapshot.ActiveVisibleGrants, grantID)
-		f.advanceRootToken()
-		return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, nil
-	default:
-		return f.visibleAuthorityState(), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-	}
-}
-
-func (f *fakeStorage) visibleAuthorityState() rootstate.State {
-	return rootstate.CloneState(f.snapshot.RootSnapshot().State)
 }
 
 func (f *fakeStorage) advanceRootToken() {
@@ -1217,63 +1130,6 @@ func TestServiceGetRegionByKeyRequiredDescriptorRevision(t *testing.T) {
 	require.Equal(t, coordpb.SyncHealth_SYNC_HEALTH_HEALTHY, resp.GetSyncHealth())
 }
 
-func TestServiceGetRegionByKeyRejectsSplitPendingDescriptor(t *testing.T) {
-	cluster := catalog.NewCluster()
-	left := testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
-	right := testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
-	left.RootEpoch = 6
-	right.RootEpoch = 6
-	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]topology.Descriptor{
-			left.RegionID:  left,
-			right.RegionID: right,
-		},
-		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
-			40: {
-				Kind:           rootstate.PendingRangeChangeSplit,
-				ParentRegionID: 40,
-				LeftRegionID:   left.RegionID,
-				RightRegionID:  right.RegionID,
-				Left:           left,
-				Right:          right,
-			},
-		},
-	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 6})
-	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
-
-	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("b")})
-	require.Error(t, err)
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errRangeChangePending)
-	require.Contains(t, err.Error(), "split")
-}
-
-func TestServiceGetRegionByKeyRejectsMergePendingDescriptor(t *testing.T) {
-	cluster := catalog.NewCluster()
-	merged := testDescriptor(51, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 2}, nil)
-	merged.RootEpoch = 9
-	cluster.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]topology.Descriptor{
-			merged.RegionID: merged,
-		},
-		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
-			merged.RegionID: {
-				Kind:          rootstate.PendingRangeChangeMerge,
-				LeftRegionID:  49,
-				RightRegionID: 50,
-				Merged:        merged,
-			},
-		},
-	}, rootstorage.TailToken{Cursor: rootstate.Cursor{Term: 1, Index: 3}, Revision: 9})
-	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1))
-
-	_, err := svc.GetRegionByKey(context.Background(), &coordpb.GetRegionByKeyRequest{Key: []byte("b")})
-	require.Error(t, err)
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Contains(t, err.Error(), errRangeChangePending)
-	require.Contains(t, err.Error(), "merge")
-}
-
 func TestServiceGetRegionByKeyUsesCachedRootSnapshot(t *testing.T) {
 	desc := topology.Descriptor{
 		RegionID:  10,
@@ -1657,11 +1513,8 @@ func TestServicePublishRootEvent(t *testing.T) {
 	store := &fakeStorage{}
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
 
-	event := rootevent.RegionSplitCommitted(
-		41,
-		[]byte("m"),
-		testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil),
-		testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil),
+	event := rootevent.RegionDescriptorPublished(
+		testDescriptor(41, []byte("a"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil),
 	)
 	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
 		Event: metawire.RootEventToProto(event),
@@ -1670,13 +1523,9 @@ func TestServicePublishRootEvent(t *testing.T) {
 	require.True(t, resp.GetAccepted())
 	require.Equal(t, 1, store.eventCalls)
 
-	left, ok := svc.cluster.GetRegionDescriptorByKey([]byte("b"))
+	got, ok := svc.cluster.GetRegionDescriptorByKey([]byte("b"))
 	require.True(t, ok)
-	require.Equal(t, uint64(41), left.RegionID)
-
-	right, ok := svc.cluster.GetRegionDescriptorByKey([]byte("x"))
-	require.True(t, ok)
-	require.Equal(t, uint64(42), right.RegionID)
+	require.Equal(t, uint64(41), got.RegionID)
 }
 
 func TestServicePublishRootEventAppliedPeerChangeMarksPendingApplied(t *testing.T) {
@@ -1911,62 +1760,23 @@ func TestServicePublishRootEventRejectsMismatchedPeerApply(t *testing.T) {
 	require.Equal(t, 0, store.eventCalls)
 }
 
-func TestServicePublishRootEventSkipsDuplicateSplitPlan(t *testing.T) {
-	cluster := catalog.NewCluster()
-	left := testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
-	right := testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
-	left.RootEpoch = 6
-	right.RootEpoch = 6
-	left.EnsureHash()
-	right.EnsureHash()
-	require.NoError(t, cluster.PublishRootEvent(rootevent.RegionSplitPlanned(40, []byte("m"), left, right)))
-
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			ClusterEpoch: 6,
-			Descriptors: map[uint64]topology.Descriptor{
-				left.RegionID:  left,
-				right.RegionID: right,
-			},
-			PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
-				40: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: 40, LeftRegionID: left.RegionID, RightRegionID: right.RegionID, Left: left, Right: right},
-			},
-		},
-	}
-	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
-
-	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.RegionSplitPlanned(40, []byte("m"), left, right)),
-	})
-	require.NoError(t, err)
-	require.True(t, resp.GetAccepted())
-	require.Equal(t, 0, store.eventCalls)
-}
-
 func TestServiceRefreshFromStorageReplacesPendingTransitions(t *testing.T) {
 	cluster := catalog.NewCluster()
-	left := testDescriptor(61, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
-	right := testDescriptor(62, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
+	target := testDescriptor(61, []byte("a"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1}, []metaregion.Peer{{StoreID: 1, PeerID: 101}, {StoreID: 2, PeerID: 201}})
 	store := &fakeStorage{
 		leader: true,
 		snapshot: rootview.Snapshot{
-			ClusterEpoch: 9,
-			Descriptors: map[uint64]topology.Descriptor{
-				left.RegionID:  left,
-				right.RegionID: right,
-			},
-			PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
-				60: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: 60, LeftRegionID: left.RegionID, RightRegionID: right.RegionID, Left: left, Right: right},
-			},
+			ClusterEpoch:       9,
+			Descriptors:        map[uint64]topology.Descriptor{target.RegionID: target},
+			PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{target.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 201, Target: target}},
 		},
 	}
 	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
 
 	require.NoError(t, svc.RefreshFromStorage())
 	transitions := svc.cluster.TransitionSnapshot()
-	require.Contains(t, transitions.PendingRangeChanges, uint64(60))
-	require.Len(t, svc.cluster.RegionSnapshot(), 2)
+	require.Contains(t, transitions.PendingPeerChanges, target.RegionID)
+	require.Len(t, svc.cluster.RegionSnapshot(), 1)
 }
 
 func TestServiceListTransitionsReturnsOperatorView(t *testing.T) {
@@ -2104,93 +1914,6 @@ func TestServicePublishRootEventValidatesAgainstStorageSnapshot(t *testing.T) {
 	require.Equal(t, "default/1#1", subtree.AuthorityID)
 }
 
-func TestServicePublishRootEventSkipsCompletedSplitPlan(t *testing.T) {
-	cluster := catalog.NewCluster()
-	left := testDescriptor(141, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
-	right := testDescriptor(142, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
-	left.RootEpoch = 6
-	right.RootEpoch = 6
-	left.EnsureHash()
-	right.EnsureHash()
-	require.NoError(t, cluster.PublishRegionDescriptor(left))
-	require.NoError(t, cluster.PublishRegionDescriptor(right))
-
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			ClusterEpoch: 6,
-			Descriptors: map[uint64]topology.Descriptor{
-				left.RegionID:  left,
-				right.RegionID: right,
-			},
-		},
-	}
-	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
-
-	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.RegionSplitPlanned(140, []byte("m"), left, right)),
-	})
-	require.NoError(t, err)
-	require.True(t, resp.GetAccepted())
-	require.Equal(t, 0, store.eventCalls)
-}
-
-func TestServicePublishRootEventSkipsCompletedMergePlan(t *testing.T) {
-	cluster := catalog.NewCluster()
-	merged := testDescriptor(151, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil)
-	merged.RootEpoch = 7
-	merged.EnsureHash()
-	require.NoError(t, cluster.PublishRegionDescriptor(merged))
-
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			ClusterEpoch: 7,
-			Descriptors: map[uint64]topology.Descriptor{
-				merged.RegionID: merged,
-			},
-		},
-	}
-	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
-
-	resp, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.RegionMergePlanned(149, 150, merged)),
-	})
-	require.NoError(t, err)
-	require.True(t, resp.GetAccepted())
-	require.Equal(t, 0, store.eventCalls)
-}
-
-func TestServicePublishRootEventRejectsMismatchedMergeApply(t *testing.T) {
-	cluster := catalog.NewCluster()
-	merged := testDescriptor(50, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil)
-	merged.RootEpoch = 7
-	merged.EnsureHash()
-	require.NoError(t, cluster.PublishRegionDescriptor(merged))
-
-	store := &fakeStorage{
-		leader: true,
-		snapshot: rootview.Snapshot{
-			ClusterEpoch: 7,
-			Descriptors:  map[uint64]topology.Descriptor{merged.RegionID: merged},
-			PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
-				merged.RegionID: {Kind: rootstate.PendingRangeChangeMerge, LeftRegionID: 50, RightRegionID: 51, Merged: merged},
-			},
-		},
-	}
-	svc := NewService(cluster, idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
-
-	mismatched := merged.Clone()
-	mismatched.RootEpoch = 0
-	mismatched.EnsureHash()
-	_, err := svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{
-		Event: metawire.RootEventToProto(rootevent.RegionMerged(50, 52, mismatched)),
-	})
-	require.Error(t, err)
-	require.Equal(t, codes.FailedPrecondition, status.Code(err))
-	require.Equal(t, 0, store.eventCalls)
-}
-
 func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 	svc := NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1))
 
@@ -2204,9 +1927,7 @@ func TestServicePublishRootEventValidationAndPersistenceError(t *testing.T) {
 
 	store := &fakeStorage{eventErr: errors.New("persist root event failed")}
 	svc = NewService(catalog.NewCluster(), idalloc.NewIDAllocator(1), tso.NewAllocator(1), store)
-	event := rootevent.RegionMerged(
-		10,
-		11,
+	event := rootevent.RegionDescriptorPublished(
 		testDescriptor(10, []byte("a"), []byte("z"), metaregion.Epoch{Version: 3, ConfVersion: 1}, nil),
 	)
 	_, err = svc.PublishRootEvent(context.Background(), &coordpb.PublishRootEventRequest{

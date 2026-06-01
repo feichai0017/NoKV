@@ -15,10 +15,8 @@ import (
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootserver "github.com/feichai0017/NoKV/meta/root/server"
 	rootstate "github.com/feichai0017/NoKV/meta/root/state"
-	metawire "github.com/feichai0017/NoKV/meta/wire"
 	metapb "github.com/feichai0017/NoKV/pb/meta"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
@@ -121,8 +119,7 @@ func TestRetryableRemoteErrorLeavesGenericInternalFatal(t *testing.T) {
 }
 
 type fakeMetadataRootClient struct {
-	statusFunc                func(context.Context, *metapb.MetadataRootStatusRequest, ...grpc.CallOption) (*metapb.MetadataRootStatusResponse, error)
-	applyVisibleAuthorityFunc func(context.Context, *metapb.MetadataRootApplyVisibleAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error)
+	statusFunc func(context.Context, *metapb.MetadataRootStatusRequest, ...grpc.CallOption) (*metapb.MetadataRootStatusResponse, error)
 }
 
 func (f *fakeMetadataRootClient) Snapshot(context.Context, *metapb.MetadataRootSnapshotRequest, ...grpc.CallOption) (*metapb.MetadataRootSnapshotResponse, error) {
@@ -146,13 +143,6 @@ func (f *fakeMetadataRootClient) Status(ctx context.Context, req *metapb.Metadat
 
 func (f *fakeMetadataRootClient) ApplyGrant(context.Context, *metapb.MetadataRootApplyGrantRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyGrantResponse, error) {
 	return nil, status.Error(codes.Unimplemented, "grant")
-}
-
-func (f *fakeMetadataRootClient) ApplyVisibleAuthority(ctx context.Context, req *metapb.MetadataRootApplyVisibleAuthorityRequest, opts ...grpc.CallOption) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
-	if f.applyVisibleAuthorityFunc != nil {
-		return f.applyVisibleAuthorityFunc(ctx, req, opts...)
-	}
-	return nil, status.Error(codes.Unimplemented, "visible authority")
 }
 
 func (f *fakeMetadataRootClient) ObserveCommitted(context.Context, *metapb.MetadataRootObserveCommittedRequest, ...grpc.CallOption) (*metapb.MetadataRootObserveCommittedResponse, error) {
@@ -199,8 +189,6 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 
 	require.True(t, validGrantAct(1))
 	require.False(t, validGrantAct(99))
-	require.True(t, validVisibleAuthorityAct(rootproto.VisibleAuthorityActAcquire))
-	require.False(t, validVisibleAuthorityAct(rootproto.VisibleAuthorityAct(99)))
 
 	leaderID, ok := leaderHint(metadataRootNotLeaderErrorForTest(23))
 	require.True(t, ok)
@@ -211,72 +199,6 @@ func TestClientHelpersAndOrdering(t *testing.T) {
 	require.False(t, ok)
 
 	require.NoError(t, waitForReady(context.Background(), nil))
-}
-
-func TestClientApplyVisibleAuthority(t *testing.T) {
-	state := rootstate.State{VisibleAuthorityEpoch: 4}
-	grant := rootproto.VisibleAuthorityGrant{
-		GrantID:         "visible-4",
-		EpochID:         4,
-		HolderID:        "holder-a",
-		Scope:           rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7},
-		ExpiresUnixNano: 1_000,
-	}
-	cmd := rootproto.VisibleAuthorityCommand{
-		Kind:            rootproto.VisibleAuthorityActAcquire,
-		HolderID:        grant.HolderID,
-		Scope:           grant.Scope,
-		ExpiresUnixNano: grant.ExpiresUnixNano,
-		NowUnixNano:     100,
-	}
-
-	t.Run("success", func(t *testing.T) {
-		c := &Client{
-			endpoints: []clientEndpoint{{
-				id: 1,
-				rpc: &fakeMetadataRootClient{
-					applyVisibleAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyVisibleAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
-						return &metapb.MetadataRootApplyVisibleAuthorityResponse{
-							State:  metawire.RootStateToProto(state),
-							Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED,
-							Grant:  metawire.RootVisibleAuthorityGrantToProto(grant),
-						}, nil
-					},
-				},
-			}},
-			byID: map[uint64]int{1: 0},
-		}
-
-		gotState, gotGrant, err := c.ApplyVisibleAuthority(context.Background(), cmd)
-		require.NoError(t, err)
-		require.Equal(t, state, gotState)
-		require.Equal(t, grant, gotGrant)
-	})
-
-	t.Run("held", func(t *testing.T) {
-		c := &Client{
-			endpoints: []clientEndpoint{{
-				id: 1,
-				rpc: &fakeMetadataRootClient{
-					applyVisibleAuthorityFunc: func(context.Context, *metapb.MetadataRootApplyVisibleAuthorityRequest, ...grpc.CallOption) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
-						return &metapb.MetadataRootApplyVisibleAuthorityResponse{
-							State:  metawire.RootStateToProto(state),
-							Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD,
-						}, nil
-					},
-				},
-			}},
-			byID: map[uint64]int{1: 0},
-		}
-
-		gotState, _, err := c.ApplyVisibleAuthority(context.Background(), rootproto.VisibleAuthorityCommand{
-			Kind:     rootproto.VisibleAuthorityActRetire,
-			HolderID: grant.HolderID,
-			GrantID:  grant.GrantID,
-		})
-		require.ErrorIs(t, err, rootstate.ErrPrimacy)
-		require.Equal(t, state, gotState)
-	})
 }
 
 func metadataRootNotLeaderErrorForTest(leaderID uint64) error {

@@ -12,14 +12,13 @@ import (
 // TransitionEntry is one rooted transition currently visible to debugging and
 // inspection surfaces.
 type TransitionEntry struct {
-	ID          string
-	Kind        TransitionKind
-	Key         uint64
-	Status      TransitionStatus
-	RetryClass  TransitionRetryClass
-	Reason      TransitionReason
-	PeerChange  *PendingPeerChange
-	RangeChange *PendingRangeChange
+	ID         string
+	Kind       TransitionKind
+	Key        uint64
+	Status     TransitionStatus
+	RetryClass TransitionRetryClass
+	Reason     TransitionReason
+	PeerChange *PendingPeerChange
 }
 
 // TransitionAssessment is one explicit lifecycle assessment for a proposed
@@ -52,7 +51,7 @@ func AssessTransition(snapshot Snapshot, event rootevent.Event) TransitionAssess
 // BuildTransitionEntries projects the rooted pending transition maps into one
 // stable inspection surface.
 func BuildTransitionEntries(snapshot Snapshot) []TransitionEntry {
-	total := len(snapshot.PendingPeerChanges) + len(snapshot.PendingRangeChanges)
+	total := len(snapshot.PendingPeerChanges)
 	if total == 0 {
 		return nil
 	}
@@ -65,15 +64,6 @@ func BuildTransitionEntries(snapshot Snapshot) []TransitionEntry {
 	slices.Sort(peerIDs)
 	for _, id := range peerIDs {
 		entries = append(entries, transitionEntryFromPendingPeerChange(snapshot, id, snapshot.PendingPeerChanges[id]))
-	}
-
-	rangeIDs := make([]uint64, 0, len(snapshot.PendingRangeChanges))
-	for id := range snapshot.PendingRangeChanges {
-		rangeIDs = append(rangeIDs, id)
-	}
-	slices.Sort(rangeIDs)
-	for _, id := range rangeIDs {
-		entries = append(entries, transitionEntryFromPendingRangeChange(snapshot, id, snapshot.PendingRangeChanges[id]))
 	}
 	return entries
 }
@@ -93,37 +83,12 @@ func transitionEntryFromPendingPeerChange(snapshot Snapshot, regionID uint64, ch
 	}
 }
 
-func transitionEntryFromPendingRangeChange(snapshot Snapshot, key uint64, change PendingRangeChange) TransitionEntry {
-	lifecycle := ObserveRangeChangeLifecycle(snapshot.PendingRangeChanges, snapshot.Descriptors, pendingRangeChangeEvent(change))
-	changeCopy := change
-	return TransitionEntry{
-		ID:          TransitionIDFromEvent(pendingRangeChangeEvent(change)),
-		Kind:        TransitionKindRangeChange,
-		Key:         key,
-		Status:      lifecycle.Status,
-		RetryClass:  lifecycle.RetryClass,
-		Reason:      lifecycle.Reason,
-		RangeChange: &changeCopy,
-	}
-}
-
 func pendingPeerChangeEvent(regionID uint64, change PendingPeerChange) rootevent.Event {
 	switch change.Kind {
 	case PendingPeerChangeAddition:
 		return rootevent.PeerAdditionPlanned(regionID, change.StoreID, change.PeerID, change.Target)
 	case PendingPeerChangeRemoval:
 		return rootevent.PeerRemovalPlanned(regionID, change.StoreID, change.PeerID, change.Target)
-	default:
-		return rootevent.Event{}
-	}
-}
-
-func pendingRangeChangeEvent(change PendingRangeChange) rootevent.Event {
-	switch change.Kind {
-	case PendingRangeChangeSplit:
-		return rootevent.RegionSplitPlanned(change.ParentRegionID, change.Right.StartKey, change.Left, change.Right)
-	case PendingRangeChangeMerge:
-		return rootevent.RegionMergePlanned(change.LeftRegionID, change.RightRegionID, change.Merged)
 	default:
 		return rootevent.Event{}
 	}

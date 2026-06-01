@@ -24,18 +24,15 @@ func RootCursorFromProto(pbCursor *metapb.RootCursor) rootproto.Cursor {
 
 func RootStateToProto(state rootstate.State) *metapb.RootState {
 	return &metapb.RootState{
-		ClusterEpoch:          state.ClusterEpoch,
-		MembershipEpoch:       state.MembershipEpoch,
-		LastCommitted:         RootCursorToProto(state.LastCommitted),
-		IdFence:               state.IDFence,
-		TsoFence:              state.TSOFence,
-		ActiveGrants:          RootAuthorityGrantsToProto(state.ActiveGrants),
-		RetiredGrants:         RootGrantRetirementsToProto(state.RetiredGrants),
-		GrantInheritances:     RootGrantInheritancesToProto(state.GrantInheritances),
-		RetiredEraFloors:      RootAuthorityRetiredEraFloorsToProto(state.RetiredEraFloors),
-		ActiveVisibleGrants:   RootVisibleAuthorityGrantsToProto(state.ActiveVisibleGrants),
-		VisibleAuthorityEpoch: state.VisibleAuthorityEpoch,
-		VisibleAuthoritySeals: RootVisibleAuthoritySealsToProto(state.VisibleAuthoritySeals),
+		ClusterEpoch:      state.ClusterEpoch,
+		MembershipEpoch:   state.MembershipEpoch,
+		LastCommitted:     RootCursorToProto(state.LastCommitted),
+		IdFence:           state.IDFence,
+		TsoFence:          state.TSOFence,
+		ActiveGrants:      RootAuthorityGrantsToProto(state.ActiveGrants),
+		RetiredGrants:     RootGrantRetirementsToProto(state.RetiredGrants),
+		GrantInheritances: RootGrantInheritancesToProto(state.GrantInheritances),
+		RetiredEraFloors:  RootAuthorityRetiredEraFloorsToProto(state.RetiredEraFloors),
 	}
 }
 
@@ -44,18 +41,15 @@ func RootStateFromProto(pbState *metapb.RootState) rootstate.State {
 		return rootstate.State{}
 	}
 	return rootstate.State{
-		ClusterEpoch:          pbState.ClusterEpoch,
-		MembershipEpoch:       pbState.MembershipEpoch,
-		LastCommitted:         RootCursorFromProto(pbState.LastCommitted),
-		IDFence:               pbState.IdFence,
-		TSOFence:              pbState.TsoFence,
-		ActiveGrants:          RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
-		RetiredGrants:         RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
-		GrantInheritances:     RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
-		RetiredEraFloors:      RootAuthorityRetiredEraFloorsFromProto(pbState.GetRetiredEraFloors()),
-		ActiveVisibleGrants:   RootVisibleAuthorityGrantsFromProto(pbState.GetActiveVisibleGrants()),
-		VisibleAuthorityEpoch: pbState.GetVisibleAuthorityEpoch(),
-		VisibleAuthoritySeals: RootVisibleAuthoritySealsFromProto(pbState.GetVisibleAuthoritySeals()),
+		ClusterEpoch:      pbState.ClusterEpoch,
+		MembershipEpoch:   pbState.MembershipEpoch,
+		LastCommitted:     RootCursorFromProto(pbState.LastCommitted),
+		IDFence:           pbState.IdFence,
+		TSOFence:          pbState.TsoFence,
+		ActiveGrants:      RootAuthorityGrantsFromProto(pbState.GetActiveGrants()),
+		RetiredGrants:     RootGrantRetirementsFromProto(pbState.GetRetiredGrants()),
+		GrantInheritances: RootGrantInheritancesFromProto(pbState.GetGrantInheritances()),
+		RetiredEraFloors:  RootAuthorityRetiredEraFloorsFromProto(pbState.GetRetiredEraFloors()),
 	}
 }
 
@@ -278,165 +272,6 @@ func RootAuthorityRetiredEraFloorsFromProto(floors []*metapb.RootAuthorityRetire
 	return out
 }
 
-func RootVisibleAuthorityScopeToProto(scope rootproto.VisibleAuthorityScope) *metapb.RootVisibleAuthorityScope {
-	return &metapb.RootVisibleAuthorityScope{
-		MountId:    scope.MountID,
-		MountKeyId: scope.MountKeyID,
-		Buckets:    rootVisibleBucketsToProto(scope.Buckets),
-		Parents:    append([]uint64(nil), scope.Parents...),
-		Inodes:     append([]uint64(nil), scope.Inodes...),
-	}
-}
-
-func RootVisibleAuthorityScopeFromProto(scope *metapb.RootVisibleAuthorityScope) rootproto.VisibleAuthorityScope {
-	if scope == nil {
-		return rootproto.VisibleAuthorityScope{}
-	}
-	return rootproto.VisibleAuthorityScope{
-		MountID:    scope.GetMountId(),
-		MountKeyID: scope.GetMountKeyId(),
-		Buckets:    rootVisibleBucketsFromProto(scope.GetBuckets()),
-		Parents:    append([]uint64(nil), scope.GetParents()...),
-		Inodes:     append([]uint64(nil), scope.GetInodes()...),
-	}
-}
-
-func RootVisibleAuthorityGrantToProto(grant rootproto.VisibleAuthorityGrant) *metapb.RootVisibleAuthorityGrant {
-	if !grant.Valid() {
-		return nil
-	}
-	return &metapb.RootVisibleAuthorityGrant{
-		GrantId:           grant.GrantID,
-		EpochId:           grant.EpochID,
-		HolderId:          grant.HolderID,
-		Scope:             RootVisibleAuthorityScopeToProto(grant.Scope),
-		ExpiresUnixNano:   grant.ExpiresUnixNano,
-		PredecessorDigest: append([]byte(nil), grant.PredecessorDigest[:]...),
-		QuotaCreditBytes:  grant.QuotaCreditBytes,
-		QuotaCreditInodes: grant.QuotaCreditInodes,
-		RootClusterEpoch:  grant.RootClusterEpoch,
-		IssuedRootToken:   RootTailTokenFromAuthorityToken(grant.IssuedRootToken),
-	}
-}
-
-func RootVisibleAuthorityGrantFromProto(grant *metapb.RootVisibleAuthorityGrant) rootproto.VisibleAuthorityGrant {
-	if grant == nil {
-		return rootproto.VisibleAuthorityGrant{}
-	}
-	var predecessorDigest [32]byte
-	copy(predecessorDigest[:], grant.GetPredecessorDigest())
-	return rootproto.VisibleAuthorityGrant{
-		GrantID:           grant.GetGrantId(),
-		EpochID:           grant.GetEpochId(),
-		HolderID:          grant.GetHolderId(),
-		Scope:             RootVisibleAuthorityScopeFromProto(grant.GetScope()),
-		ExpiresUnixNano:   grant.GetExpiresUnixNano(),
-		PredecessorDigest: predecessorDigest,
-		QuotaCreditBytes:  grant.GetQuotaCreditBytes(),
-		QuotaCreditInodes: grant.GetQuotaCreditInodes(),
-		RootClusterEpoch:  grant.GetRootClusterEpoch(),
-		IssuedRootToken:   AuthorityTokenFromRootTailToken(grant.GetIssuedRootToken()),
-	}
-}
-
-func RootVisibleAuthorityGrantsToProto(grants []rootproto.VisibleAuthorityGrant) []*metapb.RootVisibleAuthorityGrant {
-	if len(grants) == 0 {
-		return nil
-	}
-	out := make([]*metapb.RootVisibleAuthorityGrant, 0, len(grants))
-	for _, grant := range grants {
-		if pbGrant := RootVisibleAuthorityGrantToProto(grant); pbGrant != nil {
-			out = append(out, pbGrant)
-		}
-	}
-	return out
-}
-
-func RootVisibleAuthorityGrantsFromProto(grants []*metapb.RootVisibleAuthorityGrant) []rootproto.VisibleAuthorityGrant {
-	if len(grants) == 0 {
-		return nil
-	}
-	out := make([]rootproto.VisibleAuthorityGrant, 0, len(grants))
-	for _, grant := range grants {
-		if parsed := RootVisibleAuthorityGrantFromProto(grant); parsed.Valid() {
-			out = append(out, parsed)
-		}
-	}
-	return out
-}
-
-func RootVisibleAuthoritySealToProto(seal rootproto.VisibleAuthoritySeal) *metapb.RootVisibleAuthoritySeal {
-	if !seal.Valid() {
-		return nil
-	}
-	return &metapb.RootVisibleAuthoritySeal{
-		GrantId:              seal.GrantID,
-		EpochId:              seal.EpochID,
-		HolderId:             seal.HolderID,
-		Scope:                RootVisibleAuthorityScopeToProto(seal.Scope),
-		SegmentRoot:          append([]byte(nil), seal.SegmentRoot[:]...),
-		SegmentPayloadDigest: append([]byte(nil), seal.SegmentPayloadDigest[:]...),
-		OperationCount:       seal.OperationCount,
-		EntryCount:           seal.EntryCount,
-		SealedUnixNano:       seal.SealedUnixNano,
-		InstallRegionId:      seal.InstallRegionID,
-		InstallTerm:          seal.InstallTerm,
-		InstallIndex:         seal.InstallIndex,
-		InstallVersion:       seal.InstallVersion,
-	}
-}
-
-func RootVisibleAuthoritySealFromProto(seal *metapb.RootVisibleAuthoritySeal) rootproto.VisibleAuthoritySeal {
-	if seal == nil {
-		return rootproto.VisibleAuthoritySeal{}
-	}
-	var segmentRoot [32]byte
-	var payloadDigest [32]byte
-	copy(segmentRoot[:], seal.GetSegmentRoot())
-	copy(payloadDigest[:], seal.GetSegmentPayloadDigest())
-	return rootproto.VisibleAuthoritySeal{
-		GrantID:              seal.GetGrantId(),
-		EpochID:              seal.GetEpochId(),
-		HolderID:             seal.GetHolderId(),
-		Scope:                RootVisibleAuthorityScopeFromProto(seal.GetScope()),
-		SegmentRoot:          segmentRoot,
-		SegmentPayloadDigest: payloadDigest,
-		OperationCount:       seal.GetOperationCount(),
-		EntryCount:           seal.GetEntryCount(),
-		SealedUnixNano:       seal.GetSealedUnixNano(),
-		InstallRegionID:      seal.GetInstallRegionId(),
-		InstallTerm:          seal.GetInstallTerm(),
-		InstallIndex:         seal.GetInstallIndex(),
-		InstallVersion:       seal.GetInstallVersion(),
-	}
-}
-
-func RootVisibleAuthoritySealsToProto(seals []rootproto.VisibleAuthoritySeal) []*metapb.RootVisibleAuthoritySeal {
-	if len(seals) == 0 {
-		return nil
-	}
-	out := make([]*metapb.RootVisibleAuthoritySeal, 0, len(seals))
-	for _, seal := range seals {
-		if pbSeal := RootVisibleAuthoritySealToProto(seal); pbSeal != nil {
-			out = append(out, pbSeal)
-		}
-	}
-	return out
-}
-
-func RootVisibleAuthoritySealsFromProto(seals []*metapb.RootVisibleAuthoritySeal) []rootproto.VisibleAuthoritySeal {
-	if len(seals) == 0 {
-		return nil
-	}
-	out := make([]rootproto.VisibleAuthoritySeal, 0, len(seals))
-	for _, seal := range seals {
-		if parsed := RootVisibleAuthoritySealFromProto(seal); parsed.Valid() {
-			out = append(out, parsed)
-		}
-	}
-	return out
-}
-
 func RootSnapshotEvidenceRefsToProto(refs []rootproto.SnapshotEvidenceRef) []*metapb.RootSnapshotEvidenceRef {
 	if len(refs) == 0 {
 		return nil
@@ -477,110 +312,6 @@ func RootSnapshotEvidenceRefsFromProto(refs []*metapb.RootSnapshotEvidenceRef) [
 	}
 	if len(out) == 0 {
 		return nil
-	}
-	return out
-}
-
-func RootVisibleAuthorityCommandToProto(cmd rootproto.VisibleAuthorityCommand) *metapb.RootVisibleAuthorityCommand {
-	return &metapb.RootVisibleAuthorityCommand{
-		Kind:                 RootVisibleAuthorityActToProto(cmd.Kind),
-		HolderId:             cmd.HolderID,
-		GrantId:              cmd.GrantID,
-		Scope:                RootVisibleAuthorityScopeToProto(cmd.Scope),
-		ExpiresUnixNano:      cmd.ExpiresUnixNano,
-		NowUnixNano:          cmd.NowUnixNano,
-		PredecessorDigest:    append([]byte(nil), cmd.PredecessorDigest[:]...),
-		QuotaCreditBytes:     cmd.QuotaCreditBytes,
-		QuotaCreditInodes:    cmd.QuotaCreditInodes,
-		SegmentRoot:          append([]byte(nil), cmd.SegmentRoot[:]...),
-		SegmentPayloadDigest: append([]byte(nil), cmd.SegmentPayloadDigest[:]...),
-		OperationCount:       cmd.OperationCount,
-		EntryCount:           cmd.EntryCount,
-		InstallRegionId:      cmd.InstallRegionID,
-		InstallTerm:          cmd.InstallTerm,
-		InstallIndex:         cmd.InstallIndex,
-		InstallVersion:       cmd.InstallVersion,
-	}
-}
-
-func RootVisibleAuthorityCommandFromProto(cmd *metapb.RootVisibleAuthorityCommand) rootproto.VisibleAuthorityCommand {
-	if cmd == nil {
-		return rootproto.VisibleAuthorityCommand{}
-	}
-	var predecessorDigest [32]byte
-	var segmentRoot [32]byte
-	var segmentPayloadDigest [32]byte
-	copy(predecessorDigest[:], cmd.GetPredecessorDigest())
-	copy(segmentRoot[:], cmd.GetSegmentRoot())
-	copy(segmentPayloadDigest[:], cmd.GetSegmentPayloadDigest())
-	return rootproto.VisibleAuthorityCommand{
-		Kind:                 RootVisibleAuthorityActFromProto(cmd.GetKind()),
-		HolderID:             cmd.GetHolderId(),
-		GrantID:              cmd.GetGrantId(),
-		Scope:                RootVisibleAuthorityScopeFromProto(cmd.GetScope()),
-		ExpiresUnixNano:      cmd.GetExpiresUnixNano(),
-		NowUnixNano:          cmd.GetNowUnixNano(),
-		PredecessorDigest:    predecessorDigest,
-		QuotaCreditBytes:     cmd.GetQuotaCreditBytes(),
-		QuotaCreditInodes:    cmd.GetQuotaCreditInodes(),
-		SegmentRoot:          segmentRoot,
-		SegmentPayloadDigest: segmentPayloadDigest,
-		OperationCount:       cmd.GetOperationCount(),
-		EntryCount:           cmd.GetEntryCount(),
-		InstallRegionID:      cmd.GetInstallRegionId(),
-		InstallTerm:          cmd.GetInstallTerm(),
-		InstallIndex:         cmd.GetInstallIndex(),
-		InstallVersion:       cmd.GetInstallVersion(),
-	}
-}
-
-func RootVisibleAuthorityActToProto(act rootproto.VisibleAuthorityAct) metapb.RootVisibleAuthorityAct {
-	switch act {
-	case rootproto.VisibleAuthorityActAcquire:
-		return metapb.RootVisibleAuthorityAct_ROOT_VISIBLE_AUTHORITY_ACT_ACQUIRE
-	case rootproto.VisibleAuthorityActRetire:
-		return metapb.RootVisibleAuthorityAct_ROOT_VISIBLE_AUTHORITY_ACT_RETIRE
-	case rootproto.VisibleAuthorityActSeal:
-		return metapb.RootVisibleAuthorityAct_ROOT_VISIBLE_AUTHORITY_ACT_SEAL
-	default:
-		return metapb.RootVisibleAuthorityAct_ROOT_VISIBLE_AUTHORITY_ACT_UNSPECIFIED
-	}
-}
-
-func RootVisibleAuthorityActFromProto(act metapb.RootVisibleAuthorityAct) rootproto.VisibleAuthorityAct {
-	switch act {
-	case metapb.RootVisibleAuthorityAct_ROOT_VISIBLE_AUTHORITY_ACT_ACQUIRE:
-		return rootproto.VisibleAuthorityActAcquire
-	case metapb.RootVisibleAuthorityAct_ROOT_VISIBLE_AUTHORITY_ACT_RETIRE:
-		return rootproto.VisibleAuthorityActRetire
-	case metapb.RootVisibleAuthorityAct_ROOT_VISIBLE_AUTHORITY_ACT_SEAL:
-		return rootproto.VisibleAuthorityActSeal
-	default:
-		return rootproto.VisibleAuthorityActUnknown
-	}
-}
-
-func rootVisibleBucketsToProto(buckets []uint16) []uint32 {
-	if len(buckets) == 0 {
-		return nil
-	}
-	out := make([]uint32, len(buckets))
-	for i, bucket := range buckets {
-		out[i] = uint32(bucket)
-	}
-	return out
-}
-
-func rootVisibleBucketsFromProto(buckets []uint32) []uint16 {
-	if len(buckets) == 0 {
-		return nil
-	}
-	out := make([]uint16, 0, len(buckets))
-	for _, bucket := range buckets {
-		if bucket > uint32(^uint16(0)) {
-			continue
-		}
-		out = append(out, uint16(bucket))
 	}
 	return out
 }
@@ -1116,21 +847,16 @@ func RootSnapshotToProto(snapshot rootstate.Snapshot, tailOffset uint64) *metapb
 	for regionID, change := range snapshot.PendingPeerChanges {
 		pending = append(pending, RootPendingPeerChangeToProto(regionID, change))
 	}
-	pendingRanges := make([]*metapb.RootPendingRangeChange, 0, len(snapshot.PendingRangeChanges))
-	for regionID, change := range snapshot.PendingRangeChanges {
-		pendingRanges = append(pendingRanges, RootPendingRangeChangeToProto(regionID, change))
-	}
 	return &metapb.RootCheckpoint{
-		State:               RootStateToProto(snapshot.State),
-		Descriptors:         descriptors,
-		TailOffset:          tailOffset,
-		PendingPeerChanges:  pending,
-		PendingRangeChanges: pendingRanges,
-		Stores:              stores,
-		SnapshotEpochs:      snapshotEpochs,
-		Mounts:              mounts,
-		Subtrees:            subtrees,
-		Quotas:              quotas,
+		State:              RootStateToProto(snapshot.State),
+		Descriptors:        descriptors,
+		TailOffset:         tailOffset,
+		PendingPeerChanges: pending,
+		Stores:             stores,
+		SnapshotEpochs:     snapshotEpochs,
+		Mounts:             mounts,
+		Subtrees:           subtrees,
+		Quotas:             quotas,
 	}
 }
 
@@ -1139,10 +865,9 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 		return rootstate.Snapshot{Descriptors: make(map[uint64]topology.Descriptor)}, 0
 	}
 	snapshot := rootstate.Snapshot{
-		State:               RootStateFromProto(pbCheckpoint.State),
-		Descriptors:         make(map[uint64]topology.Descriptor, len(pbCheckpoint.Descriptors)),
-		PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange, len(pbCheckpoint.PendingPeerChanges)),
-		PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange, len(pbCheckpoint.PendingRangeChanges)),
+		State:              RootStateFromProto(pbCheckpoint.State),
+		Descriptors:        make(map[uint64]topology.Descriptor, len(pbCheckpoint.Descriptors)),
+		PendingPeerChanges: make(map[uint64]rootstate.PendingPeerChange, len(pbCheckpoint.PendingPeerChanges)),
 	}
 	if len(pbCheckpoint.Stores) > 0 {
 		snapshot.Stores = make(map[uint64]rootstate.StoreMembership, len(pbCheckpoint.Stores))
@@ -1207,13 +932,6 @@ func RootSnapshotFromProto(pbCheckpoint *metapb.RootCheckpoint) (rootstate.Snaps
 			continue
 		}
 		snapshot.PendingPeerChanges[regionID] = change
-	}
-	for _, pbPending := range pbCheckpoint.PendingRangeChanges {
-		regionID, change := RootPendingRangeChangeFromProto(pbPending)
-		if regionID == 0 {
-			continue
-		}
-		snapshot.PendingRangeChanges[regionID] = change
 	}
 	return snapshot, pbCheckpoint.TailOffset
 }
@@ -1424,40 +1142,6 @@ func RootPendingPeerChangeFromProto(pbPending *metapb.RootPendingPeerChange) (ui
 	}
 }
 
-func RootPendingRangeChangeToProto(regionID uint64, change rootstate.PendingRangeChange) *metapb.RootPendingRangeChange {
-	return &metapb.RootPendingRangeChange{
-		RegionId:       regionID,
-		Kind:           rootPendingRangeChangeKindToProto(change.Kind),
-		ParentRegionId: change.ParentRegionID,
-		LeftRegionId:   change.LeftRegionID,
-		RightRegionId:  change.RightRegionID,
-		Left:           DescriptorToProto(change.Left),
-		Right:          DescriptorToProto(change.Right),
-		Merged:         DescriptorToProto(change.Merged),
-		BaseParent:     DescriptorToProto(change.BaseParent),
-		BaseLeft:       DescriptorToProto(change.BaseLeft),
-		BaseRight:      DescriptorToProto(change.BaseRight),
-	}
-}
-
-func RootPendingRangeChangeFromProto(pbPending *metapb.RootPendingRangeChange) (uint64, rootstate.PendingRangeChange) {
-	if pbPending == nil || pbPending.GetRegionId() == 0 {
-		return 0, rootstate.PendingRangeChange{}
-	}
-	return pbPending.GetRegionId(), rootstate.PendingRangeChange{
-		Kind:           rootPendingRangeChangeKindFromProto(pbPending.GetKind()),
-		ParentRegionID: pbPending.GetParentRegionId(),
-		LeftRegionID:   pbPending.GetLeftRegionId(),
-		RightRegionID:  pbPending.GetRightRegionId(),
-		BaseParent:     DescriptorFromProto(pbPending.GetBaseParent()),
-		BaseLeft:       DescriptorFromProto(pbPending.GetBaseLeft()),
-		BaseRight:      DescriptorFromProto(pbPending.GetBaseRight()),
-		Left:           DescriptorFromProto(pbPending.GetLeft()),
-		Right:          DescriptorFromProto(pbPending.GetRight()),
-		Merged:         DescriptorFromProto(pbPending.GetMerged()),
-	}
-}
-
 func rootPendingPeerChangeKindToProto(kind rootstate.PendingPeerChangeKind) metapb.RootPendingPeerChangeKind {
 	switch kind {
 	case rootstate.PendingPeerChangeAddition:
@@ -1480,28 +1164,6 @@ func rootPendingPeerChangeKindFromProto(kind metapb.RootPendingPeerChangeKind) r
 	}
 }
 
-func rootPendingRangeChangeKindToProto(kind rootstate.PendingRangeChangeKind) metapb.RootPendingRangeChangeKind {
-	switch kind {
-	case rootstate.PendingRangeChangeSplit:
-		return metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_SPLIT
-	case rootstate.PendingRangeChangeMerge:
-		return metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_MERGE
-	default:
-		return metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED
-	}
-}
-
-func rootPendingRangeChangeKindFromProto(kind metapb.RootPendingRangeChangeKind) rootstate.PendingRangeChangeKind {
-	switch kind {
-	case metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_SPLIT:
-		return rootstate.PendingRangeChangeSplit
-	case metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_MERGE:
-		return rootstate.PendingRangeChangeMerge
-	default:
-		return rootstate.PendingRangeChangeUnknown
-	}
-}
-
 func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 	pbEvent := &metapb.RootEvent{Kind: rootEventKindToProto(event.Kind)}
 	switch {
@@ -1515,10 +1177,6 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_GrantRetirement{GrantRetirement: RootGrantRetirementToProto(*event.GrantRetirement)}
 	case event.GrantInheritance != nil:
 		pbEvent.Payload = &metapb.RootEvent_GrantInheritance{GrantInheritance: RootGrantInheritanceToProto(*event.GrantInheritance)}
-	case event.VisibleGrant != nil:
-		pbEvent.Payload = &metapb.RootEvent_VisibleAuthorityGrant{VisibleAuthorityGrant: RootVisibleAuthorityGrantToProto(*event.VisibleGrant)}
-	case event.VisibleSeal != nil:
-		pbEvent.Payload = &metapb.RootEvent_VisibleAuthoritySeal{VisibleAuthoritySeal: RootVisibleAuthoritySealToProto(*event.VisibleSeal)}
 	case event.SnapshotEpoch != nil:
 		pbEvent.Payload = &metapb.RootEvent_SnapshotEpoch{SnapshotEpoch: rootEventSnapshotEpochToProto(event.SnapshotEpoch)}
 	case event.Mount != nil:
@@ -1531,22 +1189,6 @@ func RootEventToProto(event rootevent.Event) *metapb.RootEvent {
 		pbEvent.Payload = &metapb.RootEvent_RegionDescriptor{RegionDescriptor: &metapb.RootRegionDescriptor{Descriptor_: DescriptorToProto(event.RegionDescriptor.Descriptor)}}
 	case event.RegionRemoval != nil:
 		pbEvent.Payload = &metapb.RootEvent_RegionRemoval{RegionRemoval: &metapb.RootRegionRemoval{RegionId: event.RegionRemoval.RegionID}}
-	case event.RangeSplit != nil:
-		pbEvent.Payload = &metapb.RootEvent_RangeSplit{RangeSplit: &metapb.RootRangeSplit{
-			ParentRegionId: event.RangeSplit.ParentRegionID,
-			SplitKey:       append([]byte(nil), event.RangeSplit.SplitKey...),
-			Left:           DescriptorToProto(event.RangeSplit.Left),
-			Right:          DescriptorToProto(event.RangeSplit.Right),
-			BaseParent:     DescriptorToProto(event.RangeSplit.BaseParent),
-		}}
-	case event.RangeMerge != nil:
-		pbEvent.Payload = &metapb.RootEvent_RangeMerge{RangeMerge: &metapb.RootRangeMerge{
-			LeftRegionId:  event.RangeMerge.LeftRegionID,
-			RightRegionId: event.RangeMerge.RightRegionID,
-			Merged:        DescriptorToProto(event.RangeMerge.Merged),
-			BaseLeft:      DescriptorToProto(event.RangeMerge.BaseLeft),
-			BaseRight:     DescriptorToProto(event.RangeMerge.BaseRight),
-		}}
 	case event.PeerChange != nil:
 		pbEvent.Payload = &metapb.RootEvent_PeerChange{PeerChange: &metapb.RootPeerChange{
 			RegionId: event.PeerChange.RegionID,
@@ -1582,14 +1224,6 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 		inheritance := RootGrantInheritanceFromProto(body)
 		event.GrantInheritance = &inheritance
 	}
-	if body := pbEvent.GetVisibleAuthorityGrant(); body != nil {
-		grant := RootVisibleAuthorityGrantFromProto(body)
-		event.VisibleGrant = &grant
-	}
-	if body := pbEvent.GetVisibleAuthoritySeal(); body != nil {
-		seal := RootVisibleAuthoritySealFromProto(body)
-		event.VisibleSeal = &seal
-	}
 	if body := pbEvent.GetSnapshotEpoch(); body != nil {
 		event.SnapshotEpoch = rootEventSnapshotEpochFromProto(body)
 	}
@@ -1607,24 +1241,6 @@ func RootEventFromProto(pbEvent *metapb.RootEvent) rootevent.Event {
 	}
 	if body := pbEvent.GetRegionRemoval(); body != nil {
 		event.RegionRemoval = &rootevent.RegionRemoval{RegionID: body.RegionId}
-	}
-	if body := pbEvent.GetRangeSplit(); body != nil {
-		event.RangeSplit = &rootevent.RangeSplit{
-			ParentRegionID: body.ParentRegionId,
-			SplitKey:       append([]byte(nil), body.SplitKey...),
-			Left:           DescriptorFromProto(body.Left),
-			Right:          DescriptorFromProto(body.Right),
-			BaseParent:     DescriptorFromProto(body.BaseParent),
-		}
-	}
-	if body := pbEvent.GetRangeMerge(); body != nil {
-		event.RangeMerge = &rootevent.RangeMerge{
-			LeftRegionID:  body.LeftRegionId,
-			RightRegionID: body.RightRegionId,
-			Merged:        DescriptorFromProto(body.Merged),
-			BaseLeft:      DescriptorFromProto(body.BaseLeft),
-			BaseRight:     DescriptorFromProto(body.BaseRight),
-		}
 	}
 	if body := pbEvent.GetPeerChange(); body != nil {
 		event.PeerChange = &rootevent.PeerChange{
@@ -1654,18 +1270,6 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_TOMBSTONED
 	case rootevent.KindTSOAllocatorFenced:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED
-	case rootevent.KindRegionSplitPlanned:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_PLANNED
-	case rootevent.KindRegionSplitCommitted:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED
-	case rootevent.KindRegionSplitCancelled:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED
-	case rootevent.KindRegionMergePlanned:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_PLANNED
-	case rootevent.KindRegionMerged:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED
-	case rootevent.KindRegionMergeCancelled:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_CANCELLED
 	case rootevent.KindPeerAdditionPlanned:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_PLANNED
 	case rootevent.KindPeerRemovalPlanned:
@@ -1686,12 +1290,6 @@ func rootEventKindToProto(kind rootevent.Kind) metapb.RootEventKind {
 		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_RETIRED
 	case rootevent.KindGrantInherited:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_INHERITED
-	case rootevent.KindVisibleAuthorityGranted:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_VISIBLE_AUTHORITY_GRANTED
-	case rootevent.KindVisibleAuthorityRetired:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_VISIBLE_AUTHORITY_RETIRED
-	case rootevent.KindVisibleAuthoritySealed:
-		return metapb.RootEventKind_ROOT_EVENT_KIND_VISIBLE_AUTHORITY_SEALED
 	case rootevent.KindSnapshotEpochPublished:
 		return metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED
 	case rootevent.KindSnapshotEpochRetired:
@@ -1729,18 +1327,6 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindRegionTombstoned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED:
 		return rootevent.KindTSOAllocatorFenced
-	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_PLANNED:
-		return rootevent.KindRegionSplitPlanned
-	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED:
-		return rootevent.KindRegionSplitCommitted
-	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED:
-		return rootevent.KindRegionSplitCancelled
-	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_PLANNED:
-		return rootevent.KindRegionMergePlanned
-	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGED:
-		return rootevent.KindRegionMerged
-	case metapb.RootEventKind_ROOT_EVENT_KIND_REGION_MERGE_CANCELLED:
-		return rootevent.KindRegionMergeCancelled
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_ADDITION_PLANNED:
 		return rootevent.KindPeerAdditionPlanned
 	case metapb.RootEventKind_ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED:
@@ -1761,12 +1347,6 @@ func rootEventKindFromProto(kind metapb.RootEventKind) rootevent.Kind {
 		return rootevent.KindGrantRetired
 	case metapb.RootEventKind_ROOT_EVENT_KIND_GRANT_INHERITED:
 		return rootevent.KindGrantInherited
-	case metapb.RootEventKind_ROOT_EVENT_KIND_VISIBLE_AUTHORITY_GRANTED:
-		return rootevent.KindVisibleAuthorityGranted
-	case metapb.RootEventKind_ROOT_EVENT_KIND_VISIBLE_AUTHORITY_RETIRED:
-		return rootevent.KindVisibleAuthorityRetired
-	case metapb.RootEventKind_ROOT_EVENT_KIND_VISIBLE_AUTHORITY_SEALED:
-		return rootevent.KindVisibleAuthoritySealed
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_PUBLISHED:
 		return rootevent.KindSnapshotEpochPublished
 	case metapb.RootEventKind_ROOT_EVENT_KIND_SNAPSHOT_EPOCH_RETIRED:

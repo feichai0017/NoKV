@@ -49,8 +49,7 @@ func (f fakeVirtualLog) Size() (int64, error)                                 { 
 
 func TestBootstrapFromObservedReplaysTail(t *testing.T) {
 	base := testMaterializeDescriptor(1, []byte("a"), []byte("m"))
-	left := testMaterializeDescriptor(1, []byte("a"), []byte("f"))
-	right := testMaterializeDescriptor(2, []byte("f"), []byte("m"))
+	updated := testMaterializeDescriptor(1, []byte("a"), []byte("z"))
 	checkpoint := rootstate.Snapshot{
 		State: rootstate.State{LastCommitted: rootstate.Cursor{Term: 1, Index: 1}},
 		Descriptors: map[uint64]topology.Descriptor{
@@ -71,7 +70,7 @@ func TestBootstrapFromObservedReplaysTail(t *testing.T) {
 				},
 				{
 					Cursor: rootstate.Cursor{Term: 1, Index: 2},
-					Event:  rootevent.RegionSplitCommitted(base.RegionID, []byte("f"), left, right),
+					Event:  rootevent.RegionDescriptorPublished(updated),
 				},
 			},
 		},
@@ -80,8 +79,7 @@ func TestBootstrapFromObservedReplaysTail(t *testing.T) {
 	bootstrap := rootmaterialize.BootstrapFromObserved(observed)
 	require.Equal(t, observed.Tail, bootstrap.Tail)
 	require.Equal(t, observed.RetainFrom(), bootstrap.RetainFrom)
-	require.Equal(t, left, bootstrap.Snapshot.Descriptors[left.RegionID])
-	require.Equal(t, right, bootstrap.Snapshot.Descriptors[right.RegionID])
+	require.Equal(t, updated, bootstrap.Snapshot.Descriptors[updated.RegionID])
 	require.Equal(t, rootstate.Cursor{Term: 1, Index: 2}, bootstrap.Snapshot.State.LastCommitted)
 }
 

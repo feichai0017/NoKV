@@ -170,26 +170,6 @@ func fromPBOperation(op *coordpb.SchedulerOperation) (Operation, bool) {
 			Source: op.GetSourcePeerId(),
 			Target: op.GetTargetPeerId(),
 		}, true
-	case coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION:
-		child := metawire.DescriptorFromProto(op.GetSplitChild())
-		if op.GetRegionId() == 0 || len(op.GetSplitKey()) == 0 || child.RegionID == 0 {
-			return Operation{}, false
-		}
-		return Operation{
-			Type:       OperationSplitRegion,
-			Region:     op.GetRegionId(),
-			SplitKey:   append([]byte(nil), op.GetSplitKey()...),
-			SplitChild: child,
-		}, true
-	case coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_MERGE_REGION:
-		if op.GetRegionId() == 0 || op.GetSourceRegionId() == 0 {
-			return Operation{}, false
-		}
-		return Operation{
-			Type:         OperationMergeRegion,
-			Region:       op.GetRegionId(),
-			SourceRegion: op.GetSourceRegionId(),
-		}, true
 	case coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS:
 		if op.GetRegionId() == 0 || op.GetRetentionFloor() == 0 {
 			return Operation{}, false
@@ -297,20 +277,6 @@ func prepareRootEventRequest(event rootevent.Event) (uint64, rootevent.Event, er
 			return 0, rootevent.Event{}, err
 		}
 		out.RegionDescriptor.Descriptor = zero(out.RegionDescriptor.Descriptor)
-	case out.RangeSplit != nil:
-		if err := collect(out.RangeSplit.Left.RootEpoch); err != nil {
-			return 0, rootevent.Event{}, err
-		}
-		if err := collect(out.RangeSplit.Right.RootEpoch); err != nil {
-			return 0, rootevent.Event{}, err
-		}
-		out.RangeSplit.Left = zero(out.RangeSplit.Left)
-		out.RangeSplit.Right = zero(out.RangeSplit.Right)
-	case out.RangeMerge != nil:
-		if err := collect(out.RangeMerge.Merged.RootEpoch); err != nil {
-			return 0, rootevent.Event{}, err
-		}
-		out.RangeMerge.Merged = zero(out.RangeMerge.Merged)
 	case out.PeerChange != nil:
 		if err := collect(out.PeerChange.Region.RootEpoch); err != nil {
 			return 0, rootevent.Event{}, err

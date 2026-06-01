@@ -210,20 +210,17 @@ func (s *Service) publishRootSnapshot(snapshot rootview.Snapshot) {
 	if s.cluster != nil {
 		s.cluster.ReplaceRootSnapshot(rootstate.Snapshot{
 			State: rootstate.State{
-				ActiveGrants:          snapshot.ActiveGrants,
-				RetiredGrants:         append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
-				GrantInheritances:     append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
-				RetiredEraFloors:      rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors),
-				ActiveVisibleGrants:   snapshot.ActiveVisibleGrants,
-				VisibleAuthorityEpoch: snapshot.VisibleAuthorityEpoch,
+				ActiveGrants:      snapshot.ActiveGrants,
+				RetiredGrants:     append([]rootproto.GrantRetirement(nil), snapshot.RetiredGrants...),
+				GrantInheritances: append([]rootproto.GrantInheritance(nil), snapshot.GrantInheritances...),
+				RetiredEraFloors:  rootproto.CloneAuthorityRetiredEraFloors(snapshot.RetiredEraFloors),
 			},
-			Stores:              snapshot.Stores,
-			Subtrees:            snapshot.Subtrees,
-			Mounts:              snapshot.Mounts,
-			Quotas:              snapshot.Quotas,
-			Descriptors:         snapshot.Descriptors,
-			PendingPeerChanges:  snapshot.PendingPeerChanges,
-			PendingRangeChanges: snapshot.PendingRangeChanges,
+			Stores:             snapshot.Stores,
+			Subtrees:           snapshot.Subtrees,
+			Mounts:             snapshot.Mounts,
+			Quotas:             snapshot.Quotas,
+			Descriptors:        snapshot.Descriptors,
+			PendingPeerChanges: snapshot.PendingPeerChanges,
 		}, snapshot.RootToken)
 	}
 }

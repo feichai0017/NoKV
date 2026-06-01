@@ -7,7 +7,6 @@
 pub type NodeId = u64;
 pub type RegionId = u64;
 
-mod admin_command;
 mod apply;
 mod error;
 mod log;
@@ -19,12 +18,10 @@ mod traffic;
 mod transport;
 mod watch;
 
-pub use admin_command::{AdminCommand, AdminCommandType, MergeCommand, SplitCommand};
 pub use apply::{
     AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
     MetadataCommandExecutor, MetadataReadExecutor, MetadataRetentionExecutor,
-    PersistentAppliedMetadataEngine, RegionApplyEngine, RegionDescriptorCatalog,
-    RegionMetadataSink, RegionSnapshotEngine,
+    PersistentAppliedMetadataEngine, RegionApplyEngine, RegionMetadataSink, RegionSnapshotEngine,
 };
 pub use error::Error;
 pub use log::{decode_log_entry, encode_log_entry, RaftEntryLog, SegmentedEntryLog};

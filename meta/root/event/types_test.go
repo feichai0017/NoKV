@@ -13,32 +13,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestRegionSplitCommittedClonesSplitKey(t *testing.T) {
-	key := []byte("m")
-	left := testDescriptor(1, []byte("a"), []byte("m"))
-	right := testDescriptor(2, []byte("m"), []byte("z"))
-
-	event := rootevent.RegionSplitCommitted(1, key, left, right)
-	key[0] = 'x'
-
-	require.Equal(t, rootevent.KindRegionSplitCommitted, event.Kind)
-	require.NotNil(t, event.RangeSplit)
-	require.Equal(t, []byte("m"), event.RangeSplit.SplitKey)
-}
-
-func TestRegionSplitPlannedClonesSplitKey(t *testing.T) {
-	key := []byte("m")
-	left := testDescriptor(1, []byte("a"), []byte("m"))
-	right := testDescriptor(2, []byte("m"), []byte("z"))
-
-	event := rootevent.RegionSplitPlanned(1, key, left, right)
-	key[0] = 'x'
-
-	require.Equal(t, rootevent.KindRegionSplitPlanned, event.Kind)
-	require.NotNil(t, event.RangeSplit)
-	require.Equal(t, []byte("m"), event.RangeSplit.SplitKey)
-}
-
 func TestCloneEventDetachesPayload(t *testing.T) {
 	in := rootevent.RegionDescriptorPublished(testDescriptor(9, []byte("a"), []byte("z")))
 	cloned := rootevent.CloneEvent(in)
@@ -85,47 +59,6 @@ func TestGrantLifecycleEventsDetachPayload(t *testing.T) {
 	inherited.GrantInheritance.SuccessorGrantID = "mutated"
 	require.Equal(t, rootevent.KindGrantInherited, inheritedClone.Kind)
 	require.Equal(t, "c2/2", inheritedClone.GrantInheritance.SuccessorGrantID)
-
-	visibleGrant := rootproto.VisibleAuthorityGrant{
-		GrantID:  "visible-1",
-		EpochID:  1,
-		HolderID: "holder-a",
-		Scope: rootproto.VisibleAuthorityScope{
-			MountID:    "vol",
-			MountKeyID: 7,
-			Buckets:    []uint16{1},
-		},
-		ExpiresUnixNano: 1_000,
-	}
-	visibleAuthorityIssued := rootevent.VisibleAuthorityGranted(visibleGrant)
-	visibleAuthorityIssued.VisibleGrant.Scope.Buckets[0] = 9
-	require.Equal(t, []uint16{1}, visibleGrant.Scope.Buckets)
-	visibleAuthorityRetired := rootevent.VisibleAuthorityRetired(visibleGrant)
-	require.Equal(t, rootevent.KindVisibleAuthorityRetired, visibleAuthorityRetired.Kind)
-	require.Equal(t, visibleGrant.GrantID, visibleAuthorityRetired.VisibleGrant.GrantID)
-
-	var root [32]byte
-	var digest [32]byte
-	root[0] = 1
-	digest[0] = 2
-	visibleSeal := rootproto.VisibleAuthoritySeal{
-		GrantID:              visibleGrant.GrantID,
-		EpochID:              visibleGrant.EpochID,
-		HolderID:             visibleGrant.HolderID,
-		Scope:                visibleGrant.Scope,
-		SegmentRoot:          root,
-		SegmentPayloadDigest: digest,
-		SealedUnixNano:       10,
-		InstallRegionID:      11,
-		InstallTerm:          12,
-		InstallIndex:         13,
-		InstallVersion:       14,
-	}
-	visibleSealed := rootevent.VisibleAuthoritySealed(visibleSeal)
-	visibleSealedClone := rootevent.CloneEvent(visibleSealed)
-	visibleSealed.VisibleSeal.Scope.Buckets[0] = 10
-	require.Equal(t, rootevent.KindVisibleAuthoritySealed, visibleSealedClone.Kind)
-	require.Equal(t, []uint16{1}, visibleSealedClone.VisibleSeal.Scope.Buckets)
 }
 
 func TestMembershipAndAllocatorConstructors(t *testing.T) {
@@ -201,36 +134,15 @@ func testEventSnapshotEvidenceRef(epoch uint64, seed byte) rootproto.SnapshotEvi
 
 func TestRegionLifecycleConstructors(t *testing.T) {
 	parent := testDescriptor(1, []byte("a"), []byte("z"))
-	left := testDescriptor(1, []byte("a"), []byte("m"))
-	right := testDescriptor(2, []byte("m"), []byte("z"))
 
 	bootstrapped := rootevent.RegionBootstrapped(parent)
 	tombstoned := rootevent.RegionTombstoned(9)
-	cancelledSplit := rootevent.RegionSplitCancelled(1, []byte("m"), left, right, parent)
-	plannedMerge := rootevent.RegionMergePlanned(1, 2, parent)
-	merged := rootevent.RegionMerged(1, 2, parent)
-	cancelledMerge := rootevent.RegionMergeCancelled(1, 2, parent, left, right)
 
 	require.Equal(t, rootevent.KindRegionBootstrap, bootstrapped.Kind)
 	require.Equal(t, parent.RegionID, bootstrapped.RegionDescriptor.Descriptor.RegionID)
 
 	require.Equal(t, rootevent.KindRegionTombstoned, tombstoned.Kind)
 	require.Equal(t, uint64(9), tombstoned.RegionRemoval.RegionID)
-
-	require.Equal(t, rootevent.KindRegionSplitCancelled, cancelledSplit.Kind)
-	require.Equal(t, []byte("m"), cancelledSplit.RangeSplit.SplitKey)
-	require.Equal(t, parent.RegionID, cancelledSplit.RangeSplit.BaseParent.RegionID)
-
-	require.Equal(t, rootevent.KindRegionMergePlanned, plannedMerge.Kind)
-	require.Equal(t, uint64(1), plannedMerge.RangeMerge.LeftRegionID)
-	require.Equal(t, uint64(2), plannedMerge.RangeMerge.RightRegionID)
-
-	require.Equal(t, rootevent.KindRegionMerged, merged.Kind)
-	require.Equal(t, parent.RegionID, merged.RangeMerge.Merged.RegionID)
-
-	require.Equal(t, rootevent.KindRegionMergeCancelled, cancelledMerge.Kind)
-	require.Equal(t, left.RegionID, cancelledMerge.RangeMerge.BaseLeft.RegionID)
-	require.Equal(t, right.RegionID, cancelledMerge.RangeMerge.BaseRight.RegionID)
 }
 
 func TestPeerChangeConstructors(t *testing.T) {

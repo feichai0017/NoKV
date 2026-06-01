@@ -17,38 +17,8 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
-func (e *Executor) admitVisibleAuthority(ctx context.Context, delta compile.SemanticDelta) error {
-	if e == nil || e.visibleAuthority == nil {
-		return nil
-	}
-	if delta.Eligibility != compile.EligibilityVisibleCommit {
-		e.visibleAdmission.recordSlow(delta.SlowReason)
-		return nil
-	}
-	e.visibleAdmission.eligibleTotal.Add(1)
-	if e.visibleCommitter != nil {
-		return nil
-	}
-	e.visibleAdmission.acquireTotal.Add(1)
-	owned, err := e.visibleAuthority.AcquireVisibleAuthority(ctx, delta.Authority)
-	if err != nil {
-		e.visibleAdmission.errorTotal.Add(1)
-		return nil
-	}
-	if !owned {
-		e.visibleAdmission.heldTotal.Add(1)
-		return nil
-	}
-	e.visibleAdmission.ownedTotal.Add(1)
-	return nil
-}
-
 func (e *Executor) tryVisibleCommit(ctx context.Context, op compile.MaterializedOp) (bool, error) {
 	if e == nil || e.visibleCommitter == nil {
-		return false, nil
-	}
-	if e.visibleAuthority == nil {
-		e.visibleCommit.skipNoAuthorityTotal.Add(1)
 		return false, nil
 	}
 	delta := op.Delta
@@ -74,7 +44,6 @@ func (e *Executor) tryVisibleCommit(ctx context.Context, op compile.Materialized
 	if err != nil {
 		if errors.Is(err, ErrVisibleAdmissionRejected) ||
 			errors.Is(err, ErrVisibleIneligibleOperation) ||
-			errors.Is(err, errVisibleAuthorityNotHeld) ||
 			nokverrors.KindOf(err) == nokverrors.KindNotLeader {
 			e.visibleCommit.skipPredicateTotal.Add(1)
 			return false, nil

@@ -302,9 +302,8 @@ func TestClusterPublishRootEventTracksTransitionSnapshot(t *testing.T) {
 	transitions := c.TransitionSnapshot()
 	require.Contains(t, transitions.PendingPeerChanges, target.RegionID)
 	entries := rootstate.BuildTransitionEntries(rootstate.Snapshot{
-		Descriptors:         map[uint64]topology.Descriptor{target.RegionID: current},
-		PendingPeerChanges:  transitions.PendingPeerChanges,
-		PendingRangeChanges: transitions.PendingRangeChanges,
+		Descriptors:        map[uint64]topology.Descriptor{target.RegionID: current},
+		PendingPeerChanges: transitions.PendingPeerChanges,
 	})
 	require.Len(t, entries, 1)
 	require.Equal(t, rootstate.TransitionStatusPending, entries[0].Status)
@@ -392,67 +391,9 @@ func TestClusterPublishRootEventCoversTopologyLifecycleBranches(t *testing.T) {
 		require.Equal(t, base.Epoch, got.Epoch)
 	})
 
-	t.Run("split committed replaces parent with children", func(t *testing.T) {
-		c := NewCluster()
-		parent := testDescriptor(53, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
-		left := testDescriptor(53, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1})
-		right := testDescriptor(54, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
-		require.NoError(t, c.PublishRegionDescriptor(parent))
-		require.NoError(t, c.PublishRootEvent(rootevent.RegionSplitCommitted(parent.RegionID, []byte("m"), left, right)))
-		gotLeft, ok := c.GetRegionDescriptor(left.RegionID)
-		require.True(t, ok)
-		require.Equal(t, left.EndKey, gotLeft.EndKey)
-		gotRight, ok := c.GetRegionDescriptor(right.RegionID)
-		require.True(t, ok)
-		require.Equal(t, right.StartKey, gotRight.StartKey)
-	})
-
-	t.Run("split cancelled restores base parent", func(t *testing.T) {
-		c := NewCluster()
-		base := testDescriptor(55, []byte("a"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
-		left := testDescriptor(55, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1})
-		right := testDescriptor(56, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
-		require.NoError(t, c.PublishRegionDescriptor(left))
-		require.NoError(t, c.PublishRegionDescriptor(right))
-		require.NoError(t, c.PublishRootEvent(rootevent.RegionSplitCancelled(base.RegionID, []byte("m"), left, right, base)))
-		got, ok := c.GetRegionDescriptor(base.RegionID)
-		require.True(t, ok)
-		require.Equal(t, base.StartKey, got.StartKey)
-		require.Equal(t, base.EndKey, got.EndKey)
-		require.False(t, c.HasRegion(right.RegionID))
-	})
-
-	t.Run("merge committed replaces left and right with merged", func(t *testing.T) {
-		c := NewCluster()
-		left := testDescriptor(57, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})
-		right := testDescriptor(58, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
-		merged := testDescriptor(57, []byte("a"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1})
-		require.NoError(t, c.PublishRegionDescriptor(left))
-		require.NoError(t, c.PublishRegionDescriptor(right))
-		require.NoError(t, c.PublishRootEvent(rootevent.RegionMerged(left.RegionID, right.RegionID, merged)))
-		require.False(t, c.HasRegion(right.RegionID))
-		got, ok := c.GetRegionDescriptor(merged.RegionID)
-		require.True(t, ok)
-		require.Equal(t, merged.EndKey, got.EndKey)
-	})
-
-	t.Run("merge cancelled restores left and right", func(t *testing.T) {
-		c := NewCluster()
-		baseLeft := testDescriptor(59, []byte("a"), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})
-		baseRight := testDescriptor(60, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1})
-		merged := testDescriptor(59, []byte("a"), []byte("z"), metaregion.Epoch{Version: 2, ConfVersion: 1})
-		require.NoError(t, c.PublishRegionDescriptor(merged))
-		require.NoError(t, c.PublishRootEvent(rootevent.RegionMergeCancelled(baseLeft.RegionID, baseRight.RegionID, merged, baseLeft, baseRight)))
-		gotLeft, ok := c.GetRegionDescriptor(baseLeft.RegionID)
-		require.True(t, ok)
-		require.Equal(t, baseLeft.EndKey, gotLeft.EndKey)
-		gotRight, ok := c.GetRegionDescriptor(baseRight.RegionID)
-		require.True(t, ok)
-		require.Equal(t, baseRight.StartKey, gotRight.StartKey)
-	})
 }
 
-func TestClusterLeaderClaimsAndPendingRangeHelpers(t *testing.T) {
+func TestClusterLeaderClaims(t *testing.T) {
 	c := NewCluster()
 	left := testDescriptor(70, []byte(""), []byte("m"), metaregion.Epoch{Version: 1, ConfVersion: 1})
 	right := testDescriptor(71, []byte("m"), []byte(""), metaregion.Epoch{Version: 2, ConfVersion: 1})
@@ -471,25 +412,6 @@ func TestClusterLeaderClaimsAndPendingRangeHelpers(t *testing.T) {
 	require.Equal(t, uint64(9), snap[1].LeaderStoreID)
 
 	require.Equal(t, right.RootEpoch, c.MaxDescriptorRevision())
-
-	merged := testDescriptor(72, []byte(""), []byte(""), metaregion.Epoch{Version: 3, ConfVersion: 1})
-	c.ReplaceRootSnapshot(rootstate.Snapshot{
-		Descriptors: map[uint64]topology.Descriptor{merged.RegionID: merged},
-		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
-			merged.RegionID: {
-				Kind:          rootstate.PendingRangeChangeMerge,
-				LeftRegionID:  left.RegionID,
-				RightRegionID: right.RegionID,
-				Merged:        merged,
-			},
-		},
-	}, rootstorage.TailToken{})
-
-	change, ok := c.PendingRangeChangeForDescriptor(merged.RegionID)
-	require.True(t, ok)
-	require.Equal(t, rootstate.PendingRangeChangeMerge, change.Kind)
-	_, ok = c.PendingRangeChangeForDescriptor(999)
-	require.False(t, ok)
 }
 
 func testDescriptor(id uint64, start, end []byte, epoch metaregion.Epoch) topology.Descriptor {

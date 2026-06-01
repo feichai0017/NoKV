@@ -50,59 +50,6 @@ func TestApplyEventToSnapshotTracksPeerChangeStage(t *testing.T) {
 	require.NotContains(t, snapshot.PendingPeerChanges, target.RegionID)
 }
 
-func TestApplyEventToSnapshotTracksPendingSplitLifecycle(t *testing.T) {
-	parent := testDescriptor(40, []byte("a"), []byte("z"))
-	parent.RootEpoch = 5
-	parent.EnsureHash()
-	left := testDescriptor(40, []byte("a"), []byte("m"))
-	right := testDescriptor(41, []byte("m"), []byte("z"))
-	left.RootEpoch = 6
-	right.RootEpoch = 6
-	left.EnsureHash()
-	right.EnsureHash()
-
-	snapshot := rootstate.Snapshot{
-		State:       rootstate.State{ClusterEpoch: 5},
-		Descriptors: map[uint64]topology.Descriptor{parent.RegionID: parent},
-	}
-
-	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.RegionSplitPlanned(parent.RegionID, []byte("m"), left, right))
-	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
-	require.Contains(t, snapshot.PendingRangeChanges, parent.RegionID)
-
-	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 2}, rootevent.RegionSplitCommitted(parent.RegionID, []byte("m"), left, right))
-	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
-	require.NotContains(t, snapshot.PendingRangeChanges, parent.RegionID)
-}
-
-func TestApplyEventToSnapshotTracksPendingMergeLifecycle(t *testing.T) {
-	left := testDescriptor(48, []byte("a"), []byte("m"))
-	right := testDescriptor(49, []byte("m"), []byte("z"))
-	merged := testDescriptor(50, []byte("a"), []byte("z"))
-	left.RootEpoch = 5
-	right.RootEpoch = 5
-	merged.RootEpoch = 6
-	left.EnsureHash()
-	right.EnsureHash()
-	merged.EnsureHash()
-
-	snapshot := rootstate.Snapshot{
-		State: rootstate.State{ClusterEpoch: 5},
-		Descriptors: map[uint64]topology.Descriptor{
-			left.RegionID:  left,
-			right.RegionID: right,
-		},
-	}
-
-	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 1}, rootevent.RegionMergePlanned(left.RegionID, right.RegionID, merged))
-	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
-	require.Contains(t, snapshot.PendingRangeChanges, merged.RegionID)
-
-	rootstate.ApplyEventToSnapshot(&snapshot, rootstate.Cursor{Term: 1, Index: 2}, rootevent.RegionMerged(left.RegionID, right.RegionID, merged))
-	require.Equal(t, uint64(6), snapshot.State.ClusterEpoch)
-	require.NotContains(t, snapshot.PendingRangeChanges, merged.RegionID)
-}
-
 func TestApplyEventToDescriptorsRestoresCancelledPeerChange(t *testing.T) {
 	current := testDescriptor(81, []byte("a"), []byte("m"))
 	target := current.Clone()
@@ -114,34 +61,6 @@ func TestApplyEventToDescriptorsRestoresCancelledPeerChange(t *testing.T) {
 	descriptors := map[uint64]topology.Descriptor{target.RegionID: target}
 	rootmaterialize.ApplyEventToDescriptors(descriptors, rootevent.PeerAdditionCancelled(target.RegionID, 2, 201, target, current))
 	require.Equal(t, current, descriptors[current.RegionID])
-}
-
-func TestApplyEventToDescriptorsRestoresCancelledSplit(t *testing.T) {
-	parent := testDescriptor(90, []byte("a"), []byte("z"))
-	left := testDescriptor(90, []byte("a"), []byte("m"))
-	right := testDescriptor(91, []byte("m"), []byte("z"))
-	descriptors := map[uint64]topology.Descriptor{
-		left.RegionID:  left,
-		right.RegionID: right,
-	}
-
-	rootmaterialize.ApplyEventToDescriptors(descriptors, rootevent.RegionSplitCancelled(parent.RegionID, []byte("m"), left, right, parent))
-	require.Equal(t, parent, descriptors[parent.RegionID])
-	require.NotContains(t, descriptors, right.RegionID)
-}
-
-func TestApplyEventToDescriptorsRestoresCancelledMerge(t *testing.T) {
-	baseLeft := testDescriptor(98, []byte("a"), []byte("m"))
-	baseRight := testDescriptor(99, []byte("m"), []byte("z"))
-	merged := testDescriptor(100, []byte("a"), []byte("z"))
-	descriptors := map[uint64]topology.Descriptor{
-		merged.RegionID: merged,
-	}
-
-	rootmaterialize.ApplyEventToDescriptors(descriptors, rootevent.RegionMergeCancelled(baseLeft.RegionID, baseRight.RegionID, merged, baseLeft, baseRight))
-	require.Equal(t, baseLeft, descriptors[baseLeft.RegionID])
-	require.Equal(t, baseRight, descriptors[baseRight.RegionID])
-	require.NotContains(t, descriptors, merged.RegionID)
 }
 
 func testDescriptor(id uint64, start, end []byte) topology.Descriptor {

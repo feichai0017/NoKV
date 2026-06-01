@@ -18,13 +18,8 @@ use crate::coordinator::{
     spawn_multi_region_coordinator_heartbeat, spawn_pending_topology_retries,
     CoordinatorHeartbeatConfig,
 };
-use crate::hosted_region::{HoltRegionDescriptorCatalog, HostedRegionRegistry};
+use crate::hosted_region::HostedRegionRegistry;
 use crate::metrics::spawn_metrics_server;
-use crate::range_controller::HoltRangeController;
-use crate::range_topology::{
-    descriptor_membership_nodes, local_peer_for_store, local_peer_is_first,
-    merged_source_region_ids_for_store,
-};
 use crate::region_open::{
     open_openraft_region, raft_log_dir_for_region, spawn_recovered_region_leadership_retries,
 };
@@ -97,9 +92,6 @@ pub(crate) async fn serve_holt_regions(
                 applied_index: 0,
             });
         let engine = AppliedMetadataEngine::with_status(apply_status, metadata_store.clone());
-        engine.set_region_descriptor_catalog(Arc::new(HoltRegionDescriptorCatalog::new(
-            metadata_store.clone(),
-        )))?;
         engine.set_region_descriptor(descriptor.clone())?;
         let engine = PersistentAppliedMetadataEngine::new(
             engine,
@@ -152,19 +144,6 @@ pub(crate) async fn serve_holt_regions(
         hosted_region_registry.clone(),
         Some(metadata_store.clone()),
     );
-    let range_controller = HoltRangeController {
-        store_id: identities[0].store_id,
-        advertised_addr: advertised_addr.clone(),
-        persistent_root: persistent_root.clone(),
-        coordinator: coordinator.clone(),
-        metadata_store: metadata_store.clone(),
-        transport: transport.clone(),
-        metadata_services: metadata_router.clone(),
-        admin_services: admin_router.clone(),
-        hosted_regions: hosted_region_registry.clone(),
-        peer_endpoints: peer_endpoints.clone(),
-        topology_publisher: topology_publisher.clone(),
-    };
     spawn_multi_region_coordinator_heartbeat(
         coordinator.clone(),
         identities[0].store_id,
@@ -172,14 +151,8 @@ pub(crate) async fn serve_holt_regions(
         advertised_addr,
         hosted_region_registry,
         Some(metadata_store.clone()),
-        Some(range_controller.clone()),
     );
-    spawn_pending_topology_retries(
-        coordinator,
-        metadata_store.clone(),
-        addr,
-        Some(range_controller),
-    );
+    spawn_pending_topology_retries(coordinator, metadata_store.clone(), addr);
     serve_with_metadata_region_services(addr, metadata_router, admin_router, transport).await?;
     Ok(())
 }
@@ -198,12 +171,8 @@ pub(crate) fn recover_holt_hosted_identities(
         .collect::<HashSet<_>>();
     let mut identities = configured;
     let descriptors = store.region_descriptors()?;
-    let merged_sources = merged_source_region_ids_for_store(&descriptors, local_store_id);
     for descriptor in descriptors {
         if descriptor.region_id == 0 || seen.contains(&descriptor.region_id) {
-            continue;
-        }
-        if merged_sources.contains(&descriptor.region_id) {
             continue;
         }
         let Some(peer) = descriptor
@@ -310,7 +279,6 @@ pub(crate) async fn serve_memory_regions(
         advertised_addr,
         hosted_region_registry,
         None,
-        None,
     );
     serve_with_metadata_region_services(
         addr,
@@ -320,6 +288,61 @@ pub(crate) async fn serve_memory_regions(
     )
     .await?;
     Ok(())
+}
+
+pub(crate) fn local_peer_for_store(
+    descriptor: &metapb::RegionDescriptor,
+    store_id: u64,
+) -> Result<metapb::RegionPeer, tonic::Status> {
+    descriptor
+        .peers
+        .iter()
+        .find(|peer| peer.store_id == store_id)
+        .cloned()
+        .ok_or_else(|| {
+            tonic::Status::failed_precondition(format!(
+                "region {} has no peer on store {}",
+                descriptor.region_id, store_id
+            ))
+        })
+}
+
+pub(crate) fn local_peer_is_first(
+    descriptor: &metapb::RegionDescriptor,
+    local_peer: &metapb::RegionPeer,
+) -> bool {
+    descriptor.peers.first().is_some_and(|peer| {
+        peer.store_id == local_peer.store_id && peer.peer_id == local_peer.peer_id
+    })
+}
+
+pub(crate) fn descriptor_membership_nodes(
+    descriptor: &metapb::RegionDescriptor,
+    local_peer: &metapb::RegionPeer,
+    local_addr: &str,
+    peer_endpoints: &PeerEndpointCatalog,
+) -> Result<BTreeMap<u64, BasicNode>, tonic::Status> {
+    let mut members = BTreeMap::new();
+    for peer in &descriptor.peers {
+        if peer.store_id == 0 || peer.peer_id == 0 {
+            return Err(tonic::Status::invalid_argument(format!(
+                "region {} has an invalid peer entry",
+                descriptor.region_id
+            )));
+        }
+        let node = if peer.store_id == local_peer.store_id && peer.peer_id == local_peer.peer_id {
+            BasicNode::new(local_addr.to_owned())
+        } else {
+            peer_endpoints.node_for_peer(peer.store_id, peer.peer_id)?
+        };
+        if members.insert(peer.peer_id, node).is_some() {
+            return Err(tonic::Status::invalid_argument(format!(
+                "region {} has duplicate peer id {}",
+                descriptor.region_id, peer.peer_id
+            )));
+        }
+    }
+    Ok(members)
 }
 
 #[cfg(test)]

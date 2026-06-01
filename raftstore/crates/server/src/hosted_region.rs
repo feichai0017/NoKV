@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 use std::sync::{Arc, RwLock};
 
-use nokv_holtstore::HoltMetadataStore;
-use nokv_proto::nokv::meta::v1 as metapb;
-use nokv_raftnode::{OpenRaftRegion, PersistentAppliedMetadataEngine, RegionDescriptorCatalog};
-use nokv_raftstore_server::HoltRegionMetadataSink;
+use nokv_raftnode::OpenRaftRegion;
 
 #[derive(Clone)]
 pub(crate) struct HostedRegionRegistry<E> {
@@ -45,32 +42,6 @@ impl<E> HostedRegionRegistry<E> {
         Ok(())
     }
 
-    pub(crate) fn get(
-        &self,
-        region_id: u64,
-    ) -> Result<Option<(crate::startup::ServerIdentity, OpenRaftRegion<E>)>, String>
-    where
-        E: Clone,
-    {
-        self.regions
-            .read()
-            .map_err(|_| "hosted region registry lock poisoned".to_owned())
-            .map(|regions| regions.get(&region_id).cloned())
-    }
-
-    pub(crate) fn remove(
-        &self,
-        region_id: u64,
-    ) -> Result<Option<(crate::startup::ServerIdentity, OpenRaftRegion<E>)>, String>
-    where
-        E: Clone,
-    {
-        self.regions
-            .write()
-            .map_err(|_| "hosted region registry lock poisoned".to_owned())
-            .map(|mut regions| regions.remove(&region_id))
-    }
-
     pub(crate) fn snapshot(
         &self,
     ) -> Result<Vec<(crate::startup::ServerIdentity, OpenRaftRegion<E>)>, String>
@@ -81,38 +52,5 @@ impl<E> HostedRegionRegistry<E> {
             .read()
             .map_err(|_| "hosted region registry lock poisoned".to_owned())
             .map(|regions| regions.values().cloned().collect())
-    }
-}
-
-pub(crate) type HoltApplyEngine =
-    PersistentAppliedMetadataEngine<HoltMetadataStore, HoltRegionMetadataSink>;
-pub(crate) type HoltRegion = OpenRaftRegion<HoltApplyEngine>;
-
-#[derive(Clone)]
-pub(crate) struct HoltRegionDescriptorCatalog {
-    store: HoltMetadataStore,
-}
-
-impl HoltRegionDescriptorCatalog {
-    pub(crate) fn new(store: HoltMetadataStore) -> Self {
-        Self { store }
-    }
-}
-
-impl std::fmt::Debug for HoltRegionDescriptorCatalog {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("HoltRegionDescriptorCatalog")
-            .finish_non_exhaustive()
-    }
-}
-
-impl RegionDescriptorCatalog for HoltRegionDescriptorCatalog {
-    fn region_descriptor(
-        &self,
-        region_id: u64,
-    ) -> nokv_metadata_state::Result<Option<metapb::RegionDescriptor>> {
-        self.store
-            .get_region_descriptor(region_id)
-            .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))
     }
 }

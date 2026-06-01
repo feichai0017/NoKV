@@ -6,7 +6,6 @@ package exec
 import (
 	"bytes"
 	"context"
-	"slices"
 	"sort"
 	"time"
 
@@ -18,7 +17,7 @@ import (
 
 func (e *Executor) tryVisibleOpenWriteSession(ctx context.Context, program compile.OpenWriteSessionProgram, mount model.MountIdentity, req model.OpenWriteSessionRequest) (model.SessionRecord, bool, error) {
 	delta := program.Compiled.Delta
-	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return model.SessionRecord{}, false, nil
 	}
 	plan := delta.Plan
@@ -85,7 +84,7 @@ func (e *Executor) tryVisibleOpenWriteSession(ctx context.Context, program compi
 
 func (e *Executor) tryVisibleHeartbeatWriteSession(ctx context.Context, program compile.HeartbeatWriteSessionProgram, mount model.MountIdentity, req model.HeartbeatWriteSessionRequest) (model.SessionRecord, bool, error) {
 	delta := program.Compiled.Delta
-	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return model.SessionRecord{}, false, nil
 	}
 	plan := delta.Plan
@@ -135,7 +134,7 @@ func (e *Executor) tryVisibleHeartbeatWriteSession(ctx context.Context, program 
 
 func (e *Executor) tryVisibleCloseWriteSession(ctx context.Context, program compile.CloseWriteSessionProgram, mount model.MountIdentity, req model.CloseWriteSessionRequest) (bool, error) {
 	delta := program.Compiled.Delta
-	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
 	plan := delta.Plan
@@ -184,29 +183,6 @@ func (e *Executor) tryVisibleExpireWriteSession(ctx context.Context, mount model
 	})
 }
 
-func sessionDrainScopeForInodes(mount model.MountIdentity, inodes map[model.InodeID]struct{}) compile.AuthorityScope {
-	if mount.MountKeyID == 0 || len(inodes) == 0 {
-		return compile.AuthorityScope{}
-	}
-	out := compile.AuthorityScope{
-		Mount:      mount.MountID,
-		MountKeyID: mount.MountKeyID,
-		Inodes:     make([]model.InodeID, 0, len(inodes)),
-	}
-	seenBuckets := make(map[layout.AffinityBucket]struct{}, len(inodes))
-	for inode := range inodes {
-		out.Inodes = append(out.Inodes, inode)
-		bucket := layout.BucketForInodeID(inode)
-		if _, ok := seenBuckets[bucket]; !ok {
-			seenBuckets[bucket] = struct{}{}
-			out.Buckets = append(out.Buckets, bucket)
-		}
-	}
-	slices.Sort(out.Inodes)
-	slices.Sort(out.Buckets)
-	return out
-}
-
 // OpenWriteSession records one exclusive writer lease for an inode. It writes
 // both a session-id key and an inode-owner key so concurrent opens for the same
 // inode conflict on one backend key.
@@ -221,9 +197,6 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSess
 		return model.SessionRecord{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return model.SessionRecord{}, err
-	}
 	plan := delta.Plan
 	if req.TTL <= 0 {
 		return model.SessionRecord{}, model.ErrInvalidRequest
@@ -339,9 +312,6 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req model.Heartbea
 		return model.SessionRecord{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return model.SessionRecord{}, err
-	}
 	plan := delta.Plan
 	if req.TTL <= 0 {
 		return model.SessionRecord{}, model.ErrInvalidRequest
@@ -419,9 +389,6 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req model.CloseWriteSe
 		return err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return err
-	}
 	plan := delta.Plan
 	if committed, err := e.tryVisibleCloseWriteSession(ctx, program, mount, req); committed || err != nil {
 		return err
@@ -478,9 +445,6 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 		return model.ExpireWriteSessionsResult{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return model.ExpireWriteSessionsResult{}, err
-	}
 	plan := delta.Plan
 	now := e.clock().UnixNano()
 	var expired uint64
@@ -492,7 +456,6 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 			session model.SessionID
 		}
 		expiredSessions := make(map[expiredSessionKey]struct{})
-		fallbackInodes := make(map[model.InodeID]struct{})
 		remaining := plan.Limit
 		for _, scanPrefix := range scanPrefixes {
 			if remaining == 0 {
@@ -553,7 +516,6 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 				} else if ok && bytes.Equal(value, kv.Value) {
 					deletes[string(ownerKey)] = ownerKey
 				}
-				fallbackInodes[record.Inode] = struct{}{}
 			}
 			remaining -= matched
 		}
@@ -561,14 +523,10 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 			expired = uint64(len(expiredSessions))
 			return nil
 		}
-		drainScope := sessionDrainScopeForInodes(mount, fallbackInodes)
-		if authorityScopeEmpty(drainScope) {
-			drainScope = delta.Authority
-		}
 		// Fallback expiration mutates base session keys. Drain only after
 		// concrete expired keys are known so ordinary visible session updates do
 		// not wait behind speculative maintenance scans.
-		if err := e.drainVisibleAuthority(ctx, drainScope); err != nil {
+		if err := e.flushVisible(ctx); err != nil {
 			return err
 		}
 		keys := make([]string, 0, len(deletes))

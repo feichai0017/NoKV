@@ -15,8 +15,7 @@ import (
 )
 
 type PendingSnapshot struct {
-	PendingPeerChanges  map[uint64]rootstate.PendingPeerChange
-	PendingRangeChanges map[uint64]rootstate.PendingRangeChange
+	PendingPeerChanges map[uint64]rootstate.PendingPeerChange
 }
 
 // ClusterSnapshot is the read-only input shape consumed by coordinator
@@ -33,34 +32,32 @@ type ClusterSnapshot struct {
 // Coordinator RPC wiring and persistence are handled by higher layers
 // (coordinator/server and coordinator/rootview).
 type Cluster struct {
-	stores              *StoreHealthView
-	regions             *RegionDirectoryView
-	storeMembershipMu   sync.RWMutex
-	storeMemberships    map[uint64]rootstate.StoreMembership
-	mountMu             sync.RWMutex
-	mounts              map[string]rootstate.MountRecord
-	subtreeMu           sync.RWMutex
-	subtrees            map[string]rootstate.SubtreeAuthority
-	quotaMu             sync.RWMutex
-	quotas              map[string]rootstate.QuotaFence
-	pendingMu           sync.RWMutex
-	pendingPeerChanges  map[uint64]rootstate.PendingPeerChange
-	pendingRangeChanges map[uint64]rootstate.PendingRangeChange
-	rootMu              sync.RWMutex
-	rootToken           rootstorage.TailToken
+	stores             *StoreHealthView
+	regions            *RegionDirectoryView
+	storeMembershipMu  sync.RWMutex
+	storeMemberships   map[uint64]rootstate.StoreMembership
+	mountMu            sync.RWMutex
+	mounts             map[string]rootstate.MountRecord
+	subtreeMu          sync.RWMutex
+	subtrees           map[string]rootstate.SubtreeAuthority
+	quotaMu            sync.RWMutex
+	quotas             map[string]rootstate.QuotaFence
+	pendingMu          sync.RWMutex
+	pendingPeerChanges map[uint64]rootstate.PendingPeerChange
+	rootMu             sync.RWMutex
+	rootToken          rootstorage.TailToken
 }
 
 // NewCluster creates an empty in-memory cluster metadata view.
 func NewCluster() *Cluster {
 	return &Cluster{
-		stores:              NewStoreHealthView(),
-		regions:             NewRegionDirectoryView(),
-		storeMemberships:    make(map[uint64]rootstate.StoreMembership),
-		mounts:              make(map[string]rootstate.MountRecord),
-		subtrees:            make(map[string]rootstate.SubtreeAuthority),
-		quotas:              make(map[string]rootstate.QuotaFence),
-		pendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
-		pendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+		stores:             NewStoreHealthView(),
+		regions:            NewRegionDirectoryView(),
+		storeMemberships:   make(map[uint64]rootstate.StoreMembership),
+		mounts:             make(map[string]rootstate.MountRecord),
+		subtrees:           make(map[string]rootstate.SubtreeAuthority),
+		quotas:             make(map[string]rootstate.QuotaFence),
+		pendingPeerChanges: make(map[uint64]rootstate.PendingPeerChange),
 	}
 }
 
@@ -289,34 +286,6 @@ func applyRootEventToRegionView(regions *RegionDirectoryView, event rootevent.Ev
 			return nil
 		}
 		return regions.Upsert(event.PeerChange.Base)
-	case event.RangeSplit != nil && event.Kind == rootevent.KindRegionSplitCancelled:
-		regions.Remove(event.RangeSplit.Left.RegionID)
-		regions.Remove(event.RangeSplit.Right.RegionID)
-		if event.RangeSplit.BaseParent.RegionID != 0 {
-			return regions.Upsert(event.RangeSplit.BaseParent)
-		}
-		return nil
-	case event.RangeMerge != nil && event.Kind == rootevent.KindRegionMergeCancelled:
-		regions.Remove(event.RangeMerge.Merged.RegionID)
-		if event.RangeMerge.BaseLeft.RegionID != 0 {
-			if err := regions.Upsert(event.RangeMerge.BaseLeft); err != nil {
-				return err
-			}
-		}
-		if event.RangeMerge.BaseRight.RegionID != 0 {
-			return regions.Upsert(event.RangeMerge.BaseRight)
-		}
-		return nil
-	case event.RangeSplit != nil:
-		regions.Remove(event.RangeSplit.ParentRegionID)
-		if err := regions.Upsert(event.RangeSplit.Left); err != nil {
-			return err
-		}
-		return regions.Upsert(event.RangeSplit.Right)
-	case event.RangeMerge != nil:
-		regions.Remove(event.RangeMerge.LeftRegionID)
-		regions.Remove(event.RangeMerge.RightRegionID)
-		return regions.Upsert(event.RangeMerge.Merged)
 	case event.PeerChange != nil:
 		return regions.Upsert(event.PeerChange.Region)
 	default:
@@ -454,17 +423,11 @@ func (c *Cluster) CatalogRootToken() rootstorage.TailToken {
 // TransitionSnapshot returns a stable copy of rooted pending execution state.
 func (c *Cluster) TransitionSnapshot() PendingSnapshot {
 	if c == nil {
-		return PendingSnapshot{
-			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
-			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
-		}
+		return PendingSnapshot{PendingPeerChanges: make(map[uint64]rootstate.PendingPeerChange)}
 	}
 	c.pendingMu.RLock()
 	defer c.pendingMu.RUnlock()
-	return PendingSnapshot{
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(c.pendingPeerChanges),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(c.pendingRangeChanges),
-	}
+	return PendingSnapshot{PendingPeerChanges: rootstate.ClonePendingPeerChanges(c.pendingPeerChanges)}
 }
 
 // ObserveRootEventLifecycle evaluates one rooted transition event against the
@@ -495,29 +458,6 @@ func (c *Cluster) GetRegionInfoByKey(key []byte) (RegionInfo, bool) {
 	return c.regions.LookupInfo(key)
 }
 
-// PendingRangeChangeForDescriptor reports whether the served descriptor is only
-// visible because a rooted split/merge is still in its planned state.
-func (c *Cluster) PendingRangeChangeForDescriptor(regionID uint64) (rootstate.PendingRangeChange, bool) {
-	if c == nil || regionID == 0 {
-		return rootstate.PendingRangeChange{}, false
-	}
-	c.pendingMu.RLock()
-	defer c.pendingMu.RUnlock()
-	for _, change := range c.pendingRangeChanges {
-		switch change.Kind {
-		case rootstate.PendingRangeChangeSplit:
-			if change.LeftRegionID == regionID || change.RightRegionID == regionID {
-				return change, true
-			}
-		case rootstate.PendingRangeChangeMerge:
-			if change.Merged.RegionID == regionID {
-				return change, true
-			}
-		}
-	}
-	return rootstate.PendingRangeChange{}, false
-}
-
 // RegionLastHeartbeat returns the latest heartbeat timestamp for regionID.
 func (c *Cluster) RegionLastHeartbeat(regionID uint64) (time.Time, bool) {
 	if c == nil {
@@ -540,7 +480,6 @@ func (c *Cluster) replaceTransitionRuntime(snapshot rootstate.Snapshot) {
 	}
 	c.pendingMu.Lock()
 	c.pendingPeerChanges = rootstate.ClonePendingPeerChanges(snapshot.PendingPeerChanges)
-	c.pendingRangeChanges = rootstate.ClonePendingRangeChanges(snapshot.PendingRangeChanges)
 	c.pendingMu.Unlock()
 }
 
@@ -774,23 +713,21 @@ func validateQuotaFenceEvent(snapshot rootstate.Snapshot, event rootevent.Event)
 func (c *Cluster) rootedSnapshot() rootstate.Snapshot {
 	if c == nil {
 		return rootstate.Snapshot{
-			Stores:              make(map[uint64]rootstate.StoreMembership),
-			Mounts:              make(map[string]rootstate.MountRecord),
-			Subtrees:            make(map[string]rootstate.SubtreeAuthority),
-			Quotas:              make(map[string]rootstate.QuotaFence),
-			Descriptors:         make(map[uint64]topology.Descriptor),
-			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
-			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+			Stores:             make(map[uint64]rootstate.StoreMembership),
+			Mounts:             make(map[string]rootstate.MountRecord),
+			Subtrees:           make(map[string]rootstate.SubtreeAuthority),
+			Quotas:             make(map[string]rootstate.QuotaFence),
+			Descriptors:        make(map[uint64]topology.Descriptor),
+			PendingPeerChanges: make(map[uint64]rootstate.PendingPeerChange),
 		}
 	}
 	return rootstate.Snapshot{
-		Stores:              c.StoreMembershipSnapshot(),
-		Mounts:              c.MountSnapshot(),
-		Subtrees:            c.SubtreeAuthoritySnapshot(),
-		Quotas:              c.QuotaFenceSnapshot(),
-		Descriptors:         c.regions.DescriptorsSnapshot(),
-		PendingPeerChanges:  c.clonePendingPeerChanges(),
-		PendingRangeChanges: c.clonePendingRangeChanges(),
+		Stores:             c.StoreMembershipSnapshot(),
+		Mounts:             c.MountSnapshot(),
+		Subtrees:           c.SubtreeAuthoritySnapshot(),
+		Quotas:             c.QuotaFenceSnapshot(),
+		Descriptors:        c.regions.DescriptorsSnapshot(),
+		PendingPeerChanges: c.clonePendingPeerChanges(),
 	}
 }
 
@@ -827,13 +764,4 @@ func (c *Cluster) clonePendingPeerChanges() map[uint64]rootstate.PendingPeerChan
 	c.pendingMu.RLock()
 	defer c.pendingMu.RUnlock()
 	return rootstate.ClonePendingPeerChanges(c.pendingPeerChanges)
-}
-
-func (c *Cluster) clonePendingRangeChanges() map[uint64]rootstate.PendingRangeChange {
-	if c == nil {
-		return make(map[uint64]rootstate.PendingRangeChange)
-	}
-	c.pendingMu.RLock()
-	defer c.pendingMu.RUnlock()
-	return rootstate.ClonePendingRangeChanges(c.pendingRangeChanges)
 }

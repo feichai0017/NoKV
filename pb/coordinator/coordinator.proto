@@ -175,28 +175,6 @@ message ListQuotaFencesResponse {
   repeated QuotaFenceInfo fences = 1;
 }
 
-message ListVisibleAuthorityGrantsRequest {}
-
-message ListVisibleAuthorityGrantsResponse {
-  repeated nokv.meta.v1.RootVisibleAuthorityGrant grants = 1;
-}
-
-message ListVisibleAuthoritySealsRequest {}
-
-message ListVisibleAuthoritySealsResponse {
-  repeated nokv.meta.v1.RootVisibleAuthoritySeal seals = 1;
-}
-
-message ApplyVisibleAuthorityRequest {
-  nokv.meta.v1.RootVisibleAuthorityCommand command = 1;
-}
-
-message ApplyVisibleAuthorityResponse {
-  nokv.meta.v1.RootVisibleAuthorityGrant grant = 1;
-  nokv.meta.v1.RootVisibleAuthorityApplyStatus status = 2;
-  repeated nokv.meta.v1.RootVisibleAuthorityGrant active_grants = 3;
-}
-
 message WatchRootEventsRequest {
   nokv.meta.v1.RootTailToken after = 1;
 }
@@ -210,8 +188,8 @@ message WatchRootEventsResponse {
 enum SchedulerOperationType {
   SCHEDULER_OPERATION_TYPE_NONE = 0;
   SCHEDULER_OPERATION_TYPE_LEADER_TRANSFER = 1;
-  SCHEDULER_OPERATION_TYPE_SPLIT_REGION = 2;
-  SCHEDULER_OPERATION_TYPE_MERGE_REGION = 3;
+  reserved 2, 3;
+  reserved "SCHEDULER_OPERATION_TYPE_SPLIT_REGION", "SCHEDULER_OPERATION_TYPE_MERGE_REGION";
   SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS = 4;
 }
 
@@ -220,9 +198,8 @@ message SchedulerOperation {
   uint64 region_id = 2;
   uint64 source_peer_id = 3;
   uint64 target_peer_id = 4;
-  bytes split_key = 5;
-  nokv.meta.v1.RegionDescriptor split_child = 6;
-  uint64 source_region_id = 7;
+  reserved 5, 6, 7;
+  reserved "split_key", "split_child", "source_region_id";
   uint64 retention_floor = 8;
 }
 
@@ -258,7 +235,8 @@ message PublishRootEventResponse {
 enum TransitionKind {
   TRANSITION_KIND_UNSPECIFIED = 0;
   TRANSITION_KIND_PEER_CHANGE = 1;
-  TRANSITION_KIND_RANGE_CHANGE = 2;
+  reserved 2;
+  reserved "TRANSITION_KIND_RANGE_CHANGE";
 }
 
 enum TransitionStatus {
@@ -294,15 +272,15 @@ enum TransitionDecision {
 }
 
 message TransitionEntry {
-  // key is the rooted transition family key: region id for peer changes, or
-  // parent/merge key for range transitions.
+  // key is the rooted transition family key.
   uint64 key = 1;
   TransitionKind kind = 2;
   TransitionStatus status = 3;
   TransitionRetryClass retry_class = 4;
   TransitionReason reason = 5;
   nokv.meta.v1.RootPendingPeerChange pending_peer_change = 6;
-  nokv.meta.v1.RootPendingRangeChange pending_range_change = 7;
+  reserved 7;
+  reserved "pending_range_change";
   // transition_id is the stable identity of the transition target.
   string transition_id = 8;
 }
@@ -498,9 +476,6 @@ service Coordinator {
   rpc ListSubtreeAuthorities(ListSubtreeAuthoritiesRequest) returns (ListSubtreeAuthoritiesResponse);
   rpc GetQuotaFence(GetQuotaFenceRequest) returns (GetQuotaFenceResponse);
   rpc ListQuotaFences(ListQuotaFencesRequest) returns (ListQuotaFencesResponse);
-  rpc ListVisibleAuthorityGrants(ListVisibleAuthorityGrantsRequest) returns (ListVisibleAuthorityGrantsResponse);
-  rpc ListVisibleAuthoritySeals(ListVisibleAuthoritySealsRequest) returns (ListVisibleAuthoritySealsResponse);
-  rpc ApplyVisibleAuthority(ApplyVisibleAuthorityRequest) returns (ApplyVisibleAuthorityResponse);
   rpc WatchRootEvents(WatchRootEventsRequest) returns (stream WatchRootEventsResponse);
   rpc RegionLiveness(RegionLivenessRequest) returns (RegionLivenessResponse);
   rpc PublishRootEvent(PublishRootEventRequest) returns (PublishRootEventResponse);

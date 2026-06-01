@@ -2,14 +2,11 @@ use nokv_holtstore::HoltMetadataStore;
 use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 
-use crate::range_controller::HoltRangeController;
-
 pub(crate) const MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS: u32 = 8;
 
 pub(crate) async fn retry_pending_scheduler_operations(
     admin_endpoint: &str,
     pending_store: &HoltMetadataStore,
-    range_controller: Option<&HoltRangeController>,
 ) {
     let pending = match pending_store.pending_scheduler_operations() {
         Ok(pending) => pending,
@@ -19,7 +16,7 @@ pub(crate) async fn retry_pending_scheduler_operations(
         }
     };
     for item in pending {
-        match execute_scheduler_operation(admin_endpoint, range_controller, &item.operation).await {
+        match execute_scheduler_operation(admin_endpoint, &item.operation).await {
             Ok(SchedulerOperationOutcome::Applied)
             | Ok(SchedulerOperationOutcome::Invalid { .. }) => {
                 if let Err(err) =
@@ -30,45 +27,6 @@ pub(crate) async fn retry_pending_scheduler_operations(
                         "raftstore pending scheduler clear failed"
                     );
                     return;
-                }
-            }
-            Ok(SchedulerOperationOutcome::Unsupported { kind, reason }) => {
-                match record_pending_scheduler_operation_attempt(pending_store, &item.operation) {
-                    Ok(attempts) if attempts >= MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS => {
-                        if let Err(err) = pending_store.block_pending_scheduler_operation(
-                            &item.operation,
-                            attempts,
-                            reason,
-                        ) {
-                            tracing::debug!(
-                                error = %err,
-                                "raftstore exhausted pending scheduler block failed"
-                            );
-                            return;
-                        }
-                        tracing::warn!(
-                            ?kind,
-                            %reason,
-                            attempts,
-                            "raftstore abandoned unsupported pending scheduler operation"
-                        );
-                        continue;
-                    }
-                    Ok(attempts) => {
-                        tracing::debug!(
-                            ?kind,
-                            %reason,
-                            attempts,
-                            "raftstore pending scheduler operation still unsupported"
-                        );
-                    }
-                    Err(err) => {
-                        tracing::debug!(
-                            error = %err,
-                            "raftstore pending scheduler attempt update failed"
-                        );
-                        return;
-                    }
                 }
             }
             Err(err) => {
@@ -138,19 +96,6 @@ pub(crate) fn record_scheduler_operation_outcome(
                 "raftstore ignored invalid coordinator operation"
             );
         }
-        Ok(SchedulerOperationOutcome::Unsupported { kind, reason }) => {
-            record_pending_scheduler_operation(store, operation);
-            tracing::warn!(
-                ?kind,
-                %reason,
-                region_id = operation.region_id,
-                source_peer_id = operation.source_peer_id,
-                target_peer_id = operation.target_peer_id,
-                source_region_id = operation.source_region_id,
-                split_key_len = operation.split_key.len(),
-                "raftstore received unsupported coordinator operation"
-            );
-        }
         Err(err) => {
             record_pending_scheduler_operation(store, operation);
             tracing::debug!(
@@ -198,18 +143,11 @@ pub(crate) fn clear_scheduler_operation_diagnostic(
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum SchedulerOperationOutcome {
     Applied,
-    Invalid {
-        reason: &'static str,
-    },
-    Unsupported {
-        kind: coordpb::SchedulerOperationType,
-        reason: &'static str,
-    },
+    Invalid { reason: &'static str },
 }
 
 pub(crate) async fn execute_scheduler_operation(
     admin_endpoint: &str,
-    range_controller: Option<&HoltRangeController>,
     operation: &coordpb::SchedulerOperation,
 ) -> Result<SchedulerOperationOutcome, tonic::Status> {
     let kind = coordpb::SchedulerOperationType::try_from(operation.r#type)
@@ -235,40 +173,6 @@ pub(crate) async fn execute_scheduler_operation(
                 })
                 .await?;
             Ok(SchedulerOperationOutcome::Applied)
-        }
-        coordpb::SchedulerOperationType::SplitRegion => {
-            if operation.region_id == 0
-                || operation.split_key.is_empty()
-                || operation
-                    .split_child
-                    .as_ref()
-                    .is_none_or(|child| child.region_id == 0)
-            {
-                return Ok(SchedulerOperationOutcome::Invalid {
-                    reason: "split requires region, split key, and child descriptor",
-                });
-            }
-            if let Some(controller) = range_controller {
-                return controller.execute_split(operation).await;
-            }
-            Ok(SchedulerOperationOutcome::Unsupported {
-                kind,
-                reason: "split execution is not implemented in raftstore yet",
-            })
-        }
-        coordpb::SchedulerOperationType::MergeRegion => {
-            if operation.region_id == 0 || operation.source_region_id == 0 {
-                return Ok(SchedulerOperationOutcome::Invalid {
-                    reason: "merge requires target region and source region",
-                });
-            }
-            if let Some(controller) = range_controller {
-                return controller.execute_merge(operation).await;
-            }
-            Ok(SchedulerOperationOutcome::Unsupported {
-                kind,
-                reason: "merge execution is not implemented in raftstore yet",
-            })
         }
         coordpb::SchedulerOperationType::PruneMetadataVersions => {
             if operation.region_id == 0 || operation.retention_floor == 0 {

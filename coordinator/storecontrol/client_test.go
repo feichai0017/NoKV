@@ -106,18 +106,6 @@ func (f *fakeCoordinatorClient) ListQuotaFences(context.Context, *coordpb.ListQu
 	return &coordpb.ListQuotaFencesResponse{}, nil
 }
 
-func (f *fakeCoordinatorClient) ListVisibleAuthorityGrants(context.Context, *coordpb.ListVisibleAuthorityGrantsRequest) (*coordpb.ListVisibleAuthorityGrantsResponse, error) {
-	return &coordpb.ListVisibleAuthorityGrantsResponse{}, nil
-}
-
-func (f *fakeCoordinatorClient) ListVisibleAuthoritySeals(context.Context, *coordpb.ListVisibleAuthoritySealsRequest) (*coordpb.ListVisibleAuthoritySealsResponse, error) {
-	return &coordpb.ListVisibleAuthoritySealsResponse{}, nil
-}
-
-func (f *fakeCoordinatorClient) ApplyVisibleAuthority(context.Context, *coordpb.ApplyVisibleAuthorityRequest) (*coordpb.ApplyVisibleAuthorityResponse, error) {
-	return &coordpb.ApplyVisibleAuthorityResponse{}, nil
-}
-
 func (f *fakeCoordinatorClient) WatchRootEvents(context.Context, *coordpb.WatchRootEventsRequest, ...grpc.CallOption) (coordpb.Coordinator_WatchRootEventsClient, error) {
 	return nil, nil
 }
@@ -262,30 +250,6 @@ func TestClientNoopOnZeroIDs(t *testing.T) {
 	require.Empty(t, coord.rootEventReq)
 }
 
-func TestClientRejectsConflictingRootEpochsInOneEvent(t *testing.T) {
-	coord := &fakeCoordinatorClient{}
-	var got []string
-	sink := NewClient(Config{
-		Coordinator: coord,
-		OnError: func(op string, err error) {
-			got = append(got, op+": "+err.Error())
-		},
-	})
-
-	left := testDescriptor(41, []byte("a"), []byte("m"), metaregion.Epoch{Version: 2, ConfVersion: 1}, nil)
-	right := testDescriptor(42, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
-	left.RootEpoch = 7
-	right.RootEpoch = 8
-	left.EnsureHash()
-	right.EnsureHash()
-
-	require.Error(t, sink.PublishRootEvent(context.Background(), rootevent.RegionSplitCommitted(41, []byte("m"), left, right)))
-	require.Empty(t, coord.rootEventReq)
-	require.Len(t, got, 1)
-	require.Contains(t, got[0], "conflicting root epochs")
-	require.True(t, sink.Status().Degraded)
-}
-
 func TestClientStatusRecoversAfterSuccess(t *testing.T) {
 	coord := &fakeCoordinatorClient{storeErr: errors.New("heartbeat failed")}
 	sink := NewClient(Config{Coordinator: coord})
@@ -317,27 +281,6 @@ func TestFromPBOperationValidation(t *testing.T) {
 	})
 	require.True(t, ok)
 	require.Equal(t, OperationLeaderTransfer, op.Type)
-
-	child := testDescriptor(2, []byte("m"), []byte("z"), metaregion.Epoch{Version: 1, ConfVersion: 1}, nil)
-	op, ok = fromPBOperation(&coordpb.SchedulerOperation{
-		Type:       coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_SPLIT_REGION,
-		RegionId:   1,
-		SplitKey:   []byte("m"),
-		SplitChild: metawire.DescriptorToProto(child),
-	})
-	require.True(t, ok)
-	require.Equal(t, OperationSplitRegion, op.Type)
-	require.Equal(t, []byte("m"), op.SplitKey)
-	require.Equal(t, uint64(2), op.SplitChild.RegionID)
-
-	op, ok = fromPBOperation(&coordpb.SchedulerOperation{
-		Type:           coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_MERGE_REGION,
-		RegionId:       1,
-		SourceRegionId: 2,
-	})
-	require.True(t, ok)
-	require.Equal(t, OperationMergeRegion, op.Type)
-	require.Equal(t, uint64(2), op.SourceRegion)
 
 	op, ok = fromPBOperation(&coordpb.SchedulerOperation{
 		Type:           coordpb.SchedulerOperationType_SCHEDULER_OPERATION_TYPE_PRUNE_METADATA_VERSIONS,

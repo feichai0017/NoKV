@@ -76,7 +76,6 @@ func TestExecutorUpdateInodeVisibleCommitReadsCreateOverlay(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -143,7 +142,6 @@ func TestExecutorUpdateInodeVisibleRechecksObservedValue(t *testing.T) {
 	}
 	executor, err := newTestExecutor(
 		runner,
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -263,7 +261,6 @@ func BenchmarkExecutorUpdateInodeVisibleCommit(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(
 		runner,
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {

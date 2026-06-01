@@ -244,86 +244,85 @@ fn blocked_root_events_survive_reopen_and_advance_sequence() {
 #[test]
 fn pending_scheduler_operations_survive_reopen_and_delete() {
     let dir = tempfile::tempdir().unwrap();
-    let split = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+    let transfer = coordpb::SchedulerOperation {
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
         region_id: 42,
-        split_key: b"m".to_vec(),
-        split_child: Some(metapb::RegionDescriptor {
-            region_id: 43,
-            ..Default::default()
-        }),
+        source_peer_id: 1,
+        target_peer_id: 2,
         ..Default::default()
     };
-    let merge = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::MergeRegion as i32,
+    let prune = coordpb::SchedulerOperation {
+        r#type: coordpb::SchedulerOperationType::PruneMetadataVersions as i32,
         region_id: 42,
-        source_region_id: 43,
+        retention_floor: 100,
         ..Default::default()
     };
     {
         let store = HoltMetadataStore::open_file(dir.path()).unwrap();
-        store.record_pending_scheduler_operation(&split).unwrap();
-        store.record_pending_scheduler_operation(&merge).unwrap();
+        store.record_pending_scheduler_operation(&transfer).unwrap();
+        store.record_pending_scheduler_operation(&prune).unwrap();
         store.checkpoint().unwrap();
     }
 
     let reopened = HoltMetadataStore::open_file(dir.path()).unwrap();
     let pending = reopened.pending_scheduler_operations().unwrap();
     assert_eq!(pending.len(), 2);
-    assert_eq!(pending[0].operation, split);
+    assert_eq!(pending[0].operation, transfer);
     assert_eq!(pending[0].attempts, 0);
-    assert_eq!(pending[1].operation, merge);
+    assert_eq!(pending[1].operation, prune);
     assert_eq!(pending[1].attempts, 0);
 
-    reopened.delete_pending_scheduler_operation(&split).unwrap();
+    reopened
+        .delete_pending_scheduler_operation(&transfer)
+        .unwrap();
     let pending = reopened.pending_scheduler_operations().unwrap();
     assert_eq!(pending.len(), 1);
-    assert_eq!(pending[0].operation, merge);
+    assert_eq!(pending[0].operation, prune);
     assert_eq!(pending[0].attempts, 0);
 }
 
 #[test]
 fn pending_scheduler_operations_dedupe_by_full_operation_identity() {
     let store = HoltMetadataStore::open_memory().unwrap();
-    let split_m = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+    let transfer_to_2 = coordpb::SchedulerOperation {
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
         region_id: 42,
-        split_key: b"m".to_vec(),
-        split_child: Some(metapb::RegionDescriptor {
-            region_id: 43,
-            ..Default::default()
-        }),
+        source_peer_id: 1,
+        target_peer_id: 2,
         ..Default::default()
     };
-    let split_n = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+    let transfer_to_3 = coordpb::SchedulerOperation {
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
         region_id: 42,
-        split_key: b"n".to_vec(),
-        split_child: Some(metapb::RegionDescriptor {
-            region_id: 44,
-            ..Default::default()
-        }),
+        source_peer_id: 1,
+        target_peer_id: 3,
         ..Default::default()
     };
-    let merge = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::MergeRegion as i32,
+    let prune = coordpb::SchedulerOperation {
+        r#type: coordpb::SchedulerOperationType::PruneMetadataVersions as i32,
         region_id: 42,
-        source_region_id: 43,
+        retention_floor: 100,
         ..Default::default()
     };
 
-    store.record_pending_scheduler_operation(&split_m).unwrap();
-    store.record_pending_scheduler_operation(&split_m).unwrap();
-    store.record_pending_scheduler_operation(&split_n).unwrap();
-    store.record_pending_scheduler_operation(&merge).unwrap();
+    store
+        .record_pending_scheduler_operation(&transfer_to_2)
+        .unwrap();
+    store
+        .record_pending_scheduler_operation(&transfer_to_2)
+        .unwrap();
+    store
+        .record_pending_scheduler_operation(&transfer_to_3)
+        .unwrap();
+    store.record_pending_scheduler_operation(&prune).unwrap();
 
     let pending = store.pending_scheduler_operations().unwrap();
     assert_eq!(pending.len(), 3);
-    assert_eq!(pending[0].operation, split_m);
+    assert_eq!(pending[0].operation, transfer_to_2);
     assert_eq!(pending[0].attempts, 0);
-    assert_eq!(pending[1].operation, split_n);
+    assert_eq!(pending[1].operation, transfer_to_3);
     assert_eq!(pending[1].attempts, 0);
-    assert_eq!(pending[2].operation, merge);
+    assert_eq!(pending[2].operation, prune);
     assert_eq!(pending[2].attempts, 0);
 }
 
@@ -371,13 +370,10 @@ fn pending_scheduler_operation_attempts_survive_reopen() {
 fn blocked_scheduler_operations_survive_reopen_and_clear_pending() {
     let dir = tempfile::tempdir().unwrap();
     let operation = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
         region_id: 42,
-        split_key: b"m".to_vec(),
-        split_child: Some(metapb::RegionDescriptor {
-            region_id: 43,
-            ..Default::default()
-        }),
+        source_peer_id: 1,
+        target_peer_id: 2,
         ..Default::default()
     };
     {

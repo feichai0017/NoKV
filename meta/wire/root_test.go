@@ -71,22 +71,17 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 		SuccessorGrantID:   "grant-1",
 		InheritedAt:        rootproto.Cursor{Term: 2, Index: 10},
 	}
-	visibleGrant := testWireVisibleAuthorityGrant()
-	visibleSeal := testWireVisibleAuthoritySeal(visibleGrant)
 	grant.PredecessorRetirements = []rootproto.GrantRetirement{retirement}
 	state := rootstate.State{
-		ClusterEpoch:          7,
-		MembershipEpoch:       3,
-		LastCommitted:         rootproto.Cursor{Term: 2, Index: 9},
-		IDFence:               100,
-		TSOFence:              200,
-		ActiveGrants:          []rootproto.AuthorityGrant{grant},
-		RetiredGrants:         []rootproto.GrantRetirement{retirement},
-		GrantInheritances:     []rootproto.GrantInheritance{inheritance},
-		RetiredEraFloors:      []rootproto.AuthorityRetiredEraFloor{{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, RetiredEraFloor: 4}},
-		ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{visibleGrant},
-		VisibleAuthorityEpoch: visibleGrant.EpochID,
-		VisibleAuthoritySeals: []rootproto.VisibleAuthoritySeal{visibleSeal},
+		ClusterEpoch:      7,
+		MembershipEpoch:   3,
+		LastCommitted:     rootproto.Cursor{Term: 2, Index: 9},
+		IDFence:           100,
+		TSOFence:          200,
+		ActiveGrants:      []rootproto.AuthorityGrant{grant},
+		RetiredGrants:     []rootproto.GrantRetirement{retirement},
+		GrantInheritances: []rootproto.GrantInheritance{inheritance},
+		RetiredEraFloors:  []rootproto.AuthorityRetiredEraFloor{{DutyID: rootproto.DutyAllocID, Scope: rootproto.DutyScope{Kind: rootproto.DutyScopeGlobal}, RetiredEraFloor: 4}},
 	}
 
 	require.Equal(t, state.LastCommitted, RootCursorFromProto(RootCursorToProto(state.LastCommitted)))
@@ -100,10 +95,6 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	require.Equal(t, retirement, RootGrantRetirementFromProto(RootGrantRetirementToProto(retirement)))
 	require.Nil(t, RootGrantInheritanceToProto(rootproto.GrantInheritance{}))
 	require.Equal(t, inheritance, RootGrantInheritanceFromProto(RootGrantInheritanceToProto(inheritance)))
-	require.Nil(t, RootVisibleAuthorityGrantToProto(rootproto.VisibleAuthorityGrant{}))
-	require.Equal(t, visibleGrant, RootVisibleAuthorityGrantFromProto(RootVisibleAuthorityGrantToProto(visibleGrant)))
-	require.Nil(t, RootVisibleAuthoritySealToProto(rootproto.VisibleAuthoritySeal{}))
-	require.Equal(t, visibleSeal, RootVisibleAuthoritySealFromProto(RootVisibleAuthoritySealToProto(visibleSeal)))
 
 	protocolState := rootstate.EunomiaState{
 		ActiveGrants:      state.ActiveGrants,
@@ -125,24 +116,6 @@ func TestRootStateProtocolAndCommandRoundTrip(t *testing.T) {
 	}
 	require.Equal(t, grantCmd, RootGrantCommandFromProto(RootGrantCommandToProto(grantCmd)))
 	require.Equal(t, rootproto.GrantCommand{}, RootGrantCommandFromProto(nil))
-
-	visibleAuthorityCmd := rootproto.VisibleAuthorityCommand{
-		Kind:                 rootproto.VisibleAuthorityActAcquire,
-		HolderID:             visibleGrant.HolderID,
-		GrantID:              visibleGrant.GrantID,
-		Scope:                visibleGrant.Scope,
-		ExpiresUnixNano:      visibleGrant.ExpiresUnixNano,
-		NowUnixNano:          321,
-		PredecessorDigest:    [32]byte{1, 2, 3},
-		QuotaCreditBytes:     4096,
-		QuotaCreditInodes:    128,
-		SegmentRoot:          visibleSeal.SegmentRoot,
-		SegmentPayloadDigest: visibleSeal.SegmentPayloadDigest,
-		OperationCount:       visibleSeal.OperationCount,
-		EntryCount:           visibleSeal.EntryCount,
-	}
-	require.Equal(t, visibleAuthorityCmd, RootVisibleAuthorityCommandFromProto(RootVisibleAuthorityCommandToProto(visibleAuthorityCmd)))
-	require.Equal(t, rootproto.VisibleAuthorityCommand{}, RootVisibleAuthorityCommandFromProto(nil))
 
 	cert := rootproto.GrantCertificate{
 		Grant:       grant,
@@ -172,8 +145,6 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 	target.RootEpoch++
 	target.EnsureHash()
 
-	left := testWireDescriptor(21, []byte("a"), []byte("f"))
-	right := testWireDescriptor(22, []byte("f"), []byte("m"))
 	snapshot := rootstate.Snapshot{
 		State: rootstate.State{
 			LastCommitted: rootproto.Cursor{Term: 3, Index: 9},
@@ -227,17 +198,6 @@ func TestRootSnapshotTailAndAllocatorRoundTrip(t *testing.T) {
 				PeerID:  201,
 				Base:    desc,
 				Target:  target,
-			},
-		},
-		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
-			left.RegionID: {
-				Kind:           rootstate.PendingRangeChangeSplit,
-				ParentRegionID: desc.RegionID,
-				LeftRegionID:   left.RegionID,
-				RightRegionID:  right.RegionID,
-				BaseParent:     desc,
-				Left:           left,
-				Right:          right,
 			},
 		},
 	}
@@ -319,9 +279,6 @@ func TestRootSnapshotEvidenceRefsFromProtoSkipsInvalidRefs(t *testing.T) {
 
 func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 	desc := testWireDescriptor(31, []byte("a"), []byte("m"))
-	left := testWireDescriptor(31, []byte("a"), []byte("f"))
-	right := testWireDescriptor(32, []byte("f"), []byte("m"))
-	merged := testWireDescriptor(33, []byte("a"), []byte("m"))
 	base := desc.Clone()
 	grant := rootproto.AuthorityGrant{
 		GrantID:         "grant-1",
@@ -344,9 +301,6 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.GrantIssued(grant),
 		rootevent.GrantSealed(retirement),
 		rootevent.GrantInherited(rootproto.GrantInheritance{PredecessorGrantID: "grant-0", SuccessorGrantID: "grant-1"}),
-		rootevent.VisibleAuthorityGranted(testWireVisibleAuthorityGrant()),
-		rootevent.VisibleAuthoritySealed(testWireVisibleAuthoritySeal(testWireVisibleAuthorityGrant())),
-		rootevent.VisibleAuthorityRetired(testWireVisibleAuthorityGrant()),
 		rootevent.SnapshotEpochPublishedWithRuntimeEvidence("vol", 1, 42, 99, []rootproto.SnapshotEvidenceRef{testWireSnapshotEvidenceRef(9, 0x80)}),
 		rootevent.SnapshotEpochRetired("vol", 1, 42, 99),
 		rootevent.MountRegistered("vol", 1, 1, 1),
@@ -357,8 +311,6 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.QuotaFenceUpdated("vol", 1, 4096, 10, 2, 99),
 		rootevent.RegionDescriptorPublished(desc),
 		rootevent.RegionTombstoned(desc.RegionID),
-		rootevent.RegionSplitCancelled(desc.RegionID, []byte("f"), left, right, base),
-		rootevent.RegionMergeCancelled(left.RegionID, right.RegionID, merged, left, right),
 		rootevent.PeerAdditionCancelled(desc.RegionID, 2, 201, desc, base),
 	}
 
@@ -368,14 +320,6 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		require.Equal(t, event, got)
 	}
 	require.Equal(t, rootevent.Event{}, RootEventFromProto(nil))
-
-	splitKey := []byte("f")
-	event := rootevent.RegionSplitCommitted(desc.RegionID, splitKey, left, right)
-	pb := RootEventToProto(event)
-	splitKey[0] = 'x'
-	event.RangeSplit.SplitKey[0] = 'x'
-	got := RootEventFromProto(pb)
-	require.Equal(t, []byte("f"), got.RangeSplit.SplitKey)
 
 	require.Nil(t, rootEventSnapshotEpochToProto(nil))
 	require.Nil(t, rootEventMountToProto(nil))
@@ -394,12 +338,6 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
-		rootevent.KindRegionSplitPlanned,
-		rootevent.KindRegionSplitCommitted,
-		rootevent.KindRegionSplitCancelled,
-		rootevent.KindRegionMergePlanned,
-		rootevent.KindRegionMerged,
-		rootevent.KindRegionMergeCancelled,
 		rootevent.KindPeerAdditionPlanned,
 		rootevent.KindPeerRemovalPlanned,
 		rootevent.KindPeerAdded,
@@ -410,9 +348,6 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 		rootevent.KindGrantSealed,
 		rootevent.KindGrantRetired,
 		rootevent.KindGrantInherited,
-		rootevent.KindVisibleAuthorityGranted,
-		rootevent.KindVisibleAuthoritySealed,
-		rootevent.KindVisibleAuthorityRetired,
 		rootevent.KindSnapshotEpochPublished,
 		rootevent.KindSnapshotEpochRetired,
 		rootevent.KindMountRegistered,
@@ -430,53 +365,6 @@ func TestRootEventRoundTripAndKindMappings(t *testing.T) {
 
 	require.Equal(t, rootstate.PendingPeerChangeAddition, rootPendingPeerChangeKindFromProto(rootPendingPeerChangeKindToProto(rootstate.PendingPeerChangeAddition)))
 	require.Equal(t, rootstate.PendingPeerChangeUnknown, rootPendingPeerChangeKindFromProto(metapb.RootPendingPeerChangeKind_ROOT_PENDING_PEER_CHANGE_KIND_UNSPECIFIED))
-	require.Equal(t, rootstate.PendingRangeChangeMerge, rootPendingRangeChangeKindFromProto(rootPendingRangeChangeKindToProto(rootstate.PendingRangeChangeMerge)))
-	require.Equal(t, rootstate.PendingRangeChangeUnknown, rootPendingRangeChangeKindFromProto(metapb.RootPendingRangeChangeKind_ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED))
-}
-
-func testWireVisibleAuthorityGrant() rootproto.VisibleAuthorityGrant {
-	var predecessor [32]byte
-	predecessor[0] = 7
-	return rootproto.VisibleAuthorityGrant{
-		GrantID:  "visible-1",
-		EpochID:  11,
-		HolderID: "fsmeta-holder-a",
-		Scope: rootproto.VisibleAuthorityScope{
-			MountID:    "vol",
-			MountKeyID: 42,
-			Buckets:    []uint16{1, 2},
-			Parents:    []uint64{10},
-			Inodes:     []uint64{20},
-		},
-		ExpiresUnixNano:   12345,
-		PredecessorDigest: predecessor,
-		QuotaCreditBytes:  4096,
-		QuotaCreditInodes: 8,
-		RootClusterEpoch:  3,
-		IssuedRootToken:   rootproto.AuthorityRootToken{Term: 1, Index: 9, Revision: 11},
-	}
-}
-
-func testWireVisibleAuthoritySeal(grant rootproto.VisibleAuthorityGrant) rootproto.VisibleAuthoritySeal {
-	var root [32]byte
-	var digest [32]byte
-	root[0] = 9
-	digest[0] = 8
-	return rootproto.VisibleAuthoritySeal{
-		GrantID:              grant.GrantID,
-		EpochID:              grant.EpochID,
-		HolderID:             grant.HolderID,
-		Scope:                grant.Scope,
-		SegmentRoot:          root,
-		SegmentPayloadDigest: digest,
-		OperationCount:       10,
-		EntryCount:           20,
-		SealedUnixNano:       30,
-		InstallRegionID:      7,
-		InstallTerm:          3,
-		InstallIndex:         99,
-		InstallVersion:       1234,
-	}
 }
 
 func testWireSnapshotEvidenceRef(epoch uint64, seed byte) rootproto.SnapshotEvidenceRef {

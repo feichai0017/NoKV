@@ -47,19 +47,6 @@ func TestEvaluateRootEventLifecycle(t *testing.T) {
 	decision, err = rootstate.EvaluateRootEventLifecycle(snapshot, peerApplied)
 	require.NoError(t, err)
 	require.Equal(t, rootstate.RootEventLifecycleApply, decision)
-
-	left := testDescriptor(60, []byte("a"), []byte("m"))
-	right := testDescriptor(61, []byte("m"), []byte("z"))
-	splitPlanned := rootevent.RegionSplitPlanned(59, []byte("m"), left, right)
-	key, pending, ok := rootstate.PendingRangeChangeFromEvent(splitPlanned)
-	require.True(t, ok)
-
-	rangeSnapshot := rootstate.Snapshot{
-		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{key: pending},
-	}
-	decision, err = rootstate.EvaluateRootEventLifecycle(rangeSnapshot, splitPlanned)
-	require.NoError(t, err)
-	require.Equal(t, rootstate.RootEventLifecycleSkip, decision)
 }
 
 func TestTransitionIDFromEventDistinguishesPeerAddAndRemove(t *testing.T) {

@@ -100,41 +100,6 @@ func requireMetadataPredicateStatUint(t *testing.T, stats map[string]any, kind m
 	require.Equal(t, want, opStats[key])
 }
 
-func requireVisibleStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
-	t.Helper()
-	raw, ok := stats["visible_admission"]
-	require.True(t, ok, "missing visible_admission stats")
-	visibleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "visible_admission has type %T", raw)
-	got, ok := visibleStats[key].(uint64)
-	require.Truef(t, ok, "visible_admission[%s] has type %T", key, visibleStats[key])
-	require.Equal(t, want, got)
-}
-
-func requireVisibleSlowReasonStatUint(t *testing.T, stats map[string]any, reason compile.SlowReason, want uint64) {
-	t.Helper()
-	raw, ok := stats["visible_admission"]
-	require.True(t, ok, "missing visible_admission stats")
-	visibleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "visible_admission has type %T", raw)
-	rawReasons, ok := visibleStats["slow_by_reason"]
-	require.True(t, ok, "missing visible slow reason stats")
-	reasons, ok := rawReasons.(map[string]uint64)
-	require.Truef(t, ok, "overlay slow_by_reason has type %T", rawReasons)
-	require.Equal(t, want, reasons[string(reason)])
-}
-
-func requireVisibleStatBool(t *testing.T, stats map[string]any, key string, want bool) {
-	t.Helper()
-	raw, ok := stats["visible_admission"]
-	require.True(t, ok, "missing visible_admission stats")
-	visibleStats, ok := raw.(map[string]any)
-	require.Truef(t, ok, "visible_admission has type %T", raw)
-	got, ok := visibleStats[key].(bool)
-	require.Truef(t, ok, "visible_admission[%s] has type %T", key, visibleStats[key])
-	require.Equal(t, want, got)
-}
-
 func requireVisibleCommitStatUint(t *testing.T, stats map[string]any, key string, want uint64) {
 	t.Helper()
 	raw, ok := stats["visible_commit"]
@@ -183,13 +148,6 @@ type fakeAuthorityResolver struct {
 	calls int
 }
 
-type fakeVisibleAdmitter struct {
-	owned  bool
-	err    error
-	calls  int
-	scopes []compile.AuthorityScope
-}
-
 type fakeVisibleCommitter struct {
 	err             error
 	beforeAdmission func()
@@ -216,14 +174,13 @@ type testVisibleCommitter struct {
 	emptySessionDirs map[string]struct{}
 }
 
-type fakeVisibleAuthorityFlusher struct {
+type fakeVisibleFlusher struct {
 	fakeVisibleCommitter
-	flushCalls  int
-	flushScopes []compile.AuthorityScope
+	flushCalls int
 }
 
 type fakeVisibleSnapshotCapturer struct {
-	fakeVisibleAuthorityFlusher
+	fakeVisibleFlusher
 	capture         bool
 	segmentRefs     []model.SnapshotEvidenceRef
 	err             error
@@ -232,8 +189,6 @@ type fakeVisibleSnapshotCapturer struct {
 }
 
 type noopVisibleCommitter struct{}
-
-type ownedVisibleAdmitter struct{}
 
 type scanOverlayCommitter struct {
 	noopVisibleCommitter
@@ -390,21 +345,6 @@ func (r *fakeAuthorityResolver) SameAuthority(context.Context, model.MountID, mo
 	return r.same, nil
 }
 
-func (a *fakeVisibleAdmitter) AcquireVisibleAuthority(_ context.Context, scope compile.AuthorityScope) (bool, error) {
-	a.calls++
-	a.scopes = append(a.scopes, compile.AuthorityScope{
-		Mount:      scope.Mount,
-		MountKeyID: scope.MountKeyID,
-		Buckets:    append([]layout.AffinityBucket(nil), scope.Buckets...),
-		Parents:    append([]model.InodeID(nil), scope.Parents...),
-		Inodes:     append([]model.InodeID(nil), scope.Inodes...),
-	})
-	if a.err != nil {
-		return false, a.err
-	}
-	return a.owned, nil
-}
-
 func (c *fakeVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOperationID, op compile.MaterializedOp, admission VisibleAdmissionFunc) (VisibleAck, error) {
 	if c.beforeAdmission != nil {
 		c.beforeAdmission()
@@ -425,7 +365,7 @@ func (c *fakeVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOper
 
 func (c *testVisibleCommitter) SubmitVisible(ctx context.Context, id VisibleOperationID, op compile.MaterializedOp, admission VisibleAdmissionFunc) (VisibleAck, error) {
 	if c == nil {
-		return VisibleAck{}, errVisibleAuthorityNotHeld
+		return VisibleAck{}, ErrVisibleAdmissionRejected
 	}
 	admitted, err := admitVisibleForTest(ctx, op, admission, proof.ProofFrontier{EpochID: 1, Sequence: id.Seq})
 	if err != nil {
@@ -448,7 +388,7 @@ func (c *testVisibleCommitter) Flush(ctx context.Context) error {
 
 func (c *testVisibleCommitter) FlushDurable(ctx context.Context) error {
 	if c == nil || c.versions == nil {
-		return errVisibleAuthorityNotHeld
+		return ErrVisibleAdmissionRejected
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -657,15 +597,8 @@ func (c *testVisibleCommitter) Stats() map[string]any {
 	return map[string]any{"commit_total": c.commitTotal}
 }
 
-func (f *fakeVisibleAuthorityFlusher) FlushAuthority(_ context.Context, scope compile.AuthorityScope) error {
+func (f *fakeVisibleFlusher) FlushDurable(context.Context) error {
 	f.flushCalls++
-	f.flushScopes = append(f.flushScopes, compile.AuthorityScope{
-		Mount:      scope.Mount,
-		MountKeyID: scope.MountKeyID,
-		Buckets:    append([]layout.AffinityBucket(nil), scope.Buckets...),
-		Parents:    append([]model.InodeID(nil), scope.Parents...),
-		Inodes:     append([]model.InodeID(nil), scope.Inodes...),
-	})
 	return nil
 }
 
@@ -802,10 +735,6 @@ func (c scanOverlayCommitter) HasVisibleDirectoryOverlay(prefix []byte) bool {
 		}
 	}
 	return false
-}
-
-func (ownedVisibleAdmitter) AcquireVisibleAuthority(context.Context, compile.AuthorityScope) (bool, error) {
-	return true, nil
 }
 
 func admitVisibleForTest(ctx context.Context, op compile.MaterializedOp, admission VisibleAdmissionFunc, frontier proof.ProofFrontier) (compile.MaterializedOp, error) {

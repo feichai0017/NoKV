@@ -181,7 +181,7 @@ func (e *Executor) reserveTimestampWithRetry(ctx context.Context, count uint64, 
 }
 
 func (e *Executor) withCommitRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error, scopes ...compile.AuthorityScope) error {
-	if err := e.drainVisibleAuthority(ctx, scopes...); err != nil {
+	if err := e.flushVisible(ctx); err != nil {
 		return err
 	}
 	return e.withCommitRetryNoVisibleFlush(ctx, run)

@@ -54,7 +54,6 @@ func TestExecutorCreateVisibleCommitServesLookupOverlay(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -83,7 +82,6 @@ func TestExecutorCreateVisibleCommitServesReadDirPlusOverlay(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -117,7 +115,6 @@ func TestExecutorReadDirPlusPinsVisibleOverlayAcrossDentryAndInodeReads(t *testi
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{23}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -165,7 +162,6 @@ func TestExecutorReadDirVisibleCreatedDirectorySkipsBaseScan(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{dirInode, childInode}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)

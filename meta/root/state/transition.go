@@ -15,7 +15,6 @@ type TransitionKind uint8
 const (
 	TransitionKindUnknown TransitionKind = iota
 	TransitionKindPeerChange
-	TransitionKindRangeChange
 )
 
 // TransitionStatus describes the observable lifecycle state of one rooted
@@ -74,19 +73,6 @@ type RootEventLifecycle struct {
 	Decision   RootEventLifecycleDecision
 }
 
-func rootEventLifecycleKey(event rootevent.Event) uint64 {
-	switch {
-	case event.PeerChange != nil:
-		return event.PeerChange.RegionID
-	case event.RangeSplit != nil:
-		return event.RangeSplit.ParentRegionID
-	case event.RangeMerge != nil:
-		return event.RangeMerge.Merged.RegionID
-	default:
-		return 0
-	}
-}
-
 func ObserveRootEventLifecycle(snapshot Snapshot, event rootevent.Event) RootEventLifecycle {
 	if event.PeerChange != nil {
 		current, ok := snapshot.Descriptors[event.PeerChange.RegionID]
@@ -98,18 +84,6 @@ func ObserveRootEventLifecycle(snapshot Snapshot, event rootevent.Event) RootEve
 			RetryClass: lifecycle.RetryClass,
 			Reason:     lifecycle.Reason,
 			Decision:   rootEventDecisionFromPeer(lifecycle.Decision),
-		}
-	}
-	if event.RangeSplit != nil || event.RangeMerge != nil {
-		key := rootEventLifecycleKey(event)
-		lifecycle := ObserveRangeChangeLifecycle(snapshot.PendingRangeChanges, snapshot.Descriptors, event)
-		return RootEventLifecycle{
-			Kind:       TransitionKindRangeChange,
-			Key:        key,
-			Status:     lifecycle.Status,
-			RetryClass: lifecycle.RetryClass,
-			Reason:     lifecycle.Reason,
-			Decision:   rootEventDecisionFromRange(lifecycle.Decision),
 		}
 	}
 	return RootEventLifecycle{
@@ -127,10 +101,6 @@ func EvaluateRootEventLifecycle(snapshot Snapshot, event rootevent.Event) (RootE
 		_, err := EvaluatePeerChangeLifecycle(snapshot.PendingPeerChanges, current, ok, event)
 		return outcome.Decision, err
 	}
-	if event.RangeSplit != nil || event.RangeMerge != nil {
-		_, err := EvaluateRangeChangeLifecycle(snapshot.PendingRangeChanges, snapshot.Descriptors, event)
-		return outcome.Decision, err
-	}
 	return outcome.Decision, nil
 }
 
@@ -141,22 +111,11 @@ func rootEventDecisionFromPeer(in PeerChangeLifecycleDecision) RootEventLifecycl
 	return RootEventLifecycleApply
 }
 
-func rootEventDecisionFromRange(in RangeChangeLifecycleDecision) RootEventLifecycleDecision {
-	if in == RangeChangeLifecycleSkip {
-		return RootEventLifecycleSkip
-	}
-	return RootEventLifecycleApply
-}
-
 // TransitionIDFromEvent returns one stable identity for a rooted transition target.
 func TransitionIDFromEvent(event rootevent.Event) string {
 	switch {
 	case event.PeerChange != nil:
 		return fmt.Sprintf("peer:%d:%s:%d:%d", event.PeerChange.RegionID, peerTransitionAction(event.Kind), event.PeerChange.StoreID, event.PeerChange.PeerID)
-	case event.RangeSplit != nil:
-		return fmt.Sprintf("split:%d:%x", event.RangeSplit.ParentRegionID, event.RangeSplit.SplitKey)
-	case event.RangeMerge != nil:
-		return fmt.Sprintf("merge:%d:%d", event.RangeMerge.LeftRegionID, event.RangeMerge.RightRegionID)
 	default:
 		return ""
 	}

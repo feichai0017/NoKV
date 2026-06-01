@@ -67,31 +67,22 @@ func TestCloneSnapshotDetachesAuthorityMapsAndPendingChanges(t *testing.T) {
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 			7: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 2, PeerID: 20, Base: base, Target: target},
 		},
-		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
-			7: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: 7, BaseParent: base, Left: target},
-		},
 	}
 
 	cloned := rootstate.CloneSnapshot(snapshot)
 	peerChange := snapshot.PendingPeerChanges[7]
 	peerChange.Target.StartKey[0] = 'x'
 	snapshot.PendingPeerChanges[7] = peerChange
-	rangeChange := snapshot.PendingRangeChanges[7]
-	rangeChange.Left.StartKey[0] = 'x'
-	snapshot.PendingRangeChanges[7] = rangeChange
 	snapshot.Mounts["vol"] = rootstate.MountRecord{MountID: "vol", State: rootstate.MountStateRetired}
 	snapshot.Subtrees["vol/1"] = rootstate.SubtreeAuthority{SubtreeID: "mutated"}
 	snapshot.Quotas["vol/0"] = rootstate.QuotaFence{SubjectID: "mutated"}
 	snapshot.PendingPeerChanges[7] = rootstate.PendingPeerChange{Base: testDescriptor(9, []byte("x"), []byte("z"))}
-	snapshot.PendingRangeChanges[7] = rootstate.PendingRangeChange{BaseParent: testDescriptor(10, []byte("x"), []byte("z"))}
 
 	require.Equal(t, rootstate.MountStateActive, cloned.Mounts["vol"].State)
 	require.Equal(t, "vol/1", cloned.Subtrees["vol/1"].SubtreeID)
 	require.Equal(t, uint64(1), cloned.Quotas["vol/0"].Era)
 	require.Equal(t, uint64(7), cloned.PendingPeerChanges[7].Base.RegionID)
-	require.Equal(t, uint64(7), cloned.PendingRangeChanges[7].BaseParent.RegionID)
 	require.Equal(t, byte('a'), cloned.PendingPeerChanges[7].Target.StartKey[0])
-	require.Equal(t, byte('a'), cloned.PendingRangeChanges[7].Left.StartKey[0])
 }
 
 func TestCloneEmptyMapsAndDescriptorRevision(t *testing.T) {
@@ -99,7 +90,6 @@ func TestCloneEmptyMapsAndDescriptorRevision(t *testing.T) {
 	require.Nil(t, rootstate.CloneSubtreeAuthorities(nil))
 	require.Nil(t, rootstate.CloneQuotaFences(nil))
 	require.Empty(t, rootstate.ClonePendingPeerChanges(nil))
-	require.Empty(t, rootstate.ClonePendingRangeChanges(nil))
 	require.Zero(t, rootstate.MaxDescriptorRevision(nil))
 
 	low := testDescriptor(1, []byte("a"), []byte("m"))

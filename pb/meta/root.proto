@@ -19,12 +19,8 @@ enum RootEventKind {
   ROOT_EVENT_KIND_REGION_DESCRIPTOR_PUBLISHED = 5;
   ROOT_EVENT_KIND_REGION_TOMBSTONED = 6;
   ROOT_EVENT_KIND_TSO_ALLOCATOR_FENCED = 7;
-  ROOT_EVENT_KIND_REGION_SPLIT_PLANNED = 8;
-  ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED = 9;
-  ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED = 16;
-  ROOT_EVENT_KIND_REGION_MERGE_PLANNED = 10;
-  ROOT_EVENT_KIND_REGION_MERGED = 11;
-  ROOT_EVENT_KIND_REGION_MERGE_CANCELLED = 17;
+  reserved 8, 9, 10, 11, 16, 17;
+  reserved "ROOT_EVENT_KIND_REGION_SPLIT_PLANNED", "ROOT_EVENT_KIND_REGION_SPLIT_COMMITTED", "ROOT_EVENT_KIND_REGION_SPLIT_CANCELLED", "ROOT_EVENT_KIND_REGION_MERGE_PLANNED", "ROOT_EVENT_KIND_REGION_MERGED", "ROOT_EVENT_KIND_REGION_MERGE_CANCELLED";
   ROOT_EVENT_KIND_PEER_ADDITION_PLANNED = 12;
   ROOT_EVENT_KIND_PEER_REMOVAL_PLANNED = 13;
   ROOT_EVENT_KIND_PEER_ADDED = 14;
@@ -43,9 +39,8 @@ enum RootEventKind {
   ROOT_EVENT_KIND_SUBTREE_HANDOFF_COMPLETED = 29;
   ROOT_EVENT_KIND_QUOTA_FENCE_UPDATED = 30;
   ROOT_EVENT_KIND_GRANT_INHERITED = 31;
-  ROOT_EVENT_KIND_VISIBLE_AUTHORITY_GRANTED = 32;
-  ROOT_EVENT_KIND_VISIBLE_AUTHORITY_RETIRED = 33;
-  ROOT_EVENT_KIND_VISIBLE_AUTHORITY_SEALED = 34;
+  reserved 32, 33, 34;
+  reserved "ROOT_EVENT_KIND_VISIBLE_AUTHORITY_GRANTED", "ROOT_EVENT_KIND_VISIBLE_AUTHORITY_RETIRED", "ROOT_EVENT_KIND_VISIBLE_AUTHORITY_SEALED";
 }
 
 message RootCursor {
@@ -64,9 +59,8 @@ message RootState {
   repeated RootGrantInheritance grant_inheritances = 9;
   reserved 10;
   reserved "retired_era_floor";
-  repeated RootVisibleAuthorityGrant active_visible_grants = 11;
-  uint64 visible_authority_epoch = 12;
-  repeated RootVisibleAuthoritySeal visible_authority_seals = 13;
+  reserved 11, 12, 13;
+  reserved "active_visible_grants", "visible_authority_epoch", "visible_authority_seals";
   // Scoped finality floors keyed by coordinator duty and duty scope.
   repeated RootAuthorityRetiredEraFloor retired_era_floors = 14;
 }
@@ -76,7 +70,8 @@ message RootCheckpoint {
   repeated nokv.meta.v1.RegionDescriptor descriptors = 2;
   uint64 tail_offset = 3;
   repeated RootPendingPeerChange pending_peer_changes = 4;
-  repeated RootPendingRangeChange pending_range_changes = 5;
+  reserved 5;
+  reserved "pending_range_changes";
   repeated RootStore stores = 6;
   repeated RootSnapshotEpoch snapshot_epochs = 7;
   repeated RootMount mounts = 8;
@@ -264,78 +259,6 @@ message RootAuthorityRetiredEraFloor {
   uint64 retired_era_floor = 3;
 }
 
-message RootVisibleAuthorityScope {
-  string mount_id = 1;
-  uint64 mount_key_id = 2;
-  repeated uint32 buckets = 3;
-  repeated uint64 parents = 4;
-  repeated uint64 inodes = 5;
-}
-
-message RootVisibleAuthorityGrant {
-  string grant_id = 1;
-  uint64 epoch_id = 2;
-  string holder_id = 3;
-  RootVisibleAuthorityScope scope = 4;
-  int64 expires_unix_nano = 5;
-  bytes predecessor_digest = 6;
-  int64 quota_credit_bytes = 7;
-  int64 quota_credit_inodes = 8;
-  uint64 root_cluster_epoch = 9;
-  RootTailToken issued_root_token = 10;
-}
-
-message RootVisibleAuthoritySeal {
-  string grant_id = 1;
-  uint64 epoch_id = 2;
-  string holder_id = 3;
-  RootVisibleAuthorityScope scope = 4;
-  bytes segment_root = 5;
-  bytes segment_payload_digest = 6;
-  uint64 operation_count = 7;
-  uint64 entry_count = 8;
-  int64 sealed_unix_nano = 9;
-  uint64 install_region_id = 10;
-  uint64 install_term = 11;
-  uint64 install_index = 12;
-  uint64 install_version = 13;
-}
-
-enum RootVisibleAuthorityAct {
-  ROOT_VISIBLE_AUTHORITY_ACT_UNSPECIFIED = 0;
-  ROOT_VISIBLE_AUTHORITY_ACT_ACQUIRE = 1;
-  ROOT_VISIBLE_AUTHORITY_ACT_RETIRE = 2;
-  ROOT_VISIBLE_AUTHORITY_ACT_SEAL = 3;
-}
-
-message RootVisibleAuthorityCommand {
-  RootVisibleAuthorityAct kind = 1;
-  string holder_id = 2;
-  string grant_id = 3;
-  RootVisibleAuthorityScope scope = 4;
-  int64 expires_unix_nano = 5;
-  int64 now_unix_nano = 6;
-  bytes predecessor_digest = 7;
-  int64 quota_credit_bytes = 8;
-  int64 quota_credit_inodes = 9;
-  bytes segment_root = 10;
-  bytes segment_payload_digest = 11;
-  uint64 operation_count = 12;
-  uint64 entry_count = 13;
-  uint64 install_region_id = 14;
-  uint64 install_term = 15;
-  uint64 install_index = 16;
-  uint64 install_version = 17;
-}
-
-enum RootVisibleAuthorityApplyStatus {
-  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_UNSPECIFIED = 0;
-  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED = 1;
-  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD = 2;
-  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED = 3;
-  ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_SEALED = 4;
-}
-
 message RootGrantCertificate {
   RootAuthorityGrant grant = 1;
   string signer_key_id = 2;
@@ -383,22 +306,6 @@ message RootRegionRemoval {
   uint64 region_id = 1;
 }
 
-message RootRangeSplit {
-  uint64 parent_region_id = 1;
-  bytes split_key = 2;
-  nokv.meta.v1.RegionDescriptor left = 3;
-  nokv.meta.v1.RegionDescriptor right = 4;
-  nokv.meta.v1.RegionDescriptor base_parent = 5;
-}
-
-message RootRangeMerge {
-  uint64 left_region_id = 1;
-  uint64 right_region_id = 2;
-  nokv.meta.v1.RegionDescriptor merged = 3;
-  nokv.meta.v1.RegionDescriptor base_left = 4;
-  nokv.meta.v1.RegionDescriptor base_right = 5;
-}
-
 message RootPeerChange {
   uint64 region_id = 1;
   uint64 store_id = 2;
@@ -422,35 +329,15 @@ message RootPendingPeerChange {
   nokv.meta.v1.RegionDescriptor base = 6;
 }
 
-enum RootPendingRangeChangeKind {
-  ROOT_PENDING_RANGE_CHANGE_KIND_UNSPECIFIED = 0;
-  ROOT_PENDING_RANGE_CHANGE_KIND_SPLIT = 1;
-  ROOT_PENDING_RANGE_CHANGE_KIND_MERGE = 2;
-}
-
-message RootPendingRangeChange {
-  uint64 region_id = 1;
-  RootPendingRangeChangeKind kind = 2;
-  uint64 parent_region_id = 3;
-  uint64 left_region_id = 4;
-  uint64 right_region_id = 5;
-  nokv.meta.v1.RegionDescriptor left = 6;
-  nokv.meta.v1.RegionDescriptor right = 7;
-  nokv.meta.v1.RegionDescriptor merged = 8;
-  nokv.meta.v1.RegionDescriptor base_parent = 9;
-  nokv.meta.v1.RegionDescriptor base_left = 10;
-  nokv.meta.v1.RegionDescriptor base_right = 11;
-}
-
 message RootEvent {
   RootEventKind kind = 1;
+  reserved 6, 7, 16, 17;
+  reserved "range_split", "range_merge", "visible_authority_grant", "visible_authority_seal";
   oneof payload {
     RootStoreMembership store_membership = 2;
     RootAllocatorFence allocator_fence = 3;
     RootRegionDescriptor region_descriptor = 4;
     RootRegionRemoval region_removal = 5;
-    RootRangeSplit range_split = 6;
-    RootRangeMerge range_merge = 7;
     RootPeerChange peer_change = 8;
     RootAuthorityGrant grant = 9;
     RootGrantRetirement grant_retirement = 10;
@@ -459,8 +346,6 @@ message RootEvent {
     RootMount mount = 13;
     RootSubtreeAuthority subtree_authority = 14;
     RootQuotaFence quota_fence = 15;
-    RootVisibleAuthorityGrant visible_authority_grant = 16;
-    RootVisibleAuthoritySeal visible_authority_seal = 17;
   }
 }
 
@@ -547,16 +432,6 @@ message MetadataRootApplyGrantResponse {
   RootGrantCertificate certificate = 3;
 }
 
-message MetadataRootApplyVisibleAuthorityRequest {
-  RootVisibleAuthorityCommand command = 1;
-}
-
-message MetadataRootApplyVisibleAuthorityResponse {
-  RootState state = 1;
-  RootVisibleAuthorityApplyStatus status = 2;
-  RootVisibleAuthorityGrant grant = 3;
-}
-
 message RootTailToken {
   RootCursor cursor = 1;
   uint64 revision = 2;
@@ -612,7 +487,6 @@ service MetadataRoot {
   rpc FenceAllocator(MetadataRootFenceAllocatorRequest) returns (MetadataRootFenceAllocatorResponse);
   rpc Status(MetadataRootStatusRequest) returns (MetadataRootStatusResponse);
   rpc ApplyGrant(MetadataRootApplyGrantRequest) returns (MetadataRootApplyGrantResponse);
-  rpc ApplyVisibleAuthority(MetadataRootApplyVisibleAuthorityRequest) returns (MetadataRootApplyVisibleAuthorityResponse);
   rpc ObserveCommitted(MetadataRootObserveCommittedRequest) returns (MetadataRootObserveCommittedResponse);
   rpc ObserveTail(MetadataRootObserveTailRequest) returns (MetadataRootObserveTailResponse);
   rpc WaitTail(MetadataRootWaitTailRequest) returns (MetadataRootWaitTailResponse);

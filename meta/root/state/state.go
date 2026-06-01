@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: Apache-2.0
 
 // Package state holds the compact applied root state of the metadata
-// kernel (State, grant lifecycle, pending peer/range changes) and the
+// kernel (State, grant lifecycle, pending peer changes) and the
 // ApplyEventToState / ApplyEventToSnapshot functions
 // that drive a rooted event log into that state.
 //
@@ -35,18 +35,15 @@ const (
 
 // State is the compact checkpointed state of the metadata root.
 type State struct {
-	ClusterEpoch          uint64
-	MembershipEpoch       uint64
-	LastCommitted         Cursor
-	IDFence               uint64
-	TSOFence              uint64
-	ActiveGrants          []rootproto.AuthorityGrant
-	RetiredGrants         []rootproto.GrantRetirement
-	GrantInheritances     []rootproto.GrantInheritance
-	RetiredEraFloors      []rootproto.AuthorityRetiredEraFloor
-	ActiveVisibleGrants   []rootproto.VisibleAuthorityGrant
-	VisibleAuthorityEpoch uint64
-	VisibleAuthoritySeals []rootproto.VisibleAuthoritySeal
+	ClusterEpoch      uint64
+	MembershipEpoch   uint64
+	LastCommitted     Cursor
+	IDFence           uint64
+	TSOFence          uint64
+	ActiveGrants      []rootproto.AuthorityGrant
+	RetiredGrants     []rootproto.GrantRetirement
+	GrantInheritances []rootproto.GrantInheritance
+	RetiredEraFloors  []rootproto.AuthorityRetiredEraFloor
 }
 
 func (s State) ActiveGrantFor(duty rootproto.DutyID, scope rootproto.DutyScope) (rootproto.AuthorityGrant, bool) {
@@ -180,38 +177,16 @@ type PendingPeerChange struct {
 	Target  topology.Descriptor
 }
 
-type PendingRangeChangeKind uint8
-
-const (
-	PendingRangeChangeUnknown PendingRangeChangeKind = iota
-	PendingRangeChangeSplit
-	PendingRangeChangeMerge
-)
-
-type PendingRangeChange struct {
-	Kind           PendingRangeChangeKind
-	ParentRegionID uint64
-	LeftRegionID   uint64
-	RightRegionID  uint64
-	BaseParent     topology.Descriptor
-	BaseLeft       topology.Descriptor
-	BaseRight      topology.Descriptor
-	Left           topology.Descriptor
-	Right          topology.Descriptor
-	Merged         topology.Descriptor
-}
-
 // Snapshot is the compact materialized rooted metadata state used for bounded bootstrap and recovery.
 type Snapshot struct {
-	State               State
-	Stores              map[uint64]StoreMembership
-	SnapshotEpochs      map[string]SnapshotEpoch
-	Mounts              map[string]MountRecord
-	Subtrees            map[string]SubtreeAuthority
-	Quotas              map[string]QuotaFence
-	Descriptors         map[uint64]topology.Descriptor
-	PendingPeerChanges  map[uint64]PendingPeerChange
-	PendingRangeChanges map[uint64]PendingRangeChange
+	State              State
+	Stores             map[uint64]StoreMembership
+	SnapshotEpochs     map[string]SnapshotEpoch
+	Mounts             map[string]MountRecord
+	Subtrees           map[string]SubtreeAuthority
+	Quotas             map[string]QuotaFence
+	Descriptors        map[uint64]topology.Descriptor
+	PendingPeerChanges map[uint64]PendingPeerChange
 }
 
 // CommitInfo reports one successful root append together with the resulting compact root state.
@@ -222,15 +197,14 @@ type CommitInfo struct {
 
 func CloneSnapshot(snapshot Snapshot) Snapshot {
 	out := Snapshot{
-		State:               CloneState(snapshot.State),
-		Stores:              CloneStoreMemberships(snapshot.Stores),
-		SnapshotEpochs:      CloneSnapshotEpochs(snapshot.SnapshotEpochs),
-		Mounts:              CloneMounts(snapshot.Mounts),
-		Subtrees:            CloneSubtreeAuthorities(snapshot.Subtrees),
-		Quotas:              CloneQuotaFences(snapshot.Quotas),
-		Descriptors:         CloneDescriptors(snapshot.Descriptors),
-		PendingPeerChanges:  ClonePendingPeerChanges(snapshot.PendingPeerChanges),
-		PendingRangeChanges: ClonePendingRangeChanges(snapshot.PendingRangeChanges),
+		State:              CloneState(snapshot.State),
+		Stores:             CloneStoreMemberships(snapshot.Stores),
+		SnapshotEpochs:     CloneSnapshotEpochs(snapshot.SnapshotEpochs),
+		Mounts:             CloneMounts(snapshot.Mounts),
+		Subtrees:           CloneSubtreeAuthorities(snapshot.Subtrees),
+		Quotas:             CloneQuotaFences(snapshot.Quotas),
+		Descriptors:        CloneDescriptors(snapshot.Descriptors),
+		PendingPeerChanges: ClonePendingPeerChanges(snapshot.PendingPeerChanges),
 	}
 	return out
 }
@@ -240,8 +214,6 @@ func CloneState(state State) State {
 	state.RetiredGrants = append([]rootproto.GrantRetirement(nil), state.RetiredGrants...)
 	state.GrantInheritances = append([]rootproto.GrantInheritance(nil), state.GrantInheritances...)
 	state.RetiredEraFloors = rootproto.CloneAuthorityRetiredEraFloors(state.RetiredEraFloors)
-	state.ActiveVisibleGrants = cloneVisibleAuthorityGrants(state.ActiveVisibleGrants)
-	state.VisibleAuthoritySeals = cloneVisibleAuthoritySeals(state.VisibleAuthoritySeals)
 	return state
 }
 
@@ -411,28 +383,6 @@ func ClonePendingPeerChanges(in map[uint64]PendingPeerChange) map[uint64]Pending
 	return out
 }
 
-func ClonePendingRangeChanges(in map[uint64]PendingRangeChange) map[uint64]PendingRangeChange {
-	if len(in) == 0 {
-		return make(map[uint64]PendingRangeChange)
-	}
-	out := make(map[uint64]PendingRangeChange, len(in))
-	for id, change := range in {
-		out[id] = PendingRangeChange{
-			Kind:           change.Kind,
-			ParentRegionID: change.ParentRegionID,
-			LeftRegionID:   change.LeftRegionID,
-			RightRegionID:  change.RightRegionID,
-			BaseParent:     change.BaseParent.Clone(),
-			BaseLeft:       change.BaseLeft.Clone(),
-			BaseRight:      change.BaseRight.Clone(),
-			Left:           change.Left.Clone(),
-			Right:          change.Right.Clone(),
-			Merged:         change.Merged.Clone(),
-		}
-	}
-	return out
-}
-
 // ApplyEventToState applies one rooted metadata event into compact root state.
 func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 	if state == nil {
@@ -472,21 +422,9 @@ func ApplyEventToState(state *State, cursor Cursor, event rootevent.Event) {
 		applyGrantRetirementToState(state, cursor, event)
 	case rootevent.KindGrantInherited:
 		applyGrantInheritanceToState(state, cursor, event)
-	case rootevent.KindVisibleAuthorityGranted:
-		applyVisibleAuthorityGrantedToState(state, cursor, event)
-	case rootevent.KindVisibleAuthoritySealed:
-		applyVisibleAuthoritySealedToState(state, event)
-	case rootevent.KindVisibleAuthorityRetired:
-		applyVisibleAuthorityRetiredToState(state, event)
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
-		rootevent.KindRegionSplitPlanned,
-		rootevent.KindRegionSplitCommitted,
-		rootevent.KindRegionSplitCancelled,
-		rootevent.KindRegionMergePlanned,
-		rootevent.KindRegionMerged,
-		rootevent.KindRegionMergeCancelled,
 		rootevent.KindPeerAdditionPlanned,
 		rootevent.KindPeerRemovalPlanned,
 		rootevent.KindPeerAdded,

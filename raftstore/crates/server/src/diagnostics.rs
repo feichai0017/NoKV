@@ -129,8 +129,6 @@ fn root_event_region_id(event: &metapb::RootEvent) -> u64 {
             .map(|region| region.region_id)
             .unwrap_or_default(),
         Some(metapb::root_event::Payload::RegionRemoval(removal)) => removal.region_id,
-        Some(metapb::root_event::Payload::RangeSplit(split)) => split.parent_region_id,
-        Some(metapb::root_event::Payload::RangeMerge(merge)) => merge.left_region_id,
         _ => 0,
     }
 }
@@ -140,8 +138,6 @@ fn root_event_action(event: &metapb::RootEvent) -> &'static str {
         Some(metapb::root_event::Payload::PeerChange(_)) => "peer change",
         Some(metapb::root_event::Payload::RegionDescriptor(_)) => "region descriptor",
         Some(metapb::root_event::Payload::RegionRemoval(_)) => "region removal",
-        Some(metapb::root_event::Payload::RangeSplit(_)) => "range split",
-        Some(metapb::root_event::Payload::RangeMerge(_)) => "range merge",
         _ => "root event",
     }
 }

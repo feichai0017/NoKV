@@ -31,14 +31,6 @@ func CloneEvent(in Event) Event {
 		cp := *in.GrantInheritance
 		out.GrantInheritance = &cp
 	}
-	if in.VisibleGrant != nil {
-		cp := rootproto.CloneVisibleAuthorityGrant(*in.VisibleGrant)
-		out.VisibleGrant = &cp
-	}
-	if in.VisibleSeal != nil {
-		cp := rootproto.CloneVisibleAuthoritySeal(*in.VisibleSeal)
-		out.VisibleSeal = &cp
-	}
 	if in.SnapshotEpoch != nil {
 		cp := *in.SnapshotEpoch
 		cp.RuntimeEvidence = rootproto.CloneSnapshotEvidenceRefs(in.SnapshotEpoch.RuntimeEvidence)
@@ -64,23 +56,6 @@ func CloneEvent(in Event) Event {
 	if in.RegionRemoval != nil {
 		cp := *in.RegionRemoval
 		out.RegionRemoval = &cp
-	}
-	if in.RangeSplit != nil {
-		cp := *in.RangeSplit
-		if in.RangeSplit.SplitKey != nil {
-			cp.SplitKey = append([]byte(nil), in.RangeSplit.SplitKey...)
-		}
-		cp.Left = in.RangeSplit.Left.Clone()
-		cp.Right = in.RangeSplit.Right.Clone()
-		cp.BaseParent = in.RangeSplit.BaseParent.Clone()
-		out.RangeSplit = &cp
-	}
-	if in.RangeMerge != nil {
-		cp := *in.RangeMerge
-		cp.Merged = in.RangeMerge.Merged.Clone()
-		cp.BaseLeft = in.RangeMerge.BaseLeft.Clone()
-		cp.BaseRight = in.RangeMerge.BaseRight.Clone()
-		out.RangeMerge = &cp
 	}
 	if in.PeerChange != nil {
 		cp := *in.PeerChange

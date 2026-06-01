@@ -20,7 +20,6 @@ func TestExecutorCreateVisibleCommitAcceptsCrossBucketCatalogInstall(t *testing.
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -85,7 +84,6 @@ func TestExecutorRenameVisibleCommitServesOverlay(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -125,7 +123,6 @@ func TestExecutorRenameDoesNotFallbackAfterVisibleOverlayReadAdmissionMiss(t *te
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -162,7 +159,6 @@ func TestExecutorRenameBaseSourceUsesDurablePath(t *testing.T) {
 	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -192,7 +188,6 @@ func TestExecutorCrossParentSameBucketRenameUsesVisibleCommit(t *testing.T) {
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
 		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -233,7 +228,6 @@ func TestExecutorRenameVisibleUsesEmptyDirectoryFactForDestination(t *testing.T)
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
 		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -273,7 +267,6 @@ func TestExecutorCrossBucketRenameUsesDurablePath(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithSubtreeAuthorityResolver(&fakeAuthorityResolver{same: true}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -371,7 +364,6 @@ func BenchmarkExecutorRenameVisibleCommit(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(
 		runner,
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {

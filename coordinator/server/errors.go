@@ -22,7 +22,6 @@ const (
 	errRequiredRootedTokenNotSatisfied = "required rooted token not satisfied"
 	errRequiredDescriptorNotSatisfied  = "required descriptor revision not satisfied"
 	errRootLagExceedsBound             = "root lag exceeds bound"
-	errRangeChangePending              = "rooted range change still pending"
 )
 
 const (
@@ -35,7 +34,6 @@ const (
 	reasonRootLagExceeded        = "root_lag_exceeded"
 	reasonRequiredRootedToken    = "required_rooted_token"
 	reasonRequiredDescriptor     = "required_descriptor"
-	reasonRangeChangePending     = "range_change_pending"
 	reasonBootstrapRequired      = "bootstrap_required"
 	reasonCatalogInvalid         = "catalog_invalid"
 	reasonCatalogPrecondition    = "catalog_precondition"

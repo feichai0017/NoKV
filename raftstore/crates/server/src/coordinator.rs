@@ -9,7 +9,6 @@ use nokv_raftnode::{
 use nokv_raftstore_server::{root_event_transition_id, RaftRuntimeStatusProvider};
 
 use crate::hosted_region::HostedRegionRegistry;
-use crate::range_controller::HoltRangeController;
 use crate::root_publication::{publish_root_event_to_any, RootEventPublishError};
 use crate::scheduler_operations::{
     execute_scheduler_operation, record_scheduler_operation_outcome,
@@ -67,19 +66,12 @@ pub(crate) fn spawn_pending_topology_retries(
     config: Option<CoordinatorHeartbeatConfig>,
     pending_store: HoltMetadataStore,
     addr: SocketAddr,
-    range_controller: Option<HoltRangeController>,
 ) {
     let Some(config) = config else {
         return;
     };
     tokio::spawn(async move {
-        run_pending_topology_retries(
-            config,
-            pending_store,
-            local_admin_endpoint(addr),
-            range_controller,
-        )
-        .await;
+        run_pending_topology_retries(config, pending_store, local_admin_endpoint(addr)).await;
     });
 }
 
@@ -87,18 +79,12 @@ pub(crate) async fn run_pending_topology_retries(
     config: CoordinatorHeartbeatConfig,
     pending_store: HoltMetadataStore,
     admin_endpoint: String,
-    range_controller: Option<HoltRangeController>,
 ) {
     let mut ticker = tokio::time::interval(config.interval);
     loop {
         ticker.tick().await;
         retry_pending_topology_events(&config.endpoints, &pending_store).await;
-        retry_pending_scheduler_operations(
-            &admin_endpoint,
-            &pending_store,
-            range_controller.as_ref(),
-        )
-        .await;
+        retry_pending_scheduler_operations(&admin_endpoint, &pending_store).await;
     }
 }
 
@@ -165,7 +151,6 @@ pub(crate) fn spawn_multi_region_coordinator_heartbeat<E>(
     advertised_addr: String,
     regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMetadataStore>,
-    range_controller: Option<HoltRangeController>,
 ) where
     E: RegionSnapshotEngine + RegionTrafficProvider + Send + Sync + 'static,
 {
@@ -180,7 +165,6 @@ pub(crate) fn spawn_multi_region_coordinator_heartbeat<E>(
             advertised_addr,
             regions,
             root_events,
-            range_controller,
         )
         .await;
     });
@@ -193,7 +177,6 @@ pub(crate) async fn run_multi_region_coordinator_heartbeat<E>(
     advertised_addr: String,
     regions: HostedRegionRegistry<E>,
     root_events: Option<HoltMetadataStore>,
-    range_controller: Option<HoltRangeController>,
 ) where
     E: RegionSnapshotEngine + RegionTrafficProvider + Send + Sync + 'static,
 {
@@ -201,14 +184,6 @@ pub(crate) async fn run_multi_region_coordinator_heartbeat<E>(
     let admin_endpoint = local_admin_endpoint(addr);
     loop {
         ticker.tick().await;
-        if let Some(controller) = range_controller.as_ref() {
-            if let Err(err) = controller.reconcile_local_region_descriptors().await {
-                tracing::debug!(
-                    error = %err,
-                    "raftstore local region descriptor reconcile failed"
-                );
-            }
-        }
         let request = match coordinator_heartbeat_request_for_hosted_regions(
             store_id,
             &advertised_addr,
@@ -227,12 +202,7 @@ pub(crate) async fn run_multi_region_coordinator_heartbeat<E>(
                     record_scheduler_operation_outcome(
                         root_events.as_ref(),
                         &operation,
-                        execute_scheduler_operation(
-                            &admin_endpoint,
-                            range_controller.as_ref(),
-                            &operation,
-                        )
-                        .await,
+                        execute_scheduler_operation(&admin_endpoint, &operation).await,
                     );
                 }
             }

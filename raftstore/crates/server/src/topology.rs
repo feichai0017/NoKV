@@ -19,16 +19,6 @@ pub fn root_event_transition_id(event: &metapb::RootEvent) -> String {
             };
             peer_change_transition_id(action, change.region_id, change.store_id, change.peer_id)
         }
-        Some(metapb::root_event::Payload::RangeSplit(split)) => {
-            format!(
-                "split:{}:{}",
-                split.parent_region_id,
-                lowercase_hex(&split.split_key)
-            )
-        }
-        Some(metapb::root_event::Payload::RangeMerge(merge)) => {
-            format!("merge:{}:{}", merge.left_region_id, merge.right_region_id)
-        }
         _ => format!("root-event:{}", event.kind),
     }
 }
@@ -50,19 +40,6 @@ pub(crate) fn scheduler_operation_transition_id(operation: &coordpb::SchedulerOp
             "leader-transfer:{}:{}:{}",
             operation.region_id, operation.source_peer_id, operation.target_peer_id
         ),
-        coordpb::SchedulerOperationType::SplitRegion => {
-            format!(
-                "split:{}:{}",
-                operation.region_id,
-                lowercase_hex(&operation.split_key)
-            )
-        }
-        coordpb::SchedulerOperationType::MergeRegion => {
-            format!(
-                "merge:{}:{}",
-                operation.region_id, operation.source_region_id
-            )
-        }
         coordpb::SchedulerOperationType::PruneMetadataVersions => {
             format!(
                 "metadata-prune:{}:{}",
@@ -80,19 +57,7 @@ pub(crate) fn scheduler_operation_action(operation: &coordpb::SchedulerOperation
         .unwrap_or(coordpb::SchedulerOperationType::None);
     match kind {
         coordpb::SchedulerOperationType::LeaderTransfer => "leader transfer",
-        coordpb::SchedulerOperationType::SplitRegion => "range split",
-        coordpb::SchedulerOperationType::MergeRegion => "range merge",
         coordpb::SchedulerOperationType::PruneMetadataVersions => "metadata retention prune",
         coordpb::SchedulerOperationType::None => "scheduler operation",
     }
-}
-
-fn lowercase_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
 }

@@ -223,26 +223,6 @@ func (c *Client) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (ro
 	return protocolState, cert, nil
 }
 
-func (c *Client) ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	if !validVisibleAuthorityAct(cmd.Kind) {
-		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-	}
-	resp, err := invokeWrite(c, ctx, func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
-		return rpc.ApplyVisibleAuthority(ctx, &metapb.MetadataRootApplyVisibleAuthorityRequest{
-			Command: metawire.RootVisibleAuthorityCommandToProto(cmd),
-		})
-	})
-	if err != nil {
-		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
-	}
-	state := metawire.RootStateFromProto(resp.GetState())
-	grant := metawire.RootVisibleAuthorityGrantFromProto(resp.GetGrant())
-	if resp.GetStatus() == metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD {
-		return state, grant, rootstate.ErrPrimacy
-	}
-	return state, grant, nil
-}
-
 func (c *Client) ObserveCommitted() (rootstorage.ObservedCommitted, error) {
 	resp, err := invokeRead(c, context.Background(), func(ctx context.Context, rpc metapb.MetadataRootClient) (*metapb.MetadataRootObserveCommittedResponse, error) {
 		return rpc.ObserveCommitted(ctx, &metapb.MetadataRootObserveCommittedRequest{})
@@ -429,17 +409,6 @@ func validGrantAct(kind rootproto.GrantAct) bool {
 		rootproto.GrantActSeal,
 		rootproto.GrantActRetireExpired,
 		rootproto.GrantActInherit:
-		return true
-	default:
-		return false
-	}
-}
-
-func validVisibleAuthorityAct(kind rootproto.VisibleAuthorityAct) bool {
-	switch kind {
-	case rootproto.VisibleAuthorityActAcquire,
-		rootproto.VisibleAuthorityActRetire,
-		rootproto.VisibleAuthorityActSeal:
 		return true
 	default:
 		return false

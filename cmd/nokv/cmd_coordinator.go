@@ -23,8 +23,6 @@ import (
 	"github.com/feichai0017/NoKV/coordinator/rootview"
 	coordserver "github.com/feichai0017/NoKV/coordinator/server"
 	"github.com/feichai0017/NoKV/coordinator/tso"
-	"github.com/feichai0017/NoKV/fsmeta/layout"
-	"github.com/feichai0017/NoKV/fsmeta/model"
 	rootproto "github.com/feichai0017/NoKV/meta/root/protocol"
 	rootstorage "github.com/feichai0017/NoKV/meta/root/storage"
 	coordpb "github.com/feichai0017/NoKV/pb/coordinator"
@@ -137,13 +135,6 @@ func runCoordinatorCmd(w io.Writer, args []string) error {
 	tsAlloc := tso.NewAllocator(*tsStart)
 	svc := coordserver.NewService(cluster, ids, tsAlloc, rootStore)
 	svc.ConfigureAllocatorWindows(*idWindowSize, *tsoWindowSize)
-	if cfg != nil && cfg.FSMetaRegionBootstrap != nil {
-		boundaries, err := fsmetaBootstrapSplitBoundaries(cfg.FSMetaRegionBootstrap)
-		if err != nil {
-			return err
-		}
-		svc.ConfigureSchedulerSplitBoundaries(boundaries)
-	}
 	parsedDuties, err := parseCoordinatorGrantDuties(*grantDuties)
 	if err != nil {
 		return err
@@ -289,24 +280,6 @@ func dutyNames(duties []rootproto.DutyID) []string {
 		out = append(out, rootproto.DutyName(duty))
 	}
 	return out
-}
-
-func fsmetaBootstrapSplitBoundaries(bootstrap *config.FSMetaRegionBootstrap) ([][]byte, error) {
-	if bootstrap == nil {
-		return nil, nil
-	}
-	mounts := make([]model.MountIdentity, 0, len(bootstrap.Mounts))
-	for _, mount := range bootstrap.Mounts {
-		mounts = append(mounts, model.MountIdentity{
-			MountID:    model.MountID(mount.MountID),
-			MountKeyID: model.MountKeyID(mount.MountKeyID),
-		})
-	}
-	boundaries, err := layout.BucketSplitBoundaries(mounts, bootstrap.BucketCount)
-	if err != nil {
-		return nil, fmt.Errorf("coordinator build fsmeta split boundaries: %w", err)
-	}
-	return boundaries, nil
 }
 
 func flagPassed(fs *flag.FlagSet, name string) bool {

@@ -49,20 +49,6 @@ type VisibleOverlayKV struct {
 	Delete bool
 }
 
-// VisibleAuthorityAdmitter is the fsmeta holder-side authority boundary. It is
-// intentionally narrower than the root protocol: the executor only asks whether
-// a compiled authority scope is locally owned before it can enter the visible
-// commit path.
-type VisibleAuthorityAdmitter interface {
-	AcquireVisibleAuthority(context.Context, compile.AuthorityScope) (owned bool, err error)
-}
-
-// VisibleAuthorityRetirer retires authority after pending visible operations
-// for the authority have reached the required durability boundary.
-type VisibleAuthorityRetirer interface {
-	RetireVisibleAuthority(context.Context, ...compile.AuthorityScope) error
-}
-
 // VisibleCommitter is the opt-in visible commit boundary. Success replaces the
 // ordinary backend commit for this fsmeta operation, so errors are
 // returned and never silently fall back after the runtime overlay may already
@@ -125,14 +111,6 @@ type visibleSnapshotRetirer interface {
 
 type VisibleFlusher interface {
 	FlushDurable(context.Context) error
-}
-
-type VisibleAuthorityFlusher interface {
-	FlushAuthority(context.Context, compile.AuthorityScope) error
-}
-
-type VisibleAuthorityDrainer interface {
-	DrainVisibleAuthority(context.Context, VisibleAuthorityRetirer, ...compile.AuthorityScope) error
 }
 
 type VisiblePredicateIndex interface {

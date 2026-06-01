@@ -11,29 +11,11 @@ import (
 	"github.com/feichai0017/NoKV/fsmeta/model"
 )
 
-type visibleAdmissionCounters struct {
-	eligibleTotal         atomic.Uint64
-	slowTotal             atomic.Uint64
-	slowReadOnlyTotal     atomic.Uint64
-	slowRangeReadTotal    atomic.Uint64
-	slowDurabilityTotal   atomic.Uint64
-	slowCrossBucketTotal  atomic.Uint64
-	slowSharedQuotaTotal  atomic.Uint64
-	slowDynamicWriteTotal atomic.Uint64
-	slowMaintenanceTotal  atomic.Uint64
-	slowUnknownTotal      atomic.Uint64
-	acquireTotal          atomic.Uint64
-	ownedTotal            atomic.Uint64
-	heldTotal             atomic.Uint64
-	errorTotal            atomic.Uint64
-}
-
 type visibleCommitCounters struct {
 	attemptTotal           atomic.Uint64
 	successTotal           atomic.Uint64
 	errorTotal             atomic.Uint64
 	skipIneligibleTotal    atomic.Uint64
-	skipNoAuthorityTotal   atomic.Uint64
 	skipNonConcreteTotal   atomic.Uint64
 	skipPlacementTotal     atomic.Uint64
 	skipPredicateTotal     atomic.Uint64
@@ -66,7 +48,6 @@ func (e *Executor) Stats() map[string]any {
 			"commit_retry_exhausted_total": uint64(0),
 			"create_total":                 uint64(0),
 			"commit_contract":              commitContractStats(false),
-			"visible_admission":            visibleAdmissionStats(nil, false),
 			"visible_commit":               visibleCommitStats(nil, false),
 			"visible_directory_read":       visibleDirectoryReadStats(nil),
 			"metadata_predicate_commit":    metadataPredicateStats(nil),
@@ -79,7 +60,6 @@ func (e *Executor) Stats() map[string]any {
 		"commit_retry_exhausted_total": e.commitRetryExhaustedTotal.Load(),
 		"create_total":                 e.createTotal.Load(),
 		"commit_contract":              commitContractStats(e.visibleCommitter != nil),
-		"visible_admission":            visibleAdmissionStats(&e.visibleAdmission, e.visibleAuthority != nil),
 		"visible_commit":               visibleCommitStats(&e.visibleCommit, e.visibleCommitter != nil),
 		"visible_directory_read":       visibleDirectoryReadStats(&e.visibleDirectoryRead),
 		"metadata_predicate_commit":    metadataPredicateStats(e.metadataPredicates),
@@ -145,31 +125,6 @@ func (s *visibleDirectoryReadCounters) record(stats compile.DirectoryReadStats) 
 	s.outputRows.Add(uint64(stats.OutputRows))
 }
 
-func visibleAdmissionStats(counters *visibleAdmissionCounters, enabled bool) map[string]any {
-	if counters == nil {
-		return map[string]any{
-			"enabled":        enabled,
-			"eligible_total": uint64(0),
-			"slow_total":     uint64(0),
-			"slow_by_reason": visibleAdmissionSlowReasonStats(nil),
-			"acquire_total":  uint64(0),
-			"owned_total":    uint64(0),
-			"held_total":     uint64(0),
-			"error_total":    uint64(0),
-		}
-	}
-	return map[string]any{
-		"enabled":        enabled,
-		"eligible_total": counters.eligibleTotal.Load(),
-		"slow_total":     counters.slowTotal.Load(),
-		"slow_by_reason": visibleAdmissionSlowReasonStats(counters),
-		"acquire_total":  counters.acquireTotal.Load(),
-		"owned_total":    counters.ownedTotal.Load(),
-		"held_total":     counters.heldTotal.Load(),
-		"error_total":    counters.errorTotal.Load(),
-	}
-}
-
 func visibleCommitStats(counters *visibleCommitCounters, enabled bool) map[string]any {
 	if counters == nil {
 		return map[string]any{
@@ -178,7 +133,6 @@ func visibleCommitStats(counters *visibleCommitCounters, enabled bool) map[strin
 			"success_total":              uint64(0),
 			"error_total":                uint64(0),
 			"skip_ineligible_total":      uint64(0),
-			"skip_no_authority_total":    uint64(0),
 			"skip_non_concrete_total":    uint64(0),
 			"skip_placement_total":       uint64(0),
 			"skip_predicate_total":       uint64(0),
@@ -199,38 +153,12 @@ func visibleCommitStats(counters *visibleCommitCounters, enabled bool) map[strin
 		"success_total":              counters.successTotal.Load(),
 		"error_total":                counters.errorTotal.Load(),
 		"skip_ineligible_total":      counters.skipIneligibleTotal.Load(),
-		"skip_no_authority_total":    counters.skipNoAuthorityTotal.Load(),
 		"skip_non_concrete_total":    counters.skipNonConcreteTotal.Load(),
 		"skip_placement_total":       counters.skipPlacementTotal.Load(),
 		"skip_predicate_total":       counters.skipPredicateTotal.Load(),
 		"latency_total_nanosecond":   latency,
 		"latency_max_nanosecond":     counters.latencyMaxNanosecond.Load(),
 		"latency_average_nanosecond": average,
-	}
-}
-
-func visibleAdmissionSlowReasonStats(counters *visibleAdmissionCounters) map[string]uint64 {
-	if counters == nil {
-		return map[string]uint64{
-			string(compile.SlowReasonReadOnly):          0,
-			string(compile.SlowReasonRangeRead):         0,
-			string(compile.SlowReasonDurabilityBarrier): 0,
-			string(compile.SlowReasonCrossBucket):       0,
-			string(compile.SlowReasonSharedQuota):       0,
-			string(compile.SlowReasonDynamicWriteSet):   0,
-			string(compile.SlowReasonMaintenanceScan):   0,
-			"unknown": 0,
-		}
-	}
-	return map[string]uint64{
-		string(compile.SlowReasonReadOnly):          counters.slowReadOnlyTotal.Load(),
-		string(compile.SlowReasonRangeRead):         counters.slowRangeReadTotal.Load(),
-		string(compile.SlowReasonDurabilityBarrier): counters.slowDurabilityTotal.Load(),
-		string(compile.SlowReasonCrossBucket):       counters.slowCrossBucketTotal.Load(),
-		string(compile.SlowReasonSharedQuota):       counters.slowSharedQuotaTotal.Load(),
-		string(compile.SlowReasonDynamicWriteSet):   counters.slowDynamicWriteTotal.Load(),
-		string(compile.SlowReasonMaintenanceScan):   counters.slowMaintenanceTotal.Load(),
-		"unknown": counters.slowUnknownTotal.Load(),
 	}
 }
 

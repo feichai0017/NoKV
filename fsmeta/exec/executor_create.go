@@ -14,7 +14,7 @@ import (
 
 func (e *Executor) tryVisibleCreate(ctx context.Context, program compile.CreateProgram, mount model.MountIdentity, req model.CreateRequest, dentryValue, inodeValue []byte) (bool, error) {
 	delta := program.Compiled.Delta
-	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
 	view := e.newVisibleReadView(ctx)
@@ -66,9 +66,6 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 		return model.CreateResult{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return model.CreateResult{}, err
-	}
 	plan := delta.Plan
 	inode := req.Attrs.InodeRecord(inodeID)
 	dentry := model.DentryRecord{
@@ -88,7 +85,7 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 		Inodes:     1,
 	}}
 	quotaOK := true
-	if e.visibleCommitter != nil && e.visibleAuthority != nil && delta.Eligibility == compile.EligibilityVisibleCommit {
+	if e.visibleCommitter != nil && delta.Eligibility == compile.EligibilityVisibleCommit {
 		var err error
 		quotaOK, err = e.visibleQuotaAllowsCommit(ctx, quotaChanges)
 		if err != nil {

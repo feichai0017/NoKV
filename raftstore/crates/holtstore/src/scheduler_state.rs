@@ -206,14 +206,6 @@ impl HoltStore {
             (
                 pending.operation.region_id,
                 pending.operation.r#type,
-                pending.operation.source_region_id,
-                pending.operation.split_key.clone(),
-                pending
-                    .operation
-                    .split_child
-                    .as_ref()
-                    .map(|child| child.region_id)
-                    .unwrap_or_default(),
                 pending.operation.source_peer_id,
                 pending.operation.target_peer_id,
             )
@@ -268,8 +260,8 @@ impl HoltStore {
             (
                 blocked.operation.region_id,
                 blocked.operation.r#type,
-                blocked.operation.source_region_id,
-                blocked.operation.split_key.clone(),
+                blocked.operation.source_peer_id,
+                blocked.operation.target_peer_id,
             )
         });
         Ok(out)

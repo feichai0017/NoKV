@@ -110,10 +110,3 @@ pub trait RegionMetadataSink: Clone + Send + Sync + 'static {
         Ok(())
     }
 }
-
-pub trait RegionDescriptorCatalog: std::fmt::Debug + Send + Sync + 'static {
-    fn region_descriptor(
-        &self,
-        region_id: RegionId,
-    ) -> nokv_metadata_state::Result<Option<metapb::RegionDescriptor>>;
-}

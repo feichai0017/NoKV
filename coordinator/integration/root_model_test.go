@@ -218,12 +218,6 @@ func assertRootEpochDelta(t *testing.T, before, after rootstate.Snapshot, event 
 	case rootevent.KindRegionBootstrap,
 		rootevent.KindRegionDescriptorPublished,
 		rootevent.KindRegionTombstoned,
-		rootevent.KindRegionSplitPlanned,
-		rootevent.KindRegionSplitCommitted,
-		rootevent.KindRegionSplitCancelled,
-		rootevent.KindRegionMergePlanned,
-		rootevent.KindRegionMerged,
-		rootevent.KindRegionMergeCancelled,
 		rootevent.KindPeerAdditionPlanned,
 		rootevent.KindPeerRemovalPlanned,
 		rootevent.KindPeerAdded,
@@ -302,9 +296,6 @@ func normalizeRootSnapshot(snapshot rootstate.Snapshot) rootstate.Snapshot {
 	}
 	if out.PendingPeerChanges == nil {
 		out.PendingPeerChanges = make(map[uint64]rootstate.PendingPeerChange)
-	}
-	if out.PendingRangeChanges == nil {
-		out.PendingRangeChanges = make(map[uint64]rootstate.PendingRangeChange)
 	}
 	return out
 }

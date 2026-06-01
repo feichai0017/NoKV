@@ -115,25 +115,6 @@ func TestGRPCClientRoundTrip(t *testing.T) {
 	require.NoError(t, err)
 	require.Len(t, listMountsResp.GetMounts(), 1)
 
-	now := time.Now()
-	visibleAuthorityResp, err := cli.ApplyVisibleAuthority(context.Background(), &coordpb.ApplyVisibleAuthorityRequest{
-		Command: metawire.RootVisibleAuthorityCommandToProto(rootproto.VisibleAuthorityCommand{
-			Kind:            rootproto.VisibleAuthorityActAcquire,
-			HolderID:        "fsmeta-holder",
-			NowUnixNano:     now.UnixNano(),
-			ExpiresUnixNano: now.Add(time.Hour).UnixNano(),
-			Scope: rootproto.VisibleAuthorityScope{
-				MountID:    "vol",
-				MountKeyID: 1,
-				Buckets:    []uint16{1},
-			},
-		}),
-	})
-	require.NoError(t, err)
-	require.Equal(t, metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED, visibleAuthorityResp.GetStatus())
-	require.Equal(t, "fsmeta-holder/1", visibleAuthorityResp.GetGrant().GetGrantId())
-	require.Len(t, visibleAuthorityResp.GetActiveGrants(), 1)
-
 	storeResp, err := cli.StoreHeartbeat(context.Background(), &coordpb.StoreHeartbeatRequest{
 		StoreId:   1,
 		RegionNum: 2,
@@ -269,9 +250,6 @@ func (f *followerStorage) SaveAllocatorState(context.Context, uint64, uint64) er
 func (f *followerStorage) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
-func (f *followerStorage) ApplyVisibleAuthority(context.Context, rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, nil
-}
 func (f *followerStorage) Refresh() error            { return nil }
 func (f *followerStorage) Close() error              { return nil }
 func (f *followerStorage) CanSubmitRootWrites() bool { return false }
@@ -289,15 +267,14 @@ func newClientRootStorage(leader bool) *clientRootStorage {
 		leader:   leader,
 		leaderID: 1,
 		snapshot: rootview.Snapshot{
-			CatchUpState:        rootview.CatchUpStateFresh,
-			Stores:              make(map[uint64]rootstate.StoreMembership),
-			SnapshotEpochs:      make(map[string]rootstate.SnapshotEpoch),
-			Mounts:              make(map[string]rootstate.MountRecord),
-			Subtrees:            make(map[string]rootstate.SubtreeAuthority),
-			Quotas:              make(map[string]rootstate.QuotaFence),
-			Descriptors:         make(map[uint64]topology.Descriptor),
-			PendingPeerChanges:  make(map[uint64]rootstate.PendingPeerChange),
-			PendingRangeChanges: make(map[uint64]rootstate.PendingRangeChange),
+			CatchUpState:       rootview.CatchUpStateFresh,
+			Stores:             make(map[uint64]rootstate.StoreMembership),
+			SnapshotEpochs:     make(map[string]rootstate.SnapshotEpoch),
+			Mounts:             make(map[string]rootstate.MountRecord),
+			Subtrees:           make(map[string]rootstate.SubtreeAuthority),
+			Quotas:             make(map[string]rootstate.QuotaFence),
+			Descriptors:        make(map[uint64]topology.Descriptor),
+			PendingPeerChanges: make(map[uint64]rootstate.PendingPeerChange),
 		},
 	}
 }
@@ -405,53 +382,6 @@ func (s *clientRootStorage) ApplyGrant(_ context.Context, cmd rootproto.GrantCom
 	}
 }
 
-func (s *clientRootStorage) ApplyVisibleAuthority(_ context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	holderID := strings.TrimSpace(cmd.HolderID)
-	switch cmd.Kind {
-	case rootproto.VisibleAuthorityActAcquire:
-		if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
-			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-		}
-		if active, ok := s.snapshot.RootSnapshot().State.ActiveVisibleGrantFor(cmd.Scope, cmd.NowUnixNano); ok {
-			if active.HolderID == holderID && active.Covers(cmd.Scope, cmd.NowUnixNano) {
-				return rootstate.CloneState(s.snapshot.RootSnapshot().State), active, nil
-			}
-			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
-		}
-		epoch := s.snapshot.VisibleAuthorityEpoch + 1
-		grantID := strings.TrimSpace(cmd.GrantID)
-		if grantID == "" {
-			grantID = fmt.Sprintf("%s/%d", holderID, epoch)
-		}
-		grant := rootproto.VisibleAuthorityGrant{
-			GrantID:           grantID,
-			EpochID:           epoch,
-			HolderID:          holderID,
-			Scope:             rootproto.CloneVisibleAuthorityScope(cmd.Scope),
-			ExpiresUnixNano:   cmd.ExpiresUnixNano,
-			PredecessorDigest: cmd.PredecessorDigest,
-			QuotaCreditBytes:  cmd.QuotaCreditBytes,
-			QuotaCreditInodes: cmd.QuotaCreditInodes,
-		}
-		s.applyEventLocked(rootevent.VisibleAuthorityGranted(grant))
-		return rootstate.CloneState(s.snapshot.RootSnapshot().State), grant, nil
-	case rootproto.VisibleAuthorityActRetire:
-		active, ok := s.snapshot.ActiveVisibleGrantByID(strings.TrimSpace(cmd.GrantID))
-		if !ok {
-			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, nil
-		}
-		if active.HolderID != holderID {
-			return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
-		}
-		s.applyEventLocked(rootevent.VisibleAuthorityRetired(active))
-		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, nil
-	default:
-		return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-	}
-}
-
 func (s *clientRootStorage) Refresh() error            { return nil }
 func (s *clientRootStorage) Close() error              { return nil }
 func (s *clientRootStorage) CanSubmitRootWrites() bool { return s.leader }
@@ -549,90 +479,6 @@ func TestCoordinatorClientErrorHelpers(t *testing.T) {
 	require.False(t, IsGrantNotHeld(errEmptyAddress))
 	_, ok := LeaderHint(errEmptyAddress)
 	require.False(t, ok)
-}
-
-func TestValidateListVisibleAuthorityGrantsResponse(t *testing.T) {
-	grant := rootproto.VisibleAuthorityGrant{
-		GrantID:         "visible-1",
-		EpochID:         1,
-		HolderID:        "holder-a",
-		Scope:           rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7},
-		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
-	}
-	require.NoError(t, validateListVisibleAuthorityGrantsResponse(&coordpb.ListVisibleAuthorityGrantsResponse{
-		Grants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(grant)},
-	}))
-
-	require.Error(t, validateListVisibleAuthorityGrantsResponse(nil))
-	require.Error(t, validateListVisibleAuthorityGrantsResponse(&coordpb.ListVisibleAuthorityGrantsResponse{
-		Grants: []*metapb.RootVisibleAuthorityGrant{
-			metawire.RootVisibleAuthorityGrantToProto(grant),
-			metawire.RootVisibleAuthorityGrantToProto(grant),
-		},
-	}))
-}
-
-func TestValidateListVisibleAuthoritySealsResponse(t *testing.T) {
-	seal := rootproto.VisibleAuthoritySeal{
-		GrantID:              "visible-1",
-		EpochID:              1,
-		HolderID:             "holder-a",
-		Scope:                rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7},
-		SegmentRoot:          [32]byte{1},
-		SegmentPayloadDigest: [32]byte{2},
-		OperationCount:       3,
-		EntryCount:           4,
-		SealedUnixNano:       time.Now().UnixNano(),
-		InstallRegionID:      5,
-		InstallTerm:          6,
-		InstallIndex:         7,
-		InstallVersion:       8,
-	}
-	require.NoError(t, validateListVisibleAuthoritySealsResponse(&coordpb.ListVisibleAuthoritySealsResponse{
-		Seals: []*metapb.RootVisibleAuthoritySeal{metawire.RootVisibleAuthoritySealToProto(seal)},
-	}))
-
-	require.Error(t, validateListVisibleAuthoritySealsResponse(nil))
-	require.Error(t, validateListVisibleAuthoritySealsResponse(&coordpb.ListVisibleAuthoritySealsResponse{
-		Seals: []*metapb.RootVisibleAuthoritySeal{
-			metawire.RootVisibleAuthoritySealToProto(seal),
-			metawire.RootVisibleAuthoritySealToProto(seal),
-		},
-	}))
-}
-
-func TestValidateApplyVisibleAuthorityResponse(t *testing.T) {
-	grant := rootproto.VisibleAuthorityGrant{
-		GrantID:         "visible-1",
-		EpochID:         1,
-		HolderID:        "holder-a",
-		Scope:           rootproto.VisibleAuthorityScope{MountID: "vol", MountKeyID: 7},
-		ExpiresUnixNano: time.Now().Add(time.Hour).UnixNano(),
-	}
-	require.NoError(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
-		Status:       metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED,
-		Grant:        metawire.RootVisibleAuthorityGrantToProto(grant),
-		ActiveGrants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(grant)},
-	}))
-	require.NoError(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
-		Status:       metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD,
-		ActiveGrants: []*metapb.RootVisibleAuthorityGrant{metawire.RootVisibleAuthorityGrantToProto(grant)},
-	}))
-	require.NoError(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
-		Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED,
-	}))
-
-	require.Error(t, validateApplyVisibleAuthorityResponse(nil))
-	require.Error(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
-		Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED,
-	}))
-	require.Error(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
-		Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD,
-		Grant:  metawire.RootVisibleAuthorityGrantToProto(grant),
-	}))
-	require.Error(t, validateApplyVisibleAuthorityResponse(&coordpb.ApplyVisibleAuthorityResponse{
-		Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_UNSPECIFIED,
-	}))
 }
 
 func TestGRPCClientRetriesWriteOnGrantNotHeld(t *testing.T) {

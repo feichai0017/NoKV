@@ -14,10 +14,10 @@ use openraft::{
 use tokio::sync::broadcast;
 
 use crate::{
-    AdminCommand, AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider,
-    ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode, Error, NodeId,
-    Proposal, RaftStoreConfig, RegionId, RegionLogStorage, RegionSnapshotEngine,
-    RegionStateMachine, RegionTrafficProvider, RegionTrafficSnapshot,
+    AppliedMetadataEngine, AppliedProposal, ApplyStatus, ApplyStatusProvider, ApplyWatchProvider,
+    ApplyWatchReplay, ApplyWatchReplayRequest, BasicNode, Error, NodeId, Proposal, RaftStoreConfig,
+    RegionId, RegionLogStorage, RegionSnapshotEngine, RegionStateMachine, RegionTrafficProvider,
+    RegionTrafficSnapshot,
 };
 
 mod metadata_api;
@@ -321,16 +321,6 @@ where
         descriptor: &metapb::RegionDescriptor,
     ) -> Result<(), Error> {
         self.propose(Proposal::from_region_descriptor(descriptor)?)
-            .await
-            .map(|_| ())
-    }
-
-    pub async fn propose_admin_command(
-        &self,
-        region_id: RegionId,
-        command: &AdminCommand,
-    ) -> Result<(), Error> {
-        self.propose(Proposal::from_admin_command(region_id, command)?)
             .await
             .map(|_| ())
     }

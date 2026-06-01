@@ -49,7 +49,6 @@ func TestExecutorLinkVisibleCommitServesOverlay(t *testing.T) {
 	committer := newTestVisibleCommitter(t, runner)
 	executor, err := newTestExecutor(
 		runner,
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -136,7 +135,6 @@ func BenchmarkExecutorLinkVisibleCommit(b *testing.B) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(
 		runner,
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {

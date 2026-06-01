@@ -4,8 +4,6 @@ mod bootstrap;
 mod coordinator;
 mod hosted_region;
 mod metrics;
-mod range_controller;
-mod range_topology;
 mod region_open;
 mod root_publication;
 mod scheduler_operations;

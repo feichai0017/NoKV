@@ -174,10 +174,6 @@ func (s *protocolMatrixStorage) ApplyGrant(_ context.Context, cmd rootproto.Gran
 	}
 }
 
-func (s *protocolMatrixStorage) ApplyVisibleAuthority(context.Context, rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	return rootstate.CloneState(s.snapshot.RootSnapshot().State), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-}
-
 func (s *protocolMatrixStorage) advanceRootToken() {
 	if s.snapshot.RootToken.Cursor.Term == 0 {
 		s.snapshot.RootToken.Cursor.Term = 1

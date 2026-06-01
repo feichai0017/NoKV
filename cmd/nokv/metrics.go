@@ -108,7 +108,6 @@ func metaRootSnapshot(ctx metaRootExpvarContext) map[string]any {
 		}
 		out["descriptor_count"] = len(snap.Descriptors)
 		out["pending_peer_changes"] = len(snap.PendingPeerChanges)
-		out["pending_range_changes"] = len(snap.PendingRangeChanges)
 	}
 	if leader, ok := ctx.backend.(interface {
 		IsLeader() bool

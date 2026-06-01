@@ -30,40 +30,34 @@ func (f fakeLoadStore) SaveAllocatorState(context.Context, uint64, uint64) error
 func (f fakeLoadStore) ApplyGrant(context.Context, rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, nil
 }
-func (f fakeLoadStore) ApplyVisibleAuthority(context.Context, rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, nil
-}
 func (f fakeLoadStore) Refresh() error            { return nil }
 func (f fakeLoadStore) CanSubmitRootWrites() bool { return true }
 func (f fakeLoadStore) LeaderID() uint64          { return 1 }
 func (f fakeLoadStore) Close() error              { return nil }
 
 type fakeRootBackend struct {
-	snapshot                    rootstate.Snapshot
-	observed                    rootstorage.ObservedCommitted
-	useObserved                 bool
-	tailAdvance                 rootstorage.TailAdvance
-	waitAdvance                 rootstorage.TailAdvance
-	appendErr                   error
-	fenceErr                    error
-	refreshErr                  error
-	observeErr                  error
-	waitErr                     error
-	observeCommittedErr         error
-	applyGrantErr               error
-	snapshotErr                 error
-	refreshCount                int
-	appendCalls                 int
-	fenceCalls                  []rootstate.AllocatorKind
-	closeCalled                 bool
-	isLeader                    bool
-	leaderID                    uint64
-	tailNotifyCh                chan struct{}
-	applyGrantResult            rootstate.EunomiaState
-	applyGrantCert              rootproto.GrantCertificate
-	applyVisibleAuthorityErr    error
-	applyVisibleAuthorityResult rootstate.State
-	applyVisibleGrant           rootproto.VisibleAuthorityGrant
+	snapshot            rootstate.Snapshot
+	observed            rootstorage.ObservedCommitted
+	useObserved         bool
+	tailAdvance         rootstorage.TailAdvance
+	waitAdvance         rootstorage.TailAdvance
+	appendErr           error
+	fenceErr            error
+	refreshErr          error
+	observeErr          error
+	waitErr             error
+	observeCommittedErr error
+	applyGrantErr       error
+	snapshotErr         error
+	refreshCount        int
+	appendCalls         int
+	fenceCalls          []rootstate.AllocatorKind
+	closeCalled         bool
+	isLeader            bool
+	leaderID            uint64
+	tailNotifyCh        chan struct{}
+	applyGrantResult    rootstate.EunomiaState
+	applyGrantCert      rootproto.GrantCertificate
 }
 
 func (f *fakeRootBackend) Snapshot() (rootstate.Snapshot, error) {
@@ -169,18 +163,6 @@ func (f *fakeRootBackend) ApplyGrant(_ context.Context, _ rootproto.GrantCommand
 	return f.applyGrantResult, f.applyGrantCert, nil
 }
 
-func (f *fakeRootBackend) ApplyVisibleAuthority(_ context.Context, _ rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	if f.applyVisibleAuthorityErr != nil {
-		return f.applyVisibleAuthorityResult, rootproto.VisibleAuthorityGrant{}, f.applyVisibleAuthorityErr
-	}
-	f.snapshot.State.ActiveVisibleGrants = cloneVisibleAuthorityGrants(f.applyVisibleAuthorityResult.ActiveVisibleGrants)
-	f.snapshot.State.VisibleAuthorityEpoch = f.applyVisibleAuthorityResult.VisibleAuthorityEpoch
-	if f.useObserved {
-		f.observed.Checkpoint.Snapshot = rootstate.CloneSnapshot(f.snapshot)
-	}
-	return f.applyVisibleAuthorityResult, f.applyVisibleGrant, nil
-}
-
 func (f *fakeRootBackend) Close() error {
 	f.closeCalled = true
 	return nil
@@ -232,9 +214,6 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{
 			desc1.RegionID: {Kind: rootstate.PendingPeerChangeAddition, StoreID: 9, PeerID: 19, Base: desc1, Target: desc2},
 		},
-		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{
-			desc1.RegionID: {Kind: rootstate.PendingRangeChangeSplit, ParentRegionID: desc1.RegionID, Left: desc1, Right: desc2},
-		},
 		Allocator: AllocatorState{IDCurrent: 20, TSCurrent: 30},
 		ActiveGrants: []rootproto.AuthorityGrant{{
 			GrantID:         "grant-7",
@@ -261,10 +240,9 @@ func TestSnapshotHelpersAndBootstrap(t *testing.T) {
 		Stores: map[uint64]rootstate.StoreMembership{
 			7: {StoreID: 7, State: rootstate.StoreMembershipActive, JoinedAt: rootstate.Cursor{Term: 2, Index: 3}},
 		},
-		SnapshotEpochs:      snapshot.SnapshotEpochs,
-		Descriptors:         snapshot.Descriptors,
-		PendingPeerChanges:  snapshot.PendingPeerChanges,
-		PendingRangeChanges: snapshot.PendingRangeChanges,
+		SnapshotEpochs:     snapshot.SnapshotEpochs,
+		Descriptors:        snapshot.Descriptors,
+		PendingPeerChanges: snapshot.PendingPeerChanges,
 	}
 	fromRoot := SnapshotFromRoot(rootSnapshot)
 	require.Equal(t, CatchUpStateFresh, fromRoot.CatchUpState)
@@ -602,81 +580,6 @@ func TestRootStoreDoesNotOverwriteFresherReloadWithOlderApplyGrantResult(t *test
 	require.Equal(t, uint64(3), loaded.ActiveGrants[0].Era)
 }
 
-func TestRootStoreMergesVisibleAuthorityStateFromHeldRejection(t *testing.T) {
-	stale := rootstate.Snapshot{
-		State: rootstate.State{
-			LastCommitted: rootstate.Cursor{Term: 1, Index: 10},
-			ActiveVisibleGrants: []rootproto.VisibleAuthorityGrant{
-				testRootviewVisibleGrant("visible-stale", 1),
-			},
-			VisibleAuthorityEpoch: 1,
-		},
-	}
-	authoritativeGrant := testRootviewVisibleGrant("visible-held", 2)
-	authoritativeGrant.EpochID = 2
-	authoritativeGrant.HolderID = "holder-b"
-	authoritative := rootstate.State{
-		ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{authoritativeGrant},
-		VisibleAuthorityEpoch: authoritativeGrant.EpochID,
-	}
-	fake := &fakeRootBackend{
-		snapshot:                    stale,
-		observed:                    rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
-		useObserved:                 true,
-		isLeader:                    true,
-		applyVisibleAuthorityErr:    rootstate.ErrPrimacy,
-		applyVisibleAuthorityResult: authoritative,
-	}
-	store, err := OpenRootStore(fake)
-	require.NoError(t, err)
-
-	state, _, err := store.ApplyVisibleAuthority(context.Background(), rootproto.VisibleAuthorityCommand{Kind: rootproto.VisibleAuthorityActAcquire})
-	require.ErrorIs(t, err, rootstate.ErrPrimacy)
-	require.Equal(t, authoritative, state)
-	loaded, err := store.Load()
-	require.NoError(t, err)
-	require.Equal(t, "holder-b", loaded.ActiveVisibleGrants[0].HolderID)
-	require.Equal(t, uint64(2), loaded.VisibleAuthorityEpoch)
-}
-
-func TestRootStorePreservesAppliedVisibleAuthorityAcrossStaleObservedReload(t *testing.T) {
-	staleGrant := testRootviewVisibleGrant("visible-stale", 1)
-	staleGrant.EpochID = 1
-	stale := rootstate.Snapshot{
-		State: rootstate.State{
-			LastCommitted:         rootstate.Cursor{Term: 1, Index: 10},
-			ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{staleGrant},
-			VisibleAuthorityEpoch: staleGrant.EpochID,
-		},
-	}
-	appliedGrant := testRootviewVisibleGrant("visible-applied", 3)
-	appliedGrant.EpochID = 3
-	appliedGrant.HolderID = "holder-c"
-	applied := rootstate.State{
-		ActiveVisibleGrants:   []rootproto.VisibleAuthorityGrant{appliedGrant},
-		VisibleAuthorityEpoch: appliedGrant.EpochID,
-	}
-	fake := &fakeRootBackend{
-		snapshot:                    stale,
-		observed:                    rootstorage.ObservedCommitted{Checkpoint: rootstorage.Checkpoint{Snapshot: stale}},
-		useObserved:                 true,
-		isLeader:                    true,
-		applyVisibleAuthorityResult: applied,
-		applyVisibleGrant:           appliedGrant,
-	}
-	store, err := OpenRootStore(fake)
-	require.NoError(t, err)
-
-	state, grant, err := store.ApplyVisibleAuthority(context.Background(), rootproto.VisibleAuthorityCommand{Kind: rootproto.VisibleAuthorityActAcquire})
-	require.NoError(t, err)
-	require.Equal(t, applied, state)
-	require.Equal(t, appliedGrant, grant)
-	loaded, err := store.Load()
-	require.NoError(t, err)
-	require.Equal(t, "holder-c", loaded.ActiveVisibleGrants[0].HolderID)
-	require.Equal(t, uint64(3), loaded.VisibleAuthorityEpoch)
-}
-
 func TestPreserveNewerAuthorityStateMergesPerDuty(t *testing.T) {
 	observed := Snapshot{
 		ActiveGrants: []rootproto.AuthorityGrant{{
@@ -815,9 +718,6 @@ func TestRootStoreUnsupportedApplyCommands(t *testing.T) {
 	require.NoError(t, err)
 
 	_, _, err = store.ApplyGrant(context.Background(), rootproto.GrantCommand{})
-	require.ErrorIs(t, err, errGrantCommandUnsupported)
-
-	_, _, err = store.ApplyVisibleAuthority(context.Background(), rootproto.VisibleAuthorityCommand{})
 	require.ErrorIs(t, err, errGrantCommandUnsupported)
 }
 

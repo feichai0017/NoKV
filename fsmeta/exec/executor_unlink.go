@@ -21,7 +21,7 @@ type removeDentryRequest struct {
 func (e *Executor) tryVisibleRemoveDentry(ctx context.Context, compiled compile.CompiledOp, mount model.MountIdentity, req removeDentryRequest) (model.RemoveResult, bool, error) {
 	delta := compiled.Delta
 	plan := delta.Plan
-	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return model.RemoveResult{}, false, nil
 	}
 	view := e.newVisibleReadView(ctx)
@@ -99,9 +99,6 @@ func (e *Executor) tryVisibleRemoveDentry(ctx context.Context, compiled compile.
 func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, compiled compile.CompiledOp, req removeDentryRequest) (model.RemoveResult, error) {
 	delta := compiled.Delta
 	plan := delta.Plan
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return model.RemoveResult{}, err
-	}
 	if result, committed, err := e.tryVisibleRemoveDentry(ctx, compiled, mount, req); committed || err != nil {
 		if err != nil {
 			return model.RemoveResult{}, err
@@ -218,9 +215,6 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 		return err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return err
-	}
 	plan := delta.Plan
 	if committed, err := e.tryVisibleRemoveDirectory(ctx, program.Compiled, mount, req); committed || err != nil {
 		if err != nil {
@@ -304,7 +298,7 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 func (e *Executor) tryVisibleRemoveDirectory(ctx context.Context, compiled compile.CompiledOp, mount model.MountIdentity, req model.RemoveDirectoryRequest) (bool, error) {
 	delta := compiled.Delta
 	plan := delta.Plan
-	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
 	view := e.newVisibleReadView(ctx)

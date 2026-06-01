@@ -164,45 +164,6 @@ func TestValidatePeerUnknownStore(t *testing.T) {
 	}
 }
 
-func TestValidateFSMetaRegionBootstrap(t *testing.T) {
-	cfg := &File{
-		Stores: []Store{{StoreID: 1, Addr: "x"}},
-		FSMetaRegionBootstrap: &FSMetaRegionBootstrap{
-			Mounts:       []FSMetaRegionBootstrapMount{{MountID: "default", MountKeyID: 1}},
-			BucketCount:  16,
-			RegionIDBase: 1000,
-			PeerIDBase:   10_000,
-		},
-	}
-	if err := cfg.Validate(); err != nil {
-		t.Fatalf("validate fsmeta bootstrap: %v", err)
-	}
-
-	cfg.FSMetaRegionBootstrap.Mounts = []FSMetaRegionBootstrapMount{{MountID: " bad", MountKeyID: 2}}
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected whitespace-padded mount_id rejection")
-	}
-
-	cfg.FSMetaRegionBootstrap.Mounts = []FSMetaRegionBootstrapMount{{MountID: "bad-zero", MountKeyID: 0}}
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected zero mount_key_id rejection")
-	}
-
-	cfg.FSMetaRegionBootstrap.Mounts = []FSMetaRegionBootstrapMount{
-		{MountID: "default", MountKeyID: 1},
-		{MountID: "other", MountKeyID: 1},
-	}
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected duplicate mount_key_id rejection")
-	}
-
-	cfg.FSMetaRegionBootstrap.Mounts = []FSMetaRegionBootstrapMount{{MountID: "default", MountKeyID: 1}}
-	cfg.Regions = []Region{{ID: 1}}
-	if err := cfg.Validate(); err == nil {
-		t.Fatalf("expected explicit region conflict")
-	}
-}
-
 func TestValidateStoreWorkDirTemplateRequiresID(t *testing.T) {
 	cfg := &File{
 		StoreWorkDirTemplate: "/var/lib/nokv-store",

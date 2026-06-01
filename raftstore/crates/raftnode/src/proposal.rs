@@ -3,7 +3,7 @@ use prost::Message;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 
-use crate::{AdminCommand, Error, RegionId};
+use crate::{Error, RegionId};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Proposal {
@@ -15,7 +15,6 @@ pub struct Proposal {
 pub enum ProposalPayload {
     MetadataCommand(Vec<u8>),
     RegionDescriptor(Vec<u8>),
-    AdminCommand(Vec<u8>),
 }
 
 impl Proposal {
@@ -47,18 +46,6 @@ impl Proposal {
         Ok(Self {
             region_id,
             payload: ProposalPayload::MetadataCommand(payload),
-        })
-    }
-
-    pub fn from_admin_command(region_id: RegionId, command: &AdminCommand) -> Result<Self, Error> {
-        if region_id == 0 {
-            return Err(Error::MissingRegionHeader);
-        }
-        let mut payload = Vec::with_capacity(command.encoded_len());
-        command.encode(&mut payload)?;
-        Ok(Self {
-            region_id,
-            payload: ProposalPayload::AdminCommand(payload),
         })
     }
 
@@ -99,28 +86,17 @@ impl Proposal {
         Ok(req)
     }
 
-    pub fn decode_admin_command(&self) -> Result<AdminCommand, Error> {
-        let ProposalPayload::AdminCommand(payload) = &self.payload else {
-            return Err(Error::InvalidLogPayload(
-                "non-admin-command proposal cannot decode as admin command".to_owned(),
-            ));
-        };
-        Ok(AdminCommand::decode(payload.as_slice())?)
-    }
-
     pub(crate) fn payload_kind(&self) -> ProposalPayloadKind {
         match &self.payload {
             ProposalPayload::MetadataCommand(_) => ProposalPayloadKind::MetadataCommand,
             ProposalPayload::RegionDescriptor(_) => ProposalPayloadKind::RegionDescriptor,
-            ProposalPayload::AdminCommand(_) => ProposalPayloadKind::AdminCommand,
         }
     }
 
     pub(crate) fn payload_bytes(&self) -> &[u8] {
         match &self.payload {
             ProposalPayload::MetadataCommand(payload)
-            | ProposalPayload::RegionDescriptor(payload)
-            | ProposalPayload::AdminCommand(payload) => payload,
+            | ProposalPayload::RegionDescriptor(payload) => payload,
         }
     }
 }
@@ -129,5 +105,4 @@ impl Proposal {
 pub(crate) enum ProposalPayloadKind {
     MetadataCommand,
     RegionDescriptor,
-    AdminCommand,
 }

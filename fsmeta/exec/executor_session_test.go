@@ -23,7 +23,6 @@ func TestExecutorOpenWriteSessionVisibleCommitBypassesRaftCommit(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
-		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -64,7 +63,6 @@ func TestExecutorOpenWriteSessionVisibleUsesCreateSessionOwnerFact(t *testing.T)
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -99,7 +97,6 @@ func TestExecutorWriteSessionLifecycleVisibleCommitServesOverlay(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -478,11 +475,11 @@ func TestExecutorExpireWriteSessionsDoesNotDeleteReusedLiveSession(t *testing.T)
 	require.Contains(t, runner.data, string(liveOwnerKey))
 }
 
-func TestExecutorExpireWriteSessionsFlushesVisibleAuthority(t *testing.T) {
+func TestExecutorExpireWriteSessionsFlushesVisible(t *testing.T) {
 	runner := newFakeRunner()
 	expired := model.SessionRecord{Session: "writer-old", Inode: 22, ExpiresUnixNs: 50}
 	seedSession(t, runner, "vol", expired)
-	flusher := &fakeVisibleAuthorityFlusher{}
+	flusher := &fakeVisibleFlusher{}
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
@@ -493,9 +490,7 @@ func TestExecutorExpireWriteSessionsFlushesVisibleAuthority(t *testing.T) {
 	result, err := executor.ExpireWriteSessions(context.Background(), model.ExpireWriteSessionsRequest{Mount: "vol"})
 	require.NoError(t, err)
 	require.Equal(t, model.ExpireWriteSessionsResult{Expired: 1}, result)
-	require.Equal(t, 1, flusher.flushCalls)
-	require.Len(t, flusher.flushScopes, 1)
-	require.Equal(t, model.MountID("vol"), flusher.flushScopes[0].Mount)
+	require.Zero(t, flusher.flushCalls)
 }
 
 func TestExecutorExpireWriteSessionsUsesVisibleCommitDelete(t *testing.T) {
@@ -506,7 +501,6 @@ func TestExecutorExpireWriteSessionsUsesVisibleCommitDelete(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -542,7 +536,6 @@ func BenchmarkExecutorOpenWriteSessionVisibleCommit(b *testing.B) {
 	executor, err := newTestExecutor(
 		runner,
 		WithClock(func() time.Time { return time.Unix(0, 100) }),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {

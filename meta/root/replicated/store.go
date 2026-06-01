@@ -7,7 +7,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -49,7 +48,6 @@ type Store struct {
 	quotas             map[string]rootstate.QuotaFence
 	descs              map[uint64]topology.Descriptor
 	pending            map[uint64]rootstate.PendingPeerChange
-	pendingRange       map[uint64]rootstate.PendingRangeChange
 	records            []rootstorage.CommittedEvent
 	retainFrom         rootstate.Cursor
 	maxRetainedRecords int
@@ -100,7 +98,6 @@ func Open(cfg Config) (*Store, error) {
 		quotas:             quotas,
 		descs:              bootstrap.Snapshot.Descriptors,
 		pending:            bootstrap.Snapshot.PendingPeerChanges,
-		pendingRange:       bootstrap.Snapshot.PendingRangeChanges,
 		records:            bootstrap.Tail.Records,
 		retainFrom:         bootstrap.RetainFrom,
 		maxRetainedRecords: cfg.MaxRetainedRecords,
@@ -242,15 +239,14 @@ func (s *Store) Snapshot() (rootstate.Snapshot, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 	return rootstate.CloneSnapshot(rootstate.Snapshot{
-		State:               s.state,
-		Stores:              s.stores,
-		SnapshotEpochs:      s.snapshots,
-		Mounts:              s.mounts,
-		Subtrees:            s.subtrees,
-		Quotas:              s.quotas,
-		Descriptors:         s.descs,
-		PendingPeerChanges:  s.pending,
-		PendingRangeChanges: s.pendingRange,
+		State:              s.state,
+		Stores:             s.stores,
+		SnapshotEpochs:     s.snapshots,
+		Mounts:             s.mounts,
+		Subtrees:           s.subtrees,
+		Quotas:             s.quotas,
+		Descriptors:        s.descs,
+		PendingPeerChanges: s.pending,
 	}), nil
 }
 
@@ -294,20 +290,18 @@ func (s *Store) Append(ctx context.Context, events ...rootevent.Event) (rootstat
 func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (rootstate.CommitInfo, error) {
 	var next rootstate.Cursor
 	snapshot := rootstate.Snapshot{
-		State:               s.state,
-		Stores:              rootstate.CloneStoreMemberships(s.stores),
-		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.snapshots),
-		Mounts:              rootstate.CloneMounts(s.mounts),
-		Subtrees:            rootstate.CloneSubtreeAuthorities(s.subtrees),
-		Quotas:              rootstate.CloneQuotaFences(s.quotas),
-		Descriptors:         rootstate.CloneDescriptors(s.descs),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
+		State:              s.state,
+		Stores:             rootstate.CloneStoreMemberships(s.stores),
+		SnapshotEpochs:     rootstate.CloneSnapshotEpochs(s.snapshots),
+		Mounts:             rootstate.CloneMounts(s.mounts),
+		Subtrees:           rootstate.CloneSubtreeAuthorities(s.subtrees),
+		Quotas:             rootstate.CloneQuotaFences(s.quotas),
+		Descriptors:        rootstate.CloneDescriptors(s.descs),
+		PendingPeerChanges: rootstate.ClonePendingPeerChanges(s.pending),
 	}
 	records := make([]rootstorage.CommittedEvent, 0, len(events))
 	for _, evt := range events {
 		next = rootstate.NextCursor(snapshot.State.LastCommitted)
-		evt = rootstate.NormalizeVisibleAuthorityEvent(snapshot.State, next, evt)
 		rootstate.ApplyEventToSnapshot(&snapshot, next, evt)
 		records = append(records, rootstorage.CommittedEvent{Cursor: next, Event: rootevent.CloneEvent(evt)})
 	}
@@ -336,7 +330,6 @@ func (s *Store) appendLocked(ctx context.Context, events ...rootevent.Event) (ro
 	s.quotas = snapshot.Quotas
 	s.descs = snapshot.Descriptors
 	s.pending = snapshot.PendingPeerChanges
-	s.pendingRange = snapshot.PendingRangeChanges
 	s.records = append(s.records, records...)
 	s.retainFrom = (rootstorage.CommittedTail{Records: s.records}).RetainFrom(snapshot.State.LastCommitted)
 	s.maybeCompactLocked()
@@ -385,183 +378,6 @@ func (s *Store) ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (roo
 	default:
 		return s.state.Eunomia(), rootproto.GrantCertificate{}, rootstate.ErrInvalidGrant
 	}
-}
-
-func (s *Store) ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	if s == nil {
-		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	if err := ctx.Err(); err != nil {
-		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if err := s.ensureFreshForRootWriteLocked(ctx); err != nil {
-		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
-	}
-
-	switch cmd.Kind {
-	case rootproto.VisibleAuthorityActAcquire:
-		return s.acquireVisibleAuthorityLocked(ctx, cmd)
-	case rootproto.VisibleAuthorityActRetire:
-		return s.retireVisibleAuthorityLocked(ctx, cmd)
-	case rootproto.VisibleAuthorityActSeal:
-		return s.sealVisibleAuthorityLocked(ctx, cmd)
-	default:
-		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-	}
-}
-
-func (s *Store) acquireVisibleAuthorityLocked(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	holderID := strings.TrimSpace(cmd.HolderID)
-	if holderID == "" || cmd.ExpiresUnixNano <= cmd.NowUnixNano || !cmd.Scope.Valid() {
-		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-	}
-	request := rootproto.VisibleAuthorityGrant{
-		GrantID:         "request",
-		EpochID:         1,
-		HolderID:        holderID,
-		Scope:           rootproto.CloneVisibleAuthorityScope(cmd.Scope),
-		ExpiresUnixNano: cmd.ExpiresUnixNano,
-	}
-	requestedGrantID := strings.TrimSpace(cmd.GrantID)
-	if requestedGrantID != "" {
-		if active, ok := activeVisibleGrantByID(s.state.ActiveVisibleGrants, requestedGrantID); ok &&
-			active.HolderID == holderID &&
-			active.ActiveAt(cmd.NowUnixNano) &&
-			active.Covers(cmd.Scope, cmd.NowUnixNano) {
-			return rootstate.CloneState(s.state), active, nil
-		}
-	}
-
-	var renewal rootproto.VisibleAuthorityGrant
-	for _, active := range s.state.ActiveVisibleGrants {
-		if !active.Overlaps(request) {
-			continue
-		}
-		// Visible authority TTL is an admission freshness bound, not proof that
-		// the holder's visible overlay has been durably drained. Keep overlapping
-		// grants rooted until the holder explicitly retires them; otherwise old
-		// pending segments can be cut off by a newer epoch and fail witness
-		// authority checks.
-		if active.HolderID != holderID {
-			return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
-		}
-		if active.ActiveAt(cmd.NowUnixNano) &&
-			active.Covers(cmd.Scope, cmd.NowUnixNano) &&
-			cmd.ExpiresUnixNano <= active.ExpiresUnixNano {
-			return rootstate.CloneState(s.state), rootproto.CloneVisibleAuthorityGrant(active), nil
-		}
-		if !renewal.Valid() {
-			renewal = rootproto.CloneVisibleAuthorityGrant(active)
-		}
-	}
-	if renewal.Valid() {
-		renewal.Scope = mergeVisibleAuthorityScopes(renewal.Scope, cmd.Scope)
-		if cmd.ExpiresUnixNano > renewal.ExpiresUnixNano {
-			renewal.ExpiresUnixNano = cmd.ExpiresUnixNano
-		}
-		commit, err := s.appendLocked(ctx, rootevent.VisibleAuthorityGranted(renewal))
-		if err != nil {
-			return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
-		}
-		committed, ok := commit.State.ActiveVisibleGrantByID(renewal.GrantID)
-		if !ok || !committed.Covers(cmd.Scope, cmd.NowUnixNano) {
-			return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, rootstate.ErrFinality
-		}
-		return rootstate.CloneState(commit.State), committed, nil
-	}
-
-	epoch := s.state.VisibleAuthorityEpoch + 1
-	grantID := requestedGrantID
-	if grantID == "" || activeVisibleGrantIDExists(s.state.ActiveVisibleGrants, grantID) {
-		grantID = fmt.Sprintf("%s/%d", holderID, epoch)
-	}
-	grant := rootproto.VisibleAuthorityGrant{
-		GrantID:           grantID,
-		EpochID:           epoch,
-		HolderID:          holderID,
-		Scope:             rootproto.CloneVisibleAuthorityScope(cmd.Scope),
-		ExpiresUnixNano:   cmd.ExpiresUnixNano,
-		QuotaCreditBytes:  cmd.QuotaCreditBytes,
-		QuotaCreditInodes: cmd.QuotaCreditInodes,
-	}
-	grant.PredecessorDigest = cmd.PredecessorDigest
-	if grant.PredecessorDigest == ([32]byte{}) {
-		if predecessor, ok := s.state.LatestVisibleAuthoritySealFor(cmd.Scope); ok {
-			grant.PredecessorDigest = predecessor.SegmentRoot
-		}
-	}
-	commit, err := s.appendLocked(ctx, rootevent.VisibleAuthorityGranted(grant))
-	if err != nil {
-		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
-	}
-	committed, ok := commit.State.ActiveVisibleGrantByID(grantID)
-	if !ok {
-		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, rootstate.ErrFinality
-	}
-	return rootstate.CloneState(commit.State), committed, nil
-}
-
-func (s *Store) retireVisibleAuthorityLocked(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	holderID := strings.TrimSpace(cmd.HolderID)
-	grantID := strings.TrimSpace(cmd.GrantID)
-	if holderID == "" || grantID == "" {
-		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-	}
-	active, ok := activeVisibleGrantByID(s.state.ActiveVisibleGrants, grantID)
-	if !ok {
-		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, nil
-	}
-	if active.HolderID != holderID {
-		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
-	}
-	commit, err := s.appendLocked(ctx, rootevent.VisibleAuthorityRetired(active))
-	if err != nil {
-		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
-	}
-	return rootstate.CloneState(commit.State), rootproto.VisibleAuthorityGrant{}, nil
-}
-
-func (s *Store) sealVisibleAuthorityLocked(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	holderID := strings.TrimSpace(cmd.HolderID)
-	grantID := strings.TrimSpace(cmd.GrantID)
-	if holderID == "" || grantID == "" || cmd.NowUnixNano <= 0 {
-		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-	}
-	active, ok := activeVisibleGrantByID(s.state.ActiveVisibleGrants, grantID)
-	if !ok {
-		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
-	}
-	if active.HolderID != holderID {
-		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrPrimacy
-	}
-	seal := rootproto.VisibleAuthoritySeal{
-		GrantID:              active.GrantID,
-		EpochID:              active.EpochID,
-		HolderID:             active.HolderID,
-		Scope:                rootproto.CloneVisibleAuthorityScope(active.Scope),
-		SegmentRoot:          cmd.SegmentRoot,
-		SegmentPayloadDigest: cmd.SegmentPayloadDigest,
-		OperationCount:       cmd.OperationCount,
-		EntryCount:           cmd.EntryCount,
-		SealedUnixNano:       cmd.NowUnixNano,
-		InstallRegionID:      cmd.InstallRegionID,
-		InstallTerm:          cmd.InstallTerm,
-		InstallIndex:         cmd.InstallIndex,
-		InstallVersion:       cmd.InstallVersion,
-	}
-	if !seal.Valid() {
-		return rootstate.CloneState(s.state), rootproto.VisibleAuthorityGrant{}, rootstate.ErrInvalidGrant
-	}
-	commit, err := s.appendLocked(ctx, rootevent.VisibleAuthoritySealed(seal))
-	if err != nil {
-		return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, err
-	}
-	return rootstate.CloneState(commit.State), active, nil
 }
 
 func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error) {
@@ -666,54 +482,6 @@ func (s *Store) issueGrantLocked(ctx context.Context, cmd rootproto.GrantCommand
 func activeGrantIDExists(grants []rootproto.AuthorityGrant, grantID string) bool {
 	_, ok := activeGrantByID(grants, grantID)
 	return ok
-}
-
-func activeVisibleGrantIDExists(grants []rootproto.VisibleAuthorityGrant, grantID string) bool {
-	_, ok := activeVisibleGrantByID(grants, grantID)
-	return ok
-}
-
-func activeVisibleGrantByID(grants []rootproto.VisibleAuthorityGrant, grantID string) (rootproto.VisibleAuthorityGrant, bool) {
-	for _, grant := range grants {
-		if grant.GrantID == grantID {
-			return rootproto.CloneVisibleAuthorityGrant(grant), true
-		}
-	}
-	return rootproto.VisibleAuthorityGrant{}, false
-}
-
-func mergeVisibleAuthorityScopes(left, right rootproto.VisibleAuthorityScope) rootproto.VisibleAuthorityScope {
-	out := rootproto.CloneVisibleAuthorityScope(left)
-	if out.MountID == "" {
-		out.MountID = right.MountID
-	}
-	if out.MountKeyID == 0 {
-		out.MountKeyID = right.MountKeyID
-	}
-	out.Buckets = appendMissingUint16(out.Buckets, right.Buckets)
-	out.Parents = appendMissingUint64(out.Parents, right.Parents)
-	out.Inodes = appendMissingUint64(out.Inodes, right.Inodes)
-	return out
-}
-
-func appendMissingUint16(out []uint16, values []uint16) []uint16 {
-	for _, value := range values {
-		seen := slices.Contains(out, value)
-		if !seen {
-			out = append(out, value)
-		}
-	}
-	return out
-}
-
-func appendMissingUint64(out []uint64, values []uint64) []uint64 {
-	for _, value := range values {
-		seen := slices.Contains(out, value)
-		if !seen {
-			out = append(out, value)
-		}
-	}
-	return out
 }
 
 func retiredGrantIDExists(retirements []rootproto.GrantRetirement, grantID string) bool {
@@ -1056,15 +824,14 @@ func (s *Store) maybeCompactLocked() {
 	plan := rootstorage.PlanTailCompaction(s.records, s.state.LastCommitted, s.maxRetainedRecords)
 	snapshotState := s.compactEunomiaState(s.state)
 	snapshot := rootstate.Snapshot{
-		State:               snapshotState,
-		Stores:              rootstate.CloneStoreMemberships(s.stores),
-		SnapshotEpochs:      rootstate.CloneSnapshotEpochs(s.snapshots),
-		Mounts:              rootstate.CloneMounts(s.mounts),
-		Subtrees:            rootstate.CloneSubtreeAuthorities(s.subtrees),
-		Quotas:              rootstate.CloneQuotaFences(s.quotas),
-		Descriptors:         rootstate.CloneDescriptors(s.descs),
-		PendingPeerChanges:  rootstate.ClonePendingPeerChanges(s.pending),
-		PendingRangeChanges: rootstate.ClonePendingRangeChanges(s.pendingRange),
+		State:              snapshotState,
+		Stores:             rootstate.CloneStoreMemberships(s.stores),
+		SnapshotEpochs:     rootstate.CloneSnapshotEpochs(s.snapshots),
+		Mounts:             rootstate.CloneMounts(s.mounts),
+		Subtrees:           rootstate.CloneSubtreeAuthorities(s.subtrees),
+		Quotas:             rootstate.CloneQuotaFences(s.quotas),
+		Descriptors:        rootstate.CloneDescriptors(s.descs),
+		PendingPeerChanges: rootstate.ClonePendingPeerChanges(s.pending),
 	}
 	if !plan.Compacted {
 		s.records = plan.Tail.Records
@@ -1158,7 +925,6 @@ func (s *Store) applyObservedLocked(observed rootstorage.ObservedCommitted) {
 	}
 	s.descs = bootstrap.Snapshot.Descriptors
 	s.pending = bootstrap.Snapshot.PendingPeerChanges
-	s.pendingRange = bootstrap.Snapshot.PendingRangeChanges
 	s.records = bootstrap.Tail.Records
 	s.retainFrom = bootstrap.RetainFrom
 }

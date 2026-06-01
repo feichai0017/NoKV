@@ -11,15 +11,14 @@ use crate::traffic::{RegionTrafficProvider, RegionTrafficSnapshot, RegionTraffic
 use crate::watch::{ApplyHistory, ApplyWatchProvider, ApplyWatchReplay, ApplyWatchReplayRequest};
 use crate::{Error, OpenRaftEntry, ProposalPayloadKind, RegionId};
 
-mod admin;
 mod metadata;
 mod snapshot;
 mod types;
 
 pub use types::{
     AppliedProposal, ApplyStatus, ApplyStatusProvider, MetadataCommandExecutor,
-    MetadataReadExecutor, MetadataRetentionExecutor, RegionApplyEngine, RegionDescriptorCatalog,
-    RegionMetadataSink, RegionSnapshotEngine,
+    MetadataReadExecutor, MetadataRetentionExecutor, RegionApplyEngine, RegionMetadataSink,
+    RegionSnapshotEngine,
 };
 
 #[derive(Debug)]
@@ -29,8 +28,6 @@ struct AppliedMetadataInner<E> {
     applied_index: AtomicU64,
     engine: Mutex<E>,
     descriptor: Mutex<Option<metapb::RegionDescriptor>>,
-    topology_descriptors: Mutex<Vec<metapb::RegionDescriptor>>,
-    topology_catalog: Mutex<Option<Arc<dyn RegionDescriptorCatalog>>>,
     traffic: RegionTrafficStats,
     watch: broadcast::Sender<metadatapb::MetadataApplyWatchEvent>,
     history: Mutex<ApplyHistory>,
@@ -83,8 +80,6 @@ impl<E> AppliedMetadataEngine<E> {
                 applied_index: AtomicU64::new(status.applied_index),
                 engine: Mutex::new(engine),
                 descriptor: Mutex::new(None),
-                topology_descriptors: Mutex::new(Vec::new()),
-                topology_catalog: Mutex::new(None),
                 traffic: RegionTrafficStats::default(),
                 watch: broadcast::channel(1024).0,
                 history: Mutex::new(ApplyHistory::default()),
@@ -104,19 +99,6 @@ impl<E> AppliedMetadataEngine<E> {
         Ok(())
     }
 
-    pub fn set_region_descriptor_catalog(
-        &self,
-        catalog: Arc<dyn RegionDescriptorCatalog>,
-    ) -> nokv_metadata_state::Result<()> {
-        let mut current = self.inner.topology_catalog.lock().map_err(|_| {
-            nokv_metadata_state::Error::Backend(
-                "region descriptor catalog mutex poisoned".to_owned(),
-            )
-        })?;
-        *current = Some(catalog);
-        Ok(())
-    }
-
     pub fn region_descriptor(
         &self,
     ) -> nokv_metadata_state::Result<Option<metapb::RegionDescriptor>> {
@@ -127,92 +109,6 @@ impl<E> AppliedMetadataEngine<E> {
                 nokv_metadata_state::Error::Backend("region descriptor mutex poisoned".to_owned())
             })
             .map(|descriptor| descriptor.clone())
-    }
-
-    pub(crate) fn record_topology_descriptor(
-        &self,
-        descriptor: metapb::RegionDescriptor,
-    ) -> nokv_metadata_state::Result<()> {
-        self.validate_topology_descriptor(&descriptor)?;
-        self.inner
-            .topology_descriptors
-            .lock()
-            .map_err(|_| {
-                nokv_metadata_state::Error::Backend("topology descriptor mutex poisoned".to_owned())
-            })?
-            .push(descriptor);
-        Ok(())
-    }
-
-    fn take_topology_descriptor(
-        &self,
-        region_id: RegionId,
-    ) -> nokv_metadata_state::Result<Option<metapb::RegionDescriptor>> {
-        let mut descriptors = self.inner.topology_descriptors.lock().map_err(|_| {
-            nokv_metadata_state::Error::Backend("topology descriptor mutex poisoned".to_owned())
-        })?;
-        let Some(index) = descriptors
-            .iter()
-            .position(|descriptor| descriptor.region_id == region_id)
-        else {
-            return Ok(None);
-        };
-        Ok(Some(descriptors.remove(index)))
-    }
-
-    fn topology_descriptor(
-        &self,
-        region_id: RegionId,
-    ) -> nokv_metadata_state::Result<Option<metapb::RegionDescriptor>> {
-        let descriptor = {
-            let descriptors = self.inner.topology_descriptors.lock().map_err(|_| {
-                nokv_metadata_state::Error::Backend("topology descriptor mutex poisoned".to_owned())
-            })?;
-            descriptors
-                .iter()
-                .find(|descriptor| descriptor.region_id == region_id)
-                .cloned()
-        };
-        if descriptor.is_some() {
-            return Ok(descriptor);
-        }
-        let catalog = self
-            .inner
-            .topology_catalog
-            .lock()
-            .map_err(|_| {
-                nokv_metadata_state::Error::Backend(
-                    "region descriptor catalog mutex poisoned".to_owned(),
-                )
-            })?
-            .clone();
-        match catalog {
-            Some(catalog) => catalog.region_descriptor(region_id),
-            None => Ok(None),
-        }
-    }
-
-    pub(crate) fn topology_descriptors(
-        &self,
-    ) -> nokv_metadata_state::Result<Vec<metapb::RegionDescriptor>> {
-        self.inner
-            .topology_descriptors
-            .lock()
-            .map_err(|_| {
-                nokv_metadata_state::Error::Backend("topology descriptor mutex poisoned".to_owned())
-            })
-            .map(|descriptors| descriptors.clone())
-    }
-
-    fn clear_topology_descriptors(&self) -> nokv_metadata_state::Result<()> {
-        self.inner
-            .topology_descriptors
-            .lock()
-            .map_err(|_| {
-                nokv_metadata_state::Error::Backend("topology descriptor mutex poisoned".to_owned())
-            })?
-            .clear();
-        Ok(())
     }
 
     fn validate_region_descriptor(
@@ -233,24 +129,6 @@ impl<E> AppliedMetadataEngine<E> {
                 Error::InvalidRegionDescriptor("region descriptor epoch is required".to_owned())
                     .to_string(),
             ));
-        }
-        Ok(())
-    }
-
-    fn validate_topology_descriptor(
-        &self,
-        descriptor: &metapb::RegionDescriptor,
-    ) -> nokv_metadata_state::Result<()> {
-        if descriptor.region_id == 0 {
-            return Err(nokv_metadata_state::Error::Backend(
-                "topology descriptor region id is required".to_owned(),
-            ));
-        }
-        if descriptor.peers.is_empty() {
-            return Err(nokv_metadata_state::Error::Backend(format!(
-                "topology descriptor for region {} has no peers",
-                descriptor.region_id
-            )));
         }
         Ok(())
     }
@@ -431,19 +309,6 @@ where
                                 descriptor_changed: true,
                             });
                         }
-                        ProposalPayloadKind::AdminCommand => {
-                            let command = proposal.decode_admin_command().map_err(|err| {
-                                nokv_metadata_state::Error::Backend(err.to_string())
-                            })?;
-                            self.apply_admin_command_at(term, index, command)?;
-                            applied.push(AppliedProposal {
-                                region_id: proposal.region_id,
-                                index,
-                                term,
-                                payload: Vec::new(),
-                                descriptor_changed: true,
-                            });
-                        }
                     }
                 }
             }
@@ -571,13 +436,6 @@ where
                 if let Some(descriptor) = self.engine.region_descriptor()? {
                     self.sink.save_region_descriptor(&descriptor)?;
                 }
-            }
-            let topology_descriptors = self.engine.topology_descriptors()?;
-            for descriptor in &topology_descriptors {
-                self.sink.save_region_descriptor(descriptor)?;
-            }
-            if !topology_descriptors.is_empty() {
-                self.engine.clear_topology_descriptors()?;
             }
             self.sink.save_apply_status(&status)?;
         }

@@ -67,9 +67,6 @@ func (s *Service) GetRegionByKey(ctx context.Context, req *coordpb.GetRegionByKe
 		return resp, nil
 	}
 	desc := info.Descriptor
-	if pending, ok := s.cluster.PendingRangeChangeForDescriptor(desc.RegionID); ok {
-		return nil, statusStaleEpoch(pendingRangeChangeError(pending), reasonRangeChangePending)
-	}
 	if err := admission.admitDescriptorRevision(desc.RootEpoch); err != nil {
 		return nil, err
 	}
@@ -95,17 +92,6 @@ func leaderPeerForDescriptor(desc topology.Descriptor, storeID uint64) *metapb.R
 		}
 	}
 	return nil
-}
-
-func pendingRangeChangeError(change rootstate.PendingRangeChange) string {
-	switch change.Kind {
-	case rootstate.PendingRangeChangeSplit:
-		return fmt.Sprintf("%s: split parent=%d left=%d right=%d", errRangeChangePending, change.ParentRegionID, change.LeftRegionID, change.RightRegionID)
-	case rootstate.PendingRangeChangeMerge:
-		return fmt.Sprintf("%s: merge left=%d right=%d merged=%d", errRangeChangePending, change.LeftRegionID, change.RightRegionID, change.Merged.RegionID)
-	default:
-		return errRangeChangePending
-	}
 }
 
 type readState struct {

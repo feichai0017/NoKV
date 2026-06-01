@@ -2056,13 +2056,10 @@ async fn execution_status_reports_holt_root_event_catalog_counts() {
         .unwrap();
     store.enqueue_pending_root_event(&pending_event).unwrap();
     let pending_scheduler = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
         region_id: 1,
-        split_key: b"m".to_vec(),
-        split_child: Some(metapb::RegionDescriptor {
-            region_id: 2,
-            ..Default::default()
-        }),
+        source_peer_id: 10,
+        target_peer_id: 20,
         ..Default::default()
     };
     store
@@ -2072,9 +2069,9 @@ async fn execution_status_reports_holt_root_event_catalog_counts() {
         .increment_pending_scheduler_operation_attempts(&pending_scheduler)
         .unwrap();
     let blocked_scheduler = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::MergeRegion as i32,
+        r#type: coordpb::SchedulerOperationType::PruneMetadataVersions as i32,
         region_id: 1,
-        source_region_id: 2,
+        retention_floor: 100,
         ..Default::default()
     };
     store
@@ -2130,10 +2127,10 @@ async fn execution_status_reports_holt_root_event_catalog_counts() {
     let pending = execution
         .topology
         .iter()
-        .find(|status| status.transition_id == "split:1:6d")
+        .find(|status| status.transition_id == "leader-transfer:1:10:20")
         .unwrap();
     assert_eq!(pending.region_id, 1);
-    assert_eq!(pending.action, "range split");
+    assert_eq!(pending.action, "leader transfer");
     assert_eq!(
         pending.outcome,
         adminpb::ExecutionTopologyOutcome::Queued as i32
@@ -2150,10 +2147,10 @@ async fn execution_status_reports_holt_root_event_catalog_counts() {
     let blocked_scheduler_status = execution
         .topology
         .iter()
-        .find(|status| status.transition_id == "merge:1:2")
+        .find(|status| status.transition_id == "metadata-prune:1:100")
         .unwrap();
     assert_eq!(blocked_scheduler_status.region_id, 1);
-    assert_eq!(blocked_scheduler_status.action, "range merge");
+    assert_eq!(blocked_scheduler_status.action, "metadata retention prune");
     assert_eq!(
         blocked_scheduler_status.outcome,
         adminpb::ExecutionTopologyOutcome::Failed as i32

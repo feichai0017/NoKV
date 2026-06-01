@@ -81,7 +81,6 @@ type Executor struct {
 	quotas                    QuotaResolver
 	subtrees                  SubtreeHandoffPublisher
 	authorities               SubtreeAuthorityResolver
-	visibleAuthority          VisibleAuthorityAdmitter
 	visibleCommitter          VisibleCommitter
 	visibleClientID           string
 	lockTTL                   uint64
@@ -91,7 +90,6 @@ type Executor struct {
 	commitRetriesTotal        atomic.Uint64
 	commitRetryExhaustedTotal atomic.Uint64
 	createTotal               atomic.Uint64
-	visibleAdmission          visibleAdmissionCounters
 	visibleCommit             visibleCommitCounters
 	visibleDirectoryRead      visibleDirectoryReadCounters
 	visibleSeq                atomic.Uint64
@@ -155,14 +153,6 @@ func WithSubtreeHandoffPublisher(publisher SubtreeHandoffPublisher) Option {
 func WithSubtreeAuthorityResolver(resolver SubtreeAuthorityResolver) Option {
 	return func(e *Executor) {
 		e.authorities = resolver
-	}
-}
-
-// WithVisibleAuthorityAdmitter enables holder-authority admission for
-// visible-commit-eligible mutations.
-func WithVisibleAuthorityAdmitter(admitter VisibleAuthorityAdmitter) Option {
-	return func(e *Executor) {
-		e.visibleAuthority = admitter
 	}
 }
 

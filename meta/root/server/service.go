@@ -51,10 +51,6 @@ type leaseBackend interface {
 	ApplyGrant(ctx context.Context, cmd rootproto.GrantCommand) (rootstate.EunomiaState, rootproto.GrantCertificate, error)
 }
 
-type visibleAuthorityBackend interface {
-	ApplyVisibleAuthority(ctx context.Context, cmd rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error)
-}
-
 // Service exposes one metadata-root backend through the MetadataRoot RPC API.
 type Service struct {
 	metapb.UnimplementedMetadataRootServer
@@ -173,42 +169,6 @@ func (s *Service) ApplyGrant(ctx context.Context, req *metapb.MetadataRootApplyG
 		State:       metawire.RootEunomiaStateToProto(protocolState),
 		Status:      applyStatus,
 		Certificate: metawire.RootGrantCertificateToProto(cert),
-	}, nil
-}
-
-func (s *Service) ApplyVisibleAuthority(ctx context.Context, req *metapb.MetadataRootApplyVisibleAuthorityRequest) (*metapb.MetadataRootApplyVisibleAuthorityResponse, error) {
-	if s == nil || s.backend == nil {
-		return &metapb.MetadataRootApplyVisibleAuthorityResponse{}, nil
-	}
-	if err := s.requireRootWriteReady(ctx); err != nil {
-		return nil, err
-	}
-	backend, ok := s.backend.(visibleAuthorityBackend)
-	if !ok {
-		return nil, statusUnimplemented("metadata root backend does not implement Visible authority protocol")
-	}
-	cmd := metawire.RootVisibleAuthorityCommandFromProto(req.GetCommand())
-	state, grant, err := backend.ApplyVisibleAuthority(ctx, cmd)
-	if err != nil {
-		if errors.Is(err, rootstate.ErrPrimacy) {
-			return &metapb.MetadataRootApplyVisibleAuthorityResponse{
-				State:  metawire.RootStateToProto(state),
-				Status: metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_HELD,
-			}, nil
-		}
-		return nil, rpcError(err)
-	}
-	applyStatus := metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_GRANTED
-	switch cmd.Kind {
-	case rootproto.VisibleAuthorityActRetire:
-		applyStatus = metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_RETIRED
-	case rootproto.VisibleAuthorityActSeal:
-		applyStatus = metapb.RootVisibleAuthorityApplyStatus_ROOT_VISIBLE_AUTHORITY_APPLY_STATUS_SEALED
-	}
-	return &metapb.MetadataRootApplyVisibleAuthorityResponse{
-		State:  metawire.RootStateToProto(state),
-		Status: applyStatus,
-		Grant:  metawire.RootVisibleAuthorityGrantToProto(grant),
 	}, nil
 }
 

@@ -40,65 +40,6 @@ func (e *Executor) flushVisible(ctx context.Context) error {
 	return flusher.FlushDurable(context.WithoutCancel(ctx))
 }
 
-func (e *Executor) flushVisibleAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
-	if e == nil || e.visibleCommitter == nil {
-		return nil
-	}
-	if len(scopes) == 0 {
-		return e.flushVisible(ctx)
-	}
-	if scoped, ok := e.visibleCommitter.(VisibleAuthorityFlusher); ok {
-		for _, scope := range scopes {
-			if authorityScopeEmpty(scope) {
-				return e.flushVisible(ctx)
-			}
-			if err := scoped.FlushAuthority(context.WithoutCancel(ctx), scope); err != nil {
-				return err
-			}
-		}
-		return nil
-	}
-	return e.flushVisible(ctx)
-}
-
-func (e *Executor) retireVisibleAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
-	if e == nil || e.visibleAuthority == nil {
-		return nil
-	}
-	retirer, ok := e.visibleAuthority.(VisibleAuthorityRetirer)
-	if !ok {
-		return nil
-	}
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	return retirer.RetireVisibleAuthority(context.WithoutCancel(ctx), scopes...)
-}
-
-func (e *Executor) drainVisibleAuthority(ctx context.Context, scopes ...compile.AuthorityScope) error {
-	if e == nil {
-		return nil
-	}
-	if e.visibleCommitter != nil && e.visibleAuthority != nil {
-		drainer, drainOK := e.visibleCommitter.(VisibleAuthorityDrainer)
-		retirer, retireOK := e.visibleAuthority.(VisibleAuthorityRetirer)
-		if drainOK && retireOK {
-			if ctx == nil {
-				ctx = context.Background()
-			}
-			return drainer.DrainVisibleAuthority(context.WithoutCancel(ctx), retirer, scopes...)
-		}
-	}
-	if err := e.flushVisibleAuthority(ctx, scopes...); err != nil {
-		return err
-	}
-	return e.retireVisibleAuthority(ctx, scopes...)
-}
-
-func authorityScopeEmpty(scope compile.AuthorityScope) bool {
-	return scope.Mount == "" || scope.MountKeyID == 0
-}
-
 func (e *Executor) visibleOverlayGet(key []byte) ([]byte, bool, bool) {
 	overlay := e.visibleOverlay()
 	if overlay == nil {

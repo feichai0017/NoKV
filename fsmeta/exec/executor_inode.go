@@ -14,7 +14,7 @@ import (
 
 func (e *Executor) tryVisibleUpdateInode(ctx context.Context, program compile.UpdateInodeProgram, mount model.MountIdentity, req model.UpdateInodeRequest) (model.InodeRecord, bool, error) {
 	delta := program.Compiled.Delta
-	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return model.InodeRecord{}, false, nil
 	}
 	plan := delta.Plan
@@ -101,9 +101,6 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 		return model.InodeRecord{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return model.InodeRecord{}, err
-	}
 	plan := delta.Plan
 	if !req.SetSize && !req.SetMode && !req.SetUpdatedUnixNs && !req.SetOpaqueAttrs {
 		return model.InodeRecord{}, model.ErrInvalidRequest

@@ -23,9 +23,6 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req model.SnapshotSubtre
 		return model.SnapshotSubtreeToken{}, err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return model.SnapshotSubtreeToken{}, err
-	}
 	if capturer, ok := e.visibleCommitter.(VisibleSnapshotCapturer); ok {
 		version, err := e.reserveReadVersion(ctx)
 		if err != nil {
@@ -45,7 +42,7 @@ func (e *Executor) SnapshotSubtree(ctx context.Context, req model.SnapshotSubtre
 			}, nil
 		}
 	}
-	if err := e.flushVisibleAuthority(ctx, delta.Authority); err != nil {
+	if err := e.flushVisible(ctx); err != nil {
 		return model.SnapshotSubtreeToken{}, err
 	}
 	version, err := e.reserveReadVersion(ctx)

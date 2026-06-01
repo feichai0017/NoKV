@@ -1832,10 +1832,6 @@ func (s *e2eRootStorage) ApplyGrant(context.Context, rootproto.GrantCommand) (ro
 	return rootstate.EunomiaState{}, rootproto.GrantCertificate{}, errors.New("grant protocol is not used by fsmeta metadata-plane e2e tests")
 }
 
-func (s *e2eRootStorage) ApplyVisibleAuthority(context.Context, rootproto.VisibleAuthorityCommand) (rootstate.State, rootproto.VisibleAuthorityGrant, error) {
-	return rootstate.State{}, rootproto.VisibleAuthorityGrant{}, errors.New("visible authority protocol is not used by fsmeta metadata-plane e2e tests")
-}
-
 func (s *e2eRootStorage) Refresh() error {
 	return nil
 }

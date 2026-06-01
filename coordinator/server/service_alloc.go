@@ -26,23 +26,6 @@ func (s *Service) normalizeRootEvent(event rootevent.Event) (rootevent.Event, er
 			return rootevent.Event{}, err
 		}
 		out.RegionDescriptor.Descriptor = desc
-	case out.RangeSplit != nil:
-		left, err := s.normalizeDescriptorRootEpoch(out.RangeSplit.Left)
-		if err != nil {
-			return rootevent.Event{}, err
-		}
-		right, err := s.normalizeDescriptorRootEpoch(out.RangeSplit.Right)
-		if err != nil {
-			return rootevent.Event{}, err
-		}
-		out.RangeSplit.Left = left
-		out.RangeSplit.Right = right
-	case out.RangeMerge != nil:
-		merged, err := s.normalizeDescriptorRootEpoch(out.RangeMerge.Merged)
-		if err != nil {
-			return rootevent.Event{}, err
-		}
-		out.RangeMerge.Merged = merged
 	case out.PeerChange != nil:
 		desc, err := s.normalizeDescriptorRootEpoch(out.PeerChange.Region)
 		if err != nil {

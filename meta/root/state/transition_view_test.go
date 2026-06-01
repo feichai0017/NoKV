@@ -18,31 +18,16 @@ func TestBuildTransitionEntries(t *testing.T) {
 	peerChange, ok := rootstate.PendingPeerChangeFromEvent(peerPlanned)
 	require.True(t, ok)
 
-	left := testDescriptor(190, []byte("a"), []byte("m"))
-	right := testDescriptor(191, []byte("m"), []byte("z"))
-	merged := testDescriptor(200, []byte("a"), []byte("z"))
-	mergePlanned := rootevent.RegionMergePlanned(left.RegionID, right.RegionID, merged)
-	rangeKey, rangeChange, ok := rootstate.PendingRangeChangeFromEvent(mergePlanned)
-	require.True(t, ok)
-
 	entries := rootstate.BuildTransitionEntries(rootstate.Snapshot{
 		Descriptors: map[uint64]topology.Descriptor{
 			peerTarget.RegionID: peerTarget,
-			left.RegionID:       left,
-			right.RegionID:      right,
 		},
-		PendingPeerChanges:  map[uint64]rootstate.PendingPeerChange{peerTarget.RegionID: peerChange},
-		PendingRangeChanges: map[uint64]rootstate.PendingRangeChange{rangeKey: rangeChange},
+		PendingPeerChanges: map[uint64]rootstate.PendingPeerChange{peerTarget.RegionID: peerChange},
 	})
-	require.Len(t, entries, 2)
+	require.Len(t, entries, 1)
 
 	require.Equal(t, rootstate.TransitionKindPeerChange, entries[0].Kind)
 	require.Equal(t, peerTarget.RegionID, entries[0].Key)
 	require.Equal(t, rootstate.TransitionStatusPending, entries[0].Status)
 	require.NotNil(t, entries[0].PeerChange)
-
-	require.Equal(t, rootstate.TransitionKindRangeChange, entries[1].Kind)
-	require.Equal(t, merged.RegionID, entries[1].Key)
-	require.Equal(t, rootstate.TransitionStatusPending, entries[1].Status)
-	require.NotNil(t, entries[1].RangeChange)
 }

@@ -22,8 +22,7 @@ func (s *Service) ListTransitions(_ context.Context, _ *coordpb.ListTransitionsR
 	}
 	transitions := s.cluster.TransitionSnapshot()
 	rooted := rootstate.BuildTransitionEntries(rootstate.Snapshot{
-		PendingPeerChanges:  transitions.PendingPeerChanges,
-		PendingRangeChanges: transitions.PendingRangeChanges,
+		PendingPeerChanges: transitions.PendingPeerChanges,
 	})
 	entries := make([]*coordpb.TransitionEntry, 0, len(rooted))
 	for _, entry := range rooted {
@@ -67,9 +66,6 @@ func transitionEntryToProto(entry rootstate.TransitionEntry) *coordpb.Transition
 	if entry.PeerChange != nil {
 		out.PendingPeerChange = metawire.RootPendingPeerChangeToProto(entry.Key, *entry.PeerChange)
 	}
-	if entry.RangeChange != nil {
-		out.PendingRangeChange = metawire.RootPendingRangeChangeToProto(entry.Key, *entry.RangeChange)
-	}
 	return out
 }
 
@@ -89,8 +85,6 @@ func transitionKindToProto(kind rootstate.TransitionKind) coordpb.TransitionKind
 	switch kind {
 	case rootstate.TransitionKindPeerChange:
 		return coordpb.TransitionKind_TRANSITION_KIND_PEER_CHANGE
-	case rootstate.TransitionKindRangeChange:
-		return coordpb.TransitionKind_TRANSITION_KIND_RANGE_CHANGE
 	default:
 		return coordpb.TransitionKind_TRANSITION_KIND_UNSPECIFIED
 	}

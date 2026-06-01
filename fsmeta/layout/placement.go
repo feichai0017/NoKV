@@ -94,20 +94,3 @@ func PlanBucketPlacement(mounts []model.MountIdentity, bucketCount int) ([]Place
 	})
 	return out, nil
 }
-
-// BucketSplitBoundaries returns byte boundaries that can split fsmeta bootstrap
-// ranges without cutting through one affinity bucket.
-func BucketSplitBoundaries(mounts []model.MountIdentity, bucketCount int) ([][]byte, error) {
-	ranges, err := PlanBucketPlacement(mounts, bucketCount)
-	if err != nil {
-		return nil, err
-	}
-	boundaries := make([][]byte, 0, len(ranges)-1)
-	for _, r := range ranges[1:] {
-		if len(r.StartKey) == 0 {
-			continue
-		}
-		boundaries = append(boundaries, append([]byte(nil), r.StartKey...))
-	}
-	return boundaries, nil
-}

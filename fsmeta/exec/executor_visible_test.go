@@ -9,7 +9,6 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/backend"
 	"github.com/feichai0017/NoKV/fsmeta/exec/compile"
-	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/feichai0017/NoKV/fsmeta/proof"
 	"github.com/stretchr/testify/require"
@@ -144,29 +143,4 @@ func TestExecutorVisibleOperationIDIsExecutorScoped(t *testing.T) {
 	require.Contains(t, firstID.ClientID, "fsmeta-exec/create")
 	require.Contains(t, secondID.ClientID, "fsmeta-exec/create")
 	require.NotEqual(t, firstID.ClientID, secondID.ClientID)
-}
-
-func BenchmarkExecutorAdmitVisibleAuthorityOwned(b *testing.B) {
-	executor, err := New(newFakeRunner(), WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}))
-	if err != nil {
-		b.Fatal(err)
-	}
-	delta := compile.SemanticDelta{
-		Eligibility: compile.EligibilityVisibleCommit,
-		Authority: compile.AuthorityScope{
-			Mount:      "vol",
-			MountKeyID: 1,
-			Buckets:    []layout.AffinityBucket{layout.BucketForInodeID(model.RootInode)},
-			Parents:    []model.InodeID{model.RootInode},
-			Inodes:     []model.InodeID{22},
-		},
-	}
-	ctx := context.Background()
-
-	b.ReportAllocs()
-	for b.Loop() {
-		if err := executor.admitVisibleAuthority(ctx, delta); err != nil {
-			b.Fatal(err)
-		}
-	}
 }

@@ -1,5 +1,5 @@
 use super::bootstrap::{
-    default_region_descriptor, default_region_descriptor_with_range,
+    default_region_descriptor, default_region_descriptor_with_range, descriptor_membership_nodes,
     recover_holt_hosted_identities, recovered_descriptor_membership_init,
     startup_region_descriptor,
 };
@@ -9,12 +9,6 @@ use super::coordinator::{
     local_admin_endpoint, send_store_heartbeat_with,
 };
 use super::hosted_region::HostedRegionRegistry;
-use super::range_controller::HoltRangeController;
-use super::range_topology::{
-    build_merge_descriptor, descriptor_membership_nodes, ensure_merge_store_coverage,
-    merge_region_ids, merge_root_event, merge_source_already_absorbed,
-    merged_source_region_ids_for_store,
-};
 use super::region_open::{open_openraft_region, region_log_dir};
 use super::root_publication::{
     classify_root_event_publish_status, startup_root_events, startup_root_events_for_regions,
@@ -36,10 +30,7 @@ use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_proto::nokv::coordinator::v1 as coordpb;
 use nokv_proto::nokv::meta::v1 as metapb;
 use nokv_raftnode::AppliedMetadataEngine;
-use nokv_raftstore_server::{
-    root_event_transition_id, EmptyTopologyPublisher, MultiRegionMetadataPlaneService,
-    MultiRegionRaftAdminService, PeerEndpointCatalog,
-};
+use nokv_raftstore_server::{root_event_transition_id, PeerEndpointCatalog};
 use prost::Message;
 use prost_types::Any;
 use std::collections::{BTreeMap, HashMap};
@@ -375,36 +366,6 @@ fn root_event_transition_id_matches_go_peer_shape() {
     assert_eq!(root_event_transition_id(&event), "peer:11:remove:2:201");
 }
 
-#[test]
-fn root_event_transition_id_matches_go_range_split_shape() {
-    let event = metapb::RootEvent {
-        kind: metapb::RootEventKind::RegionSplitPlanned as i32,
-        payload: Some(metapb::root_event::Payload::RangeSplit(
-            metapb::RootRangeSplit {
-                parent_region_id: 7,
-                split_key: vec![0x00, 0x0a, 0xff],
-                ..Default::default()
-            },
-        )),
-    };
-    assert_eq!(root_event_transition_id(&event), "split:7:000aff");
-}
-
-#[test]
-fn root_event_transition_id_matches_go_range_merge_shape() {
-    let event = metapb::RootEvent {
-        kind: metapb::RootEventKind::RegionMergePlanned as i32,
-        payload: Some(metapb::root_event::Payload::RangeMerge(
-            metapb::RootRangeMerge {
-                left_region_id: 7,
-                right_region_id: 8,
-                ..Default::default()
-            },
-        )),
-    };
-    assert_eq!(root_event_transition_id(&event), "merge:7:8");
-}
-
 fn status_with_coordinator_reason(reason: &str) -> Status {
     let mut metadata = HashMap::new();
     metadata.insert(COORDINATOR_REASON_METADATA.to_owned(), reason.to_owned());
@@ -450,7 +411,6 @@ async fn scheduler_operation_executes_leader_transfer_via_admin_rpc() {
 
     let outcome = execute_scheduler_operation(
         &local_admin_endpoint(addr),
-        None,
         &coordpb::SchedulerOperation {
             r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
             region_id: 7,
@@ -486,7 +446,6 @@ async fn scheduler_operation_executes_metadata_retention_prune_via_admin_rpc() {
 
     let outcome = execute_scheduler_operation(
         &local_admin_endpoint(addr),
-        None,
         &coordpb::SchedulerOperation {
             r#type: coordpb::SchedulerOperationType::PruneMetadataVersions as i32,
             region_id: 7,
@@ -563,91 +522,14 @@ async fn store_heartbeat_queries_all_endpoints_and_prefers_operations() {
     assert_eq!(calls.lock().unwrap().as_slice(), endpoints.as_slice());
 }
 
-#[tokio::test]
-async fn scheduler_operation_reports_unsupported_split_without_dialing_admin() {
-    let outcome = execute_scheduler_operation(
-        "http://127.0.0.1:1",
-        None,
-        &coordpb::SchedulerOperation {
-            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
-            region_id: 7,
-            split_key: b"k".to_vec(),
-            split_child: Some(metapb::RegionDescriptor {
-                region_id: 8,
-                ..Default::default()
-            }),
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        outcome,
-        SchedulerOperationOutcome::Unsupported {
-            kind: coordpb::SchedulerOperationType::SplitRegion,
-            reason: "split execution is not implemented in raftstore yet",
-        }
-    );
-}
-
-#[tokio::test]
-async fn scheduler_operation_reports_invalid_split_before_admin_rpc() {
-    let outcome = execute_scheduler_operation(
-        "http://127.0.0.1:1",
-        None,
-        &coordpb::SchedulerOperation {
-            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
-            region_id: 7,
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        outcome,
-        SchedulerOperationOutcome::Invalid {
-            reason: "split requires region, split key, and child descriptor",
-        }
-    );
-}
-
-#[tokio::test]
-async fn scheduler_operation_reports_unsupported_merge_without_dialing_admin() {
-    let outcome = execute_scheduler_operation(
-        "http://127.0.0.1:1",
-        None,
-        &coordpb::SchedulerOperation {
-            r#type: coordpb::SchedulerOperationType::MergeRegion as i32,
-            region_id: 7,
-            source_region_id: 8,
-            ..Default::default()
-        },
-    )
-    .await
-    .unwrap();
-
-    assert_eq!(
-        outcome,
-        SchedulerOperationOutcome::Unsupported {
-            kind: coordpb::SchedulerOperationType::MergeRegion,
-            reason: "merge execution is not implemented in raftstore yet",
-        }
-    );
-}
-
 #[test]
-fn unsupported_scheduler_operation_records_pending_holt_diagnostic() {
+fn scheduler_operation_records_pending_holt_diagnostic() {
     let store = HoltMetadataStore::open_memory().unwrap();
     let operation = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
         region_id: 7,
-        split_key: b"k".to_vec(),
-        split_child: Some(metapb::RegionDescriptor {
-            region_id: 8,
-            ..Default::default()
-        }),
+        source_peer_id: 101,
+        target_peer_id: 202,
         ..Default::default()
     };
 
@@ -761,7 +643,7 @@ async fn pending_scheduler_operation_retries_and_deletes_after_apply() {
         .record_pending_scheduler_operation(&operation)
         .unwrap();
 
-    retry_pending_scheduler_operations(&local_admin_endpoint(addr), &store, None).await;
+    retry_pending_scheduler_operations(&local_admin_endpoint(addr), &store).await;
 
     assert!(store.pending_scheduler_operations().unwrap().is_empty());
     let captured = transfers.lock().unwrap();
@@ -798,7 +680,7 @@ async fn pending_scheduler_operation_retry_apply_clears_matching_blocked_record(
         .record_pending_scheduler_operation(&operation)
         .unwrap();
 
-    retry_pending_scheduler_operations(&local_admin_endpoint(addr), &store, None).await;
+    retry_pending_scheduler_operations(&local_admin_endpoint(addr), &store).await;
 
     assert!(store.pending_scheduler_operations().unwrap().is_empty());
     assert!(store.blocked_scheduler_operations().unwrap().is_empty());
@@ -809,26 +691,23 @@ async fn pending_scheduler_operation_retry_apply_clears_matching_blocked_record(
 async fn pending_scheduler_operation_tracks_attempts_and_expires() {
     let store = HoltMetadataStore::open_memory().unwrap();
     let operation = coordpb::SchedulerOperation {
-        r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+        r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
         region_id: 7,
-        split_key: b"k".to_vec(),
-        split_child: Some(metapb::RegionDescriptor {
-            region_id: 8,
-            ..Default::default()
-        }),
+        source_peer_id: 101,
+        target_peer_id: 202,
         ..Default::default()
     };
     store
         .record_pending_scheduler_operation(&operation)
         .unwrap();
 
-    retry_pending_scheduler_operations("http://127.0.0.1:1", &store, None).await;
+    retry_pending_scheduler_operations("http://127.0.0.1:1", &store).await;
     let pending = store.pending_scheduler_operations().unwrap();
     assert_eq!(pending.len(), 1);
     assert_eq!(pending[0].attempts, 1);
 
     for _ in 1..MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS {
-        retry_pending_scheduler_operations("http://127.0.0.1:1", &store, None).await;
+        retry_pending_scheduler_operations("http://127.0.0.1:1", &store).await;
     }
     assert!(store.pending_scheduler_operations().unwrap().is_empty());
     let blocked = store.blocked_scheduler_operations().unwrap();
@@ -838,10 +717,7 @@ async fn pending_scheduler_operation_tracks_attempts_and_expires() {
         blocked[0].attempts,
         MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS
     );
-    assert_eq!(
-        blocked[0].last_error,
-        "split execution is not implemented in raftstore yet"
-    );
+    assert!(blocked[0].last_error.contains("transport error"));
 }
 
 #[tokio::test]
@@ -1160,13 +1036,10 @@ async fn coordinator_heartbeat_marks_pending_admin_for_pending_scheduler_operati
     let store = HoltMetadataStore::open_memory().unwrap();
     store
         .record_pending_scheduler_operation(&coordpb::SchedulerOperation {
-            r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+            r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
             region_id: identity.region_id,
-            split_key: b"m".to_vec(),
-            split_child: Some(metapb::RegionDescriptor {
-                region_id: 8,
-                ..Default::default()
-            }),
+            source_peer_id: 101,
+            target_peer_id: 202,
             ..Default::default()
         })
         .unwrap();
@@ -1199,13 +1072,10 @@ async fn coordinator_heartbeat_marks_pending_admin_for_blocked_scheduler_operati
     store
         .block_pending_scheduler_operation(
             &coordpb::SchedulerOperation {
-                r#type: coordpb::SchedulerOperationType::SplitRegion as i32,
+                r#type: coordpb::SchedulerOperationType::LeaderTransfer as i32,
                 region_id: identity.region_id,
-                split_key: b"m".to_vec(),
-                split_child: Some(metapb::RegionDescriptor {
-                    region_id: 8,
-                    ..Default::default()
-                }),
+                source_peer_id: 101,
+                target_peer_id: 202,
                 ..Default::default()
             },
             MAX_PENDING_SCHEDULER_OPERATION_ATTEMPTS,
@@ -1345,164 +1215,6 @@ fn default_region_descriptor_uses_configured_range() {
 }
 
 #[test]
-fn build_merge_descriptor_extends_target_to_right_sibling() {
-    let target = default_region_descriptor_with_range(
-        ServerIdentity {
-            region_id: 1,
-            store_id: 11,
-            peer_id: 101,
-            bootstrap: true,
-        },
-        Some(&RegionKeyRange {
-            start_key: b"a".to_vec(),
-            end_key: b"m".to_vec(),
-        }),
-    );
-    let source = default_region_descriptor_with_range(
-        ServerIdentity {
-            region_id: 2,
-            store_id: 11,
-            peer_id: 102,
-            bootstrap: true,
-        },
-        Some(&RegionKeyRange {
-            start_key: b"m".to_vec(),
-            end_key: b"z".to_vec(),
-        }),
-    );
-
-    let merged = build_merge_descriptor(&target, &source).unwrap();
-
-    assert_eq!(merged.region_id, 1);
-    assert_eq!(merged.start_key, b"a");
-    assert_eq!(merged.end_key, b"z");
-    assert_eq!(merged.epoch.unwrap().version, 2);
-    assert_eq!(merged.lineage.len(), 1);
-    assert_eq!(merged.lineage[0].region_id, 2);
-    assert_eq!(
-        merged.lineage[0].kind,
-        metapb::DescriptorLineageKind::MergeSource as i32
-    );
-    assert!(merge_source_already_absorbed(&merged, 2));
-    assert!(!merge_source_already_absorbed(&target, 2));
-    assert_eq!(merge_region_ids(&target, &source), (1, 2));
-}
-
-#[test]
-fn build_merge_descriptor_rejects_non_right_sibling_source() {
-    let target = default_region_descriptor_with_range(
-        ServerIdentity {
-            region_id: 1,
-            store_id: 11,
-            peer_id: 101,
-            bootstrap: true,
-        },
-        Some(&RegionKeyRange {
-            start_key: b"m".to_vec(),
-            end_key: b"z".to_vec(),
-        }),
-    );
-    let source = default_region_descriptor_with_range(
-        ServerIdentity {
-            region_id: 2,
-            store_id: 11,
-            peer_id: 102,
-            bootstrap: true,
-        },
-        Some(&RegionKeyRange {
-            start_key: b"a".to_vec(),
-            end_key: b"m".to_vec(),
-        }),
-    );
-
-    let err = build_merge_descriptor(&target, &source).unwrap_err();
-
-    assert_eq!(err.code(), tonic::Code::Unimplemented);
-}
-
-#[test]
-fn merge_store_coverage_accepts_matching_store_sets() {
-    let mut target = default_region_descriptor(ServerIdentity {
-        region_id: 7,
-        store_id: 11,
-        peer_id: 101,
-        bootstrap: true,
-    });
-    target.peers.push(metapb::RegionPeer {
-        store_id: 12,
-        peer_id: 102,
-    });
-    let mut source = default_region_descriptor(ServerIdentity {
-        region_id: 8,
-        store_id: 11,
-        peer_id: 201,
-        bootstrap: true,
-    });
-    source.peers.push(metapb::RegionPeer {
-        store_id: 12,
-        peer_id: 202,
-    });
-
-    ensure_merge_store_coverage(&target, &source).unwrap();
-}
-
-#[test]
-fn merge_store_coverage_rejects_mismatched_store_sets() {
-    let mut target = default_region_descriptor(ServerIdentity {
-        region_id: 7,
-        store_id: 11,
-        peer_id: 101,
-        bootstrap: true,
-    });
-    target.peers.push(metapb::RegionPeer {
-        store_id: 12,
-        peer_id: 102,
-    });
-    let source = default_region_descriptor(ServerIdentity {
-        region_id: 8,
-        store_id: 11,
-        peer_id: 201,
-        bootstrap: true,
-    });
-
-    let err = ensure_merge_store_coverage(&target, &source).unwrap_err();
-
-    assert_eq!(err.code(), tonic::Code::Unimplemented);
-    assert!(err.message().contains("must cover the same store set"));
-}
-
-#[test]
-fn merged_source_region_ids_are_scoped_to_local_target_peers() {
-    let mut merged = default_region_descriptor(ServerIdentity {
-        region_id: 7,
-        store_id: 11,
-        peer_id: 101,
-        bootstrap: true,
-    });
-    merged.peers.push(metapb::RegionPeer {
-        store_id: 12,
-        peer_id: 102,
-    });
-    merged.lineage.push(metapb::DescriptorLineageRef {
-        region_id: 8,
-        kind: metapb::DescriptorLineageKind::MergeSource as i32,
-        ..Default::default()
-    });
-    let source = default_region_descriptor(ServerIdentity {
-        region_id: 8,
-        store_id: 12,
-        peer_id: 202,
-        bootstrap: true,
-    });
-
-    let local = merged_source_region_ids_for_store(&[merged, source], 12);
-    let unrelated = merged_source_region_ids_for_store(&[], 13);
-
-    assert!(local.contains(&8));
-    assert!(unrelated.is_empty());
-}
-
-#[test]
 fn descriptor_membership_nodes_use_local_addr_and_configured_remote_endpoints() {
     let mut descriptor = default_region_descriptor(ServerIdentity {
         region_id: 7,
@@ -1572,53 +1284,6 @@ fn recover_holt_hosted_identities_marks_multi_peer_descriptor_non_bootstrap() {
 }
 
 #[test]
-fn recover_holt_hosted_identities_skips_merged_source_descriptor() {
-    let store = HoltMetadataStore::open_memory().unwrap();
-    let mut merged = default_region_descriptor(ServerIdentity {
-        region_id: 1,
-        store_id: 7,
-        peer_id: 10,
-        bootstrap: true,
-    });
-    merged.lineage.push(metapb::DescriptorLineageRef {
-        region_id: 2,
-        kind: metapb::DescriptorLineageKind::MergeSource as i32,
-        ..Default::default()
-    });
-    store.put_region_descriptor(&merged).unwrap();
-    store
-        .put_region_descriptor(&metapb::RegionDescriptor {
-            region_id: 2,
-            start_key: b"m".to_vec(),
-            peers: vec![metapb::RegionPeer {
-                store_id: 7,
-                peer_id: 20,
-            }],
-            ..Default::default()
-        })
-        .unwrap();
-
-    let identities = recover_holt_hosted_identities(
-        &store,
-        vec![ServerIdentity {
-            region_id: 1,
-            store_id: 7,
-            peer_id: 10,
-            bootstrap: true,
-        }],
-    )
-    .unwrap();
-
-    assert_eq!(
-        identities
-            .iter()
-            .map(|identity| identity.region_id)
-            .collect::<Vec<_>>(),
-        vec![1]
-    );
-}
-
-#[test]
 fn recovered_descriptor_membership_init_only_runs_on_first_local_peer() {
     let descriptor = metapb::RegionDescriptor {
         region_id: 2,
@@ -1671,95 +1336,6 @@ fn recovered_descriptor_membership_init_only_runs_on_first_local_peer() {
     )
     .unwrap();
     assert!(second.is_none());
-}
-
-#[tokio::test]
-async fn split_child_multi_peer_bootstrap_does_not_block_on_immediate_quorum() {
-    let dir = tempfile::tempdir().unwrap();
-    let metadata_store = HoltMetadataStore::open_memory().unwrap();
-    let peer_endpoints = PeerEndpointCatalog::require_configured();
-    peer_endpoints
-        .insert_peer(202, "http://127.0.0.1:30202")
-        .unwrap();
-    let metadata_services = MultiRegionMetadataPlaneService::new([]).unwrap();
-    let admin_services = MultiRegionRaftAdminService::new([]).unwrap();
-    let hosted_regions = HostedRegionRegistry::new([]).unwrap();
-    let controller = HoltRangeController {
-        store_id: 11,
-        advertised_addr: "127.0.0.1:30101".to_owned(),
-        persistent_root: dir.path().to_path_buf(),
-        coordinator: None,
-        metadata_store: metadata_store.clone(),
-        transport: nokv_raftnode::TonicRaftTransportRegistry::default(),
-        metadata_services,
-        admin_services,
-        hosted_regions: hosted_regions.clone(),
-        peer_endpoints: peer_endpoints.clone(),
-        topology_publisher: Arc::new(EmptyTopologyPublisher),
-    };
-    let identity = ServerIdentity {
-        region_id: 8,
-        store_id: 11,
-        peer_id: 101,
-        bootstrap: false,
-    };
-    let mut descriptor = default_region_descriptor_with_range(
-        identity,
-        Some(&RegionKeyRange {
-            start_key: b"m".to_vec(),
-            end_key: Vec::new(),
-        }),
-    );
-    descriptor.peers.push(metapb::RegionPeer {
-        store_id: 12,
-        peer_id: 202,
-    });
-    let members = controller
-        .child_membership_init(&descriptor, &descriptor.peers[0], true)
-        .unwrap()
-        .unwrap();
-
-    let result = tokio::time::timeout(
-        Duration::from_millis(500),
-        controller.open_split_child_region(identity, descriptor.clone(), Some(members)),
-    )
-    .await;
-
-    assert!(
-        result.is_ok(),
-        "multi-peer child bootstrap should not wait for quorum election"
-    );
-    result.unwrap().unwrap();
-    assert!(hosted_regions.get(8).unwrap().is_some());
-    assert_eq!(
-        metadata_store
-            .get_region_descriptor(8)
-            .unwrap()
-            .unwrap()
-            .peers
-            .len(),
-        2
-    );
-}
-
-#[test]
-fn merge_root_event_carries_merged_descriptor() {
-    let merged = default_region_descriptor(ServerIdentity {
-        region_id: 1,
-        store_id: 11,
-        peer_id: 101,
-        bootstrap: true,
-    });
-
-    let event = merge_root_event(metapb::RootEventKind::RegionMerged, 1, 2, &merged);
-
-    assert_eq!(event.kind, metapb::RootEventKind::RegionMerged as i32);
-    let Some(metapb::root_event::Payload::RangeMerge(merge)) = event.payload else {
-        panic!("merge event should carry a range merge payload");
-    };
-    assert_eq!(merge.left_region_id, 1);
-    assert_eq!(merge.right_region_id, 2);
-    assert_eq!(merge.merged.unwrap().region_id, 1);
 }
 
 #[test]

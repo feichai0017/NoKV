@@ -10,7 +10,6 @@ import (
 	"time"
 
 	rootevent "github.com/feichai0017/NoKV/meta/root/event"
-	"github.com/feichai0017/NoKV/meta/topology"
 )
 
 // StoreStats captures minimal store-level heartbeat information.
@@ -51,9 +50,6 @@ type Operation struct {
 	Region         uint64
 	Source         uint64
 	Target         uint64
-	SplitKey       []byte
-	SplitChild     topology.Descriptor
-	SourceRegion   uint64
 	RetentionFloor uint64
 }
 
@@ -63,8 +59,6 @@ type OperationType uint8
 const (
 	OperationNone OperationType = iota
 	OperationLeaderTransfer
-	OperationSplitRegion
-	OperationMergeRegion
 	OperationPruneMetadataVersions
 )
 
@@ -72,10 +66,6 @@ func (t OperationType) String() string {
 	switch t {
 	case OperationLeaderTransfer:
 		return "leader-transfer"
-	case OperationSplitRegion:
-		return "split-region"
-	case OperationMergeRegion:
-		return "merge-region"
 	case OperationPruneMetadataVersions:
 		return "prune-metadata-versions"
 	default:

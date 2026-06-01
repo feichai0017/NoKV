@@ -37,12 +37,11 @@ func TestExecutorSnapshotSubtreeTokenDrivesReadVersion(t *testing.T) {
 	require.Equal(t, []uint64{token.ReadVersion}, runner.batchVersions)
 }
 
-func TestExecutorSnapshotSubtreeFlushesVisibleAuthorityBeforeToken(t *testing.T) {
+func TestExecutorSnapshotSubtreeFlushesVisibleBeforeToken(t *testing.T) {
 	runner := newFakeRunner()
-	flusher := &fakeVisibleAuthorityFlusher{}
+	flusher := &fakeVisibleFlusher{}
 	executor, err := newTestExecutor(runner,
 		WithVisibleCommitter(flusher),
-		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 	)
 	require.NoError(t, err)
 
@@ -53,10 +52,6 @@ func TestExecutorSnapshotSubtreeFlushesVisibleAuthorityBeforeToken(t *testing.T)
 	require.NoError(t, err)
 	require.Equal(t, uint64(1), token.ReadVersion)
 	require.Equal(t, 1, flusher.flushCalls)
-	require.Len(t, flusher.flushScopes, 1)
-	require.Equal(t, model.MountID("vol"), flusher.flushScopes[0].Mount)
-	require.Equal(t, model.MountKeyID(1), flusher.flushScopes[0].MountKeyID)
-	require.Equal(t, []model.InodeID{7}, flusher.flushScopes[0].Parents)
 }
 
 func TestExecutorSnapshotSubtreeUsesVisibleCaptureWhenAvailable(t *testing.T) {
@@ -65,7 +60,6 @@ func TestExecutorSnapshotSubtreeUsesVisibleCaptureWhenAvailable(t *testing.T) {
 	capturer := &fakeVisibleSnapshotCapturer{capture: true, segmentRefs: []model.SnapshotEvidenceRef{ref}}
 	executor, err := newTestExecutor(runner,
 		WithVisibleCommitter(capturer),
-		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 	)
 	require.NoError(t, err)
 

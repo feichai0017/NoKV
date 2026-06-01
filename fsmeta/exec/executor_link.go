@@ -17,7 +17,7 @@ func (e *Executor) tryVisibleLink(ctx context.Context, program compile.LinkProgr
 	compiled := program.Compiled
 	delta := compiled.Delta
 	plan := delta.Plan
-	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
 	view := e.newVisibleReadView(ctx)
@@ -115,9 +115,6 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 		return err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return err
-	}
 	plan := delta.Plan
 	if committed, err := e.tryVisibleLink(ctx, program, mount, req); committed || err != nil {
 		if err != nil {

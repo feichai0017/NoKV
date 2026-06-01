@@ -185,46 +185,6 @@ func (s *Service) ListQuotaFences(ctx context.Context, _ *coordpb.ListQuotaFence
 	return &coordpb.ListQuotaFencesResponse{Fences: out}, nil
 }
 
-func (s *Service) ListVisibleAuthorityGrants(ctx context.Context, _ *coordpb.ListVisibleAuthorityGrantsRequest) (*coordpb.ListVisibleAuthorityGrantsResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, statusContext(err)
-	}
-	if s == nil || s.storage == nil {
-		return &coordpb.ListVisibleAuthorityGrantsResponse{}, nil
-	}
-	snapshot, err := s.storage.Load()
-	if err != nil {
-		return nil, statusInternalf("load rooted snapshot: %v", err)
-	}
-	out := make([]*metapb.RootVisibleAuthorityGrant, 0, len(snapshot.ActiveVisibleGrants))
-	for _, grant := range snapshot.ActiveVisibleGrants {
-		if pbGrant := metawire.RootVisibleAuthorityGrantToProto(grant); pbGrant != nil {
-			out = append(out, pbGrant)
-		}
-	}
-	return &coordpb.ListVisibleAuthorityGrantsResponse{Grants: out}, nil
-}
-
-func (s *Service) ListVisibleAuthoritySeals(ctx context.Context, _ *coordpb.ListVisibleAuthoritySealsRequest) (*coordpb.ListVisibleAuthoritySealsResponse, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, statusContext(err)
-	}
-	if s == nil || s.storage == nil {
-		return &coordpb.ListVisibleAuthoritySealsResponse{}, nil
-	}
-	snapshot, err := s.storage.Load()
-	if err != nil {
-		return nil, statusInternalf("load rooted snapshot: %v", err)
-	}
-	out := make([]*metapb.RootVisibleAuthoritySeal, 0, len(snapshot.VisibleAuthoritySeals))
-	for _, seal := range snapshot.VisibleAuthoritySeals {
-		if pbSeal := metawire.RootVisibleAuthoritySealToProto(seal); pbSeal != nil {
-			out = append(out, pbSeal)
-		}
-	}
-	return &coordpb.ListVisibleAuthoritySealsResponse{Seals: out}, nil
-}
-
 func (s *Service) WatchRootEvents(req *coordpb.WatchRootEventsRequest, stream coordpb.Coordinator_WatchRootEventsServer) error {
 	if stream == nil {
 		return statusInvalidArgument("watch root events stream is nil")
@@ -502,13 +462,12 @@ func (s *Service) assessRootEventLifecycle(event rootevent.Event) (rootstate.Tra
 		return rootstate.TransitionAssessment{}, rootstate.Snapshot{}, false, fmt.Errorf("load rooted snapshot: %w", err)
 	}
 	rooted := rootstate.Snapshot{
-		Stores:              snapshot.Stores,
-		Mounts:              snapshot.Mounts,
-		Subtrees:            snapshot.Subtrees,
-		Quotas:              snapshot.Quotas,
-		Descriptors:         snapshot.Descriptors,
-		PendingPeerChanges:  snapshot.PendingPeerChanges,
-		PendingRangeChanges: snapshot.PendingRangeChanges,
+		Stores:             snapshot.Stores,
+		Mounts:             snapshot.Mounts,
+		Subtrees:           snapshot.Subtrees,
+		Quotas:             snapshot.Quotas,
+		Descriptors:        snapshot.Descriptors,
+		PendingPeerChanges: snapshot.PendingPeerChanges,
 	}
 	assessment := rootstate.AssessTransition(rooted, event)
 	_, err = rootstate.EvaluateRootEventLifecycle(rooted, event)

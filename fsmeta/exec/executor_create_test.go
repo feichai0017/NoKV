@@ -16,42 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestExecutorCreateAdmitsVisibleAuthority(t *testing.T) {
-	runner := newFakeRunner()
-	admitter := &fakeVisibleAdmitter{owned: true}
-	inode := testInodeForParentBucket(t, model.RootInode)
-	executor, err := newTestExecutor(
-		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleAuthorityAdmitter(admitter),
-	)
-	require.NoError(t, err)
-
-	_, err = executor.Create(context.Background(), model.CreateRequest{
-		Mount:  "vol",
-		Parent: model.RootInode,
-		Name:   "file",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
-	})
-	require.NoError(t, err)
-
-	require.Equal(t, 1, admitter.calls)
-	require.Len(t, admitter.scopes, 1)
-	require.Equal(t, model.MountID("vol"), admitter.scopes[0].Mount)
-	require.Equal(t, model.MountKeyID(1), admitter.scopes[0].MountKeyID)
-	require.Equal(t, []model.InodeID{model.RootInode}, admitter.scopes[0].Parents)
-	require.Equal(t, []model.InodeID{inode}, admitter.scopes[0].Inodes)
-	require.Len(t, runner.mutations, 1)
-
-	stats := executor.Stats()
-	requireVisibleStatBool(t, stats, "enabled", true)
-	requireVisibleStatUint(t, stats, "eligible_total", 1)
-	requireVisibleStatUint(t, stats, "acquire_total", 1)
-	requireVisibleStatUint(t, stats, "owned_total", 1)
-	requireVisibleStatUint(t, stats, "held_total", 0)
-	requireVisibleStatUint(t, stats, "slow_total", 0)
-}
-
 func TestExecutorCreateVisibleCommitBypassesRaftCommit(t *testing.T) {
 	runner := newFakeRunner()
 	committer := &fakeVisibleCommitter{}
@@ -59,7 +23,6 @@ func TestExecutorCreateVisibleCommitBypassesRaftCommit(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -87,7 +50,6 @@ func TestExecutorCreateVisibleCommitBypassesRaftCommit(t *testing.T) {
 	requireVisibleCommitStatUint(t, stats, "attempt_total", 1)
 	requireVisibleCommitStatUint(t, stats, "success_total", 1)
 	requireVisibleCommitStatUint(t, stats, "error_total", 0)
-	requireVisibleCommitStatUint(t, stats, "skip_no_authority_total", 0)
 }
 
 func TestExecutorCreateVisibleCommitRejectsExistingDentry(t *testing.T) {
@@ -98,7 +60,6 @@ func TestExecutorCreateVisibleCommitRejectsExistingDentry(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -126,7 +87,6 @@ func TestExecutorCreateVisibleCommitErrorDoesNotFallback(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -147,7 +107,7 @@ func TestExecutorCreateVisibleCommitErrorDoesNotFallback(t *testing.T) {
 	requireVisibleCommitStatUint(t, stats, "error_total", 1)
 }
 
-func TestExecutorCreateVisibleCommitRequiresAuthorityAdmission(t *testing.T) {
+func TestExecutorCreateUsesVisibleCommitWhenConfigured(t *testing.T) {
 	runner := newFakeRunner()
 	committer := &fakeVisibleCommitter{}
 	executor, err := newTestExecutor(
@@ -164,12 +124,12 @@ func TestExecutorCreateVisibleCommitRequiresAuthorityAdmission(t *testing.T) {
 		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
 	})
 	require.NoError(t, err)
-	require.Zero(t, committer.calls)
-	require.Len(t, runner.mutations, 1)
+	require.Equal(t, 1, committer.calls)
+	require.Empty(t, runner.mutations)
 
 	stats := executor.Stats()
-	requireVisibleCommitStatUint(t, stats, "attempt_total", 0)
-	requireVisibleCommitStatUint(t, stats, "skip_no_authority_total", 0)
+	requireVisibleCommitStatUint(t, stats, "attempt_total", 1)
+	requireVisibleCommitStatUint(t, stats, "success_total", 1)
 }
 
 func TestExecutorCreateVisibleCommitSkipsSharedQuota(t *testing.T) {
@@ -183,7 +143,6 @@ func TestExecutorCreateVisibleCommitSkipsSharedQuota(t *testing.T) {
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
 		WithQuotaResolver(quota),
-		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -216,7 +175,6 @@ func TestExecutorCreateVisibleCommitAllowsQuotaResolverWithoutFence(t *testing.T
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
 		WithQuotaResolver(quota),
-		WithVisibleAuthorityAdmitter(&fakeVisibleAdmitter{owned: true}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -247,7 +205,6 @@ func TestExecutorCreateVisibleCommitRejectsOverlayDuplicate(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{firstInode, secondInode}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -286,7 +243,6 @@ func TestExecutorCreateVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{dirInode, childInode, nextChildInode}}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	require.NoError(t, err)
@@ -323,63 +279,6 @@ func TestExecutorCreateVisibleCommitUsesEmptyDirectoryFact(t *testing.T) {
 	require.Equal(t, getsAfterDir, runner.getCalls, "base-empty directory coverage should avoid later child predicate reads")
 	require.Empty(t, runner.mutations)
 	require.Equal(t, uint64(3), committer.Stats()["commit_total"])
-}
-
-func TestExecutorCreateFallsBackWhenVisibleAuthorityHeldElsewhere(t *testing.T) {
-	runner := newFakeRunner()
-	admitter := &fakeVisibleAdmitter{owned: false}
-	inode := testInodeForParentBucket(t, model.RootInode)
-	executor, err := newTestExecutor(
-		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{inode}}),
-		WithVisibleAuthorityAdmitter(admitter),
-	)
-	require.NoError(t, err)
-
-	_, err = executor.Create(context.Background(), model.CreateRequest{
-		Mount:  "vol",
-		Parent: model.RootInode,
-		Name:   "file",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
-	})
-	require.NoError(t, err)
-	require.Equal(t, 1, admitter.calls)
-	require.NotEmpty(t, runner.mutations)
-
-	stats := executor.Stats()
-	requireVisibleStatUint(t, stats, "eligible_total", 1)
-	requireVisibleStatUint(t, stats, "acquire_total", 1)
-	requireVisibleStatUint(t, stats, "owned_total", 0)
-	requireVisibleStatUint(t, stats, "held_total", 1)
-}
-
-func TestExecutorCreateWithSharedQuotaSkipsVisibleAuthorityAdmission(t *testing.T) {
-	runner := newFakeRunner()
-	admitter := &fakeVisibleAdmitter{owned: true}
-	executor, err := newTestExecutor(
-		runner,
-		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
-		WithQuotaResolver(&fakeQuotaResolver{}),
-		WithVisibleAuthorityAdmitter(admitter),
-	)
-	require.NoError(t, err)
-
-	_, err = executor.Create(context.Background(), model.CreateRequest{
-		Mount:  "vol",
-		Parent: model.RootInode,
-		Name:   "file",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile, Size: 4096},
-	})
-	require.NoError(t, err)
-	require.Zero(t, admitter.calls)
-	require.Len(t, runner.mutations, 1)
-
-	stats := executor.Stats()
-	requireVisibleStatUint(t, stats, "eligible_total", 0)
-	requireVisibleStatUint(t, stats, "acquire_total", 0)
-	requireVisibleStatUint(t, stats, "owned_total", 0)
-	requireVisibleStatUint(t, stats, "slow_total", 1)
-	requireVisibleSlowReasonStatUint(t, stats, compile.SlowReasonSharedQuota, 1)
 }
 
 func TestExecutorCreateRequiresInodeAllocator(t *testing.T) {
@@ -633,7 +532,6 @@ func BenchmarkExecutorCreateVisibleCommit(b *testing.B) {
 	executor, err := newTestExecutor(
 		newFakeRunner(),
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(noopVisibleCommitter{}),
 	)
 	if err != nil {
@@ -656,7 +554,6 @@ func BenchmarkExecutorCheckpointStormVisibleSegment100(b *testing.B) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	if err != nil {
@@ -671,7 +568,6 @@ func BenchmarkExecutorCheckpointStormVisibleCommit100(b *testing.B) {
 	executor, err := newTestExecutor(
 		runner,
 		WithInodeAllocator(&fakeInodeAllocator{next: 22}),
-		WithVisibleAuthorityAdmitter(ownedVisibleAdmitter{}),
 		WithVisibleCommitter(committer),
 	)
 	if err != nil {

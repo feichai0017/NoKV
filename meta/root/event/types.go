@@ -22,12 +22,6 @@ const (
 	KindRegionBootstrap
 	KindRegionDescriptorPublished
 	KindRegionTombstoned
-	KindRegionSplitPlanned
-	KindRegionSplitCommitted
-	KindRegionSplitCancelled
-	KindRegionMergePlanned
-	KindRegionMerged
-	KindRegionMergeCancelled
 	KindPeerAdditionPlanned
 	KindPeerRemovalPlanned
 	KindPeerAdded
@@ -46,9 +40,6 @@ const (
 	KindGrantSealed
 	KindGrantRetired
 	KindGrantInherited
-	KindVisibleAuthorityGranted
-	KindVisibleAuthoritySealed
-	KindVisibleAuthorityRetired
 )
 
 // StoreMembership describes one store membership change carried by a root event.
@@ -130,24 +121,6 @@ type RegionRemoval struct {
 	RegionID uint64
 }
 
-// RangeSplit describes one split intent or committed split transition.
-type RangeSplit struct {
-	ParentRegionID uint64
-	SplitKey       []byte
-	Left           topology.Descriptor
-	Right          topology.Descriptor
-	BaseParent     topology.Descriptor
-}
-
-// RangeMerge describes one merge transition.
-type RangeMerge struct {
-	LeftRegionID  uint64
-	RightRegionID uint64
-	Merged        topology.Descriptor
-	BaseLeft      topology.Descriptor
-	BaseRight     topology.Descriptor
-}
-
 // PeerChange describes one region membership mutation.
 type PeerChange struct {
 	RegionID uint64
@@ -166,16 +139,12 @@ type Event struct {
 	Grant            *rootproto.AuthorityGrant
 	GrantRetirement  *rootproto.GrantRetirement
 	GrantInheritance *rootproto.GrantInheritance
-	VisibleGrant     *rootproto.VisibleAuthorityGrant
-	VisibleSeal      *rootproto.VisibleAuthoritySeal
 	SnapshotEpoch    *SnapshotEpoch
 	Mount            *Mount
 	SubtreeAuthority *SubtreeAuthority
 	QuotaFence       *QuotaFence
 	RegionDescriptor *RegionDescriptorRecord
 	RegionRemoval    *RegionRemoval
-	RangeSplit       *RangeSplit
-	RangeMerge       *RangeMerge
 	PeerChange       *PeerChange
 }
 
@@ -197,21 +166,6 @@ func GrantRetired(retirement rootproto.GrantRetirement) Event {
 
 func GrantInherited(inheritance rootproto.GrantInheritance) Event {
 	return Event{Kind: KindGrantInherited, GrantInheritance: &inheritance}
-}
-
-func VisibleAuthorityGranted(grant rootproto.VisibleAuthorityGrant) Event {
-	grant = rootproto.CloneVisibleAuthorityGrant(grant)
-	return Event{Kind: KindVisibleAuthorityGranted, VisibleGrant: &grant}
-}
-
-func VisibleAuthorityRetired(grant rootproto.VisibleAuthorityGrant) Event {
-	grant = rootproto.CloneVisibleAuthorityGrant(grant)
-	return Event{Kind: KindVisibleAuthorityRetired, VisibleGrant: &grant}
-}
-
-func VisibleAuthoritySealed(seal rootproto.VisibleAuthoritySeal) Event {
-	seal = rootproto.CloneVisibleAuthoritySeal(seal)
-	return Event{Kind: KindVisibleAuthoritySealed, VisibleSeal: &seal}
 }
 
 func MountRegistered(mountID string, mountKeyID, rootInode uint64, schemaVersion uint32) Event {
@@ -354,78 +308,6 @@ func RegionDescriptorPublished(desc topology.Descriptor) Event {
 
 func RegionTombstoned(regionID uint64) Event {
 	return Event{Kind: KindRegionTombstoned, RegionRemoval: &RegionRemoval{RegionID: regionID}}
-}
-
-func RegionSplitPlanned(parentRegionID uint64, splitKey []byte, left, right topology.Descriptor) Event {
-	return Event{
-		Kind: KindRegionSplitPlanned,
-		RangeSplit: &RangeSplit{
-			ParentRegionID: parentRegionID,
-			SplitKey:       append([]byte(nil), splitKey...),
-			Left:           left,
-			Right:          right,
-		},
-	}
-}
-
-func RegionSplitCommitted(parentRegionID uint64, splitKey []byte, left, right topology.Descriptor) Event {
-	return Event{
-		Kind: KindRegionSplitCommitted,
-		RangeSplit: &RangeSplit{
-			ParentRegionID: parentRegionID,
-			SplitKey:       append([]byte(nil), splitKey...),
-			Left:           left,
-			Right:          right,
-		},
-	}
-}
-
-func RegionSplitCancelled(parentRegionID uint64, splitKey []byte, left, right, base topology.Descriptor) Event {
-	return Event{
-		Kind: KindRegionSplitCancelled,
-		RangeSplit: &RangeSplit{
-			ParentRegionID: parentRegionID,
-			SplitKey:       append([]byte(nil), splitKey...),
-			Left:           left,
-			Right:          right,
-			BaseParent:     base,
-		},
-	}
-}
-
-func RegionMergePlanned(leftRegionID, rightRegionID uint64, merged topology.Descriptor) Event {
-	return Event{
-		Kind: KindRegionMergePlanned,
-		RangeMerge: &RangeMerge{
-			LeftRegionID:  leftRegionID,
-			RightRegionID: rightRegionID,
-			Merged:        merged,
-		},
-	}
-}
-
-func RegionMerged(leftRegionID, rightRegionID uint64, merged topology.Descriptor) Event {
-	return Event{
-		Kind: KindRegionMerged,
-		RangeMerge: &RangeMerge{
-			LeftRegionID:  leftRegionID,
-			RightRegionID: rightRegionID,
-			Merged:        merged,
-		},
-	}
-}
-
-func RegionMergeCancelled(leftRegionID, rightRegionID uint64, merged, baseLeft, baseRight topology.Descriptor) Event {
-	return Event{
-		Kind: KindRegionMergeCancelled,
-		RangeMerge: &RangeMerge{
-			LeftRegionID:  leftRegionID,
-			RightRegionID: rightRegionID,
-			Merged:        merged,
-			BaseLeft:      baseLeft,
-			BaseRight:     baseRight,
-		},
-	}
 }
 
 func PeerAdded(regionID, storeID, peerID uint64, region topology.Descriptor) Event {

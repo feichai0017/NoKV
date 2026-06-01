@@ -17,7 +17,7 @@ import (
 func (e *Executor) tryVisibleRename(ctx context.Context, compiled compile.CompiledOp, move renameMove) (bool, error) {
 	delta := compiled.Delta
 	plan := delta.Plan
-	if e == nil || e.visibleCommitter == nil || e.visibleAuthority == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
+	if e == nil || e.visibleCommitter == nil || delta.Eligibility != compile.EligibilityVisibleCommit {
 		return false, nil
 	}
 	view := e.newVisibleReadView(ctx)
@@ -159,9 +159,6 @@ func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 	if err := e.requireSameAuthority(ctx, req.Mount, req.FromParent, req.ToParent); err != nil {
 		return err
 	}
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return err
-	}
 	plan := delta.Plan
 	move := renameMoveFromRename(req, mount)
 	var movedSize uint64
@@ -207,9 +204,6 @@ func (e *Executor) RenameReplace(ctx context.Context, req model.RenameReplaceReq
 	if err := e.requireSameAuthority(ctx, req.Mount, req.FromParent, req.ToParent); err != nil {
 		return model.RenameReplaceResult{}, err
 	}
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return model.RenameReplaceResult{}, err
-	}
 	plan := delta.Plan
 	move := renameMoveFromRenameReplace(req, mount)
 	var result model.RenameReplaceResult
@@ -243,9 +237,6 @@ func (e *Executor) RenameSubtree(ctx context.Context, req model.RenameSubtreeReq
 		return err
 	}
 	delta := program.Compiled.Delta
-	if err := e.admitVisibleAuthority(ctx, delta); err != nil {
-		return err
-	}
 	plan := delta.Plan
 	authorityRoot := mountRecord.RootInode
 	if e.subtrees != nil && authorityRoot == 0 {

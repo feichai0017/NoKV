@@ -59,15 +59,5 @@
       "docker_listen_addr": "0.0.0.0:20160",
       "docker_addr": "nokv-store-3:20160"
     }
-  ],
-  "fsmeta_region_bootstrap": {
-    "mounts": [
-      {"mount_id": "default", "mount_key_id": 1},
-      {"mount_id": "fsmeta-bench", "mount_key_id": 2}
-    ],
-    "bucket_count": 16,
-    "region_id_base": 1000,
-    "peer_id_base": 100000,
-    "leader_store_ids": [1, 2, 3]
-  }
+  ]
 }

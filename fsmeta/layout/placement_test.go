@@ -56,17 +56,3 @@ func TestPlanBucketPlacementRejectsInvalidInput(t *testing.T) {
 	_, err = PlanBucketPlacement([]model.MountIdentity{testMount, testMount}, DefaultAffinityBucketCount)
 	require.ErrorIs(t, err, model.ErrInvalidRequest)
 }
-
-func TestBucketSplitBoundariesUseBucketEdges(t *testing.T) {
-	boundaries, err := BucketSplitBoundaries([]model.MountIdentity{testMount}, 4)
-	require.NoError(t, err)
-	require.Len(t, boundaries, 5)
-
-	bucket0, _, err := EncodeBucketRange(testMount, 0)
-	require.NoError(t, err)
-	require.Equal(t, bucket0, boundaries[0])
-
-	_, bucket3End, err := EncodeBucketRange(testMount, 3)
-	require.NoError(t, err)
-	require.Equal(t, bucket3End, boundaries[4])
-}
