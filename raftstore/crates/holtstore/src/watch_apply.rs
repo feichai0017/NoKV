@@ -2,7 +2,7 @@ use holt::RangeEntry;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
 use prost::Message;
 
-use crate::trees::{watch_apply_event_key, watch_apply_region_prefix};
+use crate::trees::{watch_apply_event_key, watch_apply_region_prefix, watch_apply_retention_key};
 use crate::{HoltMetadataStore, Result};
 
 pub const DEFAULT_WATCH_APPLY_REPLAY_LIMIT: usize = 4096;
@@ -70,6 +70,36 @@ impl HoltMetadataStore {
         }
         Ok(out)
     }
+
+    pub fn watch_apply_retention_cursor(&self, region_id: u64) -> Result<Option<(u64, u64, u64)>> {
+        let Some(bytes) = self
+            .store
+            .region_meta()?
+            .get(&watch_apply_retention_key(region_id))?
+        else {
+            return Ok(None);
+        };
+        if bytes.len() != 24 {
+            return Ok(None);
+        }
+        let term = u64::from_be_bytes(bytes[0..8].try_into().expect("cursor term length"));
+        let index = u64::from_be_bytes(bytes[8..16].try_into().expect("cursor index length"));
+        let commit_version =
+            u64::from_be_bytes(bytes[16..24].try_into().expect("cursor version length"));
+        Ok(Some((term, index, commit_version)))
+    }
+}
+
+pub(crate) fn encode_watch_apply_retention_cursor(
+    term: u64,
+    index: u64,
+    commit_version: u64,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(24);
+    out.extend_from_slice(&term.to_be_bytes());
+    out.extend_from_slice(&index.to_be_bytes());
+    out.extend_from_slice(&commit_version.to_be_bytes());
+    out
 }
 
 fn apply_event_matches_prefix(event: &metadatapb::MetadataApplyWatchEvent, prefix: &[u8]) -> bool {

@@ -2,9 +2,14 @@ use std::collections::BTreeMap;
 
 use holt::RangeEntry;
 use nokv_metadata_state as metadata_state;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
+use prost::Message;
 
 use crate::store::to_backend_error;
-use crate::trees::{decode_history_key, HISTORY_TREE};
+use crate::trees::{
+    decode_history_key, watch_apply_retention_key, HISTORY_TREE, REGION_META_TREE, WATCH_APPLY_TREE,
+};
+use crate::watch_apply::encode_watch_apply_retention_cursor;
 use crate::HoltMetadataStore;
 
 impl HoltMetadataStore {
@@ -35,6 +40,11 @@ impl HoltMetadataStore {
                 .or_default()
                 .push((commit_version, key));
         }
+        // Keep one watch anchor per region so replay can distinguish a real
+        // retained frontier from an unpruned history that simply starts later.
+        let watch_prune = self
+            .watch_apply_prune_keys_locked(retention_floor)
+            .map_err(|err| metadata_state::Error::Backend(err.to_string()))?;
 
         let mut prune_keys = Vec::new();
         for versions in versions_by_key.values_mut() {
@@ -53,15 +63,112 @@ impl HoltMetadataStore {
         }
 
         result.pruned_versions = prune_keys.len() as u64;
-        if !prune_keys.is_empty() {
+        result.pruned_watch_events = watch_prune.keys.len() as u64;
+        if !prune_keys.is_empty() || !watch_prune.keys.is_empty() {
             self.atomic(|batch| {
                 for key in &prune_keys {
                     batch.delete(HISTORY_TREE, key);
+                }
+                for key in &watch_prune.keys {
+                    batch.delete(WATCH_APPLY_TREE, key);
+                }
+                for frontier in &watch_prune.frontiers {
+                    batch.put(
+                        REGION_META_TREE,
+                        &watch_apply_retention_key(frontier.region_id),
+                        &encode_watch_apply_retention_cursor(
+                            frontier.term,
+                            frontier.index,
+                            frontier.commit_version,
+                        ),
+                    );
                 }
             })?;
         }
         Ok(result)
     }
+
+    fn watch_apply_prune_keys_locked(
+        &self,
+        retention_floor: u64,
+    ) -> crate::Result<WatchApplyPrune> {
+        let mut events_by_region: BTreeMap<u64, Vec<WatchApplyRetentionCandidate>> =
+            BTreeMap::new();
+        for entry in self.store.watch_apply()?.range() {
+            let entry = entry?;
+            let RangeEntry::Key { key, value, .. } = entry else {
+                continue;
+            };
+            let event = metadatapb::MetadataApplyWatchEvent::decode(value.as_slice())?;
+            if event.region_id == 0
+                || event.commit_version == 0
+                || event.commit_version > retention_floor
+            {
+                continue;
+            }
+            events_by_region.entry(event.region_id).or_default().push(
+                WatchApplyRetentionCandidate {
+                    commit_version: event.commit_version,
+                    term: event.term,
+                    index: event.index,
+                    key,
+                },
+            );
+        }
+
+        let mut prune = WatchApplyPrune::default();
+        for (region_id, candidates) in events_by_region.iter_mut() {
+            candidates.sort_by_key(|candidate| {
+                (
+                    candidate.commit_version,
+                    candidate.term,
+                    candidate.index,
+                    candidate.key.clone(),
+                )
+            });
+            let Some(anchor) = candidates.last().cloned() else {
+                continue;
+            };
+            let mut deleted = false;
+            for candidate in candidates.iter() {
+                if candidate != &anchor {
+                    prune.keys.push(candidate.key.clone());
+                    deleted = true;
+                }
+            }
+            if deleted {
+                prune.frontiers.push(WatchApplyRetentionFrontier {
+                    region_id: *region_id,
+                    term: anchor.term,
+                    index: anchor.index,
+                    commit_version: anchor.commit_version,
+                });
+            }
+        }
+        Ok(prune)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct WatchApplyRetentionCandidate {
+    commit_version: u64,
+    term: u64,
+    index: u64,
+    key: Vec<u8>,
+}
+
+#[derive(Debug, Default)]
+struct WatchApplyPrune {
+    keys: Vec<Vec<u8>>,
+    frontiers: Vec<WatchApplyRetentionFrontier>,
+}
+
+#[derive(Clone, Debug)]
+struct WatchApplyRetentionFrontier {
+    region_id: u64,
+    term: u64,
+    index: u64,
+    commit_version: u64,
 }
 
 impl metadata_state::MetadataRetentionEngine for HoltMetadataStore {

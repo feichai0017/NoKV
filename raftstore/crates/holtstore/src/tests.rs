@@ -60,6 +60,53 @@ fn watch_apply_events_survive_reopen_and_replay_after_cursor() {
 }
 
 #[test]
+fn metadata_retention_prunes_watch_apply_history_with_region_anchor() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let event1 = metadatapb::MetadataApplyWatchEvent {
+        region_id: 7,
+        term: 2,
+        index: 10,
+        commit_version: 11,
+        keys: vec![b"artifact/a".to_vec()],
+        ..Default::default()
+    };
+    let event2 = metadatapb::MetadataApplyWatchEvent {
+        region_id: 7,
+        term: 2,
+        index: 11,
+        commit_version: 21,
+        keys: vec![b"artifact/b".to_vec()],
+        ..Default::default()
+    };
+    let event3 = metadatapb::MetadataApplyWatchEvent {
+        region_id: 7,
+        term: 2,
+        index: 12,
+        commit_version: 31,
+        keys: vec![b"artifact/c".to_vec()],
+        ..Default::default()
+    };
+    store.put_watch_apply_event(&event1).unwrap();
+    store.put_watch_apply_event(&event2).unwrap();
+    store.put_watch_apply_event(&event3).unwrap();
+
+    let pruned = store.prune_metadata_versions(25).unwrap();
+    assert_eq!(pruned.pruned_watch_events, 1);
+    assert_eq!(
+        store.first_watch_apply_event(7).unwrap().unwrap().index,
+        event2.index
+    );
+    assert_eq!(
+        store.watch_apply_retention_cursor(7).unwrap(),
+        Some((event2.term, event2.index, event2.commit_version))
+    );
+    let replay = store
+        .watch_apply_events_after(7, 2, event2.index, b"artifact/", 16)
+        .unwrap();
+    assert_eq!(replay, vec![event3]);
+}
+
+#[test]
 fn applies_cross_tree_atomic_batch() {
     let store = HoltStore::open_memory().unwrap();
     let applied = store

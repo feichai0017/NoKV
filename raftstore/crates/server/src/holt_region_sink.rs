@@ -55,6 +55,19 @@ impl RegionMetadataSink for HoltRegionMetadataSink {
         if first.is_none() {
             return Ok(None);
         }
+        let retention = self
+            .store
+            .watch_apply_retention_cursor(request.region_id)
+            .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))?;
+        if retention
+            .map(|(term, index, _)| cursor_before_retained_watch_frontier(request, term, index))
+            .unwrap_or(false)
+        {
+            return Ok(Some(ApplyWatchReplay {
+                events: Vec::new(),
+                expired: true,
+            }));
+        }
         let events = self
             .store
             .watch_apply_events_after(
@@ -80,6 +93,21 @@ impl RegionMetadataSink for HoltRegionMetadataSink {
             .and_then(|_| self.store.checkpoint())
             .map_err(|err| nokv_metadata_state::Error::Backend(err.to_string()))
     }
+}
+
+fn cursor_before_retained_watch_frontier(
+    request: &ApplyWatchReplayRequest,
+    frontier_term: u64,
+    frontier_index: u64,
+) -> bool {
+    if request.term == 0 && request.index == 0 {
+        return false;
+    }
+    if request.term == 0 {
+        return request.index < frontier_index;
+    }
+    request.term < frontier_term
+        || (request.term == frontier_term && request.index < frontier_index)
 }
 
 impl RegionDescriptorSink for HoltRegionMetadataSink {

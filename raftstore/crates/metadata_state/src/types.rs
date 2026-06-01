@@ -74,6 +74,7 @@ pub struct MetadataApplyResult {
 pub struct MetadataRetentionResult {
     pub retention_floor: u64,
     pub pruned_versions: u64,
+    pub pruned_watch_events: u64,
     pub retained_anchor_versions: u64,
 }
 

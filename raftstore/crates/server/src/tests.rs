@@ -1540,6 +1540,55 @@ async fn watch_apply_replays_after_resume_cursor() {
 }
 
 #[test]
+fn holt_region_sink_marks_watch_cursor_before_retained_frontier_expired() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    for (index, commit_version, key) in [
+        (10, 11, b"prefix/a".as_slice()),
+        (11, 21, b"prefix/b".as_slice()),
+        (12, 31, b"prefix/c".as_slice()),
+    ] {
+        store
+            .put_watch_apply_event(&metadatapb::MetadataApplyWatchEvent {
+                region_id: 7,
+                term: 2,
+                index,
+                commit_version,
+                keys: vec![key.to_vec()],
+                ..Default::default()
+            })
+            .unwrap();
+    }
+    let pruned = store.prune_metadata_versions(25).unwrap();
+    assert_eq!(pruned.pruned_watch_events, 1);
+    let sink = HoltRegionMetadataSink::new(store);
+
+    let expired = sink
+        .replay_apply_watch(&ApplyWatchReplayRequest {
+            region_id: 7,
+            term: 2,
+            index: 9,
+            key_prefix: b"prefix/".to_vec(),
+        })
+        .unwrap()
+        .unwrap();
+    assert!(expired.expired);
+    assert!(expired.events.is_empty());
+
+    let replay = sink
+        .replay_apply_watch(&ApplyWatchReplayRequest {
+            region_id: 7,
+            term: 2,
+            index: 11,
+            key_prefix: b"prefix/".to_vec(),
+        })
+        .unwrap()
+        .unwrap();
+    assert!(!replay.expired);
+    assert_eq!(replay.events.len(), 1);
+    assert_eq!(replay.events[0].index, 12);
+}
+
+#[test]
 fn apply_watch_chunks_large_key_sets() {
     let keys = (0..(DEFAULT_APPLY_WATCH_MAX_KEYS_PER_MESSAGE + 7))
         .map(|idx| format!("prefix/{idx:04}").into_bytes())
