@@ -492,4 +492,5 @@ enum TransportCallError {
 }
 
 #[cfg(test)]
-mod tests;
+#[path = "test.rs"]
+mod test;

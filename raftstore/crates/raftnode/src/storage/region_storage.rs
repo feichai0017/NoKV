@@ -423,4 +423,5 @@ fn snapshot_id(last_log_id: Option<LogId<NodeId>>, payload: &[u8]) -> String {
 }
 
 #[cfg(test)]
-mod tests;
+#[path = "test.rs"]
+mod test;
