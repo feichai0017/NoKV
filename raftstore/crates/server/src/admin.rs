@@ -31,26 +31,20 @@ pub struct RaftAdminService<S = EmptyApplyStatus, D = EmptyRegionDescriptorSink>
 
 impl<S> RaftAdminService<S, EmptyRegionDescriptorSink> {
     pub fn new(status: S) -> Self {
-        Self::with_admission_and_execution(
+        RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
             status,
-            RegionAdmission::default(),
+            RegionAdmissionState::new(RegionAdmission::default()),
             ExecutionRuntime::default(),
+            PeerEndpointCatalog::default(),
+            EmptyRegionDescriptorSink,
         )
     }
 
     pub fn with_admission(status: S, admission: RegionAdmission) -> Self {
-        Self::with_admission_and_execution(status, admission, ExecutionRuntime::default())
-    }
-
-    pub(crate) fn with_admission_and_execution(
-        status: S,
-        admission: RegionAdmission,
-        execution: ExecutionRuntime,
-    ) -> Self {
         RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
             status,
             RegionAdmissionState::new(admission),
-            execution,
+            ExecutionRuntime::default(),
             PeerEndpointCatalog::default(),
             EmptyRegionDescriptorSink,
         )

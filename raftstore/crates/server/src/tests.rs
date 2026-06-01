@@ -2675,11 +2675,14 @@ async fn admin_execution_status_reports_metadata_admission() {
         RegionAdmissionState::new(admission.clone()),
         execution.clone(),
     );
-    let admin_service = RaftAdminService::with_admission_and_execution(
-        nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
-        admission.clone(),
-        execution,
-    );
+    let admin_service =
+        RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
+            nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
+            RegionAdmissionState::new(admission.clone()),
+            execution,
+            PeerEndpointCatalog::default(),
+            EmptyRegionDescriptorSink,
+        );
 
     let response = metadata_service
         .commit_metadata(Request::new(metadata_put_request(
@@ -2732,11 +2735,14 @@ async fn metadata_admission_rejects_unhosted_runtime() {
         RegionAdmissionState::new(admission.clone()),
         execution.clone(),
     );
-    let admin_service = RaftAdminService::with_admission_and_execution(
-        nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
-        admission.clone(),
-        execution,
-    );
+    let admin_service =
+        RaftAdminService::with_admission_state_execution_peer_endpoints_and_descriptor_sink(
+            nokv_raftnode::AppliedMetadataEngine::new(1, MemoryMetadataStore::new()),
+            RegionAdmissionState::new(admission.clone()),
+            execution,
+            PeerEndpointCatalog::default(),
+            EmptyRegionDescriptorSink,
+        );
 
     let response = metadata_service
         .commit_metadata(Request::new(metadata_put_request(
