@@ -10,6 +10,7 @@ import (
 	"time"
 
 	nokverrors "github.com/feichai0017/NoKV/errors"
+	"github.com/feichai0017/NoKV/fsmeta/backend"
 	"github.com/feichai0017/NoKV/fsmeta/model"
 	"github.com/stretchr/testify/require"
 )
@@ -323,4 +324,49 @@ func TestExecutorMetadataPredicateCommitRecordsEveryAttempt(t *testing.T) {
 	stats := executor.Stats()
 	requireMetadataPredicateStatUint(t, stats, model.OperationRename, "attempt_total", uint64(total))
 	requireMetadataPredicateStatUint(t, stats, model.OperationRename, "success_total", uint64(total))
+}
+
+func TestExecutorMetadataCommandPreservesExplicitFamilyAndRetention(t *testing.T) {
+	base := newFakeRunner()
+	runner := &fakePredicateRunner{fakeRunner: base}
+	executor, err := newTestExecutor(runner)
+	require.NoError(t, err)
+
+	primary := []byte("opaque-primary")
+	key := []byte("opaque-snapshot-key")
+	_, err = executor.commitMetadataCommandWithVersionAndWatch(
+		context.Background(),
+		backend.CommandKindSnapshotSubtree,
+		testMountIdentity,
+		primary,
+		[]*backend.Predicate{{
+			Family:        backend.MetadataFamilySnapshot,
+			Key:           key,
+			Kind:          backend.PredicateNotExists,
+			ReadVersion:   11,
+		}},
+		[]*backend.Mutation{{
+			Family:              backend.MetadataFamilySnapshot,
+			Op:                  backend.MutationPut,
+			Key:                 key,
+			Value:               []byte("new"),
+			RetentionPinVersion: 7,
+		}},
+		nil,
+		11,
+		12,
+		12,
+	)
+	require.NoError(t, err)
+	require.Len(t, runner.commands, 1)
+
+	command := runner.commands[0]
+	require.Equal(t, backend.MetadataFamilyUnspecified, command.PrimaryFamily)
+	require.Len(t, command.Predicates, 1)
+	require.Equal(t, backend.MetadataFamilySnapshot, command.Predicates[0].Family)
+	require.Len(t, command.Mutations, 1)
+	require.Equal(t, backend.MetadataFamilySnapshot, command.Mutations[0].Family)
+	require.Equal(t, uint64(7), command.Mutations[0].RetentionPinVersion)
+	require.Len(t, command.WatchRefs, 1)
+	require.Equal(t, backend.MetadataFamilySnapshot, command.WatchRefs[0].Family)
 }

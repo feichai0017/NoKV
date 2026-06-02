@@ -160,7 +160,7 @@ func metadataCommandWatchRefs(mutations []*backend.Mutation) []backend.KeyRef {
 		}
 		seen[key] = struct{}{}
 		refs = append(refs, backend.KeyRef{
-			Family: metadataFamilyForKey(mut.Key),
+			Family: metadataFamilyOrKey(mut.Family, mut.Key),
 			Key:    cloneBytes(mut.Key),
 		})
 	}
@@ -435,12 +435,13 @@ func cloneMutations(in []*backend.Mutation) []*backend.Mutation {
 			continue
 		}
 		out = append(out, &backend.Mutation{
-			Family:            metadataFamilyForKey(mut.Key),
-			Op:                mut.Op,
-			Key:               cloneBytes(mut.Key),
-			Value:             cloneBytes(mut.Value),
-			AssertionNotExist: mut.AssertionNotExist,
-			ExpiresAt:         mut.ExpiresAt,
+			Family:              metadataFamilyOrKey(mut.Family, mut.Key),
+			Op:                  mut.Op,
+			Key:                 cloneBytes(mut.Key),
+			Value:               cloneBytes(mut.Value),
+			AssertionNotExist:   mut.AssertionNotExist,
+			ExpiresAt:           mut.ExpiresAt,
+			RetentionPinVersion: mut.RetentionPinVersion,
 		})
 	}
 	return out
@@ -454,7 +455,7 @@ func cloneMetadataPredicates(in []*backend.Predicate) []*backend.Predicate {
 			continue
 		}
 		out = append(out, &backend.Predicate{
-			Family:        metadataFamilyForKey(pred.Key),
+			Family:        metadataFamilyOrKey(pred.Family, pred.Key),
 			Key:           cloneBytes(pred.Key),
 			Kind:          pred.Kind,
 			ReadVersion:   pred.ReadVersion,
@@ -462,6 +463,13 @@ func cloneMetadataPredicates(in []*backend.Predicate) []*backend.Predicate {
 		})
 	}
 	return out
+}
+
+func metadataFamilyOrKey(family backend.MetadataFamily, key []byte) backend.MetadataFamily {
+	if family != backend.MetadataFamilyUnspecified {
+		return family
+	}
+	return metadataFamilyForKey(key)
 }
 
 func metadataFamilyForKey(key []byte) backend.MetadataFamily {
