@@ -10,18 +10,15 @@ type OpSpec struct {
 	Name              string
 	FileName          string
 	ProgramType       string
-	ValuesType        string
 	RequestType       string
 	CompileName       string
 	PlanName          string
-	Materialize       string
 	OperationKind     string
 	Durability        string
 	PredicateCount    int
 	EffectCount       int
 	HasOptions        bool
 	Emitter           string
-	Materializer      string
 	Effects           []EffectSpec
 	Predicates        []PredicateSpec
 	Guards            []GuardSpec
@@ -53,8 +50,6 @@ type EffectSpec struct {
 	Name        string
 	Kind        string
 	Key         string
-	ValueName   string
-	ValueSource string
 }
 
 type GuardSpec struct {

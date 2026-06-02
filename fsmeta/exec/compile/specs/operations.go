@@ -9,11 +9,9 @@ var Create = specdsl.OpSpec{
 	Name:           "Create",
 	FileName:       "create.program.go",
 	ProgramType:    "CreateProgram",
-	ValuesType:     "CreateValues",
 	RequestType:    "model.CreateRequest",
 	CompileName:    "CompileCreateProgram",
 	PlanName:       "layout.PlanCreate",
-	Materialize:    "MaterializeCreate",
 	OperationKind:  "model.OperationCreate",
 	Durability:     "DurabilityVisibleOnly",
 	Eligibility:    "EligibilityVisibleCommit",
@@ -28,9 +26,9 @@ var Create = specdsl.OpSpec{
 		{Name: "inode_absent", Kind: "PredicateNotExists", Key: "mutate[2]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "parent_inode", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueName: "ParentInodeValue"},
-		{Name: "dentry", Kind: "EffectPut", Key: "mutate[1]", ValueName: "DentryValue"},
-		{Name: "inode", Kind: "EffectPut", Key: "mutate[2]", ValueName: "InodeValue"},
+		{Name: "parent_inode", Kind: "EffectDerivedPut", Key: "mutate[0]"},
+		{Name: "dentry", Kind: "EffectPut", Key: "mutate[1]"},
+		{Name: "inode", Kind: "EffectPut", Key: "mutate[2]"},
 	},
 	OptionalGuards: []specdsl.GuardSpec{
 		{Name: "quota_credit", Guard: "GuardQuotaCredit", Condition: "quota_escrow"},
@@ -59,7 +57,7 @@ var UpdateInode = specdsl.OpSpec{
 		{Name: "inode_observed", Kind: "PredicateObservedValue", Key: "read[1]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "inode", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueSource: "runtime"},
+		{Name: "inode", Kind: "EffectDerivedPut", Key: "mutate[0]"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "single_link_inode", Guard: "GuardSingleLinkInode"},
@@ -153,9 +151,9 @@ var Rename = specdsl.OpSpec{
 	},
 	Effects: []specdsl.EffectSpec{
 		{Name: "from_dentry", Kind: "EffectDelete", Key: "mutate[0]"},
-		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
-		{Name: "from_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[2]", ValueSource: "runtime"},
-		{Name: "to_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[3]", ValueSource: "runtime"},
+		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[1]"},
+		{Name: "from_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[2]"},
+		{Name: "to_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[3]"},
 	},
 }
 
@@ -182,9 +180,9 @@ var RenameReplace = specdsl.OpSpec{
 	},
 	Effects: []specdsl.EffectSpec{
 		{Name: "from_dentry", Kind: "EffectDelete", Key: "mutate[0]"},
-		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
-		{Name: "from_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[2]", ValueSource: "runtime"},
-		{Name: "to_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[3]", ValueSource: "runtime"},
+		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[1]"},
+		{Name: "from_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[2]"},
+		{Name: "to_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[3]"},
 	},
 }
 
@@ -213,9 +211,9 @@ var RenameSubtree = specdsl.OpSpec{
 	},
 	Effects: []specdsl.EffectSpec{
 		{Name: "from_dentry", Kind: "EffectDelete", Key: "mutate[0]"},
-		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
-		{Name: "from_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[2]", ValueSource: "runtime"},
-		{Name: "to_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[3]", ValueSource: "runtime"},
+		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[1]"},
+		{Name: "from_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[2]"},
+		{Name: "to_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[3]"},
 	},
 }
 
@@ -241,9 +239,9 @@ var Link = specdsl.OpSpec{
 		{Name: "to_parent_inode_observed", Kind: "PredicateObservedValue", Key: "read[2]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueSource: "runtime"},
-		{Name: "from_inode", Kind: "EffectDerivedPut", Key: "runtime", ValueSource: "runtime"},
-		{Name: "to_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
+		{Name: "to_dentry", Kind: "EffectDerivedPut", Key: "mutate[0]"},
+		{Name: "from_inode", Kind: "EffectDerivedPut", Key: "runtime"},
+		{Name: "to_parent_inode", Kind: "EffectDerivedPut", Key: "mutate[1]"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "non_directory_inode", Guard: "GuardNonDirectoryInode"},
@@ -276,8 +274,8 @@ var Unlink = specdsl.OpSpec{
 	},
 	Effects: []specdsl.EffectSpec{
 		{Name: "dentry", Kind: "EffectDelete", Key: "mutate[0]"},
-		{Name: "inode", Kind: "EffectDerivedPut", Key: "runtime", ValueSource: "runtime"},
-		{Name: "parent_inode", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
+		{Name: "inode", Kind: "EffectDerivedPut", Key: "runtime"},
+		{Name: "parent_inode", Kind: "EffectDerivedPut", Key: "mutate[1]"},
 	},
 	OptionalGuards: []specdsl.GuardSpec{
 		{Name: "quota_credit", Guard: "GuardQuotaCredit", Condition: "quota_escrow"},
@@ -306,8 +304,8 @@ var Remove = specdsl.OpSpec{
 	},
 	Effects: []specdsl.EffectSpec{
 		{Name: "dentry", Kind: "EffectDelete", Key: "mutate[0]"},
-		{Name: "inode", Kind: "EffectDerivedPut", Key: "runtime", ValueSource: "runtime"},
-		{Name: "parent_inode", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
+		{Name: "inode", Kind: "EffectDerivedPut", Key: "runtime"},
+		{Name: "parent_inode", Kind: "EffectDerivedPut", Key: "mutate[1]"},
 	},
 	OptionalGuards: []specdsl.GuardSpec{
 		{Name: "quota_credit", Guard: "GuardQuotaCredit", Condition: "quota_escrow"},
@@ -333,9 +331,9 @@ var RemoveDirectory = specdsl.OpSpec{
 		{Name: "dentry_observed", Kind: "PredicateObservedValue", Key: "primary"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "parent_inode", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueSource: "runtime"},
+		{Name: "parent_inode", Kind: "EffectDerivedPut", Key: "mutate[0]"},
 		{Name: "dentry", Kind: "EffectDelete", Key: "mutate[1]"},
-		{Name: "inode", Kind: "EffectDerivedDelete", Key: "runtime", ValueSource: "runtime"},
+		{Name: "inode", Kind: "EffectDerivedDelete", Key: "runtime"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "empty_directory_inode", Guard: "GuardEmptyDirectory"},
@@ -346,18 +344,15 @@ var OpenWriteSession = specdsl.OpSpec{
 	Name:           "OpenWriteSession",
 	FileName:       "session.program.go",
 	ProgramType:    "OpenWriteSessionProgram",
-	ValuesType:     "OpenWriteSessionValues",
 	RequestType:    "model.OpenWriteSessionRequest",
 	CompileName:    "CompileOpenWriteSessionProgram",
 	PlanName:       "layout.PlanOpenWriteSession",
-	Materialize:    "MaterializeOpenWriteSession",
 	OperationKind:  "model.OperationOpenWriteSession",
 	Durability:     "DurabilityVisibleOnly",
 	Eligibility:    "EligibilityVisibleCommit",
 	PredicateCount: 3,
 	EffectCount:    2,
 	Emitter:        "operation",
-	Materializer:   "session_put",
 	Authority:      specdsl.AuthoritySpec{Inodes: []string{"inode"}},
 	RequestChecks:  []string{"positive_ttl"},
 	Predicates: []specdsl.PredicateSpec{
@@ -366,8 +361,8 @@ var OpenWriteSession = specdsl.OpSpec{
 		{Name: "owner_observed", Kind: "PredicateObservedValue", Key: "read[2]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "session", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueSource: "runtime"},
-		{Name: "owner", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
+		{Name: "session", Kind: "EffectDerivedPut", Key: "mutate[0]"},
+		{Name: "owner", Kind: "EffectDerivedPut", Key: "mutate[1]"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "non_directory_inode", Guard: "GuardNonDirectoryInode"},
@@ -379,18 +374,15 @@ var HeartbeatWriteSession = specdsl.OpSpec{
 	Name:           "HeartbeatWriteSession",
 	FileName:       "session.program.go",
 	ProgramType:    "HeartbeatWriteSessionProgram",
-	ValuesType:     "HeartbeatWriteSessionValues",
 	RequestType:    "model.HeartbeatWriteSessionRequest",
 	CompileName:    "CompileHeartbeatWriteSessionProgram",
 	PlanName:       "layout.PlanHeartbeatWriteSession",
-	Materialize:    "MaterializeHeartbeatWriteSession",
 	OperationKind:  "model.OperationHeartbeatSession",
 	Durability:     "DurabilityVisibleOnly",
 	Eligibility:    "EligibilityVisibleCommit",
 	PredicateCount: 2,
 	EffectCount:    2,
 	Emitter:        "operation",
-	Materializer:   "session_put",
 	Authority:      specdsl.AuthoritySpec{Inodes: []string{"inode"}},
 	RequestChecks:  []string{"positive_ttl"},
 	Predicates: []specdsl.PredicateSpec{
@@ -398,8 +390,8 @@ var HeartbeatWriteSession = specdsl.OpSpec{
 		{Name: "owner_observed", Kind: "PredicateObservedValue", Key: "read[1]"},
 	},
 	Effects: []specdsl.EffectSpec{
-		{Name: "session", Kind: "EffectDerivedPut", Key: "mutate[0]", ValueSource: "runtime"},
-		{Name: "owner", Kind: "EffectDerivedPut", Key: "mutate[1]", ValueSource: "runtime"},
+		{Name: "session", Kind: "EffectDerivedPut", Key: "mutate[0]"},
+		{Name: "owner", Kind: "EffectDerivedPut", Key: "mutate[1]"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "live_session", Guard: "GuardLiveSession"},
@@ -410,18 +402,15 @@ var CloseWriteSession = specdsl.OpSpec{
 	Name:           "CloseWriteSession",
 	FileName:       "session.program.go",
 	ProgramType:    "CloseWriteSessionProgram",
-	ValuesType:     "CloseWriteSessionValues",
 	RequestType:    "model.CloseWriteSessionRequest",
 	CompileName:    "CompileCloseWriteSessionProgram",
 	PlanName:       "layout.PlanCloseWriteSession",
-	Materialize:    "MaterializeCloseWriteSession",
 	OperationKind:  "model.OperationCloseSession",
 	Durability:     "DurabilityNeedsCloseSession",
 	Eligibility:    "EligibilityVisibleCommit",
 	PredicateCount: 2,
 	EffectCount:    -1,
 	Emitter:        "operation",
-	Materializer:   "session_close",
 	Authority:      specdsl.AuthoritySpec{Inodes: []string{"inode"}},
 	Predicates: []specdsl.PredicateSpec{
 		{Name: "session_observed", Kind: "PredicateObservedValue", Key: "read[0]"},
@@ -429,7 +418,7 @@ var CloseWriteSession = specdsl.OpSpec{
 	},
 	Effects: []specdsl.EffectSpec{
 		{Name: "session", Kind: "EffectDelete", Key: "mutate[0]"},
-		{Name: "owner", Kind: "EffectDerivedDelete", Key: "owner", ValueSource: "runtime"},
+		{Name: "owner", Kind: "EffectDerivedDelete", Key: "owner"},
 	},
 	Guards: []specdsl.GuardSpec{
 		{Name: "live_session", Guard: "GuardLiveSession"},

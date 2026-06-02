@@ -10,7 +10,6 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	"github.com/feichai0017/NoKV/fsmeta/proof"
 	"github.com/stretchr/testify/require"
 )
 
@@ -41,58 +40,11 @@ func testParentInDifferentBucket(t *testing.T, base model.InodeID) model.InodeID
 	return 0
 }
 
-func testParentInDifferentBucketAfter(t *testing.T, base, start model.InodeID) model.InodeID {
-	t.Helper()
-	want := layout.BucketForInodeID(base)
-	for candidate := start; candidate < start+4096; candidate++ {
-		if layout.BucketForInodeID(candidate) != want {
-			return candidate
-		}
-	}
-	t.Fatalf("no different-bucket parent found for inode %d after %d", base, start)
-	return 0
-}
-
-func mustInodeKey(t *testing.T, inode model.InodeID) []byte {
-	t.Helper()
-	key, err := layout.EncodeInodeKey(testMount, inode)
-	require.NoError(t, err)
-	return key
-}
-
-func testPredicateProof(key, value []byte, present bool, version uint64, source proof.ReadSource) proof.PredicateProof {
-	return proof.NewPredicateProof(key, value, present, version, source, proof.ProofFrontier{})
-}
-
 func testCompileAOT(tb testing.TB, delta SemanticDelta) CompiledOp {
 	tb.Helper()
 	compiled, err := compileAOTDelta(delta)
 	require.NoError(tb, err)
 	return compiled
-}
-
-func testMaterializeAOT(tb testing.TB, delta SemanticDelta, proofs []proof.PredicateProof) MaterializedOp {
-	tb.Helper()
-	compiled := testCompileAOT(tb, delta)
-	return MaterializedOp{
-		CompiledOp:      compiled,
-		PredicateProofs: clonePredicateProofs(proofs),
-	}
-}
-
-func testMaterializeAOTWithEffects(tb testing.TB, op CompiledOp, effects []WriteEffect, proofs []proof.PredicateProof) MaterializedOp {
-	tb.Helper()
-	materialized, err := MaterializeCompiledOpWithEvidence(op, effects, PredicateEvidence{Proofs: proofs}, nil)
-	require.NoError(tb, err)
-	return materialized
-}
-
-func testGuardProofsFor(op MaterializedOp) []proof.GuardProof {
-	proofs, err := GuardProofsFor(op.CompiledOp, op.PredicateProofs, op.Delta.RuntimeGuards)
-	if err != nil {
-		panic(err)
-	}
-	return proofs
 }
 
 func testCreateDelta(tb testing.TB, req model.CreateRequest, mount model.MountIdentity, inodeID model.InodeID, opts ...Option) (SemanticDelta, error) {
@@ -203,41 +155,6 @@ func testExpireWriteSessionsDelta(tb testing.TB, req model.ExpireWriteSessionsRe
 	return cloneDelta(program.Compiled.Delta), nil
 }
 
-func testConcreteUpdateInodeDelta(tb testing.TB, expected []byte) (SemanticDelta, []proof.PredicateProof) {
-	tb.Helper()
-	delta, err := testUpdateInodeDelta(tb, model.UpdateInodeRequest{
-		Mount:   "vol",
-		Parent:  3,
-		Inode:   44,
-		Name:    "file",
-		SetMode: true,
-		Mode:    0o600,
-	}, testMount)
-	require.NoError(tb, err)
-	dentryValue, err := layout.EncodeDentryValue(model.DentryRecord{
-		Parent: 3,
-		Name:   "file",
-		Inode:  44,
-		Type:   model.InodeTypeFile,
-	})
-	require.NoError(tb, err)
-	dentryKey := delta.ReadPredicates[0].Key
-	inodeKey := delta.ReadPredicates[1].Key
-	if expected == nil {
-		expected, err = layout.EncodeInodeValue(model.InodeRecord{Inode: 44, Type: model.InodeTypeFile, LinkCount: 1})
-		require.NoError(tb, err)
-	}
-	delta.ReadPredicates = []Predicate{
-		{Kind: PredicateObservedValue, Key: dentryKey, ExpectedValue: dentryValue, HasExpectedValue: true, RuntimeChecked: true},
-		{Kind: PredicateObservedValue, Key: inodeKey, ExpectedValue: expected, HasExpectedValue: true, RuntimeChecked: true},
-	}
-	delta.WriteEffects = []WriteEffect{{Kind: EffectPut, Key: inodeKey, Value: []byte("new-inode")}}
-	return delta, []proof.PredicateProof{
-		testPredicateProof(dentryKey, dentryValue, true, 9, proof.ReadSourceBase),
-		testPredicateProof(inodeKey, expected, true, 9, proof.ReadSourceBase),
-	}
-}
-
 func TestCreateCompilesVisibleCommitDelta(t *testing.T) {
 	req := model.CreateRequest{
 		Mount:  "vol",
@@ -285,7 +202,7 @@ func TestCreateCompilesVisibleCommitDelta(t *testing.T) {
 	require.True(t, slices.Contains(delta.Authority.Buckets, layout.BucketForInodeID(22)))
 }
 
-func TestCreateCompilesSegmentInstallableOperation(t *testing.T) {
+func TestCreateCompilesMetadataCommandDescriptor(t *testing.T) {
 	inodeID := testParentInDifferentBucket(t, model.RootInode)
 	delta, err := testCreateDelta(t, model.CreateRequest{
 		Mount:  "vol",
@@ -301,13 +218,7 @@ func TestCreateCompilesSegmentInstallableOperation(t *testing.T) {
 	require.Equal(t, delta.Kind, op.Delta.Kind)
 	require.True(t, op.Authority.Required)
 	require.Equal(t, FenceActiveAuthority, op.Authority.Fence)
-	require.True(t, op.Placement.CanSegment)
-	require.False(t, op.Placement.RequiresMaterialize)
-	require.Equal(t, testMount.MountKeyID, op.Placement.MountKeyID)
 	require.Equal(t, DurabilityVisibleOnly, op.Durability)
-	require.Equal(t, SegmentInstallCatalog, op.Placement.Install)
-	require.Equal(t, SegmentInstallCatalog, op.Placement.MergeKey.Install)
-	require.Equal(t, segmentFormatVersion, op.Placement.MergeKey.FormatVersion)
 	require.Equal(t, []MutationID{0, 1, 2}, op.Atomicity.Members)
 	require.False(t, op.Atomicity.Splittable)
 	require.Equal(t, RecoveryReplayAllOrNothing, op.Atomicity.Recovery)
@@ -341,10 +252,29 @@ func TestCreateCompilesSegmentInstallableOperation(t *testing.T) {
 	require.Equal(t, CompletionVisible, op.Completion.Kind)
 	require.Equal(t, uint32(3), op.Completion.MutationCount)
 	require.Equal(t, op.DescriptorDigest, op.Completion.DescriptorDigest)
-	require.Equal(t, op.Placement.MergeKey, op.Segment.MergeKey)
-	require.True(t, op.Segment.CanAppend)
-	require.Equal(t, uint32(1), op.Segment.OperationCount)
-	require.Equal(t, uint32(3), op.Segment.MutationCount)
+}
+
+func TestDerivedOperationKeepsRuntimeEffectMetadata(t *testing.T) {
+	delta, err := testUpdateInodeDelta(t, model.UpdateInodeRequest{
+		Mount:   "vol",
+		Parent:  3,
+		Inode:   44,
+		Name:    "file",
+		SetMode: true,
+		Mode:    0o600,
+	}, testMount)
+	require.NoError(t, err)
+
+	op := testCompileAOT(t, delta)
+	require.True(t, op.Authority.Required)
+	require.Equal(t, FenceActiveAuthority, op.Authority.Fence)
+	require.Equal(t, DurabilityVisibleOnly, op.Durability)
+	require.Len(t, op.Predicates, 2)
+	require.True(t, op.Predicates[0].NeedValue)
+	require.True(t, op.Predicates[1].NeedValue)
+	require.Len(t, op.Effects, 1)
+	require.Equal(t, DerivationRuntimeValue, op.Effects[0].Derivation)
+	require.False(t, op.Effects[0].Concrete)
 }
 
 func TestGeneratedCreateProgramMatchesCurrentCompiler(t *testing.T) {
@@ -370,54 +300,8 @@ func TestGeneratedCreateProgramMatchesCurrentCompiler(t *testing.T) {
 			program, err := CompileCreateProgram(req, testMount, inodeID, tc.opts...)
 			require.NoError(t, err)
 			require.Equal(t, testCompileAOT(t, delta), program.Compiled)
-
-			defaultMaterialized, err := MaterializeCreate(program, CreateValues{})
-			require.NoError(t, err)
-			expectedDefault, err := MaterializeCompiledOpWithEvidence(program.Compiled, nil, PredicateEvidence{}, nil)
-			require.NoError(t, err)
-			require.Equal(t, expectedDefault, defaultMaterialized)
-
-			parentValue, err := layout.EncodeInodeValue(model.InodeRecord{
-				Inode:      req.Parent,
-				Type:       model.InodeTypeDirectory,
-				LinkCount:  1,
-				ChildCount: 1,
-			})
-			require.NoError(t, err)
-			values := CreateValues{
-				ParentInodeValue: parentValue,
-				DentryValue:      append([]byte(nil), program.Compiled.Delta.WriteEffects[1].Value...),
-				InodeValue:       append([]byte(nil), program.Compiled.Delta.WriteEffects[2].Value...),
-			}
-			valueMaterialized, err := MaterializeCreate(program, values)
-			require.NoError(t, err)
-			expectedDelta := cloneDelta(delta)
-			expectedDelta.WriteEffects = []WriteEffect{
-				{Kind: EffectPut, Key: expectedDelta.WriteEffects[0].Key, Value: parentValue},
-				expectedDelta.WriteEffects[1],
-				expectedDelta.WriteEffects[2],
-			}
-			expected, err := MaterializeCompiledOpWithEvidence(program.Compiled, expectedDelta.WriteEffects, PredicateEvidence{}, nil)
-			require.NoError(t, err)
-			require.Equal(t, expected, valueMaterialized)
 		})
 	}
-}
-
-func TestGeneratedCreateMaterializerRejectsMalformedProgram(t *testing.T) {
-	_, err := MaterializeCreate(CreateProgram{}, CreateValues{})
-	require.ErrorIs(t, err, model.ErrInvalidRequest)
-
-	req := model.CreateRequest{
-		Mount:  "vol",
-		Parent: model.RootInode,
-		Name:   "file",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
-	}
-	program, err := CompileCreateProgram(req, testMount, 22)
-	require.NoError(t, err)
-	_, err = MaterializeCreate(program, CreateValues{DentryValue: program.Compiled.Delta.WriteEffects[1].Value})
-	require.ErrorIs(t, err, model.ErrInvalidRequest)
 }
 
 func TestSessionProgramsMatchCurrentCompiler(t *testing.T) {
@@ -464,104 +348,66 @@ func TestGeneratedProgramEntriesAreCanonical(t *testing.T) {
 		name    string
 		compile func() (CompiledOp, error)
 	}{
-		{
-			name: "update_inode",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileUpdateInodeProgram(model.UpdateInodeRequest{Mount: "vol", Parent: model.RootInode, Inode: 44, Name: "file", SetMode: true, Mode: 0o600}, testMount, WithQuotaMode(QuotaModeEscrow))
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "lookup",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileLookupProgram(model.LookupRequest{Mount: "vol", Parent: model.RootInode, Name: "file"}, testMount)
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "readdir",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileReadDirProgram(model.ReadDirRequest{Mount: "vol", Parent: model.RootInode, Limit: 32}, testMount)
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "snapshot_subtree",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileSnapshotSubtreeProgram(model.SnapshotSubtreeRequest{Mount: "vol", RootInode: model.RootInode}, testMount)
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "rename",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileRenameProgram(model.RenameRequest{Mount: "vol", FromParent: model.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount)
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "rename_replace",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileRenameReplaceProgram(model.RenameReplaceRequest{Mount: "vol", FromParent: model.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount)
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "rename_subtree",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileRenameSubtreeProgram(model.RenameSubtreeRequest{Mount: "vol", FromParent: model.RootInode, FromName: "old", ToParent: crossBucketParent, ToName: "new"}, testMount)
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "link",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileLinkProgram(model.LinkRequest{Mount: "vol", FromParent: model.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount, WithQuotaMode(QuotaModeEscrow))
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "unlink",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileUnlinkProgram(model.UnlinkRequest{Mount: "vol", Parent: model.RootInode, Name: "old"}, testMount, WithQuotaMode(QuotaModeEscrow))
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "remove",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileRemoveProgram(model.RemoveRequest{Mount: "vol", Parent: model.RootInode, Name: "old"}, testMount, WithQuotaMode(QuotaModeEscrow))
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "open_write_session",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileOpenWriteSessionProgram(model.OpenWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1", TTL: time.Second}, testMount)
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "heartbeat_write_session",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileHeartbeatWriteSessionProgram(model.HeartbeatWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1", TTL: time.Second}, testMount)
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "close_write_session",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileCloseWriteSessionProgram(model.CloseWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1"}, testMount)
-				return program.Compiled, err
-			},
-		},
-		{
-			name: "expire_write_sessions",
-			compile: func() (CompiledOp, error) {
-				program, err := CompileExpireWriteSessionsProgram(model.ExpireWriteSessionsRequest{Mount: "vol", Limit: 16}, testMount)
-				return program.Compiled, err
-			},
-		},
+		{name: "update_inode", compile: func() (CompiledOp, error) {
+			program, err := CompileUpdateInodeProgram(model.UpdateInodeRequest{Mount: "vol", Parent: model.RootInode, Inode: 44, Name: "file", SetMode: true, Mode: 0o600}, testMount, WithQuotaMode(QuotaModeEscrow))
+			return program.Compiled, err
+		}},
+		{name: "lookup", compile: func() (CompiledOp, error) {
+			program, err := CompileLookupProgram(model.LookupRequest{Mount: "vol", Parent: model.RootInode, Name: "file"}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "readdir", compile: func() (CompiledOp, error) {
+			program, err := CompileReadDirProgram(model.ReadDirRequest{Mount: "vol", Parent: model.RootInode, Limit: 32}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "snapshot_subtree", compile: func() (CompiledOp, error) {
+			program, err := CompileSnapshotSubtreeProgram(model.SnapshotSubtreeRequest{Mount: "vol", RootInode: model.RootInode}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "rename", compile: func() (CompiledOp, error) {
+			program, err := CompileRenameProgram(model.RenameRequest{Mount: "vol", FromParent: model.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "rename_replace", compile: func() (CompiledOp, error) {
+			program, err := CompileRenameReplaceProgram(model.RenameReplaceRequest{Mount: "vol", FromParent: model.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "rename_subtree", compile: func() (CompiledOp, error) {
+			program, err := CompileRenameSubtreeProgram(model.RenameSubtreeRequest{Mount: "vol", FromParent: model.RootInode, FromName: "old", ToParent: crossBucketParent, ToName: "new"}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "link", compile: func() (CompiledOp, error) {
+			program, err := CompileLinkProgram(model.LinkRequest{Mount: "vol", FromParent: model.RootInode, FromName: "old", ToParent: renameToParent, ToName: "new"}, testMount, WithQuotaMode(QuotaModeEscrow))
+			return program.Compiled, err
+		}},
+		{name: "unlink", compile: func() (CompiledOp, error) {
+			program, err := CompileUnlinkProgram(model.UnlinkRequest{Mount: "vol", Parent: model.RootInode, Name: "old"}, testMount, WithQuotaMode(QuotaModeEscrow))
+			return program.Compiled, err
+		}},
+		{name: "remove", compile: func() (CompiledOp, error) {
+			program, err := CompileRemoveProgram(model.RemoveRequest{Mount: "vol", Parent: model.RootInode, Name: "old"}, testMount, WithQuotaMode(QuotaModeEscrow))
+			return program.Compiled, err
+		}},
+		{name: "remove_directory", compile: func() (CompiledOp, error) {
+			program, err := CompileRemoveDirectoryProgram(model.RemoveDirectoryRequest{Mount: "vol", Parent: model.RootInode, Name: "old-dir"}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "open_write_session", compile: func() (CompiledOp, error) {
+			program, err := CompileOpenWriteSessionProgram(model.OpenWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1", TTL: time.Second}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "heartbeat_write_session", compile: func() (CompiledOp, error) {
+			program, err := CompileHeartbeatWriteSessionProgram(model.HeartbeatWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1", TTL: time.Second}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "close_write_session", compile: func() (CompiledOp, error) {
+			program, err := CompileCloseWriteSessionProgram(model.CloseWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1"}, testMount)
+			return program.Compiled, err
+		}},
+		{name: "expire_write_sessions", compile: func() (CompiledOp, error) {
+			program, err := CompileExpireWriteSessionsProgram(model.ExpireWriteSessionsRequest{Mount: "vol", Limit: 16}, testMount)
+			return program.Compiled, err
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			compiled, err := tc.compile()
@@ -587,154 +433,6 @@ func TestSessionProgramsRejectInvalidTTL(t *testing.T) {
 	require.ErrorIs(t, err, model.ErrInvalidRequest)
 }
 
-func TestOpenWriteSessionMaterializerMatchesGenericMaterialization(t *testing.T) {
-	req := model.OpenWriteSessionRequest{
-		Mount:   "vol",
-		Inode:   44,
-		Session: "writer-1",
-		TTL:     time.Second,
-	}
-	program, err := CompileOpenWriteSessionProgram(req, testMount)
-	require.NoError(t, err)
-	sessionValue, err := layout.EncodeSessionValue(model.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: 200})
-	require.NoError(t, err)
-	inodeValue, err := layout.EncodeInodeValue(model.InodeRecord{Inode: req.Inode, Type: model.InodeTypeFile})
-	require.NoError(t, err)
-	inodeKey := program.Compiled.Delta.ReadPredicates[0].Key
-	sessionKey := program.Compiled.Delta.ReadPredicates[1].Key
-	ownerKey := program.Compiled.Delta.ReadPredicates[2].Key
-	proofs := []proof.PredicateProof{
-		testPredicateProof(inodeKey, inodeValue, true, 9, proof.ReadSourceBase),
-		testPredicateProof(sessionKey, nil, false, 9, proof.ReadSourceBase),
-		testPredicateProof(ownerKey, nil, false, 9, proof.ReadSourceBase),
-	}
-
-	materialized, err := MaterializeOpenWriteSession(program, OpenWriteSessionValues{
-		SessionValue:    sessionValue,
-		PredicateProofs: proofs,
-	})
-	require.NoError(t, err)
-
-	expectedDelta := cloneDelta(program.Compiled.Delta)
-	expectedDelta.ReadPredicates = []Predicate{
-		{Kind: PredicateObservedValue, Key: inodeKey, ExpectedValue: inodeValue, HasExpectedValue: true, RuntimeChecked: true},
-		{Kind: PredicateNotExists, Key: sessionKey, RuntimeChecked: true},
-		{Kind: PredicateNotExists, Key: ownerKey, RuntimeChecked: true},
-	}
-	expectedDelta.WriteEffects = []WriteEffect{
-		{Kind: EffectPut, Key: sessionKey, Value: sessionValue},
-		{Kind: EffectPut, Key: ownerKey, Value: sessionValue},
-	}
-	expected := testMaterializeAOT(t, expectedDelta, proofs)
-	expected.IntentDigest = program.Compiled.IntentDigest
-	require.Equal(t, expected, materialized)
-}
-
-func TestHeartbeatWriteSessionMaterializerMatchesGenericMaterialization(t *testing.T) {
-	req := model.HeartbeatWriteSessionRequest{
-		Mount:   "vol",
-		Inode:   44,
-		Session: "writer-1",
-		TTL:     time.Second,
-	}
-	program, err := CompileHeartbeatWriteSessionProgram(req, testMount)
-	require.NoError(t, err)
-	oldValue, err := layout.EncodeSessionValue(model.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: 100})
-	require.NoError(t, err)
-	newValue, err := layout.EncodeSessionValue(model.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: 200})
-	require.NoError(t, err)
-	sessionKey := program.Compiled.Delta.ReadPredicates[0].Key
-	ownerKey := program.Compiled.Delta.ReadPredicates[1].Key
-	proofs := []proof.PredicateProof{
-		testPredicateProof(sessionKey, oldValue, true, 11, proof.ReadSourceBase),
-		testPredicateProof(ownerKey, oldValue, true, 11, proof.ReadSourceBase),
-	}
-
-	materialized, err := MaterializeHeartbeatWriteSession(program, HeartbeatWriteSessionValues{
-		SessionValue:    newValue,
-		PredicateProofs: proofs,
-	})
-	require.NoError(t, err)
-
-	expectedDelta := cloneDelta(program.Compiled.Delta)
-	expectedDelta.ReadPredicates = []Predicate{
-		{Kind: PredicateObservedValue, Key: sessionKey, ExpectedValue: oldValue, HasExpectedValue: true, RuntimeChecked: true},
-		{Kind: PredicateObservedValue, Key: ownerKey, ExpectedValue: oldValue, HasExpectedValue: true, RuntimeChecked: true},
-	}
-	expectedDelta.WriteEffects = []WriteEffect{
-		{Kind: EffectPut, Key: sessionKey, Value: newValue},
-		{Kind: EffectPut, Key: ownerKey, Value: newValue},
-	}
-	expected := testMaterializeAOT(t, expectedDelta, proofs)
-	expected.IntentDigest = program.Compiled.IntentDigest
-	require.Equal(t, expected, materialized)
-}
-
-func TestCloseWriteSessionMaterializerMatchesGenericMaterialization(t *testing.T) {
-	req := model.CloseWriteSessionRequest{
-		Mount:   "vol",
-		Inode:   44,
-		Session: "writer-1",
-	}
-	program, err := CompileCloseWriteSessionProgram(req, testMount)
-	require.NoError(t, err)
-	sessionValue, err := layout.EncodeSessionValue(model.SessionRecord{Session: req.Session, Inode: req.Inode, ExpiresUnixNs: 100})
-	require.NoError(t, err)
-	ownerValue, err := layout.EncodeSessionValue(model.SessionRecord{Session: "other", Inode: req.Inode, ExpiresUnixNs: 100})
-	require.NoError(t, err)
-	sessionKey := program.Compiled.Delta.ReadPredicates[0].Key
-	ownerKey := program.Compiled.Delta.ReadPredicates[1].Key
-	proofs := []proof.PredicateProof{
-		testPredicateProof(sessionKey, sessionValue, true, 12, proof.ReadSourceBase),
-		testPredicateProof(ownerKey, ownerValue, true, 12, proof.ReadSourceBase),
-	}
-
-	materialized, err := MaterializeCloseWriteSession(program, CloseWriteSessionValues{
-		PredicateProofs: proofs,
-	})
-	require.NoError(t, err)
-
-	expectedDelta := cloneDelta(program.Compiled.Delta)
-	expectedDelta.ReadPredicates = []Predicate{
-		{Kind: PredicateObservedValue, Key: sessionKey, ExpectedValue: sessionValue, HasExpectedValue: true, RuntimeChecked: true},
-		{Kind: PredicateObservedValue, Key: ownerKey, ExpectedValue: ownerValue, HasExpectedValue: true, RuntimeChecked: true},
-	}
-	expectedDelta.WriteEffects = []WriteEffect{{Kind: EffectDelete, Key: sessionKey}}
-	expected := testMaterializeAOT(t, expectedDelta, proofs)
-	expected.IntentDigest = program.Compiled.IntentDigest
-	require.Equal(t, expected, materialized)
-
-	withOwnerDelete, err := MaterializeCloseWriteSession(program, CloseWriteSessionValues{
-		DeleteOwner:     true,
-		PredicateProofs: proofs,
-	})
-	require.NoError(t, err)
-	expectedDelta.WriteEffects = []WriteEffect{
-		{Kind: EffectDelete, Key: sessionKey},
-		{Kind: EffectDelete, Key: ownerKey},
-	}
-	expected = testMaterializeAOT(t, expectedDelta, proofs)
-	expected.IntentDigest = program.Compiled.IntentDigest
-	require.Equal(t, expected, withOwnerDelete)
-}
-
-func TestSessionMaterializersRejectMalformedInput(t *testing.T) {
-	openReq := model.OpenWriteSessionRequest{Mount: "vol", Inode: 44, Session: "writer-1", TTL: time.Second}
-	openProgram, err := CompileOpenWriteSessionProgram(openReq, testMount)
-	require.NoError(t, err)
-	_, err = MaterializeOpenWriteSession(openProgram, OpenWriteSessionValues{})
-	require.ErrorIs(t, err, model.ErrInvalidRequest)
-
-	sessionValue, err := layout.EncodeSessionValue(model.SessionRecord{Session: openReq.Session, Inode: openReq.Inode, ExpiresUnixNs: 100})
-	require.NoError(t, err)
-	badProof := proof.PredicateProof{Key: openProgram.Compiled.Delta.ReadPredicates[0].Key, Present: true, Value: []byte("bad"), Version: 1, Source: proof.ReadSourceBase}
-	_, err = MaterializeOpenWriteSession(openProgram, OpenWriteSessionValues{
-		SessionValue:    sessionValue,
-		PredicateProofs: []proof.PredicateProof{badProof},
-	})
-	require.Error(t, err)
-}
-
 func TestCreateRespectsQuotaMode(t *testing.T) {
 	req := model.CreateRequest{
 		Mount:  "vol",
@@ -752,43 +450,6 @@ func TestCreateRespectsQuotaMode(t *testing.T) {
 	require.NoError(t, err)
 	require.Equal(t, EligibilityVisibleCommit, escrow.Eligibility)
 	require.Contains(t, escrow.RuntimeGuards, GuardQuotaCredit)
-}
-
-func BenchmarkCompileCreateProgram(b *testing.B) {
-	req := model.CreateRequest{
-		Mount:  "vol",
-		Parent: model.RootInode,
-		Name:   "file",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile, Size: 128, Mode: 0o644},
-	}
-	inodeID := model.InodeID(22)
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		program, err := CompileCreateProgram(req, testMount, inodeID, WithQuotaMode(QuotaModeEscrow))
-		if err != nil {
-			b.Fatal(err)
-		}
-		benchmarkCompiledOp = program.Compiled
-	}
-}
-
-func BenchmarkCompileOpenWriteSessionProgram(b *testing.B) {
-	req := model.OpenWriteSessionRequest{
-		Mount:   "vol",
-		Inode:   44,
-		Session: "writer-1",
-		TTL:     time.Second,
-	}
-	b.ReportAllocs()
-	b.ResetTimer()
-	for i := 0; i < b.N; i++ {
-		program, err := CompileOpenWriteSessionProgram(req, testMount)
-		if err != nil {
-			b.Fatal(err)
-		}
-		benchmarkCompiledOp = program.Compiled
-	}
 }
 
 func TestRenameBucketLocalVisibleCrossBucketSlow(t *testing.T) {
@@ -868,7 +529,6 @@ func TestRenameReplaceCompilesSlowPathWithoutBarrier(t *testing.T) {
 	require.Equal(t, DurabilityVisibleOnly, compiled.Durability)
 	require.False(t, compiled.Authority.Required)
 	require.Equal(t, FenceNone, compiled.Authority.Fence)
-	require.False(t, compiled.Placement.CanSegment)
 }
 
 func TestSlowPathBoundariesStayExplicit(t *testing.T) {
@@ -884,7 +544,6 @@ func TestSlowPathBoundariesStayExplicit(t *testing.T) {
 	require.False(t, compiledSnapshot.Authority.Required)
 	require.Equal(t, FenceNone, compiledSnapshot.Authority.Fence)
 	require.Equal(t, DurabilityNeedsPublishCheckpoint, compiledSnapshot.Durability)
-	require.False(t, compiledSnapshot.Placement.CanSegment)
 
 	expire, err := testExpireWriteSessionsDelta(t, model.ExpireWriteSessionsRequest{
 		Mount: "vol",
@@ -938,59 +597,39 @@ func TestLinkAndUnlinkCompileRuntimeConcreteVisibleCommitDeltas(t *testing.T) {
 	require.Equal(t, EffectDerivedPut, remove.WriteEffects[2].Kind)
 }
 
-func TestSessionOperationsCompileVisibleCommitDeltas(t *testing.T) {
-	open, err := testOpenWriteSessionDelta(t, model.OpenWriteSessionRequest{
-		Mount:   "vol",
-		Inode:   33,
-		Session: "writer-1",
-		TTL:     time.Minute,
-	}, testMount)
-	require.NoError(t, err)
-	require.Equal(t, EligibilityVisibleCommit, open.Eligibility)
-	require.Contains(t, open.RuntimeGuards, GuardExpiredSessionOwner)
-
-	heartbeat, err := testHeartbeatWriteSessionDelta(t, model.HeartbeatWriteSessionRequest{
-		Mount:   "vol",
-		Inode:   33,
-		Session: "writer-1",
-		TTL:     time.Minute,
-	}, testMount)
-	require.NoError(t, err)
-	require.Equal(t, EligibilityVisibleCommit, heartbeat.Eligibility)
-	require.Contains(t, heartbeat.RuntimeGuards, GuardLiveSession)
-
-	closeDelta, err := testCloseWriteSessionDelta(t, model.CloseWriteSessionRequest{
-		Mount:   "vol",
-		Inode:   33,
-		Session: "writer-1",
-	}, testMount)
-	require.NoError(t, err)
-	require.Equal(t, EligibilityVisibleCommit, closeDelta.Eligibility)
-	require.Equal(t, DurabilityNeedsCloseSession, testCompileAOT(t, closeDelta).Durability)
-	require.Contains(t, closeDelta.RuntimeGuards, GuardLiveSession)
-	require.Len(t, closeDelta.ReadPredicates, 2)
-	require.Len(t, closeDelta.WriteEffects, 2)
-}
-
-func TestDeltasCloneReturnedBytes(t *testing.T) {
-	delta, err := testCreateDelta(t, model.CreateRequest{
+func BenchmarkCompileCreateProgram(b *testing.B) {
+	req := model.CreateRequest{
 		Mount:  "vol",
 		Parent: model.RootInode,
 		Name:   "file",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
-	}, testMount, 22)
-	require.NoError(t, err)
-	primary := append([]byte(nil), delta.Plan.PrimaryKey...)
-	predicate := append([]byte(nil), delta.ReadPredicates[1].Key...)
-	value := append([]byte(nil), delta.WriteEffects[1].Value...)
+		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile, Size: 128, Mode: 0o644},
+	}
+	inodeID := model.InodeID(22)
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		program, err := CompileCreateProgram(req, testMount, inodeID, WithQuotaMode(QuotaModeEscrow))
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkCompiledOp = program.Compiled
+	}
+}
 
-	delta.Plan.PrimaryKey[0] ^= 0xff
-	delta.ReadPredicates[1].Key[0] ^= 0xff
-	delta.WriteEffects[1].Value[0] ^= 0xff
-
-	require.Equal(t, primary, delta.Plan.MutateKeys[1])
-	require.NotEqual(t, delta.Plan.PrimaryKey, delta.Plan.MutateKeys[1])
-	require.Equal(t, predicate, delta.Plan.MutateKeys[1])
-	require.NotEqual(t, predicate, delta.ReadPredicates[1].Key)
-	require.NotEqual(t, value, delta.WriteEffects[1].Value)
+func BenchmarkCompileOpenWriteSessionProgram(b *testing.B) {
+	req := model.OpenWriteSessionRequest{
+		Mount:   "vol",
+		Inode:   44,
+		Session: "writer-1",
+		TTL:     time.Second,
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		program, err := CompileOpenWriteSessionProgram(req, testMount)
+		if err != nil {
+			b.Fatal(err)
+		}
+		benchmarkCompiledOp = program.Compiled
+	}
 }

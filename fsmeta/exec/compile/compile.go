@@ -119,9 +119,8 @@ type AuthorityScope struct {
 
 // SemanticDelta is the request-time semantic program produced by generated
 // compile entries. It carries the authority scope, predicate obligations,
-// symbolic/concrete effects, and slow-path decision before runtime evidence is
-// attached. Runtime code must materialize it into MaterializedOp before holder
-// admission.
+// symbolic/concrete effects, and slow-path decision used by fsmeta/exec to
+// produce MetadataCommand.
 type SemanticDelta struct {
 	Kind              model.OperationKind
 	Plan              layout.OperationPlan

@@ -16,12 +16,6 @@ type CreateProgram struct {
 	Compiled CompiledOp
 }
 
-type CreateValues struct {
-	ParentInodeValue []byte
-	DentryValue      []byte
-	InodeValue       []byte
-}
-
 func CompileCreateProgram(req model.CreateRequest, mount model.MountIdentity, inodeID model.InodeID, opts ...Option) (CreateProgram, error) {
 	if req.Mount != "" && req.Mount != mount.MountID {
 		return CreateProgram{}, model.ErrInvalidMountID
@@ -92,32 +86,6 @@ func CompileCreateProgram(req model.CreateRequest, mount model.MountIdentity, in
 		return CreateProgram{}, err
 	}
 	return CreateProgram{Compiled: compiled}, nil
-}
-
-func MaterializeCreate(program CreateProgram, values CreateValues) (MaterializedOp, error) {
-	compiled := program.Compiled
-	if compiled.Delta.Kind != model.OperationCreate || len(compiled.Delta.ReadPredicates) != 3 || len(compiled.Delta.WriteEffects) != 3 {
-		return MaterializedOp{}, model.ErrInvalidRequest
-	}
-	delta := compiled.Delta
-	if values.ParentInodeValue != nil || values.DentryValue != nil || values.InodeValue != nil {
-		if values.ParentInodeValue == nil || values.DentryValue == nil || values.InodeValue == nil {
-			return MaterializedOp{}, model.ErrInvalidRequest
-		}
-		delta.WriteEffects = []WriteEffect{
-			{Kind: EffectPut, Key: delta.WriteEffects[0].Key, Value: values.ParentInodeValue},
-			{Kind: EffectPut, Key: delta.WriteEffects[1].Key, Value: values.DentryValue},
-			{Kind: EffectPut, Key: delta.WriteEffects[2].Key, Value: values.InodeValue},
-		}
-	}
-	delta.Authority = authorityScopeWithDeltaKeys(delta.Authority, delta)
-	materialized, err := compileCreateCompiledOp(delta)
-	if err != nil {
-		return MaterializedOp{}, err
-	}
-	materialized.IntentDigest = compiled.IntentDigest
-	materialized.ReplayDigest = materialized.DescriptorDigest
-	return MaterializedOp{CompiledOp: materialized}, nil
 }
 
 func validateCreateSemanticDelta(delta SemanticDelta) bool {
@@ -209,9 +177,19 @@ func compileCreateCompiledOp(delta SemanticDelta) (CompiledOp, error) {
 	}
 	digest := descriptorDigest(delta)
 	durability := DurabilityVisibleOnly
-	placement, dentryParts, inodeParts, err := compileCreatePlacementPlan(delta, durability)
-	if err != nil {
-		return CompiledOp{}, err
+	if (delta.WriteEffects[0].Kind != EffectPut && delta.WriteEffects[0].Kind != EffectDerivedPut) || delta.WriteEffects[1].Kind != EffectPut || delta.WriteEffects[2].Kind != EffectPut || delta.WriteEffects[1].Value == nil || delta.WriteEffects[2].Value == nil {
+		return CompiledOp{}, model.ErrInvalidRequest
+	}
+	dentryParts, ok := layout.InspectKey(delta.WriteEffects[1].Key)
+	if !ok || dentryParts.Kind != layout.KeyKindDentry {
+		return CompiledOp{}, layout.ErrInvalidKey
+	}
+	inodeParts, ok := layout.InspectKey(delta.WriteEffects[2].Key)
+	if !ok || inodeParts.Kind != layout.KeyKindInode {
+		return CompiledOp{}, layout.ErrInvalidKey
+	}
+	if dentryParts.MountKeyID != inodeParts.MountKeyID {
+		return CompiledOp{}, model.ErrInvalidRequest
 	}
 	refs := []KeyRef{
 		keyRef(KeyAccessRead, delta.ReadPredicates[0].Key),
@@ -255,18 +233,14 @@ func compileCreateCompiledOp(delta SemanticDelta) (CompiledOp, error) {
 		{ID: 2, Kind: EffectPut, Key: delta.WriteEffects[2].Key, Value: delta.WriteEffects[2].Value, Concrete: true, MountKeyID: inodeParts.MountKeyID, Bucket: inodeParts.Bucket, RecordKind: inodeParts.Kind, ValueHash: sha256.Sum256(delta.WriteEffects[2].Value)},
 	}
 	atomicity := AtomicityGroup{Members: []MutationID{0, 1, 2}, Recovery: RecoveryReplayAllOrNothing, Digest: digest}
-	segment := compileCreateSegmentPlan(placement, footprint)
 	return CompiledOp{
 		Delta:            delta,
 		DescriptorDigest: digest,
-		IntentDigest:     digest,
-		ReplayDigest:     digest,
 		Authority: AuthorityPlan{
 			Scope:    delta.Authority,
 			Required: delta.Eligibility == EligibilityVisibleCommit,
 			Fence:    fenceMode(delta),
 		},
-		Placement:  placement,
 		Footprint:  footprint,
 		Predicates: predicates,
 		Guards:     guards,
@@ -275,36 +249,7 @@ func compileCreateCompiledOp(delta SemanticDelta) (CompiledOp, error) {
 		Durability: durability,
 		Watch:      compileCreateWatchProjections(delta, dentryParts, inodeParts),
 		Completion: compileCreateCompletionPlan(delta, digest),
-		Segment:    segment,
 	}, nil
-}
-
-func compileCreatePlacementPlan(delta SemanticDelta, durability DurabilityClass) (PlacementPlan, layout.KeyParts, layout.KeyParts, error) {
-	placement := PlacementPlan{MountKeyID: delta.Authority.MountKeyID, Buckets: delta.Authority.Buckets, SlowReason: delta.SlowReason}
-	placement.SingleBucket = len(placement.Buckets) == 1
-	if (delta.WriteEffects[0].Kind != EffectPut && delta.WriteEffects[0].Kind != EffectDerivedPut) || delta.WriteEffects[1].Kind != EffectPut || delta.WriteEffects[2].Kind != EffectPut || delta.WriteEffects[1].Value == nil || delta.WriteEffects[2].Value == nil {
-		return PlacementPlan{}, layout.KeyParts{}, layout.KeyParts{}, model.ErrInvalidRequest
-	}
-	dentryParts, ok := layout.InspectKey(delta.WriteEffects[1].Key)
-	if !ok || dentryParts.Kind != layout.KeyKindDentry {
-		return PlacementPlan{}, layout.KeyParts{}, layout.KeyParts{}, layout.ErrInvalidKey
-	}
-	inodeParts, ok := layout.InspectKey(delta.WriteEffects[2].Key)
-	if !ok || inodeParts.Kind != layout.KeyKindInode {
-		return PlacementPlan{}, layout.KeyParts{}, layout.KeyParts{}, layout.ErrInvalidKey
-	}
-	if dentryParts.MountKeyID != inodeParts.MountKeyID {
-		return PlacementPlan{}, layout.KeyParts{}, layout.KeyParts{}, model.ErrInvalidRequest
-	}
-	if delta.Eligibility != EligibilityVisibleCommit || delta.DurabilityBarrier {
-		return placement, dentryParts, inodeParts, nil
-	}
-	placement.MountKeyID = dentryParts.MountKeyID
-	placement.SingleBucket = len(placement.Buckets) == 1
-	placement.CanSegment = true
-	placement.Install = SegmentInstallCatalog
-	placement.MergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallCatalog, Durability: durability, FormatVersion: segmentFormatVersion}
-	return placement, dentryParts, inodeParts, nil
 }
 
 func compileCreateGuardObligations(guards []RuntimeGuard) []GuardObligation {
@@ -313,25 +258,6 @@ func compileCreateGuardObligations(guards []RuntimeGuard) []GuardObligation {
 		out = append(out, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})
 	}
 	return out
-}
-
-func compileCreateSegmentPlan(placement PlacementPlan, footprint KeyFootprint) SegmentPlan {
-	segment := SegmentPlan{MergeKey: placement.MergeKey, Install: placement.Install, CanAppend: placement.CanSegment, RequiresMaterialize: placement.RequiresMaterialize, EstimatedPayloadBytes: footprint.EstimatedBytes, OperationCount: 1, MutationCount: 3}
-	switch {
-	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
-		// Multi-bucket catalog op (dentry + inode in different buckets is the
-		// common case). Materialize is safe because installer writes each
-		// entry as a direct MVCC mutation. Local fsmeta consumes this path
-		// when its installer materializes segments; distributed installers do not.
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	}
-	return segment
 }
 
 func compileCreateCompletionPlan(delta SemanticDelta, digest [32]byte) CompletionPlan {

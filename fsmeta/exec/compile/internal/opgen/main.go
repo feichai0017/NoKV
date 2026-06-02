@@ -238,9 +238,9 @@ func emitDispatch(specs []specdsl.OpSpec) ([]byte, error) {
 
 func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	if len(spec.Effects) != 3 ||
-		spec.Effects[0].ValueName != "ParentInodeValue" ||
-		spec.Effects[1].ValueName != "DentryValue" ||
-		spec.Effects[2].ValueName != "InodeValue" {
+		spec.Effects[0].Name != "parent_inode" ||
+		spec.Effects[1].Name != "dentry" ||
+		spec.Effects[2].Name != "inode" {
 		return nil, fmt.Errorf("create spec must have parent inode, dentry, and inode effects")
 	}
 	var b bytes.Buffer
@@ -252,7 +252,6 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\t\"github.com/feichai0017/NoKV/fsmeta/model\"\n")
 	b.WriteString(")\n\n")
 	fmt.Fprintf(&b, "type %s struct {\n\tCompiled CompiledOp\n}\n\n", spec.ProgramType)
-	fmt.Fprintf(&b, "type %s struct {\n\tParentInodeValue []byte\n\tDentryValue []byte\n\tInodeValue []byte\n}\n\n", spec.ValuesType)
 	fmt.Fprintf(&b, "func %s(req %s, mount model.MountIdentity, inodeID model.InodeID, opts ...Option) (%s, error) {\n", spec.CompileName, spec.RequestType, spec.ProgramType)
 	b.WriteString("\tif req.Mount != \"\" && req.Mount != mount.MountID {\n")
 	fmt.Fprintf(&b, "\t\treturn %s{}, model.ErrInvalidMountID\n", spec.ProgramType)
@@ -324,32 +323,6 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\t}\n")
 	fmt.Fprintf(&b, "\treturn %s{Compiled: compiled}, nil\n", spec.ProgramType)
 	b.WriteString("}\n\n")
-	fmt.Fprintf(&b, "func %s(program %s, values %s) (MaterializedOp, error) {\n", spec.Materialize, spec.ProgramType, spec.ValuesType)
-	b.WriteString("\tcompiled := program.Compiled\n")
-	b.WriteString("\tif compiled.Delta.Kind != model.OperationCreate || len(compiled.Delta.ReadPredicates) != 3 || len(compiled.Delta.WriteEffects) != 3 {\n")
-	b.WriteString("\t\treturn MaterializedOp{}, model.ErrInvalidRequest\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tdelta := compiled.Delta\n")
-	b.WriteString("\tif values.ParentInodeValue != nil || values.DentryValue != nil || values.InodeValue != nil {\n")
-	b.WriteString("\t\tif values.ParentInodeValue == nil || values.DentryValue == nil || values.InodeValue == nil {\n")
-	b.WriteString("\t\t\treturn MaterializedOp{}, model.ErrInvalidRequest\n")
-	b.WriteString("\t\t}\n")
-	b.WriteString("\t\tdelta.WriteEffects = []WriteEffect{\n")
-	b.WriteString("\t\t\t{Kind: EffectPut, Key: delta.WriteEffects[0].Key, Value: values.ParentInodeValue},\n")
-	b.WriteString("\t\t\t{Kind: EffectPut, Key: delta.WriteEffects[1].Key, Value: values.DentryValue},\n")
-	b.WriteString("\t\t\t{Kind: EffectPut, Key: delta.WriteEffects[2].Key, Value: values.InodeValue},\n")
-	b.WriteString("\t\t}\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tdelta.Authority = authorityScopeWithDeltaKeys(delta.Authority, delta)\n")
-	b.WriteString("\tmaterialized, err := compileCreateCompiledOp(delta)\n")
-	b.WriteString("\tif err != nil {\n")
-	b.WriteString("\t\treturn MaterializedOp{}, err\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tmaterialized.IntentDigest = compiled.IntentDigest\n")
-	b.WriteString("\tmaterialized.ReplayDigest = materialized.DescriptorDigest\n")
-	b.WriteString("\treturn MaterializedOp{CompiledOp: materialized}, nil\n")
-	b.WriteString("}\n")
-	b.WriteString("\n")
 	if err := emitSemanticDeltaValidator(&b, spec); err != nil {
 		return nil, err
 	}
@@ -359,9 +332,19 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\t}\n")
 	b.WriteString("\tdigest := descriptorDigest(delta)\n")
 	b.WriteString("\tdurability := DurabilityVisibleOnly\n")
-	b.WriteString("\tplacement, dentryParts, inodeParts, err := compileCreatePlacementPlan(delta, durability)\n")
-	b.WriteString("\tif err != nil {\n")
-	b.WriteString("\t\treturn CompiledOp{}, err\n")
+	b.WriteString("\tif (delta.WriteEffects[0].Kind != EffectPut && delta.WriteEffects[0].Kind != EffectDerivedPut) || delta.WriteEffects[1].Kind != EffectPut || delta.WriteEffects[2].Kind != EffectPut || delta.WriteEffects[1].Value == nil || delta.WriteEffects[2].Value == nil {\n")
+	b.WriteString("\t\treturn CompiledOp{}, model.ErrInvalidRequest\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tdentryParts, ok := layout.InspectKey(delta.WriteEffects[1].Key)\n")
+	b.WriteString("\tif !ok || dentryParts.Kind != layout.KeyKindDentry {\n")
+	b.WriteString("\t\treturn CompiledOp{}, layout.ErrInvalidKey\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tinodeParts, ok := layout.InspectKey(delta.WriteEffects[2].Key)\n")
+	b.WriteString("\tif !ok || inodeParts.Kind != layout.KeyKindInode {\n")
+	b.WriteString("\t\treturn CompiledOp{}, layout.ErrInvalidKey\n")
+	b.WriteString("\t}\n")
+	b.WriteString("\tif dentryParts.MountKeyID != inodeParts.MountKeyID {\n")
+	b.WriteString("\t\treturn CompiledOp{}, model.ErrInvalidRequest\n")
 	b.WriteString("\t}\n")
 	b.WriteString("\trefs := []KeyRef{\n")
 	b.WriteString("\t\tkeyRef(KeyAccessRead, delta.ReadPredicates[0].Key),\n")
@@ -405,18 +388,14 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\t\t{ID: 2, Kind: EffectPut, Key: delta.WriteEffects[2].Key, Value: delta.WriteEffects[2].Value, Concrete: true, MountKeyID: inodeParts.MountKeyID, Bucket: inodeParts.Bucket, RecordKind: inodeParts.Kind, ValueHash: sha256.Sum256(delta.WriteEffects[2].Value)},\n")
 	b.WriteString("\t}\n")
 	b.WriteString("\tatomicity := AtomicityGroup{Members: []MutationID{0, 1, 2}, Recovery: RecoveryReplayAllOrNothing, Digest: digest}\n")
-	b.WriteString("\tsegment := compileCreateSegmentPlan(placement, footprint)\n")
 	b.WriteString("\treturn CompiledOp{\n")
 	b.WriteString("\t\tDelta:            delta,\n")
 	b.WriteString("\t\tDescriptorDigest: digest,\n")
-	b.WriteString("\t\tIntentDigest:     digest,\n")
-	b.WriteString("\t\tReplayDigest:     digest,\n")
 	b.WriteString("\t\tAuthority: AuthorityPlan{\n")
 	b.WriteString("\t\t\tScope:    delta.Authority,\n")
 	b.WriteString("\t\t\tRequired: delta.Eligibility == EligibilityVisibleCommit,\n")
 	b.WriteString("\t\t\tFence:    fenceMode(delta),\n")
 	b.WriteString("\t\t},\n")
-	b.WriteString("\t\tPlacement:  placement,\n")
 	b.WriteString("\t\tFootprint:  footprint,\n")
 	b.WriteString("\t\tPredicates: predicates,\n")
 	b.WriteString("\t\tGuards:     guards,\n")
@@ -425,35 +404,7 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\t\tDurability: durability,\n")
 	b.WriteString("\t\tWatch:      compileCreateWatchProjections(delta, dentryParts, inodeParts),\n")
 	b.WriteString("\t\tCompletion: compileCreateCompletionPlan(delta, digest),\n")
-	b.WriteString("\t\tSegment:    segment,\n")
 	b.WriteString("\t}, nil\n")
-	b.WriteString("}\n\n")
-	b.WriteString("func compileCreatePlacementPlan(delta SemanticDelta, durability DurabilityClass) (PlacementPlan, layout.KeyParts, layout.KeyParts, error) {\n")
-	b.WriteString("\tplacement := PlacementPlan{MountKeyID: delta.Authority.MountKeyID, Buckets: delta.Authority.Buckets, SlowReason: delta.SlowReason}\n")
-	b.WriteString("\tplacement.SingleBucket = len(placement.Buckets) == 1\n")
-	b.WriteString("\tif (delta.WriteEffects[0].Kind != EffectPut && delta.WriteEffects[0].Kind != EffectDerivedPut) || delta.WriteEffects[1].Kind != EffectPut || delta.WriteEffects[2].Kind != EffectPut || delta.WriteEffects[1].Value == nil || delta.WriteEffects[2].Value == nil {\n")
-	b.WriteString("\t\treturn PlacementPlan{}, layout.KeyParts{}, layout.KeyParts{}, model.ErrInvalidRequest\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tdentryParts, ok := layout.InspectKey(delta.WriteEffects[1].Key)\n")
-	b.WriteString("\tif !ok || dentryParts.Kind != layout.KeyKindDentry {\n")
-	b.WriteString("\t\treturn PlacementPlan{}, layout.KeyParts{}, layout.KeyParts{}, layout.ErrInvalidKey\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tinodeParts, ok := layout.InspectKey(delta.WriteEffects[2].Key)\n")
-	b.WriteString("\tif !ok || inodeParts.Kind != layout.KeyKindInode {\n")
-	b.WriteString("\t\treturn PlacementPlan{}, layout.KeyParts{}, layout.KeyParts{}, layout.ErrInvalidKey\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tif dentryParts.MountKeyID != inodeParts.MountKeyID {\n")
-	b.WriteString("\t\treturn PlacementPlan{}, layout.KeyParts{}, layout.KeyParts{}, model.ErrInvalidRequest\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tif delta.Eligibility != EligibilityVisibleCommit || delta.DurabilityBarrier {\n")
-	b.WriteString("\t\treturn placement, dentryParts, inodeParts, nil\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\tplacement.MountKeyID = dentryParts.MountKeyID\n")
-	b.WriteString("\tplacement.SingleBucket = len(placement.Buckets) == 1\n")
-	b.WriteString("\tplacement.CanSegment = true\n")
-	b.WriteString("\tplacement.Install = SegmentInstallCatalog\n")
-	b.WriteString("\tplacement.MergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallCatalog, Durability: durability, FormatVersion: segmentFormatVersion}\n")
-	b.WriteString("\treturn placement, dentryParts, inodeParts, nil\n")
 	b.WriteString("}\n\n")
 	b.WriteString("func compileCreateGuardObligations(guards []RuntimeGuard) []GuardObligation {\n")
 	b.WriteString("\tout := make([]GuardObligation, 0, len(guards))\n")
@@ -461,24 +412,6 @@ func emitCreate(spec specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\t\tout = append(out, GuardObligation{Guard: guard, Digest: GuardObligationDigest(guard)})\n")
 	b.WriteString("\t}\n")
 	b.WriteString("\treturn out\n")
-	b.WriteString("}\n\n")
-	b.WriteString("func compileCreateSegmentPlan(placement PlacementPlan, footprint KeyFootprint) SegmentPlan {\n")
-	b.WriteString("\tsegment := SegmentPlan{MergeKey: placement.MergeKey, Install: placement.Install, CanAppend: placement.CanSegment, RequiresMaterialize: placement.RequiresMaterialize, EstimatedPayloadBytes: footprint.EstimatedBytes, OperationCount: 1, MutationCount: 3}\n")
-	b.WriteString("\tswitch {\n")
-	b.WriteString("\tcase placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:\n")
-	b.WriteString("\t\tsegment.CanMaterialize = placement.CanSegment\n")
-	b.WriteString("\t\tsegment.MaterializeInstall = SegmentInstallSingleBucket\n")
-	b.WriteString("\t\tsegment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}\n")
-	b.WriteString("\tcase placement.Install == SegmentInstallCatalog && placement.CanSegment:\n")
-	b.WriteString("\t\t// Multi-bucket catalog op (dentry + inode in different buckets is the\n")
-	b.WriteString("\t\t// common case). Materialize is safe because installer writes each\n")
-	b.WriteString("\t\t// entry as a direct MVCC mutation. Local fsmeta consumes this path\n")
-	b.WriteString("\t\t// when its installer materializes segments; distributed installers do not.\n")
-	b.WriteString("\t\tsegment.CanMaterialize = placement.CanSegment\n")
-	b.WriteString("\t\tsegment.MaterializeInstall = SegmentInstallSingleBucket\n")
-	b.WriteString("\t\tsegment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\treturn segment\n")
 	b.WriteString("}\n\n")
 	b.WriteString("func compileCreateCompletionPlan(delta SemanticDelta, digest [32]byte) CompletionPlan {\n")
 	b.WriteString("\tif delta.Eligibility != EligibilityVisibleCommit {\n")
@@ -500,20 +433,12 @@ func emitOperationFile(specs []specdsl.OpSpec) ([]byte, error) {
 	b.WriteString("\t\"crypto/sha256\"\n\n")
 	b.WriteString("\t\"github.com/feichai0017/NoKV/fsmeta/layout\"\n")
 	b.WriteString("\t\"github.com/feichai0017/NoKV/fsmeta/model\"\n")
-	if operationFileNeedsProof(specs) {
-		b.WriteString("\t\"github.com/feichai0017/NoKV/fsmeta/proof\"\n")
-	}
 	b.WriteString(")\n\n")
 	for _, spec := range specs {
 		if spec.ProgramType == "" {
 			return nil, fmt.Errorf("%s missing ProgramType", spec.Name)
 		}
 		fmt.Fprintf(&b, "type %s struct {\n\tCompiled CompiledOp\n}\n\n", spec.ProgramType)
-	}
-	for _, spec := range specs {
-		if err := emitValuesType(&b, spec); err != nil {
-			return nil, err
-		}
 	}
 	for _, spec := range specs {
 		if err := emitCompileEntry(&b, spec); err != nil {
@@ -530,11 +455,6 @@ func emitOperationFile(specs []specdsl.OpSpec) ([]byte, error) {
 			return nil, err
 		}
 	}
-	for _, spec := range specs {
-		if err := emitMaterializer(&b, spec); err != nil {
-			return nil, err
-		}
-	}
 	return b.Bytes(), nil
 }
 
@@ -542,30 +462,6 @@ func writeGeneratedHeader(b *bytes.Buffer) {
 	b.WriteString("// Copyright 2024-2026 The NoKV Authors.\n")
 	b.WriteString("// SPDX-License-Identifier: Apache-2.0\n\n")
 	b.WriteString("// Code generated by fsmeta-opgen; DO NOT EDIT.\n\n")
-}
-
-func emitValuesType(b *bytes.Buffer, spec specdsl.OpSpec) error {
-	switch spec.Materializer {
-	case "":
-		return nil
-	case "session_put":
-		fmt.Fprintf(b, "type %s struct {\n\tSessionValue []byte\n\tPredicateProofs []proof.PredicateProof\n}\n\n", spec.ValuesType)
-	case "session_close":
-		fmt.Fprintf(b, "type %s struct {\n\tDeleteOwner bool\n\tPredicateProofs []proof.PredicateProof\n}\n\n", spec.ValuesType)
-	default:
-		return fmt.Errorf("unsupported materializer %q for %s", spec.Materializer, spec.Name)
-	}
-	return nil
-}
-
-func operationFileNeedsProof(specs []specdsl.OpSpec) bool {
-	for _, spec := range specs {
-		switch spec.Materializer {
-		case "session_put", "session_close":
-			return true
-		}
-	}
-	return false
 }
 
 func emitCompileEntry(b *bytes.Buffer, spec specdsl.OpSpec) error {
@@ -991,68 +887,6 @@ func emitCompiledOpFunction(b *bytes.Buffer, spec specdsl.OpSpec) error {
 }
 
 func emitAOTCompiledOpBody(b *bytes.Buffer) {
-	b.WriteString("\tplacement := PlacementPlan{MountKeyID: delta.Authority.MountKeyID, Buckets: delta.Authority.Buckets, SlowReason: delta.SlowReason}\n")
-	b.WriteString("\tplacement.SingleBucket = len(placement.Buckets) == 1\n")
-	b.WriteString("\tif delta.Eligibility == EligibilityVisibleCommit && !delta.DurabilityBarrier && len(delta.WriteEffects) > 0 {\n")
-	b.WriteString("\t\tvar mount model.MountKeyID\n")
-	b.WriteString("\t\tvar fsmetaKeys bool\n")
-	b.WriteString("\t\tvar opaqueKeys bool\n")
-	b.WriteString("\t\tbuckets := make([]layout.AffinityBucket, 0, len(delta.WriteEffects))\n")
-	b.WriteString("\t\tfor _, effect := range delta.WriteEffects {\n")
-	b.WriteString("\t\t\tswitch effect.Kind {\n")
-	b.WriteString("\t\t\tcase EffectPut:\n")
-	b.WriteString("\t\t\t\tif len(effect.Key) == 0 || effect.Value == nil {\n")
-	b.WriteString("\t\t\t\t\tplacement.RequiresMaterialize = true\n")
-	b.WriteString("\t\t\t\t\tgoto placementDone\n")
-	b.WriteString("\t\t\t\t}\n")
-	b.WriteString("\t\t\tcase EffectDelete:\n")
-	b.WriteString("\t\t\t\tif len(effect.Key) == 0 {\n")
-	b.WriteString("\t\t\t\t\tplacement.RequiresMaterialize = true\n")
-	b.WriteString("\t\t\t\t\tgoto placementDone\n")
-	b.WriteString("\t\t\t\t}\n")
-	b.WriteString("\t\t\tcase EffectDerivedPut, EffectDerivedDelete:\n")
-	b.WriteString("\t\t\t\tplacement.RequiresMaterialize = true\n")
-	b.WriteString("\t\t\t\tgoto placementDone\n")
-	b.WriteString("\t\t\tdefault:\n")
-	b.WriteString("\t\t\t\tplacement.SlowReason = SlowReasonDynamicWriteSet\n")
-	b.WriteString("\t\t\t\tgoto placementDone\n")
-	b.WriteString("\t\t\t}\n")
-	b.WriteString("\t\t\tparts, ok := layout.InspectKey(effect.Key)\n")
-	b.WriteString("\t\t\tif !ok {\n")
-	b.WriteString("\t\t\t\tif fsmetaKeys {\n")
-	b.WriteString("\t\t\t\t\tplacement.SlowReason = SlowReasonDynamicWriteSet\n")
-	b.WriteString("\t\t\t\t\tgoto placementDone\n")
-	b.WriteString("\t\t\t\t}\n")
-	b.WriteString("\t\t\t\topaqueKeys = true\n")
-	b.WriteString("\t\t\t\tcontinue\n")
-	b.WriteString("\t\t\t}\n")
-	b.WriteString("\t\t\tif opaqueKeys {\n")
-	b.WriteString("\t\t\t\tplacement.SlowReason = SlowReasonDynamicWriteSet\n")
-	b.WriteString("\t\t\t\tgoto placementDone\n")
-	b.WriteString("\t\t\t}\n")
-	b.WriteString("\t\t\tif !fsmetaKeys {\n")
-	b.WriteString("\t\t\t\tmount = parts.MountKeyID\n")
-	b.WriteString("\t\t\t\tfsmetaKeys = true\n")
-	b.WriteString("\t\t\t} else if mount != parts.MountKeyID {\n")
-	b.WriteString("\t\t\t\tplacement.SlowReason = SlowReasonCrossBucket\n")
-	b.WriteString("\t\t\t\tgoto placementDone\n")
-	b.WriteString("\t\t\t}\n")
-	b.WriteString("\t\t\tbuckets = append(buckets, parts.Bucket)\n")
-	b.WriteString("\t\t}\n")
-	b.WriteString("\t\tif fsmetaKeys {\n")
-	b.WriteString("\t\t\tplacement.MountKeyID = mount\n")
-	b.WriteString("\t\t\tplacement.Buckets = uniqueBuckets(buckets)\n")
-	b.WriteString("\t\t\tplacement.SingleBucket = len(placement.Buckets) == 1\n")
-	b.WriteString("\t\t\tplacement.CanSegment = true\n")
-	b.WriteString("\t\t\tplacement.Install = SegmentInstallCatalog\n")
-	b.WriteString("\t\t\tplacement.MergeKey = SegmentMergeKey{MountKeyID: mount, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}\n")
-	b.WriteString("\t\t} else if opaqueKeys {\n")
-	b.WriteString("\t\t\tplacement.CanSegment = true\n")
-	b.WriteString("\t\t\tplacement.Install = SegmentInstallSingleBucket\n")
-	b.WriteString("\t\t\tplacement.MergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}\n")
-	b.WriteString("\t\t}\n")
-	b.WriteString("\t}\n")
-	b.WriteString("placementDone:\n")
 	b.WriteString("\tfootprint := KeyFootprint{Reads: make([]KeyRef, 0, len(delta.ReadPredicates)), Writes: make([]KeyRef, 0, len(delta.WriteEffects)), ConflictKeys: make([]KeyRef, 0, len(delta.ReadPredicates)+len(delta.WriteEffects))}\n")
 	b.WriteString("\tfor _, predicate := range delta.ReadPredicates {\n")
 	b.WriteString("\t\tmode := KeyAccessRead\n")
@@ -1121,28 +955,6 @@ func emitAOTCompiledOpBody(b *bytes.Buffer) {
 	b.WriteString("\t\tatomicity.Members = append(atomicity.Members, MutationID(i))\n")
 	b.WriteString("\t}\n")
 	b.WriteString("\tatomicity.Splittable = len(atomicity.Members) <= 1\n")
-	b.WriteString("\tsegment := SegmentPlan{MergeKey: placement.MergeKey, Install: placement.Install, CanAppend: placement.CanSegment, RequiresMaterialize: placement.RequiresMaterialize, EstimatedPayloadBytes: footprint.EstimatedBytes, OperationCount: 1, MutationCount: uint32(len(effects))}\n")
-	b.WriteString("\tswitch {\n")
-	b.WriteString("\tcase placement.Install == SegmentInstallSingleBucket:\n")
-	b.WriteString("\t\tsegment.CanMaterialize = placement.CanSegment\n")
-	b.WriteString("\t\tsegment.MaterializeInstall = SegmentInstallSingleBucket\n")
-	b.WriteString("\t\tsegment.MaterializeMergeKey = placement.MergeKey\n")
-	b.WriteString("\tcase placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:\n")
-	b.WriteString("\t\tsegment.CanMaterialize = placement.CanSegment\n")
-	b.WriteString("\t\tsegment.MaterializeInstall = SegmentInstallSingleBucket\n")
-	b.WriteString("\t\tsegment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}\n")
-	b.WriteString("\tcase placement.Install == SegmentInstallCatalog && placement.CanSegment:\n")
-	b.WriteString("\t\t// Multi-bucket catalog op: materialize is still safe because the\n")
-	b.WriteString("\t\t// installer writes each entry as a direct MVCC mutation regardless\n")
-	b.WriteString("\t\t// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket\n")
-	b.WriteString("\t\t// materialize ops batch together in one install. Local fsmeta runtimes\n")
-	b.WriteString("\t\t// consume this path when their installer materializes segments;\n")
-	b.WriteString("\t\t// distributed runtimes keep catalog install and never enter materialize\n")
-	b.WriteString("\t\t// in SegmentPlanForInstall.\n")
-	b.WriteString("\t\tsegment.CanMaterialize = placement.CanSegment\n")
-	b.WriteString("\t\tsegment.MaterializeInstall = SegmentInstallSingleBucket\n")
-	b.WriteString("\t\tsegment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}\n")
-	b.WriteString("\t}\n")
 	b.WriteString("\tcompletion := CompletionPlan{}\n")
 	b.WriteString("\tif delta.Eligibility == EligibilityVisibleCommit && len(effects) != 0 {\n")
 	b.WriteString("\t\tkind := CompletionVisible\n")
@@ -1178,10 +990,7 @@ func emitAOTCompiledOpBody(b *bytes.Buffer) {
 	b.WriteString("\treturn CompiledOp{\n")
 	b.WriteString("\t\tDelta: delta,\n")
 	b.WriteString("\t\tDescriptorDigest: digest,\n")
-	b.WriteString("\t\tIntentDigest: digest,\n")
-	b.WriteString("\t\tReplayDigest: digest,\n")
 	b.WriteString("\t\tAuthority: AuthorityPlan{Scope: delta.Authority, Required: delta.Eligibility == EligibilityVisibleCommit, Fence: fenceMode(delta)},\n")
-	b.WriteString("\t\tPlacement: placement,\n")
 	b.WriteString("\t\tFootprint: footprint,\n")
 	b.WriteString("\t\tPredicates: predicates,\n")
 	b.WriteString("\t\tGuards: guards,\n")
@@ -1190,7 +999,6 @@ func emitAOTCompiledOpBody(b *bytes.Buffer) {
 	b.WriteString("\t\tDurability: durability,\n")
 	b.WriteString("\t\tWatch: watch,\n")
 	b.WriteString("\t\tCompletion: completion,\n")
-	b.WriteString("\t\tSegment: segment,\n")
 	b.WriteString("\t}, nil\n")
 	b.WriteString("}\n\n")
 }
@@ -1200,57 +1008,4 @@ func compiledOpFuncName(spec specdsl.OpSpec) string {
 		return ""
 	}
 	return "compile" + spec.Name + "CompiledOp"
-}
-
-func emitMaterializer(b *bytes.Buffer, spec specdsl.OpSpec) error {
-	switch spec.Materializer {
-	case "":
-		return nil
-	case "session_put":
-		return emitSessionPutMaterializer(b, spec)
-	case "session_close":
-		return emitSessionCloseMaterializer(b, spec)
-	default:
-		return fmt.Errorf("unsupported materializer %q for %s", spec.Materializer, spec.Name)
-	}
-}
-
-func emitSessionPutMaterializer(b *bytes.Buffer, spec specdsl.OpSpec) error {
-	if spec.Materialize == "" || spec.ValuesType == "" || spec.OperationKind == "" {
-		return fmt.Errorf("%s missing session materializer fields", spec.Name)
-	}
-	fmt.Fprintf(b, "func %s(program %s, values %s) (MaterializedOp, error) {\n", spec.Materialize, spec.ProgramType, spec.ValuesType)
-	b.WriteString("\tcompiled := program.Compiled\n")
-	fmt.Fprintf(b, "\tif compiled.Delta.Kind != %s || len(compiled.Delta.WriteEffects) != 2 || values.SessionValue == nil {\n", spec.OperationKind)
-	b.WriteString("\t\treturn MaterializedOp{}, model.ErrInvalidRequest\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\teffects := []WriteEffect{\n")
-	b.WriteString("\t\t{Kind: EffectPut, Key: compiled.Delta.WriteEffects[0].Key, Value: values.SessionValue},\n")
-	b.WriteString("\t\t{Kind: EffectPut, Key: compiled.Delta.WriteEffects[1].Key, Value: values.SessionValue},\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\treturn MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{\n")
-	b.WriteString("\t\tProofs: values.PredicateProofs,\n")
-	b.WriteString("\t}, nil)\n")
-	b.WriteString("}\n\n")
-	return nil
-}
-
-func emitSessionCloseMaterializer(b *bytes.Buffer, spec specdsl.OpSpec) error {
-	if spec.Materialize == "" || spec.ValuesType == "" || spec.OperationKind == "" {
-		return fmt.Errorf("%s missing session materializer fields", spec.Name)
-	}
-	fmt.Fprintf(b, "func %s(program %s, values %s) (MaterializedOp, error) {\n", spec.Materialize, spec.ProgramType, spec.ValuesType)
-	b.WriteString("\tcompiled := program.Compiled\n")
-	fmt.Fprintf(b, "\tif compiled.Delta.Kind != %s || len(compiled.Delta.WriteEffects) != 2 {\n", spec.OperationKind)
-	b.WriteString("\t\treturn MaterializedOp{}, model.ErrInvalidRequest\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\teffects := []WriteEffect{{Kind: EffectDelete, Key: compiled.Delta.WriteEffects[0].Key}}\n")
-	b.WriteString("\tif values.DeleteOwner {\n")
-	b.WriteString("\t\teffects = append(effects, WriteEffect{Kind: EffectDelete, Key: compiled.Delta.WriteEffects[1].Key})\n")
-	b.WriteString("\t}\n")
-	b.WriteString("\treturn MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{\n")
-	b.WriteString("\t\tProofs: values.PredicateProofs,\n")
-	b.WriteString("\t}, nil)\n")
-	b.WriteString("}\n\n")
-	return nil
 }

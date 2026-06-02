@@ -10,7 +10,6 @@ import (
 
 	"github.com/feichai0017/NoKV/fsmeta/layout"
 	"github.com/feichai0017/NoKV/fsmeta/model"
-	"github.com/feichai0017/NoKV/fsmeta/proof"
 )
 
 type OpenWriteSessionProgram struct {
@@ -27,21 +26,6 @@ type CloseWriteSessionProgram struct {
 
 type ExpireWriteSessionsProgram struct {
 	Compiled CompiledOp
-}
-
-type OpenWriteSessionValues struct {
-	SessionValue    []byte
-	PredicateProofs []proof.PredicateProof
-}
-
-type HeartbeatWriteSessionValues struct {
-	SessionValue    []byte
-	PredicateProofs []proof.PredicateProof
-}
-
-type CloseWriteSessionValues struct {
-	DeleteOwner     bool
-	PredicateProofs []proof.PredicateProof
 }
 
 func CompileOpenWriteSessionProgram(req model.OpenWriteSessionRequest, mount model.MountIdentity) (OpenWriteSessionProgram, error) {
@@ -415,68 +399,6 @@ func compileOpenWriteSessionCompiledOp(delta SemanticDelta) (CompiledOp, error) 
 	}
 	digest := descriptorDigest(delta)
 	durability := DurabilityVisibleOnly
-	placement := PlacementPlan{MountKeyID: delta.Authority.MountKeyID, Buckets: delta.Authority.Buckets, SlowReason: delta.SlowReason}
-	placement.SingleBucket = len(placement.Buckets) == 1
-	if delta.Eligibility == EligibilityVisibleCommit && !delta.DurabilityBarrier && len(delta.WriteEffects) > 0 {
-		var mount model.MountKeyID
-		var fsmetaKeys bool
-		var opaqueKeys bool
-		buckets := make([]layout.AffinityBucket, 0, len(delta.WriteEffects))
-		for _, effect := range delta.WriteEffects {
-			switch effect.Kind {
-			case EffectPut:
-				if len(effect.Key) == 0 || effect.Value == nil {
-					placement.RequiresMaterialize = true
-					goto placementDone
-				}
-			case EffectDelete:
-				if len(effect.Key) == 0 {
-					placement.RequiresMaterialize = true
-					goto placementDone
-				}
-			case EffectDerivedPut, EffectDerivedDelete:
-				placement.RequiresMaterialize = true
-				goto placementDone
-			default:
-				placement.SlowReason = SlowReasonDynamicWriteSet
-				goto placementDone
-			}
-			parts, ok := layout.InspectKey(effect.Key)
-			if !ok {
-				if fsmetaKeys {
-					placement.SlowReason = SlowReasonDynamicWriteSet
-					goto placementDone
-				}
-				opaqueKeys = true
-				continue
-			}
-			if opaqueKeys {
-				placement.SlowReason = SlowReasonDynamicWriteSet
-				goto placementDone
-			}
-			if !fsmetaKeys {
-				mount = parts.MountKeyID
-				fsmetaKeys = true
-			} else if mount != parts.MountKeyID {
-				placement.SlowReason = SlowReasonCrossBucket
-				goto placementDone
-			}
-			buckets = append(buckets, parts.Bucket)
-		}
-		if fsmetaKeys {
-			placement.MountKeyID = mount
-			placement.Buckets = uniqueBuckets(buckets)
-			placement.SingleBucket = len(placement.Buckets) == 1
-			placement.CanSegment = true
-			placement.Install = SegmentInstallCatalog
-			placement.MergeKey = SegmentMergeKey{MountKeyID: mount, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}
-		} else if opaqueKeys {
-			placement.CanSegment = true
-			placement.Install = SegmentInstallSingleBucket
-			placement.MergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}
-		}
-	}
-placementDone:
 	footprint := KeyFootprint{Reads: make([]KeyRef, 0, len(delta.ReadPredicates)), Writes: make([]KeyRef, 0, len(delta.WriteEffects)), ConflictKeys: make([]KeyRef, 0, len(delta.ReadPredicates)+len(delta.WriteEffects))}
 	for _, predicate := range delta.ReadPredicates {
 		mode := KeyAccessRead
@@ -545,28 +467,6 @@ placementDone:
 		atomicity.Members = append(atomicity.Members, MutationID(i))
 	}
 	atomicity.Splittable = len(atomicity.Members) <= 1
-	segment := SegmentPlan{MergeKey: placement.MergeKey, Install: placement.Install, CanAppend: placement.CanSegment, RequiresMaterialize: placement.RequiresMaterialize, EstimatedPayloadBytes: footprint.EstimatedBytes, OperationCount: 1, MutationCount: uint32(len(effects))}
-	switch {
-	case placement.Install == SegmentInstallSingleBucket:
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = placement.MergeKey
-	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
-		// Multi-bucket catalog op: materialize is still safe because the
-		// installer writes each entry as a direct MVCC mutation regardless
-		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
-		// materialize ops batch together in one install. Local fsmeta runtimes
-		// consume this path when their installer materializes segments;
-		// distributed runtimes keep catalog install and never enter materialize
-		// in SegmentPlanForInstall.
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	}
 	completion := CompletionPlan{}
 	if delta.Eligibility == EligibilityVisibleCommit && len(effects) != 0 {
 		kind := CompletionVisible
@@ -602,10 +502,7 @@ placementDone:
 	return CompiledOp{
 		Delta:            delta,
 		DescriptorDigest: digest,
-		IntentDigest:     digest,
-		ReplayDigest:     digest,
 		Authority:        AuthorityPlan{Scope: delta.Authority, Required: delta.Eligibility == EligibilityVisibleCommit, Fence: fenceMode(delta)},
-		Placement:        placement,
 		Footprint:        footprint,
 		Predicates:       predicates,
 		Guards:           guards,
@@ -614,7 +511,6 @@ placementDone:
 		Durability:       durability,
 		Watch:            watch,
 		Completion:       completion,
-		Segment:          segment,
 	}, nil
 }
 
@@ -624,68 +520,6 @@ func compileHeartbeatWriteSessionCompiledOp(delta SemanticDelta) (CompiledOp, er
 	}
 	digest := descriptorDigest(delta)
 	durability := DurabilityVisibleOnly
-	placement := PlacementPlan{MountKeyID: delta.Authority.MountKeyID, Buckets: delta.Authority.Buckets, SlowReason: delta.SlowReason}
-	placement.SingleBucket = len(placement.Buckets) == 1
-	if delta.Eligibility == EligibilityVisibleCommit && !delta.DurabilityBarrier && len(delta.WriteEffects) > 0 {
-		var mount model.MountKeyID
-		var fsmetaKeys bool
-		var opaqueKeys bool
-		buckets := make([]layout.AffinityBucket, 0, len(delta.WriteEffects))
-		for _, effect := range delta.WriteEffects {
-			switch effect.Kind {
-			case EffectPut:
-				if len(effect.Key) == 0 || effect.Value == nil {
-					placement.RequiresMaterialize = true
-					goto placementDone
-				}
-			case EffectDelete:
-				if len(effect.Key) == 0 {
-					placement.RequiresMaterialize = true
-					goto placementDone
-				}
-			case EffectDerivedPut, EffectDerivedDelete:
-				placement.RequiresMaterialize = true
-				goto placementDone
-			default:
-				placement.SlowReason = SlowReasonDynamicWriteSet
-				goto placementDone
-			}
-			parts, ok := layout.InspectKey(effect.Key)
-			if !ok {
-				if fsmetaKeys {
-					placement.SlowReason = SlowReasonDynamicWriteSet
-					goto placementDone
-				}
-				opaqueKeys = true
-				continue
-			}
-			if opaqueKeys {
-				placement.SlowReason = SlowReasonDynamicWriteSet
-				goto placementDone
-			}
-			if !fsmetaKeys {
-				mount = parts.MountKeyID
-				fsmetaKeys = true
-			} else if mount != parts.MountKeyID {
-				placement.SlowReason = SlowReasonCrossBucket
-				goto placementDone
-			}
-			buckets = append(buckets, parts.Bucket)
-		}
-		if fsmetaKeys {
-			placement.MountKeyID = mount
-			placement.Buckets = uniqueBuckets(buckets)
-			placement.SingleBucket = len(placement.Buckets) == 1
-			placement.CanSegment = true
-			placement.Install = SegmentInstallCatalog
-			placement.MergeKey = SegmentMergeKey{MountKeyID: mount, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}
-		} else if opaqueKeys {
-			placement.CanSegment = true
-			placement.Install = SegmentInstallSingleBucket
-			placement.MergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}
-		}
-	}
-placementDone:
 	footprint := KeyFootprint{Reads: make([]KeyRef, 0, len(delta.ReadPredicates)), Writes: make([]KeyRef, 0, len(delta.WriteEffects)), ConflictKeys: make([]KeyRef, 0, len(delta.ReadPredicates)+len(delta.WriteEffects))}
 	for _, predicate := range delta.ReadPredicates {
 		mode := KeyAccessRead
@@ -754,28 +588,6 @@ placementDone:
 		atomicity.Members = append(atomicity.Members, MutationID(i))
 	}
 	atomicity.Splittable = len(atomicity.Members) <= 1
-	segment := SegmentPlan{MergeKey: placement.MergeKey, Install: placement.Install, CanAppend: placement.CanSegment, RequiresMaterialize: placement.RequiresMaterialize, EstimatedPayloadBytes: footprint.EstimatedBytes, OperationCount: 1, MutationCount: uint32(len(effects))}
-	switch {
-	case placement.Install == SegmentInstallSingleBucket:
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = placement.MergeKey
-	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
-		// Multi-bucket catalog op: materialize is still safe because the
-		// installer writes each entry as a direct MVCC mutation regardless
-		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
-		// materialize ops batch together in one install. Local fsmeta runtimes
-		// consume this path when their installer materializes segments;
-		// distributed runtimes keep catalog install and never enter materialize
-		// in SegmentPlanForInstall.
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	}
 	completion := CompletionPlan{}
 	if delta.Eligibility == EligibilityVisibleCommit && len(effects) != 0 {
 		kind := CompletionVisible
@@ -811,10 +623,7 @@ placementDone:
 	return CompiledOp{
 		Delta:            delta,
 		DescriptorDigest: digest,
-		IntentDigest:     digest,
-		ReplayDigest:     digest,
 		Authority:        AuthorityPlan{Scope: delta.Authority, Required: delta.Eligibility == EligibilityVisibleCommit, Fence: fenceMode(delta)},
-		Placement:        placement,
 		Footprint:        footprint,
 		Predicates:       predicates,
 		Guards:           guards,
@@ -823,7 +632,6 @@ placementDone:
 		Durability:       durability,
 		Watch:            watch,
 		Completion:       completion,
-		Segment:          segment,
 	}, nil
 }
 
@@ -833,68 +641,6 @@ func compileCloseWriteSessionCompiledOp(delta SemanticDelta) (CompiledOp, error)
 	}
 	digest := descriptorDigest(delta)
 	durability := DurabilityNeedsCloseSession
-	placement := PlacementPlan{MountKeyID: delta.Authority.MountKeyID, Buckets: delta.Authority.Buckets, SlowReason: delta.SlowReason}
-	placement.SingleBucket = len(placement.Buckets) == 1
-	if delta.Eligibility == EligibilityVisibleCommit && !delta.DurabilityBarrier && len(delta.WriteEffects) > 0 {
-		var mount model.MountKeyID
-		var fsmetaKeys bool
-		var opaqueKeys bool
-		buckets := make([]layout.AffinityBucket, 0, len(delta.WriteEffects))
-		for _, effect := range delta.WriteEffects {
-			switch effect.Kind {
-			case EffectPut:
-				if len(effect.Key) == 0 || effect.Value == nil {
-					placement.RequiresMaterialize = true
-					goto placementDone
-				}
-			case EffectDelete:
-				if len(effect.Key) == 0 {
-					placement.RequiresMaterialize = true
-					goto placementDone
-				}
-			case EffectDerivedPut, EffectDerivedDelete:
-				placement.RequiresMaterialize = true
-				goto placementDone
-			default:
-				placement.SlowReason = SlowReasonDynamicWriteSet
-				goto placementDone
-			}
-			parts, ok := layout.InspectKey(effect.Key)
-			if !ok {
-				if fsmetaKeys {
-					placement.SlowReason = SlowReasonDynamicWriteSet
-					goto placementDone
-				}
-				opaqueKeys = true
-				continue
-			}
-			if opaqueKeys {
-				placement.SlowReason = SlowReasonDynamicWriteSet
-				goto placementDone
-			}
-			if !fsmetaKeys {
-				mount = parts.MountKeyID
-				fsmetaKeys = true
-			} else if mount != parts.MountKeyID {
-				placement.SlowReason = SlowReasonCrossBucket
-				goto placementDone
-			}
-			buckets = append(buckets, parts.Bucket)
-		}
-		if fsmetaKeys {
-			placement.MountKeyID = mount
-			placement.Buckets = uniqueBuckets(buckets)
-			placement.SingleBucket = len(placement.Buckets) == 1
-			placement.CanSegment = true
-			placement.Install = SegmentInstallCatalog
-			placement.MergeKey = SegmentMergeKey{MountKeyID: mount, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}
-		} else if opaqueKeys {
-			placement.CanSegment = true
-			placement.Install = SegmentInstallSingleBucket
-			placement.MergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}
-		}
-	}
-placementDone:
 	footprint := KeyFootprint{Reads: make([]KeyRef, 0, len(delta.ReadPredicates)), Writes: make([]KeyRef, 0, len(delta.WriteEffects)), ConflictKeys: make([]KeyRef, 0, len(delta.ReadPredicates)+len(delta.WriteEffects))}
 	for _, predicate := range delta.ReadPredicates {
 		mode := KeyAccessRead
@@ -963,28 +709,6 @@ placementDone:
 		atomicity.Members = append(atomicity.Members, MutationID(i))
 	}
 	atomicity.Splittable = len(atomicity.Members) <= 1
-	segment := SegmentPlan{MergeKey: placement.MergeKey, Install: placement.Install, CanAppend: placement.CanSegment, RequiresMaterialize: placement.RequiresMaterialize, EstimatedPayloadBytes: footprint.EstimatedBytes, OperationCount: 1, MutationCount: uint32(len(effects))}
-	switch {
-	case placement.Install == SegmentInstallSingleBucket:
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = placement.MergeKey
-	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
-		// Multi-bucket catalog op: materialize is still safe because the
-		// installer writes each entry as a direct MVCC mutation regardless
-		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
-		// materialize ops batch together in one install. Local fsmeta runtimes
-		// consume this path when their installer materializes segments;
-		// distributed runtimes keep catalog install and never enter materialize
-		// in SegmentPlanForInstall.
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	}
 	completion := CompletionPlan{}
 	if delta.Eligibility == EligibilityVisibleCommit && len(effects) != 0 {
 		kind := CompletionVisible
@@ -1020,10 +744,7 @@ placementDone:
 	return CompiledOp{
 		Delta:            delta,
 		DescriptorDigest: digest,
-		IntentDigest:     digest,
-		ReplayDigest:     digest,
 		Authority:        AuthorityPlan{Scope: delta.Authority, Required: delta.Eligibility == EligibilityVisibleCommit, Fence: fenceMode(delta)},
-		Placement:        placement,
 		Footprint:        footprint,
 		Predicates:       predicates,
 		Guards:           guards,
@@ -1032,7 +753,6 @@ placementDone:
 		Durability:       durability,
 		Watch:            watch,
 		Completion:       completion,
-		Segment:          segment,
 	}, nil
 }
 
@@ -1042,68 +762,6 @@ func compileExpireWriteSessionsCompiledOp(delta SemanticDelta) (CompiledOp, erro
 	}
 	digest := descriptorDigest(delta)
 	durability := DurabilityVisibleOnly
-	placement := PlacementPlan{MountKeyID: delta.Authority.MountKeyID, Buckets: delta.Authority.Buckets, SlowReason: delta.SlowReason}
-	placement.SingleBucket = len(placement.Buckets) == 1
-	if delta.Eligibility == EligibilityVisibleCommit && !delta.DurabilityBarrier && len(delta.WriteEffects) > 0 {
-		var mount model.MountKeyID
-		var fsmetaKeys bool
-		var opaqueKeys bool
-		buckets := make([]layout.AffinityBucket, 0, len(delta.WriteEffects))
-		for _, effect := range delta.WriteEffects {
-			switch effect.Kind {
-			case EffectPut:
-				if len(effect.Key) == 0 || effect.Value == nil {
-					placement.RequiresMaterialize = true
-					goto placementDone
-				}
-			case EffectDelete:
-				if len(effect.Key) == 0 {
-					placement.RequiresMaterialize = true
-					goto placementDone
-				}
-			case EffectDerivedPut, EffectDerivedDelete:
-				placement.RequiresMaterialize = true
-				goto placementDone
-			default:
-				placement.SlowReason = SlowReasonDynamicWriteSet
-				goto placementDone
-			}
-			parts, ok := layout.InspectKey(effect.Key)
-			if !ok {
-				if fsmetaKeys {
-					placement.SlowReason = SlowReasonDynamicWriteSet
-					goto placementDone
-				}
-				opaqueKeys = true
-				continue
-			}
-			if opaqueKeys {
-				placement.SlowReason = SlowReasonDynamicWriteSet
-				goto placementDone
-			}
-			if !fsmetaKeys {
-				mount = parts.MountKeyID
-				fsmetaKeys = true
-			} else if mount != parts.MountKeyID {
-				placement.SlowReason = SlowReasonCrossBucket
-				goto placementDone
-			}
-			buckets = append(buckets, parts.Bucket)
-		}
-		if fsmetaKeys {
-			placement.MountKeyID = mount
-			placement.Buckets = uniqueBuckets(buckets)
-			placement.SingleBucket = len(placement.Buckets) == 1
-			placement.CanSegment = true
-			placement.Install = SegmentInstallCatalog
-			placement.MergeKey = SegmentMergeKey{MountKeyID: mount, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}
-		} else if opaqueKeys {
-			placement.CanSegment = true
-			placement.Install = SegmentInstallSingleBucket
-			placement.MergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: placement.Install, Durability: durability, FormatVersion: segmentFormatVersion}
-		}
-	}
-placementDone:
 	footprint := KeyFootprint{Reads: make([]KeyRef, 0, len(delta.ReadPredicates)), Writes: make([]KeyRef, 0, len(delta.WriteEffects)), ConflictKeys: make([]KeyRef, 0, len(delta.ReadPredicates)+len(delta.WriteEffects))}
 	for _, predicate := range delta.ReadPredicates {
 		mode := KeyAccessRead
@@ -1172,28 +830,6 @@ placementDone:
 		atomicity.Members = append(atomicity.Members, MutationID(i))
 	}
 	atomicity.Splittable = len(atomicity.Members) <= 1
-	segment := SegmentPlan{MergeKey: placement.MergeKey, Install: placement.Install, CanAppend: placement.CanSegment, RequiresMaterialize: placement.RequiresMaterialize, EstimatedPayloadBytes: footprint.EstimatedBytes, OperationCount: 1, MutationCount: uint32(len(effects))}
-	switch {
-	case placement.Install == SegmentInstallSingleBucket:
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = placement.MergeKey
-	case placement.Install == SegmentInstallCatalog && placement.SingleBucket && len(placement.Buckets) == 1:
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, HasPrimaryBucket: true, PrimaryBucket: placement.Buckets[0], Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	case placement.Install == SegmentInstallCatalog && placement.CanSegment:
-		// Multi-bucket catalog op: materialize is still safe because the
-		// installer writes each entry as a direct MVCC mutation regardless
-		// of bucket. MergeKey carries no PrimaryBucket so all multi-bucket
-		// materialize ops batch together in one install. Local fsmeta runtimes
-		// consume this path when their installer materializes segments;
-		// distributed runtimes keep catalog install and never enter materialize
-		// in SegmentPlanForInstall.
-		segment.CanMaterialize = placement.CanSegment
-		segment.MaterializeInstall = SegmentInstallSingleBucket
-		segment.MaterializeMergeKey = SegmentMergeKey{MountKeyID: placement.MountKeyID, Install: SegmentInstallSingleBucket, Durability: placement.MergeKey.Durability, FormatVersion: placement.MergeKey.FormatVersion}
-	}
 	completion := CompletionPlan{}
 	if delta.Eligibility == EligibilityVisibleCommit && len(effects) != 0 {
 		kind := CompletionVisible
@@ -1229,10 +865,7 @@ placementDone:
 	return CompiledOp{
 		Delta:            delta,
 		DescriptorDigest: digest,
-		IntentDigest:     digest,
-		ReplayDigest:     digest,
 		Authority:        AuthorityPlan{Scope: delta.Authority, Required: delta.Eligibility == EligibilityVisibleCommit, Fence: fenceMode(delta)},
-		Placement:        placement,
 		Footprint:        footprint,
 		Predicates:       predicates,
 		Guards:           guards,
@@ -1241,48 +874,5 @@ placementDone:
 		Durability:       durability,
 		Watch:            watch,
 		Completion:       completion,
-		Segment:          segment,
 	}, nil
-}
-
-func MaterializeOpenWriteSession(program OpenWriteSessionProgram, values OpenWriteSessionValues) (MaterializedOp, error) {
-	compiled := program.Compiled
-	if compiled.Delta.Kind != model.OperationOpenWriteSession || len(compiled.Delta.WriteEffects) != 2 || values.SessionValue == nil {
-		return MaterializedOp{}, model.ErrInvalidRequest
-	}
-	effects := []WriteEffect{
-		{Kind: EffectPut, Key: compiled.Delta.WriteEffects[0].Key, Value: values.SessionValue},
-		{Kind: EffectPut, Key: compiled.Delta.WriteEffects[1].Key, Value: values.SessionValue},
-	}
-	return MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{
-		Proofs: values.PredicateProofs,
-	}, nil)
-}
-
-func MaterializeHeartbeatWriteSession(program HeartbeatWriteSessionProgram, values HeartbeatWriteSessionValues) (MaterializedOp, error) {
-	compiled := program.Compiled
-	if compiled.Delta.Kind != model.OperationHeartbeatSession || len(compiled.Delta.WriteEffects) != 2 || values.SessionValue == nil {
-		return MaterializedOp{}, model.ErrInvalidRequest
-	}
-	effects := []WriteEffect{
-		{Kind: EffectPut, Key: compiled.Delta.WriteEffects[0].Key, Value: values.SessionValue},
-		{Kind: EffectPut, Key: compiled.Delta.WriteEffects[1].Key, Value: values.SessionValue},
-	}
-	return MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{
-		Proofs: values.PredicateProofs,
-	}, nil)
-}
-
-func MaterializeCloseWriteSession(program CloseWriteSessionProgram, values CloseWriteSessionValues) (MaterializedOp, error) {
-	compiled := program.Compiled
-	if compiled.Delta.Kind != model.OperationCloseSession || len(compiled.Delta.WriteEffects) != 2 {
-		return MaterializedOp{}, model.ErrInvalidRequest
-	}
-	effects := []WriteEffect{{Kind: EffectDelete, Key: compiled.Delta.WriteEffects[0].Key}}
-	if values.DeleteOwner {
-		effects = append(effects, WriteEffect{Kind: EffectDelete, Key: compiled.Delta.WriteEffects[1].Key})
-	}
-	return MaterializeCompiledOpWithEvidence(compiled, effects, PredicateEvidence{
-		Proofs: values.PredicateProofs,
-	}, nil)
 }

@@ -53,9 +53,6 @@ func TestOperationSpecsHaveStableGeneratedShape(t *testing.T) {
 			require.Len(t, spec.Effects, spec.EffectCount, spec.Name)
 		}
 		require.Contains(t, map[string]struct{}{"create": {}, "operation": {}}, spec.Emitter, spec.Name)
-		if spec.Materialize != "" {
-			require.NotEmpty(t, spec.ValuesType, spec.Name)
-		}
 		requireSemanticNames(t, spec.Name, spec.Predicates, spec.Effects, spec.Guards, spec.OptionalGuards)
 	}
 }
