@@ -263,6 +263,7 @@ func (r *Runner) CommitMetadata(ctx context.Context, command backend.MetadataCom
 			Term:             result.GetTerm(),
 			Index:            result.GetIndex(),
 			AppliedMutations: result.GetAppliedMutations(),
+			CommandKind:      command.Kind,
 		}, nil
 	}
 	return backend.MetadataCommitResult{}, lastErr

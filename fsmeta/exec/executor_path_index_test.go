@@ -14,7 +14,10 @@ import (
 
 func TestExecutorLookupPathUsesDerivedIndexForRootChild(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}))
+	executor, err := newTestExecutor(runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
+		WithPathIndexMaintenance(true),
+	)
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), model.CreateRequest{
@@ -51,9 +54,39 @@ func TestExecutorLookupPathUsesDerivedIndexForRootChild(t *testing.T) {
 	require.Equal(t, model.InodeID(22), pair.Inode.Inode)
 }
 
-func TestExecutorRenameMaintainsRootPathIndex(t *testing.T) {
+func TestExecutorLookupPathFallsBackWhenDerivedIndexDisabled(t *testing.T) {
 	runner := newFakeRunner()
 	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}))
+	require.NoError(t, err)
+
+	_, err = executor.Create(context.Background(), model.CreateRequest{
+		Mount:  "vol",
+		Parent: model.RootInode,
+		Name:   "artifact.json",
+		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile, Size: 4096, Mode: 0o644},
+	})
+	require.NoError(t, err)
+
+	key, err := layout.EncodePathIndexKey(testMountIdentity, model.RootInode, "artifact.json")
+	require.NoError(t, err)
+	_, ok := runner.data[string(key)]
+	require.False(t, ok)
+
+	pair, err := executor.LookupPath(context.Background(), model.LookupPathRequest{
+		Mount:     "vol",
+		RootInode: model.RootInode,
+		Path:      "artifact.json",
+	})
+	require.NoError(t, err)
+	require.Equal(t, model.DentryRecord{Parent: model.RootInode, Name: "artifact.json", Inode: 22, Type: model.InodeTypeFile}, pair.Dentry)
+}
+
+func TestExecutorRenameMaintainsRootPathIndex(t *testing.T) {
+	runner := newFakeRunner()
+	executor, err := newTestExecutor(runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
+		WithPathIndexMaintenance(true),
+	)
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), model.CreateRequest{
@@ -90,7 +123,10 @@ func TestExecutorRenameMaintainsRootPathIndex(t *testing.T) {
 
 func TestExecutorRemoveDeletesRootPathIndex(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}))
+	executor, err := newTestExecutor(runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{22}}),
+		WithPathIndexMaintenance(true),
+	)
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), model.CreateRequest{
@@ -120,7 +156,10 @@ func TestExecutorRemoveDeletesRootPathIndex(t *testing.T) {
 
 func TestExecutorLookupPathRejectsStaleDescendantIndexAfterDirectoryRename(t *testing.T) {
 	runner := newFakeRunner()
-	executor, err := newTestExecutor(runner, WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{21, 22}}))
+	executor, err := newTestExecutor(runner,
+		WithInodeAllocator(&fakeInodeAllocator{ids: []model.InodeID{21, 22}}),
+		WithPathIndexMaintenance(true),
+	)
 	require.NoError(t, err)
 
 	_, err = executor.Create(context.Background(), model.CreateRequest{

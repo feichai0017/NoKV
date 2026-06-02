@@ -53,6 +53,35 @@ const (
 	WatchOperationLink
 )
 
+// CommandKind names the semantic fsmeta operation class behind a
+// MetadataCommand. It is intentionally storage-neutral: backends may use it for
+// attribution or optimized internal paths, but fsmeta/exec remains responsible
+// for compiling predicates, mutations, and watch projections.
+type CommandKind uint8
+
+const (
+	CommandKindUnspecified CommandKind = iota
+	CommandKindCreate
+	CommandKindUpdateInode
+	CommandKindLookup
+	CommandKindLookupPath
+	CommandKindGetAttr
+	CommandKindReadDir
+	CommandKindReadSession
+	CommandKindSnapshotSubtree
+	CommandKindRename
+	CommandKindRenameReplace
+	CommandKindRenameSubtree
+	CommandKindLink
+	CommandKindUnlink
+	CommandKindRemove
+	CommandKindRemoveDirectory
+	CommandKindOpenWriteSession
+	CommandKindHeartbeatSession
+	CommandKindCloseSession
+	CommandKindExpireSessions
+)
+
 // WatchEvent is the semantic fsmeta watch projection attached to a
 // MetadataCommand. Key identifies the physical watch key used for prefix
 // routing; the parent/name/inode fields are the namespace payload delivered to
@@ -114,6 +143,7 @@ type Predicate struct {
 // runtimes. It groups the predicates, mutations, and watch projection that must
 // be evaluated and applied under one metadata commit boundary.
 type MetadataCommand struct {
+	Kind          CommandKind
 	RequestID     []byte
 	Mount         string
 	MountKeyID    uint64
@@ -138,6 +168,8 @@ type MetadataCommitResult struct {
 	Term             uint64
 	Index            uint64
 	AppliedMutations uint64
+	CommandKind      CommandKind
+	BatchSize        uint64
 }
 
 // Store is the minimum versioned metadata backend required by fsmeta execution.

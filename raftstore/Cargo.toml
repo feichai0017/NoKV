@@ -20,7 +20,7 @@ async-stream = "0.3"
 bytes = "1"
 crc32fast = "1.4"
 futures-core = "0.3"
-holt = { version = "0.4.1", default-features = false }
+holt = { version = "0.4.2", default-features = false }
 nokv-holtstore = { path = "crates/holtstore" }
 nokv-metadata-state = { path = "crates/metadata_state" }
 nokv-proto = { path = "crates/proto" }

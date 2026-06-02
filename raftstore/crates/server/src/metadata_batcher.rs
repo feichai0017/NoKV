@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio::task::JoinSet;
 
 const COMMIT_BATCH_MAX: usize = 64;
-const COMMIT_BATCH_DELAY: Duration = Duration::from_millis(3);
+const COMMIT_BATCH_COALESCE_DELAY: Duration = Duration::from_micros(250);
 const COMMIT_BATCH_CHANNEL: usize = 1024;
 const COMMIT_BATCH_INFLIGHT: usize = 4;
 
@@ -152,7 +152,11 @@ async fn collect_commit_batch(
     rx: &mut mpsc::Receiver<BatchItem>,
 ) -> Vec<BatchItem> {
     let mut batch = vec![first];
-    let delay = tokio::time::sleep(COMMIT_BATCH_DELAY);
+    drain_ready_commit_items(&mut batch, rx);
+    if batch.len() > 1 || batch.len() >= COMMIT_BATCH_MAX {
+        return batch;
+    }
+    let delay = tokio::time::sleep(COMMIT_BATCH_COALESCE_DELAY);
     tokio::pin!(delay);
     loop {
         if batch.len() >= COMMIT_BATCH_MAX {
@@ -161,7 +165,10 @@ async fn collect_commit_batch(
         tokio::select! {
             maybe_item = rx.recv() => {
                 match maybe_item {
-                    Some(item) => batch.push(item),
+                    Some(item) => {
+                        batch.push(item);
+                        drain_ready_commit_items(&mut batch, rx);
+                    }
                     None => break,
                 }
             }
@@ -169,6 +176,18 @@ async fn collect_commit_batch(
         }
     }
     batch
+}
+
+fn drain_ready_commit_items(batch: &mut Vec<BatchItem>, rx: &mut mpsc::Receiver<BatchItem>) {
+    while batch.len() < COMMIT_BATCH_MAX {
+        match rx.try_recv() {
+            Ok(item) => batch.push(item),
+            Err(mpsc::error::TryRecvError::Empty)
+            | Err(mpsc::error::TryRecvError::Disconnected) => {
+                break;
+            }
+        }
+    }
 }
 
 async fn flush_commit_batch<E>(engine: &E, batch: Vec<BatchItem>)

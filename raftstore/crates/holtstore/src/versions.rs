@@ -54,35 +54,6 @@ impl HoltMetadataStore {
         Ok(None)
     }
 
-    pub(crate) fn write_by_start_version(
-        &self,
-        family: metadatapb::MetadataFamily,
-        key: &[u8],
-        start_version: u64,
-    ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
-        let prefix = history_prefix(family, key);
-        for entry in self
-            .store
-            .history()
-            .map_err(to_backend_error)?
-            .range()
-            .prefix(&prefix)
-        {
-            let entry = entry.map_err(to_backend_error)?;
-            let RangeEntry::Key { key, value, .. } = entry else {
-                continue;
-            };
-            let Some((_family, _user_key, commit_ts)) = decode_history_key(&key)? else {
-                continue;
-            };
-            let decoded = decode_value(&value)?;
-            if decoded.start_version == start_version {
-                return Ok(Some((commit_ts, decoded)));
-            }
-        }
-        Ok(None)
-    }
-
     pub(crate) fn first_write_after_or_at(
         &self,
         family: metadatapb::MetadataFamily,
@@ -120,8 +91,31 @@ pub(crate) fn apply_committed(
     commit_ts: u64,
     value: &metadata_state::VersionedValue,
 ) {
+    apply_committed_with_history(batch, family, key, commit_ts, value, true);
+}
+
+pub(crate) fn apply_committed_current_only(
+    batch: &mut holt::DBAtomicBatch,
+    family: metadatapb::MetadataFamily,
+    key: &[u8],
+    commit_ts: u64,
+    value: &metadata_state::VersionedValue,
+) {
+    apply_committed_with_history(batch, family, key, commit_ts, value, false);
+}
+
+fn apply_committed_with_history(
+    batch: &mut holt::DBAtomicBatch,
+    family: metadatapb::MetadataFamily,
+    key: &[u8],
+    commit_ts: u64,
+    value: &metadata_state::VersionedValue,
+    write_history: bool,
+) {
     let encoded = encode_value(value);
-    batch.put(HISTORY_TREE, &history_key(family, key, commit_ts), &encoded);
+    if write_history {
+        batch.put(HISTORY_TREE, &history_key(family, key, commit_ts), &encoded);
+    }
     batch.put(
         current_tree_for_family(family),
         key,

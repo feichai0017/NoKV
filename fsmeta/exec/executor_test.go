@@ -48,6 +48,7 @@ type metadataPredicateCommitCall struct {
 type fakePredicateRunner struct {
 	*fakeRunner
 	err            error
+	commands       []backend.MetadataCommand
 	predicateCalls []metadataPredicateCommitCall
 }
 
@@ -484,6 +485,7 @@ func (r *fakePredicateRunner) TryMetadataPredicateCommit(_ context.Context, prim
 }
 
 func (r *fakePredicateRunner) CommitMetadata(_ context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error) {
+	r.commands = append(r.commands, command)
 	commitVersion := command.CommitVersion
 	if commitVersion == 0 {
 		commitVersion = command.ReadVersion + 1

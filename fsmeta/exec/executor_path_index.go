@@ -17,6 +17,9 @@ import (
 const pathIndexScanLimit uint32 = 8
 
 func (e *Executor) pathIndexPutMutations(ctx context.Context, mount model.MountIdentity, dentry model.DentryRecord, startVersion, commitVersion uint64) ([]*backend.Mutation, error) {
+	if e == nil || !e.maintainPathIndex {
+		return nil, nil
+	}
 	record, ok, err := e.pathIndexRecordForDentry(ctx, mount, dentry, startVersion, commitVersion)
 	if err != nil || !ok {
 		return nil, err
@@ -25,6 +28,9 @@ func (e *Executor) pathIndexPutMutations(ctx context.Context, mount model.MountI
 }
 
 func (e *Executor) pathIndexDeleteMutations(ctx context.Context, mount model.MountIdentity, dentry model.DentryRecord, startVersion uint64) ([]*backend.Mutation, error) {
+	if e == nil || !e.maintainPathIndex {
+		return nil, nil
+	}
 	record, ok, err := e.pathIndexRecordForDentry(ctx, mount, dentry, startVersion, 0)
 	if err != nil || !ok {
 		return nil, err

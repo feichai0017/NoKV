@@ -568,6 +568,42 @@ fn holt_metadata_command_survives_reopen() {
 }
 
 #[test]
+fn holt_metadata_command_dedupe_returns_original_commit_result() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let command = metadata_put_command(b"artifact/a", b"v1", 10);
+    let first = store.commit_metadata(&command, 11).unwrap();
+    assert!(first.error.is_none());
+
+    let replayed = store.commit_metadata(&command, 12).unwrap();
+    assert!(replayed.error.is_none());
+    assert_eq!(replayed.commit_version, 11);
+    assert_eq!(replayed.applied_mutations, 1);
+
+    let got = store
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"artifact/a".to_vec(),
+            version: 12,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(got.kv.unwrap().value, b"v1");
+}
+
+#[test]
+fn holt_metadata_command_dedupe_rejects_request_id_reuse_for_different_command() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let command = metadata_put_command(b"artifact/a", b"v1", 10);
+    store.commit_metadata(&command, 11).unwrap();
+
+    let mut changed = command;
+    changed.mutations[0].value = b"v2".to_vec();
+    let err = store.commit_metadata(&changed, 12).unwrap_err();
+    assert!(err
+        .to_string()
+        .contains("metadata command request id reused with different command"));
+}
+
+#[test]
 fn holt_metadata_family_current_trees_keep_identical_keys_separate() {
     let store = HoltMetadataStore::open_memory().unwrap();
     store

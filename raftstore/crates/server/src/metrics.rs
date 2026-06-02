@@ -268,12 +268,16 @@ fn raftnode_json(metrics: RaftNodeMetricsSnapshot) -> String {
 
 fn holt_metadata_json(metrics: HoltMetadataMetricsSnapshot) -> String {
     format!(
-        "{{\"commit_batches_total\":{},\"commit_commands_total\":{},\"commit_commands_max\":{},\"commit_writes_total\":{},\"commit_writes_max\":{},\"prepare_ns_total\":{},\"prepare_ns_max\":{},\"atomic_ns_total\":{},\"atomic_ns_max\":{},\"total_ns_total\":{},\"total_ns_max\":{},\"scan_keys_visited_total\":{},\"scan_keys_returned_total\":{},\"current_hit_total\":{},\"history_lookup_total\":{}}}",
+        "{{\"commit_batches_total\":{},\"commit_commands_total\":{},\"commit_commands_max\":{},\"commit_writes_total\":{},\"commit_writes_max\":{},\"commit_current_writes_total\":{},\"commit_current_writes_max\":{},\"commit_history_writes_total\":{},\"commit_history_writes_max\":{},\"prepare_ns_total\":{},\"prepare_ns_max\":{},\"atomic_ns_total\":{},\"atomic_ns_max\":{},\"total_ns_total\":{},\"total_ns_max\":{},\"scan_keys_visited_total\":{},\"scan_keys_returned_total\":{},\"current_hit_total\":{},\"history_lookup_total\":{}}}",
         metrics.commit_batches_total,
         metrics.commit_commands_total,
         metrics.commit_commands_max,
         metrics.commit_writes_total,
         metrics.commit_writes_max,
+        metrics.commit_current_writes_total,
+        metrics.commit_current_writes_max,
+        metrics.commit_history_writes_total,
+        metrics.commit_history_writes_max,
         metrics.prepare_ns_total,
         metrics.prepare_ns_max,
         metrics.atomic_ns_total,
@@ -394,6 +398,10 @@ mod tests {
                 commit_commands_max: 4,
                 commit_writes_total: 9,
                 commit_writes_max: 7,
+                commit_current_writes_total: 9,
+                commit_current_writes_max: 7,
+                commit_history_writes_total: 8,
+                commit_history_writes_max: 6,
                 prepare_ns_total: 11,
                 prepare_ns_max: 8,
                 atomic_ns_total: 12,
@@ -429,6 +437,8 @@ mod tests {
         assert!(payload.contains("\"append_entries_client_empty_calls_total\":1"));
         assert!(payload.contains("\"append_entries_client_data_calls_total\":2"));
         assert!(payload.contains("\"commit_writes_total\":9"));
+        assert!(payload.contains("\"commit_current_writes_total\":9"));
+        assert!(payload.contains("\"commit_history_writes_total\":8"));
         assert!(payload.contains("\"scan_keys_visited_total\":12"));
         assert!(payload.contains("\"pending_admin\":true"));
         assert!(payload.ends_with('\n'));

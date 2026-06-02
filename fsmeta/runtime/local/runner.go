@@ -201,6 +201,7 @@ func (r *Runner) CommitMetadata(ctx context.Context, command backend.MetadataCom
 		return backend.MetadataCommitResult{
 			CommitVersion: command.ReadVersion,
 			Index:         command.ReadVersion,
+			CommandKind:   command.Kind,
 		}, nil
 	}
 	commitVersion, applied, observer, err := r.applyMetadataCommand(command)
@@ -214,6 +215,7 @@ func (r *Runner) CommitMetadata(ctx context.Context, command backend.MetadataCom
 		CommitVersion:    commitVersion,
 		Index:            commitVersion,
 		AppliedMutations: applied,
+		CommandKind:      command.Kind,
 	}, nil
 }
 

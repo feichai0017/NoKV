@@ -77,6 +77,7 @@ type Executor struct {
 	quotas                        QuotaResolver
 	subtrees                      SubtreeHandoffPublisher
 	authorities                   SubtreeAuthorityResolver
+	maintainPathIndex             bool
 	lockTTL                       uint64
 	now                           func() time.Time
 	readRetriesTotal              atomic.Uint64
@@ -147,6 +148,16 @@ func WithSubtreeHandoffPublisher(publisher SubtreeHandoffPublisher) Option {
 func WithSubtreeAuthorityResolver(resolver SubtreeAuthorityResolver) Option {
 	return func(e *Executor) {
 		e.authorities = resolver
+	}
+}
+
+// WithPathIndexMaintenance enables maintenance of the derived path lookup
+// index. The index is not canonical namespace truth; leaving it disabled keeps
+// hot Create/Rename/Remove paths on inode/dentry records only while LookupPath
+// still falls back to canonical component lookup.
+func WithPathIndexMaintenance(enabled bool) Option {
+	return func(e *Executor) {
+		e.maintainPathIndex = enabled
 	}
 }
 

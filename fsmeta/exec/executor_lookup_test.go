@@ -40,19 +40,13 @@ func TestExecutorCreateAndLookup(t *testing.T) {
 	}, record)
 
 	require.Len(t, runner.mutations, 1)
-	require.Len(t, runner.mutations[0], 6)
+	require.Len(t, runner.mutations[0], 4)
 	require.True(t, runner.mutations[0][1].AssertionNotExist)
 	require.True(t, runner.mutations[0][2].AssertionNotExist)
 	require.True(t, runner.mutations[0][3].AssertionNotExist)
 	parentKind, err := layout.KeyKindOf(runner.mutations[0][3].Key)
 	require.NoError(t, err)
 	require.Equal(t, layout.KeyKindParent, parentKind)
-	pathKind, err := layout.KeyKindOf(runner.mutations[0][4].Key)
-	require.NoError(t, err)
-	require.Equal(t, layout.KeyKindPath, pathKind)
-	pathKind, err = layout.KeyKindOf(runner.mutations[0][5].Key)
-	require.NoError(t, err)
-	require.Equal(t, layout.KeyKindPath, pathKind)
 }
 
 func TestExecutorLookupReturnsNotFound(t *testing.T) {

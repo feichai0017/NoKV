@@ -1,21 +1,29 @@
 use holt::RangeEntry;
 use nokv_metadata_state as metadata_state;
 use nokv_proto::nokv::metadata::v1 as metadatapb;
-use std::collections::BTreeSet;
+use prost::Message;
 use std::time::{Duration, Instant};
 
 use crate::metrics;
 use crate::store::to_backend_error;
 use crate::trees::family_from_i32;
-use crate::versions::apply_committed;
+use crate::versions::{apply_committed, apply_committed_current_only, decode_current_value};
 use crate::HoltMetadataStore;
+
+#[derive(Clone)]
+struct PendingMetadataWrite {
+    family: metadatapb::MetadataFamily,
+    key: Vec<u8>,
+    commit_version: u64,
+    value: metadata_state::VersionedValue,
+    write_history: bool,
+}
 
 impl metadata_state::MetadataEngine for HoltMetadataStore {
     fn get_metadata(
         &self,
         req: &metadatapb::MetadataGetRequest,
     ) -> metadata_state::Result<metadatapb::MetadataGetResponse> {
-        let _guard = self.lock()?;
         let family = family_from_i32(req.key_family);
         Ok(match self.read_committed(family, &req.key, req.version)? {
             Some((commit, value)) => {
@@ -56,7 +64,38 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         }
         let mut responses = Vec::with_capacity(req.requests.len());
         for request in &req.requests {
-            responses.push(self.get_metadata(request)?);
+            let family = family_from_i32(request.key_family);
+            responses.push(
+                match self.read_committed(family, &request.key, request.version)? {
+                    Some((commit, value)) => {
+                        if metadata_state::value_is_expired(value.expires_at) {
+                            metadatapb::MetadataGetResponse {
+                                not_found: true,
+                                ..Default::default()
+                            }
+                        } else {
+                            let expires_at = value.expires_at;
+                            let bytes = value.value;
+                            let not_found = bytes.is_none();
+                            metadatapb::MetadataGetResponse {
+                                kv: bytes.map(|value| metadatapb::MetadataKv {
+                                    key: request.key.clone(),
+                                    key_family: family as i32,
+                                    value,
+                                    version: commit,
+                                    expires_at,
+                                }),
+                                not_found,
+                                ..Default::default()
+                            }
+                        }
+                    }
+                    None => metadatapb::MetadataGetResponse {
+                        not_found: true,
+                        ..Default::default()
+                    },
+                },
+            );
         }
         Ok(metadatapb::MetadataBatchGetResponse {
             responses,
@@ -68,7 +107,6 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         &self,
         req: &metadatapb::MetadataScanRequest,
     ) -> metadata_state::Result<metadatapb::MetadataScanResponse> {
-        let _guard = self.lock()?;
         let family = family_from_i32(req.key_family);
         let read_version = metadata_state::scan_read_version(req.version);
         let limit = metadata_state::scan_limit(req.limit);
@@ -157,7 +195,7 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         let started = Instant::now();
         let _guard = self.lock()?;
         let mut results = Vec::with_capacity(commands.len());
-        let mut pending = Vec::new();
+        let mut pending: Vec<PendingMetadataWrite> = Vec::new();
         let prepare_started = Instant::now();
         for (command, commit_version) in commands.iter().zip(commit_versions) {
             let result = self.prepare_metadata_commit(command, *commit_version, &mut pending)?;
@@ -165,12 +203,29 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         }
         let prepare_duration = prepare_started.elapsed();
         let pending_writes = pending.len() as u64;
+        let history_writes = pending.iter().filter(|write| write.write_history).count() as u64;
         let mut atomic_duration = Duration::ZERO;
         if !pending.is_empty() {
             let atomic_started = Instant::now();
             self.atomic(|batch| {
-                for (family, key, commit_version, value) in &pending {
-                    apply_committed(batch, *family, key, *commit_version, value);
+                for write in &pending {
+                    if write.write_history {
+                        apply_committed(
+                            batch,
+                            write.family,
+                            &write.key,
+                            write.commit_version,
+                            &write.value,
+                        );
+                    } else {
+                        apply_committed_current_only(
+                            batch,
+                            write.family,
+                            &write.key,
+                            write.commit_version,
+                            &write.value,
+                        );
+                    }
                 }
             })?;
             atomic_duration = atomic_started.elapsed();
@@ -178,6 +233,8 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         metrics::record_metadata_commit(
             commands.len() as u64,
             pending_writes,
+            pending_writes,
+            history_writes,
             prepare_duration,
             atomic_duration,
             started.elapsed(),
@@ -191,12 +248,7 @@ impl HoltMetadataStore {
         &self,
         command: &metadatapb::MetadataCommand,
         commit_version: u64,
-        pending: &mut Vec<(
-            metadatapb::MetadataFamily,
-            Vec<u8>,
-            u64,
-            metadata_state::VersionedValue,
-        )>,
+        pending: &mut Vec<PendingMetadataWrite>,
     ) -> metadata_state::Result<metadata_state::MetadataApplyResult> {
         if let Some(error) = metadata_state::validation::metadata_commit_version(
             command.read_version,
@@ -204,12 +256,8 @@ impl HoltMetadataStore {
         ) {
             return Ok(metadata_apply_error(commit_version, error));
         }
-        if self.metadata_already_applied(command, commit_version)? {
-            return Ok(metadata_state::MetadataApplyResult {
-                commit_version,
-                applied_mutations: command.mutations.len() as u64,
-                error: None,
-            });
+        if let Some(result) = self.metadata_dedupe_result(command, pending)? {
+            return Ok(result);
         }
         for predicate in &command.predicates {
             let read_version = if predicate.read_version == 0 {
@@ -284,14 +332,37 @@ impl HoltMetadataStore {
                 ));
             }
         }
-        pending.extend(command.mutations.iter().map(|mutation| {
-            (
-                family_from_i32(mutation.key_family),
-                mutation.key.clone(),
+        pending.extend(
+            command
+                .mutations
+                .iter()
+                .map(|mutation| PendingMetadataWrite {
+                    family: family_from_i32(mutation.key_family),
+                    key: mutation.key.clone(),
+                    commit_version,
+                    value: metadata_state::metadata_mutation_value(mutation, command.read_version),
+                    write_history: true,
+                }),
+        );
+        if !command.request_id.is_empty() {
+            pending.push(PendingMetadataWrite {
+                family: metadatapb::MetadataFamily::CommandDedupe,
+                key: command.request_id.clone(),
                 commit_version,
-                metadata_state::metadata_mutation_value(mutation, command.read_version),
-            )
-        }));
+                value: metadata_state::VersionedValue {
+                    kind: metadata_state::ValueKind::Put,
+                    start_version: command.read_version,
+                    value: Some(encode_metadata_dedupe_record(
+                        command,
+                        commit_version,
+                        command.mutations.len() as u64,
+                    )),
+                    expires_at: 0,
+                    retention_pin_version: 0,
+                },
+                write_history: false,
+            });
+        }
         Ok(metadata_state::MetadataApplyResult {
             commit_version,
             applied_mutations: command.mutations.len() as u64,
@@ -304,21 +375,18 @@ impl HoltMetadataStore {
         family: metadatapb::MetadataFamily,
         key: &[u8],
         version: u64,
-        pending: &[(
-            metadatapb::MetadataFamily,
-            Vec<u8>,
-            u64,
-            metadata_state::VersionedValue,
-        )],
+        pending: &[PendingMetadataWrite],
     ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
         let mut best = self.read_committed(family, key, version)?;
-        for (pending_family, pending_key, commit_version, value) in pending {
-            if *pending_family == family
-                && pending_key.as_slice() == key
-                && *commit_version <= version
-                && best.as_ref().is_none_or(|(ts, _)| *commit_version > *ts)
+        for write in pending {
+            if write.family == family
+                && write.key.as_slice() == key
+                && write.commit_version <= version
+                && best
+                    .as_ref()
+                    .is_none_or(|(ts, _)| write.commit_version > *ts)
             {
-                best = Some((*commit_version, value.clone()));
+                best = Some((write.commit_version, write.value.clone()));
             }
         }
         Ok(best)
@@ -329,38 +397,34 @@ impl HoltMetadataStore {
         family: metadatapb::MetadataFamily,
         prefix: &[u8],
         version: u64,
-        pending: &[(
-            metadatapb::MetadataFamily,
-            Vec<u8>,
-            u64,
-            metadata_state::VersionedValue,
-        )],
+        pending: &[PendingMetadataWrite],
     ) -> metadata_state::Result<bool> {
-        let mut keys = BTreeSet::new();
         for entry in self
             .store
             .current(family)
             .map_err(to_backend_error)?
             .range()
+            .prefix(prefix)
         {
             let entry = entry.map_err(to_backend_error)?;
             let RangeEntry::Key { key, .. } = entry else {
                 continue;
             };
-            if key.starts_with(prefix) {
-                keys.insert(key);
-            }
-        }
-        for (pending_family, pending_key, _, _) in pending {
-            if *pending_family == family && pending_key.starts_with(prefix) {
-                keys.insert(pending_key.clone());
-            }
-        }
-        for key in keys {
             if self
                 .read_committed_with_pending(family, &key, version, pending)?
                 .and_then(|(_, value)| value.value)
                 .is_some()
+            {
+                return Ok(false);
+            }
+        }
+        for write in pending {
+            if write.family == family
+                && write.key.starts_with(prefix)
+                && self
+                    .read_committed_with_pending(family, &write.key, version, pending)?
+                    .and_then(|(_, value)| value.value)
+                    .is_some()
             {
                 return Ok(false);
             }
@@ -373,51 +437,134 @@ impl HoltMetadataStore {
         family: metadatapb::MetadataFamily,
         key: &[u8],
         version: u64,
-        pending: &[(
-            metadatapb::MetadataFamily,
-            Vec<u8>,
-            u64,
-            metadata_state::VersionedValue,
-        )],
+        pending: &[PendingMetadataWrite],
     ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
         let mut best = self.first_write_after_or_at(family, key, version)?;
-        for (pending_family, pending_key, commit_version, value) in pending {
-            if *pending_family == family
-                && pending_key.as_slice() == key
-                && *commit_version >= version
-                && best.as_ref().is_none_or(|(ts, _)| *commit_version < *ts)
+        for write in pending {
+            if write.family == family
+                && write.key.as_slice() == key
+                && write.commit_version >= version
+                && best
+                    .as_ref()
+                    .is_none_or(|(ts, _)| write.commit_version < *ts)
             {
-                best = Some((*commit_version, value.clone()));
+                best = Some((write.commit_version, write.value.clone()));
             }
         }
         Ok(best)
     }
 
-    fn metadata_already_applied(
+    fn metadata_dedupe_result(
         &self,
         command: &metadatapb::MetadataCommand,
-        commit_version: u64,
-    ) -> metadata_state::Result<bool> {
-        let mut any_present = false;
-        let mut all_present = true;
-        for mutation in &command.mutations {
-            let Some((existing_commit, value)) = self.write_by_start_version(
-                family_from_i32(mutation.key_family),
-                &mutation.key,
-                command.read_version,
-            )?
-            else {
-                all_present = false;
-                continue;
-            };
-            any_present = true;
-            if existing_commit != commit_version
-                || !metadata_state::metadata_mutation_matches_value(mutation, &value)
+        pending: &[PendingMetadataWrite],
+    ) -> metadata_state::Result<Option<metadata_state::MetadataApplyResult>> {
+        if command.request_id.is_empty() {
+            return Ok(None);
+        }
+        for write in pending.iter().rev() {
+            if write.family == metadatapb::MetadataFamily::CommandDedupe
+                && write.key.as_slice() == command.request_id.as_slice()
             {
-                return Ok(false);
+                let Some(raw) = write.value.value.as_deref() else {
+                    return Ok(None);
+                };
+                return decode_metadata_dedupe_record(command, raw).map(Some);
             }
         }
-        Ok(any_present && all_present)
+        let Some(raw) = self
+            .store
+            .current(metadatapb::MetadataFamily::CommandDedupe)
+            .map_err(to_backend_error)?
+            .get(&command.request_id)
+            .map_err(to_backend_error)?
+        else {
+            return Ok(None);
+        };
+        let (_commit_ts, value) = decode_current_value(&raw)?;
+        let Some(record) = value.value else {
+            return Ok(None);
+        };
+        decode_metadata_dedupe_record(command, &record).map(Some)
+    }
+}
+
+fn encode_metadata_dedupe_record(
+    command: &metadatapb::MetadataCommand,
+    commit_version: u64,
+    applied_mutations: u64,
+) -> Vec<u8> {
+    let command_bytes = command.encode_to_vec();
+    let mut out = Vec::with_capacity(20 + command_bytes.len());
+    out.extend_from_slice(&commit_version.to_be_bytes());
+    out.extend_from_slice(&applied_mutations.to_be_bytes());
+    out.extend_from_slice(&(command_bytes.len() as u32).to_be_bytes());
+    out.extend_from_slice(&command_bytes);
+    out
+}
+
+fn decode_metadata_dedupe_record(
+    command: &metadatapb::MetadataCommand,
+    raw: &[u8],
+) -> metadata_state::Result<metadata_state::MetadataApplyResult> {
+    if raw.len() < 20 {
+        return Err(metadata_state::Error::Decode(
+            "metadata command dedupe record too short".to_owned(),
+        ));
+    }
+    let commit_version = u64::from_be_bytes(raw[0..8].try_into().unwrap());
+    let applied_mutations = u64::from_be_bytes(raw[8..16].try_into().unwrap());
+    let command_len = u32::from_be_bytes(raw[16..20].try_into().unwrap()) as usize;
+    if raw.len() != 20 + command_len {
+        return Err(metadata_state::Error::Decode(
+            "metadata command dedupe record length mismatch".to_owned(),
+        ));
+    }
+    let current = command.encode_to_vec();
+    if current.as_slice() != &raw[20..] {
+        return Err(metadata_state::Error::Backend(
+            "metadata command request id reused with different command".to_owned(),
+        ));
+    }
+    Ok(metadata_state::MetadataApplyResult {
+        commit_version,
+        applied_mutations,
+        error: None,
+    })
+}
+
+#[cfg(test)]
+mod metadata_dedupe_tests {
+    use super::*;
+
+    #[test]
+    fn metadata_dedupe_record_rejects_reused_request_id_with_different_command() {
+        let command = metadatapb::MetadataCommand {
+            request_id: b"rid".to_vec(),
+            read_version: 10,
+            mutations: vec![metadatapb::MetadataMutation {
+                key: b"k1".to_vec(),
+                value: b"v1".to_vec(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+        let encoded = encode_metadata_dedupe_record(&command, 11, 1);
+        let changed = metadatapb::MetadataCommand {
+            request_id: b"rid".to_vec(),
+            read_version: 10,
+            mutations: vec![metadatapb::MetadataMutation {
+                key: b"k1".to_vec(),
+                value: b"v2".to_vec(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        };
+
+        assert!(decode_metadata_dedupe_record(&changed, &encoded).is_err());
+        let decoded = decode_metadata_dedupe_record(&command, &encoded).unwrap();
+        assert_eq!(decoded.commit_version, 11);
+        assert_eq!(decoded.applied_mutations, 1);
     }
 }
 

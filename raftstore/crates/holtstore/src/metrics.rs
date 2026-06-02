@@ -9,6 +9,10 @@ pub struct HoltMetadataMetricsSnapshot {
     pub commit_commands_max: u64,
     pub commit_writes_total: u64,
     pub commit_writes_max: u64,
+    pub commit_current_writes_total: u64,
+    pub commit_current_writes_max: u64,
+    pub commit_history_writes_total: u64,
+    pub commit_history_writes_max: u64,
     pub prepare_ns_total: u64,
     pub prepare_ns_max: u64,
     pub atomic_ns_total: u64,
@@ -27,6 +31,10 @@ struct HoltMetadataMetrics {
     commit_commands_max: AtomicU64,
     commit_writes_total: AtomicU64,
     commit_writes_max: AtomicU64,
+    commit_current_writes_total: AtomicU64,
+    commit_current_writes_max: AtomicU64,
+    commit_history_writes_total: AtomicU64,
+    commit_history_writes_max: AtomicU64,
     prepare_ns_total: AtomicU64,
     prepare_ns_max: AtomicU64,
     atomic_ns_total: AtomicU64,
@@ -47,6 +55,10 @@ pub fn holt_metadata_metrics_snapshot() -> HoltMetadataMetricsSnapshot {
         commit_commands_max: load(&metrics.commit_commands_max),
         commit_writes_total: load(&metrics.commit_writes_total),
         commit_writes_max: load(&metrics.commit_writes_max),
+        commit_current_writes_total: load(&metrics.commit_current_writes_total),
+        commit_current_writes_max: load(&metrics.commit_current_writes_max),
+        commit_history_writes_total: load(&metrics.commit_history_writes_total),
+        commit_history_writes_max: load(&metrics.commit_history_writes_max),
         prepare_ns_total: load(&metrics.prepare_ns_total),
         prepare_ns_max: load(&metrics.prepare_ns_max),
         atomic_ns_total: load(&metrics.atomic_ns_total),
@@ -63,6 +75,8 @@ pub fn holt_metadata_metrics_snapshot() -> HoltMetadataMetricsSnapshot {
 pub(crate) fn record_metadata_commit(
     commands: u64,
     writes: u64,
+    current_writes: u64,
+    history_writes: u64,
     prepare_duration: Duration,
     atomic_duration: Duration,
     total_duration: Duration,
@@ -77,6 +91,14 @@ pub(crate) fn record_metadata_commit(
         .commit_writes_total
         .fetch_add(writes, Ordering::Relaxed);
     record_max(&metrics.commit_writes_max, writes);
+    metrics
+        .commit_current_writes_total
+        .fetch_add(current_writes, Ordering::Relaxed);
+    record_max(&metrics.commit_current_writes_max, current_writes);
+    metrics
+        .commit_history_writes_total
+        .fetch_add(history_writes, Ordering::Relaxed);
+    record_max(&metrics.commit_history_writes_max, history_writes);
     record_duration(
         &metrics.prepare_ns_total,
         &metrics.prepare_ns_max,
@@ -129,6 +151,10 @@ impl Default for HoltMetadataMetrics {
             commit_commands_max: AtomicU64::new(0),
             commit_writes_total: AtomicU64::new(0),
             commit_writes_max: AtomicU64::new(0),
+            commit_current_writes_total: AtomicU64::new(0),
+            commit_current_writes_max: AtomicU64::new(0),
+            commit_history_writes_total: AtomicU64::new(0),
+            commit_history_writes_max: AtomicU64::new(0),
             prepare_ns_total: AtomicU64::new(0),
             prepare_ns_max: AtomicU64::new(0),
             atomic_ns_total: AtomicU64::new(0),

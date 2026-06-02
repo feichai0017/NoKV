@@ -184,9 +184,14 @@ where
         &self,
         f: impl FnOnce(&E) -> nokv_metadata_state::Result<T>,
     ) -> nokv_metadata_state::Result<T> {
-        let engine = self.inner.engine.lock().map_err(|_| {
-            nokv_metadata_state::Error::Backend("region apply mutex poisoned".to_owned())
-        })?;
+        let engine = self
+            .inner
+            .engine
+            .lock()
+            .map_err(|_| {
+                nokv_metadata_state::Error::Backend("region apply mutex poisoned".to_owned())
+            })?
+            .clone();
         f(&engine)
     }
 }
