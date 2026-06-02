@@ -5,7 +5,7 @@ use nokv_raftnode::{ApplyWatchProvider, MetadataCommandExecutor, MetadataReadExe
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tonic::{Request, Response, Status};
 
-use crate::region_registry::{metadata_region_lookup, RegionServiceLookup, RegionServiceRegistry};
+use crate::region::{metadata_region_lookup, RegionServiceLookup, RegionServiceRegistry};
 use crate::{
     AppliedRegionDescriptorProvider, MetadataPlaneService, RaftRuntimeStatusProvider,
     DEFAULT_APPLY_WATCH_BUFFER,

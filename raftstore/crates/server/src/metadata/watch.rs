@@ -3,7 +3,7 @@ use nokv_raftnode::{ApplyWatchProvider, ApplyWatchReplayRequest};
 use tokio_stream::wrappers::ReceiverStream;
 use tonic::Status;
 
-use crate::watch_wire::{
+use crate::metadata::{
     chunk_apply_watch_keys, matching_apply_watch_events, matching_apply_watch_keys,
     watch_events_for_keys,
 };

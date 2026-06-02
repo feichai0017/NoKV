@@ -12,7 +12,7 @@ use nokv_raftnode::{
 };
 use tonic::{Request, Status};
 
-use crate::admission_state::RegionAdmissionState;
+use crate::admission::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
 use crate::{
     AppliedRegionDescriptorProvider, MetadataPlaneService, MultiRegionMetadataPlaneService,

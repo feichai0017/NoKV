@@ -14,19 +14,19 @@ use nokv_raftstore_server::{
     PeerEndpointCatalog, RegionAdmission, TopologyPublisher,
 };
 
-use crate::coordinator::{
+use super::coordinator::{
     spawn_multi_region_coordinator_heartbeat, spawn_pending_topology_retries,
     CoordinatorHeartbeatConfig,
 };
-use crate::hosted_region::HostedRegionRegistry;
-use crate::metrics::spawn_metrics_server;
-use crate::region_open::{
+use super::hosted_region::HostedRegionRegistry;
+use super::metrics::spawn_metrics_server;
+use super::region_open::{
     open_openraft_region, raft_log_dir_for_region, spawn_recovered_region_leadership_retries,
 };
-use crate::root_publication::{
+use super::root_publication::{
     spawn_startup_root_publication_for_regions, CoordinatorTopologyPublisher,
 };
-use crate::startup::{RegionKeyRange, RegionRangeCatalog, ServerIdentity};
+use super::startup::{RegionKeyRange, RegionRangeCatalog, ServerIdentity};
 
 fn coordinator_topology_publisher(
     config: Option<CoordinatorHeartbeatConfig>,

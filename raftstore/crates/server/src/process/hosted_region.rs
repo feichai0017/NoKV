@@ -3,14 +3,16 @@ use std::sync::{Arc, RwLock};
 
 use nokv_raftnode::OpenRaftRegion;
 
+use super::startup::ServerIdentity;
+
 #[derive(Clone)]
 pub(crate) struct HostedRegionRegistry<E> {
-    regions: Arc<RwLock<BTreeMap<u64, (crate::startup::ServerIdentity, OpenRaftRegion<E>)>>>,
+    regions: Arc<RwLock<BTreeMap<u64, (ServerIdentity, OpenRaftRegion<E>)>>>,
 }
 
 impl<E> HostedRegionRegistry<E> {
     pub(crate) fn new(
-        regions: impl IntoIterator<Item = (crate::startup::ServerIdentity, OpenRaftRegion<E>)>,
+        regions: impl IntoIterator<Item = (ServerIdentity, OpenRaftRegion<E>)>,
     ) -> Result<Self, String> {
         let registry = Self {
             regions: Arc::new(RwLock::new(BTreeMap::new())),
@@ -23,7 +25,7 @@ impl<E> HostedRegionRegistry<E> {
 
     pub(crate) fn insert(
         &self,
-        identity: crate::startup::ServerIdentity,
+        identity: ServerIdentity,
         region: OpenRaftRegion<E>,
     ) -> Result<(), String> {
         if identity.region_id == 0 {
@@ -42,9 +44,7 @@ impl<E> HostedRegionRegistry<E> {
         Ok(())
     }
 
-    pub(crate) fn snapshot(
-        &self,
-    ) -> Result<Vec<(crate::startup::ServerIdentity, OpenRaftRegion<E>)>, String>
+    pub(crate) fn snapshot(&self) -> Result<Vec<(ServerIdentity, OpenRaftRegion<E>)>, String>
     where
         E: Clone,
     {

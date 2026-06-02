@@ -8,8 +8,8 @@ use nokv_raftstore_server::{root_event_transition_id, TopologyPublishOutcome, To
 use prost::Message;
 use prost_types::Any;
 
-use crate::coordinator::CoordinatorHeartbeatConfig;
-use crate::startup::ServerIdentity;
+use super::coordinator::CoordinatorHeartbeatConfig;
+use super::startup::ServerIdentity;
 
 #[derive(Clone)]
 pub(crate) struct CoordinatorTopologyPublisher {

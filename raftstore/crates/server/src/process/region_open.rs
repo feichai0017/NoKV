@@ -6,7 +6,7 @@ use nokv_raftnode::{
     RegionStateMachine, SegmentedEntryLog, TonicRaftNetworkFactory,
 };
 
-use crate::startup::ServerIdentity;
+use super::startup::ServerIdentity;
 
 pub(crate) async fn open_openraft_region<E>(
     identity: ServerIdentity,

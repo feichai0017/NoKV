@@ -8,13 +8,13 @@ use nokv_raftnode::{
 };
 use nokv_raftstore_server::{root_event_transition_id, RaftRuntimeStatusProvider};
 
-use crate::hosted_region::HostedRegionRegistry;
-use crate::root_publication::{publish_root_event_to_any, RootEventPublishError};
-use crate::scheduler_operations::{
+use super::hosted_region::HostedRegionRegistry;
+use super::root_publication::{publish_root_event_to_any, RootEventPublishError};
+use super::scheduler_operations::{
     execute_scheduler_operation, record_scheduler_operation_outcome,
     retry_pending_scheduler_operations,
 };
-use crate::startup::{parse_required_nonzero_u64, ServerIdentity};
+use super::startup::{parse_required_nonzero_u64, ServerIdentity};
 
 #[derive(Clone)]
 pub(crate) struct CoordinatorHeartbeatConfig {

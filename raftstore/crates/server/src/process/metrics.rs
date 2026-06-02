@@ -12,8 +12,8 @@ use nokv_raftnode::{
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 
-use crate::coordinator::coordinator_heartbeat_request_for_hosted_regions;
-use crate::hosted_region::HostedRegionRegistry;
+use super::coordinator::coordinator_heartbeat_request_for_hosted_regions;
+use super::hosted_region::HostedRegionRegistry;
 use nokv_raftstore_server::{metadata_batch_metrics_snapshot, MetadataBatchMetricsSnapshot};
 
 pub(super) fn spawn_metrics_server<E>(

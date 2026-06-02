@@ -14,6 +14,10 @@ use tonic::Status;
 
 use crate::RaftRuntimeStatus;
 
+mod state;
+
+pub(crate) use state::RegionAdmissionState;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegionAdmission {
     pub region_id: u64,

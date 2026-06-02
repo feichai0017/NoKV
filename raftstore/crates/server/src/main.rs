@@ -1,17 +1,10 @@
 //! Standalone Rust metadata raftstore server entrypoint.
 
-mod bootstrap;
-mod coordinator;
-mod hosted_region;
-mod metrics;
-mod region_open;
-mod root_publication;
-mod scheduler_operations;
-mod startup;
+mod process;
 
-use bootstrap::{serve_holt_regions, serve_memory_regions};
-use coordinator::coordinator_heartbeat_config_from_env;
-use startup::{
+use process::bootstrap::{serve_holt_regions, serve_memory_regions};
+use process::coordinator::coordinator_heartbeat_config_from_env;
+use process::startup::{
     advertised_addr_from_env, peer_endpoint_catalog_from_env, validate_startup_region_ranges,
     RegionRangeCatalog, ServerArgs, ServerIdentity, StorageBackend,
 };
@@ -61,7 +54,3 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     Ok(())
 }
-
-#[cfg(test)]
-#[path = "main_tests.rs"]
-mod tests;

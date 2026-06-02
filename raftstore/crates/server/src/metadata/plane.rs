@@ -4,10 +4,11 @@ use nokv_proto::nokv::metadata::v1 as metadatapb;
 use nokv_raftnode::{ApplyWatchProvider, MetadataCommandExecutor, MetadataReadExecutor};
 use tonic::{Request, Response, Status};
 
-use crate::admission_state::RegionAdmissionState;
+use crate::admission::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
-use crate::metadata_batcher::MetadataCommitBatcher;
-use crate::metadata_watch::{metadata_watch_apply_stream, MetadataWatchApplyStream};
+use crate::metadata::{
+    metadata_watch_apply_stream, MetadataCommitBatcher, MetadataWatchApplyStream,
+};
 use crate::{internal_error, AppliedRegionDescriptorProvider, RaftRuntimeStatusProvider};
 
 #[derive(Clone)]

@@ -6,7 +6,7 @@ use nokv_raftnode::{
     RegionSnapshotEngine,
 };
 
-use crate::admission_state::RegionAdmissionState;
+use crate::admission::RegionAdmissionState;
 use crate::execution::ExecutionRuntime;
 use crate::{
     AppliedRegionDescriptorProvider, MultiRegionMetadataPlaneService, MultiRegionRaftAdminService,

@@ -4,19 +4,22 @@ use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_raftnode::MetadataRetentionExecutor;
 use tonic::{Request, Response, Status};
 
-use crate::admission::RegionAdmission;
-use crate::admission_state::RegionAdmissionState;
+use crate::admission::{RegionAdmission, RegionAdmissionState};
 use crate::execution::ExecutionRuntime;
-use crate::peer_endpoint_catalog::PeerEndpointCatalog;
-use crate::region_runtime::{
+use crate::region::{
     AppliedRegionDescriptorProvider, EmptyApplyStatus, RaftMembershipAdmin,
     RaftRuntimeStatusProvider,
 };
 use crate::topology::peer_change_transition_id;
+use crate::topology::PeerEndpointCatalog;
 use crate::{
     internal_error, EmptyRegionDescriptorSink, EmptyRestartDiagnostics, EmptyTopologyPublisher,
     RegionDescriptorSink, RestartDiagnosticsProvider, TopologyPublisher,
 };
+
+mod router;
+
+pub use router::MultiRegionRaftAdminService;
 
 #[derive(Clone)]
 pub struct RaftAdminService<S = EmptyApplyStatus, D = EmptyRegionDescriptorSink> {

@@ -6,7 +6,7 @@ use nokv_proto::nokv::admin::v1 as adminpb;
 use nokv_raftnode::MetadataRetentionExecutor;
 use tonic::{Request, Response, Status};
 
-use crate::region_registry::{admin_region_lookup, RegionServiceRegistry};
+use crate::region::{admin_region_lookup, RegionServiceRegistry};
 use crate::{
     push_missing_topology_status, AppliedRegionDescriptorProvider, EmptyRegionDescriptorSink,
     EmptyRestartDiagnostics, RaftAdminService, RaftMembershipAdmin, RaftRuntimeStatusProvider,
