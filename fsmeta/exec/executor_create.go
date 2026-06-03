@@ -51,7 +51,7 @@ func (e *Executor) Create(ctx context.Context, req model.CreateRequest) (model.C
 	}
 	inodeValue := delta.WriteEffects[2].Value
 	e.createTotal.Add(1)
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		parent, err := e.readDirectoryInode(ctx, mount, req.Parent, startVersion)
 		if err != nil {
 			return err

@@ -12,6 +12,37 @@ type KV struct {
 	Value  []byte
 }
 
+// ReadPurpose tells distributed runtimes why a read is being issued. User
+// visible reads keep the strongest default; write-plan reads are only used to
+// compile a speculative MetadataCommand whose predicates still fence the final
+// commit.
+type ReadPurpose uint8
+
+const (
+	ReadPurposeUserStrong ReadPurpose = iota
+	ReadPurposeWritePlanLocal
+	ReadPurposeSnapshot
+)
+
+// ReadOptions is intentionally storage-neutral. Local runtimes may ignore it;
+// replicated runtimes use it to select the cheapest freshness proof that still
+// preserves fsmeta semantics.
+type ReadOptions struct {
+	Purpose ReadPurpose
+}
+
+// NormalizeReadOptions returns the effective read options for a Store read.
+func NormalizeReadOptions(opts []ReadOptions) ReadOptions {
+	if len(opts) == 0 {
+		return ReadOptions{Purpose: ReadPurposeUserStrong}
+	}
+	out := opts[0]
+	if out.Purpose == 0 {
+		out.Purpose = ReadPurposeUserStrong
+	}
+	return out
+}
+
 // MetadataFamily names a storage-engine-neutral metadata record family. The
 // family is part of the backend contract so physical engines can map namespace
 // records to native trees without learning fsmeta semantics.
@@ -180,13 +211,13 @@ type MetadataCommitResult struct {
 // and engine diagnostics are intentionally outside this contract.
 type Store interface {
 	ReserveTimestamp(ctx context.Context, count uint64) (uint64, error)
-	Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
-	BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
+	Get(ctx context.Context, key []byte, version uint64, opts ...ReadOptions) ([]byte, bool, error)
+	BatchGet(ctx context.Context, keys [][]byte, version uint64, opts ...ReadOptions) (map[string][]byte, error)
 	// Scan returns visible keys starting at startKey. When prefix is non-empty,
 	// the scan is bounded to keys under that prefix; callers that know a
 	// directory/session/path scope should pass it so physical engines can use
 	// native prefix iterators.
-	Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]KV, error)
+	Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64, opts ...ReadOptions) ([]KV, error)
 	CommitMetadata(ctx context.Context, command MetadataCommand) (MetadataCommitResult, error)
 }
 

@@ -140,14 +140,14 @@ func (r *versionedRunner) ReserveTimestamp(_ context.Context, count uint64) (uin
 	return first, nil
 }
 
-func (r *versionedRunner) Get(_ context.Context, key []byte, version uint64) ([]byte, bool, error) {
+func (r *versionedRunner) Get(_ context.Context, key []byte, version uint64, _ ...backend.ReadOptions) ([]byte, bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	value, ok := r.visibleLocked(key, version)
 	return value, ok, nil
 }
 
-func (r *versionedRunner) BatchGet(_ context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
+func (r *versionedRunner) BatchGet(_ context.Context, keys [][]byte, version uint64, _ ...backend.ReadOptions) (map[string][]byte, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	out := make(map[string][]byte, len(keys))
@@ -159,7 +159,7 @@ func (r *versionedRunner) BatchGet(_ context.Context, keys [][]byte, version uin
 	return out, nil
 }
 
-func (r *versionedRunner) Scan(_ context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error) {
+func (r *versionedRunner) Scan(_ context.Context, startKey, prefix []byte, limit uint32, version uint64, _ ...backend.ReadOptions) ([]backend.KV, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	keys := make([][]byte, 0, len(r.data))

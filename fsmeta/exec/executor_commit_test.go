@@ -340,10 +340,10 @@ func TestExecutorMetadataCommandPreservesExplicitFamilyAndRetention(t *testing.T
 		testMountIdentity,
 		primary,
 		[]*backend.Predicate{{
-			Family:        backend.MetadataFamilySnapshot,
-			Key:           key,
-			Kind:          backend.PredicateNotExists,
-			ReadVersion:   11,
+			Family:      backend.MetadataFamilySnapshot,
+			Key:         key,
+			Kind:        backend.PredicateNotExists,
+			ReadVersion: 11,
 		}},
 		[]*backend.Mutation{{
 			Family:              backend.MetadataFamilySnapshot,

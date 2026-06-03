@@ -22,7 +22,7 @@ func (e *Executor) removeDentry(ctx context.Context, mount model.MountIdentity, 
 	delta := compiled.Delta
 	plan := delta.Plan
 	var result model.RemoveResult
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		dentry, err := e.readDentrySnapshot(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
 			return err
@@ -154,7 +154,7 @@ func (e *Executor) RemoveDirectory(ctx context.Context, req model.RemoveDirector
 	}
 	delta := program.Compiled.Delta
 	plan := delta.Plan
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		dentry, err := e.readDentrySnapshot(ctx, plan.PrimaryKey, startVersion)
 		if err != nil {
 			return err

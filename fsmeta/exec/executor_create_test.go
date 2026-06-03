@@ -63,6 +63,7 @@ func TestExecutorCreateUsesMetadataPredicateCommit(t *testing.T) {
 	require.True(t, call.mutations[3].AssertionNotExist)
 	require.Equal(t, backend.CommandKindCreate, runner.commands[0].Kind)
 	require.Empty(t, base.mutations)
+	require.Equal(t, []backend.ReadPurpose{backend.ReadPurposeWritePlanLocal}, base.readPurposes)
 
 	record, err := executor.Lookup(context.Background(), model.LookupRequest{
 		Mount:  "vol",
@@ -71,6 +72,7 @@ func TestExecutorCreateUsesMetadataPredicateCommit(t *testing.T) {
 	})
 	require.NoError(t, err)
 	require.Equal(t, model.InodeID(22), record.Inode)
+	require.Equal(t, backend.ReadPurposeUserStrong, base.readPurposes[len(base.readPurposes)-1])
 }
 
 func TestExecutorCreateUsesMetadataPredicatesWithDefaultRunner(t *testing.T) {

@@ -1,16 +1,19 @@
 use holt::RangeEntry;
 use nokv_metadata_state as metadata_state;
+use nokv_proto::nokv::metadata::v1 as metadatapb;
 
 use crate::codec::decode_value;
 use crate::store::to_backend_error;
-use crate::trees::{decode_history_key, family_from_i32, CURRENT_TREES, HISTORY_TREE};
-use crate::versions::apply_committed;
+use crate::trees::{
+    current_tree_for_family, decode_history_key, family_from_i32, CURRENT_TREES, HISTORY_TREE,
+};
+use crate::versions::{apply_committed, decode_current_value};
 use crate::HoltMetadataStore;
 
 impl metadata_state::MetadataSnapshotEngine for HoltMetadataStore {
     fn export_metadata_snapshot(&self) -> metadata_state::Result<metadata_state::MetadataSnapshot> {
         let _guard = self.lock()?;
-        let mut writes = Vec::new();
+        let mut writes = std::collections::BTreeMap::new();
         for entry in self.store.history().map_err(to_backend_error)?.range() {
             let entry = entry.map_err(to_backend_error)?;
             let RangeEntry::Key { key, value, .. } = entry else {
@@ -19,18 +22,37 @@ impl metadata_state::MetadataSnapshotEngine for HoltMetadataStore {
             let Some((family, user_key, commit_version)) = decode_history_key(&key)? else {
                 continue;
             };
-            writes.push(metadata_state::MetadataSnapshotWrite {
-                family: family as i32,
-                key: user_key,
-                commit_version,
-                value: decode_value(&value)?,
-            });
+            writes.insert(
+                (family as i32, user_key, commit_version),
+                decode_value(&value)?,
+            );
         }
-        writes.sort_by(|left, right| {
-            left.key
-                .cmp(&right.key)
-                .then(left.commit_version.cmp(&right.commit_version))
-        });
+        for family in metadata_current_families() {
+            for entry in self
+                .store
+                .tree(current_tree_for_family(family))
+                .map_err(to_backend_error)?
+                .range()
+            {
+                let entry = entry.map_err(to_backend_error)?;
+                let RangeEntry::Key { key, value, .. } = entry else {
+                    continue;
+                };
+                let (commit_version, current) = decode_current_value(&value)?;
+                writes.insert((family as i32, key, commit_version), current);
+            }
+        }
+        let writes = writes
+            .into_iter()
+            .map(
+                |((family, key, commit_version), value)| metadata_state::MetadataSnapshotWrite {
+                    family,
+                    key,
+                    commit_version,
+                    value,
+                },
+            )
+            .collect();
 
         Ok(metadata_state::MetadataSnapshot { writes })
     }
@@ -88,4 +110,22 @@ impl metadata_state::MetadataSnapshotEngine for HoltMetadataStore {
         })?;
         Ok(())
     }
+}
+
+fn metadata_current_families() -> [metadatapb::MetadataFamily; 13] {
+    [
+        metadatapb::MetadataFamily::Unspecified,
+        metadatapb::MetadataFamily::Mount,
+        metadatapb::MetadataFamily::Inode,
+        metadatapb::MetadataFamily::Dentry,
+        metadatapb::MetadataFamily::Parent,
+        metadatapb::MetadataFamily::Chunk,
+        metadatapb::MetadataFamily::Session,
+        metadatapb::MetadataFamily::Quota,
+        metadatapb::MetadataFamily::Snapshot,
+        metadatapb::MetadataFamily::PathIndex,
+        metadatapb::MetadataFamily::Watch,
+        metadatapb::MetadataFamily::CommandDedupe,
+        metadatapb::MetadataFamily::Segment,
+    ]
 }

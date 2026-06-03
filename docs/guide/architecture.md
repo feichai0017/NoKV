@@ -54,6 +54,9 @@ watch projection keys, and a storage-neutral metadata family under one metadata
 commit boundary. Families let runtimes place inode, dentry, snapshot, watch,
 and command-dedupe records in different physical trees without exposing Badger,
 Holt, Raft, protobuf, migration, or SST concepts to fsmeta execution.
+Read options keep user-visible reads strong by default while allowing write
+planning reads to use a cheaper leader-local applied view; the command
+predicates remain the correctness fence for stale planning reads.
 
 ## Local Runtime
 
@@ -85,9 +88,10 @@ committed Raft frontier and streams apply-ordered watch events back to fsmeta.
 Holt is not imported by Go fsmeta code. It belongs under `raftstore`, where
 Rust can use Holt multi-tree storage directly for the replicated state machine.
 The distributed data plane maps metadata families to `*_current` Holt trees and
-keeps historical MVCC versions in a separate `history` tree. Latest reads and
-directory scans therefore hit family-local current trees; snapshot reads fall
-back to history only when the requested version predates the current record.
+keeps historical MVCC versions in a separate `history` tree only when snapshot
+or watch retention requires old versions. Latest reads and directory scans
+therefore hit family-local current trees; snapshot reads fall back to history
+only when the requested version predates the current record.
 For `ReadDirPlus`, dentry current values may include an inode projection. The
 executor uses it for single-link file entries and keeps directory/hardlink
 entries on the inode-read fallback path until parent-index freshness exists.

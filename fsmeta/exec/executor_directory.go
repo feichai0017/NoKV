@@ -21,7 +21,7 @@ func (e *Executor) readDirectoryInode(ctx context.Context, mount model.MountIden
 	if err != nil {
 		return directoryInodeSnapshot{}, err
 	}
-	value, ok, err := e.runner.Get(ctx, key, version)
+	value, ok, err := e.getMetadata(ctx, key, version)
 	if err != nil {
 		return directoryInodeSnapshot{}, err
 	}

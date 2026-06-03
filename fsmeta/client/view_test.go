@@ -130,7 +130,7 @@ func (f *pathLookupViewFake) LookupPath(_ context.Context, req model.LookupPathR
 	f.lookupPathReqs = append(f.lookupPathReqs, req)
 	parent := req.RootInode
 	var current model.DentryAttrPair
-	for _, part := range strings.Split(req.Path, "/") {
+	for part := range strings.SplitSeq(req.Path, "/") {
 		pair, ok := f.dentry[viewDentryKey(parent, part)]
 		if !ok {
 			return model.DentryAttrPair{}, model.ErrNotFound

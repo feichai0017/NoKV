@@ -27,7 +27,7 @@ func (e *Executor) Link(ctx context.Context, req model.LinkRequest) error {
 	}
 	delta := program.Compiled.Delta
 	plan := delta.Plan
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		sourceDentry, err := e.readDentrySnapshot(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err

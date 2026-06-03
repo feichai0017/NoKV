@@ -238,6 +238,9 @@ where
         if status.applied_index == 0 {
             return false;
         }
+        if metadata_read_preference(context) == metadatapb::ReadPreference::LeaderOnly {
+            return true;
+        }
         let metrics = self.raft_handle().metrics();
         let metrics = metrics.borrow();
         let last_log_index = metrics.last_log_index.unwrap_or_default();
@@ -277,6 +280,14 @@ fn metadata_read_consistency(
     context
         .and_then(|context| metadatapb::ReadConsistency::try_from(context.read_consistency).ok())
         .unwrap_or(metadatapb::ReadConsistency::Strong)
+}
+
+fn metadata_read_preference(
+    context: Option<&metadatapb::MetadataContext>,
+) -> metadatapb::ReadPreference {
+    context
+        .and_then(|context| metadatapb::ReadPreference::try_from(context.read_preference).ok())
+        .unwrap_or(metadatapb::ReadPreference::LeaderOnly)
 }
 
 fn stale_metadata_region_error() -> errorpb::RegionError {

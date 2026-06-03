@@ -736,6 +736,53 @@ fn holt_metadata_scan_uses_current_tree_prefix() {
 }
 
 #[test]
+fn holt_metadata_commit_skips_history_without_retention() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    store
+        .commit_metadata(&metadata_put_command(b"artifact/a", b"v1", 10), 11)
+        .unwrap();
+
+    let history_count = store.store.history().unwrap().range().into_iter().count();
+    assert_eq!(history_count, 0);
+    let got = store
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"artifact/a".to_vec(),
+            version: 11,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(got.kv.unwrap().value, b"v1");
+    let snapshot = store.export_metadata_snapshot().unwrap();
+    assert!(snapshot
+        .writes
+        .iter()
+        .any(|write| write.key == b"artifact/a" && write.commit_version == 11));
+}
+
+#[test]
+fn holt_metadata_retention_preserves_prior_current_version() {
+    let store = HoltMetadataStore::open_memory().unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v1", 10), 11)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_retention_pin_command(b"snapshot/15", 40, 15), 41)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v2", 50), 51)
+        .unwrap();
+
+    let snapshot_read = store
+        .get_metadata(&metadatapb::MetadataGetRequest {
+            key: b"artifact/a".to_vec(),
+            version: 15,
+            ..Default::default()
+        })
+        .unwrap();
+    assert_eq!(snapshot_read.kv.unwrap().value, b"v1");
+}
+
+#[test]
 fn holt_metadata_predicate_failure_does_not_partially_apply() {
     let store = HoltMetadataStore::open_memory().unwrap();
     store
@@ -874,6 +921,12 @@ fn holt_metadata_reverse_scan_uses_start_key_as_upper_bound() {
 fn holt_metadata_retention_prunes_only_versions_hidden_by_floor_anchor() {
     let store = HoltMetadataStore::open_memory().unwrap();
     store
+        .store
+        .region_meta()
+        .unwrap()
+        .put(crate::trees::METADATA_HISTORY_ACTIVE_KEY, b"1")
+        .unwrap();
+    store
         .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v1", 10), 11)
         .unwrap();
     store
@@ -910,6 +963,7 @@ fn holt_metadata_retention_prunes_only_versions_hidden_by_floor_anchor() {
         snapshot
             .writes
             .into_iter()
+            .filter(|write| write.key == b"artifact/a")
             .map(|write| write.commit_version)
             .collect::<Vec<_>>(),
         vec![21, 31]
@@ -923,16 +977,16 @@ fn holt_metadata_retention_pin_clamps_requested_floor() {
         .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v1", 10), 11)
         .unwrap();
     store
-        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v2", 20), 21)
-        .unwrap();
-    store
-        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v3", 30), 31)
-        .unwrap();
-    store
         .commit_metadata(&metadata_retention_pin_command(b"snapshot/15", 40, 15), 41)
         .unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v2", 50), 51)
+        .unwrap();
+    store
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v3", 60), 61)
+        .unwrap();
 
-    let pruned = store.prune_metadata_versions(30).unwrap();
+    let pruned = store.prune_metadata_versions(60).unwrap();
     assert_eq!(pruned.retention_floor, 15);
     assert_eq!(pruned.pruned_versions, 0);
 
@@ -951,6 +1005,12 @@ fn holt_metadata_retention_survives_reopen() {
     let dir = tempfile::tempdir().unwrap();
     {
         let store = HoltMetadataStore::open_file(dir.path()).unwrap();
+        store
+            .store
+            .region_meta()
+            .unwrap()
+            .put(crate::trees::METADATA_HISTORY_ACTIVE_KEY, b"1")
+            .unwrap();
         store
             .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v1", 10), 11)
             .unwrap();
@@ -978,6 +1038,7 @@ fn holt_metadata_retention_survives_reopen() {
         snapshot
             .writes
             .into_iter()
+            .filter(|write| write.key == b"artifact/a")
             .map(|write| write.commit_version)
             .collect::<Vec<_>>(),
         vec![21, 31]
@@ -991,10 +1052,10 @@ fn holt_metadata_snapshot_round_trips_retention_pin_versions() {
         .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v1", 10), 11)
         .unwrap();
     source
-        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v2", 20), 21)
+        .commit_metadata(&metadata_retention_pin_command(b"snapshot/15", 40, 15), 41)
         .unwrap();
     source
-        .commit_metadata(&metadata_retention_pin_command(b"snapshot/15", 40, 15), 41)
+        .commit_metadata(&metadata_overwrite_command(b"artifact/a", b"v2", 50), 51)
         .unwrap();
 
     let target = HoltMetadataStore::open_memory().unwrap();

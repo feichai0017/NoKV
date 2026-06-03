@@ -35,7 +35,7 @@ func (e *Executor) GetQuotaUsage(ctx context.Context, req model.QuotaUsageReques
 	if err != nil {
 		return model.UsageRecord{}, err
 	}
-	value, ok, err := e.runner.Get(ctx, key, version)
+	value, ok, err := e.getMetadata(ctx, key, version)
 	if err != nil {
 		return model.UsageRecord{}, err
 	}

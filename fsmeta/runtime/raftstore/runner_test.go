@@ -104,6 +104,28 @@ func TestRunnerBatchGetMapsResponseByRequestKey(t *testing.T) {
 	require.Equal(t, map[string][]byte{"a": []byte("va")}, values)
 }
 
+func TestRunnerReadOptionsSelectMetadataContextConsistency(t *testing.T) {
+	var contexts []*metadatapb.MetadataContext
+	client := &fakeMetadataPlaneClient{
+		get: func(_ context.Context, req *metadatapb.MetadataGetRequest) (*metadatapb.MetadataGetResponse, error) {
+			contexts = append(contexts, req.GetContext())
+			return &metadatapb.MetadataGetResponse{NotFound: true}, nil
+		},
+	}
+	runner := newTestRunner(t, client)
+
+	_, _, err := runner.Get(context.Background(), []byte("k"), 5)
+	require.NoError(t, err)
+	_, _, err = runner.Get(context.Background(), []byte("k"), 5, backend.ReadOptions{Purpose: backend.ReadPurposeWritePlanLocal})
+	require.NoError(t, err)
+
+	require.Len(t, contexts, 2)
+	require.Equal(t, metadatapb.ReadConsistency_READ_CONSISTENCY_STRONG, contexts[0].GetReadConsistency())
+	require.Equal(t, metadatapb.ReadPreference_READ_PREFERENCE_LEADER_ONLY, contexts[0].GetReadPreference())
+	require.Equal(t, metadatapb.ReadConsistency_READ_CONSISTENCY_BOUNDED_STALE, contexts[1].GetReadConsistency())
+	require.Equal(t, metadatapb.ReadPreference_READ_PREFERENCE_LEADER_ONLY, contexts[1].GetReadPreference())
+}
+
 func TestRunnerScanSendsPrefixAndFamily(t *testing.T) {
 	mount := model.MountIdentity{MountID: "vol", MountKeyID: 1}
 	prefix, err := layout.EncodeDentryPrefix(mount, model.RootInode)

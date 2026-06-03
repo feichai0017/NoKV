@@ -70,7 +70,7 @@ func (e *Executor) pathIndexPathForInode(ctx context.Context, mount model.MountI
 	if err != nil {
 		return "", false, err
 	}
-	kvs, err := e.runner.Scan(ctx, prefix, prefix, pathIndexScanLimit, version)
+	kvs, err := e.scanMetadata(ctx, prefix, prefix, pathIndexScanLimit, version)
 	if err != nil {
 		return "", false, err
 	}
@@ -163,7 +163,7 @@ func (e *Executor) lookupPathIndex(ctx context.Context, mount model.MountIdentit
 	if err != nil {
 		return model.DentryAttrPair{}, false, err
 	}
-	value, ok, err := e.runner.Get(ctx, key, version)
+	value, ok, err := e.getMetadata(ctx, key, version)
 	if err != nil || !ok {
 		return model.DentryAttrPair{}, false, err
 	}

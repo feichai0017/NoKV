@@ -6,7 +6,7 @@ use std::time::{Duration, Instant};
 
 use crate::metrics;
 use crate::store::to_backend_error;
-use crate::trees::family_from_i32;
+use crate::trees::{family_from_i32, METADATA_HISTORY_ACTIVE_KEY, REGION_META_TREE};
 use crate::versions::{apply_committed, apply_committed_current_only, decode_current_value};
 use crate::HoltMetadataStore;
 
@@ -111,8 +111,54 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         let read_version = metadata_state::scan_read_version(req.version);
         let limit = metadata_state::scan_limit(req.limit);
         let mut kvs = Vec::new();
-        let mut keys = Vec::new();
         let current = self.store.current(family).map_err(to_backend_error)?;
+        if !req.reverse {
+            let mut visited = 0_u64;
+            if req.prefix_key.is_empty() {
+                for entry in current.range() {
+                    let entry = entry.map_err(to_backend_error)?;
+                    let RangeEntry::Key { key, .. } = entry else {
+                        continue;
+                    };
+                    if self.scan_one_key(
+                        req,
+                        family,
+                        key,
+                        read_version,
+                        limit,
+                        &mut visited,
+                        &mut kvs,
+                    )? {
+                        break;
+                    }
+                }
+            } else {
+                for entry in current.range().prefix(&req.prefix_key) {
+                    let entry = entry.map_err(to_backend_error)?;
+                    let RangeEntry::Key { key, .. } = entry else {
+                        continue;
+                    };
+                    if self.scan_one_key(
+                        req,
+                        family,
+                        key,
+                        read_version,
+                        limit,
+                        &mut visited,
+                        &mut kvs,
+                    )? {
+                        break;
+                    }
+                }
+            }
+            metrics::record_metadata_scan(visited, kvs.len() as u64);
+            return Ok(metadatapb::MetadataScanResponse {
+                kvs,
+                ..Default::default()
+            });
+        }
+
+        let mut keys = Vec::new();
         if req.prefix_key.is_empty() {
             for entry in current.range() {
                 let entry = entry.map_err(to_backend_error)?;
@@ -130,39 +176,19 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
                 keys.push(key);
             }
         }
-        if req.reverse {
-            keys.reverse();
-        }
+        keys.reverse();
         let mut visited = 0_u64;
         for key in keys {
-            if !metadata_state::scan_key_matches_start(
-                &key,
-                &req.start_key,
-                req.include_start,
-                req.reverse,
-            ) {
-                continue;
-            }
-            visited += 1;
-            if let Some((commit_version, value)) =
-                self.read_committed(family, &key, read_version)?
-            {
-                if metadata_state::value_is_expired(value.expires_at) {
-                    continue;
-                }
-                let expires_at = value.expires_at;
-                if let Some(bytes) = value.value {
-                    kvs.push(metadatapb::MetadataKv {
-                        key,
-                        key_family: family as i32,
-                        value: bytes,
-                        version: commit_version,
-                        expires_at,
-                    });
-                    if kvs.len() >= limit {
-                        break;
-                    }
-                }
+            if self.scan_one_key(
+                req,
+                family,
+                key,
+                read_version,
+                limit,
+                &mut visited,
+                &mut kvs,
+            )? {
+                break;
             }
         }
         metrics::record_metadata_scan(visited, kvs.len() as u64);
@@ -196,9 +222,21 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         let _guard = self.lock()?;
         let mut results = Vec::with_capacity(commands.len());
         let mut pending: Vec<PendingMetadataWrite> = Vec::new();
+        let history_active = self.metadata_history_active_locked()?;
+        let mut history_required = history_active;
         let prepare_started = Instant::now();
         for (command, commit_version) in commands.iter().zip(commit_versions) {
-            let result = self.prepare_metadata_commit(command, *commit_version, &mut pending)?;
+            let command_history_required =
+                history_required || metadata_command_activates_history(command);
+            let result = self.prepare_metadata_commit(
+                command,
+                *commit_version,
+                command_history_required,
+                &mut pending,
+            )?;
+            if command_history_required {
+                history_required = true;
+            }
             results.push(result);
         }
         let prepare_duration = prepare_started.elapsed();
@@ -208,6 +246,9 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
         if !pending.is_empty() {
             let atomic_started = Instant::now();
             self.atomic(|batch| {
+                if history_required && !history_active {
+                    batch.put(REGION_META_TREE, METADATA_HISTORY_ACTIVE_KEY, b"1");
+                }
                 for write in &pending {
                     if write.write_history {
                         apply_committed(
@@ -244,10 +285,58 @@ impl metadata_state::MetadataEngine for HoltMetadataStore {
 }
 
 impl HoltMetadataStore {
+    fn scan_one_key(
+        &self,
+        req: &metadatapb::MetadataScanRequest,
+        family: metadatapb::MetadataFamily,
+        key: Vec<u8>,
+        read_version: u64,
+        limit: usize,
+        visited: &mut u64,
+        kvs: &mut Vec<metadatapb::MetadataKv>,
+    ) -> metadata_state::Result<bool> {
+        if !metadata_state::scan_key_matches_start(
+            &key,
+            &req.start_key,
+            req.include_start,
+            req.reverse,
+        ) {
+            return Ok(false);
+        }
+        *visited += 1;
+        if let Some((commit_version, value)) = self.read_committed(family, &key, read_version)? {
+            if metadata_state::value_is_expired(value.expires_at) {
+                return Ok(false);
+            }
+            let expires_at = value.expires_at;
+            if let Some(bytes) = value.value {
+                kvs.push(metadatapb::MetadataKv {
+                    key,
+                    key_family: family as i32,
+                    value: bytes,
+                    version: commit_version,
+                    expires_at,
+                });
+            }
+        }
+        Ok(kvs.len() >= limit)
+    }
+
+    fn metadata_history_active_locked(&self) -> metadata_state::Result<bool> {
+        Ok(self
+            .store
+            .region_meta()
+            .map_err(to_backend_error)?
+            .get(METADATA_HISTORY_ACTIVE_KEY)
+            .map_err(to_backend_error)?
+            .is_some())
+    }
+
     fn prepare_metadata_commit(
         &self,
         command: &metadatapb::MetadataCommand,
         commit_version: u64,
+        history_required: bool,
         pending: &mut Vec<PendingMetadataWrite>,
     ) -> metadata_state::Result<metadata_state::MetadataApplyResult> {
         if let Some(error) = metadata_state::validation::metadata_commit_version(
@@ -332,6 +421,15 @@ impl HoltMetadataStore {
                 ));
             }
         }
+        if history_required {
+            for mutation in &command.mutations {
+                self.preserve_current_for_history(
+                    family_from_i32(mutation.key_family),
+                    &mutation.key,
+                    pending,
+                )?;
+            }
+        }
         pending.extend(
             command
                 .mutations
@@ -341,7 +439,7 @@ impl HoltMetadataStore {
                     key: mutation.key.clone(),
                     commit_version,
                     value: metadata_state::metadata_mutation_value(mutation, command.read_version),
-                    write_history: true,
+                    write_history: history_required,
                 }),
         );
         if !command.request_id.is_empty() {
@@ -368,6 +466,39 @@ impl HoltMetadataStore {
             applied_mutations: command.mutations.len() as u64,
             error: None,
         })
+    }
+
+    fn preserve_current_for_history(
+        &self,
+        family: metadatapb::MetadataFamily,
+        key: &[u8],
+        pending: &mut Vec<PendingMetadataWrite>,
+    ) -> metadata_state::Result<()> {
+        let Some(raw) = self
+            .store
+            .current(family)
+            .map_err(to_backend_error)?
+            .get(key)
+            .map_err(to_backend_error)?
+        else {
+            return Ok(());
+        };
+        let (commit_version, value) = decode_current_value(&raw)?;
+        if pending.iter().any(|write| {
+            write.family == family
+                && write.key.as_slice() == key
+                && write.commit_version == commit_version
+        }) {
+            return Ok(());
+        }
+        pending.push(PendingMetadataWrite {
+            family,
+            key: key.to_vec(),
+            commit_version,
+            value,
+            write_history: true,
+        });
+        Ok(())
     }
 
     fn read_committed_with_pending(
@@ -487,6 +618,13 @@ impl HoltMetadataStore {
         };
         decode_metadata_dedupe_record(command, &record).map(Some)
     }
+}
+
+fn metadata_command_activates_history(command: &metadatapb::MetadataCommand) -> bool {
+    command
+        .mutations
+        .iter()
+        .any(|mutation| mutation.retention_pin_version != 0)
 }
 
 fn encode_metadata_dedupe_record(

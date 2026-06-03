@@ -66,15 +66,15 @@ func (r *Runner) ReserveTimestamp(ctx context.Context, count uint64) (uint64, er
 	return r.tso.ReserveTimestamp(ctx, count)
 }
 
-func (r *Runner) Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error) {
+func (r *Runner) Get(ctx context.Context, key []byte, version uint64, opts ...backend.ReadOptions) ([]byte, bool, error) {
 	var lastErr error
-	for attempt := 0; attempt < maxRouteAttempts; attempt++ {
+	for attempt := range maxRouteAttempts {
 		route, err := r.routes.RouteForKey(ctx, key)
 		if err != nil {
 			return nil, false, err
 		}
 		resp, err := route.Client.Get(ctx, &metadatapb.MetadataGetRequest{
-			Context:   route.Context,
+			Context:   metadataContextForRead(route.Context, opts),
 			Key:       cloneBytes(key),
 			Version:   version,
 			KeyFamily: metadataFamilyToProto(metadataFamilyForKey(key)),
@@ -106,7 +106,7 @@ func (r *Runner) Get(ctx context.Context, key []byte, version uint64) ([]byte, b
 	return nil, false, lastErr
 }
 
-func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
+func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64, opts ...backend.ReadOptions) (map[string][]byte, error) {
 	out := make(map[string][]byte, len(keys))
 	if len(keys) == 0 {
 		return out, nil
@@ -120,13 +120,13 @@ func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 		})
 	}
 	var lastErr error
-	for attempt := 0; attempt < maxRouteAttempts; attempt++ {
+	for attempt := range maxRouteAttempts {
 		route, err := r.routes.RouteForKey(ctx, keys[0])
 		if err != nil {
 			return nil, err
 		}
 		resp, err := route.Client.BatchGet(ctx, &metadatapb.MetadataBatchGetRequest{
-			Context:  route.Context,
+			Context:  metadataContextForRead(route.Context, opts),
 			Requests: reqs,
 		})
 		if err != nil {
@@ -162,7 +162,7 @@ func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 	return nil, lastErr
 }
 
-func (r *Runner) Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error) {
+func (r *Runner) Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64, opts ...backend.ReadOptions) ([]backend.KV, error) {
 	if limit == 0 {
 		return nil, nil
 	}
@@ -171,13 +171,13 @@ func (r *Runner) Scan(ctx context.Context, startKey, prefix []byte, limit uint32
 		routeKey = prefix
 	}
 	var lastErr error
-	for attempt := 0; attempt < maxRouteAttempts; attempt++ {
+	for attempt := range maxRouteAttempts {
 		route, err := r.routes.RouteForKey(ctx, routeKey)
 		if err != nil {
 			return nil, err
 		}
 		resp, err := route.Client.Scan(ctx, &metadatapb.MetadataScanRequest{
-			Context:   route.Context,
+			Context:   metadataContextForRead(route.Context, opts),
 			StartKey:  cloneBytes(startKey),
 			PrefixKey: cloneBytes(prefix),
 			Limit:     limit,
@@ -225,7 +225,7 @@ func (r *Runner) CommitMetadata(ctx context.Context, command backend.MetadataCom
 		routeKey = command.Mutations[0].Key
 	}
 	var lastErr error
-	for attempt := 0; attempt < maxRouteAttempts; attempt++ {
+	for attempt := range maxRouteAttempts {
 		route, err := r.routes.RouteForKey(ctx, routeKey)
 		if err != nil {
 			return backend.MetadataCommitResult{}, err
@@ -615,6 +615,23 @@ func cloneMetadataContext(src *metadatapb.MetadataContext) *metadatapb.MetadataC
 		ReadConsistency: src.GetReadConsistency(),
 		ReadPreference:  src.GetReadPreference(),
 	}
+}
+
+func metadataContextForRead(src *metadatapb.MetadataContext, opts []backend.ReadOptions) *metadatapb.MetadataContext {
+	out := cloneMetadataContext(src)
+	if out == nil {
+		return nil
+	}
+	read := backend.NormalizeReadOptions(opts)
+	switch read.Purpose {
+	case backend.ReadPurposeWritePlanLocal:
+		out.ReadConsistency = metadatapb.ReadConsistency_READ_CONSISTENCY_BOUNDED_STALE
+		out.ReadPreference = metadatapb.ReadPreference_READ_PREFERENCE_LEADER_ONLY
+	default:
+		out.ReadConsistency = metadatapb.ReadConsistency_READ_CONSISTENCY_STRONG
+		out.ReadPreference = metadatapb.ReadPreference_READ_PREFERENCE_LEADER_ONLY
+	}
+	return out
 }
 
 func cloneBytes(src []byte) []byte {

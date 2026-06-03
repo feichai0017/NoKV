@@ -77,9 +77,9 @@ descriptor and retry external body GC after namespace mutation succeeds.
 ```go
 type Store interface {
     ReserveTimestamp(ctx context.Context, count uint64) (uint64, error)
-    Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error)
-    BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error)
-    Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error)
+    Get(ctx context.Context, key []byte, version uint64, opts ...backend.ReadOptions) ([]byte, bool, error)
+    BatchGet(ctx context.Context, keys [][]byte, version uint64, opts ...backend.ReadOptions) (map[string][]byte, error)
+    Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64, opts ...backend.ReadOptions) ([]backend.KV, error)
     CommitMetadata(ctx context.Context, command backend.MetadataCommand) (backend.MetadataCommitResult, error)
 }
 ```
@@ -89,6 +89,9 @@ backend-neutral predicates, mutations, watch keys, metadata families, and an
 optional explicit commit version. Runtime packages own concrete commit
 mechanics. Local runtimes may flatten families into one keyspace; the Rust
 distributed runtime maps them to Holt current trees plus a shared history tree.
+Read options separate user-visible strong reads from write-plan pre-reads. The
+distributed runtime may serve write-plan reads from the current leader's applied
+state because the final commit predicates still fence stale observations.
 Prefix-bounded scans are part of the backend contract so directory, path,
 session, and audit reads can use storage-native prefix iterators instead of
 walking an entire metadata family.

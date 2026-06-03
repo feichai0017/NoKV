@@ -45,7 +45,7 @@ func (e *Executor) directoryDentryProjectionMutation(ctx context.Context, mount 
 	if err != nil {
 		return nil, nil, err
 	}
-	kvs, err := e.runner.Scan(ctx, prefix, prefix, directoryParentIndexScanLimit, version)
+	kvs, err := e.scanMetadata(ctx, prefix, prefix, directoryParentIndexScanLimit, version)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -102,7 +102,7 @@ func (e *Executor) scanParentLinks(ctx context.Context, mount model.MountIdentit
 	start := cloneBytes(prefix)
 	links := make([]parentLinkSnapshot, 0, inode.LinkCount)
 	for {
-		kvs, err := e.runner.Scan(ctx, start, prefix, parentIndexScanPageLimit, version)
+		kvs, err := e.scanMetadata(ctx, start, prefix, parentIndexScanPageLimit, version)
 		if err != nil {
 			return nil, err
 		}

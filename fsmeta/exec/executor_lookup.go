@@ -32,7 +32,7 @@ func (e *Executor) Lookup(ctx context.Context, req model.LookupRequest) (model.D
 	}
 	var record model.DentryRecord
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
-		value, ok, err := e.runner.Get(ctx, program.Plan.PrimaryKey, version)
+		value, ok, err := e.getMetadata(ctx, program.Plan.PrimaryKey, version)
 		if err != nil {
 			return err
 		}
@@ -59,7 +59,7 @@ func (e *Executor) GetAttr(ctx context.Context, req model.GetAttrRequest) (model
 	}
 	var record model.InodeRecord
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
-		value, ok, err := e.runner.Get(ctx, program.Key, version)
+		value, ok, err := e.getMetadata(ctx, program.Key, version)
 		if err != nil {
 			return err
 		}
@@ -99,7 +99,7 @@ func (e *Executor) BatchGetAttr(ctx context.Context, req model.BatchGetAttrReque
 	}
 	var out []model.InodeRecord
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
-		values, err := e.runner.BatchGet(ctx, keys, version)
+		values, err := e.batchGetMetadata(ctx, keys, version)
 		if err != nil {
 			return err
 		}
@@ -138,7 +138,7 @@ func (e *Executor) LookupPlus(ctx context.Context, req model.LookupRequest) (mod
 	}
 	var pair model.DentryAttrPair
 	err = e.withReadRetry(ctx, req.SnapshotVersion, func(version uint64) error {
-		value, ok, err := e.runner.Get(ctx, program.Plan.PrimaryKey, version)
+		value, ok, err := e.getMetadata(ctx, program.Plan.PrimaryKey, version)
 		if err != nil {
 			return err
 		}
@@ -164,7 +164,7 @@ func (e *Executor) readLookupPlusInode(ctx context.Context, mount model.MountIde
 	if err != nil {
 		return model.DentryAttrPair{}, err
 	}
-	value, ok, err := e.runner.Get(ctx, program.Key, version)
+	value, ok, err := e.getMetadata(ctx, program.Key, version)
 	if err != nil {
 		return model.DentryAttrPair{}, err
 	}
@@ -241,7 +241,7 @@ func (e *Executor) ReadDirPlus(ctx context.Context, req model.ReadDirRequest) ([
 			if err != nil {
 				return err
 			}
-			values, err := e.runner.BatchGet(ctx, inodeKeys, version)
+			values, err := e.batchGetMetadata(ctx, inodeKeys, version)
 			if err != nil {
 				return err
 			}
@@ -289,7 +289,7 @@ func (e *Executor) scanDentries(ctx context.Context, plan compile.DirectoryReadP
 }
 
 func (e *Executor) scanDentrySnapshots(ctx context.Context, plan compile.DirectoryReadPlan, version uint64) ([]dentrySnapshot, error) {
-	kvs, err := e.runner.Scan(ctx, plan.StartKey, plan.Prefix, plan.Limit, version)
+	kvs, err := e.scanMetadata(ctx, plan.StartKey, plan.Prefix, plan.Limit, version)
 	if err != nil {
 		return nil, err
 	}
@@ -321,7 +321,7 @@ func (e *Executor) readDentry(ctx context.Context, key []byte, version uint64) (
 }
 
 func (e *Executor) readDentrySnapshot(ctx context.Context, key []byte, version uint64) (dentrySnapshot, error) {
-	value, ok, err := e.runner.Get(ctx, key, version)
+	value, ok, err := e.getMetadata(ctx, key, version)
 	if err != nil {
 		return dentrySnapshot{}, err
 	}
@@ -345,7 +345,7 @@ func (e *Executor) readInode(ctx context.Context, mount model.MountIdentity, ino
 	if err != nil {
 		return model.InodeRecord{}, false, err
 	}
-	value, ok, err := e.runner.Get(ctx, key, version)
+	value, ok, err := e.getMetadata(ctx, key, version)
 	if err != nil || !ok {
 		return model.InodeRecord{}, ok, err
 	}
@@ -364,7 +364,7 @@ func (e *Executor) readSessionByKey(ctx context.Context, mount model.MountIdenti
 	if parts.MountKeyID != mount.MountKeyID {
 		return model.SessionRecord{}, false, model.ErrInvalidRequest
 	}
-	value, ok, err := e.runner.Get(ctx, key, version)
+	value, ok, err := e.getMetadata(ctx, key, version)
 	if err != nil || !ok {
 		return model.SessionRecord{}, ok, err
 	}

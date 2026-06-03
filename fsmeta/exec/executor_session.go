@@ -34,7 +34,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSess
 		return model.SessionRecord{}, model.ErrInvalidRequest
 	}
 	var record model.SessionRecord
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		inode, ok, err := e.readInode(ctx, mount, req.Inode, startVersion)
 		if err != nil {
 			return err
@@ -91,7 +91,7 @@ func (e *Executor) OpenWriteSession(ctx context.Context, req model.OpenWriteSess
 				return err
 			}
 			if string(staleSessionKey) != string(plan.ReadKeys[1]) {
-				if value, ok, err := e.runner.Get(ctx, staleSessionKey, startVersion); err != nil {
+				if value, ok, err := e.getMetadata(ctx, staleSessionKey, startVersion); err != nil {
 					return err
 				} else if ok && bytes.Equal(value, ownerValue) {
 					predicates = append(predicates, metadataValueEqualsPredicate(staleSessionKey, ownerValue))
@@ -143,7 +143,7 @@ func (e *Executor) HeartbeatWriteSession(ctx context.Context, req model.Heartbea
 		return model.SessionRecord{}, model.ErrInvalidRequest
 	}
 	var record model.SessionRecord
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		nowTime := e.clock()
 		expiresUnixNs, ok := sessionExpiryUnixNs(nowTime, req.TTL)
 		if !ok {
@@ -210,7 +210,7 @@ func (e *Executor) CloseWriteSession(ctx context.Context, req model.CloseWriteSe
 	}
 	delta := program.Compiled.Delta
 	plan := delta.Plan
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		session, ok, err := e.readSessionByKey(ctx, mount, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err
@@ -266,7 +266,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 	now := e.clock().UnixNano()
 	var expired uint64
 	scanPrefixes := plan.ReadPrefixes
-	if err := e.withCommitRetryLoop(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetryLoop(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		deletes := make(map[string][]byte)
 		type expiredSessionKey struct {
 			inode   model.InodeID
@@ -278,7 +278,7 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 			if remaining == 0 {
 				break
 			}
-			kvs, err := e.runner.Scan(ctx, scanPrefix, scanPrefix, remaining, startVersion)
+			kvs, err := e.scanMetadata(ctx, scanPrefix, scanPrefix, remaining, startVersion)
 			if err != nil {
 				return err
 			}
@@ -315,13 +315,13 @@ func (e *Executor) ExpireWriteSessions(ctx context.Context, req model.ExpireWrit
 				if err != nil {
 					return err
 				}
-				if value, ok, err := e.runner.Get(ctx, sessionKey, startVersion); err != nil {
+				if value, ok, err := e.getMetadata(ctx, sessionKey, startVersion); err != nil {
 					return err
 				} else if ok && bytes.Equal(value, kv.Value) {
 					deletes[string(sessionKey)] = sessionKey
 					expiredSessions[expiredSessionKey{inode: record.Inode, session: record.Session}] = struct{}{}
 				}
-				if value, ok, err := e.runner.Get(ctx, ownerKey, startVersion); err != nil {
+				if value, ok, err := e.getMetadata(ctx, ownerKey, startVersion); err != nil {
 					return err
 				} else if ok && bytes.Equal(value, kv.Value) {
 					deletes[string(ownerKey)] = ownerKey

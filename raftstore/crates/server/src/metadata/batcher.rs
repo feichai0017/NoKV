@@ -9,7 +9,7 @@ use tokio::sync::{mpsc, oneshot, Semaphore};
 use tokio::task::JoinSet;
 
 const COMMIT_BATCH_MAX: usize = 64;
-const COMMIT_BATCH_COALESCE_DELAY: Duration = Duration::from_micros(250);
+const COMMIT_BATCH_COALESCE_DELAY: Duration = Duration::from_micros(75);
 const COMMIT_BATCH_CHANNEL: usize = 1024;
 const COMMIT_BATCH_INFLIGHT: usize = 4;
 

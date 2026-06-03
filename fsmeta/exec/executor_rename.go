@@ -77,7 +77,7 @@ func (e *Executor) Rename(ctx context.Context, req model.RenameRequest) error {
 	move := renameMoveFromRename(req, mount)
 	var movedSize uint64
 	var movedInode bool
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		mutations, predicates, watchEvents, err := e.prepareRenameMutations(ctx, plan, move, startVersion, commitVersion, &movedSize, &movedInode)
 		if err != nil {
 			return err
@@ -113,7 +113,7 @@ func (e *Executor) RenameReplace(ctx context.Context, req model.RenameReplaceReq
 	plan := delta.Plan
 	move := renameMoveFromRenameReplace(req, mount)
 	var result model.RenameReplaceResult
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		nextResult, mutations, watchEvents, err := e.prepareRenameReplaceMutations(ctx, plan, move, startVersion, commitVersion)
 		if err != nil {
 			return fmt.Errorf("prepare rename replace: %w", err)
@@ -152,7 +152,7 @@ func (e *Executor) RenameSubtree(ctx context.Context, req model.RenameSubtreeReq
 	var committedAt uint64
 	var handoffStarted bool
 	move := renameMoveFromRenameSubtree(req, mount)
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		mutations, _, watchEvents, err := e.prepareRenameMutations(ctx, plan, move, startVersion, commitVersion, &movedSize, &movedInode)
 		if err != nil {
 			return err

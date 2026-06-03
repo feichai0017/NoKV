@@ -100,7 +100,7 @@ func (r *Runner) ReserveTimestamp(_ context.Context, count uint64) (uint64, erro
 }
 
 // Get returns the value visible at version.
-func (r *Runner) Get(ctx context.Context, key []byte, version uint64) ([]byte, bool, error) {
+func (r *Runner) Get(ctx context.Context, key []byte, version uint64, _ ...backend.ReadOptions) ([]byte, bool, error) {
 	if err := ctxErr(ctx); err != nil {
 		return nil, false, err
 	}
@@ -112,7 +112,7 @@ func (r *Runner) Get(ctx context.Context, key []byte, version uint64) ([]byte, b
 }
 
 // BatchGet returns found values visible at version, keyed by string(key).
-func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
+func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64, _ ...backend.ReadOptions) (map[string][]byte, error) {
 	out := make(map[string][]byte, len(keys))
 	for _, key := range keys {
 		if err := ctxErr(ctx); err != nil {
@@ -131,7 +131,7 @@ func (r *Runner) BatchGet(ctx context.Context, keys [][]byte, version uint64) (m
 
 // Scan returns up to limit visible key/value pairs starting at startKey and
 // optionally bounded to prefix.
-func (r *Runner) Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error) {
+func (r *Runner) Scan(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64, _ ...backend.ReadOptions) ([]backend.KV, error) {
 	if limit == 0 {
 		return nil, nil
 	}

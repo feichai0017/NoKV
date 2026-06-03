@@ -31,7 +31,7 @@ func (e *Executor) UpdateInode(ctx context.Context, req model.UpdateInodeRequest
 		return model.InodeRecord{}, model.ErrInvalidRequest
 	}
 	var updated model.InodeRecord
-	if err := e.withCommitRetry(ctx, func(startVersion, commitVersion uint64) error {
+	if err := e.withCommitRetry(ctx, func(ctx context.Context, startVersion, commitVersion uint64) error {
 		dentry, err := e.readDentrySnapshot(ctx, plan.ReadKeys[0], startVersion)
 		if err != nil {
 			return err

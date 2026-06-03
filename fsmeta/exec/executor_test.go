@@ -28,6 +28,7 @@ type fakeRunner struct {
 	getVersions         []uint64
 	scanVersions        []uint64
 	batchVersions       []uint64
+	readPurposes        []backend.ReadPurpose
 	scanErrs            []error
 	batchErrs           []error
 	timestampErrs       []error
@@ -272,9 +273,10 @@ func (r *fakeRunner) ReserveTimestamp(_ context.Context, count uint64) (uint64, 
 	return first, nil
 }
 
-func (r *fakeRunner) Get(_ context.Context, key []byte, version uint64) ([]byte, bool, error) {
+func (r *fakeRunner) Get(_ context.Context, key []byte, version uint64, opts ...backend.ReadOptions) ([]byte, bool, error) {
 	r.getCalls++
 	r.getVersions = append(r.getVersions, version)
+	r.readPurposes = append(r.readPurposes, backend.NormalizeReadOptions(opts).Purpose)
 	value, ok := r.data[string(key)]
 	if !ok {
 		return nil, false, nil
@@ -282,8 +284,9 @@ func (r *fakeRunner) Get(_ context.Context, key []byte, version uint64) ([]byte,
 	return append([]byte(nil), value...), true, nil
 }
 
-func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
+func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, version uint64, opts ...backend.ReadOptions) (map[string][]byte, error) {
 	r.batchVersions = append(r.batchVersions, version)
+	r.readPurposes = append(r.readPurposes, backend.NormalizeReadOptions(opts).Purpose)
 	if r.beforeBatchGet != nil {
 		r.beforeBatchGet()
 	}
@@ -303,8 +306,9 @@ func (r *fakeRunner) BatchGet(_ context.Context, keys [][]byte, version uint64) 
 	return out, nil
 }
 
-func (r *fakeRunner) Scan(_ context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error) {
+func (r *fakeRunner) Scan(_ context.Context, startKey, prefix []byte, limit uint32, version uint64, opts ...backend.ReadOptions) ([]backend.KV, error) {
 	r.scanVersions = append(r.scanVersions, version)
+	r.readPurposes = append(r.readPurposes, backend.NormalizeReadOptions(opts).Purpose)
 	if len(r.scanErrs) > 0 {
 		err := r.scanErrs[0]
 		r.scanErrs = r.scanErrs[1:]

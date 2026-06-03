@@ -47,9 +47,9 @@ type PredicateSpec struct {
 }
 
 type EffectSpec struct {
-	Name        string
-	Kind        string
-	Key         string
+	Name string
+	Kind string
+	Key  string
 }
 
 type GuardSpec struct {

@@ -123,6 +123,7 @@ pub(crate) const PENDING_SCHEDULER_OPERATION_PREFIX: &[u8] = b"pending-scheduler
 pub(crate) const BLOCKED_SCHEDULER_OPERATION_PREFIX: &[u8] = b"blocked-scheduler-operation/";
 pub(crate) const WATCH_APPLY_EVENT_PREFIX: &[u8] = b"event/";
 pub(crate) const WATCH_APPLY_RETENTION_PREFIX: &[u8] = b"watch-apply-retention/";
+pub(crate) const METADATA_HISTORY_ACTIVE_KEY: &[u8] = b"metadata-history-active";
 
 pub(crate) fn region_descriptor_key(region_id: u64) -> Vec<u8> {
     region_meta_key(REGION_DESCRIPTOR_PREFIX, region_id)

@@ -60,8 +60,20 @@ impl HoltMetadataStore {
         key: &[u8],
         version: u64,
     ) -> metadata_state::Result<Option<(u64, metadata_state::VersionedValue)>> {
-        let prefix = history_prefix(family, key);
         let mut best = None;
+        if let Some(raw) = self
+            .store
+            .current(family)
+            .map_err(to_backend_error)?
+            .get(key)
+            .map_err(to_backend_error)?
+        {
+            let (commit_ts, value) = decode_current_value(&raw)?;
+            if commit_ts >= version {
+                best = Some((commit_ts, value));
+            }
+        }
+        let prefix = history_prefix(family, key);
         for entry in self
             .store
             .history()

@@ -278,11 +278,37 @@ func (e *Executor) reserveTimestampWithRetry(ctx context.Context, count uint64, 
 	return 0, last
 }
 
-func (e *Executor) withCommitRetry(ctx context.Context, run func(startVersion, commitVersion uint64) error, scopes ...compile.AuthorityScope) error {
+type readPurposeContextKey struct{}
+
+func withReadPurpose(ctx context.Context, purpose backend.ReadPurpose) context.Context {
+	return context.WithValue(ctx, readPurposeContextKey{}, purpose)
+}
+
+func readOptionsFromContext(ctx context.Context) backend.ReadOptions {
+	purpose, _ := ctx.Value(readPurposeContextKey{}).(backend.ReadPurpose)
+	if purpose == 0 {
+		purpose = backend.ReadPurposeUserStrong
+	}
+	return backend.ReadOptions{Purpose: purpose}
+}
+
+func (e *Executor) getMetadata(ctx context.Context, key []byte, version uint64) ([]byte, bool, error) {
+	return e.runner.Get(ctx, key, version, readOptionsFromContext(ctx))
+}
+
+func (e *Executor) batchGetMetadata(ctx context.Context, keys [][]byte, version uint64) (map[string][]byte, error) {
+	return e.runner.BatchGet(ctx, keys, version, readOptionsFromContext(ctx))
+}
+
+func (e *Executor) scanMetadata(ctx context.Context, startKey, prefix []byte, limit uint32, version uint64) ([]backend.KV, error) {
+	return e.runner.Scan(ctx, startKey, prefix, limit, version, readOptionsFromContext(ctx))
+}
+
+func (e *Executor) withCommitRetry(ctx context.Context, run func(context.Context, uint64, uint64) error, scopes ...compile.AuthorityScope) error {
 	return e.withCommitRetryLoop(ctx, run)
 }
 
-func (e *Executor) withCommitRetryLoop(ctx context.Context, run func(startVersion, commitVersion uint64) error) error {
+func (e *Executor) withCommitRetryLoop(ctx context.Context, run func(context.Context, uint64, uint64) error) error {
 	var last error
 	started := time.Now()
 	for attempt := 0; ; attempt++ {
@@ -290,7 +316,7 @@ func (e *Executor) withCommitRetryLoop(ctx context.Context, run func(startVersio
 		if err != nil {
 			return err
 		}
-		err = run(startVersion, commitVersion)
+		err = run(withReadPurpose(ctx, backend.ReadPurposeWritePlanLocal), startVersion, commitVersion)
 		if err == nil {
 			return nil
 		}

@@ -124,7 +124,7 @@ func (e *Executor) AuditMount(ctx context.Context, mount model.MountID, readVers
 		if err := ctx.Err(); err != nil {
 			return report, err
 		}
-		rows, err := e.runner.Scan(ctx, next, start, batchSize, readVersion)
+		rows, err := e.scanMetadata(ctx, next, start, batchSize, readVersion)
 		if err != nil {
 			return report, err
 		}
