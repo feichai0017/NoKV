@@ -34,9 +34,10 @@ workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_sec
 
 `--metadata-mode local` runs the in-process Holt metadata service. It is the
 fast local engine baseline. `--metadata-mode remote` starts a real `metad`
-server and runs the Rust remote SDK against it; object bytes are still read and
-written directly by the client against the configured S3-compatible object
-store. Use remote mode when evaluating the deployable service boundary.
+server and runs the Rust remote SDK against its framed metadata RPC; object
+bytes are still read and written directly by the client against the configured
+S3-compatible object store. Use remote mode when evaluating the deployable
+service boundary.
 
 Object-backed workloads can be scaled without editing code:
 

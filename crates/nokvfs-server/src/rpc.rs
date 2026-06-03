@@ -1,3 +1,6 @@
+use std::io::{self, Read, Write};
+use std::net::TcpStream;
+
 use nokvfs_meta::{DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
@@ -11,6 +14,9 @@ use nokvfs_types::{
 };
 
 use crate::server::{Server, ServerError};
+
+pub(crate) const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC1\n";
+const MAX_FRAMED_RPC_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) fn handle_rpc(server: &Server, body: &[u8]) -> String {
     let envelope = match serde_json::from_slice::<MetadataRpcRequest>(body) {
@@ -33,6 +39,69 @@ pub(crate) fn handle_rpc(server: &Server, body: &[u8]) -> String {
         },
     };
     serde_json::to_string(&envelope).expect("metadata rpc envelope is serializable") + "\n"
+}
+
+pub(crate) fn handle_framed_stream(
+    server: &Server,
+    mut stream: TcpStream,
+) -> Result<(), ServerError> {
+    stream.set_read_timeout(None).map_err(ServerError::Io)?;
+    stream.set_write_timeout(None).map_err(ServerError::Io)?;
+    let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+    stream.read_exact(&mut magic).map_err(ServerError::Io)?;
+    if &magic != FRAMED_RPC_MAGIC {
+        return Err(ServerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid metadata framed rpc magic",
+        )));
+    }
+
+    loop {
+        let Some(request) = read_frame(&mut stream)? else {
+            return Ok(());
+        };
+        let response = handle_rpc(server, &request);
+        write_frame(&mut stream, response.as_bytes())?;
+    }
+}
+
+fn read_frame(stream: &mut TcpStream) -> Result<Option<Vec<u8>>, ServerError> {
+    let mut len = [0_u8; 4];
+    match stream.read_exact(&mut len) {
+        Ok(()) => {}
+        Err(err) if is_clean_framed_end(&err) => return Ok(None),
+        Err(err) => return Err(ServerError::Io(err)),
+    }
+    let len = u32::from_be_bytes(len) as usize;
+    if len > MAX_FRAMED_RPC_BYTES {
+        return Err(ServerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "metadata framed rpc request exceeds size limit",
+        )));
+    }
+    let mut body = vec![0_u8; len];
+    stream.read_exact(&mut body).map_err(ServerError::Io)?;
+    Ok(Some(body))
+}
+
+fn write_frame(stream: &mut TcpStream, body: &[u8]) -> Result<(), ServerError> {
+    let len = u32::try_from(body.len()).map_err(|_| {
+        ServerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "metadata framed rpc response exceeds u32 length",
+        ))
+    })?;
+    stream
+        .write_all(&len.to_be_bytes())
+        .and_then(|_| stream.write_all(body))
+        .map_err(ServerError::Io)
+}
+
+fn is_clean_framed_end(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::UnexpectedEof | io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+    )
 }
 
 fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ServerError> {

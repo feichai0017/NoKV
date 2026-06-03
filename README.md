@@ -77,9 +77,11 @@ Implemented today:
 - live FUSE mount invalidates kernel entry/inode caches from typed watch replay;
 - long-running local `nokvfs-server` process with health, stats, and manual
   object/history GC endpoints;
-- inode-level metadata RPC v0 on `nokvfs-server` for bootstrap, lookup,
-  readdir-plus, create, remove, rename, snapshot, and snapshot retirement;
-- remote Rust metadata client for namespace operations over the RPC;
+- framed metadata RPC v0 on `nokvfs-server` for bootstrap, lookup,
+  readdir-plus, create, remove, rename, snapshot, artifact publish, and
+  snapshot retirement; HTTP `/rpc` remains available for debug requests;
+- remote Rust metadata client for path and inode namespace operations over the
+  framed RPC;
 - remote Rust file client that uploads object blocks directly, commits metadata
   through `metad`, fetches body read plans, and reads object ranges directly
   from the configured object store;
@@ -163,6 +165,8 @@ curl -X POST http://127.0.0.1:7777/gc
 ```
 
 Use `--server-bind ADDR` before `serve` to change the health/control address.
+The Rust SDK uses the server's framed metadata RPC on the same port; HTTP
+`/rpc` is kept for curl/debug visibility.
 
 To mount a read-only snapshot view:
 

@@ -29,6 +29,9 @@ pub(crate) fn handle_stream(server: &Server, mut stream: TcpStream) -> Result<()
     stream
         .set_write_timeout(Some(CONTROL_IO_TIMEOUT))
         .map_err(ServerError::Io)?;
+    if starts_with_framed_rpc_magic(&stream)? {
+        return rpc::handle_framed_stream(server, stream);
+    }
     loop {
         let request = match read_request(&mut stream) {
             Ok(request) => request,
@@ -43,6 +46,17 @@ pub(crate) fn handle_stream(server: &Server, mut stream: TcpStream) -> Result<()
         if !response.keep_alive {
             return Ok(());
         }
+    }
+}
+
+fn starts_with_framed_rpc_magic(stream: &TcpStream) -> Result<bool, ServerError> {
+    let mut probe = [0_u8; rpc::FRAMED_RPC_MAGIC.len()];
+    match stream.peek(&mut probe) {
+        Ok(0) => Ok(false),
+        Ok(read) if read < probe.len() => Ok(false),
+        Ok(_) => Ok(&probe == rpc::FRAMED_RPC_MAGIC),
+        Err(err) if is_idle_timeout(&err) => Ok(false),
+        Err(err) => Err(ServerError::Io(err)),
     }
 }
 

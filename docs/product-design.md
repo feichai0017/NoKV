@@ -196,8 +196,8 @@ v0 local:
   Rust SDK
   CLI
   long-running local server with health, stats, manual GC endpoints, and
-  inode-level metadata RPC
-  remote Rust metadata client for namespace operations
+  framed metadata RPC plus HTTP debug/control endpoints
+  remote Rust metadata client for path and inode namespace operations
   remote Rust file client for direct object upload, metadata publish, body read
   plans, and direct object range reads
   close-to-open FUSE reads and buffered writes
