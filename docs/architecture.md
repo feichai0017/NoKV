@@ -1,0 +1,85 @@
+<!--
+Copyright 2024-2026 The NoKV Authors.
+SPDX-License-Identifier: Apache-2.0
+-->
+
+# Architecture
+
+NoKV-FS is a Rust-first filesystem for AI training and agent workspaces. The
+repository is intentionally product-shaped: metadata semantics, object body
+storage, clients, FUSE, docs, and examples live at the repository root instead
+of behind a nested workspace.
+
+## Layers
+
+```text
+Application surface
+  nokvfs-client    Rust SDK and nokv-fs CLI
+  nokvfs-fuse      low-level FUSE frontend
+  nokvfs-python    planned Python/fsspec bindings
+  nokvfs-csi       planned Kubernetes CSI integration
+
+Metadata layer
+  nokvfs-types     mount, inode, dentry, body descriptor, watch event types
+  nokvfs-meta      schema, MetadataCommand, Holt store, in-process metad
+  nokvfs-server    planned long-running service process
+
+Body storage layer
+  nokvfs-object    local and S3-compatible object storage
+```
+
+## Write Path
+
+```mermaid
+flowchart LR
+    App["AI training / agent client"] --> API["NoKV-FS metad"]
+    App["FUSE / SDK / CLI"] --> API["nokvfs-meta service"]
+    API --> Command["MetadataCommand"]
+    Command --> Holt["Holt metadata store"]
+    API --> Object["S3-compatible object store"]
+```
+
+For artifact publication, object bytes are uploaded first. The metadata commit
+then publishes the dentry, inode projection, and body descriptor atomically.
+Failed metadata publish leaves staged objects for later garbage collection.
+
+## FUSE Path
+
+The current FUSE frontend is inode-first. It maps kernel `lookup`, `getattr`,
+`readdir`, `open`, and `read` calls to `metad` inode APIs and object-store range
+reads. It does not resolve paths through the Rust SDK and does not own metadata
+semantics.
+
+## Metadata Layout
+
+The canonical model is inode/dentry, described in
+[Metadata Schema](./metadata-schema.md):
+
+```text
+inode_current:
+  mount_id | inode_id -> inode attributes
+
+dentry_current:
+  mount_id | parent_inode | name -> dentry + inode projection
+
+chunk_manifest_current:
+  mount_id | inode_id | generation | chunk_index -> body descriptor
+
+history:
+  family | user_key_len | user_key | inverted_commit_version -> old value
+```
+
+Path indexes are derived accelerators for artifact and checkpoint fast paths;
+they are not namespace truth.
+
+## Object Storage
+
+NoKV-FS stores file bodies outside the metadata service. The first production
+body backend is S3-compatible storage. RustFS, MinIO, Ceph RGW, and AWS S3 all
+use the same object-store boundary. See [Object Layout](./object-layout.md).
+
+## Distributed Direction
+
+The planned distributed layer is not a generic KV database. It should replicate
+metadata commands over mount or shard scoped Raft groups, with Holt as the
+state machine storage engine and object bodies remaining in external storage.

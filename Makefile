@@ -1,7 +1,7 @@
 # Copyright 2024-2026 The NoKV Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-NOKV_FS_MANIFEST := nokv-fs/Cargo.toml
+NOKV_FS_MANIFEST := Cargo.toml
 
 .PHONY: help build test fmt lint verify clean docs-build
 
@@ -38,4 +38,4 @@ verify:
 	cd docs && npm run build
 
 clean:
-	rm -rf nokv-fs/target docs/.vitepress/dist
+	rm -rf target docs/.vitepress/dist

@@ -1,0 +1,27 @@
+[workspace]
+members = [
+    "crates/nokvfs-types",
+    "crates/nokvfs-meta",
+    "crates/nokvfs-object",
+    "crates/nokvfs-client",
+    "crates/nokvfs-fuse",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+authors = ["The NoKV Authors"]
+
+[workspace.dependencies]
+nokvfs-types = { path = "crates/nokvfs-types" }
+nokvfs-meta = { path = "crates/nokvfs-meta" }
+nokvfs-object = { path = "crates/nokvfs-object" }
+nokvfs-client = { path = "crates/nokvfs-client" }
+nokvfs-fuse = { path = "crates/nokvfs-fuse" }
+fuser = { version = "0.17.0", default-features = false, features = ["macos-no-mount"] }
+holt = { version = "0.4.2", default-features = false }
+opendal = { version = "0.57.0", default-features = false, features = ["blocking", "executors-tokio", "reqwest-rustls-tls", "services-s3"] }
+tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread"] }

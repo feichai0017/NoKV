@@ -11,7 +11,7 @@ Thanks for contributing. This file is the authoritative contribution guide for t
 
 - Repository: `github.com/feichai0017/NoKV`
 - Main branch: `main`
-- Main product line: Rust NoKV-FS under `nokv-fs/`
+- Main product line: Rust NoKV-FS under `crates/`
 - Rust toolchain: stable
 
 ## Development Setup
@@ -24,7 +24,7 @@ Thanks for contributing. This file is the authoritative contribution guide for t
 git clone https://github.com/feichai0017/NoKV.git
 cd NoKV
 git remote rename origin upstream
-cargo fetch --manifest-path nokv-fs/Cargo.toml
+cargo fetch
 npm --prefix docs ci
 ```
 
@@ -68,7 +68,7 @@ make docs-build
 For benchmark-related changes:
 
 ```bash
-cargo test --manifest-path nokv-fs/Cargo.toml --workspace --release
+cargo test --workspace --release
 ```
 
 ## Pull Request Rules
@@ -81,7 +81,7 @@ cargo test --manifest-path nokv-fs/Cargo.toml --workspace --release
 - Keep each PR scoped to one logical boundary. Do not mix metadata model,
   Holt layout, object-store, docs, benchmark, or unrelated refactors.
 - Every non-merge commit must include a `Signed-off-by` trailer matching the Developer Certificate of Origin in [`DCO`](./DCO).
-- If you use Codex or another agent to review a PR, point it at [`docs/guide/development/code_contract.md`](./docs/guide/development/code_contract.md) and [`docs/guide/development/pr_review_checklist.md`](./docs/guide/development/pr_review_checklist.md).
+- If you use Codex or another agent to review a PR, point it at [`docs/development/code_contract.md`](./docs/development/code_contract.md) and [`docs/development/pr_review_checklist.md`](./docs/development/pr_review_checklist.md).
 
 ## Code Guidelines
 
@@ -91,7 +91,7 @@ cargo test --manifest-path nokv-fs/Cargo.toml --workspace --release
 - Keep package boundaries clear; avoid cross-package coupling without need.
 - Do not mix unrelated refactors with behavior changes in one PR.
 - Add tests for every bug fix or behavior change.
-- Follow the repository code contract in [`docs/guide/development/code_contract.md`](./docs/guide/development/code_contract.md), including package responsibilities, shared-helper reuse, file naming, type/interface/function naming, error placement, metrics/stats ownership, generated-code discipline, and compatibility rules.
+- Follow the repository code contract in [`docs/development/code_contract.md`](./docs/development/code_contract.md), including package responsibilities, shared-helper reuse, file naming, type/interface/function naming, error placement, metrics/stats ownership, generated-code discipline, and compatibility rules.
 - Prefer breaking changes that remove ambiguity over compatibility wrappers. Add a compatibility shim only when a released RPC, CLI, config, or persisted format requires it, and document the removal condition.
 
 ## Testing Expectations

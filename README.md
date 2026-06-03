@@ -31,16 +31,24 @@ The repository has been cut down to the Rust NoKV-FS line. The current
 workspace contains the first local metadata slice:
 
 ```text
-nokv-fs/
-  crates/model        # mount, inode, dentry, body descriptor, watch types
-  crates/layout       # Holt-friendly keys and durable value codecs
-  crates/metastore    # storage-neutral MetadataCommand contract
-  crates/holtstore    # Holt-backed metadata store
-  crates/object       # local filesystem and S3-compatible object backends
-  crates/metad        # in-process metadata service
-  crates/client       # path-oriented Rust SDK over metad
-  crates/fuse         # low-level read-only FUSE frontend
-  crates/cli          # minimal local CLI
+crates/
+  nokvfs-types   # mount, inode, dentry, body descriptor, watch types
+  nokvfs-meta    # schema, MetadataCommand, Holt store, in-process metad
+  nokvfs-object  # local filesystem and S3-compatible object backends
+  nokvfs-client  # Rust SDK and nokv-fs CLI binary
+  nokvfs-fuse    # low-level read-only FUSE frontend
+
+docs/
+  architecture.md
+  metadata-schema.md
+  object-layout.md
+  ai-training.md
+  checkpointing.md
+
+examples/
+  pytorch/
+  minio/
+  k8s/
 ```
 
 Implemented today:
@@ -56,7 +64,7 @@ Implemented today:
 - path-oriented Rust SDK for mkdir, artifact publish, lookup, list, and cat;
 - low-level read-only FUSE frontend for lookup, getattr, readdir, open, and
   range read;
-- minimal local CLI: init, mkdir, put-artifact, ls, cat, and mount.
+- `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, and mount.
 
 Not implemented yet:
 
@@ -75,7 +83,7 @@ make test
 This runs:
 
 ```bash
-cargo test --manifest-path nokv-fs/Cargo.toml --workspace
+cargo test --workspace
 ```
 
 For a real S3-compatible object backend contract test, set:
@@ -86,7 +94,7 @@ export NOKV_FS_S3_ENDPOINT=http://127.0.0.1:9000
 export NOKV_FS_S3_REGION=auto
 export NOKV_FS_S3_ACCESS_KEY_ID=minioadmin
 export NOKV_FS_S3_SECRET_ACCESS_KEY=minioadmin
-cargo test --manifest-path nokv-fs/Cargo.toml -p nokv-fs-object s3_object_store_contract_from_env
+cargo test -p nokvfs-object s3_object_store_contract_from_env
 ```
 
 RustFS uses the same S3-compatible backend; it should be configured through
@@ -95,20 +103,20 @@ the endpoint and credentials, not through a RustFS-specific code path.
 ## Local CLI Smoke
 
 ```bash
-cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- init
-cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- mkdir /runs
+cargo run -p nokvfs-client --bin nokv-fs -- init
+cargo run -p nokvfs-client --bin nokv-fs -- mkdir /runs
 printf '{"step":1}' > /tmp/checkpoint.json
-cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- \
+cargo run -p nokvfs-client --bin nokv-fs -- \
   put-artifact /runs/checkpoint.json /tmp/checkpoint.json
-cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- ls /runs
-cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- cat /runs/checkpoint.json
+cargo run -p nokvfs-client --bin nokv-fs -- ls /runs
+cargo run -p nokvfs-client --bin nokv-fs -- cat /runs/checkpoint.json
 ```
 
 To mount the current read-only FUSE frontend:
 
 ```bash
 mkdir -p /tmp/nokv-fs-mount
-cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- mount /tmp/nokv-fs-mount
+cargo run -p nokvfs-client --bin nokv-fs -- mount /tmp/nokv-fs-mount
 ```
 
 Linux builds use fuser's pure-Rust mount path. macOS development builds compile
@@ -117,10 +125,12 @@ macFUSE installed.
 
 ## Documentation
 
-- [Getting Started](docs/guide/getting_started.md)
-- [Architecture](docs/guide/architecture.md)
-- [NoKV-FS Design](docs/guide/nokv_fs_design.md)
-- [Code Contract](docs/guide/development/code_contract.md)
+- [Architecture](docs/architecture.md)
+- [Metadata Schema](docs/metadata-schema.md)
+- [Object Layout](docs/object-layout.md)
+- [AI Training](docs/ai-training.md)
+- [Checkpointing](docs/checkpointing.md)
+- [Code Contract](docs/development/code_contract.md)
 
 ## License
 

@@ -7,11 +7,11 @@ hero:
   tagline: Holt-backed metadata, S3-compatible object storage, and a path toward a high-performance OSS DFS.
   actions:
     - theme: brand
-      text: Get Started
-      link: /guide/getting_started
-    - theme: alt
       text: Architecture
-      link: /guide/architecture
+      link: /architecture
+    - theme: alt
+      text: Metadata Schema
+      link: /metadata-schema
 features:
   - title: Metadata-first filesystem
     details: Inode/dentry namespace semantics, metadata commands, dentry projection, snapshots, and typed watches.

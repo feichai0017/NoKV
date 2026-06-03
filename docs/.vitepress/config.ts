@@ -61,48 +61,45 @@ export default withMermaid(
       siteTitle: 'NoKV-FS',
 
       nav: [
-        { text: 'Docs', link: '/guide/', activeMatch: '/guide/' },
+        { text: 'Docs', link: '/architecture', activeMatch: '/' },
         {
           text: 'Reference',
           items: [
-            { text: 'Architecture', link: '/guide/architecture' },
-            { text: 'NoKV-FS Design', link: '/guide/nokv_fs_design' },
+            { text: 'Architecture', link: '/architecture' },
+            { text: 'Metadata Schema', link: '/metadata-schema' },
+            { text: 'Object Layout', link: '/object-layout' },
           ],
         },
         {
           text: 'Resources',
           items: [
-            { text: 'Getting Started', link: '/guide/getting_started' },
-            { text: 'Code Contract', link: '/guide/development/code_contract' },
+            { text: 'AI Training', link: '/ai-training' },
+            { text: 'Checkpointing', link: '/checkpointing' },
+            { text: 'Code Contract', link: '/development/code_contract' },
           ],
         },
         { text: 'GitHub', link: 'https://github.com/feichai0017/NoKV' },
       ],
 
       sidebar: {
-        '/guide/': [
+        '/': [
           {
-            text: 'Start here',
+            text: 'Product',
             collapsed: false,
             items: [
-              { text: 'Overview', link: '/guide/' },
-              { text: 'Getting Started', link: '/guide/getting_started' },
-            ],
-          },
-          {
-            text: 'Architecture',
-            collapsed: false,
-            items: [
-              { text: 'Architecture', link: '/guide/architecture' },
-              { text: 'NoKV-FS Design', link: '/guide/nokv_fs_design' },
+              { text: 'Architecture', link: '/architecture' },
+              { text: 'Metadata Schema', link: '/metadata-schema' },
+              { text: 'Object Layout', link: '/object-layout' },
+              { text: 'AI Training', link: '/ai-training' },
+              { text: 'Checkpointing', link: '/checkpointing' },
             ],
           },
           {
             text: 'Development',
             collapsed: true,
             items: [
-              { text: 'Code Contract', link: '/guide/development/code_contract' },
-              { text: 'PR Review Checklist', link: '/guide/development/pr_review_checklist' },
+              { text: 'Code Contract', link: '/development/code_contract' },
+              { text: 'PR Review Checklist', link: '/development/pr_review_checklist' },
             ],
           },
         ],

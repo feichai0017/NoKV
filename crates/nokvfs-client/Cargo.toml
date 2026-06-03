@@ -1,0 +1,20 @@
+[package]
+name = "nokvfs-client"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nokvfs-fuse.workspace = true
+nokvfs-meta.workspace = true
+nokvfs-object.workspace = true
+nokvfs-types.workspace = true
+
+[[bin]]
+name = "nokv-fs"
+path = "src/bin/nokv-fs.rs"
+
+[dev-dependencies]
+tempfile.workspace = true
