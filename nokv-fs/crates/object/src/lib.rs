@@ -8,6 +8,19 @@ use std::fmt;
 use std::fs::{self, File};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::LazyLock;
+
+use opendal::blocking::Operator as BlockingOperator;
+use opendal::services::S3;
+use opendal::{ErrorKind, Operator};
+
+static OPENDAL_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .thread_name("nokv-fs-object")
+        .build()
+        .expect("create NoKV-FS object runtime")
+});
 
 pub trait ObjectStore {
     fn put(&self, key: &ObjectKey, bytes: &[u8]) -> Result<ObjectInfo, ObjectError>;
@@ -37,6 +50,24 @@ pub struct LocalObjectStore {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct S3ObjectStoreOptions {
+    pub bucket: String,
+    pub root: String,
+    pub region: String,
+    pub endpoint: Option<String>,
+    pub access_key_id: Option<String>,
+    pub secret_access_key: Option<String>,
+    pub session_token: Option<String>,
+    pub virtual_host_style: bool,
+    pub skip_signature: bool,
+}
+
+#[derive(Clone, Debug)]
+pub struct S3ObjectStore {
+    operator: BlockingOperator,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum ObjectError {
     EmptyKey,
     AbsoluteKey,
@@ -44,7 +75,10 @@ pub enum ObjectError {
     CurrentDirectory,
     ContainsNul,
     InvalidRange,
+    MissingBucket,
+    MissingRegion,
     Io(String),
+    Backend(String),
 }
 
 impl ObjectKey {
@@ -81,6 +115,134 @@ impl LocalObjectStore {
             path.push(component);
         }
         path
+    }
+}
+
+impl S3ObjectStoreOptions {
+    pub fn new(bucket: impl Into<String>) -> Self {
+        Self {
+            bucket: bucket.into(),
+            root: "/".to_owned(),
+            region: "us-east-1".to_owned(),
+            endpoint: None,
+            access_key_id: None,
+            secret_access_key: None,
+            session_token: None,
+            virtual_host_style: false,
+            skip_signature: false,
+        }
+    }
+
+    pub fn rustfs(
+        bucket: impl Into<String>,
+        endpoint: impl Into<String>,
+        access_key_id: impl Into<String>,
+        secret_access_key: impl Into<String>,
+    ) -> Self {
+        Self {
+            bucket: bucket.into(),
+            root: "/".to_owned(),
+            region: "auto".to_owned(),
+            endpoint: Some(endpoint.into()),
+            access_key_id: Some(access_key_id.into()),
+            secret_access_key: Some(secret_access_key.into()),
+            session_token: None,
+            virtual_host_style: false,
+            skip_signature: false,
+        }
+    }
+
+    pub fn validate(&self) -> Result<(), ObjectError> {
+        if self.bucket.is_empty() {
+            return Err(ObjectError::MissingBucket);
+        }
+        if self.region.is_empty() {
+            return Err(ObjectError::MissingRegion);
+        }
+        Ok(())
+    }
+}
+
+impl S3ObjectStore {
+    pub fn new(options: S3ObjectStoreOptions) -> Result<Self, ObjectError> {
+        options.validate()?;
+        let mut builder = S3::default()
+            .bucket(&options.bucket)
+            .root(&options.root)
+            .region(&options.region);
+        if let Some(endpoint) = &options.endpoint {
+            builder = builder.endpoint(endpoint);
+        }
+        if let Some(access_key_id) = &options.access_key_id {
+            builder = builder.access_key_id(access_key_id);
+        }
+        if let Some(secret_access_key) = &options.secret_access_key {
+            builder = builder.secret_access_key(secret_access_key);
+        }
+        if let Some(session_token) = &options.session_token {
+            builder = builder.session_token(session_token);
+        }
+        if options.virtual_host_style {
+            builder = builder.enable_virtual_host_style();
+        }
+        if options.skip_signature {
+            builder = builder.skip_signature();
+        }
+
+        let operator = Operator::new(builder)
+            .map_err(ObjectError::from_backend)?
+            .finish();
+        let _guard = OPENDAL_RUNTIME.enter();
+        let operator = BlockingOperator::new(operator).map_err(ObjectError::from_backend)?;
+        Ok(Self { operator })
+    }
+}
+
+impl ObjectStore for S3ObjectStore {
+    fn put(&self, key: &ObjectKey, bytes: &[u8]) -> Result<ObjectInfo, ObjectError> {
+        self.operator
+            .write(key.as_str(), bytes.to_vec())
+            .map_err(ObjectError::from_backend)?;
+        Ok(ObjectInfo {
+            key: key.clone(),
+            size: bytes.len() as u64,
+        })
+    }
+
+    fn get(&self, key: &ObjectKey, range: Option<ObjectRange>) -> Result<Vec<u8>, ObjectError> {
+        let buffer = match range {
+            Some(range) => {
+                let end = range
+                    .offset
+                    .checked_add(range.len as u64)
+                    .ok_or(ObjectError::InvalidRange)?;
+                self.operator
+                    .reader(key.as_str())
+                    .and_then(|reader| reader.read(range.offset..end))
+            }
+            None => self.operator.read(key.as_str()),
+        }
+        .map_err(ObjectError::from_backend)?;
+        Ok(buffer.to_vec())
+    }
+
+    fn head(&self, key: &ObjectKey) -> Result<Option<ObjectInfo>, ObjectError> {
+        match self.operator.stat(key.as_str()) {
+            Ok(meta) => Ok(Some(ObjectInfo {
+                key: key.clone(),
+                size: meta.content_length(),
+            })),
+            Err(err) if err.kind() == ErrorKind::NotFound => Ok(None),
+            Err(err) => Err(ObjectError::from_backend(err)),
+        }
+    }
+
+    fn delete(&self, key: &ObjectKey) -> Result<bool, ObjectError> {
+        let existed = self.head(key)?.is_some();
+        self.operator
+            .delete(key.as_str())
+            .map_err(ObjectError::from_backend)?;
+        Ok(existed)
     }
 }
 
@@ -184,6 +346,10 @@ impl ObjectError {
     fn from_io(err: std::io::Error) -> Self {
         Self::Io(err.to_string())
     }
+
+    fn from_backend(err: impl fmt::Display) -> Self {
+        Self::Backend(err.to_string())
+    }
 }
 
 impl fmt::Display for ObjectError {
@@ -195,7 +361,10 @@ impl fmt::Display for ObjectError {
             Self::CurrentDirectory => write!(f, "object key contains '.'"),
             Self::ContainsNul => write!(f, "object key contains NUL"),
             Self::InvalidRange => write!(f, "object range must have non-zero length"),
+            Self::MissingBucket => write!(f, "S3 object store bucket is required"),
+            Self::MissingRegion => write!(f, "S3 object store region is required"),
             Self::Io(err) => write!(f, "object store io error: {err}"),
+            Self::Backend(err) => write!(f, "object store backend error: {err}"),
         }
     }
 }
@@ -239,6 +408,53 @@ mod tests {
         );
         assert!(store.delete(&key).unwrap());
         assert!(!store.delete(&key).unwrap());
+        assert!(store.head(&key).unwrap().is_none());
+    }
+
+    #[test]
+    fn s3_options_validate_required_fields_and_rustfs_defaults() {
+        let mut options = S3ObjectStoreOptions::new("");
+        assert_eq!(options.validate(), Err(ObjectError::MissingBucket));
+
+        options.bucket = "nokv".to_owned();
+        options.region.clear();
+        assert_eq!(options.validate(), Err(ObjectError::MissingRegion));
+
+        let options =
+            S3ObjectStoreOptions::rustfs("nokv", "http://127.0.0.1:9000", "access", "secret");
+        assert_eq!(options.bucket, "nokv");
+        assert_eq!(options.region, "auto");
+        assert_eq!(options.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
+        assert!(!options.virtual_host_style);
+    }
+
+    #[test]
+    fn s3_object_store_contract_from_env() {
+        let Ok(bucket) = std::env::var("NOKV_FS_S3_BUCKET") else {
+            return;
+        };
+        let mut options = S3ObjectStoreOptions::new(bucket);
+        options.region = std::env::var("NOKV_FS_S3_REGION").unwrap_or_else(|_| "auto".to_owned());
+        options.endpoint = std::env::var("NOKV_FS_S3_ENDPOINT").ok();
+        options.access_key_id = std::env::var("NOKV_FS_S3_ACCESS_KEY_ID").ok();
+        options.secret_access_key = std::env::var("NOKV_FS_S3_SECRET_ACCESS_KEY").ok();
+        options.session_token = std::env::var("NOKV_FS_S3_SESSION_TOKEN").ok();
+        options.virtual_host_style =
+            std::env::var("NOKV_FS_S3_VIRTUAL_HOST_STYLE").as_deref() == Ok("1");
+        options.skip_signature = std::env::var("NOKV_FS_S3_SKIP_SIGNATURE").as_deref() == Ok("1");
+
+        let store = S3ObjectStore::new(options).unwrap();
+        let key = ObjectKey::new(format!("nokv-fs-test/{}.bin", std::process::id())).unwrap();
+
+        store.put(&key, b"abcdef").unwrap();
+        assert_eq!(store.head(&key).unwrap().unwrap().size, 6);
+        assert_eq!(
+            store
+                .get(&key, Some(ObjectRange::new(1, 3).unwrap()))
+                .unwrap(),
+            b"bcd"
+        );
+        assert!(store.delete(&key).unwrap());
         assert!(store.head(&key).unwrap().is_none());
     }
 }

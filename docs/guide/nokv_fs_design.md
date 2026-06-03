@@ -364,6 +364,13 @@ client uploads objects
 This avoids a metadata-server data bottleneck and lets the client use
 object-store multipart upload, direct reads, prefetch, and local cache.
 
+The first production object backend is S3-compatible storage. AWS S3, RustFS,
+MinIO, Ceph RGW, and similar services should use the same S3 backend with
+different endpoint, region, credential, and virtual-host/path-style settings.
+RustFS is intentionally not a separate NoKV-FS backend because it speaks the S3
+API; keeping one S3-compatible backend avoids provider-specific metadata
+semantics leaking into `metad`.
+
 ## Consistency Model
 
 NoKV-FS should define three visible levels:

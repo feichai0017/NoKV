@@ -21,4 +21,6 @@ nokv-fs-layout = { path = "crates/layout" }
 nokv-fs-metastore = { path = "crates/metastore" }
 nokv-fs-object = { path = "crates/object" }
 holt = { version = "0.4.2", default-features = false }
+opendal = { version = "0.57.0", default-features = false, features = ["blocking", "executors-tokio", "reqwest-rustls-tls", "services-s3"] }
 tempfile = "3"
+tokio = { version = "1", features = ["rt-multi-thread"] }
