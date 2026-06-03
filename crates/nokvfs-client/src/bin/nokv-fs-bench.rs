@@ -16,7 +16,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::NoKvFs;
-use nokvfs_object::LocalObjectStore;
+use nokvfs_object::{ObjectBackend, ObjectStoreConfig, S3ObjectStoreOptions};
 use nokvfs_types::MountId;
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
@@ -45,7 +45,17 @@ struct Config {
     profile: Profile,
     workload: Workload,
     root: PathBuf,
+    object_backend: ObjectBackendKind,
+    local_objects: Option<PathBuf>,
+    s3: S3ObjectStoreOptions,
     keep: bool,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ObjectBackendKind {
+    Local,
+    S3,
+    RustFs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,7 +91,7 @@ enum BenchError {
     Client(String),
 }
 
-type Client = NoKvFsClient<HoltMetadataStore, LocalObjectStore>;
+type Client = NoKvFsClient<HoltMetadataStore, ObjectBackend>;
 
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
@@ -89,7 +99,7 @@ fn main() {
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
              [--workload all|mdtest-easy|mdtest-hard|checkpoint-publish|training-read] \
-             [--root PATH] [--keep]"
+             [--root PATH] [--object-backend local|s3|rustfs] [--keep]"
         );
         std::process::exit(2);
     }
@@ -348,9 +358,10 @@ fn row(
 
 fn client_for(config: &Config, workload: &str) -> Result<Client, BenchError> {
     let meta = config.root.join(workload).join("meta");
-    let objects = config.root.join(workload).join("objects");
+    let objects = object_config_for(config, workload)
+        .open()
+        .map_err(from_client)?;
     let metadata = HoltMetadataStore::open_file(meta).map_err(from_client)?;
-    let objects = LocalObjectStore::new(objects).map_err(from_client)?;
     let service = NoKvFs::new(
         MountId::new(1).expect("mount id is non-zero"),
         metadata,
@@ -382,6 +393,9 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
     let mut profile = Profile::Smoke;
     let mut workload = Workload::All;
     let mut root = default_root();
+    let mut object_backend = ObjectBackendKind::Local;
+    let mut local_objects = None;
+    let mut s3 = S3ObjectStoreOptions::new("");
     let mut keep = false;
     let mut index = 0;
     while index < args.len() {
@@ -398,6 +412,52 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
                 index += 1;
                 root = PathBuf::from(value(&args, index, "--root")?);
             }
+            "--objects" => {
+                index += 1;
+                local_objects = Some(PathBuf::from(value(&args, index, "--objects")?));
+            }
+            "--object-backend" => {
+                index += 1;
+                object_backend = parse_object_backend(value(&args, index, "--object-backend")?)?;
+                if object_backend == ObjectBackendKind::RustFs {
+                    s3.region = "auto".to_owned();
+                }
+            }
+            "--s3-bucket" => {
+                index += 1;
+                s3.bucket = value(&args, index, "--s3-bucket")?.to_owned();
+            }
+            "--s3-endpoint" => {
+                index += 1;
+                s3.endpoint = Some(value(&args, index, "--s3-endpoint")?.to_owned());
+            }
+            "--s3-region" => {
+                index += 1;
+                s3.region = value(&args, index, "--s3-region")?.to_owned();
+            }
+            "--s3-access-key-id" => {
+                index += 1;
+                s3.access_key_id = Some(value(&args, index, "--s3-access-key-id")?.to_owned());
+            }
+            "--s3-secret-access-key" => {
+                index += 1;
+                s3.secret_access_key =
+                    Some(value(&args, index, "--s3-secret-access-key")?.to_owned());
+            }
+            "--s3-session-token" => {
+                index += 1;
+                s3.session_token = Some(value(&args, index, "--s3-session-token")?.to_owned());
+            }
+            "--s3-root" => {
+                index += 1;
+                s3.root = value(&args, index, "--s3-root")?.to_owned();
+            }
+            "--s3-virtual-host-style" => {
+                s3.virtual_host_style = true;
+            }
+            "--s3-skip-signature" => {
+                s3.skip_signature = true;
+            }
             "--keep" => keep = true,
             "--help" | "-h" => {
                 return Err(BenchError::UnknownOption("--help".to_owned()));
@@ -410,8 +470,39 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
         profile,
         workload,
         root,
+        object_backend,
+        local_objects,
+        s3,
         keep,
     })
+}
+
+fn object_config_for(config: &Config, workload: &str) -> ObjectStoreConfig {
+    match config.object_backend {
+        ObjectBackendKind::Local => {
+            let base = config
+                .local_objects
+                .clone()
+                .unwrap_or_else(|| config.root.join("objects"));
+            ObjectStoreConfig::local(base.join(workload))
+        }
+        ObjectBackendKind::S3 | ObjectBackendKind::RustFs => {
+            let mut options = config.s3.clone();
+            if options.root == "/" {
+                options.root = format!("/nokv-fs-bench/{workload}");
+            }
+            ObjectStoreConfig::s3(options)
+        }
+    }
+}
+
+fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, BenchError> {
+    match raw {
+        "local" => Ok(ObjectBackendKind::Local),
+        "s3" => Ok(ObjectBackendKind::S3),
+        "rustfs" => Ok(ObjectBackendKind::RustFs),
+        _ => Err(BenchError::UnknownOption(format!("--object-backend {raw}"))),
+    }
 }
 
 fn value<'a>(
@@ -554,6 +645,7 @@ mod tests {
         let config = parse(Vec::new()).unwrap();
         assert_eq!(config.profile, Profile::Smoke);
         assert_eq!(config.workload, Workload::All);
+        assert_eq!(config.object_backend, ObjectBackendKind::Local);
         assert!(!config.keep);
         assert!(config.root.to_string_lossy().contains("nokv-fs-bench"));
     }
@@ -567,13 +659,40 @@ mod tests {
             s("training-read"),
             s("--root"),
             s("/tmp/nokv-fs-bench"),
+            s("--objects"),
+            s("/tmp/nokv-fs-objects"),
             s("--keep"),
         ])
         .unwrap();
         assert_eq!(config.profile, Profile::Standard);
         assert_eq!(config.workload, Workload::TrainingRead);
         assert_eq!(config.root, PathBuf::from("/tmp/nokv-fs-bench"));
+        assert_eq!(
+            config.local_objects,
+            Some(PathBuf::from("/tmp/nokv-fs-objects"))
+        );
         assert!(config.keep);
+    }
+
+    #[test]
+    fn parse_rustfs_object_options() {
+        let config = parse(vec![
+            s("--object-backend"),
+            s("rustfs"),
+            s("--s3-bucket"),
+            s("nokv"),
+            s("--s3-endpoint"),
+            s("http://127.0.0.1:9000"),
+            s("--s3-access-key-id"),
+            s("access"),
+            s("--s3-secret-access-key"),
+            s("secret"),
+        ])
+        .unwrap();
+        assert_eq!(config.object_backend, ObjectBackendKind::RustFs);
+        assert_eq!(config.s3.bucket, "nokv");
+        assert_eq!(config.s3.region, "auto");
+        assert_eq!(config.s3.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
     }
 
     #[test]

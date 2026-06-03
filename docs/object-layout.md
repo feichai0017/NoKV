@@ -24,6 +24,10 @@ generation
 under `artifacts/<path>`. S3-compatible backends use the same object boundary
 for AWS S3, RustFS, MinIO, and Ceph RGW.
 
+Use `--object-backend rustfs` or `--object-backend s3` to store bodies outside
+the local filesystem. See [RustFS Backend](./rustfs.md) for the local RustFS
+shape.
+
 ## Publish Rule
 
 Artifact publish is staged:

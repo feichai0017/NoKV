@@ -50,6 +50,18 @@ pub struct LocalObjectStore {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ObjectStoreConfig {
+    Local { root: PathBuf },
+    S3 { options: S3ObjectStoreOptions },
+}
+
+#[derive(Clone, Debug)]
+pub enum ObjectBackend {
+    Local(LocalObjectStore),
+    S3(S3ObjectStore),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct S3ObjectStoreOptions {
     pub bucket: String,
     pub root: String,
@@ -115,6 +127,39 @@ impl LocalObjectStore {
             path.push(component);
         }
         path
+    }
+}
+
+impl ObjectStoreConfig {
+    pub fn local(root: impl Into<PathBuf>) -> Self {
+        Self::Local { root: root.into() }
+    }
+
+    pub fn s3(options: S3ObjectStoreOptions) -> Self {
+        Self::S3 { options }
+    }
+
+    pub fn rustfs(
+        bucket: impl Into<String>,
+        endpoint: impl Into<String>,
+        access_key_id: impl Into<String>,
+        secret_access_key: impl Into<String>,
+    ) -> Self {
+        Self::S3 {
+            options: S3ObjectStoreOptions::rustfs(
+                bucket,
+                endpoint,
+                access_key_id,
+                secret_access_key,
+            ),
+        }
+    }
+
+    pub fn open(&self) -> Result<ObjectBackend, ObjectError> {
+        match self {
+            Self::Local { root } => LocalObjectStore::new(root).map(ObjectBackend::Local),
+            Self::S3 { options } => S3ObjectStore::new(options.clone()).map(ObjectBackend::S3),
+        }
     }
 }
 
@@ -243,6 +288,36 @@ impl ObjectStore for S3ObjectStore {
             .delete(key.as_str())
             .map_err(ObjectError::from_backend)?;
         Ok(existed)
+    }
+}
+
+impl ObjectStore for ObjectBackend {
+    fn put(&self, key: &ObjectKey, bytes: &[u8]) -> Result<ObjectInfo, ObjectError> {
+        match self {
+            Self::Local(store) => store.put(key, bytes),
+            Self::S3(store) => store.put(key, bytes),
+        }
+    }
+
+    fn get(&self, key: &ObjectKey, range: Option<ObjectRange>) -> Result<Vec<u8>, ObjectError> {
+        match self {
+            Self::Local(store) => store.get(key, range),
+            Self::S3(store) => store.get(key, range),
+        }
+    }
+
+    fn head(&self, key: &ObjectKey) -> Result<Option<ObjectInfo>, ObjectError> {
+        match self {
+            Self::Local(store) => store.head(key),
+            Self::S3(store) => store.head(key),
+        }
+    }
+
+    fn delete(&self, key: &ObjectKey) -> Result<bool, ObjectError> {
+        match self {
+            Self::Local(store) => store.delete(key),
+            Self::S3(store) => store.delete(key),
+        }
     }
 }
 
@@ -426,6 +501,15 @@ mod tests {
         assert_eq!(options.region, "auto");
         assert_eq!(options.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
         assert!(!options.virtual_host_style);
+    }
+
+    #[test]
+    fn object_store_config_opens_local_backend() {
+        let dir = tempfile::tempdir().unwrap();
+        let backend = ObjectStoreConfig::local(dir.path()).open().unwrap();
+        let key = ObjectKey::new("a/b").unwrap();
+        backend.put(&key, b"x").unwrap();
+        assert_eq!(backend.get(&key, None).unwrap(), b"x");
     }
 
     #[test]

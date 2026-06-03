@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::NoKvFs;
-use nokvfs_object::LocalObjectStore;
+use nokvfs_object::{ObjectBackend, ObjectStoreConfig, S3ObjectStoreOptions};
 use nokvfs_types::{FileType, MountId};
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
@@ -21,10 +21,17 @@ const DEFAULT_GID: u32 = 1000;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Config {
     meta: PathBuf,
-    objects: PathBuf,
+    object: ObjectStoreConfig,
     mount: MountId,
     uid: u32,
     gid: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ObjectBackendKind {
+    Local,
+    S3,
+    RustFs,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -55,7 +62,7 @@ enum CliError {
     Client(String),
 }
 
-type LocalClient = NoKvFsClient<HoltMetadataStore, LocalObjectStore>;
+type Client = NoKvFsClient<HoltMetadataStore, ObjectBackend>;
 
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
@@ -204,20 +211,22 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
     Ok(())
 }
 
-fn open_client(config: &Config) -> Result<LocalClient, CliError> {
+fn open_client(config: &Config) -> Result<Client, CliError> {
     Ok(NoKvFsClient::new(open_service(config)?))
 }
 
-fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, LocalObjectStore>, CliError> {
+fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, ObjectBackend>, CliError> {
     let metadata = HoltMetadataStore::open_file(&config.meta).map_err(from_metadata)?;
-    let objects = LocalObjectStore::new(&config.objects).map_err(from_object)?;
+    let objects = config.object.open().map_err(from_object)?;
     NoKvFs::open_existing(config.mount, metadata, objects)
         .map_err(|err| CliError::Client(err.to_string()))
 }
 
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv-fs/meta");
+    let mut object_backend = ObjectBackendKind::Local;
     let mut objects = PathBuf::from(".nokv-fs/objects");
+    let mut s3 = S3ObjectStoreOptions::new("");
     let mut mount = MountId::new(1).expect("default mount id is non-zero");
     let mut uid = DEFAULT_UID;
     let mut gid = DEFAULT_GID;
@@ -231,6 +240,48 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             "--objects" => {
                 index += 1;
                 objects = PathBuf::from(value(&args, index, "--objects")?);
+            }
+            "--object-backend" => {
+                index += 1;
+                object_backend = parse_object_backend(value(&args, index, "--object-backend")?)?;
+                if object_backend == ObjectBackendKind::RustFs {
+                    s3.region = "auto".to_owned();
+                }
+            }
+            "--s3-bucket" => {
+                index += 1;
+                s3.bucket = value(&args, index, "--s3-bucket")?.to_owned();
+            }
+            "--s3-endpoint" => {
+                index += 1;
+                s3.endpoint = Some(value(&args, index, "--s3-endpoint")?.to_owned());
+            }
+            "--s3-region" => {
+                index += 1;
+                s3.region = value(&args, index, "--s3-region")?.to_owned();
+            }
+            "--s3-access-key-id" => {
+                index += 1;
+                s3.access_key_id = Some(value(&args, index, "--s3-access-key-id")?.to_owned());
+            }
+            "--s3-secret-access-key" => {
+                index += 1;
+                s3.secret_access_key =
+                    Some(value(&args, index, "--s3-secret-access-key")?.to_owned());
+            }
+            "--s3-session-token" => {
+                index += 1;
+                s3.session_token = Some(value(&args, index, "--s3-session-token")?.to_owned());
+            }
+            "--s3-root" => {
+                index += 1;
+                s3.root = value(&args, index, "--s3-root")?.to_owned();
+            }
+            "--s3-virtual-host-style" => {
+                s3.virtual_host_style = true;
+            }
+            "--s3-skip-signature" => {
+                s3.skip_signature = true;
             }
             "--mount" => {
                 index += 1;
@@ -252,7 +303,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 return Ok((
                     Config {
                         meta,
-                        objects,
+                        object: object_config(object_backend, objects, s3),
                         mount,
                         uid,
                         gid,
@@ -272,13 +323,33 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     Ok((
         Config {
             meta,
-            objects,
+            object: object_config(object_backend, objects, s3),
             mount,
             uid,
             gid,
         },
         command,
     ))
+}
+
+fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, CliError> {
+    match raw {
+        "local" => Ok(ObjectBackendKind::Local),
+        "s3" => Ok(ObjectBackendKind::S3),
+        "rustfs" => Ok(ObjectBackendKind::RustFs),
+        _ => Err(CliError::UnknownOption(format!("--object-backend {raw}"))),
+    }
+}
+
+fn object_config(
+    backend: ObjectBackendKind,
+    local_root: PathBuf,
+    s3: S3ObjectStoreOptions,
+) -> ObjectStoreConfig {
+    match backend {
+        ObjectBackendKind::Local => ObjectStoreConfig::local(local_root),
+        ObjectBackendKind::S3 | ObjectBackendKind::RustFs => ObjectStoreConfig::s3(s3),
+    }
 }
 
 fn parse_command(args: &[String]) -> Result<Command, CliError> {
@@ -402,6 +473,16 @@ Usage:\n\
   nokv-fs [--meta PATH] [--objects PATH] rename-replace SOURCE DESTINATION\n\
   nokv-fs [--meta PATH] [--objects PATH] mount MOUNTPOINT\n\
 \n\
+Object backends:\n\
+  --object-backend local|s3|rustfs\n\
+  --objects PATH                    local object root\n\
+  --s3-bucket BUCKET                S3/RustFS bucket\n\
+  --s3-endpoint URL                 S3/RustFS endpoint\n\
+  --s3-region REGION                S3 region; RustFS commonly uses auto\n\
+  --s3-access-key-id KEY\n\
+  --s3-secret-access-key SECRET\n\
+  --s3-root PREFIX\n\
+\n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\
   --objects .nokv-fs/objects\n\
@@ -439,7 +520,10 @@ mod tests {
     fn parse_defaults_to_local_paths() {
         let (config, command) = parse(vec![s("ls"), s("/")]).unwrap();
         assert_eq!(config.meta, PathBuf::from(".nokv-fs/meta"));
-        assert_eq!(config.objects, PathBuf::from(".nokv-fs/objects"));
+        assert_eq!(
+            config.object,
+            ObjectStoreConfig::local(PathBuf::from(".nokv-fs/objects"))
+        );
         assert_eq!(config.mount.get(), 1);
         assert_eq!(command, Command::Ls { path: s("/") });
     }
@@ -458,9 +542,39 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(config.meta, PathBuf::from("/tmp/meta"));
-        assert_eq!(config.objects, PathBuf::from("/tmp/objects"));
+        assert_eq!(
+            config.object,
+            ObjectStoreConfig::local(PathBuf::from("/tmp/objects"))
+        );
         assert_eq!(config.mount.get(), 7);
         assert_eq!(command, Command::Mkdir { path: s("/runs") });
+    }
+
+    #[test]
+    fn parse_rustfs_object_options() {
+        let (config, command) = parse(vec![
+            s("--object-backend"),
+            s("rustfs"),
+            s("--s3-bucket"),
+            s("nokv"),
+            s("--s3-endpoint"),
+            s("http://127.0.0.1:9000"),
+            s("--s3-access-key-id"),
+            s("access"),
+            s("--s3-secret-access-key"),
+            s("secret"),
+            s("init"),
+        ])
+        .unwrap();
+        assert_eq!(command, Command::Init);
+        let ObjectStoreConfig::S3 { options } = config.object else {
+            panic!("rustfs backend should use S3-compatible object config");
+        };
+        assert_eq!(options.bucket, "nokv");
+        assert_eq!(options.region, "auto");
+        assert_eq!(options.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
+        assert_eq!(options.access_key_id.as_deref(), Some("access"));
+        assert_eq!(options.secret_access_key.as_deref(), Some("secret"));
     }
 
     #[test]
