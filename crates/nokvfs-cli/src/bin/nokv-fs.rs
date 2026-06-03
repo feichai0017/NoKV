@@ -47,6 +47,9 @@ enum Command {
     RenameReplace { source: String, destination: String },
     Mount { mountpoint: PathBuf },
     Gc { limit: usize },
+    Snapshot { path: String },
+    CatSnapshot { snapshot_id: u64, path: String },
+    RetireSnapshot { snapshot_id: u64 },
     Help,
 }
 
@@ -217,6 +220,30 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 cleanup.missing,
                 cleanup.records_removed
             );
+        }
+        Command::Snapshot { path } => {
+            let client = open_client(&config)?;
+            let snapshot = client.snapshot(&path).map_err(from_client)?;
+            println!(
+                "snapshot path={} id={} root={} read_version={} created_version={}",
+                path,
+                snapshot.snapshot_id,
+                snapshot.root.get(),
+                snapshot.read_version,
+                snapshot.created_version
+            );
+        }
+        Command::CatSnapshot { snapshot_id, path } => {
+            let client = open_client(&config)?;
+            let bytes = client
+                .cat_snapshot(snapshot_id, &path)
+                .map_err(from_client)?;
+            io::stdout().write_all(&bytes).map_err(from_io)?;
+        }
+        Command::RetireSnapshot { snapshot_id } => {
+            let client = open_client(&config)?;
+            let retired = client.retire_snapshot(snapshot_id).map_err(from_client)?;
+            println!("retired_snapshot id={} retired={}", snapshot_id, retired);
         }
         Command::Help => {
             print_help(&mut io::stdout()).map_err(from_io)?;
@@ -419,6 +446,22 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
             }),
             _ => Err(CliError::TooManyArguments),
         },
+        "snapshot" => exact_args(args, 2).map(|()| Command::Snapshot {
+            path: args[1].clone(),
+        }),
+        "cat-snapshot" => {
+            exact_args(args, 3)?;
+            Ok(Command::CatSnapshot {
+                snapshot_id: parse_u64(&args[1], "snapshot_id")?,
+                path: args[2].clone(),
+            })
+        }
+        "retire-snapshot" => {
+            exact_args(args, 2)?;
+            Ok(Command::RetireSnapshot {
+                snapshot_id: parse_u64(&args[1], "snapshot_id")?,
+            })
+        }
         "help" => Ok(Command::Help),
         other => Err(CliError::UnknownCommand(other.to_owned())),
     }
@@ -430,6 +473,9 @@ fn exact_args(args: &[String], expected: usize) -> Result<(), CliError> {
             match args.first().map(String::as_str) {
                 Some("mkdir") | Some("ls") | Some("cat") | Some("rm") | Some("rmdir") => "path",
                 Some("put-artifact") => "path and source",
+                Some("snapshot") => "path",
+                Some("cat-snapshot") => "snapshot id and path",
+                Some("retire-snapshot") => "snapshot id",
                 Some("rename") | Some("rename-replace") => "source and destination",
                 Some("mount") => "mountpoint",
                 _ => "argument",
@@ -450,6 +496,13 @@ fn value<'a>(args: &'a [String], index: usize, option: &'static str) -> Result<&
 
 fn parse_u32(raw: &str, field: &'static str) -> Result<u32, CliError> {
     raw.parse::<u32>().map_err(|_| CliError::InvalidNumber {
+        field,
+        value: raw.to_owned(),
+    })
+}
+
+fn parse_u64(raw: &str, field: &'static str) -> Result<u64, CliError> {
+    raw.parse::<u64>().map_err(|_| CliError::InvalidNumber {
         field,
         value: raw.to_owned(),
     })
@@ -511,6 +564,9 @@ Usage:\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount MOUNTPOINT\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
+  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\
+  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] cat-snapshot SNAPSHOT_ID PATH\n\
+  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] retire-snapshot SNAPSHOT_ID\n\
 \n\
 Object backends:\n\
   --object-backend s3|rustfs\n\
@@ -667,6 +723,34 @@ mod tests {
         assert!(matches!(
             parse(vec![s("gc"), s("bad")]),
             Err(CliError::InvalidNumber { field: "limit", .. })
+        ));
+    }
+
+    #[test]
+    fn parse_snapshot_commands() {
+        assert_eq!(
+            parse(vec![s("snapshot"), s("/runs")]).unwrap().1,
+            Command::Snapshot { path: s("/runs") }
+        );
+        assert_eq!(
+            parse(vec![s("cat-snapshot"), s("42"), s("/runs/checkpoint")])
+                .unwrap()
+                .1,
+            Command::CatSnapshot {
+                snapshot_id: 42,
+                path: s("/runs/checkpoint")
+            }
+        );
+        assert_eq!(
+            parse(vec![s("retire-snapshot"), s("42")]).unwrap().1,
+            Command::RetireSnapshot { snapshot_id: 42 }
+        );
+        assert!(matches!(
+            parse(vec![s("cat-snapshot"), s("bad"), s("/runs/checkpoint")]),
+            Err(CliError::InvalidNumber {
+                field: "snapshot_id",
+                ..
+            })
         ));
     }
 

@@ -11,7 +11,7 @@ use nokvfs_meta::{
     DentryWithAttr, MetadError, NoKvFs, ObjectTransferStats, PublishArtifact, RenameReplaceResult,
 };
 use nokvfs_object::ObjectStore;
-use nokvfs_types::{DentryName, FileType, InodeId};
+use nokvfs_types::{DentryName, FileType, InodeId, SnapshotPin};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactMetadata {
@@ -178,6 +178,24 @@ where
             .map_err(Into::into)
     }
 
+    pub fn snapshot(&self, path: &str) -> Result<SnapshotPin, ClientError> {
+        let root = self.resolve_directory(path)?;
+        self.service.snapshot_subtree(root).map_err(Into::into)
+    }
+
+    pub fn retire_snapshot(&self, snapshot_id: u64) -> Result<bool, ClientError> {
+        self.service
+            .retire_snapshot(snapshot_id)
+            .map_err(Into::into)
+    }
+
+    pub fn cat_snapshot(&self, snapshot_id: u64, path: &str) -> Result<Vec<u8>, ClientError> {
+        let (parent, name) = self.resolve_parent_at_snapshot(snapshot_id, path)?;
+        self.service
+            .read_artifact_at_snapshot(snapshot_id, parent, &name)
+            .map_err(Into::into)
+    }
+
     pub fn into_inner(self) -> NoKvFs<M, O> {
         self.service
     }
@@ -201,6 +219,17 @@ where
         Ok((parent, name))
     }
 
+    fn resolve_parent_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        path: &str,
+    ) -> Result<(InodeId, DentryName), ClientError> {
+        let mut components = parse_absolute_path(path)?;
+        let name = components.pop().ok_or(ClientError::RootHasNoParent)?;
+        let parent = self.resolve_components_as_directory_at_snapshot(snapshot_id, &components)?;
+        Ok((parent, name))
+    }
+
     fn resolve_directory(&self, path: &str) -> Result<InodeId, ClientError> {
         let components = parse_absolute_path(path)?;
         self.resolve_components_as_directory(&components)
@@ -216,6 +245,26 @@ where
             let entry = self
                 .service
                 .lookup_plus(current, name)?
+                .ok_or_else(|| ClientError::NotFound(label.clone()))?;
+            if entry.attr.file_type != FileType::Directory {
+                return Err(ClientError::NotDirectory(label));
+            }
+            current = entry.attr.inode;
+        }
+        Ok(current)
+    }
+
+    fn resolve_components_as_directory_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        components: &[DentryName],
+    ) -> Result<InodeId, ClientError> {
+        let mut current = InodeId::root();
+        for name in components {
+            let label = display_name(name);
+            let entry = self
+                .service
+                .lookup_plus_at_snapshot(snapshot_id, current, name)?
                 .ok_or_else(|| ClientError::NotFound(label.clone()))?;
             if entry.attr.file_type != FileType::Directory {
                 return Err(ClientError::NotDirectory(label));
@@ -377,6 +426,56 @@ mod tests {
             "runs/checkpoint-old"
         );
         assert_eq!(client.cat("/runs/checkpoint").unwrap(), b"new");
+    }
+
+    #[test]
+    fn snapshot_cat_uses_snapshot_path_resolution() {
+        let client = client();
+        client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
+        client
+            .put_artifact(
+                "/runs/checkpoint",
+                b"old".to_vec(),
+                ArtifactMetadata {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:old".to_owned(),
+                    content_type: "application/octet-stream".to_owned(),
+                    manifest_id: "runs/checkpoint-old".to_owned(),
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                },
+            )
+            .unwrap();
+        let snapshot = client.snapshot("/runs").unwrap();
+        client
+            .put_artifact_replace(
+                "/runs/checkpoint",
+                b"new".to_vec(),
+                ArtifactMetadata {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:new".to_owned(),
+                    content_type: "application/octet-stream".to_owned(),
+                    manifest_id: "runs/checkpoint-new".to_owned(),
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(client.cat("/runs/checkpoint").unwrap(), b"new");
+        assert_eq!(
+            client
+                .cat_snapshot(snapshot.snapshot_id, "/runs/checkpoint")
+                .unwrap(),
+            b"old"
+        );
+        assert!(client.retire_snapshot(snapshot.snapshot_id).unwrap());
+        assert!(matches!(
+            client.cat_snapshot(snapshot.snapshot_id, "/runs/checkpoint"),
+            Err(ClientError::Metadata(MetadError::NotFound))
+        ));
     }
 
     #[test]
