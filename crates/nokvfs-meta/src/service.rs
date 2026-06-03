@@ -6,7 +6,7 @@
 //! boundary. It does not own Holt trees, Raft replication, FUSE, or protobuf.
 
 use std::fmt;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 
 use crate::command::{
     CommandKind, MetadataCommand, MetadataError, MetadataStore, Mutation, MutationOp, Predicate,
@@ -87,6 +87,7 @@ pub struct NoKvFs<M, O> {
     clock: AtomicU64,
     next_inode: AtomicU64,
     block_cache: MemoryBlockCache,
+    block_cache_enabled: AtomicBool,
     object_puts: AtomicU64,
     object_gets: AtomicU64,
     cache_hits: AtomicU64,
@@ -107,6 +108,7 @@ where
             clock: AtomicU64::new(1),
             next_inode: AtomicU64::new(InodeId::ROOT_RAW + 1),
             block_cache: MemoryBlockCache::default(),
+            block_cache_enabled: AtomicBool::new(true),
             object_puts: AtomicU64::new(0),
             object_gets: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
@@ -145,6 +147,7 @@ where
             clock: AtomicU64::new(max_version),
             next_inode: AtomicU64::new(next_inode),
             block_cache: MemoryBlockCache::default(),
+            block_cache_enabled: AtomicBool::new(true),
             object_puts: AtomicU64::new(0),
             object_gets: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
@@ -161,6 +164,14 @@ where
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
             manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
         }
+    }
+
+    pub fn set_block_cache_enabled(&self, enabled: bool) {
+        self.block_cache_enabled.store(enabled, Ordering::Relaxed);
+    }
+
+    pub fn block_cache_enabled(&self) -> bool {
+        self.block_cache_enabled.load(Ordering::Relaxed)
     }
 
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<InodeAttr, MetadError> {
@@ -435,7 +446,12 @@ where
         let body = self.body_descriptor(inode)?.ok_or(MetadError::NotFound)?;
         let len = len.min((body.size - offset) as usize);
         let plan = self.read_plan(inode, &body, offset, len)?;
-        let outcome = read_object_blocks(&self.objects, Some(&self.block_cache), len, &plan)?;
+        let cache = if self.block_cache_enabled() {
+            Some(&self.block_cache)
+        } else {
+            None
+        };
+        let outcome = read_object_blocks(&self.objects, cache, len, &plan)?;
         self.object_gets
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
         self.cache_hits

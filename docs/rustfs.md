@@ -78,6 +78,8 @@ cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
   --profile smoke \
   --workload checkpoint-publish \
   --object-backend rustfs \
+  --object-concurrency 4 \
+  --checkpoint-bytes 1048576 \
   --s3-bucket nokv \
   --s3-endpoint http://127.0.0.1:9000 \
   --s3-access-key-id rustfsadmin \
@@ -86,7 +88,8 @@ cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
 
 `mdtest-easy` and `mdtest-hard` are metadata-only and do not exercise object
 storage. `checkpoint-publish` and `training-read` are the useful object-backed
-workloads for RustFS.
+workloads for RustFS. Use `--block-cache off` as a control run when measuring
+object backend latency instead of NoKV-FS cache reuse.
 
 References:
 

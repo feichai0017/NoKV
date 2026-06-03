@@ -163,6 +163,14 @@ where
         self.service.object_stats()
     }
 
+    pub fn set_block_cache_enabled(&self, enabled: bool) {
+        self.service.set_block_cache_enabled(enabled);
+    }
+
+    pub fn block_cache_enabled(&self) -> bool {
+        self.service.block_cache_enabled()
+    }
+
     fn resolve_parent(&self, path: &str) -> Result<(InodeId, DentryName), ClientError> {
         let mut components = parse_absolute_path(path)?;
         let name = components.pop().ok_or(ClientError::RootHasNoParent)?;

@@ -28,8 +28,29 @@ workloads.
 The harness prints CSV:
 
 ```text
-workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,checksum,shape,caveat
+workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,object_concurrency,read_repeats,block_cache,checksum,shape,caveat
 ```
+
+Object-backed workloads can be scaled without editing code:
+
+```bash
+cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
+  --profile standard \
+  --workload mlperf-dlio \
+  --object-backend rustfs \
+  --object-concurrency 8 \
+  --checkpoint-bytes 1048576 \
+  --sample-bytes 65536 \
+  --read-repeats 2 \
+  --block-cache on
+```
+
+`--object-concurrency` controls parallel object publish/read work inside the
+benchmark. `checkpoint-publish` stages checkpoint objects in parallel, then
+keeps the final `rename_replace` sequence ordered so the latest-checkpoint
+semantics stay clear. `--read-repeats` intentionally rereads the same sample per
+directory; use it with `--block-cache on|off` to separate object-store latency
+from cache reuse.
 
 ## Workloads
 
@@ -61,9 +82,9 @@ for CI performance claims.
 
 | Profile | Use |
 | --- | --- |
-| `smoke` | Fast correctness and shape check. |
-| `standard` | Local performance baseline for development. |
-| `long` | Larger local stress run. |
+| `smoke` | Fast correctness and shape check: 4 KiB checkpoints and 512 B samples. |
+| `standard` | Local performance baseline: 1 MiB checkpoints and 16 KiB samples. |
+| `long` | Larger local stress run: 8 MiB checkpoints and 256 KiB samples. |
 
 ## Current Caveats
 

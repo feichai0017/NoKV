@@ -11,6 +11,8 @@ use std::fmt;
 use std::fs;
 use std::hint::black_box;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
+use std::sync::Mutex;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
@@ -50,6 +52,11 @@ struct Config {
     root: PathBuf,
     object_backend: ObjectBackendKind,
     s3: S3ObjectStoreOptions,
+    object_concurrency: usize,
+    read_repeats: usize,
+    block_cache: bool,
+    checkpoint_bytes: Option<usize>,
+    sample_bytes: Option<usize>,
     keep: bool,
 }
 
@@ -65,6 +72,7 @@ struct WorkloadShape {
     files_per_dir: usize,
     shared_files: usize,
     checkpoints: usize,
+    checkpoint_bytes: usize,
     dataset_dirs: usize,
     dataset_files_per_dir: usize,
     dataset_file_bytes: usize,
@@ -85,6 +93,9 @@ struct ResultRow {
     cache_hit_rate: f64,
     manifest_chunks: u64,
     manifest_blocks: u64,
+    object_concurrency: usize,
+    read_repeats: usize,
+    block_cache: bool,
     checksum: u64,
     shape: String,
     caveat: String,
@@ -99,6 +110,9 @@ struct RowInput {
     bytes: u64,
     samples: usize,
     object_stats: ObjectTransferStats,
+    object_concurrency: usize,
+    read_repeats: usize,
+    block_cache: bool,
     checksum: u64,
     shape: String,
     caveat: String,
@@ -122,7 +136,9 @@ fn main() {
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
              [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
-             [--root PATH] [--object-backend s3|rustfs] [--keep]"
+             [--root PATH] [--object-backend s3|rustfs] \
+             [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
+             [--read-repeats N] [--block-cache on|off] [--keep]"
         );
         std::process::exit(2);
     }
@@ -130,14 +146,14 @@ fn main() {
 
 fn run(args: Vec<String>) -> Result<(), BenchError> {
     let config = parse(args)?;
-    let shape = shape(config.profile);
+    let shape = shape(&config);
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
-    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,checksum,shape,caveat");
+    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
         println!(
-            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{}",
+            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{}",
             row.workload,
             profile_name(row.profile),
             row.operations,
@@ -151,6 +167,9 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
             row.cache_hit_rate,
             row.manifest_chunks,
             row.manifest_blocks,
+            row.object_concurrency,
+            row.read_repeats,
+            row.block_cache,
             row.checksum,
             csv_field(&row.shape),
             csv_field(&row.caveat)
@@ -221,6 +240,9 @@ fn bench_mdtest_easy(
         bytes: 0,
         samples: 0,
         object_stats: stats_delta(before, client.object_stats()),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
         checksum,
         shape: format!(
             "dirs={} files_per_dir={} file_body=metadata-only",
@@ -256,6 +278,9 @@ fn bench_mdtest_hard(
         bytes: 0,
         samples: 0,
         object_stats: stats_delta(before, client.object_stats()),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
         checksum,
         shape: format!(
             "shared_dir_files={} file_body=metadata-only",
@@ -273,7 +298,7 @@ fn bench_checkpoint_publish(
     client
         .mkdir("/checkpoints", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
         .map_err(from_client)?;
-    let first = vec![1_u8; 4096];
+    let first = checkpoint_payload(0, shape.checkpoint_bytes);
     client
         .put_artifact(
             "/checkpoints/latest.ckpt",
@@ -284,11 +309,10 @@ fn bench_checkpoint_publish(
 
     let before = client.object_stats();
     let start = Instant::now();
-    let mut checksum = 0_u64;
-    for step in 0..shape.checkpoints {
+    let stage_checksum = run_parallel(shape.checkpoints, config.object_concurrency, |step| {
         let stage_path = format!("/checkpoints/.stage-{step:06}");
         let manifest_id = format!("checkpoints/stage-{step:06}");
-        let bytes = checkpoint_payload(step, 4096);
+        let bytes = checkpoint_payload(step, shape.checkpoint_bytes);
         let staged = client
             .put_artifact(
                 &stage_path,
@@ -296,11 +320,16 @@ fn bench_checkpoint_publish(
                 artifact_metadata("checkpoint", &manifest_id),
             )
             .map_err(from_client)?;
+        Ok(staged.attr.inode.get())
+    })?;
+
+    let mut checksum = stage_checksum;
+    for step in 0..shape.checkpoints {
+        let stage_path = format!("/checkpoints/.stage-{step:06}");
         let result = client
             .rename_replace(&stage_path, "/checkpoints/latest.ckpt")
             .map_err(from_client)?;
         checksum = checksum
-            .wrapping_add(staged.attr.inode.get())
             .wrapping_add(result.entry.attr.inode.get())
             .wrapping_add(
                 result
@@ -314,13 +343,16 @@ fn bench_checkpoint_publish(
         profile: config.profile,
         operations: shape.checkpoints * 2,
         seconds: start.elapsed().as_secs_f64(),
-        bytes: (shape.checkpoints * 4096) as u64,
+        bytes: (shape.checkpoints * shape.checkpoint_bytes) as u64,
         samples: 0,
         object_stats: stats_delta(before, client.object_stats()),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
         checksum,
         shape: format!(
-            "iterations={} payload_bytes=4096 ops=count_put_plus_atomic_replace",
-            shape.checkpoints
+            "iterations={} payload_bytes={} ops=count_parallel_put_plus_atomic_replace",
+            shape.checkpoints, shape.checkpoint_bytes
         ),
         caveat: object_caveat(config, "object put plus metadata rename-replace"),
     }))
@@ -334,7 +366,6 @@ fn bench_training_read(
     client
         .mkdir("/dataset", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
         .map_err(from_client)?;
-    let payload = vec![7_u8; shape.dataset_file_bytes];
     for shard in 0..shape.dataset_dirs {
         let shard_path = format!("/dataset/shard-{shard:04}");
         client
@@ -343,42 +374,45 @@ fn bench_training_read(
         for file in 0..shape.dataset_files_per_dir {
             let path = format!("{shard_path}/sample-{file:05}.bin");
             let manifest_id = format!("dataset/shard-{shard:04}/sample-{file:05}.bin");
+            let payload = dataset_payload(shard, file, shape.dataset_file_bytes);
             client
-                .put_artifact(
-                    &path,
-                    payload.clone(),
-                    artifact_metadata("dataset", &manifest_id),
-                )
+                .put_artifact(&path, payload, artifact_metadata("dataset", &manifest_id))
                 .map_err(from_client)?;
         }
     }
 
     let before = client.object_stats();
     let start = Instant::now();
-    let mut checksum = 0_u64;
-    for shard in 0..shape.dataset_dirs {
+    let checksum = run_parallel(shape.dataset_dirs, config.object_concurrency, |shard| {
         let shard_path = format!("/dataset/shard-{shard:04}");
         let entries = client.list(&shard_path).map_err(from_client)?;
-        checksum = checksum.wrapping_add(entries.len() as u64);
+        let mut checksum = entries.len() as u64;
         if let Some(first) = entries.first() {
             let name = String::from_utf8_lossy(first.dentry.name.as_bytes());
             let path = format!("{shard_path}/{name}");
-            let bytes = client.cat(&path).map_err(from_client)?;
-            checksum = checksum.wrapping_add(bytes.iter().map(|byte| *byte as u64).sum::<u64>());
+            for _ in 0..config.read_repeats {
+                let bytes = client.cat(&path).map_err(from_client)?;
+                checksum =
+                    checksum.wrapping_add(bytes.iter().map(|byte| *byte as u64).sum::<u64>());
+            }
         }
-    }
+        Ok(checksum)
+    })?;
     black_box(checksum);
     Ok(row(RowInput {
         workload: "training-read",
         profile: config.profile,
-        operations: shape.dataset_dirs * 2,
+        operations: shape.dataset_dirs * (1 + config.read_repeats),
         seconds: start.elapsed().as_secs_f64(),
-        bytes: (shape.dataset_dirs * shape.dataset_file_bytes) as u64,
-        samples: shape.dataset_dirs,
+        bytes: (shape.dataset_dirs * shape.dataset_file_bytes * config.read_repeats) as u64,
+        samples: shape.dataset_dirs * config.read_repeats,
         object_stats: stats_delta(before, client.object_stats()),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
         checksum,
         shape: format!(
-            "dataset_dirs={} files_per_dir={} sample_bytes={} timed_ops=list_plus_one_read_per_dir",
+            "dataset_dirs={} files_per_dir={} sample_bytes={} timed_ops=list_plus_repeated_read_per_dir",
             shape.dataset_dirs, shape.dataset_files_per_dir, shape.dataset_file_bytes
         ),
         caveat: object_caveat(config, "warm object reads after deterministic dataset seed"),
@@ -410,7 +444,6 @@ fn bench_mlperf_dlio(
         )
         .map_err(from_client)?;
 
-    let sample_payload = vec![11_u8; shape.dataset_file_bytes];
     for shard in 0..shape.dataset_dirs {
         let shard_path = format!("/mlperf-dlio/dataset/shard-{shard:04}");
         client
@@ -419,10 +452,11 @@ fn bench_mlperf_dlio(
         for file in 0..shape.dataset_files_per_dir {
             let path = format!("{shard_path}/sample-{file:05}.bin");
             let manifest_id = format!("mlperf-dlio/dataset/shard-{shard:04}/sample-{file:05}");
+            let sample_payload = dataset_payload(shard, file, shape.dataset_file_bytes);
             client
                 .put_artifact(
                     &path,
-                    sample_payload.clone(),
+                    sample_payload,
                     artifact_metadata("mlperf-dlio-dataset", &manifest_id),
                 )
                 .map_err(from_client)?;
@@ -432,7 +466,7 @@ fn bench_mlperf_dlio(
     client
         .put_artifact(
             "/mlperf-dlio/checkpoints/latest.ckpt",
-            checkpoint_payload(0, 4096),
+            checkpoint_payload(0, shape.checkpoint_bytes),
             artifact_metadata(
                 "mlperf-dlio-checkpoint",
                 "mlperf-dlio/checkpoints/latest-initial",
@@ -443,27 +477,35 @@ fn bench_mlperf_dlio(
     let checkpoint_steps = shape.checkpoints.max(1) / 4;
     let before = client.object_stats();
     let start = Instant::now();
-    let mut checksum = 0_u64;
-    for shard in 0..shape.dataset_dirs {
+    let mut checksum = run_parallel(shape.dataset_dirs, config.object_concurrency, |shard| {
         let shard_path = format!("/mlperf-dlio/dataset/shard-{shard:04}");
         let entries = client.list(&shard_path).map_err(from_client)?;
+        let mut checksum = entries.len() as u64;
         if let Some(first) = entries.first() {
             let name = String::from_utf8_lossy(first.dentry.name.as_bytes());
             let path = format!("{shard_path}/{name}");
-            let bytes = client.cat(&path).map_err(from_client)?;
-            checksum = checksum.wrapping_add(bytes.len() as u64);
+            for _ in 0..config.read_repeats {
+                let bytes = client.cat(&path).map_err(from_client)?;
+                checksum = checksum.wrapping_add(bytes.len() as u64);
+            }
         }
-    }
-    for step in 0..checkpoint_steps {
+        Ok(checksum)
+    })?;
+    let stage_checksum = run_parallel(checkpoint_steps, config.object_concurrency, |step| {
         let stage_path = format!("/mlperf-dlio/checkpoints/.stage-{step:06}");
         let manifest_id = format!("mlperf-dlio/checkpoints/stage-{step:06}");
-        client
+        let entry = client
             .put_artifact(
                 &stage_path,
-                checkpoint_payload(step, 4096),
+                checkpoint_payload(step, shape.checkpoint_bytes),
                 artifact_metadata("mlperf-dlio-checkpoint", &manifest_id),
             )
             .map_err(from_client)?;
+        Ok(entry.attr.inode.get())
+    })?;
+    checksum = checksum.wrapping_add(stage_checksum);
+    for step in 0..checkpoint_steps {
+        let stage_path = format!("/mlperf-dlio/checkpoints/.stage-{step:06}");
         let result = client
             .rename_replace(&stage_path, "/mlperf-dlio/checkpoints/latest.ckpt")
             .map_err(from_client)?;
@@ -473,18 +515,23 @@ fn bench_mlperf_dlio(
     Ok(row(RowInput {
         workload: "mlperf-dlio",
         profile: config.profile,
-        operations: shape.dataset_dirs * 2 + checkpoint_steps * 2,
+        operations: shape.dataset_dirs * (1 + config.read_repeats) + checkpoint_steps * 2,
         seconds: start.elapsed().as_secs_f64(),
-        bytes: (shape.dataset_dirs * shape.dataset_file_bytes + checkpoint_steps * 4096) as u64,
-        samples: shape.dataset_dirs,
+        bytes: (shape.dataset_dirs * shape.dataset_file_bytes * config.read_repeats
+            + checkpoint_steps * shape.checkpoint_bytes) as u64,
+        samples: shape.dataset_dirs * config.read_repeats,
         object_stats: stats_delta(before, client.object_stats()),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
         checksum,
         shape: format!(
-            "dlio_style_generated dataset_dirs={} files_per_dir={} sample_bytes={} checkpoint_steps={} checkpoint_bytes=4096",
+            "dlio_style_generated dataset_dirs={} files_per_dir={} sample_bytes={} checkpoint_steps={} checkpoint_bytes={}",
             shape.dataset_dirs,
             shape.dataset_files_per_dir,
             shape.dataset_file_bytes,
-            checkpoint_steps
+            checkpoint_steps,
+            shape.checkpoint_bytes
         ),
         caveat: object_caveat(config, "MLPerf Storage/DLIO-style generated training read plus checkpoint write"),
     }))
@@ -540,6 +587,9 @@ fn bench_demo_dataset(
         bytes: (classes * 2 * sample_bytes) as u64,
         samples: classes * 2,
         object_stats: stats_delta(before, client.object_stats()),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
         checksum,
         shape: format!(
             "public_dataset_demo_shape classes={} samples_per_class={} sample_bytes={} timed=list_plus_two_reads_per_class",
@@ -569,6 +619,9 @@ fn row(input: RowInput) -> ResultRow {
         },
         manifest_chunks: input.object_stats.manifest_chunks,
         manifest_blocks: input.object_stats.manifest_blocks,
+        object_concurrency: input.object_concurrency,
+        read_repeats: input.read_repeats,
+        block_cache: input.block_cache,
         checksum: input.checksum,
         shape: input.shape,
         caveat: input.caveat,
@@ -593,12 +646,23 @@ fn metadata_only_caveat(config: &Config) -> String {
 }
 
 fn object_caveat(config: &Config, path: &str) -> String {
+    let cache = if config.block_cache {
+        "cache=on"
+    } else {
+        "cache=off"
+    };
     match config.object_backend {
         ObjectBackendKind::RustFs => {
-            format!("{path}, RustFS S3-compatible backend over configured endpoint")
+            format!(
+                "{path}, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
+                config.object_concurrency, config.read_repeats
+            )
         }
         ObjectBackendKind::S3 => {
-            format!("{path}, generic S3-compatible backend over configured endpoint")
+            format!(
+                "{path}, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
+                config.object_concurrency, config.read_repeats
+            )
         }
     }
 }
@@ -614,7 +678,9 @@ fn client_for(config: &Config, workload: &str) -> Result<Client, BenchError> {
         metadata,
         objects,
     );
-    Ok(NoKvFsClient::new(service))
+    let client = NoKvFsClient::new(service);
+    client.set_block_cache_enabled(config.block_cache);
+    Ok(client)
 }
 
 fn artifact_metadata(producer: &str, manifest_id: &str) -> ArtifactMetadata {
@@ -644,12 +710,62 @@ fn checkpoint_payload(seed: usize, len: usize) -> Vec<u8> {
         .collect()
 }
 
+fn dataset_payload(shard: usize, file: usize, len: usize) -> Vec<u8> {
+    (0..len)
+        .map(|offset| ((shard * 31 + file * 17 + offset) % 251) as u8)
+        .collect()
+}
+
+fn run_parallel<F>(total: usize, concurrency: usize, worker: F) -> Result<u64, BenchError>
+where
+    F: Fn(usize) -> Result<u64, BenchError> + Sync,
+{
+    if total == 0 {
+        return Ok(0);
+    }
+    let workers = concurrency.max(1).min(total);
+    let next = AtomicUsize::new(0);
+    let checksum = AtomicU64::new(0);
+    let error = Mutex::new(None);
+    std::thread::scope(|scope| {
+        for _ in 0..workers {
+            scope.spawn(|| loop {
+                if error.lock().expect("error lock").is_some() {
+                    break;
+                }
+                let index = next.fetch_add(1, Ordering::Relaxed);
+                if index >= total {
+                    break;
+                }
+                match worker(index) {
+                    Ok(value) => {
+                        checksum.fetch_add(value, Ordering::Relaxed);
+                    }
+                    Err(err) => {
+                        *error.lock().expect("error lock") = Some(err);
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    if let Some(err) = error.into_inner().expect("error lock") {
+        return Err(err);
+    }
+    Ok(checksum.load(Ordering::Relaxed))
+}
+
 fn parse(args: Vec<String>) -> Result<Config, BenchError> {
     let mut profile = Profile::Smoke;
     let mut workload = Workload::All;
     let mut root = default_root();
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
+    let mut object_concurrency = 1_usize;
+    let mut read_repeats = 1_usize;
+    let mut block_cache = true;
+    let mut checkpoint_bytes = None;
+    let mut sample_bytes = None;
     let mut keep = false;
     let mut index = 0;
     while index < args.len() {
@@ -705,6 +821,36 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
             "--s3-skip-signature" => {
                 s3.skip_signature = true;
             }
+            "--object-concurrency" => {
+                index += 1;
+                object_concurrency = parse_positive_usize(
+                    value(&args, index, "--object-concurrency")?,
+                    "--object-concurrency",
+                )?;
+            }
+            "--checkpoint-bytes" => {
+                index += 1;
+                checkpoint_bytes = Some(parse_positive_usize(
+                    value(&args, index, "--checkpoint-bytes")?,
+                    "--checkpoint-bytes",
+                )?);
+            }
+            "--sample-bytes" => {
+                index += 1;
+                sample_bytes = Some(parse_positive_usize(
+                    value(&args, index, "--sample-bytes")?,
+                    "--sample-bytes",
+                )?);
+            }
+            "--read-repeats" => {
+                index += 1;
+                read_repeats =
+                    parse_positive_usize(value(&args, index, "--read-repeats")?, "--read-repeats")?;
+            }
+            "--block-cache" => {
+                index += 1;
+                block_cache = parse_block_cache(value(&args, index, "--block-cache")?)?;
+            }
             "--keep" => keep = true,
             "--help" | "-h" => {
                 return Err(BenchError::UnknownOption("--help".to_owned()));
@@ -722,6 +868,11 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
         root,
         object_backend,
         s3,
+        object_concurrency,
+        read_repeats,
+        block_cache,
+        checkpoint_bytes,
+        sample_bytes,
         keep,
     })
 }
@@ -742,6 +893,21 @@ fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, BenchError> {
         "s3" => Ok(ObjectBackendKind::S3),
         "rustfs" => Ok(ObjectBackendKind::RustFs),
         _ => Err(BenchError::UnknownOption(format!("--object-backend {raw}"))),
+    }
+}
+
+fn parse_positive_usize(raw: &str, option: &'static str) -> Result<usize, BenchError> {
+    raw.parse::<usize>()
+        .ok()
+        .filter(|value| *value > 0)
+        .ok_or_else(|| BenchError::UnknownOption(format!("{option} {raw}")))
+}
+
+fn parse_block_cache(raw: &str) -> Result<bool, BenchError> {
+    match raw {
+        "on" | "true" | "1" => Ok(true),
+        "off" | "false" | "0" => Ok(false),
+        _ => Err(BenchError::UnknownOption(format!("--block-cache {raw}"))),
     }
 }
 
@@ -793,13 +959,14 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
     }
 }
 
-fn shape(profile: Profile) -> WorkloadShape {
-    match profile {
+fn shape(config: &Config) -> WorkloadShape {
+    let mut shape = match config.profile {
         Profile::Smoke => WorkloadShape {
             dirs: 8,
             files_per_dir: 64,
             shared_files: 512,
             checkpoints: 128,
+            checkpoint_bytes: 4096,
             dataset_dirs: 8,
             dataset_files_per_dir: 64,
             dataset_file_bytes: 512,
@@ -809,20 +976,29 @@ fn shape(profile: Profile) -> WorkloadShape {
             files_per_dir: 256,
             shared_files: 8192,
             checkpoints: 1024,
+            checkpoint_bytes: 1024 * 1024,
             dataset_dirs: 32,
             dataset_files_per_dir: 256,
-            dataset_file_bytes: 1024,
+            dataset_file_bytes: 16 * 1024,
         },
         Profile::Long => WorkloadShape {
             dirs: 64,
             files_per_dir: 1024,
             shared_files: 65536,
             checkpoints: 4096,
+            checkpoint_bytes: 8 * 1024 * 1024,
             dataset_dirs: 64,
             dataset_files_per_dir: 1024,
-            dataset_file_bytes: 4096,
+            dataset_file_bytes: 256 * 1024,
         },
+    };
+    if let Some(bytes) = config.checkpoint_bytes {
+        shape.checkpoint_bytes = bytes;
     }
+    if let Some(bytes) = config.sample_bytes {
+        shape.dataset_file_bytes = bytes;
+    }
+    shape
 }
 
 fn workload_name(workload: Workload) -> &'static str {
@@ -942,6 +1118,9 @@ mod tests {
         assert_eq!(config.workload, Workload::TrainingRead);
         assert_eq!(config.root, PathBuf::from("/tmp/nokv-fs-bench"));
         assert!(config.keep);
+        assert_eq!(config.object_concurrency, 1);
+        assert_eq!(config.read_repeats, 1);
+        assert!(config.block_cache);
     }
 
     #[test]
@@ -978,6 +1157,44 @@ mod tests {
         assert_eq!(config.s3.bucket, "training-artifacts");
         assert_eq!(config.s3.region, "us-east-1");
         assert_eq!(config.s3.endpoint, None);
+    }
+
+    #[test]
+    fn parse_object_size_concurrency_and_cache_options() {
+        let config = parse(vec![
+            s("--object-concurrency"),
+            s("8"),
+            s("--checkpoint-bytes"),
+            s("1048576"),
+            s("--sample-bytes"),
+            s("65536"),
+            s("--read-repeats"),
+            s("3"),
+            s("--block-cache"),
+            s("off"),
+        ])
+        .unwrap();
+        assert_eq!(config.object_concurrency, 8);
+        assert_eq!(config.checkpoint_bytes, Some(1_048_576));
+        assert_eq!(config.sample_bytes, Some(65_536));
+        assert_eq!(config.read_repeats, 3);
+        assert!(!config.block_cache);
+    }
+
+    #[test]
+    fn shape_applies_object_size_overrides() {
+        let config = parse(vec![
+            s("--profile"),
+            s("standard"),
+            s("--checkpoint-bytes"),
+            s("8192"),
+            s("--sample-bytes"),
+            s("4096"),
+        ])
+        .unwrap();
+        let shape = shape(&config);
+        assert_eq!(shape.checkpoint_bytes, 8192);
+        assert_eq!(shape.dataset_file_bytes, 4096);
     }
 
     #[test]
