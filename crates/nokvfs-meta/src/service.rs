@@ -52,6 +52,13 @@ struct AllocatorState {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+struct StagedArtifactBody {
+    body: BodyDescriptor,
+    chunks: Vec<ChunkManifest>,
+    staged: StagedObjectSet,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DentryWithAttr {
     pub dentry: DentryRecord,
     pub attr: InodeAttr,
@@ -268,61 +275,11 @@ where
         let version = self.next_version()?;
         let inode = self.next_inode()?;
         self.reserve_allocator_state(version, self.next_inode.load(Ordering::Relaxed))?;
-        let written = put_chunked_object(
-            &self.objects,
-            &request.bytes,
-            ChunkWriteOptions {
-                manifest_id: request.manifest_id,
-                mount: self.mount.get(),
-                inode: inode.get(),
-                generation: version.get(),
-                chunk_size: DEFAULT_CHUNK_SIZE,
-                block_size: DEFAULT_BLOCK_SIZE,
-            },
-        )?;
-        let staged = written.staged_objects()?;
-        self.object_puts
-            .fetch_add(written.object_puts as u64, Ordering::Relaxed);
-        self.manifest_chunks
-            .fetch_add(written.chunks.len() as u64, Ordering::Relaxed);
-        self.manifest_blocks.fetch_add(
-            written
-                .chunks
-                .iter()
-                .map(|chunk| chunk.blocks.len() as u64)
-                .sum::<u64>(),
-            Ordering::Relaxed,
-        );
-        let chunks: Vec<ChunkManifest> = written
-            .chunks
-            .into_iter()
-            .map(|chunk| ChunkManifest {
-                chunk_index: chunk.chunk_index,
-                logical_offset: chunk.logical_offset,
-                len: chunk.len,
-                blocks: chunk
-                    .blocks
-                    .into_iter()
-                    .map(|block| BlockDescriptor {
-                        object_key: block.object_key,
-                        logical_offset: block.logical_offset,
-                        object_offset: block.object_offset,
-                        len: block.len,
-                        digest_uri: block.digest_uri,
-                    })
-                    .collect(),
-            })
-            .collect();
-        let body = BodyDescriptor {
-            producer: request.producer,
-            digest_uri: request.digest_uri,
-            size: written.size,
-            content_type: request.content_type,
-            manifest_id: written.manifest_id,
-            generation: version.get(),
-            chunk_size: written.chunk_size,
-            block_size: written.block_size,
-        };
+        let StagedArtifactBody {
+            body,
+            chunks,
+            staged,
+        } = self.stage_artifact_body(&request, inode, version)?;
         let attr = InodeAttr {
             inode,
             file_type: FileType::File,
@@ -347,6 +304,54 @@ where
             });
         }
         Ok(projection.into())
+    }
+
+    pub fn replace_artifact(
+        &self,
+        request: PublishArtifact,
+    ) -> Result<RenameReplaceResult, MetadError> {
+        let (existing, dentry_version) = self
+            .lookup_plus_versioned(request.parent, &request.name)?
+            .ok_or(MetadError::NotFound)?;
+        if existing.attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        let version = self.next_version()?;
+        self.reserve_allocator_state(version, self.next_inode.load(Ordering::Relaxed))?;
+        let StagedArtifactBody {
+            body,
+            chunks,
+            staged,
+        } = self.stage_artifact_body(&request, existing.attr.inode, version)?;
+        let attr = InodeAttr {
+            inode: existing.attr.inode,
+            file_type: FileType::File,
+            mode: request.mode,
+            uid: request.uid,
+            gid: request.gid,
+            size: body.size,
+            generation: version.get(),
+            mtime_ms: version.get(),
+            ctime_ms: version.get(),
+        };
+        let projection = projection(request.parent, request.name, attr, Some(body));
+        let old_generation = existing.body.as_ref().map(|body| body.generation);
+        if let Err(err) = self.commit_replace_projection_with_chunks(
+            &projection,
+            &chunks,
+            dentry_version,
+            old_generation,
+            version,
+        ) {
+            return Err(MetadError::PublishArtifactFailed {
+                source: Box::new(err),
+                staged,
+            });
+        }
+        Ok(RenameReplaceResult {
+            entry: projection.into(),
+            replaced: Some(existing),
+        })
     }
 
     pub fn get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, MetadError> {
@@ -804,6 +809,150 @@ where
         Ok(())
     }
 
+    fn commit_replace_projection_with_chunks(
+        &self,
+        projection: &DentryProjection,
+        chunks: &[ChunkManifest],
+        dentry_version: Version,
+        old_generation: Option<u64>,
+        version: Version,
+    ) -> Result<(), MetadError> {
+        let inode = projection.attr.inode;
+        let dentry = dentry_key(
+            self.mount,
+            projection.dentry.parent,
+            &projection.dentry.name,
+        );
+        let mut mutations = vec![
+            Mutation {
+                family: RecordFamily::Inode,
+                key: inode_key(self.mount, inode),
+                op: MutationOp::Put,
+                value: Some(Value(encode_inode_attr(&projection.attr))),
+            },
+            Mutation {
+                family: RecordFamily::Dentry,
+                key: dentry.clone(),
+                op: MutationOp::Put,
+                value: Some(Value(encode_dentry_projection(projection))),
+            },
+        ];
+        if let Some(body) = &projection.body {
+            if let Some(old_generation) = old_generation {
+                mutations.extend(self.chunk_manifest_delete_mutations(inode, old_generation)?);
+            }
+            mutations.push(Mutation {
+                family: RecordFamily::ChunkManifest,
+                key: chunk_manifest_key(
+                    self.mount,
+                    inode,
+                    body.generation,
+                    BODY_SUMMARY_CHUNK_INDEX,
+                ),
+                op: MutationOp::Put,
+                value: Some(Value(encode_body_descriptor(body))),
+            });
+            for chunk in chunks {
+                mutations.push(Mutation {
+                    family: RecordFamily::ChunkManifest,
+                    key: chunk_manifest_key(self.mount, inode, body.generation, chunk.chunk_index),
+                    op: MutationOp::Put,
+                    value: Some(Value(encode_chunk_manifest(chunk))),
+                });
+            }
+        }
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(b"replace-artifact", self.mount, inode, version),
+            kind: CommandKind::ReplaceArtifact,
+            read_version: predecessor(version)?,
+            commit_version: version,
+            primary_family: RecordFamily::Dentry,
+            primary_key: dentry.clone(),
+            predicates: vec![
+                PredicateRef {
+                    family: RecordFamily::Dentry,
+                    key: dentry,
+                    predicate: Predicate::VersionEquals(dentry_version),
+                },
+                PredicateRef {
+                    family: RecordFamily::Inode,
+                    key: inode_key(self.mount, inode),
+                    predicate: Predicate::Exists,
+                },
+            ],
+            mutations,
+            watch: Vec::new(),
+        })?;
+        Ok(())
+    }
+
+    fn stage_artifact_body(
+        &self,
+        request: &PublishArtifact,
+        inode: InodeId,
+        version: Version,
+    ) -> Result<StagedArtifactBody, MetadError> {
+        let written = put_chunked_object(
+            &self.objects,
+            &request.bytes,
+            ChunkWriteOptions {
+                manifest_id: request.manifest_id.clone(),
+                mount: self.mount.get(),
+                inode: inode.get(),
+                generation: version.get(),
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+        )?;
+        let staged = written.staged_objects()?;
+        self.object_puts
+            .fetch_add(written.object_puts as u64, Ordering::Relaxed);
+        self.manifest_chunks
+            .fetch_add(written.chunks.len() as u64, Ordering::Relaxed);
+        self.manifest_blocks.fetch_add(
+            written
+                .chunks
+                .iter()
+                .map(|chunk| chunk.blocks.len() as u64)
+                .sum::<u64>(),
+            Ordering::Relaxed,
+        );
+        let chunks = written
+            .chunks
+            .into_iter()
+            .map(|chunk| ChunkManifest {
+                chunk_index: chunk.chunk_index,
+                logical_offset: chunk.logical_offset,
+                len: chunk.len,
+                blocks: chunk
+                    .blocks
+                    .into_iter()
+                    .map(|block| BlockDescriptor {
+                        object_key: block.object_key,
+                        logical_offset: block.logical_offset,
+                        object_offset: block.object_offset,
+                        len: block.len,
+                        digest_uri: block.digest_uri,
+                    })
+                    .collect(),
+            })
+            .collect();
+        Ok(StagedArtifactBody {
+            body: BodyDescriptor {
+                producer: request.producer.clone(),
+                digest_uri: request.digest_uri.clone(),
+                size: written.size,
+                content_type: request.content_type.clone(),
+                manifest_id: written.manifest_id,
+                generation: version.get(),
+                chunk_size: written.chunk_size,
+                block_size: written.block_size,
+            },
+            chunks,
+            staged,
+        })
+    }
+
     fn read_plan(
         &self,
         inode: InodeId,
@@ -1072,6 +1221,7 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
         CommandKind::RemoveFile => b"remove-file",
         CommandKind::RemoveEmptyDir => b"remove-empty-dir",
         CommandKind::PublishArtifact => b"publish-artifact",
+        CommandKind::ReplaceArtifact => b"replace-artifact",
         CommandKind::SnapshotSubtree => b"snapshot-subtree",
         CommandKind::WatchSubtree => b"watch-subtree",
     }
@@ -1253,6 +1403,38 @@ mod tests {
             .expect("read cached file range");
         assert_eq!(cached, b"x\":");
         assert!(service.object_stats().cache_hits > before_cache.cache_hits);
+    }
+
+    #[test]
+    fn replace_artifact_preserves_inode_and_returns_old_body() {
+        let service = service();
+        let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+        let first = service
+            .publish_artifact(artifact_request(name.clone(), "checkpoint/old", b"old"))
+            .unwrap();
+        let replaced = service
+            .replace_artifact(artifact_request(
+                name.clone(),
+                "checkpoint/new",
+                b"new-body",
+            ))
+            .unwrap();
+
+        assert_eq!(replaced.entry.attr.inode, first.attr.inode);
+        assert!(replaced.entry.attr.generation > first.attr.generation);
+        assert_eq!(replaced.replaced, Some(first.clone()));
+        assert_eq!(
+            service.lookup_plus(InodeId::root(), &name).unwrap(),
+            Some(replaced.entry.clone())
+        );
+        assert_eq!(
+            service.read_artifact(InodeId::root(), &name).unwrap(),
+            b"new-body"
+        );
+        assert_eq!(
+            replaced.replaced.unwrap().body.unwrap().manifest_id,
+            "checkpoint/old"
+        );
     }
 
     #[test]

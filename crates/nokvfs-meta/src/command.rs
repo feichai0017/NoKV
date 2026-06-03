@@ -37,6 +37,7 @@ pub enum CommandKind {
     RemoveFile,
     RemoveEmptyDir,
     PublishArtifact,
+    ReplaceArtifact,
     SnapshotSubtree,
     WatchSubtree,
 }

@@ -103,6 +103,29 @@ where
             .map_err(Into::into)
     }
 
+    pub fn put_artifact_replace(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        metadata: ArtifactMetadata,
+    ) -> Result<RenameReplaceResult, ClientError> {
+        let (parent, name) = self.resolve_parent(path)?;
+        self.service
+            .replace_artifact(PublishArtifact {
+                parent,
+                name,
+                producer: metadata.producer,
+                digest_uri: metadata.digest_uri,
+                content_type: metadata.content_type,
+                manifest_id: metadata.manifest_id,
+                bytes,
+                mode: metadata.mode,
+                uid: metadata.uid,
+                gid: metadata.gid,
+            })
+            .map_err(Into::into)
+    }
+
     pub fn lookup(&self, path: &str) -> Result<Option<DentryWithAttr>, ClientError> {
         if is_root_path(path)? {
             return Ok(None);
@@ -311,6 +334,49 @@ mod tests {
             client.cat("/runs/1/checkpoint.json").unwrap(),
             b"{\"step\":1}"
         );
+    }
+
+    #[test]
+    fn put_artifact_replace_keeps_path_and_inode() {
+        let client = client();
+        client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
+        let first = client
+            .put_artifact(
+                "/runs/checkpoint",
+                b"old".to_vec(),
+                ArtifactMetadata {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:old".to_owned(),
+                    content_type: "application/octet-stream".to_owned(),
+                    manifest_id: "runs/checkpoint-old".to_owned(),
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                },
+            )
+            .unwrap();
+        let replaced = client
+            .put_artifact_replace(
+                "/runs/checkpoint",
+                b"new".to_vec(),
+                ArtifactMetadata {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:new".to_owned(),
+                    content_type: "application/octet-stream".to_owned(),
+                    manifest_id: "runs/checkpoint-new".to_owned(),
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(replaced.entry.attr.inode, first.attr.inode);
+        assert_eq!(
+            replaced.replaced.unwrap().body.unwrap().manifest_id,
+            "runs/checkpoint-old"
+        );
+        assert_eq!(client.cat("/runs/checkpoint").unwrap(), b"new");
     }
 
     #[test]
