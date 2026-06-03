@@ -67,16 +67,18 @@ impl Server {
 
     pub fn stats_json(&self) -> String {
         let objects = self.service.object_stats();
+        let metadata = self.service.metadata_store_stats();
         let object_gc = self.object_gc.state();
         let history_gc = self.history_gc.state();
         format!(
-            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_gets\":{},\"cache_hits\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
+            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_gets\":{},\"cache_hits\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
             self.service.block_cache_enabled(),
             objects.object_puts,
             objects.object_gets,
             objects.cache_hits,
             objects.manifest_chunks,
             objects.manifest_blocks,
+            metadata_store_json(&metadata),
             object_gc_json(&object_gc),
             history_gc_json(&history_gc),
         )
@@ -98,6 +100,21 @@ impl Server {
             history.retained_by_snapshots,
         ))
     }
+}
+
+fn metadata_store_json(stats: &nokvfs_meta::MetadataStoreStats) -> String {
+    format!(
+        "{{\"commit_total\":{},\"dedupe_hit_total\":{},\"predicate_total\":{},\"prefix_empty_predicate_total\":{},\"current_put_total\":{},\"current_delete_total\":{},\"history_write_total\":{},\"watch_write_total\":{},\"dedupe_write_total\":{}}}",
+        stats.commit_total,
+        stats.dedupe_hit_total,
+        stats.predicate_total,
+        stats.prefix_empty_predicate_total,
+        stats.current_put_total,
+        stats.current_delete_total,
+        stats.history_write_total,
+        stats.watch_write_total,
+        stats.dedupe_write_total,
+    )
 }
 
 fn object_gc_json(state: &ObjectGcWorkerState) -> String {

@@ -5,12 +5,13 @@
 //! Raft replication, FUSE, or protobuf types.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use crate::command::{
     CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
-    MetadataStore, MutationOp, Predicate, ReadItem, ReadPurpose, ScanItem, ScanRequest, Value,
-    Version,
+    MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, MutationOp, Predicate, ReadItem,
+    ReadPurpose, ScanItem, ScanRequest, Value, Version,
 };
 use crate::layout::{history_key, history_prefix};
 use holt::{RangeEntry, Tree, TreeConfig, DB};
@@ -54,6 +55,20 @@ const REQUIRED_TREES: [&str; 13] = [
 pub struct HoltMetadataStore {
     db: DB,
     write_gate: Arc<Mutex<()>>,
+    stats: Arc<HoltMetadataStoreCounters>,
+}
+
+#[derive(Default)]
+struct HoltMetadataStoreCounters {
+    commit_total: AtomicU64,
+    dedupe_hit_total: AtomicU64,
+    predicate_total: AtomicU64,
+    prefix_empty_predicate_total: AtomicU64,
+    current_put_total: AtomicU64,
+    current_delete_total: AtomicU64,
+    history_write_total: AtomicU64,
+    watch_write_total: AtomicU64,
+    dedupe_write_total: AtomicU64,
 }
 
 impl HoltMetadataStore {
@@ -73,6 +88,7 @@ impl HoltMetadataStore {
         Ok(Self {
             db,
             write_gate: Arc::new(Mutex::new(())),
+            stats: Arc::new(HoltMetadataStoreCounters::default()),
         })
     }
 
@@ -88,6 +104,12 @@ impl HoltMetadataStore {
 
     fn history_tree(&self) -> Result<Tree, MetadataError> {
         self.db.open_tree(HISTORY_TREE).map_err(to_backend_error)
+    }
+}
+
+impl MetadataStoreStatsProvider for HoltMetadataStore {
+    fn metadata_store_stats(&self) -> MetadataStoreStats {
+        self.stats.snapshot()
     }
 }
 
@@ -163,6 +185,7 @@ impl MetadataStore for HoltMetadataStore {
             .map(decode_dedupe_result)
             .transpose()?
         {
+            self.stats.dedupe_hit_total.fetch_add(1, Ordering::Relaxed);
             return Ok(encoded);
         }
 
@@ -199,6 +222,9 @@ impl MetadataStore for HoltMetadataStore {
 
         let mut history_records = Vec::new();
         for mutation in &command.mutations {
+            if !family_requires_history(mutation.family) {
+                continue;
+            }
             if let Some(current) = self
                 .current_tree(mutation.family)?
                 .get(&mutation.key)
@@ -207,6 +233,25 @@ impl MetadataStore for HoltMetadataStore {
                 history_records.push((mutation.family, mutation.key.clone(), current));
             }
         }
+
+        let predicate_count = command.predicates.len() as u64;
+        let prefix_empty_predicate_count = command
+            .predicates
+            .iter()
+            .filter(|predicate| matches!(predicate.predicate, Predicate::PrefixEmpty))
+            .count() as u64;
+        let current_put_count = command
+            .mutations
+            .iter()
+            .filter(|mutation| mutation.op == MutationOp::Put)
+            .count() as u64;
+        let current_delete_count = command
+            .mutations
+            .iter()
+            .filter(|mutation| mutation.op == MutationOp::Delete)
+            .count() as u64;
+        let history_write_count = history_records.len() as u64;
+        let watch_write_count = command.watch.len() as u64;
 
         let mut applied = 0_usize;
         let mut watch_events = 0_usize;
@@ -267,6 +312,29 @@ impl MetadataStore for HoltMetadataStore {
                 );
             })
             .map_err(to_backend_error)?;
+
+        self.stats.commit_total.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .predicate_total
+            .fetch_add(predicate_count, Ordering::Relaxed);
+        self.stats
+            .prefix_empty_predicate_total
+            .fetch_add(prefix_empty_predicate_count, Ordering::Relaxed);
+        self.stats
+            .current_put_total
+            .fetch_add(current_put_count, Ordering::Relaxed);
+        self.stats
+            .current_delete_total
+            .fetch_add(current_delete_count, Ordering::Relaxed);
+        self.stats
+            .history_write_total
+            .fetch_add(history_write_count, Ordering::Relaxed);
+        self.stats
+            .watch_write_total
+            .fetch_add(watch_write_count, Ordering::Relaxed);
+        self.stats
+            .dedupe_write_total
+            .fetch_add(1, Ordering::Relaxed);
 
         Ok(CommitResult {
             applied_mutations: applied,
@@ -341,6 +409,22 @@ impl MetadataStore for HoltMetadataStore {
     }
 }
 
+impl HoltMetadataStoreCounters {
+    fn snapshot(&self) -> MetadataStoreStats {
+        MetadataStoreStats {
+            commit_total: self.commit_total.load(Ordering::Relaxed),
+            dedupe_hit_total: self.dedupe_hit_total.load(Ordering::Relaxed),
+            predicate_total: self.predicate_total.load(Ordering::Relaxed),
+            prefix_empty_predicate_total: self.prefix_empty_predicate_total.load(Ordering::Relaxed),
+            current_put_total: self.current_put_total.load(Ordering::Relaxed),
+            current_delete_total: self.current_delete_total.load(Ordering::Relaxed),
+            history_write_total: self.history_write_total.load(Ordering::Relaxed),
+            watch_write_total: self.watch_write_total.load(Ordering::Relaxed),
+            dedupe_write_total: self.dedupe_write_total.load(Ordering::Relaxed),
+        }
+    }
+}
+
 fn current_tree_name(family: RecordFamily) -> &'static str {
     match family {
         RecordFamily::System => SYSTEM_CURRENT_TREE,
@@ -357,6 +441,13 @@ fn current_tree_name(family: RecordFamily) -> &'static str {
         RecordFamily::CommandDedupe => COMMAND_DEDUPE_CURRENT_TREE,
         RecordFamily::History => HISTORY_TREE,
     }
+}
+
+fn family_requires_history(family: RecordFamily) -> bool {
+    !matches!(
+        family,
+        RecordFamily::System | RecordFamily::CommandDedupe | RecordFamily::Watch | RecordFamily::Gc
+    )
 }
 
 fn read_visible(

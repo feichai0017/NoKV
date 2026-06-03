@@ -60,7 +60,10 @@ but the batch removes per-operation network round trips for SDK workloads. The
 Rust SDK has a remote metadata client for namespace operations and a remote file
 client that uploads object blocks directly, asks `metad` to atomically publish
 the body manifest, fetches body read plans, and reads object ranges directly
-from the configured object store. Remote FUSE is still future work.
+from the configured object store. The server stats endpoint reports
+metadata-store write attribution counters so benchmark runs can distinguish
+current writes, history writes, watch writes, and dedupe writes. Remote FUSE is
+still future work.
 
 ## FUSE Path
 

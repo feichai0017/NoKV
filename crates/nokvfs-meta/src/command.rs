@@ -100,6 +100,19 @@ pub struct CommitResult {
     pub watch_events: usize,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MetadataStoreStats {
+    pub commit_total: u64,
+    pub dedupe_hit_total: u64,
+    pub predicate_total: u64,
+    pub prefix_empty_predicate_total: u64,
+    pub current_put_total: u64,
+    pub current_delete_total: u64,
+    pub history_write_total: u64,
+    pub watch_write_total: u64,
+    pub dedupe_write_total: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct HistoryPruneRequest {
     pub retain_from: Option<Version>,
@@ -169,6 +182,10 @@ pub trait MetadataStore {
         &self,
         request: HistoryPruneRequest,
     ) -> Result<HistoryPruneOutcome, MetadataError>;
+}
+
+pub trait MetadataStoreStatsProvider {
+    fn metadata_store_stats(&self) -> MetadataStoreStats;
 }
 
 impl Version {

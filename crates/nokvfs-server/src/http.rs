@@ -224,6 +224,8 @@ mod tests {
         let response = handle_parts(&server, "GET /stats HTTP/1.1", &[]);
         assert_eq!(response.status, "200 OK");
         assert!(response.body.contains("\"object_puts\":0"));
+        assert!(response.body.contains("\"metadata_store\""));
+        assert!(response.body.contains("\"commit_total\""));
         assert!(response.body.contains("\"block_cache_enabled\":true"));
     }
 

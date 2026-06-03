@@ -167,7 +167,9 @@ curl -X POST http://127.0.0.1:7777/gc
 
 Use `--server-bind ADDR` before `serve` to change the health/control address.
 The Rust SDK uses the server's framed metadata RPC on the same port; HTTP
-`/rpc` is kept for curl/debug visibility.
+`/rpc` is kept for curl/debug visibility. `/stats` includes object counters,
+GC worker state, and metadata-store write attribution counters for current,
+history, watch, and dedupe writes.
 
 To mount a read-only snapshot view:
 

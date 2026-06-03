@@ -11,8 +11,8 @@ use std::sync::Mutex;
 
 use crate::command::{
     CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand,
-    MetadataError, MetadataStore, Mutation, MutationOp, Predicate, PredicateRef, ReadPurpose,
-    ScanRequest, Value, Version, WatchProjection,
+    MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, Mutation,
+    MutationOp, Predicate, PredicateRef, ReadPurpose, ScanRequest, Value, Version, WatchProjection,
 };
 use crate::layout::{
     allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,
@@ -1855,6 +1855,15 @@ where
     }
 }
 
+impl<M, O> NoKvFs<M, O>
+where
+    M: MetadataStore + MetadataStoreStatsProvider,
+{
+    pub fn metadata_store_stats(&self) -> MetadataStoreStats {
+        self.metadata.metadata_store_stats()
+    }
+}
+
 fn projection(
     parent: InodeId,
     name: DentryName,
@@ -2317,6 +2326,36 @@ mod tests {
             service.lookup_plus(InodeId::root(), &name).unwrap(),
             Some(created)
         );
+    }
+
+    #[test]
+    fn create_file_hot_path_write_attribution_is_bounded() {
+        let metadata = HoltMetadataStore::open_memory().unwrap();
+        let service = NoKvFs::new(
+            MountId::new(1).unwrap(),
+            metadata.clone(),
+            MemoryObjectStore::new(),
+        );
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        let before = metadata.metadata_store_stats();
+
+        service
+            .create_file(
+                InodeId::root(),
+                DentryName::new(b"empty.txt".to_vec()).unwrap(),
+                0o644,
+                1000,
+                1000,
+            )
+            .unwrap();
+
+        let after = metadata.metadata_store_stats();
+        assert_eq!(after.commit_total - before.commit_total, 1);
+        assert_eq!(after.current_put_total - before.current_put_total, 3);
+        assert_eq!(after.current_delete_total - before.current_delete_total, 0);
+        assert_eq!(after.history_write_total - before.history_write_total, 0);
+        assert_eq!(after.watch_write_total - before.watch_write_total, 1);
+        assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 1);
     }
 
     #[test]
