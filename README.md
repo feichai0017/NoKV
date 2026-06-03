@@ -118,9 +118,8 @@ mkdir -p /tmp/nokv-fs-mount
 cargo run -p nokvfs-client --bin nokv-fs -- mount /tmp/nokv-fs-mount
 ```
 
-Linux builds use fuser's pure-Rust mount path. macOS development builds compile
-without requiring macFUSE; a real macOS mount needs a macFUSE-enabled build and
-macFUSE installed.
+Linux builds use fuser's pure-Rust mount path. macOS builds require macFUSE
+and its `pkg-config` metadata so the CLI can perform a real FUSE mount.
 
 ## Documentation
 

@@ -105,12 +105,21 @@ where
     O: ObjectStore + Send + Sync + 'static,
 {
     let mut config = Config::default();
-    config.mount_options = vec![
+    let mut mount_options = vec![
         MountOption::FSName(options.fs_name.clone()),
-        MountOption::Subtype("nokv-fs".to_owned()),
         MountOption::RO,
-        MountOption::NoAtime,
     ];
+    #[cfg(target_os = "macos")]
+    {
+        mount_options.push(MountOption::CUSTOM("fstypename=nokvfs".to_owned()));
+        mount_options.push(MountOption::CUSTOM(format!("volname={}", options.fs_name)));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        mount_options.push(MountOption::Subtype("nokv-fs".to_owned()));
+        mount_options.push(MountOption::NoAtime);
+    }
+    config.mount_options = mount_options;
     config.n_threads = Some(options.threads);
     fuser::mount2(NoKvFuse::new(service, options), mountpoint, &config)
 }

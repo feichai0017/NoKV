@@ -20,7 +20,7 @@ nokvfs-meta = { path = "crates/nokvfs-meta" }
 nokvfs-object = { path = "crates/nokvfs-object" }
 nokvfs-client = { path = "crates/nokvfs-client" }
 nokvfs-fuse = { path = "crates/nokvfs-fuse" }
-fuser = { version = "0.17.0", default-features = false, features = ["macos-no-mount"] }
+fuser = { version = "0.17.0", default-features = false }
 holt = { version = "0.4.2", default-features = false }
 opendal = { version = "0.57.0", default-features = false, features = ["blocking", "executors-tokio", "reqwest-rustls-tls", "services-s3"] }
 tempfile = "3"
