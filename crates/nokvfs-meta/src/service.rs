@@ -775,11 +775,10 @@ impl std::error::Error for MetadError {}
 mod tests {
     use super::*;
     use crate::holtstore::HoltMetadataStore;
-    use nokvfs_object::LocalObjectStore;
+    use nokvfs_object::MemoryObjectStore;
 
-    fn service() -> NoKvFs<HoltMetadataStore, LocalObjectStore> {
-        let dir = tempfile::tempdir().unwrap();
-        let objects = LocalObjectStore::new(dir.path().join("objects")).unwrap();
+    fn service() -> NoKvFs<HoltMetadataStore, MemoryObjectStore> {
+        let objects = MemoryObjectStore::new();
         let service = NoKvFs::new(
             MountId::new(1).unwrap(),
             HoltMetadataStore::open_memory().unwrap(),
@@ -1046,7 +1045,7 @@ mod tests {
     #[test]
     fn open_existing_recovers_inode_and_version_allocators() {
         let dir = tempfile::tempdir().unwrap();
-        let objects = LocalObjectStore::new(dir.path().join("objects")).unwrap();
+        let objects = MemoryObjectStore::new();
         let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
         let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
         service.bootstrap_root(0o755, 1000, 1000).unwrap();

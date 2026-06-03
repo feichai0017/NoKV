@@ -17,39 +17,47 @@ production layout.
 
 ## Start RustFS
 
-One local Docker shape is:
+Install the RustFS binary with Homebrew:
 
 ```bash
-docker pull rustfs/rustfs
-
-mkdir -p /tmp/rustfs-data
-docker run -d \
-  --name rustfs_local \
-  -p 9000:9000 \
-  -p 9001:9001 \
-  -v /tmp/rustfs-data:/data \
-  rustfs/rustfs:latest \
-  /data
+brew tap rustfs/homebrew-tap
+brew install rustfs
+rustfs --version
 ```
 
-Create a bucket with an S3-compatible client such as `mc`:
+Start a single-node local RustFS process:
 
 ```bash
-mc alias set rustfs http://localhost:9000 rustfsadmin rustfsadmin
-mc mb rustfs/nokv
+mkdir -p /tmp/rustfs-data
+RUSTFS_ACCESS_KEY=rustfsadmin \
+RUSTFS_SECRET_KEY=rustfsadmin \
+rustfs server \
+  --address 127.0.0.1:9000 \
+  --console-enable \
+  --console-address 127.0.0.1:9001 \
+  --buffer-profile AiTraining \
+  /tmp/rustfs-data
+```
+
+Create the default NoKV-FS bucket with an S3-compatible client:
+
+```bash
+AWS_ACCESS_KEY_ID=rustfsadmin \
+AWS_SECRET_ACCESS_KEY=rustfsadmin \
+aws --endpoint-url http://127.0.0.1:9000 \
+  s3api create-bucket --bucket nokv
 ```
 
 ## Use RustFS With NoKV-FS
 
 ```bash
 cargo run --release -p nokvfs-client --bin nokv-fs -- \
-  --object-backend rustfs \
-  --s3-bucket nokv \
-  --s3-endpoint http://127.0.0.1:9000 \
-  --s3-access-key-id rustfsadmin \
-  --s3-secret-access-key rustfsadmin \
   init
 ```
+
+Those are the CLI defaults for the RustFS backend: bucket `nokv`, endpoint
+`http://127.0.0.1:9000`, access key `rustfsadmin`, and secret key
+`rustfsadmin`.
 
 The same object flags work for artifact publish, `cat`, and FUSE mount:
 

@@ -1,14 +1,13 @@
 //! Object storage boundary for NoKV-FS file bodies.
 //!
-//! This crate owns body-object keys and the local filesystem object backend used
-//! by demos and contract tests. It does not own namespace metadata, Holt state,
-//! Raft replication, FUSE, or wire types.
+//! This crate owns body-object keys, an S3-compatible object backend, and an
+//! in-memory object store for package tests. It does not own namespace metadata,
+//! Holt state, Raft replication, FUSE, or wire types.
 
+use std::collections::BTreeMap;
 use std::fmt;
-use std::fs::{self, File};
-use std::io::{Read, Seek, SeekFrom, Write};
-use std::path::{Component, Path, PathBuf};
-use std::sync::LazyLock;
+use std::path::{Component, Path};
+use std::sync::{Arc, LazyLock, Mutex};
 
 use opendal::blocking::Operator as BlockingOperator;
 use opendal::services::S3;
@@ -44,21 +43,14 @@ pub struct ObjectRange {
     pub len: usize,
 }
 
-#[derive(Clone, Debug)]
-pub struct LocalObjectStore {
-    root: PathBuf,
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ObjectStoreConfig {
-    Local { root: PathBuf },
-    S3 { options: S3ObjectStoreOptions },
+pub struct ObjectStoreConfig {
+    options: S3ObjectStoreOptions,
 }
 
 #[derive(Clone, Debug)]
-pub enum ObjectBackend {
-    Local(LocalObjectStore),
-    S3(S3ObjectStore),
+pub struct MemoryObjectStore {
+    objects: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -89,7 +81,6 @@ pub enum ObjectError {
     InvalidRange,
     MissingBucket,
     MissingRegion,
-    Io(String),
     Backend(String),
 }
 
@@ -114,29 +105,9 @@ impl ObjectRange {
     }
 }
 
-impl LocalObjectStore {
-    pub fn new(root: impl Into<PathBuf>) -> Result<Self, ObjectError> {
-        let root = root.into();
-        fs::create_dir_all(&root).map_err(ObjectError::from_io)?;
-        Ok(Self { root })
-    }
-
-    fn path_for(&self, key: &ObjectKey) -> PathBuf {
-        let mut path = self.root.clone();
-        for component in key.as_str().split('/') {
-            path.push(component);
-        }
-        path
-    }
-}
-
 impl ObjectStoreConfig {
-    pub fn local(root: impl Into<PathBuf>) -> Self {
-        Self::Local { root: root.into() }
-    }
-
     pub fn s3(options: S3ObjectStoreOptions) -> Self {
-        Self::S3 { options }
+        Self { options }
     }
 
     pub fn rustfs(
@@ -145,7 +116,7 @@ impl ObjectStoreConfig {
         access_key_id: impl Into<String>,
         secret_access_key: impl Into<String>,
     ) -> Self {
-        Self::S3 {
+        Self {
             options: S3ObjectStoreOptions::rustfs(
                 bucket,
                 endpoint,
@@ -155,11 +126,26 @@ impl ObjectStoreConfig {
         }
     }
 
-    pub fn open(&self) -> Result<ObjectBackend, ObjectError> {
-        match self {
-            Self::Local { root } => LocalObjectStore::new(root).map(ObjectBackend::Local),
-            Self::S3 { options } => S3ObjectStore::new(options.clone()).map(ObjectBackend::S3),
+    pub fn open(&self) -> Result<S3ObjectStore, ObjectError> {
+        S3ObjectStore::new(self.options.clone())
+    }
+
+    pub fn options(&self) -> &S3ObjectStoreOptions {
+        &self.options
+    }
+}
+
+impl MemoryObjectStore {
+    pub fn new() -> Self {
+        Self {
+            objects: Arc::new(Mutex::new(BTreeMap::new())),
         }
+    }
+}
+
+impl Default for MemoryObjectStore {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -291,53 +277,12 @@ impl ObjectStore for S3ObjectStore {
     }
 }
 
-impl ObjectStore for ObjectBackend {
+impl ObjectStore for MemoryObjectStore {
     fn put(&self, key: &ObjectKey, bytes: &[u8]) -> Result<ObjectInfo, ObjectError> {
-        match self {
-            Self::Local(store) => store.put(key, bytes),
-            Self::S3(store) => store.put(key, bytes),
-        }
-    }
-
-    fn get(&self, key: &ObjectKey, range: Option<ObjectRange>) -> Result<Vec<u8>, ObjectError> {
-        match self {
-            Self::Local(store) => store.get(key, range),
-            Self::S3(store) => store.get(key, range),
-        }
-    }
-
-    fn head(&self, key: &ObjectKey) -> Result<Option<ObjectInfo>, ObjectError> {
-        match self {
-            Self::Local(store) => store.head(key),
-            Self::S3(store) => store.head(key),
-        }
-    }
-
-    fn delete(&self, key: &ObjectKey) -> Result<bool, ObjectError> {
-        match self {
-            Self::Local(store) => store.delete(key),
-            Self::S3(store) => store.delete(key),
-        }
-    }
-}
-
-impl ObjectStore for LocalObjectStore {
-    fn put(&self, key: &ObjectKey, bytes: &[u8]) -> Result<ObjectInfo, ObjectError> {
-        let final_path = self.path_for(key);
-        let parent = final_path
-            .parent()
-            .ok_or_else(|| ObjectError::Io("object path has no parent".to_owned()))?;
-        fs::create_dir_all(parent).map_err(ObjectError::from_io)?;
-
-        let tmp_path = temp_path(parent, &final_path);
-        {
-            let mut file = File::create(&tmp_path).map_err(ObjectError::from_io)?;
-            file.write_all(bytes).map_err(ObjectError::from_io)?;
-            file.sync_all().map_err(ObjectError::from_io)?;
-        }
-        fs::rename(&tmp_path, &final_path).map_err(ObjectError::from_io)?;
-        sync_dir(parent)?;
-
+        self.objects
+            .lock()
+            .map_err(ObjectError::from_poisoned_lock)?
+            .insert(key.as_str().to_owned(), bytes.to_vec());
         Ok(ObjectInfo {
             key: key.clone(),
             size: bytes.len() as u64,
@@ -345,42 +290,38 @@ impl ObjectStore for LocalObjectStore {
     }
 
     fn get(&self, key: &ObjectKey, range: Option<ObjectRange>) -> Result<Vec<u8>, ObjectError> {
-        let mut file = File::open(self.path_for(key)).map_err(ObjectError::from_io)?;
+        let objects = self
+            .objects
+            .lock()
+            .map_err(ObjectError::from_poisoned_lock)?;
+        let Some(bytes) = objects.get(key.as_str()) else {
+            return Err(ObjectError::Backend("object not found".to_owned()));
+        };
         match range {
-            Some(range) => {
-                file.seek(SeekFrom::Start(range.offset))
-                    .map_err(ObjectError::from_io)?;
-                let mut buf = vec![0; range.len];
-                let read = file.read(&mut buf).map_err(ObjectError::from_io)?;
-                buf.truncate(read);
-                Ok(buf)
-            }
-            None => {
-                let mut buf = Vec::new();
-                file.read_to_end(&mut buf).map_err(ObjectError::from_io)?;
-                Ok(buf)
-            }
+            Some(range) => slice_range(bytes, range),
+            None => Ok(bytes.clone()),
         }
     }
 
     fn head(&self, key: &ObjectKey) -> Result<Option<ObjectInfo>, ObjectError> {
-        match fs::metadata(self.path_for(key)) {
-            Ok(meta) if meta.is_file() => Ok(Some(ObjectInfo {
+        Ok(self
+            .objects
+            .lock()
+            .map_err(ObjectError::from_poisoned_lock)?
+            .get(key.as_str())
+            .map(|bytes| ObjectInfo {
                 key: key.clone(),
-                size: meta.len(),
-            })),
-            Ok(_) => Ok(None),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(err) => Err(ObjectError::from_io(err)),
-        }
+                size: bytes.len() as u64,
+            }))
     }
 
     fn delete(&self, key: &ObjectKey) -> Result<bool, ObjectError> {
-        match fs::remove_file(self.path_for(key)) {
-            Ok(()) => Ok(true),
-            Err(err) if err.kind() == std::io::ErrorKind::NotFound => Ok(false),
-            Err(err) => Err(ObjectError::from_io(err)),
-        }
+        Ok(self
+            .objects
+            .lock()
+            .map_err(ObjectError::from_poisoned_lock)?
+            .remove(key.as_str())
+            .is_some())
     }
 }
 
@@ -403,27 +344,25 @@ fn validate_key(raw: &str) -> Result<(), ObjectError> {
     Ok(())
 }
 
-fn temp_path(parent: &Path, final_path: &Path) -> PathBuf {
-    let name = final_path
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("object");
-    parent.join(format!(".{name}.tmp-{}", std::process::id()))
-}
-
-fn sync_dir(path: &Path) -> Result<(), ObjectError> {
-    File::open(path)
-        .and_then(|file| file.sync_all())
-        .map_err(ObjectError::from_io)
+fn slice_range(bytes: &[u8], range: ObjectRange) -> Result<Vec<u8>, ObjectError> {
+    let offset = usize::try_from(range.offset).map_err(|_| ObjectError::InvalidRange)?;
+    if offset >= bytes.len() {
+        return Ok(Vec::new());
+    }
+    let end = offset
+        .checked_add(range.len)
+        .ok_or(ObjectError::InvalidRange)?
+        .min(bytes.len());
+    Ok(bytes[offset..end].to_vec())
 }
 
 impl ObjectError {
-    fn from_io(err: std::io::Error) -> Self {
-        Self::Io(err.to_string())
-    }
-
     fn from_backend(err: impl fmt::Display) -> Self {
         Self::Backend(err.to_string())
+    }
+
+    fn from_poisoned_lock(err: impl fmt::Display) -> Self {
+        Self::Backend(format!("object store lock poisoned: {err}"))
     }
 }
 
@@ -438,7 +377,6 @@ impl fmt::Display for ObjectError {
             Self::InvalidRange => write!(f, "object range must have non-zero length"),
             Self::MissingBucket => write!(f, "S3 object store bucket is required"),
             Self::MissingRegion => write!(f, "S3 object store region is required"),
-            Self::Io(err) => write!(f, "object store io error: {err}"),
             Self::Backend(err) => write!(f, "object store backend error: {err}"),
         }
     }
@@ -466,9 +404,8 @@ mod tests {
     }
 
     #[test]
-    fn local_object_store_put_head_get_delete() {
-        let dir = tempfile::tempdir().unwrap();
-        let store = LocalObjectStore::new(dir.path()).unwrap();
+    fn memory_object_store_put_head_get_delete() {
+        let store = MemoryObjectStore::new();
         let key = ObjectKey::new("runs/1/artifact.bin").unwrap();
 
         let info = store.put(&key, b"abcdef").unwrap();
@@ -504,12 +441,9 @@ mod tests {
     }
 
     #[test]
-    fn object_store_config_opens_local_backend() {
-        let dir = tempfile::tempdir().unwrap();
-        let backend = ObjectStoreConfig::local(dir.path()).open().unwrap();
-        let key = ObjectKey::new("a/b").unwrap();
-        backend.put(&key, b"x").unwrap();
-        assert_eq!(backend.get(&key, None).unwrap(), b"x");
+    fn object_store_config_requires_valid_s3_backend() {
+        let config = ObjectStoreConfig::s3(S3ObjectStoreOptions::new(""));
+        assert_eq!(config.open().unwrap_err(), ObjectError::MissingBucket);
     }
 
     #[test]

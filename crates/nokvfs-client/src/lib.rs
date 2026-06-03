@@ -253,15 +253,14 @@ mod tests {
     use super::*;
     use nokvfs_meta::holtstore::HoltMetadataStore;
     use nokvfs_meta::NoKvFs;
-    use nokvfs_object::LocalObjectStore;
+    use nokvfs_object::MemoryObjectStore;
     use nokvfs_types::MountId;
 
-    fn client() -> NoKvFsClient<HoltMetadataStore, LocalObjectStore> {
-        let dir = tempfile::tempdir().unwrap();
+    fn client() -> NoKvFsClient<HoltMetadataStore, MemoryObjectStore> {
         let service = NoKvFs::new(
             MountId::new(1).unwrap(),
             HoltMetadataStore::open_memory().unwrap(),
-            LocalObjectStore::new(dir.path().join("objects")).unwrap(),
+            MemoryObjectStore::new(),
         );
         let client = NoKvFsClient::new(service);
         client.bootstrap_root(0o755, 1000, 1000).unwrap();

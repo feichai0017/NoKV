@@ -20,13 +20,13 @@ object_ref
 generation
 ```
 
-`object_ref` is provider-neutral. The current local CLI writes artifact bodies
-under `artifacts/<path>`. S3-compatible backends use the same object boundary
-for AWS S3, RustFS, MinIO, and Ceph RGW.
+`object_ref` is provider-neutral. The CLI writes artifact bodies through the
+configured S3-compatible backend under `artifacts/<path>` by default. The same
+object boundary works for AWS S3, RustFS, MinIO, and Ceph RGW.
 
-Use `--object-backend rustfs` or `--object-backend s3` to store bodies outside
-the local filesystem. See [RustFS Backend](./rustfs.md) for the local RustFS
-shape.
+Use `--object-backend rustfs` for a local RustFS deployment or
+`--object-backend s3` for another S3-compatible provider. See
+[RustFS Backend](./rustfs.md) for the local RustFS shape.
 
 ## Publish Rule
 
