@@ -1,0 +1,14 @@
+[package]
+name = "nokv-fs-metastore"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[lib]
+name = "nokv_fs_metastore"
+path = "src/lib.rs"
+
+[dependencies]
+nokv-fs-model.workspace = true

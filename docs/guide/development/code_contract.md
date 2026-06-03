@@ -52,6 +52,9 @@ Package boundaries follow ownership of truth, not convenience.
 | `pb/`, `*/wire/` | Proto definitions and conversion glue. | Leak protobuf structs into semantic cores when a domain type exists. |
 | `metrics/` | Reusable metric value types. | Own subsystem state. |
 | `cmd/` | Binary assembly, flags, env, and config wiring. | Contain core protocol, semantic, or storage logic. |
+| `nokv-fs/crates/model/` | Rust-native NoKV-FS namespace model: mount ids, inode ids, dentry names, inode attrs, body descriptors, record families, and typed watch events. | Import key layout, Holt, Raft, object-store clients, FUSE, protobuf, or service/runtime packages. |
+| `nokv-fs/crates/layout/` | Holt-friendly ordered key layout for NoKV-FS metadata families. | Own namespace semantics, execute metadata commands, import Holt tree handles, Raft, object-store clients, FUSE, or wire packages. |
+| `nokv-fs/crates/metastore/` | Rust-native metadata command contract between NoKV-FS service semantics and concrete metadata stores. | Import Holt, Raft, object-store clients, FUSE, protobuf, or expose a generic KV database API. |
 
 Deleted package trees are intentionally not compatibility surfaces:
 

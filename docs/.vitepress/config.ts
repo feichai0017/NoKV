@@ -66,6 +66,7 @@ export default withMermaid(
           text: 'Reference',
           items: [
             { text: 'Architecture', link: '/guide/architecture' },
+            { text: 'NoKV-FS Design', link: '/guide/nokv_fs_design' },
             { text: 'fsmeta API', link: '/guide/fsmeta' },
             { text: 'Rooted Truth', link: '/guide/rooted_truth' },
             { text: 'Coordinator', link: '/guide/coordinator' },
@@ -105,6 +106,7 @@ export default withMermaid(
             collapsed: false,
             items: [
               { text: 'Architecture', link: '/guide/architecture' },
+              { text: 'NoKV-FS Design', link: '/guide/nokv_fs_design' },
             ],
           },
           {

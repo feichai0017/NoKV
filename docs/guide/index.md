@@ -25,6 +25,7 @@ trees were removed from the mainline.
 |---|---|
 | Build and run local fsmeta | [Getting Started](./getting_started) |
 | Layering and package ownership | [Architecture](./architecture) |
+| Target NoKV-FS product architecture | [NoKV-FS Design](./nokv_fs_design) |
 | fsmeta API and data model | [fsmeta](./fsmeta) |
 | Rooted truth | [Rooted Truth](./rooted_truth) |
 | Coordinator | [Coordinator](./coordinator) |
@@ -46,3 +47,7 @@ Application / SDK
 
 NoKV keeps namespace semantics above the storage engine. Badger and Holt are
 persistence choices; they do not own the inode/dentry model or workspace API.
+
+The long-term product direction is described in [NoKV-FS Design](./nokv_fs_design):
+Rust-native clients and metadata services, distributed Holt-backed metadata
+shards, and object storage for file bodies.

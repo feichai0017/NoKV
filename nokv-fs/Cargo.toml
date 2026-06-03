@@ -1,0 +1,17 @@
+[workspace]
+members = [
+    "crates/model",
+    "crates/layout",
+    "crates/metastore",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2021"
+rust-version = "1.88"
+license = "Apache-2.0"
+authors = ["The NoKV Authors"]
+
+[workspace.dependencies]
+nokv-fs-model = { path = "crates/model" }
+nokv-fs-layout = { path = "crates/layout" }
