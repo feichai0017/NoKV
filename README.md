@@ -80,8 +80,9 @@ Implemented today:
 - inode-level metadata RPC v0 on `nokvfs-server` for bootstrap, lookup,
   readdir-plus, create, remove, rename, snapshot, and snapshot retirement;
 - remote Rust metadata client for namespace operations over the RPC;
-- remote Rust file client that fetches body read plans from `metad` and reads
-  object ranges directly from the configured object store;
+- remote Rust file client that uploads object blocks directly, commits metadata
+  through `metad`, fetches body read plans, and reads object ranges directly
+  from the configured object store;
 - basic root bootstrap, directory create, artifact publish, lookup-plus,
   readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
   service;
@@ -96,7 +97,7 @@ Implemented today:
 
 Not implemented yet:
 
-- remote object-body write through the SDK and FUSE;
+- remote FUSE over the metadata server;
 - full POSIX random-write/truncate semantics;
 - distributed metadata shards.
 

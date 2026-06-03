@@ -1023,6 +1023,7 @@ fn errno(err: MetadError) -> Errno {
         | MetadError::PublishArtifactFailed { .. }
         | MetadError::Codec(_)
         | MetadError::BodySizeMismatch { .. }
+        | MetadError::InvalidPreparedArtifact(_)
         | MetadError::AllocatorExhausted => Errno::EIO,
     }
 }

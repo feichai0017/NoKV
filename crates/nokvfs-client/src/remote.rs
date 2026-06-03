@@ -3,17 +3,22 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use nokvfs_meta::{DentryWithAttr, RenameReplaceResult};
-use nokvfs_object::{read_object_blocks, MemoryBlockCache, ObjectReadBlock, ObjectStore};
+use nokvfs_object::{
+    delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
+    MemoryBlockCache, ObjectError, ObjectReadBlock, ObjectStore, StagedObjectSet,
+    DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+};
 use nokvfs_protocol::{
-    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
-    WireBodyReadPlan, WireDentryRecord, WireDentryWithAttr, WireInodeAttr, WireObjectReadBlock,
-    WireSnapshotPin,
+    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBlockDescriptor,
+    WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryRecord, WireDentryWithAttr,
+    WireInodeAttr, WireObjectReadBlock, WirePreparedArtifact, WireSnapshotPin,
 };
 use nokvfs_types::{
-    BodyDescriptor, DentryName, DentryRecord, FileType, InodeAttr, InodeId, SnapshotPin,
+    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
+    InodeId, SnapshotPin,
 };
 
-use crate::{display_name, is_root_path, parse_absolute_path, ClientError};
+use crate::{display_name, is_root_path, parse_absolute_path, ArtifactMetadata, ClientError};
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 
@@ -31,6 +36,18 @@ pub struct RemoteMetadataClient {
 pub struct RemoteBodyReadPlan {
     pub output_len: usize,
     pub blocks: Vec<ObjectReadBlock>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemotePreparedArtifact {
+    pub mount: u64,
+    pub parent: InodeId,
+    pub name: DentryName,
+    pub inode: InodeId,
+    pub generation: u64,
+    pub replace: bool,
+    pub dentry_version: Option<u64>,
+    pub old_generation: Option<u64>,
 }
 
 pub struct RemoteNoKvFsClient<O> {
@@ -123,6 +140,125 @@ where
             .map(|outcome| outcome.bytes)
             .map_err(ClientError::Object)
     }
+
+    pub fn put_artifact(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        metadata: ArtifactMetadata,
+    ) -> Result<DentryWithAttr, ClientError> {
+        let (parent, name) = self.metadata.resolve_parent(path)?;
+        let prepared = self.metadata.prepare_artifact(parent, name, false)?;
+        let mode = metadata.mode;
+        let uid = metadata.uid;
+        let gid = metadata.gid;
+        let (body, chunks, staged) = self.stage_artifact_body(&prepared, &bytes, metadata)?;
+        match self
+            .metadata
+            .publish_prepared_artifact(prepared, body, chunks, mode, uid, gid)
+        {
+            Ok(result) => Ok(result.entry),
+            Err(err) => {
+                delete_staged_objects(&self.objects, &staged).map_err(ClientError::Object)?;
+                Err(err)
+            }
+        }
+    }
+
+    pub fn put_artifact_replace(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        metadata: ArtifactMetadata,
+    ) -> Result<RenameReplaceResult, ClientError> {
+        let (parent, name) = self.metadata.resolve_parent(path)?;
+        let prepared = self.metadata.prepare_artifact(parent, name, true)?;
+        let mode = metadata.mode;
+        let uid = metadata.uid;
+        let gid = metadata.gid;
+        let (body, chunks, staged) = self.stage_artifact_body(&prepared, &bytes, metadata)?;
+        match self
+            .metadata
+            .publish_prepared_artifact(prepared, body, chunks, mode, uid, gid)
+        {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                delete_staged_objects(&self.objects, &staged).map_err(ClientError::Object)?;
+                Err(err)
+            }
+        }
+    }
+
+    fn stage_artifact_body(
+        &self,
+        prepared: &RemotePreparedArtifact,
+        bytes: &[u8],
+        metadata: ArtifactMetadata,
+    ) -> Result<(BodyDescriptor, Vec<ChunkManifest>, StagedObjectSet), ClientError> {
+        let written = match put_chunked_object(
+            &self.objects,
+            bytes,
+            ChunkWriteOptions {
+                manifest_id: metadata.manifest_id,
+                mount: prepared.mount,
+                inode: prepared.inode.get(),
+                generation: prepared.generation,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+        ) {
+            Ok(written) => written,
+            Err(err) => {
+                cleanup_staged_write_error(&self.objects, &err)?;
+                return Err(ClientError::Object(err));
+            }
+        };
+        let staged = written.staged_objects()?;
+        let chunks = written
+            .chunks
+            .iter()
+            .map(|chunk| ChunkManifest {
+                chunk_index: chunk.chunk_index,
+                logical_offset: chunk.logical_offset,
+                len: chunk.len,
+                blocks: chunk
+                    .blocks
+                    .iter()
+                    .map(|block| BlockDescriptor {
+                        object_key: block.object_key.clone(),
+                        logical_offset: block.logical_offset,
+                        object_offset: block.object_offset,
+                        len: block.len,
+                        digest_uri: block.digest_uri.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+        Ok((
+            BodyDescriptor {
+                producer: metadata.producer,
+                digest_uri: metadata.digest_uri,
+                size: written.size,
+                content_type: metadata.content_type,
+                manifest_id: written.manifest_id,
+                generation: prepared.generation,
+                chunk_size: written.chunk_size,
+                block_size: written.block_size,
+            },
+            chunks,
+            staged,
+        ))
+    }
+}
+
+fn cleanup_staged_write_error<O: ObjectStore>(
+    objects: &O,
+    err: &ObjectError,
+) -> Result<(), ClientError> {
+    if let ObjectError::StagedWriteFailed { staged, .. } = err {
+        delete_staged_objects(objects, staged).map_err(ClientError::Object)?;
+    }
+    Ok(())
 }
 
 impl RemoteMetadataClient {
@@ -301,6 +437,47 @@ impl RemoteMetadataClient {
         }
     }
 
+    pub fn prepare_artifact(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        replace: bool,
+    ) -> Result<RemotePreparedArtifact, ClientError> {
+        match self.call(MetadataRpcRequest::PrepareArtifact {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            replace,
+        })? {
+            MetadataRpcResult::PreparedArtifact { prepared } => wire_prepared_artifact(prepared),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn publish_prepared_artifact(
+        &self,
+        prepared: RemotePreparedArtifact,
+        body: BodyDescriptor,
+        chunks: Vec<ChunkManifest>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<RenameReplaceResult, ClientError> {
+        match self.call(MetadataRpcRequest::PublishPreparedArtifact {
+            prepared: prepared_artifact_to_wire(&prepared)?,
+            body: body_to_wire(&body),
+            chunks: chunks.iter().map(chunk_to_wire).collect(),
+            mode,
+            uid,
+            gid,
+        })? {
+            MetadataRpcResult::RenameReplace { entry, replaced } => Ok(RenameReplaceResult {
+                entry: wire_dentry(*entry)?,
+                replaced: replaced.map(|entry| wire_dentry(*entry)).transpose()?,
+            }),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     fn resolve_parent(&self, path: &str) -> Result<(InodeId, DentryName), ClientError> {
         let mut components = parse_absolute_path(path)?;
         let name = components.pop().ok_or(ClientError::RootHasNoParent)?;
@@ -445,6 +622,69 @@ fn wire_body(body: WireBodyDescriptor) -> Result<BodyDescriptor, ClientError> {
         chunk_size: body.chunk_size,
         block_size: body.block_size,
     })
+}
+
+fn wire_prepared_artifact(
+    prepared: WirePreparedArtifact,
+) -> Result<RemotePreparedArtifact, ClientError> {
+    Ok(RemotePreparedArtifact {
+        mount: prepared.mount,
+        parent: inode_id(prepared.parent)?,
+        name: DentryName::new(prepared.name.into_bytes())
+            .map_err(|err| ClientError::InvalidName(err.to_string()))?,
+        inode: inode_id(prepared.inode)?,
+        generation: prepared.generation,
+        replace: prepared.replace,
+        dentry_version: prepared.dentry_version,
+        old_generation: prepared.old_generation,
+    })
+}
+
+fn prepared_artifact_to_wire(
+    prepared: &RemotePreparedArtifact,
+) -> Result<WirePreparedArtifact, ClientError> {
+    Ok(WirePreparedArtifact {
+        mount: prepared.mount,
+        parent: prepared.parent.get(),
+        name: rpc_name(&prepared.name)?,
+        inode: prepared.inode.get(),
+        generation: prepared.generation,
+        replace: prepared.replace,
+        dentry_version: prepared.dentry_version,
+        old_generation: prepared.old_generation,
+    })
+}
+
+fn body_to_wire(body: &BodyDescriptor) -> WireBodyDescriptor {
+    WireBodyDescriptor {
+        producer: body.producer.clone(),
+        digest_uri: body.digest_uri.clone(),
+        size: body.size,
+        content_type: body.content_type.clone(),
+        manifest_id: body.manifest_id.clone(),
+        generation: body.generation,
+        chunk_size: body.chunk_size,
+        block_size: body.block_size,
+    }
+}
+
+fn chunk_to_wire(chunk: &ChunkManifest) -> WireChunkManifest {
+    WireChunkManifest {
+        chunk_index: chunk.chunk_index,
+        logical_offset: chunk.logical_offset,
+        len: chunk.len,
+        blocks: chunk.blocks.iter().map(block_to_wire).collect(),
+    }
+}
+
+fn block_to_wire(block: &BlockDescriptor) -> WireBlockDescriptor {
+    WireBlockDescriptor {
+        object_key: block.object_key.clone(),
+        logical_offset: block.logical_offset,
+        object_offset: block.object_offset,
+        len: block.len,
+        digest_uri: block.digest_uri.clone(),
+    }
 }
 
 fn wire_body_read_plan(plan: WireBodyReadPlan) -> Result<RemoteBodyReadPlan, ClientError> {
@@ -602,6 +842,18 @@ mod tests {
         Some((header_end + 4, content_len))
     }
 
+    fn artifact_metadata(manifest_id: &str) -> ArtifactMetadata {
+        ArtifactMetadata {
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:demo".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: manifest_id.to_owned(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        }
+    }
+
     #[test]
     fn remote_mkdir_sends_metadata_rpc() {
         let addr = serve_one(
@@ -640,5 +892,58 @@ mod tests {
         let client = RemoteNoKvFsClient::connect(addr, store);
         let bytes = client.read("/artifact.bin", 6, 6).unwrap();
         assert_eq!(bytes, b"remote");
+    }
+
+    #[test]
+    fn remote_file_client_uploads_blocks_then_publishes_metadata() {
+        let store = MemoryObjectStore::new();
+        let addr = serve_many(vec![
+            r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
+            r#"{"ok":true,"result":{"type":"rename_replace","entry":{"dentry":{"parent":1,"name_utf8":"artifact.bin","name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":11,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":11,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"replaced":null}}"#,
+        ]);
+        let client = RemoteNoKvFsClient::connect(addr, store.clone());
+        let entry = client
+            .put_artifact(
+                "/artifact.bin",
+                b"hello world".to_vec(),
+                artifact_metadata("artifact.bin"),
+            )
+            .unwrap();
+        assert_eq!(entry.attr.inode.get(), 42);
+        assert!(
+            store
+                .head(&ObjectKey::new("blocks/1/42/7/0/0").unwrap())
+                .unwrap()
+                .is_some(),
+            "remote publish should upload object block before metadata commit"
+        );
+    }
+
+    #[test]
+    fn remote_file_client_cleans_staged_blocks_after_publish_failure() {
+        let store = MemoryObjectStore::new();
+        let addr = serve_many(vec![
+            r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
+            r#"{"ok":false,"error":"metadata command predicate failed"}"#,
+        ]);
+        let client = RemoteNoKvFsClient::connect(addr, store.clone());
+        let err = client
+            .put_artifact(
+                "/artifact.bin",
+                b"hello world".to_vec(),
+                artifact_metadata("artifact.bin"),
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, ClientError::Remote(ref err) if err.contains("predicate failed")),
+            "unexpected error: {err:?}"
+        );
+        assert!(
+            store
+                .head(&ObjectKey::new("blocks/1/42/7/0/0").unwrap())
+                .unwrap()
+                .is_none(),
+            "failed metadata publish should clean staged object block"
+        );
     }
 }

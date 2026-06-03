@@ -17,6 +17,7 @@ use nokvfs_types::{DentryName, FileType, InodeId, SnapshotPin};
 
 pub use remote::{
     RemoteBodyReadPlan, RemoteMetadataClient, RemoteMetadataClientOptions, RemoteNoKvFsClient,
+    RemotePreparedArtifact,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

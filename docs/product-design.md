@@ -198,7 +198,8 @@ v0 local:
   long-running local server with health, stats, manual GC endpoints, and
   inode-level metadata RPC
   remote Rust metadata client for namespace operations
-  remote Rust file client for body read plans plus direct object range reads
+  remote Rust file client for direct object upload, metadata publish, body read
+  plans, and direct object range reads
   close-to-open FUSE reads and buffered writes
   artifact publish
   durable object GC queue, explicit cleanup API, and background worker
@@ -210,7 +211,7 @@ v0 local:
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
-  remote SDK object-body write and remote FUSE over server metadata
+  remote FUSE over server metadata
   Python/fsspec
   SDK watch consumer integration
 

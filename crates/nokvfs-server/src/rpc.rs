@@ -1,12 +1,13 @@
-use nokvfs_meta::{DentryWithAttr, MetadError};
+use nokvfs_meta::{DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
-    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
-    WireBodyReadPlan, WireDentryRecord, WireDentryWithAttr, WireInodeAttr, WireObjectReadBlock,
-    WireSnapshotPin,
+    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBlockDescriptor,
+    WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryRecord, WireDentryWithAttr,
+    WireInodeAttr, WireObjectReadBlock, WirePreparedArtifact, WireSnapshotPin,
 };
 use nokvfs_types::{
-    BodyDescriptor, DentryName, DentryRecord, FileType, InodeAttr, InodeId, SnapshotPin,
+    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
+    InodeId, MountId, SnapshotPin,
 };
 
 use crate::server::{Server, ServerError};
@@ -179,6 +180,57 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 plan: wire_body_read_plan(&plan),
             })
         }
+        MetadataRpcRequest::PrepareArtifact {
+            parent,
+            name,
+            replace,
+        } => {
+            let name = dentry_name(name)?;
+            let prepared = if replace {
+                server
+                    .service()
+                    .prepare_artifact_replace(inode_id(parent)?, name)?
+            } else {
+                server
+                    .service()
+                    .prepare_artifact_create(inode_id(parent)?, name)?
+            };
+            Ok(MetadataRpcResult::PreparedArtifact {
+                prepared: wire_prepared_artifact(server.service().mount_id(), &prepared),
+            })
+        }
+        MetadataRpcRequest::PublishPreparedArtifact {
+            prepared,
+            body,
+            chunks,
+            mode,
+            uid,
+            gid,
+        } => {
+            if prepared.mount != server.service().mount_id().get() {
+                return Err(ServerError::Metadata(MetadError::Codec(
+                    "prepared artifact mount does not match server mount".to_owned(),
+                )));
+            }
+            let result = server.service().publish_prepared_artifact(
+                prepared_artifact(prepared)?,
+                body_descriptor(body),
+                chunks
+                    .into_iter()
+                    .map(chunk_manifest)
+                    .collect::<Result<Vec<_>, _>>()?,
+                mode,
+                uid,
+                gid,
+            )?;
+            Ok(MetadataRpcResult::RenameReplace {
+                entry: Box::new(wire_dentry(&result.entry)),
+                replaced: result
+                    .replaced
+                    .as_ref()
+                    .map(|entry| Box::new(wire_dentry(entry))),
+            })
+        }
     }
 }
 
@@ -234,6 +286,74 @@ fn wire_body(body: &BodyDescriptor) -> WireBodyDescriptor {
         chunk_size: body.chunk_size,
         block_size: body.block_size,
     }
+}
+
+fn wire_prepared_artifact(mount: MountId, prepared: &PreparedArtifact) -> WirePreparedArtifact {
+    WirePreparedArtifact {
+        mount: mount.get(),
+        parent: prepared.parent.get(),
+        name: String::from_utf8(prepared.name.as_bytes().to_vec())
+            .expect("remote prepared artifact names are utf-8"),
+        inode: prepared.inode.get(),
+        generation: prepared.generation,
+        replace: prepared.replace,
+        dentry_version: prepared.dentry_version,
+        old_generation: prepared.old_generation,
+    }
+}
+
+fn prepared_artifact(prepared: WirePreparedArtifact) -> Result<PreparedArtifact, MetadError> {
+    MountId::new(prepared.mount)?;
+    Ok(PreparedArtifact {
+        parent: inode_id(prepared.parent)?,
+        name: dentry_name(prepared.name)?,
+        inode: inode_id(prepared.inode)?,
+        generation: prepared.generation,
+        replace: prepared.replace,
+        dentry_version: prepared.dentry_version,
+        old_generation: prepared.old_generation,
+    })
+}
+
+fn body_descriptor(body: WireBodyDescriptor) -> BodyDescriptor {
+    BodyDescriptor {
+        producer: body.producer,
+        digest_uri: body.digest_uri,
+        size: body.size,
+        content_type: body.content_type,
+        manifest_id: body.manifest_id,
+        generation: body.generation,
+        chunk_size: body.chunk_size,
+        block_size: body.block_size,
+    }
+}
+
+fn chunk_manifest(chunk: WireChunkManifest) -> Result<ChunkManifest, MetadError> {
+    Ok(ChunkManifest {
+        chunk_index: chunk.chunk_index,
+        logical_offset: chunk.logical_offset,
+        len: chunk.len,
+        blocks: chunk
+            .blocks
+            .into_iter()
+            .map(block_descriptor)
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+fn block_descriptor(block: WireBlockDescriptor) -> Result<BlockDescriptor, MetadError> {
+    if block.object_key.is_empty() {
+        return Err(MetadError::Codec(
+            "block descriptor object key is empty".to_owned(),
+        ));
+    }
+    Ok(BlockDescriptor {
+        object_key: block.object_key,
+        logical_offset: block.logical_offset,
+        object_offset: block.object_offset,
+        len: block.len,
+        digest_uri: block.digest_uri,
+    })
 }
 
 fn wire_body_read_plan(plan: &nokvfs_meta::BodyReadPlan) -> WireBodyReadPlan {
@@ -316,5 +436,52 @@ mod tests {
         let response = handle_rpc(&server, b"not-json");
         assert!(response.contains("\"ok\":false"));
         assert!(response.contains("invalid metadata rpc request"));
+    }
+
+    #[test]
+    fn rpc_prepares_and_publishes_artifact_manifest() {
+        let server = test_server();
+        let response = handle_rpc(
+            &server,
+            br#"{"op":"prepare_artifact","parent":1,"name":"artifact.bin","replace":false}"#,
+        );
+        let envelope: MetadataRpcEnvelope = serde_json::from_str(&response).unwrap();
+        let prepared = match envelope.result.unwrap() {
+            MetadataRpcResult::PreparedArtifact { prepared } => prepared,
+            other => panic!("unexpected prepare result: {other:?}"),
+        };
+        let request = MetadataRpcRequest::PublishPreparedArtifact {
+            body: WireBodyDescriptor {
+                producer: "unit-test".to_owned(),
+                digest_uri: "sha256:body".to_owned(),
+                size: 4,
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "artifact.bin".to_owned(),
+                generation: prepared.generation,
+                chunk_size: 64 * 1024 * 1024,
+                block_size: 4 * 1024 * 1024,
+            },
+            chunks: vec![WireChunkManifest {
+                chunk_index: 0,
+                logical_offset: 0,
+                len: 4,
+                blocks: vec![WireBlockDescriptor {
+                    object_key: format!("blocks/1/{}/{}", prepared.inode, prepared.generation),
+                    logical_offset: 0,
+                    object_offset: 0,
+                    len: 4,
+                    digest_uri: "sha256:block".to_owned(),
+                }],
+            }],
+            prepared,
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        };
+        let request = serde_json::to_vec(&request).unwrap();
+        let response = handle_rpc(&server, &request);
+        assert!(response.contains("\"ok\":true"));
+        assert!(response.contains("\"name_utf8\":\"artifact.bin\""));
+        assert!(response.contains("\"type\":\"rename_replace\""));
     }
 }

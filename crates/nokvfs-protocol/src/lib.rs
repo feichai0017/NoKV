@@ -70,6 +70,19 @@ pub enum MetadataRpcRequest {
         offset: u64,
         len: u64,
     },
+    PrepareArtifact {
+        parent: u64,
+        name: String,
+        replace: bool,
+    },
+    PublishPreparedArtifact {
+        prepared: WirePreparedArtifact,
+        body: WireBodyDescriptor,
+        chunks: Vec<WireChunkManifest>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -105,6 +118,9 @@ pub enum MetadataRpcResult {
     },
     BodyReadPlan {
         plan: WireBodyReadPlan,
+    },
+    PreparedArtifact {
+        prepared: WirePreparedArtifact,
     },
 }
 
@@ -148,6 +164,35 @@ pub struct WireBodyDescriptor {
     pub generation: u64,
     pub chunk_size: u64,
     pub block_size: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WirePreparedArtifact {
+    pub mount: u64,
+    pub parent: u64,
+    pub name: String,
+    pub inode: u64,
+    pub generation: u64,
+    pub replace: bool,
+    pub dentry_version: Option<u64>,
+    pub old_generation: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireChunkManifest {
+    pub chunk_index: u64,
+    pub logical_offset: u64,
+    pub len: u64,
+    pub blocks: Vec<WireBlockDescriptor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireBlockDescriptor {
+    pub object_key: String,
+    pub logical_offset: u64,
+    pub object_offset: u64,
+    pub len: u64,
+    pub digest_uri: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

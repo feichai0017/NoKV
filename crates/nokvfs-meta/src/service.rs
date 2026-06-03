@@ -85,6 +85,17 @@ pub struct PublishArtifact {
     pub gid: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PreparedArtifact {
+    pub parent: InodeId,
+    pub name: DentryName,
+    pub inode: InodeId,
+    pub generation: u64,
+    pub replace: bool,
+    pub dentry_version: Option<u64>,
+    pub old_generation: Option<u64>,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectTransferStats {
     pub object_puts: u64,
@@ -130,6 +141,7 @@ pub enum MetadError {
         descriptor: u64,
         bytes: u64,
     },
+    InvalidPreparedArtifact(String),
     StaleBodyGeneration {
         expected: u64,
         current: u64,
@@ -209,6 +221,10 @@ where
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
             manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
         }
+    }
+
+    pub fn mount_id(&self) -> MountId {
+        self.mount
     }
 
     pub fn set_block_cache_enabled(&self, enabled: bool) {
@@ -605,6 +621,126 @@ where
             entry: projection.into(),
             replaced: Some(existing),
         })
+    }
+
+    pub fn prepare_artifact_create(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+    ) -> Result<PreparedArtifact, MetadError> {
+        let Some(parent_attr) = self.get_attr(parent)? else {
+            return Err(MetadError::NotFound);
+        };
+        if parent_attr.file_type != FileType::Directory {
+            return Err(MetadError::NotDirectory);
+        }
+        if self.lookup_plus(parent, &name)?.is_some() {
+            return Err(MetadataError::PredicateFailed.into());
+        }
+        let generation = self.next_version()?;
+        let inode = self.next_inode()?;
+        self.reserve_allocator_state(generation, self.next_inode.load(Ordering::Relaxed))?;
+        Ok(PreparedArtifact {
+            parent,
+            name,
+            inode,
+            generation: generation.get(),
+            replace: false,
+            dentry_version: None,
+            old_generation: None,
+        })
+    }
+
+    pub fn prepare_artifact_replace(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+    ) -> Result<PreparedArtifact, MetadError> {
+        let (existing, dentry_version) = self
+            .lookup_plus_versioned(parent, &name)?
+            .ok_or(MetadError::NotFound)?;
+        if existing.attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        let generation = self.next_version()?;
+        self.reserve_allocator_state(generation, self.next_inode.load(Ordering::Relaxed))?;
+        Ok(PreparedArtifact {
+            parent,
+            name,
+            inode: existing.attr.inode,
+            generation: generation.get(),
+            replace: true,
+            dentry_version: Some(dentry_version.get()),
+            old_generation: existing.body.as_ref().map(|body| body.generation),
+        })
+    }
+
+    pub fn publish_prepared_artifact(
+        &self,
+        prepared: PreparedArtifact,
+        body: BodyDescriptor,
+        chunks: Vec<ChunkManifest>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<RenameReplaceResult, MetadError> {
+        validate_prepared_artifact(&prepared, &body, &chunks)?;
+        let version = Version::new(prepared.generation)?;
+        let attr = InodeAttr {
+            inode: prepared.inode,
+            file_type: FileType::File,
+            mode,
+            uid,
+            gid,
+            size: body.size,
+            generation: prepared.generation,
+            mtime_ms: prepared.generation,
+            ctime_ms: prepared.generation,
+        };
+        let projection = projection(prepared.parent, prepared.name.clone(), attr, Some(body));
+        if prepared.replace {
+            let expected_dentry_version =
+                Version::new(prepared.dentry_version.ok_or_else(|| {
+                    MetadError::InvalidPreparedArtifact(
+                        "replace artifact is missing dentry version".to_owned(),
+                    )
+                })?)?;
+            let replaced = self
+                .lookup_plus_versioned(prepared.parent, &prepared.name)?
+                .and_then(|(existing, current_dentry_version)| {
+                    (existing.attr.file_type == FileType::File
+                        && existing.attr.inode == prepared.inode
+                        && current_dentry_version == expected_dentry_version)
+                        .then_some(existing)
+                });
+            self.commit_replace_projection_with_chunks(
+                &projection,
+                &chunks,
+                expected_dentry_version,
+                prepared.old_generation,
+                version,
+            )?;
+            Ok(RenameReplaceResult {
+                entry: projection.into(),
+                replaced,
+            })
+        } else {
+            if prepared.dentry_version.is_some() || prepared.old_generation.is_some() {
+                return Err(MetadError::InvalidPreparedArtifact(
+                    "create artifact must not carry replace state".to_owned(),
+                ));
+            }
+            self.commit_create_projection_with_chunks(
+                CommandKind::PublishArtifact,
+                &projection,
+                &chunks,
+                version,
+            )?;
+            Ok(RenameReplaceResult {
+                entry: projection.into(),
+                replaced: None,
+            })
+        }
     }
 
     pub fn get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, MetadError> {
@@ -1755,6 +1891,53 @@ fn create_watch_kind(kind: CommandKind) -> WatchEventKind {
     }
 }
 
+fn validate_prepared_artifact(
+    prepared: &PreparedArtifact,
+    body: &BodyDescriptor,
+    chunks: &[ChunkManifest],
+) -> Result<(), MetadError> {
+    if body.generation != prepared.generation {
+        return Err(MetadError::InvalidPreparedArtifact(format!(
+            "body generation {} does not match prepared generation {}",
+            body.generation, prepared.generation
+        )));
+    }
+    if body.chunk_size == 0 || body.block_size == 0 {
+        return Err(ObjectError::InvalidChunkLayout.into());
+    }
+    let mut covered = 0_u64;
+    for chunk in chunks {
+        let chunk_end = chunk
+            .logical_offset
+            .checked_add(chunk.len)
+            .ok_or(ObjectError::InvalidRange)?;
+        if chunk_end > body.size {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "chunk manifest exceeds body size".to_owned(),
+            ));
+        }
+        covered = covered.saturating_add(chunk.len);
+        for block in &chunk.blocks {
+            let block_end = block
+                .logical_offset
+                .checked_add(block.len)
+                .ok_or(ObjectError::InvalidRange)?;
+            if block_end > chunk_end || block.logical_offset < chunk.logical_offset {
+                return Err(MetadError::InvalidPreparedArtifact(
+                    "block descriptor is outside chunk range".to_owned(),
+                ));
+            }
+        }
+    }
+    if covered != body.size {
+        return Err(MetadError::InvalidPreparedArtifact(format!(
+            "chunk manifests cover {covered} bytes but body size is {}",
+            body.size
+        )));
+    }
+    Ok(())
+}
+
 fn watch_cursor_from_key(key: &[u8]) -> Result<WatchCursor, MetadError> {
     let cursor_len = std::mem::size_of::<u64>() * 2;
     if key.len() < cursor_len {
@@ -1875,6 +2058,9 @@ impl fmt::Display for MetadError {
                 f,
                 "body descriptor size {descriptor} does not match uploaded bytes {bytes}"
             ),
+            Self::InvalidPreparedArtifact(err) => {
+                write!(f, "invalid prepared artifact: {err}")
+            }
             Self::StaleBodyGeneration { expected, current } => write!(
                 f,
                 "body generation {expected} is stale; current generation is {current}"
@@ -1940,6 +2126,34 @@ mod tests {
             block
         ))
         .unwrap()
+    }
+
+    fn body_descriptor(generation: u64, size: u64) -> BodyDescriptor {
+        BodyDescriptor {
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            size,
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: format!("manifest-{generation}"),
+            generation,
+            chunk_size: DEFAULT_CHUNK_SIZE,
+            block_size: DEFAULT_BLOCK_SIZE as u64,
+        }
+    }
+
+    fn one_chunk_manifest(inode: InodeId, generation: u64, len: u64) -> ChunkManifest {
+        ChunkManifest {
+            chunk_index: 0,
+            logical_offset: 0,
+            len,
+            blocks: vec![BlockDescriptor {
+                object_key: block_key(inode, generation, 0, 0).as_str().to_owned(),
+                logical_offset: 0,
+                object_offset: 0,
+                len,
+                digest_uri: "sha256:block".to_owned(),
+            }],
+        }
     }
 
     #[test]
@@ -2046,6 +2260,97 @@ mod tests {
             matches!(stale, MetadError::StaleBodyGeneration { .. }),
             "unexpected error: {stale:?}"
         );
+    }
+
+    #[test]
+    fn prepared_artifact_publish_commits_manifest_without_object_fetch() {
+        let service = service();
+        let name = DentryName::new(b"remote.bin".to_vec()).unwrap();
+        let prepared = service
+            .prepare_artifact_create(InodeId::root(), name.clone())
+            .unwrap();
+        let body = body_descriptor(prepared.generation, 6);
+        let result = service
+            .publish_prepared_artifact(
+                prepared.clone(),
+                body,
+                vec![one_chunk_manifest(prepared.inode, prepared.generation, 6)],
+                0o644,
+                1000,
+                1000,
+            )
+            .unwrap();
+        assert_eq!(result.replaced, None);
+        assert_eq!(result.entry.attr.inode, prepared.inode);
+        let lookup = service
+            .lookup_plus(InodeId::root(), &name)
+            .unwrap()
+            .unwrap();
+        assert_eq!(lookup, result.entry);
+        let plan = service
+            .read_file_plan(prepared.inode, prepared.generation, 1, 3)
+            .unwrap();
+        assert_eq!(plan.output_len, 3);
+        assert_eq!(plan.blocks[0].object_offset, 1);
+    }
+
+    #[test]
+    fn prepared_artifact_replace_rejects_stale_dentry_version() {
+        let service = service();
+        let name = DentryName::new(b"replace-remote.bin".to_vec()).unwrap();
+        service
+            .publish_artifact(artifact_request(name.clone(), "old", b"old"))
+            .unwrap();
+        let prepared = service
+            .prepare_artifact_replace(InodeId::root(), name.clone())
+            .unwrap();
+        service
+            .replace_artifact(artifact_request(name, "newer", b"newer"))
+            .unwrap();
+        let err = service
+            .publish_prepared_artifact(
+                prepared.clone(),
+                body_descriptor(prepared.generation, 6),
+                vec![one_chunk_manifest(prepared.inode, prepared.generation, 6)],
+                0o644,
+                1000,
+                1000,
+            )
+            .unwrap_err();
+        assert!(
+            matches!(err, MetadError::Metadata(MetadataError::PredicateFailed)),
+            "unexpected error: {err:?}"
+        );
+    }
+
+    #[test]
+    fn prepared_artifact_replace_retry_is_idempotent() {
+        let service = service();
+        let name = DentryName::new(b"retry-remote.bin".to_vec()).unwrap();
+        service
+            .publish_artifact(artifact_request(name.clone(), "old", b"old"))
+            .unwrap();
+        let prepared = service
+            .prepare_artifact_replace(InodeId::root(), name)
+            .unwrap();
+        let body = body_descriptor(prepared.generation, 6);
+        let chunks = vec![one_chunk_manifest(prepared.inode, prepared.generation, 6)];
+        let first = service
+            .publish_prepared_artifact(
+                prepared.clone(),
+                body.clone(),
+                chunks.clone(),
+                0o644,
+                1000,
+                1000,
+            )
+            .unwrap();
+        assert!(first.replaced.is_some());
+        let second = service
+            .publish_prepared_artifact(prepared, body, chunks, 0o644, 1000, 1000)
+            .unwrap();
+        assert_eq!(second.entry, first.entry);
+        assert_eq!(second.replaced, None);
     }
 
     #[test]
