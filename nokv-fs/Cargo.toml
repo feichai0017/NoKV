@@ -3,6 +3,9 @@ members = [
     "crates/model",
     "crates/layout",
     "crates/metastore",
+    "crates/object",
+    "crates/holtstore",
+    "crates/metad",
 ]
 resolver = "2"
 
@@ -15,3 +18,7 @@ authors = ["The NoKV Authors"]
 [workspace.dependencies]
 nokv-fs-model = { path = "crates/model" }
 nokv-fs-layout = { path = "crates/layout" }
+nokv-fs-metastore = { path = "crates/metastore" }
+nokv-fs-object = { path = "crates/object" }
+holt = { version = "0.4.2", default-features = false }
+tempfile = "3"

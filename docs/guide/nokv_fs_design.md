@@ -311,7 +311,7 @@ command_dedupe
   val: CommitResultSummary
 
 history
-  key: family | user_key | inverted_commit_version
+  key: family | user_key_len | user_key | inverted_commit_version
   val: previous value
 ```
 

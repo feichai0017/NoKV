@@ -60,6 +60,13 @@ pub struct DentryRecord {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DentryProjection {
+    pub dentry: DentryRecord,
+    pub attr: InodeAttr,
+    pub body: Option<BodyDescriptor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BodyDescriptor {
     pub producer: String,
     pub digest_uri: String,

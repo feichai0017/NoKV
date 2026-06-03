@@ -114,6 +114,7 @@ pub enum MetadataError {
     EmptyPrimaryKey,
     PutWithoutValue,
     DeleteWithValue,
+    PredicateFailed,
     Backend(String),
 }
 
@@ -175,6 +176,7 @@ impl fmt::Display for MetadataError {
             Self::EmptyPrimaryKey => write!(f, "metadata command primary key is empty"),
             Self::PutWithoutValue => write!(f, "put mutation is missing value"),
             Self::DeleteWithValue => write!(f, "delete mutation has a value"),
+            Self::PredicateFailed => write!(f, "metadata command predicate failed"),
             Self::Backend(err) => write!(f, "metadata backend error: {err}"),
         }
     }

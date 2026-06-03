@@ -10,6 +10,6 @@ mod types;
 
 pub use names::{DentryName, NameError};
 pub use types::{
-    BodyDescriptor, DentryRecord, FileType, InodeAttr, InodeId, ModelError, MountId, RecordFamily,
-    WatchEvent, WatchEventKind,
+    BodyDescriptor, DentryProjection, DentryRecord, FileType, InodeAttr, InodeId, ModelError,
+    MountId, RecordFamily, WatchEvent, WatchEventKind,
 };

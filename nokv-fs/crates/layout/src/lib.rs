@@ -4,9 +4,17 @@
 //! namespace semantics, metadata execution, Holt tree handles, Raft state, or
 //! object-store references.
 
+mod codec;
+
 use nokv_fs_model::{DentryName, InodeId, MountId, RecordFamily};
 
 pub const U64_WIDTH: usize = 8;
+const U32_WIDTH: usize = 4;
+
+pub use codec::{
+    decode_body_descriptor, decode_dentry_projection, decode_inode_attr, encode_body_descriptor,
+    encode_dentry_projection, encode_inode_attr, CodecError,
+};
 
 pub fn inode_key(mount: MountId, inode: InodeId) -> Vec<u8> {
     let mut out = Vec::with_capacity(U64_WIDTH * 2);
@@ -66,10 +74,16 @@ pub fn watch_log_key(mount: MountId, scope: InodeId, apply_index: u64, event_id:
 }
 
 pub fn history_key(family: RecordFamily, user_key: &[u8], commit_version: u64) -> Vec<u8> {
-    let mut out = Vec::with_capacity(1 + user_key.len() + U64_WIDTH);
-    out.push(family_tag(family));
-    out.extend_from_slice(user_key);
+    let mut out = history_prefix(family, user_key);
     push_u64(&mut out, u64::MAX - commit_version);
+    out
+}
+
+pub fn history_prefix(family: RecordFamily, user_key: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(1 + U32_WIDTH + user_key.len());
+    out.push(family_tag(family));
+    out.extend_from_slice(&(user_key.len() as u32).to_be_bytes());
+    out.extend_from_slice(user_key);
     out
 }
 
@@ -133,5 +147,12 @@ mod tests {
         let newer = history_key(RecordFamily::Inode, &key, 100);
         let older = history_key(RecordFamily::Inode, &key, 90);
         assert!(newer < older);
+    }
+
+    #[test]
+    fn history_prefix_is_exact_for_user_key() {
+        let a = history_prefix(RecordFamily::Dentry, b"a");
+        let aa = history_prefix(RecordFamily::Dentry, b"aa");
+        assert!(!aa.starts_with(&a));
     }
 }

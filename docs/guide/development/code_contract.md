@@ -53,8 +53,11 @@ Package boundaries follow ownership of truth, not convenience.
 | `metrics/` | Reusable metric value types. | Own subsystem state. |
 | `cmd/` | Binary assembly, flags, env, and config wiring. | Contain core protocol, semantic, or storage logic. |
 | `nokv-fs/crates/model/` | Rust-native NoKV-FS namespace model: mount ids, inode ids, dentry names, inode attrs, body descriptors, record families, and typed watch events. | Import key layout, Holt, Raft, object-store clients, FUSE, protobuf, or service/runtime packages. |
-| `nokv-fs/crates/layout/` | Holt-friendly ordered key layout for NoKV-FS metadata families. | Own namespace semantics, execute metadata commands, import Holt tree handles, Raft, object-store clients, FUSE, or wire packages. |
+| `nokv-fs/crates/layout/` | Holt-friendly ordered key layout and durable value codecs for NoKV-FS metadata families. | Own namespace semantics, execute metadata commands, import Holt tree handles, Raft, object-store clients, FUSE, or wire packages. |
 | `nokv-fs/crates/metastore/` | Rust-native metadata command contract between NoKV-FS service semantics and concrete metadata stores. | Import Holt, Raft, object-store clients, FUSE, protobuf, or expose a generic KV database API. |
+| `nokv-fs/crates/object/` | Object-store boundary and demo local filesystem object backend for file bodies. | Own namespace metadata, import Holt, Raft, FUSE, protobuf, or implement metadata transactions. |
+| `nokv-fs/crates/holtstore/` | Concrete Holt implementation of the `metastore` command contract, including family current trees, history records, predicate checks, and command dedupe. | Own filesystem namespace semantics, import object-store clients, FUSE, Raft, protobuf, or expose raw Holt handles through the service boundary. |
+| `nokv-fs/crates/metad/` | In-process NoKV-FS metadata service that compiles namespace operations into `MetadataCommand`s and coordinates metadata publish with object-store writes. | Own Holt tree layout, bypass `metastore`, import Raft/FUSE/protobuf, or expose a generic object/KV database API. |
 
 Deleted package trees are intentionally not compatibility surfaces:
 

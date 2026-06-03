@@ -1,0 +1,17 @@
+[package]
+name = "nokv-fs-metad"
+version = "0.1.0"
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+nokv-fs-layout.workspace = true
+nokv-fs-metastore.workspace = true
+nokv-fs-model.workspace = true
+nokv-fs-object.workspace = true
+
+[dev-dependencies]
+nokv-fs-holtstore = { path = "../holtstore" }
+tempfile.workspace = true
