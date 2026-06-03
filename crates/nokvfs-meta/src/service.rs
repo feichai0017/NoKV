@@ -164,7 +164,7 @@ pub struct NoKvFs<M, O> {
     mount: MountId,
     metadata: M,
     objects: O,
-    commit_gate: Mutex<()>,
+    allocator_gate: Mutex<()>,
     clock: AtomicU64,
     reserved_version: AtomicU64,
     next_inode: AtomicU64,
@@ -188,7 +188,7 @@ where
             mount,
             metadata,
             objects,
-            commit_gate: Mutex::new(()),
+            allocator_gate: Mutex::new(()),
             clock: AtomicU64::new(1),
             reserved_version: AtomicU64::new(1),
             next_inode: AtomicU64::new(InodeId::ROOT_RAW + 1),
@@ -209,7 +209,7 @@ where
             mount,
             metadata,
             objects,
-            commit_gate: Mutex::new(()),
+            allocator_gate: Mutex::new(()),
             clock: AtomicU64::new(allocator.last_commit_version),
             reserved_version: AtomicU64::new(allocator.last_commit_version),
             next_inode: AtomicU64::new(allocator.next_inode),
@@ -1804,9 +1804,6 @@ where
     }
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadError> {
-        let _guard = self.commit_gate.lock().map_err(|err| {
-            MetadataError::Backend(format!("metadata commit gate poisoned: {err}"))
-        })?;
         self.metadata.commit_metadata(command).map_err(Into::into)
     }
 
@@ -1821,8 +1818,8 @@ where
             return Ok(());
         }
 
-        let _guard = self.commit_gate.lock().map_err(|err| {
-            MetadataError::Backend(format!("metadata commit gate poisoned: {err}"))
+        let _guard = self.allocator_gate.lock().map_err(|err| {
+            MetadataError::Backend(format!("metadata allocator gate poisoned: {err}"))
         })?;
         let current_reserved_version = self.reserved_version.load(Ordering::Relaxed);
         let current_reserved_next_inode = self.reserved_next_inode.load(Ordering::Relaxed);

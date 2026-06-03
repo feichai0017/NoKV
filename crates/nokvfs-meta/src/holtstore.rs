@@ -14,7 +14,7 @@ use crate::command::{
     ReadPurpose, ScanItem, ScanRequest, Value, Version,
 };
 use crate::layout::{history_key, history_prefix};
-use holt::{RangeEntry, Tree, TreeConfig, DB};
+use holt::{RangeEntry, RecordVersion, Tree, TreeConfig, DB};
 use nokvfs_types::RecordFamily;
 
 const VALUE_HEADER_LEN: usize = 9;
@@ -71,6 +71,46 @@ struct HoltMetadataStoreCounters {
     dedupe_write_total: AtomicU64,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MutationGuard {
+    Always,
+    PutIfAbsent,
+    CompareAndPut(RecordVersion),
+    DeleteIfVersion(RecordVersion),
+}
+
+#[derive(Clone, Debug)]
+struct PlannedMutation {
+    mutation: crate::command::Mutation,
+    guard: MutationGuard,
+}
+
+#[derive(Clone, Debug)]
+struct VersionGuard {
+    family: RecordFamily,
+    key: Vec<u8>,
+    version: RecordVersion,
+}
+
+#[derive(Clone, Debug)]
+struct PrefixEmptyGuard {
+    family: RecordFamily,
+    prefix: Vec<u8>,
+}
+
+struct CommandPlan {
+    mutations: Vec<PlannedMutation>,
+    history_records: Vec<(RecordFamily, Vec<u8>, Vec<u8>)>,
+    version_guards: Vec<VersionGuard>,
+    prefix_empty_guards: Vec<PrefixEmptyGuard>,
+}
+
+struct CurrentRecord {
+    record_version: RecordVersion,
+    metadata_version: Version,
+    value: Option<Vec<u8>>,
+}
+
 impl HoltMetadataStore {
     pub fn open_memory() -> Result<Self, MetadataError> {
         Self::open(TreeConfig::memory())
@@ -104,6 +144,39 @@ impl HoltMetadataStore {
 
     fn history_tree(&self) -> Result<Tree, MetadataError> {
         self.db.open_tree(HISTORY_TREE).map_err(to_backend_error)
+    }
+
+    fn current_live_record(
+        &self,
+        family: RecordFamily,
+        key: &[u8],
+    ) -> Result<Option<(RecordVersion, Version, Vec<u8>)>, MetadataError> {
+        let Some(record) = self.current_record(family, key)? else {
+            return Ok(None);
+        };
+        Ok(record
+            .value
+            .map(|value| (record.record_version, record.metadata_version, value)))
+    }
+
+    fn current_record(
+        &self,
+        family: RecordFamily,
+        key: &[u8],
+    ) -> Result<Option<CurrentRecord>, MetadataError> {
+        let Some(record) = self
+            .current_tree(family)?
+            .get_record(key)
+            .map_err(to_backend_error)?
+        else {
+            return Ok(None);
+        };
+        let (version, value) = decode_current_value(&record.value)?;
+        Ok(Some(CurrentRecord {
+            record_version: record.version,
+            metadata_version: version,
+            value,
+        }))
     }
 }
 
@@ -172,11 +245,6 @@ impl MetadataStore for HoltMetadataStore {
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
         command.validate()?;
-        let _guard = self
-            .write_gate
-            .lock()
-            .map_err(|_| MetadataError::Backend("holt metadata write gate poisoned".to_owned()))?;
-
         let dedupe = self.current_tree(RecordFamily::CommandDedupe)?;
         if let Some(encoded) = dedupe
             .get(&command.request_id)
@@ -189,158 +257,8 @@ impl MetadataStore for HoltMetadataStore {
             return Ok(encoded);
         }
 
-        for predicate in &command.predicates {
-            let tree = self.current_tree(predicate.family)?;
-            match predicate.predicate {
-                Predicate::Exists => {
-                    if !current_value_is_live(&tree, &predicate.key)? {
-                        return Err(MetadataError::PredicateFailed);
-                    }
-                }
-                Predicate::NotExists => {
-                    if current_value_is_live(&tree, &predicate.key)? {
-                        return Err(MetadataError::PredicateFailed);
-                    }
-                }
-                Predicate::PrefixEmpty => {
-                    if prefix_has_key(&tree, &predicate.key)? {
-                        return Err(MetadataError::PredicateFailed);
-                    }
-                }
-                Predicate::VersionEquals(expected) => {
-                    let current = tree.get(&predicate.key).map_err(to_backend_error)?;
-                    let Some(current) = current else {
-                        return Err(MetadataError::PredicateFailed);
-                    };
-                    let (actual, _) = decode_current_value(&current)?;
-                    if actual != expected {
-                        return Err(MetadataError::PredicateFailed);
-                    }
-                }
-            }
-        }
-
-        let mut history_records = Vec::new();
-        for mutation in &command.mutations {
-            if !family_requires_history(mutation.family) {
-                continue;
-            }
-            if let Some(current) = self
-                .current_tree(mutation.family)?
-                .get(&mutation.key)
-                .map_err(to_backend_error)?
-            {
-                history_records.push((mutation.family, mutation.key.clone(), current));
-            }
-        }
-
-        let predicate_count = command.predicates.len() as u64;
-        let prefix_empty_predicate_count = command
-            .predicates
-            .iter()
-            .filter(|predicate| matches!(predicate.predicate, Predicate::PrefixEmpty))
-            .count() as u64;
-        let current_put_count = command
-            .mutations
-            .iter()
-            .filter(|mutation| mutation.op == MutationOp::Put)
-            .count() as u64;
-        let current_delete_count = command
-            .mutations
-            .iter()
-            .filter(|mutation| mutation.op == MutationOp::Delete)
-            .count() as u64;
-        let history_write_count = history_records.len() as u64;
-        let watch_write_count = command.watch.len() as u64;
-
-        let mut applied = 0_usize;
-        let mut watch_events = 0_usize;
-        let result = CommitResult {
-            commit_version: command.commit_version,
-            applied_mutations: command.mutations.len(),
-            watch_events: command.watch.len(),
-        };
-        let dedupe_result = encode_dedupe_result(&result);
-
-        self.db
-            .atomic(|batch| {
-                for (family, key, current) in history_records {
-                    if let Ok((old_version, _)) = decode_current_value(&current) {
-                        batch.put(
-                            HISTORY_TREE,
-                            &history_key(family, &key, old_version.get()),
-                            &current,
-                        );
-                    }
-                }
-                for mutation in &command.mutations {
-                    match mutation.op {
-                        MutationOp::Put => {
-                            let value = mutation
-                                .value
-                                .as_ref()
-                                .expect("validated put mutation has a value");
-                            batch.put(
-                                current_tree_name(mutation.family),
-                                &mutation.key,
-                                &encode_current_value(command.commit_version, &value.0),
-                            );
-                        }
-                        MutationOp::Delete => {
-                            batch.put(
-                                current_tree_name(mutation.family),
-                                &mutation.key,
-                                &encode_tombstone_value(command.commit_version),
-                            );
-                        }
-                    }
-                    applied += 1;
-                }
-                for event in &command.watch {
-                    let key = watch_event_key(&event.key, command.commit_version, watch_events);
-                    batch.put(
-                        WATCH_CURRENT_TREE,
-                        &key,
-                        &encode_current_value(command.commit_version, &event.event),
-                    );
-                    watch_events += 1;
-                }
-                batch.put(
-                    current_tree_name(RecordFamily::CommandDedupe),
-                    &command.request_id,
-                    &dedupe_result,
-                );
-            })
-            .map_err(to_backend_error)?;
-
-        self.stats.commit_total.fetch_add(1, Ordering::Relaxed);
-        self.stats
-            .predicate_total
-            .fetch_add(predicate_count, Ordering::Relaxed);
-        self.stats
-            .prefix_empty_predicate_total
-            .fetch_add(prefix_empty_predicate_count, Ordering::Relaxed);
-        self.stats
-            .current_put_total
-            .fetch_add(current_put_count, Ordering::Relaxed);
-        self.stats
-            .current_delete_total
-            .fetch_add(current_delete_count, Ordering::Relaxed);
-        self.stats
-            .history_write_total
-            .fetch_add(history_write_count, Ordering::Relaxed);
-        self.stats
-            .watch_write_total
-            .fetch_add(watch_write_count, Ordering::Relaxed);
-        self.stats
-            .dedupe_write_total
-            .fetch_add(1, Ordering::Relaxed);
-
-        Ok(CommitResult {
-            applied_mutations: applied,
-            watch_events,
-            ..result
-        })
+        let plan = self.plan_command(&command)?;
+        self.commit_planned_command(command, plan)
     }
 
     fn prune_history(
@@ -406,6 +324,284 @@ impl MetadataStore for HoltMetadataStore {
                 .map_err(to_backend_error)?;
         }
         Ok(outcome)
+    }
+}
+
+impl HoltMetadataStore {
+    fn plan_command(&self, command: &MetadataCommand) -> Result<CommandPlan, MetadataError> {
+        let mut mutations = command
+            .mutations
+            .iter()
+            .cloned()
+            .map(|mutation| PlannedMutation {
+                mutation,
+                guard: MutationGuard::Always,
+            })
+            .collect::<Vec<_>>();
+        let mut version_guards = Vec::new();
+        let mut prefix_empty_guards = Vec::new();
+
+        for predicate in &command.predicates {
+            match predicate.predicate {
+                Predicate::Exists => {
+                    let (record_version, _, _) = self
+                        .current_live_record(predicate.family, &predicate.key)?
+                        .ok_or(MetadataError::PredicateFailed)?;
+                    apply_record_version_guard(
+                        &mut mutations,
+                        &mut version_guards,
+                        predicate.family,
+                        &predicate.key,
+                        record_version,
+                    )?;
+                }
+                Predicate::NotExists => {
+                    let index = mutation_index(&mutations, predicate.family, &predicate.key)
+                        .ok_or(MetadataError::PredicateFailed)?;
+                    if mutations[index].mutation.op != MutationOp::Put {
+                        return Err(MetadataError::PredicateFailed);
+                    }
+                    match self.current_record(predicate.family, &predicate.key)? {
+                        None => {
+                            set_mutation_guard(&mut mutations[index], MutationGuard::PutIfAbsent)?;
+                        }
+                        Some(record) if record.value.is_none() => {
+                            set_mutation_guard(
+                                &mut mutations[index],
+                                MutationGuard::CompareAndPut(record.record_version),
+                            )?;
+                        }
+                        Some(_) => return Err(MetadataError::PredicateFailed),
+                    }
+                }
+                Predicate::PrefixEmpty => {
+                    prefix_empty_guards.push(PrefixEmptyGuard {
+                        family: predicate.family,
+                        prefix: predicate.key.clone(),
+                    });
+                }
+                Predicate::VersionEquals(expected) => {
+                    let (record_version, actual, _) = self
+                        .current_live_record(predicate.family, &predicate.key)?
+                        .ok_or(MetadataError::PredicateFailed)?;
+                    if actual != expected {
+                        return Err(MetadataError::PredicateFailed);
+                    }
+                    apply_record_version_guard(
+                        &mut mutations,
+                        &mut version_guards,
+                        predicate.family,
+                        &predicate.key,
+                        record_version,
+                    )?;
+                }
+            }
+        }
+
+        let mut history_records = Vec::new();
+        for planned in &mutations {
+            if !family_requires_history(planned.mutation.family) {
+                continue;
+            }
+            if let Some(current) = self
+                .current_tree(planned.mutation.family)?
+                .get(&planned.mutation.key)
+                .map_err(to_backend_error)?
+            {
+                history_records.push((
+                    planned.mutation.family,
+                    planned.mutation.key.clone(),
+                    current,
+                ));
+            }
+        }
+
+        Ok(CommandPlan {
+            mutations,
+            history_records,
+            version_guards,
+            prefix_empty_guards,
+        })
+    }
+
+    fn commit_planned_command(
+        &self,
+        command: MetadataCommand,
+        plan: CommandPlan,
+    ) -> Result<CommitResult, MetadataError> {
+        let predicate_count = command.predicates.len() as u64;
+        let prefix_empty_predicate_count = command
+            .predicates
+            .iter()
+            .filter(|predicate| matches!(predicate.predicate, Predicate::PrefixEmpty))
+            .count() as u64;
+        let current_put_count = plan
+            .mutations
+            .iter()
+            .filter(|planned| planned.mutation.op == MutationOp::Put)
+            .count() as u64;
+        let current_delete_count = plan
+            .mutations
+            .iter()
+            .filter(|planned| planned.mutation.op == MutationOp::Delete)
+            .count() as u64;
+        let history_write_count = plan.history_records.len() as u64;
+        let watch_write_count = command.watch.len() as u64;
+
+        let mut applied = 0_usize;
+        let mut watch_events = 0_usize;
+        let result = CommitResult {
+            commit_version: command.commit_version,
+            applied_mutations: plan.mutations.len(),
+            watch_events: command.watch.len(),
+        };
+        let dedupe_result = encode_dedupe_result(&result);
+
+        let committed = self
+            .db
+            .atomic(|batch| {
+                for (family, key, current) in plan.history_records {
+                    if let Ok((old_version, _)) = decode_current_value(&current) {
+                        batch.put(
+                            HISTORY_TREE,
+                            &history_key(family, &key, old_version.get()),
+                            &current,
+                        );
+                    }
+                }
+                for guard in plan.version_guards {
+                    batch.assert_version(
+                        current_tree_name(guard.family),
+                        &guard.key,
+                        guard.version,
+                    );
+                }
+                for guard in plan.prefix_empty_guards {
+                    batch.assert_prefix_empty(current_tree_name(guard.family), &guard.prefix);
+                }
+                for planned in &plan.mutations {
+                    match (planned.mutation.op, planned.guard) {
+                        (MutationOp::Put, MutationGuard::Always) => {
+                            let value = planned
+                                .mutation
+                                .value
+                                .as_ref()
+                                .expect("validated put mutation has a value");
+                            batch.put(
+                                current_tree_name(planned.mutation.family),
+                                &planned.mutation.key,
+                                &encode_current_value(command.commit_version, &value.0),
+                            );
+                        }
+                        (MutationOp::Put, MutationGuard::PutIfAbsent) => {
+                            let value = planned
+                                .mutation
+                                .value
+                                .as_ref()
+                                .expect("validated put mutation has a value");
+                            batch.put_if_absent(
+                                current_tree_name(planned.mutation.family),
+                                &planned.mutation.key,
+                                &encode_current_value(command.commit_version, &value.0),
+                            );
+                        }
+                        (MutationOp::Put, MutationGuard::CompareAndPut(version)) => {
+                            let value = planned
+                                .mutation
+                                .value
+                                .as_ref()
+                                .expect("validated put mutation has a value");
+                            batch.compare_and_put(
+                                current_tree_name(planned.mutation.family),
+                                &planned.mutation.key,
+                                version,
+                                &encode_current_value(command.commit_version, &value.0),
+                            );
+                        }
+                        (MutationOp::Put, MutationGuard::DeleteIfVersion(_)) => {
+                            unreachable!("put mutation cannot use delete guard")
+                        }
+                        (MutationOp::Delete, MutationGuard::Always) => {
+                            batch.put(
+                                current_tree_name(planned.mutation.family),
+                                &planned.mutation.key,
+                                &encode_tombstone_value(command.commit_version),
+                            );
+                        }
+                        (MutationOp::Delete, MutationGuard::DeleteIfVersion(version)) => {
+                            batch.compare_and_put(
+                                current_tree_name(planned.mutation.family),
+                                &planned.mutation.key,
+                                version,
+                                &encode_tombstone_value(command.commit_version),
+                            );
+                        }
+                        (MutationOp::Delete, MutationGuard::PutIfAbsent)
+                        | (MutationOp::Delete, MutationGuard::CompareAndPut(_)) => {
+                            unreachable!("delete mutation cannot use put guard")
+                        }
+                    }
+                    applied += 1;
+                }
+                for event in &command.watch {
+                    let key = watch_event_key(&event.key, command.commit_version, watch_events);
+                    batch.put(
+                        WATCH_CURRENT_TREE,
+                        &key,
+                        &encode_current_value(command.commit_version, &event.event),
+                    );
+                    watch_events += 1;
+                }
+                batch.put_if_absent(
+                    current_tree_name(RecordFamily::CommandDedupe),
+                    &command.request_id,
+                    &dedupe_result,
+                );
+            })
+            .map_err(to_backend_error)?;
+        if !committed {
+            if let Some(encoded) = self
+                .current_tree(RecordFamily::CommandDedupe)?
+                .get(&command.request_id)
+                .map_err(to_backend_error)?
+                .as_deref()
+                .map(decode_dedupe_result)
+                .transpose()?
+            {
+                self.stats.dedupe_hit_total.fetch_add(1, Ordering::Relaxed);
+                return Ok(encoded);
+            }
+            return Err(MetadataError::PredicateFailed);
+        }
+
+        self.stats.commit_total.fetch_add(1, Ordering::Relaxed);
+        self.stats
+            .predicate_total
+            .fetch_add(predicate_count, Ordering::Relaxed);
+        self.stats
+            .prefix_empty_predicate_total
+            .fetch_add(prefix_empty_predicate_count, Ordering::Relaxed);
+        self.stats
+            .current_put_total
+            .fetch_add(current_put_count, Ordering::Relaxed);
+        self.stats
+            .current_delete_total
+            .fetch_add(current_delete_count, Ordering::Relaxed);
+        self.stats
+            .history_write_total
+            .fetch_add(history_write_count, Ordering::Relaxed);
+        self.stats
+            .watch_write_total
+            .fetch_add(watch_write_count, Ordering::Relaxed);
+        self.stats
+            .dedupe_write_total
+            .fetch_add(1, Ordering::Relaxed);
+
+        Ok(CommitResult {
+            applied_mutations: applied,
+            watch_events,
+            ..result
+        })
     }
 }
 
@@ -557,29 +753,6 @@ fn decode_current_value(encoded: &[u8]) -> Result<(Version, Option<Vec<u8>>), Me
     }
 }
 
-fn prefix_has_key(tree: &Tree, prefix: &[u8]) -> Result<bool, MetadataError> {
-    for entry in tree.range().prefix(prefix) {
-        match entry {
-            Ok(RangeEntry::Key { value, .. }) => {
-                if decode_current_value(&value)?.1.is_some() {
-                    return Ok(true);
-                }
-            }
-            Ok(RangeEntry::CommonPrefix(_)) => return Ok(true),
-            Ok(_) => continue,
-            Err(err) => return Err(to_backend_error(err)),
-        }
-    }
-    Ok(false)
-}
-
-fn current_value_is_live(tree: &Tree, key: &[u8]) -> Result<bool, MetadataError> {
-    let Some(value) = tree.get(key).map_err(to_backend_error)? else {
-        return Ok(false);
-    };
-    decode_current_value(&value).map(|(_, value)| value.is_some())
-}
-
 fn watch_event_key(base: &[u8], version: Version, ordinal: usize) -> Vec<u8> {
     let mut key = Vec::with_capacity(base.len() + 16);
     key.extend_from_slice(base);
@@ -622,6 +795,55 @@ fn to_backend_error(err: impl std::fmt::Display) -> MetadataError {
     MetadataError::Backend(err.to_string())
 }
 
+fn mutation_index(
+    mutations: &[PlannedMutation],
+    family: RecordFamily,
+    key: &[u8],
+) -> Option<usize> {
+    mutations
+        .iter()
+        .position(|planned| planned.mutation.family == family && planned.mutation.key == key)
+}
+
+fn apply_record_version_guard(
+    mutations: &mut [PlannedMutation],
+    version_guards: &mut Vec<VersionGuard>,
+    family: RecordFamily,
+    key: &[u8],
+    record_version: RecordVersion,
+) -> Result<(), MetadataError> {
+    if let Some(index) = mutation_index(mutations, family, key) {
+        let guard = match mutations[index].mutation.op {
+            MutationOp::Put => MutationGuard::CompareAndPut(record_version),
+            MutationOp::Delete => MutationGuard::DeleteIfVersion(record_version),
+        };
+        set_mutation_guard(&mut mutations[index], guard)?;
+    } else {
+        version_guards.push(VersionGuard {
+            family,
+            key: key.to_vec(),
+            version: record_version,
+        });
+    }
+    Ok(())
+}
+
+fn set_mutation_guard(
+    planned: &mut PlannedMutation,
+    guard: MutationGuard,
+) -> Result<(), MetadataError> {
+    match (planned.guard, guard) {
+        (MutationGuard::Always, guard) => {
+            planned.guard = guard;
+            Ok(())
+        }
+        (current, requested) if current == requested => Ok(()),
+        _ => Err(MetadataError::Backend(
+            "metadata command has conflicting mutation guards".to_owned(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -629,6 +851,8 @@ mod tests {
         CommandKind, HistoryPruneRequest, MetadataCommand, Mutation, PredicateRef, ScanRequest,
         Value,
     };
+    use std::sync::{Arc, Barrier};
+    use std::thread;
 
     fn version(raw: u64) -> Version {
         Version::new(raw).unwrap()
@@ -792,6 +1016,51 @@ mod tests {
     }
 
     #[test]
+    fn not_exists_allows_recreate_after_tombstone() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+        store
+            .commit_metadata(MetadataCommand {
+                request_id: b"req-delete".to_vec(),
+                kind: CommandKind::RemoveFile,
+                read_version: version(2),
+                commit_version: version(3),
+                primary_family: RecordFamily::Dentry,
+                primary_key: b"dir/a".to_vec(),
+                predicates: vec![PredicateRef {
+                    family: RecordFamily::Dentry,
+                    key: b"dir/a".to_vec(),
+                    predicate: Predicate::Exists,
+                }],
+                mutations: vec![Mutation {
+                    family: RecordFamily::Dentry,
+                    key: b"dir/a".to_vec(),
+                    op: MutationOp::Delete,
+                    value: None,
+                }],
+                watch: Vec::new(),
+            })
+            .unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-2", b"value-b", 4))
+            .unwrap();
+
+        assert_eq!(
+            store
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(4),
+                    ReadPurpose::UserStrong
+                )
+                .unwrap(),
+            Some(Value(b"value-b".to_vec()))
+        );
+    }
+
+    #[test]
     fn prefix_empty_predicate_uses_family_prefix() {
         let store = HoltMetadataStore::open_memory().unwrap();
         store
@@ -828,6 +1097,81 @@ mod tests {
             )
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn concurrent_duplicate_request_id_commits_once() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let left_store = store.clone();
+        let left_barrier = Arc::clone(&barrier);
+        let left = thread::spawn(move || {
+            left_barrier.wait();
+            left_store.commit_metadata(put_command(b"dir/a", b"req-shared", b"value-a", 2))
+        });
+        let right_store = store.clone();
+        let right = thread::spawn(move || {
+            barrier.wait();
+            right_store.commit_metadata(put_command(b"dir/b", b"req-shared", b"value-b", 3))
+        });
+
+        let left = left.join().unwrap().unwrap();
+        let right = right.join().unwrap().unwrap();
+        assert_eq!(left, right);
+
+        let a = store
+            .get(
+                RecordFamily::Dentry,
+                b"dir/a",
+                version(3),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap();
+        let b = store
+            .get(
+                RecordFamily::Dentry,
+                b"dir/b",
+                version(3),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap();
+        assert_ne!(a.is_some(), b.is_some());
+    }
+
+    #[test]
+    fn concurrent_not_exists_commits_one_writer() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        let barrier = Arc::new(Barrier::new(2));
+        let left_store = store.clone();
+        let left_barrier = Arc::clone(&barrier);
+        let left = thread::spawn(move || {
+            left_barrier.wait();
+            left_store.commit_metadata(put_command(b"dir/a", b"req-left", b"value-a", 2))
+        });
+        let right_store = store.clone();
+        let right = thread::spawn(move || {
+            barrier.wait();
+            right_store.commit_metadata(put_command(b"dir/a", b"req-right", b"value-b", 3))
+        });
+
+        let outcomes = [left.join().unwrap(), right.join().unwrap()];
+        assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|outcome| matches!(outcome, Err(MetadataError::PredicateFailed)))
+                .count(),
+            1
+        );
+        assert!(store
+            .get(
+                RecordFamily::Dentry,
+                b"dir/a",
+                version(3),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .is_some());
     }
 
     #[test]
