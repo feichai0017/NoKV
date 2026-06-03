@@ -129,6 +129,10 @@ where
         self.read_entry(path, &entry, 0, file_len(entry.attr.size)?)
     }
 
+    pub fn cat_snapshot(&self, snapshot_id: u64, path: &str) -> Result<Vec<u8>, ClientError> {
+        self.metadata.read_artifact_at_snapshot(snapshot_id, path)
+    }
+
     pub fn read(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>, ClientError> {
         let entry = self
             .metadata
@@ -491,6 +495,20 @@ impl RemoteMetadataClient {
             len,
         })? {
             MetadataRpcResult::BodyReadPlan { plan } => wire_body_read_plan(plan),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn read_artifact_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        path: &str,
+    ) -> Result<Vec<u8>, ClientError> {
+        match self.call(MetadataRpcRequest::ReadArtifactPathAtSnapshot {
+            snapshot_id,
+            path: path.to_owned(),
+        })? {
+            MetadataRpcResult::FileBytes { bytes } => Ok(bytes),
             other => Err(unexpected_result(other)),
         }
     }
@@ -1012,6 +1030,31 @@ mod tests {
             ),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn remote_snapshot_cat_uses_snapshot_file_rpc() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+            let request = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::ReadArtifactPathAtSnapshot { snapshot_id, path }
+                    if snapshot_id == 9 && path == "/runs/checkpoint"
+            ));
+            let response = response_body(
+                r#"{"ok":true,"result":{"type":"file_bytes","bytes":[111,108,100]}}"#,
+            );
+            write_frame(&mut stream, &response).unwrap();
+        });
+        let client = RemoteNoKvFsClient::connect(addr, MemoryObjectStore::new());
+        assert_eq!(client.cat_snapshot(9, "/runs/checkpoint").unwrap(), b"old");
     }
 
     #[test]

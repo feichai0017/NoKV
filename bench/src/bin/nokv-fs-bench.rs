@@ -1,9 +1,8 @@
 //! NoKV-FS workload benchmark harness.
 //!
 //! This binary intentionally reports workload shape and durability caveats with
-//! every result. It can run either the local in-process Holt metadata path or a
-//! real `metad` process boundary with the remote SDK. It is not a distributed
-//! replicated cluster benchmark.
+//! every result. It runs a real `metad` process boundary with the remote SDK.
+//! It is not a distributed replicated cluster benchmark.
 
 use std::env;
 use std::error::Error;
@@ -17,11 +16,9 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nokvfs_client::{ArtifactMetadata, NoKvFsClient, RemoteNoKvFsClient};
-use nokvfs_meta::holtstore::HoltMetadataStore;
+use nokvfs_client::{ArtifactMetadata, RemoteNoKvFsClient};
 use nokvfs_meta::{
-    DentryWithAttr, HistoryGcOptions, NoKvFs, ObjectGcOptions, ObjectTransferStats,
-    RenameReplaceResult,
+    DentryWithAttr, HistoryGcOptions, ObjectGcOptions, ObjectTransferStats, RenameReplaceResult,
 };
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_server::{Server, ServerOptions};
@@ -56,7 +53,6 @@ struct Config {
     profile: Profile,
     workload: Workload,
     root: PathBuf,
-    metadata_mode: MetadataMode,
     object_backend: ObjectBackendKind,
     s3: S3ObjectStoreOptions,
     object_concurrency: usize,
@@ -71,12 +67,6 @@ struct Config {
 enum ObjectBackendKind {
     S3,
     RustFs,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum MetadataMode {
-    Local,
-    Remote,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -106,7 +96,6 @@ struct ResultRow {
     cache_hit_rate: f64,
     manifest_chunks: u64,
     manifest_blocks: u64,
-    metadata_mode: MetadataMode,
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
@@ -124,7 +113,6 @@ struct RowInput {
     bytes: u64,
     samples: usize,
     object_stats: ObjectTransferStats,
-    metadata_mode: MetadataMode,
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
@@ -185,61 +173,6 @@ trait BenchClient: Sync {
     fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError>;
     fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError>;
     fn object_stats(&self) -> ObjectTransferStats;
-}
-
-impl BenchClient for NoKvFsClient<HoltMetadataStore, S3ObjectStore> {
-    fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), BenchError> {
-        NoKvFsClient::bootstrap_root(self, mode, uid, gid).map_err(from_client)
-    }
-
-    fn mkdir(
-        &self,
-        path: &str,
-        mode: u32,
-        uid: u32,
-        gid: u32,
-    ) -> Result<DentryWithAttr, BenchError> {
-        NoKvFsClient::mkdir(self, path, mode, uid, gid).map_err(from_client)
-    }
-
-    fn create_file(
-        &self,
-        path: &str,
-        mode: u32,
-        uid: u32,
-        gid: u32,
-    ) -> Result<DentryWithAttr, BenchError> {
-        NoKvFsClient::create_file(self, path, mode, uid, gid).map_err(from_client)
-    }
-
-    fn put_artifact(
-        &self,
-        path: &str,
-        bytes: Vec<u8>,
-        metadata: ArtifactMetadata,
-    ) -> Result<DentryWithAttr, BenchError> {
-        NoKvFsClient::put_artifact(self, path, bytes, metadata).map_err(from_client)
-    }
-
-    fn rename_replace(
-        &self,
-        source: &str,
-        destination: &str,
-    ) -> Result<RenameReplaceResult, BenchError> {
-        NoKvFsClient::rename_replace(self, source, destination).map_err(from_client)
-    }
-
-    fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError> {
-        NoKvFsClient::list(self, path).map_err(from_client)
-    }
-
-    fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError> {
-        NoKvFsClient::cat(self, path).map_err(from_client)
-    }
-
-    fn object_stats(&self) -> ObjectTransferStats {
-        NoKvFsClient::object_stats(self)
-    }
 }
 
 impl BenchClient for RemoteNoKvFsClient<S3ObjectStore> {
@@ -326,7 +259,7 @@ fn main() {
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
              [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
-             [--root PATH] [--metadata-mode local|remote] [--object-backend s3|rustfs] \
+             [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] [--keep]"
         );
@@ -339,11 +272,11 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     let shape = shape(&config);
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
-    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_mode,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
+    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
         println!(
-            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{}",
             row.workload,
             profile_name(row.profile),
             row.operations,
@@ -357,7 +290,6 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
             row.cache_hit_rate,
             row.manifest_chunks,
             row.manifest_blocks,
-            metadata_mode_name(row.metadata_mode),
             row.object_concurrency,
             row.read_repeats,
             row.block_cache,
@@ -424,7 +356,6 @@ fn bench_mdtest_easy(
         bytes: 0,
         samples: 0,
         object_stats: stats_delta(before, client.object_stats()),
-        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -460,7 +391,6 @@ fn bench_mdtest_hard(
         bytes: 0,
         samples: 0,
         object_stats: stats_delta(before, client.object_stats()),
-        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -521,7 +451,6 @@ fn bench_checkpoint_publish(
         bytes: (shape.checkpoints * shape.checkpoint_bytes) as u64,
         samples: 0,
         object_stats: stats_delta(before, client.object_stats()),
-        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -577,7 +506,6 @@ fn bench_training_read(
         bytes: (shape.dataset_dirs * shape.dataset_file_bytes * config.read_repeats) as u64,
         samples: shape.dataset_dirs * config.read_repeats,
         object_stats: stats_delta(before, client.object_stats()),
-        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -676,7 +604,6 @@ fn bench_mlperf_dlio(
             + checkpoint_steps * shape.checkpoint_bytes) as u64,
         samples: shape.dataset_dirs * config.read_repeats,
         object_stats: stats_delta(before, client.object_stats()),
-        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -737,7 +664,6 @@ fn bench_demo_dataset(
         bytes: (classes * 2 * sample_bytes) as u64,
         samples: classes * 2,
         object_stats: stats_delta(before, client.object_stats()),
-        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -770,7 +696,6 @@ fn row(input: RowInput) -> ResultRow {
         },
         manifest_chunks: input.object_stats.manifest_chunks,
         manifest_blocks: input.object_stats.manifest_blocks,
-        metadata_mode: input.metadata_mode,
         object_concurrency: input.object_concurrency,
         read_repeats: input.read_repeats,
         block_cache: input.block_cache,
@@ -792,8 +717,7 @@ fn stats_delta(before: ObjectTransferStats, after: ObjectTransferStats) -> Objec
 
 fn metadata_only_caveat(config: &Config) -> String {
     format!(
-        "metadata-only on {} Holt metadata, object_backend={}, no distributed replication",
-        metadata_mode_name(config.metadata_mode),
+        "metadata-only on remote Holt metadata, object_backend={}, no distributed replication",
         object_backend_name(config.object_backend)
     )
 }
@@ -807,16 +731,14 @@ fn object_caveat(config: &Config, path: &str) -> String {
     match config.object_backend {
         ObjectBackendKind::RustFs => {
             format!(
-                "{path}, {} Holt metadata, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
-                metadata_mode_name(config.metadata_mode),
+                "{path}, remote Holt metadata, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
                 config.object_concurrency,
                 config.read_repeats
             )
         }
         ObjectBackendKind::S3 => {
             format!(
-                "{path}, {} Holt metadata, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
-                metadata_mode_name(config.metadata_mode),
+                "{path}, remote Holt metadata, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
                 config.object_concurrency,
                 config.read_repeats
             )
@@ -825,26 +747,7 @@ fn object_caveat(config: &Config, path: &str) -> String {
 }
 
 fn client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
-    match config.metadata_mode {
-        MetadataMode::Local => local_client_for(config, workload),
-        MetadataMode::Remote => remote_client_for(config, workload),
-    }
-}
-
-fn local_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
-    let meta = config.root.join(workload).join("meta");
-    let objects = object_config_for(config, workload)
-        .open()
-        .map_err(from_client)?;
-    let metadata = HoltMetadataStore::open_file(meta).map_err(from_client)?;
-    let service = NoKvFs::new(
-        MountId::new(1).expect("mount id is non-zero"),
-        metadata,
-        objects,
-    );
-    let client = NoKvFsClient::new(service);
-    client.set_block_cache_enabled(config.block_cache);
-    Ok(Box::new(client))
+    remote_client_for(config, workload)
 }
 
 fn remote_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
@@ -956,7 +859,6 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
     let mut profile = Profile::Smoke;
     let mut workload = Workload::All;
     let mut root = default_root();
-    let mut metadata_mode = MetadataMode::Local;
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
     let mut object_concurrency = 1_usize;
@@ -979,10 +881,6 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
             "--root" => {
                 index += 1;
                 root = PathBuf::from(value(&args, index, "--root")?);
-            }
-            "--metadata-mode" => {
-                index += 1;
-                metadata_mode = parse_metadata_mode(value(&args, index, "--metadata-mode")?)?;
             }
             "--object-backend" => {
                 index += 1;
@@ -1068,7 +966,6 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
         profile,
         workload,
         root,
-        metadata_mode,
         object_backend,
         s3,
         object_concurrency,
@@ -1089,14 +986,6 @@ fn object_config_for(config: &Config, workload: &str) -> ObjectStoreConfig {
         options.root = format!("/nokv-fs-bench/{workload}");
     }
     ObjectStoreConfig::s3(options)
-}
-
-fn parse_metadata_mode(raw: &str) -> Result<MetadataMode, BenchError> {
-    match raw {
-        "local" => Ok(MetadataMode::Local),
-        "remote" => Ok(MetadataMode::Remote),
-        _ => Err(BenchError::UnknownOption(format!("--metadata-mode {raw}"))),
-    }
 }
 
 fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, BenchError> {
@@ -1233,13 +1122,6 @@ fn profile_name(profile: Profile) -> &'static str {
     }
 }
 
-fn metadata_mode_name(mode: MetadataMode) -> &'static str {
-    match mode {
-        MetadataMode::Local => "local",
-        MetadataMode::Remote => "remote",
-    }
-}
-
 fn object_backend_name(backend: ObjectBackendKind) -> &'static str {
     match backend {
         ObjectBackendKind::S3 => "s3",
@@ -1327,8 +1209,6 @@ mod tests {
             s("standard"),
             s("--workload"),
             s("training-read"),
-            s("--metadata-mode"),
-            s("remote"),
             s("--root"),
             s("/tmp/nokv-fs-bench"),
             s("--keep"),
@@ -1336,7 +1216,6 @@ mod tests {
         .unwrap();
         assert_eq!(config.profile, Profile::Standard);
         assert_eq!(config.workload, Workload::TrainingRead);
-        assert_eq!(config.metadata_mode, MetadataMode::Remote);
         assert_eq!(config.root, PathBuf::from("/tmp/nokv-fs-bench"));
         assert!(config.keep);
         assert_eq!(config.object_concurrency, 1);

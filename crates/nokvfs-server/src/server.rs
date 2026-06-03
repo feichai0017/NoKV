@@ -3,6 +3,7 @@ use std::fmt;
 use std::io;
 use std::net::TcpListener;
 use std::sync::Arc;
+use std::thread;
 
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -51,12 +52,16 @@ impl Server {
         })
     }
 
-    pub fn serve(&self, listener: TcpListener) -> Result<(), ServerError> {
+    pub fn serve(self, listener: TcpListener) -> Result<(), ServerError> {
+        let server = Arc::new(self);
         for stream in listener.incoming() {
             let stream = stream.map_err(ServerError::Io)?;
-            if let Err(err) = http::handle_stream(self, stream) {
-                eprintln!("nokvfs-server control connection failed: {err}");
-            }
+            let server = Arc::clone(&server);
+            thread::spawn(move || {
+                if let Err(err) = http::handle_stream(&server, stream) {
+                    eprintln!("nokvfs-server connection failed: {err}");
+                }
+            });
         }
         Ok(())
     }
@@ -84,9 +89,9 @@ impl Server {
         )
     }
 
-    pub fn run_manual_gc(&self) -> Result<String, ServerError> {
-        let object = self.service.cleanup_pending_objects(usize::MAX)?;
-        let history = self.service.cleanup_history(usize::MAX)?;
+    pub fn run_manual_gc(&self, limit: usize) -> Result<String, ServerError> {
+        let object = self.service.cleanup_pending_objects(limit)?;
+        let history = self.service.cleanup_history(limit)?;
         Ok(format!(
             "{{\"object_gc\":{{\"scanned\":{},\"blocked_by_snapshots\":{},\"attempted\":{},\"deleted\":{},\"missing\":{},\"records_removed\":{}}},\"history_gc\":{{\"scanned\":{},\"removed\":{},\"retained_by_snapshots\":{}}}}}\n",
             object.scanned,
@@ -226,7 +231,7 @@ pub(crate) mod tests {
     #[test]
     fn manual_gc_reports_empty_outcomes() {
         let server = test_server();
-        let body = server.run_manual_gc().unwrap();
+        let body = server.run_manual_gc(128).unwrap();
         assert!(body.contains("\"object_gc\""));
         assert!(body.contains("\"history_gc\""));
     }

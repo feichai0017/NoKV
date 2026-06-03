@@ -77,7 +77,6 @@ cargo run --release -p nokvfs-cli --bin nokv-fs -- \
 cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
   --profile smoke \
   --workload checkpoint-publish \
-  --metadata-mode remote \
   --object-backend rustfs \
   --object-concurrency 4 \
   --checkpoint-bytes 1048576 \
@@ -89,10 +88,9 @@ cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
 
 `mdtest-easy` and `mdtest-hard` are metadata-only and do not exercise object
 storage. `checkpoint-publish` and `training-read` are the useful object-backed
-workloads for RustFS. Use `--metadata-mode local` for the in-process Holt
-baseline and `--metadata-mode remote` for the deployable `metad` service
-boundary. Use `--block-cache off` as a control run when measuring object
-backend latency instead of NoKV-FS cache reuse.
+workloads for RustFS. The benchmark harness uses the deployable single-node
+`metad` service boundary by default. Use `--block-cache off` as a control run
+when measuring object backend latency instead of NoKV-FS cache reuse.
 
 References:
 

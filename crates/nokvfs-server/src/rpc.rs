@@ -329,6 +329,12 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 plan: wire_body_read_plan(&plan),
             })
         }
+        MetadataRpcRequest::ReadArtifactPathAtSnapshot { snapshot_id, path } => {
+            let bytes = server
+                .service()
+                .read_artifact_path_at_snapshot(snapshot_id, &path)?;
+            Ok(MetadataRpcResult::FileBytes { bytes })
+        }
         MetadataRpcRequest::PrepareArtifact {
             parent,
             name,

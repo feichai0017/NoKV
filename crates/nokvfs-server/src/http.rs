@@ -134,21 +134,51 @@ fn handle_request(server: &Server, request: &HttpRequest) -> HttpResponse {
 pub(crate) fn handle_parts(server: &Server, line: &str, body: &[u8]) -> HttpResponse {
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or_default();
-    let path = parts.next().unwrap_or_default();
+    let target = parts.next().unwrap_or_default();
+    let (path, query) = split_target(target);
     match (method, path) {
         ("GET", "/healthz") => HttpResponse::text("200 OK", "ok\n"),
         ("GET", "/readyz") => HttpResponse::text("200 OK", "ready\n"),
         ("GET", "/stats") => HttpResponse::json("200 OK", server.stats_json()),
         ("POST", "/rpc") => HttpResponse::json_keep_alive("200 OK", rpc::handle_rpc(server, body)),
-        ("GET", "/gc") | ("POST", "/gc") => match server.run_manual_gc() {
-            Ok(body) => HttpResponse::json("200 OK", body),
-            Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
-        },
+        ("GET", "/gc") | ("POST", "/gc") => {
+            let limit = match gc_limit(query) {
+                Ok(limit) => limit,
+                Err(err) => return HttpResponse::text("400 Bad Request", format!("{err}\n")),
+            };
+            match server.run_manual_gc(limit) {
+                Ok(body) => HttpResponse::json("200 OK", body),
+                Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
+            }
+        }
         (_, "/request-too-large") => {
             HttpResponse::text("413 Payload Too Large", "request too large\n")
         }
         _ => HttpResponse::text("404 Not Found", "not found\n"),
     }
+}
+
+fn split_target(target: &str) -> (&str, Option<&str>) {
+    target
+        .split_once('?')
+        .map_or((target, None), |(path, query)| (path, Some(query)))
+}
+
+fn gc_limit(query: Option<&str>) -> Result<usize, String> {
+    let Some(query) = query else {
+        return Ok(usize::MAX);
+    };
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key == "limit" {
+            return value
+                .parse::<usize>()
+                .map_err(|_| format!("invalid gc limit {value}"));
+        }
+    }
+    Ok(usize::MAX)
 }
 
 impl HttpResponse {
@@ -227,6 +257,22 @@ mod tests {
         assert!(response.body.contains("\"metadata_store\""));
         assert!(response.body.contains("\"commit_total\""));
         assert!(response.body.contains("\"block_cache_enabled\":true"));
+    }
+
+    #[test]
+    fn gc_endpoint_accepts_limit_query() {
+        let server = test_server();
+        let response = handle_parts(&server, "GET /gc?limit=7 HTTP/1.1", &[]);
+        assert_eq!(response.status, "200 OK");
+        assert!(response.body.contains("\"object_gc\""));
+        assert!(response.body.contains("\"history_gc\""));
+    }
+
+    #[test]
+    fn gc_endpoint_rejects_invalid_limit_query() {
+        let server = test_server();
+        let response = handle_parts(&server, "GET /gc?limit=bad HTTP/1.1", &[]);
+        assert_eq!(response.status, "400 Bad Request");
     }
 
     #[test]

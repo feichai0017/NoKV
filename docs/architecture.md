@@ -10,9 +10,9 @@ repository is intentionally product-shaped: metadata semantics, object body
 storage, clients, FUSE, docs, and examples live at the repository root instead
 of behind a nested workspace.
 
-The implemented tree is the local metadata slice. The product target, including
-distributed metadata shards, CSI, Python/fsspec, and node-local cache, is
-recorded in [Product Design](./product-design.md).
+The implemented tree is the single-node metadata service slice. The product
+target, including distributed metadata shards, CSI, Python/fsspec, and
+node-local cache, is recorded in [Product Design](./product-design.md).
 
 ## Layers
 
@@ -27,8 +27,8 @@ Application surface
 Metadata layer
   nokvfs-types     mount, inode, dentry, body descriptor, watch event types
   nokvfs-protocol  metadata RPC wire DTOs
-  nokvfs-meta      schema, MetadataCommand, Holt store, in-process metad
-  nokvfs-server    long-running local metad process and health/control plane
+  nokvfs-meta      schema, MetadataCommand, Holt store, service core
+  nokvfs-server    long-running metad process, RPC, health, and control plane
 
 Body storage layer
   nokvfs-object    S3-compatible object storage, including RustFS

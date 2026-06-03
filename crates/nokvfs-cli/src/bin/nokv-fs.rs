@@ -4,13 +4,13 @@ use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
-use std::io::{self, Write};
-use std::net::SocketAddr;
+use std::io::{self, Read, Write};
+use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
+use nokvfs_client::{ArtifactMetadata, RemoteNoKvFsClient};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, ObjectGcWorker};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
@@ -111,7 +111,7 @@ enum CliError {
     Client(String),
 }
 
-type Client = NoKvFsClient<HoltMetadataStore, S3ObjectStore>;
+type Client = RemoteNoKvFsClient<S3ObjectStore>;
 
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
@@ -128,6 +128,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
         Command::Init => {
             let client = open_client(&config)?;
             client
+                .metadata()
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
             println!("initialized mount {}", config.mount.get());
@@ -135,9 +136,11 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
         Command::Mkdir { path } => {
             let client = open_client(&config)?;
             client
+                .metadata()
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
             let entry = client
+                .metadata()
                 .mkdir(&path, DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
             println!("dir {} inode={}", path, entry.attr.inode.get());
@@ -146,6 +149,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             let bytes = fs::read(&source).map_err(from_io)?;
             let client = open_client(&config)?;
             client
+                .metadata()
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
             let manifest_id = default_manifest_id(&path)?;
@@ -174,9 +178,10 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
         Command::Ls { path } => {
             let client = open_client(&config)?;
             client
+                .metadata()
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
-            for entry in client.list(&path).map_err(from_client)? {
+            for entry in client.metadata().list(&path).map_err(from_client)? {
                 println!(
                     "{}\t{}\t{}\t{}",
                     file_type_label(entry.attr.file_type),
@@ -193,7 +198,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
         }
         Command::Rm { path } => {
             let client = open_client(&config)?;
-            let removed = client.remove(&path).map_err(from_client)?;
+            let removed = client.metadata().remove(&path).map_err(from_client)?;
             println!(
                 "removed file {} inode={} body={}",
                 path,
@@ -207,7 +212,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
         }
         Command::Rmdir { path } => {
             let client = open_client(&config)?;
-            let removed = client.rmdir(&path).map_err(from_client)?;
+            let removed = client.metadata().rmdir(&path).map_err(from_client)?;
             println!("removed dir {} inode={}", path, removed.attr.inode.get());
         }
         Command::Rename {
@@ -215,7 +220,10 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             destination,
         } => {
             let client = open_client(&config)?;
-            let renamed = client.rename(&source, &destination).map_err(from_client)?;
+            let renamed = client
+                .metadata()
+                .rename(&source, &destination)
+                .map_err(from_client)?;
             println!(
                 "renamed {} -> {} inode={}",
                 source,
@@ -229,6 +237,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
         } => {
             let client = open_client(&config)?;
             let result = client
+                .metadata()
                 .rename_replace(&source, &destination)
                 .map_err(from_client)?;
             println!(
@@ -313,27 +322,12 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             .map_err(from_io)?;
         }
         Command::Gc { limit } => {
-            let service = open_service(&config)?;
-            let cleanup = service
-                .cleanup_pending_objects(limit)
-                .map_err(from_client)?;
-            let history = service.cleanup_history(limit).map_err(from_client)?;
-            println!(
-                "object-gc scanned={} attempted={} deleted={} missing={} records_removed={}",
-                cleanup.scanned,
-                cleanup.attempted,
-                cleanup.deleted,
-                cleanup.missing,
-                cleanup.records_removed
-            );
-            println!(
-                "history-gc scanned={} removed={} retained_by_snapshots={}",
-                history.scanned, history.removed, history.retained_by_snapshots
-            );
+            let body = control_get(&config, &format!("/gc?limit={limit}"))?;
+            print!("{body}");
         }
         Command::Snapshot { path } => {
             let client = open_client(&config)?;
-            let snapshot = client.snapshot(&path).map_err(from_client)?;
+            let snapshot = client.metadata().snapshot(&path).map_err(from_client)?;
             println!(
                 "snapshot path={} id={} root={} read_version={} created_version={}",
                 path,
@@ -352,7 +346,10 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
         }
         Command::RetireSnapshot { snapshot_id } => {
             let client = open_client(&config)?;
-            let retired = client.retire_snapshot(snapshot_id).map_err(from_client)?;
+            let retired = client
+                .metadata()
+                .retire_snapshot(snapshot_id)
+                .map_err(from_client)?;
             println!("retired_snapshot id={} retired={}", snapshot_id, retired);
         }
         Command::Help => {
@@ -363,7 +360,27 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
 }
 
 fn open_client(config: &Config) -> Result<Client, CliError> {
-    Ok(NoKvFsClient::new(open_service(config)?))
+    let objects = config.object.open().map_err(from_object)?;
+    Ok(RemoteNoKvFsClient::connect(config.server_bind, objects))
+}
+
+fn control_get(config: &Config, path: &str) -> Result<String, CliError> {
+    let mut stream = TcpStream::connect(config.server_bind).map_err(from_io)?;
+    write!(
+        stream,
+        "GET {path} HTTP/1.1\r\nhost: {}\r\nconnection: close\r\n\r\n",
+        config.server_bind
+    )
+    .map_err(from_io)?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(from_io)?;
+    let Some((headers, body)) = response.split_once("\r\n\r\n") else {
+        return Err(CliError::Client("malformed control response".to_owned()));
+    };
+    if !headers.starts_with("HTTP/1.1 200 ") {
+        return Err(CliError::Client(response));
+    }
+    Ok(body.to_owned())
 }
 
 fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, S3ObjectStore>, CliError> {
@@ -737,25 +754,25 @@ fn from_object(err: impl Error) -> CliError {
 fn print_help(out: &mut impl Write) -> io::Result<()> {
     writeln!(
         out,
-        "NoKV-FS local metadata CLI\n\
+        "NoKV-FS metadata client/server CLI\n\
 \n\
 Usage:\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] init\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mkdir PATH\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] put-artifact PATH SOURCE\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] ls PATH\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] cat PATH\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rm PATH\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rmdir PATH\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] init\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mkdir PATH\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] put-artifact PATH SOURCE\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] ls PATH\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] cat PATH\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rm PATH\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rmdir PATH\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount MOUNTPOINT\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID MOUNTPOINT\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] cat-snapshot SNAPSHOT_ID PATH\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] retire-snapshot SNAPSHOT_ID\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] cat-snapshot SNAPSHOT_ID PATH\n\
+  nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] retire-snapshot SNAPSHOT_ID\n\
 \n\
 Object backends:\n\
   --object-backend s3|rustfs\n\
@@ -769,7 +786,7 @@ Object backends:\n\
   --object-gc-limit LIMIT          Max queued object records per GC iteration\n\
   --history-gc-interval-ms MS      Background metadata history GC interval for live mount\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
-  --server-bind ADDR              Health/control bind address for serve\n\
+  --server-bind ADDR              Metadata service address for client commands and serve bind\n\
 \n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\

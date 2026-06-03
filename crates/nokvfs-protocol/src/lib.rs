@@ -95,6 +95,10 @@ pub enum MetadataRpcRequest {
         offset: u64,
         len: u64,
     },
+    ReadArtifactPathAtSnapshot {
+        snapshot_id: u64,
+        path: String,
+    },
     PrepareArtifact {
         parent: u64,
         name: String,
@@ -150,6 +154,9 @@ pub enum MetadataRpcResult {
     },
     BodyReadPlan {
         plan: WireBodyReadPlan,
+    },
+    FileBytes {
+        bytes: Vec<u8>,
     },
     PreparedArtifact {
         prepared: WirePreparedArtifact,

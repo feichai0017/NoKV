@@ -102,8 +102,9 @@ flowchart TB
     Metad --> Object
 ```
 
-The first implementation is local and in-process. The distributed target is
-metadata-shard replication with Holt as each shard's local state machine.
+The first implementation is a single-node `metad` server backed by Holt. The
+distributed target is metadata-shard replication with Holt as each shard's
+local state machine.
 
 ## Kubernetes Deployment Target
 
@@ -126,9 +127,10 @@ nokvfs-python
   Python SDK and fsspec binding for training frameworks
 ```
 
-The current repository implements the local metadata slice, FUSE frontend, and
-a long-running local `nokvfs-server` process. Remote metadata RPC, CSI, Python,
-node-local cache, and distributed metadata shards remain product direction.
+The current repository implements a long-running single-node `nokvfs-server`,
+remote metadata RPC for the Rust SDK and CLI, and the FUSE frontend. Remote
+FUSE, CSI, Python, node-local cache, and distributed metadata shards remain
+product direction.
 
 ## Metadata Distribution
 

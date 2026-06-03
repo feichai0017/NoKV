@@ -480,6 +480,28 @@ where
         self.read_file_at_version(entry.attr.inode, &body, 0, body.size as usize, version)
     }
 
+    pub fn read_artifact_path_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        path: &str,
+    ) -> Result<Vec<u8>, MetadError> {
+        let version = self.snapshot_read_version(snapshot_id)?;
+        let mut components = parse_absolute_path(path)?;
+        let name = components
+            .pop()
+            .ok_or_else(|| MetadError::InvalidPath("root has no file body".to_owned()))?;
+        let parent = self.resolve_components_as_directory_at_version(&components, version)?;
+        let entry = self
+            .lookup_plus_at_version(parent, &name, version)?
+            .map(|(entry, _)| entry)
+            .ok_or(MetadError::NotFound)?;
+        if entry.attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
+        self.read_file_at_version(entry.attr.inode, &body, 0, body.size as usize, version)
+    }
+
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<InodeAttr, MetadError> {
         let version = self.next_version()?;
         let root = directory_attr(InodeId::root(), mode, uid, gid, version.get());
@@ -909,10 +931,19 @@ where
         &self,
         components: &[DentryName],
     ) -> Result<InodeId, MetadError> {
+        self.resolve_components_as_directory_at_version(components, self.read_version()?)
+    }
+
+    fn resolve_components_as_directory_at_version(
+        &self,
+        components: &[DentryName],
+        version: Version,
+    ) -> Result<InodeId, MetadError> {
         let mut current = InodeId::root();
         for name in components {
             let entry = self
-                .lookup_plus(current, name)?
+                .lookup_plus_at_version(current, name, version)?
+                .map(|(entry, _)| entry)
                 .ok_or(MetadError::NotFound)?;
             if entry.attr.file_type != FileType::Directory {
                 return Err(MetadError::NotDirectory);
