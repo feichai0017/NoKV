@@ -35,6 +35,8 @@ use nokvfs_types::{
 };
 
 const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
+const ALLOCATOR_VERSION_RESERVATION: u64 = 1024;
+const ALLOCATOR_INODE_RESERVATION: u64 = 1024;
 
 const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 12] = [
     RecordFamily::System,
@@ -53,6 +55,8 @@ const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 12] = [
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct AllocatorState {
+    // These values are durable reservation upper bounds. Recovery may skip
+    // unused ids after a crash, but must never reuse a visible version/inode.
     last_commit_version: u64,
     next_inode: u64,
 }
@@ -162,7 +166,9 @@ pub struct NoKvFs<M, O> {
     objects: O,
     commit_gate: Mutex<()>,
     clock: AtomicU64,
+    reserved_version: AtomicU64,
     next_inode: AtomicU64,
+    reserved_next_inode: AtomicU64,
     block_cache: MemoryBlockCache,
     block_cache_enabled: AtomicBool,
     object_puts: AtomicU64,
@@ -184,7 +190,9 @@ where
             objects,
             commit_gate: Mutex::new(()),
             clock: AtomicU64::new(1),
+            reserved_version: AtomicU64::new(1),
             next_inode: AtomicU64::new(InodeId::ROOT_RAW + 1),
+            reserved_next_inode: AtomicU64::new(InodeId::ROOT_RAW + 1),
             block_cache: MemoryBlockCache::default(),
             block_cache_enabled: AtomicBool::new(true),
             object_puts: AtomicU64::new(0),
@@ -203,7 +211,9 @@ where
             objects,
             commit_gate: Mutex::new(()),
             clock: AtomicU64::new(allocator.last_commit_version),
+            reserved_version: AtomicU64::new(allocator.last_commit_version),
             next_inode: AtomicU64::new(allocator.next_inode),
+            reserved_next_inode: AtomicU64::new(allocator.next_inode),
             block_cache: MemoryBlockCache::default(),
             block_cache_enabled: AtomicBool::new(true),
             object_puts: AtomicU64::new(0),
@@ -566,7 +576,6 @@ where
     pub fn publish_artifact(&self, request: PublishArtifact) -> Result<DentryWithAttr, MetadError> {
         let version = self.next_version()?;
         let inode = self.next_inode()?;
-        self.reserve_allocator_state(version, self.next_inode.load(Ordering::Relaxed))?;
         let StagedArtifactBody {
             body,
             chunks,
@@ -609,7 +618,6 @@ where
             return Err(MetadError::NotFile);
         }
         let version = self.next_version()?;
-        self.reserve_allocator_state(version, self.next_inode.load(Ordering::Relaxed))?;
         let StagedArtifactBody {
             body,
             chunks,
@@ -662,7 +670,6 @@ where
         }
         let generation = self.next_version()?;
         let inode = self.next_inode()?;
-        self.reserve_allocator_state(generation, self.next_inode.load(Ordering::Relaxed))?;
         Ok(PreparedArtifact {
             parent,
             name,
@@ -691,7 +698,6 @@ where
             return Err(MetadError::NotFile);
         }
         let generation = self.next_version()?;
-        self.reserve_allocator_state(generation, self.next_inode.load(Ordering::Relaxed))?;
         Ok(PreparedArtifact {
             parent,
             name,
@@ -1797,37 +1803,62 @@ where
         Ok(mutations)
     }
 
-    fn commit_metadata(&self, mut command: MetadataCommand) -> Result<CommitResult, MetadError> {
+    fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadError> {
         let _guard = self.commit_gate.lock().map_err(|err| {
             MetadataError::Backend(format!("metadata commit gate poisoned: {err}"))
         })?;
-        command.mutations.push(Mutation {
-            family: RecordFamily::System,
-            key: allocator_key(self.mount),
-            op: MutationOp::Put,
-            value: Some(Value(encode_allocator_state(
-                command.commit_version.get(),
-                self.next_inode.load(Ordering::Relaxed),
-            ))),
-        });
         self.metadata.commit_metadata(command).map_err(Into::into)
     }
 
-    fn reserve_allocator_state(
+    fn ensure_allocator_reservation(
         &self,
-        version: Version,
-        next_inode: u64,
-    ) -> Result<CommitResult, MetadError> {
+        required_version: u64,
+        required_next_inode: u64,
+    ) -> Result<(), MetadError> {
+        if required_version <= self.reserved_version.load(Ordering::Relaxed)
+            && required_next_inode <= self.reserved_next_inode.load(Ordering::Relaxed)
+        {
+            return Ok(());
+        }
+
         let _guard = self.commit_gate.lock().map_err(|err| {
             MetadataError::Backend(format!("metadata commit gate poisoned: {err}"))
         })?;
+        let current_reserved_version = self.reserved_version.load(Ordering::Relaxed);
+        let current_reserved_next_inode = self.reserved_next_inode.load(Ordering::Relaxed);
+        if required_version <= current_reserved_version
+            && required_next_inode <= current_reserved_next_inode
+        {
+            return Ok(());
+        }
+
+        let reserved_version = current_reserved_version.max(reservation_upper_bound(
+            required_version,
+            ALLOCATOR_VERSION_RESERVATION,
+        ));
+        let reserved_next_inode = current_reserved_next_inode.max(reservation_upper_bound(
+            required_next_inode,
+            ALLOCATOR_INODE_RESERVATION,
+        ));
+        InodeId::new(reserved_next_inode)?;
+
+        let commit_version = Version::new(
+            required_version
+                .max(self.clock.load(Ordering::Relaxed))
+                .max(2),
+        )?;
         let key = allocator_key(self.mount);
         self.metadata
             .commit_metadata(MetadataCommand {
-                request_id: request_id(b"reserve-allocator", self.mount, InodeId::root(), version),
+                request_id: allocator_reservation_request_id(
+                    self.mount,
+                    commit_version,
+                    reserved_version,
+                    reserved_next_inode,
+                ),
                 kind: CommandKind::ReserveAllocator,
-                read_version: predecessor(version)?,
-                commit_version: version,
+                read_version: predecessor(commit_version)?,
+                commit_version,
                 primary_family: RecordFamily::System,
                 primary_key: key.clone(),
                 predicates: Vec::new(),
@@ -1835,15 +1866,25 @@ where
                     family: RecordFamily::System,
                     key,
                     op: MutationOp::Put,
-                    value: Some(Value(encode_allocator_state(version.get(), next_inode))),
+                    value: Some(Value(encode_allocator_state(
+                        reserved_version,
+                        reserved_next_inode,
+                    ))),
                 }],
                 watch: Vec::new(),
             })
-            .map_err(Into::into)
+            .map_err(MetadError::from)?;
+        self.reserved_version
+            .store(reserved_version, Ordering::Relaxed);
+        self.reserved_next_inode
+            .store(reserved_next_inode, Ordering::Relaxed);
+        Ok(())
     }
 
     fn next_version(&self) -> Result<Version, MetadError> {
-        Version::new(self.clock.fetch_add(1, Ordering::Relaxed) + 1).map_err(Into::into)
+        let raw = self.clock.fetch_add(1, Ordering::Relaxed) + 1;
+        self.ensure_allocator_reservation(raw, self.next_inode.load(Ordering::Relaxed))?;
+        Version::new(raw).map_err(Into::into)
     }
 
     fn read_version(&self) -> Result<Version, MetadError> {
@@ -1851,7 +1892,10 @@ where
     }
 
     fn next_inode(&self) -> Result<InodeId, MetadError> {
-        InodeId::new(self.next_inode.fetch_add(1, Ordering::Relaxed)).map_err(Into::into)
+        let raw = self.next_inode.fetch_add(1, Ordering::Relaxed);
+        let required_next_inode = raw.checked_add(1).ok_or(MetadError::AllocatorExhausted)?;
+        self.ensure_allocator_reservation(self.clock.load(Ordering::Relaxed), required_next_inode)?;
+        InodeId::new(raw).map_err(Into::into)
     }
 }
 
@@ -1948,6 +1992,10 @@ fn recover_allocator_state<M: MetadataStore>(
         last_commit_version,
         next_inode,
     })
+}
+
+fn reservation_upper_bound(required: u64, reservation: u64) -> u64 {
+    required.saturating_add(reservation)
 }
 
 fn directory_attr(inode: InodeId, mode: u32, uid: u32, gid: u32, version: u64) -> InodeAttr {
@@ -2100,6 +2148,22 @@ fn request_id(prefix: &[u8], mount: MountId, inode: InodeId, version: Version) -
     out.extend_from_slice(&mount.get().to_be_bytes());
     out.extend_from_slice(&inode.get().to_be_bytes());
     out.extend_from_slice(&version.get().to_be_bytes());
+    out
+}
+
+fn allocator_reservation_request_id(
+    mount: MountId,
+    commit_version: Version,
+    reserved_version: u64,
+    reserved_next_inode: u64,
+) -> Vec<u8> {
+    let prefix = b"reserve-allocator";
+    let mut out = Vec::with_capacity(prefix.len() + 32);
+    out.extend_from_slice(prefix);
+    out.extend_from_slice(&mount.get().to_be_bytes());
+    out.extend_from_slice(&commit_version.get().to_be_bytes());
+    out.extend_from_slice(&reserved_version.to_be_bytes());
+    out.extend_from_slice(&reserved_next_inode.to_be_bytes());
     out
 }
 
@@ -2351,7 +2415,7 @@ mod tests {
 
         let after = metadata.metadata_store_stats();
         assert_eq!(after.commit_total - before.commit_total, 1);
-        assert_eq!(after.current_put_total - before.current_put_total, 3);
+        assert_eq!(after.current_put_total - before.current_put_total, 2);
         assert_eq!(after.current_delete_total - before.current_delete_total, 0);
         assert_eq!(after.history_write_total - before.history_write_total, 0);
         assert_eq!(after.watch_write_total - before.watch_write_total, 1);
