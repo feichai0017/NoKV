@@ -38,9 +38,19 @@ impl Default for FuseOptions {
             entry_ttl: Duration::from_secs(1),
             attr_ttl: Duration::from_secs(1),
             fs_name: "nokv-fs".to_owned(),
-            threads: 4,
+            threads: default_threads(),
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+fn default_threads() -> usize {
+    4
+}
+
+#[cfg(not(target_os = "linux"))]
+fn default_threads() -> usize {
+    1
 }
 
 impl<M, O> NoKvFuse<M, O>
