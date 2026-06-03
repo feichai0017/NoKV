@@ -27,7 +27,7 @@ Application surface
 Metadata layer
   nokvfs-types     mount, inode, dentry, body descriptor, watch event types
   nokvfs-meta      schema, MetadataCommand, Holt store, in-process metad
-  nokvfs-server    planned long-running service process
+  nokvfs-server    long-running local metad process and health/control plane
 
 Body storage layer
   nokvfs-object    S3-compatible object storage, including RustFS
@@ -47,6 +47,11 @@ flowchart LR
 For artifact publication, object bytes are uploaded first. The metadata commit
 then publishes the dentry, inode projection, and body descriptor atomically.
 Failed metadata publish leaves staged objects for later garbage collection.
+
+`nokvfs-server` runs the same local `nokvfs-meta` service in a long-lived
+process. It owns health, readiness, stats, and manual GC endpoints. It does not
+yet expose the remote metadata RPC used by future SDK, FUSE, or distributed
+router clients.
 
 ## FUSE Path
 

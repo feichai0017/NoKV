@@ -1156,6 +1156,7 @@ dependencies = [
  "nokvfs-fuse",
  "nokvfs-meta",
  "nokvfs-object",
+ "nokvfs-server",
  "nokvfs-types",
 ]
 
@@ -1197,6 +1198,16 @@ dependencies = [
  "opendal",
  "tempfile",
  "tokio",
+]
+
+[[package]]
+name = "nokvfs-server"
+version = "0.1.0"
+dependencies = [
+ "nokvfs-meta",
+ "nokvfs-object",
+ "nokvfs-types",
+ "tempfile",
 ]
 
 [[package]]

@@ -23,6 +23,7 @@ condition.
 | `crates/nokvfs-object/` | Object-store boundary, S3-compatible backend, and in-memory test object store for file bodies. | Own namespace metadata, import Holt/FUSE/protobuf, implement metadata transactions, or expose filesystem-directory object storage as a product backend. |
 | `crates/nokvfs-client/` | Path-oriented Rust SDK over the in-process metadata service. | Own metadata layout, bypass `nokvfs-meta`, expose object-store internals, implement FUSE/kernel cache semantics, or depend on `nokvfs-fuse`. |
 | `crates/nokvfs-fuse/` | FUSE low-level frontend, inode mapping, kernel-facing attr conversion, range reads, and close-to-open buffered writes through `nokvfs-meta`. | Resolve paths through the SDK, own metadata layout, import Holt directly, or implement object-provider-specific behavior. |
+| `crates/nokvfs-server/` | Long-running metadata service process, startup config, background GC ownership, health/status/control HTTP, and future remote service boundary. | Own metadata semantics, durable layout, object provider internals, FUSE/kernel cache policy, or hidden compatibility shims. |
 | `crates/nokvfs-cli/` | `nokv-fs` CLI binary, command parsing, local service startup, and CLI wiring across client, FUSE, metadata, and object config. | Own metadata semantics, durable layout, object backend internals, or FUSE filesystem implementation. |
 | `bench/` | System workload harnesses for metadata smoke, MLPerf Storage/DLIO-style generated training reads, checkpoint publish/read, and demo dataset shapes. | Own product APIs, metadata layout, object backend implementation, FUSE/kernel cache policy, or hidden benchmark-only behavior in product crates. |
 
@@ -30,7 +31,6 @@ Planned package owners:
 
 | Package | Owns |
 | --- | --- |
-| `crates/nokvfs-server/` | Long-running metadata service, config, health, and remote service boundary. |
 | `crates/nokvfs-csi/` | Kubernetes CSI integration and mount lifecycle. |
 | `crates/nokvfs-python/` | Python SDK/fsspec bindings for training workflows. |
 

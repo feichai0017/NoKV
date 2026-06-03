@@ -5,6 +5,7 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::io::{self, Write};
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
@@ -13,6 +14,7 @@ use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, ObjectGcWorker};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
+use nokvfs_server::{ServerOptions, DEFAULT_SERVER_BIND};
 use nokvfs_types::{FileType, MountId};
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
@@ -32,6 +34,7 @@ struct Config {
     object_gc_limit: usize,
     history_gc_interval: Duration,
     history_gc_limit: usize,
+    server_bind: SocketAddr,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -77,6 +80,7 @@ enum Command {
         snapshot_id: u64,
         mountpoint: PathBuf,
     },
+    Serve,
     Gc {
         limit: usize,
     },
@@ -101,6 +105,7 @@ enum CliError {
     MissingArgument(&'static str),
     TooManyArguments,
     InvalidMount(String),
+    InvalidAddress { field: &'static str, value: String },
     InvalidNumber { field: &'static str, value: String },
     Io(String),
     Client(String),
@@ -286,6 +291,27 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             )
             .map_err(from_io)?;
         }
+        Command::Serve => {
+            nokvfs_server::run(ServerOptions {
+                bind: config.server_bind,
+                mount: config.mount,
+                meta_path: config.meta,
+                object: config.object,
+                uid: config.uid,
+                gid: config.gid,
+                object_gc: ObjectGcOptions {
+                    interval: config.object_gc_interval,
+                    limit: config.object_gc_limit,
+                    run_immediately: false,
+                },
+                history_gc: HistoryGcOptions {
+                    interval: config.history_gc_interval,
+                    limit: config.history_gc_limit,
+                    run_immediately: false,
+                },
+            })
+            .map_err(from_io)?;
+        }
         Command::Gc { limit } => {
             let service = open_service(&config)?;
             let cleanup = service
@@ -358,6 +384,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut object_gc_limit = ObjectGcOptions::default().limit;
     let mut history_gc_interval = HistoryGcOptions::default().interval;
     let mut history_gc_limit = HistoryGcOptions::default().limit;
+    let mut server_bind = DEFAULT_SERVER_BIND;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -460,6 +487,11 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                     "history_gc_limit",
                 )?;
             }
+            "--server-bind" => {
+                index += 1;
+                server_bind =
+                    parse_socket_addr(value(&args, index, "--server-bind")?, "server_bind")?;
+            }
             "--help" | "-h" => {
                 return Ok((
                     Config {
@@ -472,6 +504,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         object_gc_limit,
                         history_gc_interval,
                         history_gc_limit,
+                        server_bind,
                     },
                     Command::Help,
                 ));
@@ -496,6 +529,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             object_gc_limit,
             history_gc_interval,
             history_gc_limit,
+            server_bind,
         },
         command,
     ))
@@ -580,6 +614,7 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
                 mountpoint: PathBuf::from(&args[2]),
             })
         }
+        "serve" => exact_args(args, 1).map(|()| Command::Serve),
         "gc" => match args.len() {
             1 => Ok(Command::Gc {
                 limit: DEFAULT_GC_LIMIT,
@@ -659,6 +694,14 @@ fn parse_usize(raw: &str, field: &'static str) -> Result<usize, CliError> {
     })
 }
 
+fn parse_socket_addr(raw: &str, field: &'static str) -> Result<SocketAddr, CliError> {
+    raw.parse::<SocketAddr>()
+        .map_err(|_| CliError::InvalidAddress {
+            field,
+            value: raw.to_owned(),
+        })
+}
+
 fn default_manifest_id(path: &str) -> Result<String, CliError> {
     let trimmed = path.trim_start_matches('/');
     if trimmed.is_empty() {
@@ -708,6 +751,7 @@ Usage:\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount MOUNTPOINT\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID MOUNTPOINT\n\
+  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] cat-snapshot SNAPSHOT_ID PATH\n\
@@ -725,6 +769,7 @@ Object backends:\n\
   --object-gc-limit LIMIT          Max queued object records per GC iteration\n\
   --history-gc-interval-ms MS      Background metadata history GC interval for live mount\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
+  --server-bind ADDR              Health/control bind address for serve\n\
 \n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\
@@ -735,6 +780,7 @@ Defaults:\n\
   --object-gc-limit 1024\n\
   --history-gc-interval-ms 30000\n\
   --history-gc-limit 1024\n\
+  --server-bind 127.0.0.1:7777\n\
   --mount 1"
     )
 }
@@ -748,6 +794,7 @@ impl fmt::Display for CliError {
             Self::MissingArgument(arg) => write!(f, "missing {arg}"),
             Self::TooManyArguments => write!(f, "too many arguments"),
             Self::InvalidMount(value) => write!(f, "invalid mount id {value}"),
+            Self::InvalidAddress { field, value } => write!(f, "invalid {field} address {value}"),
             Self::InvalidNumber { field, value } => write!(f, "invalid {field} value {value}"),
             Self::Io(err) => write!(f, "io error: {err}"),
             Self::Client(err) => write!(f, "{err}"),
@@ -773,6 +820,7 @@ mod tests {
         assert_eq!(options.bucket, "nokv");
         assert_eq!(options.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
         assert_eq!(config.mount.get(), 1);
+        assert_eq!(config.server_bind, DEFAULT_SERVER_BIND);
         assert_eq!(command, Command::Ls { path: s("/") });
     }
 
@@ -793,6 +841,8 @@ mod tests {
             s("60"),
             s("--history-gc-limit"),
             s("11"),
+            s("--server-bind"),
+            s("127.0.0.1:17777"),
             s("mkdir"),
             s("/runs"),
         ])
@@ -803,6 +853,10 @@ mod tests {
         assert_eq!(config.object_gc_limit, 9);
         assert_eq!(config.history_gc_interval, Duration::from_millis(60));
         assert_eq!(config.history_gc_limit, 11);
+        assert_eq!(
+            config.server_bind,
+            "127.0.0.1:17777".parse::<SocketAddr>().unwrap()
+        );
         assert_eq!(command, Command::Mkdir { path: s("/runs") });
     }
 
@@ -833,6 +887,17 @@ mod tests {
             ]),
             Err(CliError::InvalidNumber {
                 field: "history_gc_interval_ms",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_rejects_invalid_server_bind() {
+        assert!(matches!(
+            parse(vec![s("--server-bind"), s("localhost"), s("serve")]),
+            Err(CliError::InvalidAddress {
+                field: "server_bind",
                 ..
             })
         ));
@@ -918,6 +983,16 @@ mod tests {
                 field: "snapshot_id",
                 ..
             })
+        ));
+    }
+
+    #[test]
+    fn parse_serve_command() {
+        let (_config, command) = parse(vec![s("serve")]).unwrap();
+        assert_eq!(command, Command::Serve);
+        assert!(matches!(
+            parse(vec![s("serve"), s("extra")]),
+            Err(CliError::TooManyArguments)
         ));
     }
 

@@ -111,7 +111,7 @@ The cloud-native deployment should grow into these components:
 
 ```text
 nokvfs-server
-  long-running metadata service and router
+  long-running metadata service, health/control plane, and future router
 
 nokvfs-csi
   Kubernetes volume lifecycle and node mount integration
@@ -126,8 +126,9 @@ nokvfs-python
   Python SDK and fsspec binding for training frameworks
 ```
 
-The current repository only implements the local metadata slice and read-only
-FUSE frontend. These components are the product direction, not present crates.
+The current repository implements the local metadata slice, FUSE frontend, and
+a long-running local `nokvfs-server` process. Remote metadata RPC, CSI, Python,
+node-local cache, and distributed metadata shards remain product direction.
 
 ## Metadata Distribution
 
@@ -194,6 +195,7 @@ v0 local:
   S3-compatible object backend, with RustFS as the local default
   Rust SDK
   CLI
+  long-running local server with health, stats, and manual GC endpoints
   close-to-open FUSE reads and buffered writes
   artifact publish
   durable object GC queue, explicit cleanup API, and background worker
@@ -205,7 +207,7 @@ v0 local:
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
-  long-running server
+  remote metadata RPC for SDK/FUSE clients
   Python/fsspec
   SDK watch consumer integration
 

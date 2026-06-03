@@ -37,6 +37,7 @@ crates/
   nokvfs-object  # S3-compatible object backend, including RustFS
   nokvfs-client  # Rust SDK
   nokvfs-fuse    # low-level FUSE frontend
+  nokvfs-server  # long-running local metad process and health/control plane
   nokvfs-cli     # nokv-fs CLI binary
 
 bench/           # system workload benchmark harness
@@ -73,6 +74,8 @@ Implemented today:
 - read-only FUSE snapshot mounts rooted at a snapshot subtree;
 - durable typed watch replay for namespace and artifact publication events;
 - live FUSE mount invalidates kernel entry/inode caches from typed watch replay;
+- long-running local `nokvfs-server` process with health, stats, and manual
+  object/history GC endpoints;
 - basic root bootstrap, directory create, artifact publish, lookup-plus,
   readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
   service;
@@ -83,11 +86,11 @@ Implemented today:
   publish, unlink, rmdir, and rename-replace;
 - `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, rm, rmdir, rename,
   rename-replace, mount, mount-snapshot, snapshot, cat-snapshot,
-  retire-snapshot, and manual GC cleanup.
+  retire-snapshot, serve, and manual GC cleanup.
 
 Not implemented yet:
 
-- long-running metad server;
+- remote SDK/FUSE metadata RPC;
 - full POSIX random-write/truncate semantics;
 - distributed metadata shards.
 
@@ -139,6 +142,17 @@ cargo run -p nokvfs-cli --bin nokv-fs -- mount /tmp/nokv-fs-mount
 The live mount starts background object and metadata-history GC workers. Use
 `--object-gc-interval-ms`, `--object-gc-limit`, `--history-gc-interval-ms`,
 and `--history-gc-limit` before `mount` to tune them.
+
+To run the local metadata process without mounting FUSE:
+
+```bash
+cargo run -p nokvfs-cli --bin nokv-fs -- serve
+curl http://127.0.0.1:7777/healthz
+curl http://127.0.0.1:7777/stats
+curl -X POST http://127.0.0.1:7777/gc
+```
+
+Use `--server-bind ADDR` before `serve` to change the health/control address.
 
 To mount a read-only snapshot view:
 

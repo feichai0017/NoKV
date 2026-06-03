@@ -5,6 +5,7 @@ members = [
     "crates/nokvfs-object",
     "crates/nokvfs-client",
     "crates/nokvfs-fuse",
+    "crates/nokvfs-server",
     "crates/nokvfs-cli",
     "bench",
 ]
@@ -22,6 +23,7 @@ nokvfs-meta = { path = "crates/nokvfs-meta" }
 nokvfs-object = { path = "crates/nokvfs-object" }
 nokvfs-client = { path = "crates/nokvfs-client" }
 nokvfs-fuse = { path = "crates/nokvfs-fuse" }
+nokvfs-server = { path = "crates/nokvfs-server" }
 nokvfs-cli = { path = "crates/nokvfs-cli" }
 nokvfs-bench = { path = "bench" }
 fuser = { version = "0.17.0", default-features = false }
