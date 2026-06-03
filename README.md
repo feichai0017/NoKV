@@ -66,6 +66,8 @@ Implemented today:
   publish paths;
 - durable pending-object GC queue and explicit cleanup API for removed or
   replaced artifact bodies;
+- durable snapshot pins, snapshot-version artifact reads, and snapshot-protected
+  object cleanup;
 - basic root bootstrap, directory create, artifact publish, lookup-plus,
   readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
   service;
@@ -81,7 +83,8 @@ Not implemented yet:
 
 - long-running metad server;
 - full POSIX random-write/truncate semantics;
-- watch replay, snapshot retention, and background object GC worker;
+- watch replay, read-only snapshot mounts, history GC worker, and background
+  object GC worker;
 - distributed metadata shards.
 
 ## Quick Check

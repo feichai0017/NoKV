@@ -78,7 +78,9 @@ If metadata remove or replace succeeds, the old body objects are written into a
 durable metadata GC queue in the same metadata commit that removes namespace
 reachability. The current local service exposes an explicit cleanup API; a
 future long-running metad process should call it as a background worker after
-the configured retention window.
+the configured retention window. Active snapshot pins conservatively block
+object cleanup so snapshot-version artifact reads can still fetch the old
+blocks. Retiring the snapshot lets later cleanup consume the queued records.
 
 ## Chunk Manifest
 

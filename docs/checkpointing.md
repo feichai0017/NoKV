@@ -23,13 +23,14 @@ metadata command:
 
 The namespace entry appears only after the metadata command commits.
 
-## Required Next Semantics
+## Current And Remaining Semantics
 
-- atomic replace that returns the old body descriptor;
-- durable GC retry for old and orphaned body descriptors;
-- read-only snapshot views for `/workspace/input`;
+- atomic replace returns the old body descriptor;
+- durable object GC queue stores old body refs from remove/replace;
+- snapshot pins protect old body refs until retired;
+- chunk manifests describe large checkpoint files;
+- read-only snapshot mounts for `/workspace/input`;
 - typed watch events for checkpoint consumers;
-- chunk manifest for large checkpoint files.
 
 ## Failure Handling
 
@@ -39,4 +40,5 @@ The product contract should be explicit:
 - metadata publish failure returns staged object refs for explicit cleanup;
 - metadata remove/replace success persists old body refs in the metadata GC
   queue and returns the old body descriptor to the caller;
-- snapshot pins and watch cursors must protect history before GC.
+- snapshot pins protect old body refs from object cleanup until retired;
+- watch cursors must protect history before history GC.

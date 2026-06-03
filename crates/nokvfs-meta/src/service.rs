@@ -16,9 +16,10 @@ use crate::command::{
 use crate::layout::{
     allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,
     decode_body_descriptor, decode_chunk_manifest, decode_dentry_projection, decode_inode_attr,
-    decode_object_gc_record, dentry_key, dentry_prefix, encode_allocator_state,
-    encode_body_descriptor, encode_chunk_manifest, encode_dentry_projection, encode_inode_attr,
-    encode_object_gc_record, gc_object_key, gc_queue_prefix, inode_key,
+    decode_object_gc_record, decode_snapshot_pin, dentry_key, dentry_prefix,
+    encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
+    encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
+    gc_object_key, gc_queue_prefix, inode_key, snapshot_pin_key, snapshot_pin_prefix,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
@@ -27,7 +28,7 @@ use nokvfs_object::{
 };
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
-    FileType, InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, RecordFamily,
+    FileType, InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, RecordFamily, SnapshotPin,
 };
 
 const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
@@ -93,6 +94,7 @@ pub struct ObjectTransferStats {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PendingObjectCleanupOutcome {
     pub scanned: usize,
+    pub blocked_by_snapshots: usize,
     pub attempted: usize,
     pub deleted: usize,
     pub missing: usize,
@@ -226,9 +228,17 @@ where
         if rows.is_empty() {
             return Ok(PendingObjectCleanupOutcome::default());
         }
+        if self.has_active_snapshot_pins()? {
+            return Ok(PendingObjectCleanupOutcome {
+                scanned: rows.len(),
+                blocked_by_snapshots: rows.len(),
+                ..PendingObjectCleanupOutcome::default()
+            });
+        }
 
         let mut outcome = PendingObjectCleanupOutcome {
             scanned: rows.len(),
+            blocked_by_snapshots: 0,
             attempted: 0,
             deleted: 0,
             missing: 0,
@@ -271,6 +281,112 @@ where
         })?;
         outcome.records_removed = records_removed;
         Ok(outcome)
+    }
+
+    pub fn snapshot_subtree(&self, root: InodeId) -> Result<SnapshotPin, MetadError> {
+        let Some(attr) = self.get_attr(root)? else {
+            return Err(MetadError::NotFound);
+        };
+        if attr.file_type != FileType::Directory {
+            return Err(MetadError::NotDirectory);
+        }
+        let created_version = self.next_version()?;
+        let read_version = predecessor(created_version)?;
+        let pin = SnapshotPin {
+            snapshot_id: created_version.get(),
+            root,
+            read_version: read_version.get(),
+            created_version: created_version.get(),
+        };
+        let key = snapshot_pin_key(self.mount, pin.snapshot_id);
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(b"snapshot-subtree", self.mount, root, created_version),
+            kind: CommandKind::SnapshotSubtree,
+            read_version,
+            commit_version: created_version,
+            primary_family: RecordFamily::Snapshot,
+            primary_key: key.clone(),
+            predicates: vec![PredicateRef {
+                family: RecordFamily::Snapshot,
+                key: key.clone(),
+                predicate: Predicate::NotExists,
+            }],
+            mutations: vec![Mutation {
+                family: RecordFamily::Snapshot,
+                key,
+                op: MutationOp::Put,
+                value: Some(Value(encode_snapshot_pin(&pin))),
+            }],
+            watch: Vec::new(),
+        })?;
+        Ok(pin)
+    }
+
+    pub fn retire_snapshot(&self, snapshot_id: u64) -> Result<bool, MetadError> {
+        let key = snapshot_pin_key(self.mount, snapshot_id);
+        if self.snapshot_pin(snapshot_id)?.is_none() {
+            return Ok(false);
+        }
+        let version = self.next_version()?;
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(b"retire-snapshot", self.mount, InodeId::root(), version),
+            kind: CommandKind::RetireSnapshot,
+            read_version: predecessor(version)?,
+            commit_version: version,
+            primary_family: RecordFamily::Snapshot,
+            primary_key: key.clone(),
+            predicates: vec![PredicateRef {
+                family: RecordFamily::Snapshot,
+                key: key.clone(),
+                predicate: Predicate::Exists,
+            }],
+            mutations: vec![delete_mutation(RecordFamily::Snapshot, key)],
+            watch: Vec::new(),
+        })?;
+        Ok(true)
+    }
+
+    pub fn snapshot_pin(&self, snapshot_id: u64) -> Result<Option<SnapshotPin>, MetadError> {
+        let value = self.metadata.get(
+            RecordFamily::Snapshot,
+            &snapshot_pin_key(self.mount, snapshot_id),
+            self.read_version()?,
+            ReadPurpose::UserStrong,
+        )?;
+        value
+            .map(|value| {
+                decode_snapshot_pin(&value.0).map_err(|err| MetadError::Codec(err.to_string()))
+            })
+            .transpose()
+    }
+
+    pub fn lookup_plus_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<Option<DentryWithAttr>, MetadError> {
+        let version = self.snapshot_read_version(snapshot_id)?;
+        self.lookup_plus_at_version(parent, name, version)
+            .map(|entry| entry.map(|(entry, _)| entry))
+    }
+
+    pub fn read_artifact_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<Vec<u8>, MetadError> {
+        let version = self.snapshot_read_version(snapshot_id)?;
+        let entry = self
+            .lookup_plus_at_version(parent, name, version)?
+            .map(|(entry, _)| entry)
+            .ok_or(MetadError::NotFound)?;
+        if entry.attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
+        self.read_file_at_version(entry.attr.inode, &body, 0, body.size as usize, version)
     }
 
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<InodeAttr, MetadError> {
@@ -458,6 +574,15 @@ where
         name: &DentryName,
     ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
         let version = self.read_version()?;
+        self.lookup_plus_at_version(parent, name, version)
+    }
+
+    fn lookup_plus_at_version(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+        version: Version,
+    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
         let key = dentry_key(self.mount, parent, name);
         let Some(item) = self.metadata.get_versioned(
             RecordFamily::Dentry,
@@ -548,8 +673,25 @@ where
             return Ok(Vec::new());
         }
         let body = self.body_descriptor(inode)?.ok_or(MetadError::NotFound)?;
+        self.read_file_at_version(inode, &body, offset, len, self.read_version()?)
+    }
+
+    fn read_file_at_version(
+        &self,
+        inode: InodeId,
+        body: &BodyDescriptor,
+        offset: u64,
+        len: usize,
+        version: Version,
+    ) -> Result<Vec<u8>, MetadError> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        if offset >= body.size {
+            return Ok(Vec::new());
+        }
         let len = len.min((body.size - offset) as usize);
-        let plan = self.read_plan(inode, &body, offset, len)?;
+        let plan = self.read_plan(inode, body, offset, len, version)?;
         let cache = if self.block_cache_enabled() {
             Some(&self.block_cache)
         } else {
@@ -1041,6 +1183,7 @@ where
         body: &BodyDescriptor,
         offset: u64,
         len: usize,
+        version: Version,
     ) -> Result<Vec<ObjectReadBlock>, MetadError> {
         if body.chunk_size == 0 || body.block_size == 0 {
             return Err(ObjectError::InvalidChunkLayout.into());
@@ -1055,7 +1198,6 @@ where
 
         let start_chunk = offset / body.chunk_size;
         let end_chunk = (end - 1) / body.chunk_size;
-        let version = self.read_version()?;
         let mut plan = Vec::new();
         for chunk_index in start_chunk..=end_chunk {
             let key = chunk_manifest_key(self.mount, inode, body.generation, chunk_index);
@@ -1093,6 +1235,24 @@ where
             }
         }
         Ok(plan)
+    }
+
+    fn snapshot_read_version(&self, snapshot_id: u64) -> Result<Version, MetadError> {
+        let pin = self
+            .snapshot_pin(snapshot_id)?
+            .ok_or(MetadError::NotFound)?;
+        Version::new(pin.read_version).map_err(Into::into)
+    }
+
+    fn has_active_snapshot_pins(&self) -> Result<bool, MetadError> {
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::Snapshot,
+            prefix: snapshot_pin_prefix(self.mount),
+            version: self.read_version()?,
+            limit: 1,
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        Ok(!rows.is_empty())
     }
 
     fn chunk_manifest_delete_and_gc_mutations(
@@ -1347,6 +1507,7 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
         CommandKind::PublishArtifact => b"publish-artifact",
         CommandKind::ReplaceArtifact => b"replace-artifact",
         CommandKind::SnapshotSubtree => b"snapshot-subtree",
+        CommandKind::RetireSnapshot => b"retire-snapshot",
         CommandKind::WatchSubtree => b"watch-subtree",
         CommandKind::CleanupObjects => b"cleanup-objects",
     }
@@ -1667,6 +1828,53 @@ mod tests {
     }
 
     #[test]
+    fn snapshot_preserves_old_artifact_and_blocks_object_gc_until_retired() {
+        let (service, objects) = service_with_objects();
+        let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+        let first = service
+            .publish_artifact(artifact_request(name.clone(), "checkpoint/old", b"old"))
+            .unwrap();
+        let old_body = first.body.clone().unwrap();
+        let old_object = block_key(first.attr.inode, old_body.generation, 0, 0);
+        let snapshot = service.snapshot_subtree(InodeId::root()).unwrap();
+
+        let replaced = service
+            .replace_artifact(artifact_request(
+                name.clone(),
+                "checkpoint/new",
+                b"new-body",
+            ))
+            .unwrap();
+        let new_body = replaced.entry.body.clone().unwrap();
+        let new_object = block_key(replaced.entry.attr.inode, new_body.generation, 0, 0);
+
+        assert_eq!(
+            service
+                .read_artifact_at_snapshot(snapshot.snapshot_id, InodeId::root(), &name)
+                .unwrap(),
+            b"old"
+        );
+        assert_eq!(
+            service.read_artifact(InodeId::root(), &name).unwrap(),
+            b"new-body"
+        );
+        let blocked = service.cleanup_pending_objects(100).unwrap();
+        assert_eq!(blocked.scanned, 1);
+        assert_eq!(blocked.blocked_by_snapshots, 1);
+        assert_eq!(blocked.attempted, 0);
+        assert!(objects.head(&old_object).unwrap().is_some());
+        assert!(objects.head(&new_object).unwrap().is_some());
+
+        assert!(service.retire_snapshot(snapshot.snapshot_id).unwrap());
+        assert!(!service.retire_snapshot(snapshot.snapshot_id).unwrap());
+        let cleanup = service.cleanup_pending_objects(100).unwrap();
+        assert_eq!(cleanup.deleted, 1);
+        assert_eq!(cleanup.records_removed, 1);
+        assert!(objects.head(&old_object).unwrap().is_none());
+        assert!(objects.head(&new_object).unwrap().is_some());
+    }
+
+    #[test]
     fn remove_empty_dir_rejects_non_empty_directory() {
         let service = service();
         let dir = DentryName::new(b"runs".to_vec()).unwrap();
@@ -1884,6 +2092,23 @@ mod tests {
         assert_eq!(cleanup.deleted, 1);
         assert_eq!(cleanup.records_removed, 1);
         assert!(objects.head(&object).unwrap().is_none());
+    }
+
+    #[test]
+    fn snapshot_pin_survives_service_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = MemoryObjectStore::new();
+        let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
+        let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        let snapshot = service.snapshot_subtree(InodeId::root()).unwrap();
+        drop(service);
+
+        let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+        assert_eq!(
+            reopened.snapshot_pin(snapshot.snapshot_id).unwrap(),
+            Some(snapshot)
+        );
     }
 
     #[test]

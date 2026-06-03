@@ -13,9 +13,10 @@ const U32_WIDTH: usize = 4;
 
 pub use codec::{
     decode_allocator_state, decode_body_descriptor, decode_chunk_manifest,
-    decode_dentry_projection, decode_inode_attr, decode_object_gc_record, encode_allocator_state,
-    encode_body_descriptor, encode_chunk_manifest, encode_dentry_projection, encode_inode_attr,
-    encode_object_gc_record, CodecError,
+    decode_dentry_projection, decode_inode_attr, decode_object_gc_record, decode_snapshot_pin,
+    encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
+    encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
+    CodecError,
 };
 
 pub fn allocator_key(mount: MountId) -> Vec<u8> {
@@ -84,6 +85,18 @@ pub fn watch_log_key(mount: MountId, scope: InodeId, apply_index: u64, event_id:
     push_u64(&mut out, scope.get());
     push_u64(&mut out, apply_index);
     push_u64(&mut out, event_id);
+    out
+}
+
+pub fn snapshot_pin_prefix(mount: MountId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH);
+    push_u64(&mut out, mount.get());
+    out
+}
+
+pub fn snapshot_pin_key(mount: MountId, snapshot_id: u64) -> Vec<u8> {
+    let mut out = snapshot_pin_prefix(mount);
+    push_u64(&mut out, snapshot_id);
     out
 }
 
@@ -227,6 +240,17 @@ mod tests {
 
         assert!(key.starts_with(&gc_queue_prefix(mount())));
         assert!(!other_mount.starts_with(&gc_queue_prefix(mount())));
+        assert!(key < later);
+    }
+
+    #[test]
+    fn snapshot_pin_keys_are_mount_scoped() {
+        let key = snapshot_pin_key(mount(), 10);
+        let other_mount = snapshot_pin_key(MountId::new(8).unwrap(), 10);
+        let later = snapshot_pin_key(mount(), 11);
+
+        assert!(key.starts_with(&snapshot_pin_prefix(mount())));
+        assert!(!other_mount.starts_with(&snapshot_pin_prefix(mount())));
         assert!(key < later);
     }
 

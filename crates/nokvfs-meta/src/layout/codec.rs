@@ -2,7 +2,7 @@ use std::fmt;
 
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
-    FileType, InodeAttr, InodeId, ObjectGcRecord,
+    FileType, InodeAttr, InodeId, ObjectGcRecord, SnapshotPin,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -206,6 +206,27 @@ pub fn decode_object_gc_record(bytes: &[u8]) -> Result<ObjectGcRecord, CodecErro
     };
     input.finish()?;
     Ok(record)
+}
+
+pub fn encode_snapshot_pin(pin: &SnapshotPin) -> Vec<u8> {
+    let mut out = Vec::with_capacity(32);
+    push_u64(&mut out, pin.snapshot_id);
+    push_u64(&mut out, pin.root.get());
+    push_u64(&mut out, pin.read_version);
+    push_u64(&mut out, pin.created_version);
+    out
+}
+
+pub fn decode_snapshot_pin(bytes: &[u8]) -> Result<SnapshotPin, CodecError> {
+    let mut input = Decoder::new(bytes);
+    let pin = SnapshotPin {
+        snapshot_id: input.u64()?,
+        root: inode(input.u64()?)?,
+        read_version: input.u64()?,
+        created_version: input.u64()?,
+    };
+    input.finish()?;
+    Ok(pin)
 }
 
 fn decode_inode_attr_from(input: &mut Decoder<'_>) -> Result<InodeAttr, CodecError> {

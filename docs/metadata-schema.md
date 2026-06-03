@@ -104,7 +104,7 @@ watch_log
 
 snapshot_pin
   key: mount_id | snapshot_id
-  val: read frontier, root inode, retention evidence
+  val: snapshot id, root inode, read version, created version
 
 gc_queue
   key: mount_id | enqueue_version | inode | generation | chunk | block

@@ -179,7 +179,7 @@ snapshot:
   mount | snapshot_id -> read frontier and retention pin
 
 gc:
-  mount | epoch | manifest_id/object_key -> pending cleanup record
+  mount | enqueue_version | inode | generation | chunk | block -> pending cleanup record
 ```
 
 Full-path indexes are derived accelerators for artifact and checkpoint lookup.
@@ -197,12 +197,14 @@ v0 local:
   close-to-open FUSE reads and buffered writes
   artifact publish
   durable object GC queue and explicit cleanup API
+  durable snapshot pin and snapshot-version artifact read
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
   remove/rmdir/rename-replace
   long-running server
   Python/fsspec
+  read-only snapshot mounts
   background object GC worker
 
 v2 cluster:

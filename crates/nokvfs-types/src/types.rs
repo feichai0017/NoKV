@@ -107,6 +107,14 @@ pub struct ObjectGcRecord {
     pub enqueue_version: u64,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SnapshotPin {
+    pub snapshot_id: u64,
+    pub root: InodeId,
+    pub read_version: u64,
+    pub created_version: u64,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WatchEventKind {
     Create,

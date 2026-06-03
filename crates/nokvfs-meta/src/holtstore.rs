@@ -15,7 +15,9 @@ use crate::layout::{history_key, history_prefix};
 use holt::{RangeEntry, Tree, TreeConfig, DB};
 use nokvfs_types::RecordFamily;
 
-const VALUE_HEADER_LEN: usize = 8;
+const VALUE_HEADER_LEN: usize = 9;
+const VALUE_KIND_LIVE: u8 = 1;
+const VALUE_KIND_TOMBSTONE: u8 = 2;
 
 const SYSTEM_CURRENT_TREE: &str = "system_current";
 const MOUNT_CURRENT_TREE: &str = "mount_current";
@@ -167,20 +169,12 @@ impl MetadataStore for HoltMetadataStore {
             let tree = self.current_tree(predicate.family)?;
             match predicate.predicate {
                 Predicate::Exists => {
-                    if tree
-                        .get(&predicate.key)
-                        .map_err(to_backend_error)?
-                        .is_none()
-                    {
+                    if !current_value_is_live(&tree, &predicate.key)? {
                         return Err(MetadataError::PredicateFailed);
                     }
                 }
                 Predicate::NotExists => {
-                    if tree
-                        .get(&predicate.key)
-                        .map_err(to_backend_error)?
-                        .is_some()
-                    {
+                    if current_value_is_live(&tree, &predicate.key)? {
                         return Err(MetadataError::PredicateFailed);
                     }
                 }
@@ -247,7 +241,11 @@ impl MetadataStore for HoltMetadataStore {
                             );
                         }
                         MutationOp::Delete => {
-                            batch.delete(current_tree_name(mutation.family), &mutation.key);
+                            batch.put(
+                                current_tree_name(mutation.family),
+                                &mutation.key,
+                                &encode_tombstone_value(command.commit_version),
+                            );
                         }
                     }
                     applied += 1;
@@ -298,10 +296,8 @@ fn read_visible(
     version: Version,
     history: &Tree,
 ) -> Result<Option<ReadItem>, MetadataError> {
-    let Some(encoded) = current.get(key).map_err(to_backend_error)? else {
-        return Ok(None);
-    };
-    decode_visible_value(family, key, &encoded, version, history).map(|value| {
+    let encoded = current.get(key).map_err(to_backend_error)?;
+    decode_visible_value(family, key, encoded.as_deref(), version, history).map(|value| {
         value.map(|(version, bytes)| ReadItem {
             value: Value(bytes),
             version,
@@ -312,13 +308,15 @@ fn read_visible(
 fn decode_visible_value(
     family: RecordFamily,
     key: &[u8],
-    encoded: &[u8],
+    encoded: Option<&[u8]>,
     version: Version,
     history: &Tree,
 ) -> Result<Option<(Version, Vec<u8>)>, MetadataError> {
-    let (current_version, current_value) = decode_current_value(encoded)?;
-    if current_version <= version {
-        return Ok(Some((current_version, current_value)));
+    if let Some(encoded) = encoded {
+        let (current_version, current_value) = decode_current_value(encoded)?;
+        if current_version <= version {
+            return Ok(current_value.map(|value| (current_version, value)));
+        }
     }
     for entry in history.range().prefix(&history_prefix(family, key)) {
         let RangeEntry::Key { value, .. } = entry.map_err(to_backend_error)? else {
@@ -326,7 +324,7 @@ fn decode_visible_value(
         };
         let (history_version, history_value) = decode_current_value(&value)?;
         if history_version <= version {
-            return Ok(Some((history_version, history_value)));
+            return Ok(history_value.map(|value| (history_version, value)));
         }
     }
     Ok(None)
@@ -343,7 +341,9 @@ fn push_visible_scan_item(
     let RangeEntry::Key { key, value, .. } = entry.map_err(to_backend_error)? else {
         return Ok(false);
     };
-    if let Some((commit, visible)) = decode_visible_value(family, &key, &value, version, history)? {
+    if let Some((commit, visible)) =
+        decode_visible_value(family, &key, Some(&value), version, history)?
+    {
         out.push(ScanItem {
             key,
             value: Value(visible),
@@ -356,34 +356,67 @@ fn push_visible_scan_item(
 fn encode_current_value(version: Version, value: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(VALUE_HEADER_LEN + value.len());
     out.extend_from_slice(&version.get().to_be_bytes());
+    out.push(VALUE_KIND_LIVE);
     out.extend_from_slice(value);
     out
 }
 
-fn decode_current_value(encoded: &[u8]) -> Result<(Version, Vec<u8>), MetadataError> {
+fn encode_tombstone_value(version: Version) -> Vec<u8> {
+    let mut out = Vec::with_capacity(VALUE_HEADER_LEN);
+    out.extend_from_slice(&version.get().to_be_bytes());
+    out.push(VALUE_KIND_TOMBSTONE);
+    out
+}
+
+fn decode_current_value(encoded: &[u8]) -> Result<(Version, Option<Vec<u8>>), MetadataError> {
     if encoded.len() < VALUE_HEADER_LEN {
         return Err(MetadataError::Backend(
             "encoded current metadata value is truncated".to_owned(),
         ));
     }
     let raw = u64::from_be_bytes(
-        encoded[..VALUE_HEADER_LEN]
+        encoded[..8]
             .try_into()
             .expect("current value header has fixed width"),
     );
     let version = Version::new(raw)?;
-    Ok((version, encoded[VALUE_HEADER_LEN..].to_vec()))
+    match encoded[8] {
+        VALUE_KIND_LIVE => Ok((version, Some(encoded[VALUE_HEADER_LEN..].to_vec()))),
+        VALUE_KIND_TOMBSTONE => {
+            if encoded.len() != VALUE_HEADER_LEN {
+                return Err(MetadataError::Backend(
+                    "encoded tombstone metadata value has trailing bytes".to_owned(),
+                ));
+            }
+            Ok((version, None))
+        }
+        tag => Err(MetadataError::Backend(format!(
+            "encoded metadata value has unknown kind {tag}"
+        ))),
+    }
 }
 
 fn prefix_has_key(tree: &Tree, prefix: &[u8]) -> Result<bool, MetadataError> {
     for entry in tree.range().prefix(prefix) {
         match entry {
-            Ok(RangeEntry::Key { .. }) | Ok(RangeEntry::CommonPrefix(_)) => return Ok(true),
+            Ok(RangeEntry::Key { value, .. }) => {
+                if decode_current_value(&value)?.1.is_some() {
+                    return Ok(true);
+                }
+            }
+            Ok(RangeEntry::CommonPrefix(_)) => return Ok(true),
             Ok(_) => continue,
             Err(err) => return Err(to_backend_error(err)),
         }
     }
     Ok(false)
+}
+
+fn current_value_is_live(tree: &Tree, key: &[u8]) -> Result<bool, MetadataError> {
+    let Some(value) = tree.get(key).map_err(to_backend_error)? else {
+        return Ok(false);
+    };
+    decode_current_value(&value).map(|(_, value)| value.is_some())
 }
 
 fn watch_event_key(base: &[u8], version: Version, ordinal: usize) -> Vec<u8> {
@@ -499,6 +532,59 @@ mod tests {
                     b"dir/a",
                     version(3),
                     ReadPurpose::UserStrong
+                )
+                .unwrap(),
+            Some(Value(b"value-a".to_vec()))
+        );
+    }
+
+    #[test]
+    fn deleted_key_is_hidden_latest_but_visible_to_old_version() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+        store
+            .commit_metadata(MetadataCommand {
+                request_id: b"req-delete".to_vec(),
+                kind: CommandKind::RemoveFile,
+                read_version: version(2),
+                commit_version: version(3),
+                primary_family: RecordFamily::Dentry,
+                primary_key: b"dir/a".to_vec(),
+                predicates: vec![PredicateRef {
+                    family: RecordFamily::Dentry,
+                    key: b"dir/a".to_vec(),
+                    predicate: Predicate::Exists,
+                }],
+                mutations: vec![Mutation {
+                    family: RecordFamily::Dentry,
+                    key: b"dir/a".to_vec(),
+                    op: MutationOp::Delete,
+                    value: None,
+                }],
+                watch: Vec::new(),
+            })
+            .unwrap();
+
+        assert_eq!(
+            store
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(3),
+                    ReadPurpose::UserStrong
+                )
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(2),
+                    ReadPurpose::Snapshot
                 )
                 .unwrap(),
             Some(Value(b"value-a".to_vec()))
