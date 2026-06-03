@@ -84,10 +84,14 @@ where
     O: ObjectStore,
 {
     pub fn new(service: NoKvFs<M, O>, options: FuseOptions) -> Self {
+        Self::from_shared(Arc::new(service), options)
+    }
+
+    pub fn from_shared(service: Arc<NoKvFs<M, O>>, options: FuseOptions) -> Self {
         let mut parents = HashMap::new();
         parents.insert(options.view.root().get(), options.view.root().get());
         Self {
-            service: Arc::new(service),
+            service,
             options,
             parents: RwLock::new(parents),
             names: RwLock::new(HashMap::new()),
@@ -379,6 +383,18 @@ where
     M: MetadataStore + Send + Sync + 'static,
     O: ObjectStore + Send + Sync + 'static,
 {
+    mount_shared(Arc::new(service), mountpoint, options)
+}
+
+pub fn mount_shared<M, O>(
+    service: Arc<NoKvFs<M, O>>,
+    mountpoint: impl AsRef<Path>,
+    options: FuseOptions,
+) -> io::Result<()>
+where
+    M: MetadataStore + Send + Sync + 'static,
+    O: ObjectStore + Send + Sync + 'static,
+{
     let mut config = Config::default();
     let mut mount_options = vec![MountOption::FSName(options.fs_name.clone())];
     if options.view.is_read_only() {
@@ -398,7 +414,7 @@ where
     }
     config.mount_options = mount_options;
     config.n_threads = Some(options.threads);
-    fuser::mount2(NoKvFuse::new(service, options), mountpoint, &config)
+    fuser::mount2(NoKvFuse::from_shared(service, options), mountpoint, &config)
 }
 
 impl FuseView {

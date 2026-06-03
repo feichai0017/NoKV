@@ -6,6 +6,7 @@
 //! client path ergonomics.
 
 pub mod command;
+pub mod gc;
 pub mod holtstore;
 pub mod layout;
 pub mod service;
@@ -14,7 +15,9 @@ pub use command::{
     CommandKind, CommitResult, MetadataCommand, MetadataError, MetadataStore, Mutation, MutationOp,
     Predicate, PredicateRef, ReadPurpose, ScanItem, ScanRequest, Value, Version, WatchProjection,
 };
+pub use gc::{ObjectGcOptions, ObjectGcWorker, ObjectGcWorkerState};
 pub use holtstore::HoltMetadataStore;
 pub use service::{
-    DentryWithAttr, MetadError, NoKvFs, ObjectTransferStats, PublishArtifact, RenameReplaceResult,
+    DentryWithAttr, MetadError, NoKvFs, ObjectTransferStats, PendingObjectCleanupOutcome,
+    PublishArtifact, RenameReplaceResult,
 };

@@ -196,7 +196,7 @@ v0 local:
   CLI
   close-to-open FUSE reads and buffered writes
   artifact publish
-  durable object GC queue and explicit cleanup API
+  durable object GC queue, explicit cleanup API, and background worker
   durable snapshot pin and snapshot-version artifact read
   remove/rmdir/rename-replace
   durable typed watch replay
@@ -206,7 +206,6 @@ v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
   long-running server
   Python/fsspec
-  background object GC worker
   FUSE and SDK watch consumer integration
 
 v2 cluster:

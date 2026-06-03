@@ -6,10 +6,12 @@ use std::fmt;
 use std::fs;
 use std::io::{self, Write};
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
 use nokvfs_meta::holtstore::HoltMetadataStore;
-use nokvfs_meta::NoKvFs;
+use nokvfs_meta::{NoKvFs, ObjectGcOptions, ObjectGcWorker};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_types::{FileType, MountId};
 
@@ -26,6 +28,8 @@ struct Config {
     mount: MountId,
     uid: u32,
     gid: u32,
+    object_gc_interval: Duration,
+    object_gc_limit: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -234,11 +238,19 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             );
         }
         Command::Mount { mountpoint } => {
-            let service = open_service(&config)?;
+            let service = Arc::new(open_service(&config)?);
             service
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
-            nokvfs_fuse::mount(service, mountpoint, nokvfs_fuse::FuseOptions::default())
+            let _gc_worker = ObjectGcWorker::spawn(
+                Arc::clone(&service),
+                ObjectGcOptions {
+                    interval: config.object_gc_interval,
+                    limit: config.object_gc_limit,
+                    run_immediately: false,
+                },
+            );
+            nokvfs_fuse::mount_shared(service, mountpoint, nokvfs_fuse::FuseOptions::default())
                 .map_err(from_io)?;
         }
         Command::MountSnapshot {
@@ -327,6 +339,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut mount = MountId::new(1).expect("default mount id is non-zero");
     let mut uid = DEFAULT_UID;
     let mut gid = DEFAULT_GID;
+    let mut object_gc_interval = ObjectGcOptions::default().interval;
+    let mut object_gc_limit = ObjectGcOptions::default().limit;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -389,6 +403,25 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 index += 1;
                 gid = parse_u32(value(&args, index, "--gid")?, "gid")?;
             }
+            "--object-gc-interval-ms" => {
+                index += 1;
+                let interval_ms = parse_u64(
+                    value(&args, index, "--object-gc-interval-ms")?,
+                    "object_gc_interval_ms",
+                )?;
+                if interval_ms == 0 {
+                    return Err(CliError::InvalidNumber {
+                        field: "object_gc_interval_ms",
+                        value: interval_ms.to_string(),
+                    });
+                }
+                object_gc_interval = Duration::from_millis(interval_ms);
+            }
+            "--object-gc-limit" => {
+                index += 1;
+                object_gc_limit =
+                    parse_usize(value(&args, index, "--object-gc-limit")?, "object_gc_limit")?;
+            }
             "--help" | "-h" => {
                 return Ok((
                     Config {
@@ -397,6 +430,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         mount,
                         uid,
                         gid,
+                        object_gc_interval,
+                        object_gc_limit,
                     },
                     Command::Help,
                 ));
@@ -417,6 +452,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             mount,
             uid,
             gid,
+            object_gc_interval,
+            object_gc_limit,
         },
         command,
     ))
@@ -642,12 +679,16 @@ Object backends:\n\
   --s3-access-key-id KEY\n\
   --s3-secret-access-key SECRET\n\
   --s3-root PREFIX\n\
+  --object-gc-interval-ms MS       Background object GC interval for live mount\n\
+  --object-gc-limit LIMIT          Max queued object records per GC iteration\n\
 \n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\
   --object-backend rustfs\n\
   --s3-bucket nokv\n\
   --s3-endpoint http://127.0.0.1:9000\n\
+  --object-gc-interval-ms 30000\n\
+  --object-gc-limit 1024\n\
   --mount 1"
     )
 }
@@ -698,13 +739,35 @@ mod tests {
             s("rustfs"),
             s("--mount"),
             s("7"),
+            s("--object-gc-interval-ms"),
+            s("50"),
+            s("--object-gc-limit"),
+            s("9"),
             s("mkdir"),
             s("/runs"),
         ])
         .unwrap();
         assert_eq!(config.meta, PathBuf::from("/tmp/meta"));
         assert_eq!(config.mount.get(), 7);
+        assert_eq!(config.object_gc_interval, Duration::from_millis(50));
+        assert_eq!(config.object_gc_limit, 9);
         assert_eq!(command, Command::Mkdir { path: s("/runs") });
+    }
+
+    #[test]
+    fn parse_rejects_zero_object_gc_interval() {
+        assert!(matches!(
+            parse(vec![
+                s("--object-gc-interval-ms"),
+                s("0"),
+                s("mount"),
+                s("/tmp/nokv-fs")
+            ]),
+            Err(CliError::InvalidNumber {
+                field: "object_gc_interval_ms",
+                ..
+            })
+        ));
     }
 
     #[test]

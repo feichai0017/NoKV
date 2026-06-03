@@ -66,6 +66,7 @@ Implemented today:
   publish paths;
 - durable pending-object GC queue and explicit cleanup API for removed or
   replaced artifact bodies;
+- service-level background object GC worker, enabled by the live FUSE mount;
 - durable snapshot pins, snapshot-version artifact reads, and snapshot-protected
   object cleanup;
 - read-only FUSE snapshot mounts rooted at a snapshot subtree;
@@ -86,8 +87,7 @@ Not implemented yet:
 
 - long-running metad server;
 - full POSIX random-write/truncate semantics;
-- FUSE watch invalidation, history GC worker, and background
-  object GC worker;
+- FUSE watch invalidation and history GC worker;
 - distributed metadata shards.
 
 ## Quick Check
@@ -134,6 +134,9 @@ To mount the current FUSE frontend:
 mkdir -p /tmp/nokv-fs-mount
 cargo run -p nokvfs-cli --bin nokv-fs -- mount /tmp/nokv-fs-mount
 ```
+
+The live mount starts a background object GC worker. Use
+`--object-gc-interval-ms` and `--object-gc-limit` before `mount` to tune it.
 
 To mount a read-only snapshot view:
 
