@@ -7,4 +7,5 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+rmp-serde.workspace = true
 serde.workspace = true

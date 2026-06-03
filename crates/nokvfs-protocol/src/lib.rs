@@ -4,7 +4,11 @@
 //! server and remote clients. It does not execute metadata semantics, know Holt
 //! layout, own object-store behavior, or implement path resolution.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
+
+const BINARY_CODEC_LIMIT: u64 = 16 * 1024 * 1024;
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case")]
@@ -243,4 +247,89 @@ pub struct WireSnapshotPin {
     pub root: u64,
     pub read_version: u64,
     pub created_version: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MetadataProtocolError(String);
+
+pub fn encode_request(request: &MetadataRpcRequest) -> Result<Vec<u8>, MetadataProtocolError> {
+    serialize(request)
+}
+
+pub fn decode_request(body: &[u8]) -> Result<MetadataRpcRequest, MetadataProtocolError> {
+    deserialize(body)
+}
+
+pub fn encode_envelope(envelope: &MetadataRpcEnvelope) -> Result<Vec<u8>, MetadataProtocolError> {
+    serialize(envelope)
+}
+
+pub fn decode_envelope(body: &[u8]) -> Result<MetadataRpcEnvelope, MetadataProtocolError> {
+    deserialize(body)
+}
+
+fn serialize<T: Serialize>(value: &T) -> Result<Vec<u8>, MetadataProtocolError> {
+    let mut out = Vec::new();
+    value
+        .serialize(&mut rmp_serde::Serializer::new(&mut out).with_struct_map())
+        .map_err(|err| MetadataProtocolError(err.to_string()))?;
+    Ok(out)
+}
+
+fn deserialize<'a, T: Deserialize<'a>>(body: &'a [u8]) -> Result<T, MetadataProtocolError> {
+    if body.len() as u64 > BINARY_CODEC_LIMIT {
+        return Err(MetadataProtocolError(format!(
+            "metadata binary rpc body exceeds {BINARY_CODEC_LIMIT} bytes"
+        )));
+    }
+    rmp_serde::from_slice(body).map_err(|err| MetadataProtocolError(err.to_string()))
+}
+
+impl fmt::Display for MetadataProtocolError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for MetadataProtocolError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn binary_codec_round_trips_metadata_request() {
+        let request = MetadataRpcRequest::CreateFilePath {
+            path: "/runs/a.bin".to_owned(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        };
+        let encoded = encode_request(&request).unwrap();
+        assert!(encoded.len() < 64);
+        assert_eq!(decode_request(&encoded).unwrap(), request);
+    }
+
+    #[test]
+    fn binary_codec_round_trips_metadata_envelope() {
+        let envelope = MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::InodeAttr {
+                attr: Some(WireInodeAttr {
+                    inode: 7,
+                    file_type: "file".to_owned(),
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                    size: 16,
+                    generation: 2,
+                    mtime_ms: 2,
+                    ctime_ms: 2,
+                }),
+            }),
+            error: None,
+        };
+        let encoded = encode_envelope(&envelope).unwrap();
+        assert_eq!(decode_envelope(&encoded).unwrap(), envelope);
+    }
 }

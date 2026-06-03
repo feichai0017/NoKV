@@ -11,9 +11,9 @@ use nokvfs_object::{
     DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_protocol::{
-    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBlockDescriptor,
-    WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryRecord, WireDentryWithAttr,
-    WireInodeAttr, WireObjectReadBlock, WirePreparedArtifact, WireSnapshotPin,
+    decode_envelope, encode_request, MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult,
+    WireBlockDescriptor, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryRecord,
+    WireDentryWithAttr, WireInodeAttr, WireObjectReadBlock, WirePreparedArtifact, WireSnapshotPin,
 };
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
@@ -25,7 +25,7 @@ use crate::{display_name, parse_absolute_path, ArtifactMetadata, ClientError};
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BATCH_RPC_REQUESTS: usize = 512;
-const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC1\n";
+const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC2\n";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RemoteMetadataClientOptions {
@@ -589,13 +589,13 @@ impl RemoteMetadataClient {
 
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
         let body =
-            serde_json::to_vec(&request).map_err(|err| ClientError::Protocol(err.to_string()))?;
+            encode_request(&request).map_err(|err| ClientError::Protocol(err.to_string()))?;
         let mut stream = self.take_connection()?;
         write_frame(&mut stream, &body)?;
         let body = read_frame(&mut stream)?;
         self.return_connection(stream);
-        let envelope: MetadataRpcEnvelope =
-            serde_json::from_slice(&body).map_err(|err| ClientError::Protocol(err.to_string()))?;
+        let envelope =
+            decode_envelope(&body).map_err(|err| ClientError::Protocol(err.to_string()))?;
         envelope_result(envelope)
     }
 
@@ -894,14 +894,15 @@ fn unexpected_result(result: MetadataRpcResult) -> ClientError {
 mod tests {
     use super::*;
     use nokvfs_object::{MemoryObjectStore, ObjectKey};
+    use nokvfs_protocol::{decode_request, encode_envelope};
     use std::net::TcpListener;
     use std::thread;
 
     fn serve_one(body: &'static str) -> SocketAddr {
-        serve_many(vec![body])
+        serve_many(vec![response_body(body)])
     }
 
-    fn serve_many(bodies: Vec<&'static str>) -> SocketAddr {
+    fn serve_many(bodies: Vec<Vec<u8>>) -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -911,12 +912,16 @@ mod tests {
             assert_eq!(&magic, FRAMED_RPC_MAGIC);
             for body in bodies {
                 let request = read_frame(&mut stream).unwrap();
-                let request = String::from_utf8_lossy(&request);
-                assert!(request.contains(r#""op":"#));
-                write_frame(&mut stream, body.as_bytes()).unwrap();
+                decode_request(&request).expect("framed request is binary metadata rpc");
+                write_frame(&mut stream, &body).unwrap();
             }
         });
         addr
+    }
+
+    fn response_body(json: &str) -> Vec<u8> {
+        let envelope: MetadataRpcEnvelope = serde_json::from_str(json).unwrap();
+        encode_envelope(&envelope).unwrap()
     }
 
     fn artifact_metadata(manifest_id: &str) -> ArtifactMetadata {
@@ -965,15 +970,27 @@ mod tests {
             stream.read_exact(&mut magic).unwrap();
             assert_eq!(&magic, FRAMED_RPC_MAGIC);
             let request = read_frame(&mut stream).unwrap();
-            let request = String::from_utf8_lossy(&request);
-            assert!(request.contains(r#""op":"batch""#));
-            assert!(request.contains(r#""path":"/runs/a.bin""#));
-            assert!(request.contains(r#""path":"/runs/b.bin""#));
-            write_frame(
-                &mut stream,
-                br#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"a.bin","name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"b.bin","name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
-            )
-            .unwrap();
+            let request = decode_request(&request).unwrap();
+            match request {
+                MetadataRpcRequest::Batch { requests } => {
+                    assert_eq!(requests.len(), 2);
+                    assert!(matches!(
+                        &requests[0],
+                        MetadataRpcRequest::CreateFilePath { path, .. }
+                            if path == "/runs/a.bin"
+                    ));
+                    assert!(matches!(
+                        &requests[1],
+                        MetadataRpcRequest::CreateFilePath { path, .. }
+                            if path == "/runs/b.bin"
+                    ));
+                }
+                other => panic!("unexpected request: {other:?}"),
+            }
+            let response = response_body(
+                r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"a.bin","name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"b.bin","name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
+            );
+            write_frame(&mut stream, &response).unwrap();
         });
         let client = RemoteMetadataClient::connect(addr);
         let paths = vec!["/runs/a.bin".to_owned(), "/runs/b.bin".to_owned()];
@@ -1004,8 +1021,12 @@ mod tests {
             .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello remote")
             .unwrap();
         let addr = serve_many(vec![
-            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_utf8":"artifact.bin","name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
-            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+            response_body(
+                r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_utf8":"artifact.bin","name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
+            ),
+            response_body(
+                r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+            ),
         ]);
         let client = RemoteNoKvFsClient::connect(addr, store);
         let bytes = client.read("/artifact.bin", 6, 6).unwrap();
@@ -1016,8 +1037,12 @@ mod tests {
     fn remote_file_client_uploads_blocks_then_publishes_metadata() {
         let store = MemoryObjectStore::new();
         let addr = serve_many(vec![
-            r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
-            r#"{"ok":true,"result":{"type":"rename_replace","entry":{"dentry":{"parent":1,"name_utf8":"artifact.bin","name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":11,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":11,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"replaced":null}}"#,
+            response_body(
+                r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
+            ),
+            response_body(
+                r#"{"ok":true,"result":{"type":"rename_replace","entry":{"dentry":{"parent":1,"name_utf8":"artifact.bin","name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":11,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":11,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"replaced":null}}"#,
+            ),
         ]);
         let client = RemoteNoKvFsClient::connect(addr, store.clone());
         let entry = client
@@ -1041,8 +1066,10 @@ mod tests {
     fn remote_file_client_cleans_staged_blocks_after_publish_failure() {
         let store = MemoryObjectStore::new();
         let addr = serve_many(vec![
-            r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
-            r#"{"ok":false,"error":"metadata command predicate failed"}"#,
+            response_body(
+                r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
+            ),
+            response_body(r#"{"ok":false,"error":"metadata command predicate failed"}"#),
         ]);
         let client = RemoteNoKvFsClient::connect(addr, store.clone());
         let err = client

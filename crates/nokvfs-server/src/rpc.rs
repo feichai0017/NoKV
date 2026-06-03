@@ -4,9 +4,9 @@ use std::net::TcpStream;
 use nokvfs_meta::{DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
-    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBlockDescriptor,
-    WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryRecord, WireDentryWithAttr,
-    WireInodeAttr, WireObjectReadBlock, WirePreparedArtifact, WireSnapshotPin,
+    decode_request, encode_envelope, MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult,
+    WireBlockDescriptor, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryRecord,
+    WireDentryWithAttr, WireInodeAttr, WireObjectReadBlock, WirePreparedArtifact, WireSnapshotPin,
 };
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
@@ -15,7 +15,7 @@ use nokvfs_types::{
 
 use crate::server::{Server, ServerError};
 
-pub(crate) const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC1\n";
+pub(crate) const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC2\n";
 const MAX_FRAMED_RPC_BYTES: usize = 16 * 1024 * 1024;
 
 pub(crate) fn handle_rpc(server: &Server, body: &[u8]) -> String {
@@ -41,6 +41,34 @@ pub(crate) fn handle_rpc(server: &Server, body: &[u8]) -> String {
     serde_json::to_string(&envelope).expect("metadata rpc envelope is serializable") + "\n"
 }
 
+fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerError> {
+    let envelope = match decode_request(body) {
+        Ok(request) => match execute(server, request) {
+            Ok(result) => MetadataRpcEnvelope {
+                ok: true,
+                result: Some(result),
+                error: None,
+            },
+            Err(err) => MetadataRpcEnvelope {
+                ok: false,
+                result: None,
+                error: Some(err.to_string()),
+            },
+        },
+        Err(err) => MetadataRpcEnvelope {
+            ok: false,
+            result: None,
+            error: Some(format!("invalid metadata binary rpc request: {err}")),
+        },
+    };
+    encode_envelope(&envelope).map_err(|err| {
+        ServerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("metadata binary rpc response encode failed: {err}"),
+        ))
+    })
+}
+
 pub(crate) fn handle_framed_stream(
     server: &Server,
     mut stream: TcpStream,
@@ -60,8 +88,8 @@ pub(crate) fn handle_framed_stream(
         let Some(request) = read_frame(&mut stream)? else {
             return Ok(());
         };
-        let response = handle_rpc(server, &request);
-        write_frame(&mut stream, response.as_bytes())?;
+        let response = handle_binary_rpc(server, &request)?;
+        write_frame(&mut stream, &response)?;
     }
 }
 
