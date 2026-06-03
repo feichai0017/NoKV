@@ -62,6 +62,8 @@ Implemented today:
 - in-memory object backend for package tests;
 - metadata commands with predicates, mutations, family trees, command dedupe,
   and dentry projection;
+- staged object references and explicit cleanup helpers for failed artifact
+  publish paths;
 - basic root bootstrap, directory create, artifact publish, lookup-plus,
   readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
   service;

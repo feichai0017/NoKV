@@ -428,6 +428,7 @@ fn errno(err: MetadError) -> Errno {
         MetadError::MissingBodyDescriptor
         | MetadError::Metadata(_)
         | MetadError::Object(_)
+        | MetadError::PublishArtifactFailed { .. }
         | MetadError::Codec(_)
         | MetadError::BodySizeMismatch { .. }
         | MetadError::AllocatorExhausted => Errno::EIO,

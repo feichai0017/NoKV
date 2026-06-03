@@ -84,6 +84,24 @@ pub struct StoredBlock {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StagedObject {
+    pub key: ObjectKey,
+    pub size: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct StagedObjectSet {
+    objects: Vec<StagedObject>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObjectCleanupOutcome {
+    pub attempted: usize,
+    pub deleted: usize,
+    pub missing: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ObjectReadBlock {
     pub object_key: String,
     pub object_offset: u64,
@@ -143,6 +161,10 @@ pub enum ObjectError {
     MissingRegion,
     InvalidChunkLayout,
     Backend(String),
+    StagedWriteFailed {
+        source: String,
+        staged: StagedObjectSet,
+    },
 }
 
 impl ObjectKey {
@@ -185,6 +207,39 @@ impl ChunkWriteOptions {
     }
 }
 
+impl ChunkedWrite {
+    pub fn staged_objects(&self) -> Result<StagedObjectSet, ObjectError> {
+        let mut objects = Vec::new();
+        for chunk in &self.chunks {
+            for block in &chunk.blocks {
+                objects.push(StagedObject {
+                    key: ObjectKey::new(block.object_key.clone())?,
+                    size: block.len,
+                });
+            }
+        }
+        Ok(StagedObjectSet::new(objects))
+    }
+}
+
+impl StagedObjectSet {
+    pub fn new(objects: Vec<StagedObject>) -> Self {
+        Self { objects }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.objects.is_empty()
+    }
+
+    pub fn len(&self) -> usize {
+        self.objects.len()
+    }
+
+    pub fn objects(&self) -> &[StagedObject] {
+        &self.objects
+    }
+}
+
 impl MemoryBlockCache {
     pub fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ObjectError> {
         Ok(self
@@ -212,6 +267,7 @@ pub fn put_chunked_object<O: ObjectStore>(
     options.validate()?;
     let mut chunks = Vec::new();
     let mut object_puts = 0_usize;
+    let mut staged = Vec::new();
     let mut offset = 0_usize;
     while offset < bytes.len() {
         let chunk_index = (offset as u64) / options.chunk_size;
@@ -227,8 +283,17 @@ pub fn put_chunked_object<O: ObjectStore>(
             let object_key = block_object_key(&options, chunk_index, block_index);
             let key = ObjectKey::new(object_key.clone())?;
             let block = &bytes[block_offset..block_end];
-            store.put(&key, block)?;
+            let info = store
+                .put(&key, block)
+                .map_err(|err| ObjectError::StagedWriteFailed {
+                    source: err.to_string(),
+                    staged: StagedObjectSet::new(staged.clone()),
+                })?;
             object_puts += 1;
+            staged.push(StagedObject {
+                key: info.key,
+                size: info.size,
+            });
             blocks.push(StoredBlock {
                 object_key,
                 logical_offset: block_offset as u64,
@@ -255,6 +320,25 @@ pub fn put_chunked_object<O: ObjectStore>(
         chunks,
         object_puts,
     })
+}
+
+pub fn delete_staged_objects<O: ObjectStore>(
+    store: &O,
+    staged: &StagedObjectSet,
+) -> Result<ObjectCleanupOutcome, ObjectError> {
+    let mut outcome = ObjectCleanupOutcome {
+        attempted: staged.len(),
+        deleted: 0,
+        missing: 0,
+    };
+    for object in staged.objects() {
+        if store.delete(&object.key)? {
+            outcome.deleted += 1;
+        } else {
+            outcome.missing += 1;
+        }
+    }
+    Ok(outcome)
 }
 
 pub fn read_object_blocks<O: ObjectStore>(
@@ -595,6 +679,11 @@ impl fmt::Display for ObjectError {
             Self::MissingRegion => write!(f, "S3 object store region is required"),
             Self::InvalidChunkLayout => write!(f, "invalid object chunk layout"),
             Self::Backend(err) => write!(f, "object store backend error: {err}"),
+            Self::StagedWriteFailed { source, staged } => write!(
+                f,
+                "object write failed after staging {} objects: {source}",
+                staged.len()
+            ),
         }
     }
 }
@@ -662,6 +751,8 @@ mod tests {
         assert_eq!(written.chunks.len(), 2);
         assert_eq!(written.chunks[0].blocks.len(), 2);
         assert_eq!(written.chunks[0].blocks[0].object_key, "blocks/1/2/3/0/0");
+        let staged = written.staged_objects().unwrap();
+        assert_eq!(staged.len(), 4);
 
         let blocks = vec![
             ObjectReadBlock {
@@ -681,6 +772,15 @@ mod tests {
         assert_eq!(read.bytes, b"fghij");
         assert_eq!(read.object_gets, 2);
         assert_eq!(read.cache_hits, 0);
+
+        let cleanup = delete_staged_objects(&store, &staged).unwrap();
+        assert_eq!(cleanup.attempted, 4);
+        assert_eq!(cleanup.deleted, 4);
+        assert_eq!(cleanup.missing, 0);
+        let cleanup = delete_staged_objects(&store, &staged).unwrap();
+        assert_eq!(cleanup.attempted, 4);
+        assert_eq!(cleanup.deleted, 0);
+        assert_eq!(cleanup.missing, 4);
     }
 
     #[test]
@@ -701,6 +801,75 @@ mod tests {
         assert_eq!(first.cache_hits, 0);
         assert_eq!(second.object_gets, 0);
         assert_eq!(second.cache_hits, 1);
+    }
+
+    #[derive(Clone)]
+    struct FailAfterFirstPut {
+        inner: MemoryObjectStore,
+        puts: Arc<Mutex<usize>>,
+    }
+
+    impl FailAfterFirstPut {
+        fn new() -> Self {
+            Self {
+                inner: MemoryObjectStore::new(),
+                puts: Arc::new(Mutex::new(0)),
+            }
+        }
+    }
+
+    impl ObjectStore for FailAfterFirstPut {
+        fn put(&self, key: &ObjectKey, bytes: &[u8]) -> Result<ObjectInfo, ObjectError> {
+            let mut puts = self.puts.lock().unwrap();
+            if *puts >= 1 {
+                return Err(ObjectError::Backend("injected put failure".to_owned()));
+            }
+            *puts += 1;
+            self.inner.put(key, bytes)
+        }
+
+        fn get(&self, key: &ObjectKey, range: Option<ObjectRange>) -> Result<Vec<u8>, ObjectError> {
+            self.inner.get(key, range)
+        }
+
+        fn head(&self, key: &ObjectKey) -> Result<Option<ObjectInfo>, ObjectError> {
+            self.inner.head(key)
+        }
+
+        fn delete(&self, key: &ObjectKey) -> Result<bool, ObjectError> {
+            self.inner.delete(key)
+        }
+    }
+
+    #[test]
+    fn chunked_put_failure_returns_staged_objects_for_cleanup() {
+        let store = FailAfterFirstPut::new();
+        let err = put_chunked_object(
+            &store,
+            b"abcdefgh",
+            ChunkWriteOptions {
+                manifest_id: "artifacts/checkpoint".to_owned(),
+                mount: 1,
+                inode: 2,
+                generation: 3,
+                chunk_size: 8,
+                block_size: 4,
+            },
+        )
+        .unwrap_err();
+        let staged = match err {
+            ObjectError::StagedWriteFailed { source, staged } => {
+                assert!(source.contains("injected put failure"));
+                staged
+            }
+            err => panic!("unexpected object error: {err:?}"),
+        };
+        assert_eq!(staged.len(), 1);
+        assert!(store.head(&staged.objects()[0].key).unwrap().is_some());
+
+        let cleanup = delete_staged_objects(&store, &staged).unwrap();
+        assert_eq!(cleanup.deleted, 1);
+        assert!(store.head(&staged.objects()[0].key).unwrap().is_none());
     }
 
     #[test]

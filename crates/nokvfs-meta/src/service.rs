@@ -20,8 +20,9 @@ use crate::layout::{
     encode_chunk_manifest, encode_dentry_projection, encode_inode_attr, inode_key,
 };
 use nokvfs_object::{
-    put_chunked_object, read_object_blocks, ChunkWriteOptions, MemoryBlockCache, ObjectError,
-    ObjectReadBlock, ObjectStore, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
+    MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectReadBlock, ObjectStore,
+    StagedObjectSet, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
@@ -91,8 +92,15 @@ pub enum MetadError {
     Model(ModelError),
     Metadata(MetadataError),
     Object(ObjectError),
+    PublishArtifactFailed {
+        source: Box<MetadError>,
+        staged: StagedObjectSet,
+    },
     Codec(String),
-    BodySizeMismatch { descriptor: u64, bytes: u64 },
+    BodySizeMismatch {
+        descriptor: u64,
+        bytes: u64,
+    },
     AllocatorExhausted,
     NotFound,
     NotFile,
@@ -176,6 +184,13 @@ where
 
     pub fn block_cache_enabled(&self) -> bool {
         self.block_cache_enabled.load(Ordering::Relaxed)
+    }
+
+    pub fn cleanup_staged_objects(
+        &self,
+        staged: &StagedObjectSet,
+    ) -> Result<ObjectCleanupOutcome, MetadError> {
+        delete_staged_objects(&self.objects, staged).map_err(Into::into)
     }
 
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<InodeAttr, MetadError> {
@@ -265,6 +280,7 @@ where
                 block_size: DEFAULT_BLOCK_SIZE,
             },
         )?;
+        let staged = written.staged_objects()?;
         self.object_puts
             .fetch_add(written.object_puts as u64, Ordering::Relaxed);
         self.manifest_chunks
@@ -319,12 +335,17 @@ where
             ctime_ms: version.get(),
         };
         let projection = projection(request.parent, request.name, attr, Some(body));
-        self.commit_create_projection_with_chunks(
+        if let Err(err) = self.commit_create_projection_with_chunks(
             CommandKind::PublishArtifact,
             &projection,
             &chunks,
             version,
-        )?;
+        ) {
+            return Err(MetadError::PublishArtifactFailed {
+                source: Box::new(err),
+                staged,
+            });
+        }
         Ok(projection.into())
     }
 
@@ -1084,12 +1105,27 @@ impl From<ObjectError> for MetadError {
     }
 }
 
+impl MetadError {
+    pub fn staged_objects(&self) -> Option<&StagedObjectSet> {
+        match self {
+            Self::PublishArtifactFailed { staged, .. } => Some(staged),
+            Self::Object(ObjectError::StagedWriteFailed { staged, .. }) => Some(staged),
+            _ => None,
+        }
+    }
+}
+
 impl fmt::Display for MetadError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Model(err) => write!(f, "model error: {err}"),
             Self::Metadata(err) => write!(f, "metadata error: {err}"),
             Self::Object(err) => write!(f, "object error: {err}"),
+            Self::PublishArtifactFailed { source, staged } => write!(
+                f,
+                "artifact publish failed after staging {} objects: {source}",
+                staged.len()
+            ),
             Self::Codec(err) => write!(f, "codec error: {err}"),
             Self::BodySizeMismatch { descriptor, bytes } => write!(
                 f,
@@ -1442,7 +1478,7 @@ mod tests {
     }
 
     #[test]
-    fn failed_publish_does_not_reuse_reserved_object_identity_after_reopen() {
+    fn failed_publish_returns_staged_objects_for_cleanup_and_does_not_reuse_identity() {
         let dir = tempfile::tempdir().unwrap();
         let objects = MemoryObjectStore::new();
         let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
@@ -1455,10 +1491,32 @@ mod tests {
         let err = service
             .publish_artifact(artifact_request(name.clone(), "duplicate", b"duplicate"))
             .unwrap_err();
-        assert!(matches!(
-            err,
-            MetadError::Metadata(MetadataError::PredicateFailed)
-        ));
+        let staged = match err {
+            MetadError::PublishArtifactFailed { source, staged } => {
+                assert!(matches!(
+                    *source,
+                    MetadError::Metadata(MetadataError::PredicateFailed)
+                ));
+                staged
+            }
+            err => panic!("unexpected publish error: {err:?}"),
+        };
+        assert_eq!(staged.len(), 1);
+        for object in staged.objects() {
+            assert!(objects.head(&object.key).unwrap().is_some());
+        }
+        assert_eq!(
+            service.lookup_plus(InodeId::root(), &name).unwrap(),
+            Some(first.clone())
+        );
+
+        let cleanup = service.cleanup_staged_objects(&staged).unwrap();
+        assert_eq!(cleanup.attempted, staged.len());
+        assert_eq!(cleanup.deleted, staged.len());
+        assert_eq!(cleanup.missing, 0);
+        for object in staged.objects() {
+            assert!(objects.head(&object.key).unwrap().is_none());
+        }
         drop(service);
 
         let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
