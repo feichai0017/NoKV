@@ -17,7 +17,8 @@ checkpoint publish/read paths:
 ```bash
 cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
   --profile smoke \
-  --workload all
+  --workload all \
+  --metadata-mode local
 ```
 
 The default object backend is a local RustFS endpoint at
@@ -28,8 +29,14 @@ workloads.
 The harness prints CSV:
 
 ```text
-workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,object_concurrency,read_repeats,block_cache,checksum,shape,caveat
+workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_mode,object_concurrency,read_repeats,block_cache,checksum,shape,caveat
 ```
+
+`--metadata-mode local` runs the in-process Holt metadata service. It is the
+fast local engine baseline. `--metadata-mode remote` starts a real `metad`
+server and runs the Rust remote SDK against it; object bytes are still read and
+written directly by the client against the configured S3-compatible object
+store. Use remote mode when evaluating the deployable service boundary.
 
 Object-backed workloads can be scaled without editing code:
 
@@ -37,6 +44,7 @@ Object-backed workloads can be scaled without editing code:
 cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
   --profile standard \
   --workload mlperf-dlio \
+  --metadata-mode remote \
   --object-backend rustfs \
   --object-concurrency 8 \
   --checkpoint-bytes 1048576 \
@@ -88,12 +96,12 @@ for CI performance claims.
 
 ## Current Caveats
 
-The current harness runs local Holt metadata and a configured S3-compatible
-object backend. It does not include distributed metadata replication, FUSE
-kernel caching, Python DataLoader overhead, object-store multipart upload, or
-restart recovery.
+The current harness runs either local Holt metadata or a single-node remote
+`metad` process with a configured S3-compatible object backend. It does not
+include distributed metadata replication, FUSE kernel caching, Python
+DataLoader overhead, object-store multipart upload, or restart recovery.
 
 Treat metadata-only numbers as a local engine baseline, and object-backed
-numbers as specific to the configured endpoint. Distributed and training-cluster
-claims need a separate benchmark that reports network, object-store, cache, and
-durability settings.
+numbers as specific to the configured endpoint and metadata mode. Distributed
+and training-cluster claims need a separate benchmark that reports network,
+object-store, cache, and durability settings.

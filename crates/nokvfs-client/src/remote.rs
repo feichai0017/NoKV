@@ -1,6 +1,7 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 use nokvfs_meta::{DentryWithAttr, ObjectTransferStats, RenameReplaceResult};
@@ -22,6 +23,7 @@ use nokvfs_types::{
 use crate::{display_name, is_root_path, parse_absolute_path, ArtifactMetadata, ClientError};
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RemoteMetadataClientOptions {
@@ -31,6 +33,7 @@ pub struct RemoteMetadataClientOptions {
 
 pub struct RemoteMetadataClient {
     options: RemoteMetadataClientOptions,
+    connections: Mutex<Vec<TcpStream>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -300,7 +303,10 @@ fn cleanup_staged_write_error<O: ObjectStore>(
 
 impl RemoteMetadataClient {
     pub fn new(options: RemoteMetadataClientOptions) -> Self {
-        Self { options }
+        Self {
+            options,
+            connections: Mutex::new(Vec::new()),
+        }
     }
 
     pub fn connect(address: SocketAddr) -> Self {
@@ -555,16 +561,9 @@ impl RemoteMetadataClient {
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
         let body =
             serde_json::to_vec(&request).map_err(|err| ClientError::Protocol(err.to_string()))?;
-        let mut stream = TcpStream::connect(self.options.address)
-            .map_err(|err| ClientError::Io(err.to_string()))?;
-        stream
-            .set_read_timeout(Some(self.options.timeout))
-            .map_err(|err| ClientError::Io(err.to_string()))?;
-        stream
-            .set_write_timeout(Some(self.options.timeout))
-            .map_err(|err| ClientError::Io(err.to_string()))?;
+        let mut stream = self.take_connection()?;
         let header = format!(
-            "POST /rpc HTTP/1.1\r\nhost: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
+            "POST /rpc HTTP/1.1\r\nhost: {}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: keep-alive\r\n\r\n",
             self.options.address,
             body.len()
         );
@@ -575,13 +574,10 @@ impl RemoteMetadataClient {
             .write_all(&request)
             .map_err(|err| ClientError::Io(err.to_string()))?;
 
-        let mut response = Vec::new();
-        stream
-            .read_to_end(&mut response)
-            .map_err(|err| ClientError::Io(err.to_string()))?;
-        let body = http_response_body(&response)?;
+        let body = read_http_response_body(&mut stream)?;
+        self.return_connection(stream);
         let envelope: MetadataRpcEnvelope =
-            serde_json::from_slice(body).map_err(|err| ClientError::Protocol(err.to_string()))?;
+            serde_json::from_slice(&body).map_err(|err| ClientError::Protocol(err.to_string()))?;
         if !envelope.ok {
             return Err(ClientError::Remote(
                 envelope
@@ -593,21 +589,101 @@ impl RemoteMetadataClient {
             .result
             .ok_or_else(|| ClientError::Protocol("metadata rpc response missing result".to_owned()))
     }
+
+    fn take_connection(&self) -> Result<TcpStream, ClientError> {
+        if let Some(stream) = self.connections.lock().expect("connection pool").pop() {
+            return Ok(stream);
+        }
+        let stream = TcpStream::connect(self.options.address)
+            .map_err(|err| ClientError::Io(err.to_string()))?;
+        stream
+            .set_read_timeout(Some(self.options.timeout))
+            .map_err(|err| ClientError::Io(err.to_string()))?;
+        stream
+            .set_write_timeout(Some(self.options.timeout))
+            .map_err(|err| ClientError::Io(err.to_string()))?;
+        Ok(stream)
+    }
+
+    fn return_connection(&self, stream: TcpStream) {
+        self.connections
+            .lock()
+            .expect("connection pool")
+            .push(stream);
+    }
 }
 
-fn http_response_body(response: &[u8]) -> Result<&[u8], ClientError> {
-    let header_end = response
-        .windows(4)
-        .position(|window| window == b"\r\n\r\n")
-        .ok_or_else(|| ClientError::Protocol("metadata rpc response missing headers".to_owned()))?;
+fn read_http_response_body(stream: &mut TcpStream) -> Result<Vec<u8>, ClientError> {
+    let mut response = Vec::new();
+    let mut buf = [0_u8; 4096];
+    loop {
+        let read = stream
+            .read(&mut buf)
+            .map_err(|err| ClientError::Io(err.to_string()))?;
+        if read == 0 {
+            return Err(ClientError::Protocol(
+                "metadata rpc response missing headers".to_owned(),
+            ));
+        }
+        response.extend_from_slice(&buf[..read]);
+        if response.len() > MAX_RPC_RESPONSE_BYTES {
+            return Err(ClientError::Protocol(
+                "metadata rpc response exceeds size limit".to_owned(),
+            ));
+        }
+        if let Some((header_end, content_len)) = header_end_and_content_len(&response)? {
+            let body_start = header_end + 4;
+            let expected = body_start.saturating_add(content_len);
+            while response.len() < expected {
+                let read = stream
+                    .read(&mut buf)
+                    .map_err(|err| ClientError::Io(err.to_string()))?;
+                if read == 0 {
+                    return Err(ClientError::Protocol(
+                        "metadata rpc response ended before body".to_owned(),
+                    ));
+                }
+                response.extend_from_slice(&buf[..read]);
+                if response.len() > MAX_RPC_RESPONSE_BYTES {
+                    return Err(ClientError::Protocol(
+                        "metadata rpc response exceeds size limit".to_owned(),
+                    ));
+                }
+            }
+            validate_http_status(&response[..header_end])?;
+            return Ok(response[body_start..expected].to_vec());
+        }
+    }
+}
+
+fn header_end_and_content_len(response: &[u8]) -> Result<Option<(usize, usize)>, ClientError> {
+    let Some(header_end) = response.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return Ok(None);
+    };
     let header = String::from_utf8_lossy(&response[..header_end]);
+    let mut content_len = None;
+    for line in header.lines().skip(1) {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case("content-length") {
+            content_len = Some(value.trim().parse::<usize>().map_err(|err| {
+                ClientError::Protocol(format!("invalid metadata rpc content-length: {err}"))
+            })?);
+        }
+    }
+    Ok(Some((header_end, content_len.unwrap_or(0))))
+}
+
+fn validate_http_status(header: &[u8]) -> Result<(), ClientError> {
+    let header = String::from_utf8_lossy(header);
     let status = header.lines().next().unwrap_or_default();
     if !status.contains(" 200 ") {
         return Err(ClientError::Protocol(format!(
             "metadata rpc returned non-success status {status}"
         )));
     }
-    Ok(&response[header_end + 4..])
+    Ok(())
 }
 
 fn rpc_name(name: &DentryName) -> Result<String, ClientError> {
@@ -828,13 +904,13 @@ mod tests {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
             for body in bodies {
-                let (mut stream, _) = listener.accept().unwrap();
                 let request = read_request(&mut stream);
                 let request = String::from_utf8_lossy(&request);
                 assert!(request.starts_with("POST /rpc HTTP/1.1"));
                 let response = format!(
-                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: keep-alive\r\n\r\n{}",
                     body.len(),
                     body
                 );

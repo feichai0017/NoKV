@@ -19,6 +19,7 @@ pub(crate) struct HttpResponse {
     status: &'static str,
     content_type: &'static str,
     body: String,
+    keep_alive: bool,
 }
 
 pub(crate) fn handle_stream(server: &Server, mut stream: TcpStream) -> Result<(), ServerError> {
@@ -28,9 +29,21 @@ pub(crate) fn handle_stream(server: &Server, mut stream: TcpStream) -> Result<()
     stream
         .set_write_timeout(Some(CONTROL_IO_TIMEOUT))
         .map_err(ServerError::Io)?;
-    let request = read_request(&mut stream)?;
-    let response = handle_request(server, &request);
-    write_response(&mut stream, &response).map_err(ServerError::Io)
+    loop {
+        let request = match read_request(&mut stream) {
+            Ok(request) => request,
+            Err(ServerError::Io(err)) if is_idle_timeout(&err) => return Ok(()),
+            Err(err) => return Err(err),
+        };
+        if request.line.is_empty() && request.body.is_empty() {
+            return Ok(());
+        }
+        let response = handle_request(server, &request);
+        write_response(&mut stream, &response).map_err(ServerError::Io)?;
+        if !response.keep_alive {
+            return Ok(());
+        }
+    }
 }
 
 fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, ServerError> {
@@ -112,7 +125,7 @@ pub(crate) fn handle_parts(server: &Server, line: &str, body: &[u8]) -> HttpResp
         ("GET", "/healthz") => HttpResponse::text("200 OK", "ok\n"),
         ("GET", "/readyz") => HttpResponse::text("200 OK", "ready\n"),
         ("GET", "/stats") => HttpResponse::json("200 OK", server.stats_json()),
-        ("POST", "/rpc") => HttpResponse::json("200 OK", rpc::handle_rpc(server, body)),
+        ("POST", "/rpc") => HttpResponse::json_keep_alive("200 OK", rpc::handle_rpc(server, body)),
         ("GET", "/gc") | ("POST", "/gc") => match server.run_manual_gc() {
             Ok(body) => HttpResponse::json("200 OK", body),
             Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
@@ -130,6 +143,7 @@ impl HttpResponse {
             status,
             content_type: "text/plain; charset=utf-8",
             body: body.into(),
+            keep_alive: false,
         }
     }
 
@@ -138,18 +152,41 @@ impl HttpResponse {
             status,
             content_type: "application/json",
             body: body.into(),
+            keep_alive: false,
+        }
+    }
+
+    fn json_keep_alive(status: &'static str, body: impl Into<String>) -> Self {
+        Self {
+            status,
+            content_type: "application/json",
+            body: body.into(),
+            keep_alive: true,
         }
     }
 }
 
 fn write_response(out: &mut impl Write, response: &HttpResponse) -> io::Result<()> {
+    let connection = if response.keep_alive {
+        "keep-alive"
+    } else {
+        "close"
+    };
     write!(
         out,
-        "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        "HTTP/1.1 {}\r\ncontent-type: {}\r\ncontent-length: {}\r\nconnection: {}\r\n\r\n{}",
         response.status,
         response.content_type,
         response.body.len(),
+        connection,
         response.body
+    )
+}
+
+fn is_idle_timeout(err: &io::Error) -> bool {
+    matches!(
+        err.kind(),
+        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
     )
 }
 
