@@ -7,7 +7,7 @@
 use std::fmt;
 
 use nokvfs_meta::command::MetadataStore;
-use nokvfs_meta::{DentryWithAttr, MetadError, NoKvFs, PublishArtifact};
+use nokvfs_meta::{DentryWithAttr, MetadError, NoKvFs, PublishArtifact, RenameReplaceResult};
 use nokvfs_object::ObjectStore;
 use nokvfs_types::{BodyDescriptor, DentryName, FileType, InodeId};
 
@@ -66,6 +66,19 @@ where
             .map_err(Into::into)
     }
 
+    pub fn create_file(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, ClientError> {
+        let (parent, name) = self.resolve_parent(path)?;
+        self.service
+            .create_file(parent, name, mode, uid, gid)
+            .map_err(Into::into)
+    }
+
     pub fn put_artifact(
         &self,
         path: &str,
@@ -104,6 +117,38 @@ where
     pub fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
         let inode = self.resolve_directory(path)?;
         self.service.read_dir_plus(inode).map_err(Into::into)
+    }
+
+    pub fn remove(&self, path: &str) -> Result<DentryWithAttr, ClientError> {
+        let (parent, name) = self.resolve_parent(path)?;
+        self.service.remove_file(parent, &name).map_err(Into::into)
+    }
+
+    pub fn rmdir(&self, path: &str) -> Result<DentryWithAttr, ClientError> {
+        let (parent, name) = self.resolve_parent(path)?;
+        self.service
+            .remove_empty_dir(parent, &name)
+            .map_err(Into::into)
+    }
+
+    pub fn rename(&self, source: &str, destination: &str) -> Result<DentryWithAttr, ClientError> {
+        let (parent, name) = self.resolve_parent(source)?;
+        let (new_parent, new_name) = self.resolve_parent(destination)?;
+        self.service
+            .rename(parent, &name, new_parent, new_name)
+            .map_err(Into::into)
+    }
+
+    pub fn rename_replace(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> Result<RenameReplaceResult, ClientError> {
+        let (parent, name) = self.resolve_parent(source)?;
+        let (new_parent, new_name) = self.resolve_parent(destination)?;
+        self.service
+            .rename_replace(parent, &name, new_parent, new_name)
+            .map_err(Into::into)
     }
 
     pub fn cat(&self, path: &str) -> Result<Vec<u8>, ClientError> {
@@ -227,6 +272,11 @@ mod tests {
     fn mkdir_put_list_and_cat_by_path() {
         let client = client();
         client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
+        let empty = client
+            .create_file("/runs/empty", 0o644, 1000, 1000)
+            .unwrap();
+        assert_eq!(empty.attr.size, 0);
+        assert_eq!(empty.body, None);
         client.mkdir("/runs/1", 0o755, 1000, 1000).unwrap();
         let published = client
             .put_artifact(
@@ -289,5 +339,74 @@ mod tests {
             )
             .unwrap_err();
         assert!(matches!(err, ClientError::NotFound(name) if name == "missing"));
+    }
+
+    #[test]
+    fn remove_rmdir_and_rename_by_path() {
+        let client = client();
+        client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
+        client.mkdir("/runs/old", 0o755, 1000, 1000).unwrap();
+        let renamed = client.rename("/runs/old", "/runs/new").unwrap();
+        assert_eq!(renamed.dentry.name.as_bytes(), b"new");
+        assert!(client.lookup("/runs/old").unwrap().is_none());
+        assert!(client.lookup("/runs/new").unwrap().is_some());
+
+        let removed_dir = client.rmdir("/runs/new").unwrap();
+        assert_eq!(removed_dir.dentry.name.as_bytes(), b"new");
+
+        client
+            .put_artifact(
+                "/runs/file",
+                b"x".to_vec(),
+                ArtifactMetadata {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:x".to_owned(),
+                    content_type: "text/plain".to_owned(),
+                    object_ref: "runs/file".to_owned(),
+                    generation: 1,
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                },
+            )
+            .unwrap();
+        let removed_file = client.remove("/runs/file").unwrap();
+        assert_eq!(removed_file.body.as_ref().unwrap().object_ref, "runs/file");
+        assert!(client.lookup("/runs/file").unwrap().is_none());
+    }
+
+    #[test]
+    fn rename_replace_by_path_returns_replaced_body() {
+        let client = client();
+        client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
+        for (path, object_ref, body) in [
+            ("/runs/stage", "runs/stage", b"new".to_vec()),
+            ("/runs/final", "runs/final-old", b"old".to_vec()),
+        ] {
+            client
+                .put_artifact(
+                    path,
+                    body,
+                    ArtifactMetadata {
+                        producer: "unit-test".to_owned(),
+                        digest_uri: "sha256:test".to_owned(),
+                        content_type: "application/octet-stream".to_owned(),
+                        object_ref: object_ref.to_owned(),
+                        generation: 1,
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                )
+                .unwrap();
+        }
+
+        let result = client.rename_replace("/runs/stage", "/runs/final").unwrap();
+        assert_eq!(
+            result.replaced.unwrap().body.unwrap().object_ref,
+            "runs/final-old"
+        );
+        assert!(client.lookup("/runs/stage").unwrap().is_none());
+        assert_eq!(client.cat("/runs/final").unwrap(), b"new");
     }
 }

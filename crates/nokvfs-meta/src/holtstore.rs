@@ -8,7 +8,7 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::command::{
-    CommitResult, MetadataCommand, MetadataError, MetadataStore, MutationOp, Predicate,
+    CommitResult, MetadataCommand, MetadataError, MetadataStore, MutationOp, Predicate, ReadItem,
     ReadPurpose, ScanItem, ScanRequest, Value, Version,
 };
 use crate::layout::{history_key, history_prefix};
@@ -85,13 +85,13 @@ impl HoltMetadataStore {
 }
 
 impl MetadataStore for HoltMetadataStore {
-    fn get(
+    fn get_versioned(
         &self,
         family: RecordFamily,
         key: &[u8],
         version: Version,
         _purpose: ReadPurpose,
-    ) -> Result<Option<Value>, MetadataError> {
+    ) -> Result<Option<ReadItem>, MetadataError> {
         read_visible(
             &self.current_tree(family)?,
             family,
@@ -291,12 +291,16 @@ fn read_visible(
     key: &[u8],
     version: Version,
     history: &Tree,
-) -> Result<Option<Value>, MetadataError> {
+) -> Result<Option<ReadItem>, MetadataError> {
     let Some(encoded) = current.get(key).map_err(to_backend_error)? else {
         return Ok(None);
     };
-    decode_visible_value(family, key, &encoded, version, history)
-        .map(|value| value.map(|(_, bytes)| Value(bytes)))
+    decode_visible_value(family, key, &encoded, version, history).map(|value| {
+        value.map(|(version, bytes)| ReadItem {
+            value: Value(bytes),
+            version,
+        })
+    })
 }
 
 fn decode_visible_value(

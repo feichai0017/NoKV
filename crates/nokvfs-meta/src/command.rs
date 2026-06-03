@@ -14,6 +14,12 @@ pub struct Version(u64);
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Value(pub Vec<u8>);
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadItem {
+    pub value: Value,
+    pub version: Version,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ReadPurpose {
     UserStrong,
@@ -119,13 +125,24 @@ pub enum MetadataError {
 }
 
 pub trait MetadataStore {
+    fn get_versioned(
+        &self,
+        family: RecordFamily,
+        key: &[u8],
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Option<ReadItem>, MetadataError>;
+
     fn get(
         &self,
         family: RecordFamily,
         key: &[u8],
         version: Version,
         purpose: ReadPurpose,
-    ) -> Result<Option<Value>, MetadataError>;
+    ) -> Result<Option<Value>, MetadataError> {
+        self.get_versioned(family, key, version, purpose)
+            .map(|item| item.map(|item| item.value))
+    }
 
     fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError>;
 

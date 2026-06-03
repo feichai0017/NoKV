@@ -34,6 +34,10 @@ enum Command {
     PutArtifact { path: String, source: PathBuf },
     Ls { path: String },
     Cat { path: String },
+    Rm { path: String },
+    Rmdir { path: String },
+    Rename { source: String, destination: String },
+    RenameReplace { source: String, destination: String },
     Mount { mountpoint: PathBuf },
     Help,
 }
@@ -131,6 +135,59 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             let client = open_client(&config)?;
             let bytes = client.cat(&path).map_err(from_client)?;
             io::stdout().write_all(&bytes).map_err(from_io)?;
+        }
+        Command::Rm { path } => {
+            let client = open_client(&config)?;
+            let removed = client.remove(&path).map_err(from_client)?;
+            println!(
+                "removed file {} inode={} body={}",
+                path,
+                removed.attr.inode.get(),
+                removed
+                    .body
+                    .as_ref()
+                    .map(|body| body.object_ref.as_str())
+                    .unwrap_or("-")
+            );
+        }
+        Command::Rmdir { path } => {
+            let client = open_client(&config)?;
+            let removed = client.rmdir(&path).map_err(from_client)?;
+            println!("removed dir {} inode={}", path, removed.attr.inode.get());
+        }
+        Command::Rename {
+            source,
+            destination,
+        } => {
+            let client = open_client(&config)?;
+            let renamed = client.rename(&source, &destination).map_err(from_client)?;
+            println!(
+                "renamed {} -> {} inode={}",
+                source,
+                destination,
+                renamed.attr.inode.get()
+            );
+        }
+        Command::RenameReplace {
+            source,
+            destination,
+        } => {
+            let client = open_client(&config)?;
+            let result = client
+                .rename_replace(&source, &destination)
+                .map_err(from_client)?;
+            println!(
+                "renamed {} -> {} inode={} replaced_body={}",
+                source,
+                destination,
+                result.entry.attr.inode.get(),
+                result
+                    .replaced
+                    .as_ref()
+                    .and_then(|entry| entry.body.as_ref())
+                    .map(|body| body.object_ref.as_str())
+                    .unwrap_or("-")
+            );
         }
         Command::Mount { mountpoint } => {
             let service = open_service(&config)?;
@@ -243,6 +300,20 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
         "cat" => exact_args(args, 2).map(|()| Command::Cat {
             path: args[1].clone(),
         }),
+        "rm" => exact_args(args, 2).map(|()| Command::Rm {
+            path: args[1].clone(),
+        }),
+        "rmdir" => exact_args(args, 2).map(|()| Command::Rmdir {
+            path: args[1].clone(),
+        }),
+        "rename" => exact_args(args, 3).map(|()| Command::Rename {
+            source: args[1].clone(),
+            destination: args[2].clone(),
+        }),
+        "rename-replace" => exact_args(args, 3).map(|()| Command::RenameReplace {
+            source: args[1].clone(),
+            destination: args[2].clone(),
+        }),
         "mount" => exact_args(args, 2).map(|()| Command::Mount {
             mountpoint: PathBuf::from(&args[1]),
         }),
@@ -255,8 +326,9 @@ fn exact_args(args: &[String], expected: usize) -> Result<(), CliError> {
     if args.len() < expected {
         return Err(CliError::MissingArgument(
             match args.first().map(String::as_str) {
-                Some("mkdir") | Some("ls") | Some("cat") => "path",
+                Some("mkdir") | Some("ls") | Some("cat") | Some("rm") | Some("rmdir") => "path",
                 Some("put-artifact") => "path and source",
+                Some("rename") | Some("rename-replace") => "source and destination",
                 Some("mount") => "mountpoint",
                 _ => "argument",
             },
@@ -324,6 +396,10 @@ Usage:\n\
   nokv-fs [--meta PATH] [--objects PATH] put-artifact PATH SOURCE\n\
   nokv-fs [--meta PATH] [--objects PATH] ls PATH\n\
   nokv-fs [--meta PATH] [--objects PATH] cat PATH\n\
+  nokv-fs [--meta PATH] [--objects PATH] rm PATH\n\
+  nokv-fs [--meta PATH] [--objects PATH] rmdir PATH\n\
+  nokv-fs [--meta PATH] [--objects PATH] rename SOURCE DESTINATION\n\
+  nokv-fs [--meta PATH] [--objects PATH] rename-replace SOURCE DESTINATION\n\
   nokv-fs [--meta PATH] [--objects PATH] mount MOUNTPOINT\n\
 \n\
 Defaults:\n\
@@ -406,6 +482,34 @@ mod tests {
             command,
             Command::Mount {
                 mountpoint: PathBuf::from("/tmp/nokv-fs")
+            }
+        );
+    }
+
+    #[test]
+    fn parse_mutation_commands() {
+        assert_eq!(
+            parse(vec![s("rm"), s("/runs/a")]).unwrap().1,
+            Command::Rm { path: s("/runs/a") }
+        );
+        assert_eq!(
+            parse(vec![s("rmdir"), s("/runs")]).unwrap().1,
+            Command::Rmdir { path: s("/runs") }
+        );
+        assert_eq!(
+            parse(vec![s("rename"), s("/a"), s("/b")]).unwrap().1,
+            Command::Rename {
+                source: s("/a"),
+                destination: s("/b")
+            }
+        );
+        assert_eq!(
+            parse(vec![s("rename-replace"), s("/stage"), s("/final")])
+                .unwrap()
+                .1,
+            Command::RenameReplace {
+                source: s("/stage"),
+                destination: s("/final")
             }
         );
     }

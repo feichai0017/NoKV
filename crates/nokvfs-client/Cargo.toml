@@ -16,5 +16,9 @@ nokvfs-types.workspace = true
 name = "nokv-fs"
 path = "src/bin/nokv-fs.rs"
 
+[[bin]]
+name = "nokv-fs-bench"
+path = "src/bin/nokv-fs-bench.rs"
+
 [dev-dependencies]
 tempfile.workspace = true

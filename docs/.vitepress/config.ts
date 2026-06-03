@@ -69,6 +69,7 @@ export default withMermaid(
             { text: 'Architecture', link: '/architecture' },
             { text: 'Metadata Schema', link: '/metadata-schema' },
             { text: 'Object Layout', link: '/object-layout' },
+            { text: 'Benchmarks', link: '/benchmarks' },
           ],
         },
         {
@@ -92,6 +93,7 @@ export default withMermaid(
               { text: 'Product Design', link: '/product-design' },
               { text: 'Metadata Schema', link: '/metadata-schema' },
               { text: 'Object Layout', link: '/object-layout' },
+              { text: 'Benchmarks', link: '/benchmarks' },
               { text: 'AI Training', link: '/ai-training' },
               { text: 'Checkpointing', link: '/checkpointing' },
             ],

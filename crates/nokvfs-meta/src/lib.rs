@@ -15,4 +15,4 @@ pub use command::{
     Predicate, PredicateRef, ReadPurpose, ScanItem, ScanRequest, Value, Version, WatchProjection,
 };
 pub use holtstore::HoltMetadataStore;
-pub use service::{DentryWithAttr, MetadError, NoKvFs, PublishArtifact};
+pub use service::{DentryWithAttr, MetadError, NoKvFs, PublishArtifact, RenameReplaceResult};

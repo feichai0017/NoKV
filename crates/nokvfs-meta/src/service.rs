@@ -41,6 +41,12 @@ pub struct PublishArtifact {
     pub gid: u32,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RenameReplaceResult {
+    pub entry: DentryWithAttr,
+    pub replaced: Option<DentryWithAttr>,
+}
+
 #[derive(Debug)]
 pub enum MetadError {
     Model(ModelError),
@@ -51,6 +57,9 @@ pub enum MetadError {
     AllocatorExhausted,
     NotFound,
     NotFile,
+    NotDirectory,
+    DirectoryNotEmpty,
+    CannotRemoveRoot,
     MissingBodyDescriptor,
 }
 
@@ -154,6 +163,32 @@ where
         Ok(projection.into())
     }
 
+    pub fn create_file(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, MetadError> {
+        let version = self.next_version()?;
+        let inode = self.next_inode()?;
+        let attr = InodeAttr {
+            inode,
+            file_type: FileType::File,
+            mode,
+            uid,
+            gid,
+            size: 0,
+            generation: version.get(),
+            mtime_ms: version.get(),
+            ctime_ms: version.get(),
+        };
+        let projection = projection(parent, name, attr, None);
+        self.commit_create_projection(CommandKind::CreateFile, &projection, version)?;
+        Ok(projection.into())
+    }
+
     pub fn publish_artifact(&self, request: PublishArtifact) -> Result<DentryWithAttr, MetadError> {
         if request.body.size != request.bytes.len() as u64 {
             return Err(MetadError::BodySizeMismatch {
@@ -205,19 +240,32 @@ where
         parent: InodeId,
         name: &DentryName,
     ) -> Result<Option<DentryWithAttr>, MetadError> {
+        self.lookup_plus_versioned(parent, name)
+            .map(|entry| entry.map(|(entry, _)| entry))
+    }
+
+    fn lookup_plus_versioned(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
         let version = self.read_version()?;
         let key = dentry_key(self.mount, parent, name);
-        let Some(value) =
-            self.metadata
-                .get(RecordFamily::Dentry, &key, version, ReadPurpose::UserStrong)?
+        let Some(item) = self.metadata.get_versioned(
+            RecordFamily::Dentry,
+            &key,
+            version,
+            ReadPurpose::UserStrong,
+        )?
         else {
             return Ok(None);
         };
-        Ok(Some(
-            crate::layout::decode_dentry_projection(&value.0)
+        Ok(Some((
+            crate::layout::decode_dentry_projection(&item.value.0)
                 .map_err(|err| MetadError::Codec(err.to_string()))?
                 .into(),
-        ))
+            item.version,
+        )))
     }
 
     pub fn read_dir_plus(&self, parent: InodeId) -> Result<Vec<DentryWithAttr>, MetadError> {
@@ -290,6 +338,244 @@ where
         let key = ObjectKey::new(body.object_ref)?;
         let range = ObjectRange::new(offset, len)?;
         self.objects.get(&key, Some(range)).map_err(Into::into)
+    }
+
+    pub fn remove_file(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<DentryWithAttr, MetadError> {
+        let (entry, dentry_version) = self
+            .lookup_plus_versioned(parent, name)?
+            .ok_or(MetadError::NotFound)?;
+        if entry.attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        let version = self.next_version()?;
+        let key = dentry_key(self.mount, parent, name);
+        let mut mutations = vec![
+            delete_mutation(RecordFamily::Dentry, key.clone()),
+            delete_mutation(RecordFamily::Inode, inode_key(self.mount, entry.attr.inode)),
+        ];
+        if let Some(body) = &entry.body {
+            mutations.push(delete_mutation(
+                RecordFamily::ChunkManifest,
+                chunk_manifest_key(self.mount, entry.attr.inode, body.generation, 0),
+            ));
+        }
+        self.metadata.commit_metadata(MetadataCommand {
+            request_id: request_id(b"remove-file", self.mount, entry.attr.inode, version),
+            kind: CommandKind::RemoveFile,
+            read_version: predecessor(version)?,
+            commit_version: version,
+            primary_family: RecordFamily::Dentry,
+            primary_key: key.clone(),
+            predicates: vec![
+                PredicateRef {
+                    family: RecordFamily::Dentry,
+                    key,
+                    predicate: Predicate::VersionEquals(dentry_version),
+                },
+                PredicateRef {
+                    family: RecordFamily::Inode,
+                    key: inode_key(self.mount, entry.attr.inode),
+                    predicate: Predicate::Exists,
+                },
+            ],
+            mutations,
+            watch: Vec::new(),
+        })?;
+        Ok(entry)
+    }
+
+    pub fn remove_empty_dir(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<DentryWithAttr, MetadError> {
+        let (entry, dentry_version) = self
+            .lookup_plus_versioned(parent, name)?
+            .ok_or(MetadError::NotFound)?;
+        if entry.attr.file_type != FileType::Directory {
+            return Err(MetadError::NotDirectory);
+        }
+        if entry.attr.inode == InodeId::root() {
+            return Err(MetadError::CannotRemoveRoot);
+        }
+        let version = self.next_version()?;
+        let source_key = dentry_key(self.mount, parent, name);
+        let child_prefix = dentry_prefix(self.mount, entry.attr.inode);
+        match self.metadata.commit_metadata(MetadataCommand {
+            request_id: request_id(b"remove-empty-dir", self.mount, entry.attr.inode, version),
+            kind: CommandKind::RemoveEmptyDir,
+            read_version: predecessor(version)?,
+            commit_version: version,
+            primary_family: RecordFamily::Dentry,
+            primary_key: source_key.clone(),
+            predicates: vec![
+                PredicateRef {
+                    family: RecordFamily::Dentry,
+                    key: source_key.clone(),
+                    predicate: Predicate::VersionEquals(dentry_version),
+                },
+                PredicateRef {
+                    family: RecordFamily::Dentry,
+                    key: child_prefix,
+                    predicate: Predicate::PrefixEmpty,
+                },
+            ],
+            mutations: vec![
+                delete_mutation(RecordFamily::Dentry, source_key),
+                delete_mutation(RecordFamily::Inode, inode_key(self.mount, entry.attr.inode)),
+            ],
+            watch: Vec::new(),
+        }) {
+            Ok(_) => Ok(entry),
+            Err(MetadataError::PredicateFailed) => Err(MetadError::DirectoryNotEmpty),
+            Err(err) => Err(err.into()),
+        }
+    }
+
+    pub fn rename(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+        new_parent: InodeId,
+        new_name: DentryName,
+    ) -> Result<DentryWithAttr, MetadError> {
+        self.rename_inner(parent, name, new_parent, new_name, false)
+            .map(|outcome| outcome.entry)
+    }
+
+    pub fn rename_replace(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+        new_parent: InodeId,
+        new_name: DentryName,
+    ) -> Result<RenameReplaceResult, MetadError> {
+        self.rename_inner(parent, name, new_parent, new_name, true)
+    }
+
+    fn rename_inner(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+        new_parent: InodeId,
+        new_name: DentryName,
+        replace: bool,
+    ) -> Result<RenameReplaceResult, MetadError> {
+        let (source, source_version) = self
+            .lookup_plus_versioned(parent, name)?
+            .ok_or(MetadError::NotFound)?;
+        if parent == new_parent && *name == new_name {
+            return Ok(RenameReplaceResult {
+                entry: source,
+                replaced: None,
+            });
+        }
+        let destination = self.lookup_plus_versioned(new_parent, &new_name)?;
+        if !replace && destination.is_some() {
+            return Err(MetadataError::PredicateFailed.into());
+        }
+        if replace {
+            if source.attr.file_type != FileType::File {
+                return Err(MetadError::NotFile);
+            }
+            if let Some((entry, _)) = &destination {
+                if entry.attr.file_type != FileType::File {
+                    return Err(MetadError::NotFile);
+                }
+            }
+        }
+
+        let version = self.next_version()?;
+        let source_key = dentry_key(self.mount, parent, name);
+        let destination_key = dentry_key(self.mount, new_parent, &new_name);
+        let projection = projection(
+            new_parent,
+            new_name,
+            source.attr.clone(),
+            source.body.clone(),
+        );
+        let mut predicates = vec![
+            PredicateRef {
+                family: RecordFamily::Inode,
+                key: inode_key(self.mount, new_parent),
+                predicate: Predicate::Exists,
+            },
+            PredicateRef {
+                family: RecordFamily::Dentry,
+                key: source_key.clone(),
+                predicate: Predicate::VersionEquals(source_version),
+            },
+        ];
+        let replaced = if let Some((entry, destination_version)) = destination {
+            predicates.push(PredicateRef {
+                family: RecordFamily::Dentry,
+                key: destination_key.clone(),
+                predicate: Predicate::VersionEquals(destination_version),
+            });
+            Some(entry)
+        } else {
+            predicates.push(PredicateRef {
+                family: RecordFamily::Dentry,
+                key: destination_key.clone(),
+                predicate: Predicate::NotExists,
+            });
+            None
+        };
+
+        let mut mutations = vec![
+            delete_mutation(RecordFamily::Dentry, source_key),
+            Mutation {
+                family: RecordFamily::Dentry,
+                key: destination_key.clone(),
+                op: MutationOp::Put,
+                value: Some(Value(encode_dentry_projection(&projection))),
+            },
+        ];
+        if let Some(replaced) = &replaced {
+            mutations.push(delete_mutation(
+                RecordFamily::Inode,
+                inode_key(self.mount, replaced.attr.inode),
+            ));
+            if let Some(body) = &replaced.body {
+                mutations.push(delete_mutation(
+                    RecordFamily::ChunkManifest,
+                    chunk_manifest_key(self.mount, replaced.attr.inode, body.generation, 0),
+                ));
+            }
+        }
+
+        self.metadata.commit_metadata(MetadataCommand {
+            request_id: request_id(
+                if replace {
+                    b"rename-replace"
+                } else {
+                    b"rename"
+                },
+                self.mount,
+                source.attr.inode,
+                version,
+            ),
+            kind: if replace {
+                CommandKind::RenameReplace
+            } else {
+                CommandKind::Rename
+            },
+            read_version: predecessor(version)?,
+            commit_version: version,
+            primary_family: RecordFamily::Dentry,
+            primary_key: destination_key,
+            predicates,
+            mutations,
+            watch: Vec::new(),
+        })?;
+        Ok(RenameReplaceResult {
+            entry: projection.into(),
+            replaced,
+        })
     }
 
     fn commit_create_projection(
@@ -397,6 +683,15 @@ fn directory_attr(inode: InodeId, mode: u32, uid: u32, gid: u32, version: u64) -
     }
 }
 
+fn delete_mutation(family: RecordFamily, key: Vec<u8>) -> Mutation {
+    Mutation {
+        family,
+        key,
+        op: MutationOp::Delete,
+        value: None,
+    }
+}
+
 fn predecessor(version: Version) -> Result<Version, MetadataError> {
     Version::new(version.get().saturating_sub(1))
 }
@@ -412,9 +707,15 @@ fn request_id(prefix: &[u8], mount: MountId, inode: InodeId, version: Version) -
 
 fn kind_name(kind: CommandKind) -> &'static [u8] {
     match kind {
+        CommandKind::CreateFile => b"create-file",
         CommandKind::CreateDir => b"create-dir",
+        CommandKind::Rename => b"rename",
+        CommandKind::RenameReplace => b"rename-replace",
+        CommandKind::RemoveFile => b"remove-file",
+        CommandKind::RemoveEmptyDir => b"remove-empty-dir",
         CommandKind::PublishArtifact => b"publish-artifact",
-        _ => b"metadata-command",
+        CommandKind::SnapshotSubtree => b"snapshot-subtree",
+        CommandKind::WatchSubtree => b"watch-subtree",
     }
 }
 
@@ -460,6 +761,9 @@ impl fmt::Display for MetadError {
             Self::AllocatorExhausted => write!(f, "inode allocator is exhausted"),
             Self::NotFound => write!(f, "metadata entry not found"),
             Self::NotFile => write!(f, "metadata entry is not a file"),
+            Self::NotDirectory => write!(f, "metadata entry is not a directory"),
+            Self::DirectoryNotEmpty => write!(f, "directory is not empty"),
+            Self::CannotRemoveRoot => write!(f, "root directory cannot be removed"),
             Self::MissingBodyDescriptor => write!(f, "file is missing body descriptor"),
         }
     }
@@ -501,6 +805,22 @@ mod tests {
 
         let entries = service.read_dir_plus(InodeId::root()).unwrap();
         assert_eq!(entries, vec![created]);
+    }
+
+    #[test]
+    fn create_file_publishes_metadata_without_body_descriptor() {
+        let service = service();
+        let name = DentryName::new(b"empty.txt".to_vec()).unwrap();
+        let created = service
+            .create_file(InodeId::root(), name.clone(), 0o644, 1000, 1000)
+            .unwrap();
+        assert_eq!(created.attr.file_type, FileType::File);
+        assert_eq!(created.attr.size, 0);
+        assert!(created.body.is_none());
+        assert_eq!(
+            service.lookup_plus(InodeId::root(), &name).unwrap(),
+            Some(created)
+        );
     }
 
     #[test]
@@ -560,6 +880,167 @@ mod tests {
         let root = service.get_attr(InodeId::root()).unwrap().unwrap();
         assert_eq!(root.inode, InodeId::root());
         assert_eq!(root.file_type, FileType::Directory);
+    }
+
+    #[test]
+    fn remove_file_deletes_namespace_and_returns_old_body() {
+        let service = service();
+        let name = DentryName::new(b"artifact.bin".to_vec()).unwrap();
+        let published = service
+            .publish_artifact(PublishArtifact {
+                parent: InodeId::root(),
+                name: name.clone(),
+                body: BodyDescriptor {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:old".to_owned(),
+                    size: 3,
+                    content_type: "application/octet-stream".to_owned(),
+                    object_ref: "artifact.bin".to_owned(),
+                    generation: 1,
+                },
+                bytes: b"old".to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+
+        let removed = service.remove_file(InodeId::root(), &name).unwrap();
+        assert_eq!(removed, published);
+        assert_eq!(removed.body.as_ref().unwrap().object_ref, "artifact.bin");
+        assert!(service
+            .lookup_plus(InodeId::root(), &name)
+            .unwrap()
+            .is_none());
+        assert!(service.get_attr(removed.attr.inode).unwrap().is_none());
+    }
+
+    #[test]
+    fn remove_empty_dir_rejects_non_empty_directory() {
+        let service = service();
+        let dir = DentryName::new(b"runs".to_vec()).unwrap();
+        let child = DentryName::new(b"1".to_vec()).unwrap();
+        let created = service
+            .create_dir(InodeId::root(), dir.clone(), 0o755, 1000, 1000)
+            .unwrap();
+        service
+            .create_dir(created.attr.inode, child, 0o755, 1000, 1000)
+            .unwrap();
+
+        let err = service.remove_empty_dir(InodeId::root(), &dir).unwrap_err();
+        assert!(matches!(err, MetadError::DirectoryNotEmpty));
+        assert!(service
+            .lookup_plus(InodeId::root(), &dir)
+            .unwrap()
+            .is_some());
+    }
+
+    #[test]
+    fn remove_empty_dir_deletes_empty_directory() {
+        let service = service();
+        let dir = DentryName::new(b"runs".to_vec()).unwrap();
+        let created = service
+            .create_dir(InodeId::root(), dir.clone(), 0o755, 1000, 1000)
+            .unwrap();
+
+        let removed = service.remove_empty_dir(InodeId::root(), &dir).unwrap();
+        assert_eq!(removed, created);
+        assert!(service
+            .lookup_plus(InodeId::root(), &dir)
+            .unwrap()
+            .is_none());
+        assert!(service.get_attr(created.attr.inode).unwrap().is_none());
+    }
+
+    #[test]
+    fn rename_moves_dentry_without_changing_inode() {
+        let service = service();
+        let old_name = DentryName::new(b"old".to_vec()).unwrap();
+        let new_name = DentryName::new(b"new".to_vec()).unwrap();
+        let created = service
+            .create_dir(InodeId::root(), old_name.clone(), 0o755, 1000, 1000)
+            .unwrap();
+
+        let renamed = service
+            .rename(
+                InodeId::root(),
+                &old_name,
+                InodeId::root(),
+                new_name.clone(),
+            )
+            .unwrap();
+        assert_eq!(renamed.attr.inode, created.attr.inode);
+        assert!(service
+            .lookup_plus(InodeId::root(), &old_name)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            service.lookup_plus(InodeId::root(), &new_name).unwrap(),
+            Some(renamed)
+        );
+    }
+
+    #[test]
+    fn rename_replace_returns_replaced_file_body() {
+        let service = service();
+        let source_name = DentryName::new(b"stage".to_vec()).unwrap();
+        let final_name = DentryName::new(b"final".to_vec()).unwrap();
+        let source = service
+            .publish_artifact(PublishArtifact {
+                parent: InodeId::root(),
+                name: source_name.clone(),
+                body: BodyDescriptor {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:new".to_owned(),
+                    size: 3,
+                    content_type: "application/octet-stream".to_owned(),
+                    object_ref: "stage".to_owned(),
+                    generation: 1,
+                },
+                bytes: b"new".to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+        let old = service
+            .publish_artifact(PublishArtifact {
+                parent: InodeId::root(),
+                name: final_name.clone(),
+                body: BodyDescriptor {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:old".to_owned(),
+                    size: 3,
+                    content_type: "application/octet-stream".to_owned(),
+                    object_ref: "final-old".to_owned(),
+                    generation: 1,
+                },
+                bytes: b"old".to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+
+        let result = service
+            .rename_replace(
+                InodeId::root(),
+                &source_name,
+                InodeId::root(),
+                final_name.clone(),
+            )
+            .unwrap();
+        assert_eq!(result.entry.attr.inode, source.attr.inode);
+        assert_eq!(result.replaced, Some(old.clone()));
+        assert!(service
+            .lookup_plus(InodeId::root(), &source_name)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            service.lookup_plus(InodeId::root(), &final_name).unwrap(),
+            Some(result.entry)
+        );
+        assert!(service.get_attr(old.attr.inode).unwrap().is_none());
     }
 
     #[test]

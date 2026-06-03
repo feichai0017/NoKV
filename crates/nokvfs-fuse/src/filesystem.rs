@@ -422,6 +422,9 @@ fn errno(err: MetadError) -> Errno {
         MetadError::Model(_) => Errno::EINVAL,
         MetadError::NotFound => Errno::ENOENT,
         MetadError::NotFile => Errno::EISDIR,
+        MetadError::NotDirectory => Errno::ENOTDIR,
+        MetadError::DirectoryNotEmpty => Errno::ENOTEMPTY,
+        MetadError::CannotRemoveRoot => Errno::EBUSY,
         MetadError::MissingBodyDescriptor
         | MetadError::Metadata(_)
         | MetadError::Object(_)
