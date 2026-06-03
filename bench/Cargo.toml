@@ -10,6 +10,7 @@ authors.workspace = true
 nokvfs-client.workspace = true
 nokvfs-meta.workspace = true
 nokvfs-object.workspace = true
+nokvfs-server.workspace = true
 nokvfs-types.workspace = true
 
 [[bin]]

@@ -1145,6 +1145,7 @@ dependencies = [
  "nokvfs-client",
  "nokvfs-meta",
  "nokvfs-object",
+ "nokvfs-server",
  "nokvfs-types",
 ]
 

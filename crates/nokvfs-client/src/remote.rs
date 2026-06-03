@@ -1,8 +1,9 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
-use nokvfs_meta::{DentryWithAttr, RenameReplaceResult};
+use nokvfs_meta::{DentryWithAttr, ObjectTransferStats, RenameReplaceResult};
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
     MemoryBlockCache, ObjectError, ObjectReadBlock, ObjectStore, StagedObjectSet,
@@ -55,6 +56,11 @@ pub struct RemoteNoKvFsClient<O> {
     objects: O,
     block_cache: MemoryBlockCache,
     block_cache_enabled: bool,
+    object_puts: AtomicU64,
+    object_gets: AtomicU64,
+    cache_hits: AtomicU64,
+    manifest_chunks: AtomicU64,
+    manifest_blocks: AtomicU64,
 }
 
 impl RemoteMetadataClientOptions {
@@ -76,6 +82,11 @@ where
             objects,
             block_cache: MemoryBlockCache::default(),
             block_cache_enabled: true,
+            object_puts: AtomicU64::new(0),
+            object_gets: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(0),
+            manifest_chunks: AtomicU64::new(0),
+            manifest_blocks: AtomicU64::new(0),
         }
     }
 
@@ -93,6 +104,16 @@ where
 
     pub fn block_cache_enabled(&self) -> bool {
         self.block_cache_enabled
+    }
+
+    pub fn object_stats(&self) -> ObjectTransferStats {
+        ObjectTransferStats {
+            object_puts: self.object_puts.load(Ordering::Relaxed),
+            object_gets: self.object_gets.load(Ordering::Relaxed),
+            cache_hits: self.cache_hits.load(Ordering::Relaxed),
+            manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
+            manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
+        }
     }
 
     pub fn cat(&self, path: &str) -> Result<Vec<u8>, ClientError> {
@@ -136,9 +157,13 @@ where
         } else {
             None
         };
-        read_object_blocks(&self.objects, cache, plan.output_len, &plan.blocks)
-            .map(|outcome| outcome.bytes)
-            .map_err(ClientError::Object)
+        let outcome = read_object_blocks(&self.objects, cache, plan.output_len, &plan.blocks)
+            .map_err(ClientError::Object)?;
+        self.object_gets
+            .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
+        self.cache_hits
+            .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
+        Ok(outcome.bytes)
     }
 
     pub fn put_artifact(
@@ -213,6 +238,18 @@ where
                 return Err(ClientError::Object(err));
             }
         };
+        self.object_puts
+            .fetch_add(written.object_puts as u64, Ordering::Relaxed);
+        self.manifest_chunks
+            .fetch_add(written.chunks.len() as u64, Ordering::Relaxed);
+        self.manifest_blocks.fetch_add(
+            written
+                .chunks
+                .iter()
+                .map(|chunk| chunk.blocks.len() as u64)
+                .sum::<u64>(),
+            Ordering::Relaxed,
+        );
         let staged = written.staged_objects()?;
         let chunks = written
             .chunks

@@ -1,24 +1,30 @@
-//! NoKV-FS local workload benchmark harness.
+//! NoKV-FS workload benchmark harness.
 //!
 //! This binary intentionally reports workload shape and durability caveats with
-//! every result. The current target is local Holt metadata plus a configured
-//! S3-compatible object store; it is a correctness and local-path baseline, not
-//! a distributed cluster benchmark.
+//! every result. It can run either the local in-process Holt metadata path or a
+//! real `metad` process boundary with the remote SDK. It is not a distributed
+//! replicated cluster benchmark.
 
 use std::env;
 use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::hint::black_box;
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::thread;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
+use nokvfs_client::{ArtifactMetadata, NoKvFsClient, RemoteNoKvFsClient};
 use nokvfs_meta::holtstore::HoltMetadataStore;
-use nokvfs_meta::{NoKvFs, ObjectTransferStats};
+use nokvfs_meta::{
+    DentryWithAttr, HistoryGcOptions, NoKvFs, ObjectGcOptions, ObjectTransferStats,
+    RenameReplaceResult,
+};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
+use nokvfs_server::{Server, ServerOptions};
 use nokvfs_types::MountId;
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
@@ -50,6 +56,7 @@ struct Config {
     profile: Profile,
     workload: Workload,
     root: PathBuf,
+    metadata_mode: MetadataMode,
     object_backend: ObjectBackendKind,
     s3: S3ObjectStoreOptions,
     object_concurrency: usize,
@@ -64,6 +71,12 @@ struct Config {
 enum ObjectBackendKind {
     S3,
     RustFs,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum MetadataMode {
+    Local,
+    Remote,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -93,6 +106,7 @@ struct ResultRow {
     cache_hit_rate: f64,
     manifest_chunks: u64,
     manifest_blocks: u64,
+    metadata_mode: MetadataMode,
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
@@ -110,6 +124,7 @@ struct RowInput {
     bytes: u64,
     samples: usize,
     object_stats: ObjectTransferStats,
+    metadata_mode: MetadataMode,
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
@@ -128,7 +143,155 @@ enum BenchError {
     Client(String),
 }
 
-type Client = NoKvFsClient<HoltMetadataStore, S3ObjectStore>;
+trait BenchClient: Sync {
+    fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), BenchError>;
+    fn mkdir(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, BenchError>;
+    fn create_file(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, BenchError>;
+    fn put_artifact(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        metadata: ArtifactMetadata,
+    ) -> Result<DentryWithAttr, BenchError>;
+    fn rename_replace(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> Result<RenameReplaceResult, BenchError>;
+    fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError>;
+    fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError>;
+    fn object_stats(&self) -> ObjectTransferStats;
+}
+
+impl BenchClient for NoKvFsClient<HoltMetadataStore, S3ObjectStore> {
+    fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), BenchError> {
+        NoKvFsClient::bootstrap_root(self, mode, uid, gid).map_err(from_client)
+    }
+
+    fn mkdir(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, BenchError> {
+        NoKvFsClient::mkdir(self, path, mode, uid, gid).map_err(from_client)
+    }
+
+    fn create_file(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, BenchError> {
+        NoKvFsClient::create_file(self, path, mode, uid, gid).map_err(from_client)
+    }
+
+    fn put_artifact(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        metadata: ArtifactMetadata,
+    ) -> Result<DentryWithAttr, BenchError> {
+        NoKvFsClient::put_artifact(self, path, bytes, metadata).map_err(from_client)
+    }
+
+    fn rename_replace(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> Result<RenameReplaceResult, BenchError> {
+        NoKvFsClient::rename_replace(self, source, destination).map_err(from_client)
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError> {
+        NoKvFsClient::list(self, path).map_err(from_client)
+    }
+
+    fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError> {
+        NoKvFsClient::cat(self, path).map_err(from_client)
+    }
+
+    fn object_stats(&self) -> ObjectTransferStats {
+        NoKvFsClient::object_stats(self)
+    }
+}
+
+impl BenchClient for RemoteNoKvFsClient<S3ObjectStore> {
+    fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), BenchError> {
+        self.metadata()
+            .bootstrap_root(mode, uid, gid)
+            .map_err(from_client)
+    }
+
+    fn mkdir(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, BenchError> {
+        self.metadata()
+            .mkdir(path, mode, uid, gid)
+            .map_err(from_client)
+    }
+
+    fn create_file(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, BenchError> {
+        self.metadata()
+            .create_file(path, mode, uid, gid)
+            .map_err(from_client)
+    }
+
+    fn put_artifact(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        metadata: ArtifactMetadata,
+    ) -> Result<DentryWithAttr, BenchError> {
+        RemoteNoKvFsClient::put_artifact(self, path, bytes, metadata).map_err(from_client)
+    }
+
+    fn rename_replace(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> Result<RenameReplaceResult, BenchError> {
+        self.metadata()
+            .rename_replace(source, destination)
+            .map_err(from_client)
+    }
+
+    fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError> {
+        self.metadata().list(path).map_err(from_client)
+    }
+
+    fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError> {
+        RemoteNoKvFsClient::cat(self, path).map_err(from_client)
+    }
+
+    fn object_stats(&self) -> ObjectTransferStats {
+        RemoteNoKvFsClient::object_stats(self)
+    }
+}
 
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
@@ -136,7 +299,7 @@ fn main() {
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
              [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
-             [--root PATH] [--object-backend s3|rustfs] \
+             [--root PATH] [--metadata-mode local|remote] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] [--keep]"
         );
@@ -149,11 +312,11 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     let shape = shape(&config);
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
-    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
+    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_mode,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
         println!(
-            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{}",
+            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{}",
             row.workload,
             profile_name(row.profile),
             row.operations,
@@ -167,6 +330,7 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
             row.cache_hit_rate,
             row.manifest_chunks,
             row.manifest_blocks,
+            metadata_mode_name(row.metadata_mode),
             row.object_concurrency,
             row.read_repeats,
             row.block_cache,
@@ -189,23 +353,21 @@ fn run_one(
 ) -> Result<ResultRow, BenchError> {
     let label = workload_name(workload);
     let client = client_for(config, label)?;
-    client
-        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?;
+    client.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
     match workload {
-        Workload::MdtestEasy => bench_mdtest_easy(&client, config, shape),
-        Workload::MdtestHard => bench_mdtest_hard(&client, config, shape),
-        Workload::CheckpointPublish => bench_checkpoint_publish(&client, config, shape),
-        Workload::TrainingRead => bench_training_read(&client, config, shape),
-        Workload::MlperfDlio => bench_mlperf_dlio(&client, config, shape),
-        Workload::DemoDataset => bench_demo_dataset(&client, config, shape),
+        Workload::MdtestEasy => bench_mdtest_easy(client.as_ref(), config, shape),
+        Workload::MdtestHard => bench_mdtest_hard(client.as_ref(), config, shape),
+        Workload::CheckpointPublish => bench_checkpoint_publish(client.as_ref(), config, shape),
+        Workload::TrainingRead => bench_training_read(client.as_ref(), config, shape),
+        Workload::MlperfDlio => bench_mlperf_dlio(client.as_ref(), config, shape),
+        Workload::DemoDataset => bench_demo_dataset(client.as_ref(), config, shape),
         Workload::MetadataSmoke => unreachable!("metadata-smoke expands before execution"),
         Workload::All => unreachable!("all expands before execution"),
     }
 }
 
 fn bench_mdtest_easy(
-    client: &Client,
+    client: &dyn BenchClient,
     config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
@@ -215,19 +377,13 @@ fn bench_mdtest_easy(
     for dir in 0..shape.dirs {
         let dir_path = format!("/mdtest-easy/dir-{dir:05}");
         if dir == 0 {
-            client
-                .mkdir("/mdtest-easy", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-                .map_err(from_client)?;
+            client.mkdir("/mdtest-easy", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         }
-        client
-            .mkdir(&dir_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-            .map_err(from_client)?;
+        client.mkdir(&dir_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         checksum = checksum.wrapping_add(dir as u64);
         for file in 0..shape.files_per_dir {
             let path = format!("{dir_path}/file-{file:05}");
-            let entry = client
-                .create_file(&path, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
-                .map_err(from_client)?;
+            let entry = client.create_file(&path, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)?;
             checksum = checksum.wrapping_add(entry.attr.inode.get());
         }
     }
@@ -240,6 +396,7 @@ fn bench_mdtest_easy(
         bytes: 0,
         samples: 0,
         object_stats: stats_delta(before, client.object_stats()),
+        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -253,21 +410,17 @@ fn bench_mdtest_easy(
 }
 
 fn bench_mdtest_hard(
-    client: &Client,
+    client: &dyn BenchClient,
     config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
-    client
-        .mkdir("/mdtest-hard", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?;
+    client.mkdir("/mdtest-hard", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
     let before = client.object_stats();
     let start = Instant::now();
     let mut checksum = 0_u64;
     for file in 0..shape.shared_files {
         let path = format!("/mdtest-hard/file-{file:06}");
-        let entry = client
-            .create_file(&path, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
-            .map_err(from_client)?;
+        let entry = client.create_file(&path, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)?;
         checksum = checksum.wrapping_add(entry.attr.inode.get());
     }
     Ok(row(RowInput {
@@ -278,6 +431,7 @@ fn bench_mdtest_hard(
         bytes: 0,
         samples: 0,
         object_stats: stats_delta(before, client.object_stats()),
+        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -291,21 +445,17 @@ fn bench_mdtest_hard(
 }
 
 fn bench_checkpoint_publish(
-    client: &Client,
+    client: &dyn BenchClient,
     config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
-    client
-        .mkdir("/checkpoints", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?;
+    client.mkdir("/checkpoints", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
     let first = checkpoint_payload(0, shape.checkpoint_bytes);
-    client
-        .put_artifact(
-            "/checkpoints/latest.ckpt",
-            first,
-            artifact_metadata("checkpoint", "checkpoints/latest-initial"),
-        )
-        .map_err(from_client)?;
+    client.put_artifact(
+        "/checkpoints/latest.ckpt",
+        first,
+        artifact_metadata("checkpoint", "checkpoints/latest-initial"),
+    )?;
 
     let before = client.object_stats();
     let start = Instant::now();
@@ -313,22 +463,18 @@ fn bench_checkpoint_publish(
         let stage_path = format!("/checkpoints/.stage-{step:06}");
         let manifest_id = format!("checkpoints/stage-{step:06}");
         let bytes = checkpoint_payload(step, shape.checkpoint_bytes);
-        let staged = client
-            .put_artifact(
-                &stage_path,
-                bytes,
-                artifact_metadata("checkpoint", &manifest_id),
-            )
-            .map_err(from_client)?;
+        let staged = client.put_artifact(
+            &stage_path,
+            bytes,
+            artifact_metadata("checkpoint", &manifest_id),
+        )?;
         Ok(staged.attr.inode.get())
     })?;
 
     let mut checksum = stage_checksum;
     for step in 0..shape.checkpoints {
         let stage_path = format!("/checkpoints/.stage-{step:06}");
-        let result = client
-            .rename_replace(&stage_path, "/checkpoints/latest.ckpt")
-            .map_err(from_client)?;
+        let result = client.rename_replace(&stage_path, "/checkpoints/latest.ckpt")?;
         checksum = checksum
             .wrapping_add(result.entry.attr.inode.get())
             .wrapping_add(
@@ -346,6 +492,7 @@ fn bench_checkpoint_publish(
         bytes: (shape.checkpoints * shape.checkpoint_bytes) as u64,
         samples: 0,
         object_stats: stats_delta(before, client.object_stats()),
+        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -359,25 +506,19 @@ fn bench_checkpoint_publish(
 }
 
 fn bench_training_read(
-    client: &Client,
+    client: &dyn BenchClient,
     config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
-    client
-        .mkdir("/dataset", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?;
+    client.mkdir("/dataset", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
     for shard in 0..shape.dataset_dirs {
         let shard_path = format!("/dataset/shard-{shard:04}");
-        client
-            .mkdir(&shard_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-            .map_err(from_client)?;
+        client.mkdir(&shard_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         for file in 0..shape.dataset_files_per_dir {
             let path = format!("{shard_path}/sample-{file:05}.bin");
             let manifest_id = format!("dataset/shard-{shard:04}/sample-{file:05}.bin");
             let payload = dataset_payload(shard, file, shape.dataset_file_bytes);
-            client
-                .put_artifact(&path, payload, artifact_metadata("dataset", &manifest_id))
-                .map_err(from_client)?;
+            client.put_artifact(&path, payload, artifact_metadata("dataset", &manifest_id))?;
         }
     }
 
@@ -385,13 +526,13 @@ fn bench_training_read(
     let start = Instant::now();
     let checksum = run_parallel(shape.dataset_dirs, config.object_concurrency, |shard| {
         let shard_path = format!("/dataset/shard-{shard:04}");
-        let entries = client.list(&shard_path).map_err(from_client)?;
+        let entries = client.list(&shard_path)?;
         let mut checksum = entries.len() as u64;
         if let Some(first) = entries.first() {
             let name = String::from_utf8_lossy(first.dentry.name.as_bytes());
             let path = format!("{shard_path}/{name}");
             for _ in 0..config.read_repeats {
-                let bytes = client.cat(&path).map_err(from_client)?;
+                let bytes = client.cat(&path)?;
                 checksum =
                     checksum.wrapping_add(bytes.iter().map(|byte| *byte as u64).sum::<u64>());
             }
@@ -407,6 +548,7 @@ fn bench_training_read(
         bytes: (shape.dataset_dirs * shape.dataset_file_bytes * config.read_repeats) as u64,
         samples: shape.dataset_dirs * config.read_repeats,
         object_stats: stats_delta(before, client.object_stats()),
+        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -420,72 +562,60 @@ fn bench_training_read(
 }
 
 fn bench_mlperf_dlio(
-    client: &Client,
+    client: &dyn BenchClient,
     config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
-    client
-        .mkdir("/mlperf-dlio", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?;
-    client
-        .mkdir(
-            "/mlperf-dlio/dataset",
-            DEFAULT_MODE_DIR,
-            DEFAULT_UID,
-            DEFAULT_GID,
-        )
-        .map_err(from_client)?;
-    client
-        .mkdir(
-            "/mlperf-dlio/checkpoints",
-            DEFAULT_MODE_DIR,
-            DEFAULT_UID,
-            DEFAULT_GID,
-        )
-        .map_err(from_client)?;
+    client.mkdir("/mlperf-dlio", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+    client.mkdir(
+        "/mlperf-dlio/dataset",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+    client.mkdir(
+        "/mlperf-dlio/checkpoints",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
 
     for shard in 0..shape.dataset_dirs {
         let shard_path = format!("/mlperf-dlio/dataset/shard-{shard:04}");
-        client
-            .mkdir(&shard_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-            .map_err(from_client)?;
+        client.mkdir(&shard_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         for file in 0..shape.dataset_files_per_dir {
             let path = format!("{shard_path}/sample-{file:05}.bin");
             let manifest_id = format!("mlperf-dlio/dataset/shard-{shard:04}/sample-{file:05}");
             let sample_payload = dataset_payload(shard, file, shape.dataset_file_bytes);
-            client
-                .put_artifact(
-                    &path,
-                    sample_payload,
-                    artifact_metadata("mlperf-dlio-dataset", &manifest_id),
-                )
-                .map_err(from_client)?;
+            client.put_artifact(
+                &path,
+                sample_payload,
+                artifact_metadata("mlperf-dlio-dataset", &manifest_id),
+            )?;
         }
     }
 
-    client
-        .put_artifact(
-            "/mlperf-dlio/checkpoints/latest.ckpt",
-            checkpoint_payload(0, shape.checkpoint_bytes),
-            artifact_metadata(
-                "mlperf-dlio-checkpoint",
-                "mlperf-dlio/checkpoints/latest-initial",
-            ),
-        )
-        .map_err(from_client)?;
+    client.put_artifact(
+        "/mlperf-dlio/checkpoints/latest.ckpt",
+        checkpoint_payload(0, shape.checkpoint_bytes),
+        artifact_metadata(
+            "mlperf-dlio-checkpoint",
+            "mlperf-dlio/checkpoints/latest-initial",
+        ),
+    )?;
 
     let checkpoint_steps = shape.checkpoints.max(1) / 4;
     let before = client.object_stats();
     let start = Instant::now();
     let mut checksum = run_parallel(shape.dataset_dirs, config.object_concurrency, |shard| {
         let shard_path = format!("/mlperf-dlio/dataset/shard-{shard:04}");
-        let entries = client.list(&shard_path).map_err(from_client)?;
+        let entries = client.list(&shard_path)?;
         let mut checksum = entries.len() as u64;
         if let Some(first) = entries.first() {
             let name = String::from_utf8_lossy(first.dentry.name.as_bytes());
             let path = format!("{shard_path}/{name}");
             for _ in 0..config.read_repeats {
-                let bytes = client.cat(&path).map_err(from_client)?;
+                let bytes = client.cat(&path)?;
                 checksum = checksum.wrapping_add(bytes.len() as u64);
             }
         }
@@ -494,21 +624,17 @@ fn bench_mlperf_dlio(
     let stage_checksum = run_parallel(checkpoint_steps, config.object_concurrency, |step| {
         let stage_path = format!("/mlperf-dlio/checkpoints/.stage-{step:06}");
         let manifest_id = format!("mlperf-dlio/checkpoints/stage-{step:06}");
-        let entry = client
-            .put_artifact(
-                &stage_path,
-                checkpoint_payload(step, shape.checkpoint_bytes),
-                artifact_metadata("mlperf-dlio-checkpoint", &manifest_id),
-            )
-            .map_err(from_client)?;
+        let entry = client.put_artifact(
+            &stage_path,
+            checkpoint_payload(step, shape.checkpoint_bytes),
+            artifact_metadata("mlperf-dlio-checkpoint", &manifest_id),
+        )?;
         Ok(entry.attr.inode.get())
     })?;
     checksum = checksum.wrapping_add(stage_checksum);
     for step in 0..checkpoint_steps {
         let stage_path = format!("/mlperf-dlio/checkpoints/.stage-{step:06}");
-        let result = client
-            .rename_replace(&stage_path, "/mlperf-dlio/checkpoints/latest.ckpt")
-            .map_err(from_client)?;
+        let result = client.rename_replace(&stage_path, "/mlperf-dlio/checkpoints/latest.ckpt")?;
         checksum = checksum.wrapping_add(result.entry.attr.inode.get());
     }
     black_box(checksum);
@@ -521,6 +647,7 @@ fn bench_mlperf_dlio(
             + checkpoint_steps * shape.checkpoint_bytes) as u64,
         samples: shape.dataset_dirs * config.read_repeats,
         object_stats: stats_delta(before, client.object_stats()),
+        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -538,32 +665,26 @@ fn bench_mlperf_dlio(
 }
 
 fn bench_demo_dataset(
-    client: &Client,
+    client: &dyn BenchClient,
     config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
-    client
-        .mkdir("/demo-dataset", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?;
+    client.mkdir("/demo-dataset", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
     let classes = shape.dataset_dirs.clamp(1, 8);
     let samples_per_class = shape.dataset_files_per_dir.clamp(1, 32);
     let sample_bytes = shape.dataset_file_bytes.clamp(128, 4096);
     let payload = vec![23_u8; sample_bytes];
     for class in 0..classes {
         let class_path = format!("/demo-dataset/class-{class:03}");
-        client
-            .mkdir(&class_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-            .map_err(from_client)?;
+        client.mkdir(&class_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         for sample in 0..samples_per_class {
             let path = format!("{class_path}/sample-{sample:05}.bin");
             let manifest_id = format!("demo-dataset/class-{class:03}/sample-{sample:05}");
-            client
-                .put_artifact(
-                    &path,
-                    payload.clone(),
-                    artifact_metadata("demo-dataset", &manifest_id),
-                )
-                .map_err(from_client)?;
+            client.put_artifact(
+                &path,
+                payload.clone(),
+                artifact_metadata("demo-dataset", &manifest_id),
+            )?;
         }
     }
 
@@ -572,11 +693,11 @@ fn bench_demo_dataset(
     let mut checksum = 0_u64;
     for class in 0..classes {
         let class_path = format!("/demo-dataset/class-{class:03}");
-        let entries = client.list(&class_path).map_err(from_client)?;
+        let entries = client.list(&class_path)?;
         for entry in entries.iter().take(2) {
             let name = String::from_utf8_lossy(entry.dentry.name.as_bytes());
             let path = format!("{class_path}/{name}");
-            checksum = checksum.wrapping_add(client.cat(&path).map_err(from_client)?.len() as u64);
+            checksum = checksum.wrapping_add(client.cat(&path)?.len() as u64);
         }
     }
     Ok(row(RowInput {
@@ -587,6 +708,7 @@ fn bench_demo_dataset(
         bytes: (classes * 2 * sample_bytes) as u64,
         samples: classes * 2,
         object_stats: stats_delta(before, client.object_stats()),
+        metadata_mode: config.metadata_mode,
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -619,6 +741,7 @@ fn row(input: RowInput) -> ResultRow {
         },
         manifest_chunks: input.object_stats.manifest_chunks,
         manifest_blocks: input.object_stats.manifest_blocks,
+        metadata_mode: input.metadata_mode,
         object_concurrency: input.object_concurrency,
         read_repeats: input.read_repeats,
         block_cache: input.block_cache,
@@ -640,7 +763,8 @@ fn stats_delta(before: ObjectTransferStats, after: ObjectTransferStats) -> Objec
 
 fn metadata_only_caveat(config: &Config) -> String {
     format!(
-        "metadata-only on local Holt, object_backend={}, no distributed replication",
+        "metadata-only on {} Holt metadata, object_backend={}, no distributed replication",
+        metadata_mode_name(config.metadata_mode),
         object_backend_name(config.object_backend)
     )
 }
@@ -654,20 +778,31 @@ fn object_caveat(config: &Config, path: &str) -> String {
     match config.object_backend {
         ObjectBackendKind::RustFs => {
             format!(
-                "{path}, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
-                config.object_concurrency, config.read_repeats
+                "{path}, {} Holt metadata, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
+                metadata_mode_name(config.metadata_mode),
+                config.object_concurrency,
+                config.read_repeats
             )
         }
         ObjectBackendKind::S3 => {
             format!(
-                "{path}, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
-                config.object_concurrency, config.read_repeats
+                "{path}, {} Holt metadata, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
+                metadata_mode_name(config.metadata_mode),
+                config.object_concurrency,
+                config.read_repeats
             )
         }
     }
 }
 
-fn client_for(config: &Config, workload: &str) -> Result<Client, BenchError> {
+fn client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
+    match config.metadata_mode {
+        MetadataMode::Local => local_client_for(config, workload),
+        MetadataMode::Remote => remote_client_for(config, workload),
+    }
+}
+
+fn local_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
     let meta = config.root.join(workload).join("meta");
     let objects = object_config_for(config, workload)
         .open()
@@ -680,7 +815,40 @@ fn client_for(config: &Config, workload: &str) -> Result<Client, BenchError> {
     );
     let client = NoKvFsClient::new(service);
     client.set_block_cache_enabled(config.block_cache);
-    Ok(client)
+    Ok(Box::new(client))
+}
+
+fn remote_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
+    let meta = config.root.join(workload).join("meta");
+    let object = object_config_for(config, workload);
+    let objects = object.clone().open().map_err(from_client)?;
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let bind = listener.local_addr().map_err(from_io)?;
+    let server = Server::open(ServerOptions {
+        bind,
+        mount: MountId::new(1).expect("mount id is non-zero"),
+        meta_path: meta,
+        object,
+        uid: DEFAULT_UID,
+        gid: DEFAULT_GID,
+        object_gc: ObjectGcOptions {
+            interval: Duration::from_secs(3600),
+            limit: 1024,
+            run_immediately: false,
+        },
+        history_gc: HistoryGcOptions {
+            interval: Duration::from_secs(3600),
+            limit: 1024,
+            run_immediately: false,
+        },
+    })
+    .map_err(from_client)?;
+    thread::spawn(move || {
+        let _ = server.serve(listener);
+    });
+    let mut client = RemoteNoKvFsClient::connect(bind, objects);
+    client.set_block_cache_enabled(config.block_cache);
+    Ok(Box::new(client))
 }
 
 fn artifact_metadata(producer: &str, manifest_id: &str) -> ArtifactMetadata {
@@ -759,6 +927,7 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
     let mut profile = Profile::Smoke;
     let mut workload = Workload::All;
     let mut root = default_root();
+    let mut metadata_mode = MetadataMode::Local;
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
     let mut object_concurrency = 1_usize;
@@ -781,6 +950,10 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
             "--root" => {
                 index += 1;
                 root = PathBuf::from(value(&args, index, "--root")?);
+            }
+            "--metadata-mode" => {
+                index += 1;
+                metadata_mode = parse_metadata_mode(value(&args, index, "--metadata-mode")?)?;
             }
             "--object-backend" => {
                 index += 1;
@@ -866,6 +1039,7 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
         profile,
         workload,
         root,
+        metadata_mode,
         object_backend,
         s3,
         object_concurrency,
@@ -886,6 +1060,14 @@ fn object_config_for(config: &Config, workload: &str) -> ObjectStoreConfig {
         options.root = format!("/nokv-fs-bench/{workload}");
     }
     ObjectStoreConfig::s3(options)
+}
+
+fn parse_metadata_mode(raw: &str) -> Result<MetadataMode, BenchError> {
+    match raw {
+        "local" => Ok(MetadataMode::Local),
+        "remote" => Ok(MetadataMode::Remote),
+        _ => Err(BenchError::UnknownOption(format!("--metadata-mode {raw}"))),
+    }
 }
 
 fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, BenchError> {
@@ -1022,6 +1204,13 @@ fn profile_name(profile: Profile) -> &'static str {
     }
 }
 
+fn metadata_mode_name(mode: MetadataMode) -> &'static str {
+    match mode {
+        MetadataMode::Local => "local",
+        MetadataMode::Remote => "remote",
+    }
+}
+
 fn object_backend_name(backend: ObjectBackendKind) -> &'static str {
     match backend {
         ObjectBackendKind::S3 => "s3",
@@ -1109,6 +1298,8 @@ mod tests {
             s("standard"),
             s("--workload"),
             s("training-read"),
+            s("--metadata-mode"),
+            s("remote"),
             s("--root"),
             s("/tmp/nokv-fs-bench"),
             s("--keep"),
@@ -1116,6 +1307,7 @@ mod tests {
         .unwrap();
         assert_eq!(config.profile, Profile::Standard);
         assert_eq!(config.workload, Workload::TrainingRead);
+        assert_eq!(config.metadata_mode, MetadataMode::Remote);
         assert_eq!(config.root, PathBuf::from("/tmp/nokv-fs-bench"));
         assert!(config.keep);
         assert_eq!(config.object_concurrency, 1);
