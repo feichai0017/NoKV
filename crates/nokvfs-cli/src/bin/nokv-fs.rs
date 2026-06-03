@@ -17,6 +17,7 @@ const DEFAULT_MODE_DIR: u32 = 0o755;
 const DEFAULT_MODE_FILE: u32 = 0o644;
 const DEFAULT_UID: u32 = 1000;
 const DEFAULT_GID: u32 = 1000;
+const DEFAULT_GC_LIMIT: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Config {
@@ -45,6 +46,7 @@ enum Command {
     Rename { source: String, destination: String },
     RenameReplace { source: String, destination: String },
     Mount { mountpoint: PathBuf },
+    Gc { limit: usize },
     Help,
 }
 
@@ -201,6 +203,20 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 .map_err(from_client)?;
             nokvfs_fuse::mount(service, mountpoint, nokvfs_fuse::FuseOptions::default())
                 .map_err(from_io)?;
+        }
+        Command::Gc { limit } => {
+            let service = open_service(&config)?;
+            let cleanup = service
+                .cleanup_pending_objects(limit)
+                .map_err(from_client)?;
+            println!(
+                "object-gc scanned={} attempted={} deleted={} missing={} records_removed={}",
+                cleanup.scanned,
+                cleanup.attempted,
+                cleanup.deleted,
+                cleanup.missing,
+                cleanup.records_removed
+            );
         }
         Command::Help => {
             print_help(&mut io::stdout()).map_err(from_io)?;
@@ -394,6 +410,15 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
         "mount" => exact_args(args, 2).map(|()| Command::Mount {
             mountpoint: PathBuf::from(&args[1]),
         }),
+        "gc" => match args.len() {
+            1 => Ok(Command::Gc {
+                limit: DEFAULT_GC_LIMIT,
+            }),
+            2 => Ok(Command::Gc {
+                limit: parse_usize(&args[1], "limit")?,
+            }),
+            _ => Err(CliError::TooManyArguments),
+        },
         "help" => Ok(Command::Help),
         other => Err(CliError::UnknownCommand(other.to_owned())),
     }
@@ -425,6 +450,13 @@ fn value<'a>(args: &'a [String], index: usize, option: &'static str) -> Result<&
 
 fn parse_u32(raw: &str, field: &'static str) -> Result<u32, CliError> {
     raw.parse::<u32>().map_err(|_| CliError::InvalidNumber {
+        field,
+        value: raw.to_owned(),
+    })
+}
+
+fn parse_usize(raw: &str, field: &'static str) -> Result<usize, CliError> {
+    raw.parse::<usize>().map_err(|_| CliError::InvalidNumber {
         field,
         value: raw.to_owned(),
     })
@@ -478,6 +510,7 @@ Usage:\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount MOUNTPOINT\n\
+  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
 \n\
 Object backends:\n\
   --object-backend s3|rustfs\n\
@@ -617,6 +650,24 @@ mod tests {
                 mountpoint: PathBuf::from("/tmp/nokv-fs")
             }
         );
+    }
+
+    #[test]
+    fn parse_gc_command() {
+        assert_eq!(
+            parse(vec![s("gc")]).unwrap().1,
+            Command::Gc {
+                limit: DEFAULT_GC_LIMIT
+            }
+        );
+        assert_eq!(
+            parse(vec![s("gc"), s("7")]).unwrap().1,
+            Command::Gc { limit: 7 }
+        );
+        assert!(matches!(
+            parse(vec![s("gc"), s("bad")]),
+            Err(CliError::InvalidNumber { field: "limit", .. })
+        ));
     }
 
     #[test]

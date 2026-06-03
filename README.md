@@ -75,7 +75,7 @@ Implemented today:
   create, buffered write, flush/fsync/release publish, unlink, rmdir, and
   rename-replace;
 - `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, rm, rmdir, rename,
-  rename-replace, and mount.
+  rename-replace, mount, and manual object GC cleanup.
 
 Not implemented yet:
 
