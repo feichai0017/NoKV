@@ -54,8 +54,10 @@ process. It owns health, readiness, stats, manual GC endpoints, and the first
 metadata RPC. The SDK hot path uses a length-prefixed framed RPC on the same
 port; HTTP stays as the health/stats/gc and `/rpc` debug surface. The RPC
 supports both inode/name operations and path-oriented SDK operations, so
-server-side path resolution can avoid multi-round-trip nested creates. The Rust
-SDK has a remote metadata client for namespace operations and a remote file
+server-side path resolution can avoid multi-round-trip nested creates. It also
+supports ordered non-atomic batches: each subrequest has its own result/error,
+but the batch removes per-operation network round trips for SDK workloads. The
+Rust SDK has a remote metadata client for namespace operations and a remote file
 client that uploads object blocks directly, asks `metad` to atomically publish
 the body manifest, fetches body read plans, and reads object ranges directly
 from the configured object store. Remote FUSE is still future work.

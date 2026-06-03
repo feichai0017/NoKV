@@ -39,6 +39,11 @@ bytes are still read and written directly by the client against the configured
 S3-compatible object store. Use remote mode when evaluating the deployable
 service boundary.
 
+Metadata smoke workloads use the SDK's ordered non-atomic `create_files`
+batching for file create bursts. This measures the deployable SDK/server path
+without charging one network round trip per independent file create; each
+subrequest still has its own success or error result.
+
 Object-backed workloads can be scaled without editing code:
 
 ```bash

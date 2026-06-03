@@ -24,6 +24,7 @@ use crate::{display_name, parse_absolute_path, ArtifactMetadata, ClientError};
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
+const MAX_BATCH_RPC_REQUESTS: usize = 512;
 const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC1\n";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -355,6 +356,31 @@ impl RemoteMetadataClient {
         }
     }
 
+    pub fn create_files(
+        &self,
+        paths: &[String],
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        let mut entries = Vec::with_capacity(paths.len());
+        for chunk in paths.chunks(MAX_BATCH_RPC_REQUESTS) {
+            let requests = chunk
+                .iter()
+                .map(|path| MetadataRpcRequest::CreateFilePath {
+                    path: path.clone(),
+                    mode,
+                    uid,
+                    gid,
+                })
+                .collect();
+            for result in self.call_many(requests)? {
+                entries.push(result.and_then(dentry_result));
+            }
+        }
+        Ok(entries)
+    }
+
     pub fn lookup(&self, path: &str) -> Result<Option<DentryWithAttr>, ClientError> {
         match self.call(MetadataRpcRequest::LookupPath {
             path: path.to_owned(),
@@ -570,16 +596,22 @@ impl RemoteMetadataClient {
         self.return_connection(stream);
         let envelope: MetadataRpcEnvelope =
             serde_json::from_slice(&body).map_err(|err| ClientError::Protocol(err.to_string()))?;
-        if !envelope.ok {
-            return Err(ClientError::Remote(
-                envelope
-                    .error
-                    .unwrap_or_else(|| "unknown remote error".to_owned()),
-            ));
+        envelope_result(envelope)
+    }
+
+    fn call_many(
+        &self,
+        requests: Vec<MetadataRpcRequest>,
+    ) -> Result<Vec<Result<MetadataRpcResult, ClientError>>, ClientError> {
+        if requests.is_empty() {
+            return Ok(Vec::new());
         }
-        envelope
-            .result
-            .ok_or_else(|| ClientError::Protocol("metadata rpc response missing result".to_owned()))
+        match self.call(MetadataRpcRequest::Batch { requests })? {
+            MetadataRpcResult::Batch { results } => {
+                Ok(results.into_iter().map(envelope_result).collect())
+            }
+            other => Err(unexpected_result(other)),
+        }
     }
 
     fn take_connection(&self) -> Result<TcpStream, ClientError> {
@@ -834,6 +866,26 @@ fn hex_digit(byte: u8) -> Result<u8, ClientError> {
     }
 }
 
+fn dentry_result(result: MetadataRpcResult) -> Result<DentryWithAttr, ClientError> {
+    match result {
+        MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+        other => Err(unexpected_result(other)),
+    }
+}
+
+fn envelope_result(envelope: MetadataRpcEnvelope) -> Result<MetadataRpcResult, ClientError> {
+    if !envelope.ok {
+        return Err(ClientError::Remote(
+            envelope
+                .error
+                .unwrap_or_else(|| "unknown remote error".to_owned()),
+        ));
+    }
+    envelope
+        .result
+        .ok_or_else(|| ClientError::Protocol("metadata rpc response missing result".to_owned()))
+}
+
 fn unexpected_result(result: MetadataRpcResult) -> ClientError {
     ClientError::Protocol(format!("unexpected metadata rpc result {result:?}"))
 }
@@ -901,6 +953,34 @@ mod tests {
             .unwrap();
         assert_eq!(entry.attr.inode.get(), 42);
         assert_eq!(entry.dentry.name.as_bytes(), b"checkpoint.bin");
+    }
+
+    #[test]
+    fn remote_create_files_uses_single_batch_frame() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+            let request = read_frame(&mut stream).unwrap();
+            let request = String::from_utf8_lossy(&request);
+            assert!(request.contains(r#""op":"batch""#));
+            assert!(request.contains(r#""path":"/runs/a.bin""#));
+            assert!(request.contains(r#""path":"/runs/b.bin""#));
+            write_frame(
+                &mut stream,
+                br#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"a.bin","name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"b.bin","name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
+            )
+            .unwrap();
+        });
+        let client = RemoteMetadataClient::connect(addr);
+        let paths = vec!["/runs/a.bin".to_owned(), "/runs/b.bin".to_owned()];
+        let entries = client.create_files(&paths, 0o644, 1000, 1000).unwrap();
+        let entries = entries.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(entries[0].attr.inode.get(), 40);
+        assert_eq!(entries[1].attr.inode.get(), 41);
     }
 
     #[test]

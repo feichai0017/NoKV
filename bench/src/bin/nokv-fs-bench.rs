@@ -159,6 +159,18 @@ trait BenchClient: Sync {
         uid: u32,
         gid: u32,
     ) -> Result<DentryWithAttr, BenchError>;
+    fn create_files(
+        &self,
+        paths: &[String],
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Vec<DentryWithAttr>, BenchError> {
+        paths
+            .iter()
+            .map(|path| self.create_file(path, mode, uid, gid))
+            .collect()
+    }
     fn put_artifact(
         &self,
         path: &str,
@@ -258,6 +270,21 @@ impl BenchClient for RemoteNoKvFsClient<S3ObjectStore> {
     ) -> Result<DentryWithAttr, BenchError> {
         self.metadata()
             .create_file(path, mode, uid, gid)
+            .map_err(from_client)
+    }
+
+    fn create_files(
+        &self,
+        paths: &[String],
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Vec<DentryWithAttr>, BenchError> {
+        self.metadata()
+            .create_files(paths, mode, uid, gid)
+            .map_err(from_client)?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
             .map_err(from_client)
     }
 
@@ -381,9 +408,10 @@ fn bench_mdtest_easy(
         }
         client.mkdir(&dir_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         checksum = checksum.wrapping_add(dir as u64);
-        for file in 0..shape.files_per_dir {
-            let path = format!("{dir_path}/file-{file:05}");
-            let entry = client.create_file(&path, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)?;
+        let paths = (0..shape.files_per_dir)
+            .map(|file| format!("{dir_path}/file-{file:05}"))
+            .collect::<Vec<_>>();
+        for entry in client.create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)? {
             checksum = checksum.wrapping_add(entry.attr.inode.get());
         }
     }
@@ -418,9 +446,10 @@ fn bench_mdtest_hard(
     let before = client.object_stats();
     let start = Instant::now();
     let mut checksum = 0_u64;
-    for file in 0..shape.shared_files {
-        let path = format!("/mdtest-hard/file-{file:06}");
-        let entry = client.create_file(&path, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)?;
+    let paths = (0..shape.shared_files)
+        .map(|file| format!("/mdtest-hard/file-{file:06}"))
+        .collect::<Vec<_>>();
+    for entry in client.create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)? {
         checksum = checksum.wrapping_add(entry.attr.inode.get());
     }
     Ok(row(RowInput {

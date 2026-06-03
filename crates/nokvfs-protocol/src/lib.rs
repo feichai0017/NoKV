@@ -9,6 +9,9 @@ use serde::{Deserialize, Serialize};
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "op", rename_all = "snake_case")]
 pub enum MetadataRpcRequest {
+    Batch {
+        requests: Vec<MetadataRpcRequest>,
+    },
     BootstrapRoot {
         mode: u32,
         uid: u32,
@@ -119,6 +122,9 @@ pub struct MetadataRpcEnvelope {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MetadataRpcResult {
+    Batch {
+        results: Vec<MetadataRpcEnvelope>,
+    },
     InodeAttr {
         attr: Option<WireInodeAttr>,
     },

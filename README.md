@@ -79,7 +79,8 @@ Implemented today:
   object/history GC endpoints;
 - framed metadata RPC v0 on `nokvfs-server` for bootstrap, lookup,
   readdir-plus, create, remove, rename, snapshot, artifact publish, and
-  snapshot retirement; HTTP `/rpc` remains available for debug requests;
+  snapshot retirement, with ordered non-atomic batch requests for remote SDK
+  throughput; HTTP `/rpc` remains available for debug requests;
 - remote Rust metadata client for path and inode namespace operations over the
   framed RPC;
 - remote Rust file client that uploads object blocks directly, commits metadata

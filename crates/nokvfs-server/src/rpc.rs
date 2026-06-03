@@ -106,6 +106,24 @@ fn is_clean_framed_end(err: &io::Error) -> bool {
 
 fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ServerError> {
     match request {
+        MetadataRpcRequest::Batch { requests } => {
+            let results = requests
+                .into_iter()
+                .map(|request| match execute(server, request) {
+                    Ok(result) => MetadataRpcEnvelope {
+                        ok: true,
+                        result: Some(result),
+                        error: None,
+                    },
+                    Err(err) => MetadataRpcEnvelope {
+                        ok: false,
+                        result: None,
+                        error: Some(err.to_string()),
+                    },
+                })
+                .collect();
+            Ok(MetadataRpcResult::Batch { results })
+        }
         MetadataRpcRequest::BootstrapRoot { mode, uid, gid } => {
             let attr = server.service().bootstrap_root(mode, uid, gid)?;
             Ok(MetadataRpcResult::InodeAttr {
@@ -549,6 +567,25 @@ mod tests {
         let response = handle_rpc(&server, br#"{"op":"read_dir_plus_path","path":"/runs"}"#);
         assert!(response.contains("\"entries\""));
         assert!(response.contains("\"name_utf8\":\"checkpoint.bin\""));
+    }
+
+    #[test]
+    fn rpc_batch_preserves_ordered_per_request_results() {
+        let server = test_server();
+        let response = handle_rpc(
+            &server,
+            br#"{"op":"batch","requests":[{"op":"create_dir_path","path":"/runs","mode":493,"uid":1000,"gid":1000},{"op":"create_file_path","path":"/runs/a.bin","mode":420,"uid":1000,"gid":1000},{"op":"create_file_path","path":"/runs/a.bin","mode":420,"uid":1000,"gid":1000}]}"#,
+        );
+        let envelope: MetadataRpcEnvelope = serde_json::from_str(&response).unwrap();
+        let results = match envelope.result.unwrap() {
+            MetadataRpcResult::Batch { results } => results,
+            other => panic!("unexpected batch result: {other:?}"),
+        };
+        assert_eq!(results.len(), 3);
+        assert!(results[0].ok);
+        assert!(results[1].ok);
+        assert!(!results[2].ok);
+        assert!(results[2].error.is_some());
     }
 
     #[test]
