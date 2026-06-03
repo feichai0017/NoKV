@@ -13,8 +13,9 @@ const U32_WIDTH: usize = 4;
 
 pub use codec::{
     decode_allocator_state, decode_body_descriptor, decode_chunk_manifest,
-    decode_dentry_projection, decode_inode_attr, encode_allocator_state, encode_body_descriptor,
-    encode_chunk_manifest, encode_dentry_projection, encode_inode_attr, CodecError,
+    decode_dentry_projection, decode_inode_attr, decode_object_gc_record, encode_allocator_state,
+    encode_body_descriptor, encode_chunk_manifest, encode_dentry_projection, encode_inode_attr,
+    encode_object_gc_record, CodecError,
 };
 
 pub fn allocator_key(mount: MountId) -> Vec<u8> {
@@ -86,6 +87,30 @@ pub fn watch_log_key(mount: MountId, scope: InodeId, apply_index: u64, event_id:
     out
 }
 
+pub fn gc_queue_prefix(mount: MountId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH);
+    push_u64(&mut out, mount.get());
+    out
+}
+
+pub fn gc_object_key(
+    mount: MountId,
+    enqueue_version: u64,
+    inode: InodeId,
+    generation: u64,
+    chunk_index: u64,
+    block_index: u64,
+) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH * 6);
+    push_u64(&mut out, mount.get());
+    push_u64(&mut out, enqueue_version);
+    push_u64(&mut out, inode.get());
+    push_u64(&mut out, generation);
+    push_u64(&mut out, chunk_index);
+    push_u64(&mut out, block_index);
+    out
+}
+
 pub fn history_key(family: RecordFamily, user_key: &[u8], commit_version: u64) -> Vec<u8> {
     let mut out = history_prefix(family, user_key);
     push_u64(&mut out, u64::MAX - commit_version);
@@ -111,9 +136,10 @@ pub fn family_tag(family: RecordFamily) -> u8 {
         RecordFamily::PathIndex => 7,
         RecordFamily::Watch => 8,
         RecordFamily::Snapshot => 9,
-        RecordFamily::CommandDedupe => 10,
-        RecordFamily::History => 11,
-        RecordFamily::System => 12,
+        RecordFamily::Gc => 10,
+        RecordFamily::CommandDedupe => 11,
+        RecordFamily::History => 12,
+        RecordFamily::System => 13,
     }
 }
 
@@ -191,6 +217,17 @@ mod tests {
         let newer = history_key(RecordFamily::Inode, &key, 100);
         let older = history_key(RecordFamily::Inode, &key, 90);
         assert!(newer < older);
+    }
+
+    #[test]
+    fn gc_keys_are_mount_and_version_ordered() {
+        let key = gc_object_key(mount(), 10, inode(2), 3, 4, 5);
+        let other_mount = gc_object_key(MountId::new(8).unwrap(), 10, inode(2), 3, 4, 5);
+        let later = gc_object_key(mount(), 11, inode(2), 3, 4, 5);
+
+        assert!(key.starts_with(&gc_queue_prefix(mount())));
+        assert!(!other_mount.starts_with(&gc_queue_prefix(mount())));
+        assert!(key < later);
     }
 
     #[test]

@@ -71,8 +71,14 @@ upload object bytes
 ```
 
 If object upload succeeds and metadata publish fails, the object is staged but
-not reachable from the namespace. A future GC worker should clean staged or
-orphaned objects after a retention window.
+not reachable from the namespace. The caller can pass the staged object set to
+the explicit cleanup helper.
+
+If metadata remove or replace succeeds, the old body objects are written into a
+durable metadata GC queue in the same metadata commit that removes namespace
+reachability. The current local service exposes an explicit cleanup API; a
+future long-running metad process should call it as a background worker after
+the configured retention window.
 
 ## Chunk Manifest
 

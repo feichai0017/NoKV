@@ -36,6 +36,7 @@ The namespace entry appears only after the metadata command commits.
 The product contract should be explicit:
 
 - object upload failure means no metadata publish;
-- metadata publish failure leaves an orphan object for GC;
-- metadata remove/replace success returns old body refs for retryable GC;
+- metadata publish failure returns staged object refs for explicit cleanup;
+- metadata remove/replace success persists old body refs in the metadata GC
+  queue and returns the old body descriptor to the caller;
 - snapshot pins and watch cursors must protect history before GC.

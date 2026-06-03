@@ -34,6 +34,7 @@ pub enum RecordFamily {
     PathIndex,
     Watch,
     Snapshot,
+    Gc,
     CommandDedupe,
     History,
 }
@@ -94,6 +95,16 @@ pub struct BlockDescriptor {
     pub object_offset: u64,
     pub len: u64,
     pub digest_uri: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectGcRecord {
+    pub inode: InodeId,
+    pub generation: u64,
+    pub object_key: String,
+    pub size: u64,
+    pub digest_uri: String,
+    pub enqueue_version: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

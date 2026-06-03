@@ -2,7 +2,7 @@ use std::fmt;
 
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
-    FileType, InodeAttr, InodeId,
+    FileType, InodeAttr, InodeId, ObjectGcRecord,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -181,6 +181,31 @@ pub fn decode_chunk_manifest(bytes: &[u8]) -> Result<ChunkManifest, CodecError> 
         len,
         blocks,
     })
+}
+
+pub fn encode_object_gc_record(record: &ObjectGcRecord) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_u64(&mut out, record.inode.get());
+    push_u64(&mut out, record.generation);
+    put_string(&mut out, &record.object_key);
+    push_u64(&mut out, record.size);
+    put_string(&mut out, &record.digest_uri);
+    push_u64(&mut out, record.enqueue_version);
+    out
+}
+
+pub fn decode_object_gc_record(bytes: &[u8]) -> Result<ObjectGcRecord, CodecError> {
+    let mut input = Decoder::new(bytes);
+    let record = ObjectGcRecord {
+        inode: inode(input.u64()?)?,
+        generation: input.u64()?,
+        object_key: input.string()?,
+        size: input.u64()?,
+        digest_uri: input.string()?,
+        enqueue_version: input.u64()?,
+    };
+    input.finish()?;
+    Ok(record)
 }
 
 fn decode_inode_attr_from(input: &mut Decoder<'_>) -> Result<InodeAttr, CodecError> {

@@ -40,6 +40,7 @@ pub enum CommandKind {
     ReplaceArtifact,
     SnapshotSubtree,
     WatchSubtree,
+    CleanupObjects,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -196,13 +196,14 @@ v0 local:
   CLI
   close-to-open FUSE reads and buffered writes
   artifact publish
+  durable object GC queue and explicit cleanup API
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
   remove/rmdir/rename-replace
   long-running server
   Python/fsspec
-  object GC
+  background object GC worker
 
 v2 cluster:
   metadata router

@@ -16,22 +16,23 @@ use crate::command::{
 use crate::layout::{
     allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,
     decode_body_descriptor, decode_chunk_manifest, decode_dentry_projection, decode_inode_attr,
-    dentry_key, dentry_prefix, encode_allocator_state, encode_body_descriptor,
-    encode_chunk_manifest, encode_dentry_projection, encode_inode_attr, inode_key,
+    decode_object_gc_record, dentry_key, dentry_prefix, encode_allocator_state,
+    encode_body_descriptor, encode_chunk_manifest, encode_dentry_projection, encode_inode_attr,
+    encode_object_gc_record, gc_object_key, gc_queue_prefix, inode_key,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
-    MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectReadBlock, ObjectStore,
+    MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectKey, ObjectReadBlock, ObjectStore,
     StagedObjectSet, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
-    FileType, InodeAttr, InodeId, ModelError, MountId, RecordFamily,
+    FileType, InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, RecordFamily,
 };
 
 const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
 
-const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 11] = [
+const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 12] = [
     RecordFamily::System,
     RecordFamily::Mount,
     RecordFamily::Inode,
@@ -42,6 +43,7 @@ const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 11] = [
     RecordFamily::PathIndex,
     RecordFamily::Watch,
     RecordFamily::Snapshot,
+    RecordFamily::Gc,
     RecordFamily::CommandDedupe,
 ];
 
@@ -86,6 +88,15 @@ pub struct ObjectTransferStats {
     pub cache_hits: u64,
     pub manifest_chunks: u64,
     pub manifest_blocks: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PendingObjectCleanupOutcome {
+    pub scanned: usize,
+    pub attempted: usize,
+    pub deleted: usize,
+    pub missing: usize,
+    pub records_removed: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -198,6 +209,68 @@ where
         staged: &StagedObjectSet,
     ) -> Result<ObjectCleanupOutcome, MetadError> {
         delete_staged_objects(&self.objects, staged).map_err(Into::into)
+    }
+
+    pub fn cleanup_pending_objects(
+        &self,
+        limit: usize,
+    ) -> Result<PendingObjectCleanupOutcome, MetadError> {
+        let version = self.read_version()?;
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::Gc,
+            prefix: gc_queue_prefix(self.mount),
+            version,
+            limit,
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        if rows.is_empty() {
+            return Ok(PendingObjectCleanupOutcome::default());
+        }
+
+        let mut outcome = PendingObjectCleanupOutcome {
+            scanned: rows.len(),
+            attempted: 0,
+            deleted: 0,
+            missing: 0,
+            records_removed: 0,
+        };
+        let mut cleaned_keys = Vec::with_capacity(rows.len());
+        for row in rows {
+            let record = decode_object_gc_record(&row.value.0)
+                .map_err(|err| MetadError::Codec(err.to_string()))?;
+            let key = ObjectKey::new(record.object_key)?;
+            outcome.attempted += 1;
+            if self.objects.delete(&key)? {
+                outcome.deleted += 1;
+            } else {
+                outcome.missing += 1;
+            }
+            cleaned_keys.push(row.key);
+        }
+
+        let commit_version = self.next_version()?;
+        let records_removed = cleaned_keys.len();
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(
+                b"cleanup-objects",
+                self.mount,
+                InodeId::root(),
+                commit_version,
+            ),
+            kind: CommandKind::CleanupObjects,
+            read_version: predecessor(commit_version)?,
+            commit_version,
+            primary_family: RecordFamily::Gc,
+            primary_key: gc_queue_prefix(self.mount),
+            predicates: Vec::new(),
+            mutations: cleaned_keys
+                .into_iter()
+                .map(|key| delete_mutation(RecordFamily::Gc, key))
+                .collect(),
+            watch: Vec::new(),
+        })?;
+        outcome.records_removed = records_removed;
+        Ok(outcome)
     }
 
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<InodeAttr, MetadError> {
@@ -508,8 +581,11 @@ where
             delete_mutation(RecordFamily::Inode, inode_key(self.mount, entry.attr.inode)),
         ];
         if let Some(body) = &entry.body {
-            mutations
-                .extend(self.chunk_manifest_delete_mutations(entry.attr.inode, body.generation)?);
+            mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
+                entry.attr.inode,
+                body.generation,
+                version,
+            )?);
         }
         self.commit_metadata(MetadataCommand {
             request_id: request_id(b"remove-file", self.mount, entry.attr.inode, version),
@@ -691,9 +767,11 @@ where
                 inode_key(self.mount, replaced.attr.inode),
             ));
             if let Some(body) = &replaced.body {
-                mutations.extend(
-                    self.chunk_manifest_delete_mutations(replaced.attr.inode, body.generation)?,
-                );
+                mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
+                    replaced.attr.inode,
+                    body.generation,
+                    version,
+                )?);
             }
         }
 
@@ -839,7 +917,11 @@ where
         ];
         if let Some(body) = &projection.body {
             if let Some(old_generation) = old_generation {
-                mutations.extend(self.chunk_manifest_delete_mutations(inode, old_generation)?);
+                mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
+                    inode,
+                    old_generation,
+                    version,
+                )?);
             }
             mutations.push(Mutation {
                 family: RecordFamily::ChunkManifest,
@@ -1013,10 +1095,11 @@ where
         Ok(plan)
     }
 
-    fn chunk_manifest_delete_mutations(
+    fn chunk_manifest_delete_and_gc_mutations(
         &self,
         inode: InodeId,
         generation: u64,
+        enqueue_version: Version,
     ) -> Result<Vec<Mutation>, MetadError> {
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::ChunkManifest,
@@ -1025,10 +1108,38 @@ where
             limit: 0,
             purpose: ReadPurpose::WritePlanLocal,
         })?;
-        Ok(rows
-            .into_iter()
-            .map(|row| delete_mutation(RecordFamily::ChunkManifest, row.key))
-            .collect())
+        let mut mutations = Vec::new();
+        for row in rows {
+            if chunk_index_from_manifest_key(&row.key)? != BODY_SUMMARY_CHUNK_INDEX {
+                let manifest = decode_chunk_manifest(&row.value.0)
+                    .map_err(|err| MetadError::Codec(err.to_string()))?;
+                for (block_index, block) in manifest.blocks.iter().enumerate() {
+                    let record = ObjectGcRecord {
+                        inode,
+                        generation,
+                        object_key: block.object_key.clone(),
+                        size: block.len,
+                        digest_uri: block.digest_uri.clone(),
+                        enqueue_version: enqueue_version.get(),
+                    };
+                    mutations.push(Mutation {
+                        family: RecordFamily::Gc,
+                        key: gc_object_key(
+                            self.mount,
+                            enqueue_version.get(),
+                            inode,
+                            generation,
+                            manifest.chunk_index,
+                            block_index as u64,
+                        ),
+                        op: MutationOp::Put,
+                        value: Some(Value(encode_object_gc_record(&record))),
+                    });
+                }
+            }
+            mutations.push(delete_mutation(RecordFamily::ChunkManifest, row.key));
+        }
+        Ok(mutations)
     }
 
     fn commit_metadata(&self, mut command: MetadataCommand) -> Result<CommitResult, MetadError> {
@@ -1198,6 +1309,19 @@ fn delete_mutation(family: RecordFamily, key: Vec<u8>) -> Mutation {
     }
 }
 
+fn chunk_index_from_manifest_key(key: &[u8]) -> Result<u64, MetadError> {
+    if key.len() < std::mem::size_of::<u64>() {
+        return Err(MetadError::Codec(
+            "chunk manifest key is truncated".to_owned(),
+        ));
+    }
+    Ok(u64::from_be_bytes(
+        key[key.len() - std::mem::size_of::<u64>()..]
+            .try_into()
+            .expect("chunk index has fixed width"),
+    ))
+}
+
 fn predecessor(version: Version) -> Result<Version, MetadataError> {
     Version::new(version.get().saturating_sub(1))
 }
@@ -1224,6 +1348,7 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
         CommandKind::ReplaceArtifact => b"replace-artifact",
         CommandKind::SnapshotSubtree => b"snapshot-subtree",
         CommandKind::WatchSubtree => b"watch-subtree",
+        CommandKind::CleanupObjects => b"cleanup-objects",
     }
 }
 
@@ -1301,14 +1426,21 @@ mod tests {
     use nokvfs_object::MemoryObjectStore;
 
     fn service() -> NoKvFs<HoltMetadataStore, MemoryObjectStore> {
+        service_with_objects().0
+    }
+
+    fn service_with_objects() -> (
+        NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+        MemoryObjectStore,
+    ) {
         let objects = MemoryObjectStore::new();
         let service = NoKvFs::new(
             MountId::new(1).unwrap(),
             HoltMetadataStore::open_memory().unwrap(),
-            objects,
+            objects.clone(),
         );
         service.bootstrap_root(0o755, 1000, 1000).unwrap();
-        service
+        (service, objects)
     }
 
     fn artifact_request(name: DentryName, manifest_id: &str, bytes: &[u8]) -> PublishArtifact {
@@ -1324,6 +1456,17 @@ mod tests {
             uid: 1000,
             gid: 1000,
         }
+    }
+
+    fn block_key(inode: InodeId, generation: u64, chunk: u64, block: u64) -> ObjectKey {
+        ObjectKey::new(format!(
+            "blocks/1/{}/{}/{}/{}",
+            inode.get(),
+            generation,
+            chunk,
+            block
+        ))
+        .unwrap()
     }
 
     #[test]
@@ -1461,6 +1604,66 @@ mod tests {
             .unwrap()
             .is_none());
         assert!(service.get_attr(removed.attr.inode).unwrap().is_none());
+    }
+
+    #[test]
+    fn remove_file_queues_old_body_for_object_cleanup() {
+        let (service, objects) = service_with_objects();
+        let name = DentryName::new(b"artifact.bin".to_vec()).unwrap();
+        let published = service
+            .publish_artifact(artifact_request(name.clone(), "artifact.bin", b"old"))
+            .unwrap();
+        let body = published.body.clone().unwrap();
+        let object = block_key(published.attr.inode, body.generation, 0, 0);
+        assert!(objects.head(&object).unwrap().is_some());
+
+        let removed = service.remove_file(InodeId::root(), &name).unwrap();
+        assert_eq!(removed, published);
+        assert!(objects.head(&object).unwrap().is_some());
+
+        let cleanup = service.cleanup_pending_objects(100).unwrap();
+        assert_eq!(cleanup.scanned, 1);
+        assert_eq!(cleanup.attempted, 1);
+        assert_eq!(cleanup.deleted, 1);
+        assert_eq!(cleanup.missing, 0);
+        assert_eq!(cleanup.records_removed, 1);
+        assert!(objects.head(&object).unwrap().is_none());
+        assert_eq!(
+            service.cleanup_pending_objects(100).unwrap(),
+            PendingObjectCleanupOutcome::default()
+        );
+    }
+
+    #[test]
+    fn replace_artifact_cleanup_deletes_only_old_generation() {
+        let (service, objects) = service_with_objects();
+        let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+        let first = service
+            .publish_artifact(artifact_request(name.clone(), "checkpoint/old", b"old"))
+            .unwrap();
+        let old_body = first.body.clone().unwrap();
+        let old_object = block_key(first.attr.inode, old_body.generation, 0, 0);
+        let replaced = service
+            .replace_artifact(artifact_request(
+                name.clone(),
+                "checkpoint/new",
+                b"new-body",
+            ))
+            .unwrap();
+        let new_body = replaced.entry.body.clone().unwrap();
+        let new_object = block_key(replaced.entry.attr.inode, new_body.generation, 0, 0);
+        assert!(objects.head(&old_object).unwrap().is_some());
+        assert!(objects.head(&new_object).unwrap().is_some());
+
+        let cleanup = service.cleanup_pending_objects(100).unwrap();
+        assert_eq!(cleanup.deleted, 1);
+        assert_eq!(cleanup.records_removed, 1);
+        assert!(objects.head(&old_object).unwrap().is_none());
+        assert!(objects.head(&new_object).unwrap().is_some());
+        assert_eq!(
+            service.read_artifact(InodeId::root(), &name).unwrap(),
+            b"new-body"
+        );
     }
 
     #[test]
@@ -1657,6 +1860,30 @@ mod tests {
             reopened.lookup_plus(InodeId::root(), &second_name).unwrap(),
             Some(second)
         );
+    }
+
+    #[test]
+    fn pending_object_gc_survives_service_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = MemoryObjectStore::new();
+        let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
+        let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        let name = DentryName::new(b"artifact.bin".to_vec()).unwrap();
+        let published = service
+            .publish_artifact(artifact_request(name.clone(), "artifact.bin", b"old"))
+            .unwrap();
+        let body = published.body.clone().unwrap();
+        let object = block_key(published.attr.inode, body.generation, 0, 0);
+        service.remove_file(InodeId::root(), &name).unwrap();
+        drop(service);
+
+        let reopened =
+            NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects.clone()).unwrap();
+        let cleanup = reopened.cleanup_pending_objects(100).unwrap();
+        assert_eq!(cleanup.deleted, 1);
+        assert_eq!(cleanup.records_removed, 1);
+        assert!(objects.head(&object).unwrap().is_none());
     }
 
     #[test]

@@ -107,8 +107,8 @@ snapshot_pin
   val: read frontier, root inode, retention evidence
 
 gc_queue
-  key: mount_id | epoch | manifest_id_hash
-  val: pending object cleanup record
+  key: mount_id | enqueue_version | inode | generation | chunk | block
+  val: object key, size, digest, enqueue version
 ```
 
 `path_index` entries must be verified against the canonical dentry generation

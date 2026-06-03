@@ -27,10 +27,11 @@ const SESSION_CURRENT_TREE: &str = "session_current";
 const PATH_INDEX_CURRENT_TREE: &str = "path_index_current";
 const WATCH_CURRENT_TREE: &str = "watch_current";
 const SNAPSHOT_CURRENT_TREE: &str = "snapshot_current";
+const GC_CURRENT_TREE: &str = "gc_current";
 const COMMAND_DEDUPE_CURRENT_TREE: &str = "command_dedupe_current";
 const HISTORY_TREE: &str = "history";
 
-const REQUIRED_TREES: [&str; 12] = [
+const REQUIRED_TREES: [&str; 13] = [
     SYSTEM_CURRENT_TREE,
     MOUNT_CURRENT_TREE,
     INODE_CURRENT_TREE,
@@ -41,6 +42,7 @@ const REQUIRED_TREES: [&str; 12] = [
     PATH_INDEX_CURRENT_TREE,
     WATCH_CURRENT_TREE,
     SNAPSHOT_CURRENT_TREE,
+    GC_CURRENT_TREE,
     COMMAND_DEDUPE_CURRENT_TREE,
     HISTORY_TREE,
 ];
@@ -283,6 +285,7 @@ fn current_tree_name(family: RecordFamily) -> &'static str {
         RecordFamily::PathIndex => PATH_INDEX_CURRENT_TREE,
         RecordFamily::Watch => WATCH_CURRENT_TREE,
         RecordFamily::Snapshot => SNAPSHOT_CURRENT_TREE,
+        RecordFamily::Gc => GC_CURRENT_TREE,
         RecordFamily::CommandDedupe => COMMAND_DEDUPE_CURRENT_TREE,
         RecordFamily::History => HISTORY_TREE,
     }
