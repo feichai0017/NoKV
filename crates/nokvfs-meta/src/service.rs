@@ -5,6 +5,7 @@
 //! into `MetadataCommand`s and stores file bodies through an object-store
 //! boundary. It does not own Holt trees, Raft replication, FUSE, or protobuf.
 
+use std::collections::HashSet;
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -593,6 +594,54 @@ where
     ) -> Result<DentryWithAttr, MetadError> {
         let (parent, name) = self.resolve_parent_path(path)?;
         self.create_file(parent, name, mode, uid, gid)
+    }
+
+    pub fn create_files_in_dir_path(
+        &self,
+        parent_path: &str,
+        names: Vec<DentryName>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Vec<DentryWithAttr>, MetadError> {
+        let parent = self.resolve_directory_path(parent_path)?;
+        self.create_files_in_dir(parent, names, mode, uid, gid)
+    }
+
+    pub fn create_files_in_dir(
+        &self,
+        parent: InodeId,
+        names: Vec<DentryName>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Vec<DentryWithAttr>, MetadError> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        ensure_unique_names(&names)?;
+        let version = self.next_version()?;
+        let inodes = self.next_inodes(names.len())?;
+        let projections = names
+            .into_iter()
+            .zip(inodes)
+            .map(|(name, inode)| {
+                let attr = InodeAttr {
+                    inode,
+                    file_type: FileType::File,
+                    mode,
+                    uid,
+                    gid,
+                    size: 0,
+                    generation: version.get(),
+                    mtime_ms: version.get(),
+                    ctime_ms: version.get(),
+                };
+                projection(parent, name, attr, None)
+            })
+            .collect::<Vec<_>>();
+        self.commit_create_projections(CommandKind::CreateFiles, &projections, version)?;
+        Ok(projections.into_iter().map(Into::into).collect())
     }
 
     pub fn publish_artifact(&self, request: PublishArtifact) -> Result<DentryWithAttr, MetadError> {
@@ -1442,6 +1491,77 @@ where
         self.commit_create_projection_with_chunks(kind, projection, &[], version)
     }
 
+    fn commit_create_projections(
+        &self,
+        kind: CommandKind,
+        projections: &[DentryProjection],
+        version: Version,
+    ) -> Result<(), MetadError> {
+        let Some(first) = projections.first() else {
+            return Ok(());
+        };
+        let parent = first.dentry.parent;
+        let mut predicates = vec![PredicateRef {
+            family: RecordFamily::Inode,
+            key: inode_key(self.mount, parent),
+            predicate: Predicate::Exists,
+        }];
+        let mut mutations = Vec::with_capacity(projections.len() * 2);
+        let mut watch = Vec::with_capacity(projections.len());
+        for projection in projections {
+            if projection.dentry.parent != parent {
+                return Err(MetadError::InvalidPath(
+                    "batched create requires one parent".to_owned(),
+                ));
+            }
+            let inode = projection.attr.inode;
+            let dentry = dentry_key(
+                self.mount,
+                projection.dentry.parent,
+                &projection.dentry.name,
+            );
+            predicates.push(PredicateRef {
+                family: RecordFamily::Dentry,
+                key: dentry.clone(),
+                predicate: Predicate::NotExists,
+            });
+            mutations.push(Mutation {
+                family: RecordFamily::Inode,
+                key: inode_key(self.mount, inode),
+                op: MutationOp::Put,
+                value: Some(Value(encode_inode_attr(&projection.attr))),
+            });
+            mutations.push(Mutation {
+                family: RecordFamily::Dentry,
+                key: dentry,
+                op: MutationOp::Put,
+                value: Some(Value(encode_dentry_projection(projection))),
+            });
+            watch.push(self.watch_projection(
+                projection.dentry.parent,
+                WatchEvent {
+                    kind: create_watch_kind(kind),
+                    parent: Some(projection.dentry.parent),
+                    name: Some(projection.dentry.name.clone()),
+                    inode,
+                    version: version.get(),
+                },
+            ));
+        }
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(kind_name(kind), self.mount, parent, version),
+            kind,
+            read_version: predecessor(version)?,
+            commit_version: version,
+            primary_family: RecordFamily::Dentry,
+            primary_key: dentry_prefix(self.mount, parent),
+            predicates,
+            mutations,
+            watch,
+        })?;
+        Ok(())
+    }
+
     fn commit_create_projection_with_chunks(
         &self,
         kind: CommandKind,
@@ -1925,6 +2045,18 @@ where
         self.ensure_allocator_reservation(self.clock.load(Ordering::Relaxed), required_next_inode)?;
         InodeId::new(raw).map_err(Into::into)
     }
+
+    fn next_inodes(&self, count: usize) -> Result<Vec<InodeId>, MetadError> {
+        let count = u64::try_from(count).map_err(|_| MetadError::AllocatorExhausted)?;
+        let start = self.next_inode.fetch_add(count, Ordering::Relaxed);
+        let end = start
+            .checked_add(count)
+            .ok_or(MetadError::AllocatorExhausted)?;
+        self.ensure_allocator_reservation(self.clock.load(Ordering::Relaxed), end)?;
+        (start..end)
+            .map(|raw| InodeId::new(raw).map_err(Into::into))
+            .collect()
+    }
 }
 
 impl<M, O> NoKvFs<M, O>
@@ -2049,10 +2181,25 @@ fn delete_mutation(family: RecordFamily, key: Vec<u8>) -> Mutation {
     }
 }
 
+fn ensure_unique_names(names: &[DentryName]) -> Result<(), MetadError> {
+    let mut seen = HashSet::with_capacity(names.len());
+    for name in names {
+        if !seen.insert(name.as_bytes()) {
+            return Err(MetadError::InvalidPath(format!(
+                "duplicate dentry name {} in batched create",
+                String::from_utf8_lossy(name.as_bytes())
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn create_watch_kind(kind: CommandKind) -> WatchEventKind {
     match kind {
         CommandKind::PublishArtifact => WatchEventKind::PublishArtifact,
-        CommandKind::CreateFile | CommandKind::CreateDir => WatchEventKind::Create,
+        CommandKind::CreateFile | CommandKind::CreateFiles | CommandKind::CreateDir => {
+            WatchEventKind::Create
+        }
         _ => WatchEventKind::UpdateAttr,
     }
 }
@@ -2199,6 +2346,7 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
     match kind {
         CommandKind::ReserveAllocator => b"reserve-allocator",
         CommandKind::CreateFile => b"create-file",
+        CommandKind::CreateFiles => b"create-files",
         CommandKind::CreateDir => b"create-dir",
         CommandKind::Rename => b"rename",
         CommandKind::RenameReplace => b"rename-replace",
@@ -2448,6 +2596,43 @@ mod tests {
         assert_eq!(after.history_write_total - before.history_write_total, 0);
         assert_eq!(after.watch_write_total - before.watch_write_total, 1);
         assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 1);
+    }
+
+    #[test]
+    fn create_files_in_dir_coalesces_into_one_metadata_command() {
+        let metadata = HoltMetadataStore::open_memory().unwrap();
+        let service = NoKvFs::new(
+            MountId::new(1).unwrap(),
+            metadata.clone(),
+            MemoryObjectStore::new(),
+        );
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+        let before = metadata.metadata_store_stats();
+
+        let entries = service
+            .create_files_in_dir_path(
+                "/runs",
+                vec![
+                    DentryName::new(b"a.bin".to_vec()).unwrap(),
+                    DentryName::new(b"b.bin".to_vec()).unwrap(),
+                ],
+                0o644,
+                1000,
+                1000,
+            )
+            .unwrap();
+
+        let after = metadata.metadata_store_stats();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(after.commit_total - before.commit_total, 1);
+        assert_eq!(after.current_put_total - before.current_put_total, 4);
+        assert_eq!(after.current_delete_total - before.current_delete_total, 0);
+        assert_eq!(after.history_write_total - before.history_write_total, 0);
+        assert_eq!(after.watch_write_total - before.watch_write_total, 2);
+        assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 1);
+        let listed = service.read_dir_plus_path("/runs").unwrap();
+        assert_eq!(listed.len(), 2);
     }
 
     #[test]

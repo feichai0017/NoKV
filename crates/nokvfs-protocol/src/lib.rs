@@ -63,6 +63,13 @@ pub enum MetadataRpcRequest {
         uid: u32,
         gid: u32,
     },
+    CreateFilesInDirPath {
+        parent_path: String,
+        names: Vec<String>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
     RemoveFile {
         parent: u64,
         name: String,

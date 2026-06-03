@@ -1,5 +1,6 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::rpc;
@@ -22,7 +23,7 @@ pub(crate) struct HttpResponse {
     keep_alive: bool,
 }
 
-pub(crate) fn handle_stream(server: &Server, mut stream: TcpStream) -> Result<(), ServerError> {
+pub(crate) fn handle_stream(server: Arc<Server>, mut stream: TcpStream) -> Result<(), ServerError> {
     stream
         .set_read_timeout(Some(CONTROL_IO_TIMEOUT))
         .map_err(ServerError::Io)?;
@@ -41,7 +42,7 @@ pub(crate) fn handle_stream(server: &Server, mut stream: TcpStream) -> Result<()
         if request.line.is_empty() && request.body.is_empty() {
             return Ok(());
         }
-        let response = handle_request(server, &request);
+        let response = handle_request(server.as_ref(), &request);
         write_response(&mut stream, &response).map_err(ServerError::Io)?;
         if !response.keep_alive {
             return Ok(());

@@ -31,6 +31,7 @@ pub enum ReadPurpose {
 pub enum CommandKind {
     ReserveAllocator,
     CreateFile,
+    CreateFiles,
     CreateDir,
     Rename,
     RenameReplace,

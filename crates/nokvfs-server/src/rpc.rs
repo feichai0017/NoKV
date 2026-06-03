@@ -1,5 +1,7 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
+use std::sync::{Arc, Mutex};
+use std::thread;
 
 use nokvfs_meta::{DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
@@ -15,8 +17,15 @@ use nokvfs_types::{
 
 use crate::server::{Server, ServerError};
 
-pub(crate) const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC2\n";
+pub(crate) const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
+const FRAME_HEADER_BYTES: usize = 16;
 const MAX_FRAMED_RPC_BYTES: usize = 16 * 1024 * 1024;
+
+struct RpcFrame {
+    request_id: u64,
+    flags: u32,
+    payload: Vec<u8>,
+}
 
 pub(crate) fn handle_rpc(server: &Server, body: &[u8]) -> String {
     let envelope = match serde_json::from_slice::<MetadataRpcRequest>(body) {
@@ -70,11 +79,12 @@ fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerErro
 }
 
 pub(crate) fn handle_framed_stream(
-    server: &Server,
+    server: Arc<Server>,
     mut stream: TcpStream,
 ) -> Result<(), ServerError> {
     stream.set_read_timeout(None).map_err(ServerError::Io)?;
     stream.set_write_timeout(None).map_err(ServerError::Io)?;
+    let writer = Arc::new(Mutex::new(stream.try_clone().map_err(ServerError::Io)?));
     let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
     stream.read_exact(&mut magic).map_err(ServerError::Io)?;
     if &magic != FRAMED_RPC_MAGIC {
@@ -85,22 +95,48 @@ pub(crate) fn handle_framed_stream(
     }
 
     loop {
-        let Some(request) = read_frame(&mut stream)? else {
+        let Some(frame) = read_frame(&mut stream)? else {
             return Ok(());
         };
-        let response = handle_binary_rpc(server, &request)?;
-        write_frame(&mut stream, &response)?;
+        let server = Arc::clone(&server);
+        let writer = Arc::clone(&writer);
+        thread::spawn(move || {
+            let response = handle_binary_rpc(server.as_ref(), &frame.payload);
+            let response = match response {
+                Ok(response) => response,
+                Err(err) => {
+                    let envelope = MetadataRpcEnvelope {
+                        ok: false,
+                        result: None,
+                        error: Some(err.to_string()),
+                    };
+                    match encode_envelope(&envelope) {
+                        Ok(response) => response,
+                        Err(err) => {
+                            eprintln!("metadata framed rpc error encode failed: {err}");
+                            return;
+                        }
+                    }
+                }
+            };
+            let mut writer = writer.lock().expect("framed rpc writer");
+            if let Err(err) = write_frame(&mut writer, frame.request_id, frame.flags, &response) {
+                eprintln!("metadata framed rpc response write failed: {err}");
+            }
+        });
     }
 }
 
-fn read_frame(stream: &mut TcpStream) -> Result<Option<Vec<u8>>, ServerError> {
-    let mut len = [0_u8; 4];
-    match stream.read_exact(&mut len) {
+fn read_frame(stream: &mut TcpStream) -> Result<Option<RpcFrame>, ServerError> {
+    let mut header = [0_u8; FRAME_HEADER_BYTES];
+    match stream.read_exact(&mut header) {
         Ok(()) => {}
         Err(err) if is_clean_framed_end(&err) => return Ok(None),
         Err(err) => return Err(ServerError::Io(err)),
     }
-    let len = u32::from_be_bytes(len) as usize;
+    let request_id = u64::from_be_bytes(header[0..8].try_into().expect("request id header"));
+    let flags = u32::from_be_bytes(header[8..12].try_into().expect("flags header"));
+    let len = u32::from_be_bytes(header[12..16].try_into().expect("length header")) as usize;
     if len > MAX_FRAMED_RPC_BYTES {
         return Err(ServerError::Io(io::Error::new(
             io::ErrorKind::InvalidData,
@@ -109,18 +145,31 @@ fn read_frame(stream: &mut TcpStream) -> Result<Option<Vec<u8>>, ServerError> {
     }
     let mut body = vec![0_u8; len];
     stream.read_exact(&mut body).map_err(ServerError::Io)?;
-    Ok(Some(body))
+    Ok(Some(RpcFrame {
+        request_id,
+        flags,
+        payload: body,
+    }))
 }
 
-fn write_frame(stream: &mut TcpStream, body: &[u8]) -> Result<(), ServerError> {
+fn write_frame(
+    stream: &mut TcpStream,
+    request_id: u64,
+    flags: u32,
+    body: &[u8],
+) -> Result<(), ServerError> {
     let len = u32::try_from(body.len()).map_err(|_| {
         ServerError::Io(io::Error::new(
             io::ErrorKind::InvalidData,
             "metadata framed rpc response exceeds u32 length",
         ))
     })?;
+    let mut header = [0_u8; FRAME_HEADER_BYTES];
+    header[0..8].copy_from_slice(&request_id.to_be_bytes());
+    header[8..12].copy_from_slice(&flags.to_be_bytes());
+    header[12..16].copy_from_slice(&len.to_be_bytes());
     stream
-        .write_all(&len.to_be_bytes())
+        .write_all(&header)
         .and_then(|_| stream.write_all(body))
         .map_err(ServerError::Io)
 }
@@ -132,26 +181,163 @@ fn is_clean_framed_end(err: &io::Error) -> bool {
     )
 }
 
+fn execute_batch(
+    server: &Server,
+    requests: Vec<MetadataRpcRequest>,
+) -> Result<MetadataRpcResult, ServerError> {
+    let mut results = Vec::with_capacity(requests.len());
+    let mut iter = requests.into_iter().peekable();
+    while let Some(request) = iter.next() {
+        let Some((parent_path, name, mode, uid, gid)) = create_file_path_parts(&request) else {
+            results.push(execute_envelope(server, request));
+            continue;
+        };
+        let mut names = vec![name];
+        while let Some(next) = iter.peek() {
+            let Some((next_parent, next_name, next_mode, next_uid, next_gid)) =
+                create_file_path_parts(next)
+            else {
+                break;
+            };
+            if next_parent != parent_path || next_mode != mode || next_uid != uid || next_gid != gid
+            {
+                break;
+            }
+            names.push(next_name);
+            iter.next();
+        }
+        if names.len() == 1 {
+            let path = child_path(&parent_path, &names.remove(0));
+            results.push(execute_envelope(
+                server,
+                MetadataRpcRequest::CreateFilePath {
+                    path,
+                    mode,
+                    uid,
+                    gid,
+                },
+            ));
+        } else {
+            results.extend(create_files_in_dir_path_envelopes(
+                server,
+                &parent_path,
+                names,
+                mode,
+                uid,
+                gid,
+            ));
+        }
+    }
+    Ok(MetadataRpcResult::Batch { results })
+}
+
+fn execute_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
+    match execute(server, request) {
+        Ok(result) => ok_envelope(result),
+        Err(err) => err_envelope(err),
+    }
+}
+
+fn ok_envelope(result: MetadataRpcResult) -> MetadataRpcEnvelope {
+    MetadataRpcEnvelope {
+        ok: true,
+        result: Some(result),
+        error: None,
+    }
+}
+
+fn err_envelope(err: ServerError) -> MetadataRpcEnvelope {
+    MetadataRpcEnvelope {
+        ok: false,
+        result: None,
+        error: Some(err.to_string()),
+    }
+}
+
+fn create_files_in_dir_path_envelopes(
+    server: &Server,
+    parent_path: &str,
+    names: Vec<String>,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+) -> Vec<MetadataRpcEnvelope> {
+    let parsed = names
+        .iter()
+        .map(|name| dentry_name(name.clone()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ServerError::Metadata);
+    let coalesced = parsed.and_then(|names| {
+        server
+            .service()
+            .create_files_in_dir_path(parent_path, names, mode, uid, gid)
+            .map_err(ServerError::Metadata)
+    });
+    match coalesced {
+        Ok(entries) => entries
+            .iter()
+            .map(|entry| {
+                ok_envelope(MetadataRpcResult::Dentry {
+                    entry: Some(Box::new(wire_dentry(entry))),
+                })
+            })
+            .collect(),
+        Err(_) => names
+            .into_iter()
+            .map(|name| {
+                execute_envelope(
+                    server,
+                    MetadataRpcRequest::CreateFilePath {
+                        path: child_path(parent_path, &name),
+                        mode,
+                        uid,
+                        gid,
+                    },
+                )
+            })
+            .collect(),
+    }
+}
+
+fn create_file_path_parts(request: &MetadataRpcRequest) -> Option<(String, String, u32, u32, u32)> {
+    match request {
+        MetadataRpcRequest::CreateFilePath {
+            path,
+            mode,
+            uid,
+            gid,
+        } => {
+            let (parent_path, name) = split_parent_path(path)?;
+            Some((parent_path, name, *mode, *uid, *gid))
+        }
+        _ => None,
+    }
+}
+
+fn split_parent_path(path: &str) -> Option<(String, String)> {
+    if !path.starts_with('/') || path == "/" {
+        return None;
+    }
+    let slash = path.rfind('/')?;
+    let name = path.get(slash + 1..)?;
+    if name.is_empty() {
+        return None;
+    }
+    let parent = if slash == 0 { "/" } else { &path[..slash] };
+    Some((parent.to_owned(), name.to_owned()))
+}
+
+fn child_path(parent: &str, name: &str) -> String {
+    if parent == "/" {
+        format!("/{name}")
+    } else {
+        format!("{parent}/{name}")
+    }
+}
+
 fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ServerError> {
     match request {
-        MetadataRpcRequest::Batch { requests } => {
-            let results = requests
-                .into_iter()
-                .map(|request| match execute(server, request) {
-                    Ok(result) => MetadataRpcEnvelope {
-                        ok: true,
-                        result: Some(result),
-                        error: None,
-                    },
-                    Err(err) => MetadataRpcEnvelope {
-                        ok: false,
-                        result: None,
-                        error: Some(err.to_string()),
-                    },
-                })
-                .collect();
-            Ok(MetadataRpcResult::Batch { results })
-        }
+        MetadataRpcRequest::Batch { requests } => execute_batch(server, requests),
         MetadataRpcRequest::BootstrapRoot { mode, uid, gid } => {
             let attr = server.service().bootstrap_root(mode, uid, gid)?;
             Ok(MetadataRpcResult::InodeAttr {
@@ -248,6 +434,22 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
+        MetadataRpcRequest::CreateFilesInDirPath {
+            parent_path,
+            names,
+            mode,
+            uid,
+            gid,
+        } => Ok(MetadataRpcResult::Batch {
+            results: create_files_in_dir_path_envelopes(
+                server,
+                &parent_path,
+                names,
+                mode,
+                uid,
+                gid,
+            ),
+        }),
         MetadataRpcRequest::RemoveFile { parent, name } => {
             let entry = server
                 .service()

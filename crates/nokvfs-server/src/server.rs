@@ -58,7 +58,7 @@ impl Server {
             let stream = stream.map_err(ServerError::Io)?;
             let server = Arc::clone(&server);
             thread::spawn(move || {
-                if let Err(err) = http::handle_stream(&server, stream) {
+                if let Err(err) = http::handle_stream(server, stream) {
                     eprintln!("nokvfs-server connection failed: {err}");
                 }
             });

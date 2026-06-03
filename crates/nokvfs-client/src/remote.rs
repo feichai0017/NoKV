@@ -1,8 +1,10 @@
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{mpsc, Arc, Mutex};
+use std::thread;
 use std::time::Duration;
+use std::{collections::HashMap, io};
 
 use nokvfs_meta::{DentryWithAttr, ObjectTransferStats, RenameReplaceResult};
 use nokvfs_object::{
@@ -25,7 +27,8 @@ use crate::{display_name, parse_absolute_path, ArtifactMetadata, ClientError};
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BATCH_RPC_REQUESTS: usize = 512;
-const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC2\n";
+const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
+const FRAME_HEADER_BYTES: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct RemoteMetadataClientOptions {
@@ -35,7 +38,18 @@ pub struct RemoteMetadataClientOptions {
 
 pub struct RemoteMetadataClient {
     options: RemoteMetadataClientOptions,
-    connections: Mutex<Vec<TcpStream>>,
+    next_request_id: AtomicU64,
+    connection: Mutex<Option<Arc<PipelinedConnection>>>,
+}
+
+struct PipelinedConnection {
+    writer: Mutex<TcpStream>,
+    pending: Arc<Mutex<HashMap<u64, mpsc::Sender<PendingFrame>>>>,
+}
+
+enum PendingFrame {
+    Payload(Vec<u8>),
+    Failed(String),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -309,7 +323,8 @@ impl RemoteMetadataClient {
     pub fn new(options: RemoteMetadataClientOptions) -> Self {
         Self {
             options,
-            connections: Mutex::new(Vec::new()),
+            next_request_id: AtomicU64::new(1),
+            connection: Mutex::new(None),
         }
     }
 
@@ -369,16 +384,14 @@ impl RemoteMetadataClient {
     ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
         let mut entries = Vec::with_capacity(paths.len());
         for chunk in paths.chunks(MAX_BATCH_RPC_REQUESTS) {
-            let requests = chunk
-                .iter()
-                .map(|path| MetadataRpcRequest::CreateFilePath {
-                    path: path.clone(),
-                    mode,
-                    uid,
-                    gid,
-                })
-                .collect();
-            for result in self.call_many(requests)? {
+            let request = create_files_request(chunk, mode, uid, gid)?;
+            let results: Vec<Result<MetadataRpcResult, ClientError>> = match self.call(request)? {
+                MetadataRpcResult::Batch { results } => {
+                    results.into_iter().map(envelope_result).collect()
+                }
+                other => return Err(unexpected_result(other)),
+            };
+            for result in results {
                 entries.push(result.and_then(dentry_result));
             }
         }
@@ -608,71 +621,188 @@ impl RemoteMetadataClient {
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
         let body =
             encode_request(&request).map_err(|err| ClientError::Protocol(err.to_string()))?;
-        let mut stream = self.take_connection()?;
-        write_frame(&mut stream, &body)?;
-        let body = read_frame(&mut stream)?;
-        self.return_connection(stream);
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let connection = self.connection()?;
+        let body = connection.call(request_id, &body, self.options.timeout)?;
         let envelope =
             decode_envelope(&body).map_err(|err| ClientError::Protocol(err.to_string()))?;
         envelope_result(envelope)
     }
 
-    fn call_many(
-        &self,
-        requests: Vec<MetadataRpcRequest>,
-    ) -> Result<Vec<Result<MetadataRpcResult, ClientError>>, ClientError> {
-        if requests.is_empty() {
-            return Ok(Vec::new());
+    fn connection(&self) -> Result<Arc<PipelinedConnection>, ClientError> {
+        let mut guard = self.connection.lock().expect("metadata rpc connection");
+        if let Some(connection) = &*guard {
+            return Ok(Arc::clone(connection));
         }
-        match self.call(MetadataRpcRequest::Batch { requests })? {
-            MetadataRpcResult::Batch { results } => {
-                Ok(results.into_iter().map(envelope_result).collect())
-            }
-            other => Err(unexpected_result(other)),
-        }
-    }
-
-    fn take_connection(&self) -> Result<TcpStream, ClientError> {
-        if let Some(stream) = self.connections.lock().expect("connection pool").pop() {
-            return Ok(stream);
-        }
-        let mut stream = TcpStream::connect(self.options.address)
-            .map_err(|err| ClientError::Io(err.to_string()))?;
-        stream
-            .set_read_timeout(Some(self.options.timeout))
-            .map_err(|err| ClientError::Io(err.to_string()))?;
-        stream
-            .set_write_timeout(Some(self.options.timeout))
-            .map_err(|err| ClientError::Io(err.to_string()))?;
-        stream
-            .write_all(FRAMED_RPC_MAGIC)
-            .map_err(|err| ClientError::Io(err.to_string()))?;
-        Ok(stream)
-    }
-
-    fn return_connection(&self, stream: TcpStream) {
-        self.connections
-            .lock()
-            .expect("connection pool")
-            .push(stream);
+        let connection = Arc::new(PipelinedConnection::connect(self.options.address)?);
+        *guard = Some(Arc::clone(&connection));
+        Ok(connection)
     }
 }
 
-fn write_frame(stream: &mut TcpStream, body: &[u8]) -> Result<(), ClientError> {
+fn create_files_request(
+    paths: &[String],
+    mode: u32,
+    uid: u32,
+    gid: u32,
+) -> Result<MetadataRpcRequest, ClientError> {
+    let mut parent_path = None;
+    let mut names = Vec::with_capacity(paths.len());
+    for path in paths {
+        let (parent, name) = rpc_parent_and_name(path)?;
+        if parent_path
+            .as_deref()
+            .is_some_and(|existing| existing != parent)
+        {
+            let requests = paths
+                .iter()
+                .map(|path| MetadataRpcRequest::CreateFilePath {
+                    path: path.clone(),
+                    mode,
+                    uid,
+                    gid,
+                })
+                .collect();
+            return Ok(MetadataRpcRequest::Batch { requests });
+        }
+        parent_path = Some(parent);
+        names.push(name);
+    }
+    Ok(MetadataRpcRequest::CreateFilesInDirPath {
+        parent_path: parent_path.unwrap_or_else(|| "/".to_owned()),
+        names,
+        mode,
+        uid,
+        gid,
+    })
+}
+
+fn rpc_parent_and_name(path: &str) -> Result<(String, String), ClientError> {
+    let mut components = parse_absolute_path(path)?;
+    let name = components.pop().ok_or(ClientError::RootHasNoParent)?;
+    let name = rpc_name(&name)?;
+    let mut parent = String::from("/");
+    for (index, component) in components.iter().enumerate() {
+        if index > 0 {
+            parent.push('/');
+        }
+        parent.push_str(&rpc_name(component)?);
+    }
+    Ok((parent, name))
+}
+
+impl PipelinedConnection {
+    fn connect(address: SocketAddr) -> Result<Self, ClientError> {
+        let mut stream =
+            TcpStream::connect(address).map_err(|err| ClientError::Io(err.to_string()))?;
+        stream
+            .write_all(FRAMED_RPC_MAGIC)
+            .map_err(|err| ClientError::Io(err.to_string()))?;
+        let reader = stream
+            .try_clone()
+            .map_err(|err| ClientError::Io(err.to_string()))?;
+        let connection = Self {
+            writer: Mutex::new(stream),
+            pending: Arc::new(Mutex::new(HashMap::new())),
+        };
+        connection.spawn_reader(reader);
+        Ok(connection)
+    }
+
+    fn spawn_reader(&self, mut reader: TcpStream) {
+        let pending = Arc::clone(&self.pending);
+        thread::spawn(move || loop {
+            match read_frame(&mut reader) {
+                Ok((request_id, _flags, payload)) => {
+                    let waiter = pending
+                        .lock()
+                        .expect("metadata rpc pending")
+                        .remove(&request_id);
+                    if let Some(waiter) = waiter {
+                        let _ = waiter.send(PendingFrame::Payload(payload));
+                    }
+                }
+                Err(err) => {
+                    let mut pending = pending.lock().expect("metadata rpc pending");
+                    let waiters = pending
+                        .drain()
+                        .map(|(_, waiter)| waiter)
+                        .collect::<Vec<_>>();
+                    drop(pending);
+                    for waiter in waiters {
+                        let _ = waiter.send(PendingFrame::Failed(err.to_string()));
+                    }
+                    break;
+                }
+            }
+        });
+    }
+
+    fn call(
+        &self,
+        request_id: u64,
+        body: &[u8],
+        timeout: Duration,
+    ) -> Result<Vec<u8>, ClientError> {
+        let (tx, rx) = mpsc::channel();
+        self.pending
+            .lock()
+            .expect("metadata rpc pending")
+            .insert(request_id, tx);
+        let write_result = {
+            let mut writer = self.writer.lock().expect("metadata rpc writer");
+            write_frame(&mut writer, request_id, 0, body)
+        };
+        if let Err(err) = write_result {
+            self.pending
+                .lock()
+                .expect("metadata rpc pending")
+                .remove(&request_id);
+            return Err(err);
+        }
+        match rx.recv_timeout(timeout) {
+            Ok(PendingFrame::Payload(payload)) => Ok(payload),
+            Ok(PendingFrame::Failed(err)) => Err(ClientError::Io(err)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                self.pending
+                    .lock()
+                    .expect("metadata rpc pending")
+                    .remove(&request_id);
+                Err(ClientError::Io(
+                    "metadata rpc response timed out".to_owned(),
+                ))
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(ClientError::Io("metadata rpc connection closed".to_owned()))
+            }
+        }
+    }
+}
+
+fn write_frame(
+    stream: &mut TcpStream,
+    request_id: u64,
+    flags: u32,
+    body: &[u8],
+) -> Result<(), ClientError> {
     let len = u32::try_from(body.len())
         .map_err(|_| ClientError::Protocol("metadata rpc request exceeds u32".to_owned()))?;
+    let mut header = [0_u8; FRAME_HEADER_BYTES];
+    header[0..8].copy_from_slice(&request_id.to_be_bytes());
+    header[8..12].copy_from_slice(&flags.to_be_bytes());
+    header[12..16].copy_from_slice(&len.to_be_bytes());
     stream
-        .write_all(&len.to_be_bytes())
+        .write_all(&header)
         .and_then(|_| stream.write_all(body))
         .map_err(|err| ClientError::Io(err.to_string()))
 }
 
-fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>, ClientError> {
-    let mut len = [0_u8; 4];
-    stream
-        .read_exact(&mut len)
-        .map_err(|err| ClientError::Io(err.to_string()))?;
-    let len = u32::from_be_bytes(len) as usize;
+fn read_frame(stream: &mut TcpStream) -> Result<(u64, u32, Vec<u8>), ClientError> {
+    let mut header = [0_u8; FRAME_HEADER_BYTES];
+    stream.read_exact(&mut header).map_err(rpc_read_error)?;
+    let request_id = u64::from_be_bytes(header[0..8].try_into().expect("request id header"));
+    let flags = u32::from_be_bytes(header[8..12].try_into().expect("flags header"));
+    let len = u32::from_be_bytes(header[12..16].try_into().expect("length header")) as usize;
     if len > MAX_RPC_RESPONSE_BYTES {
         return Err(ClientError::Protocol(
             "metadata rpc response exceeds size limit".to_owned(),
@@ -682,7 +812,11 @@ fn read_frame(stream: &mut TcpStream) -> Result<Vec<u8>, ClientError> {
     stream
         .read_exact(&mut body)
         .map_err(|err| ClientError::Io(err.to_string()))?;
-    Ok(body)
+    Ok((request_id, flags, body))
+}
+
+fn rpc_read_error(err: io::Error) -> ClientError {
+    ClientError::Io(err.to_string())
 }
 
 fn rpc_name(name: &DentryName) -> Result<String, ClientError> {
@@ -929,9 +1063,9 @@ mod tests {
             stream.read_exact(&mut magic).unwrap();
             assert_eq!(&magic, FRAMED_RPC_MAGIC);
             for body in bodies {
-                let request = read_frame(&mut stream).unwrap();
+                let (request_id, flags, request) = read_frame(&mut stream).unwrap();
                 decode_request(&request).expect("framed request is binary metadata rpc");
-                write_frame(&mut stream, &body).unwrap();
+                write_frame(&mut stream, request_id, flags, &body).unwrap();
             }
         });
         addr
@@ -940,6 +1074,55 @@ mod tests {
     fn response_body(json: &str) -> Vec<u8> {
         let envelope: MetadataRpcEnvelope = serde_json::from_str(json).unwrap();
         encode_envelope(&envelope).unwrap()
+    }
+
+    fn dentry_response(parent: u64, name: &str, inode: u64, generation: u64) -> Vec<u8> {
+        let envelope = MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(WireDentryWithAttr {
+                    dentry: WireDentryRecord {
+                        parent,
+                        name_utf8: Some(name.to_owned()),
+                        name_hex: name
+                            .as_bytes()
+                            .iter()
+                            .map(|byte| format!("{byte:02x}"))
+                            .collect::<String>(),
+                        child: inode,
+                        child_type: "file".to_owned(),
+                        attr_generation: generation,
+                    },
+                    attr: WireInodeAttr {
+                        inode,
+                        file_type: "file".to_owned(),
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                        size: 0,
+                        generation,
+                        mtime_ms: generation,
+                        ctime_ms: generation,
+                    },
+                    body: None,
+                })),
+            }),
+            error: None,
+        };
+        encode_envelope(&envelope).unwrap()
+    }
+
+    fn dentry_response_for_request(request: &MetadataRpcRequest) -> Vec<u8> {
+        let MetadataRpcRequest::CreateFilePath { path, .. } = request else {
+            panic!("unexpected pipelined request: {request:?}");
+        };
+        let name = path.rsplit('/').next().expect("path has a final component");
+        let inode = match name {
+            "a.bin" => 40,
+            "b.bin" => 41,
+            other => panic!("unexpected file name: {other}"),
+        };
+        dentry_response(2, name, inode, inode)
     }
 
     fn artifact_metadata(manifest_id: &str) -> ArtifactMetadata {
@@ -979,7 +1162,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_create_files_uses_single_batch_frame() {
+    fn remote_create_files_uses_single_coalesced_frame() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -987,28 +1170,21 @@ mod tests {
             let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
             stream.read_exact(&mut magic).unwrap();
             assert_eq!(&magic, FRAMED_RPC_MAGIC);
-            let request = read_frame(&mut stream).unwrap();
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
             let request = decode_request(&request).unwrap();
             match request {
-                MetadataRpcRequest::Batch { requests } => {
-                    assert_eq!(requests.len(), 2);
-                    assert!(matches!(
-                        &requests[0],
-                        MetadataRpcRequest::CreateFilePath { path, .. }
-                            if path == "/runs/a.bin"
-                    ));
-                    assert!(matches!(
-                        &requests[1],
-                        MetadataRpcRequest::CreateFilePath { path, .. }
-                            if path == "/runs/b.bin"
-                    ));
+                MetadataRpcRequest::CreateFilesInDirPath {
+                    parent_path, names, ..
+                } => {
+                    assert_eq!(parent_path, "/runs");
+                    assert_eq!(names, vec!["a.bin".to_owned(), "b.bin".to_owned()]);
                 }
                 other => panic!("unexpected request: {other:?}"),
             }
             let response = response_body(
                 r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"a.bin","name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"b.bin","name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
             );
-            write_frame(&mut stream, &response).unwrap();
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
         });
         let client = RemoteMetadataClient::connect(addr);
         let paths = vec!["/runs/a.bin".to_owned(), "/runs/b.bin".to_owned()];
@@ -1016,6 +1192,43 @@ mod tests {
         let entries = entries.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(entries[0].attr.inode.get(), 40);
         assert_eq!(entries[1].attr.inode.get(), 41);
+    }
+
+    #[test]
+    fn remote_framed_rpc_accepts_out_of_order_responses() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+            let first = read_frame(&mut stream).unwrap();
+            let second = read_frame(&mut stream).unwrap();
+            let first_request = decode_request(&first.2).unwrap();
+            let second_request = decode_request(&second.2).unwrap();
+            let first_response = dentry_response_for_request(&first_request);
+            let second_response = dentry_response_for_request(&second_request);
+
+            write_frame(&mut stream, second.0, second.1, &second_response).unwrap();
+            write_frame(&mut stream, first.0, first.1, &first_response).unwrap();
+        });
+
+        let client = Arc::new(RemoteMetadataClient::connect(addr));
+        let first = {
+            let client = Arc::clone(&client);
+            thread::spawn(move || client.create_file("/runs/a.bin", 0o644, 1000, 1000))
+        };
+        let second = {
+            let client = Arc::clone(&client);
+            thread::spawn(move || client.create_file("/runs/b.bin", 0o644, 1000, 1000))
+        };
+
+        let first = first.join().unwrap().unwrap();
+        let second = second.join().unwrap().unwrap();
+        assert_eq!(first.dentry.name.as_bytes(), b"a.bin");
+        assert_eq!(second.dentry.name.as_bytes(), b"b.bin");
     }
 
     #[test]
@@ -1041,7 +1254,7 @@ mod tests {
             let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
             stream.read_exact(&mut magic).unwrap();
             assert_eq!(&magic, FRAMED_RPC_MAGIC);
-            let request = read_frame(&mut stream).unwrap();
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
             let request = decode_request(&request).unwrap();
             assert!(matches!(
                 request,
@@ -1051,7 +1264,7 @@ mod tests {
             let response = response_body(
                 r#"{"ok":true,"result":{"type":"file_bytes","bytes":[111,108,100]}}"#,
             );
-            write_frame(&mut stream, &response).unwrap();
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
         });
         let client = RemoteNoKvFsClient::connect(addr, MemoryObjectStore::new());
         assert_eq!(client.cat_snapshot(9, "/runs/checkpoint").unwrap(), b"old");
