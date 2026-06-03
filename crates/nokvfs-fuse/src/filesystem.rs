@@ -19,6 +19,7 @@ use nokvfs_object::ObjectStore;
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
 
 use crate::attr::{file_attr, fuse_file_type};
+use crate::invalidation::{FuseInvalidationOptions, FuseInvalidationWorker, InvalidationRegistry};
 
 #[derive(Clone, Debug)]
 pub struct FuseOptions {
@@ -27,6 +28,7 @@ pub struct FuseOptions {
     pub fs_name: String,
     pub threads: usize,
     pub view: FuseView,
+    pub invalidation: FuseInvalidationOptions,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -42,6 +44,7 @@ pub struct NoKvFuse<M, O> {
     names: RwLock<HashMap<u64, Vec<u8>>>,
     next_handle: AtomicU64,
     write_handles: RwLock<HashMap<u64, WriteHandle>>,
+    invalidation: Arc<InvalidationRegistry>,
 }
 
 #[derive(Clone, Debug)]
@@ -64,6 +67,7 @@ impl Default for FuseOptions {
             fs_name: "nokv-fs".to_owned(),
             threads: default_threads(),
             view: FuseView::Live,
+            invalidation: FuseInvalidationOptions::default(),
         }
     }
 }
@@ -90,14 +94,18 @@ where
     pub fn from_shared(service: Arc<NoKvFs<M, O>>, options: FuseOptions) -> Self {
         let mut parents = HashMap::new();
         parents.insert(options.view.root().get(), options.view.root().get());
-        Self {
+        let invalidation = Arc::new(InvalidationRegistry::default());
+        let fuse = Self {
             service,
             options,
             parents: RwLock::new(parents),
             names: RwLock::new(HashMap::new()),
             next_handle: AtomicU64::new(1),
             write_handles: RwLock::new(HashMap::new()),
-        }
+            invalidation,
+        };
+        fuse.register_watch_scope(fuse.options.view.root());
+        fuse
     }
 
     pub fn service(&self) -> &NoKvFs<M, O> {
@@ -119,6 +127,22 @@ where
     fn remember_entry(&self, entry: &DentryWithAttr) {
         self.remember_parent(entry.attr.inode, entry.dentry.parent);
         self.remember_name(entry.attr.inode, &entry.dentry.name);
+        if entry.attr.file_type == FileType::Directory {
+            self.register_watch_scope(entry.attr.inode);
+        }
+    }
+
+    fn register_watch_scope(&self, scope: InodeId) {
+        if self.options.view != FuseView::Live {
+            return;
+        }
+        if let Ok(cursor) = self.service.watch_subtree(scope) {
+            self.invalidation.register_scope(scope, cursor);
+        }
+    }
+
+    fn invalidation_registry(&self) -> Arc<InvalidationRegistry> {
+        Arc::clone(&self.invalidation)
     }
 
     fn parent_of(&self, inode: InodeId) -> InodeId {
@@ -414,7 +438,20 @@ where
     }
     config.mount_options = mount_options;
     config.n_threads = Some(options.threads);
-    fuser::mount2(NoKvFuse::from_shared(service, options), mountpoint, &config)
+    let fuse = NoKvFuse::from_shared(Arc::clone(&service), options.clone());
+    let registry = fuse.invalidation_registry();
+    let session = fuser::spawn_mount2(fuse, mountpoint, &config)?;
+    let _invalidation_worker = if options.view == FuseView::Live {
+        Some(FuseInvalidationWorker::spawn(
+            service,
+            session.notifier(),
+            registry,
+            options.invalidation,
+        ))
+    } else {
+        None
+    };
+    session.join()
 }
 
 impl FuseView {

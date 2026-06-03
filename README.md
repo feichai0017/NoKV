@@ -72,6 +72,7 @@ Implemented today:
 - snapshot-aware metadata history cleanup and background history GC worker;
 - read-only FUSE snapshot mounts rooted at a snapshot subtree;
 - durable typed watch replay for namespace and artifact publication events;
+- live FUSE mount invalidates kernel entry/inode caches from typed watch replay;
 - basic root bootstrap, directory create, artifact publish, lookup-plus,
   readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
   service;
@@ -88,7 +89,6 @@ Not implemented yet:
 
 - long-running metad server;
 - full POSIX random-write/truncate semantics;
-- FUSE watch invalidation;
 - distributed metadata shards.
 
 ## Quick Check

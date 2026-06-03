@@ -32,10 +32,12 @@ The namespace entry appears only after the metadata command commits.
 - read-only snapshot FUSE mounts can expose a pinned subtree as `/`;
 - service-level typed watch replay lets checkpoint consumers observe publish and
   replace events;
+- live FUSE mounts consume typed watch replay to invalidate kernel entry/inode
+  caches;
 
 Remaining work:
 
-- SDK/FUSE watch consumer integration;
+- SDK watch consumer integration and broader node-local cache invalidation;
 
 ## Failure Handling
 

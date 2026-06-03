@@ -53,7 +53,10 @@ Failed metadata publish leaves staged objects for later garbage collection.
 The current FUSE frontend is inode-first. It maps kernel `lookup`, `getattr`,
 `readdir`, `open`, and `read` calls to `metad` inode APIs and object-store range
 reads. It does not resolve paths through the Rust SDK and does not own metadata
-semantics.
+semantics. Live mounts register observed directory scopes with the metadata
+watch log and translate typed watch events into FUSE `inval_entry` and
+`inval_inode` notifications. Snapshot mounts are read-only and do not start the
+invalidation worker.
 
 ## Metadata Layout
 

@@ -200,13 +200,14 @@ v0 local:
   durable snapshot pin, snapshot-version artifact read, and history GC
   remove/rmdir/rename-replace
   durable typed watch replay
+  FUSE kernel entry/inode invalidation from typed watches
   read-only FUSE snapshot mounts
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
   long-running server
   Python/fsspec
-  FUSE and SDK watch consumer integration
+  SDK watch consumer integration
 
 v2 cluster:
   metadata router
