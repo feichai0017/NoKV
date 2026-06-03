@@ -1,7 +1,9 @@
 use nokvfs_meta::{DentryWithAttr, MetadError};
+use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
-    WireDentryRecord, WireDentryWithAttr, WireInodeAttr, WireSnapshotPin,
+    WireBodyReadPlan, WireDentryRecord, WireDentryWithAttr, WireInodeAttr, WireObjectReadBlock,
+    WireSnapshotPin,
 };
 use nokvfs_types::{
     BodyDescriptor, DentryName, DentryRecord, FileType, InodeAttr, InodeId, SnapshotPin,
@@ -158,6 +160,25 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             let retired = server.service().retire_snapshot(snapshot_id)?;
             Ok(MetadataRpcResult::RetiredSnapshot { retired })
         }
+        MetadataRpcRequest::ReadBodyPlan {
+            inode,
+            generation,
+            offset,
+            len,
+        } => {
+            let len = usize::try_from(len).map_err(|_| {
+                ServerError::Metadata(MetadError::Codec(
+                    "body read length exceeds platform limit".to_owned(),
+                ))
+            })?;
+            let plan =
+                server
+                    .service()
+                    .read_file_plan(inode_id(inode)?, generation, offset, len)?;
+            Ok(MetadataRpcResult::BodyReadPlan {
+                plan: wire_body_read_plan(&plan),
+            })
+        }
     }
 }
 
@@ -212,6 +233,22 @@ fn wire_body(body: &BodyDescriptor) -> WireBodyDescriptor {
         generation: body.generation,
         chunk_size: body.chunk_size,
         block_size: body.block_size,
+    }
+}
+
+fn wire_body_read_plan(plan: &nokvfs_meta::BodyReadPlan) -> WireBodyReadPlan {
+    WireBodyReadPlan {
+        output_len: plan.output_len as u64,
+        blocks: plan.blocks.iter().map(wire_object_read_block).collect(),
+    }
+}
+
+fn wire_object_read_block(block: &ObjectReadBlock) -> WireObjectReadBlock {
+    WireObjectReadBlock {
+        object_key: block.object_key.clone(),
+        object_offset: block.object_offset,
+        len: block.len as u64,
+        output_offset: block.output_offset as u64,
     }
 }
 

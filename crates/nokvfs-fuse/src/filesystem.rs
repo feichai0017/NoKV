@@ -1016,6 +1016,7 @@ fn errno(err: MetadError) -> Errno {
         MetadError::NotDirectory => Errno::ENOTDIR,
         MetadError::DirectoryNotEmpty => Errno::ENOTEMPTY,
         MetadError::CannotRemoveRoot => Errno::EBUSY,
+        MetadError::StaleBodyGeneration { .. } => Errno::ESTALE,
         MetadError::MissingBodyDescriptor
         | MetadError::Metadata(_)
         | MetadError::Object(_)

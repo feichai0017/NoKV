@@ -64,6 +64,12 @@ pub enum MetadataRpcRequest {
     RetireSnapshot {
         snapshot_id: u64,
     },
+    ReadBodyPlan {
+        inode: u64,
+        generation: u64,
+        offset: u64,
+        len: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -96,6 +102,9 @@ pub enum MetadataRpcResult {
     },
     RetiredSnapshot {
         retired: bool,
+    },
+    BodyReadPlan {
+        plan: WireBodyReadPlan,
     },
 }
 
@@ -139,6 +148,20 @@ pub struct WireBodyDescriptor {
     pub generation: u64,
     pub chunk_size: u64,
     pub block_size: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireBodyReadPlan {
+    pub output_len: u64,
+    pub blocks: Vec<WireObjectReadBlock>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireObjectReadBlock {
+    pub object_key: String,
+    pub object_offset: u64,
+    pub len: u64,
+    pub output_offset: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

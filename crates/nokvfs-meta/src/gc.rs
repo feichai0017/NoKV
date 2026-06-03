@@ -390,7 +390,7 @@ mod tests {
         let mut worker = HistoryGcWorker::spawn(
             Arc::clone(&service),
             HistoryGcOptions {
-                interval: Duration::from_millis(10),
+                interval: Duration::from_secs(60),
                 limit: 100,
                 run_immediately: true,
             },
@@ -409,6 +409,17 @@ mod tests {
         );
 
         assert!(service.retire_snapshot(snapshot.snapshot_id).unwrap());
+        worker.stop();
+        assert_eq!(worker.state().last_error, None);
+
+        let mut worker = HistoryGcWorker::spawn(
+            Arc::clone(&service),
+            HistoryGcOptions {
+                interval: Duration::from_secs(60),
+                limit: 100,
+                run_immediately: true,
+            },
+        );
         wait_for(|| {
             worker
                 .state()

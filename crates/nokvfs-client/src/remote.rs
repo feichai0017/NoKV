@@ -3,9 +3,11 @@ use std::net::{SocketAddr, TcpStream};
 use std::time::Duration;
 
 use nokvfs_meta::{DentryWithAttr, RenameReplaceResult};
+use nokvfs_object::{read_object_blocks, MemoryBlockCache, ObjectReadBlock, ObjectStore};
 use nokvfs_protocol::{
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
-    WireDentryRecord, WireDentryWithAttr, WireInodeAttr, WireSnapshotPin,
+    WireBodyReadPlan, WireDentryRecord, WireDentryWithAttr, WireInodeAttr, WireObjectReadBlock,
+    WireSnapshotPin,
 };
 use nokvfs_types::{
     BodyDescriptor, DentryName, DentryRecord, FileType, InodeAttr, InodeId, SnapshotPin,
@@ -25,12 +27,101 @@ pub struct RemoteMetadataClient {
     options: RemoteMetadataClientOptions,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RemoteBodyReadPlan {
+    pub output_len: usize,
+    pub blocks: Vec<ObjectReadBlock>,
+}
+
+pub struct RemoteNoKvFsClient<O> {
+    metadata: RemoteMetadataClient,
+    objects: O,
+    block_cache: MemoryBlockCache,
+    block_cache_enabled: bool,
+}
+
 impl RemoteMetadataClientOptions {
     pub fn new(address: SocketAddr) -> Self {
         Self {
             address,
             timeout: DEFAULT_RPC_TIMEOUT,
         }
+    }
+}
+
+impl<O> RemoteNoKvFsClient<O>
+where
+    O: ObjectStore,
+{
+    pub fn new(metadata: RemoteMetadataClient, objects: O) -> Self {
+        Self {
+            metadata,
+            objects,
+            block_cache: MemoryBlockCache::default(),
+            block_cache_enabled: true,
+        }
+    }
+
+    pub fn connect(address: SocketAddr, objects: O) -> Self {
+        Self::new(RemoteMetadataClient::connect(address), objects)
+    }
+
+    pub fn metadata(&self) -> &RemoteMetadataClient {
+        &self.metadata
+    }
+
+    pub fn set_block_cache_enabled(&mut self, enabled: bool) {
+        self.block_cache_enabled = enabled;
+    }
+
+    pub fn block_cache_enabled(&self) -> bool {
+        self.block_cache_enabled
+    }
+
+    pub fn cat(&self, path: &str) -> Result<Vec<u8>, ClientError> {
+        let entry = self
+            .metadata
+            .lookup(path)?
+            .ok_or_else(|| ClientError::NotFound(path.to_owned()))?;
+        self.read_entry(path, &entry, 0, file_len(entry.attr.size)?)
+    }
+
+    pub fn read(&self, path: &str, offset: u64, len: usize) -> Result<Vec<u8>, ClientError> {
+        let entry = self
+            .metadata
+            .lookup(path)?
+            .ok_or_else(|| ClientError::NotFound(path.to_owned()))?;
+        self.read_entry(path, &entry, offset, len)
+    }
+
+    fn read_entry(
+        &self,
+        path: &str,
+        entry: &DentryWithAttr,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, ClientError> {
+        if entry.attr.file_type != FileType::File {
+            return Err(ClientError::Metadata(nokvfs_meta::MetadError::NotFile));
+        }
+        if len == 0 || offset >= entry.attr.size {
+            return Ok(Vec::new());
+        }
+        let body = entry.body.as_ref().ok_or_else(|| {
+            ClientError::Protocol(format!("file {path} is missing body descriptor"))
+        })?;
+        let len = bounded_read_len(entry.attr.size - offset, len)?;
+        let plan = self
+            .metadata
+            .read_body_plan(entry.attr.inode, body.generation, offset, len)?;
+        let cache = if self.block_cache_enabled {
+            Some(&self.block_cache)
+        } else {
+            None
+        };
+        read_object_blocks(&self.objects, cache, plan.output_len, &plan.blocks)
+            .map(|outcome| outcome.bytes)
+            .map_err(ClientError::Object)
     }
 }
 
@@ -190,6 +281,26 @@ impl RemoteMetadataClient {
         }
     }
 
+    pub fn read_body_plan(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        offset: u64,
+        len: usize,
+    ) -> Result<RemoteBodyReadPlan, ClientError> {
+        let len = u64::try_from(len)
+            .map_err(|_| ClientError::Protocol("body read length exceeds u64".to_owned()))?;
+        match self.call(MetadataRpcRequest::ReadBodyPlan {
+            inode: inode.get(),
+            generation,
+            offset,
+            len,
+        })? {
+            MetadataRpcResult::BodyReadPlan { plan } => wire_body_read_plan(plan),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     fn resolve_parent(&self, path: &str) -> Result<(InodeId, DentryName), ClientError> {
         let mut components = parse_absolute_path(path)?;
         let name = components.pop().ok_or(ClientError::RootHasNoParent)?;
@@ -336,6 +447,32 @@ fn wire_body(body: WireBodyDescriptor) -> Result<BodyDescriptor, ClientError> {
     })
 }
 
+fn wire_body_read_plan(plan: WireBodyReadPlan) -> Result<RemoteBodyReadPlan, ClientError> {
+    Ok(RemoteBodyReadPlan {
+        output_len: usize::try_from(plan.output_len).map_err(|_| {
+            ClientError::Protocol("body read plan output length exceeds platform limit".to_owned())
+        })?,
+        blocks: plan
+            .blocks
+            .into_iter()
+            .map(wire_object_read_block)
+            .collect::<Result<Vec<_>, _>>()?,
+    })
+}
+
+fn wire_object_read_block(block: WireObjectReadBlock) -> Result<ObjectReadBlock, ClientError> {
+    Ok(ObjectReadBlock {
+        object_key: block.object_key,
+        object_offset: block.object_offset,
+        len: usize::try_from(block.len).map_err(|_| {
+            ClientError::Protocol("body read block length exceeds platform limit".to_owned())
+        })?,
+        output_offset: usize::try_from(block.output_offset).map_err(|_| {
+            ClientError::Protocol("body read block offset exceeds platform limit".to_owned())
+        })?,
+    })
+}
+
 fn wire_snapshot(snapshot: WireSnapshotPin) -> Result<SnapshotPin, ClientError> {
     Ok(SnapshotPin {
         snapshot_id: snapshot.snapshot_id,
@@ -343,6 +480,19 @@ fn wire_snapshot(snapshot: WireSnapshotPin) -> Result<SnapshotPin, ClientError> 
         read_version: snapshot.read_version,
         created_version: snapshot.created_version,
     })
+}
+
+fn file_len(size: u64) -> Result<usize, ClientError> {
+    usize::try_from(size)
+        .map_err(|_| ClientError::Protocol("file size exceeds platform limit".to_owned()))
+}
+
+fn bounded_read_len(available: u64, requested: usize) -> Result<usize, ClientError> {
+    let requested_u64 = u64::try_from(requested).unwrap_or(u64::MAX);
+    if requested_u64 <= available {
+        return Ok(requested);
+    }
+    file_len(available)
 }
 
 fn inode_id(raw: u64) -> Result<InodeId, ClientError> {
@@ -389,23 +539,30 @@ fn unexpected_result(result: MetadataRpcResult) -> ClientError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nokvfs_object::{MemoryObjectStore, ObjectKey};
     use std::net::TcpListener;
     use std::thread;
 
     fn serve_one(body: &'static str) -> SocketAddr {
+        serve_many(vec![body])
+    }
+
+    fn serve_many(bodies: Vec<&'static str>) -> SocketAddr {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
-            let (mut stream, _) = listener.accept().unwrap();
-            let request = read_request(&mut stream);
-            let request = String::from_utf8_lossy(&request);
-            assert!(request.starts_with("POST /rpc HTTP/1.1"));
-            let response = format!(
-                "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
-                body.len(),
-                body
-            );
-            stream.write_all(response.as_bytes()).unwrap();
+            for body in bodies {
+                let (mut stream, _) = listener.accept().unwrap();
+                let request = read_request(&mut stream);
+                let request = String::from_utf8_lossy(&request);
+                assert!(request.starts_with("POST /rpc HTTP/1.1"));
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
         });
         addr
     }
@@ -468,5 +625,20 @@ mod tests {
             ),
             "unexpected error: {err:?}"
         );
+    }
+
+    #[test]
+    fn remote_file_client_reads_body_from_object_store() {
+        let store = MemoryObjectStore::new();
+        store
+            .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello remote")
+            .unwrap();
+        let addr = serve_many(vec![
+            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_utf8":"artifact.bin","name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+        ]);
+        let client = RemoteNoKvFsClient::connect(addr, store);
+        let bytes = client.read("/artifact.bin", 6, 6).unwrap();
+        assert_eq!(bytes, b"remote");
     }
 }

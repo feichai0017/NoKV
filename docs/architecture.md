@@ -54,9 +54,10 @@ process. It owns health, readiness, stats, manual GC endpoints, and the first
 inode-level metadata RPC. The RPC is intentionally low-level: clients send
 inode/name operations such as `lookup_plus`, `read_dir_plus`, `create_dir`,
 `remove_file`, `rename_replace`, and `snapshot_subtree`. Path resolution stays
-in SDK/FUSE clients. Remote SDK/FUSE implementations over this RPC are still
-future work; the Rust SDK already has a remote metadata client for namespace
-operations.
+in SDK/FUSE clients. The Rust SDK has a remote metadata client for namespace
+operations and a remote file client that asks `metad` for a body read plan, then
+fetches object ranges directly from the configured object store. Remote writes
+and remote FUSE are still future work.
 
 ## FUSE Path
 

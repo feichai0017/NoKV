@@ -105,6 +105,12 @@ pub struct PendingObjectCleanupOutcome {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BodyReadPlan {
+    pub output_len: usize,
+    pub blocks: Vec<ObjectReadBlock>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenameReplaceResult {
     pub entry: DentryWithAttr,
     pub replaced: Option<DentryWithAttr>,
@@ -123,6 +129,10 @@ pub enum MetadError {
     BodySizeMismatch {
         descriptor: u64,
         bytes: u64,
+    },
+    StaleBodyGeneration {
+        expected: u64,
+        current: u64,
     },
     AllocatorExhausted,
     NotFound,
@@ -797,6 +807,54 @@ where
         }
         let body = self.body_descriptor(inode)?.ok_or(MetadError::NotFound)?;
         self.read_file_at_version(inode, &body, offset, len, self.read_version()?)
+    }
+
+    pub fn read_file_plan(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        offset: u64,
+        len: usize,
+    ) -> Result<BodyReadPlan, MetadError> {
+        if len == 0 {
+            return Ok(BodyReadPlan {
+                output_len: 0,
+                blocks: Vec::new(),
+            });
+        }
+        let Some(attr) = self.get_attr(inode)? else {
+            return Err(MetadError::NotFound);
+        };
+        if attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        if attr.generation != generation {
+            return Err(MetadError::StaleBodyGeneration {
+                expected: generation,
+                current: attr.generation,
+            });
+        }
+        if offset >= attr.size {
+            return Ok(BodyReadPlan {
+                output_len: 0,
+                blocks: Vec::new(),
+            });
+        }
+        let version = self.read_version()?;
+        let body = self
+            .body_descriptor_at_version(inode, generation, version)?
+            .ok_or(MetadError::MissingBodyDescriptor)?;
+        if body.size != attr.size {
+            return Err(MetadError::BodySizeMismatch {
+                descriptor: body.size,
+                bytes: attr.size,
+            });
+        }
+        let output_len = len.min((attr.size - offset) as usize);
+        Ok(BodyReadPlan {
+            output_len,
+            blocks: self.read_plan(inode, &body, offset, output_len, version)?,
+        })
     }
 
     fn read_file_at_version(
@@ -1817,6 +1875,10 @@ impl fmt::Display for MetadError {
                 f,
                 "body descriptor size {descriptor} does not match uploaded bytes {bytes}"
             ),
+            Self::StaleBodyGeneration { expected, current } => write!(
+                f,
+                "body generation {expected} is stale; current generation is {current}"
+            ),
             Self::AllocatorExhausted => write!(f, "inode allocator is exhausted"),
             Self::NotFound => write!(f, "metadata entry not found"),
             Self::NotFile => write!(f, "metadata entry is not a file"),
@@ -1957,6 +2019,33 @@ mod tests {
             .expect("read cached file range");
         assert_eq!(cached, b"x\":");
         assert!(service.object_stats().cache_hits > before_cache.cache_hits);
+    }
+
+    #[test]
+    fn read_file_plan_returns_ranges_without_fetching_objects() {
+        let service = service();
+        let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+        let published = service
+            .publish_artifact(artifact_request(name, "checkpoint/body", b"hello remote"))
+            .unwrap();
+        let before = service.object_stats();
+        let plan = service
+            .read_file_plan(published.attr.inode, published.attr.generation, 6, 6)
+            .unwrap();
+        assert_eq!(plan.output_len, 6);
+        assert_eq!(plan.blocks.len(), 1);
+        assert_eq!(plan.blocks[0].object_offset, 6);
+        assert_eq!(plan.blocks[0].len, 6);
+        assert_eq!(plan.blocks[0].output_offset, 0);
+        assert_eq!(service.object_stats().object_gets, before.object_gets);
+
+        let stale = service
+            .read_file_plan(published.attr.inode, published.attr.generation - 1, 0, 1)
+            .unwrap_err();
+        assert!(
+            matches!(stale, MetadError::StaleBodyGeneration { .. }),
+            "unexpected error: {stale:?}"
+        );
     }
 
     #[test]

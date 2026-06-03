@@ -12,10 +12,12 @@ use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{
     DentryWithAttr, MetadError, NoKvFs, ObjectTransferStats, PublishArtifact, RenameReplaceResult,
 };
-use nokvfs_object::ObjectStore;
+use nokvfs_object::{ObjectError, ObjectStore};
 use nokvfs_types::{DentryName, FileType, InodeId, SnapshotPin};
 
-pub use remote::{RemoteMetadataClient, RemoteMetadataClientOptions};
+pub use remote::{
+    RemoteBodyReadPlan, RemoteMetadataClient, RemoteMetadataClientOptions, RemoteNoKvFsClient,
+};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactMetadata {
@@ -38,6 +40,7 @@ pub enum ClientError {
     NotFound(String),
     NotDirectory(String),
     Metadata(MetadError),
+    Object(ObjectError),
     Remote(String),
     Io(String),
     Protocol(String),
@@ -319,6 +322,12 @@ impl From<MetadError> for ClientError {
     }
 }
 
+impl From<ObjectError> for ClientError {
+    fn from(err: ObjectError) -> Self {
+        Self::Object(err)
+    }
+}
+
 impl fmt::Display for ClientError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
@@ -330,6 +339,7 @@ impl fmt::Display for ClientError {
             Self::NotFound(path) => write!(f, "path component not found: {path}"),
             Self::NotDirectory(path) => write!(f, "path component is not a directory: {path}"),
             Self::Metadata(err) => write!(f, "metadata service error: {err}"),
+            Self::Object(err) => write!(f, "object store error: {err}"),
             Self::Remote(err) => write!(f, "remote metadata error: {err}"),
             Self::Io(err) => write!(f, "io error: {err}"),
             Self::Protocol(err) => write!(f, "metadata protocol error: {err}"),
