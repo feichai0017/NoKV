@@ -1011,6 +1011,7 @@ fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
 fn errno(err: MetadError) -> Errno {
     match err {
         MetadError::Model(_) => Errno::EINVAL,
+        MetadError::InvalidPath(_) => Errno::EINVAL,
         MetadError::NotFound => Errno::ENOENT,
         MetadError::NotFile => Errno::EISDIR,
         MetadError::NotDirectory => Errno::ENOTDIR,

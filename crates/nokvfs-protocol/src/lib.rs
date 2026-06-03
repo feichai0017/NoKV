@@ -21,8 +21,14 @@ pub enum MetadataRpcRequest {
         parent: u64,
         name: String,
     },
+    LookupPath {
+        path: String,
+    },
     ReadDirPlus {
         parent: u64,
+    },
+    ReadDirPlusPath {
+        path: String,
     },
     CreateDir {
         parent: u64,
@@ -31,9 +37,21 @@ pub enum MetadataRpcRequest {
         uid: u32,
         gid: u32,
     },
+    CreateDirPath {
+        path: String,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
     CreateFile {
         parent: u64,
         name: String,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
+    CreateFilePath {
+        path: String,
         mode: u32,
         uid: u32,
         gid: u32,
@@ -73,6 +91,10 @@ pub enum MetadataRpcRequest {
     PrepareArtifact {
         parent: u64,
         name: String,
+        replace: bool,
+    },
+    PrepareArtifactPath {
+        path: String,
         replace: bool,
     },
     PublishPreparedArtifact {

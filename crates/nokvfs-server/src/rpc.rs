@@ -57,8 +57,20 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 entry: entry.as_ref().map(|entry| Box::new(wire_dentry(entry))),
             })
         }
+        MetadataRpcRequest::LookupPath { path } => {
+            let entry = server.service().lookup_path(&path)?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: entry.as_ref().map(|entry| Box::new(wire_dentry(entry))),
+            })
+        }
         MetadataRpcRequest::ReadDirPlus { parent } => {
             let entries = server.service().read_dir_plus(inode_id(parent)?)?;
+            Ok(MetadataRpcResult::Dentries {
+                entries: entries.iter().map(wire_dentry).collect(),
+            })
+        }
+        MetadataRpcRequest::ReadDirPlusPath { path } => {
+            let entries = server.service().read_dir_plus_path(&path)?;
             Ok(MetadataRpcResult::Dentries {
                 entries: entries.iter().map(wire_dentry).collect(),
             })
@@ -81,6 +93,17 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
+        MetadataRpcRequest::CreateDirPath {
+            path,
+            mode,
+            uid,
+            gid,
+        } => {
+            let entry = server.service().create_dir_path(&path, mode, uid, gid)?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
         MetadataRpcRequest::CreateFile {
             parent,
             name,
@@ -95,6 +118,17 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 uid,
                 gid,
             )?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
+        MetadataRpcRequest::CreateFilePath {
+            path,
+            mode,
+            uid,
+            gid,
+        } => {
+            let entry = server.service().create_file_path(&path, mode, uid, gid)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
@@ -194,6 +228,16 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 server
                     .service()
                     .prepare_artifact_create(inode_id(parent)?, name)?
+            };
+            Ok(MetadataRpcResult::PreparedArtifact {
+                prepared: wire_prepared_artifact(server.service().mount_id(), &prepared),
+            })
+        }
+        MetadataRpcRequest::PrepareArtifactPath { path, replace } => {
+            let prepared = if replace {
+                server.service().prepare_artifact_replace_path(&path)?
+            } else {
+                server.service().prepare_artifact_create_path(&path)?
             };
             Ok(MetadataRpcResult::PreparedArtifact {
                 prepared: wire_prepared_artifact(server.service().mount_id(), &prepared),
@@ -417,6 +461,25 @@ mod tests {
         let response = handle_rpc(&server, br#"{"op":"read_dir_plus","parent":1}"#);
         assert!(response.contains("\"entries\""));
         assert!(response.contains("\"name_utf8\":\"runs\""));
+    }
+
+    #[test]
+    fn rpc_path_ops_resolve_on_server_side() {
+        let server = test_server();
+        let response = handle_rpc(
+            &server,
+            br#"{"op":"create_dir_path","path":"/runs","mode":493,"uid":1000,"gid":1000}"#,
+        );
+        assert!(response.contains("\"ok\":true"));
+        let response = handle_rpc(
+            &server,
+            br#"{"op":"create_file_path","path":"/runs/checkpoint.bin","mode":420,"uid":1000,"gid":1000}"#,
+        );
+        assert!(response.contains("\"ok\":true"));
+        assert!(response.contains("\"name_utf8\":\"checkpoint.bin\""));
+        let response = handle_rpc(&server, br#"{"op":"read_dir_plus_path","path":"/runs"}"#);
+        assert!(response.contains("\"entries\""));
+        assert!(response.contains("\"name_utf8\":\"checkpoint.bin\""));
     }
 
     #[test]

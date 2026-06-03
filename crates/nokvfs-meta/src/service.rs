@@ -147,6 +147,7 @@ pub enum MetadError {
         current: u64,
     },
     AllocatorExhausted,
+    InvalidPath(String),
     NotFound,
     NotFile,
     NotDirectory,
@@ -540,6 +541,28 @@ where
         Ok(projection.into())
     }
 
+    pub fn create_dir_path(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, MetadError> {
+        let (parent, name) = self.resolve_parent_path(path)?;
+        self.create_dir(parent, name, mode, uid, gid)
+    }
+
+    pub fn create_file_path(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, MetadError> {
+        let (parent, name) = self.resolve_parent_path(path)?;
+        self.create_file(parent, name, mode, uid, gid)
+    }
+
     pub fn publish_artifact(&self, request: PublishArtifact) -> Result<DentryWithAttr, MetadError> {
         let version = self.next_version()?;
         let inode = self.next_inode()?;
@@ -651,6 +674,11 @@ where
         })
     }
 
+    pub fn prepare_artifact_create_path(&self, path: &str) -> Result<PreparedArtifact, MetadError> {
+        let (parent, name) = self.resolve_parent_path(path)?;
+        self.prepare_artifact_create(parent, name)
+    }
+
     pub fn prepare_artifact_replace(
         &self,
         parent: InodeId,
@@ -673,6 +701,14 @@ where
             dentry_version: Some(dentry_version.get()),
             old_generation: existing.body.as_ref().map(|body| body.generation),
         })
+    }
+
+    pub fn prepare_artifact_replace_path(
+        &self,
+        path: &str,
+    ) -> Result<PreparedArtifact, MetadError> {
+        let (parent, name) = self.resolve_parent_path(path)?;
+        self.prepare_artifact_replace(parent, name)
     }
 
     pub fn publish_prepared_artifact(
@@ -776,6 +812,15 @@ where
             .map(|entry| entry.map(|(entry, _)| entry))
     }
 
+    pub fn lookup_path(&self, path: &str) -> Result<Option<DentryWithAttr>, MetadError> {
+        let mut components = parse_absolute_path(path)?;
+        let Some(name) = components.pop() else {
+            return Ok(None);
+        };
+        let parent = self.resolve_components_as_directory(&components)?;
+        self.lookup_plus(parent, &name)
+    }
+
     fn lookup_plus_versioned(
         &self,
         parent: InodeId,
@@ -814,6 +859,11 @@ where
         self.read_dir_plus_at_version(parent, version)
     }
 
+    pub fn read_dir_plus_path(&self, path: &str) -> Result<Vec<DentryWithAttr>, MetadError> {
+        let parent = self.resolve_directory_path(path)?;
+        self.read_dir_plus(parent)
+    }
+
     fn read_dir_plus_at_version(
         &self,
         parent: InodeId,
@@ -833,6 +883,37 @@ where
                     .map_err(|err| MetadError::Codec(err.to_string()))
             })
             .collect()
+    }
+
+    fn resolve_parent_path(&self, path: &str) -> Result<(InodeId, DentryName), MetadError> {
+        let mut components = parse_absolute_path(path)?;
+        let name = components
+            .pop()
+            .ok_or_else(|| MetadError::InvalidPath("root has no parent".to_owned()))?;
+        let parent = self.resolve_components_as_directory(&components)?;
+        Ok((parent, name))
+    }
+
+    fn resolve_directory_path(&self, path: &str) -> Result<InodeId, MetadError> {
+        let components = parse_absolute_path(path)?;
+        self.resolve_components_as_directory(&components)
+    }
+
+    fn resolve_components_as_directory(
+        &self,
+        components: &[DentryName],
+    ) -> Result<InodeId, MetadError> {
+        let mut current = InodeId::root();
+        for name in components {
+            let entry = self
+                .lookup_plus(current, name)?
+                .ok_or(MetadError::NotFound)?;
+            if entry.attr.file_type != FileType::Directory {
+                return Err(MetadError::NotDirectory);
+            }
+            current = entry.attr.inode;
+        }
+        Ok(current)
     }
 
     pub fn watch_subtree(&self, scope: InodeId) -> Result<WatchCursor, MetadError> {
@@ -1938,6 +2019,33 @@ fn validate_prepared_artifact(
     Ok(())
 }
 
+fn parse_absolute_path(path: &str) -> Result<Vec<DentryName>, MetadError> {
+    if path.is_empty() {
+        return Err(MetadError::InvalidPath("path is empty".to_owned()));
+    }
+    if !path.starts_with('/') {
+        return Err(MetadError::InvalidPath(format!(
+            "path {path} is not absolute"
+        )));
+    }
+    let mut out = Vec::new();
+    for raw in path.split('/').filter(|part| !part.is_empty()) {
+        if raw == "." {
+            continue;
+        }
+        if raw == ".." {
+            return Err(MetadError::InvalidPath(
+                "path parent traversal is not allowed".to_owned(),
+            ));
+        }
+        out.push(
+            DentryName::new(raw.as_bytes().to_vec())
+                .map_err(|err| MetadError::InvalidPath(err.to_string()))?,
+        );
+    }
+    Ok(out)
+}
+
 fn watch_cursor_from_key(key: &[u8]) -> Result<WatchCursor, MetadError> {
     let cursor_len = std::mem::size_of::<u64>() * 2;
     if key.len() < cursor_len {
@@ -2066,6 +2174,7 @@ impl fmt::Display for MetadError {
                 "body generation {expected} is stale; current generation is {current}"
             ),
             Self::AllocatorExhausted => write!(f, "inode allocator is exhausted"),
+            Self::InvalidPath(err) => write!(f, "invalid path: {err}"),
             Self::NotFound => write!(f, "metadata entry not found"),
             Self::NotFile => write!(f, "metadata entry is not a file"),
             Self::NotDirectory => write!(f, "metadata entry is not a directory"),
@@ -2172,6 +2281,26 @@ mod tests {
 
         let entries = service.read_dir_plus(InodeId::root()).unwrap();
         assert_eq!(entries, vec![created]);
+    }
+
+    #[test]
+    fn path_methods_resolve_current_namespace_on_server_side() {
+        let service = service();
+        let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+        let artifact = service
+            .create_file_path("/runs/checkpoint.bin", 0o644, 1000, 1000)
+            .unwrap();
+
+        assert_eq!(service.lookup_path("/runs").unwrap(), Some(runs.clone()));
+        assert_eq!(
+            service.lookup_path("/runs/checkpoint.bin").unwrap(),
+            Some(artifact.clone())
+        );
+        assert_eq!(service.read_dir_plus_path("/runs").unwrap(), vec![artifact]);
+        assert!(matches!(
+            service.create_file_path("relative", 0o644, 1000, 1000),
+            Err(MetadError::InvalidPath(_))
+        ));
     }
 
     #[test]

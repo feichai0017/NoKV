@@ -20,7 +20,7 @@ use nokvfs_types::{
     InodeId, SnapshotPin,
 };
 
-use crate::{display_name, is_root_path, parse_absolute_path, ArtifactMetadata, ClientError};
+use crate::{display_name, parse_absolute_path, ArtifactMetadata, ClientError};
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -175,8 +175,7 @@ where
         bytes: Vec<u8>,
         metadata: ArtifactMetadata,
     ) -> Result<DentryWithAttr, ClientError> {
-        let (parent, name) = self.metadata.resolve_parent(path)?;
-        let prepared = self.metadata.prepare_artifact(parent, name, false)?;
+        let prepared = self.metadata.prepare_artifact_path(path, false)?;
         let mode = metadata.mode;
         let uid = metadata.uid;
         let gid = metadata.gid;
@@ -199,8 +198,7 @@ where
         bytes: Vec<u8>,
         metadata: ArtifactMetadata,
     ) -> Result<RenameReplaceResult, ClientError> {
-        let (parent, name) = self.metadata.resolve_parent(path)?;
-        let prepared = self.metadata.prepare_artifact(parent, name, true)?;
+        let prepared = self.metadata.prepare_artifact_path(path, true)?;
         let mode = metadata.mode;
         let uid = metadata.uid;
         let gid = metadata.gid;
@@ -327,10 +325,8 @@ impl RemoteMetadataClient {
         uid: u32,
         gid: u32,
     ) -> Result<DentryWithAttr, ClientError> {
-        let (parent, name) = self.resolve_parent(path)?;
-        match self.call(MetadataRpcRequest::CreateDir {
-            parent: parent.get(),
-            name: rpc_name(&name)?,
+        match self.call(MetadataRpcRequest::CreateDirPath {
+            path: path.to_owned(),
             mode,
             uid,
             gid,
@@ -347,10 +343,8 @@ impl RemoteMetadataClient {
         uid: u32,
         gid: u32,
     ) -> Result<DentryWithAttr, ClientError> {
-        let (parent, name) = self.resolve_parent(path)?;
-        match self.call(MetadataRpcRequest::CreateFile {
-            parent: parent.get(),
-            name: rpc_name(&name)?,
+        match self.call(MetadataRpcRequest::CreateFilePath {
+            path: path.to_owned(),
             mode,
             uid,
             gid,
@@ -361,13 +355,8 @@ impl RemoteMetadataClient {
     }
 
     pub fn lookup(&self, path: &str) -> Result<Option<DentryWithAttr>, ClientError> {
-        if is_root_path(path)? {
-            return Ok(None);
-        }
-        let (parent, name) = self.resolve_parent(path)?;
-        match self.call(MetadataRpcRequest::LookupPlus {
-            parent: parent.get(),
-            name: rpc_name(&name)?,
+        match self.call(MetadataRpcRequest::LookupPath {
+            path: path.to_owned(),
         })? {
             MetadataRpcResult::Dentry { entry } => {
                 entry.map(|entry| wire_dentry(*entry)).transpose()
@@ -377,9 +366,8 @@ impl RemoteMetadataClient {
     }
 
     pub fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
-        let parent = self.resolve_directory(path)?;
-        match self.call(MetadataRpcRequest::ReadDirPlus {
-            parent: parent.get(),
+        match self.call(MetadataRpcRequest::ReadDirPlusPath {
+            path: path.to_owned(),
         })? {
             MetadataRpcResult::Dentries { entries } => {
                 entries.into_iter().map(wire_dentry).collect()
@@ -489,6 +477,20 @@ impl RemoteMetadataClient {
         match self.call(MetadataRpcRequest::PrepareArtifact {
             parent: parent.get(),
             name: rpc_name(&name)?,
+            replace,
+        })? {
+            MetadataRpcResult::PreparedArtifact { prepared } => wire_prepared_artifact(prepared),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn prepare_artifact_path(
+        &self,
+        path: &str,
+        replace: bool,
+    ) -> Result<RemotePreparedArtifact, ClientError> {
+        match self.call(MetadataRpcRequest::PrepareArtifactPath {
+            path: path.to_owned(),
             replace,
         })? {
             MetadataRpcResult::PreparedArtifact { prepared } => wire_prepared_artifact(prepared),
@@ -976,6 +978,19 @@ mod tests {
         let entry = client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
         assert_eq!(entry.attr.inode.get(), 2);
         assert_eq!(entry.dentry.name.as_bytes(), b"runs");
+    }
+
+    #[test]
+    fn remote_create_file_uses_single_path_rpc_for_nested_parent() {
+        let addr = serve_one(
+            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"checkpoint.bin","name_hex":"636865636b706f696e742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+        );
+        let client = RemoteMetadataClient::connect(addr);
+        let entry = client
+            .create_file("/runs/checkpoint.bin", 0o644, 1000, 1000)
+            .unwrap();
+        assert_eq!(entry.attr.inode.get(), 42);
+        assert_eq!(entry.dentry.name.as_bytes(), b"checkpoint.bin");
     }
 
     #[test]
