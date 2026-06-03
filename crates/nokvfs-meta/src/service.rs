@@ -362,6 +362,15 @@ where
             .transpose()
     }
 
+    pub fn get_attr_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        inode: InodeId,
+    ) -> Result<Option<InodeAttr>, MetadError> {
+        let version = self.snapshot_read_version(snapshot_id)?;
+        self.get_attr_at_version(inode, version)
+    }
+
     pub fn lookup_plus_at_snapshot(
         &self,
         snapshot_id: u64,
@@ -371,6 +380,41 @@ where
         let version = self.snapshot_read_version(snapshot_id)?;
         self.lookup_plus_at_version(parent, name, version)
             .map(|entry| entry.map(|(entry, _)| entry))
+    }
+
+    pub fn read_dir_plus_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        parent: InodeId,
+    ) -> Result<Vec<DentryWithAttr>, MetadError> {
+        let version = self.snapshot_read_version(snapshot_id)?;
+        self.read_dir_plus_at_version(parent, version)
+    }
+
+    pub fn read_file_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        inode: InodeId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, MetadError> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let version = self.snapshot_read_version(snapshot_id)?;
+        let Some(attr) = self.get_attr_at_version(inode, version)? else {
+            return Err(MetadError::NotFound);
+        };
+        if attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        if offset >= attr.size {
+            return Ok(Vec::new());
+        }
+        let body = self
+            .body_descriptor_at_version(inode, attr.generation, version)?
+            .ok_or(MetadError::MissingBodyDescriptor)?;
+        self.read_file_at_version(inode, &body, offset, len, version)
     }
 
     pub fn read_artifact_at_snapshot(
@@ -547,6 +591,14 @@ where
 
     pub fn get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, MetadError> {
         let version = self.read_version()?;
+        self.get_attr_at_version(inode, version)
+    }
+
+    fn get_attr_at_version(
+        &self,
+        inode: InodeId,
+        version: Version,
+    ) -> Result<Option<InodeAttr>, MetadError> {
         let Some(value) = self.metadata.get(
             RecordFamily::Inode,
             &inode_key(self.mount, inode),
@@ -605,6 +657,14 @@ where
 
     pub fn read_dir_plus(&self, parent: InodeId) -> Result<Vec<DentryWithAttr>, MetadError> {
         let version = self.read_version()?;
+        self.read_dir_plus_at_version(parent, version)
+    }
+
+    fn read_dir_plus_at_version(
+        &self,
+        parent: InodeId,
+        version: Version,
+    ) -> Result<Vec<DentryWithAttr>, MetadError> {
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Dentry,
             prefix: dentry_prefix(self.mount, parent),
@@ -684,9 +744,17 @@ where
         if attr.file_type != FileType::File {
             return Err(MetadError::NotFile);
         }
-        let version = self.read_version()?;
+        self.body_descriptor_at_version(inode, attr.generation, self.read_version()?)
+    }
+
+    fn body_descriptor_at_version(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        version: Version,
+    ) -> Result<Option<BodyDescriptor>, MetadError> {
         let summary_key =
-            chunk_manifest_key(self.mount, inode, attr.generation, BODY_SUMMARY_CHUNK_INDEX);
+            chunk_manifest_key(self.mount, inode, generation, BODY_SUMMARY_CHUNK_INDEX);
         let Some(value) = self.metadata.get(
             RecordFamily::ChunkManifest,
             &summary_key,
@@ -2007,6 +2075,24 @@ mod tests {
                 .read_artifact_at_snapshot(snapshot.snapshot_id, InodeId::root(), &name)
                 .unwrap(),
             b"old"
+        );
+        assert_eq!(
+            service
+                .get_attr_at_snapshot(snapshot.snapshot_id, first.attr.inode)
+                .unwrap(),
+            Some(first.attr.clone())
+        );
+        assert_eq!(
+            service
+                .read_file_at_snapshot(snapshot.snapshot_id, first.attr.inode, 0, 3)
+                .unwrap(),
+            b"old"
+        );
+        assert_eq!(
+            service
+                .read_dir_plus_at_snapshot(snapshot.snapshot_id, InodeId::root())
+                .unwrap(),
+            vec![first.clone()]
         );
         assert_eq!(
             service.read_artifact(InodeId::root(), &name).unwrap(),

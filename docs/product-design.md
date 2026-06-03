@@ -200,12 +200,12 @@ v0 local:
   durable snapshot pin and snapshot-version artifact read
   remove/rmdir/rename-replace
   durable typed watch replay
+  read-only FUSE snapshot mounts
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
   long-running server
   Python/fsspec
-  read-only snapshot mounts
   background object GC worker
   FUSE and SDK watch consumer integration
 

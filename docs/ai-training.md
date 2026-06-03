@@ -29,9 +29,9 @@ PyTorch / training process
   -> S3-compatible object store
 ```
 
-The current FUSE frontend is read-only and maps inode operations to metadata
-lookups plus object range reads. Write support should use write-on-close
-staging rather than exposing object-store partial writes.
+The current FUSE frontend maps inode operations to metadata lookups plus object
+range reads, and uses buffered write-on-close publishing for writes. Read-only
+snapshot mounts expose pinned input subtrees without allowing mutation.
 
 FUSE should not be the only high-performance path. Training frameworks that can
 use a native client should bypass kernel/FUSE overhead and call the Rust or

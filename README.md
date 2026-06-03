@@ -68,24 +68,25 @@ Implemented today:
   replaced artifact bodies;
 - durable snapshot pins, snapshot-version artifact reads, and snapshot-protected
   object cleanup;
+- read-only FUSE snapshot mounts rooted at a snapshot subtree;
 - durable typed watch replay for namespace and artifact publication events;
 - basic root bootstrap, directory create, artifact publish, lookup-plus,
   readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
   service;
 - path-oriented Rust SDK for mkdir, artifact publish, lookup, list, cat,
   remove, rmdir, rename, and rename-replace;
-- low-level FUSE frontend for lookup, getattr, readdir, open, range read, mkdir,
-  create, buffered write, flush/fsync/release publish, unlink, rmdir, and
-  rename-replace;
+- low-level FUSE frontend for lookup, getattr, readdir, open, range read,
+  snapshot read mounts, mkdir, create, buffered write, flush/fsync/release
+  publish, unlink, rmdir, and rename-replace;
 - `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, rm, rmdir, rename,
-  rename-replace, mount, snapshot, cat-snapshot, retire-snapshot, and manual
-  object GC cleanup.
+  rename-replace, mount, mount-snapshot, snapshot, cat-snapshot,
+  retire-snapshot, and manual object GC cleanup.
 
 Not implemented yet:
 
 - long-running metad server;
 - full POSIX random-write/truncate semantics;
-- FUSE watch invalidation, read-only snapshot mounts, history GC worker, and background
+- FUSE watch invalidation, history GC worker, and background
   object GC worker;
 - distributed metadata shards.
 
@@ -132,6 +133,16 @@ To mount the current FUSE frontend:
 ```bash
 mkdir -p /tmp/nokv-fs-mount
 cargo run -p nokvfs-cli --bin nokv-fs -- mount /tmp/nokv-fs-mount
+```
+
+To mount a read-only snapshot view:
+
+```bash
+SNAPSHOT_ID=$(cargo run -q -p nokvfs-cli --bin nokv-fs -- snapshot /runs \
+  | sed -n 's/.* id=\([0-9][0-9]*\) .*/\1/p')
+mkdir -p /tmp/nokv-fs-snapshot
+cargo run -p nokvfs-cli --bin nokv-fs -- \
+  mount-snapshot "$SNAPSHOT_ID" /tmp/nokv-fs-snapshot
 ```
 
 Linux builds use fuser's pure-Rust mount path. macOS builds require macFUSE

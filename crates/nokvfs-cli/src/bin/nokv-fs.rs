@@ -37,19 +37,53 @@ enum ObjectBackendKind {
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Command {
     Init,
-    Mkdir { path: String },
-    PutArtifact { path: String, source: PathBuf },
-    Ls { path: String },
-    Cat { path: String },
-    Rm { path: String },
-    Rmdir { path: String },
-    Rename { source: String, destination: String },
-    RenameReplace { source: String, destination: String },
-    Mount { mountpoint: PathBuf },
-    Gc { limit: usize },
-    Snapshot { path: String },
-    CatSnapshot { snapshot_id: u64, path: String },
-    RetireSnapshot { snapshot_id: u64 },
+    Mkdir {
+        path: String,
+    },
+    PutArtifact {
+        path: String,
+        source: PathBuf,
+    },
+    Ls {
+        path: String,
+    },
+    Cat {
+        path: String,
+    },
+    Rm {
+        path: String,
+    },
+    Rmdir {
+        path: String,
+    },
+    Rename {
+        source: String,
+        destination: String,
+    },
+    RenameReplace {
+        source: String,
+        destination: String,
+    },
+    Mount {
+        mountpoint: PathBuf,
+    },
+    MountSnapshot {
+        snapshot_id: u64,
+        mountpoint: PathBuf,
+    },
+    Gc {
+        limit: usize,
+    },
+    Snapshot {
+        path: String,
+    },
+    CatSnapshot {
+        snapshot_id: u64,
+        path: String,
+    },
+    RetireSnapshot {
+        snapshot_id: u64,
+    },
     Help,
 }
 
@@ -206,6 +240,29 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 .map_err(from_client)?;
             nokvfs_fuse::mount(service, mountpoint, nokvfs_fuse::FuseOptions::default())
                 .map_err(from_io)?;
+        }
+        Command::MountSnapshot {
+            snapshot_id,
+            mountpoint,
+        } => {
+            let service = open_service(&config)?;
+            let snapshot = service
+                .snapshot_pin(snapshot_id)
+                .map_err(from_client)?
+                .ok_or_else(|| CliError::Client(format!("snapshot {snapshot_id} not found")))?;
+            nokvfs_fuse::mount(
+                service,
+                mountpoint,
+                nokvfs_fuse::FuseOptions {
+                    fs_name: format!("nokv-fs-snapshot-{snapshot_id}"),
+                    view: nokvfs_fuse::FuseView::Snapshot {
+                        snapshot_id,
+                        root: snapshot.root,
+                    },
+                    ..nokvfs_fuse::FuseOptions::default()
+                },
+            )
+            .map_err(from_io)?;
         }
         Command::Gc { limit } => {
             let service = open_service(&config)?;
@@ -437,6 +494,13 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
         "mount" => exact_args(args, 2).map(|()| Command::Mount {
             mountpoint: PathBuf::from(&args[1]),
         }),
+        "mount-snapshot" => {
+            exact_args(args, 3)?;
+            Ok(Command::MountSnapshot {
+                snapshot_id: parse_u64(&args[1], "snapshot_id")?,
+                mountpoint: PathBuf::from(&args[2]),
+            })
+        }
         "gc" => match args.len() {
             1 => Ok(Command::Gc {
                 limit: DEFAULT_GC_LIMIT,
@@ -476,6 +540,7 @@ fn exact_args(args: &[String], expected: usize) -> Result<(), CliError> {
                 Some("snapshot") => "path",
                 Some("cat-snapshot") => "snapshot id and path",
                 Some("retire-snapshot") => "snapshot id",
+                Some("mount-snapshot") => "snapshot id and mountpoint",
                 Some("rename") | Some("rename-replace") => "source and destination",
                 Some("mount") => "mountpoint",
                 _ => "argument",
@@ -563,6 +628,7 @@ Usage:\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount MOUNTPOINT\n\
+  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID MOUNTPOINT\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] cat-snapshot SNAPSHOT_ID PATH\n\
@@ -706,6 +772,22 @@ mod tests {
                 mountpoint: PathBuf::from("/tmp/nokv-fs")
             }
         );
+        let (_config, command) =
+            parse(vec![s("mount-snapshot"), s("42"), s("/tmp/nokv-fs-ro")]).unwrap();
+        assert_eq!(
+            command,
+            Command::MountSnapshot {
+                snapshot_id: 42,
+                mountpoint: PathBuf::from("/tmp/nokv-fs-ro")
+            }
+        );
+        assert!(matches!(
+            parse(vec![s("mount-snapshot"), s("bad"), s("/tmp/nokv-fs-ro")]),
+            Err(CliError::InvalidNumber {
+                field: "snapshot_id",
+                ..
+            })
+        ));
     }
 
     #[test]

@@ -8,4 +8,4 @@ mod attr;
 mod filesystem;
 
 pub use attr::{file_attr, fuse_file_type};
-pub use filesystem::{mount, FuseOptions, NoKvFuse};
+pub use filesystem::{mount, FuseOptions, FuseView, NoKvFuse};

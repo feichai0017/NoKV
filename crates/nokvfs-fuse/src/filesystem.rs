@@ -8,10 +8,10 @@ use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use fuser::{
-    Config, Errno, FileHandle, FileType as FuseFileType, Filesystem, FopenFlags, Generation,
-    INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags, ReplyAttr, ReplyCreate, ReplyData,
-    ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
-    WriteFlags,
+    Config, Errno, FileAttr, FileHandle, FileType as FuseFileType, Filesystem, FopenFlags,
+    Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags, ReplyAttr, ReplyCreate,
+    ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite,
+    Request, WriteFlags,
 };
 use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{DentryWithAttr, MetadError, NoKvFs, PublishArtifact};
@@ -26,6 +26,13 @@ pub struct FuseOptions {
     pub attr_ttl: Duration,
     pub fs_name: String,
     pub threads: usize,
+    pub view: FuseView,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FuseView {
+    Live,
+    Snapshot { snapshot_id: u64, root: InodeId },
 }
 
 pub struct NoKvFuse<M, O> {
@@ -56,6 +63,7 @@ impl Default for FuseOptions {
             attr_ttl: Duration::from_secs(1),
             fs_name: "nokv-fs".to_owned(),
             threads: default_threads(),
+            view: FuseView::Live,
         }
     }
 }
@@ -77,7 +85,7 @@ where
 {
     pub fn new(service: NoKvFs<M, O>, options: FuseOptions) -> Self {
         let mut parents = HashMap::new();
-        parents.insert(InodeId::ROOT_RAW, InodeId::ROOT_RAW);
+        parents.insert(options.view.root().get(), options.view.root().get());
         Self {
             service: Arc::new(service),
             options,
@@ -110,6 +118,9 @@ where
     }
 
     fn parent_of(&self, inode: InodeId) -> InodeId {
+        if inode == self.options.view.root() {
+            return inode;
+        }
         let raw = self
             .parents
             .read()
@@ -129,16 +140,118 @@ where
         DentryName::new(raw).map_err(|_| Errno::EIO)
     }
 
+    fn metadata_inode(&self, ino: INodeNo) -> Result<InodeId, Errno> {
+        if ino.0 == InodeId::ROOT_RAW {
+            return Ok(self.options.view.root());
+        }
+        inode_id(ino)
+    }
+
+    fn fuse_ino(&self, inode: InodeId) -> INodeNo {
+        if inode == self.options.view.root() {
+            INodeNo(InodeId::ROOT_RAW)
+        } else {
+            INodeNo(inode.get())
+        }
+    }
+
+    fn view_file_attr(&self, attr: &InodeAttr) -> FileAttr {
+        let mut out = file_attr(attr);
+        out.ino = self.fuse_ino(attr.inode);
+        out
+    }
+
+    fn read_only(&self) -> bool {
+        self.options.view.is_read_only()
+    }
+
+    fn service_get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, MetadError> {
+        match self.options.view {
+            FuseView::Live => self.service.get_attr(inode),
+            FuseView::Snapshot { snapshot_id, .. } => {
+                self.service.get_attr_at_snapshot(snapshot_id, inode)
+            }
+        }
+    }
+
+    fn service_lookup_plus(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<Option<DentryWithAttr>, MetadError> {
+        match self.options.view {
+            FuseView::Live => self.service.lookup_plus(parent, name),
+            FuseView::Snapshot { snapshot_id, .. } => {
+                self.service
+                    .lookup_plus_at_snapshot(snapshot_id, parent, name)
+            }
+        }
+    }
+
+    fn service_read_dir_plus(&self, inode: InodeId) -> Result<Vec<DentryWithAttr>, MetadError> {
+        match self.options.view {
+            FuseView::Live => self.service.read_dir_plus(inode),
+            FuseView::Snapshot { snapshot_id, .. } => {
+                self.service.read_dir_plus_at_snapshot(snapshot_id, inode)
+            }
+        }
+    }
+
+    fn service_read_file(
+        &self,
+        inode: InodeId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, MetadError> {
+        match self.options.view {
+            FuseView::Live => self.service.read_file(inode, offset, len),
+            FuseView::Snapshot { snapshot_id, .. } => {
+                self.service
+                    .read_file_at_snapshot(snapshot_id, inode, offset, len)
+            }
+        }
+    }
+
+    fn add_dirent(
+        &self,
+        reply: &mut ReplyDirectory,
+        request_offset: u64,
+        entry_offset: u64,
+        inode: InodeId,
+        kind: FuseFileType,
+        name: &str,
+    ) -> bool {
+        request_offset < entry_offset && reply.add(self.fuse_ino(inode), entry_offset, kind, name)
+    }
+
+    fn add_dirent_plus(
+        &self,
+        reply: &mut ReplyDirectoryPlus,
+        request_offset: u64,
+        entry_offset: u64,
+        name: &str,
+        attr: &InodeAttr,
+    ) -> bool {
+        request_offset < entry_offset
+            && reply.add(
+                self.fuse_ino(attr.inode),
+                entry_offset,
+                name,
+                &self.options.entry_ttl,
+                &self.view_file_attr(attr),
+                Generation(attr.generation),
+            )
+    }
+
     fn directory_entries(&self, inode: InodeId) -> Result<(InodeAttr, Vec<DentryWithAttr>), Errno> {
         let attr = self
-            .service
-            .get_attr(inode)
+            .service_get_attr(inode)
             .map_err(errno)?
             .ok_or(Errno::ENOENT)?;
         if attr.file_type != FileType::Directory {
             return Err(Errno::ENOTDIR);
         }
-        let entries = self.service.read_dir_plus(inode).map_err(errno)?;
+        let entries = self.service_read_dir_plus(inode).map_err(errno)?;
         for entry in &entries {
             self.remember_entry(entry);
         }
@@ -268,6 +381,11 @@ where
 {
     let mut config = Config::default();
     let mut mount_options = vec![MountOption::FSName(options.fs_name.clone())];
+    if options.view.is_read_only() {
+        mount_options.push(MountOption::RO);
+    } else {
+        mount_options.push(MountOption::RW);
+    }
     #[cfg(target_os = "macos")]
     {
         mount_options.push(MountOption::CUSTOM("fstypename=nokvfs".to_owned()));
@@ -283,13 +401,26 @@ where
     fuser::mount2(NoKvFuse::new(service, options), mountpoint, &config)
 }
 
+impl FuseView {
+    fn root(self) -> InodeId {
+        match self {
+            Self::Live => InodeId::root(),
+            Self::Snapshot { root, .. } => root,
+        }
+    }
+
+    fn is_read_only(self) -> bool {
+        matches!(self, Self::Snapshot { .. })
+    }
+}
+
 impl<M, O> Filesystem for NoKvFuse<M, O>
 where
     M: MetadataStore + Send + Sync + 'static,
     O: ObjectStore + Send + Sync + 'static,
 {
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
-        let parent = match inode_id(parent) {
+        let parent = match self.metadata_inode(parent) {
             Ok(parent) => parent,
             Err(err) => {
                 reply.error(err);
@@ -303,12 +434,12 @@ where
                 return;
             }
         };
-        match self.service.lookup_plus(parent, &name) {
+        match self.service_lookup_plus(parent, &name) {
             Ok(Some(entry)) => {
                 self.remember_parent(entry.attr.inode, parent);
                 reply.entry(
                     &self.options.entry_ttl,
-                    &file_attr(&entry.attr),
+                    &self.view_file_attr(&entry.attr),
                     Generation(entry.attr.generation),
                 );
             }
@@ -318,27 +449,29 @@ where
     }
 
     fn getattr(&self, _req: &Request, ino: INodeNo, _fh: Option<FileHandle>, reply: ReplyAttr) {
-        match inode_id(ino).and_then(|inode| {
-            self.service
-                .get_attr(inode)
+        match self.metadata_inode(ino).and_then(|inode| {
+            self.service_get_attr(inode)
                 .map_err(errno)?
                 .ok_or(Errno::ENOENT)
         }) {
-            Ok(attr) => reply.attr(&self.options.attr_ttl, &file_attr(&attr)),
+            Ok(attr) => reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr)),
             Err(err) => reply.error(err),
         }
     }
 
     fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
-        match inode_id(ino).and_then(|inode| {
-            self.service
-                .get_attr(inode)
+        match self.metadata_inode(ino).and_then(|inode| {
+            self.service_get_attr(inode)
                 .map_err(errno)?
                 .ok_or(Errno::ENOENT)
         }) {
             Ok(attr) if attr.file_type == FileType::File => match flags.acc_mode() {
                 OpenAccMode::O_RDONLY => reply.opened(FileHandle(0), FopenFlags::FOPEN_KEEP_CACHE),
                 OpenAccMode::O_WRONLY | OpenAccMode::O_RDWR => {
+                    if self.read_only() {
+                        reply.error(Errno::EROFS);
+                        return;
+                    }
                     let parent = self.parent_of(attr.inode);
                     match self.open_write_handle(&attr, parent) {
                         Ok(fh) => reply.opened(fh, FopenFlags::empty()),
@@ -373,9 +506,8 @@ where
                 return;
             }
         }
-        match inode_id(ino).and_then(|inode| {
-            self.service
-                .read_file(inode, offset, size as usize)
+        match self.metadata_inode(ino).and_then(|inode| {
+            self.service_read_file(inode, offset, size as usize)
                 .map_err(errno)
         }) {
             Ok(bytes) => reply.data(&bytes),
@@ -384,7 +516,10 @@ where
     }
 
     fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
-        match inode_id(ino).and_then(|inode| self.directory_entries(inode).map(|_| ())) {
+        match self
+            .metadata_inode(ino)
+            .and_then(|inode| self.directory_entries(inode).map(|_| ()))
+        {
             Ok(()) => reply.opened(FileHandle(0), FopenFlags::FOPEN_KEEP_CACHE),
             Err(err) => reply.error(err),
         }
@@ -398,7 +533,7 @@ where
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
-        let inode = match inode_id(ino) {
+        let inode = match self.metadata_inode(ino) {
             Ok(inode) => inode,
             Err(err) => {
                 reply.error(err);
@@ -410,8 +545,8 @@ where
             return;
         };
         let parent = self.parent_of(inode);
-        if add_dirent(&mut reply, offset, 1, inode, FuseFileType::Directory, ".")
-            || add_dirent(&mut reply, offset, 2, parent, FuseFileType::Directory, "..")
+        if self.add_dirent(&mut reply, offset, 1, inode, FuseFileType::Directory, ".")
+            || self.add_dirent(&mut reply, offset, 2, parent, FuseFileType::Directory, "..")
         {
             reply.ok();
             return;
@@ -422,7 +557,7 @@ where
                 continue;
             }
             if reply.add(
-                INodeNo(entry.attr.inode.get()),
+                self.fuse_ino(entry.attr.inode),
                 entry_offset,
                 fuse_file_type(entry.attr.file_type),
                 OsStr::from_bytes(entry.dentry.name.as_bytes()),
@@ -441,7 +576,7 @@ where
         offset: u64,
         mut reply: ReplyDirectoryPlus,
     ) {
-        let inode = match inode_id(ino) {
+        let inode = match self.metadata_inode(ino) {
             Ok(inode) => inode,
             Err(err) => {
                 reply.error(err);
@@ -454,13 +589,12 @@ where
         };
         let parent = self.parent_of(inode);
         let parent_attr = self
-            .service
-            .get_attr(parent)
+            .service_get_attr(parent)
             .ok()
             .flatten()
             .unwrap_or_else(|| attr.clone());
-        if add_dirent_plus(&mut reply, &self.options, offset, 1, ".", &attr)
-            || add_dirent_plus(&mut reply, &self.options, offset, 2, "..", &parent_attr)
+        if self.add_dirent_plus(&mut reply, offset, 1, ".", &attr)
+            || self.add_dirent_plus(&mut reply, offset, 2, "..", &parent_attr)
         {
             reply.ok();
             return;
@@ -471,11 +605,11 @@ where
                 continue;
             }
             if reply.add(
-                INodeNo(entry.attr.inode.get()),
+                self.fuse_ino(entry.attr.inode),
                 entry_offset,
                 OsStr::from_bytes(entry.dentry.name.as_bytes()),
                 &self.options.entry_ttl,
-                &file_attr(&entry.attr),
+                &self.view_file_attr(&entry.attr),
                 Generation(entry.attr.generation),
             ) {
                 break;
@@ -493,7 +627,11 @@ where
         umask: u32,
         reply: ReplyEntry,
     ) {
-        let parent = match inode_id(parent) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let parent = match self.metadata_inode(parent) {
             Ok(parent) => parent,
             Err(err) => {
                 reply.error(err);
@@ -515,7 +653,7 @@ where
                 self.remember_entry(&entry);
                 reply.entry(
                     &self.options.entry_ttl,
-                    &file_attr(&entry.attr),
+                    &self.view_file_attr(&entry.attr),
                     Generation(entry.attr.generation),
                 );
             }
@@ -546,7 +684,11 @@ where
         _flags: i32,
         reply: ReplyCreate,
     ) {
-        let parent = match inode_id(parent) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let parent = match self.metadata_inode(parent) {
             Ok(parent) => parent,
             Err(err) => {
                 reply.error(err);
@@ -578,7 +720,7 @@ where
                     self.remember_entry(&entry);
                     reply.created(
                         &self.options.entry_ttl,
-                        &file_attr(&entry.attr),
+                        &self.view_file_attr(&entry.attr),
                         Generation(entry.attr.generation),
                         handle,
                         FopenFlags::empty(),
@@ -591,7 +733,11 @@ where
     }
 
     fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        let parent = match inode_id(parent) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let parent = match self.metadata_inode(parent) {
             Ok(parent) => parent,
             Err(err) => {
                 reply.error(err);
@@ -620,7 +766,11 @@ where
     }
 
     fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
-        let parent = match inode_id(parent) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let parent = match self.metadata_inode(parent) {
             Ok(parent) => parent,
             Err(err) => {
                 reply.error(err);
@@ -662,14 +812,18 @@ where
             reply.error(Errno::EINVAL);
             return;
         }
-        let parent = match inode_id(parent) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let parent = match self.metadata_inode(parent) {
             Ok(parent) => parent,
             Err(err) => {
                 reply.error(err);
                 return;
             }
         };
-        let newparent = match inode_id(newparent) {
+        let newparent = match self.metadata_inode(newparent) {
             Ok(parent) => parent,
             Err(err) => {
                 reply.error(err);
@@ -722,6 +876,10 @@ where
         _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyWrite,
     ) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
         match self.write_to_handle(fh, offset, data) {
             Ok(written) => reply.written(written as u32),
             Err(err) => reply.error(err),
@@ -736,6 +894,10 @@ where
         _lock_owner: fuser::LockOwner,
         reply: ReplyEmpty,
     ) {
+        if self.read_only() {
+            reply.ok();
+            return;
+        }
         match self.publish_handle(fh) {
             Ok(()) => reply.ok(),
             Err(err) => reply.error(err),
@@ -752,6 +914,10 @@ where
         _flush: bool,
         reply: ReplyEmpty,
     ) {
+        if self.read_only() {
+            reply.ok();
+            return;
+        }
         match self.release_handle(fh) {
             Ok(()) => reply.ok(),
             Err(err) => reply.error(err),
@@ -766,6 +932,10 @@ where
         _datasync: bool,
         reply: ReplyEmpty,
     ) {
+        if self.read_only() {
+            reply.ok();
+            return;
+        }
         match self.publish_handle(fh) {
             Ok(()) => reply.ok(),
             Err(err) => reply.error(err),
@@ -783,36 +953,6 @@ fn dentry_name(name: &OsStr) -> Result<DentryName, Errno> {
 
 fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
     format!("fuse/{}/{}", parent.get(), inode.get())
-}
-
-fn add_dirent(
-    reply: &mut ReplyDirectory,
-    request_offset: u64,
-    entry_offset: u64,
-    inode: InodeId,
-    kind: FuseFileType,
-    name: &str,
-) -> bool {
-    request_offset < entry_offset && reply.add(INodeNo(inode.get()), entry_offset, kind, name)
-}
-
-fn add_dirent_plus(
-    reply: &mut ReplyDirectoryPlus,
-    options: &FuseOptions,
-    request_offset: u64,
-    entry_offset: u64,
-    name: &str,
-    attr: &InodeAttr,
-) -> bool {
-    request_offset < entry_offset
-        && reply.add(
-            INodeNo(attr.inode.get()),
-            entry_offset,
-            name,
-            &options.entry_ttl,
-            &file_attr(attr),
-            Generation(attr.generation),
-        )
 }
 
 fn errno(err: MetadError) -> Errno {
@@ -884,6 +1024,83 @@ mod tests {
             .read_file(published.attr.inode, 4, 3)
             .expect("read range through inode API");
         assert_eq!(bytes, b"456");
+    }
+
+    #[test]
+    fn snapshot_view_maps_snapshot_root_and_reads_old_body() {
+        let service = service();
+        let runs = service
+            .create_dir(
+                InodeId::root(),
+                DentryName::new(b"runs".to_vec()).unwrap(),
+                0o755,
+                1000,
+                1000,
+            )
+            .unwrap();
+        let name = DentryName::new(b"checkpoint".to_vec()).unwrap();
+        let old = service
+            .publish_artifact(PublishArtifact {
+                parent: runs.attr.inode,
+                name: name.clone(),
+                producer: "fuse-test".to_owned(),
+                digest_uri: "sha256:old".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "checkpoint-old".to_owned(),
+                bytes: b"old".to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+        let snapshot = service.snapshot_subtree(runs.attr.inode).unwrap();
+        service
+            .replace_artifact(PublishArtifact {
+                parent: runs.attr.inode,
+                name,
+                producer: "fuse-test".to_owned(),
+                digest_uri: "sha256:new".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "checkpoint-new".to_owned(),
+                bytes: b"new-body".to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+
+        let fuse = NoKvFuse::new(
+            service,
+            FuseOptions {
+                view: FuseView::Snapshot {
+                    snapshot_id: snapshot.snapshot_id,
+                    root: snapshot.root,
+                },
+                ..FuseOptions::default()
+            },
+        );
+        assert!(fuse.read_only());
+        assert_eq!(
+            fuse.metadata_inode(INodeNo(InodeId::ROOT_RAW)).unwrap(),
+            runs.attr.inode
+        );
+        let root_attr = fuse
+            .service_get_attr(runs.attr.inode)
+            .unwrap()
+            .expect("snapshot root attr");
+        assert_eq!(
+            fuse.view_file_attr(&root_attr).ino,
+            INodeNo(InodeId::ROOT_RAW)
+        );
+
+        let (_attr, entries) = fuse.directory_entries(runs.attr.inode).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0], old);
+        assert_eq!(
+            fuse.service_read_file(old.attr.inode, 0, old.attr.size as usize)
+                .unwrap(),
+            b"old"
+        );
     }
 
     #[test]
