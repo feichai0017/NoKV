@@ -194,11 +194,11 @@ v0 local:
   S3-compatible object backend, with RustFS as the local default
   Rust SDK
   CLI
-  read-only FUSE
+  close-to-open FUSE reads and buffered writes
   artifact publish
 
 v1 usable filesystem:
-  write-capable FUSE
+  fuller FUSE semantics beyond buffered write publish
   remove/rmdir/rename-replace
   long-running server
   Python/fsspec

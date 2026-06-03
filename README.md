@@ -36,7 +36,7 @@ crates/
   nokvfs-meta    # schema, MetadataCommand, Holt store, in-process metad
   nokvfs-object  # S3-compatible object backend, including RustFS
   nokvfs-client  # Rust SDK
-  nokvfs-fuse    # low-level read-only FUSE frontend
+  nokvfs-fuse    # low-level FUSE frontend
   nokvfs-cli     # nokv-fs CLI binary
 
 bench/           # system workload benchmark harness
@@ -69,15 +69,16 @@ Implemented today:
   service;
 - path-oriented Rust SDK for mkdir, artifact publish, lookup, list, cat,
   remove, rmdir, rename, and rename-replace;
-- low-level read-only FUSE frontend for lookup, getattr, readdir, open, and
-  range read;
+- low-level FUSE frontend for lookup, getattr, readdir, open, range read, mkdir,
+  create, buffered write, flush/fsync/release publish, unlink, rmdir, and
+  rename-replace;
 - `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, rm, rmdir, rename,
   rename-replace, and mount.
 
 Not implemented yet:
 
 - long-running metad server;
-- FUSE write operations;
+- full POSIX random-write/truncate semantics;
 - watch replay, snapshot retention, and object GC worker;
 - distributed metadata shards.
 
@@ -119,7 +120,7 @@ cargo run -p nokvfs-cli --bin nokv-fs -- ls /runs
 cargo run -p nokvfs-cli --bin nokv-fs -- cat /runs/checkpoint.json
 ```
 
-To mount the current read-only FUSE frontend:
+To mount the current FUSE frontend:
 
 ```bash
 mkdir -p /tmp/nokv-fs-mount

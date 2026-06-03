@@ -199,7 +199,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             service
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
-            nokvfs_fuse::mount_read_only(service, mountpoint, nokvfs_fuse::FuseOptions::default())
+            nokvfs_fuse::mount(service, mountpoint, nokvfs_fuse::FuseOptions::default())
                 .map_err(from_io)?;
         }
         Command::Help => {

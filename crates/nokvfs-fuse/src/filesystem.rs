@@ -3,16 +3,18 @@ use std::ffi::OsStr;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use fuser::{
     Config, Errno, FileHandle, FileType as FuseFileType, Filesystem, FopenFlags, Generation,
-    INodeNo, MountOption, OpenFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
-    ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request, WriteFlags,
+    INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags, ReplyAttr, ReplyCreate, ReplyData,
+    ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite, Request,
+    WriteFlags,
 };
 use nokvfs_meta::command::MetadataStore;
-use nokvfs_meta::{DentryWithAttr, MetadError, NoKvFs};
+use nokvfs_meta::{DentryWithAttr, MetadError, NoKvFs, PublishArtifact};
 use nokvfs_object::ObjectStore;
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
 
@@ -30,6 +32,21 @@ pub struct NoKvFuse<M, O> {
     service: Arc<NoKvFs<M, O>>,
     options: FuseOptions,
     parents: RwLock<HashMap<u64, u64>>,
+    names: RwLock<HashMap<u64, Vec<u8>>>,
+    next_handle: AtomicU64,
+    write_handles: RwLock<HashMap<u64, WriteHandle>>,
+}
+
+#[derive(Clone, Debug)]
+struct WriteHandle {
+    inode: InodeId,
+    parent: InodeId,
+    name: DentryName,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+    bytes: Vec<u8>,
+    dirty: bool,
 }
 
 impl Default for FuseOptions {
@@ -65,6 +82,9 @@ where
             service: Arc::new(service),
             options,
             parents: RwLock::new(parents),
+            names: RwLock::new(HashMap::new()),
+            next_handle: AtomicU64::new(1),
+            write_handles: RwLock::new(HashMap::new()),
         }
     }
 
@@ -78,6 +98,17 @@ where
         }
     }
 
+    fn remember_name(&self, child: InodeId, name: &DentryName) {
+        if let Ok(mut names) = self.names.write() {
+            names.insert(child.get(), name.as_bytes().to_vec());
+        }
+    }
+
+    fn remember_entry(&self, entry: &DentryWithAttr) {
+        self.remember_parent(entry.attr.inode, entry.dentry.parent);
+        self.remember_name(entry.attr.inode, &entry.dentry.name);
+    }
+
     fn parent_of(&self, inode: InodeId) -> InodeId {
         let raw = self
             .parents
@@ -86,6 +117,16 @@ where
             .and_then(|parents| parents.get(&inode.get()).copied())
             .unwrap_or(InodeId::ROOT_RAW);
         InodeId::new(raw).unwrap_or_else(|_| InodeId::root())
+    }
+
+    fn name_of(&self, inode: InodeId) -> Result<DentryName, Errno> {
+        let raw = self
+            .names
+            .read()
+            .ok()
+            .and_then(|names| names.get(&inode.get()).cloned())
+            .ok_or(Errno::EIO)?;
+        DentryName::new(raw).map_err(|_| Errno::EIO)
     }
 
     fn directory_entries(&self, inode: InodeId) -> Result<(InodeAttr, Vec<DentryWithAttr>), Errno> {
@@ -99,13 +140,124 @@ where
         }
         let entries = self.service.read_dir_plus(inode).map_err(errno)?;
         for entry in &entries {
-            self.remember_parent(entry.attr.inode, inode);
+            self.remember_entry(entry);
         }
         Ok((attr, entries))
     }
+
+    fn allocate_handle(&self, handle: WriteHandle) -> Result<FileHandle, Errno> {
+        let raw = self.next_handle.fetch_add(1, Ordering::Relaxed);
+        self.write_handles
+            .write()
+            .map_err(|_| Errno::EIO)?
+            .insert(raw, handle);
+        Ok(FileHandle(raw))
+    }
+
+    fn open_write_handle(&self, attr: &InodeAttr, parent: InodeId) -> Result<FileHandle, Errno> {
+        let name = self.name_of(attr.inode)?;
+        let bytes = if attr.size == 0 {
+            Vec::new()
+        } else {
+            self.service
+                .read_file(attr.inode, 0, attr.size as usize)
+                .map_err(errno)?
+        };
+        self.allocate_handle(WriteHandle {
+            inode: attr.inode,
+            parent,
+            name,
+            mode: attr.mode,
+            uid: attr.uid,
+            gid: attr.gid,
+            bytes,
+            dirty: false,
+        })
+    }
+
+    fn write_to_handle(&self, fh: FileHandle, offset: u64, data: &[u8]) -> Result<usize, Errno> {
+        let offset = usize::try_from(offset).map_err(|_| Errno::EINVAL)?;
+        let end = offset.checked_add(data.len()).ok_or(Errno::EINVAL)?;
+        let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+        let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
+        if end > handle.bytes.len() {
+            handle.bytes.resize(end, 0);
+        }
+        handle.bytes[offset..end].copy_from_slice(data);
+        handle.dirty = true;
+        Ok(data.len())
+    }
+
+    fn read_from_handle(
+        &self,
+        fh: FileHandle,
+        offset: u64,
+        size: u32,
+    ) -> Result<Option<Vec<u8>>, Errno> {
+        let handles = self.write_handles.read().map_err(|_| Errno::EIO)?;
+        let Some(handle) = handles.get(&fh.0) else {
+            return Ok(None);
+        };
+        let offset = usize::try_from(offset).map_err(|_| Errno::EINVAL)?;
+        if offset >= handle.bytes.len() {
+            return Ok(Some(Vec::new()));
+        }
+        let end = offset
+            .checked_add(size as usize)
+            .ok_or(Errno::EINVAL)?
+            .min(handle.bytes.len());
+        Ok(Some(handle.bytes[offset..end].to_vec()))
+    }
+
+    fn publish_handle(&self, fh: FileHandle) -> Result<(), Errno> {
+        let Some(snapshot) = self
+            .write_handles
+            .read()
+            .map_err(|_| Errno::EIO)?
+            .get(&fh.0)
+            .cloned()
+        else {
+            return Ok(());
+        };
+        if !snapshot.dirty {
+            return Ok(());
+        }
+        self.service
+            .replace_artifact(PublishArtifact {
+                parent: snapshot.parent,
+                name: snapshot.name,
+                producer: "nokv-fuse".to_owned(),
+                digest_uri: "unknown".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: fuse_manifest_id(snapshot.parent, snapshot.inode),
+                bytes: snapshot.bytes.clone(),
+                mode: snapshot.mode,
+                uid: snapshot.uid,
+                gid: snapshot.gid,
+            })
+            .map_err(errno)?;
+        if let Some(handle) = self
+            .write_handles
+            .write()
+            .map_err(|_| Errno::EIO)?
+            .get_mut(&fh.0)
+        {
+            handle.dirty = false;
+        }
+        Ok(())
+    }
+
+    fn release_handle(&self, fh: FileHandle) -> Result<(), Errno> {
+        self.publish_handle(fh)?;
+        self.write_handles
+            .write()
+            .map_err(|_| Errno::EIO)?
+            .remove(&fh.0);
+        Ok(())
+    }
 }
 
-pub fn mount_read_only<M, O>(
+pub fn mount<M, O>(
     service: NoKvFs<M, O>,
     mountpoint: impl AsRef<Path>,
     options: FuseOptions,
@@ -115,10 +267,7 @@ where
     O: ObjectStore + Send + Sync + 'static,
 {
     let mut config = Config::default();
-    let mut mount_options = vec![
-        MountOption::FSName(options.fs_name.clone()),
-        MountOption::RO,
-    ];
+    let mut mount_options = vec![MountOption::FSName(options.fs_name.clone())];
     #[cfg(target_os = "macos")]
     {
         mount_options.push(MountOption::CUSTOM("fstypename=nokvfs".to_owned()));
@@ -180,16 +329,23 @@ where
         }
     }
 
-    fn open(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
+    fn open(&self, _req: &Request, ino: INodeNo, flags: OpenFlags, reply: ReplyOpen) {
         match inode_id(ino).and_then(|inode| {
             self.service
                 .get_attr(inode)
                 .map_err(errno)?
                 .ok_or(Errno::ENOENT)
         }) {
-            Ok(attr) if attr.file_type == FileType::File => {
-                reply.opened(FileHandle(0), FopenFlags::FOPEN_KEEP_CACHE);
-            }
+            Ok(attr) if attr.file_type == FileType::File => match flags.acc_mode() {
+                OpenAccMode::O_RDONLY => reply.opened(FileHandle(0), FopenFlags::FOPEN_KEEP_CACHE),
+                OpenAccMode::O_WRONLY | OpenAccMode::O_RDWR => {
+                    let parent = self.parent_of(attr.inode);
+                    match self.open_write_handle(&attr, parent) {
+                        Ok(fh) => reply.opened(fh, FopenFlags::empty()),
+                        Err(err) => reply.error(err),
+                    }
+                }
+            },
             Ok(_) => reply.error(Errno::EISDIR),
             Err(err) => reply.error(err),
         }
@@ -199,13 +355,24 @@ where
         &self,
         _req: &Request,
         ino: INodeNo,
-        _fh: FileHandle,
+        fh: FileHandle,
         offset: u64,
         size: u32,
         _flags: OpenFlags,
         _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyData,
     ) {
+        match self.read_from_handle(fh, offset, size) {
+            Ok(Some(bytes)) => {
+                reply.data(&bytes);
+                return;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        }
         match inode_id(ino).and_then(|inode| {
             self.service
                 .read_file(inode, offset, size as usize)
@@ -319,14 +486,41 @@ where
 
     fn mkdir(
         &self,
-        _req: &Request,
-        _parent: INodeNo,
-        _name: &OsStr,
-        _mode: u32,
-        _umask: u32,
+        req: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
         reply: ReplyEntry,
     ) {
-        reply.error(Errno::EROFS);
+        let parent = match inode_id(parent) {
+            Ok(parent) => parent,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match dentry_name(name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self
+            .service
+            .create_dir(parent, name, mode & !umask, req.uid(), req.gid())
+        {
+            Ok(entry) => {
+                self.remember_entry(&entry);
+                reply.entry(
+                    &self.options.entry_ttl,
+                    &file_attr(&entry.attr),
+                    Generation(entry.attr.generation),
+                );
+            }
+            Err(err) => reply.error(errno(err)),
+        }
     }
 
     fn mknod(
@@ -344,38 +538,238 @@ where
 
     fn create(
         &self,
-        _req: &Request,
-        _parent: INodeNo,
-        _name: &OsStr,
-        _mode: u32,
-        _umask: u32,
+        req: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
         _flags: i32,
         reply: ReplyCreate,
     ) {
-        reply.error(Errno::EROFS);
+        let parent = match inode_id(parent) {
+            Ok(parent) => parent,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match dentry_name(name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self
+            .service
+            .create_file(parent, name, mode & !umask, req.uid(), req.gid())
+        {
+            Ok(entry) => match self.allocate_handle(WriteHandle {
+                inode: entry.attr.inode,
+                parent,
+                name: entry.dentry.name.clone(),
+                mode: entry.attr.mode,
+                uid: entry.attr.uid,
+                gid: entry.attr.gid,
+                bytes: Vec::new(),
+                dirty: false,
+            }) {
+                Ok(handle) => {
+                    self.remember_entry(&entry);
+                    reply.created(
+                        &self.options.entry_ttl,
+                        &file_attr(&entry.attr),
+                        Generation(entry.attr.generation),
+                        handle,
+                        FopenFlags::empty(),
+                    );
+                }
+                Err(err) => reply.error(err),
+            },
+            Err(err) => reply.error(errno(err)),
+        }
     }
 
-    fn unlink(&self, _req: &Request, _parent: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(Errno::EROFS);
+    fn unlink(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let parent = match inode_id(parent) {
+            Ok(parent) => parent,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match dentry_name(name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.service.remove_file(parent, &name) {
+            Ok(entry) => {
+                if let Ok(mut parents) = self.parents.write() {
+                    parents.remove(&entry.attr.inode.get());
+                }
+                if let Ok(mut names) = self.names.write() {
+                    names.remove(&entry.attr.inode.get());
+                }
+                reply.ok();
+            }
+            Err(err) => reply.error(errno(err)),
+        }
     }
 
-    fn rmdir(&self, _req: &Request, _parent: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(Errno::EROFS);
+    fn rmdir(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        let parent = match inode_id(parent) {
+            Ok(parent) => parent,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match dentry_name(name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.service.remove_empty_dir(parent, &name) {
+            Ok(entry) => {
+                if let Ok(mut parents) = self.parents.write() {
+                    parents.remove(&entry.attr.inode.get());
+                }
+                if let Ok(mut names) = self.names.write() {
+                    names.remove(&entry.attr.inode.get());
+                }
+                reply.ok();
+            }
+            Err(err) => reply.error(errno(err)),
+        }
+    }
+
+    fn rename(
+        &self,
+        _req: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        newparent: INodeNo,
+        newname: &OsStr,
+        flags: RenameFlags,
+        reply: ReplyEmpty,
+    ) {
+        if !flags.is_empty() {
+            reply.error(Errno::EINVAL);
+            return;
+        }
+        let parent = match inode_id(parent) {
+            Ok(parent) => parent,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let newparent = match inode_id(newparent) {
+            Ok(parent) => parent,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match dentry_name(name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let newname = match dentry_name(newname) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self
+            .service
+            .rename_replace(parent, &name, newparent, newname)
+        {
+            Ok(result) => {
+                self.remember_entry(&result.entry);
+                if let Some(replaced) = result.replaced {
+                    if let Ok(mut parents) = self.parents.write() {
+                        parents.remove(&replaced.attr.inode.get());
+                    }
+                    if let Ok(mut names) = self.names.write() {
+                        names.remove(&replaced.attr.inode.get());
+                    }
+                }
+                reply.ok();
+            }
+            Err(err) => reply.error(errno(err)),
+        }
     }
 
     fn write(
         &self,
         _req: &Request,
         _ino: INodeNo,
-        _fh: FileHandle,
-        _offset: u64,
-        _data: &[u8],
+        fh: FileHandle,
+        offset: u64,
+        data: &[u8],
         _write_flags: WriteFlags,
         _flags: OpenFlags,
         _lock_owner: Option<fuser::LockOwner>,
         reply: ReplyWrite,
     ) {
-        reply.error(Errno::EROFS);
+        match self.write_to_handle(fh, offset, data) {
+            Ok(written) => reply.written(written as u32),
+            Err(err) => reply.error(err),
+        }
+    }
+
+    fn flush(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _lock_owner: fuser::LockOwner,
+        reply: ReplyEmpty,
+    ) {
+        match self.publish_handle(fh) {
+            Ok(()) => reply.ok(),
+            Err(err) => reply.error(err),
+        }
+    }
+
+    fn release(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _flags: OpenFlags,
+        _lock_owner: Option<fuser::LockOwner>,
+        _flush: bool,
+        reply: ReplyEmpty,
+    ) {
+        match self.release_handle(fh) {
+            Ok(()) => reply.ok(),
+            Err(err) => reply.error(err),
+        }
+    }
+
+    fn fsync(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _datasync: bool,
+        reply: ReplyEmpty,
+    ) {
+        match self.publish_handle(fh) {
+            Ok(()) => reply.ok(),
+            Err(err) => reply.error(err),
+        }
     }
 }
 
@@ -385,6 +779,10 @@ fn inode_id(ino: INodeNo) -> Result<InodeId, Errno> {
 
 fn dentry_name(name: &OsStr) -> Result<DentryName, Errno> {
     DentryName::new(name.as_bytes().to_vec()).map_err(|_| Errno::EINVAL)
+}
+
+fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
+    format!("fuse/{}/{}", parent.get(), inode.get())
 }
 
 fn add_dirent(
@@ -486,5 +884,36 @@ mod tests {
             .read_file(published.attr.inode, 4, 3)
             .expect("read range through inode API");
         assert_eq!(bytes, b"456");
+    }
+
+    #[test]
+    fn write_handle_publish_updates_file_body() {
+        let service = service();
+        let name = DentryName::new(b"checkpoint".to_vec()).unwrap();
+        let created = service
+            .create_file(InodeId::root(), name, 0o644, 1000, 1000)
+            .unwrap();
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        fuse.remember_entry(&created);
+        let handle = fuse
+            .open_write_handle(&created.attr, InodeId::root())
+            .expect("open write handle");
+
+        assert_eq!(fuse.write_to_handle(handle, 0, b"0123").unwrap(), 4);
+        assert_eq!(fuse.write_to_handle(handle, 6, b"89").unwrap(), 2);
+        let expected = &[b'0', b'1', b'2', b'3', 0, 0, b'8', b'9'];
+        assert_eq!(
+            fuse.read_from_handle(handle, 0, 8).unwrap().unwrap(),
+            expected
+        );
+
+        fuse.publish_handle(handle).expect("publish handle");
+        assert_eq!(
+            fuse.service()
+                .read_file(created.attr.inode, 0, 8)
+                .expect("read published body"),
+            expected
+        );
+        fuse.release_handle(handle).expect("release handle");
     }
 }
