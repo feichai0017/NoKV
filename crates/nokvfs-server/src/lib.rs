@@ -7,6 +7,7 @@
 
 mod http;
 mod options;
+mod rpc;
 mod server;
 
 pub use options::{ServerOptions, DEFAULT_SERVER_BIND};

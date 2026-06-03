@@ -76,6 +76,8 @@ Implemented today:
 - live FUSE mount invalidates kernel entry/inode caches from typed watch replay;
 - long-running local `nokvfs-server` process with health, stats, and manual
   object/history GC endpoints;
+- inode-level metadata RPC v0 on `nokvfs-server` for bootstrap, lookup,
+  readdir-plus, create, remove, rename, snapshot, and snapshot retirement;
 - basic root bootstrap, directory create, artifact publish, lookup-plus,
   readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
   service;
@@ -90,7 +92,7 @@ Implemented today:
 
 Not implemented yet:
 
-- remote SDK/FUSE metadata RPC;
+- remote SDK/FUSE clients over the metadata RPC;
 - full POSIX random-write/truncate semantics;
 - distributed metadata shards.
 
@@ -149,6 +151,9 @@ To run the local metadata process without mounting FUSE:
 cargo run -p nokvfs-cli --bin nokv-fs -- serve
 curl http://127.0.0.1:7777/healthz
 curl http://127.0.0.1:7777/stats
+curl -X POST http://127.0.0.1:7777/rpc \
+  -H 'content-type: application/json' \
+  -d '{"op":"read_dir_plus","parent":1}'
 curl -X POST http://127.0.0.1:7777/gc
 ```
 

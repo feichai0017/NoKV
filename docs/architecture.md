@@ -49,9 +49,12 @@ then publishes the dentry, inode projection, and body descriptor atomically.
 Failed metadata publish leaves staged objects for later garbage collection.
 
 `nokvfs-server` runs the same local `nokvfs-meta` service in a long-lived
-process. It owns health, readiness, stats, and manual GC endpoints. It does not
-yet expose the remote metadata RPC used by future SDK, FUSE, or distributed
-router clients.
+process. It owns health, readiness, stats, manual GC endpoints, and the first
+inode-level metadata RPC. The RPC is intentionally low-level: clients send
+inode/name operations such as `lookup_plus`, `read_dir_plus`, `create_dir`,
+`remove_file`, `rename_replace`, and `snapshot_subtree`. Path resolution stays
+in SDK/FUSE clients. Remote SDK/FUSE implementations over this RPC are still
+future work.
 
 ## FUSE Path
 

@@ -61,6 +61,10 @@ impl Server {
         Ok(())
     }
 
+    pub(crate) fn service(&self) -> &NoKvFs<HoltMetadataStore, S3ObjectStore> {
+        &self.service
+    }
+
     pub fn stats_json(&self) -> String {
         let objects = self.service.object_stats();
         let object_gc = self.object_gc.state();

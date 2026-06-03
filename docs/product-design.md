@@ -195,7 +195,8 @@ v0 local:
   S3-compatible object backend, with RustFS as the local default
   Rust SDK
   CLI
-  long-running local server with health, stats, and manual GC endpoints
+  long-running local server with health, stats, manual GC endpoints, and
+  inode-level metadata RPC
   close-to-open FUSE reads and buffered writes
   artifact publish
   durable object GC queue, explicit cleanup API, and background worker
@@ -207,7 +208,7 @@ v0 local:
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
-  remote metadata RPC for SDK/FUSE clients
+  remote SDK/FUSE clients over the metadata RPC
   Python/fsspec
   SDK watch consumer integration
 

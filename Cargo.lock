@@ -1207,6 +1207,8 @@ dependencies = [
  "nokvfs-meta",
  "nokvfs-object",
  "nokvfs-types",
+ "serde",
+ "serde_json",
  "tempfile",
 ]
 

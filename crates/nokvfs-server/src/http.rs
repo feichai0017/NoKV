@@ -2,9 +2,17 @@ use std::io::{self, Read, Write};
 use std::net::TcpStream;
 use std::time::Duration;
 
+use crate::rpc;
 use crate::server::{Server, ServerError};
 
 const CONTROL_IO_TIMEOUT: Duration = Duration::from_secs(5);
+const MAX_CONTROL_REQUEST_BYTES: usize = 1024 * 1024;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct HttpRequest {
+    line: String,
+    body: Vec<u8>,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct HttpResponse {
@@ -20,14 +28,83 @@ pub(crate) fn handle_stream(server: &Server, mut stream: TcpStream) -> Result<()
     stream
         .set_write_timeout(Some(CONTROL_IO_TIMEOUT))
         .map_err(ServerError::Io)?;
-    let mut buf = [0_u8; 4096];
-    let read = stream.read(&mut buf).map_err(ServerError::Io)?;
-    let request = String::from_utf8_lossy(&buf[..read]);
-    let response = handle_request_line(server, request.lines().next().unwrap_or_default());
+    let request = read_request(&mut stream)?;
+    let response = handle_request(server, &request);
     write_response(&mut stream, &response).map_err(ServerError::Io)
 }
 
-pub(crate) fn handle_request_line(server: &Server, line: &str) -> HttpResponse {
+fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, ServerError> {
+    let mut bytes = Vec::new();
+    let mut buf = [0_u8; 4096];
+    loop {
+        let read = stream.read(&mut buf).map_err(ServerError::Io)?;
+        if read == 0 {
+            break;
+        }
+        bytes.extend_from_slice(&buf[..read]);
+        if bytes.len() > MAX_CONTROL_REQUEST_BYTES {
+            return Ok(HttpRequest {
+                line: "GET /request-too-large HTTP/1.1".to_owned(),
+                body: Vec::new(),
+            });
+        }
+        if let Some((header_end, content_len)) = header_end_and_content_len(&bytes) {
+            let body_start = header_end + 4;
+            let expected = body_start.saturating_add(content_len);
+            while bytes.len() < expected {
+                let read = stream.read(&mut buf).map_err(ServerError::Io)?;
+                if read == 0 {
+                    break;
+                }
+                bytes.extend_from_slice(&buf[..read]);
+                if bytes.len() > MAX_CONTROL_REQUEST_BYTES {
+                    return Ok(HttpRequest {
+                        line: "GET /request-too-large HTTP/1.1".to_owned(),
+                        body: Vec::new(),
+                    });
+                }
+            }
+            let header = String::from_utf8_lossy(&bytes[..header_end]);
+            let line = header.lines().next().unwrap_or_default().to_owned();
+            let body_end = bytes.len().min(expected);
+            return Ok(HttpRequest {
+                line,
+                body: bytes[body_start..body_end].to_vec(),
+            });
+        }
+    }
+
+    let line = String::from_utf8_lossy(&bytes)
+        .lines()
+        .next()
+        .unwrap_or_default()
+        .to_owned();
+    Ok(HttpRequest {
+        line,
+        body: Vec::new(),
+    })
+}
+
+fn header_end_and_content_len(bytes: &[u8]) -> Option<(usize, usize)> {
+    let header_end = bytes.windows(4).position(|window| window == b"\r\n\r\n")?;
+    let header = String::from_utf8_lossy(&bytes[..header_end]);
+    let mut content_len = 0_usize;
+    for line in header.lines().skip(1) {
+        let Some((key, value)) = line.split_once(':') else {
+            continue;
+        };
+        if key.eq_ignore_ascii_case("content-length") {
+            content_len = value.trim().parse().unwrap_or(0);
+        }
+    }
+    Some((header_end, content_len))
+}
+
+fn handle_request(server: &Server, request: &HttpRequest) -> HttpResponse {
+    handle_parts(server, &request.line, &request.body)
+}
+
+pub(crate) fn handle_parts(server: &Server, line: &str, body: &[u8]) -> HttpResponse {
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let path = parts.next().unwrap_or_default();
@@ -35,10 +112,14 @@ pub(crate) fn handle_request_line(server: &Server, line: &str) -> HttpResponse {
         ("GET", "/healthz") => HttpResponse::text("200 OK", "ok\n"),
         ("GET", "/readyz") => HttpResponse::text("200 OK", "ready\n"),
         ("GET", "/stats") => HttpResponse::json("200 OK", server.stats_json()),
+        ("POST", "/rpc") => HttpResponse::json("200 OK", rpc::handle_rpc(server, body)),
         ("GET", "/gc") | ("POST", "/gc") => match server.run_manual_gc() {
             Ok(body) => HttpResponse::json("200 OK", body),
             Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
         },
+        (_, "/request-too-large") => {
+            HttpResponse::text("413 Payload Too Large", "request too large\n")
+        }
         _ => HttpResponse::text("404 Not Found", "not found\n"),
     }
 }
@@ -80,7 +161,7 @@ mod tests {
     #[test]
     fn health_endpoint_is_plain_text() {
         let server = test_server();
-        let response = handle_request_line(&server, "GET /healthz HTTP/1.1");
+        let response = handle_parts(&server, "GET /healthz HTTP/1.1", &[]);
         assert_eq!(response.status, "200 OK");
         assert_eq!(response.content_type, "text/plain; charset=utf-8");
         assert_eq!(response.body, "ok\n");
@@ -89,7 +170,7 @@ mod tests {
     #[test]
     fn stats_endpoint_reports_object_counters() {
         let server = test_server();
-        let response = handle_request_line(&server, "GET /stats HTTP/1.1");
+        let response = handle_parts(&server, "GET /stats HTTP/1.1", &[]);
         assert_eq!(response.status, "200 OK");
         assert!(response.body.contains("\"object_puts\":0"));
         assert!(response.body.contains("\"block_cache_enabled\":true"));
@@ -98,7 +179,20 @@ mod tests {
     #[test]
     fn unknown_endpoint_returns_404() {
         let server = test_server();
-        let response = handle_request_line(&server, "GET /missing HTTP/1.1");
+        let response = handle_parts(&server, "GET /missing HTTP/1.1", &[]);
         assert_eq!(response.status, "404 Not Found");
+    }
+
+    #[test]
+    fn rpc_endpoint_executes_metadata_request() {
+        let server = test_server();
+        let response = handle_parts(
+            &server,
+            "POST /rpc HTTP/1.1",
+            br#"{"op":"create_dir","parent":1,"name":"runs","mode":493,"uid":1000,"gid":1000}"#,
+        );
+        assert_eq!(response.status, "200 OK");
+        assert!(response.body.contains("\"ok\":true"));
+        assert!(response.body.contains("\"name_utf8\":\"runs\""));
     }
 }
