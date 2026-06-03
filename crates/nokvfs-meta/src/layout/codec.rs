@@ -2,13 +2,15 @@ use std::fmt;
 
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
-    FileType, InodeAttr, InodeId, ObjectGcRecord, SnapshotPin,
+    FileType, InodeAttr, InodeId, ObjectGcRecord, SnapshotPin, WatchEvent, WatchEventKind,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum CodecError {
     Truncated,
     InvalidFileType(u8),
+    InvalidWatchEventKind(u8),
+    InvalidOptionTag(u8),
     InvalidInodeId(u64),
     InvalidName(String),
     InvalidUtf8,
@@ -229,6 +231,49 @@ pub fn decode_snapshot_pin(bytes: &[u8]) -> Result<SnapshotPin, CodecError> {
     Ok(pin)
 }
 
+pub fn encode_watch_event(event: &WatchEvent) -> Vec<u8> {
+    let mut out = Vec::new();
+    out.push(watch_event_kind_tag(event.kind));
+    put_optional_inode(&mut out, event.parent);
+    match &event.name {
+        Some(name) => {
+            out.push(1);
+            put_bytes(&mut out, name.as_bytes());
+        }
+        None => out.push(0),
+    }
+    push_u64(&mut out, event.inode.get());
+    push_u64(&mut out, event.version);
+    out
+}
+
+pub fn decode_watch_event(bytes: &[u8]) -> Result<WatchEvent, CodecError> {
+    let mut input = Decoder::new(bytes);
+    let kind = watch_event_kind(input.u8()?)?;
+    let parent = match input.u8()? {
+        0 => None,
+        1 => Some(inode(input.u64()?)?),
+        tag => return Err(CodecError::InvalidOptionTag(tag)),
+    };
+    let name = match input.u8()? {
+        0 => None,
+        1 => Some(
+            DentryName::new(input.bytes()?.to_vec())
+                .map_err(|err| CodecError::InvalidName(err.to_string()))?,
+        ),
+        tag => return Err(CodecError::InvalidOptionTag(tag)),
+    };
+    let event = WatchEvent {
+        kind,
+        parent,
+        name,
+        inode: inode(input.u64()?)?,
+        version: input.u64()?,
+    };
+    input.finish()?;
+    Ok(event)
+}
+
 fn decode_inode_attr_from(input: &mut Decoder<'_>) -> Result<InodeAttr, CodecError> {
     Ok(InodeAttr {
         inode: inode(input.u64()?)?,
@@ -260,8 +305,39 @@ fn file_type(tag: u8) -> Result<FileType, CodecError> {
     }
 }
 
+fn watch_event_kind_tag(kind: WatchEventKind) -> u8 {
+    match kind {
+        WatchEventKind::Create => 1,
+        WatchEventKind::Remove => 2,
+        WatchEventKind::Rename => 3,
+        WatchEventKind::UpdateAttr => 4,
+        WatchEventKind::PublishArtifact => 5,
+    }
+}
+
+fn watch_event_kind(tag: u8) -> Result<WatchEventKind, CodecError> {
+    match tag {
+        1 => Ok(WatchEventKind::Create),
+        2 => Ok(WatchEventKind::Remove),
+        3 => Ok(WatchEventKind::Rename),
+        4 => Ok(WatchEventKind::UpdateAttr),
+        5 => Ok(WatchEventKind::PublishArtifact),
+        _ => Err(CodecError::InvalidWatchEventKind(tag)),
+    }
+}
+
 fn inode(raw: u64) -> Result<InodeId, CodecError> {
     InodeId::new(raw).map_err(|_| CodecError::InvalidInodeId(raw))
+}
+
+fn put_optional_inode(out: &mut Vec<u8>, inode: Option<InodeId>) {
+    match inode {
+        Some(inode) => {
+            out.push(1);
+            push_u64(out, inode.get());
+        }
+        None => out.push(0),
+    }
 }
 
 fn put_bytes(out: &mut Vec<u8>, bytes: &[u8]) {
@@ -343,6 +419,8 @@ impl fmt::Display for CodecError {
         match self {
             Self::Truncated => write!(f, "encoded metadata value is truncated"),
             Self::InvalidFileType(tag) => write!(f, "invalid file type tag {tag}"),
+            Self::InvalidWatchEventKind(tag) => write!(f, "invalid watch event kind tag {tag}"),
+            Self::InvalidOptionTag(tag) => write!(f, "invalid optional value tag {tag}"),
             Self::InvalidInodeId(id) => write!(f, "invalid inode id {id}"),
             Self::InvalidName(err) => write!(f, "invalid dentry name: {err}"),
             Self::InvalidUtf8 => write!(f, "encoded metadata string is not UTF-8"),

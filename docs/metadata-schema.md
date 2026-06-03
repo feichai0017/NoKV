@@ -99,7 +99,7 @@ path_index
   val: inode, dentry generation, root epoch
 
 watch_log
-  key: mount_id | watch_scope | sequence
+  key: mount_id | watch_scope | commit_version | event_id
   val: typed watch event
 
 snapshot_pin

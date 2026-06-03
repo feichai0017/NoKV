@@ -115,6 +115,18 @@ pub struct SnapshotPin {
     pub created_version: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WatchCursor {
+    pub version: u64,
+    pub event_id: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WatchRecord {
+    pub cursor: WatchCursor,
+    pub event: WatchEvent,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum WatchEventKind {
     Create,

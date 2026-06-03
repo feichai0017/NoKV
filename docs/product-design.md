@@ -198,14 +198,16 @@ v0 local:
   artifact publish
   durable object GC queue and explicit cleanup API
   durable snapshot pin and snapshot-version artifact read
+  remove/rmdir/rename-replace
+  durable typed watch replay
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
-  remove/rmdir/rename-replace
   long-running server
   Python/fsspec
   read-only snapshot mounts
   background object GC worker
+  FUSE and SDK watch consumer integration
 
 v2 cluster:
   metadata router

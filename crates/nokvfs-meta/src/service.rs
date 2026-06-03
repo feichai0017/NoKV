@@ -11,15 +11,16 @@ use std::sync::Mutex;
 
 use crate::command::{
     CommandKind, CommitResult, MetadataCommand, MetadataError, MetadataStore, Mutation, MutationOp,
-    Predicate, PredicateRef, ReadPurpose, ScanRequest, Value, Version,
+    Predicate, PredicateRef, ReadPurpose, ScanRequest, Value, Version, WatchProjection,
 };
 use crate::layout::{
     allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,
     decode_body_descriptor, decode_chunk_manifest, decode_dentry_projection, decode_inode_attr,
-    decode_object_gc_record, decode_snapshot_pin, dentry_key, dentry_prefix,
+    decode_object_gc_record, decode_snapshot_pin, decode_watch_event, dentry_key, dentry_prefix,
     encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
     encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
-    gc_object_key, gc_queue_prefix, inode_key, snapshot_pin_key, snapshot_pin_prefix,
+    encode_watch_event, gc_object_key, gc_queue_prefix, inode_key, snapshot_pin_key,
+    snapshot_pin_prefix, watch_log_prefix,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
@@ -29,6 +30,7 @@ use nokvfs_object::{
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
     FileType, InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, RecordFamily, SnapshotPin,
+    WatchCursor, WatchEvent, WatchEventKind, WatchRecord,
 };
 
 const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
@@ -619,6 +621,51 @@ where
             .collect()
     }
 
+    pub fn watch_subtree(&self, scope: InodeId) -> Result<WatchCursor, MetadError> {
+        let Some(attr) = self.get_attr(scope)? else {
+            return Err(MetadError::NotFound);
+        };
+        if attr.file_type != FileType::Directory {
+            return Err(MetadError::NotDirectory);
+        }
+        Ok(WatchCursor {
+            version: self.read_version()?.get(),
+            event_id: u64::MAX,
+        })
+    }
+
+    pub fn replay_watch(
+        &self,
+        scope: InodeId,
+        after: WatchCursor,
+        limit: usize,
+    ) -> Result<Vec<WatchRecord>, MetadError> {
+        let version = self.read_version()?;
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::Watch,
+            prefix: watch_log_prefix(self.mount, scope),
+            version,
+            limit: 0,
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let cursor = watch_cursor_from_key(&row.key)?;
+            if cursor <= after {
+                continue;
+            }
+            out.push(WatchRecord {
+                cursor,
+                event: decode_watch_event(&row.value.0)
+                    .map_err(|err| MetadError::Codec(err.to_string()))?,
+            });
+            if limit != 0 && out.len() >= limit {
+                break;
+            }
+        }
+        Ok(out)
+    }
+
     pub fn read_artifact(&self, parent: InodeId, name: &DentryName) -> Result<Vec<u8>, MetadError> {
         let entry = self
             .lookup_plus(parent, name)?
@@ -749,7 +796,16 @@ where
                 },
             ],
             mutations,
-            watch: Vec::new(),
+            watch: vec![self.watch_projection(
+                parent,
+                WatchEvent {
+                    kind: WatchEventKind::Remove,
+                    parent: Some(parent),
+                    name: Some(name.clone()),
+                    inode: entry.attr.inode,
+                    version: version.get(),
+                },
+            )],
         })?;
         Ok(entry)
     }
@@ -794,7 +850,16 @@ where
                 delete_mutation(RecordFamily::Dentry, source_key),
                 delete_mutation(RecordFamily::Inode, inode_key(self.mount, entry.attr.inode)),
             ],
-            watch: Vec::new(),
+            watch: vec![self.watch_projection(
+                parent,
+                WatchEvent {
+                    kind: WatchEventKind::Remove,
+                    parent: Some(parent),
+                    name: Some(name.clone()),
+                    inode: entry.attr.inode,
+                    version: version.get(),
+                },
+            )],
         }) {
             Ok(_) => Ok(entry),
             Err(MetadError::Metadata(MetadataError::PredicateFailed)) => {
@@ -916,6 +981,39 @@ where
                 )?);
             }
         }
+        let mut watch = Vec::new();
+        if let Some(replaced) = &replaced {
+            watch.push(self.watch_projection(
+                new_parent,
+                WatchEvent {
+                    kind: WatchEventKind::Remove,
+                    parent: Some(new_parent),
+                    name: Some(projection.dentry.name.clone()),
+                    inode: replaced.attr.inode,
+                    version: version.get(),
+                },
+            ));
+        }
+        watch.push(self.watch_projection(
+            parent,
+            WatchEvent {
+                kind: WatchEventKind::Remove,
+                parent: Some(parent),
+                name: Some(name.clone()),
+                inode: source.attr.inode,
+                version: version.get(),
+            },
+        ));
+        watch.push(self.watch_projection(
+            new_parent,
+            WatchEvent {
+                kind: WatchEventKind::Rename,
+                parent: Some(new_parent),
+                name: Some(projection.dentry.name.clone()),
+                inode: source.attr.inode,
+                version: version.get(),
+            },
+        ));
 
         self.commit_metadata(MetadataCommand {
             request_id: request_id(
@@ -939,7 +1037,7 @@ where
             primary_key: destination_key,
             predicates,
             mutations,
-            watch: Vec::new(),
+            watch,
         })?;
         Ok(RenameReplaceResult {
             entry: projection.into(),
@@ -1024,7 +1122,16 @@ where
                 },
             ],
             mutations,
-            watch: Vec::new(),
+            watch: vec![self.watch_projection(
+                projection.dentry.parent,
+                WatchEvent {
+                    kind: create_watch_kind(kind),
+                    parent: Some(projection.dentry.parent),
+                    name: Some(projection.dentry.name.clone()),
+                    inode,
+                    version: version.get(),
+                },
+            )],
         })?;
         Ok(())
     }
@@ -1105,7 +1212,16 @@ where
                 },
             ],
             mutations,
-            watch: Vec::new(),
+            watch: vec![self.watch_projection(
+                projection.dentry.parent,
+                WatchEvent {
+                    kind: WatchEventKind::PublishArtifact,
+                    parent: Some(projection.dentry.parent),
+                    name: Some(projection.dentry.name.clone()),
+                    inode,
+                    version: version.get(),
+                },
+            )],
         })?;
         Ok(())
     }
@@ -1253,6 +1369,14 @@ where
             purpose: ReadPurpose::UserStrong,
         })?;
         Ok(!rows.is_empty())
+    }
+
+    fn watch_projection(&self, scope: InodeId, event: WatchEvent) -> WatchProjection {
+        WatchProjection {
+            family: RecordFamily::Watch,
+            key: watch_log_prefix(self.mount, scope),
+            event: encode_watch_event(&event),
+        }
     }
 
     fn chunk_manifest_delete_and_gc_mutations(
@@ -1467,6 +1591,36 @@ fn delete_mutation(family: RecordFamily, key: Vec<u8>) -> Mutation {
         op: MutationOp::Delete,
         value: None,
     }
+}
+
+fn create_watch_kind(kind: CommandKind) -> WatchEventKind {
+    match kind {
+        CommandKind::PublishArtifact => WatchEventKind::PublishArtifact,
+        CommandKind::CreateFile | CommandKind::CreateDir => WatchEventKind::Create,
+        _ => WatchEventKind::UpdateAttr,
+    }
+}
+
+fn watch_cursor_from_key(key: &[u8]) -> Result<WatchCursor, MetadError> {
+    let cursor_len = std::mem::size_of::<u64>() * 2;
+    if key.len() < cursor_len {
+        return Err(MetadError::Codec(
+            "watch log key is missing cursor suffix".to_owned(),
+        ));
+    }
+    let offset = key.len() - cursor_len;
+    Ok(WatchCursor {
+        version: u64::from_be_bytes(
+            key[offset..offset + std::mem::size_of::<u64>()]
+                .try_into()
+                .expect("watch version has fixed width"),
+        ),
+        event_id: u64::from_be_bytes(
+            key[offset + std::mem::size_of::<u64>()..]
+                .try_into()
+                .expect("watch event id has fixed width"),
+        ),
+    })
 }
 
 fn chunk_index_from_manifest_key(key: &[u8]) -> Result<u64, MetadError> {
@@ -1970,6 +2124,104 @@ mod tests {
             Some(result.entry)
         );
         assert!(service.get_attr(old.attr.inode).unwrap().is_none());
+    }
+
+    #[test]
+    fn watch_replay_returns_typed_events_after_cursor() {
+        let service = service();
+        let cursor = service.watch_subtree(InodeId::root()).unwrap();
+        let name = DentryName::new(b"runs".to_vec()).unwrap();
+        let created = service
+            .create_dir(InodeId::root(), name.clone(), 0o755, 1000, 1000)
+            .unwrap();
+
+        let events = service.replay_watch(InodeId::root(), cursor, 100).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.kind, WatchEventKind::Create);
+        assert_eq!(events[0].event.parent, Some(InodeId::root()));
+        assert_eq!(events[0].event.name, Some(name.clone()));
+        assert_eq!(events[0].event.inode, created.attr.inode);
+
+        let next_name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+        service
+            .publish_artifact(artifact_request(
+                next_name.clone(),
+                "checkpoint.bin",
+                b"body",
+            ))
+            .unwrap();
+        let resumed = service
+            .replay_watch(InodeId::root(), events[0].cursor, 100)
+            .unwrap();
+        assert_eq!(resumed.len(), 1);
+        assert_eq!(resumed[0].event.kind, WatchEventKind::PublishArtifact);
+        assert_eq!(resumed[0].event.name, Some(next_name));
+    }
+
+    #[test]
+    fn rename_replay_notifies_old_and_new_parent_scopes() {
+        let service = service();
+        let old_parent_name = DentryName::new(b"old-parent".to_vec()).unwrap();
+        let new_parent_name = DentryName::new(b"new-parent".to_vec()).unwrap();
+        let old_parent = service
+            .create_dir(InodeId::root(), old_parent_name, 0o755, 1000, 1000)
+            .unwrap();
+        let new_parent = service
+            .create_dir(InodeId::root(), new_parent_name, 0o755, 1000, 1000)
+            .unwrap();
+        let file_name = DentryName::new(b"artifact".to_vec()).unwrap();
+        let source = service
+            .create_file(old_parent.attr.inode, file_name.clone(), 0o644, 1000, 1000)
+            .unwrap();
+        let old_cursor = service.watch_subtree(old_parent.attr.inode).unwrap();
+        let new_cursor = service.watch_subtree(new_parent.attr.inode).unwrap();
+
+        service
+            .rename(
+                old_parent.attr.inode,
+                &file_name,
+                new_parent.attr.inode,
+                file_name.clone(),
+            )
+            .unwrap();
+
+        let old_events = service
+            .replay_watch(old_parent.attr.inode, old_cursor, 100)
+            .unwrap();
+        assert_eq!(old_events.len(), 1);
+        assert_eq!(old_events[0].event.kind, WatchEventKind::Remove);
+        assert_eq!(old_events[0].event.inode, source.attr.inode);
+
+        let new_events = service
+            .replay_watch(new_parent.attr.inode, new_cursor, 100)
+            .unwrap();
+        assert_eq!(new_events.len(), 1);
+        assert_eq!(new_events[0].event.kind, WatchEventKind::Rename);
+        assert_eq!(new_events[0].event.name, Some(file_name));
+        assert_eq!(new_events[0].event.inode, source.attr.inode);
+    }
+
+    #[test]
+    fn watch_replay_survives_service_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = MemoryObjectStore::new();
+        let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
+        let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        let name = DentryName::new(b"runs".to_vec()).unwrap();
+        let created = service
+            .create_dir(InodeId::root(), name.clone(), 0o755, 1000, 1000)
+            .unwrap();
+        drop(service);
+
+        let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+        let events = reopened
+            .replay_watch(InodeId::root(), WatchCursor::default(), 100)
+            .unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].event.kind, WatchEventKind::Create);
+        assert_eq!(events[0].event.name, Some(name));
+        assert_eq!(events[0].event.inode, created.attr.inode);
     }
 
     #[test]

@@ -11,6 +11,6 @@ mod types;
 pub use names::{DentryName, NameError};
 pub use types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryProjection, DentryRecord, FileType,
-    InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, RecordFamily, SnapshotPin, WatchEvent,
-    WatchEventKind,
+    InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, RecordFamily, SnapshotPin,
+    WatchCursor, WatchEvent, WatchEventKind, WatchRecord,
 };

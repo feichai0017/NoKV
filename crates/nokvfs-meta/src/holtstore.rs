@@ -252,7 +252,11 @@ impl MetadataStore for HoltMetadataStore {
                 }
                 for event in &command.watch {
                     let key = watch_event_key(&event.key, command.commit_version, watch_events);
-                    batch.put(WATCH_CURRENT_TREE, &key, &event.event);
+                    batch.put(
+                        WATCH_CURRENT_TREE,
+                        &key,
+                        &encode_current_value(command.commit_version, &event.event),
+                    );
                     watch_events += 1;
                 }
                 batch.put(

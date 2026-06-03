@@ -29,8 +29,13 @@ The namespace entry appears only after the metadata command commits.
 - durable object GC queue stores old body refs from remove/replace;
 - snapshot pins protect old body refs until retired;
 - chunk manifests describe large checkpoint files;
+- service-level typed watch replay lets checkpoint consumers observe publish and
+  replace events;
+
+Remaining work:
+
 - read-only snapshot mounts for `/workspace/input`;
-- typed watch events for checkpoint consumers;
+- SDK/FUSE watch consumer integration;
 
 ## Failure Handling
 

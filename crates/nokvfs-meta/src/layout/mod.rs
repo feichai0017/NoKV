@@ -14,9 +14,9 @@ const U32_WIDTH: usize = 4;
 pub use codec::{
     decode_allocator_state, decode_body_descriptor, decode_chunk_manifest,
     decode_dentry_projection, decode_inode_attr, decode_object_gc_record, decode_snapshot_pin,
-    encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
+    decode_watch_event, encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
     encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
-    CodecError,
+    encode_watch_event, CodecError,
 };
 
 pub fn allocator_key(mount: MountId) -> Vec<u8> {
@@ -80,11 +80,16 @@ pub fn chunk_manifest_key(
 }
 
 pub fn watch_log_key(mount: MountId, scope: InodeId, apply_index: u64, event_id: u64) -> Vec<u8> {
-    let mut out = Vec::with_capacity(U64_WIDTH * 4);
-    push_u64(&mut out, mount.get());
-    push_u64(&mut out, scope.get());
+    let mut out = watch_log_prefix(mount, scope);
     push_u64(&mut out, apply_index);
     push_u64(&mut out, event_id);
+    out
+}
+
+pub fn watch_log_prefix(mount: MountId, scope: InodeId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH * 2);
+    push_u64(&mut out, mount.get());
+    push_u64(&mut out, scope.get());
     out
 }
 
@@ -163,6 +168,7 @@ fn push_u64(out: &mut Vec<u8>, value: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use nokvfs_types::{WatchEvent, WatchEventKind};
 
     fn mount() -> MountId {
         MountId::new(7).unwrap()
@@ -195,6 +201,19 @@ mod tests {
             decode_allocator_state(&trailing).unwrap_err(),
             CodecError::TrailingBytes
         );
+    }
+
+    #[test]
+    fn watch_event_codec_preserves_typed_event_fields() {
+        let event = WatchEvent {
+            kind: WatchEventKind::PublishArtifact,
+            parent: Some(inode(9)),
+            name: Some(name(b"checkpoint.bin")),
+            inode: inode(10),
+            version: 42,
+        };
+        let encoded = encode_watch_event(&event);
+        assert_eq!(decode_watch_event(&encoded).unwrap(), event);
     }
 
     #[test]
@@ -251,6 +270,17 @@ mod tests {
 
         assert!(key.starts_with(&snapshot_pin_prefix(mount())));
         assert!(!other_mount.starts_with(&snapshot_pin_prefix(mount())));
+        assert!(key < later);
+    }
+
+    #[test]
+    fn watch_log_keys_are_scope_and_cursor_ordered() {
+        let key = watch_log_key(mount(), inode(2), 10, 0);
+        let later = watch_log_key(mount(), inode(2), 10, 1);
+        let other_scope = watch_log_key(mount(), inode(3), 10, 0);
+
+        assert!(key.starts_with(&watch_log_prefix(mount(), inode(2))));
+        assert!(!other_scope.starts_with(&watch_log_prefix(mount(), inode(2))));
         assert!(key < later);
     }
 
