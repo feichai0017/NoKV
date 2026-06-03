@@ -12,10 +12,17 @@ pub const U64_WIDTH: usize = 8;
 const U32_WIDTH: usize = 4;
 
 pub use codec::{
-    decode_body_descriptor, decode_chunk_manifest, decode_dentry_projection, decode_inode_attr,
-    encode_body_descriptor, encode_chunk_manifest, encode_dentry_projection, encode_inode_attr,
-    CodecError,
+    decode_allocator_state, decode_body_descriptor, decode_chunk_manifest,
+    decode_dentry_projection, decode_inode_attr, encode_allocator_state, encode_body_descriptor,
+    encode_chunk_manifest, encode_dentry_projection, encode_inode_attr, CodecError,
 };
+
+pub fn allocator_key(mount: MountId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH + 9);
+    push_u64(&mut out, mount.get());
+    out.extend_from_slice(b"allocator");
+    out
+}
 
 pub fn inode_key(mount: MountId, inode: InodeId) -> Vec<u8> {
     let mut out = inode_prefix(mount);
@@ -106,6 +113,7 @@ pub fn family_tag(family: RecordFamily) -> u8 {
         RecordFamily::Snapshot => 9,
         RecordFamily::CommandDedupe => 10,
         RecordFamily::History => 11,
+        RecordFamily::System => 12,
     }
 }
 
@@ -127,6 +135,27 @@ mod tests {
 
     fn name(raw: &[u8]) -> DentryName {
         DentryName::new(raw.to_vec()).unwrap()
+    }
+
+    #[test]
+    fn allocator_key_is_mount_scoped() {
+        let key = allocator_key(mount());
+        assert!(key.starts_with(&mount().get().to_be_bytes()));
+        assert_ne!(key, allocator_key(MountId::new(8).unwrap()));
+    }
+
+    #[test]
+    fn allocator_state_codec_is_fixed_width() {
+        let encoded = encode_allocator_state(42, 99);
+        assert_eq!(encoded.len(), U64_WIDTH * 2);
+        assert_eq!(decode_allocator_state(&encoded).unwrap(), (42, 99));
+
+        let mut trailing = encoded;
+        trailing.push(1);
+        assert_eq!(
+            decode_allocator_state(&trailing).unwrap_err(),
+            CodecError::TrailingBytes
+        );
     }
 
     #[test]

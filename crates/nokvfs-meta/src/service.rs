@@ -7,15 +7,17 @@
 
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Mutex;
 
 use crate::command::{
-    CommandKind, MetadataCommand, MetadataError, MetadataStore, Mutation, MutationOp, Predicate,
-    PredicateRef, ReadPurpose, ScanRequest, Value, Version,
+    CommandKind, CommitResult, MetadataCommand, MetadataError, MetadataStore, Mutation, MutationOp,
+    Predicate, PredicateRef, ReadPurpose, ScanRequest, Value, Version,
 };
 use crate::layout::{
-    chunk_manifest_key, chunk_manifest_prefix, decode_body_descriptor, decode_chunk_manifest,
-    decode_inode_attr, dentry_key, dentry_prefix, encode_body_descriptor, encode_chunk_manifest,
-    encode_dentry_projection, encode_inode_attr, inode_key, inode_prefix,
+    allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,
+    decode_body_descriptor, decode_chunk_manifest, decode_dentry_projection, decode_inode_attr,
+    dentry_key, dentry_prefix, encode_allocator_state, encode_body_descriptor,
+    encode_chunk_manifest, encode_dentry_projection, encode_inode_attr, inode_key,
 };
 use nokvfs_object::{
     put_chunked_object, read_object_blocks, ChunkWriteOptions, MemoryBlockCache, ObjectError,
@@ -27,6 +29,26 @@ use nokvfs_types::{
 };
 
 const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
+
+const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 11] = [
+    RecordFamily::System,
+    RecordFamily::Mount,
+    RecordFamily::Inode,
+    RecordFamily::Dentry,
+    RecordFamily::Parent,
+    RecordFamily::ChunkManifest,
+    RecordFamily::Session,
+    RecordFamily::PathIndex,
+    RecordFamily::Watch,
+    RecordFamily::Snapshot,
+    RecordFamily::CommandDedupe,
+];
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct AllocatorState {
+    last_commit_version: u64,
+    next_inode: u64,
+}
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DentryWithAttr {
@@ -84,6 +106,7 @@ pub struct NoKvFs<M, O> {
     mount: MountId,
     metadata: M,
     objects: O,
+    commit_gate: Mutex<()>,
     clock: AtomicU64,
     next_inode: AtomicU64,
     block_cache: MemoryBlockCache,
@@ -105,6 +128,7 @@ where
             mount,
             metadata,
             objects,
+            commit_gate: Mutex::new(()),
             clock: AtomicU64::new(1),
             next_inode: AtomicU64::new(InodeId::ROOT_RAW + 1),
             block_cache: MemoryBlockCache::default(),
@@ -118,34 +142,14 @@ where
     }
 
     pub fn open_existing(mount: MountId, metadata: M, objects: O) -> Result<Self, MetadError> {
-        let mut max_version = 1_u64;
-        let mut max_inode = InodeId::ROOT_RAW;
-        let rows = metadata.scan(ScanRequest {
-            family: RecordFamily::Inode,
-            prefix: inode_prefix(mount),
-            version: Version::new(u64::MAX)?,
-            limit: 0,
-            purpose: ReadPurpose::UserStrong,
-        })?;
-        for row in rows {
-            let attr = decode_inode_attr(&row.value.0)
-                .map_err(|err| MetadError::Codec(err.to_string()))?;
-            max_version = max_version
-                .max(row.version.get())
-                .max(attr.generation)
-                .max(attr.mtime_ms)
-                .max(attr.ctime_ms);
-            max_inode = max_inode.max(attr.inode.get());
-        }
-        let next_inode = max_inode
-            .checked_add(1)
-            .ok_or(MetadError::AllocatorExhausted)?;
+        let allocator = recover_allocator_state(&metadata, mount)?;
         Ok(Self {
             mount,
             metadata,
             objects,
-            clock: AtomicU64::new(max_version),
-            next_inode: AtomicU64::new(next_inode),
+            commit_gate: Mutex::new(()),
+            clock: AtomicU64::new(allocator.last_commit_version),
+            next_inode: AtomicU64::new(allocator.next_inode),
             block_cache: MemoryBlockCache::default(),
             block_cache_enabled: AtomicBool::new(true),
             object_puts: AtomicU64::new(0),
@@ -197,9 +201,9 @@ where
             }],
             watch: Vec::new(),
         };
-        match self.metadata.commit_metadata(command) {
-            Ok(_) | Err(MetadataError::PredicateFailed) => Ok(root),
-            Err(err) => Err(err.into()),
+        match self.commit_metadata(command) {
+            Ok(_) | Err(MetadError::Metadata(MetadataError::PredicateFailed)) => Ok(root),
+            Err(err) => Err(err),
         }
     }
 
@@ -248,6 +252,7 @@ where
     pub fn publish_artifact(&self, request: PublishArtifact) -> Result<DentryWithAttr, MetadError> {
         let version = self.next_version()?;
         let inode = self.next_inode()?;
+        self.reserve_allocator_state(version, self.next_inode.load(Ordering::Relaxed))?;
         let written = put_chunked_object(
             &self.objects,
             &request.bytes,
@@ -480,7 +485,7 @@ where
             mutations
                 .extend(self.chunk_manifest_delete_mutations(entry.attr.inode, body.generation)?);
         }
-        self.metadata.commit_metadata(MetadataCommand {
+        self.commit_metadata(MetadataCommand {
             request_id: request_id(b"remove-file", self.mount, entry.attr.inode, version),
             kind: CommandKind::RemoveFile,
             read_version: predecessor(version)?,
@@ -522,7 +527,7 @@ where
         let version = self.next_version()?;
         let source_key = dentry_key(self.mount, parent, name);
         let child_prefix = dentry_prefix(self.mount, entry.attr.inode);
-        match self.metadata.commit_metadata(MetadataCommand {
+        match self.commit_metadata(MetadataCommand {
             request_id: request_id(b"remove-empty-dir", self.mount, entry.attr.inode, version),
             kind: CommandKind::RemoveEmptyDir,
             read_version: predecessor(version)?,
@@ -548,8 +553,10 @@ where
             watch: Vec::new(),
         }) {
             Ok(_) => Ok(entry),
-            Err(MetadataError::PredicateFailed) => Err(MetadError::DirectoryNotEmpty),
-            Err(err) => Err(err.into()),
+            Err(MetadError::Metadata(MetadataError::PredicateFailed)) => {
+                Err(MetadError::DirectoryNotEmpty)
+            }
+            Err(err) => Err(err),
         }
     }
 
@@ -664,7 +671,7 @@ where
             }
         }
 
-        self.metadata.commit_metadata(MetadataCommand {
+        self.commit_metadata(MetadataCommand {
             request_id: request_id(
                 if replace {
                     b"rename-replace"
@@ -751,7 +758,7 @@ where
                 });
             }
         }
-        self.metadata.commit_metadata(MetadataCommand {
+        self.commit_metadata(MetadataCommand {
             request_id: request_id(kind_name(kind), self.mount, inode, version),
             kind,
             read_version: predecessor(version)?,
@@ -854,6 +861,51 @@ where
             .collect())
     }
 
+    fn commit_metadata(&self, mut command: MetadataCommand) -> Result<CommitResult, MetadError> {
+        let _guard = self.commit_gate.lock().map_err(|err| {
+            MetadataError::Backend(format!("metadata commit gate poisoned: {err}"))
+        })?;
+        command.mutations.push(Mutation {
+            family: RecordFamily::System,
+            key: allocator_key(self.mount),
+            op: MutationOp::Put,
+            value: Some(Value(encode_allocator_state(
+                command.commit_version.get(),
+                self.next_inode.load(Ordering::Relaxed),
+            ))),
+        });
+        self.metadata.commit_metadata(command).map_err(Into::into)
+    }
+
+    fn reserve_allocator_state(
+        &self,
+        version: Version,
+        next_inode: u64,
+    ) -> Result<CommitResult, MetadError> {
+        let _guard = self.commit_gate.lock().map_err(|err| {
+            MetadataError::Backend(format!("metadata commit gate poisoned: {err}"))
+        })?;
+        let key = allocator_key(self.mount);
+        self.metadata
+            .commit_metadata(MetadataCommand {
+                request_id: request_id(b"reserve-allocator", self.mount, InodeId::root(), version),
+                kind: CommandKind::ReserveAllocator,
+                read_version: predecessor(version)?,
+                commit_version: version,
+                primary_family: RecordFamily::System,
+                primary_key: key.clone(),
+                predicates: Vec::new(),
+                mutations: vec![Mutation {
+                    family: RecordFamily::System,
+                    key,
+                    op: MutationOp::Put,
+                    value: Some(Value(encode_allocator_state(version.get(), next_inode))),
+                }],
+                watch: Vec::new(),
+            })
+            .map_err(Into::into)
+    }
+
     fn next_version(&self) -> Result<Version, MetadError> {
         Version::new(self.clock.fetch_add(1, Ordering::Relaxed) + 1).map_err(Into::into)
     }
@@ -884,6 +936,73 @@ fn projection(
         attr,
         body,
     }
+}
+
+fn recover_allocator_state<M: MetadataStore>(
+    metadata: &M,
+    mount: MountId,
+) -> Result<AllocatorState, MetadError> {
+    let max_read = Version::new(u64::MAX)?;
+    if let Some(value) = metadata.get(
+        RecordFamily::System,
+        &allocator_key(mount),
+        max_read,
+        ReadPurpose::UserStrong,
+    )? {
+        let (last_commit_version, next_inode) =
+            decode_allocator_state(&value.0).map_err(|err| MetadError::Codec(err.to_string()))?;
+        Version::new(last_commit_version)?;
+        InodeId::new(next_inode)?;
+        return Ok(AllocatorState {
+            last_commit_version,
+            next_inode,
+        });
+    }
+
+    let mut last_commit_version = 1_u64;
+    let mut max_inode = InodeId::ROOT_RAW;
+    for family in ALLOCATOR_RECOVERY_FAMILIES {
+        let rows = metadata.scan(ScanRequest {
+            family,
+            prefix: Vec::new(),
+            version: max_read,
+            limit: 0,
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        for row in rows {
+            last_commit_version = last_commit_version.max(row.version.get());
+            match family {
+                RecordFamily::Inode => {
+                    let attr = decode_inode_attr(&row.value.0)
+                        .map_err(|err| MetadError::Codec(err.to_string()))?;
+                    last_commit_version = last_commit_version
+                        .max(attr.generation)
+                        .max(attr.mtime_ms)
+                        .max(attr.ctime_ms);
+                    max_inode = max_inode.max(attr.inode.get());
+                }
+                RecordFamily::Dentry => {
+                    let projection = decode_dentry_projection(&row.value.0)
+                        .map_err(|err| MetadError::Codec(err.to_string()))?;
+                    last_commit_version = last_commit_version
+                        .max(projection.attr.generation)
+                        .max(projection.dentry.attr_generation);
+                    max_inode = max_inode
+                        .max(projection.attr.inode.get())
+                        .max(projection.dentry.child.get());
+                }
+                _ => {}
+            }
+        }
+    }
+
+    let next_inode = max_inode
+        .checked_add(1)
+        .ok_or(MetadError::AllocatorExhausted)?;
+    Ok(AllocatorState {
+        last_commit_version,
+        next_inode,
+    })
 }
 
 fn directory_attr(inode: InodeId, mode: u32, uid: u32, gid: u32, version: u64) -> InodeAttr {
@@ -924,6 +1043,7 @@ fn request_id(prefix: &[u8], mount: MountId, inode: InodeId, version: Version) -
 
 fn kind_name(kind: CommandKind) -> &'static [u8] {
     match kind {
+        CommandKind::ReserveAllocator => b"reserve-allocator",
         CommandKind::CreateFile => b"create-file",
         CommandKind::CreateDir => b"create-dir",
         CommandKind::Rename => b"rename",
@@ -1253,5 +1373,101 @@ mod tests {
             .unwrap();
         assert!(second.attr.inode > first.attr.inode);
         assert!(second.attr.generation > first.attr.generation);
+    }
+
+    #[test]
+    fn open_existing_recovers_after_dentry_only_rename() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = MemoryObjectStore::new();
+        let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
+        let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        let old_name = DentryName::new(b"old".to_vec()).unwrap();
+        let new_name = DentryName::new(b"new".to_vec()).unwrap();
+        let created = service
+            .create_dir(InodeId::root(), old_name.clone(), 0o755, 1000, 1000)
+            .unwrap();
+        let renamed = service
+            .rename(
+                InodeId::root(),
+                &old_name,
+                InodeId::root(),
+                new_name.clone(),
+            )
+            .unwrap();
+        assert_eq!(renamed.attr.inode, created.attr.inode);
+        drop(service);
+
+        let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+        assert!(reopened
+            .lookup_plus(InodeId::root(), &old_name)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            reopened.lookup_plus(InodeId::root(), &new_name).unwrap(),
+            Some(renamed)
+        );
+        assert_eq!(reopened.read_dir_plus(InodeId::root()).unwrap().len(), 1);
+    }
+
+    #[test]
+    fn open_existing_does_not_reuse_removed_inode() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = MemoryObjectStore::new();
+        let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
+        let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        let first_name = DentryName::new(b"first".to_vec()).unwrap();
+        let second_name = DentryName::new(b"second".to_vec()).unwrap();
+        let first = service
+            .create_file(InodeId::root(), first_name.clone(), 0o644, 1000, 1000)
+            .unwrap();
+        service.remove_file(InodeId::root(), &first_name).unwrap();
+        drop(service);
+
+        let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+        let second = reopened
+            .create_file(InodeId::root(), second_name.clone(), 0o644, 1000, 1000)
+            .unwrap();
+        assert!(second.attr.inode > first.attr.inode);
+        assert!(second.attr.generation > first.attr.generation);
+        assert!(reopened
+            .lookup_plus(InodeId::root(), &first_name)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            reopened.lookup_plus(InodeId::root(), &second_name).unwrap(),
+            Some(second)
+        );
+    }
+
+    #[test]
+    fn failed_publish_does_not_reuse_reserved_object_identity_after_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = MemoryObjectStore::new();
+        let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
+        let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        let name = DentryName::new(b"artifact.bin".to_vec()).unwrap();
+        let first = service
+            .publish_artifact(artifact_request(name.clone(), "first", b"first"))
+            .unwrap();
+        let err = service
+            .publish_artifact(artifact_request(name.clone(), "duplicate", b"duplicate"))
+            .unwrap_err();
+        assert!(matches!(
+            err,
+            MetadError::Metadata(MetadataError::PredicateFailed)
+        ));
+        drop(service);
+
+        let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+        let next_name = DentryName::new(b"next.bin".to_vec()).unwrap();
+        let next = reopened
+            .publish_artifact(artifact_request(next_name, "next", b"next"))
+            .unwrap();
+
+        assert!(next.attr.inode.get() > first.attr.inode.get() + 1);
+        assert!(next.attr.generation > first.attr.generation + 1);
     }
 }

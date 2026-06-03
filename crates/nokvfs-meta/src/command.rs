@@ -29,6 +29,7 @@ pub enum ReadPurpose {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CommandKind {
+    ReserveAllocator,
     CreateFile,
     CreateDir,
     Rename,

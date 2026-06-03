@@ -17,6 +17,7 @@ use nokvfs_types::RecordFamily;
 
 const VALUE_HEADER_LEN: usize = 8;
 
+const SYSTEM_CURRENT_TREE: &str = "system_current";
 const MOUNT_CURRENT_TREE: &str = "mount_current";
 const INODE_CURRENT_TREE: &str = "inode_current";
 const DENTRY_CURRENT_TREE: &str = "dentry_current";
@@ -29,7 +30,8 @@ const SNAPSHOT_CURRENT_TREE: &str = "snapshot_current";
 const COMMAND_DEDUPE_CURRENT_TREE: &str = "command_dedupe_current";
 const HISTORY_TREE: &str = "history";
 
-const REQUIRED_TREES: [&str; 11] = [
+const REQUIRED_TREES: [&str; 12] = [
+    SYSTEM_CURRENT_TREE,
     MOUNT_CURRENT_TREE,
     INODE_CURRENT_TREE,
     DENTRY_CURRENT_TREE,
@@ -271,6 +273,7 @@ impl MetadataStore for HoltMetadataStore {
 
 fn current_tree_name(family: RecordFamily) -> &'static str {
     match family {
+        RecordFamily::System => SYSTEM_CURRENT_TREE,
         RecordFamily::Mount => MOUNT_CURRENT_TREE,
         RecordFamily::Inode => INODE_CURRENT_TREE,
         RecordFamily::Dentry => DENTRY_CURRENT_TREE,

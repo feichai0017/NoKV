@@ -15,6 +15,20 @@ pub enum CodecError {
     TrailingBytes,
 }
 
+pub fn encode_allocator_state(last_commit_version: u64, next_inode: u64) -> Vec<u8> {
+    let mut out = Vec::with_capacity(16);
+    push_u64(&mut out, last_commit_version);
+    push_u64(&mut out, next_inode);
+    out
+}
+
+pub fn decode_allocator_state(bytes: &[u8]) -> Result<(u64, u64), CodecError> {
+    let mut input = Decoder::new(bytes);
+    let state = (input.u64()?, input.u64()?);
+    input.finish()?;
+    Ok(state)
+}
+
 pub fn encode_inode_attr(attr: &InodeAttr) -> Vec<u8> {
     let mut out = Vec::with_capacity(61);
     push_u64(&mut out, attr.inode.get());

@@ -57,23 +57,25 @@ examples/
 Implemented today:
 
 - local Holt-backed metadata store;
-- local filesystem object backend;
 - S3-compatible object backend for AWS S3, RustFS, MinIO, and compatible
   services;
+- in-memory object backend for package tests;
 - metadata commands with predicates, mutations, family trees, command dedupe,
   and dentry projection;
-- basic root bootstrap, directory create, artifact publish, lookup-plus, and
-  readdir-plus in the in-process service;
-- path-oriented Rust SDK for mkdir, artifact publish, lookup, list, and cat;
+- basic root bootstrap, directory create, artifact publish, lookup-plus,
+  readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
+  service;
+- path-oriented Rust SDK for mkdir, artifact publish, lookup, list, cat,
+  remove, rmdir, rename, and rename-replace;
 - low-level read-only FUSE frontend for lookup, getattr, readdir, open, and
   range read;
-- `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, and mount.
+- `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, rm, rmdir, rename,
+  rename-replace, and mount.
 
 Not implemented yet:
 
 - long-running metad server;
-- durable inode/version allocator;
-- remove/rmdir/rename-replace;
+- FUSE write operations;
 - watch replay, snapshot retention, and object GC worker;
 - distributed metadata shards.
 

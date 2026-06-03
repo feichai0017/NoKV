@@ -24,6 +24,7 @@ pub enum FileType {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RecordFamily {
+    System,
     Mount,
     Inode,
     Dentry,
