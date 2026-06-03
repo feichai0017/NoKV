@@ -10,8 +10,9 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use crate::command::{
-    CommandKind, CommitResult, MetadataCommand, MetadataError, MetadataStore, Mutation, MutationOp,
-    Predicate, PredicateRef, ReadPurpose, ScanRequest, Value, Version, WatchProjection,
+    CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand,
+    MetadataError, MetadataStore, Mutation, MutationOp, Predicate, PredicateRef, ReadPurpose,
+    ScanRequest, Value, Version, WatchProjection,
 };
 use crate::layout::{
     allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,
@@ -283,6 +284,13 @@ where
         })?;
         outcome.records_removed = records_removed;
         Ok(outcome)
+    }
+
+    pub fn cleanup_history(&self, limit: usize) -> Result<HistoryPruneOutcome, MetadError> {
+        let retain_from = self.history_retention_floor()?;
+        self.metadata
+            .prune_history(HistoryPruneRequest { retain_from, limit })
+            .map_err(Into::into)
     }
 
     pub fn snapshot_subtree(&self, root: InodeId) -> Result<SnapshotPin, MetadError> {
@@ -1439,6 +1447,26 @@ where
         Ok(!rows.is_empty())
     }
 
+    fn history_retention_floor(&self) -> Result<Option<Version>, MetadError> {
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::Snapshot,
+            prefix: snapshot_pin_prefix(self.mount),
+            version: self.read_version()?,
+            limit: 0,
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        rows.into_iter()
+            .map(|row| {
+                let pin = decode_snapshot_pin(&row.value.0)
+                    .map_err(|err| MetadError::Codec(err.to_string()))?;
+                Version::new(pin.read_version).map_err(MetadError::from)
+            })
+            .try_fold(None, |floor: Option<Version>, version| {
+                let version = version?;
+                Ok(Some(floor.map_or(version, |floor| floor.min(version))))
+            })
+    }
+
     fn watch_projection(&self, scope: InodeId, event: WatchEvent) -> WatchProjection {
         WatchProjection {
             family: RecordFamily::Watch,
@@ -2112,6 +2140,48 @@ mod tests {
         assert_eq!(cleanup.records_removed, 1);
         assert!(objects.head(&old_object).unwrap().is_none());
         assert!(objects.head(&new_object).unwrap().is_some());
+    }
+
+    #[test]
+    fn history_cleanup_keeps_snapshot_reads_until_snapshot_retired() {
+        let service = service();
+        let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+        service
+            .publish_artifact(artifact_request(name.clone(), "checkpoint/old", b"old"))
+            .unwrap();
+        let snapshot = service.snapshot_subtree(InodeId::root()).unwrap();
+        service
+            .replace_artifact(artifact_request(
+                name.clone(),
+                "checkpoint/new",
+                b"new-body",
+            ))
+            .unwrap();
+
+        let retained = service.cleanup_history(100).unwrap();
+        assert!(retained.retained_by_snapshots > 0);
+        assert_eq!(
+            service
+                .read_artifact_at_snapshot(snapshot.snapshot_id, InodeId::root(), &name)
+                .unwrap(),
+            b"old"
+        );
+
+        assert!(service.retire_snapshot(snapshot.snapshot_id).unwrap());
+        let pruned = service.cleanup_history(100).unwrap();
+        assert!(pruned.removed > 0);
+        assert_eq!(
+            service
+                .metadata
+                .get(
+                    RecordFamily::Dentry,
+                    &dentry_key(service.mount, InodeId::root(), &name),
+                    Version::new(snapshot.read_version).unwrap(),
+                    ReadPurpose::Snapshot,
+                )
+                .unwrap(),
+            None
+        );
     }
 
     #[test]

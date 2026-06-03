@@ -100,6 +100,19 @@ pub struct CommitResult {
     pub watch_events: usize,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryPruneRequest {
+    pub retain_from: Option<Version>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HistoryPruneOutcome {
+    pub scanned: usize,
+    pub removed: usize,
+    pub retained_by_snapshots: usize,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanRequest {
     pub family: RecordFamily,
@@ -151,6 +164,11 @@ pub trait MetadataStore {
     fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError>;
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError>;
+
+    fn prune_history(
+        &self,
+        request: HistoryPruneRequest,
+    ) -> Result<HistoryPruneOutcome, MetadataError>;
 }
 
 impl Version {

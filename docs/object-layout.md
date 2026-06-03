@@ -82,6 +82,12 @@ Active snapshot pins conservatively block object cleanup so snapshot-version
 artifact reads can still fetch the old blocks. Retiring the snapshot lets later
 cleanup consume the queued records.
 
+Metadata history uses the same retention boundary. Active snapshot pins define
+the oldest read version that must remain reconstructible. History cleanup keeps
+the per-key anchor needed by that oldest snapshot and removes older versions;
+when no snapshot pins remain, history cleanup may remove all historical records.
+Live FUSE mounts start the history GC worker alongside object GC.
+
 ## Chunk Manifest
 
 Each `chunk_manifest` record stores the blocks that cover one logical chunk:

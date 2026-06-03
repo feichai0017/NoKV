@@ -197,7 +197,7 @@ v0 local:
   close-to-open FUSE reads and buffered writes
   artifact publish
   durable object GC queue, explicit cleanup API, and background worker
-  durable snapshot pin and snapshot-version artifact read
+  durable snapshot pin, snapshot-version artifact read, and history GC
   remove/rmdir/rename-replace
   durable typed watch replay
   read-only FUSE snapshot mounts

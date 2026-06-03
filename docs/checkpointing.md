@@ -46,4 +46,5 @@ The product contract should be explicit:
 - metadata remove/replace success persists old body refs in the metadata GC
   queue and returns the old body descriptor to the caller;
 - snapshot pins protect old body refs from object cleanup until retired;
-- watch cursors must protect history before history GC.
+- snapshot pins protect metadata history before history GC;
+- typed watch replay uses the durable watch log rather than MVCC history.

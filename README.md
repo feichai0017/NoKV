@@ -69,6 +69,7 @@ Implemented today:
 - service-level background object GC worker, enabled by the live FUSE mount;
 - durable snapshot pins, snapshot-version artifact reads, and snapshot-protected
   object cleanup;
+- snapshot-aware metadata history cleanup and background history GC worker;
 - read-only FUSE snapshot mounts rooted at a snapshot subtree;
 - durable typed watch replay for namespace and artifact publication events;
 - basic root bootstrap, directory create, artifact publish, lookup-plus,
@@ -81,13 +82,13 @@ Implemented today:
   publish, unlink, rmdir, and rename-replace;
 - `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, rm, rmdir, rename,
   rename-replace, mount, mount-snapshot, snapshot, cat-snapshot,
-  retire-snapshot, and manual object GC cleanup.
+  retire-snapshot, and manual GC cleanup.
 
 Not implemented yet:
 
 - long-running metad server;
 - full POSIX random-write/truncate semantics;
-- FUSE watch invalidation and history GC worker;
+- FUSE watch invalidation;
 - distributed metadata shards.
 
 ## Quick Check
@@ -135,8 +136,9 @@ mkdir -p /tmp/nokv-fs-mount
 cargo run -p nokvfs-cli --bin nokv-fs -- mount /tmp/nokv-fs-mount
 ```
 
-The live mount starts a background object GC worker. Use
-`--object-gc-interval-ms` and `--object-gc-limit` before `mount` to tune it.
+The live mount starts background object and metadata-history GC workers. Use
+`--object-gc-interval-ms`, `--object-gc-limit`, `--history-gc-interval-ms`,
+and `--history-gc-limit` before `mount` to tune them.
 
 To mount a read-only snapshot view:
 

@@ -1,14 +1,14 @@
-//! Background object-reference garbage collection for NoKV-FS metadata.
+//! Background garbage collection for NoKV-FS metadata.
 //!
-//! This module owns only the background loop around `NoKvFs::cleanup_pending_objects`.
-//! The durable queue format, object deletes, and metadata commits stay in the
-//! service layer.
+//! This module owns only background loops around service-level cleanup APIs.
+//! Durable queue formats, object deletes, history pruning rules, and metadata
+//! commits stay in the service layer.
 
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
-use crate::command::MetadataStore;
+use crate::command::{HistoryPruneOutcome, MetadataStore};
 use crate::service::{NoKvFs, PendingObjectCleanupOutcome};
 use nokvfs_object::ObjectStore;
 
@@ -35,7 +35,37 @@ pub struct ObjectGcWorker {
     handle: Option<JoinHandle<()>>,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HistoryGcOptions {
+    pub interval: Duration,
+    pub limit: usize,
+    pub run_immediately: bool,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct HistoryGcWorkerState {
+    pub iterations: u64,
+    pub last_outcome: Option<HistoryPruneOutcome>,
+    pub last_error: Option<String>,
+}
+
+pub struct HistoryGcWorker {
+    stop: Arc<(Mutex<bool>, Condvar)>,
+    state: Arc<Mutex<HistoryGcWorkerState>>,
+    handle: Option<JoinHandle<()>>,
+}
+
 impl Default for ObjectGcOptions {
+    fn default() -> Self {
+        Self {
+            interval: DEFAULT_INTERVAL,
+            limit: DEFAULT_LIMIT,
+            run_immediately: true,
+        }
+    }
+}
+
+impl Default for HistoryGcOptions {
     fn default() -> Self {
         Self {
             interval: DEFAULT_INTERVAL,
@@ -108,12 +138,95 @@ impl Drop for ObjectGcWorker {
     }
 }
 
+impl HistoryGcWorker {
+    pub fn spawn<M, O>(service: Arc<NoKvFs<M, O>>, options: HistoryGcOptions) -> Self
+    where
+        M: MetadataStore + Send + Sync + 'static,
+        O: ObjectStore + Send + Sync + 'static,
+    {
+        let stop = Arc::new((Mutex::new(false), Condvar::new()));
+        let state = Arc::new(Mutex::new(HistoryGcWorkerState::default()));
+        let worker_stop = Arc::clone(&stop);
+        let worker_state = Arc::clone(&state);
+        let handle = thread::spawn(move || {
+            if options.run_immediately {
+                run_history_once(&service, options.limit, &worker_state);
+            }
+            loop {
+                let (lock, cvar) = &*worker_stop;
+                let stopped = match lock.lock() {
+                    Ok(stopped) => stopped,
+                    Err(_) => break,
+                };
+                let (stopped, _) = match cvar.wait_timeout(stopped, options.interval) {
+                    Ok(waited) => waited,
+                    Err(_) => break,
+                };
+                if *stopped {
+                    break;
+                }
+                drop(stopped);
+                run_history_once(&service, options.limit, &worker_state);
+            }
+        });
+        Self {
+            stop,
+            state,
+            handle: Some(handle),
+        }
+    }
+
+    pub fn state(&self) -> HistoryGcWorkerState {
+        self.state
+            .lock()
+            .map(|state| state.clone())
+            .unwrap_or_else(|err| err.into_inner().clone())
+    }
+
+    pub fn stop(&mut self) {
+        let (lock, cvar) = &*self.stop;
+        if let Ok(mut stopped) = lock.lock() {
+            *stopped = true;
+            cvar.notify_all();
+        }
+        if let Some(handle) = self.handle.take() {
+            let _ = handle.join();
+        }
+    }
+}
+
+impl Drop for HistoryGcWorker {
+    fn drop(&mut self) {
+        self.stop();
+    }
+}
+
 fn run_once<M, O>(service: &NoKvFs<M, O>, limit: usize, state: &Mutex<ObjectGcWorkerState>)
 where
     M: MetadataStore,
     O: ObjectStore,
 {
     let result = service.cleanup_pending_objects(limit);
+    if let Ok(mut state) = state.lock() {
+        state.iterations += 1;
+        match result {
+            Ok(outcome) => {
+                state.last_outcome = Some(outcome);
+                state.last_error = None;
+            }
+            Err(err) => {
+                state.last_error = Some(err.to_string());
+            }
+        }
+    }
+}
+
+fn run_history_once<M, O>(service: &NoKvFs<M, O>, limit: usize, state: &Mutex<HistoryGcWorkerState>)
+where
+    M: MetadataStore,
+    O: ObjectStore,
+{
+    let result = service.cleanup_history(limit);
     if let Ok(mut state) = state.lock() {
         state.iterations += 1;
         match result {
@@ -233,6 +346,75 @@ mod tests {
 
         assert!(service.retire_snapshot(snapshot.snapshot_id).unwrap());
         wait_for(|| objects.head(&old_object).unwrap().is_none());
+        worker.stop();
+        assert_eq!(worker.state().last_error, None);
+    }
+
+    #[test]
+    fn history_worker_prunes_history_without_snapshot_pins() {
+        let (service, _) = service_with_objects();
+        let name = DentryName::new(b"history.bin".to_vec()).unwrap();
+        service
+            .publish_artifact(artifact_request(name.clone(), "history-old", b"old"))
+            .unwrap();
+        service
+            .replace_artifact(artifact_request(name, "history-new", b"new-body"))
+            .unwrap();
+
+        let mut worker = HistoryGcWorker::spawn(
+            Arc::clone(&service),
+            HistoryGcOptions {
+                interval: Duration::from_secs(60),
+                limit: 100,
+                run_immediately: true,
+            },
+        );
+        wait_for(|| worker.state().iterations > 0);
+        worker.stop();
+        assert_eq!(worker.state().last_error, None);
+        assert_eq!(service.cleanup_history(100).unwrap().removed, 0);
+    }
+
+    #[test]
+    fn history_worker_respects_snapshot_pins_until_retired() {
+        let (service, _) = service_with_objects();
+        let name = DentryName::new(b"snapshot-history.bin".to_vec()).unwrap();
+        service
+            .publish_artifact(artifact_request(name.clone(), "history-old", b"old"))
+            .unwrap();
+        let snapshot = service.snapshot_subtree(InodeId::root()).unwrap();
+        service
+            .replace_artifact(artifact_request(name.clone(), "history-new", b"new-body"))
+            .unwrap();
+
+        let mut worker = HistoryGcWorker::spawn(
+            Arc::clone(&service),
+            HistoryGcOptions {
+                interval: Duration::from_millis(10),
+                limit: 100,
+                run_immediately: true,
+            },
+        );
+        wait_for(|| {
+            worker
+                .state()
+                .last_outcome
+                .is_some_and(|outcome| outcome.retained_by_snapshots > 0)
+        });
+        assert_eq!(
+            service
+                .read_artifact_at_snapshot(snapshot.snapshot_id, InodeId::root(), &name)
+                .unwrap(),
+            b"old"
+        );
+
+        assert!(service.retire_snapshot(snapshot.snapshot_id).unwrap());
+        wait_for(|| {
+            worker
+                .state()
+                .last_outcome
+                .is_some_and(|outcome| outcome.removed > 0)
+        });
         worker.stop();
         assert_eq!(worker.state().last_error, None);
     }

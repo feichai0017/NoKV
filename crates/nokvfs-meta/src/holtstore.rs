@@ -8,8 +8,9 @@ use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::command::{
-    CommitResult, MetadataCommand, MetadataError, MetadataStore, MutationOp, Predicate, ReadItem,
-    ReadPurpose, ScanItem, ScanRequest, Value, Version,
+    CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
+    MetadataStore, MutationOp, Predicate, ReadItem, ReadPurpose, ScanItem, ScanRequest, Value,
+    Version,
 };
 use crate::layout::{history_key, history_prefix};
 use holt::{RangeEntry, Tree, TreeConfig, DB};
@@ -273,6 +274,71 @@ impl MetadataStore for HoltMetadataStore {
             ..result
         })
     }
+
+    fn prune_history(
+        &self,
+        request: HistoryPruneRequest,
+    ) -> Result<HistoryPruneOutcome, MetadataError> {
+        let _guard = self
+            .write_gate
+            .lock()
+            .map_err(|_| MetadataError::Backend("holt metadata write gate poisoned".to_owned()))?;
+        let remove_limit = if request.limit == 0 {
+            usize::MAX
+        } else {
+            request.limit
+        };
+        let history = self.history_tree()?;
+        let mut outcome = HistoryPruneOutcome::default();
+        let mut keys_to_remove = Vec::new();
+        let mut current_prefix = Vec::new();
+        let mut kept_anchor_below_floor = false;
+
+        for entry in history.range() {
+            let RangeEntry::Key { key, value, .. } = entry.map_err(to_backend_error)? else {
+                continue;
+            };
+            let prefix = history_user_prefix(&key)?;
+            if prefix != current_prefix.as_slice() {
+                current_prefix.clear();
+                current_prefix.extend_from_slice(prefix);
+                kept_anchor_below_floor = false;
+            }
+            let (version, _) = decode_current_value(&value)?;
+            outcome.scanned += 1;
+            let remove = match request.retain_from {
+                None => true,
+                Some(floor) if version >= floor => {
+                    outcome.retained_by_snapshots += 1;
+                    false
+                }
+                Some(_) if !kept_anchor_below_floor => {
+                    kept_anchor_below_floor = true;
+                    outcome.retained_by_snapshots += 1;
+                    false
+                }
+                Some(_) => true,
+            };
+            if remove {
+                keys_to_remove.push(key);
+                if keys_to_remove.len() >= remove_limit {
+                    break;
+                }
+            }
+        }
+
+        outcome.removed = keys_to_remove.len();
+        if !keys_to_remove.is_empty() {
+            self.db
+                .atomic(|batch| {
+                    for key in &keys_to_remove {
+                        batch.delete(HISTORY_TREE, key);
+                    }
+                })
+                .map_err(to_backend_error)?;
+        }
+        Ok(outcome)
+    }
 }
 
 fn current_tree_name(family: RecordFamily) -> &'static str {
@@ -452,6 +518,15 @@ fn decode_dedupe_result(encoded: &[u8]) -> Result<CommitResult, MetadataError> {
     })
 }
 
+fn history_user_prefix(key: &[u8]) -> Result<&[u8], MetadataError> {
+    if key.len() <= std::mem::size_of::<u64>() {
+        return Err(MetadataError::Backend(
+            "history key is missing version suffix".to_owned(),
+        ));
+    }
+    Ok(&key[..key.len() - std::mem::size_of::<u64>()])
+}
+
 fn to_backend_error(err: impl std::fmt::Display) -> MetadataError {
     MetadataError::Backend(err.to_string())
 }
@@ -460,7 +535,8 @@ fn to_backend_error(err: impl std::fmt::Display) -> MetadataError {
 mod tests {
     use super::*;
     use crate::command::{
-        CommandKind, MetadataCommand, Mutation, PredicateRef, ScanRequest, Value,
+        CommandKind, HistoryPruneRequest, MetadataCommand, Mutation, PredicateRef, ScanRequest,
+        Value,
     };
 
     fn version(raw: u64) -> Version {
@@ -479,6 +555,35 @@ mod tests {
                 family: RecordFamily::Dentry,
                 key: key.to_vec(),
                 predicate: Predicate::NotExists,
+            }],
+            mutations: vec![Mutation {
+                family: RecordFamily::Dentry,
+                key: key.to_vec(),
+                op: MutationOp::Put,
+                value: Some(Value(value.to_vec())),
+            }],
+            watch: Vec::new(),
+        }
+    }
+
+    fn replace_command(
+        key: &[u8],
+        request_id: &[u8],
+        value: &[u8],
+        read: u64,
+        commit: u64,
+    ) -> MetadataCommand {
+        MetadataCommand {
+            request_id: request_id.to_vec(),
+            kind: CommandKind::RenameReplace,
+            read_version: version(read),
+            commit_version: version(commit),
+            primary_family: RecordFamily::Dentry,
+            primary_key: key.to_vec(),
+            predicates: vec![PredicateRef {
+                family: RecordFamily::Dentry,
+                key: key.to_vec(),
+                predicate: Predicate::Exists,
             }],
             mutations: vec![Mutation {
                 family: RecordFamily::Dentry,
@@ -632,5 +737,103 @@ mod tests {
             )
             .unwrap()
             .is_none());
+    }
+
+    #[test]
+    fn prune_history_removes_all_old_versions_without_snapshot_floor() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+        store
+            .commit_metadata(replace_command(b"dir/a", b"req-2", b"value-b", 2, 3))
+            .unwrap();
+
+        assert_eq!(
+            store
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(2),
+                    ReadPurpose::Snapshot
+                )
+                .unwrap(),
+            Some(Value(b"value-a".to_vec()))
+        );
+        let outcome = store
+            .prune_history(HistoryPruneRequest {
+                retain_from: None,
+                limit: 100,
+            })
+            .unwrap();
+        assert_eq!(outcome.removed, 1);
+        assert_eq!(
+            store
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(2),
+                    ReadPurpose::Snapshot
+                )
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            store
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(3),
+                    ReadPurpose::UserStrong
+                )
+                .unwrap(),
+            Some(Value(b"value-b".to_vec()))
+        );
+    }
+
+    #[test]
+    fn prune_history_keeps_snapshot_floor_anchor_per_key() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+        store
+            .commit_metadata(replace_command(b"dir/a", b"req-2", b"value-b", 2, 3))
+            .unwrap();
+        store
+            .commit_metadata(replace_command(b"dir/a", b"req-3", b"value-c", 3, 4))
+            .unwrap();
+
+        let outcome = store
+            .prune_history(HistoryPruneRequest {
+                retain_from: Some(version(4)),
+                limit: 100,
+            })
+            .unwrap();
+        assert_eq!(outcome.scanned, 2);
+        assert_eq!(outcome.removed, 1);
+        assert_eq!(outcome.retained_by_snapshots, 1);
+        assert_eq!(
+            store
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(3),
+                    ReadPurpose::Snapshot
+                )
+                .unwrap(),
+            Some(Value(b"value-b".to_vec()))
+        );
+        assert_eq!(
+            store
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(2),
+                    ReadPurpose::Snapshot
+                )
+                .unwrap(),
+            None
+        );
     }
 }

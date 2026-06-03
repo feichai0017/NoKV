@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
 use nokvfs_meta::holtstore::HoltMetadataStore;
-use nokvfs_meta::{NoKvFs, ObjectGcOptions, ObjectGcWorker};
+use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, ObjectGcWorker};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_types::{FileType, MountId};
 
@@ -30,6 +30,8 @@ struct Config {
     gid: u32,
     object_gc_interval: Duration,
     object_gc_limit: usize,
+    history_gc_interval: Duration,
+    history_gc_limit: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -250,6 +252,14 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                     run_immediately: false,
                 },
             );
+            let _history_gc_worker = HistoryGcWorker::spawn(
+                Arc::clone(&service),
+                HistoryGcOptions {
+                    interval: config.history_gc_interval,
+                    limit: config.history_gc_limit,
+                    run_immediately: false,
+                },
+            );
             nokvfs_fuse::mount_shared(service, mountpoint, nokvfs_fuse::FuseOptions::default())
                 .map_err(from_io)?;
         }
@@ -281,6 +291,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             let cleanup = service
                 .cleanup_pending_objects(limit)
                 .map_err(from_client)?;
+            let history = service.cleanup_history(limit).map_err(from_client)?;
             println!(
                 "object-gc scanned={} attempted={} deleted={} missing={} records_removed={}",
                 cleanup.scanned,
@@ -288,6 +299,10 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 cleanup.deleted,
                 cleanup.missing,
                 cleanup.records_removed
+            );
+            println!(
+                "history-gc scanned={} removed={} retained_by_snapshots={}",
+                history.scanned, history.removed, history.retained_by_snapshots
             );
         }
         Command::Snapshot { path } => {
@@ -341,6 +356,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut gid = DEFAULT_GID;
     let mut object_gc_interval = ObjectGcOptions::default().interval;
     let mut object_gc_limit = ObjectGcOptions::default().limit;
+    let mut history_gc_interval = HistoryGcOptions::default().interval;
+    let mut history_gc_limit = HistoryGcOptions::default().limit;
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -422,6 +439,27 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 object_gc_limit =
                     parse_usize(value(&args, index, "--object-gc-limit")?, "object_gc_limit")?;
             }
+            "--history-gc-interval-ms" => {
+                index += 1;
+                let interval_ms = parse_u64(
+                    value(&args, index, "--history-gc-interval-ms")?,
+                    "history_gc_interval_ms",
+                )?;
+                if interval_ms == 0 {
+                    return Err(CliError::InvalidNumber {
+                        field: "history_gc_interval_ms",
+                        value: interval_ms.to_string(),
+                    });
+                }
+                history_gc_interval = Duration::from_millis(interval_ms);
+            }
+            "--history-gc-limit" => {
+                index += 1;
+                history_gc_limit = parse_usize(
+                    value(&args, index, "--history-gc-limit")?,
+                    "history_gc_limit",
+                )?;
+            }
             "--help" | "-h" => {
                 return Ok((
                     Config {
@@ -432,6 +470,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         gid,
                         object_gc_interval,
                         object_gc_limit,
+                        history_gc_interval,
+                        history_gc_limit,
                     },
                     Command::Help,
                 ));
@@ -454,6 +494,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             gid,
             object_gc_interval,
             object_gc_limit,
+            history_gc_interval,
+            history_gc_limit,
         },
         command,
     ))
@@ -681,6 +723,8 @@ Object backends:\n\
   --s3-root PREFIX\n\
   --object-gc-interval-ms MS       Background object GC interval for live mount\n\
   --object-gc-limit LIMIT          Max queued object records per GC iteration\n\
+  --history-gc-interval-ms MS      Background metadata history GC interval for live mount\n\
+  --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
 \n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\
@@ -689,6 +733,8 @@ Defaults:\n\
   --s3-endpoint http://127.0.0.1:9000\n\
   --object-gc-interval-ms 30000\n\
   --object-gc-limit 1024\n\
+  --history-gc-interval-ms 30000\n\
+  --history-gc-limit 1024\n\
   --mount 1"
     )
 }
@@ -743,6 +789,10 @@ mod tests {
             s("50"),
             s("--object-gc-limit"),
             s("9"),
+            s("--history-gc-interval-ms"),
+            s("60"),
+            s("--history-gc-limit"),
+            s("11"),
             s("mkdir"),
             s("/runs"),
         ])
@@ -751,6 +801,8 @@ mod tests {
         assert_eq!(config.mount.get(), 7);
         assert_eq!(config.object_gc_interval, Duration::from_millis(50));
         assert_eq!(config.object_gc_limit, 9);
+        assert_eq!(config.history_gc_interval, Duration::from_millis(60));
+        assert_eq!(config.history_gc_limit, 11);
         assert_eq!(command, Command::Mkdir { path: s("/runs") });
     }
 
@@ -765,6 +817,22 @@ mod tests {
             ]),
             Err(CliError::InvalidNumber {
                 field: "object_gc_interval_ms",
+                ..
+            })
+        ));
+    }
+
+    #[test]
+    fn parse_rejects_zero_history_gc_interval() {
+        assert!(matches!(
+            parse(vec![
+                s("--history-gc-interval-ms"),
+                s("0"),
+                s("mount"),
+                s("/tmp/nokv-fs")
+            ]),
+            Err(CliError::InvalidNumber {
+                field: "history_gc_interval_ms",
                 ..
             })
         ));
