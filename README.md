@@ -47,7 +47,6 @@ docs/
 
 examples/
   pytorch/
-  minio/
   k8s/
 ```
 
