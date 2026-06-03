@@ -40,6 +40,7 @@ crates/
 
 docs/
   architecture.md
+  product-design.md
   metadata-schema.md
   object-layout.md
   ai-training.md
@@ -124,6 +125,7 @@ and its `pkg-config` metadata so the CLI can perform a real FUSE mount.
 ## Documentation
 
 - [Architecture](docs/architecture.md)
+- [Product Design](docs/product-design.md)
 - [Metadata Schema](docs/metadata-schema.md)
 - [Object Layout](docs/object-layout.md)
 - [AI Training](docs/ai-training.md)

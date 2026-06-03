@@ -10,8 +10,8 @@ hero:
       text: Architecture
       link: /architecture
     - theme: alt
-      text: Metadata Schema
-      link: /metadata-schema
+      text: Product Design
+      link: /product-design
 features:
   - title: Metadata-first filesystem
     details: Inode/dentry namespace semantics, metadata commands, dentry projection, snapshots, and typed watches.

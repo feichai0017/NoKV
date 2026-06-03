@@ -65,6 +65,7 @@ export default withMermaid(
         {
           text: 'Reference',
           items: [
+            { text: 'Product Design', link: '/product-design' },
             { text: 'Architecture', link: '/architecture' },
             { text: 'Metadata Schema', link: '/metadata-schema' },
             { text: 'Object Layout', link: '/object-layout' },
@@ -88,6 +89,7 @@ export default withMermaid(
             collapsed: false,
             items: [
               { text: 'Architecture', link: '/architecture' },
+              { text: 'Product Design', link: '/product-design' },
               { text: 'Metadata Schema', link: '/metadata-schema' },
               { text: 'Object Layout', link: '/object-layout' },
               { text: 'AI Training', link: '/ai-training' },

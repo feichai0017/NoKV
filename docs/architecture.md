@@ -10,6 +10,10 @@ repository is intentionally product-shaped: metadata semantics, object body
 storage, clients, FUSE, docs, and examples live at the repository root instead
 of behind a nested workspace.
 
+The implemented tree is the local metadata slice. The product target, including
+distributed metadata shards, CSI, Python/fsspec, and node-local cache, is
+recorded in [Product Design](./product-design.md).
+
 ## Layers
 
 ```text
@@ -83,3 +87,7 @@ use the same object-store boundary. See [Object Layout](./object-layout.md).
 The planned distributed layer is not a generic KV database. It should replicate
 metadata commands over mount or shard scoped Raft groups, with Holt as the
 state machine storage engine and object bodies remaining in external storage.
+
+Holt is the metadata engine inside each shard. NoKV-FS `metad` owns filesystem
+semantics such as inode/dentry updates, watch/snapshot policy, publish rules,
+and object GC decisions.

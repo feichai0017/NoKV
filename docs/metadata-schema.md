@@ -66,3 +66,50 @@ Planned records:
 - watch log indexed by scope;
 - snapshot pins and GC floor;
 - parent index for hardlink and subtree operations.
+
+## Target Families
+
+The target schema keeps full paths out of canonical truth. Path-like keys may be
+used for acceleration, but inode/dentry records define the namespace.
+
+```text
+mount
+  key: mount_id
+  val: mount options, root inode, generation
+
+inode_current
+  key: mount_id | inode_id
+  val: attributes, link count, body summary, generation
+
+dentry_current
+  key: mount_id | parent_inode | name
+  val: child inode, file type, dentry generation, inode projection
+
+manifest_current
+  key: mount_id | inode_id | manifest_generation | chunk_index
+  val: object descriptor, logical offset, length, digest
+
+parent_index
+  key: mount_id | child_inode | parent_inode | name
+  val: link metadata
+
+path_index
+  key: mount_id | workspace_or_channel | normalized_path
+  val: inode, dentry generation, root epoch
+
+watch_log
+  key: mount_id | watch_scope | sequence
+  val: typed watch event
+
+snapshot_pin
+  key: mount_id | snapshot_id
+  val: read frontier, root inode, retention evidence
+
+gc_queue
+  key: mount_id | epoch | object_ref_hash
+  val: pending object cleanup record
+```
+
+`path_index` entries must be verified against the canonical dentry generation
+before use. A stale path-index hit falls back to inode/dentry traversal and can
+be repaired later.
