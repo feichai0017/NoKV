@@ -29,8 +29,8 @@ boundaries.
   layout or storage internals?
 - Does `nokvfs-fuse` stay inode-first and call `nokvfs-meta` rather than the
   path SDK?
-- Does the `nokv-fs` CLI stay thin over `client`/`fuse` instead of duplicating
-  metadata semantics?
+- Does `nokvfs-cli` keep the `nokv-fs` binary thin over `client`/`fuse` instead
+  of duplicating metadata semantics?
 
 ## Correctness
 

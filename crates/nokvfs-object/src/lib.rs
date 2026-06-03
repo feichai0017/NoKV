@@ -13,6 +13,9 @@ use opendal::blocking::Operator as BlockingOperator;
 use opendal::services::S3;
 use opendal::{ErrorKind, Operator};
 
+pub const DEFAULT_CHUNK_SIZE: u64 = 64 * 1024 * 1024;
+pub const DEFAULT_BLOCK_SIZE: usize = 4 * 1024 * 1024;
+
 static OPENDAL_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -41,6 +44,63 @@ pub struct ObjectInfo {
 pub struct ObjectRange {
     pub offset: u64,
     pub len: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChunkWriteOptions {
+    pub manifest_id: String,
+    pub mount: u64,
+    pub inode: u64,
+    pub generation: u64,
+    pub chunk_size: u64,
+    pub block_size: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChunkedWrite {
+    pub manifest_id: String,
+    pub size: u64,
+    pub chunk_size: u64,
+    pub block_size: u64,
+    pub chunks: Vec<StoredChunk>,
+    pub object_puts: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredChunk {
+    pub chunk_index: u64,
+    pub logical_offset: u64,
+    pub len: u64,
+    pub blocks: Vec<StoredBlock>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct StoredBlock {
+    pub object_key: String,
+    pub logical_offset: u64,
+    pub object_offset: u64,
+    pub len: u64,
+    pub digest_uri: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectReadBlock {
+    pub object_key: String,
+    pub object_offset: u64,
+    pub len: usize,
+    pub output_offset: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockReadOutcome {
+    pub bytes: Vec<u8>,
+    pub object_gets: usize,
+    pub cache_hits: usize,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct MemoryBlockCache {
+    blocks: Arc<Mutex<BTreeMap<String, Vec<u8>>>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -81,6 +141,7 @@ pub enum ObjectError {
     InvalidRange,
     MissingBucket,
     MissingRegion,
+    InvalidChunkLayout,
     Backend(String),
 }
 
@@ -103,6 +164,145 @@ impl ObjectRange {
         }
         Ok(Self { offset, len })
     }
+}
+
+impl ChunkWriteOptions {
+    pub fn validate(&self) -> Result<(), ObjectError> {
+        if self.manifest_id.is_empty() {
+            return Err(ObjectError::InvalidChunkLayout);
+        }
+        validate_key(&self.manifest_id)?;
+        if self.mount == 0 || self.inode == 0 || self.generation == 0 {
+            return Err(ObjectError::InvalidChunkLayout);
+        }
+        if self.chunk_size == 0 || self.block_size == 0 {
+            return Err(ObjectError::InvalidChunkLayout);
+        }
+        if self.block_size as u64 > self.chunk_size {
+            return Err(ObjectError::InvalidChunkLayout);
+        }
+        Ok(())
+    }
+}
+
+impl MemoryBlockCache {
+    pub fn get(&self, key: &str) -> Result<Option<Vec<u8>>, ObjectError> {
+        Ok(self
+            .blocks
+            .lock()
+            .map_err(ObjectError::from_poisoned_lock)?
+            .get(key)
+            .cloned())
+    }
+
+    pub fn put(&self, key: String, bytes: Vec<u8>) -> Result<(), ObjectError> {
+        self.blocks
+            .lock()
+            .map_err(ObjectError::from_poisoned_lock)?
+            .insert(key, bytes);
+        Ok(())
+    }
+}
+
+pub fn put_chunked_object<O: ObjectStore>(
+    store: &O,
+    bytes: &[u8],
+    options: ChunkWriteOptions,
+) -> Result<ChunkedWrite, ObjectError> {
+    options.validate()?;
+    let mut chunks = Vec::new();
+    let mut object_puts = 0_usize;
+    let mut offset = 0_usize;
+    while offset < bytes.len() {
+        let chunk_index = (offset as u64) / options.chunk_size;
+        let chunk_start = offset;
+        let chunk_end = bytes
+            .len()
+            .min((chunk_index + 1).saturating_mul(options.chunk_size) as usize);
+        let mut blocks = Vec::new();
+        let mut block_offset = chunk_start;
+        let mut block_index = 0_u64;
+        while block_offset < chunk_end {
+            let block_end = chunk_end.min(block_offset.saturating_add(options.block_size));
+            let object_key = block_object_key(&options, chunk_index, block_index);
+            let key = ObjectKey::new(object_key.clone())?;
+            let block = &bytes[block_offset..block_end];
+            store.put(&key, block)?;
+            object_puts += 1;
+            blocks.push(StoredBlock {
+                object_key,
+                logical_offset: block_offset as u64,
+                object_offset: 0,
+                len: block.len() as u64,
+                digest_uri: block_digest_uri(block),
+            });
+            block_offset = block_end;
+            block_index += 1;
+        }
+        chunks.push(StoredChunk {
+            chunk_index,
+            logical_offset: chunk_start as u64,
+            len: (chunk_end - chunk_start) as u64,
+            blocks,
+        });
+        offset = chunk_end;
+    }
+    Ok(ChunkedWrite {
+        manifest_id: options.manifest_id,
+        size: bytes.len() as u64,
+        chunk_size: options.chunk_size,
+        block_size: options.block_size as u64,
+        chunks,
+        object_puts,
+    })
+}
+
+pub fn read_object_blocks<O: ObjectStore>(
+    store: &O,
+    cache: Option<&MemoryBlockCache>,
+    output_len: usize,
+    blocks: &[ObjectReadBlock],
+) -> Result<BlockReadOutcome, ObjectError> {
+    let mut out = vec![0_u8; output_len];
+    let mut object_gets = 0_usize;
+    let mut cache_hits = 0_usize;
+    for block in blocks {
+        let key = ObjectKey::new(block.object_key.clone())?;
+        let cache_key = format!("{}:{}:{}", key.as_str(), block.object_offset, block.len);
+        let bytes = if let Some(cache) = cache {
+            if let Some(cached) = cache.get(&cache_key)? {
+                cache_hits += 1;
+                cached
+            } else {
+                let fetched = store.get(
+                    &key,
+                    Some(ObjectRange::new(block.object_offset, block.len)?),
+                )?;
+                cache.put(cache_key, fetched.clone())?;
+                object_gets += 1;
+                fetched
+            }
+        } else {
+            object_gets += 1;
+            store.get(
+                &key,
+                Some(ObjectRange::new(block.object_offset, block.len)?),
+            )?
+        };
+        let end = block
+            .output_offset
+            .checked_add(bytes.len())
+            .ok_or(ObjectError::InvalidRange)?;
+        if end > out.len() {
+            return Err(ObjectError::InvalidRange);
+        }
+        out[block.output_offset..end].copy_from_slice(&bytes);
+    }
+    Ok(BlockReadOutcome {
+        bytes: out,
+        object_gets,
+        cache_hits,
+    })
 }
 
 impl ObjectStoreConfig {
@@ -356,6 +556,22 @@ fn slice_range(bytes: &[u8], range: ObjectRange) -> Result<Vec<u8>, ObjectError>
     Ok(bytes[offset..end].to_vec())
 }
 
+fn block_object_key(options: &ChunkWriteOptions, chunk_index: u64, block_index: u64) -> String {
+    format!(
+        "blocks/{}/{}/{}/{}/{}",
+        options.mount, options.inode, options.generation, chunk_index, block_index
+    )
+}
+
+fn block_digest_uri(bytes: &[u8]) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in bytes {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    format!("fnv64:{hash:016x}")
+}
+
 impl ObjectError {
     fn from_backend(err: impl fmt::Display) -> Self {
         Self::Backend(err.to_string())
@@ -377,6 +593,7 @@ impl fmt::Display for ObjectError {
             Self::InvalidRange => write!(f, "object range must have non-zero length"),
             Self::MissingBucket => write!(f, "S3 object store bucket is required"),
             Self::MissingRegion => write!(f, "S3 object store region is required"),
+            Self::InvalidChunkLayout => write!(f, "invalid object chunk layout"),
             Self::Backend(err) => write!(f, "object store backend error: {err}"),
         }
     }
@@ -421,6 +638,69 @@ mod tests {
         assert!(store.delete(&key).unwrap());
         assert!(!store.delete(&key).unwrap());
         assert!(store.head(&key).unwrap().is_none());
+    }
+
+    #[test]
+    fn chunked_put_and_read_cross_block_range() {
+        let store = MemoryObjectStore::new();
+        let bytes = b"abcdefghijklmnop".to_vec();
+        let written = put_chunked_object(
+            &store,
+            &bytes,
+            ChunkWriteOptions {
+                manifest_id: "artifacts/checkpoint".to_owned(),
+                mount: 1,
+                inode: 2,
+                generation: 3,
+                chunk_size: 8,
+                block_size: 4,
+            },
+        )
+        .unwrap();
+        assert_eq!(written.size, 16);
+        assert_eq!(written.object_puts, 4);
+        assert_eq!(written.chunks.len(), 2);
+        assert_eq!(written.chunks[0].blocks.len(), 2);
+        assert_eq!(written.chunks[0].blocks[0].object_key, "blocks/1/2/3/0/0");
+
+        let blocks = vec![
+            ObjectReadBlock {
+                object_key: "blocks/1/2/3/0/1".to_owned(),
+                object_offset: 1,
+                len: 3,
+                output_offset: 0,
+            },
+            ObjectReadBlock {
+                object_key: "blocks/1/2/3/1/0".to_owned(),
+                object_offset: 0,
+                len: 2,
+                output_offset: 3,
+            },
+        ];
+        let read = read_object_blocks(&store, None, 5, &blocks).unwrap();
+        assert_eq!(read.bytes, b"fghij");
+        assert_eq!(read.object_gets, 2);
+        assert_eq!(read.cache_hits, 0);
+    }
+
+    #[test]
+    fn block_cache_reuses_object_reads() {
+        let store = MemoryObjectStore::new();
+        let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
+        store.put(&key, b"abcd").unwrap();
+        let cache = MemoryBlockCache::default();
+        let blocks = vec![ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            object_offset: 0,
+            len: 4,
+            output_offset: 0,
+        }];
+        let first = read_object_blocks(&store, Some(&cache), 4, &blocks).unwrap();
+        let second = read_object_blocks(&store, Some(&cache), 4, &blocks).unwrap();
+        assert_eq!(first.object_gets, 1);
+        assert_eq!(first.cache_hits, 0);
+        assert_eq!(second.object_gets, 0);
+        assert_eq!(second.cache_hits, 1);
     }
 
     #[test]

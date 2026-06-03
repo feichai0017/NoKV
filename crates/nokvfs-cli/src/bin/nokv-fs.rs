@@ -98,7 +98,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             client
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
-            let object_ref = default_object_ref(&path)?;
+            let manifest_id = default_manifest_id(&path)?;
             let entry = client
                 .put_artifact(
                     &path,
@@ -107,8 +107,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                         producer: "nokv-fs".to_owned(),
                         digest_uri: "unknown".to_owned(),
                         content_type: "application/octet-stream".to_owned(),
-                        object_ref,
-                        generation: 1,
+                        manifest_id,
                         mode: DEFAULT_MODE_FILE,
                         uid: config.uid,
                         gid: config.gid,
@@ -152,7 +151,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 removed
                     .body
                     .as_ref()
-                    .map(|body| body.object_ref.as_str())
+                    .map(|body| body.manifest_id.as_str())
                     .unwrap_or("-")
             );
         }
@@ -191,7 +190,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                     .replaced
                     .as_ref()
                     .and_then(|entry| entry.body.as_ref())
-                    .map(|body| body.object_ref.as_str())
+                    .map(|body| body.manifest_id.as_str())
                     .unwrap_or("-")
             );
         }
@@ -431,7 +430,7 @@ fn parse_u32(raw: &str, field: &'static str) -> Result<u32, CliError> {
     })
 }
 
-fn default_object_ref(path: &str) -> Result<String, CliError> {
+fn default_manifest_id(path: &str) -> Result<String, CliError> {
     let trimmed = path.trim_start_matches('/');
     if trimmed.is_empty() {
         return Err(CliError::MissingArgument("artifact path"));
@@ -598,13 +597,13 @@ mod tests {
     }
 
     #[test]
-    fn default_object_ref_is_relative_and_stable() {
+    fn default_manifest_id_is_relative_and_stable() {
         assert_eq!(
-            default_object_ref("/runs/1/checkpoint").unwrap(),
+            default_manifest_id("/runs/1/checkpoint").unwrap(),
             "artifacts/runs/1/checkpoint"
         );
         assert_eq!(
-            default_object_ref("runs/1/checkpoint").unwrap(),
+            default_manifest_id("runs/1/checkpoint").unwrap(),
             "artifacts/runs/1/checkpoint"
         );
     }

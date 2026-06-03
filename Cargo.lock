@@ -1139,10 +1139,30 @@ dependencies = [
 ]
 
 [[package]]
+name = "nokvfs-bench"
+version = "0.1.0"
+dependencies = [
+ "nokvfs-client",
+ "nokvfs-meta",
+ "nokvfs-object",
+ "nokvfs-types",
+]
+
+[[package]]
+name = "nokvfs-cli"
+version = "0.1.0"
+dependencies = [
+ "nokvfs-client",
+ "nokvfs-fuse",
+ "nokvfs-meta",
+ "nokvfs-object",
+ "nokvfs-types",
+]
+
+[[package]]
 name = "nokvfs-client"
 version = "0.1.0"
 dependencies = [
- "nokvfs-fuse",
  "nokvfs-meta",
  "nokvfs-object",
  "nokvfs-types",

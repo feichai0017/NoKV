@@ -18,7 +18,8 @@ recorded in [Product Design](./product-design.md).
 
 ```text
 Application surface
-  nokvfs-client    Rust SDK and nokv-fs CLI
+  nokvfs-client    Rust SDK
+  nokvfs-cli       nokv-fs CLI
   nokvfs-fuse      low-level FUSE frontend
   nokvfs-python    planned Python/fsspec bindings
   nokvfs-csi       planned Kubernetes CSI integration
@@ -29,7 +30,7 @@ Metadata layer
   nokvfs-server    planned long-running service process
 
 Body storage layer
-  nokvfs-object    local and S3-compatible object storage
+  nokvfs-object    S3-compatible object storage, including RustFS
 ```
 
 ## Write Path
@@ -67,7 +68,8 @@ dentry_current:
   mount_id | parent_inode | name -> dentry + inode projection
 
 chunk_manifest_current:
-  mount_id | inode_id | generation | chunk_index -> body descriptor
+  mount_id | inode_id | generation | u64::MAX -> body summary
+  mount_id | inode_id | generation | chunk_index -> block manifest
 
 history:
   family | user_key_len | user_key | inverted_commit_version -> old value
@@ -78,9 +80,11 @@ they are not namespace truth.
 
 ## Object Storage
 
-NoKV-FS stores file bodies outside the metadata service. The first production
-body backend is S3-compatible storage. RustFS, MinIO, Ceph RGW, and AWS S3 all
-use the same object-store boundary. See [Object Layout](./object-layout.md).
+NoKV-FS stores file bodies outside the metadata service. File bytes are split
+into immutable object blocks and published through metadata manifests. The first
+production body backend is S3-compatible storage. RustFS, MinIO, Ceph RGW, and
+AWS S3 all use the same object-store boundary. See
+[Object Layout](./object-layout.md).
 
 ## Distributed Direction
 

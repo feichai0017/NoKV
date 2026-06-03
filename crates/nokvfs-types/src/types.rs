@@ -72,8 +72,27 @@ pub struct BodyDescriptor {
     pub digest_uri: String,
     pub size: u64,
     pub content_type: String,
-    pub object_ref: String,
+    pub manifest_id: String,
     pub generation: u64,
+    pub chunk_size: u64,
+    pub block_size: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChunkManifest {
+    pub chunk_index: u64,
+    pub logical_offset: u64,
+    pub len: u64,
+    pub blocks: Vec<BlockDescriptor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BlockDescriptor {
+    pub object_key: String,
+    pub logical_offset: u64,
+    pub object_offset: u64,
+    pub len: u64,
+    pub digest_uri: String,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -1,7 +1,8 @@
 use std::fmt;
 
 use nokvfs_types::{
-    BodyDescriptor, DentryName, DentryProjection, DentryRecord, FileType, InodeAttr, InodeId,
+    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
+    FileType, InodeAttr, InodeId,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -50,8 +51,10 @@ pub fn encode_dentry_projection(projection: &DentryProjection) -> Vec<u8> {
             put_string(&mut out, &body.digest_uri);
             push_u64(&mut out, body.size);
             put_string(&mut out, &body.content_type);
-            put_string(&mut out, &body.object_ref);
+            put_string(&mut out, &body.manifest_id);
             push_u64(&mut out, body.generation);
+            push_u64(&mut out, body.chunk_size);
+            push_u64(&mut out, body.block_size);
         }
         None => out.push(0),
     }
@@ -75,8 +78,10 @@ pub fn decode_dentry_projection(bytes: &[u8]) -> Result<DentryProjection, CodecE
             digest_uri: input.string()?,
             size: input.u64()?,
             content_type: input.string()?,
-            object_ref: input.string()?,
+            manifest_id: input.string()?,
             generation: input.u64()?,
+            chunk_size: input.u64()?,
+            block_size: input.u64()?,
         }),
         tag => return Err(CodecError::InvalidFileType(tag)),
     };
@@ -100,8 +105,10 @@ pub fn encode_body_descriptor(body: &BodyDescriptor) -> Vec<u8> {
     put_string(&mut out, &body.digest_uri);
     push_u64(&mut out, body.size);
     put_string(&mut out, &body.content_type);
-    put_string(&mut out, &body.object_ref);
+    put_string(&mut out, &body.manifest_id);
     push_u64(&mut out, body.generation);
+    push_u64(&mut out, body.chunk_size);
+    push_u64(&mut out, body.block_size);
     out
 }
 
@@ -112,11 +119,54 @@ pub fn decode_body_descriptor(bytes: &[u8]) -> Result<BodyDescriptor, CodecError
         digest_uri: input.string()?,
         size: input.u64()?,
         content_type: input.string()?,
-        object_ref: input.string()?,
+        manifest_id: input.string()?,
         generation: input.u64()?,
+        chunk_size: input.u64()?,
+        block_size: input.u64()?,
     };
     input.finish()?;
     Ok(body)
+}
+
+pub fn encode_chunk_manifest(manifest: &ChunkManifest) -> Vec<u8> {
+    let mut out = Vec::new();
+    push_u64(&mut out, manifest.chunk_index);
+    push_u64(&mut out, manifest.logical_offset);
+    push_u64(&mut out, manifest.len);
+    push_u32(&mut out, manifest.blocks.len() as u32);
+    for block in &manifest.blocks {
+        put_string(&mut out, &block.object_key);
+        push_u64(&mut out, block.logical_offset);
+        push_u64(&mut out, block.object_offset);
+        push_u64(&mut out, block.len);
+        put_string(&mut out, &block.digest_uri);
+    }
+    out
+}
+
+pub fn decode_chunk_manifest(bytes: &[u8]) -> Result<ChunkManifest, CodecError> {
+    let mut input = Decoder::new(bytes);
+    let chunk_index = input.u64()?;
+    let logical_offset = input.u64()?;
+    let len = input.u64()?;
+    let block_count = input.u32()? as usize;
+    let mut blocks = Vec::with_capacity(block_count);
+    for _ in 0..block_count {
+        blocks.push(BlockDescriptor {
+            object_key: input.string()?,
+            logical_offset: input.u64()?,
+            object_offset: input.u64()?,
+            len: input.u64()?,
+            digest_uri: input.string()?,
+        });
+    }
+    input.finish()?;
+    Ok(ChunkManifest {
+        chunk_index,
+        logical_offset,
+        len,
+        blocks,
+    })
 }
 
 fn decode_inode_attr_from(input: &mut Decoder<'_>) -> Result<InodeAttr, CodecError> {

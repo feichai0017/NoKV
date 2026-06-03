@@ -15,7 +15,7 @@ use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
 use nokvfs_meta::holtstore::HoltMetadataStore;
-use nokvfs_meta::NoKvFs;
+use nokvfs_meta::{NoKvFs, ObjectTransferStats};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_types::MountId;
 
@@ -34,10 +34,13 @@ enum Profile {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Workload {
     All,
+    MetadataSmoke,
     MdtestEasy,
     MdtestHard,
     CheckpointPublish,
     TrainingRead,
+    MlperfDlio,
+    DemoDataset,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -74,6 +77,28 @@ struct ResultRow {
     operations: usize,
     seconds: f64,
     ops_per_second: f64,
+    mb_per_second: f64,
+    samples_per_second: f64,
+    object_puts: u64,
+    object_gets: u64,
+    cache_hits: u64,
+    cache_hit_rate: f64,
+    manifest_chunks: u64,
+    manifest_blocks: u64,
+    checksum: u64,
+    shape: String,
+    caveat: String,
+}
+
+#[derive(Clone, Debug)]
+struct RowInput {
+    workload: &'static str,
+    profile: Profile,
+    operations: usize,
+    seconds: f64,
+    bytes: u64,
+    samples: usize,
+    object_stats: ObjectTransferStats,
     checksum: u64,
     shape: String,
     caveat: String,
@@ -96,7 +121,7 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
-             [--workload all|mdtest-easy|mdtest-hard|checkpoint-publish|training-read] \
+             [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] [--keep]"
         );
         std::process::exit(2);
@@ -108,16 +133,24 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     let shape = shape(config.profile);
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
-    println!("workload,profile,operations,seconds,ops_per_second,checksum,shape,caveat");
+    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,checksum,shape,caveat");
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
         println!(
-            "{},{},{},{:.6},{:.2},{},{},{}",
+            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{}",
             row.workload,
             profile_name(row.profile),
             row.operations,
             row.seconds,
             row.ops_per_second,
+            row.mb_per_second,
+            row.samples_per_second,
+            row.object_puts,
+            row.object_gets,
+            row.cache_hits,
+            row.cache_hit_rate,
+            row.manifest_chunks,
+            row.manifest_blocks,
             row.checksum,
             csv_field(&row.shape),
             csv_field(&row.caveat)
@@ -145,6 +178,9 @@ fn run_one(
         Workload::MdtestHard => bench_mdtest_hard(&client, config, shape),
         Workload::CheckpointPublish => bench_checkpoint_publish(&client, config, shape),
         Workload::TrainingRead => bench_training_read(&client, config, shape),
+        Workload::MlperfDlio => bench_mlperf_dlio(&client, config, shape),
+        Workload::DemoDataset => bench_demo_dataset(&client, config, shape),
+        Workload::MetadataSmoke => unreachable!("metadata-smoke expands before execution"),
         Workload::All => unreachable!("all expands before execution"),
     }
 }
@@ -154,6 +190,7 @@ fn bench_mdtest_easy(
     config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
+    let before = client.object_stats();
     let start = Instant::now();
     let mut checksum = 0_u64;
     for dir in 0..shape.dirs {
@@ -176,18 +213,21 @@ fn bench_mdtest_easy(
         }
     }
     let operations = shape.dirs + shape.dirs * shape.files_per_dir + 1;
-    Ok(row(
-        "mdtest-easy",
-        config.profile,
+    Ok(row(RowInput {
+        workload: "mdtest-easy",
+        profile: config.profile,
         operations,
-        start.elapsed().as_secs_f64(),
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: 0,
+        samples: 0,
+        object_stats: stats_delta(before, client.object_stats()),
         checksum,
-        format!(
+        shape: format!(
             "dirs={} files_per_dir={} file_body=metadata-only",
             shape.dirs, shape.files_per_dir
         ),
-        metadata_only_caveat(config),
-    ))
+        caveat: metadata_only_caveat(config),
+    }))
 }
 
 fn bench_mdtest_hard(
@@ -198,6 +238,7 @@ fn bench_mdtest_hard(
     client
         .mkdir("/mdtest-hard", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
         .map_err(from_client)?;
+    let before = client.object_stats();
     let start = Instant::now();
     let mut checksum = 0_u64;
     for file in 0..shape.shared_files {
@@ -207,18 +248,21 @@ fn bench_mdtest_hard(
             .map_err(from_client)?;
         checksum = checksum.wrapping_add(entry.attr.inode.get());
     }
-    Ok(row(
-        "mdtest-hard",
-        config.profile,
-        shape.shared_files,
-        start.elapsed().as_secs_f64(),
+    Ok(row(RowInput {
+        workload: "mdtest-hard",
+        profile: config.profile,
+        operations: shape.shared_files,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: 0,
+        samples: 0,
+        object_stats: stats_delta(before, client.object_stats()),
         checksum,
-        format!(
+        shape: format!(
             "shared_dir_files={} file_body=metadata-only",
             shape.shared_files
         ),
-        metadata_only_caveat(config),
-    ))
+        caveat: metadata_only_caveat(config),
+    }))
 }
 
 fn bench_checkpoint_publish(
@@ -234,21 +278,22 @@ fn bench_checkpoint_publish(
         .put_artifact(
             "/checkpoints/latest.ckpt",
             first,
-            artifact_metadata("checkpoint", "checkpoints/latest-initial", 1),
+            artifact_metadata("checkpoint", "checkpoints/latest-initial"),
         )
         .map_err(from_client)?;
 
+    let before = client.object_stats();
     let start = Instant::now();
     let mut checksum = 0_u64;
     for step in 0..shape.checkpoints {
         let stage_path = format!("/checkpoints/.stage-{step:06}");
-        let object_ref = format!("checkpoints/stage-{step:06}");
+        let manifest_id = format!("checkpoints/stage-{step:06}");
         let bytes = checkpoint_payload(step, 4096);
         let staged = client
             .put_artifact(
                 &stage_path,
                 bytes,
-                artifact_metadata("checkpoint", &object_ref, step as u64 + 2),
+                artifact_metadata("checkpoint", &manifest_id),
             )
             .map_err(from_client)?;
         let result = client
@@ -264,18 +309,21 @@ fn bench_checkpoint_publish(
                     .unwrap_or(0),
             );
     }
-    Ok(row(
-        "checkpoint-publish",
-        config.profile,
-        shape.checkpoints * 2,
-        start.elapsed().as_secs_f64(),
+    Ok(row(RowInput {
+        workload: "checkpoint-publish",
+        profile: config.profile,
+        operations: shape.checkpoints * 2,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: (shape.checkpoints * 4096) as u64,
+        samples: 0,
+        object_stats: stats_delta(before, client.object_stats()),
         checksum,
-        format!(
+        shape: format!(
             "iterations={} payload_bytes=4096 ops=count_put_plus_atomic_replace",
             shape.checkpoints
         ),
-        object_caveat(config, "object put plus metadata rename-replace"),
-    ))
+        caveat: object_caveat(config, "object put plus metadata rename-replace"),
+    }))
 }
 
 fn bench_training_read(
@@ -294,17 +342,18 @@ fn bench_training_read(
             .map_err(from_client)?;
         for file in 0..shape.dataset_files_per_dir {
             let path = format!("{shard_path}/sample-{file:05}.bin");
-            let object_ref = format!("dataset/shard-{shard:04}/sample-{file:05}.bin");
+            let manifest_id = format!("dataset/shard-{shard:04}/sample-{file:05}.bin");
             client
                 .put_artifact(
                     &path,
                     payload.clone(),
-                    artifact_metadata("dataset", &object_ref, 1),
+                    artifact_metadata("dataset", &manifest_id),
                 )
                 .map_err(from_client)?;
         }
     }
 
+    let before = client.object_stats();
     let start = Instant::now();
     let mut checksum = 0_u64;
     for shard in 0..shape.dataset_dirs {
@@ -319,38 +368,220 @@ fn bench_training_read(
         }
     }
     black_box(checksum);
-    Ok(row(
-        "training-read",
-        config.profile,
-        shape.dataset_dirs * 2,
-        start.elapsed().as_secs_f64(),
+    Ok(row(RowInput {
+        workload: "training-read",
+        profile: config.profile,
+        operations: shape.dataset_dirs * 2,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: (shape.dataset_dirs * shape.dataset_file_bytes) as u64,
+        samples: shape.dataset_dirs,
+        object_stats: stats_delta(before, client.object_stats()),
         checksum,
-        format!(
+        shape: format!(
             "dataset_dirs={} files_per_dir={} sample_bytes={} timed_ops=list_plus_one_read_per_dir",
             shape.dataset_dirs, shape.dataset_files_per_dir, shape.dataset_file_bytes
         ),
-        object_caveat(config, "warm object reads after deterministic dataset seed"),
-    ))
+        caveat: object_caveat(config, "warm object reads after deterministic dataset seed"),
+    }))
 }
 
-fn row(
-    workload: &'static str,
-    profile: Profile,
-    operations: usize,
-    seconds: f64,
-    checksum: u64,
-    shape: String,
-    caveat: String,
-) -> ResultRow {
-    ResultRow {
-        workload,
-        profile,
-        operations,
-        seconds,
-        ops_per_second: operations as f64 / seconds.max(f64::MIN_POSITIVE),
+fn bench_mlperf_dlio(
+    client: &Client,
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<ResultRow, BenchError> {
+    client
+        .mkdir("/mlperf-dlio", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(from_client)?;
+    client
+        .mkdir(
+            "/mlperf-dlio/dataset",
+            DEFAULT_MODE_DIR,
+            DEFAULT_UID,
+            DEFAULT_GID,
+        )
+        .map_err(from_client)?;
+    client
+        .mkdir(
+            "/mlperf-dlio/checkpoints",
+            DEFAULT_MODE_DIR,
+            DEFAULT_UID,
+            DEFAULT_GID,
+        )
+        .map_err(from_client)?;
+
+    let sample_payload = vec![11_u8; shape.dataset_file_bytes];
+    for shard in 0..shape.dataset_dirs {
+        let shard_path = format!("/mlperf-dlio/dataset/shard-{shard:04}");
+        client
+            .mkdir(&shard_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+            .map_err(from_client)?;
+        for file in 0..shape.dataset_files_per_dir {
+            let path = format!("{shard_path}/sample-{file:05}.bin");
+            let manifest_id = format!("mlperf-dlio/dataset/shard-{shard:04}/sample-{file:05}");
+            client
+                .put_artifact(
+                    &path,
+                    sample_payload.clone(),
+                    artifact_metadata("mlperf-dlio-dataset", &manifest_id),
+                )
+                .map_err(from_client)?;
+        }
+    }
+
+    client
+        .put_artifact(
+            "/mlperf-dlio/checkpoints/latest.ckpt",
+            checkpoint_payload(0, 4096),
+            artifact_metadata(
+                "mlperf-dlio-checkpoint",
+                "mlperf-dlio/checkpoints/latest-initial",
+            ),
+        )
+        .map_err(from_client)?;
+
+    let checkpoint_steps = shape.checkpoints.max(1) / 4;
+    let before = client.object_stats();
+    let start = Instant::now();
+    let mut checksum = 0_u64;
+    for shard in 0..shape.dataset_dirs {
+        let shard_path = format!("/mlperf-dlio/dataset/shard-{shard:04}");
+        let entries = client.list(&shard_path).map_err(from_client)?;
+        if let Some(first) = entries.first() {
+            let name = String::from_utf8_lossy(first.dentry.name.as_bytes());
+            let path = format!("{shard_path}/{name}");
+            let bytes = client.cat(&path).map_err(from_client)?;
+            checksum = checksum.wrapping_add(bytes.len() as u64);
+        }
+    }
+    for step in 0..checkpoint_steps {
+        let stage_path = format!("/mlperf-dlio/checkpoints/.stage-{step:06}");
+        let manifest_id = format!("mlperf-dlio/checkpoints/stage-{step:06}");
+        client
+            .put_artifact(
+                &stage_path,
+                checkpoint_payload(step, 4096),
+                artifact_metadata("mlperf-dlio-checkpoint", &manifest_id),
+            )
+            .map_err(from_client)?;
+        let result = client
+            .rename_replace(&stage_path, "/mlperf-dlio/checkpoints/latest.ckpt")
+            .map_err(from_client)?;
+        checksum = checksum.wrapping_add(result.entry.attr.inode.get());
+    }
+    black_box(checksum);
+    Ok(row(RowInput {
+        workload: "mlperf-dlio",
+        profile: config.profile,
+        operations: shape.dataset_dirs * 2 + checkpoint_steps * 2,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: (shape.dataset_dirs * shape.dataset_file_bytes + checkpoint_steps * 4096) as u64,
+        samples: shape.dataset_dirs,
+        object_stats: stats_delta(before, client.object_stats()),
         checksum,
-        shape,
-        caveat,
+        shape: format!(
+            "dlio_style_generated dataset_dirs={} files_per_dir={} sample_bytes={} checkpoint_steps={} checkpoint_bytes=4096",
+            shape.dataset_dirs,
+            shape.dataset_files_per_dir,
+            shape.dataset_file_bytes,
+            checkpoint_steps
+        ),
+        caveat: object_caveat(config, "MLPerf Storage/DLIO-style generated training read plus checkpoint write"),
+    }))
+}
+
+fn bench_demo_dataset(
+    client: &Client,
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<ResultRow, BenchError> {
+    client
+        .mkdir("/demo-dataset", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(from_client)?;
+    let classes = shape.dataset_dirs.clamp(1, 8);
+    let samples_per_class = shape.dataset_files_per_dir.clamp(1, 32);
+    let sample_bytes = shape.dataset_file_bytes.clamp(128, 4096);
+    let payload = vec![23_u8; sample_bytes];
+    for class in 0..classes {
+        let class_path = format!("/demo-dataset/class-{class:03}");
+        client
+            .mkdir(&class_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+            .map_err(from_client)?;
+        for sample in 0..samples_per_class {
+            let path = format!("{class_path}/sample-{sample:05}.bin");
+            let manifest_id = format!("demo-dataset/class-{class:03}/sample-{sample:05}");
+            client
+                .put_artifact(
+                    &path,
+                    payload.clone(),
+                    artifact_metadata("demo-dataset", &manifest_id),
+                )
+                .map_err(from_client)?;
+        }
+    }
+
+    let before = client.object_stats();
+    let start = Instant::now();
+    let mut checksum = 0_u64;
+    for class in 0..classes {
+        let class_path = format!("/demo-dataset/class-{class:03}");
+        let entries = client.list(&class_path).map_err(from_client)?;
+        for entry in entries.iter().take(2) {
+            let name = String::from_utf8_lossy(entry.dentry.name.as_bytes());
+            let path = format!("{class_path}/{name}");
+            checksum = checksum.wrapping_add(client.cat(&path).map_err(from_client)?.len() as u64);
+        }
+    }
+    Ok(row(RowInput {
+        workload: "demo-dataset",
+        profile: config.profile,
+        operations: classes * 3,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: (classes * 2 * sample_bytes) as u64,
+        samples: classes * 2,
+        object_stats: stats_delta(before, client.object_stats()),
+        checksum,
+        shape: format!(
+            "public_dataset_demo_shape classes={} samples_per_class={} sample_bytes={} timed=list_plus_two_reads_per_class",
+            classes, samples_per_class, sample_bytes
+        ),
+        caveat: object_caveat(config, "small public-dataset-shaped demo without external download"),
+    }))
+}
+
+fn row(input: RowInput) -> ResultRow {
+    let cache_total = input.object_stats.object_gets + input.object_stats.cache_hits;
+    ResultRow {
+        workload: input.workload,
+        profile: input.profile,
+        operations: input.operations,
+        seconds: input.seconds,
+        ops_per_second: input.operations as f64 / input.seconds.max(f64::MIN_POSITIVE),
+        mb_per_second: input.bytes as f64 / 1_048_576_f64 / input.seconds.max(f64::MIN_POSITIVE),
+        samples_per_second: input.samples as f64 / input.seconds.max(f64::MIN_POSITIVE),
+        object_puts: input.object_stats.object_puts,
+        object_gets: input.object_stats.object_gets,
+        cache_hits: input.object_stats.cache_hits,
+        cache_hit_rate: if cache_total == 0 {
+            0.0
+        } else {
+            input.object_stats.cache_hits as f64 / cache_total as f64
+        },
+        manifest_chunks: input.object_stats.manifest_chunks,
+        manifest_blocks: input.object_stats.manifest_blocks,
+        checksum: input.checksum,
+        shape: input.shape,
+        caveat: input.caveat,
+    }
+}
+
+fn stats_delta(before: ObjectTransferStats, after: ObjectTransferStats) -> ObjectTransferStats {
+    ObjectTransferStats {
+        object_puts: after.object_puts.saturating_sub(before.object_puts),
+        object_gets: after.object_gets.saturating_sub(before.object_gets),
+        cache_hits: after.cache_hits.saturating_sub(before.cache_hits),
+        manifest_chunks: after.manifest_chunks.saturating_sub(before.manifest_chunks),
+        manifest_blocks: after.manifest_blocks.saturating_sub(before.manifest_blocks),
     }
 }
 
@@ -386,17 +617,25 @@ fn client_for(config: &Config, workload: &str) -> Result<Client, BenchError> {
     Ok(NoKvFsClient::new(service))
 }
 
-fn artifact_metadata(producer: &str, object_ref: &str, generation: u64) -> ArtifactMetadata {
+fn artifact_metadata(producer: &str, manifest_id: &str) -> ArtifactMetadata {
     ArtifactMetadata {
         producer: producer.to_owned(),
-        digest_uri: format!("sha256:{generation:016x}"),
+        digest_uri: format!("sha256:{}", stable_id_hash(manifest_id)),
         content_type: "application/octet-stream".to_owned(),
-        object_ref: object_ref.to_owned(),
-        generation,
+        manifest_id: manifest_id.to_owned(),
         mode: DEFAULT_MODE_FILE,
         uid: DEFAULT_UID,
         gid: DEFAULT_GID,
     }
+}
+
+fn stable_id_hash(value: &str) -> String {
+    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
+    for byte in value.as_bytes() {
+        hash ^= *byte as u64;
+        hash = hash.wrapping_mul(0x1000_0000_01b3);
+    }
+    format!("{hash:016x}")
 }
 
 fn checkpoint_payload(seed: usize, len: usize) -> Vec<u8> {
@@ -528,10 +767,13 @@ fn parse_profile(raw: &str) -> Result<Profile, BenchError> {
 fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
     match raw {
         "all" => Ok(Workload::All),
+        "metadata-smoke" => Ok(Workload::MetadataSmoke),
         "mdtest-easy" => Ok(Workload::MdtestEasy),
         "mdtest-hard" => Ok(Workload::MdtestHard),
         "checkpoint-publish" => Ok(Workload::CheckpointPublish),
         "training-read" => Ok(Workload::TrainingRead),
+        "mlperf-dlio" => Ok(Workload::MlperfDlio),
+        "demo-dataset" => Ok(Workload::DemoDataset),
         _ => Err(BenchError::InvalidWorkload(raw.to_owned())),
     }
 }
@@ -543,7 +785,10 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
             Workload::MdtestHard,
             Workload::CheckpointPublish,
             Workload::TrainingRead,
+            Workload::MlperfDlio,
+            Workload::DemoDataset,
         ],
+        Workload::MetadataSmoke => vec![Workload::MdtestEasy, Workload::MdtestHard],
         other => vec![other],
     }
 }
@@ -583,10 +828,13 @@ fn shape(profile: Profile) -> WorkloadShape {
 fn workload_name(workload: Workload) -> &'static str {
     match workload {
         Workload::All => "all",
+        Workload::MetadataSmoke => "metadata-smoke",
         Workload::MdtestEasy => "mdtest-easy",
         Workload::MdtestHard => "mdtest-hard",
         Workload::CheckpointPublish => "checkpoint-publish",
         Workload::TrainingRead => "training-read",
+        Workload::MlperfDlio => "mlperf-dlio",
+        Workload::DemoDataset => "demo-dataset",
     }
 }
 
@@ -740,8 +988,18 @@ mod tests {
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
                 Workload::CheckpointPublish,
-                Workload::TrainingRead
+                Workload::TrainingRead,
+                Workload::MlperfDlio,
+                Workload::DemoDataset
             ]
+        );
+    }
+
+    #[test]
+    fn metadata_smoke_expands_to_metadata_only_paths() {
+        assert_eq!(
+            expand_workloads(Workload::MetadataSmoke),
+            vec![Workload::MdtestEasy, Workload::MdtestHard]
         );
     }
 

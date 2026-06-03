@@ -440,7 +440,7 @@ mod tests {
     use nokvfs_meta::holtstore::HoltMetadataStore;
     use nokvfs_meta::PublishArtifact;
     use nokvfs_object::MemoryObjectStore;
-    use nokvfs_types::{BodyDescriptor, MountId};
+    use nokvfs_types::MountId;
 
     fn service() -> NoKvFs<HoltMetadataStore, MemoryObjectStore> {
         let service = NoKvFs::new(
@@ -469,14 +469,10 @@ mod tests {
             .publish_artifact(PublishArtifact {
                 parent: InodeId::root(),
                 name: DentryName::new(b"checkpoint".to_vec()).unwrap(),
-                body: BodyDescriptor {
-                    producer: "fuse-test".to_owned(),
-                    digest_uri: "sha256:test".to_owned(),
-                    size: 10,
-                    content_type: "application/octet-stream".to_owned(),
-                    object_ref: "checkpoint".to_owned(),
-                    generation: 1,
-                },
+                producer: "fuse-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "checkpoint".to_owned(),
                 bytes: b"0123456789".to_vec(),
                 mode: 0o644,
                 uid: 1000,

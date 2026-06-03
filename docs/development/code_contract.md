@@ -21,8 +21,10 @@ condition.
 | `crates/nokvfs-types/` | Storage-neutral namespace model: mount ids, inode ids, dentry names, inode attrs, body descriptors, record families, and typed watch events. | Import metadata layout, Holt, Raft, object-store clients, FUSE, protobuf, or service packages. |
 | `crates/nokvfs-meta/` | Metadata schema, Holt-friendly layout, `MetadataCommand`, Holt-backed metastore, and in-process metadata service. | Own provider-specific object behavior, FUSE/kernel cache policy, Python bindings, CSI behavior, or remote protocol compatibility shims. |
 | `crates/nokvfs-object/` | Object-store boundary, S3-compatible backend, and in-memory test object store for file bodies. | Own namespace metadata, import Holt/FUSE/protobuf, implement metadata transactions, or expose filesystem-directory object storage as a product backend. |
-| `crates/nokvfs-client/` | Path-oriented Rust SDK and the `nokv-fs` CLI binary. | Own metadata layout, bypass `nokvfs-meta`, expose object-store internals, or implement FUSE/kernel cache semantics. |
+| `crates/nokvfs-client/` | Path-oriented Rust SDK over the in-process metadata service. | Own metadata layout, bypass `nokvfs-meta`, expose object-store internals, implement FUSE/kernel cache semantics, or depend on `nokvfs-fuse`. |
 | `crates/nokvfs-fuse/` | FUSE low-level frontend, inode mapping, kernel-facing attr conversion, and read-only range reads through `nokvfs-meta`. | Resolve paths through the SDK, own metadata layout, import Holt directly, or implement object-provider-specific behavior. |
+| `crates/nokvfs-cli/` | `nokv-fs` CLI binary, command parsing, local service startup, and CLI wiring across client, FUSE, metadata, and object config. | Own metadata semantics, durable layout, object backend internals, or FUSE filesystem implementation. |
+| `bench/` | System workload harnesses for metadata smoke, MLPerf Storage/DLIO-style generated training reads, checkpoint publish/read, and demo dataset shapes. | Own product APIs, metadata layout, object backend implementation, FUSE/kernel cache policy, or hidden benchmark-only behavior in product crates. |
 
 Planned package owners:
 

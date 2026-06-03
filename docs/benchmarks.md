@@ -9,11 +9,13 @@ SPDX-License-Identifier: Apache-2.0
 
 # Benchmarks
 
-NoKV-FS includes a local workload harness for metadata and AI-training access
-patterns:
+NoKV-FS keeps product microbenchmarks inside the product crates and puts
+system-level workload runs in the root-level `bench/` crate. The benchmark harness is
+for metadata smoke, MLPerf Storage/DLIO-style generated training reads, and
+checkpoint publish/read paths:
 
 ```bash
-cargo run --release -p nokvfs-client --bin nokv-fs-bench -- \
+cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
   --profile smoke \
   --workload all
 ```
@@ -26,7 +28,7 @@ workloads.
 The harness prints CSV:
 
 ```text
-workload,profile,operations,seconds,ops_per_second,checksum,shape,caveat
+workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,checksum,shape,caveat
 ```
 
 ## Workloads
@@ -45,6 +47,15 @@ alone.
 `training-read` seeds a dataset tree, then times directory listing plus one
 sample read per shard. The reported time excludes seed time and represents a
 warm object read path through the configured backend.
+
+`mlperf-dlio` uses deterministic generated data in an MLPerf Storage/DLIO-style
+shape: dataset seed, timed training reads, and checkpoint writes with atomic
+latest-checkpoint replacement. It is an official-style local gate, not an
+MLCommons submission result.
+
+`demo-dataset` uses a small public-dataset-shaped class/sample directory tree
+without downloading external data. It is meant for demos and CLI validation, not
+for CI performance claims.
 
 ## Profiles
 

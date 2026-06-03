@@ -51,7 +51,7 @@ aws --endpoint-url http://127.0.0.1:9000 \
 ## Use RustFS With NoKV-FS
 
 ```bash
-cargo run --release -p nokvfs-client --bin nokv-fs -- \
+cargo run --release -p nokvfs-cli --bin nokv-fs -- \
   init
 ```
 
@@ -62,7 +62,7 @@ Those are the CLI defaults for the RustFS backend: bucket `nokv`, endpoint
 The same object flags work for artifact publish, `cat`, and FUSE mount:
 
 ```bash
-cargo run --release -p nokvfs-client --bin nokv-fs -- \
+cargo run --release -p nokvfs-cli --bin nokv-fs -- \
   --object-backend rustfs \
   --s3-bucket nokv \
   --s3-endpoint http://127.0.0.1:9000 \
@@ -74,7 +74,7 @@ cargo run --release -p nokvfs-client --bin nokv-fs -- \
 ## Benchmark Against RustFS
 
 ```bash
-cargo run --release -p nokvfs-client --bin nokv-fs-bench -- \
+cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
   --profile smoke \
   --workload checkpoint-publish \
   --object-backend rustfs \

@@ -13,15 +13,20 @@ use crate::command::{
     PredicateRef, ReadPurpose, ScanRequest, Value, Version,
 };
 use crate::layout::{
-    chunk_manifest_key, chunk_manifest_prefix, decode_body_descriptor, decode_inode_attr,
-    dentry_key, dentry_prefix, encode_body_descriptor, encode_dentry_projection, encode_inode_attr,
-    inode_key, inode_prefix,
+    chunk_manifest_key, chunk_manifest_prefix, decode_body_descriptor, decode_chunk_manifest,
+    decode_inode_attr, dentry_key, dentry_prefix, encode_body_descriptor, encode_chunk_manifest,
+    encode_dentry_projection, encode_inode_attr, inode_key, inode_prefix,
 };
-use nokvfs_object::{ObjectError, ObjectKey, ObjectRange, ObjectStore};
+use nokvfs_object::{
+    put_chunked_object, read_object_blocks, ChunkWriteOptions, MemoryBlockCache, ObjectError,
+    ObjectReadBlock, ObjectStore, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+};
 use nokvfs_types::{
-    BodyDescriptor, DentryName, DentryProjection, DentryRecord, FileType, InodeAttr, InodeId,
-    ModelError, MountId, RecordFamily,
+    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
+    FileType, InodeAttr, InodeId, ModelError, MountId, RecordFamily,
 };
+
+const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DentryWithAttr {
@@ -34,11 +39,23 @@ pub struct DentryWithAttr {
 pub struct PublishArtifact {
     pub parent: InodeId,
     pub name: DentryName,
-    pub body: BodyDescriptor,
+    pub producer: String,
+    pub digest_uri: String,
+    pub content_type: String,
+    pub manifest_id: String,
     pub bytes: Vec<u8>,
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObjectTransferStats {
+    pub object_puts: u64,
+    pub object_gets: u64,
+    pub cache_hits: u64,
+    pub manifest_chunks: u64,
+    pub manifest_blocks: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -69,6 +86,12 @@ pub struct NoKvFs<M, O> {
     objects: O,
     clock: AtomicU64,
     next_inode: AtomicU64,
+    block_cache: MemoryBlockCache,
+    object_puts: AtomicU64,
+    object_gets: AtomicU64,
+    cache_hits: AtomicU64,
+    manifest_chunks: AtomicU64,
+    manifest_blocks: AtomicU64,
 }
 
 impl<M, O> NoKvFs<M, O>
@@ -83,6 +106,12 @@ where
             objects,
             clock: AtomicU64::new(1),
             next_inode: AtomicU64::new(InodeId::ROOT_RAW + 1),
+            block_cache: MemoryBlockCache::default(),
+            object_puts: AtomicU64::new(0),
+            object_gets: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(0),
+            manifest_chunks: AtomicU64::new(0),
+            manifest_blocks: AtomicU64::new(0),
         }
     }
 
@@ -115,7 +144,23 @@ where
             objects,
             clock: AtomicU64::new(max_version),
             next_inode: AtomicU64::new(next_inode),
+            block_cache: MemoryBlockCache::default(),
+            object_puts: AtomicU64::new(0),
+            object_gets: AtomicU64::new(0),
+            cache_hits: AtomicU64::new(0),
+            manifest_chunks: AtomicU64::new(0),
+            manifest_blocks: AtomicU64::new(0),
         })
+    }
+
+    pub fn object_stats(&self) -> ObjectTransferStats {
+        ObjectTransferStats {
+            object_puts: self.object_puts.load(Ordering::Relaxed),
+            object_gets: self.object_gets.load(Ordering::Relaxed),
+            cache_hits: self.cache_hits.load(Ordering::Relaxed),
+            manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
+            manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
+        }
     }
 
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<InodeAttr, MetadError> {
@@ -190,19 +235,62 @@ where
     }
 
     pub fn publish_artifact(&self, request: PublishArtifact) -> Result<DentryWithAttr, MetadError> {
-        if request.body.size != request.bytes.len() as u64 {
-            return Err(MetadError::BodySizeMismatch {
-                descriptor: request.body.size,
-                bytes: request.bytes.len() as u64,
-            });
-        }
-        let mut body = request.body;
-        let object_key = ObjectKey::new(body.object_ref.clone())?;
-        self.objects.put(&object_key, &request.bytes)?;
-
         let version = self.next_version()?;
         let inode = self.next_inode()?;
-        body.generation = version.get();
+        let written = put_chunked_object(
+            &self.objects,
+            &request.bytes,
+            ChunkWriteOptions {
+                manifest_id: request.manifest_id,
+                mount: self.mount.get(),
+                inode: inode.get(),
+                generation: version.get(),
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+        )?;
+        self.object_puts
+            .fetch_add(written.object_puts as u64, Ordering::Relaxed);
+        self.manifest_chunks
+            .fetch_add(written.chunks.len() as u64, Ordering::Relaxed);
+        self.manifest_blocks.fetch_add(
+            written
+                .chunks
+                .iter()
+                .map(|chunk| chunk.blocks.len() as u64)
+                .sum::<u64>(),
+            Ordering::Relaxed,
+        );
+        let chunks: Vec<ChunkManifest> = written
+            .chunks
+            .into_iter()
+            .map(|chunk| ChunkManifest {
+                chunk_index: chunk.chunk_index,
+                logical_offset: chunk.logical_offset,
+                len: chunk.len,
+                blocks: chunk
+                    .blocks
+                    .into_iter()
+                    .map(|block| BlockDescriptor {
+                        object_key: block.object_key,
+                        logical_offset: block.logical_offset,
+                        object_offset: block.object_offset,
+                        len: block.len,
+                        digest_uri: block.digest_uri,
+                    })
+                    .collect(),
+            })
+            .collect();
+        let body = BodyDescriptor {
+            producer: request.producer,
+            digest_uri: request.digest_uri,
+            size: written.size,
+            content_type: request.content_type,
+            manifest_id: written.manifest_id,
+            generation: version.get(),
+            chunk_size: written.chunk_size,
+            block_size: written.block_size,
+        };
         let attr = InodeAttr {
             inode,
             file_type: FileType::File,
@@ -215,7 +303,12 @@ where
             ctime_ms: version.get(),
         };
         let projection = projection(request.parent, request.name, attr, Some(body));
-        self.commit_create_projection(CommandKind::PublishArtifact, &projection, version)?;
+        self.commit_create_projection_with_chunks(
+            CommandKind::PublishArtifact,
+            &projection,
+            &chunks,
+            version,
+        )?;
         Ok(projection.into())
     }
 
@@ -294,8 +387,7 @@ where
             return Err(MetadError::NotFile);
         }
         let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
-        let key = ObjectKey::new(body.object_ref)?;
-        self.objects.get(&key, None).map_err(Into::into)
+        self.read_file(entry.attr.inode, 0, body.size as usize)
     }
 
     pub fn body_descriptor(&self, inode: InodeId) -> Result<Option<BodyDescriptor>, MetadError> {
@@ -306,17 +398,18 @@ where
             return Err(MetadError::NotFile);
         }
         let version = self.read_version()?;
-        let rows = self.metadata.scan(ScanRequest {
-            family: RecordFamily::ChunkManifest,
-            prefix: chunk_manifest_prefix(self.mount, inode, attr.generation),
+        let summary_key =
+            chunk_manifest_key(self.mount, inode, attr.generation, BODY_SUMMARY_CHUNK_INDEX);
+        let Some(value) = self.metadata.get(
+            RecordFamily::ChunkManifest,
+            &summary_key,
             version,
-            limit: 1,
-            purpose: ReadPurpose::UserStrong,
-        })?;
-        let Some(row) = rows.into_iter().next() else {
+            ReadPurpose::UserStrong,
+        )?
+        else {
             return Err(MetadError::MissingBodyDescriptor);
         };
-        decode_body_descriptor(&row.value.0)
+        decode_body_descriptor(&value.0)
             .map(Some)
             .map_err(|err| MetadError::Codec(err.to_string()))
     }
@@ -330,14 +423,24 @@ where
         if len == 0 {
             return Ok(Vec::new());
         }
-        let body = self.body_descriptor(inode)?.ok_or(MetadError::NotFound)?;
-        if offset >= body.size {
+        let Some(attr) = self.get_attr(inode)? else {
+            return Err(MetadError::NotFound);
+        };
+        if attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        if offset >= attr.size {
             return Ok(Vec::new());
         }
+        let body = self.body_descriptor(inode)?.ok_or(MetadError::NotFound)?;
         let len = len.min((body.size - offset) as usize);
-        let key = ObjectKey::new(body.object_ref)?;
-        let range = ObjectRange::new(offset, len)?;
-        self.objects.get(&key, Some(range)).map_err(Into::into)
+        let plan = self.read_plan(inode, &body, offset, len)?;
+        let outcome = read_object_blocks(&self.objects, Some(&self.block_cache), len, &plan)?;
+        self.object_gets
+            .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
+        self.cache_hits
+            .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
+        Ok(outcome.bytes)
     }
 
     pub fn remove_file(
@@ -358,10 +461,8 @@ where
             delete_mutation(RecordFamily::Inode, inode_key(self.mount, entry.attr.inode)),
         ];
         if let Some(body) = &entry.body {
-            mutations.push(delete_mutation(
-                RecordFamily::ChunkManifest,
-                chunk_manifest_key(self.mount, entry.attr.inode, body.generation, 0),
-            ));
+            mutations
+                .extend(self.chunk_manifest_delete_mutations(entry.attr.inode, body.generation)?);
         }
         self.metadata.commit_metadata(MetadataCommand {
             request_id: request_id(b"remove-file", self.mount, entry.attr.inode, version),
@@ -541,10 +642,9 @@ where
                 inode_key(self.mount, replaced.attr.inode),
             ));
             if let Some(body) = &replaced.body {
-                mutations.push(delete_mutation(
-                    RecordFamily::ChunkManifest,
-                    chunk_manifest_key(self.mount, replaced.attr.inode, body.generation, 0),
-                ));
+                mutations.extend(
+                    self.chunk_manifest_delete_mutations(replaced.attr.inode, body.generation)?,
+                );
             }
         }
 
@@ -584,6 +684,16 @@ where
         projection: &DentryProjection,
         version: Version,
     ) -> Result<(), MetadError> {
+        self.commit_create_projection_with_chunks(kind, projection, &[], version)
+    }
+
+    fn commit_create_projection_with_chunks(
+        &self,
+        kind: CommandKind,
+        projection: &DentryProjection,
+        chunks: &[ChunkManifest],
+        version: Version,
+    ) -> Result<(), MetadError> {
         let inode = projection.attr.inode;
         let dentry = dentry_key(
             self.mount,
@@ -607,10 +717,23 @@ where
         if let Some(body) = &projection.body {
             mutations.push(Mutation {
                 family: RecordFamily::ChunkManifest,
-                key: chunk_manifest_key(self.mount, inode, body.generation, 0),
+                key: chunk_manifest_key(
+                    self.mount,
+                    inode,
+                    body.generation,
+                    BODY_SUMMARY_CHUNK_INDEX,
+                ),
                 op: MutationOp::Put,
                 value: Some(Value(encode_body_descriptor(body))),
             });
+            for chunk in chunks {
+                mutations.push(Mutation {
+                    family: RecordFamily::ChunkManifest,
+                    key: chunk_manifest_key(self.mount, inode, body.generation, chunk.chunk_index),
+                    op: MutationOp::Put,
+                    value: Some(Value(encode_chunk_manifest(chunk))),
+                });
+            }
         }
         self.metadata.commit_metadata(MetadataCommand {
             request_id: request_id(kind_name(kind), self.mount, inode, version),
@@ -635,6 +758,84 @@ where
             watch: Vec::new(),
         })?;
         Ok(())
+    }
+
+    fn read_plan(
+        &self,
+        inode: InodeId,
+        body: &BodyDescriptor,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<ObjectReadBlock>, MetadError> {
+        if body.chunk_size == 0 || body.block_size == 0 {
+            return Err(ObjectError::InvalidChunkLayout.into());
+        }
+        let end = offset
+            .checked_add(len as u64)
+            .ok_or(ObjectError::InvalidRange)?
+            .min(body.size);
+        if end <= offset {
+            return Ok(Vec::new());
+        }
+
+        let start_chunk = offset / body.chunk_size;
+        let end_chunk = (end - 1) / body.chunk_size;
+        let version = self.read_version()?;
+        let mut plan = Vec::new();
+        for chunk_index in start_chunk..=end_chunk {
+            let key = chunk_manifest_key(self.mount, inode, body.generation, chunk_index);
+            let Some(value) = self.metadata.get(
+                RecordFamily::ChunkManifest,
+                &key,
+                version,
+                ReadPurpose::UserStrong,
+            )?
+            else {
+                return Err(MetadError::MissingBodyDescriptor);
+            };
+            let manifest = decode_chunk_manifest(&value.0)
+                .map_err(|err| MetadError::Codec(err.to_string()))?;
+            for block in manifest.blocks {
+                let block_start = block.logical_offset;
+                let block_end = block_start
+                    .checked_add(block.len)
+                    .ok_or(ObjectError::InvalidRange)?;
+                let overlap_start = block_start.max(offset);
+                let overlap_end = block_end.min(end);
+                if overlap_start >= overlap_end {
+                    continue;
+                }
+                let object_offset = block
+                    .object_offset
+                    .checked_add(overlap_start - block_start)
+                    .ok_or(ObjectError::InvalidRange)?;
+                plan.push(ObjectReadBlock {
+                    object_key: block.object_key,
+                    object_offset,
+                    len: (overlap_end - overlap_start) as usize,
+                    output_offset: (overlap_start - offset) as usize,
+                });
+            }
+        }
+        Ok(plan)
+    }
+
+    fn chunk_manifest_delete_mutations(
+        &self,
+        inode: InodeId,
+        generation: u64,
+    ) -> Result<Vec<Mutation>, MetadError> {
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::ChunkManifest,
+            prefix: chunk_manifest_prefix(self.mount, inode, generation),
+            version: self.read_version()?,
+            limit: 0,
+            purpose: ReadPurpose::WritePlanLocal,
+        })?;
+        Ok(rows
+            .into_iter()
+            .map(|row| delete_mutation(RecordFamily::ChunkManifest, row.key))
+            .collect())
     }
 
     fn next_version(&self) -> Result<Version, MetadError> {
@@ -788,6 +989,21 @@ mod tests {
         service
     }
 
+    fn artifact_request(name: DentryName, manifest_id: &str, bytes: &[u8]) -> PublishArtifact {
+        PublishArtifact {
+            parent: InodeId::root(),
+            name,
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: manifest_id.to_owned(),
+            bytes: bytes.to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        }
+    }
+
     #[test]
     fn create_dir_then_lookup_and_readdir_use_dentry_projection() {
         let service = service();
@@ -828,20 +1044,8 @@ mod tests {
         let name = DentryName::new(b"checkpoint.json".to_vec()).unwrap();
         let published = service
             .publish_artifact(PublishArtifact {
-                parent: InodeId::root(),
-                name: name.clone(),
-                body: BodyDescriptor {
-                    producer: "unit-test".to_owned(),
-                    digest_uri: "sha256:test".to_owned(),
-                    size: 7,
-                    content_type: "application/json".to_owned(),
-                    object_ref: "runs/1/checkpoint.json".to_owned(),
-                    generation: 1,
-                },
-                bytes: b"{\"x\":1}".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
+                content_type: "application/json".to_owned(),
+                ..artifact_request(name.clone(), "runs/1/checkpoint.json", b"{\"x\":1}")
             })
             .unwrap();
 
@@ -852,7 +1056,7 @@ mod tests {
         assert_eq!(lookup, published);
         assert_eq!(lookup.attr.size, 7);
         assert_eq!(
-            lookup.body.as_ref().unwrap().object_ref,
+            lookup.body.as_ref().unwrap().manifest_id,
             "runs/1/checkpoint.json"
         );
 
@@ -865,12 +1069,18 @@ mod tests {
             .body_descriptor(published.attr.inode)
             .expect("read body descriptor")
             .expect("body descriptor exists");
-        assert_eq!(body.object_ref, "runs/1/checkpoint.json");
+        assert_eq!(body.manifest_id, "runs/1/checkpoint.json");
         assert_eq!(body.generation, published.attr.generation);
         let range = service
             .read_file(published.attr.inode, 2, 3)
             .expect("read file range");
         assert_eq!(range, b"x\":");
+        let before_cache = service.object_stats();
+        let cached = service
+            .read_file(published.attr.inode, 2, 3)
+            .expect("read cached file range");
+        assert_eq!(cached, b"x\":");
+        assert!(service.object_stats().cache_hits > before_cache.cache_hits);
     }
 
     #[test]
@@ -886,27 +1096,12 @@ mod tests {
         let service = service();
         let name = DentryName::new(b"artifact.bin".to_vec()).unwrap();
         let published = service
-            .publish_artifact(PublishArtifact {
-                parent: InodeId::root(),
-                name: name.clone(),
-                body: BodyDescriptor {
-                    producer: "unit-test".to_owned(),
-                    digest_uri: "sha256:old".to_owned(),
-                    size: 3,
-                    content_type: "application/octet-stream".to_owned(),
-                    object_ref: "artifact.bin".to_owned(),
-                    generation: 1,
-                },
-                bytes: b"old".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            })
+            .publish_artifact(artifact_request(name.clone(), "artifact.bin", b"old"))
             .unwrap();
 
         let removed = service.remove_file(InodeId::root(), &name).unwrap();
         assert_eq!(removed, published);
-        assert_eq!(removed.body.as_ref().unwrap().object_ref, "artifact.bin");
+        assert_eq!(removed.body.as_ref().unwrap().manifest_id, "artifact.bin");
         assert!(service
             .lookup_plus(InodeId::root(), &name)
             .unwrap()
@@ -985,40 +1180,10 @@ mod tests {
         let source_name = DentryName::new(b"stage".to_vec()).unwrap();
         let final_name = DentryName::new(b"final".to_vec()).unwrap();
         let source = service
-            .publish_artifact(PublishArtifact {
-                parent: InodeId::root(),
-                name: source_name.clone(),
-                body: BodyDescriptor {
-                    producer: "unit-test".to_owned(),
-                    digest_uri: "sha256:new".to_owned(),
-                    size: 3,
-                    content_type: "application/octet-stream".to_owned(),
-                    object_ref: "stage".to_owned(),
-                    generation: 1,
-                },
-                bytes: b"new".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            })
+            .publish_artifact(artifact_request(source_name.clone(), "stage", b"new"))
             .unwrap();
         let old = service
-            .publish_artifact(PublishArtifact {
-                parent: InodeId::root(),
-                name: final_name.clone(),
-                body: BodyDescriptor {
-                    producer: "unit-test".to_owned(),
-                    digest_uri: "sha256:old".to_owned(),
-                    size: 3,
-                    content_type: "application/octet-stream".to_owned(),
-                    object_ref: "final-old".to_owned(),
-                    generation: 1,
-                },
-                bytes: b"old".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            })
+            .publish_artifact(artifact_request(final_name.clone(), "final-old", b"old"))
             .unwrap();
 
         let result = service

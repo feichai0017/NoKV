@@ -1,5 +1,5 @@
 [package]
-name = "nokvfs-client"
+name = "nokvfs-bench"
 version = "0.1.0"
 edition.workspace = true
 rust-version.workspace = true
@@ -7,9 +7,11 @@ license.workspace = true
 authors.workspace = true
 
 [dependencies]
+nokvfs-client.workspace = true
 nokvfs-meta.workspace = true
 nokvfs-object.workspace = true
 nokvfs-types.workspace = true
 
-[dev-dependencies]
-tempfile.workspace = true
+[[bin]]
+name = "nokv-fs-bench"
+path = "src/bin/nokv-fs-bench.rs"

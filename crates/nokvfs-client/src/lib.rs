@@ -7,17 +7,18 @@
 use std::fmt;
 
 use nokvfs_meta::command::MetadataStore;
-use nokvfs_meta::{DentryWithAttr, MetadError, NoKvFs, PublishArtifact, RenameReplaceResult};
+use nokvfs_meta::{
+    DentryWithAttr, MetadError, NoKvFs, ObjectTransferStats, PublishArtifact, RenameReplaceResult,
+};
 use nokvfs_object::ObjectStore;
-use nokvfs_types::{BodyDescriptor, DentryName, FileType, InodeId};
+use nokvfs_types::{DentryName, FileType, InodeId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactMetadata {
     pub producer: String,
     pub digest_uri: String,
     pub content_type: String,
-    pub object_ref: String,
-    pub generation: u64,
+    pub manifest_id: String,
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
@@ -90,14 +91,10 @@ where
             .publish_artifact(PublishArtifact {
                 parent,
                 name,
-                body: BodyDescriptor {
-                    producer: metadata.producer,
-                    digest_uri: metadata.digest_uri,
-                    size: bytes.len() as u64,
-                    content_type: metadata.content_type,
-                    object_ref: metadata.object_ref,
-                    generation: metadata.generation,
-                },
+                producer: metadata.producer,
+                digest_uri: metadata.digest_uri,
+                content_type: metadata.content_type,
+                manifest_id: metadata.manifest_id,
                 bytes,
                 mode: metadata.mode,
                 uid: metadata.uid,
@@ -160,6 +157,10 @@ where
 
     pub fn into_inner(self) -> NoKvFs<M, O> {
         self.service
+    }
+
+    pub fn object_stats(&self) -> ObjectTransferStats {
+        self.service.object_stats()
     }
 
     fn resolve_parent(&self, path: &str) -> Result<(InodeId, DentryName), ClientError> {
@@ -285,8 +286,7 @@ mod tests {
                     producer: "unit-test".to_owned(),
                     digest_uri: "sha256:demo".to_owned(),
                     content_type: "application/json".to_owned(),
-                    object_ref: "runs/1/checkpoint.json".to_owned(),
-                    generation: 1,
+                    manifest_id: "runs/1/checkpoint.json".to_owned(),
                     mode: 0o644,
                     uid: 1000,
                     gid: 1000,
@@ -329,8 +329,7 @@ mod tests {
                     producer: "unit-test".to_owned(),
                     digest_uri: "sha256:x".to_owned(),
                     content_type: "text/plain".to_owned(),
-                    object_ref: "missing/file".to_owned(),
-                    generation: 1,
+                    manifest_id: "missing/file".to_owned(),
                     mode: 0o644,
                     uid: 1000,
                     gid: 1000,
@@ -361,8 +360,7 @@ mod tests {
                     producer: "unit-test".to_owned(),
                     digest_uri: "sha256:x".to_owned(),
                     content_type: "text/plain".to_owned(),
-                    object_ref: "runs/file".to_owned(),
-                    generation: 1,
+                    manifest_id: "runs/file".to_owned(),
                     mode: 0o644,
                     uid: 1000,
                     gid: 1000,
@@ -370,7 +368,7 @@ mod tests {
             )
             .unwrap();
         let removed_file = client.remove("/runs/file").unwrap();
-        assert_eq!(removed_file.body.as_ref().unwrap().object_ref, "runs/file");
+        assert_eq!(removed_file.body.as_ref().unwrap().manifest_id, "runs/file");
         assert!(client.lookup("/runs/file").unwrap().is_none());
     }
 
@@ -378,7 +376,7 @@ mod tests {
     fn rename_replace_by_path_returns_replaced_body() {
         let client = client();
         client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
-        for (path, object_ref, body) in [
+        for (path, manifest_id, body) in [
             ("/runs/stage", "runs/stage", b"new".to_vec()),
             ("/runs/final", "runs/final-old", b"old".to_vec()),
         ] {
@@ -390,8 +388,7 @@ mod tests {
                         producer: "unit-test".to_owned(),
                         digest_uri: "sha256:test".to_owned(),
                         content_type: "application/octet-stream".to_owned(),
-                        object_ref: object_ref.to_owned(),
-                        generation: 1,
+                        manifest_id: manifest_id.to_owned(),
                         mode: 0o644,
                         uid: 1000,
                         gid: 1000,
@@ -402,7 +399,7 @@ mod tests {
 
         let result = client.rename_replace("/runs/stage", "/runs/final").unwrap();
         assert_eq!(
-            result.replaced.unwrap().body.unwrap().object_ref,
+            result.replaced.unwrap().body.unwrap().manifest_id,
             "runs/final-old"
         );
         assert!(client.lookup("/runs/stage").unwrap().is_none());

@@ -34,9 +34,12 @@ workspace contains the first local metadata slice:
 crates/
   nokvfs-types   # mount, inode, dentry, body descriptor, watch types
   nokvfs-meta    # schema, MetadataCommand, Holt store, in-process metad
-  nokvfs-object  # local filesystem and S3-compatible object backends
-  nokvfs-client  # Rust SDK and nokv-fs CLI binary
+  nokvfs-object  # S3-compatible object backend, including RustFS
+  nokvfs-client  # Rust SDK
   nokvfs-fuse    # low-level read-only FUSE frontend
+  nokvfs-cli     # nokv-fs CLI binary
+
+bench/           # system workload benchmark harness
 
 docs/
   architecture.md
@@ -103,20 +106,20 @@ the endpoint and credentials, not through a RustFS-specific code path.
 ## Local CLI Smoke
 
 ```bash
-cargo run -p nokvfs-client --bin nokv-fs -- init
-cargo run -p nokvfs-client --bin nokv-fs -- mkdir /runs
+cargo run -p nokvfs-cli --bin nokv-fs -- init
+cargo run -p nokvfs-cli --bin nokv-fs -- mkdir /runs
 printf '{"step":1}' > /tmp/checkpoint.json
-cargo run -p nokvfs-client --bin nokv-fs -- \
+cargo run -p nokvfs-cli --bin nokv-fs -- \
   put-artifact /runs/checkpoint.json /tmp/checkpoint.json
-cargo run -p nokvfs-client --bin nokv-fs -- ls /runs
-cargo run -p nokvfs-client --bin nokv-fs -- cat /runs/checkpoint.json
+cargo run -p nokvfs-cli --bin nokv-fs -- ls /runs
+cargo run -p nokvfs-cli --bin nokv-fs -- cat /runs/checkpoint.json
 ```
 
 To mount the current read-only FUSE frontend:
 
 ```bash
 mkdir -p /tmp/nokv-fs-mount
-cargo run -p nokvfs-client --bin nokv-fs -- mount /tmp/nokv-fs-mount
+cargo run -p nokvfs-cli --bin nokv-fs -- mount /tmp/nokv-fs-mount
 ```
 
 Linux builds use fuser's pure-Rust mount path. macOS builds require macFUSE

@@ -12,8 +12,9 @@ pub const U64_WIDTH: usize = 8;
 const U32_WIDTH: usize = 4;
 
 pub use codec::{
-    decode_body_descriptor, decode_dentry_projection, decode_inode_attr, encode_body_descriptor,
-    encode_dentry_projection, encode_inode_attr, CodecError,
+    decode_body_descriptor, decode_chunk_manifest, decode_dentry_projection, decode_inode_attr,
+    encode_body_descriptor, encode_chunk_manifest, encode_dentry_projection, encode_inode_attr,
+    CodecError,
 };
 
 pub fn inode_key(mount: MountId, inode: InodeId) -> Vec<u8> {

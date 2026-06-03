@@ -170,7 +170,7 @@ dentry:
   mount | parent_inode | name -> child inode and projection
 
 manifest:
-  mount | inode | generation | chunk -> object descriptor
+  mount | inode | generation | chunk -> block descriptors
 
 watch:
   mount | scope | sequence -> typed event
@@ -179,7 +179,7 @@ snapshot:
   mount | snapshot_id -> read frontier and retention pin
 
 gc:
-  mount | epoch | object_ref -> pending cleanup record
+  mount | epoch | manifest_id/object_key -> pending cleanup record
 ```
 
 Full-path indexes are derived accelerators for artifact and checkpoint lookup.
@@ -191,8 +191,9 @@ every descendant path.
 ```text
 v0 local:
   Holt-backed metadata
-  local and S3-compatible object backends
+  S3-compatible object backend, with RustFS as the local default
   Rust SDK
+  CLI
   read-only FUSE
   artifact publish
 

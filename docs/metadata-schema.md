@@ -22,7 +22,8 @@ dentry_current
 
 chunk_manifest_current
   key: mount_id | inode_id | generation | chunk_index
-  val: BodyDescriptor
+  val: BodyDescriptor when chunk_index = u64::MAX
+  val: ChunkManifest otherwise
 
 history
   key: family | user_key_len | user_key | inverted_commit_version
@@ -56,7 +57,7 @@ Implemented hot path records:
 
 - inode attributes;
 - dentry projection;
-- chunk manifest body descriptor;
+- chunk manifest body summary plus per-chunk block descriptors;
 - command dedupe;
 - history records for previous values.
 
@@ -87,7 +88,7 @@ dentry_current
 
 manifest_current
   key: mount_id | inode_id | manifest_generation | chunk_index
-  val: object descriptor, logical offset, length, digest
+  val: body summary at u64::MAX, or chunk block descriptors for real chunk ids
 
 parent_index
   key: mount_id | child_inode | parent_inode | name
@@ -106,7 +107,7 @@ snapshot_pin
   val: read frontier, root inode, retention evidence
 
 gc_queue
-  key: mount_id | epoch | object_ref_hash
+  key: mount_id | epoch | manifest_id_hash
   val: pending object cleanup record
 ```
 
