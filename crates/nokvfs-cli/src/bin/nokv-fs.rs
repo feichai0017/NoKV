@@ -807,9 +807,59 @@ impl Error for CliError {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::net::TcpListener;
+    use std::thread;
+
+    use nokvfs_client::RemoteNoKvFsClient;
+    use nokvfs_object::{MemoryObjectStore, ObjectKey, ObjectStore};
+    use tempfile::tempdir;
 
     fn s(value: &str) -> String {
         value.to_owned()
+    }
+
+    fn fake_server_object_config() -> ObjectStoreConfig {
+        ObjectStoreConfig::s3(S3ObjectStoreOptions {
+            bucket: "test".to_owned(),
+            root: "/".to_owned(),
+            region: "auto".to_owned(),
+            endpoint: Some("http://127.0.0.1:1".to_owned()),
+            access_key_id: Some("test".to_owned()),
+            secret_access_key: Some("test".to_owned()),
+            session_token: None,
+            virtual_host_style: false,
+            skip_signature: true,
+        })
+    }
+
+    fn spawn_test_server() -> SocketAddr {
+        let dir = tempdir().unwrap();
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let bind = listener.local_addr().unwrap();
+        let server = nokvfs_server::Server::open(ServerOptions {
+            bind,
+            mount: MountId::new(1).unwrap(),
+            meta_path: dir.path().join("meta"),
+            object: fake_server_object_config(),
+            uid: 1000,
+            gid: 1000,
+            object_gc: ObjectGcOptions {
+                interval: Duration::from_secs(3600),
+                limit: 128,
+                run_immediately: false,
+            },
+            history_gc: HistoryGcOptions {
+                interval: Duration::from_secs(3600),
+                limit: 128,
+                run_immediately: false,
+            },
+        })
+        .unwrap();
+        thread::spawn(move || {
+            let _dir = dir;
+            let _ = server.serve(listener);
+        });
+        bind
     }
 
     #[test]
@@ -822,6 +872,46 @@ mod tests {
         assert_eq!(config.mount.get(), 1);
         assert_eq!(config.server_bind, DEFAULT_SERVER_BIND);
         assert_eq!(command, Command::Ls { path: s("/") });
+    }
+
+    #[test]
+    fn remote_sdk_round_trip_uses_server_metadata_and_client_object_store() {
+        let store = MemoryObjectStore::new();
+        let client = RemoteNoKvFsClient::connect(spawn_test_server(), store.clone());
+        let entry = client
+            .put_artifact(
+                "/checkpoint.bin",
+                b"hello remote server".to_vec(),
+                ArtifactMetadata {
+                    producer: "cli-test".to_owned(),
+                    digest_uri: "sha256:demo".to_owned(),
+                    content_type: "application/octet-stream".to_owned(),
+                    manifest_id: "checkpoint.bin".to_owned(),
+                    mode: DEFAULT_MODE_FILE,
+                    uid: DEFAULT_UID,
+                    gid: DEFAULT_GID,
+                },
+            )
+            .unwrap();
+        assert_eq!(entry.attr.size, 19);
+        assert!(store
+            .head(
+                &ObjectKey::new(format!(
+                    "blocks/1/{}/{}/0/0",
+                    entry.attr.inode.get(),
+                    entry.attr.generation
+                ))
+                .unwrap()
+            )
+            .unwrap()
+            .is_some());
+        assert_eq!(
+            client.cat("/checkpoint.bin").unwrap(),
+            b"hello remote server"
+        );
+        let listed = client.metadata().list("/").unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].attr.inode, entry.attr.inode);
     }
 
     #[test]
