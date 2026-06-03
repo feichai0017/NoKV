@@ -33,6 +33,7 @@ workspace contains the first local metadata slice:
 ```text
 crates/
   nokvfs-types   # mount, inode, dentry, body descriptor, watch types
+  nokvfs-protocol # metadata RPC wire DTOs
   nokvfs-meta    # schema, MetadataCommand, Holt store, in-process metad
   nokvfs-object  # S3-compatible object backend, including RustFS
   nokvfs-client  # Rust SDK
@@ -78,6 +79,7 @@ Implemented today:
   object/history GC endpoints;
 - inode-level metadata RPC v0 on `nokvfs-server` for bootstrap, lookup,
   readdir-plus, create, remove, rename, snapshot, and snapshot retirement;
+- remote Rust metadata client for namespace operations over the RPC;
 - basic root bootstrap, directory create, artifact publish, lookup-plus,
   readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
   service;
@@ -92,7 +94,7 @@ Implemented today:
 
 Not implemented yet:
 
-- remote SDK/FUSE clients over the metadata RPC;
+- remote object-body read/write through the SDK and FUSE;
 - full POSIX random-write/truncate semantics;
 - distributed metadata shards.
 

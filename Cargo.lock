@@ -1166,7 +1166,9 @@ version = "0.1.0"
 dependencies = [
  "nokvfs-meta",
  "nokvfs-object",
+ "nokvfs-protocol",
  "nokvfs-types",
+ "serde_json",
  "tempfile",
 ]
 
@@ -1201,13 +1203,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "nokvfs-protocol"
+version = "0.1.0"
+dependencies = [
+ "serde",
+]
+
+[[package]]
 name = "nokvfs-server"
 version = "0.1.0"
 dependencies = [
  "nokvfs-meta",
  "nokvfs-object",
+ "nokvfs-protocol",
  "nokvfs-types",
- "serde",
  "serde_json",
  "tempfile",
 ]

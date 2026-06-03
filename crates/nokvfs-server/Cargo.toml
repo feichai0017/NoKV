@@ -9,8 +9,8 @@ authors.workspace = true
 [dependencies]
 nokvfs-meta.workspace = true
 nokvfs-object.workspace = true
+nokvfs-protocol.workspace = true
 nokvfs-types.workspace = true
-serde.workspace = true
 serde_json.workspace = true
 
 [dev-dependencies]

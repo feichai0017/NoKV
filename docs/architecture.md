@@ -26,6 +26,7 @@ Application surface
 
 Metadata layer
   nokvfs-types     mount, inode, dentry, body descriptor, watch event types
+  nokvfs-protocol  metadata RPC wire DTOs
   nokvfs-meta      schema, MetadataCommand, Holt store, in-process metad
   nokvfs-server    long-running local metad process and health/control plane
 
@@ -54,7 +55,8 @@ inode-level metadata RPC. The RPC is intentionally low-level: clients send
 inode/name operations such as `lookup_plus`, `read_dir_plus`, `create_dir`,
 `remove_file`, `rename_replace`, and `snapshot_subtree`. Path resolution stays
 in SDK/FUSE clients. Remote SDK/FUSE implementations over this RPC are still
-future work.
+future work; the Rust SDK already has a remote metadata client for namespace
+operations.
 
 ## FUSE Path
 

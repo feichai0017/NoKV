@@ -1,6 +1,7 @@
 [workspace]
 members = [
     "crates/nokvfs-types",
+    "crates/nokvfs-protocol",
     "crates/nokvfs-meta",
     "crates/nokvfs-object",
     "crates/nokvfs-client",
@@ -19,6 +20,7 @@ authors = ["The NoKV Authors"]
 
 [workspace.dependencies]
 nokvfs-types = { path = "crates/nokvfs-types" }
+nokvfs-protocol = { path = "crates/nokvfs-protocol" }
 nokvfs-meta = { path = "crates/nokvfs-meta" }
 nokvfs-object = { path = "crates/nokvfs-object" }
 nokvfs-client = { path = "crates/nokvfs-client" }

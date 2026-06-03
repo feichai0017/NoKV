@@ -197,6 +197,7 @@ v0 local:
   CLI
   long-running local server with health, stats, manual GC endpoints, and
   inode-level metadata RPC
+  remote Rust metadata client for namespace operations
   close-to-open FUSE reads and buffered writes
   artifact publish
   durable object GC queue, explicit cleanup API, and background worker
@@ -208,7 +209,7 @@ v0 local:
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
-  remote SDK/FUSE clients over the metadata RPC
+  remote SDK/FUSE object-body read/write over server metadata
   Python/fsspec
   SDK watch consumer integration
 

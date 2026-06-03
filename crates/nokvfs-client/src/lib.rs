@@ -1,10 +1,12 @@
 //! Path-oriented Rust client for NoKV-FS.
 //!
-//! This crate owns SDK ergonomics over the in-process `metad` service. It does
-//! not own metadata layout, Holt trees, object-store internals, FUSE, or remote
-//! wire protocols.
+//! This crate owns SDK ergonomics over in-process or remote `metad` services.
+//! It does not own metadata layout, Holt trees, object-store internals, FUSE,
+//! or metadata wire-format definitions.
 
 use std::fmt;
+
+mod remote;
 
 use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{
@@ -12,6 +14,8 @@ use nokvfs_meta::{
 };
 use nokvfs_object::ObjectStore;
 use nokvfs_types::{DentryName, FileType, InodeId, SnapshotPin};
+
+pub use remote::{RemoteMetadataClient, RemoteMetadataClientOptions};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactMetadata {
@@ -34,6 +38,9 @@ pub enum ClientError {
     NotFound(String),
     NotDirectory(String),
     Metadata(MetadError),
+    Remote(String),
+    Io(String),
+    Protocol(String),
 }
 
 pub struct NoKvFsClient<M, O> {
@@ -323,6 +330,9 @@ impl fmt::Display for ClientError {
             Self::NotFound(path) => write!(f, "path component not found: {path}"),
             Self::NotDirectory(path) => write!(f, "path component is not a directory: {path}"),
             Self::Metadata(err) => write!(f, "metadata service error: {err}"),
+            Self::Remote(err) => write!(f, "remote metadata error: {err}"),
+            Self::Io(err) => write!(f, "io error: {err}"),
+            Self::Protocol(err) => write!(f, "metadata protocol error: {err}"),
         }
     }
 }

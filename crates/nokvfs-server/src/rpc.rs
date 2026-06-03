@@ -1,154 +1,13 @@
-use serde::{Deserialize, Serialize};
-
 use nokvfs_meta::{DentryWithAttr, MetadError};
+use nokvfs_protocol::{
+    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
+    WireDentryRecord, WireDentryWithAttr, WireInodeAttr, WireSnapshotPin,
+};
 use nokvfs_types::{
     BodyDescriptor, DentryName, DentryRecord, FileType, InodeAttr, InodeId, SnapshotPin,
 };
 
 use crate::server::{Server, ServerError};
-
-#[derive(Clone, Debug, Deserialize, PartialEq, Eq)]
-#[serde(tag = "op", rename_all = "snake_case")]
-pub(crate) enum MetadataRpcRequest {
-    BootstrapRoot {
-        mode: u32,
-        uid: u32,
-        gid: u32,
-    },
-    GetAttr {
-        inode: u64,
-    },
-    LookupPlus {
-        parent: u64,
-        name: String,
-    },
-    ReadDirPlus {
-        parent: u64,
-    },
-    CreateDir {
-        parent: u64,
-        name: String,
-        mode: u32,
-        uid: u32,
-        gid: u32,
-    },
-    CreateFile {
-        parent: u64,
-        name: String,
-        mode: u32,
-        uid: u32,
-        gid: u32,
-    },
-    RemoveFile {
-        parent: u64,
-        name: String,
-    },
-    RemoveEmptyDir {
-        parent: u64,
-        name: String,
-    },
-    Rename {
-        parent: u64,
-        name: String,
-        new_parent: u64,
-        new_name: String,
-    },
-    RenameReplace {
-        parent: u64,
-        name: String,
-        new_parent: u64,
-        new_name: String,
-    },
-    SnapshotSubtree {
-        root: u64,
-    },
-    RetireSnapshot {
-        snapshot_id: u64,
-    },
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct MetadataRpcEnvelope {
-    ok: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    result: Option<MetadataRpcResult>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error: Option<String>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-#[serde(tag = "type", rename_all = "snake_case")]
-pub(crate) enum MetadataRpcResult {
-    InodeAttr {
-        attr: Option<WireInodeAttr>,
-    },
-    Dentry {
-        entry: Option<Box<WireDentryWithAttr>>,
-    },
-    Dentries {
-        entries: Vec<WireDentryWithAttr>,
-    },
-    RenameReplace {
-        entry: Box<WireDentryWithAttr>,
-        replaced: Option<Box<WireDentryWithAttr>>,
-    },
-    Snapshot {
-        snapshot: WireSnapshotPin,
-    },
-    RetiredSnapshot {
-        retired: bool,
-    },
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct WireDentryWithAttr {
-    pub dentry: WireDentryRecord,
-    pub attr: WireInodeAttr,
-    pub body: Option<WireBodyDescriptor>,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct WireDentryRecord {
-    pub parent: u64,
-    pub name_utf8: Option<String>,
-    pub name_hex: String,
-    pub child: u64,
-    pub child_type: &'static str,
-    pub attr_generation: u64,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct WireInodeAttr {
-    pub inode: u64,
-    pub file_type: &'static str,
-    pub mode: u32,
-    pub uid: u32,
-    pub gid: u32,
-    pub size: u64,
-    pub generation: u64,
-    pub mtime_ms: u64,
-    pub ctime_ms: u64,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct WireBodyDescriptor {
-    pub producer: String,
-    pub digest_uri: String,
-    pub size: u64,
-    pub content_type: String,
-    pub manifest_id: String,
-    pub generation: u64,
-    pub chunk_size: u64,
-    pub block_size: u64,
-}
-
-#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
-pub(crate) struct WireSnapshotPin {
-    pub snapshot_id: u64,
-    pub root: u64,
-    pub read_version: u64,
-    pub created_version: u64,
-}
 
 pub(crate) fn handle_rpc(server: &Server, body: &[u8]) -> String {
     let envelope = match serde_json::from_slice::<MetadataRpcRequest>(body) {
@@ -178,13 +37,13 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
         MetadataRpcRequest::BootstrapRoot { mode, uid, gid } => {
             let attr = server.service().bootstrap_root(mode, uid, gid)?;
             Ok(MetadataRpcResult::InodeAttr {
-                attr: Some((&attr).into()),
+                attr: Some(wire_inode_attr(&attr)),
             })
         }
         MetadataRpcRequest::GetAttr { inode } => {
             let attr = server.service().get_attr(inode_id(inode)?)?;
             Ok(MetadataRpcResult::InodeAttr {
-                attr: attr.as_ref().map(Into::into),
+                attr: attr.as_ref().map(wire_inode_attr),
             })
         }
         MetadataRpcRequest::LookupPlus { parent, name } => {
@@ -192,13 +51,13 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 .service()
                 .lookup_plus(inode_id(parent)?, &dentry_name(name)?)?;
             Ok(MetadataRpcResult::Dentry {
-                entry: entry.as_ref().map(|entry| Box::new(entry.into())),
+                entry: entry.as_ref().map(|entry| Box::new(wire_dentry(entry))),
             })
         }
         MetadataRpcRequest::ReadDirPlus { parent } => {
             let entries = server.service().read_dir_plus(inode_id(parent)?)?;
             Ok(MetadataRpcResult::Dentries {
-                entries: entries.iter().map(Into::into).collect(),
+                entries: entries.iter().map(wire_dentry).collect(),
             })
         }
         MetadataRpcRequest::CreateDir {
@@ -216,7 +75,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 gid,
             )?;
             Ok(MetadataRpcResult::Dentry {
-                entry: Some(Box::new((&entry).into())),
+                entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
         MetadataRpcRequest::CreateFile {
@@ -234,7 +93,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 gid,
             )?;
             Ok(MetadataRpcResult::Dentry {
-                entry: Some(Box::new((&entry).into())),
+                entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
         MetadataRpcRequest::RemoveFile { parent, name } => {
@@ -242,7 +101,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 .service()
                 .remove_file(inode_id(parent)?, &dentry_name(name)?)?;
             Ok(MetadataRpcResult::Dentry {
-                entry: Some(Box::new((&entry).into())),
+                entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
         MetadataRpcRequest::RemoveEmptyDir { parent, name } => {
@@ -250,7 +109,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 .service()
                 .remove_empty_dir(inode_id(parent)?, &dentry_name(name)?)?;
             Ok(MetadataRpcResult::Dentry {
-                entry: Some(Box::new((&entry).into())),
+                entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
         MetadataRpcRequest::Rename {
@@ -266,7 +125,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 dentry_name(new_name)?,
             )?;
             Ok(MetadataRpcResult::Dentry {
-                entry: Some(Box::new((&entry).into())),
+                entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
         MetadataRpcRequest::RenameReplace {
@@ -282,14 +141,17 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 dentry_name(new_name)?,
             )?;
             Ok(MetadataRpcResult::RenameReplace {
-                entry: Box::new((&result.entry).into()),
-                replaced: result.replaced.as_ref().map(|entry| Box::new(entry.into())),
+                entry: Box::new(wire_dentry(&result.entry)),
+                replaced: result
+                    .replaced
+                    .as_ref()
+                    .map(|entry| Box::new(wire_dentry(entry))),
             })
         }
         MetadataRpcRequest::SnapshotSubtree { root } => {
             let snapshot = server.service().snapshot_subtree(inode_id(root)?)?;
             Ok(MetadataRpcResult::Snapshot {
-                snapshot: (&snapshot).into(),
+                snapshot: wire_snapshot(&snapshot),
             })
         }
         MetadataRpcRequest::RetireSnapshot { snapshot_id } => {
@@ -307,68 +169,58 @@ fn dentry_name(name: String) -> Result<DentryName, MetadError> {
     DentryName::new(name.into_bytes()).map_err(|err| MetadError::Codec(err.to_string()))
 }
 
-impl From<&DentryWithAttr> for WireDentryWithAttr {
-    fn from(entry: &DentryWithAttr) -> Self {
-        Self {
-            dentry: (&entry.dentry).into(),
-            attr: (&entry.attr).into(),
-            body: entry.body.as_ref().map(Into::into),
-        }
+fn wire_dentry(entry: &DentryWithAttr) -> WireDentryWithAttr {
+    WireDentryWithAttr {
+        dentry: wire_dentry_record(&entry.dentry),
+        attr: wire_inode_attr(&entry.attr),
+        body: entry.body.as_ref().map(wire_body),
     }
 }
 
-impl From<&DentryRecord> for WireDentryRecord {
-    fn from(record: &DentryRecord) -> Self {
-        Self {
-            parent: record.parent.get(),
-            name_utf8: String::from_utf8(record.name.as_bytes().to_vec()).ok(),
-            name_hex: hex_encode(record.name.as_bytes()),
-            child: record.child.get(),
-            child_type: file_type_label(record.child_type),
-            attr_generation: record.attr_generation,
-        }
+fn wire_dentry_record(record: &DentryRecord) -> WireDentryRecord {
+    WireDentryRecord {
+        parent: record.parent.get(),
+        name_utf8: String::from_utf8(record.name.as_bytes().to_vec()).ok(),
+        name_hex: hex_encode(record.name.as_bytes()),
+        child: record.child.get(),
+        child_type: file_type_label(record.child_type).to_owned(),
+        attr_generation: record.attr_generation,
     }
 }
 
-impl From<&InodeAttr> for WireInodeAttr {
-    fn from(attr: &InodeAttr) -> Self {
-        Self {
-            inode: attr.inode.get(),
-            file_type: file_type_label(attr.file_type),
-            mode: attr.mode,
-            uid: attr.uid,
-            gid: attr.gid,
-            size: attr.size,
-            generation: attr.generation,
-            mtime_ms: attr.mtime_ms,
-            ctime_ms: attr.ctime_ms,
-        }
+fn wire_inode_attr(attr: &InodeAttr) -> WireInodeAttr {
+    WireInodeAttr {
+        inode: attr.inode.get(),
+        file_type: file_type_label(attr.file_type).to_owned(),
+        mode: attr.mode,
+        uid: attr.uid,
+        gid: attr.gid,
+        size: attr.size,
+        generation: attr.generation,
+        mtime_ms: attr.mtime_ms,
+        ctime_ms: attr.ctime_ms,
     }
 }
 
-impl From<&BodyDescriptor> for WireBodyDescriptor {
-    fn from(body: &BodyDescriptor) -> Self {
-        Self {
-            producer: body.producer.clone(),
-            digest_uri: body.digest_uri.clone(),
-            size: body.size,
-            content_type: body.content_type.clone(),
-            manifest_id: body.manifest_id.clone(),
-            generation: body.generation,
-            chunk_size: body.chunk_size,
-            block_size: body.block_size,
-        }
+fn wire_body(body: &BodyDescriptor) -> WireBodyDescriptor {
+    WireBodyDescriptor {
+        producer: body.producer.clone(),
+        digest_uri: body.digest_uri.clone(),
+        size: body.size,
+        content_type: body.content_type.clone(),
+        manifest_id: body.manifest_id.clone(),
+        generation: body.generation,
+        chunk_size: body.chunk_size,
+        block_size: body.block_size,
     }
 }
 
-impl From<&SnapshotPin> for WireSnapshotPin {
-    fn from(snapshot: &SnapshotPin) -> Self {
-        Self {
-            snapshot_id: snapshot.snapshot_id,
-            root: snapshot.root.get(),
-            read_version: snapshot.read_version,
-            created_version: snapshot.created_version,
-        }
+fn wire_snapshot(snapshot: &SnapshotPin) -> WireSnapshotPin {
+    WireSnapshotPin {
+        snapshot_id: snapshot.snapshot_id,
+        root: snapshot.root.get(),
+        read_version: snapshot.read_version,
+        created_version: snapshot.created_version,
     }
 }
 
