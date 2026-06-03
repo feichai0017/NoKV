@@ -1097,6 +1097,29 @@ dependencies = [
 ]
 
 [[package]]
+name = "nokv-fs-cli"
+version = "0.1.0"
+dependencies = [
+ "nokv-fs-client",
+ "nokv-fs-holtstore",
+ "nokv-fs-metad",
+ "nokv-fs-model",
+ "nokv-fs-object",
+]
+
+[[package]]
+name = "nokv-fs-client"
+version = "0.1.0"
+dependencies = [
+ "nokv-fs-holtstore",
+ "nokv-fs-metad",
+ "nokv-fs-metastore",
+ "nokv-fs-model",
+ "nokv-fs-object",
+ "tempfile",
+]
+
+[[package]]
 name = "nokv-fs-holtstore"
 version = "0.1.0"
 dependencies = [

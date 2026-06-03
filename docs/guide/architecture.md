@@ -19,13 +19,14 @@ Layer 1: namespace model
 Layer 2: metadata execution
   metastore   storage-neutral MetadataCommand contract
   metad       in-process filesystem metadata service
+  client      path-oriented Rust SDK
+  cli         local command line entrypoint
 
 Layer 3: storage bindings
   holtstore   Holt-backed metadata store
   object      local and S3-compatible object storage
 
 Planned:
-  client      Rust SDK
   fuse        FUSE low-level frontend
   server      long-running metad process
   raftgroup   distributed Holt metadata shards

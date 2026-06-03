@@ -9,8 +9,8 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use nokv_fs_layout::{
-    chunk_manifest_key, dentry_key, dentry_prefix, encode_body_descriptor,
-    encode_dentry_projection, encode_inode_attr, inode_key,
+    chunk_manifest_key, decode_inode_attr, dentry_key, dentry_prefix, encode_body_descriptor,
+    encode_dentry_projection, encode_inode_attr, inode_key, inode_prefix,
 };
 use nokv_fs_metastore::{
     CommandKind, MetadataCommand, MetadataError, MetadataStore, Mutation, MutationOp, Predicate,
@@ -46,6 +46,11 @@ pub enum MetadError {
     Metadata(MetadataError),
     Object(ObjectError),
     Codec(String),
+    BodySizeMismatch { descriptor: u64, bytes: u64 },
+    AllocatorExhausted,
+    NotFound,
+    NotFile,
+    MissingBodyDescriptor,
 }
 
 pub struct NoKvFs<M, O> {
@@ -69,6 +74,38 @@ where
             clock: AtomicU64::new(1),
             next_inode: AtomicU64::new(InodeId::ROOT_RAW + 1),
         }
+    }
+
+    pub fn open_existing(mount: MountId, metadata: M, objects: O) -> Result<Self, MetadError> {
+        let mut max_version = 1_u64;
+        let mut max_inode = InodeId::ROOT_RAW;
+        let rows = metadata.scan(ScanRequest {
+            family: RecordFamily::Inode,
+            prefix: inode_prefix(mount),
+            version: Version::new(u64::MAX)?,
+            limit: 0,
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        for row in rows {
+            let attr = decode_inode_attr(&row.value.0)
+                .map_err(|err| MetadError::Codec(err.to_string()))?;
+            max_version = max_version
+                .max(row.version.get())
+                .max(attr.generation)
+                .max(attr.mtime_ms)
+                .max(attr.ctime_ms);
+            max_inode = max_inode.max(attr.inode.get());
+        }
+        let next_inode = max_inode
+            .checked_add(1)
+            .ok_or(MetadError::AllocatorExhausted)?;
+        Ok(Self {
+            mount,
+            metadata,
+            objects,
+            clock: AtomicU64::new(max_version),
+            next_inode: AtomicU64::new(next_inode),
+        })
     }
 
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<InodeAttr, MetadError> {
@@ -117,6 +154,12 @@ where
     }
 
     pub fn publish_artifact(&self, request: PublishArtifact) -> Result<DentryWithAttr, MetadError> {
+        if request.body.size != request.bytes.len() as u64 {
+            return Err(MetadError::BodySizeMismatch {
+                descriptor: request.body.size,
+                bytes: request.bytes.len() as u64,
+            });
+        }
         let object_key = ObjectKey::new(request.body.object_ref.clone())?;
         self.objects.put(&object_key, &request.bytes)?;
 
@@ -136,6 +179,22 @@ where
         let projection = projection(request.parent, request.name, attr, Some(request.body));
         self.commit_create_projection(CommandKind::PublishArtifact, &projection, version)?;
         Ok(projection.into())
+    }
+
+    pub fn get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, MetadError> {
+        let version = self.read_version()?;
+        let Some(value) = self.metadata.get(
+            RecordFamily::Inode,
+            &inode_key(self.mount, inode),
+            version,
+            ReadPurpose::UserStrong,
+        )?
+        else {
+            return Ok(None);
+        };
+        decode_inode_attr(&value.0)
+            .map(Some)
+            .map_err(|err| MetadError::Codec(err.to_string()))
     }
 
     pub fn lookup_plus(
@@ -174,6 +233,18 @@ where
                     .map_err(|err| MetadError::Codec(err.to_string()))
             })
             .collect()
+    }
+
+    pub fn read_artifact(&self, parent: InodeId, name: &DentryName) -> Result<Vec<u8>, MetadError> {
+        let entry = self
+            .lookup_plus(parent, name)?
+            .ok_or(MetadError::NotFound)?;
+        if entry.attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
+        let key = ObjectKey::new(body.object_ref)?;
+        self.objects.get(&key, None).map_err(Into::into)
     }
 
     fn commit_create_projection(
@@ -337,6 +408,14 @@ impl fmt::Display for MetadError {
             Self::Metadata(err) => write!(f, "metadata error: {err}"),
             Self::Object(err) => write!(f, "object error: {err}"),
             Self::Codec(err) => write!(f, "codec error: {err}"),
+            Self::BodySizeMismatch { descriptor, bytes } => write!(
+                f,
+                "body descriptor size {descriptor} does not match uploaded bytes {bytes}"
+            ),
+            Self::AllocatorExhausted => write!(f, "inode allocator is exhausted"),
+            Self::NotFound => write!(f, "metadata entry not found"),
+            Self::NotFile => write!(f, "metadata entry is not a file"),
+            Self::MissingBodyDescriptor => write!(f, "file is missing body descriptor"),
         }
     }
 }
@@ -412,5 +491,50 @@ mod tests {
             lookup.body.as_ref().unwrap().object_ref,
             "runs/1/checkpoint.json"
         );
+
+        let bytes = service
+            .read_artifact(InodeId::root(), &name)
+            .expect("read artifact body");
+        assert_eq!(bytes, b"{\"x\":1}");
+    }
+
+    #[test]
+    fn get_attr_reads_root_inode() {
+        let service = service();
+        let root = service.get_attr(InodeId::root()).unwrap().unwrap();
+        assert_eq!(root.inode, InodeId::root());
+        assert_eq!(root.file_type, FileType::Directory);
+    }
+
+    #[test]
+    fn open_existing_recovers_inode_and_version_allocators() {
+        let dir = tempfile::tempdir().unwrap();
+        let objects = LocalObjectStore::new(dir.path().join("objects")).unwrap();
+        let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
+        let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        let first = service
+            .create_dir(
+                InodeId::root(),
+                DentryName::new(b"first".to_vec()).unwrap(),
+                0o755,
+                1000,
+                1000,
+            )
+            .unwrap();
+        drop(service);
+
+        let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+        let second = reopened
+            .create_dir(
+                InodeId::root(),
+                DentryName::new(b"second".to_vec()).unwrap(),
+                0o755,
+                1000,
+                1000,
+            )
+            .unwrap();
+        assert!(second.attr.inode > first.attr.inode);
+        assert!(second.attr.generation > first.attr.generation);
     }
 }

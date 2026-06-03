@@ -1,0 +1,293 @@
+//! Path-oriented Rust client for NoKV-FS.
+//!
+//! This crate owns SDK ergonomics over the in-process `metad` service. It does
+//! not own metadata layout, Holt trees, object-store internals, FUSE, or remote
+//! wire protocols.
+
+use std::fmt;
+
+use nokv_fs_metad::{DentryWithAttr, MetadError, NoKvFs, PublishArtifact};
+use nokv_fs_metastore::MetadataStore;
+use nokv_fs_model::{BodyDescriptor, DentryName, FileType, InodeId};
+use nokv_fs_object::ObjectStore;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ArtifactMetadata {
+    pub producer: String,
+    pub digest_uri: String,
+    pub content_type: String,
+    pub object_ref: String,
+    pub generation: u64,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+#[derive(Debug)]
+pub enum ClientError {
+    EmptyPath,
+    RelativePath,
+    ParentTraversal,
+    InvalidName(String),
+    RootHasNoParent,
+    NotFound(String),
+    NotDirectory(String),
+    Metadata(MetadError),
+}
+
+pub struct NoKvFsClient<M, O> {
+    service: NoKvFs<M, O>,
+}
+
+impl<M, O> NoKvFsClient<M, O>
+where
+    M: MetadataStore,
+    O: ObjectStore,
+{
+    pub fn new(service: NoKvFs<M, O>) -> Self {
+        Self { service }
+    }
+
+    pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), ClientError> {
+        self.service.bootstrap_root(mode, uid, gid)?;
+        Ok(())
+    }
+
+    pub fn mkdir(
+        &self,
+        path: &str,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, ClientError> {
+        let (parent, name) = self.resolve_parent(path)?;
+        self.service
+            .create_dir(parent, name, mode, uid, gid)
+            .map_err(Into::into)
+    }
+
+    pub fn put_artifact(
+        &self,
+        path: &str,
+        bytes: Vec<u8>,
+        metadata: ArtifactMetadata,
+    ) -> Result<DentryWithAttr, ClientError> {
+        let (parent, name) = self.resolve_parent(path)?;
+        self.service
+            .publish_artifact(PublishArtifact {
+                parent,
+                name,
+                body: BodyDescriptor {
+                    producer: metadata.producer,
+                    digest_uri: metadata.digest_uri,
+                    size: bytes.len() as u64,
+                    content_type: metadata.content_type,
+                    object_ref: metadata.object_ref,
+                    generation: metadata.generation,
+                },
+                bytes,
+                mode: metadata.mode,
+                uid: metadata.uid,
+                gid: metadata.gid,
+            })
+            .map_err(Into::into)
+    }
+
+    pub fn lookup(&self, path: &str) -> Result<Option<DentryWithAttr>, ClientError> {
+        if is_root_path(path)? {
+            return Ok(None);
+        }
+        let (parent, name) = self.resolve_parent(path)?;
+        self.service.lookup_plus(parent, &name).map_err(Into::into)
+    }
+
+    pub fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
+        let inode = self.resolve_directory(path)?;
+        self.service.read_dir_plus(inode).map_err(Into::into)
+    }
+
+    pub fn cat(&self, path: &str) -> Result<Vec<u8>, ClientError> {
+        let (parent, name) = self.resolve_parent(path)?;
+        self.service
+            .read_artifact(parent, &name)
+            .map_err(Into::into)
+    }
+
+    pub fn into_inner(self) -> NoKvFs<M, O> {
+        self.service
+    }
+
+    fn resolve_parent(&self, path: &str) -> Result<(InodeId, DentryName), ClientError> {
+        let mut components = parse_absolute_path(path)?;
+        let name = components.pop().ok_or(ClientError::RootHasNoParent)?;
+        let parent = self.resolve_components_as_directory(&components)?;
+        Ok((parent, name))
+    }
+
+    fn resolve_directory(&self, path: &str) -> Result<InodeId, ClientError> {
+        let components = parse_absolute_path(path)?;
+        self.resolve_components_as_directory(&components)
+    }
+
+    fn resolve_components_as_directory(
+        &self,
+        components: &[DentryName],
+    ) -> Result<InodeId, ClientError> {
+        let mut current = InodeId::root();
+        for name in components {
+            let label = display_name(name);
+            let entry = self
+                .service
+                .lookup_plus(current, name)?
+                .ok_or_else(|| ClientError::NotFound(label.clone()))?;
+            if entry.attr.file_type != FileType::Directory {
+                return Err(ClientError::NotDirectory(label));
+            }
+            current = entry.attr.inode;
+        }
+        Ok(current)
+    }
+}
+
+fn parse_absolute_path(path: &str) -> Result<Vec<DentryName>, ClientError> {
+    if path.is_empty() {
+        return Err(ClientError::EmptyPath);
+    }
+    if !path.starts_with('/') {
+        return Err(ClientError::RelativePath);
+    }
+    let mut out = Vec::new();
+    for raw in path.split('/').filter(|part| !part.is_empty()) {
+        if raw == "." {
+            continue;
+        }
+        if raw == ".." {
+            return Err(ClientError::ParentTraversal);
+        }
+        out.push(
+            DentryName::new(raw.as_bytes().to_vec())
+                .map_err(|err| ClientError::InvalidName(err.to_string()))?,
+        );
+    }
+    Ok(out)
+}
+
+fn is_root_path(path: &str) -> Result<bool, ClientError> {
+    Ok(parse_absolute_path(path)?.is_empty())
+}
+
+fn display_name(name: &DentryName) -> String {
+    String::from_utf8_lossy(name.as_bytes()).into_owned()
+}
+
+impl From<MetadError> for ClientError {
+    fn from(err: MetadError) -> Self {
+        Self::Metadata(err)
+    }
+}
+
+impl fmt::Display for ClientError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::EmptyPath => write!(f, "path is empty"),
+            Self::RelativePath => write!(f, "path must be absolute"),
+            Self::ParentTraversal => write!(f, "path must not contain '..'"),
+            Self::InvalidName(err) => write!(f, "invalid path component: {err}"),
+            Self::RootHasNoParent => write!(f, "root path has no parent"),
+            Self::NotFound(path) => write!(f, "path component not found: {path}"),
+            Self::NotDirectory(path) => write!(f, "path component is not a directory: {path}"),
+            Self::Metadata(err) => write!(f, "metadata service error: {err}"),
+        }
+    }
+}
+
+impl std::error::Error for ClientError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nokv_fs_holtstore::HoltMetadataStore;
+    use nokv_fs_metad::NoKvFs;
+    use nokv_fs_model::MountId;
+    use nokv_fs_object::LocalObjectStore;
+
+    fn client() -> NoKvFsClient<HoltMetadataStore, LocalObjectStore> {
+        let dir = tempfile::tempdir().unwrap();
+        let service = NoKvFs::new(
+            MountId::new(1).unwrap(),
+            HoltMetadataStore::open_memory().unwrap(),
+            LocalObjectStore::new(dir.path().join("objects")).unwrap(),
+        );
+        let client = NoKvFsClient::new(service);
+        client.bootstrap_root(0o755, 1000, 1000).unwrap();
+        client
+    }
+
+    #[test]
+    fn mkdir_put_list_and_cat_by_path() {
+        let client = client();
+        client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
+        client.mkdir("/runs/1", 0o755, 1000, 1000).unwrap();
+        let published = client
+            .put_artifact(
+                "/runs/1/checkpoint.json",
+                b"{\"step\":1}".to_vec(),
+                ArtifactMetadata {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:demo".to_owned(),
+                    content_type: "application/json".to_owned(),
+                    object_ref: "runs/1/checkpoint.json".to_owned(),
+                    generation: 1,
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                },
+            )
+            .unwrap();
+
+        assert_eq!(
+            client.lookup("/runs/1/checkpoint.json").unwrap(),
+            Some(published.clone())
+        );
+        assert_eq!(client.list("/runs/1").unwrap(), vec![published]);
+        assert_eq!(
+            client.cat("/runs/1/checkpoint.json").unwrap(),
+            b"{\"step\":1}"
+        );
+    }
+
+    #[test]
+    fn path_resolution_rejects_relative_and_parent_paths() {
+        let client = client();
+        assert!(matches!(
+            client.list("runs"),
+            Err(ClientError::RelativePath)
+        ));
+        assert!(matches!(
+            client.list("/../runs"),
+            Err(ClientError::ParentTraversal)
+        ));
+    }
+
+    #[test]
+    fn missing_parent_is_reported_before_publish() {
+        let client = client();
+        let err = client
+            .put_artifact(
+                "/missing/file",
+                b"x".to_vec(),
+                ArtifactMetadata {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:x".to_owned(),
+                    content_type: "text/plain".to_owned(),
+                    object_ref: "missing/file".to_owned(),
+                    generation: 1,
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                },
+            )
+            .unwrap_err();
+        assert!(matches!(err, ClientError::NotFound(name) if name == "missing"));
+    }
+}

@@ -19,6 +19,8 @@ nokv-fs/
   crates/holtstore
   crates/object
   crates/metad
+  crates/client
+  crates/cli
 ```
 
 ## Start Here
@@ -35,6 +37,7 @@ nokv-fs/
 
 ```text
 AI training / agent workspace client
+  -> NoKV-FS client SDK
   -> NoKV-FS metad
   -> Holt metadata store
   -> S3-compatible object store for file bodies

@@ -26,6 +26,9 @@ boundaries.
 - Does `metastore` avoid raw KV or Holt-specific APIs?
 - Does `object` avoid namespace metadata?
 - Does `metad` avoid direct Holt calls and go through `MetadataStore`?
+- Does `client` resolve paths through `metad` instead of importing layout or
+  storage internals?
+- Does `cli` stay thin over `client` instead of duplicating metadata semantics?
 
 ## Correctness
 

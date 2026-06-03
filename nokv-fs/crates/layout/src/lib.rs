@@ -17,9 +17,14 @@ pub use codec::{
 };
 
 pub fn inode_key(mount: MountId, inode: InodeId) -> Vec<u8> {
+    let mut out = inode_prefix(mount);
+    push_u64(&mut out, inode.get());
+    out
+}
+
+pub fn inode_prefix(mount: MountId) -> Vec<u8> {
     let mut out = Vec::with_capacity(U64_WIDTH * 2);
     push_u64(&mut out, mount.get());
-    push_u64(&mut out, inode.get());
     out
 }
 
@@ -139,6 +144,15 @@ mod tests {
     #[test]
     fn big_endian_ids_keep_numeric_order() {
         assert!(inode_key(mount(), inode(2)) < inode_key(mount(), inode(10)));
+    }
+
+    #[test]
+    fn inode_keys_for_one_mount_share_a_prefix() {
+        let prefix = inode_prefix(mount());
+        let key = inode_key(mount(), inode(42));
+        let other_mount = inode_key(MountId::new(8).unwrap(), inode(42));
+        assert!(key.starts_with(&prefix));
+        assert!(!other_mount.starts_with(&prefix));
     }
 
     #[test]

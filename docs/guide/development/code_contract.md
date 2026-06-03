@@ -24,12 +24,13 @@ condition.
 | `nokv-fs/crates/holtstore/` | Holt implementation of `metastore`: family current trees, history records, predicate checks, and command dedupe. | Own filesystem semantics, import object-store clients, FUSE, Raft, protobuf, or expose raw Holt handles through the service boundary. |
 | `nokv-fs/crates/object/` | Object-store boundary and local/S3-compatible backends for file bodies. | Own namespace metadata, import Holt, Raft, FUSE, protobuf, or implement metadata transactions. |
 | `nokv-fs/crates/metad/` | In-process filesystem metadata service that compiles operations into `MetadataCommand`s and coordinates object publish with metadata publish. | Own Holt tree layout, bypass `metastore`, import Raft/FUSE/protobuf, or expose a generic object/KV API. |
+| `nokv-fs/crates/client/` | Path-oriented Rust SDK over `metad`, including path resolution and user-facing artifact operations. | Own metadata layout, import Holt, bypass `metad`, expose object-store internals, or implement FUSE/kernel cache semantics. |
+| `nokv-fs/crates/cli/` | Local developer/user entrypoint for the current embedded Holt path. | Reimplement service semantics, bypass `client`, own server/RPC behavior, or add provider-specific object semantics. |
 
 Planned package owners:
 
 | Package | Owns |
 | --- | --- |
-| `nokv-fs/crates/client/` | Rust SDK and remote/local client ergonomics. |
 | `nokv-fs/crates/fuse/` | FUSE low-level frontend and kernel cache invalidation. |
 | `nokv-fs/crates/server/` | Long-running metad process, config, health, and service boundary. |
 | `nokv-fs/crates/raftgroup/` | Distributed metadata shard replication. |

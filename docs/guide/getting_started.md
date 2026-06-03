@@ -74,19 +74,24 @@ metadata semantics are exposed to higher layers.
 - local filesystem object backend;
 - S3-compatible object backend;
 - in-process `metad` operations for root bootstrap, directory create, artifact
-  publish, lookup-plus, and readdir-plus.
+  publish, lookup-plus, and readdir-plus;
+- path-oriented Rust SDK for mkdir, artifact publish, lookup, list, and cat;
+- minimal local CLI for init, mkdir, put-artifact, ls, and cat.
 
-## Next User-Facing Step
+## Local CLI
 
-The next milestone is a small CLI:
+The current CLI uses embedded Holt metadata and the local object backend:
 
-```text
-nokv-fs init
-nokv-fs mkdir
-nokv-fs put-artifact
-nokv-fs ls
-nokv-fs cat
+```bash
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- init
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- mkdir /runs
+printf '{"step":1}' > /tmp/checkpoint.json
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- \
+  put-artifact /runs/checkpoint.json /tmp/checkpoint.json
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- ls /runs
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- cat /runs/checkpoint.json
 ```
 
-That makes the current local Holt + S3/RustFS path usable before FUSE and
-distributed metadata shards are introduced.
+By default it stores metadata under `.nokv-fs/meta` and object bodies under
+`.nokv-fs/objects`. Use `--meta PATH` and `--objects PATH` to choose explicit
+locations.

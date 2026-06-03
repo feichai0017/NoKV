@@ -38,6 +38,8 @@ nokv-fs/
   crates/holtstore    # Holt-backed metadata store
   crates/object       # local filesystem and S3-compatible object backends
   crates/metad        # in-process metadata service
+  crates/client       # path-oriented Rust SDK over metad
+  crates/cli          # minimal local CLI
 ```
 
 Implemented today:
@@ -49,11 +51,13 @@ Implemented today:
 - metadata commands with predicates, mutations, family trees, command dedupe,
   and dentry projection;
 - basic root bootstrap, directory create, artifact publish, lookup-plus, and
-  readdir-plus in the in-process service.
+  readdir-plus in the in-process service;
+- path-oriented Rust SDK for mkdir, artifact publish, lookup, list, and cat;
+- minimal local CLI: init, mkdir, put-artifact, ls, and cat.
 
 Not implemented yet:
 
-- CLI and long-running metad server;
+- long-running metad server;
 - FUSE client;
 - durable inode/version allocator;
 - remove/rmdir/rename-replace;
@@ -85,6 +89,18 @@ cargo test --manifest-path nokv-fs/Cargo.toml -p nokv-fs-object s3_object_store_
 
 RustFS uses the same S3-compatible backend; it should be configured through
 the endpoint and credentials, not through a RustFS-specific code path.
+
+## Local CLI Smoke
+
+```bash
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- init
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- mkdir /runs
+printf '{"step":1}' > /tmp/checkpoint.json
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- \
+  put-artifact /runs/checkpoint.json /tmp/checkpoint.json
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- ls /runs
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- cat /runs/checkpoint.json
+```
 
 ## Documentation
 

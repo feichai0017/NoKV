@@ -515,6 +515,7 @@ crates/holtstore
 crates/metad
 crates/manager
 crates/client
+crates/cli
 crates/fuse
 crates/object
 crates/cache
