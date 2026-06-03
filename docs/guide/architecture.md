@@ -20,6 +20,7 @@ Layer 2: metadata execution
   metastore   storage-neutral MetadataCommand contract
   metad       in-process filesystem metadata service
   client      path-oriented Rust SDK
+  fuse        FUSE low-level read-only frontend
   cli         local command line entrypoint
 
 Layer 3: storage bindings
@@ -27,7 +28,6 @@ Layer 3: storage bindings
   object      local and S3-compatible object storage
 
 Planned:
-  fuse        FUSE low-level frontend
   server      long-running metad process
   raftgroup   distributed Holt metadata shards
 ```
@@ -45,6 +45,13 @@ flowchart LR
 For artifact publication, object bytes are uploaded first. The metadata commit
 then publishes the dentry, inode projection, and body descriptor atomically.
 Failed metadata publish leaves staged objects for later garbage collection.
+
+## FUSE Path
+
+The current FUSE frontend is inode-first. It maps kernel `lookup`, `getattr`,
+`readdir`, `open`, and `read` calls to `metad` inode APIs and object-store range
+reads. It does not resolve paths through the Rust SDK and does not own metadata
+semantics.
 
 ## Metadata Layout
 

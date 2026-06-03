@@ -34,6 +34,7 @@ enum Command {
     PutArtifact { path: String, source: PathBuf },
     Ls { path: String },
     Cat { path: String },
+    Mount { mountpoint: PathBuf },
     Help,
 }
 
@@ -131,6 +132,18 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             let bytes = client.cat(&path).map_err(from_client)?;
             io::stdout().write_all(&bytes).map_err(from_io)?;
         }
+        Command::Mount { mountpoint } => {
+            let service = open_service(&config)?;
+            service
+                .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
+                .map_err(from_client)?;
+            nokv_fs_fuse::mount_read_only(
+                service,
+                mountpoint,
+                nokv_fs_fuse::FuseOptions::default(),
+            )
+            .map_err(from_io)?;
+        }
         Command::Help => {
             print_help(&mut io::stdout()).map_err(from_io)?;
         }
@@ -139,11 +152,14 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
 }
 
 fn open_client(config: &Config) -> Result<LocalClient, CliError> {
+    Ok(NoKvFsClient::new(open_service(config)?))
+}
+
+fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, LocalObjectStore>, CliError> {
     let metadata = HoltMetadataStore::open_file(&config.meta).map_err(from_metadata)?;
     let objects = LocalObjectStore::new(&config.objects).map_err(from_object)?;
-    let service = NoKvFs::open_existing(config.mount, metadata, objects)
-        .map_err(|err| CliError::Client(err.to_string()))?;
-    Ok(NoKvFsClient::new(service))
+    NoKvFs::open_existing(config.mount, metadata, objects)
+        .map_err(|err| CliError::Client(err.to_string()))
 }
 
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
@@ -231,6 +247,9 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
         "cat" => exact_args(args, 2).map(|()| Command::Cat {
             path: args[1].clone(),
         }),
+        "mount" => exact_args(args, 2).map(|()| Command::Mount {
+            mountpoint: PathBuf::from(&args[1]),
+        }),
         "help" => Ok(Command::Help),
         other => Err(CliError::UnknownCommand(other.to_owned())),
     }
@@ -242,6 +261,7 @@ fn exact_args(args: &[String], expected: usize) -> Result<(), CliError> {
             match args.first().map(String::as_str) {
                 Some("mkdir") | Some("ls") | Some("cat") => "path",
                 Some("put-artifact") => "path and source",
+                Some("mount") => "mountpoint",
                 _ => "argument",
             },
         ));
@@ -308,6 +328,7 @@ Usage:\n\
   nokv-fs [--meta PATH] [--objects PATH] put-artifact PATH SOURCE\n\
   nokv-fs [--meta PATH] [--objects PATH] ls PATH\n\
   nokv-fs [--meta PATH] [--objects PATH] cat PATH\n\
+  nokv-fs [--meta PATH] [--objects PATH] mount MOUNTPOINT\n\
 \n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\
@@ -379,6 +400,17 @@ mod tests {
         assert_eq!(
             default_object_ref("runs/1/checkpoint").unwrap(),
             "artifacts/runs/1/checkpoint"
+        );
+    }
+
+    #[test]
+    fn parse_mount_command() {
+        let (_config, command) = parse(vec![s("mount"), s("/tmp/nokv-fs")]).unwrap();
+        assert_eq!(
+            command,
+            Command::Mount {
+                mountpoint: PathBuf::from("/tmp/nokv-fs")
+            }
         );
     }
 }

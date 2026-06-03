@@ -76,7 +76,8 @@ metadata semantics are exposed to higher layers.
 - in-process `metad` operations for root bootstrap, directory create, artifact
   publish, lookup-plus, and readdir-plus;
 - path-oriented Rust SDK for mkdir, artifact publish, lookup, list, and cat;
-- minimal local CLI for init, mkdir, put-artifact, ls, and cat.
+- read-only FUSE frontend for lookup, getattr, readdir, open, and range read;
+- minimal local CLI for init, mkdir, put-artifact, ls, cat, and mount.
 
 ## Local CLI
 
@@ -95,3 +96,17 @@ cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- cat /runs/checkpo
 By default it stores metadata under `.nokv-fs/meta` and object bodies under
 `.nokv-fs/objects`. Use `--meta PATH` and `--objects PATH` to choose explicit
 locations.
+
+## Read-Only FUSE Mount
+
+The current FUSE frontend is read-only. It is meant to make published datasets
+and artifacts visible to tools that expect a filesystem path:
+
+```bash
+mkdir -p /tmp/nokv-fs-mount
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- mount /tmp/nokv-fs-mount
+```
+
+Linux builds use fuser's pure-Rust mount path. macOS workspace builds compile
+without requiring macFUSE; a real macOS mount needs macFUSE and a mount-enabled
+build.

@@ -533,7 +533,7 @@ the hot path and include a removal condition.
 - Rust metadata model and layout.
 - Holt-backed metastore.
 - Object-store adapter.
-- FUSE low-level client.
+- Read-only FUSE low-level client.
 - Rust SDK.
 - Basic ops: lookup, getattr, batch getattr, readdirplus, create, rename,
   remove, rmdir, snapshot, watch, publish artifact.

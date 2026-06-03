@@ -39,6 +39,7 @@ nokv-fs/
   crates/object       # local filesystem and S3-compatible object backends
   crates/metad        # in-process metadata service
   crates/client       # path-oriented Rust SDK over metad
+  crates/fuse         # low-level read-only FUSE frontend
   crates/cli          # minimal local CLI
 ```
 
@@ -53,12 +54,13 @@ Implemented today:
 - basic root bootstrap, directory create, artifact publish, lookup-plus, and
   readdir-plus in the in-process service;
 - path-oriented Rust SDK for mkdir, artifact publish, lookup, list, and cat;
-- minimal local CLI: init, mkdir, put-artifact, ls, and cat.
+- low-level read-only FUSE frontend for lookup, getattr, readdir, open, and
+  range read;
+- minimal local CLI: init, mkdir, put-artifact, ls, cat, and mount.
 
 Not implemented yet:
 
 - long-running metad server;
-- FUSE client;
 - durable inode/version allocator;
 - remove/rmdir/rename-replace;
 - watch replay, snapshot retention, and object GC worker;
@@ -101,6 +103,17 @@ cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- \
 cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- ls /runs
 cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- cat /runs/checkpoint.json
 ```
+
+To mount the current read-only FUSE frontend:
+
+```bash
+mkdir -p /tmp/nokv-fs-mount
+cargo run --manifest-path nokv-fs/Cargo.toml -p nokv-fs-cli -- mount /tmp/nokv-fs-mount
+```
+
+Linux builds use fuser's pure-Rust mount path. macOS development builds compile
+without requiring macFUSE; a real macOS mount needs a macFUSE-enabled build and
+macFUSE installed.
 
 ## Documentation
 

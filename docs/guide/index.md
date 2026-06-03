@@ -20,6 +20,7 @@ nokv-fs/
   crates/object
   crates/metad
   crates/client
+  crates/fuse
   crates/cli
 ```
 
@@ -37,12 +38,12 @@ nokv-fs/
 
 ```text
 AI training / agent workspace client
-  -> NoKV-FS client SDK
+  -> FUSE path or NoKV-FS client SDK
   -> NoKV-FS metad
   -> Holt metadata store
   -> S3-compatible object store for file bodies
 ```
 
-The first usable product path is an artifact/checkpoint workspace API. FUSE and
-distributed metadata shards are planned after the local service semantics,
-object backend, and durable allocator are stable.
+The first usable product path is an artifact/checkpoint workspace API plus a
+read-only FUSE frontend. Distributed metadata shards are planned after the
+local service semantics, object backend, and durable allocator are stable.

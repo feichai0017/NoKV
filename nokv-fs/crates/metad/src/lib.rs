@@ -9,8 +9,9 @@ use std::fmt;
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use nokv_fs_layout::{
-    chunk_manifest_key, decode_inode_attr, dentry_key, dentry_prefix, encode_body_descriptor,
-    encode_dentry_projection, encode_inode_attr, inode_key, inode_prefix,
+    chunk_manifest_key, chunk_manifest_prefix, decode_body_descriptor, decode_inode_attr,
+    dentry_key, dentry_prefix, encode_body_descriptor, encode_dentry_projection, encode_inode_attr,
+    inode_key, inode_prefix,
 };
 use nokv_fs_metastore::{
     CommandKind, MetadataCommand, MetadataError, MetadataStore, Mutation, MutationOp, Predicate,
@@ -20,7 +21,7 @@ use nokv_fs_model::{
     BodyDescriptor, DentryName, DentryProjection, DentryRecord, FileType, InodeAttr, InodeId,
     ModelError, MountId, RecordFamily,
 };
-use nokv_fs_object::{ObjectError, ObjectKey, ObjectStore};
+use nokv_fs_object::{ObjectError, ObjectKey, ObjectRange, ObjectStore};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DentryWithAttr {
@@ -160,23 +161,25 @@ where
                 bytes: request.bytes.len() as u64,
             });
         }
-        let object_key = ObjectKey::new(request.body.object_ref.clone())?;
+        let mut body = request.body;
+        let object_key = ObjectKey::new(body.object_ref.clone())?;
         self.objects.put(&object_key, &request.bytes)?;
 
         let version = self.next_version()?;
         let inode = self.next_inode()?;
+        body.generation = version.get();
         let attr = InodeAttr {
             inode,
             file_type: FileType::File,
             mode: request.mode,
             uid: request.uid,
             gid: request.gid,
-            size: request.body.size,
+            size: body.size,
             generation: version.get(),
             mtime_ms: version.get(),
             ctime_ms: version.get(),
         };
-        let projection = projection(request.parent, request.name, attr, Some(request.body));
+        let projection = projection(request.parent, request.name, attr, Some(body));
         self.commit_create_projection(CommandKind::PublishArtifact, &projection, version)?;
         Ok(projection.into())
     }
@@ -245,6 +248,48 @@ where
         let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
         let key = ObjectKey::new(body.object_ref)?;
         self.objects.get(&key, None).map_err(Into::into)
+    }
+
+    pub fn body_descriptor(&self, inode: InodeId) -> Result<Option<BodyDescriptor>, MetadError> {
+        let Some(attr) = self.get_attr(inode)? else {
+            return Ok(None);
+        };
+        if attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        let version = self.read_version()?;
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::ChunkManifest,
+            prefix: chunk_manifest_prefix(self.mount, inode, attr.generation),
+            version,
+            limit: 1,
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        let Some(row) = rows.into_iter().next() else {
+            return Err(MetadError::MissingBodyDescriptor);
+        };
+        decode_body_descriptor(&row.value.0)
+            .map(Some)
+            .map_err(|err| MetadError::Codec(err.to_string()))
+    }
+
+    pub fn read_file(
+        &self,
+        inode: InodeId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, MetadError> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let body = self.body_descriptor(inode)?.ok_or(MetadError::NotFound)?;
+        if offset >= body.size {
+            return Ok(Vec::new());
+        }
+        let len = len.min((body.size - offset) as usize);
+        let key = ObjectKey::new(body.object_ref)?;
+        let range = ObjectRange::new(offset, len)?;
+        self.objects.get(&key, Some(range)).map_err(Into::into)
     }
 
     fn commit_create_projection(
@@ -496,6 +541,17 @@ mod tests {
             .read_artifact(InodeId::root(), &name)
             .expect("read artifact body");
         assert_eq!(bytes, b"{\"x\":1}");
+
+        let body = service
+            .body_descriptor(published.attr.inode)
+            .expect("read body descriptor")
+            .expect("body descriptor exists");
+        assert_eq!(body.object_ref, "runs/1/checkpoint.json");
+        assert_eq!(body.generation, published.attr.generation);
+        let range = service
+            .read_file(published.attr.inode, 2, 3)
+            .expect("read file range");
+        assert_eq!(range, b"x\":");
     }
 
     #[test]

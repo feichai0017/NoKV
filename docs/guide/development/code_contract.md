@@ -25,13 +25,13 @@ condition.
 | `nokv-fs/crates/object/` | Object-store boundary and local/S3-compatible backends for file bodies. | Own namespace metadata, import Holt, Raft, FUSE, protobuf, or implement metadata transactions. |
 | `nokv-fs/crates/metad/` | In-process filesystem metadata service that compiles operations into `MetadataCommand`s and coordinates object publish with metadata publish. | Own Holt tree layout, bypass `metastore`, import Raft/FUSE/protobuf, or expose a generic object/KV API. |
 | `nokv-fs/crates/client/` | Path-oriented Rust SDK over `metad`, including path resolution and user-facing artifact operations. | Own metadata layout, import Holt, bypass `metad`, expose object-store internals, or implement FUSE/kernel cache semantics. |
-| `nokv-fs/crates/cli/` | Local developer/user entrypoint for the current embedded Holt path. | Reimplement service semantics, bypass `client`, own server/RPC behavior, or add provider-specific object semantics. |
+| `nokv-fs/crates/fuse/` | FUSE low-level frontend, inode mapping, kernel-facing attr conversion, and read-only range reads through `metad`. | Resolve paths through the SDK, own metadata layout, import Holt, bypass `metad`, or implement object-provider-specific behavior. |
+| `nokv-fs/crates/cli/` | Local developer/user entrypoint for the current embedded Holt path and read-only FUSE mount command. | Reimplement service semantics, own FUSE behavior, own server/RPC behavior, or add provider-specific object semantics. |
 
 Planned package owners:
 
 | Package | Owns |
 | --- | --- |
-| `nokv-fs/crates/fuse/` | FUSE low-level frontend and kernel cache invalidation. |
 | `nokv-fs/crates/server/` | Long-running metad process, config, health, and service boundary. |
 | `nokv-fs/crates/raftgroup/` | Distributed metadata shard replication. |
 
