@@ -5,121 +5,88 @@ SPDX-License-Identifier: Apache-2.0
 
 # Getting Started
 
-This guide starts the local Badger-backed fsmeta runtime. The distributed Rust
-data plane lives in `raftstore`; it is available through the `raftstore`
-runtime but is not the default Compose demo path yet.
+NoKV-FS is currently a Rust workspace with an in-process metadata service,
+Holt-backed metadata storage, and local/S3-compatible object backends.
 
 ## Prerequisites
 
-- Go 1.26+
+- Rust stable
 - Git
-- Optional: Docker + Docker Compose
-- Optional for distributed data-plane work: Rust toolchain and protobuf compiler
+- Optional: Node.js 20+ for the documentation site
+- Optional: RustFS, MinIO, or another S3-compatible endpoint for object-store
+  integration tests
 
-## Local Server
-
-```bash
-go run ./cmd/nokv-fsmeta \
-  --addr 127.0.0.1:8090 \
-  --metrics-addr 127.0.0.1:9400 \
-  --local-work-dir ./nokv-fsmeta-local \
-  --local-mount-id default \
-  --local-mount-key-id 1
-```
-
-Metrics and Go profiles are available at:
+## Build And Test
 
 ```bash
-curl http://127.0.0.1:9400/debug/vars
-```
-
-## Docker Demo
-
-```bash
-docker compose up -d --build
-docker compose logs -f
-docker compose down -v
-```
-
-This starts one `nokv-fsmeta` service backed by a Badger workdir in the
-`fsmeta-data` volume.
-
-## Distributed Entrypoints
-
-The distributed path is not wired into the default Compose demo yet. The
-process split is:
-
-```bash
-go run ./cmd/nokv meta-root ...
-go run ./cmd/nokv coordinator ...
-NOKV_RAFTSTORE_HOLT_DIR=/tmp/nokv-raftstore-holt \
-NOKV_RAFTSTORE_LOG_DIR=/tmp/nokv-raftstore-log \
-cargo run --manifest-path raftstore/Cargo.toml -p nokv-raftstore-server -- ...
-go run ./cmd/nokv-fsmeta \
-  --runtime raftstore \
-  --coordinator-addr 127.0.0.1:23800 \
-  --bootstrap-mount default
-```
-
-`cmd/nokv` owns Go control-plane startup only. The Rust data-plane binary owns
-the replicated metadata data-plane service.
-
-## Library Usage
-
-```go
-package main
-
-import (
-	"context"
-
-	"github.com/feichai0017/NoKV/fsmeta/model"
-	fsmetalocal "github.com/feichai0017/NoKV/fsmeta/runtime/local"
-)
-
-func main() {
-	ctx := context.Background()
-	rt, err := fsmetalocal.Open(ctx, fsmetalocal.Options{
-		WorkDir: "./nokv-fsmeta-local",
-		Mount:   model.MountIdentity{MountID: "default", MountKeyID: 1},
-	})
-	if err != nil {
-		panic(err)
-	}
-	defer rt.Close()
-
-	_, err = rt.Executor.Create(ctx, model.CreateRequest{
-		Mount:  "default",
-		Parent: model.RootInode,
-		Name:   "hello.txt",
-		Attrs:  model.CreateAttrs{Type: model.InodeTypeFile},
-	})
-	if err != nil {
-		panic(err)
-	}
-}
-```
-
-## Benchmarks
-
-Run the local fsmeta workload matrix:
-
-```bash
-NOKV_FSMETA_BENCH_MODE=local make fsmeta-bench
-```
-
-Override the workload and scale:
-
-```bash
-NOKV_FSMETA_PROFILE=official \
-NOKV_FSMETA_WORKLOADS=mdtest-easy \
-NOKV_FSMETA_BENCH_MODE=local \
-make fsmeta-bench
-```
-
-## Tests
-
-```bash
-go test ./...
-cargo test --manifest-path raftstore/Cargo.toml --workspace
 make test
 ```
+
+Equivalent cargo command:
+
+```bash
+cargo test --manifest-path nokv-fs/Cargo.toml --workspace
+```
+
+Run formatting and clippy:
+
+```bash
+make fmt
+make lint
+```
+
+Build docs:
+
+```bash
+cd docs
+npm install
+npm run build
+```
+
+## S3-Compatible Object Backend
+
+The object crate has a local filesystem backend for tests and an S3-compatible
+backend for AWS S3, RustFS, MinIO, and compatible services.
+
+To run the real S3/RustFS contract test:
+
+```bash
+export NOKV_FS_S3_BUCKET=nokv-fs-test
+export NOKV_FS_S3_ENDPOINT=http://127.0.0.1:9000
+export NOKV_FS_S3_REGION=auto
+export NOKV_FS_S3_ACCESS_KEY_ID=minioadmin
+export NOKV_FS_S3_SECRET_ACCESS_KEY=minioadmin
+
+cargo test \
+  --manifest-path nokv-fs/Cargo.toml \
+  -p nokv-fs-object \
+  s3_object_store_contract_from_env
+```
+
+RustFS is configured through the same S3-compatible backend. No RustFS-specific
+metadata semantics are exposed to higher layers.
+
+## What Works Today
+
+- metadata model and Holt-friendly layout;
+- metadata command contract;
+- Holt-backed metadata store;
+- local filesystem object backend;
+- S3-compatible object backend;
+- in-process `metad` operations for root bootstrap, directory create, artifact
+  publish, lookup-plus, and readdir-plus.
+
+## Next User-Facing Step
+
+The next milestone is a small CLI:
+
+```text
+nokv-fs init
+nokv-fs mkdir
+nokv-fs put-artifact
+nokv-fs ls
+nokv-fs cat
+```
+
+That makes the current local Holt + S3/RustFS path usable before FUSE and
+distributed metadata shards are introduced.

@@ -1,0 +1,36 @@
+# Copyright 2024-2026 The NoKV Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Rust
+
+on:
+  push:
+    branches: [ "main" ]
+  pull_request:
+    branches: [ "main" ]
+
+permissions:
+  contents: read
+
+jobs:
+  nokv-fs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: nokv-fs
+
+      - name: Format
+        run: cargo fmt --manifest-path nokv-fs/Cargo.toml --all -- --check
+
+      - name: Clippy
+        run: cargo clippy --manifest-path nokv-fs/Cargo.toml --workspace --all-targets -- -D warnings
+
+      - name: Test
+        run: cargo test --manifest-path nokv-fs/Cargo.toml --workspace

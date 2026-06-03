@@ -1,5 +1,0 @@
-// Copyright 2024-2026 The NoKV Authors.
-// SPDX-License-Identifier: Apache-2.0
-
-// Package testcluster spins up an in-process coordinator plus meta-root cluster for tests.
-package testcluster

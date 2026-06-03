@@ -5,97 +5,75 @@ SPDX-License-Identifier: Apache-2.0
 
 # Architecture
 
-NoKV is being kept deliberately narrow: **fsmeta first, distributed metadata
-execution second, replaceable storage engines below that**.
+NoKV-FS is being rebuilt as a Rust-first filesystem for AI training and agent
+workspaces. The repository no longer carries the legacy metadata/control-plane
+mainline; the product center is the Rust `nokv-fs` workspace.
 
 ## Layers
 
 ```text
-Layer 1: fsmeta
-  model/      inode, dentry, session, quota, snapshot, watch domain types
-  layout/     ordered namespace keys and value codecs
-  backend/    metadata command backend contract
-  exec/       semantic compiler and executor
-  runtime/    concrete runtime bindings
+Layer 1: namespace model
+  model       mount, inode, dentry, body descriptor, watch event types
+  layout      Holt-friendly ordered keys and durable value codecs
 
-Layer 2: distributed metadata control and execution
-  meta/root      rooted topology, authority, lifecycle, grant, and seal truth
-  coordinator    rebuildable routing, TSO, discovery, and root-event serving
-  raftstore   Rust/OpenRaft/Holt data-plane target
+Layer 2: metadata execution
+  metastore   storage-neutral MetadataCommand contract
+  metad       in-process filesystem metadata service
 
-Layer 3: concrete persistence
-  Badger directly inside fsmeta/runtime/local for local demos
-  Holt multi-tree inside raftstore for the distributed target
+Layer 3: storage bindings
+  holtstore   Holt-backed metadata store
+  object      local and S3-compatible object storage
+
+Planned:
+  client      Rust SDK
+  fuse        FUSE low-level frontend
+  server      long-running metad process
+  raftgroup   distributed Holt metadata shards
 ```
-
-The old Go `local`, `storage`, `txn`, `raftstore`, and `experimental` package
-trees are no longer mainline architecture. They were removed so new work cannot
-accidentally depend on the previous storage-engine or transaction-engine-heavy
-shape.
 
 ## Write Path
 
 ```mermaid
 flowchart LR
-    Client["Application / SDK"] --> API["fsmeta API"]
-    API --> Exec["fsmeta/exec"]
-    Exec --> Backend["fsmeta/backend.Store"]
-    Backend --> Local["fsmeta/runtime/local"]
-    Local --> Badger["Badger DB"]
-    Backend -. "distributed target" .-> Coord["coordinator route + TSO"]
-    Coord -.-> Root["meta/root truth"]
-    Coord -.-> Rust["raftstore"]
-    Rust -.-> Holt["Holt multi-tree"]
+    App["AI training / agent client"] --> API["NoKV-FS metad"]
+    API --> Command["MetadataCommand"]
+    Command --> Holt["Holt metadata store"]
+    API --> Object["S3-compatible object store"]
 ```
 
-`fsmeta/backend.Store` is the key boundary. It exposes timestamped reads,
-scans, and `MetadataCommand` commits. A command carries predicates, mutations,
-watch projection keys, and a storage-neutral metadata family under one metadata
-commit boundary. Families let runtimes place inode, dentry, snapshot, watch,
-and command-dedupe records in different physical trees without exposing Badger,
-Holt, Raft, protobuf, migration, or SST concepts to fsmeta execution.
-Read options keep user-visible reads strong by default while allowing write
-planning reads to use a cheaper leader-local applied view; the command
-predicates remain the correctness fence for stale planning reads.
+For artifact publication, object bytes are uploaded first. The metadata commit
+then publishes the dentry, inode projection, and body descriptor atomically.
+Failed metadata publish leaves staged objects for later garbage collection.
 
-## Local Runtime
+## Metadata Layout
 
-`fsmeta/runtime/local` is a one-process implementation of the fsmeta backend
-contract. It stores versioned fsmeta records directly in Badger and is intended
-for demos, tests, small agent workspaces, and product iteration.
+The canonical model is inode/dentry:
 
-The local path is not a generic KV database. It is a local implementation of
-the fsmeta metadata contract.
+```text
+inode_current:
+  mount_id | inode_id -> inode attributes
 
-## Distributed Runtime Target
+dentry_current:
+  mount_id | parent_inode | name -> dentry + inode projection
 
-The distributed target keeps Go for the control plane and Rust for the data
-plane:
+chunk_manifest_current:
+  mount_id | inode_id | generation | chunk_index -> body descriptor
 
-- `meta/root` is rooted truth.
-- `coordinator` is a rebuildable serving and scheduling view over root truth.
-- `raftstore` owns replicated data-plane execution, OpenRaft isolation,
-  Raft log persistence, Holt state-machine storage, snapshots, and apply
-  notifications.
+history:
+  family | user_key_len | user_key | inverted_commit_version -> old value
+```
 
-The target shape is mount-scoped metadata execution, not a general-purpose
-distributed KV first. fsmeta compiles namespace operations into metadata
-commands; the distributed data plane applies those commands atomically at a
-committed Raft frontier and streams apply-ordered watch events back to fsmeta.
+Path indexes are derived accelerators for artifact and checkpoint fast paths;
+they are not namespace truth.
 
-## Holt Placement
+## Object Storage
 
-Holt is not imported by Go fsmeta code. It belongs under `raftstore`, where
-Rust can use Holt multi-tree storage directly for the replicated state machine.
-The distributed data plane maps metadata families to `*_current` Holt trees and
-keeps historical MVCC versions in a separate `history` tree only when snapshot
-or watch retention requires old versions. Latest reads and directory scans
-therefore hit family-local current trees; snapshot reads fall back to history
-only when the requested version predates the current record.
-For `ReadDirPlus`, dentry current values may include an inode projection. The
-executor uses it for single-link file entries and keeps directory/hardlink
-entries on the inode-read fallback path until parent-index freshness exists.
+NoKV-FS stores file bodies outside the metadata service. The first production
+body backend is S3-compatible storage. RustFS, MinIO, Ceph RGW, and AWS S3 all
+use the same `S3ObjectStore` configuration surface.
 
-If a future local Rust backend is needed, it should be added as a runtime
-adapter, not by leaking Holt-specific types into `fsmeta/model`, `layout`,
-`backend`, or `exec`.
+## Distributed Direction
+
+The planned distributed layer is not a generic KV database. It should replicate
+metadata commands over mount or shard scoped Raft groups, with Holt as the
+state machine storage engine and object bodies remaining in external storage.

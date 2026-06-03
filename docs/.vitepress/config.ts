@@ -10,10 +10,10 @@ const OG_IMAGE = `${SITE_URL}/img/og.png`
 export default withMermaid(
   defineConfig({
     base: '/',
-    title: 'NoKV',
-    titleTemplate: ':title — NoKV',
+    title: 'NoKV-FS',
+    titleTemplate: ':title — NoKV-FS',
     description:
-      'Open-source namespace metadata substrate for distributed filesystems, object storage, and AI dataset metadata.',
+      'Open-source Rust filesystem for AI training and agent workspaces.',
     cleanUrls: true,
     lastUpdated: true,
     appearance: 'dark',
@@ -29,36 +29,36 @@ export default withMermaid(
       ['meta', { name: 'theme-color', content: '#3b82f6' }],
       ['meta', { property: 'og:type', content: 'website' }],
       ['meta', { property: 'og:url', content: `${SITE_URL}/` }],
-      ['meta', { property: 'og:title', content: 'NoKV — Namespace metadata, purpose-built.' }],
+      ['meta', { property: 'og:title', content: 'NoKV-FS — Rust filesystem for AI workspaces.' }],
       [
         'meta',
         {
           property: 'og:description',
           content:
-            'The namespace metadata layer DFS, object storage, and AI dataset pipelines should not have to build themselves. Apache-2.0.',
+            'Rust metadata layer with Holt-backed namespace state and S3-compatible object storage. Apache-2.0.',
         },
       ],
       ['meta', { property: 'og:image', content: OG_IMAGE }],
       ['meta', { property: 'og:image:width', content: '1200' }],
       ['meta', { property: 'og:image:height', content: '630' }],
-      ['meta', { property: 'og:image:alt', content: 'NoKV — Namespace metadata, purpose-built.' }],
-      ['meta', { property: 'og:site_name', content: 'NoKV' }],
+      ['meta', { property: 'og:image:alt', content: 'NoKV-FS — Rust filesystem for AI workspaces.' }],
+      ['meta', { property: 'og:site_name', content: 'NoKV-FS' }],
       ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
-      ['meta', { name: 'twitter:title', content: 'NoKV — Namespace metadata, purpose-built.' }],
+      ['meta', { name: 'twitter:title', content: 'NoKV-FS — Rust filesystem for AI workspaces.' }],
       [
         'meta',
         {
           name: 'twitter:description',
           content:
-            'The namespace metadata layer DFS, object storage, and AI dataset pipelines should not have to build themselves. Apache-2.0.',
+            'Rust metadata layer with Holt-backed namespace state and S3-compatible object storage. Apache-2.0.',
         },
       ],
       ['meta', { name: 'twitter:image', content: OG_IMAGE }],
     ],
 
     themeConfig: {
-      logo: { src: '/img/logo.svg', width: 40, height: 40, alt: 'NoKV' },
-      siteTitle: 'NoKV',
+      logo: { src: '/img/logo.svg', width: 40, height: 40, alt: 'NoKV-FS' },
+      siteTitle: 'NoKV-FS',
 
       nav: [
         { text: 'Docs', link: '/guide/', activeMatch: '/guide/' },
@@ -67,25 +67,13 @@ export default withMermaid(
           items: [
             { text: 'Architecture', link: '/guide/architecture' },
             { text: 'NoKV-FS Design', link: '/guide/nokv_fs_design' },
-            { text: 'fsmeta API', link: '/guide/fsmeta' },
-            { text: 'Rooted Truth', link: '/guide/rooted_truth' },
-            { text: 'Coordinator', link: '/guide/coordinator' },
           ],
         },
         {
           text: 'Resources',
           items: [
             { text: 'Getting Started', link: '/guide/getting_started' },
-            { text: 'Testing', link: '/guide/testing' },
             { text: 'Code Contract', link: '/guide/development/code_contract' },
-            {
-              text: 'Formal Specs (spec/)',
-              link: 'https://github.com/feichai0017/NoKV/tree/main/spec',
-            },
-            {
-              text: 'DeepWiki',
-              link: 'https://deepwiki.com/feichai0017/NoKV',
-            },
           ],
         },
         { text: 'GitHub', link: 'https://github.com/feichai0017/NoKV' },
@@ -107,25 +95,6 @@ export default withMermaid(
             items: [
               { text: 'Architecture', link: '/guide/architecture' },
               { text: 'NoKV-FS Design', link: '/guide/nokv_fs_design' },
-            ],
-          },
-          {
-            text: 'Namespace Metadata',
-            collapsed: false,
-            items: [
-              { text: 'fsmeta', link: '/guide/fsmeta' },
-              { text: 'Rooted Truth (meta/root)', link: '/guide/rooted_truth' },
-              { text: 'Coordinator', link: '/guide/coordinator' },
-              { text: 'Recovery', link: '/guide/recovery' },
-            ],
-          },
-          {
-            text: 'Operations & Tooling',
-            collapsed: true,
-            items: [
-              { text: 'Stats & Observability', link: '/guide/stats' },
-              { text: 'Testing', link: '/guide/testing' },
-              { text: 'Error Handling', link: '/guide/errors' },
             ],
           },
           {

@@ -13,8 +13,5 @@ reviews:
     ignore_title_keywords:
       - "WIP"
       - "wip"
-  tools:
-    golangci-lint:
-      enabled: true
 chat:
   auto_reply: true

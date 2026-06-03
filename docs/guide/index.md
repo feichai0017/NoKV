@@ -5,49 +5,41 @@ SPDX-License-Identifier: Apache-2.0
 
 # Documentation
 
-NoKV is centered on **fsmeta**, a filesystem-shaped metadata API for AI agent
-workspaces, artifact stores, DFS frontends, and object namespace layers.
+NoKV-FS is an open-source Rust filesystem for AI training and agent
+workspaces. It stores metadata in Holt and file bodies in S3-compatible object
+storage such as AWS S3, RustFS, MinIO, or Ceph RGW.
 
-The current repository is intentionally smaller than previous iterations:
+The repository is now centered on the Rust `nokv-fs` workspace:
 
-- `fsmeta` owns the namespace model, layout, compiler, executor, local Badger
-  runtime, server, and client.
-- `meta/root` owns rooted lifecycle and authority truth.
-- `coordinator` owns rebuildable routing, TSO, discovery, and scheduling views.
-- `raftstore` is the Rust/OpenRaft/Holt distributed data-plane target.
-
-The old Go `local`, `storage`, `txn`, `raftstore`, and `experimental` package
-trees were removed from the mainline.
+```text
+nokv-fs/
+  crates/model
+  crates/layout
+  crates/metastore
+  crates/holtstore
+  crates/object
+  crates/metad
+```
 
 ## Start Here
 
 | Topic | Doc |
 |---|---|
-| Build and run local fsmeta | [Getting Started](./getting_started) |
+| Build and run the current workspace | [Getting Started](./getting_started) |
 | Layering and package ownership | [Architecture](./architecture) |
-| Target NoKV-FS product architecture | [NoKV-FS Design](./nokv_fs_design) |
-| fsmeta API and data model | [fsmeta](./fsmeta) |
-| Rooted truth | [Rooted Truth](./rooted_truth) |
-| Coordinator | [Coordinator](./coordinator) |
-| Recovery and lifecycle notes | [Recovery](./recovery) |
-| Stats and observability | [Stats & Observability](./stats) |
-| Testing strategy | [Testing](./testing) |
+| Target product design | [NoKV-FS Design](./nokv_fs_design) |
 | Code ownership rules | [Code Contract](./development/code_contract) |
+| PR review checklist | [PR Review Checklist](./development/pr_review_checklist) |
 
-## Architecture at a Glance
+## Current Shape
 
 ```text
-Application / SDK
-  -> fsmeta API
-  -> fsmeta/exec
-  -> fsmeta/backend
-  -> fsmeta/runtime/local  -> Badger
-  -> coordinator + meta/root + raftstore  -> Holt
+AI training / agent workspace client
+  -> NoKV-FS metad
+  -> Holt metadata store
+  -> S3-compatible object store for file bodies
 ```
 
-NoKV keeps namespace semantics above the storage engine. Badger and Holt are
-persistence choices; they do not own the inode/dentry model or workspace API.
-
-The long-term product direction is described in [NoKV-FS Design](./nokv_fs_design):
-Rust-native clients and metadata services, distributed Holt-backed metadata
-shards, and object storage for file bodies.
+The first usable product path is an artifact/checkpoint workspace API. FUSE and
+distributed metadata shards are planned after the local service semantics,
+object backend, and durable allocator are stable.

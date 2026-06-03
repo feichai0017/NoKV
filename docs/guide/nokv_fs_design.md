@@ -503,7 +503,9 @@ Required safety rules:
 
 ## Repository Direction
 
-The Rust-native target should eventually move most product logic into Rust:
+The repository is now cut toward a Rust-native NoKV-FS product line. The main
+workspace should stay small and should only keep packages that serve the
+filesystem product directly:
 
 ```text
 crates/model
@@ -519,10 +521,9 @@ crates/cache
 crates/python
 ```
 
-The current Go `fsmeta`, `meta/root`, and `coordinator` code can remain as the
-bridge during migration, but the target product should avoid permanent
-cross-language hot paths. If Go remains in the system, it should be limited to
-control-plane compatibility or transitional tooling.
+Legacy metadata execution, generic KV, and experiment paths are not part of the
+product surface. If compatibility tooling is ever needed, it should live outside
+the hot path and include a removal condition.
 
 ## Implementation Milestones
 

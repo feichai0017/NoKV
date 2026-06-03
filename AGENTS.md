@@ -6,8 +6,8 @@ SPDX-License-Identifier: Apache-2.0
 # Agent Review Instructions
 
 This repository uses `docs/guide/development/code_contract.md` as the source of truth
-for code structure, package boundaries, naming, errors, metrics, tests, DCO,
-and distributed-safety review.
+for Rust package boundaries, naming, errors, metrics, tests, DCO, and storage
+safety review.
 
 Before reviewing or editing a PR:
 
@@ -18,8 +18,8 @@ Before reviewing or editing a PR:
 
 Check for:
 
-- Scope drift across root, coordinator, raftstore, fsmeta, Peras, docs, and
-  benchmark files.
+- Scope drift across `model`, `layout`, `metastore`, `holtstore`, `object`,
+  `metad`, docs, and benchmark files.
 - Missing DCO `Signed-off-by` trailers.
 - Package-boundary violations.
 - New helpers that reimplement standard library or existing repository helpers.
@@ -27,8 +27,8 @@ Check for:
 - Misplaced errors, metrics, stats, validation, recovery, or encoding code.
 - Vague file names, type names, interface names, or function names.
 - Redundant forwarding wrappers or compatibility shims.
-- Authority, freshness, durability, recovery, or GC ambiguity.
-- Generated-code drift.
+- Metadata durability, object-reference lifetime, watch/snapshot retention, or
+  GC ambiguity.
 - Missing regression, integration, recovery, or benchmark evidence.
 
 Do not suggest compatibility shims by default. NoKV accepts breaking changes

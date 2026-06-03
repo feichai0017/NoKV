@@ -1,7 +1,7 @@
 // Copyright 2024-2026 The NoKV Authors.
 // SPDX-License-Identifier: Apache-2.0
 
-// Generate the 1200×630 Open Graph card for the NoKV landing page.
+// Generate the 1200x630 Open Graph card for the NoKV-FS landing page.
 //
 // Run:    npm --prefix docs run gen:og
 // Output: docs/public/img/og.png
@@ -52,24 +52,24 @@ const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" v
     <rect x="0" y="0" width="48" height="48" rx="14" fill="#3b82f6" fill-opacity="0.18" stroke="#3b82f6" stroke-opacity="0.4" stroke-width="1"/>
     <circle cx="24" cy="24" r="11" fill="#60a5fa"/>
     <circle cx="24" cy="24" r="5" fill="#0a0d18"/>
-    <text x="68" y="34" font-family="sans-serif" font-size="28" font-weight="800" fill="#f1f5f9" letter-spacing="-0.5">NoKV</text>
+    <text x="68" y="34" font-family="sans-serif" font-size="28" font-weight="800" fill="#f1f5f9" letter-spacing="-0.5">NoKV-FS</text>
   </g>
 
   <g transform="translate(72,232)">
     <rect x="0" y="0" width="14" height="6" rx="3" fill="#60a5fa"/>
-    <text x="26" y="6" font-family="monospace" font-size="18" font-weight="700" fill="#60a5fa" letter-spacing="3.2">OPEN SOURCE  ·  APACHE-2.0  ·  CNCF LANDSCAPE</text>
+    <text x="26" y="6" font-family="monospace" font-size="18" font-weight="700" fill="#60a5fa" letter-spacing="3.2">OPEN SOURCE  ·  APACHE-2.0  ·  RUST DFS</text>
   </g>
 
-  <text x="72" y="330" font-family="sans-serif" font-size="72" font-weight="800" fill="#f1f5f9" letter-spacing="-2.6">Namespace metadata,</text>
-  <text x="72" y="420" font-family="sans-serif" font-size="72" font-weight="800" fill="url(#title-grad)" letter-spacing="-2.6">purpose-built.</text>
+  <text x="72" y="330" font-family="sans-serif" font-size="72" font-weight="800" fill="#f1f5f9" letter-spacing="-2.6">Rust filesystem for</text>
+  <text x="72" y="420" font-family="sans-serif" font-size="72" font-weight="800" fill="url(#title-grad)" letter-spacing="-2.6">AI workspaces.</text>
 
-  <text x="72" y="486" font-family="sans-serif" font-size="26" font-weight="400" fill="#b4becc">Server-side ReadDirPlus  ·  prefix-scoped change feeds  ·  TLA+ verified.</text>
+  <text x="72" y="486" font-family="sans-serif" font-size="26" font-weight="400" fill="#b4becc">Holt metadata  ·  S3-compatible bodies  ·  agent workspace namespace.</text>
 
   <g transform="translate(72,556)" font-family="monospace" font-size="18" fill="#8b94a7">
     <text>github.com/feichai0017/NoKV</text>
-    <text x="320">·   Go 1.26+</text>
-    <text x="460">·   gRPC native</text>
-    <text x="630">·   multi-Raft</text>
+    <text x="320">·   Rust</text>
+    <text x="430">·   Holt</text>
+    <text x="540">·   S3 / RustFS</text>
   </g>
 
   <rect x="0" y="624" width="1200" height="6" fill="url(#title-grad)"/>

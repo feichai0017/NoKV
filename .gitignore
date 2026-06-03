@@ -1,49 +1,21 @@
 # Copyright 2024-2026 The NoKV Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-.vscode
-work_test
-testdata
-!tools/lint/analyzers/*/testdata/
-!tools/lint/analyzers/*/testdata/**
-.idea
 .DS_Store
+.idea
+.vscode
 
-# golangci-lint custom plugin build artifact
-/bin/custom-gcl
-
-test_results
-benchmark/ycsb/results/
-benchmark/ycsb/data/
-benchmark/data/
-benchmark/eunomia/results/
-
-.gocache
-.gomodcache
-
-build/
-book/
-docs/research/
-docs/notes/
-docs/eunomia-audit.md
-benchmark/eunomia/
-cmd/nokv/cmd_eunomia_audit.go
-cmd/nokv/cmd_eunomia_audit_test.go
-
-cpu.pprof
-mem.pprof
-benchmark.test
-
-
-./artifacts/
-
-work_redis
-
-third_party/*
-.tlc-states/
-_apalache-out/
-
-coverage.out
-
-# Rust workspace build output
+# Rust build output
 target/
+**/target/
+
+# Docs
+docs/node_modules/
+docs/.vitepress/dist/
+
+# Local scratch data
+artifacts/
+work_test/
+testdata/
+coverage.out
+*.pprof

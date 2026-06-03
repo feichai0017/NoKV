@@ -4,7 +4,7 @@
  */
 
 /* ------------------------------------------------------------------------- */
-/*  NoKV site theme — VitePress design-token overrides + landing tokens      */
+/*  NoKV-FS site theme - VitePress design-token overrides                    */
 /* ------------------------------------------------------------------------- */
 
 :root {
@@ -32,7 +32,7 @@
   --vp-c-gutter: rgba(15, 23, 42, 0.06);
   --vp-c-border: rgba(15, 23, 42, 0.1);
 
-  /* Custom NoKV tokens */
+  /* Custom NoKV-FS tokens */
   --nokv-accent: #2563eb;
   --nokv-accent-2: #0891b2;
   --nokv-accent-3: #f59e0b;
@@ -78,7 +78,7 @@
   --vp-c-gutter: rgba(148, 163, 184, 0.08);
   --vp-c-border: rgba(148, 163, 184, 0.16);
 
-  /* NoKV tokens */
+  /* NoKV-FS tokens */
   --nokv-accent: #60a5fa;
   --nokv-accent-2: #22d3ee;
   --nokv-accent-3: #fbbf24;
