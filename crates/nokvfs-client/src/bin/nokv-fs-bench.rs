@@ -78,7 +78,7 @@ struct ResultRow {
     ops_per_second: f64,
     checksum: u64,
     shape: String,
-    caveat: &'static str,
+    caveat: String,
 }
 
 #[derive(Debug)]
@@ -122,7 +122,7 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
             row.ops_per_second,
             row.checksum,
             csv_field(&row.shape),
-            csv_field(row.caveat)
+            csv_field(&row.caveat)
         );
     }
 
@@ -143,17 +143,17 @@ fn run_one(
         .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
         .map_err(from_client)?;
     match workload {
-        Workload::MdtestEasy => bench_mdtest_easy(&client, config.profile, shape),
-        Workload::MdtestHard => bench_mdtest_hard(&client, config.profile, shape),
-        Workload::CheckpointPublish => bench_checkpoint_publish(&client, config.profile, shape),
-        Workload::TrainingRead => bench_training_read(&client, config.profile, shape),
+        Workload::MdtestEasy => bench_mdtest_easy(&client, config, shape),
+        Workload::MdtestHard => bench_mdtest_hard(&client, config, shape),
+        Workload::CheckpointPublish => bench_checkpoint_publish(&client, config, shape),
+        Workload::TrainingRead => bench_training_read(&client, config, shape),
         Workload::All => unreachable!("all expands before execution"),
     }
 }
 
 fn bench_mdtest_easy(
     client: &Client,
-    profile: Profile,
+    config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
     let start = Instant::now();
@@ -180,7 +180,7 @@ fn bench_mdtest_easy(
     let operations = shape.dirs + shape.dirs * shape.files_per_dir + 1;
     Ok(row(
         "mdtest-easy",
-        profile,
+        config.profile,
         operations,
         start.elapsed().as_secs_f64(),
         checksum,
@@ -188,13 +188,13 @@ fn bench_mdtest_easy(
             "dirs={} files_per_dir={} file_body=metadata-only",
             shape.dirs, shape.files_per_dir
         ),
-        "local Holt metadata, no extra fsync, no distributed replication",
+        metadata_only_caveat(config),
     ))
 }
 
 fn bench_mdtest_hard(
     client: &Client,
-    profile: Profile,
+    config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
     client
@@ -211,7 +211,7 @@ fn bench_mdtest_hard(
     }
     Ok(row(
         "mdtest-hard",
-        profile,
+        config.profile,
         shape.shared_files,
         start.elapsed().as_secs_f64(),
         checksum,
@@ -219,13 +219,13 @@ fn bench_mdtest_hard(
             "shared_dir_files={} file_body=metadata-only",
             shape.shared_files
         ),
-        "single hot directory on local Holt metadata, no distributed replication",
+        metadata_only_caveat(config),
     ))
 }
 
 fn bench_checkpoint_publish(
     client: &Client,
-    profile: Profile,
+    config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
     client
@@ -268,7 +268,7 @@ fn bench_checkpoint_publish(
     }
     Ok(row(
         "checkpoint-publish",
-        profile,
+        config.profile,
         shape.checkpoints * 2,
         start.elapsed().as_secs_f64(),
         checksum,
@@ -276,13 +276,13 @@ fn bench_checkpoint_publish(
             "iterations={} payload_bytes=4096 ops=count_put_plus_atomic_replace",
             shape.checkpoints
         ),
-        "local object put plus metadata rename-replace, no external object-store latency",
+        object_caveat(config, "object put plus metadata rename-replace"),
     ))
 }
 
 fn bench_training_read(
     client: &Client,
-    profile: Profile,
+    config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
     client
@@ -323,7 +323,7 @@ fn bench_training_read(
     black_box(checksum);
     Ok(row(
         "training-read",
-        profile,
+        config.profile,
         shape.dataset_dirs * 2,
         start.elapsed().as_secs_f64(),
         checksum,
@@ -331,7 +331,7 @@ fn bench_training_read(
             "dataset_dirs={} files_per_dir={} sample_bytes={} timed_ops=list_plus_one_read_per_dir",
             shape.dataset_dirs, shape.dataset_files_per_dir, shape.dataset_file_bytes
         ),
-        "warm local object reads after deterministic dataset seed, no remote S3 latency",
+        object_caveat(config, "warm object reads after deterministic dataset seed"),
     ))
 }
 
@@ -342,7 +342,7 @@ fn row(
     seconds: f64,
     checksum: u64,
     shape: String,
-    caveat: &'static str,
+    caveat: String,
 ) -> ResultRow {
     ResultRow {
         workload,
@@ -353,6 +353,27 @@ fn row(
         checksum,
         shape,
         caveat,
+    }
+}
+
+fn metadata_only_caveat(config: &Config) -> String {
+    format!(
+        "metadata-only on local Holt, object_backend={}, no distributed replication",
+        object_backend_name(config.object_backend)
+    )
+}
+
+fn object_caveat(config: &Config, path: &str) -> String {
+    match config.object_backend {
+        ObjectBackendKind::Local => {
+            format!("{path}, local filesystem object backend, no distributed replication")
+        }
+        ObjectBackendKind::RustFs => {
+            format!("{path}, RustFS S3-compatible backend over configured endpoint")
+        }
+        ObjectBackendKind::S3 => {
+            format!("{path}, generic S3-compatible backend over configured endpoint")
+        }
     }
 }
 
@@ -594,6 +615,14 @@ fn profile_name(profile: Profile) -> &'static str {
         Profile::Smoke => "smoke",
         Profile::Standard => "standard",
         Profile::Long => "long",
+    }
+}
+
+fn object_backend_name(backend: ObjectBackendKind) -> &'static str {
+    match backend {
+        ObjectBackendKind::Local => "local",
+        ObjectBackendKind::S3 => "s3",
+        ObjectBackendKind::RustFs => "rustfs",
     }
 }
 
