@@ -167,6 +167,18 @@ trait BenchClient: Sync {
         uid: u32,
         gid: u32,
     ) -> Result<DentryWithAttr, BenchError>;
+    fn mkdirs(
+        &self,
+        paths: &[String],
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Vec<DentryWithAttr>, BenchError> {
+        paths
+            .iter()
+            .map(|path| self.mkdir(path, mode, uid, gid))
+            .collect()
+    }
     fn create_file(
         &self,
         path: &str,
@@ -225,6 +237,22 @@ impl BenchClient for ServiceBenchClient {
         self.client
             .metadata()
             .mkdir(path, mode, uid, gid)
+            .map_err(from_client)
+    }
+
+    fn mkdirs(
+        &self,
+        paths: &[String],
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Vec<DentryWithAttr>, BenchError> {
+        self.client
+            .metadata()
+            .mkdirs(paths, mode, uid, gid)
+            .map_err(from_client)?
+            .into_iter()
+            .collect::<Result<Vec<_>, _>>()
             .map_err(from_client)
     }
 
@@ -389,12 +417,15 @@ fn bench_mdtest_easy(
     let before = client.stats()?;
     let start = Instant::now();
     let mut checksum = 0_u64;
+    client.mkdir("/mdtest-easy", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+    let dir_paths = (0..shape.dirs)
+        .map(|dir| format!("/mdtest-easy/dir-{dir:05}"))
+        .collect::<Vec<_>>();
+    for entry in client.mkdirs(&dir_paths, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)? {
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
+    }
     for dir in 0..shape.dirs {
         let dir_path = format!("/mdtest-easy/dir-{dir:05}");
-        if dir == 0 {
-            client.mkdir("/mdtest-easy", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
-        }
-        client.mkdir(&dir_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         checksum = checksum.wrapping_add(dir as u64);
         let paths = (0..shape.files_per_dir)
             .map(|file| format!("{dir_path}/file-{file:05}"))
@@ -525,9 +556,12 @@ fn bench_training_read(
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
     client.mkdir("/dataset", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+    let shard_paths = (0..shape.dataset_dirs)
+        .map(|shard| format!("/dataset/shard-{shard:04}"))
+        .collect::<Vec<_>>();
+    client.mkdirs(&shard_paths, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
     for shard in 0..shape.dataset_dirs {
         let shard_path = format!("/dataset/shard-{shard:04}");
-        client.mkdir(&shard_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         for file in 0..shape.dataset_files_per_dir {
             let path = format!("{shard_path}/sample-{file:05}.bin");
             let manifest_id = format!("dataset/shard-{shard:04}/sample-{file:05}.bin");
@@ -593,9 +627,12 @@ fn bench_mlperf_dlio(
         DEFAULT_GID,
     )?;
 
+    let shard_paths = (0..shape.dataset_dirs)
+        .map(|shard| format!("/mlperf-dlio/dataset/shard-{shard:04}"))
+        .collect::<Vec<_>>();
+    client.mkdirs(&shard_paths, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
     for shard in 0..shape.dataset_dirs {
         let shard_path = format!("/mlperf-dlio/dataset/shard-{shard:04}");
-        client.mkdir(&shard_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         for file in 0..shape.dataset_files_per_dir {
             let path = format!("{shard_path}/sample-{file:05}.bin");
             let manifest_id = format!("mlperf-dlio/dataset/shard-{shard:04}/sample-{file:05}");
@@ -686,9 +723,12 @@ fn bench_demo_dataset(
     let samples_per_class = shape.dataset_files_per_dir.clamp(1, 32);
     let sample_bytes = shape.dataset_file_bytes.clamp(128, 4096);
     let payload = vec![23_u8; sample_bytes];
+    let class_paths = (0..classes)
+        .map(|class| format!("/demo-dataset/class-{class:03}"))
+        .collect::<Vec<_>>();
+    client.mkdirs(&class_paths, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
     for class in 0..classes {
         let class_path = format!("/demo-dataset/class-{class:03}");
-        client.mkdir(&class_path, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
         for sample in 0..samples_per_class {
             let path = format!("{class_path}/sample-{sample:05}.bin");
             let manifest_id = format!("demo-dataset/class-{class:03}/sample-{sample:05}");
