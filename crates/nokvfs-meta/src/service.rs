@@ -269,13 +269,7 @@ where
         if rows.is_empty() {
             return Ok(PendingObjectCleanupOutcome::default());
         }
-        if self.has_active_snapshot_pins()? {
-            return Ok(PendingObjectCleanupOutcome {
-                scanned: rows.len(),
-                blocked_by_snapshots: rows.len(),
-                ..PendingObjectCleanupOutcome::default()
-            });
-        }
+        let retention_floor = self.history_retention_floor()?;
 
         let mut outcome = PendingObjectCleanupOutcome {
             scanned: rows.len(),
@@ -289,6 +283,10 @@ where
         for row in rows {
             let record = decode_object_gc_record(&row.value.0)
                 .map_err(|err| MetadError::Codec(err.to_string()))?;
+            if retention_floor.is_some_and(|floor| floor.get() < record.enqueue_version) {
+                outcome.blocked_by_snapshots += 1;
+                continue;
+            }
             let key = ObjectKey::new(record.object_key)?;
             outcome.attempted += 1;
             if self.objects.delete(&key)? {
@@ -297,6 +295,10 @@ where
                 outcome.missing += 1;
             }
             cleaned_keys.push(row.key);
+        }
+
+        if cleaned_keys.is_empty() {
+            return Ok(outcome);
         }
 
         let commit_version = self.next_version()?;
@@ -1868,17 +1870,6 @@ where
         Version::new(pin.read_version).map_err(Into::into)
     }
 
-    fn has_active_snapshot_pins(&self) -> Result<bool, MetadError> {
-        let rows = self.metadata.scan(ScanRequest {
-            family: RecordFamily::Snapshot,
-            prefix: snapshot_pin_prefix(self.mount),
-            version: self.read_version()?,
-            limit: 1,
-            purpose: ReadPurpose::UserStrong,
-        })?;
-        Ok(!rows.is_empty())
-    }
-
     fn history_retention_floor(&self) -> Result<Option<Version>, MetadError> {
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Snapshot,
@@ -2913,6 +2904,48 @@ mod tests {
         assert_eq!(
             service.read_artifact(InodeId::root(), &name).unwrap(),
             b"new-body"
+        );
+    }
+
+    #[test]
+    fn snapshot_after_replace_does_not_block_old_object_cleanup() {
+        let (service, objects) = service_with_objects();
+        let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+        let first = service
+            .publish_artifact(artifact_request(name.clone(), "checkpoint/old", b"old"))
+            .unwrap();
+        let old_body = first.body.clone().unwrap();
+        let old_object = block_key(first.attr.inode, old_body.generation, 0, 0);
+        let replaced = service
+            .replace_artifact(artifact_request(
+                name.clone(),
+                "checkpoint/new",
+                b"new-body",
+            ))
+            .unwrap();
+        let snapshot = service.snapshot_subtree(InodeId::root()).unwrap();
+
+        assert_eq!(
+            service
+                .read_artifact_at_snapshot(snapshot.snapshot_id, InodeId::root(), &name)
+                .unwrap(),
+            b"new-body"
+        );
+        assert!(objects.head(&old_object).unwrap().is_some());
+
+        let cleanup = service.cleanup_pending_objects(100).unwrap();
+        assert_eq!(cleanup.scanned, 1);
+        assert_eq!(cleanup.blocked_by_snapshots, 0);
+        assert_eq!(cleanup.deleted, 1);
+        assert_eq!(cleanup.records_removed, 1);
+        assert!(objects.head(&old_object).unwrap().is_none());
+        assert_eq!(
+            service.read_artifact(InodeId::root(), &name).unwrap(),
+            b"new-body"
+        );
+        assert_eq!(
+            replaced.entry.body.unwrap().generation,
+            snapshot.read_version
         );
     }
 
