@@ -54,13 +54,15 @@ impl Server {
             Some(path) => {
                 let log = FileSharedLog::open(path)?;
                 let frontier = FileAppliedFrontierStore::open(metadata_apply_frontier_path(path))?;
-                let logged = Arc::new(SharedLogMetadataStore::with_frontier_store(
+                let (logged, _replay) = SharedLogMetadataStore::recover_with_frontier_store(
                     metadata,
                     log,
                     LogTerm::new(1)?,
                     options.mount,
                     frontier,
-                )?);
+                )
+                .map_err(|err| ServerError::SharedLog(SharedLogError::Backend(err.to_string())))?;
+                let logged = Arc::new(logged);
                 metadata_log = Some(Arc::clone(&logged));
                 ServerMetadataStore::file_logged(logged)
             }

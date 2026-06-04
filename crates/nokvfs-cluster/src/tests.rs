@@ -524,6 +524,90 @@ fn shared_log_metadata_store_persists_file_applied_frontier() {
 }
 
 #[test]
+fn shared_log_metadata_store_replays_tail_after_file_frontier() {
+    let dir = tempdir().unwrap();
+    let meta_path = dir.path().join("meta");
+    let log_path = dir.path().join("metadata.log");
+    let frontier_path = dir.path().join("metadata.log.apply");
+    let mount = MountId::new(1).unwrap();
+    {
+        let log = FileSharedLog::open(&log_path).unwrap();
+        let store = HoltMetadataStore::open_file(&meta_path).unwrap();
+        let frontier = FileAppliedFrontierStore::open(&frontier_path).unwrap();
+        let shared = SharedLogMetadataStore::with_frontier_store(
+            store,
+            log,
+            LogTerm::new(1).unwrap(),
+            mount,
+            frontier,
+        )
+        .unwrap();
+        shared.commit_metadata(command(b"applied", 2)).unwrap();
+        shared
+            .log()
+            .append_batch(
+                LogTerm::new(1).unwrap(),
+                mount,
+                &[command(b"durable-tail", 3)],
+            )
+            .unwrap();
+    }
+
+    let log = FileSharedLog::open(&log_path).unwrap();
+    let store = HoltMetadataStore::open_file(&meta_path).unwrap();
+    let frontier = FileAppliedFrontierStore::open(&frontier_path).unwrap();
+    let (recovered, outcome) = SharedLogMetadataStore::recover_with_frontier_store(
+        store,
+        log,
+        LogTerm::new(1).unwrap(),
+        mount,
+        frontier,
+    )
+    .unwrap();
+
+    assert_eq!(outcome.entries, 1);
+    assert_eq!(outcome.commands, 1);
+    assert_eq!(
+        recovered.applied_frontier(),
+        Some(ApplyFrontier {
+            position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(2).unwrap(),
+            },
+            commit_version: version(3),
+        })
+    );
+    assert_eq!(
+        recovered
+            .inner()
+            .get(
+                RecordFamily::Dentry,
+                b"applied",
+                version(3),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+    assert_eq!(
+        recovered
+            .inner()
+            .get(
+                RecordFamily::Dentry,
+                b"durable-tail",
+                version(3),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+}
+
+#[test]
 fn shared_log_metadata_store_compacts_only_applied_prefix() {
     let log = InMemorySharedLog::new();
     let store = HoltMetadataStore::open_memory().unwrap();

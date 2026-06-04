@@ -79,6 +79,23 @@ where
         })
     }
 
+    pub fn recover_with_frontier_store(
+        store: M,
+        log: L,
+        term: LogTerm,
+        mount: MountId,
+        frontier_store: F,
+    ) -> Result<(Self, ReplayOutcome), ReplayError> {
+        let shared = Self::with_frontier_store(store, log, term, mount, frontier_store)
+            .map_err(ReplayError::from)?;
+        let start = match shared.applied_frontier() {
+            Some(frontier) => next_log_index(frontier.position.index)?,
+            None => first_available_replay_index(&shared.log)?,
+        };
+        let outcome = ReplayDriver::new(&shared.log, &shared).replay_from(start, 0)?;
+        Ok((shared, outcome))
+    }
+
     pub fn commit_batch(
         &self,
         commands: &[MetadataCommand],
