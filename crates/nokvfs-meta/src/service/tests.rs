@@ -584,6 +584,36 @@ fn validated_path_index_cache_reuses_stat_validation_for_indexed_list() {
 }
 
 #[test]
+fn validated_path_index_lookup_cache_reuses_repeated_stat_result() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let artifact = publish_path_artifact(&service, "/runs/a.bin", "runs/a.bin", b"a");
+    service.clear_read_path_caches_for_test();
+
+    let first = service
+        .stat_path("/runs/a.bin")
+        .unwrap()
+        .expect("first stat");
+    assert_eq!(first.attr, artifact.attr);
+
+    let before_store = metadata.metadata_store_stats();
+    let second = service
+        .stat_path("/runs/a.bin")
+        .unwrap()
+        .expect("second stat");
+    let after_store = metadata.metadata_store_stats();
+
+    assert_eq!(second.attr, artifact.attr);
+    assert_eq!(after_store.get_total - before_store.get_total, 0);
+}
+
+#[test]
 fn stale_path_index_falls_back_to_canonical_namespace() {
     let service = service();
     let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();

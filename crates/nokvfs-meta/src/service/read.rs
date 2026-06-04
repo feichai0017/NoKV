@@ -331,6 +331,7 @@ where
                     return Ok(None);
                 };
                 if canonical_version == item.version && canonical == indexed {
+                    self.remember_path_index_lookup(&item.key, version, &canonical, item.version)?;
                     self.remember_validated_path_index(
                         &item.key,
                         item.version,
@@ -499,6 +500,50 @@ where
         Ok(cache.get(&key).cloned())
     }
 
+    fn cached_path_index_lookup(
+        &self,
+        index_key: &[u8],
+        read_version: Version,
+    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
+        let key = self.path_index_lookup_cache_key(index_key, read_version);
+        let shard_index = path_cache_shard_index(&key);
+        let cache = self.path_index_lookup_cache[shard_index]
+            .lock()
+            .map_err(|err| {
+                MetadataError::Backend(format!("metadata path-index lookup cache poisoned: {err}"))
+            })?;
+        Ok(cache
+            .get(&key)
+            .map(|value| (value.entry.clone(), value.dentry_version)))
+    }
+
+    fn remember_path_index_lookup(
+        &self,
+        index_key: &[u8],
+        read_version: Version,
+        entry: &DentryWithAttr,
+        dentry_version: Version,
+    ) -> Result<(), MetadError> {
+        let key = self.path_index_lookup_cache_key(index_key, read_version);
+        let shard_index = path_cache_shard_index(&key);
+        let mut cache = self.path_index_lookup_cache[shard_index]
+            .lock()
+            .map_err(|err| {
+                MetadataError::Backend(format!("metadata path-index lookup cache poisoned: {err}"))
+            })?;
+        if cache.len() >= PATH_INDEX_LOOKUP_CACHE_MAX_ENTRIES_PER_SHARD {
+            cache.clear();
+        }
+        cache.insert(
+            key,
+            PathIndexLookupCacheValue {
+                entry: entry.clone(),
+                dentry_version,
+            },
+        );
+        Ok(())
+    }
+
     fn remember_validated_path_index(
         &self,
         index_key: &[u8],
@@ -522,6 +567,17 @@ where
         Ok(())
     }
 
+    fn path_index_lookup_cache_key(
+        &self,
+        index_key: &[u8],
+        read_version: Version,
+    ) -> PathIndexLookupCacheKey {
+        PathIndexLookupCacheKey {
+            read_version: read_version.get(),
+            index_key: index_key.to_vec(),
+        }
+    }
+
     fn path_index_validation_cache_key(
         &self,
         index_key: &[u8],
@@ -538,6 +594,9 @@ where
     #[cfg(test)]
     pub(super) fn clear_read_path_caches_for_test(&self) {
         for shard in &self.path_resolution_cache {
+            shard.lock().unwrap().clear();
+        }
+        for shard in &self.path_index_lookup_cache {
             shard.lock().unwrap().clear();
         }
         for shard in &self.path_index_validation_cache {
@@ -596,6 +655,10 @@ where
         };
         self.path_index_lookup_total.fetch_add(1, Ordering::Relaxed);
         let key = path_index_key(self.mount, components);
+        if let Some(cached) = self.cached_path_index_lookup(&key, version)? {
+            self.path_index_hit_total.fetch_add(1, Ordering::Relaxed);
+            return Ok(Some(cached));
+        }
         let Some(item) =
             self.metadata
                 .get_versioned(RecordFamily::PathIndex, &key, version, purpose)?
@@ -634,6 +697,7 @@ where
             return Ok(None);
         };
         if canonical_version == item.version && canonical == indexed {
+            self.remember_path_index_lookup(&key, version, &canonical, canonical_version)?;
             self.remember_validated_path_index(&key, item.version, version, &canonical)?;
             self.path_index_hit_total.fetch_add(1, Ordering::Relaxed);
             return Ok(Some((canonical, canonical_version)));

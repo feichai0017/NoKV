@@ -60,10 +60,13 @@ const ALLOCATOR_VERSION_RESERVATION: u64 = 1024;
 const ALLOCATOR_INODE_RESERVATION: u64 = 1024;
 const BODY_DIGEST_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 const PATH_RESOLUTION_CACHE_MAX_ENTRIES: usize = 4096;
+const PATH_INDEX_LOOKUP_CACHE_MAX_ENTRIES: usize = 4096;
 const PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES: usize = 4096;
 const PATH_CACHE_SHARD_COUNT: usize = 64;
 const PATH_RESOLUTION_CACHE_MAX_ENTRIES_PER_SHARD: usize =
     PATH_RESOLUTION_CACHE_MAX_ENTRIES / PATH_CACHE_SHARD_COUNT;
+const PATH_INDEX_LOOKUP_CACHE_MAX_ENTRIES_PER_SHARD: usize =
+    PATH_INDEX_LOOKUP_CACHE_MAX_ENTRIES / PATH_CACHE_SHARD_COUNT;
 const PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES_PER_SHARD: usize =
     PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES / PATH_CACHE_SHARD_COUNT;
 
@@ -96,6 +99,18 @@ struct PathResolutionCacheKey {
     root: u64,
     version: u64,
     components_key: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
+struct PathIndexLookupCacheKey {
+    read_version: u64,
+    index_key: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct PathIndexLookupCacheValue {
+    entry: DentryWithAttr,
+    dentry_version: Version,
 }
 
 #[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
@@ -320,6 +335,8 @@ pub struct NoKvFs<M, O> {
     objects: O,
     allocator_gate: Mutex<()>,
     path_resolution_cache: Vec<Mutex<BTreeMap<PathResolutionCacheKey, InodeId>>>,
+    path_index_lookup_cache:
+        Vec<Mutex<BTreeMap<PathIndexLookupCacheKey, PathIndexLookupCacheValue>>>,
     path_index_validation_cache: Vec<Mutex<BTreeMap<PathIndexValidationCacheKey, DentryWithAttr>>>,
     clock: AtomicU64,
     reserved_version: AtomicU64,
@@ -348,6 +365,13 @@ pub struct NoKvFs<M, O> {
 }
 
 fn new_path_resolution_cache_shards() -> Vec<Mutex<BTreeMap<PathResolutionCacheKey, InodeId>>> {
+    (0..PATH_CACHE_SHARD_COUNT)
+        .map(|_| Mutex::new(BTreeMap::new()))
+        .collect()
+}
+
+fn new_path_index_lookup_cache_shards(
+) -> Vec<Mutex<BTreeMap<PathIndexLookupCacheKey, PathIndexLookupCacheValue>>> {
     (0..PATH_CACHE_SHARD_COUNT)
         .map(|_| Mutex::new(BTreeMap::new()))
         .collect()
