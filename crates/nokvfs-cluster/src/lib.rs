@@ -12,6 +12,7 @@ mod file;
 mod frontier;
 mod group;
 mod log;
+mod membership;
 mod memory;
 mod quorum;
 mod replay;
@@ -31,6 +32,7 @@ pub use file::{
 pub use frontier::{AppliedFrontierStore, FileAppliedFrontierStore, MemoryAppliedFrontierStore};
 pub use group::{MetadataGroup, MetadataGroupCommit};
 pub use log::SharedMetadataLog;
+pub use membership::{FileMembershipCatalog, MembershipCatalog, MemoryMembershipCatalog};
 pub use memory::InMemorySharedLog;
 pub use quorum::{InMemoryQuorumLog, QuorumNodeLog, QuorumNodeRole};
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};
@@ -42,7 +44,7 @@ pub use store::{SharedLogMetadataStore, SharedLogRuntimeStats};
 pub use types::{
     AppliedMetadataCommand, ApplyFrontier, CheckpointArtifact, CheckpointFrontier,
     CheckpointManifest, DurableReceipt, LearnerBootstrapPlan, LogIndex, LogPosition, LogTerm,
-    MetadataLogEntry, NodeId, ReadFreshness,
+    MetadataLogEntry, MetadataMembership, NodeId, ReadFreshness,
 };
 
 #[cfg(test)]

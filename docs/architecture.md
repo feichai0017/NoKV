@@ -146,13 +146,15 @@ replica catch-up via `ReadMetadataLog`. Each returned payload is encoded by
 `nokvfs-cluster`, so protocol framing does not need to understand
 `MetadataCommand` internals. It can also accept an externally ordered command
 batch via `AppendMetadataLog`, validate the leader id against the server's
-configured metadata-log node id, validate the term shape, append it to the
-local metadata log, and replay it into Holt state. The log rejects stale terms
-after a newer committed term, so an old leader cannot keep extending a local
-tail once a newer term has been observed. The RPC path can also read the latest
-published checkpoint manifest for a mount, giving learners the frontier and
-artifact descriptor they need before replaying a retained tail. A learner can
-request a bootstrap plan that pairs that checkpoint with the retained log tail
-range to replay. Actual checkpoint artifact transfer/install, durable
-membership, and full leader election/voter authorization are still the next HA
-steps.
+configured metadata-log membership, validate the term shape, append it to the
+local metadata log, and replay it into Holt state. A server with metadata log
+enabled publishes a durable single-voter membership catalog next to the log;
+future multi-voter membership must update that catalog at a higher term rather
+than silently changing voters in place. The log rejects stale terms after a
+newer committed term, so an old leader cannot keep extending a local tail once a
+newer term has been observed. The RPC path can also read the latest published
+checkpoint manifest for a mount, giving learners the frontier and artifact
+descriptor they need before replaying a retained tail. A learner can request a
+bootstrap plan that pairs that checkpoint with the retained log tail range to
+replay. Actual checkpoint artifact transfer/install, leader election, and full
+multi-voter quorum transport are still the next HA steps.

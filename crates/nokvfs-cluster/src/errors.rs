@@ -1,6 +1,8 @@
 use std::fmt;
 
-use crate::{LogIndex, LogPosition, NodeId};
+use nokvfs_types::MountId;
+
+use crate::{LogIndex, LogPosition, LogTerm, NodeId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SharedLogError {
@@ -13,6 +15,11 @@ pub enum SharedLogError {
     NoVoters,
     DuplicateNode(NodeId),
     UnknownNode(NodeId),
+    LeaderNotVoter(NodeId),
+    MembershipConflict {
+        mount: MountId,
+        term: LogTerm,
+    },
     NoQuorum {
         required: usize,
         available: usize,
@@ -83,6 +90,17 @@ impl fmt::Display for SharedLogError {
             Self::UnknownNode(node) => {
                 write!(f, "metadata quorum log node {} is unknown", node.get())
             }
+            Self::LeaderNotVoter(node) => write!(
+                f,
+                "metadata membership leader {} must be a voter",
+                node.get()
+            ),
+            Self::MembershipConflict { mount, term } => write!(
+                f,
+                "metadata membership for mount {} conflicts at term {}",
+                mount.get(),
+                term.get()
+            ),
             Self::NoQuorum {
                 required,
                 available,

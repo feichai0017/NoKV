@@ -1477,6 +1477,79 @@ fn file_checkpoint_catalog_persists_latest_manifest() {
 }
 
 #[test]
+fn metadata_membership_validates_voters_and_leader() {
+    let mount = MountId::new(1).unwrap();
+    let term = LogTerm::new(3).unwrap();
+    let membership =
+        MetadataMembership::new(mount, term, node(2), [node(3), node(2)], [node(5), node(4)])
+            .unwrap();
+
+    assert_eq!(membership.voters, vec![node(2), node(3)]);
+    assert_eq!(membership.learners, vec![node(4), node(5)]);
+    assert!(membership.is_voter(node(3)));
+    assert!(membership.is_learner(node(5)));
+    assert_eq!(membership.authorize_leader(node(2)), Ok(()));
+    assert!(matches!(
+        membership.authorize_leader(node(3)),
+        Err(SharedLogError::UnauthorizedLeader {
+            expected,
+            proposed,
+        }) if expected == node(2) && proposed == node(3)
+    ));
+    assert!(matches!(
+        MetadataMembership::new(mount, term, node(2), [], []),
+        Err(SharedLogError::NoVoters)
+    ));
+    assert!(matches!(
+        MetadataMembership::new(mount, term, node(9), [node(2)], []),
+        Err(SharedLogError::LeaderNotVoter(leader)) if leader == node(9)
+    ));
+    assert!(matches!(
+        MetadataMembership::new(mount, term, node(2), [node(2)], [node(2)]),
+        Err(SharedLogError::DuplicateNode(duplicate)) if duplicate == node(2)
+    ));
+}
+
+#[test]
+fn membership_catalog_persists_term_ordered_membership() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.membership");
+    let mount = MountId::new(1).unwrap();
+    let term_2 = LogTerm::new(2).unwrap();
+    let term_3 = LogTerm::new(3).unwrap();
+    let old = MetadataMembership::single_voter(mount, term_2, node(1)).unwrap();
+    let latest =
+        MetadataMembership::new(mount, term_3, node(2), [node(2), node(3)], [node(4)]).unwrap();
+
+    let memory = MemoryMembershipCatalog::new();
+    memory.publish(latest.clone()).unwrap();
+    assert!(matches!(
+        memory.publish(old.clone()),
+        Err(SharedLogError::StaleTerm { current, proposed })
+            if current == term_3 && proposed == term_2
+    ));
+    assert_eq!(
+        memory.latest_for_mount(mount).unwrap(),
+        Some(latest.clone())
+    );
+
+    let file = FileMembershipCatalog::open(&path).unwrap();
+    assert_eq!(file.latest_for_mount(mount).unwrap(), None);
+    file.publish(old).unwrap();
+    file.publish(latest.clone()).unwrap();
+    assert!(matches!(
+        file.publish(MetadataMembership::single_voter(mount, term_3, node(3)).unwrap()),
+        Err(SharedLogError::MembershipConflict { mount: conflict_mount, term })
+            if conflict_mount == mount && term == term_3
+    ));
+
+    let reopened = FileMembershipCatalog::open(&path).unwrap();
+    assert_eq!(reopened.latest_for_mount(mount).unwrap(), Some(latest));
+    assert!(path.is_file());
+    assert!(!path.with_file_name("metadata.membership.tmp").is_file());
+}
+
+#[test]
 fn checkpoint_compaction_without_manifest_is_noop() {
     let log = InMemorySharedLog::new();
     let catalog = MemoryCheckpointCatalog::new();

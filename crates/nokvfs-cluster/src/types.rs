@@ -1,3 +1,5 @@
+use std::collections::BTreeSet;
+
 use nokvfs_meta::command::{MetadataCommand, Version};
 use nokvfs_types::MountId;
 
@@ -83,6 +85,15 @@ pub struct LearnerBootstrapPlan {
     pub checkpoint: CheckpointManifest,
     pub replay_start: LogIndex,
     pub replayed_index: LogIndex,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MetadataMembership {
+    pub mount: MountId,
+    pub term: LogTerm,
+    pub leader: NodeId,
+    pub voters: Vec<NodeId>,
+    pub learners: Vec<NodeId>,
 }
 
 impl LogTerm {
@@ -174,5 +185,72 @@ impl CheckpointArtifact {
             digest: digest.into(),
             size_bytes,
         })
+    }
+}
+
+impl MetadataMembership {
+    pub fn new(
+        mount: MountId,
+        term: LogTerm,
+        leader: NodeId,
+        voters: impl IntoIterator<Item = NodeId>,
+        learners: impl IntoIterator<Item = NodeId>,
+    ) -> Result<Self, SharedLogError> {
+        let mut seen = BTreeSet::new();
+        let mut voter_set = BTreeSet::new();
+        for voter in voters {
+            if !seen.insert(voter) {
+                return Err(SharedLogError::DuplicateNode(voter));
+            }
+            voter_set.insert(voter);
+        }
+        if voter_set.is_empty() {
+            return Err(SharedLogError::NoVoters);
+        }
+        if !voter_set.contains(&leader) {
+            return Err(SharedLogError::LeaderNotVoter(leader));
+        }
+
+        let mut learner_set = BTreeSet::new();
+        for learner in learners {
+            if !seen.insert(learner) {
+                return Err(SharedLogError::DuplicateNode(learner));
+            }
+            learner_set.insert(learner);
+        }
+
+        Ok(Self {
+            mount,
+            term,
+            leader,
+            voters: voter_set.into_iter().collect(),
+            learners: learner_set.into_iter().collect(),
+        })
+    }
+
+    pub fn single_voter(
+        mount: MountId,
+        term: LogTerm,
+        node: NodeId,
+    ) -> Result<Self, SharedLogError> {
+        Self::new(mount, term, node, [node], [])
+    }
+
+    pub fn authorize_leader(&self, proposed: NodeId) -> Result<(), SharedLogError> {
+        if proposed != self.leader {
+            return Err(SharedLogError::UnauthorizedLeader {
+                expected: self.leader,
+                proposed,
+            });
+        }
+        Ok(())
+    }
+
+    pub fn is_voter(&self, node: NodeId) -> bool {
+        self.voters.contains(&node)
+    }
+
+    pub fn is_learner(&self, node: NodeId) -> bool {
+        self.learners.contains(&node)
     }
 }

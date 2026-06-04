@@ -9,9 +9,10 @@ use std::thread;
 use nokvfs_cluster::{
     compact_log_to_checkpoint, AppendMetadataBatchRequest, AppendMetadataBatchResponse,
     ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
-    FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog, FileSharedLogOptions, LogIndex,
-    LogPosition, MetadataLogEntry, NodeId, SharedLogError, SharedLogMetadataStore,
-    SharedLogRuntimeStats, SharedMetadataLog,
+    FileAppliedFrontierStore, FileCheckpointCatalog, FileMembershipCatalog, FileSharedLog,
+    FileSharedLogOptions, LogIndex, LogPosition, MembershipCatalog, MetadataLogEntry,
+    MetadataMembership, NodeId, SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats,
+    SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -29,6 +30,7 @@ pub struct Server {
     service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
     metadata_log_enabled: bool,
     metadata_log_node: NodeId,
+    metadata_membership: Option<MetadataMembership>,
     metadata_log_sync: nokvfs_cluster::FileSharedLogSync,
     metadata_log_status: Option<Arc<dyn ServerMetadataLogStatus>>,
     metadata_log: Option<Arc<FileLoggedMetadataStore>>,
@@ -59,6 +61,7 @@ impl Server {
         let mut metadata_log = None;
         let mut metadata_log_status = None;
         let mut metadata_checkpoint = None;
+        let mut metadata_membership = None;
         let metadata = match options.metadata_log_path.as_ref() {
             Some(path) => {
                 let log = FileSharedLog::open(
@@ -69,6 +72,14 @@ impl Server {
                 )?;
                 let frontier = FileAppliedFrontierStore::open(metadata_apply_frontier_path(path))?;
                 let checkpoint = FileCheckpointCatalog::open(metadata_checkpoint_path(path))?;
+                let membership_catalog =
+                    FileMembershipCatalog::open(metadata_membership_path(path))?;
+                let membership = MetadataMembership::single_voter(
+                    options.mount,
+                    options.metadata_log_term,
+                    options.metadata_log_node,
+                )?;
+                membership_catalog.publish(membership.clone())?;
                 let (logged, _replay) = SharedLogMetadataStore::recover_with_frontier_store(
                     metadata,
                     log,
@@ -82,6 +93,7 @@ impl Server {
                 metadata_log = Some(Arc::clone(&logged));
                 metadata_log_status = Some(status);
                 metadata_checkpoint = Some(checkpoint);
+                metadata_membership = Some(membership);
                 ServerMetadataStore::shared_logged(logged)
             }
             None => ServerMetadataStore::direct(metadata),
@@ -95,6 +107,7 @@ impl Server {
             service,
             metadata_log_enabled: metadata_log.is_some(),
             metadata_log_node: options.metadata_log_node,
+            metadata_membership,
             metadata_log_sync: options.metadata_log_sync,
             metadata_log_status,
             metadata_log,
@@ -292,6 +305,11 @@ impl Server {
     }
 
     fn authorize_metadata_log_leader(&self, leader: NodeId) -> Result<(), ServerError> {
+        if let Some(membership) = self.metadata_membership.as_ref() {
+            return membership
+                .authorize_leader(leader)
+                .map_err(ServerError::SharedLog);
+        }
         if leader != self.metadata_log_node {
             return Err(ServerError::SharedLog(SharedLogError::UnauthorizedLeader {
                 expected: self.metadata_log_node,
@@ -368,6 +386,20 @@ fn metadata_checkpoint_path(log_path: &Path) -> PathBuf {
             name
         })
         .unwrap_or_else(|| "metadata.log.checkpoint".into());
+    path.set_file_name(file_name);
+    path
+}
+
+fn metadata_membership_path(log_path: &Path) -> PathBuf {
+    let mut path = log_path.to_path_buf();
+    let file_name = log_path
+        .file_name()
+        .map(|name| {
+            let mut name = name.to_os_string();
+            name.push(".membership");
+            name
+        })
+        .unwrap_or_else(|| "metadata.log.membership".into());
     path.set_file_name(file_name);
     path
 }
@@ -672,6 +704,14 @@ pub(crate) mod tests {
             service,
             metadata_log_enabled: true,
             metadata_log_node: options.metadata_log_node,
+            metadata_membership: Some(
+                MetadataMembership::single_voter(
+                    options.mount,
+                    options.metadata_log_term,
+                    options.metadata_log_node,
+                )
+                .unwrap(),
+            ),
             metadata_log_sync: options.metadata_log_sync,
             metadata_log_status: Some(metadata_log_status),
             metadata_log: None,
@@ -765,6 +805,27 @@ pub(crate) mod tests {
         assert!(runtime.commit_entry_total >= 1);
         assert_eq!(runtime.commit_entry_total, runtime.commit_command_total);
         assert_eq!(runtime.max_commands_per_entry, 1);
+    }
+
+    #[test]
+    fn server_publishes_metadata_log_membership() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let mut options = test_options(dir.path(), Some(metadata_log.clone()));
+        options.metadata_log_node = node(4);
+        options.metadata_log_term = LogTerm::new(7).unwrap();
+        let server = Server::open(options).unwrap();
+
+        let catalog = FileMembershipCatalog::open(metadata_membership_path(&metadata_log)).unwrap();
+        let membership = catalog
+            .latest_for_mount(server.service().mount_id())
+            .unwrap()
+            .expect("server should publish metadata log membership");
+        assert_eq!(membership.mount, server.service().mount_id());
+        assert_eq!(membership.term, LogTerm::new(7).unwrap());
+        assert_eq!(membership.leader, node(4));
+        assert_eq!(membership.voters, vec![node(4)]);
+        assert!(membership.learners.is_empty());
     }
 
     #[test]
