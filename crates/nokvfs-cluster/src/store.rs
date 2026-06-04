@@ -100,11 +100,53 @@ where
         &self,
         commands: &[MetadataCommand],
     ) -> Result<Vec<CommitResult>, MetadataError> {
-        validate_batch_independence(commands)?;
         let _guard = self
             .apply_gate
             .lock()
             .map_err(|_| MetadataError::Backend("shared-log apply gate poisoned".to_owned()))?;
+        self.commit_batch_locked(commands)
+    }
+
+    pub fn commit_independent_batch(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Vec<Result<CommitResult, MetadataError>> {
+        let mut results = vec![None; commands.len()];
+        let _guard = match self.apply_gate.lock() {
+            Ok(guard) => guard,
+            Err(_) => {
+                let error = MetadataError::Backend("shared-log apply gate poisoned".to_owned());
+                return commands.iter().map(|_| Err(error.clone())).collect();
+            }
+        };
+        let mut pending = Vec::new();
+        for (index, command) in commands.iter().cloned().enumerate() {
+            if command_conflicts_with_pending_batch(&pending, &command) {
+                self.commit_pending_batch(&mut pending, &mut results);
+            }
+            match validate_against_current_store(&self.store, &command) {
+                Ok(()) => pending.push((index, command)),
+                Err(err) => results[index] = Some(Err(err)),
+            }
+        }
+        self.commit_pending_batch(&mut pending, &mut results);
+        results
+            .into_iter()
+            .map(|result| {
+                result.unwrap_or_else(|| {
+                    Err(MetadataError::Backend(
+                        "shared-log batch result was not recorded".to_owned(),
+                    ))
+                })
+            })
+            .collect()
+    }
+
+    fn commit_batch_locked(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Result<Vec<CommitResult>, MetadataError> {
+        validate_batch_independence(commands)?;
         for command in commands {
             validate_against_current_store(&self.store, command)?;
         }
@@ -120,6 +162,34 @@ where
                 watch_events: applied.watch_events,
             })
             .collect())
+    }
+
+    fn commit_pending_batch(
+        &self,
+        pending: &mut Vec<(usize, MetadataCommand)>,
+        results: &mut [Option<Result<CommitResult, MetadataError>>],
+    ) {
+        if pending.is_empty() {
+            return;
+        }
+        let indexes = pending.iter().map(|(index, _)| *index).collect::<Vec<_>>();
+        let commands = pending
+            .iter()
+            .map(|(_, command)| command.clone())
+            .collect::<Vec<_>>();
+        match self.commit_batch_locked(&commands) {
+            Ok(committed) => {
+                for (index, result) in indexes.into_iter().zip(committed) {
+                    results[index] = Some(Ok(result));
+                }
+            }
+            Err(err) => {
+                for index in indexes {
+                    results[index] = Some(Err(err.clone()));
+                }
+            }
+        }
+        pending.clear();
     }
 
     pub fn inner(&self) -> &M {
@@ -374,19 +444,31 @@ where
 
 fn validate_batch_independence(commands: &[MetadataCommand]) -> Result<(), MetadataError> {
     for (index, command) in commands.iter().enumerate() {
-        if commands[..index]
-            .iter()
-            .any(|previous| previous.request_id == command.request_id)
-        {
+        if command_conflicts_with_prior_commands(&commands[..index], command) {
             return Err(MetadataError::PredicateFailed);
-        }
-        for other in &commands[..index] {
-            if commands_have_internal_conflict(command, other) {
-                return Err(MetadataError::PredicateFailed);
-            }
         }
     }
     Ok(())
+}
+
+fn command_conflicts_with_pending_batch(
+    pending: &[(usize, MetadataCommand)],
+    command: &MetadataCommand,
+) -> bool {
+    pending.iter().any(|(_, previous)| {
+        previous.request_id == command.request_id
+            || commands_have_internal_conflict(command, previous)
+    })
+}
+
+fn command_conflicts_with_prior_commands(
+    commands: &[MetadataCommand],
+    command: &MetadataCommand,
+) -> bool {
+    commands.iter().any(|previous| {
+        previous.request_id == command.request_id
+            || commands_have_internal_conflict(command, previous)
+    })
 }
 
 fn commands_have_internal_conflict(left: &MetadataCommand, right: &MetadataCommand) -> bool {

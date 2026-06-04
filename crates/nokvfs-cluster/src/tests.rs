@@ -50,6 +50,16 @@ fn not_exists_command(id: &[u8], commit_version: u64) -> MetadataCommand {
     command
 }
 
+fn not_exists_command_with_request(
+    key: &[u8],
+    request_id: &[u8],
+    commit_version: u64,
+) -> MetadataCommand {
+    let mut command = not_exists_command(key, commit_version);
+    command.request_id = request_id.to_vec();
+    command
+}
+
 fn checkpoint_artifact(id: &[u8]) -> CheckpointArtifact {
     CheckpointArtifact::new(
         format!("local-holt:{}", String::from_utf8_lossy(id)).into_bytes(),
@@ -584,6 +594,56 @@ fn shared_log_metadata_store_rejects_internal_batch_key_conflict_before_append()
         )
         .unwrap()
         .is_none());
+}
+
+#[test]
+fn shared_log_metadata_store_commit_independent_batch_groups_independent_commands() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+
+    let results = shared.commit_independent_batch(&[command(b"a", 2), command(b"b", 3)]);
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0].as_ref().unwrap().commit_version, version(2));
+    assert_eq!(results[1].as_ref().unwrap().commit_version, version(3));
+    assert_eq!(shared.log().committed_index().get(), 1);
+    let entries = shared
+        .log()
+        .read_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].commands.len(), 2);
+}
+
+#[test]
+fn shared_log_metadata_store_commit_independent_batch_preserves_conflict_result_boundary() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+
+    let results = shared.commit_independent_batch(&[
+        not_exists_command_with_request(b"a", b"create-a", 2),
+        not_exists_command_with_request(b"a", b"create-a-again", 3),
+        not_exists_command_with_request(b"b", b"create-b", 4),
+    ]);
+
+    assert_eq!(results.len(), 3);
+    assert!(results[0].is_ok());
+    assert_eq!(results[1], Err(nokvfs_meta::MetadataError::PredicateFailed));
+    assert!(results[2].is_ok());
+    assert_eq!(shared.log().committed_index().get(), 2);
+    let entries = shared
+        .log()
+        .read_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].commands.len(), 1);
+    assert_eq!(entries[0].commands[0].request_id, b"create-a");
+    assert_eq!(entries[1].commands.len(), 1);
+    assert_eq!(entries[1].commands[0].request_id, b"create-b");
 }
 
 #[test]
