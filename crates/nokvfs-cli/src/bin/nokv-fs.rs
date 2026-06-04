@@ -32,6 +32,8 @@ struct Config {
     metadata_log: Option<PathBuf>,
     metadata_log_node: NodeId,
     metadata_log_term: LogTerm,
+    metadata_log_voters: Vec<NodeId>,
+    metadata_log_learners: Vec<NodeId>,
     metadata_log_sync: FileSharedLogSync,
     object: ObjectStoreConfig,
     mount: MountId,
@@ -331,6 +333,8 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 metadata_log_path: config.metadata_log,
                 metadata_log_node: config.metadata_log_node,
                 metadata_log_term: config.metadata_log_term,
+                metadata_log_voters: config.metadata_log_voters,
+                metadata_log_learners: config.metadata_log_learners,
                 metadata_log_sync: config.metadata_log_sync,
                 object: config.object,
                 uid: config.uid,
@@ -422,6 +426,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut metadata_log = Some(PathBuf::from(DEFAULT_METADATA_LOG));
     let mut metadata_log_node = NodeId::new(1).expect("default metadata log node is non-zero");
     let mut metadata_log_term = LogTerm::new(1).expect("default metadata log term is non-zero");
+    let mut metadata_log_voters = Vec::new();
+    let mut metadata_log_learners = Vec::new();
     let mut metadata_log_sync = FileSharedLogSync::Data;
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
@@ -454,6 +460,16 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             "--metadata-log-node" => {
                 index += 1;
                 metadata_log_node = parse_node_id(value(&args, index, "--metadata-log-node")?)?;
+            }
+            "--metadata-log-voters" => {
+                index += 1;
+                metadata_log_voters =
+                    parse_node_id_list(value(&args, index, "--metadata-log-voters")?)?;
+            }
+            "--metadata-log-learners" => {
+                index += 1;
+                metadata_log_learners =
+                    parse_node_id_list(value(&args, index, "--metadata-log-learners")?)?;
             }
             "--metadata-log-sync" => {
                 index += 1;
@@ -567,6 +583,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         metadata_log,
                         metadata_log_node,
                         metadata_log_term,
+                        metadata_log_voters,
+                        metadata_log_learners,
                         metadata_log_sync,
                         object: object_config(object_backend, s3),
                         mount,
@@ -596,6 +614,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             metadata_log,
             metadata_log_node,
             metadata_log_term,
+            metadata_log_voters,
+            metadata_log_learners,
             metadata_log_sync,
             object: object_config(object_backend, s3),
             mount,
@@ -643,6 +663,30 @@ fn parse_node_id(raw: &str) -> Result<NodeId, CliError> {
         field: "metadata_log_node",
         value: raw.to_owned(),
     })
+}
+
+fn parse_node_id_list(raw: &str) -> Result<Vec<NodeId>, CliError> {
+    if raw.is_empty() {
+        return Err(CliError::InvalidNumber {
+            field: "metadata_log_nodes",
+            value: raw.to_owned(),
+        });
+    }
+    raw.split(',')
+        .map(|part| {
+            if part.is_empty() {
+                return Err(CliError::InvalidNumber {
+                    field: "metadata_log_nodes",
+                    value: raw.to_owned(),
+                });
+            }
+            let parsed = parse_u64(part, "metadata_log_nodes")?;
+            NodeId::new(parsed).map_err(|_| CliError::InvalidNumber {
+                field: "metadata_log_nodes",
+                value: raw.to_owned(),
+            })
+        })
+        .collect()
 }
 
 fn object_config(backend: ObjectBackendKind, mut s3: S3ObjectStoreOptions) -> ObjectStoreConfig {
@@ -891,6 +935,8 @@ Object backends:\n\
   --no-metadata-log               Disable metadata log for local/debug serve\n\
   --metadata-log-node NODE        Local metadata log node id accepted as leader\n\
   --metadata-log-term TERM        Shared metadata log term for serve\n\
+  --metadata-log-voters CSV       Metadata voter node ids, e.g. 1,2,3\n\
+  --metadata-log-learners CSV     Metadata learner node ids, e.g. 4,5\n\
   --metadata-log-sync data|none   data fsyncs log records; none only flushes to the OS\n\
 \n\
 Defaults:\n\
@@ -906,6 +952,8 @@ Defaults:\n\
   --metadata-log .nokv-fs/metadata.log\n\
   --metadata-log-node 1\n\
   --metadata-log-term 1\n\
+  --metadata-log-voters <local node only>\n\
+  --metadata-log-learners <empty>\n\
   --metadata-log-sync data\n\
   --mount 1"
     )
@@ -969,6 +1017,8 @@ mod tests {
             metadata_log_path: None,
             metadata_log_node: NodeId::new(1).unwrap(),
             metadata_log_term: LogTerm::new(1).unwrap(),
+            metadata_log_voters: Vec::new(),
+            metadata_log_learners: Vec::new(),
             metadata_log_sync: FileSharedLogSync::Data,
             object: fake_server_object_config(),
             uid: 1000,
@@ -1337,6 +1387,10 @@ mod tests {
             s("4"),
             s("--metadata-log-term"),
             s("7"),
+            s("--metadata-log-voters"),
+            s("1,2,3"),
+            s("--metadata-log-learners"),
+            s("4,5"),
             s("--metadata-log-sync"),
             s("none"),
             s("serve"),
@@ -1349,6 +1403,22 @@ mod tests {
         );
         assert_eq!(config.metadata_log_node.get(), 4);
         assert_eq!(config.metadata_log_term.get(), 7);
+        assert_eq!(
+            config
+                .metadata_log_voters
+                .iter()
+                .map(|node| node.get())
+                .collect::<Vec<_>>(),
+            vec![1, 2, 3]
+        );
+        assert_eq!(
+            config
+                .metadata_log_learners
+                .iter()
+                .map(|node| node.get())
+                .collect::<Vec<_>>(),
+            vec![4, 5]
+        );
         assert_eq!(config.metadata_log_sync, FileSharedLogSync::None);
         let (disabled, command) = parse(vec![s("--no-metadata-log"), s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
@@ -1377,6 +1447,20 @@ mod tests {
             parse(vec![s("--metadata-log-node"), s("0"), s("serve")]),
             Err(CliError::InvalidNumber {
                 field: "metadata_log_node",
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(vec![s("--metadata-log-voters"), s("1,,3"), s("serve")]),
+            Err(CliError::InvalidNumber {
+                field: "metadata_log_nodes",
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(vec![s("--metadata-log-learners"), s("0"), s("serve")]),
+            Err(CliError::InvalidNumber {
+                field: "metadata_log_nodes",
                 ..
             })
         ));

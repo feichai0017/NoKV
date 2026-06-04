@@ -16,6 +16,8 @@ pub struct ServerOptions {
     pub metadata_log_path: Option<PathBuf>,
     pub metadata_log_node: NodeId,
     pub metadata_log_term: LogTerm,
+    pub metadata_log_voters: Vec<NodeId>,
+    pub metadata_log_learners: Vec<NodeId>,
     pub metadata_log_sync: FileSharedLogSync,
     pub object: ObjectStoreConfig,
     pub uid: u32,

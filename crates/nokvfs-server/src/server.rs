@@ -102,6 +102,8 @@ impl Server {
                     options.mount,
                     options.metadata_log_term,
                     options.metadata_log_node,
+                    &options.metadata_log_voters,
+                    &options.metadata_log_learners,
                 )?;
                 let log_term = membership.term;
                 install_startup_checkpoint_if_required(
@@ -514,11 +516,30 @@ fn metadata_membership_for_node(
     mount: nokvfs_types::MountId,
     fallback_term: nokvfs_cluster::LogTerm,
     node: NodeId,
+    configured_voters: &[NodeId],
+    configured_learners: &[NodeId],
 ) -> Result<MetadataMembership, ServerError> {
     let membership = match catalog.latest_for_mount(mount)? {
         Some(membership) => membership,
         None => {
-            let membership = MetadataMembership::single_voter(mount, fallback_term, node)?;
+            let membership = if configured_voters.is_empty() {
+                let voters = [node];
+                MetadataMembership::new(
+                    mount,
+                    fallback_term,
+                    node,
+                    voters,
+                    configured_learners.iter().copied(),
+                )?
+            } else {
+                MetadataMembership::new(
+                    mount,
+                    fallback_term,
+                    node,
+                    configured_voters.iter().copied(),
+                    configured_learners.iter().copied(),
+                )?
+            };
             catalog.publish(membership.clone())?;
             membership
         }
@@ -872,6 +893,8 @@ pub(crate) mod tests {
             metadata_log_path,
             metadata_log_node: NodeId::new(1).unwrap(),
             metadata_log_term: LogTerm::new(1).unwrap(),
+            metadata_log_voters: Vec::new(),
+            metadata_log_learners: Vec::new(),
             metadata_log_sync: FileSharedLogSync::Data,
             object: ObjectStoreConfig::s3(S3ObjectStoreOptions {
                 bucket: "test".to_owned(),
@@ -1082,6 +1105,63 @@ pub(crate) mod tests {
         assert_eq!(membership.leader, node(4));
         assert_eq!(membership.voters, vec![node(4)]);
         assert!(membership.learners.is_empty());
+    }
+
+    #[test]
+    fn server_publishes_configured_metadata_log_membership() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let mut options = test_options(dir.path(), Some(metadata_log.clone()));
+        options.metadata_log_node = node(2);
+        options.metadata_log_term = LogTerm::new(9).unwrap();
+        options.metadata_log_voters = vec![node(1), node(2), node(3)];
+        options.metadata_log_learners = vec![node(4)];
+        let server = Server::open(options).unwrap();
+
+        let catalog = FileMembershipCatalog::open(metadata_membership_path(&metadata_log)).unwrap();
+        let membership = catalog
+            .latest_for_mount(server.service().mount_id())
+            .unwrap()
+            .expect("server should publish configured metadata log membership");
+        assert_eq!(membership.mount, server.service().mount_id());
+        assert_eq!(membership.term, LogTerm::new(9).unwrap());
+        assert_eq!(membership.leader, node(2));
+        assert_eq!(membership.voters, vec![node(1), node(2), node(3)]);
+        assert_eq!(membership.learners, vec![node(4)]);
+    }
+
+    #[test]
+    fn server_uses_local_voter_when_only_learners_are_configured() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let mut options = test_options(dir.path(), Some(metadata_log.clone()));
+        options.metadata_log_node = node(2);
+        options.metadata_log_learners = vec![node(4)];
+        let server = Server::open(options).unwrap();
+
+        let catalog = FileMembershipCatalog::open(metadata_membership_path(&metadata_log)).unwrap();
+        let membership = catalog
+            .latest_for_mount(server.service().mount_id())
+            .unwrap()
+            .expect("server should publish metadata log membership");
+        assert_eq!(membership.leader, node(2));
+        assert_eq!(membership.voters, vec![node(2)]);
+        assert_eq!(membership.learners, vec![node(4)]);
+    }
+
+    #[test]
+    fn server_rejects_configured_metadata_leader_outside_voters() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let mut options = test_options(dir.path(), Some(metadata_log));
+        options.metadata_log_node = node(4);
+        options.metadata_log_voters = vec![node(1), node(2), node(3)];
+        options.metadata_log_learners = vec![node(4)];
+
+        assert!(matches!(
+            Server::open(options),
+            Err(ServerError::SharedLog(SharedLogError::LeaderNotVoter(leader))) if leader == node(4)
+        ));
     }
 
     #[test]

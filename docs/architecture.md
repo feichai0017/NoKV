@@ -120,10 +120,14 @@ The local shared-log implementation exposes explicit term and sync policy.
 `nokv-fs serve` defaults to `--metadata-log .nokv-fs/metadata.log` and
 `--metadata-log-term 1`, so server mode records metadata commands through the
 shared-log path by default. Use `--no-metadata-log` only for local debugging.
-Use `--metadata-log-sync data` when the file log is the durable ordering source.
-Use `--metadata-log-sync none` only for local performance experiments or when a
-higher-level replicated log already owns durability; it flushes records to the
-OS but does not make each record power-loss durable.
+Use `--metadata-log-voters 1,2,3` and `--metadata-log-learners 4,5` to publish
+the initial metadata-log membership. If a durable membership catalog already
+exists beside the log, that catalog remains the source of truth and startup
+parameters cannot silently replace it. Use `--metadata-log-sync data` when the
+file log is the durable ordering source. Use `--metadata-log-sync none` only for
+local performance experiments or when a higher-level replicated log already
+owns durability; it flushes records to the OS but does not make each record
+power-loss durable.
 
 Shared-log HA is built around storage-neutral metadata replication contracts in
 `nokvfs-cluster`. The replicated value is a batch of `MetadataCommand`s. It is
@@ -148,11 +152,13 @@ replica catch-up via `ReadMetadataLog`. Each returned payload is encoded by
 batch via `AppendMetadataLog`, validate the leader id against the server's
 configured metadata-log membership, validate the term shape, append it to the
 local metadata log, and replay it into Holt state. A server with metadata log
-enabled publishes a durable single-voter membership catalog next to the log;
-future multi-voter membership must update that catalog at a higher term rather
-than silently changing voters in place. The log rejects stale terms after a
-newer committed term, so an old leader cannot keep extending a local tail once a
-newer term has been observed. The RPC path can also read the latest published
+enabled publishes a durable membership catalog next to the log. Without explicit
+voters it starts as a single-voter group; with `--metadata-log-voters` and
+`--metadata-log-learners`, the initial multi-node membership is persisted before
+serving. Future membership changes must update that catalog at a higher term
+rather than silently changing voters in place. The log rejects stale terms after
+a newer committed term, so an old leader cannot keep extending a local tail once
+a newer term has been observed. The RPC path can also read the latest published
 checkpoint manifest for a mount, giving learners the frontier and artifact
 descriptor they need before replaying a retained tail. A learner can request a
 bootstrap plan that pairs that checkpoint with the retained log tail range to
