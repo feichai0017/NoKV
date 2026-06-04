@@ -1510,6 +1510,86 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn server_bootstrap_installs_checkpoint_then_replays_retained_tail() {
+        let dir = tempdir().unwrap();
+        let checkpoint_objects = test_checkpoint_objects();
+        let leader_log = dir.path().join("leader-metadata.log");
+        let follower_log = dir.path().join("follower-metadata.log");
+        let leader = open_test_server_with_checkpoint_objects(
+            dir.path(),
+            Some(leader_log),
+            &checkpoint_objects,
+        );
+        leader
+            .service()
+            .create_dir_path("/runs", 0o755, 1000, 1000)
+            .unwrap();
+        leader
+            .service()
+            .create_dir_path("/runs/before-checkpoint", 0o755, 1000, 1000)
+            .unwrap();
+        leader.run_manual_gc(128).unwrap();
+        leader
+            .service()
+            .create_dir_path("/runs/after-checkpoint", 0o755, 1000, 1000)
+            .unwrap();
+
+        let mut follower_options = test_options(dir.path(), Some(follower_log));
+        follower_options.metadata_log_node = node(3);
+        follower_options.metadata_log_leader = node(1);
+        follower_options.metadata_log_voters = vec![node(1)];
+        follower_options.metadata_log_learners = vec![node(3)];
+        let follower =
+            Server::open_with_test_checkpoint_objects(follower_options, checkpoint_objects)
+                .unwrap();
+        let request = leader
+            .plan_metadata_bootstrap(node(1), node(3), leader.service().mount_id())
+            .unwrap();
+        assert!(
+            request.plan.replayed_index > request.plan.checkpoint.frontier.applied_position.index,
+            "test must include retained tail entries after the checkpoint"
+        );
+
+        let checkpoint_only = InstallCheckpointRequest::from_plan(
+            request.leader,
+            nokvfs_cluster::LearnerBootstrapPlan {
+                node: request.plan.node,
+                checkpoint: request.plan.checkpoint.clone(),
+                replay_start: request.plan.replay_start,
+                replayed_index: request.plan.checkpoint.frontier.applied_position.index,
+            },
+        );
+        follower
+            .install_metadata_checkpoint(checkpoint_only)
+            .unwrap();
+        let (tail, _) = leader
+            .read_metadata_log_tail(request.plan.replay_start, 0)
+            .unwrap();
+        assert!(!tail.is_empty());
+        for entry in tail {
+            if entry.position.index > request.plan.replayed_index {
+                break;
+            }
+            follower
+                .append_metadata_log_batch(AppendMetadataBatchRequest::new(node(1), entry).unwrap())
+                .unwrap();
+        }
+
+        let before = follower
+            .service()
+            .lookup_path("/runs/before-checkpoint")
+            .unwrap()
+            .expect("checkpoint image should install pre-compaction namespace");
+        let after = follower
+            .service()
+            .lookup_path("/runs/after-checkpoint")
+            .unwrap()
+            .expect("retained tail should replay after checkpoint install");
+        assert_eq!(before.attr.file_type, nokvfs_types::FileType::Directory);
+        assert_eq!(after.attr.file_type, nokvfs_types::FileType::Directory);
+    }
+
+    #[test]
     fn server_quorum_learner_enforces_require_applied_until_local_tail_replayed() {
         let dir = tempdir().unwrap();
         let log = Arc::new(
