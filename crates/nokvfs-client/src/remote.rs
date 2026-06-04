@@ -13,16 +13,16 @@ use nokvfs_object::{
     DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_protocol::{
-    decode_envelope, encode_request, MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult,
-    WireBlockDescriptor, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryRecord,
-    WireDentryWithAttr, WireInodeAttr, WireObjectReadBlock, WirePreparedArtifact, WireSnapshotPin,
+    decode_envelope, encode_request, MetadataProtocolError, MetadataRpcEnvelope,
+    MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest,
+    WireDentryWithAttr, WireObjectReadBlock, WirePreparedArtifact,
 };
 use nokvfs_types::{
-    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
+    parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
     InodeId, SnapshotPin,
 };
 
-use crate::{display_name, parse_absolute_path, ArtifactMetadata, ClientError};
+use crate::{ArtifactMetadata, ClientError};
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
@@ -421,10 +421,8 @@ impl RemoteMetadataClient {
     }
 
     pub fn remove(&self, path: &str) -> Result<DentryWithAttr, ClientError> {
-        let (parent, name) = self.resolve_parent(path)?;
-        match self.call(MetadataRpcRequest::RemoveFile {
-            parent: parent.get(),
-            name: rpc_name(&name)?,
+        match self.call(MetadataRpcRequest::RemoveFilePath {
+            path: path.to_owned(),
         })? {
             MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
             other => Err(unexpected_result(other)),
@@ -432,10 +430,8 @@ impl RemoteMetadataClient {
     }
 
     pub fn rmdir(&self, path: &str) -> Result<DentryWithAttr, ClientError> {
-        let (parent, name) = self.resolve_parent(path)?;
-        match self.call(MetadataRpcRequest::RemoveEmptyDir {
-            parent: parent.get(),
-            name: rpc_name(&name)?,
+        match self.call(MetadataRpcRequest::RemoveEmptyDirPath {
+            path: path.to_owned(),
         })? {
             MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
             other => Err(unexpected_result(other)),
@@ -443,13 +439,9 @@ impl RemoteMetadataClient {
     }
 
     pub fn rename(&self, source: &str, destination: &str) -> Result<DentryWithAttr, ClientError> {
-        let (parent, name) = self.resolve_parent(source)?;
-        let (new_parent, new_name) = self.resolve_parent(destination)?;
-        match self.call(MetadataRpcRequest::Rename {
-            parent: parent.get(),
-            name: rpc_name(&name)?,
-            new_parent: new_parent.get(),
-            new_name: rpc_name(&new_name)?,
+        match self.call(MetadataRpcRequest::RenamePath {
+            source: source.to_owned(),
+            destination: destination.to_owned(),
         })? {
             MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
             other => Err(unexpected_result(other)),
@@ -461,13 +453,9 @@ impl RemoteMetadataClient {
         source: &str,
         destination: &str,
     ) -> Result<RenameReplaceResult, ClientError> {
-        let (parent, name) = self.resolve_parent(source)?;
-        let (new_parent, new_name) = self.resolve_parent(destination)?;
-        match self.call(MetadataRpcRequest::RenameReplace {
-            parent: parent.get(),
-            name: rpc_name(&name)?,
-            new_parent: new_parent.get(),
-            new_name: rpc_name(&new_name)?,
+        match self.call(MetadataRpcRequest::RenameReplacePath {
+            source: source.to_owned(),
+            destination: destination.to_owned(),
         })? {
             MetadataRpcResult::RenameReplace { entry, replaced } => Ok(RenameReplaceResult {
                 entry: wire_dentry(*entry)?,
@@ -478,8 +466,9 @@ impl RemoteMetadataClient {
     }
 
     pub fn snapshot(&self, path: &str) -> Result<SnapshotPin, ClientError> {
-        let root = self.resolve_directory(path)?;
-        match self.call(MetadataRpcRequest::SnapshotSubtree { root: root.get() })? {
+        match self.call(MetadataRpcRequest::SnapshotSubtreePath {
+            path: path.to_owned(),
+        })? {
             MetadataRpcResult::Snapshot { snapshot } => wire_snapshot(snapshot),
             other => Err(unexpected_result(other)),
         }
@@ -579,43 +568,6 @@ impl RemoteMetadataClient {
             }),
             other => Err(unexpected_result(other)),
         }
-    }
-
-    fn resolve_parent(&self, path: &str) -> Result<(InodeId, DentryName), ClientError> {
-        let mut components = parse_absolute_path(path)?;
-        let name = components.pop().ok_or(ClientError::RootHasNoParent)?;
-        let parent = self.resolve_components_as_directory(&components)?;
-        Ok((parent, name))
-    }
-
-    fn resolve_directory(&self, path: &str) -> Result<InodeId, ClientError> {
-        let components = parse_absolute_path(path)?;
-        self.resolve_components_as_directory(&components)
-    }
-
-    fn resolve_components_as_directory(
-        &self,
-        components: &[DentryName],
-    ) -> Result<InodeId, ClientError> {
-        let mut current = InodeId::root();
-        for name in components {
-            let label = display_name(name);
-            let entry = match self.call(MetadataRpcRequest::LookupPlus {
-                parent: current.get(),
-                name: rpc_name(name)?,
-            })? {
-                MetadataRpcResult::Dentry { entry } => {
-                    entry.map(|entry| wire_dentry(*entry)).transpose()?
-                }
-                other => return Err(unexpected_result(other)),
-            }
-            .ok_or_else(|| ClientError::NotFound(label.clone()))?;
-            if entry.attr.file_type != FileType::Directory {
-                return Err(ClientError::NotDirectory(label));
-            }
-            current = entry.attr.inode;
-        }
-        Ok(current)
     }
 
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
@@ -826,47 +778,9 @@ fn rpc_name(name: &DentryName) -> Result<String, ClientError> {
 
 fn wire_dentry(entry: WireDentryWithAttr) -> Result<DentryWithAttr, ClientError> {
     Ok(DentryWithAttr {
-        dentry: wire_dentry_record(entry.dentry)?,
-        attr: wire_inode_attr(entry.attr)?,
-        body: entry.body.map(wire_body).transpose()?,
-    })
-}
-
-fn wire_dentry_record(record: WireDentryRecord) -> Result<DentryRecord, ClientError> {
-    Ok(DentryRecord {
-        parent: inode_id(record.parent)?,
-        name: DentryName::new(hex_decode(&record.name_hex)?)
-            .map_err(|err| ClientError::InvalidName(err.to_string()))?,
-        child: inode_id(record.child)?,
-        child_type: wire_file_type(&record.child_type)?,
-        attr_generation: record.attr_generation,
-    })
-}
-
-fn wire_inode_attr(attr: WireInodeAttr) -> Result<InodeAttr, ClientError> {
-    Ok(InodeAttr {
-        inode: inode_id(attr.inode)?,
-        file_type: wire_file_type(&attr.file_type)?,
-        mode: attr.mode,
-        uid: attr.uid,
-        gid: attr.gid,
-        size: attr.size,
-        generation: attr.generation,
-        mtime_ms: attr.mtime_ms,
-        ctime_ms: attr.ctime_ms,
-    })
-}
-
-fn wire_body(body: WireBodyDescriptor) -> Result<BodyDescriptor, ClientError> {
-    Ok(BodyDescriptor {
-        producer: body.producer,
-        digest_uri: body.digest_uri,
-        size: body.size,
-        content_type: body.content_type,
-        manifest_id: body.manifest_id,
-        generation: body.generation,
-        chunk_size: body.chunk_size,
-        block_size: body.block_size,
+        dentry: entry.dentry.into_dentry_record().map_err(protocol_error)?,
+        attr: entry.attr.into_inode_attr().map_err(protocol_error)?,
+        body: entry.body.map(|body| body.into_body_descriptor()),
     })
 }
 
@@ -902,35 +816,11 @@ fn prepared_artifact_to_wire(
 }
 
 fn body_to_wire(body: &BodyDescriptor) -> WireBodyDescriptor {
-    WireBodyDescriptor {
-        producer: body.producer.clone(),
-        digest_uri: body.digest_uri.clone(),
-        size: body.size,
-        content_type: body.content_type.clone(),
-        manifest_id: body.manifest_id.clone(),
-        generation: body.generation,
-        chunk_size: body.chunk_size,
-        block_size: body.block_size,
-    }
+    WireBodyDescriptor::from_body_descriptor(body)
 }
 
 fn chunk_to_wire(chunk: &ChunkManifest) -> WireChunkManifest {
-    WireChunkManifest {
-        chunk_index: chunk.chunk_index,
-        logical_offset: chunk.logical_offset,
-        len: chunk.len,
-        blocks: chunk.blocks.iter().map(block_to_wire).collect(),
-    }
-}
-
-fn block_to_wire(block: &BlockDescriptor) -> WireBlockDescriptor {
-    WireBlockDescriptor {
-        object_key: block.object_key.clone(),
-        logical_offset: block.logical_offset,
-        object_offset: block.object_offset,
-        len: block.len,
-        digest_uri: block.digest_uri.clone(),
-    }
+    WireChunkManifest::from_chunk_manifest(chunk)
 }
 
 fn wire_body_read_plan(plan: WireBodyReadPlan) -> Result<RemoteBodyReadPlan, ClientError> {
@@ -959,13 +849,8 @@ fn wire_object_read_block(block: WireObjectReadBlock) -> Result<ObjectReadBlock,
     })
 }
 
-fn wire_snapshot(snapshot: WireSnapshotPin) -> Result<SnapshotPin, ClientError> {
-    Ok(SnapshotPin {
-        snapshot_id: snapshot.snapshot_id,
-        root: inode_id(snapshot.root)?,
-        read_version: snapshot.read_version,
-        created_version: snapshot.created_version,
-    })
+fn wire_snapshot(snapshot: nokvfs_protocol::WireSnapshotPin) -> Result<SnapshotPin, ClientError> {
+    snapshot.into_snapshot_pin().map_err(protocol_error)
 }
 
 fn file_len(size: u64) -> Result<usize, ClientError> {
@@ -985,37 +870,8 @@ fn inode_id(raw: u64) -> Result<InodeId, ClientError> {
     InodeId::new(raw).map_err(|err| ClientError::Protocol(err.to_string()))
 }
 
-fn wire_file_type(raw: &str) -> Result<FileType, ClientError> {
-    match raw {
-        "file" => Ok(FileType::File),
-        "directory" => Ok(FileType::Directory),
-        "symlink" => Ok(FileType::Symlink),
-        other => Err(ClientError::Protocol(format!("unknown file type {other}"))),
-    }
-}
-
-fn hex_decode(raw: &str) -> Result<Vec<u8>, ClientError> {
-    if !raw.len().is_multiple_of(2) {
-        return Err(ClientError::Protocol(
-            "hex string has odd length".to_owned(),
-        ));
-    }
-    let mut out = Vec::with_capacity(raw.len() / 2);
-    for pair in raw.as_bytes().chunks_exact(2) {
-        let high = hex_digit(pair[0])?;
-        let low = hex_digit(pair[1])?;
-        out.push((high << 4) | low);
-    }
-    Ok(out)
-}
-
-fn hex_digit(byte: u8) -> Result<u8, ClientError> {
-    match byte {
-        b'0'..=b'9' => Ok(byte - b'0'),
-        b'a'..=b'f' => Ok(byte - b'a' + 10),
-        b'A'..=b'F' => Ok(byte - b'A' + 10),
-        _ => Err(ClientError::Protocol("invalid hex digit".to_owned())),
-    }
+fn protocol_error(err: MetadataProtocolError) -> ClientError {
+    ClientError::Protocol(err.to_string())
 }
 
 fn dentry_result(result: MetadataRpcResult) -> Result<DentryWithAttr, ClientError> {
@@ -1046,7 +902,7 @@ fn unexpected_result(result: MetadataRpcResult) -> ClientError {
 mod tests {
     use super::*;
     use nokvfs_object::{MemoryObjectStore, ObjectKey};
-    use nokvfs_protocol::{decode_request, encode_envelope};
+    use nokvfs_protocol::{decode_request, encode_envelope, WireDentryRecord, WireInodeAttr};
     use std::net::TcpListener;
     use std::thread;
 
@@ -1083,7 +939,6 @@ mod tests {
                 entry: Some(Box::new(WireDentryWithAttr {
                     dentry: WireDentryRecord {
                         parent,
-                        name_utf8: Some(name.to_owned()),
                         name_hex: name
                             .as_bytes()
                             .iter()
@@ -1140,7 +995,7 @@ mod tests {
     #[test]
     fn remote_mkdir_sends_metadata_rpc() {
         let addr = serve_one(
-            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_utf8":"runs","name_hex":"72756e73","child":2,"child_type":"directory","attr_generation":1},"attr":{"inode":2,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":1,"mtime_ms":1,"ctime_ms":1},"body":null}}}"#,
+            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"72756e73","child":2,"child_type":"directory","attr_generation":1},"attr":{"inode":2,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":1,"mtime_ms":1,"ctime_ms":1},"body":null}}}"#,
         );
         let client = RemoteMetadataClient::connect(addr);
         let entry = client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
@@ -1151,7 +1006,7 @@ mod tests {
     #[test]
     fn remote_create_file_uses_single_path_rpc_for_nested_parent() {
         let addr = serve_one(
-            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"checkpoint.bin","name_hex":"636865636b706f696e742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"636865636b706f696e742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
         );
         let client = RemoteMetadataClient::connect(addr);
         let entry = client
@@ -1182,7 +1037,7 @@ mod tests {
                 other => panic!("unexpected request: {other:?}"),
             }
             let response = response_body(
-                r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"a.bin","name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_utf8":"b.bin","name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
+                r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
             );
             write_frame(&mut stream, request_id, flags, &response).unwrap();
         });
@@ -1278,7 +1133,7 @@ mod tests {
             .unwrap();
         let addr = serve_many(vec![
             response_body(
-                r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_utf8":"artifact.bin","name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
+                r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
             ),
             response_body(
                 r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
@@ -1297,7 +1152,7 @@ mod tests {
                 r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
             ),
             response_body(
-                r#"{"ok":true,"result":{"type":"rename_replace","entry":{"dentry":{"parent":1,"name_utf8":"artifact.bin","name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":11,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":11,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"replaced":null}}"#,
+                r#"{"ok":true,"result":{"type":"rename_replace","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":11,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":11,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"replaced":null}}"#,
             ),
         ]);
         let client = RemoteNoKvFsClient::connect(addr, store.clone());

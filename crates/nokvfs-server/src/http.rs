@@ -30,15 +30,25 @@ pub(crate) fn handle_stream(server: Arc<Server>, mut stream: TcpStream) -> Resul
     stream
         .set_write_timeout(Some(CONTROL_IO_TIMEOUT))
         .map_err(ServerError::Io)?;
-    if starts_with_framed_rpc_magic(&stream)? {
-        return rpc::handle_framed_stream(server, stream);
+    let mut prefix = [0_u8; rpc::FRAMED_RPC_MAGIC.len()];
+    match stream.read_exact(&mut prefix) {
+        Ok(()) if &prefix == rpc::FRAMED_RPC_MAGIC => {
+            return rpc::handle_framed_stream_after_magic(server, stream);
+        }
+        Ok(()) => {}
+        Err(err) if is_idle_timeout(&err) || err.kind() == io::ErrorKind::UnexpectedEof => {
+            return Ok(());
+        }
+        Err(err) => return Err(ServerError::Io(err)),
     }
+    let mut initial = Some(prefix.to_vec());
     loop {
-        let request = match read_request(&mut stream) {
-            Ok(request) => request,
-            Err(ServerError::Io(err)) if is_idle_timeout(&err) => return Ok(()),
-            Err(err) => return Err(err),
-        };
+        let request =
+            match read_request_with_initial(&mut stream, initial.take().unwrap_or_default()) {
+                Ok(request) => request,
+                Err(ServerError::Io(err)) if is_idle_timeout(&err) => return Ok(()),
+                Err(err) => return Err(err),
+            };
         if request.line.is_empty() && request.body.is_empty() {
             return Ok(());
         }
@@ -50,26 +60,20 @@ pub(crate) fn handle_stream(server: Arc<Server>, mut stream: TcpStream) -> Resul
     }
 }
 
-fn starts_with_framed_rpc_magic(stream: &TcpStream) -> Result<bool, ServerError> {
-    let mut probe = [0_u8; rpc::FRAMED_RPC_MAGIC.len()];
-    match stream.peek(&mut probe) {
-        Ok(0) => Ok(false),
-        Ok(read) if read < probe.len() => Ok(false),
-        Ok(_) => Ok(&probe == rpc::FRAMED_RPC_MAGIC),
-        Err(err) if is_idle_timeout(&err) => Ok(false),
-        Err(err) => Err(ServerError::Io(err)),
-    }
-}
-
-fn read_request(stream: &mut TcpStream) -> Result<HttpRequest, ServerError> {
-    let mut bytes = Vec::new();
+fn read_request_with_initial(
+    stream: &mut TcpStream,
+    initial: Vec<u8>,
+) -> Result<HttpRequest, ServerError> {
+    let mut bytes = initial;
     let mut buf = [0_u8; 4096];
     loop {
-        let read = stream.read(&mut buf).map_err(ServerError::Io)?;
-        if read == 0 {
-            break;
+        if bytes.is_empty() || header_end_and_content_len(&bytes).is_none() {
+            let read = stream.read(&mut buf).map_err(ServerError::Io)?;
+            if read == 0 {
+                break;
+            }
+            bytes.extend_from_slice(&buf[..read]);
         }
-        bytes.extend_from_slice(&buf[..read]);
         if bytes.len() > MAX_CONTROL_REQUEST_BYTES {
             return Ok(HttpRequest {
                 line: "GET /request-too-large HTTP/1.1".to_owned(),
@@ -141,6 +145,8 @@ pub(crate) fn handle_parts(server: &Server, line: &str, body: &[u8]) -> HttpResp
         ("GET", "/healthz") => HttpResponse::text("200 OK", "ok\n"),
         ("GET", "/readyz") => HttpResponse::text("200 OK", "ready\n"),
         ("GET", "/stats") => HttpResponse::json("200 OK", server.stats_json()),
+        // JSON RPC is a control/debug endpoint. The hot client path uses the
+        // framed binary protocol and both paths share the same RPC dispatcher.
         ("POST", "/rpc") => HttpResponse::json_keep_alive("200 OK", rpc::handle_rpc(server, body)),
         ("GET", "/gc") | ("POST", "/gc") => {
             let limit = match gc_limit(query) {
@@ -293,6 +299,6 @@ mod tests {
         );
         assert_eq!(response.status, "200 OK");
         assert!(response.body.contains("\"ok\":true"));
-        assert!(response.body.contains("\"name_utf8\":\"runs\""));
+        assert!(response.body.contains("\"name_hex\":\"72756e73\""));
     }
 }

@@ -6,6 +6,10 @@
 
 use std::fmt;
 
+use nokvfs_types::{
+    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
+    InodeId, SnapshotPin,
+};
 use serde::{Deserialize, Serialize};
 
 const BINARY_CODEC_LIMIT: u64 = 16 * 1024 * 1024;
@@ -74,9 +78,15 @@ pub enum MetadataRpcRequest {
         parent: u64,
         name: String,
     },
+    RemoveFilePath {
+        path: String,
+    },
     RemoveEmptyDir {
         parent: u64,
         name: String,
+    },
+    RemoveEmptyDirPath {
+        path: String,
     },
     Rename {
         parent: u64,
@@ -84,14 +94,25 @@ pub enum MetadataRpcRequest {
         new_parent: u64,
         new_name: String,
     },
+    RenamePath {
+        source: String,
+        destination: String,
+    },
     RenameReplace {
         parent: u64,
         name: String,
         new_parent: u64,
         new_name: String,
     },
+    RenameReplacePath {
+        source: String,
+        destination: String,
+    },
     SnapshotSubtree {
         root: u64,
+    },
+    SnapshotSubtreePath {
+        path: String,
     },
     RetireSnapshot {
         snapshot_id: u64,
@@ -180,7 +201,6 @@ pub struct WireDentryWithAttr {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WireDentryRecord {
     pub parent: u64,
-    pub name_utf8: Option<String>,
     pub name_hex: String,
     pub child: u64,
     pub child_type: String,
@@ -266,6 +286,168 @@ pub struct WireSnapshotPin {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MetadataProtocolError(String);
 
+impl MetadataProtocolError {
+    pub fn new(message: impl Into<String>) -> Self {
+        Self(message.into())
+    }
+}
+
+impl WireDentryRecord {
+    pub fn from_dentry_record(record: &DentryRecord) -> Self {
+        Self {
+            parent: record.parent.get(),
+            name_hex: hex_encode(record.name.as_bytes()),
+            child: record.child.get(),
+            child_type: file_type_label(record.child_type).to_owned(),
+            attr_generation: record.attr_generation,
+        }
+    }
+
+    pub fn into_dentry_record(self) -> Result<DentryRecord, MetadataProtocolError> {
+        Ok(DentryRecord {
+            parent: inode_id(self.parent)?,
+            name: DentryName::new(hex_decode(&self.name_hex)?)
+                .map_err(|err| MetadataProtocolError::new(err.to_string()))?,
+            child: inode_id(self.child)?,
+            child_type: parse_file_type(&self.child_type)?,
+            attr_generation: self.attr_generation,
+        })
+    }
+}
+
+impl WireInodeAttr {
+    pub fn from_inode_attr(attr: &InodeAttr) -> Self {
+        Self {
+            inode: attr.inode.get(),
+            file_type: file_type_label(attr.file_type).to_owned(),
+            mode: attr.mode,
+            uid: attr.uid,
+            gid: attr.gid,
+            size: attr.size,
+            generation: attr.generation,
+            mtime_ms: attr.mtime_ms,
+            ctime_ms: attr.ctime_ms,
+        }
+    }
+
+    pub fn into_inode_attr(self) -> Result<InodeAttr, MetadataProtocolError> {
+        Ok(InodeAttr {
+            inode: inode_id(self.inode)?,
+            file_type: parse_file_type(&self.file_type)?,
+            mode: self.mode,
+            uid: self.uid,
+            gid: self.gid,
+            size: self.size,
+            generation: self.generation,
+            mtime_ms: self.mtime_ms,
+            ctime_ms: self.ctime_ms,
+        })
+    }
+}
+
+impl WireBodyDescriptor {
+    pub fn from_body_descriptor(body: &BodyDescriptor) -> Self {
+        Self {
+            producer: body.producer.clone(),
+            digest_uri: body.digest_uri.clone(),
+            size: body.size,
+            content_type: body.content_type.clone(),
+            manifest_id: body.manifest_id.clone(),
+            generation: body.generation,
+            chunk_size: body.chunk_size,
+            block_size: body.block_size,
+        }
+    }
+
+    pub fn into_body_descriptor(self) -> BodyDescriptor {
+        BodyDescriptor {
+            producer: self.producer,
+            digest_uri: self.digest_uri,
+            size: self.size,
+            content_type: self.content_type,
+            manifest_id: self.manifest_id,
+            generation: self.generation,
+            chunk_size: self.chunk_size,
+            block_size: self.block_size,
+        }
+    }
+}
+
+impl WireChunkManifest {
+    pub fn from_chunk_manifest(chunk: &ChunkManifest) -> Self {
+        Self {
+            chunk_index: chunk.chunk_index,
+            logical_offset: chunk.logical_offset,
+            len: chunk.len,
+            blocks: chunk
+                .blocks
+                .iter()
+                .map(WireBlockDescriptor::from_block_descriptor)
+                .collect(),
+        }
+    }
+
+    pub fn into_chunk_manifest(self) -> Result<ChunkManifest, MetadataProtocolError> {
+        Ok(ChunkManifest {
+            chunk_index: self.chunk_index,
+            logical_offset: self.logical_offset,
+            len: self.len,
+            blocks: self
+                .blocks
+                .into_iter()
+                .map(WireBlockDescriptor::into_block_descriptor)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl WireBlockDescriptor {
+    pub fn from_block_descriptor(block: &BlockDescriptor) -> Self {
+        Self {
+            object_key: block.object_key.clone(),
+            logical_offset: block.logical_offset,
+            object_offset: block.object_offset,
+            len: block.len,
+            digest_uri: block.digest_uri.clone(),
+        }
+    }
+
+    pub fn into_block_descriptor(self) -> Result<BlockDescriptor, MetadataProtocolError> {
+        if self.object_key.is_empty() {
+            return Err(MetadataProtocolError::new(
+                "block descriptor object key is empty",
+            ));
+        }
+        Ok(BlockDescriptor {
+            object_key: self.object_key,
+            logical_offset: self.logical_offset,
+            object_offset: self.object_offset,
+            len: self.len,
+            digest_uri: self.digest_uri,
+        })
+    }
+}
+
+impl WireSnapshotPin {
+    pub fn from_snapshot_pin(snapshot: &SnapshotPin) -> Self {
+        Self {
+            snapshot_id: snapshot.snapshot_id,
+            root: snapshot.root.get(),
+            read_version: snapshot.read_version,
+            created_version: snapshot.created_version,
+        }
+    }
+
+    pub fn into_snapshot_pin(self) -> Result<SnapshotPin, MetadataProtocolError> {
+        Ok(SnapshotPin {
+            snapshot_id: self.snapshot_id,
+            root: inode_id(self.root)?,
+            read_version: self.read_version,
+            created_version: self.created_version,
+        })
+    }
+}
+
 pub fn encode_request(request: &MetadataRpcRequest) -> Result<Vec<u8>, MetadataProtocolError> {
     serialize(request)
 }
@@ -297,6 +479,61 @@ fn deserialize<'a, T: Deserialize<'a>>(body: &'a [u8]) -> Result<T, MetadataProt
         )));
     }
     rmp_serde::from_slice(body).map_err(|err| MetadataProtocolError(err.to_string()))
+}
+
+fn inode_id(raw: u64) -> Result<InodeId, MetadataProtocolError> {
+    InodeId::new(raw).map_err(|err| MetadataProtocolError::new(err.to_string()))
+}
+
+fn file_type_label(file_type: FileType) -> &'static str {
+    match file_type {
+        FileType::File => "file",
+        FileType::Directory => "directory",
+        FileType::Symlink => "symlink",
+    }
+}
+
+fn parse_file_type(raw: &str) -> Result<FileType, MetadataProtocolError> {
+    match raw {
+        "file" => Ok(FileType::File),
+        "directory" => Ok(FileType::Directory),
+        "symlink" => Ok(FileType::Symlink),
+        other => Err(MetadataProtocolError::new(format!(
+            "unknown file type {other}"
+        ))),
+    }
+}
+
+fn hex_encode(bytes: &[u8]) -> String {
+    const HEX: &[u8; 16] = b"0123456789abcdef";
+    let mut out = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
+        out.push(HEX[(byte >> 4) as usize] as char);
+        out.push(HEX[(byte & 0x0f) as usize] as char);
+    }
+    out
+}
+
+fn hex_decode(raw: &str) -> Result<Vec<u8>, MetadataProtocolError> {
+    if !raw.len().is_multiple_of(2) {
+        return Err(MetadataProtocolError::new("hex string has odd length"));
+    }
+    let mut out = Vec::with_capacity(raw.len() / 2);
+    for pair in raw.as_bytes().chunks_exact(2) {
+        let high = hex_digit(pair[0])?;
+        let low = hex_digit(pair[1])?;
+        out.push((high << 4) | low);
+    }
+    Ok(out)
+}
+
+fn hex_digit(byte: u8) -> Result<u8, MetadataProtocolError> {
+    match byte {
+        b'0'..=b'9' => Ok(byte - b'0'),
+        b'a'..=b'f' => Ok(byte - b'a' + 10),
+        b'A'..=b'F' => Ok(byte - b'A' + 10),
+        _ => Err(MetadataProtocolError::new("invalid hex digit")),
+    }
 }
 
 impl fmt::Display for MetadataProtocolError {

@@ -57,6 +57,12 @@ pub struct ChunkWriteOptions {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ChunkWriteRange {
+    pub logical_offset: u64,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ChunkedWrite {
     pub manifest_id: String,
     pub size: u64,
@@ -315,6 +321,102 @@ pub fn put_chunked_object<O: ObjectStore>(
     Ok(ChunkedWrite {
         manifest_id: options.manifest_id,
         size: bytes.len() as u64,
+        chunk_size: options.chunk_size,
+        block_size: options.block_size as u64,
+        chunks,
+        object_puts,
+    })
+}
+
+pub fn put_chunked_ranges<O: ObjectStore>(
+    store: &O,
+    ranges: &[ChunkWriteRange],
+    options: ChunkWriteOptions,
+) -> Result<ChunkedWrite, ObjectError> {
+    put_chunked_ranges_with_block_index_base(store, ranges, options, 0)
+}
+
+pub fn put_chunked_ranges_with_block_index_base<O: ObjectStore>(
+    store: &O,
+    ranges: &[ChunkWriteRange],
+    options: ChunkWriteOptions,
+    block_index_base: u64,
+) -> Result<ChunkedWrite, ObjectError> {
+    options.validate()?;
+    let mut chunks = BTreeMap::<u64, StoredChunk>::new();
+    let mut object_puts = 0_usize;
+    let mut staged = Vec::new();
+    let mut max_end = 0_u64;
+    let mut block_indexes = BTreeMap::<u64, u64>::new();
+    for range in ranges {
+        if range.bytes.is_empty() {
+            continue;
+        }
+        let mut range_offset = 0_usize;
+        while range_offset < range.bytes.len() {
+            let logical_offset = range
+                .logical_offset
+                .checked_add(u64::try_from(range_offset).map_err(|_| ObjectError::InvalidRange)?)
+                .ok_or(ObjectError::InvalidRange)?;
+            let chunk_index = logical_offset / options.chunk_size;
+            let chunk_start = chunk_index.saturating_mul(options.chunk_size);
+            let next_chunk = chunk_start
+                .checked_add(options.chunk_size)
+                .ok_or(ObjectError::InvalidRange)?;
+            let remaining_in_chunk = usize::try_from(next_chunk - logical_offset)
+                .map_err(|_| ObjectError::InvalidRange)?;
+            let write_len = options
+                .block_size
+                .min(remaining_in_chunk)
+                .min(range.bytes.len() - range_offset);
+            let block_index = block_indexes.entry(chunk_index).or_insert(block_index_base);
+            let block_index_value = *block_index;
+            let object_key = block_object_key(&options, chunk_index, block_index_value);
+            *block_index = block_index_value.saturating_add(1);
+            let key = ObjectKey::new(object_key.clone())?;
+            let block = &range.bytes[range_offset..range_offset + write_len];
+            let info = store
+                .put(&key, block)
+                .map_err(|err| ObjectError::StagedWriteFailed {
+                    source: err.to_string(),
+                    staged: StagedObjectSet::new(staged.clone()),
+                })?;
+            object_puts += 1;
+            staged.push(StagedObject {
+                key: info.key,
+                size: info.size,
+            });
+            chunks
+                .entry(chunk_index)
+                .or_insert_with(|| StoredChunk {
+                    chunk_index,
+                    logical_offset: chunk_start,
+                    len: 0,
+                    blocks: Vec::new(),
+                })
+                .blocks
+                .push(StoredBlock {
+                    object_key,
+                    logical_offset,
+                    object_offset: 0,
+                    len: write_len as u64,
+                    digest_uri: block_digest_uri(block),
+                });
+            let block_end = logical_offset
+                .checked_add(write_len as u64)
+                .ok_or(ObjectError::InvalidRange)?;
+            max_end = max_end.max(block_end);
+            range_offset += write_len;
+        }
+    }
+    let mut chunks = chunks.into_values().collect::<Vec<_>>();
+    for chunk in &mut chunks {
+        let chunk_end = max_end.min(chunk.logical_offset.saturating_add(options.chunk_size));
+        chunk.len = chunk_end.saturating_sub(chunk.logical_offset);
+    }
+    Ok(ChunkedWrite {
+        manifest_id: options.manifest_id,
+        size: max_end,
         chunk_size: options.chunk_size,
         block_size: options.block_size as u64,
         chunks,
@@ -781,6 +883,50 @@ mod tests {
         assert_eq!(cleanup.attempted, 4);
         assert_eq!(cleanup.deleted, 0);
         assert_eq!(cleanup.missing, 4);
+    }
+
+    #[test]
+    fn chunked_ranges_put_only_dirty_blocks() {
+        let store = MemoryObjectStore::new();
+        let written = put_chunked_ranges(
+            &store,
+            &[
+                ChunkWriteRange {
+                    logical_offset: 3,
+                    bytes: b"XYZ".to_vec(),
+                },
+                ChunkWriteRange {
+                    logical_offset: 10,
+                    bytes: b"mnopq".to_vec(),
+                },
+            ],
+            ChunkWriteOptions {
+                manifest_id: "artifacts/checkpoint".to_owned(),
+                mount: 1,
+                inode: 2,
+                generation: 4,
+                chunk_size: 8,
+                block_size: 4,
+            },
+        )
+        .unwrap();
+        assert_eq!(written.size, 15);
+        assert_eq!(written.object_puts, 3);
+        assert_eq!(written.chunks.len(), 2);
+        assert_eq!(written.chunks[0].chunk_index, 0);
+        assert_eq!(written.chunks[0].blocks[0].logical_offset, 3);
+        assert_eq!(written.chunks[0].blocks[0].object_key, "blocks/1/2/4/0/0");
+        assert_eq!(written.chunks[1].chunk_index, 1);
+        assert_eq!(written.chunks[1].blocks.len(), 2);
+        assert_eq!(
+            store
+                .get(
+                    &ObjectKey::new("blocks/1/2/4/1/0").unwrap(),
+                    Some(ObjectRange::new(0, 4).unwrap())
+                )
+                .unwrap(),
+            b"mnop"
+        );
     }
 
     #[test]

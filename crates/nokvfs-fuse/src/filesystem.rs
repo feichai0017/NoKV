@@ -14,8 +14,11 @@ use fuser::{
     Request, WriteFlags,
 };
 use nokvfs_meta::command::MetadataStore;
-use nokvfs_meta::{DentryWithAttr, MetadError, NoKvFs, PublishArtifact};
-use nokvfs_object::ObjectStore;
+use nokvfs_meta::{
+    DentryWithAttr, MetadError, NoKvFs, PreparedArtifact, PublishArtifactRange,
+    PublishArtifactStagedSession,
+};
+use nokvfs_object::{ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk};
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
 
 use crate::attr::{file_attr, fuse_file_type};
@@ -52,11 +55,22 @@ struct WriteHandle {
     inode: InodeId,
     parent: InodeId,
     name: DentryName,
+    prepared: Option<PreparedArtifact>,
     mode: u32,
     uid: u32,
     gid: u32,
-    bytes: Vec<u8>,
+    base_size: u64,
+    size: u64,
+    dirty_extents: Vec<DirtyExtent>,
+    staged_chunks: Vec<StoredChunk>,
+    staged: StagedObjectSet,
+    next_block_index: u64,
     dirty: bool,
+}
+
+#[derive(Clone, Debug)]
+struct DirtyExtent {
+    chunks: Vec<StoredChunk>,
 }
 
 impl Default for FuseOptions {
@@ -297,35 +311,79 @@ where
 
     fn open_write_handle(&self, attr: &InodeAttr, parent: InodeId) -> Result<FileHandle, Errno> {
         let name = self.name_of(attr.inode)?;
-        let bytes = if attr.size == 0 {
-            Vec::new()
-        } else {
-            self.service
-                .read_file(attr.inode, 0, attr.size as usize)
-                .map_err(errno)?
-        };
+        self.allocate_write_handle(attr, parent, name)
+    }
+
+    fn allocate_write_handle(
+        &self,
+        attr: &InodeAttr,
+        parent: InodeId,
+        name: DentryName,
+    ) -> Result<FileHandle, Errno> {
         self.allocate_handle(WriteHandle {
             inode: attr.inode,
             parent,
             name,
+            prepared: None,
             mode: attr.mode,
             uid: attr.uid,
             gid: attr.gid,
-            bytes,
+            base_size: attr.size,
+            size: attr.size,
+            dirty_extents: Vec::new(),
+            staged_chunks: Vec::new(),
+            staged: StagedObjectSet::default(),
+            next_block_index: 0,
             dirty: false,
         })
     }
 
     fn write_to_handle(&self, fh: FileHandle, offset: u64, data: &[u8]) -> Result<usize, Errno> {
-        let offset = usize::try_from(offset).map_err(|_| Errno::EINVAL)?;
-        let end = offset.checked_add(data.len()).ok_or(Errno::EINVAL)?;
+        let end = offset
+            .checked_add(u64::try_from(data.len()).map_err(|_| Errno::EINVAL)?)
+            .ok_or(Errno::EINVAL)?;
         let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
         let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
-        if end > handle.bytes.len() {
-            handle.bytes.resize(end, 0);
+        if !data.is_empty() {
+            if handle.prepared.is_none() {
+                handle.prepared = Some(
+                    self.service
+                        .prepare_artifact_replace(handle.parent, handle.name.clone())
+                        .map_err(errno)?,
+                );
+            }
+            let prepared = handle.prepared.as_ref().ok_or(Errno::EIO)?;
+            let written = self
+                .service
+                .stage_prepared_artifact_ranges(
+                    prepared,
+                    &fuse_manifest_id(handle.parent, handle.inode),
+                    &[PublishArtifactRange {
+                        offset,
+                        bytes: data.to_vec(),
+                    }],
+                    handle.next_block_index,
+                )
+                .map_err(errno)?;
+            handle.next_block_index = handle
+                .next_block_index
+                .saturating_add(written.object_puts as u64);
+            let staged = written.staged_objects().map_err(|_| Errno::EIO)?;
+            let staged_objects = handle
+                .staged
+                .objects()
+                .iter()
+                .cloned()
+                .chain(staged.objects().iter().cloned())
+                .collect();
+            handle.staged = StagedObjectSet::new(staged_objects);
+            handle.staged_chunks.extend(written.chunks.clone());
+            handle.dirty_extents.push(DirtyExtent {
+                chunks: written.chunks,
+            });
+            handle.size = handle.size.max(end);
+            handle.dirty = true;
         }
-        handle.bytes[offset..end].copy_from_slice(data);
-        handle.dirty = true;
         Ok(data.len())
     }
 
@@ -335,19 +393,85 @@ where
         offset: u64,
         size: u32,
     ) -> Result<Option<Vec<u8>>, Errno> {
-        let handles = self.write_handles.read().map_err(|_| Errno::EIO)?;
-        let Some(handle) = handles.get(&fh.0) else {
+        let Some(handle) = self
+            .write_handles
+            .read()
+            .map_err(|_| Errno::EIO)?
+            .get(&fh.0)
+            .cloned()
+        else {
             return Ok(None);
         };
-        let offset = usize::try_from(offset).map_err(|_| Errno::EINVAL)?;
-        if offset >= handle.bytes.len() {
+        if offset >= handle.size {
             return Ok(Some(Vec::new()));
         }
-        let end = offset
-            .checked_add(size as usize)
-            .ok_or(Errno::EINVAL)?
-            .min(handle.bytes.len());
-        Ok(Some(handle.bytes[offset..end].to_vec()))
+        let output_len = u64::from(size)
+            .min(handle.size.saturating_sub(offset))
+            .try_into()
+            .map_err(|_| Errno::EINVAL)?;
+        let mut bytes = vec![0_u8; output_len];
+        if offset < handle.base_size {
+            let base_len = u64::try_from(output_len)
+                .map_err(|_| Errno::EINVAL)?
+                .min(handle.base_size - offset) as usize;
+            let base = self
+                .service_read_file(handle.inode, offset, base_len)
+                .map_err(errno)?;
+            bytes[..base.len()].copy_from_slice(&base);
+        }
+        self.overlay_dirty_extents(&mut bytes, offset, &handle.dirty_extents)?;
+        Ok(Some(bytes))
+    }
+
+    fn overlay_dirty_extents(
+        &self,
+        output: &mut [u8],
+        output_offset: u64,
+        extents: &[DirtyExtent],
+    ) -> Result<(), Errno> {
+        if output.is_empty() {
+            return Ok(());
+        }
+        let output_limit = output_offset
+            .checked_add(u64::try_from(output.len()).map_err(|_| Errno::EINVAL)?)
+            .ok_or(Errno::EINVAL)?;
+        for extent in extents {
+            for chunk in &extent.chunks {
+                for block in &chunk.blocks {
+                    let block_end = block
+                        .logical_offset
+                        .checked_add(block.len)
+                        .ok_or(Errno::EINVAL)?;
+                    let start = block.logical_offset.max(output_offset);
+                    let end = block_end.min(output_limit);
+                    if start >= end {
+                        continue;
+                    }
+                    let object_offset = block
+                        .object_offset
+                        .checked_add(start - block.logical_offset)
+                        .ok_or(Errno::EINVAL)?;
+                    let len = usize::try_from(end - start).map_err(|_| Errno::EINVAL)?;
+                    let bytes = self
+                        .service
+                        .read_session_object_blocks(
+                            len,
+                            &[ObjectReadBlock {
+                                object_key: block.object_key.clone(),
+                                object_offset,
+                                len,
+                                output_offset: 0,
+                            }],
+                        )
+                        .map_err(errno)?;
+                    let output_start =
+                        usize::try_from(start - output_offset).map_err(|_| Errno::EINVAL)?;
+                    let output_end = output_start.checked_add(bytes.len()).ok_or(Errno::EINVAL)?;
+                    output[output_start..output_end].copy_from_slice(&bytes);
+                }
+            }
+        }
+        Ok(())
     }
 
     fn publish_handle(&self, fh: FileHandle) -> Result<(), Errno> {
@@ -364,18 +488,23 @@ where
             return Ok(());
         }
         self.service
-            .replace_artifact(PublishArtifact {
-                parent: snapshot.parent,
-                name: snapshot.name,
-                producer: "nokv-fuse".to_owned(),
-                digest_uri: "unknown".to_owned(),
-                content_type: "application/octet-stream".to_owned(),
-                manifest_id: fuse_manifest_id(snapshot.parent, snapshot.inode),
-                bytes: snapshot.bytes.clone(),
-                mode: snapshot.mode,
-                uid: snapshot.uid,
-                gid: snapshot.gid,
-            })
+            .publish_prepared_artifact_staged_session(
+                snapshot.prepared.ok_or(Errno::EIO)?,
+                PublishArtifactStagedSession {
+                    parent: snapshot.parent,
+                    name: snapshot.name,
+                    producer: "nokv-fuse".to_owned(),
+                    digest_uri: "unknown".to_owned(),
+                    content_type: "application/octet-stream".to_owned(),
+                    manifest_id: fuse_manifest_id(snapshot.parent, snapshot.inode),
+                    size: snapshot.size,
+                    chunks: snapshot.staged_chunks,
+                    staged: snapshot.staged,
+                    mode: snapshot.mode,
+                    uid: snapshot.uid,
+                    gid: snapshot.gid,
+                },
+            )
             .map_err(errno)?;
         if let Some(handle) = self
             .write_handles
@@ -383,6 +512,13 @@ where
             .map_err(|_| Errno::EIO)?
             .get_mut(&fh.0)
         {
+            handle.base_size = snapshot.size;
+            handle.size = snapshot.size;
+            handle.dirty_extents.clear();
+            handle.staged_chunks.clear();
+            handle.staged = StagedObjectSet::default();
+            handle.prepared = None;
+            handle.next_block_index = 0;
             handle.dirty = false;
         }
         Ok(())
@@ -759,28 +895,21 @@ where
             .service
             .create_file(parent, name, mode & !umask, req.uid(), req.gid())
         {
-            Ok(entry) => match self.allocate_handle(WriteHandle {
-                inode: entry.attr.inode,
-                parent,
-                name: entry.dentry.name.clone(),
-                mode: entry.attr.mode,
-                uid: entry.attr.uid,
-                gid: entry.attr.gid,
-                bytes: Vec::new(),
-                dirty: false,
-            }) {
-                Ok(handle) => {
-                    self.remember_entry(&entry);
-                    reply.created(
-                        &self.options.entry_ttl,
-                        &self.view_file_attr(&entry.attr),
-                        Generation(entry.attr.generation),
-                        handle,
-                        FopenFlags::empty(),
-                    );
+            Ok(entry) => {
+                match self.allocate_write_handle(&entry.attr, parent, entry.dentry.name.clone()) {
+                    Ok(handle) => {
+                        self.remember_entry(&entry);
+                        reply.created(
+                            &self.options.entry_ttl,
+                            &self.view_file_attr(&entry.attr),
+                            Generation(entry.attr.generation),
+                            handle,
+                            FopenFlags::empty(),
+                        );
+                    }
+                    Err(err) => reply.error(err),
                 }
-                Err(err) => reply.error(err),
-            },
+            }
             Err(err) => reply.error(errno(err)),
         }
     }
@@ -1188,5 +1317,82 @@ mod tests {
             expected
         );
         fuse.release_handle(handle).expect("release handle");
+    }
+
+    #[test]
+    fn write_handle_open_does_not_eagerly_fetch_existing_body() {
+        let service = service();
+        let published = service
+            .publish_artifact(PublishArtifact {
+                parent: InodeId::root(),
+                name: DentryName::new(b"checkpoint".to_vec()).unwrap(),
+                producer: "fuse-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "checkpoint".to_owned(),
+                bytes: b"0123456789".to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        fuse.remember_entry(&published);
+        let before = fuse.service().object_stats();
+        let handle = fuse
+            .open_write_handle(&published.attr, InodeId::root())
+            .expect("open write handle");
+        let after_open = fuse.service().object_stats();
+        assert_eq!(after_open.object_gets, before.object_gets);
+
+        assert_eq!(
+            fuse.read_from_handle(handle, 2, 4).unwrap().unwrap(),
+            b"2345"
+        );
+        assert!(fuse.service().object_stats().object_gets > before.object_gets);
+    }
+
+    #[test]
+    fn dirty_range_write_overlays_existing_body_until_publish() {
+        let service = service();
+        let published = service
+            .publish_artifact(PublishArtifact {
+                parent: InodeId::root(),
+                name: DentryName::new(b"checkpoint".to_vec()).unwrap(),
+                producer: "fuse-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "checkpoint".to_owned(),
+                bytes: b"abcdefghij".to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        fuse.remember_entry(&published);
+        let handle = fuse
+            .open_write_handle(&published.attr, InodeId::root())
+            .expect("open write handle");
+        let before_write = fuse.service().object_stats();
+
+        assert_eq!(fuse.write_to_handle(handle, 3, b"XYZ").unwrap(), 3);
+        let after_write = fuse.service().object_stats();
+        assert_eq!(after_write.object_puts, before_write.object_puts + 1);
+        assert_eq!(
+            fuse.read_from_handle(handle, 0, 10).unwrap().unwrap(),
+            b"abcXYZghij"
+        );
+
+        let before_publish = fuse.service().object_stats();
+        fuse.publish_handle(handle).expect("publish handle");
+        let after_publish = fuse.service().object_stats();
+        assert_eq!(after_publish.object_puts, before_publish.object_puts);
+        assert_eq!(
+            fuse.service()
+                .read_file(published.attr.inode, 0, 10)
+                .expect("read published body"),
+            b"abcXYZghij"
+        );
     }
 }

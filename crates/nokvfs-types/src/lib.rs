@@ -8,7 +8,7 @@
 mod names;
 mod types;
 
-pub use names::{DentryName, NameError};
+pub use names::{parse_absolute_path, DentryName, NameError, PathError};
 pub use types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryProjection, DentryRecord, FileType,
     InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, RecordFamily, SnapshotPin,

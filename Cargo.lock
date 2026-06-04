@@ -1208,6 +1208,7 @@ dependencies = [
 name = "nokvfs-protocol"
 version = "0.1.0"
 dependencies = [
+ "nokvfs-types",
  "rmp-serde",
  "serde",
 ]

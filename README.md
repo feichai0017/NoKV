@@ -3,6 +3,57 @@ Copyright 2024-2026 The NoKV Authors.
 SPDX-License-Identifier: Apache-2.0
 -->
 
+<div align="center">
+  <img src="./docs/public/img/logo.svg" width="200" alt="NoKV" />
+
+  <p>
+    <strong>Rust filesystem metadata for AI training and agent workspaces.</strong>
+  </p>
+
+  <h3>Recognized In The AI-Native Storage Ecosystem</h3>
+
+  <table>
+    <tr>
+      <td align="center" width="360">
+        <a href="https://landscape.cncf.io/?group=projects-and-products&item=runtime--cloud-native-storage--nokv">
+          <img src="./docs/public/img/recognition/cncf.svg" width="128" alt="Cloud Native Computing Foundation" />
+        </a>
+        <br />
+        <strong>Linux Foundation CNCF Landscape</strong>
+        <br />
+        <sub>Listed in AI Native Infra / Storage and Cloud Native Storage.</sub>
+      </td>
+      <td align="center" width="360">
+        <a href="https://dbdb.io/db/nokv">
+          <img src="./docs/public/img/recognition/dbdb.svg" width="128" alt="DBDB.io Database of Databases" />
+        </a>
+        <br />
+        <strong>DBDB.io Database of Databases</strong>
+        <br />
+        <sub>Profiled by the CMU Database Group catalog as a Go-native log-structured key/value DBMS.</sub>
+      </td>
+    </tr>
+  </table>
+
+  <p>
+    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go"><img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" /></a>
+    <a href="https://pkg.go.dev/github.com/feichai0017/NoKV"><img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white" /></a>
+    <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV"><img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" /></a>
+    <a href="https://landscape.cncf.io/?group=projects-and-products&item=runtime--cloud-native-storage--nokv"><img alt="CNCF Landscape" src="https://img.shields.io/badge/CNCF%20Landscape-listed-5699C6?logo=cncf&logoColor=white" /></a>
+    <a href="https://dbdb.io/db/nokv"><img alt="DBDB.io" src="https://img.shields.io/badge/DBDB.io-profiled-244A64" /></a>
+  </p>
+
+  <p>
+    <a href="https://github.com/feichai0017/NoKV/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/go.yml?branch=main" /></a>
+    <a href="https://codecov.io/gh/feichai0017/NoKV"><img alt="Coverage" src="https://img.shields.io/codecov/c/gh/feichai0017/NoKV" /></a>
+    <img alt="Go Version" src="https://img.shields.io/badge/go-1.26%2B-00ADD8?logo=go&logoColor=white" />
+    <img alt="License" src="https://img.shields.io/badge/license-Apache--2.0-yellow" />
+    <a href="https://deepwiki.com/feichai0017/NoKV"><img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" /></a>
+  </p>
+</div>
+
+<br/>
+
 # NoKV-FS
 
 NoKV-FS is an open-source Rust filesystem for AI training and agent
@@ -28,7 +79,16 @@ body descriptors, watch/snapshot state, and later distributed metadata shards.
 ## Current Status
 
 The repository has been cut down to the Rust NoKV-FS line. The current
-workspace contains the first local metadata slice:
+implementation is a basic usable local filesystem surface: it can mount with
+FUSE, create and list directories, write and read files through object-backed
+chunk manifests, rename or remove namespace entries, publish artifacts
+atomically, serve remote metadata clients, and expose read-only snapshot views.
+
+It is not yet a production distributed DFS. Multi-node metadata replication,
+remote FUSE over the metadata server, and the remaining strict POSIX corners
+are still future work.
+
+The current workspace contains:
 
 ```text
 crates/
@@ -58,10 +118,13 @@ examples/
 
 Implemented today:
 
-- local Holt-backed metadata store;
+- local Holt-backed metadata store with inode/dentry canonical truth,
+  family trees, dentry projection, and snapshot-aware history;
 - S3-compatible object backend for AWS S3, RustFS, MinIO, and compatible
   services;
 - in-memory object backend for package tests;
+- chunked object data plane with 64 MiB chunks, 4 MiB immutable object blocks,
+  range read plans, and metadata-published body manifests;
 - metadata commands with predicates, mutations, family trees, command dedupe,
   and dentry projection;
 - staged object references and explicit cleanup helpers for failed artifact
@@ -77,9 +140,10 @@ Implemented today:
 - live FUSE mount invalidates kernel entry/inode caches from typed watch replay;
 - long-running local `nokvfs-server` process with health, stats, and manual
   object/history GC endpoints;
-- framed metadata RPC v0 on `nokvfs-server` for bootstrap, lookup,
+- framed metadata RPC v3 on `nokvfs-server` for bootstrap, lookup,
   readdir-plus, create, remove, rename, snapshot, artifact publish, and
-  snapshot retirement, with ordered non-atomic batch requests for remote SDK
+  snapshot retirement, with pipelined request ids, out-of-order responses,
+  bounded server workers, and ordered non-atomic batch requests for remote SDK
   throughput; HTTP `/rpc` remains available for debug requests;
 - remote Rust metadata client for path and inode namespace operations over the
   framed RPC;
@@ -92,8 +156,8 @@ Implemented today:
 - path-oriented Rust SDK for mkdir, artifact publish, lookup, list, cat,
   remove, rmdir, rename, and rename-replace;
 - low-level FUSE frontend for lookup, getattr, readdir, open, range read,
-  snapshot read mounts, mkdir, create, buffered write, flush/fsync/release
-  publish, unlink, rmdir, and rename-replace;
+  snapshot read mounts, mkdir, create, dirty-range buffered write sessions,
+  flush/fsync/release publish, unlink, rmdir, and rename-replace;
 - `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, rm, rmdir, rename,
   rename-replace, mount, mount-snapshot, snapshot, cat-snapshot,
   retire-snapshot, serve, and manual GC cleanup.
@@ -101,8 +165,8 @@ Implemented today:
 Not implemented yet:
 
 - remote FUSE over the metadata server;
-- full POSIX random-write/truncate semantics;
-- distributed metadata shards.
+- full POSIX mmap, lock, truncate, and strict fsync semantics;
+- multi-node distributed metadata shards.
 
 ## Quick Check
 

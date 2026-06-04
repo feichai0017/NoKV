@@ -5,7 +5,7 @@
 //! into `MetadataCommand`s and stores file bodies through an object-store
 //! boundary. It does not own Holt trees, Raft replication, FUSE, or protobuf.
 
-use std::collections::HashSet;
+use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
@@ -25,14 +25,17 @@ use crate::layout::{
     snapshot_pin_prefix, watch_log_prefix,
 };
 use nokvfs_object::{
-    delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
-    MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectKey, ObjectReadBlock, ObjectStore,
-    StagedObjectSet, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    delete_staged_objects, put_chunked_object, put_chunked_ranges,
+    put_chunked_ranges_with_block_index_base, read_object_blocks, ChunkWriteOptions,
+    ChunkWriteRange, ChunkedWrite, MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectKey,
+    ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE,
+    DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_types::{
-    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
-    FileType, InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, RecordFamily, SnapshotPin,
-    WatchCursor, WatchEvent, WatchEventKind, WatchRecord,
+    parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
+    DentryProjection, DentryRecord, FileType, InodeAttr, InodeId, ModelError, MountId,
+    ObjectGcRecord, PathError, RecordFamily, SnapshotPin, WatchCursor, WatchEvent, WatchEventKind,
+    WatchRecord,
 };
 
 const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
@@ -85,6 +88,43 @@ pub struct PublishArtifact {
     pub content_type: String,
     pub manifest_id: String,
     pub bytes: Vec<u8>,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishArtifactRange {
+    pub offset: u64,
+    pub bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishArtifactSession {
+    pub parent: InodeId,
+    pub name: DentryName,
+    pub producer: String,
+    pub digest_uri: String,
+    pub content_type: String,
+    pub manifest_id: String,
+    pub size: u64,
+    pub ranges: Vec<PublishArtifactRange>,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PublishArtifactStagedSession {
+    pub parent: InodeId,
+    pub name: DentryName,
+    pub producer: String,
+    pub digest_uri: String,
+    pub content_type: String,
+    pub manifest_id: String,
+    pub size: u64,
+    pub chunks: Vec<StoredChunk>,
+    pub staged: StagedObjectSet,
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
@@ -370,6 +410,11 @@ where
             watch: Vec::new(),
         })?;
         Ok(pin)
+    }
+
+    pub fn snapshot_subtree_path(&self, path: &str) -> Result<SnapshotPin, MetadError> {
+        let root = self.resolve_directory_path(path)?;
+        self.snapshot_subtree(root)
     }
 
     pub fn retire_snapshot(&self, snapshot_id: u64) -> Result<bool, MetadError> {
@@ -858,6 +903,138 @@ where
         }
     }
 
+    pub fn publish_prepared_artifact_session(
+        &self,
+        prepared: PreparedArtifact,
+        request: PublishArtifactSession,
+    ) -> Result<RenameReplaceResult, MetadError> {
+        if prepared.parent != request.parent || prepared.name != request.name {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "prepared artifact target does not match publish session".to_owned(),
+            ));
+        }
+        let version = Version::new(prepared.generation)?;
+        let StagedArtifactBody {
+            body,
+            chunks,
+            staged,
+        } = self.stage_artifact_session(&request, &prepared, version)?;
+        self.publish_prepared_artifact(
+            prepared,
+            body,
+            chunks,
+            request.mode,
+            request.uid,
+            request.gid,
+        )
+        .map_err(|err| MetadError::PublishArtifactFailed {
+            source: Box::new(err),
+            staged,
+        })
+    }
+
+    pub fn stage_prepared_artifact_ranges(
+        &self,
+        prepared: &PreparedArtifact,
+        manifest_id: &str,
+        ranges: &[PublishArtifactRange],
+        block_index_base: u64,
+    ) -> Result<ChunkedWrite, MetadError> {
+        let dirty_ranges = ranges
+            .iter()
+            .filter(|range| !range.bytes.is_empty())
+            .map(|range| ChunkWriteRange {
+                logical_offset: range.offset,
+                bytes: range.bytes.clone(),
+            })
+            .collect::<Vec<_>>();
+        match put_chunked_ranges_with_block_index_base(
+            &self.objects,
+            &dirty_ranges,
+            ChunkWriteOptions {
+                manifest_id: manifest_id.to_owned(),
+                mount: self.mount.get(),
+                inode: prepared.inode.get(),
+                generation: prepared.generation,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+            block_index_base,
+        ) {
+            Ok(written) => {
+                self.object_puts
+                    .fetch_add(written.object_puts as u64, Ordering::Relaxed);
+                Ok(written)
+            }
+            Err(err) => {
+                if let ObjectError::StagedWriteFailed { staged, .. } = &err {
+                    let _ = delete_staged_objects(&self.objects, staged);
+                }
+                Err(err.into())
+            }
+        }
+    }
+
+    pub fn publish_prepared_artifact_staged_session(
+        &self,
+        prepared: PreparedArtifact,
+        request: PublishArtifactStagedSession,
+    ) -> Result<RenameReplaceResult, MetadError> {
+        if prepared.parent != request.parent || prepared.name != request.name {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "prepared artifact target does not match staged publish session".to_owned(),
+            ));
+        }
+        let version = Version::new(prepared.generation)?;
+        let old_chunks = if prepared.replace {
+            prepared
+                .old_generation
+                .map(|generation| {
+                    self.chunk_manifests_at_version(
+                        prepared.inode,
+                        generation,
+                        self.read_version()?,
+                    )
+                })
+                .transpose()?
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let chunks = merge_session_chunks(request.size, old_chunks, request.chunks)?;
+        self.manifest_chunks
+            .fetch_add(chunks.len() as u64, Ordering::Relaxed);
+        self.manifest_blocks.fetch_add(
+            chunks
+                .iter()
+                .map(|chunk| chunk.blocks.len() as u64)
+                .sum::<u64>(),
+            Ordering::Relaxed,
+        );
+        let body = BodyDescriptor {
+            producer: request.producer,
+            digest_uri: request.digest_uri,
+            size: request.size,
+            content_type: request.content_type,
+            manifest_id: request.manifest_id,
+            generation: version.get(),
+            chunk_size: DEFAULT_CHUNK_SIZE,
+            block_size: DEFAULT_BLOCK_SIZE as u64,
+        };
+        self.publish_prepared_artifact(
+            prepared,
+            body,
+            chunks,
+            request.mode,
+            request.uid,
+            request.gid,
+        )
+        .map_err(|err| MetadError::PublishArtifactFailed {
+            source: Box::new(err),
+            staged: request.staged,
+        })
+    }
+
     pub fn get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, MetadError> {
         let version = self.read_version()?;
         self.get_attr_at_version(inode, version)
@@ -1191,6 +1368,20 @@ where
         Ok(outcome.bytes)
     }
 
+    pub fn read_session_object_blocks(
+        &self,
+        output_len: usize,
+        blocks: &[ObjectReadBlock],
+    ) -> Result<Vec<u8>, MetadError> {
+        let cache = self.block_cache_enabled().then_some(&self.block_cache);
+        let outcome = read_object_blocks(&self.objects, cache, output_len, blocks)?;
+        self.object_gets
+            .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
+        self.cache_hits
+            .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
+        Ok(outcome.bytes)
+    }
+
     pub fn remove_file(
         &self,
         parent: InodeId,
@@ -1213,6 +1404,7 @@ where
                 entry.attr.inode,
                 body.generation,
                 version,
+                &HashSet::new(),
             )?);
         }
         self.commit_metadata(MetadataCommand {
@@ -1247,6 +1439,11 @@ where
             )],
         })?;
         Ok(entry)
+    }
+
+    pub fn remove_file_path(&self, path: &str) -> Result<DentryWithAttr, MetadError> {
+        let (parent, name) = self.resolve_parent_path(path)?;
+        self.remove_file(parent, &name)
     }
 
     pub fn remove_empty_dir(
@@ -1308,6 +1505,11 @@ where
         }
     }
 
+    pub fn remove_empty_dir_path(&self, path: &str) -> Result<DentryWithAttr, MetadError> {
+        let (parent, name) = self.resolve_parent_path(path)?;
+        self.remove_empty_dir(parent, &name)
+    }
+
     pub fn rename(
         &self,
         parent: InodeId,
@@ -1319,6 +1521,16 @@ where
             .map(|outcome| outcome.entry)
     }
 
+    pub fn rename_path(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> Result<DentryWithAttr, MetadError> {
+        let (parent, name) = self.resolve_parent_path(source)?;
+        let (new_parent, new_name) = self.resolve_parent_path(destination)?;
+        self.rename(parent, &name, new_parent, new_name)
+    }
+
     pub fn rename_replace(
         &self,
         parent: InodeId,
@@ -1327,6 +1539,16 @@ where
         new_name: DentryName,
     ) -> Result<RenameReplaceResult, MetadError> {
         self.rename_inner(parent, name, new_parent, new_name, true)
+    }
+
+    pub fn rename_replace_path(
+        &self,
+        source: &str,
+        destination: &str,
+    ) -> Result<RenameReplaceResult, MetadError> {
+        let (parent, name) = self.resolve_parent_path(source)?;
+        let (new_parent, new_name) = self.resolve_parent_path(destination)?;
+        self.rename_replace(parent, &name, new_parent, new_name)
     }
 
     fn rename_inner(
@@ -1417,6 +1639,7 @@ where
                     replaced.attr.inode,
                     body.generation,
                     version,
+                    &HashSet::new(),
                 )?);
             }
         }
@@ -1676,10 +1899,12 @@ where
         ];
         if let Some(body) = &projection.body {
             if let Some(old_generation) = old_generation {
+                let retained_object_keys = chunk_object_keys(chunks);
                 mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
                     inode,
                     old_generation,
                     version,
+                    &retained_object_keys,
                 )?);
             }
             mutations.push(Mutation {
@@ -1903,6 +2128,7 @@ where
         inode: InodeId,
         generation: u64,
         enqueue_version: Version,
+        retained_object_keys: &HashSet<String>,
     ) -> Result<Vec<Mutation>, MetadError> {
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::ChunkManifest,
@@ -1917,6 +2143,9 @@ where
                 let manifest = decode_chunk_manifest(&row.value.0)
                     .map_err(|err| MetadError::Codec(err.to_string()))?;
                 for (block_index, block) in manifest.blocks.iter().enumerate() {
+                    if retained_object_keys.contains(&block.object_key) {
+                        continue;
+                    }
                     let record = ObjectGcRecord {
                         inode,
                         generation,
@@ -1943,6 +2172,106 @@ where
             mutations.push(delete_mutation(RecordFamily::ChunkManifest, row.key));
         }
         Ok(mutations)
+    }
+
+    fn stage_artifact_session(
+        &self,
+        request: &PublishArtifactSession,
+        prepared: &PreparedArtifact,
+        version: Version,
+    ) -> Result<StagedArtifactBody, MetadError> {
+        validate_artifact_ranges(request)?;
+        let dirty_ranges = request
+            .ranges
+            .iter()
+            .filter(|range| !range.bytes.is_empty())
+            .map(|range| ChunkWriteRange {
+                logical_offset: range.offset,
+                bytes: range.bytes.clone(),
+            })
+            .collect::<Vec<_>>();
+        let written = put_chunked_ranges(
+            &self.objects,
+            &dirty_ranges,
+            ChunkWriteOptions {
+                manifest_id: request.manifest_id.clone(),
+                mount: self.mount.get(),
+                inode: prepared.inode.get(),
+                generation: version.get(),
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+        )?;
+        let staged = written.staged_objects()?;
+        self.object_puts
+            .fetch_add(written.object_puts as u64, Ordering::Relaxed);
+
+        let old_chunks = if prepared.replace {
+            prepared
+                .old_generation
+                .map(|generation| {
+                    self.chunk_manifests_at_version(
+                        prepared.inode,
+                        generation,
+                        self.read_version()?,
+                    )
+                })
+                .transpose()?
+                .unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+        let chunks = merge_session_chunks(request.size, old_chunks, written.chunks)?;
+        self.manifest_chunks
+            .fetch_add(chunks.len() as u64, Ordering::Relaxed);
+        self.manifest_blocks.fetch_add(
+            chunks
+                .iter()
+                .map(|chunk| chunk.blocks.len() as u64)
+                .sum::<u64>(),
+            Ordering::Relaxed,
+        );
+        Ok(StagedArtifactBody {
+            body: BodyDescriptor {
+                producer: request.producer.clone(),
+                digest_uri: request.digest_uri.clone(),
+                size: request.size,
+                content_type: request.content_type.clone(),
+                manifest_id: written.manifest_id,
+                generation: version.get(),
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE as u64,
+            },
+            chunks,
+            staged,
+        })
+    }
+
+    fn chunk_manifests_at_version(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        version: Version,
+    ) -> Result<Vec<ChunkManifest>, MetadError> {
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::ChunkManifest,
+            prefix: chunk_manifest_prefix(self.mount, inode, generation),
+            version,
+            limit: 0,
+            purpose: ReadPurpose::WritePlanLocal,
+        })?;
+        rows.into_iter()
+            .filter_map(|row| match chunk_index_from_manifest_key(&row.key) {
+                Ok(BODY_SUMMARY_CHUNK_INDEX) => None,
+                Ok(_) => Some(Ok(row)),
+                Err(err) => Some(Err(err)),
+            })
+            .map(|row| {
+                let row = row?;
+                decode_chunk_manifest(&row.value.0)
+                    .map_err(|err| MetadError::Codec(err.to_string()))
+            })
+            .collect()
     }
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadError> {
@@ -2242,31 +2571,124 @@ fn validate_prepared_artifact(
     Ok(())
 }
 
-fn parse_absolute_path(path: &str) -> Result<Vec<DentryName>, MetadError> {
-    if path.is_empty() {
-        return Err(MetadError::InvalidPath("path is empty".to_owned()));
-    }
-    if !path.starts_with('/') {
-        return Err(MetadError::InvalidPath(format!(
-            "path {path} is not absolute"
-        )));
-    }
-    let mut out = Vec::new();
-    for raw in path.split('/').filter(|part| !part.is_empty()) {
-        if raw == "." {
-            continue;
-        }
-        if raw == ".." {
-            return Err(MetadError::InvalidPath(
-                "path parent traversal is not allowed".to_owned(),
+fn validate_artifact_ranges(request: &PublishArtifactSession) -> Result<(), MetadError> {
+    let mut ranges = request
+        .ranges
+        .iter()
+        .filter(|range| !range.bytes.is_empty())
+        .collect::<Vec<_>>();
+    ranges.sort_by_key(|range| range.offset);
+    let mut previous_end = 0_u64;
+    for range in ranges {
+        let len = u64::try_from(range.bytes.len()).map_err(|_| ObjectError::InvalidRange)?;
+        let end = range
+            .offset
+            .checked_add(len)
+            .ok_or(ObjectError::InvalidRange)?;
+        if end > request.size {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "dirty range exceeds session body size".to_owned(),
             ));
         }
-        out.push(
-            DentryName::new(raw.as_bytes().to_vec())
-                .map_err(|err| MetadError::InvalidPath(err.to_string()))?,
-        );
+        if range.offset < previous_end {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "dirty ranges must not overlap".to_owned(),
+            ));
+        }
+        previous_end = end;
     }
-    Ok(out)
+    Ok(())
+}
+
+fn merge_session_chunks(
+    size: u64,
+    old_chunks: Vec<ChunkManifest>,
+    dirty_chunks: Vec<StoredChunk>,
+) -> Result<Vec<ChunkManifest>, MetadError> {
+    let mut chunks = BTreeMap::<u64, ChunkManifest>::new();
+    if size > 0 {
+        let last_chunk = (size - 1) / DEFAULT_CHUNK_SIZE;
+        for chunk_index in 0..=last_chunk {
+            ensure_manifest_chunk(&mut chunks, chunk_index, size);
+        }
+    }
+    for old_chunk in old_chunks {
+        for block in old_chunk.blocks {
+            let Some(block) = clip_block_to_size(block, size)? else {
+                continue;
+            };
+            let chunk_index = block.logical_offset / DEFAULT_CHUNK_SIZE;
+            ensure_manifest_chunk(&mut chunks, chunk_index, size)
+                .blocks
+                .push(block);
+        }
+    }
+    for dirty_chunk in dirty_chunks {
+        for block in dirty_chunk.blocks {
+            let block = BlockDescriptor {
+                object_key: block.object_key,
+                logical_offset: block.logical_offset,
+                object_offset: block.object_offset,
+                len: block.len,
+                digest_uri: block.digest_uri,
+            };
+            let Some(block) = clip_block_to_size(block, size)? else {
+                continue;
+            };
+            let chunk_index = block.logical_offset / DEFAULT_CHUNK_SIZE;
+            ensure_manifest_chunk(&mut chunks, chunk_index, size)
+                .blocks
+                .push(block);
+        }
+    }
+    Ok(chunks.into_values().collect())
+}
+
+fn ensure_manifest_chunk(
+    chunks: &mut BTreeMap<u64, ChunkManifest>,
+    chunk_index: u64,
+    size: u64,
+) -> &mut ChunkManifest {
+    chunks.entry(chunk_index).or_insert_with(|| {
+        let logical_offset = chunk_index.saturating_mul(DEFAULT_CHUNK_SIZE);
+        let len = if logical_offset >= size {
+            0
+        } else {
+            DEFAULT_CHUNK_SIZE.min(size - logical_offset)
+        };
+        ChunkManifest {
+            chunk_index,
+            logical_offset,
+            len,
+            blocks: Vec::new(),
+        }
+    })
+}
+
+fn clip_block_to_size(
+    mut block: BlockDescriptor,
+    size: u64,
+) -> Result<Option<BlockDescriptor>, MetadError> {
+    if block.logical_offset >= size {
+        return Ok(None);
+    }
+    let max_len = size - block.logical_offset;
+    block.len = block.len.min(max_len);
+    if block.len == 0 {
+        return Ok(None);
+    }
+    block
+        .logical_offset
+        .checked_add(block.len)
+        .ok_or(ObjectError::InvalidRange)?;
+    Ok(Some(block))
+}
+
+fn chunk_object_keys(chunks: &[ChunkManifest]) -> HashSet<String> {
+    chunks
+        .iter()
+        .flat_map(|chunk| chunk.blocks.iter().map(|block| block.object_key.clone()))
+        .collect()
 }
 
 fn watch_cursor_from_key(key: &[u8]) -> Result<WatchCursor, MetadError> {
@@ -2371,6 +2793,12 @@ impl From<MetadataError> for MetadError {
 impl From<ModelError> for MetadError {
     fn from(err: ModelError) -> Self {
         Self::Model(err)
+    }
+}
+
+impl From<PathError> for MetadError {
+    fn from(err: PathError) -> Self {
+        Self::InvalidPath(err.to_string())
     }
 }
 
@@ -2787,6 +3215,53 @@ mod tests {
             .unwrap();
         assert_eq!(second.entry, first.entry);
         assert_eq!(second.replaced, None);
+    }
+
+    #[test]
+    fn prepared_artifact_session_uploads_only_dirty_ranges_and_reuses_old_blocks() {
+        let service = service();
+        let name = DentryName::new(b"artifact.bin".to_vec()).unwrap();
+        let published = service
+            .publish_artifact(artifact_request(
+                name.clone(),
+                "artifact.bin",
+                b"abcdefghij",
+            ))
+            .unwrap();
+        let before = service.object_stats();
+        let prepared = service
+            .prepare_artifact_replace(InodeId::root(), name.clone())
+            .unwrap();
+        let replaced = service
+            .publish_prepared_artifact_session(
+                prepared,
+                PublishArtifactSession {
+                    parent: InodeId::root(),
+                    name,
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "unknown".to_owned(),
+                    content_type: "application/octet-stream".to_owned(),
+                    manifest_id: "artifact.bin".to_owned(),
+                    size: 10,
+                    ranges: vec![PublishArtifactRange {
+                        offset: 3,
+                        bytes: b"XYZ".to_vec(),
+                    }],
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                },
+            )
+            .unwrap();
+        let after = service.object_stats();
+        assert_eq!(after.object_puts, before.object_puts + 1);
+        assert_eq!(replaced.entry.attr.inode, published.attr.inode);
+        assert_eq!(
+            service.read_file(published.attr.inode, 0, 10).unwrap(),
+            b"abcXYZghij"
+        );
+        let gc = service.cleanup_pending_objects(10).unwrap();
+        assert_eq!(gc.attempted, 0);
     }
 
     #[test]

@@ -24,5 +24,6 @@ pub use gc::{
 pub use holtstore::HoltMetadataStore;
 pub use service::{
     BodyReadPlan, DentryWithAttr, MetadError, NoKvFs, ObjectTransferStats,
-    PendingObjectCleanupOutcome, PreparedArtifact, PublishArtifact, RenameReplaceResult,
+    PendingObjectCleanupOutcome, PreparedArtifact, PublishArtifact, PublishArtifactRange,
+    PublishArtifactSession, PublishArtifactStagedSession, RenameReplaceResult,
 };

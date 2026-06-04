@@ -1,25 +1,66 @@
 use std::io::{self, Read, Write};
 use std::net::TcpStream;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 
 use nokvfs_meta::{DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
-    decode_request, encode_envelope, MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult,
-    WireBlockDescriptor, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryRecord,
-    WireDentryWithAttr, WireInodeAttr, WireObjectReadBlock, WirePreparedArtifact, WireSnapshotPin,
+    decode_request, encode_envelope, MetadataProtocolError, MetadataRpcEnvelope,
+    MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr,
+    WireObjectReadBlock, WirePreparedArtifact,
 };
-use nokvfs_types::{
-    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
-    InodeId, MountId, SnapshotPin,
-};
+use nokvfs_types::{DentryName, InodeId, MountId};
 
 use crate::server::{Server, ServerError};
 
 pub(crate) const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
 const FRAME_HEADER_BYTES: usize = 16;
 const MAX_FRAMED_RPC_BYTES: usize = 16 * 1024 * 1024;
+const MIN_FRAMED_RPC_WORKERS: usize = 4;
+const MAX_FRAMED_RPC_WORKERS: usize = 64;
+const FRAMED_RPC_QUEUE_PER_WORKER: usize = 256;
+
+type RpcJob = Box<dyn FnOnce() + Send + 'static>;
+
+static FRAMED_RPC_WORKERS: OnceLock<RpcWorkerPool> = OnceLock::new();
+
+struct RpcWorkerPool {
+    sender: mpsc::SyncSender<RpcJob>,
+}
+
+impl RpcWorkerPool {
+    fn new(workers: usize, queue_capacity: usize) -> Self {
+        let (sender, receiver) = mpsc::sync_channel::<RpcJob>(queue_capacity.max(workers));
+        let receiver = Arc::new(Mutex::new(receiver));
+        for worker in 0..workers {
+            let receiver = Arc::clone(&receiver);
+            thread::Builder::new()
+                .name(format!("nokvfs-rpc-{worker}"))
+                .spawn(move || loop {
+                    let job = {
+                        let receiver = receiver.lock().expect("metadata rpc worker receiver");
+                        receiver.recv()
+                    };
+                    match job {
+                        Ok(job) => job(),
+                        Err(_) => return,
+                    }
+                })
+                .expect("spawn metadata rpc worker");
+        }
+        Self { sender }
+    }
+
+    fn submit(&self, job: RpcJob) -> Result<(), ServerError> {
+        self.sender.send(job).map_err(|_| {
+            ServerError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "metadata framed rpc worker pool stopped",
+            ))
+        })
+    }
+}
 
 struct RpcFrame {
     request_id: u64,
@@ -78,21 +119,13 @@ fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerErro
     })
 }
 
-pub(crate) fn handle_framed_stream(
+pub(crate) fn handle_framed_stream_after_magic(
     server: Arc<Server>,
     mut stream: TcpStream,
 ) -> Result<(), ServerError> {
     stream.set_read_timeout(None).map_err(ServerError::Io)?;
     stream.set_write_timeout(None).map_err(ServerError::Io)?;
     let writer = Arc::new(Mutex::new(stream.try_clone().map_err(ServerError::Io)?));
-    let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
-    stream.read_exact(&mut magic).map_err(ServerError::Io)?;
-    if &magic != FRAMED_RPC_MAGIC {
-        return Err(ServerError::Io(io::Error::new(
-            io::ErrorKind::InvalidData,
-            "invalid metadata framed rpc magic",
-        )));
-    }
 
     loop {
         let Some(frame) = read_frame(&mut stream)? else {
@@ -100,7 +133,7 @@ pub(crate) fn handle_framed_stream(
         };
         let server = Arc::clone(&server);
         let writer = Arc::clone(&writer);
-        thread::spawn(move || {
+        framed_rpc_worker_pool().submit(Box::new(move || {
             let response = handle_binary_rpc(server.as_ref(), &frame.payload);
             let response = match response {
                 Ok(response) => response,
@@ -123,8 +156,22 @@ pub(crate) fn handle_framed_stream(
             if let Err(err) = write_frame(&mut writer, frame.request_id, frame.flags, &response) {
                 eprintln!("metadata framed rpc response write failed: {err}");
             }
-        });
+        }))?;
     }
+}
+
+fn framed_rpc_worker_pool() -> &'static RpcWorkerPool {
+    FRAMED_RPC_WORKERS.get_or_init(|| {
+        let workers = default_framed_rpc_worker_count();
+        RpcWorkerPool::new(workers, workers.saturating_mul(FRAMED_RPC_QUEUE_PER_WORKER))
+    })
+}
+
+fn default_framed_rpc_worker_count() -> usize {
+    thread::available_parallelism()
+        .map(|parallelism| parallelism.get().saturating_mul(4))
+        .unwrap_or(MIN_FRAMED_RPC_WORKERS)
+        .clamp(MIN_FRAMED_RPC_WORKERS, MAX_FRAMED_RPC_WORKERS)
 }
 
 fn read_frame(stream: &mut TcpStream) -> Result<Option<RpcFrame>, ServerError> {
@@ -341,13 +388,15 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
         MetadataRpcRequest::BootstrapRoot { mode, uid, gid } => {
             let attr = server.service().bootstrap_root(mode, uid, gid)?;
             Ok(MetadataRpcResult::InodeAttr {
-                attr: Some(wire_inode_attr(&attr)),
+                attr: Some(nokvfs_protocol::WireInodeAttr::from_inode_attr(&attr)),
             })
         }
         MetadataRpcRequest::GetAttr { inode } => {
             let attr = server.service().get_attr(inode_id(inode)?)?;
             Ok(MetadataRpcResult::InodeAttr {
-                attr: attr.as_ref().map(wire_inode_attr),
+                attr: attr
+                    .as_ref()
+                    .map(nokvfs_protocol::WireInodeAttr::from_inode_attr),
             })
         }
         MetadataRpcRequest::LookupPlus { parent, name } => {
@@ -458,10 +507,22 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
+        MetadataRpcRequest::RemoveFilePath { path } => {
+            let entry = server.service().remove_file_path(&path)?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
         MetadataRpcRequest::RemoveEmptyDir { parent, name } => {
             let entry = server
                 .service()
                 .remove_empty_dir(inode_id(parent)?, &dentry_name(name)?)?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
+        MetadataRpcRequest::RemoveEmptyDirPath { path } => {
+            let entry = server.service().remove_empty_dir_path(&path)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
@@ -478,6 +539,15 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 inode_id(new_parent)?,
                 dentry_name(new_name)?,
             )?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
+        MetadataRpcRequest::RenamePath {
+            source,
+            destination,
+        } => {
+            let entry = server.service().rename_path(&source, &destination)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
@@ -502,10 +572,31 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     .map(|entry| Box::new(wire_dentry(entry))),
             })
         }
+        MetadataRpcRequest::RenameReplacePath {
+            source,
+            destination,
+        } => {
+            let result = server
+                .service()
+                .rename_replace_path(&source, &destination)?;
+            Ok(MetadataRpcResult::RenameReplace {
+                entry: Box::new(wire_dentry(&result.entry)),
+                replaced: result
+                    .replaced
+                    .as_ref()
+                    .map(|entry| Box::new(wire_dentry(entry))),
+            })
+        }
         MetadataRpcRequest::SnapshotSubtree { root } => {
             let snapshot = server.service().snapshot_subtree(inode_id(root)?)?;
             Ok(MetadataRpcResult::Snapshot {
-                snapshot: wire_snapshot(&snapshot),
+                snapshot: nokvfs_protocol::WireSnapshotPin::from_snapshot_pin(&snapshot),
+            })
+        }
+        MetadataRpcRequest::SnapshotSubtreePath { path } => {
+            let snapshot = server.service().snapshot_subtree_path(&path)?;
+            Ok(MetadataRpcResult::Snapshot {
+                snapshot: nokvfs_protocol::WireSnapshotPin::from_snapshot_pin(&snapshot),
             })
         }
         MetadataRpcRequest::RetireSnapshot { snapshot_id } => {
@@ -581,10 +672,10 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             }
             let result = server.service().publish_prepared_artifact(
                 prepared_artifact(prepared)?,
-                body_descriptor(body),
+                body.into_body_descriptor(),
                 chunks
                     .into_iter()
-                    .map(chunk_manifest)
+                    .map(|chunk| chunk.into_chunk_manifest().map_err(protocol_error))
                     .collect::<Result<Vec<_>, _>>()?,
                 mode,
                 uid,
@@ -611,47 +702,12 @@ fn dentry_name(name: String) -> Result<DentryName, MetadError> {
 
 fn wire_dentry(entry: &DentryWithAttr) -> WireDentryWithAttr {
     WireDentryWithAttr {
-        dentry: wire_dentry_record(&entry.dentry),
-        attr: wire_inode_attr(&entry.attr),
-        body: entry.body.as_ref().map(wire_body),
-    }
-}
-
-fn wire_dentry_record(record: &DentryRecord) -> WireDentryRecord {
-    WireDentryRecord {
-        parent: record.parent.get(),
-        name_utf8: String::from_utf8(record.name.as_bytes().to_vec()).ok(),
-        name_hex: hex_encode(record.name.as_bytes()),
-        child: record.child.get(),
-        child_type: file_type_label(record.child_type).to_owned(),
-        attr_generation: record.attr_generation,
-    }
-}
-
-fn wire_inode_attr(attr: &InodeAttr) -> WireInodeAttr {
-    WireInodeAttr {
-        inode: attr.inode.get(),
-        file_type: file_type_label(attr.file_type).to_owned(),
-        mode: attr.mode,
-        uid: attr.uid,
-        gid: attr.gid,
-        size: attr.size,
-        generation: attr.generation,
-        mtime_ms: attr.mtime_ms,
-        ctime_ms: attr.ctime_ms,
-    }
-}
-
-fn wire_body(body: &BodyDescriptor) -> WireBodyDescriptor {
-    WireBodyDescriptor {
-        producer: body.producer.clone(),
-        digest_uri: body.digest_uri.clone(),
-        size: body.size,
-        content_type: body.content_type.clone(),
-        manifest_id: body.manifest_id.clone(),
-        generation: body.generation,
-        chunk_size: body.chunk_size,
-        block_size: body.block_size,
+        dentry: nokvfs_protocol::WireDentryRecord::from_dentry_record(&entry.dentry),
+        attr: nokvfs_protocol::WireInodeAttr::from_inode_attr(&entry.attr),
+        body: entry
+            .body
+            .as_ref()
+            .map(nokvfs_protocol::WireBodyDescriptor::from_body_descriptor),
     }
 }
 
@@ -682,47 +738,6 @@ fn prepared_artifact(prepared: WirePreparedArtifact) -> Result<PreparedArtifact,
     })
 }
 
-fn body_descriptor(body: WireBodyDescriptor) -> BodyDescriptor {
-    BodyDescriptor {
-        producer: body.producer,
-        digest_uri: body.digest_uri,
-        size: body.size,
-        content_type: body.content_type,
-        manifest_id: body.manifest_id,
-        generation: body.generation,
-        chunk_size: body.chunk_size,
-        block_size: body.block_size,
-    }
-}
-
-fn chunk_manifest(chunk: WireChunkManifest) -> Result<ChunkManifest, MetadError> {
-    Ok(ChunkManifest {
-        chunk_index: chunk.chunk_index,
-        logical_offset: chunk.logical_offset,
-        len: chunk.len,
-        blocks: chunk
-            .blocks
-            .into_iter()
-            .map(block_descriptor)
-            .collect::<Result<Vec<_>, _>>()?,
-    })
-}
-
-fn block_descriptor(block: WireBlockDescriptor) -> Result<BlockDescriptor, MetadError> {
-    if block.object_key.is_empty() {
-        return Err(MetadError::Codec(
-            "block descriptor object key is empty".to_owned(),
-        ));
-    }
-    Ok(BlockDescriptor {
-        object_key: block.object_key,
-        logical_offset: block.logical_offset,
-        object_offset: block.object_offset,
-        len: block.len,
-        digest_uri: block.digest_uri,
-    })
-}
-
 fn wire_body_read_plan(plan: &nokvfs_meta::BodyReadPlan) -> WireBodyReadPlan {
     WireBodyReadPlan {
         output_len: plan.output_len as u64,
@@ -739,37 +754,15 @@ fn wire_object_read_block(block: &ObjectReadBlock) -> WireObjectReadBlock {
     }
 }
 
-fn wire_snapshot(snapshot: &SnapshotPin) -> WireSnapshotPin {
-    WireSnapshotPin {
-        snapshot_id: snapshot.snapshot_id,
-        root: snapshot.root.get(),
-        read_version: snapshot.read_version,
-        created_version: snapshot.created_version,
-    }
-}
-
-fn file_type_label(file_type: FileType) -> &'static str {
-    match file_type {
-        FileType::File => "file",
-        FileType::Directory => "directory",
-        FileType::Symlink => "symlink",
-    }
-}
-
-fn hex_encode(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-    let mut out = String::with_capacity(bytes.len() * 2);
-    for byte in bytes {
-        out.push(HEX[(byte >> 4) as usize] as char);
-        out.push(HEX[(byte & 0x0f) as usize] as char);
-    }
-    out
+fn protocol_error(err: MetadataProtocolError) -> MetadError {
+    MetadError::Codec(err.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::server::tests::test_server;
+    use nokvfs_protocol::{WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest};
 
     #[test]
     fn rpc_creates_and_lists_directory() {
@@ -779,11 +772,11 @@ mod tests {
             br#"{"op":"create_dir","parent":1,"name":"runs","mode":493,"uid":1000,"gid":1000}"#,
         );
         assert!(response.contains("\"ok\":true"));
-        assert!(response.contains("\"name_utf8\":\"runs\""));
+        assert!(response.contains("\"name_hex\":\"72756e73\""));
 
         let response = handle_rpc(&server, br#"{"op":"read_dir_plus","parent":1}"#);
         assert!(response.contains("\"entries\""));
-        assert!(response.contains("\"name_utf8\":\"runs\""));
+        assert!(response.contains("\"name_hex\":\"72756e73\""));
     }
 
     #[test]
@@ -799,10 +792,10 @@ mod tests {
             br#"{"op":"create_file_path","path":"/runs/checkpoint.bin","mode":420,"uid":1000,"gid":1000}"#,
         );
         assert!(response.contains("\"ok\":true"));
-        assert!(response.contains("\"name_utf8\":\"checkpoint.bin\""));
+        assert!(response.contains("\"name_hex\":\"636865636b706f696e742e62696e\""));
         let response = handle_rpc(&server, br#"{"op":"read_dir_plus_path","path":"/runs"}"#);
         assert!(response.contains("\"entries\""));
-        assert!(response.contains("\"name_utf8\":\"checkpoint.bin\""));
+        assert!(response.contains("\"name_hex\":\"636865636b706f696e742e62696e\""));
     }
 
     #[test]
@@ -841,6 +834,13 @@ mod tests {
         let response = handle_rpc(&server, b"not-json");
         assert!(response.contains("\"ok\":false"));
         assert!(response.contains("invalid metadata rpc request"));
+    }
+
+    #[test]
+    fn framed_rpc_worker_count_is_bounded() {
+        let workers = default_framed_rpc_worker_count();
+        assert!(workers >= MIN_FRAMED_RPC_WORKERS);
+        assert!(workers <= MAX_FRAMED_RPC_WORKERS);
     }
 
     #[test]
@@ -886,7 +886,7 @@ mod tests {
         let request = serde_json::to_vec(&request).unwrap();
         let response = handle_rpc(&server, &request);
         assert!(response.contains("\"ok\":true"));
-        assert!(response.contains("\"name_utf8\":\"artifact.bin\""));
+        assert!(response.contains("\"name_hex\":\"61727469666163742e62696e\""));
         assert!(response.contains("\"type\":\"rename_replace\""));
     }
 }
