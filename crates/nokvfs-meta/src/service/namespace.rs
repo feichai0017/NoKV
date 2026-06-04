@@ -150,7 +150,7 @@ where
         changes: UpdateAttr,
     ) -> Result<DentryWithAttr, MetadError> {
         let (entry, dentry_version) = self
-            .lookup_plus_versioned(parent, name)?
+            .lookup_plus_for_write_plan(parent, name)?
             .ok_or(MetadError::NotFound)?;
         if changes.is_empty() {
             return Ok(entry);
@@ -234,7 +234,7 @@ where
             RecordFamily::Inode,
             &key,
             self.read_version()?,
-            ReadPurpose::UserStrong,
+            ReadPurpose::WritePlanLocal,
         )?
         else {
             return Err(MetadError::NotFound);
@@ -639,7 +639,7 @@ where
         path_index: Option<Vec<u8>>,
     ) -> Result<DentryWithAttr, MetadError> {
         let (entry, dentry_version) = self
-            .lookup_plus_versioned(parent, name)?
+            .lookup_plus_for_write_plan(parent, name)?
             .ok_or(MetadError::NotFound)?;
         if entry.attr.file_type == FileType::Directory {
             return Err(MetadError::NotFile);
@@ -719,7 +719,7 @@ where
         path_index_deletes: Vec<Mutation>,
     ) -> Result<DentryWithAttr, MetadError> {
         let (entry, dentry_version) = self
-            .lookup_plus_versioned(parent, name)?
+            .lookup_plus_for_write_plan(parent, name)?
             .ok_or(MetadError::NotFound)?;
         if entry.attr.file_type != FileType::Directory {
             return Err(MetadError::NotDirectory);
@@ -875,7 +875,7 @@ where
         path_index: Option<(Vec<u8>, Vec<u8>, Vec<u8>)>,
     ) -> Result<RenameReplaceResult, MetadError> {
         let (source, source_version) = self
-            .lookup_plus_versioned(parent, name)?
+            .lookup_plus_for_write_plan(parent, name)?
             .ok_or(MetadError::NotFound)?;
         if parent == new_parent && *name == new_name {
             return Ok(RenameReplaceResult {
@@ -883,7 +883,7 @@ where
                 replaced: None,
             });
         }
-        let destination = self.lookup_plus_versioned(new_parent, &new_name)?;
+        let destination = self.lookup_plus_for_write_plan(new_parent, &new_name)?;
         if !replace && destination.is_some() {
             return Err(MetadataError::PredicateFailed.into());
         }

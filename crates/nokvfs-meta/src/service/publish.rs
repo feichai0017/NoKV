@@ -45,7 +45,7 @@ where
         request: PublishArtifact,
     ) -> Result<RenameReplaceResult, MetadError> {
         let (existing, dentry_version) = self
-            .lookup_plus_versioned(request.parent, &request.name)?
+            .lookup_plus_for_write_plan(request.parent, &request.name)?
             .ok_or(MetadError::NotFound)?;
         if existing.attr.file_type != FileType::File {
             return Err(MetadError::NotFile);
@@ -95,13 +95,18 @@ where
         parent: InodeId,
         name: DentryName,
     ) -> Result<PreparedArtifact, MetadError> {
-        let Some(parent_attr) = self.get_attr(parent)? else {
+        let Some(parent_attr) = self.get_attr_at_version_for_purpose(
+            parent,
+            self.read_version()?,
+            ReadPurpose::WritePlanLocal,
+        )?
+        else {
             return Err(MetadError::NotFound);
         };
         if parent_attr.file_type != FileType::Directory {
             return Err(MetadError::NotDirectory);
         }
-        if self.lookup_plus(parent, &name)?.is_some() {
+        if self.lookup_plus_for_write_plan(parent, &name)?.is_some() {
             return Err(MetadataError::PredicateFailed.into());
         }
         let generation = self.next_version()?;
@@ -135,7 +140,7 @@ where
         name: DentryName,
     ) -> Result<PreparedArtifact, MetadError> {
         let (existing, dentry_version) = self
-            .lookup_plus_versioned(parent, &name)?
+            .lookup_plus_for_write_plan(parent, &name)?
             .ok_or(MetadError::NotFound)?;
         if existing.attr.file_type != FileType::File {
             return Err(MetadError::NotFile);
@@ -198,7 +203,7 @@ where
                     )
                 })?)?;
             let replaced = self
-                .lookup_plus_versioned(prepared.parent, &prepared.name)?
+                .lookup_plus_for_write_plan(prepared.parent, &prepared.name)?
                 .and_then(|(existing, current_dentry_version)| {
                     (existing.attr.file_type == FileType::File
                         && existing.attr.inode == prepared.inode

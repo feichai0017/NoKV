@@ -1,6 +1,121 @@
 use super::*;
+use crate::command::{ReadItem, ScanItem};
 use crate::holtstore::HoltMetadataStore;
 use nokvfs_object::MemoryObjectStore;
+use std::sync::Arc;
+
+#[derive(Clone)]
+struct PurposeTrackingStore {
+    inner: HoltMetadataStore,
+    counts: Arc<PurposeCounts>,
+}
+
+#[derive(Default)]
+struct PurposeCounts {
+    user_strong_gets: AtomicU64,
+    write_plan_gets: AtomicU64,
+    snapshot_gets: AtomicU64,
+    user_strong_scans: AtomicU64,
+    write_plan_scans: AtomicU64,
+    snapshot_scans: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct PurposeCountSnapshot {
+    user_strong_gets: u64,
+    write_plan_gets: u64,
+    snapshot_gets: u64,
+    user_strong_scans: u64,
+    write_plan_scans: u64,
+    snapshot_scans: u64,
+}
+
+impl PurposeTrackingStore {
+    fn new() -> Self {
+        Self {
+            inner: HoltMetadataStore::open_memory().unwrap(),
+            counts: Arc::new(PurposeCounts::default()),
+        }
+    }
+
+    fn counts(&self) -> PurposeCountSnapshot {
+        PurposeCountSnapshot {
+            user_strong_gets: self.counts.user_strong_gets.load(Ordering::Relaxed),
+            write_plan_gets: self.counts.write_plan_gets.load(Ordering::Relaxed),
+            snapshot_gets: self.counts.snapshot_gets.load(Ordering::Relaxed),
+            user_strong_scans: self.counts.user_strong_scans.load(Ordering::Relaxed),
+            write_plan_scans: self.counts.write_plan_scans.load(Ordering::Relaxed),
+            snapshot_scans: self.counts.snapshot_scans.load(Ordering::Relaxed),
+        }
+    }
+
+    fn record_get(&self, purpose: ReadPurpose) {
+        match purpose {
+            ReadPurpose::UserStrong => &self.counts.user_strong_gets,
+            ReadPurpose::WritePlanLocal => &self.counts.write_plan_gets,
+            ReadPurpose::Snapshot => &self.counts.snapshot_gets,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_scan(&self, purpose: ReadPurpose) {
+        match purpose {
+            ReadPurpose::UserStrong => &self.counts.user_strong_scans,
+            ReadPurpose::WritePlanLocal => &self.counts.write_plan_scans,
+            ReadPurpose::Snapshot => &self.counts.snapshot_scans,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+impl MetadataStore for PurposeTrackingStore {
+    fn get_versioned(
+        &self,
+        family: RecordFamily,
+        key: &[u8],
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Option<ReadItem>, MetadataError> {
+        self.record_get(purpose);
+        self.inner.get_versioned(family, key, version, purpose)
+    }
+
+    fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
+        self.record_scan(request.purpose);
+        self.inner.scan(request)
+    }
+
+    fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
+        self.inner.commit_metadata(command)
+    }
+
+    fn commit_independent_batch(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Vec<Result<CommitResult, MetadataError>> {
+        self.inner.commit_independent_batch(commands)
+    }
+
+    fn committed_request_result(
+        &self,
+        request_id: &[u8],
+    ) -> Result<Option<CommitResult>, MetadataError> {
+        self.inner.committed_request_result(request_id)
+    }
+
+    fn prune_history(
+        &self,
+        request: HistoryPruneRequest,
+    ) -> Result<HistoryPruneOutcome, MetadataError> {
+        self.inner.prune_history(request)
+    }
+}
+
+impl MetadataStoreStatsProvider for PurposeTrackingStore {
+    fn metadata_store_stats(&self) -> MetadataStoreStats {
+        self.inner.metadata_store_stats()
+    }
+}
 
 fn service() -> NoKvFs<HoltMetadataStore, MemoryObjectStore> {
     service_with_objects().0
@@ -94,6 +209,51 @@ fn create_dir_then_lookup_and_readdir_use_dentry_projection() {
     assert_eq!(stats.read_dir_plus_total, 1);
     assert_eq!(stats.read_dir_plus_entry_total, 1);
     assert_eq!(stats.read_dir_plus_projection_hit_total, 1);
+}
+
+#[test]
+fn write_planning_reads_are_marked_local_while_user_reads_stay_strong() {
+    let metadata = PurposeTrackingStore::new();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    let file_name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+    service
+        .create_file(InodeId::root(), file_name.clone(), 0o644, 1000, 1000)
+        .unwrap();
+    let dir_name = DentryName::new(b"runs".to_vec()).unwrap();
+    let dir = service
+        .create_dir(InodeId::root(), dir_name, 0o755, 1000, 1000)
+        .unwrap();
+
+    let before_lookup = metadata.counts();
+    assert!(service
+        .lookup_plus(InodeId::root(), &file_name)
+        .unwrap()
+        .is_some());
+    let after_lookup = metadata.counts();
+    assert!(after_lookup.user_strong_gets > before_lookup.user_strong_gets);
+    assert_eq!(after_lookup.write_plan_gets, before_lookup.write_plan_gets);
+
+    service
+        .remove_file(InodeId::root(), &file_name)
+        .expect("remove file");
+    let after_remove = metadata.counts();
+    assert_eq!(after_remove.user_strong_gets, after_lookup.user_strong_gets);
+    assert!(after_remove.write_plan_gets > after_lookup.write_plan_gets);
+
+    service
+        .snapshot_subtree(dir.attr.inode)
+        .expect("snapshot subtree");
+    let after_snapshot = metadata.counts();
+    assert_eq!(
+        after_snapshot.user_strong_gets,
+        after_remove.user_strong_gets
+    );
+    assert!(after_snapshot.write_plan_gets > after_remove.write_plan_gets);
 }
 
 #[test]

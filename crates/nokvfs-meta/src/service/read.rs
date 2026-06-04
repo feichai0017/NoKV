@@ -15,11 +15,20 @@ where
         inode: InodeId,
         version: Version,
     ) -> Result<Option<InodeAttr>, MetadError> {
+        self.get_attr_at_version_for_purpose(inode, version, ReadPurpose::UserStrong)
+    }
+
+    pub(super) fn get_attr_at_version_for_purpose(
+        &self,
+        inode: InodeId,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Option<InodeAttr>, MetadError> {
         let Some(value) = self.metadata.get(
             RecordFamily::Inode,
             &inode_key(self.mount, inode),
             version,
-            ReadPurpose::UserStrong,
+            purpose,
         )?
         else {
             return Ok(None);
@@ -52,19 +61,35 @@ where
         self.lookup_plus_at_version(parent, name, version)
     }
 
+    pub(super) fn lookup_plus_for_write_plan(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
+        let version = self.read_version()?;
+        self.lookup_plus_at_version_for_purpose(parent, name, version, ReadPurpose::WritePlanLocal)
+    }
+
     pub(super) fn lookup_plus_at_version(
         &self,
         parent: InodeId,
         name: &DentryName,
         version: Version,
     ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
+        self.lookup_plus_at_version_for_purpose(parent, name, version, ReadPurpose::UserStrong)
+    }
+
+    pub(super) fn lookup_plus_at_version_for_purpose(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
         let key = dentry_key(self.mount, parent, name);
-        let Some(item) = self.metadata.get_versioned(
-            RecordFamily::Dentry,
-            &key,
-            version,
-            ReadPurpose::UserStrong,
-        )?
+        let Some(item) =
+            self.metadata
+                .get_versioned(RecordFamily::Dentry, &key, version, purpose)?
         else {
             return Ok(None);
         };

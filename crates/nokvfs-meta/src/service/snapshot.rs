@@ -6,7 +6,12 @@ where
     O: ObjectStore,
 {
     pub fn snapshot_subtree(&self, root: InodeId) -> Result<SnapshotPin, MetadError> {
-        let Some(attr) = self.get_attr(root)? else {
+        let Some(attr) = self.get_attr_at_version_for_purpose(
+            root,
+            self.read_version()?,
+            ReadPurpose::WritePlanLocal,
+        )?
+        else {
             return Err(MetadError::NotFound);
         };
         if attr.file_type != FileType::Directory {
@@ -28,11 +33,18 @@ where
             commit_version: created_version,
             primary_family: RecordFamily::Snapshot,
             primary_key: key.clone(),
-            predicates: vec![PredicateRef {
-                family: RecordFamily::Snapshot,
-                key: key.clone(),
-                predicate: Predicate::NotExists,
-            }],
+            predicates: vec![
+                PredicateRef {
+                    family: RecordFamily::Inode,
+                    key: inode_key(self.mount, root),
+                    predicate: Predicate::Exists,
+                },
+                PredicateRef {
+                    family: RecordFamily::Snapshot,
+                    key: key.clone(),
+                    predicate: Predicate::NotExists,
+                },
+            ],
             mutations: vec![Mutation {
                 family: RecordFamily::Snapshot,
                 key,
