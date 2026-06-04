@@ -11,7 +11,7 @@ use fuser::{
     AccessFlags, BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType as FuseFileType,
     Filesystem, FopenFlags, Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags,
     ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry,
-    ReplyOpen, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
+    ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{
@@ -100,6 +100,10 @@ const FUSE_DOT_DOT_OFFSET: u64 = 2;
 const FUSE_FIRST_CHILD_OFFSET: u64 = 3;
 const XATTR_CREATE: i32 = 0x1;
 const XATTR_REPLACE: i32 = 0x2;
+const STATFS_BLOCK_SIZE: u32 = 4096;
+const STATFS_TOTAL_BYTES: u64 = 1 << 40;
+const STATFS_TOTAL_FILES: u64 = 1 << 32;
+const STATFS_NAME_MAX: u32 = 255;
 
 impl Default for FuseOptions {
     fn default() -> Self {
@@ -173,6 +177,32 @@ where
         self.remember_name(entry.attr.inode, &entry.dentry.name);
         if entry.attr.file_type == FileType::Directory {
             self.register_watch_scope(entry.attr.inode);
+        }
+    }
+
+    fn forget_inode_cache(&self, inode: InodeId) {
+        if inode == self.options.view.root() {
+            return;
+        }
+        if let Ok(mut parents) = self.parents.write() {
+            parents.remove(&inode.get());
+        }
+        if let Ok(mut names) = self.names.write() {
+            names.remove(&inode.get());
+        }
+    }
+
+    fn statfs_snapshot(&self) -> FuseStatfs {
+        let blocks = STATFS_TOTAL_BYTES / u64::from(STATFS_BLOCK_SIZE);
+        FuseStatfs {
+            blocks,
+            bfree: blocks,
+            bavail: blocks,
+            files: STATFS_TOTAL_FILES,
+            ffree: STATFS_TOTAL_FILES,
+            bsize: STATFS_BLOCK_SIZE,
+            namelen: STATFS_NAME_MAX,
+            frsize: STATFS_BLOCK_SIZE,
         }
     }
 
@@ -827,11 +857,29 @@ impl FuseAccessMode {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct FuseStatfs {
+    blocks: u64,
+    bfree: u64,
+    bavail: u64,
+    files: u64,
+    ffree: u64,
+    bsize: u32,
+    namelen: u32,
+    frsize: u32,
+}
+
 impl<M, O> Filesystem for NoKvFuse<M, O>
 where
     M: MetadataStore + Send + Sync + 'static,
     O: ObjectStore + Send + Sync + 'static,
 {
+    fn forget(&self, _req: &Request, ino: INodeNo, _nlookup: u64) {
+        if let Ok(inode) = self.metadata_inode(ino) {
+            self.forget_inode_cache(inode);
+        }
+    }
+
     fn lookup(&self, _req: &Request, parent: INodeNo, name: &OsStr, reply: ReplyEntry) {
         let parent = match self.metadata_inode(parent) {
             Ok(parent) => parent,
@@ -1207,6 +1255,20 @@ where
             Ok(()) => reply.ok(),
             Err(err) => reply.error(err),
         }
+    }
+
+    fn statfs(&self, _req: &Request, _ino: INodeNo, reply: ReplyStatfs) {
+        let stat = self.statfs_snapshot();
+        reply.statfs(
+            stat.blocks,
+            stat.bfree,
+            stat.bavail,
+            stat.files,
+            stat.ffree,
+            stat.bsize,
+            stat.namelen,
+            stat.frsize,
+        );
     }
 
     fn setxattr(
@@ -1940,6 +2002,48 @@ mod tests {
             fuse.sync_directory_handle(handle).unwrap_err().code(),
             Errno::EBADF.code()
         );
+    }
+
+    #[test]
+    fn statfs_snapshot_reports_nonzero_capacity_and_name_limit() {
+        let service = service();
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+
+        let stat = fuse.statfs_snapshot();
+
+        assert_eq!(stat.bsize, STATFS_BLOCK_SIZE);
+        assert_eq!(stat.frsize, STATFS_BLOCK_SIZE);
+        assert_eq!(stat.namelen, STATFS_NAME_MAX);
+        assert!(stat.blocks > 0);
+        assert!(stat.bfree <= stat.blocks);
+        assert!(stat.bavail <= stat.bfree);
+        assert!(stat.files > 0);
+        assert!(stat.ffree <= stat.files);
+    }
+
+    #[test]
+    fn forget_inode_cache_drops_fuse_parent_name_without_removing_metadata() {
+        let service = service();
+        let name = DentryName::new(b"cached.bin".to_vec()).unwrap();
+        let entry = service
+            .create_file(InodeId::root(), name.clone(), 0o644, 1000, 1000)
+            .unwrap();
+        let inode = entry.attr.inode;
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        fuse.remember_entry(&entry);
+
+        assert_eq!(fuse.parent_of(inode), InodeId::root());
+        assert_eq!(fuse.name_of(inode).unwrap(), name);
+
+        fuse.forget_inode_cache(inode);
+
+        assert_eq!(fuse.parent_of(inode), InodeId::root());
+        assert_eq!(fuse.name_of(inode).unwrap_err().code(), Errno::EIO.code());
+        assert!(fuse
+            .service()
+            .lookup_plus(InodeId::root(), &entry.dentry.name)
+            .unwrap()
+            .is_some());
     }
 
     #[test]
