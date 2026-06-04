@@ -17,6 +17,10 @@ pub enum SharedLogError {
         required: usize,
         available: usize,
     },
+    StaleTerm {
+        current: crate::LogTerm,
+        proposed: crate::LogTerm,
+    },
     LearnerCannotAppend(NodeId),
     LearnerCannotCompact(NodeId),
     Compacted {
@@ -82,6 +86,12 @@ impl fmt::Display for SharedLogError {
                 f,
                 "metadata quorum log requires {} voters but only {} are available",
                 required, available
+            ),
+            Self::StaleTerm { current, proposed } => write!(
+                f,
+                "metadata log rejects stale term {}; current term is {}",
+                proposed.get(),
+                current.get()
             ),
             Self::LearnerCannotAppend(node) => write!(
                 f,

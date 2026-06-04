@@ -55,6 +55,14 @@ impl SharedMetadataLog for InMemorySharedLog {
             .inner
             .lock()
             .map_err(|_| SharedLogError::Backend("shared log mutex poisoned".to_owned()))?;
+        if let Some(current) = inner.committed_position {
+            if term < current.term {
+                return Err(SharedLogError::StaleTerm {
+                    current: current.term,
+                    proposed: term,
+                });
+            }
+        }
         let index = LogIndex::new(inner.next_index)?;
         inner.next_index = inner.next_index.saturating_add(1);
         let position = LogPosition { term, index };

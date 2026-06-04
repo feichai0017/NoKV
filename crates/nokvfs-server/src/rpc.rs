@@ -1139,10 +1139,12 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })
         }
         MetadataRpcRequest::AppendMetadataLog {
+            leader,
             term,
             mount,
             payload,
         } => {
+            let leader = nokvfs_cluster::NodeId::new(leader).map_err(ServerError::SharedLog)?;
             let term = nokvfs_cluster::LogTerm::new(term).map_err(ServerError::SharedLog)?;
             let mount = MountId::new(mount).map_err(|err| {
                 ServerError::Metadata(MetadError::Codec(format!(
@@ -1151,9 +1153,10 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             })?;
             let commands = nokvfs_cluster::decode_metadata_command_batch(&payload)
                 .map_err(ServerError::SharedLog)?;
-            let receipts = server.append_metadata_log_batch(term, mount, commands)?;
-            let response = nokvfs_cluster::AppendMetadataBatchResponse::from_receipts(receipts)
-                .map_err(ServerError::SharedLog)?;
+            let request =
+                nokvfs_cluster::AppendMetadataBatchRequest::new(leader, term, mount, commands)
+                    .map_err(ServerError::SharedLog)?;
+            let response = server.append_metadata_log_batch(request)?;
             Ok(MetadataRpcResult::MetadataLogAppend {
                 position: wire_log_position(response.position),
                 receipts: response
@@ -1437,6 +1440,7 @@ mod tests {
         let envelope = request_envelope(
             &replica,
             MetadataRpcRequest::AppendMetadataLog {
+                leader: 1,
                 term: 2,
                 mount: 1,
                 payload,
@@ -1473,6 +1477,72 @@ mod tests {
     }
 
     #[test]
+    fn rpc_rejects_metadata_log_append_with_zero_leader() {
+        let leader_dir = tempdir().unwrap();
+        let leader_log = leader_dir.path().join("metadata.log");
+        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
+        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+
+        let replica_dir = tempdir().unwrap();
+        let replica_log = replica_dir.path().join("metadata.log");
+        let replica = Server::open(test_options(replica_dir.path(), Some(replica_log))).unwrap();
+        let envelope = request_envelope(
+            &replica,
+            MetadataRpcRequest::AppendMetadataLog {
+                leader: 0,
+                term: 2,
+                mount: 1,
+                payload,
+            },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("cluster node id must be non-zero")
+        ));
+    }
+
+    #[test]
+    fn rpc_rejects_stale_metadata_log_append_term() {
+        let leader_dir = tempdir().unwrap();
+        let leader_log = leader_dir.path().join("metadata.log");
+        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
+        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+
+        let replica_dir = tempdir().unwrap();
+        let replica_log = replica_dir.path().join("metadata.log");
+        let replica = Server::open(test_options(replica_dir.path(), Some(replica_log))).unwrap();
+        let first = request_envelope(
+            &replica,
+            MetadataRpcRequest::AppendMetadataLog {
+                leader: 1,
+                term: 3,
+                mount: 1,
+                payload: payload.clone(),
+            },
+        );
+        assert!(first.ok, "unexpected first append error: {first:?}");
+
+        let stale = request_envelope(
+            &replica,
+            MetadataRpcRequest::AppendMetadataLog {
+                leader: 1,
+                term: 2,
+                mount: 1,
+                payload,
+            },
+        );
+        assert!(!stale.ok);
+        assert!(matches!(
+            stale.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("rejects stale term")
+        ));
+    }
+
+    #[test]
     fn rpc_rejects_metadata_log_append_when_log_is_disabled() {
         let leader_dir = tempdir().unwrap();
         let leader_log = leader_dir.path().join("metadata.log");
@@ -1482,6 +1552,7 @@ mod tests {
         let envelope = request_envelope(
             &server,
             MetadataRpcRequest::AppendMetadataLog {
+                leader: 1,
                 term: 2,
                 mount: 1,
                 payload,
@@ -1508,6 +1579,7 @@ mod tests {
         let envelope = request_envelope(
             &replica,
             MetadataRpcRequest::AppendMetadataLog {
+                leader: 1,
                 term: 2,
                 mount: 99,
                 payload,

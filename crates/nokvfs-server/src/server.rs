@@ -7,12 +7,12 @@ use std::sync::Arc;
 use std::thread;
 
 use nokvfs_cluster::{
-    compact_log_to_checkpoint, ApplyFrontier, CheckpointArtifact, CheckpointCatalog,
-    CheckpointManifest, DurableReceipt, FileAppliedFrontierStore, FileCheckpointCatalog,
-    FileSharedLog, FileSharedLogOptions, LogIndex, LogPosition, LogTerm, MetadataLogEntry,
-    SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
+    compact_log_to_checkpoint, AppendMetadataBatchRequest, AppendMetadataBatchResponse,
+    ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
+    FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog, FileSharedLogOptions, LogIndex,
+    LogPosition, MetadataLogEntry, SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats,
+    SharedMetadataLog,
 };
-use nokvfs_meta::command::MetadataCommand;
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
     HistoryGcWorker, HistoryGcWorkerState, MetadError, NoKvFs, ObjectGcWorker, ObjectGcWorkerState,
@@ -153,14 +153,12 @@ impl Server {
 
     pub(crate) fn append_metadata_log_batch(
         &self,
-        term: LogTerm,
-        mount: nokvfs_types::MountId,
-        commands: Vec<MetadataCommand>,
-    ) -> Result<Vec<DurableReceipt>, ServerError> {
-        if mount != self.service.mount_id() {
+        request: AppendMetadataBatchRequest,
+    ) -> Result<AppendMetadataBatchResponse, ServerError> {
+        if request.mount != self.service.mount_id() {
             return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
                 "metadata log append mount {} does not match server mount {}",
-                mount.get(),
+                request.mount.get(),
                 self.service.mount_id().get(),
             ))));
         }
@@ -169,12 +167,15 @@ impl Server {
                 "metadata log is disabled".to_owned(),
             )));
         };
-        let receipts = metadata_log.log().append_batch(term, mount, &commands)?;
+        let receipts =
+            metadata_log
+                .log()
+                .append_batch(request.term, request.mount, &request.commands)?;
         metadata_log
             .replay_committed_tail(0)
             .map_err(|err| ServerError::SharedLog(SharedLogError::Backend(err.to_string())))?;
         self.service.refresh_allocator_state()?;
-        Ok(receipts)
+        AppendMetadataBatchResponse::from_receipts(receipts).map_err(ServerError::SharedLog)
     }
 
     pub fn stats_json(&self) -> String {

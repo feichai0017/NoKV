@@ -271,6 +271,14 @@ impl SharedMetadataLog for InMemoryQuorumLog {
         }
 
         let mut inner = self.lock()?;
+        if let Some(current) = inner.committed_position {
+            if term < current.term {
+                return Err(SharedLogError::StaleTerm {
+                    current: current.term,
+                    proposed: term,
+                });
+            }
+        }
         let available_voters = inner
             .voters
             .values()

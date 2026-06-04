@@ -146,6 +146,8 @@ The current framed RPC path can expose committed metadata log entries for
 replica catch-up via `ReadMetadataLog`. Each returned payload is encoded by
 `nokvfs-cluster`, so protocol framing does not need to understand
 `MetadataCommand` internals. It can also accept an externally ordered command
-batch via `AppendMetadataLog`, append it to the local metadata log, and replay
-it into Holt state. Checkpoint install, durable membership, and leader/voter
-authorization are still the next HA steps.
+batch via `AppendMetadataLog`, validate the leader id and term shape, append it
+to the local metadata log, and replay it into Holt state. The log rejects stale
+terms after a newer committed term, so an old leader cannot keep extending a
+local tail once a newer term has been observed. Checkpoint install, durable
+membership, and full leader/voter authorization are still the next HA steps.

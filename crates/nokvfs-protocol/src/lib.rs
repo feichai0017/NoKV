@@ -180,6 +180,7 @@ pub enum MetadataRpcRequest {
         limit: usize,
     },
     AppendMetadataLog {
+        leader: u64,
         term: u64,
         mount: u64,
         payload: Vec<u8>,
@@ -771,6 +772,7 @@ mod tests {
     #[test]
     fn binary_codec_round_trips_metadata_log_append() {
         let request = MetadataRpcRequest::AppendMetadataLog {
+            leader: 7,
             term: 3,
             mount: 1,
             payload: b"command-batch".to_vec(),

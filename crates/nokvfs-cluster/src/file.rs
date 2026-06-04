@@ -92,6 +92,14 @@ impl SharedMetadataLog for FileSharedLog {
             .inner
             .lock()
             .map_err(|_| SharedLogError::Backend("file shared log mutex poisoned".to_owned()))?;
+        if let Some(current) = inner.committed_position {
+            if term < current.term {
+                return Err(SharedLogError::StaleTerm {
+                    current: current.term,
+                    proposed: term,
+                });
+            }
+        }
         let index = LogIndex::new(inner.next_index)?;
         let position = LogPosition { term, index };
         let entry = MetadataLogEntry {

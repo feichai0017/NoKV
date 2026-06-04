@@ -178,6 +178,22 @@ fn append_batch_returns_per_command_receipts() {
 }
 
 #[test]
+fn shared_log_rejects_stale_term_after_newer_commit() {
+    let log = InMemorySharedLog::new();
+    let mount = MountId::new(7).unwrap();
+    log.append_batch(LogTerm::new(3).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+
+    assert_eq!(
+        log.append_batch(LogTerm::new(2).unwrap(), mount, &[command(b"b", 3)]),
+        Err(SharedLogError::StaleTerm {
+            current: LogTerm::new(3).unwrap(),
+            proposed: LogTerm::new(2).unwrap(),
+        })
+    );
+}
+
+#[test]
 fn read_from_replays_log_entries_in_index_order() {
     let log = InMemorySharedLog::new();
     let mount = MountId::new(1).unwrap();
@@ -513,6 +529,28 @@ fn file_shared_log_recovers_committed_position_after_full_compaction() {
         reopened.read_from(LogIndex::new(2).unwrap(), 0),
         Err(SharedLogError::Compacted { .. })
     ));
+}
+
+#[test]
+fn file_shared_log_rejects_stale_term_after_reopen() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    {
+        let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
+        log.append_batch(LogTerm::new(3).unwrap(), mount, &[command(b"a", 2)])
+            .unwrap();
+    }
+
+    let reopened = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
+    assert_eq!(
+        reopened.append_batch(LogTerm::new(2).unwrap(), mount, &[command(b"b", 3)]),
+        Err(SharedLogError::StaleTerm {
+            current: LogTerm::new(3).unwrap(),
+            proposed: LogTerm::new(2).unwrap(),
+        })
+    );
+    assert_eq!(reopened.committed_index().get(), 1);
 }
 
 #[test]
@@ -1583,6 +1621,23 @@ fn quorum_log_commits_with_majority_and_rejects_minority() {
             available: 1,
         })
     ));
+    assert_eq!(log.committed_index().get(), 1);
+}
+
+#[test]
+fn quorum_log_rejects_stale_term_after_newer_commit() {
+    let log = InMemoryQuorumLog::new([node(1), node(2), node(3)]).unwrap();
+    let mount = MountId::new(1).unwrap();
+    log.append_batch(LogTerm::new(3).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+
+    assert_eq!(
+        log.append_batch(LogTerm::new(2).unwrap(), mount, &[command(b"b", 3)]),
+        Err(SharedLogError::StaleTerm {
+            current: LogTerm::new(3).unwrap(),
+            proposed: LogTerm::new(2).unwrap(),
+        })
+    );
     assert_eq!(log.committed_index().get(), 1);
 }
 
