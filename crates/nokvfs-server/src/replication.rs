@@ -1,6 +1,7 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
+use std::thread;
 
 use nokvfs_cluster::{
     CheckpointCatalog, DurableReceipt, FileCheckpointCatalog, FileSharedLog,
@@ -122,34 +123,56 @@ impl MajorityMetadataLog {
             };
             let quorum = majority(self.membership.voters.len())?;
             if quorum > 1 {
-                let required_remote = quorum.saturating_sub(1);
-                let mut remote_successes = 0_usize;
-                for voter in &self.membership.voters {
-                    if *voter == self.local_node {
-                        continue;
-                    }
-                    let Some(peer) = self.peers.get(voter) else {
-                        continue;
-                    };
-                    if self
-                        .append_peer_with_catchup(*voter, peer.as_ref(), &entry)
-                        .is_ok()
-                    {
-                        remote_successes = remote_successes.saturating_add(1);
-                    }
-                }
-                if remote_successes < required_remote {
-                    return Err(SharedLogError::NoQuorum {
-                        required: quorum,
-                        available: remote_successes.saturating_add(1),
-                    });
-                }
+                self.append_remote_voter_quorum(&entry, quorum)?;
             }
             let receipts = self.local.append_entry(entry.clone())?;
             (entry, receipts)
         };
         self.replicate_learners_after_commit(&entry);
         Ok(receipts)
+    }
+
+    fn append_remote_voter_quorum(
+        &self,
+        entry: &MetadataLogEntry,
+        quorum: usize,
+    ) -> Result<(), SharedLogError> {
+        let required_remote = quorum.saturating_sub(1);
+        let targets = self
+            .membership
+            .voters
+            .iter()
+            .filter_map(|voter| {
+                if *voter == self.local_node {
+                    return None;
+                }
+                self.peers.get(voter).map(|peer| (*voter, Arc::clone(peer)))
+            })
+            .collect::<Vec<_>>();
+        let mut remote_successes = 0_usize;
+        thread::scope(|scope| {
+            let handles = targets
+                .into_iter()
+                .map(|(voter, peer)| {
+                    scope.spawn(move || {
+                        self.append_peer_with_catchup(voter, peer.as_ref(), entry)
+                            .is_ok()
+                    })
+                })
+                .collect::<Vec<_>>();
+            for handle in handles {
+                if handle.join().unwrap_or(false) {
+                    remote_successes = remote_successes.saturating_add(1);
+                }
+            }
+        });
+        if remote_successes < required_remote {
+            return Err(SharedLogError::NoQuorum {
+                required: quorum,
+                available: remote_successes.saturating_add(1),
+            });
+        }
+        Ok(())
     }
 
     fn replicate_learners_after_commit(&self, entry: &MetadataLogEntry) {
@@ -312,11 +335,17 @@ mod tests {
         CommandKind, Mutation, MutationOp, PredicateRef, Value, Version, WatchProjection,
     };
     use nokvfs_types::RecordFamily;
-    use std::sync::Mutex;
+    use std::sync::{Condvar, Mutex};
+    use std::time::Duration;
     use tempfile::{tempdir, TempDir};
 
     struct RecordingPeer {
         result: Result<(), SharedLogError>,
+        entries: Mutex<Vec<MetadataLogEntry>>,
+    }
+
+    struct CoordinatedPeer {
+        state: Arc<(Mutex<usize>, Condvar)>,
         entries: Mutex<Vec<MetadataLogEntry>>,
     }
 
@@ -345,6 +374,15 @@ mod tests {
         }
     }
 
+    impl CoordinatedPeer {
+        fn new(state: Arc<(Mutex<usize>, Condvar)>) -> Self {
+            Self {
+                state,
+                entries: Mutex::new(Vec::new()),
+            }
+        }
+    }
+
     impl MetadataLogPeerAppender for RecordingPeer {
         fn append_entry(
             &self,
@@ -353,6 +391,29 @@ mod tests {
         ) -> Result<(), SharedLogError> {
             self.entries.lock().unwrap().push(entry.clone());
             self.result.clone()
+        }
+    }
+
+    impl MetadataLogPeerAppender for CoordinatedPeer {
+        fn append_entry(
+            &self,
+            _leader: NodeId,
+            entry: &MetadataLogEntry,
+        ) -> Result<(), SharedLogError> {
+            let (lock, cvar) = &*self.state;
+            let mut active = lock.lock().unwrap();
+            *active += 1;
+            cvar.notify_all();
+            let (active, timeout) = cvar
+                .wait_timeout_while(active, Duration::from_secs(1), |active| *active < 2)
+                .unwrap();
+            if timeout.timed_out() && *active < 2 {
+                return Err(SharedLogError::Backend(
+                    "remote voter append was not concurrent".to_owned(),
+                ));
+            }
+            self.entries.lock().unwrap().push(entry.clone());
+            Ok(())
         }
     }
 
@@ -468,6 +529,26 @@ mod tests {
             assert_eq!(entries[0].position.index.get(), 1);
             assert_eq!(entries[0].commands[0].request_id, b"a");
         }
+    }
+
+    #[test]
+    fn majority_append_sends_remote_voter_appends_concurrently() {
+        let (_dir, local) = file_log();
+        let state = Arc::new((Mutex::new(0_usize), Condvar::new()));
+        let peer2 = Arc::new(CoordinatedPeer::new(Arc::clone(&state)));
+        let peer3 = Arc::new(CoordinatedPeer::new(Arc::clone(&state)));
+        let mut peers = BTreeMap::new();
+        peers.insert(node(2), peer2.clone() as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(3), peer3.clone() as Arc<dyn MetadataLogPeerAppender>);
+        let log = MajorityMetadataLog::with_peers(node(1), membership(node(1)), local, peers, None);
+
+        let receipts = log
+            .append_batch(term(1), mount(), &[command(b"a", 2)])
+            .unwrap();
+
+        assert_eq!(receipts[0].position.index.get(), 1);
+        assert_eq!(peer2.entries.lock().unwrap().len(), 1);
+        assert_eq!(peer3.entries.lock().unwrap().len(), 1);
     }
 
     #[test]
