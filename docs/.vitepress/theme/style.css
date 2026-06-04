@@ -93,11 +93,13 @@
   --nokv-code-text: #e6edf3;
 }
 
-/* Buttons */
+/* Buttons — VitePress applies these via `background-color`, which silently
+   rejects a gradient value (→ transparent button, invisible on a light page).
+   Keep them SOLID. */
 :root {
-  --vp-button-brand-bg: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
-  --vp-button-brand-hover-bg: linear-gradient(135deg, #1d4ed8 0%, #1e40af 100%);
-  --vp-button-brand-active-bg: linear-gradient(135deg, #1e40af 0%, #1e3a8a 100%);
+  --vp-button-brand-bg: #2563eb;
+  --vp-button-brand-hover-bg: #1d4ed8;
+  --vp-button-brand-active-bg: #1e40af;
   --vp-button-brand-border: transparent;
   --vp-button-brand-hover-border: transparent;
   --vp-button-brand-active-border: transparent;
@@ -105,9 +107,9 @@
 }
 
 .dark {
-  --vp-button-brand-bg: linear-gradient(135deg, #3b82f6 0%, #2563eb 100%);
-  --vp-button-brand-hover-bg: linear-gradient(135deg, #60a5fa 0%, #3b82f6 100%);
-  --vp-button-brand-active-bg: linear-gradient(135deg, #2563eb 0%, #1d4ed8 100%);
+  --vp-button-brand-bg: #3b82f6;
+  --vp-button-brand-hover-bg: #2563eb;
+  --vp-button-brand-active-bg: #1d4ed8;
 }
 
 /* --------------------------------- Globals -------------------------------- */
@@ -450,4 +452,456 @@ body {
 ::selection {
   background: color-mix(in srgb, var(--nokv-accent) 35%, transparent);
   color: var(--vp-c-text-1);
+}
+
+/* ========================================================================= */
+/*  Home landing — clean, airy, light-first (rustfs-flavored)                */
+/* ========================================================================= */
+
+:root {
+  /* Hero brand name → subtle blue→cyan gradient (echoes the mark) */
+  --vp-home-hero-name-color: transparent;
+  --vp-home-hero-name-background: linear-gradient(118deg, #2563eb 12%, #0891b2 92%);
+}
+
+.dark {
+  --vp-home-hero-name-background: linear-gradient(118deg, #60a5fa 12%, #22d3ee 92%);
+}
+
+/* Faint dot-grid texture fading out below the hero (very subtle) */
+.VPHome {
+  position: relative;
+  overflow: hidden;
+  padding-bottom: 8px;
+}
+
+.VPHome::before {
+  content: '';
+  position: absolute;
+  inset: 0 0 auto 0;
+  height: 680px;
+  background-image: radial-gradient(
+    color-mix(in srgb, var(--nokv-accent) 22%, transparent) 1px,
+    transparent 1px
+  );
+  background-size: 28px 28px;
+  -webkit-mask-image: radial-gradient(
+    ellipse 64% 58% at 50% 0%,
+    #000 28%,
+    transparent 76%
+  );
+  mask-image: radial-gradient(ellipse 64% 58% at 50% 0%, #000 28%, transparent 76%);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 0;
+}
+
+.VPHome .VPHero,
+.VPHome .VPFeatures,
+.VPHome .vp-doc {
+  position: relative;
+  z-index: 1;
+}
+
+/* Hero — more breathing room, refined type scale */
+.VPHero.has-image {
+  padding: 80px 24px 56px;
+}
+
+@media (min-width: 960px) {
+  .VPHero.has-image {
+    padding: 104px 0 80px;
+  }
+}
+
+.VPHero .name {
+  font-size: clamp(3rem, 6.4vw, 4.75rem);
+  line-height: 1.02;
+  letter-spacing: -0.04em;
+  font-weight: 800;
+}
+
+.VPHero .text {
+  font-size: clamp(1.35rem, 2.6vw, 2.05rem);
+  line-height: 1.24;
+  letter-spacing: -0.022em;
+  font-weight: 700;
+  color: var(--vp-c-text-1);
+  max-width: 26ch;
+}
+
+.VPHero .tagline {
+  font-size: 1.08rem;
+  line-height: 1.66;
+  color: var(--vp-c-text-2);
+  max-width: 54ch;
+  padding-top: 10px;
+}
+
+/* Gopher mark — gentle float, soft brand-tinted shadow, no heavy frame */
+.VPHero .image-bg {
+  opacity: 0;
+}
+
+.VPHero .VPImage {
+  max-width: 340px;
+  filter: drop-shadow(0 20px 44px color-mix(in srgb, var(--nokv-accent) 22%, transparent));
+}
+
+/* Hero buttons — rounded, clean */
+.VPHero .actions {
+  padding-top: 6px;
+}
+
+.VPHero .action .VPButton.medium {
+  border-radius: 11px;
+  padding: 0 22px;
+  line-height: 46px;
+  font-size: 0.98rem;
+  font-weight: 650;
+}
+
+.VPButton.medium.brand {
+  box-shadow: 0 12px 30px -12px var(--nokv-accent-glow);
+}
+
+/* Features — airy, clean, light cards */
+.VPFeatures {
+  padding: 8px 24px 40px;
+}
+
+@media (min-width: 960px) {
+  .VPFeatures {
+    padding: 8px 0 56px;
+  }
+}
+
+.VPFeatures .container {
+  max-width: 1200px;
+}
+
+.VPFeatures .VPFeature {
+  border: 1px solid var(--vp-c-border);
+  border-radius: 16px;
+  background: var(--vp-c-bg);
+  padding: 0;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.05);
+  transition: transform 0.22s ease, border-color 0.22s ease, box-shadow 0.22s ease;
+}
+
+.VPFeatures .VPFeature .box {
+  padding: 28px 26px;
+}
+
+.dark .VPFeatures .VPFeature {
+  background: var(--nokv-card-bg);
+  box-shadow: none;
+}
+
+.VPFeatures .VPFeature:hover {
+  transform: translateY(-3px);
+  border-color: color-mix(in srgb, var(--nokv-accent) 50%, transparent);
+  box-shadow: 0 18px 40px -20px var(--nokv-accent-glow);
+}
+
+.VPFeature .title {
+  font-size: 1.16rem;
+  font-weight: 750;
+  letter-spacing: -0.012em;
+  line-height: 1.3;
+}
+
+.VPFeature .details {
+  color: var(--vp-c-text-2);
+  line-height: 1.62;
+  font-size: 0.96rem;
+  margin-top: 8px;
+}
+
+/* ---- Recognition strip ---- */
+.recognition {
+  max-width: 880px;
+  margin: 8px auto 80px;
+  padding-top: 56px;
+  border-top: 1px solid var(--vp-c-divider);
+  text-align: center;
+}
+
+.recognition-label {
+  font-size: 0.74rem;
+  font-weight: 600;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: var(--vp-c-text-3);
+  margin: 0 0 30px;
+}
+
+.recognition-logos {
+  display: flex;
+  gap: 28px;
+  align-items: stretch;
+  justify-content: center;
+  flex-wrap: wrap;
+}
+
+.recognition-logos a {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 220px;
+  height: 104px;
+  padding: 0 40px;
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 16px;
+  background: var(--vp-c-bg-soft);
+  transition: transform 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.recognition-logos a:hover {
+  transform: translateY(-2px);
+  border-color: color-mix(in srgb, var(--nokv-accent) 42%, transparent);
+  box-shadow: 0 14px 30px -18px var(--nokv-accent-glow);
+}
+
+.recognition-logos img {
+  height: 56px;
+  width: auto;
+}
+
+/* ========================================================================= */
+/*  Home landing — content sections (rich body below the hero)               */
+/* ========================================================================= */
+
+/* The home body renders inside `.vp-doc`; neutralize article prose so our
+   section components render cleanly. `.VPHome .vp-doc el` (0,2,1) beats
+   VitePress's `.vp-doc el` (0,1,1). */
+.VPHome .vp-doc h2 {
+  border-top: 0;
+  padding-top: 0;
+}
+.VPHome .vp-doc table {
+  display: table;
+  width: auto;
+  margin: 0;
+  border-collapse: separate;
+}
+.VPHome .vp-doc tr {
+  border: 0;
+  background: transparent;
+}
+.VPHome .vp-doc th,
+.VPHome .vp-doc td {
+  border: 0;
+}
+.VPHome .vp-doc ul {
+  margin: 0;
+  padding: 0;
+}
+
+/* Section rhythm tuned for a flowing landing */
+.VPHome .vp-doc .nokv-section {
+  max-width: 1152px;
+  padding: 64px 32px;
+}
+.VPHome .vp-doc .nokv-section--tight {
+  padding: 52px 32px;
+}
+.VPHome .vp-doc .nokv-section-head {
+  margin-bottom: 40px;
+}
+.VPHome .vp-doc .nokv-h2 {
+  margin: 0 0 14px;
+  border-top: 0;
+  padding-top: 0;
+}
+.VPHome .vp-doc .nokv-lead {
+  margin: 0 auto;
+}
+.VPHome .vp-doc .nokv-eyebrow {
+  margin-bottom: 16px;
+}
+
+/* 3-up architecture cards */
+.VPHome .vp-doc .nokv-grid-3 {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 20px;
+}
+@media (max-width: 860px) {
+  .VPHome .vp-doc .nokv-grid-3 {
+    grid-template-columns: 1fr;
+  }
+}
+.VPHome .vp-doc .nokv-card-kicker {
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.72rem;
+  font-weight: 600;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--nokv-accent);
+  margin-bottom: 12px;
+}
+.VPHome .vp-doc .nokv-card h3 {
+  font-size: 1.18rem;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  margin: 0 0 10px;
+}
+.VPHome .vp-doc .nokv-card p {
+  color: var(--vp-c-text-2);
+  font-size: 0.97rem;
+  line-height: 1.62;
+  margin: 0;
+}
+.VPHome .vp-doc .nokv-card code {
+  font-size: 0.85em;
+  color: var(--nokv-accent);
+  background: var(--vp-c-brand-soft);
+  padding: 2px 6px;
+  border-radius: 6px;
+}
+
+/* Atomic-publish callout */
+.VPHome .vp-doc .nokv-callout {
+  margin: 24px auto 0;
+  max-width: 920px;
+  padding: 18px 26px;
+  border: 1px solid color-mix(in srgb, var(--nokv-accent) 24%, transparent);
+  border-radius: 14px;
+  background: var(--vp-c-brand-soft);
+  color: var(--vp-c-text-2);
+  line-height: 1.62;
+  font-size: 0.97rem;
+  text-align: center;
+}
+.VPHome .vp-doc .nokv-callout strong {
+  color: var(--vp-c-text-1);
+}
+
+/* Benchmark stat cards */
+.VPHome .vp-doc .nokv-stats {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 20px;
+}
+@media (max-width: 860px) {
+  .VPHome .vp-doc .nokv-stats {
+    grid-template-columns: repeat(2, 1fr);
+  }
+}
+.VPHome .vp-doc .nokv-stat {
+  border: 1px solid var(--vp-c-border);
+  border-radius: 16px;
+  background: var(--vp-c-bg-soft);
+  padding: 26px 20px;
+  text-align: center;
+}
+.VPHome .vp-doc .nokv-stat-num {
+  display: block;
+  font-weight: 800;
+  line-height: 1;
+  font-size: clamp(1.8rem, 3vw, 2.5rem);
+  letter-spacing: -0.03em;
+  background: linear-gradient(120deg, var(--nokv-accent), var(--nokv-accent-2));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+}
+.VPHome .vp-doc .nokv-stat-label {
+  display: block;
+  margin-top: 12px;
+  font-size: 0.86rem;
+  line-height: 1.5;
+  color: var(--vp-c-text-3);
+}
+
+/* Comparison table */
+.VPHome .vp-doc .nokv-table {
+  width: 100%;
+  max-width: 940px;
+  margin: 0 auto;
+  border-collapse: separate;
+  border-spacing: 0;
+  border: 1px solid var(--vp-c-border);
+  border-radius: 16px;
+  overflow: hidden;
+  font-size: 0.95rem;
+}
+.VPHome .vp-doc .nokv-table th,
+.VPHome .vp-doc .nokv-table td {
+  padding: 14px 20px;
+  text-align: left;
+  border-bottom: 1px solid var(--vp-c-divider);
+}
+.VPHome .vp-doc .nokv-table thead th {
+  font-weight: 700;
+  font-size: 0.9rem;
+  color: var(--vp-c-text-1);
+  background: var(--vp-c-bg-soft);
+}
+.VPHome .vp-doc .nokv-table thead th:last-child {
+  color: var(--nokv-accent);
+}
+.VPHome .vp-doc .nokv-table tbody tr:last-child td {
+  border-bottom: 0;
+}
+.VPHome .vp-doc .nokv-table td:first-child {
+  color: var(--vp-c-text-2);
+  font-weight: 600;
+}
+.VPHome .vp-doc .nokv-table td:last-child {
+  color: var(--vp-c-text-1);
+}
+.VPHome .vp-doc .nokv-table strong {
+  color: var(--nokv-accent);
+}
+
+/* Quick-start code panel (dark on light — like VitePress code blocks) */
+.VPHome .vp-doc .nokv-code {
+  max-width: 760px;
+  margin: 0 auto;
+  background: var(--nokv-code-bg);
+  border: 1px solid var(--vp-c-border);
+  border-radius: 16px;
+  padding: 22px 26px;
+  overflow-x: auto;
+  text-align: left;
+}
+.VPHome .vp-doc .nokv-code code {
+  display: block;
+  font-family: var(--vp-font-family-mono);
+  font-size: 0.85rem;
+  line-height: 1.85;
+  color: #c9d4e3;
+  white-space: pre;
+}
+.VPHome .vp-doc .nokv-code .c {
+  color: #5f6b7c;
+}
+
+/* Final CTA */
+.VPHome .vp-doc .nokv-cta {
+  text-align: center;
+}
+.VPHome .vp-doc .nokv-actions {
+  display: flex;
+  gap: 14px;
+  justify-content: center;
+  flex-wrap: wrap;
+  margin-top: 30px;
+}
+
+/* Buttons are <a> inside .vp-doc — keep their own colors, not link colors */
+.VPHome .vp-doc .nokv-btn {
+  text-decoration: none;
+  font-weight: 600;
+}
+.VPHome .vp-doc .nokv-btn--primary {
+  color: #fff;
+}
+.VPHome .vp-doc .nokv-btn--ghost {
+  color: var(--vp-c-text-1);
+}
+.VPHome .vp-doc .nokv-btn--ghost:hover {
+  color: var(--nokv-accent);
 }
