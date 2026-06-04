@@ -10,8 +10,8 @@ const OG_IMAGE = `${SITE_URL}/img/og.png`
 export default withMermaid(
   defineConfig({
     base: '/',
-    title: 'NoKV-FS',
-    titleTemplate: ':title — NoKV-FS',
+    title: 'NoKV',
+    titleTemplate: ':title — NoKV',
     description:
       'Open-source Rust filesystem for AI training and agent workspaces.',
     cleanUrls: true,
@@ -29,7 +29,7 @@ export default withMermaid(
       ['meta', { name: 'theme-color', content: '#3b82f6' }],
       ['meta', { property: 'og:type', content: 'website' }],
       ['meta', { property: 'og:url', content: `${SITE_URL}/` }],
-      ['meta', { property: 'og:title', content: 'NoKV-FS — Rust filesystem for AI workspaces.' }],
+      ['meta', { property: 'og:title', content: 'NoKV — Rust filesystem for AI workspaces.' }],
       [
         'meta',
         {
@@ -41,10 +41,10 @@ export default withMermaid(
       ['meta', { property: 'og:image', content: OG_IMAGE }],
       ['meta', { property: 'og:image:width', content: '1200' }],
       ['meta', { property: 'og:image:height', content: '630' }],
-      ['meta', { property: 'og:image:alt', content: 'NoKV-FS — Rust filesystem for AI workspaces.' }],
-      ['meta', { property: 'og:site_name', content: 'NoKV-FS' }],
+      ['meta', { property: 'og:image:alt', content: 'NoKV — Rust filesystem for AI workspaces.' }],
+      ['meta', { property: 'og:site_name', content: 'NoKV' }],
       ['meta', { name: 'twitter:card', content: 'summary_large_image' }],
-      ['meta', { name: 'twitter:title', content: 'NoKV-FS — Rust filesystem for AI workspaces.' }],
+      ['meta', { name: 'twitter:title', content: 'NoKV — Rust filesystem for AI workspaces.' }],
       [
         'meta',
         {
@@ -57,8 +57,8 @@ export default withMermaid(
     ],
 
     themeConfig: {
-      logo: { src: '/img/logo.svg', width: 40, height: 40, alt: 'NoKV-FS' },
-      siteTitle: 'NoKV-FS',
+      logo: { src: '/img/logo.svg', width: 40, height: 40, alt: 'NoKV' },
+      siteTitle: 'NoKV',
 
       nav: [
         { text: 'Docs', link: '/architecture', activeMatch: '/' },

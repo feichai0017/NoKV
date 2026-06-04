@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Metadata Schema
 
-NoKV-FS uses inode/dentry as canonical namespace truth. Path indexes are derived
+NoKV uses inode/dentry as canonical namespace truth. Path indexes are derived
 accelerators for agent and artifact workflows; they are not the source of
 truth.
 

@@ -1,8 +1,8 @@
 ---
-title: NoKV-FS
+title: NoKV
 layout: home
 hero:
-  name: NoKV-FS
+  name: NoKV
   text: Rust filesystem metadata for AI training and agent workspaces.
   tagline: Holt-backed metadata, S3-compatible object storage, and a path toward a high-performance OSS DFS.
   actions:

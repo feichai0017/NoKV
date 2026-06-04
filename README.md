@@ -54,9 +54,9 @@ SPDX-License-Identifier: Apache-2.0
 
 <br/>
 
-# NoKV-FS
+# NoKV
 
-NoKV-FS is an open-source Rust filesystem for AI training and agent
+NoKV is an open-source Rust filesystem for AI training and agent
 workspaces. It keeps filesystem metadata in Holt and stores file bodies in
 S3-compatible object storage such as AWS S3, RustFS, MinIO, or Ceph RGW.
 
@@ -71,14 +71,14 @@ The product target is a real file interface with metadata optimized for:
 - DFS-style metadata services that want inode/dentry semantics without owning
   the object body durability layer.
 
-NoKV-FS is not a general-purpose distributed KV database and does not implement
+NoKV is not a general-purpose distributed KV database and does not implement
 object-store durability itself. Object bytes live in an external body store.
-NoKV-FS owns namespace truth, metadata transactions, inode/dentry records,
+NoKV owns namespace truth, metadata transactions, inode/dentry records,
 body descriptors, watch/snapshot state, and later distributed metadata shards.
 
 ## Current Status
 
-The repository has been cut down to the Rust NoKV-FS line. The current
+The repository has been cut down to the Rust NoKV line. The current
 implementation is a basic usable local filesystem surface: it can mount with
 FUSE, create and list directories, write and read files through object-backed
 chunk manifests, rename or remove namespace entries, publish artifacts

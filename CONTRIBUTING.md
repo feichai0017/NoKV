@@ -11,7 +11,7 @@ Thanks for contributing. This file is the authoritative contribution guide for t
 
 - Repository: `github.com/feichai0017/NoKV`
 - Main branch: `main`
-- Main product line: Rust NoKV-FS under `crates/`
+- Main product line: Rust NoKV under `crates/`
 - Rust toolchain: stable
 
 ## Development Setup

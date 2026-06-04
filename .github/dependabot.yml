@@ -4,7 +4,7 @@
 version: 2
 updates:
   - package-ecosystem: "cargo"
-    directory: "/nokv-fs"
+    directory: "/"
     schedule:
       interval: "weekly"
       day: "monday"

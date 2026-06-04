@@ -6,7 +6,7 @@ NOKV_FS_MANIFEST := Cargo.toml
 .PHONY: help build test fmt lint verify clean docs-build
 
 help:
-	@echo "NoKV-FS development commands:"
+	@echo "NoKV development commands:"
 	@echo ""
 	@echo "  make build       - Build the Rust workspace"
 	@echo "  make test        - Run the Rust workspace tests"

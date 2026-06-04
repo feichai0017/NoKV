@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Benchmarks
 
-NoKV-FS keeps product microbenchmarks inside the product crates and puts
+NoKV keeps product microbenchmarks inside the product crates and puts
 system-level workload runs in the root-level `bench/` crate. The benchmark harness is
 for metadata smoke, MLPerf Storage/DLIO-style generated training reads, and
 checkpoint publish/read paths:

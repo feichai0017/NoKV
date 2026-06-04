@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Architecture
 
-NoKV-FS is a Rust-first filesystem for AI training and agent workspaces. The
+NoKV is a Rust-first filesystem for AI training and agent workspaces. The
 repository is intentionally product-shaped: metadata semantics, object body
 storage, clients, FUSE, docs, and examples live at the repository root instead
 of behind a nested workspace.
@@ -38,7 +38,7 @@ Body storage layer
 
 ```mermaid
 flowchart LR
-    App["AI training / agent client"] --> API["NoKV-FS metad"]
+    App["AI training / agent client"] --> API["NoKV metad"]
     App["FUSE / SDK / CLI"] --> API["nokvfs-meta service"]
     API --> Command["MetadataCommand"]
     Command --> Holt["Holt metadata store"]
@@ -100,7 +100,7 @@ they are not namespace truth.
 
 ## Object Storage
 
-NoKV-FS stores file bodies outside the metadata service. File bytes are split
+NoKV stores file bodies outside the metadata service. File bytes are split
 into immutable object blocks and published through metadata manifests. The first
 production body backend is S3-compatible storage. RustFS, MinIO, Ceph RGW, and
 AWS S3 all use the same object-store boundary. See
@@ -112,6 +112,6 @@ The planned distributed layer is not a generic KV database. It should replicate
 metadata commands over mount or shard scoped Raft groups, with Holt as the
 state machine storage engine and object bodies remaining in external storage.
 
-Holt is the metadata engine inside each shard. NoKV-FS `metad` owns filesystem
+Holt is the metadata engine inside each shard. NoKV `metad` owns filesystem
 semantics such as inode/dentry updates, watch/snapshot policy, publish rules,
 and object GC decisions.

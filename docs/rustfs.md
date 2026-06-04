@@ -9,7 +9,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # RustFS Backend
 
-NoKV-FS can store file bodies in RustFS through the S3-compatible object backend.
+NoKV can store file bodies in RustFS through the S3-compatible object backend.
 RustFS supports single-node single-disk, single-node multi-disk, and multi-node
 multi-disk deployment modes. The single-node single-disk mode is useful for
 local testing and small non-critical deployments; it is not a high-availability
@@ -39,7 +39,7 @@ rustfs server \
   /tmp/rustfs-data
 ```
 
-Create the default NoKV-FS bucket with an S3-compatible client:
+Create the default NoKV bucket with an S3-compatible client:
 
 ```bash
 AWS_ACCESS_KEY_ID=rustfsadmin \
@@ -48,7 +48,7 @@ aws --endpoint-url http://127.0.0.1:9000 \
   s3api create-bucket --bucket nokv
 ```
 
-## Use RustFS With NoKV-FS
+## Use RustFS With NoKV
 
 ```bash
 cargo run --release -p nokvfs-cli --bin nokv-fs -- \
@@ -90,7 +90,7 @@ cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
 storage. `checkpoint-publish` and `training-read` are the useful object-backed
 workloads for RustFS. The benchmark harness uses the deployable single-node
 `metad` service boundary by default. Use `--block-cache off` as a control run
-when measuring object backend latency instead of NoKV-FS cache reuse.
+when measuring object backend latency instead of NoKV cache reuse.
 
 References:
 

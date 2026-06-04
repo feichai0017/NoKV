@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # AI Training
 
-NoKV-FS targets training clusters where file bodies live in object storage and
+NoKV targets training clusters where file bodies live in object storage and
 metadata needs to be fast, typed, and easy to mount.
 
 ## Target Workloads

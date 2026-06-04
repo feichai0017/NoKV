@@ -3,13 +3,13 @@ Copyright 2024-2026 The NoKV Authors.
 SPDX-License-Identifier: Apache-2.0
 -->
 
-# NoKV-FS Code Contract
+# NoKV Code Contract
 
-This repository is the Rust NoKV-FS product line: an AI-training and
+This repository is the Rust NoKV product line: an AI-training and
 agent-workspace filesystem with Holt-backed metadata and S3-compatible object
 storage.
 
-NoKV-FS accepts breaking internal changes when they reduce ambiguity or remove
+NoKV accepts breaking internal changes when they reduce ambiguity or remove
 old compatibility paths. Do not add forwarding wrappers, deprecated aliases, or
 dual execution paths unless the PR states the operational need and removal
 condition.

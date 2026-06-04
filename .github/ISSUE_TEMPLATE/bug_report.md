@@ -33,7 +33,7 @@ If applicable, add screenshots or paste logs to help explain your problem.
 ## 💻 Environment
  - OS: [e.g. Linux, macOS]
  - Rust Version: [e.g. 1.87]
- - NoKV-FS Version: [e.g. commit SHA or release tag]
+ - NoKV Version: [e.g. commit SHA or release tag]
 
 ## 🧐 Additional Context
 Add any other context about the problem here.

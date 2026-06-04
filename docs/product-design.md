@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Product Design
 
-NoKV-FS is an AI-native filesystem control plane. It presents a file interface
+NoKV is an AI-native filesystem control plane. It presents a file interface
 for training jobs and agent workspaces, keeps namespace metadata in Holt, and
 stores file bodies in external object storage.
 
@@ -16,7 +16,7 @@ durability to local or S3-compatible object storage.
 ## Product Boundary
 
 ```text
-NoKV-FS
+NoKV
   owns:
     namespace truth
     inode/dentry metadata
@@ -32,7 +32,7 @@ NoKV-FS
 ```
 
 This keeps the system focused. Object stores already provide elastic byte
-storage. NoKV-FS adds the metadata layer that object stores do not provide:
+storage. NoKV adds the metadata layer that object stores do not provide:
 fast directory state, atomic path publication, typed workspace events, and
 mountable namespace views.
 
@@ -41,7 +41,7 @@ mountable namespace views.
 Holt is the metadata storage engine. It is not the whole metadata service.
 
 ```text
-NoKV-FS metad
+NoKV metad
   inode/dentry semantics
   MetadataCommand validation
   watch/snapshot/GC policy
@@ -61,14 +61,14 @@ types, object, client, and FUSE crates must not leak Holt internals.
 
 ## Reference Shape
 
-NoKV-FS borrows the proven split used by object-backed filesystems: metadata is
+NoKV borrows the proven split used by object-backed filesystems: metadata is
 separate from bytes, and clients can access the namespace through FUSE or a
 native SDK.
 
 ```text
 AI training / agent process
   -> FUSE, Rust SDK, or Python/fsspec
-  -> NoKV-FS metadata service
+  -> NoKV metadata service
   -> Holt metadata engine
   -> S3-compatible object store
 ```
@@ -89,7 +89,7 @@ flowchart TB
     Python --> Router
     Rust --> Router
 
-    Router --> Metad["NoKV-FS metad"]
+    Router --> Metad["NoKV metad"]
     Metad --> Command["MetadataCommand"]
     Command --> Shard["metadata shard"]
     Shard --> Raft["Raft log"]

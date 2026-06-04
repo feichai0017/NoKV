@@ -5,7 +5,7 @@ SPDX-License-Identifier: Apache-2.0
 
 # Object Layout
 
-NoKV-FS stores file bodies outside the metadata service. Metadata stores compact
+NoKV stores file bodies outside the metadata service. Metadata stores compact
 body descriptors; durability of bytes is delegated to the configured object
 store.
 

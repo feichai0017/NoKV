@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 400 400" role="img" aria-labelledby="title desc">
-  <title id="title">NoKV-FS</title>
+  <title id="title">NoKV</title>
   <desc id="desc">A compact filesystem metadata mark.</desc>
   <defs>
     <linearGradient id="bg" x1="72" y1="48" x2="328" y2="352" gradientUnits="userSpaceOnUse">
