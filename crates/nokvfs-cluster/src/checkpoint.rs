@@ -8,7 +8,7 @@ use nokvfs_types::MountId;
 
 use crate::{
     CheckpointArtifact, CheckpointFrontier, CheckpointManifest, LogIndex, LogPosition, LogTerm,
-    SharedLogError,
+    SharedLogError, SharedMetadataLog,
 };
 use nokvfs_meta::Version;
 
@@ -31,6 +31,12 @@ pub struct MemoryCheckpointCatalog {
 pub struct FileCheckpointCatalog {
     path: PathBuf,
     inner: Mutex<Option<CheckpointManifest>>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct CheckpointCompactionOutcome {
+    pub manifest: Option<CheckpointManifest>,
+    pub compacted_through: Option<LogIndex>,
 }
 
 impl MemoryCheckpointCatalog {
@@ -125,6 +131,38 @@ impl CheckpointCatalog for FileCheckpointCatalog {
             })
             .map_err(|_| SharedLogError::Backend("checkpoint catalog mutex poisoned".to_owned()))
     }
+}
+
+pub fn compact_log_to_checkpoint<L>(
+    log: &L,
+    manifest: CheckpointManifest,
+) -> Result<CheckpointCompactionOutcome, SharedLogError>
+where
+    L: SharedMetadataLog,
+{
+    let compacted_through = manifest.frontier.compact_through();
+    if let Some(index) = compacted_through {
+        log.compact_through(index)?;
+    }
+    Ok(CheckpointCompactionOutcome {
+        manifest: Some(manifest),
+        compacted_through,
+    })
+}
+
+pub fn compact_log_to_latest_checkpoint<C, L>(
+    log: &L,
+    catalog: &C,
+    mount: MountId,
+) -> Result<CheckpointCompactionOutcome, SharedLogError>
+where
+    C: CheckpointCatalog,
+    L: SharedMetadataLog,
+{
+    let Some(manifest) = catalog.latest_for_mount(mount)? else {
+        return Ok(CheckpointCompactionOutcome::default());
+    };
+    compact_log_to_checkpoint(log, manifest)
 }
 
 fn checkpoint_is_newer(next: &CheckpointManifest, current: &CheckpointManifest) -> bool {

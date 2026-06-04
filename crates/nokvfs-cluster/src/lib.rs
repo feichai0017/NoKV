@@ -18,7 +18,10 @@ mod replay;
 mod store;
 mod types;
 
-pub use checkpoint::{CheckpointCatalog, FileCheckpointCatalog, MemoryCheckpointCatalog};
+pub use checkpoint::{
+    compact_log_to_checkpoint, compact_log_to_latest_checkpoint, CheckpointCatalog,
+    CheckpointCompactionOutcome, FileCheckpointCatalog, MemoryCheckpointCatalog,
+};
 pub use errors::{ReplayError, SharedLogError};
 pub use file::{FileSharedLog, FileSharedLogOptions, FileSharedLogSync};
 pub use frontier::{AppliedFrontierStore, FileAppliedFrontierStore, MemoryAppliedFrontierStore};

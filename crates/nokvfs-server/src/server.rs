@@ -7,10 +7,10 @@ use std::sync::Arc;
 use std::thread;
 
 use nokvfs_cluster::{
-    ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
-    FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog, FileSharedLogOptions, LogIndex,
-    LogPosition, LogTerm, ReadFreshness, SharedLogError, SharedLogMetadataStore,
-    SharedLogRuntimeStats, SharedMetadataLog,
+    compact_log_to_checkpoint, ApplyFrontier, CheckpointArtifact, CheckpointCatalog,
+    CheckpointManifest, FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog,
+    FileSharedLogOptions, LogIndex, LogPosition, LogTerm, ReadFreshness, SharedLogError,
+    SharedLogMetadataStore, SharedLogRuntimeStats,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -214,13 +214,9 @@ impl Server {
         let artifact = metadata_checkpoint_artifact(&checkpoint_id)?;
         let manifest = CheckpointManifest::new(checkpoint_id, mount, frontier, artifact)?;
         checkpoints.publish(manifest.clone())?;
-        if let Some(compact_through) = frontier.compact_through() {
-            metadata_log
-                .log()
-                .compact_through(compact_through)
-                .map_err(ServerError::SharedLog)?;
-        }
-        Ok(Some(manifest))
+        let outcome = compact_log_to_checkpoint(metadata_log.log(), manifest)
+            .map_err(ServerError::SharedLog)?;
+        Ok(outcome.manifest)
     }
 }
 

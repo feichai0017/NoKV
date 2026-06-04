@@ -1380,6 +1380,94 @@ fn file_checkpoint_catalog_persists_latest_manifest() {
 }
 
 #[test]
+fn checkpoint_compaction_without_manifest_is_noop() {
+    let log = InMemorySharedLog::new();
+    let catalog = MemoryCheckpointCatalog::new();
+    let mount = MountId::new(1).unwrap();
+
+    let outcome = compact_log_to_latest_checkpoint(&log, &catalog, mount).unwrap();
+
+    assert_eq!(outcome, CheckpointCompactionOutcome::default());
+}
+
+#[test]
+fn checkpoint_compaction_keeps_first_retained_index() {
+    let log = InMemorySharedLog::new();
+    let catalog = MemoryCheckpointCatalog::new();
+    let mount = MountId::new(1).unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)])
+        .unwrap();
+    let manifest = CheckpointManifest::new(
+        b"checkpoint-b".to_vec(),
+        mount,
+        CheckpointFrontier {
+            durable_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(2).unwrap(),
+            },
+            applied_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(2).unwrap(),
+            },
+            min_retained_index: LogIndex::new(2).unwrap(),
+            max_commit_version: version(3),
+        },
+        checkpoint_artifact(b"checkpoint-b"),
+    )
+    .unwrap();
+    catalog.publish(manifest.clone()).unwrap();
+
+    let outcome = compact_log_to_latest_checkpoint(&log, &catalog, mount).unwrap();
+
+    assert_eq!(outcome.manifest, Some(manifest));
+    assert_eq!(outcome.compacted_through, Some(LogIndex::new(1).unwrap()));
+    assert!(matches!(
+        log.read_from(LogIndex::new(1).unwrap(), 0),
+        Err(SharedLogError::Compacted { .. })
+    ));
+    let tail = log.read_from(LogIndex::new(2).unwrap(), 0).unwrap();
+    assert_eq!(tail.len(), 1);
+    assert_eq!(tail[0].commands[0].request_id, b"b");
+}
+
+#[test]
+fn checkpoint_compaction_at_log_start_does_not_compact() {
+    let log = InMemorySharedLog::new();
+    let mount = MountId::new(1).unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+    let manifest = CheckpointManifest::new(
+        b"checkpoint-a".to_vec(),
+        mount,
+        CheckpointFrontier {
+            durable_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(1).unwrap(),
+            },
+            applied_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(1).unwrap(),
+            },
+            min_retained_index: LogIndex::new(1).unwrap(),
+            max_commit_version: version(2),
+        },
+        checkpoint_artifact(b"checkpoint-a"),
+    )
+    .unwrap();
+
+    let outcome = compact_log_to_checkpoint(&log, manifest.clone()).unwrap();
+
+    assert_eq!(outcome.manifest, Some(manifest));
+    assert_eq!(outcome.compacted_through, None);
+    assert_eq!(
+        log.read_from(LogIndex::new(1).unwrap(), 0).unwrap().len(),
+        1
+    );
+}
+
+#[test]
 fn replay_rejects_non_contiguous_entries() {
     let mount = MountId::new(1).unwrap();
     let entries = vec![
