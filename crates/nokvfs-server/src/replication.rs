@@ -105,7 +105,7 @@ impl MajorityMetadataLog {
             let Some(peer) = self.peers.get(voter) else {
                 continue;
             };
-            if peer.append_entry(self.local_node, &entry).is_ok() {
+            if self.append_peer_with_catchup(peer.as_ref(), &entry).is_ok() {
                 remote_successes = remote_successes.saturating_add(1);
             }
         }
@@ -117,6 +117,39 @@ impl MajorityMetadataLog {
         }
 
         self.local.append_entry(entry)
+    }
+
+    fn append_peer_with_catchup(
+        &self,
+        peer: &dyn MetadataLogPeerAppender,
+        entry: &MetadataLogEntry,
+    ) -> Result<(), SharedLogError> {
+        match peer.append_entry(self.local_node, entry) {
+            Ok(()) => Ok(()),
+            Err(first_err) => {
+                self.catch_up_peer(peer, entry.position.index)?;
+                peer.append_entry(self.local_node, entry).map_err(|retry_err| {
+                    SharedLogError::Backend(format!(
+                        "metadata peer append failed after tail catch-up: {retry_err}; initial error: {first_err}"
+                    ))
+                })
+            }
+        }
+    }
+
+    fn catch_up_peer(
+        &self,
+        peer: &dyn MetadataLogPeerAppender,
+        before: LogIndex,
+    ) -> Result<(), SharedLogError> {
+        let entries = self.local.read_from(LogIndex::new(1)?, 0)?;
+        for entry in entries {
+            if entry.position.index >= before {
+                break;
+            }
+            peer.append_entry(self.local_node, &entry)?;
+        }
+        Ok(())
     }
 
     fn validate_local_append(&self, term: LogTerm) -> Result<(), SharedLogError> {
@@ -235,6 +268,10 @@ mod tests {
         entries: Mutex<Vec<MetadataLogEntry>>,
     }
 
+    struct FilePeer {
+        log: Arc<FileSharedLog>,
+    }
+
     impl RecordingPeer {
         fn ok() -> Self {
             Self {
@@ -259,6 +296,16 @@ mod tests {
         ) -> Result<(), SharedLogError> {
             self.entries.lock().unwrap().push(entry.clone());
             self.result.clone()
+        }
+    }
+
+    impl MetadataLogPeerAppender for FilePeer {
+        fn append_entry(
+            &self,
+            _leader: NodeId,
+            entry: &MetadataLogEntry,
+        ) -> Result<(), SharedLogError> {
+            self.log.append_entry(entry.clone()).map(|_| ())
         }
     }
 
@@ -290,6 +337,17 @@ mod tests {
                 value: Some(Value(b"value".to_vec())),
             }],
             watch: Vec::<WatchProjection>::new(),
+        }
+    }
+
+    fn entry(index: u64, command: MetadataCommand) -> MetadataLogEntry {
+        MetadataLogEntry {
+            position: LogPosition {
+                term: term(1),
+                index: LogIndex::new(index).unwrap(),
+            },
+            mount: mount(),
+            commands: vec![command],
         }
     }
 
@@ -358,6 +416,33 @@ mod tests {
             .read_from(LogIndex::new(1).unwrap(), 0)
             .unwrap()
             .is_empty());
+    }
+
+    #[test]
+    fn lagging_peer_catches_up_before_current_append() {
+        let (_leader_dir, local) = file_log();
+        local
+            .append_entry(entry(1, command(b"first", 2)))
+            .expect("leader should hold prior entry");
+        let (_peer_dir, peer_log) = file_log();
+        let peer = Arc::new(FilePeer {
+            log: Arc::clone(&peer_log),
+        });
+        let peer3 = Arc::new(RecordingPeer::ok());
+        let mut peers = BTreeMap::new();
+        peers.insert(node(2), peer as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(3), peer3 as Arc<dyn MetadataLogPeerAppender>);
+        let log = MajorityMetadataLog::with_peers(node(1), membership(node(1)), local, peers);
+
+        let receipts = log
+            .append_batch(term(1), mount(), &[command(b"second", 3)])
+            .unwrap();
+
+        assert_eq!(receipts[0].position.index.get(), 2);
+        let entries = peer_log.read_from(LogIndex::new(1).unwrap(), 0).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].commands[0].request_id, b"first");
+        assert_eq!(entries[1].commands[0].request_id, b"second");
     }
 
     #[test]

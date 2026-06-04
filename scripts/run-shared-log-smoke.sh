@@ -229,12 +229,8 @@ RUSTFS_PID=$!
 wait_for_rustfs
 create_bucket
 
-# Followers must be online before the leader starts because leader startup
-# bootstraps the root inode through the majority metadata log.
 start_node 2 "$NODE2_ADDRESS"
-start_node 3 "$NODE3_ADDRESS"
 wait_for_http "http://$NODE2_ADDRESS/healthz" "NoKV node 2"
-wait_for_http "http://$NODE3_ADDRESS/healthz" "NoKV node 3"
 
 start_node 1 "$NODE1_ADDRESS" \
     --metadata-log-peer "2=$NODE2_ADDRESS" \
@@ -273,6 +269,21 @@ printf 'nokv shared log smoke\n' >"$payload"
     --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
     put-artifact /runs/1/checkpoint.txt "$payload"
 
+# Bring the third voter online after it missed the initial root and artifact
+# entries. The next leader append should push the retained tail before appending
+# the current entry.
+start_node 3 "$NODE3_ADDRESS"
+wait_for_http "http://$NODE3_ADDRESS/healthz" "NoKV node 3"
+
+"$NOKV_FS_BIN" \
+    --server-bind "$NODE1_ADDRESS" \
+    --object-backend rustfs \
+    --s3-bucket "$RUSTFS_BUCKET" \
+    --s3-endpoint "$RUSTFS_ENDPOINT" \
+    --s3-access-key-id "$RUSTFS_ACCESS_KEY" \
+    --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
+    mkdir /runs/1/after-rejoin
+
 "$NOKV_FS_BIN" \
     --server-bind "$NODE2_ADDRESS" \
     --object-backend rustfs \
@@ -294,4 +305,4 @@ printf 'nokv shared log smoke\n' >"$payload"
 cmp "$payload" "$restored2"
 cmp "$payload" "$restored3"
 
-echo "NoKV metadata shared-log smoke passed: leader wrote artifact and both followers read it."
+echo "NoKV metadata shared-log smoke passed: leader wrote artifact, one voter rejoined, and both followers read it."
