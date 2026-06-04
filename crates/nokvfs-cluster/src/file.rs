@@ -129,6 +129,25 @@ impl FileSharedLog {
         inner.entries.push_back(entry);
         Ok(receipts)
     }
+
+    pub fn next_append_position(&self, term: LogTerm) -> Result<LogPosition, SharedLogError> {
+        let inner = self
+            .inner
+            .lock()
+            .map_err(|_| SharedLogError::Backend("file shared log mutex poisoned".to_owned()))?;
+        if let Some(current) = inner.committed_position {
+            if term < current.term {
+                return Err(SharedLogError::StaleTerm {
+                    current: current.term,
+                    proposed: term,
+                });
+            }
+        }
+        Ok(LogPosition {
+            term,
+            index: LogIndex::new(inner.next_index)?,
+        })
+    }
 }
 
 impl SharedMetadataLog for FileSharedLog {

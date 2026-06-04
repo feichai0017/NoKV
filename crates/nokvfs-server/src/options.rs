@@ -18,10 +18,17 @@ pub struct ServerOptions {
     pub metadata_log_term: LogTerm,
     pub metadata_log_voters: Vec<NodeId>,
     pub metadata_log_learners: Vec<NodeId>,
+    pub metadata_log_peers: Vec<MetadataLogPeerOptions>,
     pub metadata_log_sync: FileSharedLogSync,
     pub object: ObjectStoreConfig,
     pub uid: u32,
     pub gid: u32,
     pub object_gc: ObjectGcOptions,
     pub history_gc: HistoryGcOptions,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct MetadataLogPeerOptions {
+    pub node: NodeId,
+    pub address: SocketAddr,
 }

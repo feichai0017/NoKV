@@ -1,9 +1,8 @@
 use std::sync::Arc;
 
 use nokvfs_cluster::{
-    AppliedFrontierStore, ApplyFrontier, FileAppliedFrontierStore, FileSharedLog, LogPosition,
-    ReadFreshness, SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats,
-    SharedMetadataLog,
+    AppliedFrontierStore, ApplyFrontier, FileAppliedFrontierStore, LogPosition, ReadFreshness,
+    SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
 };
 use nokvfs_meta::command::{
     CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
@@ -13,8 +12,10 @@ use nokvfs_meta::command::{
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_types::RecordFamily;
 
+use crate::replication::MajorityMetadataLog;
+
 pub(crate) type FileLoggedMetadataStore =
-    SharedLogMetadataStore<HoltMetadataStore, FileSharedLog, FileAppliedFrontierStore>;
+    SharedLogMetadataStore<HoltMetadataStore, MajorityMetadataLog, FileAppliedFrontierStore>;
 
 pub(crate) trait ServerMetadataBackend:
     MetadataStore + MetadataStoreStatsProvider + Send + Sync

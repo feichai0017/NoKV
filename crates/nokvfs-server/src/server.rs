@@ -24,6 +24,7 @@ use sha2::{Digest, Sha256};
 use crate::http;
 use crate::metadata::{FileLoggedMetadataStore, ServerMetadataLogStatus, ServerMetadataStore};
 use crate::options::ServerOptions;
+use crate::replication::MajorityMetadataLog;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
 type CheckpointObjectStore = Arc<dyn ObjectStore + Send + Sync>;
@@ -87,12 +88,12 @@ impl Server {
         let mut metadata_membership = None;
         let metadata = match options.metadata_log_path.as_ref() {
             Some(path) => {
-                let log = FileSharedLog::open(
+                let local_log = Arc::new(FileSharedLog::open(
                     path,
                     FileSharedLogOptions {
                         sync: options.metadata_log_sync,
                     },
-                )?;
+                )?);
                 let frontier = FileAppliedFrontierStore::open(metadata_apply_frontier_path(path))?;
                 let checkpoint = FileCheckpointCatalog::open(metadata_checkpoint_path(path))?;
                 let membership_catalog =
@@ -108,13 +109,19 @@ impl Server {
                 let log_term = membership.term;
                 install_startup_checkpoint_if_required(
                     &metadata,
-                    &log,
+                    local_log.as_ref(),
                     &frontier,
                     &checkpoint,
                     checkpoint_objects.as_ref(),
                     options.mount,
                     options.metadata_log_node,
                 )?;
+                let log = MajorityMetadataLog::new(
+                    options.metadata_log_node,
+                    membership.clone(),
+                    Arc::clone(&local_log),
+                    &options.metadata_log_peers,
+                );
                 let (logged, _replay) = SharedLogMetadataStore::recover_with_frontier_store(
                     metadata,
                     log,
@@ -898,6 +905,7 @@ pub(crate) mod tests {
             metadata_log_term: LogTerm::new(1).unwrap(),
             metadata_log_voters: Vec::new(),
             metadata_log_learners: Vec::new(),
+            metadata_log_peers: Vec::new(),
             metadata_log_sync: FileSharedLogSync::Data,
             object: ObjectStoreConfig::s3(S3ObjectStoreOptions {
                 bucket: "test".to_owned(),
@@ -1124,19 +1132,29 @@ pub(crate) mod tests {
     fn server_publishes_configured_metadata_log_membership() {
         let dir = tempdir().unwrap();
         let metadata_log = dir.path().join("metadata.log");
-        let mut options = test_options(dir.path(), Some(metadata_log.clone()));
-        options.metadata_log_node = node(2);
-        options.metadata_log_term = LogTerm::new(9).unwrap();
-        options.metadata_log_voters = vec![node(1), node(2), node(3)];
-        options.metadata_log_learners = vec![node(4)];
-        let server = Server::open(options).unwrap();
-
         let catalog = FileMembershipCatalog::open(metadata_membership_path(&metadata_log)).unwrap();
+        let mount = MountId::new(1).unwrap();
+        let membership = metadata_membership_for_node(
+            &catalog,
+            mount,
+            LogTerm::new(9).unwrap(),
+            node(2),
+            &[node(1), node(2), node(3)],
+            &[node(4)],
+        )
+        .unwrap();
+
+        assert_eq!(membership.mount, mount);
+        assert_eq!(membership.term, LogTerm::new(9).unwrap());
+        assert_eq!(membership.leader, node(2));
+        assert_eq!(membership.voters, vec![node(1), node(2), node(3)]);
+        assert_eq!(membership.learners, vec![node(4)]);
+
         let membership = catalog
-            .latest_for_mount(server.service().mount_id())
+            .latest_for_mount(mount)
             .unwrap()
             .expect("server should publish configured metadata log membership");
-        assert_eq!(membership.mount, server.service().mount_id());
+        assert_eq!(membership.mount, mount);
         assert_eq!(membership.term, LogTerm::new(9).unwrap());
         assert_eq!(membership.leader, node(2));
         assert_eq!(membership.voters, vec![node(1), node(2), node(3)]);

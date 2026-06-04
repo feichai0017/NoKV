@@ -8,8 +8,9 @@
 mod http;
 mod metadata;
 mod options;
+mod replication;
 mod rpc;
 mod server;
 
-pub use options::{ServerOptions, DEFAULT_SERVER_BIND};
+pub use options::{MetadataLogPeerOptions, ServerOptions, DEFAULT_SERVER_BIND};
 pub use server::{run, Server, ServerError};

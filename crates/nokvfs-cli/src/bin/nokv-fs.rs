@@ -15,7 +15,7 @@ use nokvfs_cluster::{FileSharedLogSync, LogTerm, NodeId};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, ObjectGcWorker};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
-use nokvfs_server::{ServerOptions, DEFAULT_SERVER_BIND};
+use nokvfs_server::{MetadataLogPeerOptions, ServerOptions, DEFAULT_SERVER_BIND};
 use nokvfs_types::{FileType, MountId};
 use sha2::{Digest, Sha256};
 
@@ -34,6 +34,7 @@ struct Config {
     metadata_log_term: LogTerm,
     metadata_log_voters: Vec<NodeId>,
     metadata_log_learners: Vec<NodeId>,
+    metadata_log_peers: Vec<MetadataLogPeerOptions>,
     metadata_log_sync: FileSharedLogSync,
     object: ObjectStoreConfig,
     mount: MountId,
@@ -335,6 +336,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 metadata_log_term: config.metadata_log_term,
                 metadata_log_voters: config.metadata_log_voters,
                 metadata_log_learners: config.metadata_log_learners,
+                metadata_log_peers: config.metadata_log_peers,
                 metadata_log_sync: config.metadata_log_sync,
                 object: config.object,
                 uid: config.uid,
@@ -428,6 +430,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut metadata_log_term = LogTerm::new(1).expect("default metadata log term is non-zero");
     let mut metadata_log_voters = Vec::new();
     let mut metadata_log_learners = Vec::new();
+    let mut metadata_log_peers = Vec::new();
     let mut metadata_log_sync = FileSharedLogSync::Data;
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
@@ -470,6 +473,14 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 index += 1;
                 metadata_log_learners =
                     parse_node_id_list(value(&args, index, "--metadata-log-learners")?)?;
+            }
+            "--metadata-log-peer" => {
+                index += 1;
+                metadata_log_peers.push(parse_metadata_log_peer(value(
+                    &args,
+                    index,
+                    "--metadata-log-peer",
+                )?)?);
             }
             "--metadata-log-sync" => {
                 index += 1;
@@ -585,6 +596,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         metadata_log_term,
                         metadata_log_voters,
                         metadata_log_learners,
+                        metadata_log_peers,
                         metadata_log_sync,
                         object: object_config(object_backend, s3),
                         mount,
@@ -616,6 +628,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             metadata_log_term,
             metadata_log_voters,
             metadata_log_learners,
+            metadata_log_peers,
             metadata_log_sync,
             object: object_config(object_backend, s3),
             mount,
@@ -687,6 +700,21 @@ fn parse_node_id_list(raw: &str) -> Result<Vec<NodeId>, CliError> {
             })
         })
         .collect()
+}
+
+fn parse_metadata_log_peer(raw: &str) -> Result<MetadataLogPeerOptions, CliError> {
+    let Some((node, address)) = raw.split_once('=') else {
+        return Err(CliError::UnknownOption(format!(
+            "--metadata-log-peer {raw}"
+        )));
+    };
+    Ok(MetadataLogPeerOptions {
+        node: parse_node_id(node).map_err(|_| CliError::InvalidNumber {
+            field: "metadata_log_peer_node",
+            value: node.to_owned(),
+        })?,
+        address: parse_socket_addr(address, "metadata_log_peer")?,
+    })
 }
 
 fn object_config(backend: ObjectBackendKind, mut s3: S3ObjectStoreOptions) -> ObjectStoreConfig {
@@ -937,6 +965,7 @@ Object backends:\n\
   --metadata-log-term TERM        Shared metadata log term for serve\n\
   --metadata-log-voters CSV       Metadata voter node ids, e.g. 1,2,3\n\
   --metadata-log-learners CSV     Metadata learner node ids, e.g. 4,5\n\
+  --metadata-log-peer NODE=ADDR   Voter peer endpoint; repeat for each remote voter\n\
   --metadata-log-sync data|none   data fsyncs log records; none only flushes to the OS\n\
 \n\
 Defaults:\n\
@@ -954,6 +983,7 @@ Defaults:\n\
   --metadata-log-term 1\n\
   --metadata-log-voters <local node only>\n\
   --metadata-log-learners <empty>\n\
+  --metadata-log-peer <empty>\n\
   --metadata-log-sync data\n\
   --mount 1"
     )
@@ -1019,6 +1049,7 @@ mod tests {
             metadata_log_term: LogTerm::new(1).unwrap(),
             metadata_log_voters: Vec::new(),
             metadata_log_learners: Vec::new(),
+            metadata_log_peers: Vec::new(),
             metadata_log_sync: FileSharedLogSync::Data,
             object: fake_server_object_config(),
             uid: 1000,
@@ -1391,6 +1422,10 @@ mod tests {
             s("1,2,3"),
             s("--metadata-log-learners"),
             s("4,5"),
+            s("--metadata-log-peer"),
+            s("2=127.0.0.1:7778"),
+            s("--metadata-log-peer"),
+            s("3=127.0.0.1:7779"),
             s("--metadata-log-sync"),
             s("none"),
             s("serve"),
@@ -1418,6 +1453,17 @@ mod tests {
                 .map(|node| node.get())
                 .collect::<Vec<_>>(),
             vec![4, 5]
+        );
+        assert_eq!(
+            config
+                .metadata_log_peers
+                .iter()
+                .map(|peer| (peer.node.get(), peer.address.to_string()))
+                .collect::<Vec<_>>(),
+            vec![
+                (2, "127.0.0.1:7778".to_owned()),
+                (3, "127.0.0.1:7779".to_owned())
+            ]
         );
         assert_eq!(config.metadata_log_sync, FileSharedLogSync::None);
         let (disabled, command) = parse(vec![s("--no-metadata-log"), s("serve")]).unwrap();
@@ -1461,6 +1507,17 @@ mod tests {
             parse(vec![s("--metadata-log-learners"), s("0"), s("serve")]),
             Err(CliError::InvalidNumber {
                 field: "metadata_log_nodes",
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(vec![s("--metadata-log-peer"), s("2"), s("serve")]),
+            Err(CliError::UnknownOption(option)) if option == "--metadata-log-peer 2"
+        ));
+        assert!(matches!(
+            parse(vec![s("--metadata-log-peer"), s("2=bad"), s("serve")]),
+            Err(CliError::InvalidAddress {
+                field: "metadata_log_peer",
                 ..
             })
         ));

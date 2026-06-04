@@ -1,16 +1,18 @@
 use std::io::{self, Read, Write};
-use std::net::TcpStream;
+use std::net::{SocketAddr, TcpStream};
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
+use std::time::Duration;
 
 use nokvfs_meta::{CreateInDirPathBatch, DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
-    decode_name_cursor, decode_request, encode_envelope, encode_name_cursor, MetadataProtocolError,
-    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
-    WireDentryWithAttr, WireMetadataBootstrapPlan, WireMetadataCheckpoint,
-    WireMetadataCheckpointInstall, WireMetadataError, WireMetadataLogEntry, WireMetadataPosition,
-    WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    decode_envelope, decode_name_cursor, decode_request, encode_envelope, encode_name_cursor,
+    encode_request, MetadataProtocolError, MetadataRpcEnvelope, MetadataRpcRequest,
+    MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataBootstrapPlan,
+    WireMetadataCheckpoint, WireMetadataCheckpointInstall, WireMetadataError, WireMetadataLogEntry,
+    WireMetadataPosition, WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata,
+    WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -23,6 +25,7 @@ const MAX_FRAMED_RPC_BATCH: usize = 64;
 const MIN_FRAMED_RPC_WORKERS: usize = 4;
 const MAX_FRAMED_RPC_WORKERS: usize = 64;
 const FRAMED_RPC_QUEUE_PER_WORKER: usize = 256;
+const OUTBOUND_FRAMED_RPC_TIMEOUT: Duration = Duration::from_secs(5);
 
 type RpcJob = Box<dyn FnOnce() + Send + 'static>;
 
@@ -140,6 +143,51 @@ pub(crate) fn handle_framed_stream_after_magic(
             }
         }))?;
     }
+}
+
+pub(crate) fn call_framed_rpc(
+    address: SocketAddr,
+    request_id: u64,
+    request: &MetadataRpcRequest,
+) -> Result<MetadataRpcEnvelope, ServerError> {
+    let mut stream = TcpStream::connect(address).map_err(ServerError::Io)?;
+    stream
+        .set_read_timeout(Some(OUTBOUND_FRAMED_RPC_TIMEOUT))
+        .map_err(ServerError::Io)?;
+    stream
+        .set_write_timeout(Some(OUTBOUND_FRAMED_RPC_TIMEOUT))
+        .map_err(ServerError::Io)?;
+    stream
+        .write_all(FRAMED_RPC_MAGIC)
+        .map_err(ServerError::Io)?;
+    let payload = encode_request(request).map_err(|err| {
+        ServerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("metadata framed rpc request encode failed: {err}"),
+        ))
+    })?;
+    write_frame(&mut stream, request_id, 0, &payload)?;
+    let Some(frame) = read_frame(&mut stream)? else {
+        return Err(ServerError::Io(io::Error::new(
+            io::ErrorKind::UnexpectedEof,
+            "metadata framed rpc peer closed before response",
+        )));
+    };
+    if frame.request_id != request_id {
+        return Err(ServerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "metadata framed rpc response id {} did not match request id {}",
+                frame.request_id, request_id
+            ),
+        )));
+    }
+    decode_envelope(&frame.payload).map_err(|err| {
+        ServerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("metadata framed rpc response decode failed: {err}"),
+        ))
+    })
 }
 
 fn drain_ready_frames(
