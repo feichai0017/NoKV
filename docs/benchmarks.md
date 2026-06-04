@@ -66,6 +66,16 @@ scripts/run-ai-training-smoke.sh fuse-smoke
 NOKV_AI_SMOKE_INCLUDE_FUSE=1 scripts/run-ai-training-smoke.sh
 ```
 
+The special workload `shared-log-smoke` runs the heavier checkpoint/bootstrap
+process smoke. It starts RustFS, two initial metadata voters, publishes data,
+compacts through a metadata checkpoint, then brings up a late voter and learner
+that must bootstrap from checkpoint plus retained tail:
+
+```bash
+scripts/run-ai-training-smoke.sh shared-log-smoke
+NOKV_AI_SMOKE_INCLUDE_SHARED_LOG_BOOTSTRAP=1 scripts/run-ai-training-smoke.sh
+```
+
 For a disposable local RustFS-backed FUSE semantics smoke, use:
 
 ```bash
@@ -84,11 +94,12 @@ The harness prints CSV:
 workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat
 ```
 
-The harness always starts a real single-node `metad` process and runs the Rust
-service client against its framed metadata RPC. Object bytes are still read and
-written directly by the client against the configured S3-compatible object
-store. This keeps benchmark numbers attached to the deployable service
-boundary instead of an in-process metadata shortcut.
+Most benchmark workloads start a real single-node `metad` process and run the
+Rust service client against its framed metadata RPC. HA workloads start local
+multi-process metadata topologies. Object bytes are still read and written
+directly by the client against the configured S3-compatible object store. This
+keeps benchmark numbers attached to the deployable service boundary instead of
+an in-process metadata shortcut.
 
 Metadata smoke workloads use the SDK's ordered non-atomic `create_files`
 batching for file create bursts. This measures the deployable SDK/server path

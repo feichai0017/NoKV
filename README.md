@@ -233,10 +233,13 @@ report shared-log metrics separately. Training-cluster claims need separate
 runs that report replication, cache, object-store, and durability settings.
 Run `scripts/run-ai-training-smoke.sh fuse-smoke` when the local machine has a
 working FUSE installation and you want the mounted POSIX smoke in the same
-workflow.
+workflow. Run `scripts/run-ai-training-smoke.sh shared-log-smoke` when you want
+the heavier checkpoint/bootstrap shared-log smoke in the same entrypoint.
 
-The local shared-log smoke starts RustFS plus three metadata voters and verifies
-that a leader-published artifact is readable through both followers:
+The local shared-log smoke starts RustFS plus metadata voters and a learner,
+compacts through a metadata checkpoint, brings late replicas online, and
+verifies that a leader-published artifact is readable through the surviving
+voter, the late voter, and the learner:
 
 ```bash
 scripts/run-shared-log-smoke.sh

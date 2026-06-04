@@ -32,8 +32,10 @@ Usage: scripts/run-ai-training-smoke.sh [workload...]
 Runs the standard AI-training smoke gate. With no workload arguments, runs:
   ${DEFAULT_WORKLOADS[*]}
 
-Use the special workload name "fuse-smoke" to run the mounted POSIX/FUSE smoke,
-or set NOKV_AI_SMOKE_INCLUDE_FUSE=1 to append it to the default gate.
+Use the special workload name "fuse-smoke" to run the mounted POSIX/FUSE smoke.
+Use "shared-log-smoke" to run the checkpoint/bootstrap shared-log process
+smoke. Set NOKV_AI_SMOKE_INCLUDE_FUSE=1 or
+NOKV_AI_SMOKE_INCLUDE_SHARED_LOG_BOOTSTRAP=1 to append them to the default gate.
 
 Environment:
   NOKV_AI_SMOKE_PROFILE              smoke|standard|long (default: smoke)
@@ -58,6 +60,9 @@ if [[ "${#workloads[@]}" -eq 0 ]]; then
     if [[ "${NOKV_AI_SMOKE_INCLUDE_FUSE:-0}" == "1" ]]; then
         workloads+=(fuse-smoke)
     fi
+    if [[ "${NOKV_AI_SMOKE_INCLUDE_SHARED_LOG_BOOTSTRAP:-0}" == "1" ]]; then
+        workloads+=(shared-log-smoke)
+    fi
 fi
 
 extra_args=()
@@ -70,6 +75,10 @@ for workload in "${workloads[@]}"; do
     echo "==> NoKV-FS smoke workload: $workload"
     if [[ "$workload" == "fuse-smoke" ]]; then
         "$ROOT_DIR/scripts/run-fuse-smoke.sh"
+        continue
+    fi
+    if [[ "$workload" == "shared-log-smoke" ]]; then
+        "$ROOT_DIR/scripts/run-shared-log-smoke.sh"
         continue
     fi
     NOKV_E2E_PROFILE="$PROFILE" \
