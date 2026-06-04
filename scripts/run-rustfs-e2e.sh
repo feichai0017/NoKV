@@ -168,6 +168,7 @@ bench_args=(
     --profile "$PROFILE"
     --workload "$WORKLOAD"
     --object-backend rustfs
+    --s3-bucket "$RUSTFS_BUCKET"
     --s3-endpoint "$RUSTFS_ENDPOINT"
     --s3-access-key-id "$RUSTFS_ACCESS_KEY"
     --s3-secret-access-key "$RUSTFS_SECRET_KEY"
