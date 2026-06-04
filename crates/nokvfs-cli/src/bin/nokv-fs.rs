@@ -27,6 +27,7 @@ const DEFAULT_GC_LIMIT: usize = 1024;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Config {
     meta: PathBuf,
+    metadata_log: Option<PathBuf>,
     object: ObjectStoreConfig,
     mount: MountId,
     uid: u32,
@@ -322,6 +323,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 bind: config.server_bind,
                 mount: config.mount,
                 meta_path: config.meta,
+                metadata_log_path: config.metadata_log,
                 object: config.object,
                 uid: config.uid,
                 gid: config.gid,
@@ -409,6 +411,7 @@ fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, S3ObjectSto
 
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv-fs/meta");
+    let mut metadata_log = None;
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
     let mut mount = MountId::new(1).expect("default mount id is non-zero");
@@ -425,6 +428,10 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             "--meta" => {
                 index += 1;
                 meta = PathBuf::from(value(&args, index, "--meta")?);
+            }
+            "--metadata-log" => {
+                index += 1;
+                metadata_log = Some(PathBuf::from(value(&args, index, "--metadata-log")?));
             }
             "--object-backend" => {
                 index += 1;
@@ -530,6 +537,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 return Ok((
                     Config {
                         meta,
+                        metadata_log,
                         object: object_config(object_backend, s3),
                         mount,
                         uid,
@@ -555,6 +563,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     Ok((
         Config {
             meta,
+            metadata_log,
             object: object_config(object_backend, s3),
             mount,
             uid,
@@ -819,6 +828,7 @@ Object backends:\n\
   --history-gc-interval-ms MS      Background metadata history GC interval for live mount\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
+  --metadata-log PATH             Optional durable shared metadata log for serve\n\
 \n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\
@@ -830,6 +840,7 @@ Defaults:\n\
   --history-gc-interval-ms 30000\n\
   --history-gc-limit 1024\n\
   --server-bind 127.0.0.1:7777\n\
+  --metadata-log disabled\n\
   --mount 1"
     )
 }
@@ -889,6 +900,7 @@ mod tests {
             bind,
             mount: MountId::new(1).unwrap(),
             meta_path: dir.path().join("meta"),
+            metadata_log_path: None,
             object: fake_server_object_config(),
             uid: 1000,
             gid: 1000,
@@ -1234,6 +1246,21 @@ mod tests {
                 source: s("/stage"),
                 destination: s("/final")
             }
+        );
+    }
+
+    #[test]
+    fn parse_metadata_log_option_for_serve() {
+        let (config, command) = parse(vec![
+            s("--metadata-log"),
+            s(".nokv-fs/metadata.log"),
+            s("serve"),
+        ])
+        .unwrap();
+        assert_eq!(command, Command::Serve);
+        assert_eq!(
+            config.metadata_log,
+            Some(PathBuf::from(".nokv-fs/metadata.log"))
         );
     }
 }

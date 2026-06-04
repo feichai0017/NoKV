@@ -292,6 +292,9 @@ fn wire_server_error(err: &ServerError) -> WireMetadataError {
             message: err.to_string(),
         },
         ServerError::Metadata(err) => wire_metad_error(err),
+        ServerError::SharedLog(err) => WireMetadataError::Metadata {
+            message: err.to_string(),
+        },
     }
 }
 

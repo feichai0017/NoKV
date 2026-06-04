@@ -12,6 +12,7 @@ pub struct ServerOptions {
     pub bind: SocketAddr,
     pub mount: MountId,
     pub meta_path: PathBuf,
+    pub metadata_log_path: Option<PathBuf>,
     pub object: ObjectStoreConfig,
     pub uid: u32,
     pub gid: u32,

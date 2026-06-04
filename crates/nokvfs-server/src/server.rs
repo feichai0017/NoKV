@@ -5,6 +5,7 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
 
+use nokvfs_cluster::{FileSharedLog, SharedLogError};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
     HistoryGcWorker, HistoryGcWorkerState, MetadError, NoKvFs, ObjectGcWorker, ObjectGcWorkerState,
@@ -12,12 +13,13 @@ use nokvfs_meta::{
 use nokvfs_object::{ObjectError, S3ObjectStore};
 
 use crate::http;
+use crate::metadata::ServerMetadataStore;
 use crate::options::ServerOptions;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
 
 pub struct Server {
-    service: Arc<NoKvFs<HoltMetadataStore, S3ObjectStore>>,
+    service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
 }
@@ -27,6 +29,7 @@ pub enum ServerError {
     Io(io::Error),
     Metadata(MetadError),
     Object(ObjectError),
+    SharedLog(SharedLogError),
 }
 
 pub fn run(options: ServerOptions) -> Result<(), ServerError> {
@@ -40,6 +43,13 @@ impl Server {
     pub fn open(options: ServerOptions) -> Result<Self, ServerError> {
         let metadata =
             HoltMetadataStore::open_file(&options.meta_path).map_err(MetadError::from)?;
+        let metadata = match options.metadata_log_path.as_ref() {
+            Some(path) => {
+                let log = FileSharedLog::open(path)?;
+                ServerMetadataStore::file_logged(metadata, log, options.mount)?
+            }
+            None => ServerMetadataStore::direct(metadata),
+        };
         let objects = options.object.open()?;
         let service = Arc::new(NoKvFs::open_existing(options.mount, metadata, objects)?);
         service.bootstrap_root(DEFAULT_ROOT_MODE, options.uid, options.gid)?;
@@ -66,7 +76,7 @@ impl Server {
         Ok(())
     }
 
-    pub(crate) fn service(&self) -> &NoKvFs<HoltMetadataStore, S3ObjectStore> {
+    pub(crate) fn service(&self) -> &NoKvFs<ServerMetadataStore, S3ObjectStore> {
         &self.service
     }
 
@@ -196,12 +206,19 @@ impl From<ObjectError> for ServerError {
     }
 }
 
+impl From<SharedLogError> for ServerError {
+    fn from(err: SharedLogError) -> Self {
+        Self::SharedLog(err)
+    }
+}
+
 impl fmt::Display for ServerError {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Io(err) => write!(f, "io error: {err}"),
             Self::Metadata(err) => write!(f, "{err}"),
             Self::Object(err) => write!(f, "{err}"),
+            Self::SharedLog(err) => write!(f, "{err}"),
         }
     }
 }
@@ -211,6 +228,7 @@ impl Error for ServerError {}
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use std::path::{Path, PathBuf};
     use std::time::Duration;
 
     use nokvfs_meta::{HistoryGcOptions, ObjectGcOptions};
@@ -218,12 +236,12 @@ pub(crate) mod tests {
     use nokvfs_types::MountId;
     use tempfile::tempdir;
 
-    pub(crate) fn test_server() -> Server {
-        let dir = tempdir().unwrap();
-        let options = ServerOptions {
+    fn test_options(root: &Path, metadata_log_path: Option<PathBuf>) -> ServerOptions {
+        ServerOptions {
             bind: crate::options::DEFAULT_SERVER_BIND,
             mount: MountId::new(1).unwrap(),
-            meta_path: dir.path().to_path_buf(),
+            meta_path: root.join("meta"),
+            metadata_log_path,
             object: ObjectStoreConfig::s3(S3ObjectStoreOptions {
                 bucket: "test".to_owned(),
                 root: "/".to_owned(),
@@ -247,8 +265,12 @@ pub(crate) mod tests {
                 limit: 128,
                 run_immediately: false,
             },
-        };
-        Server::open(options).unwrap()
+        }
+    }
+
+    pub(crate) fn test_server() -> Server {
+        let dir = tempdir().unwrap();
+        Server::open(test_options(dir.path(), None)).unwrap()
     }
 
     #[test]
@@ -257,5 +279,27 @@ pub(crate) mod tests {
         let body = server.run_manual_gc(128).unwrap();
         assert!(body.contains("\"object_gc\""));
         assert!(body.contains("\"history_gc\""));
+    }
+
+    #[test]
+    fn server_metadata_log_preserves_namespace_after_reopen() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        {
+            let server =
+                Server::open(test_options(dir.path(), Some(metadata_log.clone()))).unwrap();
+            server
+                .service()
+                .create_dir_path("/runs", 0o755, 1000, 1000)
+                .unwrap();
+        }
+
+        let reopened = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let entry = reopened
+            .service()
+            .lookup_path("/runs")
+            .unwrap()
+            .expect("created directory should survive metadata-log reopen");
+        assert_eq!(entry.attr.file_type, nokvfs_types::FileType::Directory);
     }
 }

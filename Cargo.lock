@@ -1230,6 +1230,7 @@ dependencies = [
 name = "nokvfs-server"
 version = "0.1.0"
 dependencies = [
+ "nokvfs-cluster",
  "nokvfs-meta",
  "nokvfs-object",
  "nokvfs-protocol",

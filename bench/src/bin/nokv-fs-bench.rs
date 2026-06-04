@@ -949,6 +949,7 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         bind,
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: meta,
+        metadata_log_path: None,
         object,
         uid: DEFAULT_UID,
         gid: DEFAULT_GID,

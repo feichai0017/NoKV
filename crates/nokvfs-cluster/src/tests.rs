@@ -5,7 +5,7 @@ use std::sync::Mutex;
 use super::*;
 use nokvfs_meta::command::{
     CommandKind, MetadataCommand, MetadataStore, MetadataStoreStatsProvider, Mutation, MutationOp,
-    ReadPurpose, Value, Version,
+    Predicate, PredicateRef, ReadPurpose, Value, Version,
 };
 use nokvfs_meta::HoltMetadataStore;
 use nokvfs_types::{MountId, RecordFamily};
@@ -414,6 +414,97 @@ fn file_shared_log_truncates_partial_tail_on_reopen() {
     assert_eq!(entries.len(), 2);
     assert_eq!(entries[0].commands[0].request_id, b"a");
     assert_eq!(entries[1].commands[0].request_id, b"b");
+}
+
+#[test]
+fn shared_log_metadata_store_logs_before_applying_command() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+
+    let result = shared.commit_metadata(command(b"a", 2)).unwrap();
+    assert_eq!(result.commit_version, version(2));
+    assert_eq!(shared.log().committed_index().get(), 1);
+    assert_eq!(
+        shared
+            .inner()
+            .get(
+                RecordFamily::Dentry,
+                b"a",
+                version(2),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+    let entries = shared
+        .log()
+        .read_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    assert_eq!(entries[0].commands[0].request_id, b"a");
+}
+
+#[test]
+fn shared_log_metadata_store_rejects_failed_predicate_before_log_append() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+    let mut command = command(b"a", 2);
+    command.predicates = vec![PredicateRef {
+        family: RecordFamily::Dentry,
+        key: b"a".to_vec(),
+        predicate: Predicate::Exists,
+    }];
+
+    assert_eq!(
+        shared.commit_metadata(command),
+        Err(nokvfs_meta::MetadataError::PredicateFailed)
+    );
+    assert_eq!(shared.log().committed_index(), LogIndex::ZERO);
+}
+
+#[test]
+fn shared_log_metadata_store_recovers_file_log_into_fresh_store() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    {
+        let log = FileSharedLog::open(&path).unwrap();
+        let store = HoltMetadataStore::open_memory().unwrap();
+        let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+        shared
+            .commit_batch(&[command(b"a", 2), command(b"b", 3)])
+            .unwrap();
+    }
+
+    let log = FileSharedLog::open(&path).unwrap();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let (recovered, outcome) =
+        SharedLogMetadataStore::recover(store, log, LogTerm::new(1).unwrap(), mount).unwrap();
+    assert_eq!(outcome.entries, 1);
+    assert_eq!(outcome.commands, 2);
+    assert_eq!(
+        recovered
+            .inner()
+            .get(
+                RecordFamily::Dentry,
+                b"b",
+                version(3),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+
+    let result = recovered.commit_metadata(command(b"c", 4)).unwrap();
+    assert_eq!(result.commit_version, version(4));
+    assert_eq!(recovered.log().committed_index().get(), 2);
 }
 
 #[test]

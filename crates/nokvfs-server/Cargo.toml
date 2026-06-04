@@ -10,6 +10,7 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
+nokvfs-cluster.workspace = true
 nokvfs-meta.workspace = true
 nokvfs-object.workspace = true
 nokvfs-protocol.workspace = true

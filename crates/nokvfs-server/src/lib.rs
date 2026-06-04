@@ -6,6 +6,7 @@
 //! compatibility.
 
 mod http;
+mod metadata;
 mod options;
 mod rpc;
 mod server;

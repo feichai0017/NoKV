@@ -13,6 +13,7 @@ mod log;
 mod memory;
 mod quorum;
 mod replay;
+mod store;
 mod types;
 
 pub use errors::{ReplayError, SharedLogError};
@@ -22,6 +23,7 @@ pub use log::SharedMetadataLog;
 pub use memory::InMemorySharedLog;
 pub use quorum::InMemoryQuorumLog;
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};
+pub use store::SharedLogMetadataStore;
 pub use types::{
     AppliedMetadataCommand, ApplyFrontier, CheckpointFrontier, DurableReceipt, LogIndex,
     LogPosition, LogTerm, MetadataLogEntry, NodeId,
