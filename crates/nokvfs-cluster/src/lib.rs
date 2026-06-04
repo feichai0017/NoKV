@@ -10,6 +10,7 @@ mod errors;
 mod group;
 mod log;
 mod memory;
+mod quorum;
 mod replay;
 mod types;
 
@@ -17,10 +18,11 @@ pub use errors::{ReplayError, SharedLogError};
 pub use group::{MetadataGroup, MetadataGroupCommit};
 pub use log::SharedMetadataLog;
 pub use memory::InMemorySharedLog;
+pub use quorum::InMemoryQuorumLog;
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};
 pub use types::{
     AppliedMetadataCommand, ApplyFrontier, CheckpointFrontier, DurableReceipt, LogIndex,
-    LogPosition, LogTerm, MetadataLogEntry,
+    LogPosition, LogTerm, MetadataLogEntry, NodeId,
 };
 
 #[cfg(test)]

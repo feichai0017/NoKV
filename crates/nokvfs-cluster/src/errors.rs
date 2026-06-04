@@ -1,12 +1,20 @@
 use std::fmt;
 
-use crate::{LogIndex, LogPosition};
+use crate::{LogIndex, LogPosition, NodeId};
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SharedLogError {
     ZeroTerm,
     ZeroIndex,
+    ZeroNodeId,
     EmptyBatch,
+    NoVoters,
+    DuplicateNode(NodeId),
+    UnknownNode(NodeId),
+    NoQuorum {
+        required: usize,
+        available: usize,
+    },
     Compacted {
         requested: LogIndex,
         compacted: LogIndex,
@@ -37,7 +45,23 @@ impl fmt::Display for SharedLogError {
         match self {
             Self::ZeroTerm => write!(f, "log term must be non-zero"),
             Self::ZeroIndex => write!(f, "log index must be non-zero"),
+            Self::ZeroNodeId => write!(f, "cluster node id must be non-zero"),
             Self::EmptyBatch => write!(f, "metadata log entry batch is empty"),
+            Self::NoVoters => write!(f, "metadata quorum log requires at least one voter"),
+            Self::DuplicateNode(node) => {
+                write!(f, "metadata quorum log has duplicate node {}", node.get())
+            }
+            Self::UnknownNode(node) => {
+                write!(f, "metadata quorum log node {} is unknown", node.get())
+            }
+            Self::NoQuorum {
+                required,
+                available,
+            } => write!(
+                f,
+                "metadata quorum log requires {} voters but only {} are available",
+                required, available
+            ),
             Self::Compacted {
                 requested,
                 compacted,

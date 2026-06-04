@@ -12,6 +12,10 @@ fn version(raw: u64) -> Version {
     Version::new(raw).unwrap()
 }
 
+fn node(raw: u64) -> NodeId {
+    NodeId::new(raw).unwrap()
+}
+
 fn command(id: &[u8], commit_version: u64) -> MetadataCommand {
     MetadataCommand {
         request_id: id.to_vec(),
@@ -349,5 +353,109 @@ fn replay_rejects_non_contiguous_entries() {
             &entries
         ),
         Err(ReplayError::NonContiguousLog { .. })
+    ));
+}
+
+#[test]
+fn quorum_log_commits_with_majority_and_rejects_minority() {
+    let log = InMemoryQuorumLog::new([node(1), node(2), node(3)]).unwrap();
+    let mount = MountId::new(1).unwrap();
+
+    log.set_node_available(node(3), false).unwrap();
+    let receipts = log
+        .append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+    assert_eq!(receipts[0].position.index.get(), 1);
+    assert_eq!(log.committed_index().get(), 1);
+    assert_eq!(log.replica_committed_index(node(1)).unwrap().get(), 1);
+    assert_eq!(
+        log.replica_committed_index(node(3)).unwrap(),
+        LogIndex::ZERO
+    );
+
+    log.set_node_available(node(2), false).unwrap();
+    assert!(matches!(
+        log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)]),
+        Err(SharedLogError::NoQuorum {
+            required: 2,
+            available: 1,
+        })
+    ));
+    assert_eq!(log.committed_index().get(), 1);
+}
+
+#[test]
+fn quorum_log_syncs_restarted_voter_from_committed_tail() {
+    let log = InMemoryQuorumLog::new([node(1), node(2), node(3)]).unwrap();
+    let mount = MountId::new(1).unwrap();
+
+    log.set_node_available(node(3), false).unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+    assert_eq!(
+        log.replica_committed_index(node(3)).unwrap(),
+        LogIndex::ZERO
+    );
+
+    log.set_node_available(node(3), true).unwrap();
+    assert_eq!(log.sync_node(node(3)).unwrap().get(), 1);
+    let entries = log
+        .read_from_node(node(3), LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].commands[0].request_id, b"a");
+}
+
+#[test]
+fn quorum_log_learner_catches_up_without_voting() {
+    let log = InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap();
+    let mount = MountId::new(1).unwrap();
+
+    log.set_node_available(node(4), false).unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)])
+        .unwrap();
+    assert_eq!(
+        log.replica_committed_index(node(4)).unwrap(),
+        LogIndex::ZERO
+    );
+
+    log.set_node_available(node(4), true).unwrap();
+    assert_eq!(log.sync_learner(node(4)).unwrap().get(), 2);
+    let entries = log
+        .read_from_node(node(4), LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[1].commands[0].request_id, b"b");
+}
+
+#[test]
+fn quorum_log_requires_checkpoint_for_learner_past_compaction() {
+    let log = InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap();
+    let mount = MountId::new(1).unwrap();
+
+    log.set_node_available(node(4), false).unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+    log.compact_through(LogIndex::new(1).unwrap()).unwrap();
+    log.set_node_available(node(4), true).unwrap();
+
+    assert!(matches!(
+        log.sync_learner(node(4)),
+        Err(SharedLogError::Compacted { .. })
+    ));
+}
+
+#[test]
+fn quorum_membership_rejects_empty_or_duplicate_voters() {
+    assert!(matches!(
+        InMemoryQuorumLog::new([]),
+        Err(SharedLogError::NoVoters)
+    ));
+    assert!(matches!(NodeId::new(0), Err(SharedLogError::ZeroNodeId)));
+    assert!(matches!(
+        InMemoryQuorumLog::with_learners([node(1), node(2)], [node(2)]),
+        Err(SharedLogError::DuplicateNode(_))
     ));
 }

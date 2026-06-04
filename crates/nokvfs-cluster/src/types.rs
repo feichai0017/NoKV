@@ -9,6 +9,9 @@ pub struct LogTerm(u64);
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord)]
 pub struct LogIndex(u64);
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct NodeId(u64);
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct LogPosition {
     pub term: LogTerm,
@@ -73,6 +76,19 @@ impl LogIndex {
             return Err(SharedLogError::ZeroIndex);
         }
         Ok(Self(index))
+    }
+
+    pub fn get(self) -> u64 {
+        self.0
+    }
+}
+
+impl NodeId {
+    pub fn new(id: u64) -> Result<Self, SharedLogError> {
+        if id == 0 {
+            return Err(SharedLogError::ZeroNodeId);
+        }
+        Ok(Self(id))
     }
 
     pub fn get(self) -> u64 {
