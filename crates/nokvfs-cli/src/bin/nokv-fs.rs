@@ -11,7 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
-use nokvfs_cluster::FileSharedLogSync;
+use nokvfs_cluster::{FileSharedLogSync, LogTerm};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, ObjectGcWorker};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
@@ -30,6 +30,7 @@ const DEFAULT_METADATA_LOG: &str = ".nokv-fs/metadata.log";
 struct Config {
     meta: PathBuf,
     metadata_log: Option<PathBuf>,
+    metadata_log_term: LogTerm,
     metadata_log_sync: FileSharedLogSync,
     object: ObjectStoreConfig,
     mount: MountId,
@@ -327,6 +328,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 mount: config.mount,
                 meta_path: config.meta,
                 metadata_log_path: config.metadata_log,
+                metadata_log_term: config.metadata_log_term,
                 metadata_log_sync: config.metadata_log_sync,
                 object: config.object,
                 uid: config.uid,
@@ -416,6 +418,7 @@ fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, S3ObjectSto
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv-fs/meta");
     let mut metadata_log = Some(PathBuf::from(DEFAULT_METADATA_LOG));
+    let mut metadata_log_term = LogTerm::new(1).expect("default metadata log term is non-zero");
     let mut metadata_log_sync = FileSharedLogSync::Data;
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
@@ -440,6 +443,10 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             }
             "--no-metadata-log" => {
                 metadata_log = None;
+            }
+            "--metadata-log-term" => {
+                index += 1;
+                metadata_log_term = parse_log_term(value(&args, index, "--metadata-log-term")?)?;
             }
             "--metadata-log-sync" => {
                 index += 1;
@@ -551,6 +558,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                     Config {
                         meta,
                         metadata_log,
+                        metadata_log_term,
                         metadata_log_sync,
                         object: object_config(object_backend, s3),
                         mount,
@@ -578,6 +586,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
         Config {
             meta,
             metadata_log,
+            metadata_log_term,
             metadata_log_sync,
             object: object_config(object_backend, s3),
             mount,
@@ -609,6 +618,14 @@ fn parse_metadata_log_sync(raw: &str) -> Result<FileSharedLogSync, CliError> {
             "--metadata-log-sync {raw}"
         ))),
     }
+}
+
+fn parse_log_term(raw: &str) -> Result<LogTerm, CliError> {
+    let parsed = parse_u64(raw, "metadata_log_term")?;
+    LogTerm::new(parsed).map_err(|_| CliError::InvalidNumber {
+        field: "metadata_log_term",
+        value: raw.to_owned(),
+    })
 }
 
 fn object_config(backend: ObjectBackendKind, mut s3: S3ObjectStoreOptions) -> ObjectStoreConfig {
@@ -855,6 +872,7 @@ Object backends:\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
   --metadata-log PATH             Durable shared metadata log for serve\n\
   --no-metadata-log               Disable metadata log for local/debug serve\n\
+  --metadata-log-term TERM        Shared metadata log term for serve\n\
   --metadata-log-sync data|none   data fsyncs log records; none only flushes to the OS\n\
 \n\
 Defaults:\n\
@@ -868,6 +886,7 @@ Defaults:\n\
   --history-gc-limit 1024\n\
   --server-bind 127.0.0.1:7777\n\
   --metadata-log .nokv-fs/metadata.log\n\
+  --metadata-log-term 1\n\
   --metadata-log-sync data\n\
   --mount 1"
     )
@@ -929,6 +948,7 @@ mod tests {
             mount: MountId::new(1).unwrap(),
             meta_path: dir.path().join("meta"),
             metadata_log_path: None,
+            metadata_log_term: LogTerm::new(1).unwrap(),
             metadata_log_sync: FileSharedLogSync::Data,
             object: fake_server_object_config(),
             uid: 1000,
@@ -1035,6 +1055,7 @@ mod tests {
             config.metadata_log,
             Some(PathBuf::from(DEFAULT_METADATA_LOG))
         );
+        assert_eq!(config.metadata_log_term.get(), 1);
         assert_eq!(
             config.server_bind,
             "127.0.0.1:17777".parse::<SocketAddr>().unwrap()
@@ -1291,6 +1312,8 @@ mod tests {
         let (config, command) = parse(vec![
             s("--metadata-log"),
             s(".nokv-fs/metadata.log"),
+            s("--metadata-log-term"),
+            s("7"),
             s("--metadata-log-sync"),
             s("none"),
             s("serve"),
@@ -1301,6 +1324,7 @@ mod tests {
             config.metadata_log,
             Some(PathBuf::from(".nokv-fs/metadata.log"))
         );
+        assert_eq!(config.metadata_log_term.get(), 7);
         assert_eq!(config.metadata_log_sync, FileSharedLogSync::None);
         let (disabled, command) = parse(vec![s("--no-metadata-log"), s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
@@ -1317,6 +1341,13 @@ mod tests {
         assert!(matches!(
             parse(vec![s("--metadata-log-sync"), s("invalid"), s("serve")]),
             Err(CliError::UnknownOption(option)) if option == "--metadata-log-sync invalid"
+        ));
+        assert!(matches!(
+            parse(vec![s("--metadata-log-term"), s("0"), s("serve")]),
+            Err(CliError::InvalidNumber {
+                field: "metadata_log_term",
+                ..
+            })
         ));
     }
 }

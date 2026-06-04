@@ -9,7 +9,7 @@ use std::thread;
 use nokvfs_cluster::{
     compact_log_to_checkpoint, ApplyFrontier, CheckpointArtifact, CheckpointCatalog,
     CheckpointManifest, FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog,
-    FileSharedLogOptions, LogIndex, LogPosition, LogTerm, SharedLogError, SharedLogMetadataStore,
+    FileSharedLogOptions, LogIndex, LogPosition, SharedLogError, SharedLogMetadataStore,
     SharedLogRuntimeStats,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
@@ -70,7 +70,7 @@ impl Server {
                 let (logged, _replay) = SharedLogMetadataStore::recover_with_frontier_store(
                     metadata,
                     log,
-                    LogTerm::new(1)?,
+                    options.metadata_log_term,
                     options.mount,
                     frontier,
                 )
@@ -478,7 +478,7 @@ pub(crate) mod tests {
     use std::time::Duration;
 
     use nokvfs_cluster::{
-        FileSharedLogSync, InMemoryQuorumLog, NodeId, QuorumNodeLog, ReadFreshness,
+        FileSharedLogSync, InMemoryQuorumLog, LogTerm, NodeId, QuorumNodeLog, ReadFreshness,
         SharedMetadataLog,
     };
     use nokvfs_meta::holtstore::HoltMetadataStore;
@@ -499,6 +499,7 @@ pub(crate) mod tests {
             mount: MountId::new(1).unwrap(),
             meta_path: root.join("meta"),
             metadata_log_path,
+            metadata_log_term: LogTerm::new(1).unwrap(),
             metadata_log_sync: FileSharedLogSync::Data,
             object: ObjectStoreConfig::s3(S3ObjectStoreOptions {
                 bucket: "test".to_owned(),
@@ -625,6 +626,7 @@ pub(crate) mod tests {
         let dir = tempdir().unwrap();
         let metadata_log = dir.path().join("metadata.log");
         let mut options = test_options(dir.path(), Some(metadata_log));
+        options.metadata_log_term = LogTerm::new(7).unwrap();
         options.metadata_log_sync = FileSharedLogSync::None;
         let server = Server::open(options).unwrap();
         server
@@ -634,6 +636,7 @@ pub(crate) mod tests {
 
         let stats = server.stats_json();
         assert!(stats.contains("\"metadata_log\":{\"enabled\":true,\"sync\":\"none\""));
+        assert!(stats.contains("\"applied_term\":7"));
         assert!(stats.contains("\"commit_entry_total\":"));
         assert!(stats.contains("\"commit_command_total\":"));
         assert!(stats.contains("\"max_commands_per_entry\":"));
