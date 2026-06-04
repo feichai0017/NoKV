@@ -26,7 +26,7 @@ use nokvfs_meta::{
 };
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_server::{MetadataLogPeerOptions, Server, ServerOptions};
-use nokvfs_types::MountId;
+use nokvfs_types::{MountId, PathMetadata};
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
 const DEFAULT_MODE_FILE: u32 = 0o644;
@@ -49,6 +49,7 @@ enum Workload {
     MdtestEasy,
     MdtestHard,
     MetadataNegativeLookup,
+    ArtifactIndexLookup,
     CheckpointPublish,
     TrainingRead,
     MlperfDlio,
@@ -260,7 +261,9 @@ trait BenchClient: Sync {
         destination: &str,
     ) -> Result<RenameReplaceResult, BenchError>;
     fn lookup(&self, path: &str) -> Result<Option<DentryWithAttr>, BenchError>;
+    fn stat_path(&self, path: &str) -> Result<Option<PathMetadata>, BenchError>;
     fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError>;
+    fn list_indexed(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError>;
     fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError>;
     fn stats(&self) -> Result<BenchStats, BenchError>;
 }
@@ -360,8 +363,19 @@ impl BenchClient for ServiceBenchClient {
         self.client.metadata().lookup(path).map_err(from_client)
     }
 
+    fn stat_path(&self, path: &str) -> Result<Option<PathMetadata>, BenchError> {
+        self.client.metadata().stat_path(path).map_err(from_client)
+    }
+
     fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError> {
         self.client.metadata().list(path).map_err(from_client)
+    }
+
+    fn list_indexed(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError> {
+        self.client
+            .metadata()
+            .list_indexed(path)
+            .map_err(from_client)
     }
 
     fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError> {
@@ -380,7 +394,7 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] \
@@ -426,6 +440,9 @@ fn run_one(
         Workload::MdtestHard => bench_mdtest_hard(client.as_ref(), config, shape),
         Workload::MetadataNegativeLookup => {
             bench_metadata_negative_lookup(client.as_ref(), config, shape)
+        }
+        Workload::ArtifactIndexLookup => {
+            bench_artifact_index_lookup(client.as_ref(), config, shape)
         }
         Workload::CheckpointPublish => bench_checkpoint_publish(client.as_ref(), config, shape),
         Workload::TrainingRead => bench_training_read(client.as_ref(), config, shape),
@@ -581,6 +598,80 @@ fn bench_metadata_negative_lookup(
         shape: format!(
             "dirs={} missing_per_dir={} setup_present_per_dir={} file_body=metadata-only",
             shape.dirs, shape.files_per_dir, shape.files_per_dir
+        ),
+        caveat: metadata_only_caveat(config),
+    }))
+}
+
+fn bench_artifact_index_lookup(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<ResultRow, BenchError> {
+    client.mkdir(
+        "/artifact-index",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+    let run_paths = (0..shape.dirs)
+        .map(|run| format!("/artifact-index/run-{run:05}"))
+        .collect::<Vec<_>>();
+    client.mkdirs(&run_paths, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+
+    let mut artifact_paths = Vec::with_capacity(shape.dirs * shape.files_per_dir);
+    for run in 0..shape.dirs {
+        let run_path = format!("/artifact-index/run-{run:05}");
+        for artifact in 0..shape.files_per_dir {
+            let path = format!("{run_path}/artifact-{artifact:05}.bin");
+            let manifest_id = format!("artifact-index/run-{run:05}/artifact-{artifact:05}");
+            client.put_artifact(
+                &path,
+                vec![artifact as u8],
+                artifact_metadata("artifact-index", &manifest_id),
+            )?;
+            artifact_paths.push(path);
+        }
+    }
+
+    let before = client.stats()?;
+    let start = Instant::now();
+    let mut checksum = 0_u64;
+    for path in &artifact_paths {
+        let metadata = client.stat_path(path)?.ok_or_else(|| {
+            BenchError::Client(format!("artifact stat missed indexed path {path}"))
+        })?;
+        checksum = checksum
+            .wrapping_add(metadata.attr.inode.get())
+            .wrapping_add(metadata.attr.generation);
+    }
+    for run_path in &run_paths {
+        let entries = client.list_indexed(run_path)?;
+        if entries.len() != shape.files_per_dir {
+            return Err(BenchError::Client(format!(
+                "indexed list for {run_path} returned {} entries, expected {}",
+                entries.len(),
+                shape.files_per_dir
+            )));
+        }
+        checksum = checksum.wrapping_add(entries.len() as u64);
+    }
+
+    Ok(row(RowInput {
+        workload: "artifact-index-lookup",
+        profile: config.profile,
+        operations: artifact_paths.len() + run_paths.len(),
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: 0,
+        samples: 0,
+        stats: stats_delta(before, client.stats()?),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!(
+            "runs={} artifacts_per_run={} timed_ops=stat_path_plus_indexed_list",
+            shape.dirs, shape.files_per_dir
         ),
         caveat: metadata_only_caveat(config),
     }))
@@ -2031,6 +2122,7 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
         "mdtest-easy" => Ok(Workload::MdtestEasy),
         "mdtest-hard" => Ok(Workload::MdtestHard),
         "metadata-negative-lookup" => Ok(Workload::MetadataNegativeLookup),
+        "artifact-index-lookup" => Ok(Workload::ArtifactIndexLookup),
         "checkpoint-publish" => Ok(Workload::CheckpointPublish),
         "training-read" => Ok(Workload::TrainingRead),
         "mlperf-dlio" => Ok(Workload::MlperfDlio),
@@ -2047,6 +2139,7 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
             Workload::MdtestEasy,
             Workload::MdtestHard,
             Workload::MetadataNegativeLookup,
+            Workload::ArtifactIndexLookup,
             Workload::CheckpointPublish,
             Workload::TrainingRead,
             Workload::MlperfDlio,
@@ -2112,6 +2205,7 @@ fn workload_name(workload: Workload) -> &'static str {
         Workload::MdtestEasy => "mdtest-easy",
         Workload::MdtestHard => "mdtest-hard",
         Workload::MetadataNegativeLookup => "metadata-negative-lookup",
+        Workload::ArtifactIndexLookup => "artifact-index-lookup",
         Workload::CheckpointPublish => "checkpoint-publish",
         Workload::TrainingRead => "training-read",
         Workload::MlperfDlio => "mlperf-dlio",
@@ -2327,6 +2421,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_artifact_index_lookup_workload() {
+        let config = parse(vec![s("--workload"), s("artifact-index-lookup")]).unwrap();
+        assert_eq!(config.workload, Workload::ArtifactIndexLookup);
+    }
+
+    #[test]
     fn shape_applies_object_size_overrides() {
         let config = parse(vec![
             s("--profile"),
@@ -2436,6 +2536,7 @@ mod tests {
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
                 Workload::MetadataNegativeLookup,
+                Workload::ArtifactIndexLookup,
                 Workload::CheckpointPublish,
                 Workload::TrainingRead,
                 Workload::MlperfDlio,
