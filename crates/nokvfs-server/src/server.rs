@@ -2,11 +2,13 @@ use std::error::Error;
 use std::fmt;
 use std::io;
 use std::net::TcpListener;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
 
 use nokvfs_cluster::{
-    ApplyFrontier, FileSharedLog, LogTerm, SharedLogError, SharedLogMetadataStore,
+    ApplyFrontier, FileAppliedFrontierStore, FileSharedLog, LogTerm, SharedLogError,
+    SharedLogMetadataStore,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -51,12 +53,14 @@ impl Server {
         let metadata = match options.metadata_log_path.as_ref() {
             Some(path) => {
                 let log = FileSharedLog::open(path)?;
-                let logged = Arc::new(SharedLogMetadataStore::new(
+                let frontier = FileAppliedFrontierStore::open(metadata_apply_frontier_path(path))?;
+                let logged = Arc::new(SharedLogMetadataStore::with_frontier_store(
                     metadata,
                     log,
                     LogTerm::new(1)?,
                     options.mount,
-                ));
+                    frontier,
+                )?);
                 metadata_log = Some(Arc::clone(&logged));
                 ServerMetadataStore::file_logged(logged)
             }
@@ -132,6 +136,20 @@ impl Server {
             history.retained_by_snapshots,
         ))
     }
+}
+
+fn metadata_apply_frontier_path(log_path: &Path) -> PathBuf {
+    let mut path = log_path.to_path_buf();
+    let file_name = log_path
+        .file_name()
+        .map(|name| {
+            let mut name = name.to_os_string();
+            name.push(".apply");
+            name
+        })
+        .unwrap_or_else(|| "metadata.log.apply".into());
+    path.set_file_name(file_name);
+    path
 }
 
 impl Server {
@@ -336,8 +354,11 @@ pub(crate) mod tests {
             assert!(stats.contains("\"applied_index\":"));
             assert!(stats.contains("\"commit_version\":"));
         }
+        let apply_marker = dir.path().join("metadata.log.apply");
+        assert!(apply_marker.is_file());
 
         let reopened = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        assert!(reopened.stats_json().contains("\"applied_index\":"));
         let entry = reopened
             .service()
             .lookup_path("/runs")

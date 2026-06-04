@@ -8,22 +8,23 @@ use nokvfs_meta::command::{
 use nokvfs_types::{MountId, RecordFamily};
 
 use crate::{
-    AppliedMetadataCommand, ApplyFrontier, DurableReceipt, LogIndex, LogPosition, LogTerm,
-    MetadataGroup, MetadataLogSink, ReplayDriver, ReplayError, ReplayOutcome, SharedLogError,
-    SharedMetadataLog,
+    AppliedFrontierStore, AppliedMetadataCommand, ApplyFrontier, DurableReceipt, LogIndex,
+    LogPosition, LogTerm, MemoryAppliedFrontierStore, MetadataGroup, MetadataLogSink, ReplayDriver,
+    ReplayError, ReplayOutcome, SharedLogError, SharedMetadataLog,
 };
 
 #[derive(Debug)]
-pub struct SharedLogMetadataStore<M, L> {
+pub struct SharedLogMetadataStore<M, L, F = MemoryAppliedFrontierStore> {
     store: M,
     log: L,
     term: LogTerm,
     mount: MountId,
+    frontier_store: F,
     apply_gate: Mutex<()>,
     applied_frontier: Mutex<Option<ApplyFrontier>>,
 }
 
-impl<M, L> SharedLogMetadataStore<M, L>
+impl<M, L> SharedLogMetadataStore<M, L, MemoryAppliedFrontierStore>
 where
     M: MetadataStore,
     L: SharedMetadataLog,
@@ -34,6 +35,7 @@ where
             log,
             term,
             mount,
+            frontier_store: MemoryAppliedFrontierStore::new(),
             apply_gate: Mutex::new(()),
             applied_frontier: Mutex::new(None),
         }
@@ -49,6 +51,32 @@ where
         let start = first_available_replay_index(&shared.log)?;
         let outcome = ReplayDriver::new(&shared.log, &shared).replay_from(start, 0)?;
         Ok((shared, outcome))
+    }
+}
+
+impl<M, L, F> SharedLogMetadataStore<M, L, F>
+where
+    M: MetadataStore,
+    L: SharedMetadataLog,
+    F: AppliedFrontierStore,
+{
+    pub fn with_frontier_store(
+        store: M,
+        log: L,
+        term: LogTerm,
+        mount: MountId,
+        frontier_store: F,
+    ) -> Result<Self, SharedLogError> {
+        let applied_frontier = frontier_store.load()?;
+        Ok(Self {
+            store,
+            log,
+            term,
+            mount,
+            frontier_store,
+            apply_gate: Mutex::new(()),
+            applied_frontier: Mutex::new(applied_frontier),
+        })
     }
 
     pub fn commit_batch(
@@ -92,9 +120,10 @@ where
     }
 }
 
-impl<M, L> MetadataLogSink for SharedLogMetadataStore<M, L>
+impl<M, L, F> MetadataLogSink for SharedLogMetadataStore<M, L, F>
 where
     M: MetadataStore,
+    F: AppliedFrontierStore,
 {
     fn apply_command(
         &self,
@@ -121,10 +150,11 @@ where
     }
 }
 
-impl<M, L> MetadataStore for SharedLogMetadataStore<M, L>
+impl<M, L, F> MetadataStore for SharedLogMetadataStore<M, L, F>
 where
     M: MetadataStore,
     L: SharedMetadataLog,
+    F: AppliedFrontierStore,
 {
     fn get_versioned(
         &self,
@@ -155,9 +185,10 @@ where
     }
 }
 
-impl<M, L> MetadataStoreStatsProvider for SharedLogMetadataStore<M, L>
+impl<M, L, F> MetadataStoreStatsProvider for SharedLogMetadataStore<M, L, F>
 where
     M: MetadataStoreStatsProvider,
+    F: AppliedFrontierStore,
 {
     fn metadata_store_stats(&self) -> MetadataStoreStats {
         self.store.metadata_store_stats()
@@ -274,8 +305,18 @@ where
     }
 }
 
-impl<M, L> SharedLogMetadataStore<M, L> {
+impl<M, L, F> SharedLogMetadataStore<M, L, F>
+where
+    F: AppliedFrontierStore,
+{
     fn record_applied_frontier(&self, frontier: ApplyFrontier) -> Result<(), ReplayError> {
+        self.frontier_store
+            .save(frontier)
+            .map_err(|err| ReplayError::Apply {
+                position: frontier.position,
+                batch_position: 0,
+                message: err.to_string(),
+            })?;
         let mut current = self
             .applied_frontier
             .lock()

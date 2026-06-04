@@ -8,6 +8,7 @@
 
 mod errors;
 mod file;
+mod frontier;
 mod group;
 mod log;
 mod memory;
@@ -18,6 +19,7 @@ mod types;
 
 pub use errors::{ReplayError, SharedLogError};
 pub use file::FileSharedLog;
+pub use frontier::{AppliedFrontierStore, FileAppliedFrontierStore, MemoryAppliedFrontierStore};
 pub use group::{MetadataGroup, MetadataGroupCommit};
 pub use log::SharedMetadataLog;
 pub use memory::InMemorySharedLog;

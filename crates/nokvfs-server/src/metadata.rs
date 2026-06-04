@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use nokvfs_cluster::{FileSharedLog, SharedLogMetadataStore};
+use nokvfs_cluster::{FileAppliedFrontierStore, FileSharedLog, SharedLogMetadataStore};
 use nokvfs_meta::command::{
     CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
     MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, ReadItem, ReadPurpose, ScanItem,
@@ -9,7 +9,8 @@ use nokvfs_meta::command::{
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_types::RecordFamily;
 
-pub(crate) type FileLoggedMetadataStore = SharedLogMetadataStore<HoltMetadataStore, FileSharedLog>;
+pub(crate) type FileLoggedMetadataStore =
+    SharedLogMetadataStore<HoltMetadataStore, FileSharedLog, FileAppliedFrontierStore>;
 
 pub(crate) enum ServerMetadataStore {
     Direct(Box<HoltMetadataStore>),

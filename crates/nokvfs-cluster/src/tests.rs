@@ -491,6 +491,39 @@ fn shared_log_metadata_store_allows_deduped_retry_after_predicate_changes() {
 }
 
 #[test]
+fn shared_log_metadata_store_persists_file_applied_frontier() {
+    let dir = tempdir().unwrap();
+    let frontier_path = dir.path().join("applied.frontier");
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let frontier = FileAppliedFrontierStore::open(&frontier_path).unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::with_frontier_store(
+        store,
+        log,
+        LogTerm::new(1).unwrap(),
+        mount,
+        frontier,
+    )
+    .unwrap();
+
+    shared.commit_metadata(command(b"a", 2)).unwrap();
+    assert_eq!(
+        FileAppliedFrontierStore::open(&frontier_path)
+            .unwrap()
+            .load()
+            .unwrap(),
+        Some(ApplyFrontier {
+            position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(1).unwrap(),
+            },
+            commit_version: version(2),
+        })
+    );
+}
+
+#[test]
 fn shared_log_metadata_store_rejects_failed_predicate_before_log_append() {
     let log = InMemorySharedLog::new();
     let store = HoltMetadataStore::open_memory().unwrap();
