@@ -1812,6 +1812,33 @@ fn open_existing_recovers_inode_and_version_allocators() {
 }
 
 #[test]
+fn refresh_allocator_state_advances_live_read_version_after_external_commit() {
+    let dir = tempfile::tempdir().unwrap();
+    let objects = MemoryObjectStore::new();
+    let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
+    let original = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
+    original.bootstrap_root(0o755, 1000, 1000).unwrap();
+
+    let external = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
+    let external_file = external
+        .create_file_path("/external.bin", 0o644, 1000, 1000)
+        .unwrap();
+    assert!(original.stat_path("/external.bin").unwrap().is_none());
+
+    original.refresh_allocator_state().unwrap();
+    let visible = original
+        .stat_path("/external.bin")
+        .unwrap()
+        .expect("external commit should be visible after refresh");
+    assert_eq!(visible.attr, external_file.attr);
+    let local_file = original
+        .create_file_path("/after-refresh.bin", 0o644, 1000, 1000)
+        .unwrap();
+    assert!(local_file.attr.inode > external_file.attr.inode);
+    assert!(local_file.attr.generation > external_file.attr.generation);
+}
+
+#[test]
 fn open_existing_recovers_after_dentry_only_rename() {
     let dir = tempfile::tempdir().unwrap();
     let objects = MemoryObjectStore::new();

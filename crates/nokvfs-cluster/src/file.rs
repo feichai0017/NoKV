@@ -303,6 +303,36 @@ pub fn decode_metadata_log_entry(payload: &[u8]) -> Result<MetadataLogEntry, Sha
     }
 }
 
+pub fn encode_metadata_command_batch(
+    commands: &[MetadataCommand],
+) -> Result<Vec<u8>, SharedLogError> {
+    if commands.is_empty() {
+        return Err(SharedLogError::EmptyBatch);
+    }
+    let mut out = Vec::new();
+    push_len(&mut out, commands.len())?;
+    for command in commands {
+        encode_command(&mut out, command)?;
+    }
+    Ok(out)
+}
+
+pub fn decode_metadata_command_batch(
+    payload: &[u8],
+) -> Result<Vec<MetadataCommand>, SharedLogError> {
+    let mut input = Decoder::new(payload);
+    let command_count = input.len()?;
+    if command_count == 0 {
+        return Err(SharedLogError::EmptyBatch);
+    }
+    let mut commands = Vec::with_capacity(command_count);
+    for _ in 0..command_count {
+        commands.push(decode_command(&mut input)?);
+    }
+    input.finish()?;
+    Ok(commands)
+}
+
 fn encode_entry_record(entry: &MetadataLogEntry) -> Result<Vec<u8>, SharedLogError> {
     let mut out = vec![RECORD_ENTRY];
     push_u64(&mut out, entry.position.term.get());

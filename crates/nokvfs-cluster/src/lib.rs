@@ -25,8 +25,8 @@ pub use checkpoint::{
 };
 pub use errors::{ReplayError, SharedLogError};
 pub use file::{
-    decode_metadata_log_entry, encode_metadata_log_entry, FileSharedLog, FileSharedLogOptions,
-    FileSharedLogSync,
+    decode_metadata_command_batch, decode_metadata_log_entry, encode_metadata_command_batch,
+    encode_metadata_log_entry, FileSharedLog, FileSharedLogOptions, FileSharedLogSync,
 };
 pub use frontier::{AppliedFrontierStore, FileAppliedFrontierStore, MemoryAppliedFrontierStore};
 pub use group::{MetadataGroup, MetadataGroupCommit};

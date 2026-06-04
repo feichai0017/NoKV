@@ -5,6 +5,19 @@ where
     M: MetadataStore,
     O: ObjectStore,
 {
+    pub fn refresh_allocator_state(&self) -> Result<(), MetadError> {
+        let allocator = recover_allocator_state(&self.metadata, self.mount)?;
+        self.clock
+            .fetch_max(allocator.last_commit_version, Ordering::Relaxed);
+        self.reserved_version
+            .fetch_max(allocator.last_commit_version, Ordering::Relaxed);
+        self.next_inode
+            .fetch_max(allocator.next_inode, Ordering::Relaxed);
+        self.reserved_next_inode
+            .fetch_max(allocator.next_inode, Ordering::Relaxed);
+        Ok(())
+    }
+
     pub(super) fn ensure_allocator_reservation(
         &self,
         required_version: u64,

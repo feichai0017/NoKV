@@ -179,6 +179,11 @@ pub enum MetadataRpcRequest {
         start_index: u64,
         limit: usize,
     },
+    AppendMetadataLog {
+        term: u64,
+        mount: u64,
+        payload: Vec<u8>,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -277,6 +282,10 @@ pub enum MetadataRpcResult {
     MetadataLogEntries {
         entries: Vec<WireMetadataLogEntry>,
         committed: Option<WireMetadataPosition>,
+    },
+    MetadataLogAppend {
+        position: WireMetadataPosition,
+        receipts: Vec<WireMetadataReceipt>,
     },
 }
 
@@ -395,6 +404,15 @@ pub struct WireMetadataLogEntry {
     pub position: WireMetadataPosition,
     pub mount: u64,
     pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataReceipt {
+    pub position: WireMetadataPosition,
+    pub mount: u64,
+    pub batch_position: usize,
+    pub request_id: Vec<u8>,
+    pub commit_version: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -743,6 +761,40 @@ mod tests {
             error: None,
             error_kind: None,
             metadata_position: Some(WireMetadataPosition { term: 2, index: 8 }),
+        };
+        assert_eq!(
+            decode_envelope(&encode_envelope(&envelope).unwrap()).unwrap(),
+            envelope
+        );
+    }
+
+    #[test]
+    fn binary_codec_round_trips_metadata_log_append() {
+        let request = MetadataRpcRequest::AppendMetadataLog {
+            term: 3,
+            mount: 1,
+            payload: b"command-batch".to_vec(),
+        };
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
+        );
+
+        let envelope = MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::MetadataLogAppend {
+                position: WireMetadataPosition { term: 3, index: 11 },
+                receipts: vec![WireMetadataReceipt {
+                    position: WireMetadataPosition { term: 3, index: 11 },
+                    mount: 1,
+                    batch_position: 0,
+                    request_id: b"request-a".to_vec(),
+                    commit_version: 9,
+                }],
+            }),
+            error: None,
+            error_kind: None,
+            metadata_position: Some(WireMetadataPosition { term: 3, index: 11 }),
         };
         assert_eq!(
             decode_envelope(&encode_envelope(&envelope).unwrap()).unwrap(),

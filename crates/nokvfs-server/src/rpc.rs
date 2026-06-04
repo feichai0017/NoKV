@@ -9,7 +9,7 @@ use nokvfs_protocol::{
     decode_name_cursor, decode_request, encode_envelope, encode_name_cursor, MetadataProtocolError,
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
     WireDentryWithAttr, WireMetadataError, WireMetadataLogEntry, WireMetadataPosition,
-    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -1138,6 +1138,31 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 committed: committed.map(wire_log_position),
             })
         }
+        MetadataRpcRequest::AppendMetadataLog {
+            term,
+            mount,
+            payload,
+        } => {
+            let term = nokvfs_cluster::LogTerm::new(term).map_err(ServerError::SharedLog)?;
+            let mount = MountId::new(mount).map_err(|err| {
+                ServerError::Metadata(MetadError::Codec(format!(
+                    "invalid metadata log mount: {err}"
+                )))
+            })?;
+            let commands = nokvfs_cluster::decode_metadata_command_batch(&payload)
+                .map_err(ServerError::SharedLog)?;
+            let receipts = server.append_metadata_log_batch(term, mount, commands)?;
+            let response = nokvfs_cluster::AppendMetadataBatchResponse::from_receipts(receipts)
+                .map_err(ServerError::SharedLog)?;
+            Ok(MetadataRpcResult::MetadataLogAppend {
+                position: wire_log_position(response.position),
+                receipts: response
+                    .receipts
+                    .iter()
+                    .map(wire_metadata_receipt)
+                    .collect(),
+            })
+        }
     }
 }
 
@@ -1218,6 +1243,16 @@ fn wire_metadata_log_entry(
         payload: nokvfs_cluster::encode_metadata_log_entry(entry)
             .map_err(ServerError::SharedLog)?,
     })
+}
+
+fn wire_metadata_receipt(receipt: &nokvfs_cluster::DurableReceipt) -> WireMetadataReceipt {
+    WireMetadataReceipt {
+        position: wire_log_position(receipt.position),
+        mount: receipt.mount.get(),
+        batch_position: receipt.batch_position,
+        request_id: receipt.request_id.clone(),
+        commit_version: receipt.commit_version.get(),
+    }
 }
 
 fn protocol_error(err: MetadataProtocolError) -> MetadError {
@@ -1390,6 +1425,104 @@ mod tests {
     }
 
     #[test]
+    fn rpc_appends_metadata_log_batch_and_replays_state() {
+        let leader_dir = tempdir().unwrap();
+        let leader_log = leader_dir.path().join("metadata.log");
+        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
+        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+
+        let replica_dir = tempdir().unwrap();
+        let replica_log = replica_dir.path().join("metadata.log");
+        let replica = Server::open(test_options(replica_dir.path(), Some(replica_log))).unwrap();
+        let envelope = request_envelope(
+            &replica,
+            MetadataRpcRequest::AppendMetadataLog {
+                term: 2,
+                mount: 1,
+                payload,
+            },
+        );
+
+        assert!(envelope.ok, "unexpected append error: {envelope:?}");
+        let (position, receipts) = match envelope.result.unwrap() {
+            MetadataRpcResult::MetadataLogAppend { position, receipts } => (position, receipts),
+            other => panic!("unexpected append result: {other:?}"),
+        };
+        assert_eq!(position.term, 2);
+        assert!(receipts.len() >= 2);
+        for (batch_position, receipt) in receipts.iter().enumerate() {
+            assert_eq!(receipt.position, position);
+            assert_eq!(receipt.mount, 1);
+            assert_eq!(receipt.batch_position, batch_position);
+            assert!(!receipt.request_id.is_empty());
+        }
+
+        let stat = request_envelope(
+            &replica,
+            MetadataRpcRequest::StatPath {
+                path: "/model.bin".to_owned(),
+            },
+        );
+        assert!(stat.ok, "replica did not apply appended log: {stat:?}");
+        match stat.result.unwrap() {
+            MetadataRpcResult::PathMetadata {
+                metadata: Some(metadata),
+            } => assert_eq!(metadata.attr.file_type, "file"),
+            other => panic!("unexpected stat result after append: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn rpc_rejects_metadata_log_append_when_log_is_disabled() {
+        let leader_dir = tempdir().unwrap();
+        let leader_log = leader_dir.path().join("metadata.log");
+        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
+        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+        let server = test_server();
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::AppendMetadataLog {
+                term: 2,
+                mount: 1,
+                payload,
+            },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("metadata log is disabled")
+        ));
+    }
+
+    #[test]
+    fn rpc_rejects_metadata_log_append_for_wrong_mount() {
+        let leader_dir = tempdir().unwrap();
+        let leader_log = leader_dir.path().join("metadata.log");
+        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
+        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+        let replica_dir = tempdir().unwrap();
+        let replica_log = replica_dir.path().join("metadata.log");
+        let replica = Server::open(test_options(replica_dir.path(), Some(replica_log))).unwrap();
+        let envelope = request_envelope(
+            &replica,
+            MetadataRpcRequest::AppendMetadataLog {
+                term: 2,
+                mount: 99,
+                payload,
+            },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("does not match server mount")
+        ));
+    }
+
+    #[test]
     fn rpc_rejects_metadata_log_read_when_log_is_disabled() {
         let server = test_server();
         let envelope = request_envelope(
@@ -1406,6 +1539,42 @@ mod tests {
             Some(WireMetadataError::Metadata { message })
                 if message.contains("metadata log is disabled")
         ));
+    }
+
+    fn create_file_log_tail_payload(server: &Server, path: &str) -> Vec<u8> {
+        let created = request_envelope(
+            server,
+            MetadataRpcRequest::CreateFilePath {
+                path: path.to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        assert!(created.ok, "failed to create test file: {created:?}");
+        let log = request_envelope(
+            server,
+            MetadataRpcRequest::ReadMetadataLog {
+                start_index: 1,
+                limit: 0,
+            },
+        );
+        let entries = match log.result.unwrap() {
+            MetadataRpcResult::MetadataLogEntries { entries, .. } => entries,
+            other => panic!("unexpected metadata log result: {other:?}"),
+        };
+        let commands = entries
+            .iter()
+            .flat_map(|entry| {
+                nokvfs_cluster::decode_metadata_log_entry(&entry.payload)
+                    .unwrap()
+                    .commands
+            })
+            .collect::<Vec<_>>();
+        assert!(commands
+            .iter()
+            .any(|command| command.kind == nokvfs_meta::command::CommandKind::CreateFile));
+        nokvfs_cluster::encode_metadata_command_batch(&commands).unwrap()
     }
 
     #[test]

@@ -210,6 +210,24 @@ fn metadata_log_entry_codec_round_trips_command_batch() {
 }
 
 #[test]
+fn metadata_command_batch_codec_round_trips_commands() {
+    let commands = vec![command(b"a", 2), not_exists_command(b"b", 3)];
+
+    let encoded = encode_metadata_command_batch(&commands).unwrap();
+    let decoded = decode_metadata_command_batch(&encoded).unwrap();
+
+    assert_eq!(decoded, commands);
+    assert_eq!(
+        encode_metadata_command_batch(&[]),
+        Err(SharedLogError::EmptyBatch)
+    );
+    assert_eq!(
+        decode_metadata_command_batch(&0_u64.to_be_bytes()),
+        Err(SharedLogError::EmptyBatch)
+    );
+}
+
+#[test]
 fn compact_through_removes_old_entries_and_rejects_stale_reads() {
     let log = InMemorySharedLog::new();
     let mount = MountId::new(1).unwrap();

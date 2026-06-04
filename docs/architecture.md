@@ -145,5 +145,7 @@ part of the contract.
 The current framed RPC path can expose committed metadata log entries for
 replica catch-up via `ReadMetadataLog`. Each returned payload is encoded by
 `nokvfs-cluster`, so protocol framing does not need to understand
-`MetadataCommand` internals. Network append, checkpoint install, and durable
-membership are still the next HA steps.
+`MetadataCommand` internals. It can also accept an externally ordered command
+batch via `AppendMetadataLog`, append it to the local metadata log, and replay
+it into Holt state. Checkpoint install, durable membership, and leader/voter
+authorization are still the next HA steps.

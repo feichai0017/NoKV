@@ -8,10 +8,11 @@ use std::thread;
 
 use nokvfs_cluster::{
     compact_log_to_checkpoint, ApplyFrontier, CheckpointArtifact, CheckpointCatalog,
-    CheckpointManifest, FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog,
-    FileSharedLogOptions, LogIndex, LogPosition, MetadataLogEntry, SharedLogError,
-    SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
+    CheckpointManifest, DurableReceipt, FileAppliedFrontierStore, FileCheckpointCatalog,
+    FileSharedLog, FileSharedLogOptions, LogIndex, LogPosition, LogTerm, MetadataLogEntry,
+    SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
 };
+use nokvfs_meta::command::MetadataCommand;
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
     HistoryGcWorker, HistoryGcWorkerState, MetadError, NoKvFs, ObjectGcWorker, ObjectGcWorkerState,
@@ -148,6 +149,32 @@ impl Server {
         };
         let entries = metadata_log.log().read_from(start, limit)?;
         Ok((entries, metadata_log.log().committed_position()))
+    }
+
+    pub(crate) fn append_metadata_log_batch(
+        &self,
+        term: LogTerm,
+        mount: nokvfs_types::MountId,
+        commands: Vec<MetadataCommand>,
+    ) -> Result<Vec<DurableReceipt>, ServerError> {
+        if mount != self.service.mount_id() {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                "metadata log append mount {} does not match server mount {}",
+                mount.get(),
+                self.service.mount_id().get(),
+            ))));
+        }
+        let Some(metadata_log) = self.metadata_log.as_ref() else {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(
+                "metadata log is disabled".to_owned(),
+            )));
+        };
+        let receipts = metadata_log.log().append_batch(term, mount, &commands)?;
+        metadata_log
+            .replay_committed_tail(0)
+            .map_err(|err| ServerError::SharedLog(SharedLogError::Backend(err.to_string())))?;
+        self.service.refresh_allocator_state()?;
+        Ok(receipts)
     }
 
     pub fn stats_json(&self) -> String {
