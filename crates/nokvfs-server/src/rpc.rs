@@ -8,8 +8,8 @@ use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_name_cursor, decode_request, encode_envelope, encode_name_cursor, MetadataProtocolError,
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
-    WireDentryWithAttr, WireMetadataError, WireObjectReadBlock, WirePathMetadata,
-    WirePreparedArtifact,
+    WireDentryWithAttr, WireMetadataError, WireMetadataPosition, WireObjectReadBlock,
+    WirePathMetadata, WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -78,6 +78,9 @@ fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerErro
                 result: Some(result),
                 error: None,
                 error_kind: None,
+                metadata_position: server
+                    .metadata_log_applied_position()
+                    .map(wire_log_position),
             },
             Err(err) => err_envelope(err),
         },
@@ -88,6 +91,7 @@ fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerErro
             error_kind: Some(WireMetadataError::Protocol {
                 message: err.to_string(),
             }),
+            metadata_position: None,
         },
     };
     encode_envelope(&envelope).map_err(|err| {
@@ -268,6 +272,7 @@ fn encode_server_error(err: &ServerError) -> Result<Vec<u8>, ServerError> {
         result: None,
         error: Some(err.to_string()),
         error_kind: Some(wire_server_error(err)),
+        metadata_position: None,
     };
     encode_envelope(&envelope).map_err(|err| {
         ServerError::Io(io::Error::new(
@@ -396,17 +401,20 @@ fn execute_batch(
 
 fn execute_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
     match execute(server, request) {
-        Ok(result) => ok_envelope(result),
+        Ok(result) => ok_envelope(server, result),
         Err(err) => err_envelope(err),
     }
 }
 
-fn ok_envelope(result: MetadataRpcResult) -> MetadataRpcEnvelope {
+fn ok_envelope(server: &Server, result: MetadataRpcResult) -> MetadataRpcEnvelope {
     MetadataRpcEnvelope {
         ok: true,
         result: Some(result),
         error: None,
         error_kind: None,
+        metadata_position: server
+            .metadata_log_applied_position()
+            .map(wire_log_position),
     }
 }
 
@@ -417,6 +425,7 @@ fn err_envelope(err: ServerError) -> MetadataRpcEnvelope {
         result: None,
         error: Some(err.to_string()),
         error_kind: Some(error_kind),
+        metadata_position: None,
     }
 }
 
@@ -429,8 +438,20 @@ fn wire_server_error(err: &ServerError) -> WireMetadataError {
             message: err.to_string(),
         },
         ServerError::Metadata(err) => wire_metad_error(err),
-        ServerError::SharedLog(err) => WireMetadataError::Metadata {
-            message: err.to_string(),
+        ServerError::SharedLog(err) => wire_shared_log_error(err),
+    }
+}
+
+fn wire_shared_log_error(err: &nokvfs_cluster::SharedLogError) -> WireMetadataError {
+    match err {
+        nokvfs_cluster::SharedLogError::ReadNotFresh { required, applied } => {
+            WireMetadataError::ReadNotFresh {
+                required: wire_log_position(*required),
+                applied: applied.map(wire_log_position),
+            }
+        }
+        other => WireMetadataError::Metadata {
+            message: other.to_string(),
         },
     }
 }
@@ -541,9 +562,12 @@ fn create_path_batch_envelopes(
         Ok(entries) => entries
             .iter()
             .map(|entry| {
-                ok_envelope(MetadataRpcResult::Dentry {
-                    entry: Some(Box::new(wire_dentry(entry))),
-                })
+                ok_envelope(
+                    server,
+                    MetadataRpcResult::Dentry {
+                        entry: Some(Box::new(wire_dentry(entry))),
+                    },
+                )
             })
             .collect(),
         Err(_) => names
@@ -598,9 +622,12 @@ fn create_path_group_envelopes(
                 Ok(entries) => entries
                     .iter()
                     .map(|entry| {
-                        ok_envelope(MetadataRpcResult::Dentry {
-                            entry: Some(Box::new(wire_dentry(entry))),
-                        })
+                        ok_envelope(
+                            server,
+                            MetadataRpcResult::Dentry {
+                                entry: Some(Box::new(wire_dentry(entry))),
+                            },
+                        )
                     })
                     .collect::<Vec<_>>(),
                 Err(_) => create_path_batch_envelopes(
@@ -716,6 +743,10 @@ fn child_path(parent: &str, name: &str) -> String {
 fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ServerError> {
     match request {
         MetadataRpcRequest::Batch { requests } => execute_batch(server, requests),
+        MetadataRpcRequest::RequireApplied { position, request } => {
+            server.ensure_metadata_log_applied(log_position(position)?)?;
+            execute(server, *request)
+        }
         MetadataRpcRequest::BootstrapRoot { mode, uid, gid } => {
             let attr = server.service().bootstrap_root(mode, uid, gid)?;
             Ok(MetadataRpcResult::InodeAttr {
@@ -1170,6 +1201,22 @@ fn protocol_error(err: MetadataProtocolError) -> MetadError {
     MetadError::Codec(err.to_string())
 }
 
+fn wire_log_position(position: nokvfs_cluster::LogPosition) -> WireMetadataPosition {
+    WireMetadataPosition {
+        term: position.term.get(),
+        index: position.index.get(),
+    }
+}
+
+fn log_position(
+    position: WireMetadataPosition,
+) -> Result<nokvfs_cluster::LogPosition, ServerError> {
+    Ok(nokvfs_cluster::LogPosition {
+        term: nokvfs_cluster::LogTerm::new(position.term).map_err(ServerError::SharedLog)?,
+        index: nokvfs_cluster::LogIndex::new(position.index).map_err(ServerError::SharedLog)?,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1217,6 +1264,56 @@ mod tests {
         };
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].dentry.name_hex, "72756e73");
+    }
+
+    #[test]
+    fn rpc_require_applied_enforces_shared_log_freshness() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let created = request_envelope(
+            &server,
+            MetadataRpcRequest::CreateFilePath {
+                path: "/model.bin".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        assert!(created.ok);
+        let position = created
+            .metadata_position
+            .expect("logged metadata response carries applied position");
+
+        let fresh = request_envelope(
+            &server,
+            MetadataRpcRequest::RequireApplied {
+                position,
+                request: Box::new(MetadataRpcRequest::StatPath {
+                    path: "/model.bin".to_owned(),
+                }),
+            },
+        );
+        assert!(fresh.ok, "unexpected stale response: {fresh:?}");
+
+        let stale = request_envelope(
+            &server,
+            MetadataRpcRequest::RequireApplied {
+                position: WireMetadataPosition {
+                    term: position.term,
+                    index: position.index + 1,
+                },
+                request: Box::new(MetadataRpcRequest::StatPath {
+                    path: "/model.bin".to_owned(),
+                }),
+            },
+        );
+        assert!(!stale.ok);
+        assert!(matches!(
+            stale.error_kind,
+            Some(WireMetadataError::ReadNotFresh { required, applied: Some(applied) })
+                if required.index == position.index + 1 && applied == position
+        ));
     }
 
     #[test]

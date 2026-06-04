@@ -16,7 +16,7 @@ use nokvfs_protocol::{
     decode_envelope, decode_name_cursor, encode_name_cursor, encode_request, MetadataProtocolError,
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
     WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr, WireMetadataError,
-    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireMetadataPosition, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
@@ -41,6 +41,7 @@ pub struct MetadataClient {
     options: MetadataClientOptions,
     next_request_id: AtomicU64,
     connection: Mutex<Option<Arc<PipelinedConnection>>>,
+    observed_position: Mutex<Option<WireMetadataPosition>>,
 }
 
 struct PipelinedConnection {
@@ -407,6 +408,7 @@ impl MetadataClient {
             options,
             next_request_id: AtomicU64::new(1),
             connection: Mutex::new(None),
+            observed_position: Mutex::new(None),
         }
     }
 
@@ -786,6 +788,7 @@ impl MetadataClient {
     }
 
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
+        let request = self.request_with_observed_position(request);
         let body =
             encode_request(&request).map_err(|err| ClientError::Protocol(err.to_string()))?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
@@ -793,7 +796,39 @@ impl MetadataClient {
         let body = connection.call(request_id, &body, self.options.timeout)?;
         let envelope =
             decode_envelope(&body).map_err(|err| ClientError::Protocol(err.to_string()))?;
+        if envelope.ok {
+            if let Some(position) = envelope.metadata_position {
+                self.record_observed_position(position);
+            }
+        }
         envelope_result(envelope)
+    }
+
+    fn request_with_observed_position(&self, request: MetadataRpcRequest) -> MetadataRpcRequest {
+        if !request_requires_observed_position(&request) {
+            return request;
+        }
+        let Some(position) = *self
+            .observed_position
+            .lock()
+            .expect("metadata observed position")
+        else {
+            return request;
+        };
+        MetadataRpcRequest::RequireApplied {
+            position,
+            request: Box::new(request),
+        }
+    }
+
+    fn record_observed_position(&self, position: WireMetadataPosition) {
+        let mut observed = self
+            .observed_position
+            .lock()
+            .expect("metadata observed position");
+        if observed.map(|existing| position > existing).unwrap_or(true) {
+            *observed = Some(position);
+        }
     }
 
     fn connection(&self) -> Result<Arc<PipelinedConnection>, ClientError> {
@@ -842,6 +877,21 @@ fn create_files_request(
         uid,
         gid,
     })
+}
+
+fn request_requires_observed_position(request: &MetadataRpcRequest) -> bool {
+    matches!(
+        request,
+        MetadataRpcRequest::GetAttr { .. }
+            | MetadataRpcRequest::LookupPlus { .. }
+            | MetadataRpcRequest::LookupPath { .. }
+            | MetadataRpcRequest::StatPath { .. }
+            | MetadataRpcRequest::ReadDirPlus { .. }
+            | MetadataRpcRequest::ReadDirPlusPage { .. }
+            | MetadataRpcRequest::ReadDirPlusPath { .. }
+            | MetadataRpcRequest::ReadDirPlusPathPage { .. }
+            | MetadataRpcRequest::ReadBodyPlan { .. }
+    )
 }
 
 fn rpc_parent_and_name(path: &str) -> Result<(String, String), ClientError> {
@@ -1136,6 +1186,12 @@ fn client_error_from_wire_error(error: WireMetadataError) -> ClientError {
         WireMetadataError::PredicateFailed => ClientError::Metadata(
             nokvfs_meta::MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed),
         ),
+        WireMetadataError::ReadNotFresh { required, applied } => ClientError::ReadNotFresh {
+            required_term: required.term,
+            required_index: required.index,
+            applied_term: applied.map(|position| position.term),
+            applied_index: applied.map(|position| position.index),
+        },
         WireMetadataError::StaleBodyGeneration { expected, current } => {
             ClientError::Metadata(nokvfs_meta::MetadError::StaleBodyGeneration {
                 expected,
@@ -1195,6 +1251,16 @@ mod tests {
     }
 
     fn dentry_response(parent: u64, name: &str, inode: u64, generation: u64) -> Vec<u8> {
+        dentry_response_with_position(parent, name, inode, generation, None)
+    }
+
+    fn dentry_response_with_position(
+        parent: u64,
+        name: &str,
+        inode: u64,
+        generation: u64,
+        metadata_position: Option<WireMetadataPosition>,
+    ) -> Vec<u8> {
         let envelope = MetadataRpcEnvelope {
             ok: true,
             result: Some(MetadataRpcResult::Dentry {
@@ -1226,6 +1292,7 @@ mod tests {
             }),
             error: None,
             error_kind: None,
+            metadata_position,
         };
         encode_envelope(&envelope).unwrap()
     }
@@ -1325,6 +1392,49 @@ mod tests {
             .unwrap();
         assert_eq!(entry.attr.inode.get(), 42);
         assert_eq!(entry.dentry.name.as_bytes(), b"checkpoint.bin");
+    }
+
+    #[test]
+    fn service_client_carries_observed_metadata_position_to_live_reads() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::CreateFilePath { path, .. } if path == "/runs/a.bin"
+            ));
+            let position = WireMetadataPosition { term: 2, index: 5 };
+            let response = dentry_response_with_position(2, "a.bin", 40, 7, Some(position));
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::RequireApplied {
+                    position: observed,
+                    request,
+                } if observed == position
+                    && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
+            ));
+            let response = response_body(
+                r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+            );
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+        });
+        let client = MetadataClient::connect(addr);
+        client
+            .create_file("/runs/a.bin", 0o644, 1000, 1000)
+            .unwrap();
+        let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
+        assert_eq!(metadata.attr.inode.get(), 40);
     }
 
     #[test]
@@ -1442,6 +1552,24 @@ mod tests {
                 expected: 7,
                 current: 8
             })
+        ));
+    }
+
+    #[test]
+    fn service_typed_error_maps_read_not_fresh() {
+        let addr = serve_one(
+            r#"{"ok":false,"error":"metadata read requires applied frontier 2:8","error_kind":{"type":"read_not_fresh","required":{"term":2,"index":8},"applied":{"term":2,"index":5}}}"#,
+        );
+        let client = MetadataClient::connect(addr);
+        let err = client.stat_path("/artifact.bin").unwrap_err();
+        assert!(matches!(
+            err,
+            ClientError::ReadNotFresh {
+                required_term: 2,
+                required_index: 8,
+                applied_term: Some(2),
+                applied_index: Some(5),
+            }
         ));
     }
 

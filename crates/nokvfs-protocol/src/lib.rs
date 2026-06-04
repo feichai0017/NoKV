@@ -20,6 +20,10 @@ pub enum MetadataRpcRequest {
     Batch {
         requests: Vec<MetadataRpcRequest>,
     },
+    RequireApplied {
+        position: WireMetadataPosition,
+        request: Box<MetadataRpcRequest>,
+    },
     BootstrapRoot {
         mode: u32,
         uid: u32,
@@ -182,6 +186,8 @@ pub struct MetadataRpcEnvelope {
     pub error: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<WireMetadataError>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata_position: Option<WireMetadataPosition>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -192,12 +198,35 @@ pub enum WireMetadataError {
     NotDirectory,
     MissingBodyDescriptor,
     PredicateFailed,
-    StaleBodyGeneration { expected: u64, current: u64 },
-    InvalidPath { message: String },
-    Metadata { message: String },
-    Object { message: String },
-    Io { message: String },
-    Protocol { message: String },
+    ReadNotFresh {
+        required: WireMetadataPosition,
+        applied: Option<WireMetadataPosition>,
+    },
+    StaleBodyGeneration {
+        expected: u64,
+        current: u64,
+    },
+    InvalidPath {
+        message: String,
+    },
+    Metadata {
+        message: String,
+    },
+    Object {
+        message: String,
+    },
+    Io {
+        message: String,
+    },
+    Protocol {
+        message: String,
+    },
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
+pub struct WireMetadataPosition {
+    pub term: u64,
+    pub index: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -669,6 +698,7 @@ mod tests {
             }),
             error: None,
             error_kind: None,
+            metadata_position: Some(WireMetadataPosition { term: 1, index: 7 }),
         };
         let encoded = encode_envelope(&envelope).unwrap();
         assert_eq!(decode_envelope(&encoded).unwrap(), envelope);

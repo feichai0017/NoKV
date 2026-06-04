@@ -50,6 +50,12 @@ pub enum ClientError {
     RootHasNoParent,
     NotFound(String),
     NotDirectory(String),
+    ReadNotFresh {
+        required_term: u64,
+        required_index: u64,
+        applied_term: Option<u64>,
+        applied_index: Option<u64>,
+    },
     Metadata(MetadError),
     Object(ObjectError),
     Io(String),
@@ -92,6 +98,19 @@ impl fmt::Display for ClientError {
             Self::RootHasNoParent => write!(f, "root path has no parent"),
             Self::NotFound(path) => write!(f, "path component not found: {path}"),
             Self::NotDirectory(path) => write!(f, "path component is not a directory: {path}"),
+            Self::ReadNotFresh {
+                required_term,
+                required_index,
+                applied_term,
+                applied_index,
+            } => write!(
+                f,
+                "metadata read requires applied frontier {required_term}:{required_index}, current applied frontier is {}",
+                match (applied_term, applied_index) {
+                    (Some(term), Some(index)) => format!("{term}:{index}"),
+                    _ => "none".to_owned(),
+                }
+            ),
             Self::Metadata(err) => write!(f, "metadata service error: {err}"),
             Self::Object(err) => write!(f, "object store error: {err}"),
             Self::Io(err) => write!(f, "io error: {err}"),

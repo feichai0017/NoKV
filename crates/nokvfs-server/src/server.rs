@@ -9,7 +9,8 @@ use std::thread;
 use nokvfs_cluster::{
     ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
     FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog, FileSharedLogOptions, LogIndex,
-    LogTerm, SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
+    LogPosition, LogTerm, ReadFreshness, SharedLogError, SharedLogMetadataStore,
+    SharedLogRuntimeStats, SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -111,6 +112,23 @@ impl Server {
 
     pub(crate) fn service(&self) -> &NoKvFs<ServerMetadataStore, S3ObjectStore> {
         &self.service
+    }
+
+    pub(crate) fn metadata_log_applied_position(&self) -> Option<LogPosition> {
+        self.metadata_log_frontier()
+            .map(|frontier| frontier.position)
+    }
+
+    pub(crate) fn ensure_metadata_log_applied(
+        &self,
+        position: LogPosition,
+    ) -> Result<(), ServerError> {
+        let Some(metadata_log) = self.metadata_log.as_ref() else {
+            return Ok(());
+        };
+        metadata_log
+            .ensure_read_freshness(ReadFreshness::AppliedThrough(position))
+            .map_err(ServerError::SharedLog)
     }
 
     pub fn stats_json(&self) -> String {
