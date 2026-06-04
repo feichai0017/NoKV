@@ -813,7 +813,10 @@ where
         if len == 0 {
             return Ok(Vec::new());
         }
-        let Some(attr) = self.get_attr(inode)? else {
+        let version = self.read_version()?;
+        let Some(attr) =
+            self.get_attr_at_version_for_purpose(inode, version, ReadPurpose::UserStrong)?
+        else {
             return Err(MetadError::NotFound);
         };
         if attr.file_type != FileType::File {
@@ -822,8 +825,15 @@ where
         if offset >= attr.size {
             return Ok(Vec::new());
         }
-        let body = self.body_descriptor(inode)?.ok_or(MetadError::NotFound)?;
-        self.read_file_at_version(inode, &body, offset, len, self.read_version()?)
+        let body = self
+            .body_descriptor_at_version_for_purpose(
+                inode,
+                attr.generation,
+                version,
+                ReadPurpose::UserStrong,
+            )?
+            .ok_or(MetadError::NotFound)?;
+        self.read_file_at_version(inode, &body, offset, len, version)
     }
 
     pub fn read_symlink(&self, inode: InodeId) -> Result<Vec<u8>, MetadError> {
@@ -853,7 +863,10 @@ where
                 blocks: Vec::new(),
             });
         }
-        let Some(attr) = self.get_attr(inode)? else {
+        let version = self.read_version()?;
+        let Some(attr) =
+            self.get_attr_at_version_for_purpose(inode, version, ReadPurpose::UserStrong)?
+        else {
             return Err(MetadError::NotFound);
         };
         if attr.file_type != FileType::File {
@@ -871,9 +884,13 @@ where
                 blocks: Vec::new(),
             });
         }
-        let version = self.read_version()?;
         let body = self
-            .body_descriptor_at_version(inode, generation, version)?
+            .body_descriptor_at_version_for_purpose(
+                inode,
+                generation,
+                version,
+                ReadPurpose::UserStrong,
+            )?
             .ok_or(MetadError::MissingBodyDescriptor)?;
         if body.size != attr.size {
             return Err(MetadError::BodySizeMismatch {

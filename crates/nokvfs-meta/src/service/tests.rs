@@ -1361,6 +1361,37 @@ fn publish_artifact_stores_body_then_publishes_metadata() {
 }
 
 #[test]
+fn read_file_uses_one_attr_read_for_body_and_manifest_plan() {
+    let metadata = PurposeTrackingStore::new();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    let published = service
+        .publish_artifact(artifact_request(
+            DentryName::new(b"checkpoint.bin".to_vec()).unwrap(),
+            "checkpoint/body",
+            b"abcdef",
+        ))
+        .unwrap();
+
+    let before = metadata.counts();
+    assert_eq!(
+        service.read_file(published.attr.inode, 1, 3).unwrap(),
+        b"bcd"
+    );
+    let after = metadata.counts();
+    assert_eq!(
+        after.user_strong_gets - before.user_strong_gets,
+        3,
+        "read_file should read inode, body summary, and one chunk manifest"
+    );
+    assert_eq!(after.write_plan_gets, before.write_plan_gets);
+}
+
+#[test]
 fn read_file_plan_returns_ranges_without_fetching_objects() {
     let service = service();
     let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
