@@ -109,45 +109,56 @@ impl MajorityMetadataLog {
         if commands.is_empty() {
             return Err(SharedLogError::EmptyBatch);
         }
-        let _append = self.append_gate.lock().map_err(|_| {
-            SharedLogError::Backend("metadata majority log mutex poisoned".to_owned())
-        })?;
-        self.validate_local_append(term)?;
-        let position = self.local.next_append_position(term)?;
-        let entry = MetadataLogEntry {
-            position,
-            mount,
-            commands: commands.to_vec(),
-        };
-        let quorum = majority(self.membership.voters.len())?;
-        if quorum == 1 {
-            return self.local.append_entry(entry);
-        }
-
-        let required_remote = quorum.saturating_sub(1);
-        let mut remote_successes = 0_usize;
-        for voter in &self.membership.voters {
-            if *voter == self.local_node {
-                continue;
+        let (entry, receipts) = {
+            let _append = self.append_gate.lock().map_err(|_| {
+                SharedLogError::Backend("metadata majority log mutex poisoned".to_owned())
+            })?;
+            self.validate_local_append(term)?;
+            let position = self.local.next_append_position(term)?;
+            let entry = MetadataLogEntry {
+                position,
+                mount,
+                commands: commands.to_vec(),
+            };
+            let quorum = majority(self.membership.voters.len())?;
+            if quorum > 1 {
+                let required_remote = quorum.saturating_sub(1);
+                let mut remote_successes = 0_usize;
+                for voter in &self.membership.voters {
+                    if *voter == self.local_node {
+                        continue;
+                    }
+                    let Some(peer) = self.peers.get(voter) else {
+                        continue;
+                    };
+                    if self
+                        .append_peer_with_catchup(*voter, peer.as_ref(), &entry)
+                        .is_ok()
+                    {
+                        remote_successes = remote_successes.saturating_add(1);
+                    }
+                }
+                if remote_successes < required_remote {
+                    return Err(SharedLogError::NoQuorum {
+                        required: quorum,
+                        available: remote_successes.saturating_add(1),
+                    });
+                }
             }
-            let Some(peer) = self.peers.get(voter) else {
+            let receipts = self.local.append_entry(entry.clone())?;
+            (entry, receipts)
+        };
+        self.replicate_learners_after_commit(&entry);
+        Ok(receipts)
+    }
+
+    fn replicate_learners_after_commit(&self, entry: &MetadataLogEntry) {
+        for learner in &self.membership.learners {
+            let Some(peer) = self.peers.get(learner) else {
                 continue;
             };
-            if self
-                .append_peer_with_catchup(*voter, peer.as_ref(), &entry)
-                .is_ok()
-            {
-                remote_successes = remote_successes.saturating_add(1);
-            }
+            let _ = self.append_peer_with_catchup(*learner, peer.as_ref(), entry);
         }
-        if remote_successes < required_remote {
-            return Err(SharedLogError::NoQuorum {
-                required: quorum,
-                available: remote_successes.saturating_add(1),
-            });
-        }
-
-        self.local.append_entry(entry)
     }
 
     fn append_peer_with_catchup(
@@ -414,6 +425,17 @@ mod tests {
         MetadataMembership::new(mount(), term(1), leader, [node(1), node(2), node(3)], []).unwrap()
     }
 
+    fn membership_with_learner(leader: NodeId) -> MetadataMembership {
+        MetadataMembership::new(
+            mount(),
+            term(1),
+            leader,
+            [node(1), node(2), node(3)],
+            [node(4)],
+        )
+        .unwrap()
+    }
+
     #[test]
     fn majority_append_writes_remote_before_local() {
         let (_dir, local) = file_log();
@@ -538,6 +560,122 @@ mod tests {
             Err(SharedLogError::Compacted { .. })
         ));
         let entries = peer_log.read_from(LogIndex::new(3).unwrap(), 0).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].commands[0].request_id, b"third");
+    }
+
+    #[test]
+    fn learner_receives_entry_after_quorum_commit() {
+        let (_dir, local) = file_log();
+        let voter2 = Arc::new(RecordingPeer::ok());
+        let voter3 = Arc::new(RecordingPeer::ok());
+        let learner4 = Arc::new(RecordingPeer::ok());
+        let mut peers = BTreeMap::new();
+        peers.insert(node(2), voter2.clone() as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(3), voter3.clone() as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(
+            node(4),
+            learner4.clone() as Arc<dyn MetadataLogPeerAppender>,
+        );
+        let log = MajorityMetadataLog::with_peers(
+            node(1),
+            membership_with_learner(node(1)),
+            local,
+            peers,
+            None,
+        );
+
+        let receipts = log
+            .append_batch(term(1), mount(), &[command(b"a", 2)])
+            .unwrap();
+
+        assert_eq!(receipts[0].position.index.get(), 1);
+        let learner_entries = learner4.entries.lock().unwrap();
+        assert_eq!(learner_entries.len(), 1);
+        assert_eq!(learner_entries[0].commands[0].request_id, b"a");
+    }
+
+    #[test]
+    fn learner_failure_does_not_break_quorum_commit() {
+        let (_dir, local) = file_log();
+        let voter2 = Arc::new(RecordingPeer::ok());
+        let voter3 = Arc::new(RecordingPeer::ok());
+        let learner4 = Arc::new(RecordingPeer::failing());
+        let mut peers = BTreeMap::new();
+        peers.insert(node(2), voter2 as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(3), voter3 as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(
+            node(4),
+            learner4.clone() as Arc<dyn MetadataLogPeerAppender>,
+        );
+        let log = MajorityMetadataLog::with_peers(
+            node(1),
+            membership_with_learner(node(1)),
+            local,
+            peers,
+            None,
+        );
+
+        let receipts = log
+            .append_batch(term(1), mount(), &[command(b"a", 2)])
+            .unwrap();
+
+        assert_eq!(receipts[0].position.index.get(), 1);
+        assert_eq!(log.committed_position().unwrap().index.get(), 1);
+        let attempts = learner4.entries.lock().unwrap();
+        assert_eq!(attempts.len(), 2);
+        assert_eq!(attempts[0].commands[0].request_id, b"a");
+        assert_eq!(attempts[1].commands[0].request_id, b"a");
+    }
+
+    #[test]
+    fn compacted_leader_bootstraps_learner_after_quorum_commit() {
+        let (_leader_dir, local) = file_log();
+        local
+            .append_entry(entry(1, command(b"first", 2)))
+            .expect("leader should hold first entry");
+        local
+            .append_entry(entry(2, command(b"second", 3)))
+            .expect("leader should hold second entry");
+        local
+            .compact_through(LogIndex::new(2).unwrap())
+            .expect("leader should compact checkpointed prefix");
+        let (_learner_dir, learner_log) = file_log();
+        let learner = Arc::new(FilePeer {
+            log: Arc::clone(&learner_log),
+        });
+        let voter2 = Arc::new(RecordingPeer::ok());
+        let voter3 = Arc::new(RecordingPeer::ok());
+        let bootstrapper = Arc::new(CompactingBootstrapper {
+            log: Arc::clone(&learner_log),
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert(node(2), voter2 as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(3), voter3 as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(4), learner as Arc<dyn MetadataLogPeerAppender>);
+        let log = MajorityMetadataLog::with_peers(
+            node(1),
+            membership_with_learner(node(1)),
+            local,
+            peers,
+            Some(bootstrapper.clone() as Arc<dyn MetadataLogPeerBootstrapper>),
+        );
+
+        let receipts = log
+            .append_batch(term(1), mount(), &[command(b"third", 4)])
+            .unwrap();
+
+        assert_eq!(receipts[0].position.index.get(), 3);
+        assert_eq!(
+            bootstrapper.calls.lock().unwrap().as_slice(),
+            &[(node(4), LogIndex::new(3).unwrap())]
+        );
+        assert!(matches!(
+            learner_log.read_from(LogIndex::new(1).unwrap(), 0),
+            Err(SharedLogError::Compacted { .. })
+        ));
+        let entries = learner_log.read_from(LogIndex::new(3).unwrap(), 0).unwrap();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].commands[0].request_id, b"third");
     }

@@ -1,11 +1,12 @@
 #!/usr/bin/env bash
 #
-# Run a local RustFS-backed 3-voter metadata shared-log smoke test.
+# Run a local RustFS-backed 3-voter + 1-learner metadata shared-log smoke test.
 #
 # The script starts RustFS, launches three NoKV metadata service processes that
 # share one metadata-log membership, writes an artifact through the leader, and
-# reads it back through both followers. It exercises real framed RPC append
-# between metadata voters rather than only the in-process fake quorum tests.
+# reads it back through both followers and a learner. It exercises real framed
+# RPC append between metadata voters and learner checkpoint bootstrap rather
+# than only the in-process fake quorum tests.
 
 set -euo pipefail
 
@@ -27,6 +28,7 @@ RUSTFS_BUFFER_PROFILE="${NOKV_SHARED_LOG_SMOKE_RUSTFS_BUFFER_PROFILE:-AiTraining
 NODE1_ADDRESS="${NOKV_SHARED_LOG_SMOKE_NODE1:-127.0.0.1:7791}"
 NODE2_ADDRESS="${NOKV_SHARED_LOG_SMOKE_NODE2:-127.0.0.1:7792}"
 NODE3_ADDRESS="${NOKV_SHARED_LOG_SMOKE_NODE3:-127.0.0.1:7793}"
+NODE4_ADDRESS="${NOKV_SHARED_LOG_SMOKE_NODE4:-127.0.0.1:7794}"
 WORK_DIR="${NOKV_SHARED_LOG_SMOKE_WORKDIR:-}"
 KEEP_WORKDIR="${NOKV_SHARED_LOG_SMOKE_KEEP:-0}"
 
@@ -47,6 +49,7 @@ Environment:
   NOKV_SHARED_LOG_SMOKE_NODE1          leader address (default: 127.0.0.1:7791)
   NOKV_SHARED_LOG_SMOKE_NODE2          follower voter address (default: 127.0.0.1:7792)
   NOKV_SHARED_LOG_SMOKE_NODE3          follower voter address (default: 127.0.0.1:7793)
+  NOKV_SHARED_LOG_SMOKE_NODE4          learner address (default: 127.0.0.1:7794)
 EOF
 }
 
@@ -162,6 +165,7 @@ server_args() {
         --metadata-log-leader 1 \
         --metadata-log-term 1 \
         --metadata-log-voters 1,2,3 \
+        --metadata-log-learners 4 \
         --metadata-log-sync none \
         --object-backend rustfs \
         --s3-bucket "$RUSTFS_BUCKET" \
@@ -234,12 +238,14 @@ wait_for_http "http://$NODE2_ADDRESS/healthz" "NoKV node 2"
 
 start_node 1 "$NODE1_ADDRESS" \
     --metadata-log-peer "2=$NODE2_ADDRESS" \
-    --metadata-log-peer "3=$NODE3_ADDRESS"
+    --metadata-log-peer "3=$NODE3_ADDRESS" \
+    --metadata-log-peer "4=$NODE4_ADDRESS"
 wait_for_http "http://$NODE1_ADDRESS/healthz" "NoKV node 1"
 
 payload="$WORK_DIR/payload.bin"
 restored2="$WORK_DIR/restored-node2.bin"
 restored3="$WORK_DIR/restored-node3.bin"
+restored4="$WORK_DIR/restored-node4.bin"
 printf 'nokv shared log smoke\n' >"$payload"
 
 "$NOKV_FS_BIN" \
@@ -271,12 +277,14 @@ printf 'nokv shared log smoke\n' >"$payload"
 
 curl -fsS --max-time 10 "http://$NODE1_ADDRESS/gc?limit=128" >/dev/null
 
-# Bring the third voter online only after the leader has published a metadata
-# checkpoint and compacted the initial log prefix. The next leader append must
-# automatically install the checkpoint and append the current entry before the
-# node can serve reads.
+# Bring the third voter and fourth learner online only after the leader has
+# published a metadata checkpoint and compacted the initial log prefix. The
+# next leader append must automatically install the checkpoint and append the
+# current entry before both late nodes can serve reads.
 start_node 3 "$NODE3_ADDRESS"
 wait_for_http "http://$NODE3_ADDRESS/healthz" "NoKV node 3"
+start_node 4 "$NODE4_ADDRESS"
+wait_for_http "http://$NODE4_ADDRESS/healthz" "NoKV node 4"
 
 "$NOKV_FS_BIN" \
     --server-bind "$NODE1_ADDRESS" \
@@ -286,6 +294,15 @@ wait_for_http "http://$NODE3_ADDRESS/healthz" "NoKV node 3"
     --s3-access-key-id "$RUSTFS_ACCESS_KEY" \
     --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
     mkdir /runs/1/after-checkpoint
+
+"$NOKV_FS_BIN" \
+    --server-bind "$NODE1_ADDRESS" \
+    --object-backend rustfs \
+    --s3-bucket "$RUSTFS_BUCKET" \
+    --s3-endpoint "$RUSTFS_ENDPOINT" \
+    --s3-access-key-id "$RUSTFS_ACCESS_KEY" \
+    --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
+    mkdir /runs/1/learner-after-checkpoint
 
 echo "Reading artifact through metadata node 2"
 "$NOKV_FS_BIN" \
@@ -307,7 +324,18 @@ echo "Reading artifact through metadata node 3"
     --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
     cat /runs/1/checkpoint.txt >"$restored3"
 
+echo "Reading artifact through metadata node 4 learner"
+"$NOKV_FS_BIN" \
+    --server-bind "$NODE4_ADDRESS" \
+    --object-backend rustfs \
+    --s3-bucket "$RUSTFS_BUCKET" \
+    --s3-endpoint "$RUSTFS_ENDPOINT" \
+    --s3-access-key-id "$RUSTFS_ACCESS_KEY" \
+    --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
+    cat /runs/1/checkpoint.txt >"$restored4"
+
 cmp "$payload" "$restored2"
 cmp "$payload" "$restored3"
+cmp "$payload" "$restored4"
 
-echo "NoKV metadata shared-log smoke passed: leader compacted, late voter auto-bootstrapped from checkpoint, and both followers read the artifact."
+echo "NoKV metadata shared-log smoke passed: leader compacted, late voter and learner auto-bootstrapped from checkpoint, and all replicas read the artifact."

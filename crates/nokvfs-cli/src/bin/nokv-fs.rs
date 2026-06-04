@@ -979,7 +979,7 @@ Object backends:\n\
   --metadata-log-term TERM        Shared metadata log term for serve\n\
   --metadata-log-voters CSV       Metadata voter node ids, e.g. 1,2,3\n\
   --metadata-log-learners CSV     Metadata learner node ids, e.g. 4,5\n\
-  --metadata-log-peer NODE=ADDR   Voter peer endpoint; repeat for each remote voter\n\
+  --metadata-log-peer NODE=ADDR   Metadata peer endpoint; repeat for remote voters and learners\n\
   --metadata-log-sync data|none   data fsyncs log records; none only flushes to the OS\n\
 \n\
 Defaults:\n\
