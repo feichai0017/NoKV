@@ -70,14 +70,15 @@ where
         };
         let projection = projection(request.parent, request.name, attr, Some(body));
         let old_generation = existing.body.as_ref().map(|body| body.generation);
-        if let Err(err) = self.commit_replace_projection_with_chunks(
-            CommandKind::ReplaceArtifact,
-            &projection,
-            &chunks,
+        if let Err(err) = self.commit_replace_projection_with_chunks(ReplaceProjectionCommit {
+            kind: CommandKind::ReplaceArtifact,
+            projection: &projection,
+            chunks: &chunks,
             dentry_version,
             old_generation,
             version,
-        ) {
+            path_index: None,
+        }) {
             return Err(MetadError::PublishArtifactFailed {
                 source: Box::new(err),
                 staged,
@@ -109,6 +110,7 @@ where
         Ok(PreparedArtifact {
             parent,
             name,
+            path: None,
             inode,
             generation: generation.get(),
             mtime_ms: now_ms,
@@ -120,8 +122,11 @@ where
     }
 
     pub fn prepare_artifact_create_path(&self, path: &str) -> Result<PreparedArtifact, MetadError> {
+        let components = parse_absolute_path(path)?;
         let (parent, name) = self.resolve_parent_path(path)?;
-        self.prepare_artifact_create(parent, name)
+        let mut prepared = self.prepare_artifact_create(parent, name)?;
+        prepared.path = Some(canonical_path(&components)?);
+        Ok(prepared)
     }
 
     pub fn prepare_artifact_replace(
@@ -140,6 +145,7 @@ where
         Ok(PreparedArtifact {
             parent,
             name,
+            path: None,
             inode: existing.attr.inode,
             generation: generation.get(),
             mtime_ms: now_ms,
@@ -155,7 +161,10 @@ where
         path: &str,
     ) -> Result<PreparedArtifact, MetadError> {
         let (parent, name) = self.resolve_parent_path(path)?;
-        self.prepare_artifact_replace(parent, name)
+        let components = parse_absolute_path(path)?;
+        let mut prepared = self.prepare_artifact_replace(parent, name)?;
+        prepared.path = Some(canonical_path(&components)?);
+        Ok(prepared)
     }
 
     pub fn publish_prepared_artifact(
@@ -196,14 +205,22 @@ where
                         && current_dentry_version == expected_dentry_version)
                         .then_some(existing)
                 });
-            self.commit_replace_projection_with_chunks(
-                CommandKind::ReplaceArtifact,
-                &projection,
-                &chunks,
-                expected_dentry_version,
-                prepared.old_generation,
+            self.commit_replace_projection_with_chunks(ReplaceProjectionCommit {
+                kind: CommandKind::ReplaceArtifact,
+                projection: &projection,
+                chunks: &chunks,
+                dentry_version: expected_dentry_version,
+                old_generation: prepared.old_generation,
                 version,
-            )?;
+                path_index: prepared
+                    .path
+                    .as_deref()
+                    .map(|path| {
+                        parse_absolute_path(path)
+                            .map(|components| path_index_key(self.mount, &components))
+                    })
+                    .transpose()?,
+            })?;
             Ok(RenameReplaceResult {
                 entry: projection.into(),
                 replaced,
@@ -214,11 +231,19 @@ where
                     "create artifact must not carry replace state".to_owned(),
                 ));
             }
-            self.commit_create_projection_with_chunks(
+            self.commit_create_projection_with_chunks_and_path_index(
                 CommandKind::PublishArtifact,
                 &projection,
                 &chunks,
                 version,
+                prepared
+                    .path
+                    .as_deref()
+                    .map(|path| {
+                        parse_absolute_path(path)
+                            .map(|components| path_index_key(self.mount, &components))
+                    })
+                    .transpose()?,
             )?;
             Ok(RenameReplaceResult {
                 entry: projection.into(),

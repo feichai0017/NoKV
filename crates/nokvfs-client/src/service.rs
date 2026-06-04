@@ -64,6 +64,7 @@ pub struct ClientPreparedArtifact {
     pub mount: u64,
     pub parent: InodeId,
     pub name: DentryName,
+    pub path: Option<String>,
     pub inode: InodeId,
     pub generation: u64,
     pub mtime_ms: u64,
@@ -932,6 +933,7 @@ fn wire_prepared_artifact(
         parent: inode_id(prepared.parent)?,
         name: DentryName::new(prepared.name.into_bytes())
             .map_err(|err| ClientError::InvalidName(err.to_string()))?,
+        path: prepared.path,
         inode: inode_id(prepared.inode)?,
         generation: prepared.generation,
         mtime_ms: prepared.mtime_ms,
@@ -949,6 +951,7 @@ fn prepared_artifact_to_wire(
         mount: prepared.mount,
         parent: prepared.parent.get(),
         name: rpc_name(&prepared.name)?,
+        path: prepared.path.clone(),
         inode: prepared.inode.get(),
         generation: prepared.generation,
         mtime_ms: prepared.mtime_ms,

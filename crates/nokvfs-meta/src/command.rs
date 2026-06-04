@@ -105,6 +105,10 @@ pub struct CommitResult {
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MetadataStoreStats {
+    pub get_total: u64,
+    pub scan_total: u64,
+    pub scan_key_visited_total: u64,
+    pub scan_key_returned_total: u64,
     pub commit_total: u64,
     pub dedupe_hit_total: u64,
     pub predicate_total: u64,
@@ -114,6 +118,8 @@ pub struct MetadataStoreStats {
     pub history_write_total: u64,
     pub watch_write_total: u64,
     pub dedupe_write_total: u64,
+    pub commit_prepare_ns_total: u64,
+    pub atomic_apply_ns_total: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

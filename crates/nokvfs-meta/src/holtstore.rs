@@ -7,6 +7,7 @@
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+use std::time::Instant;
 
 use crate::command::{
     CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
@@ -60,6 +61,10 @@ pub struct HoltMetadataStore {
 
 #[derive(Default)]
 struct HoltMetadataStoreCounters {
+    get_total: AtomicU64,
+    scan_total: AtomicU64,
+    scan_key_visited_total: AtomicU64,
+    scan_key_returned_total: AtomicU64,
     commit_total: AtomicU64,
     dedupe_hit_total: AtomicU64,
     predicate_total: AtomicU64,
@@ -69,6 +74,8 @@ struct HoltMetadataStoreCounters {
     history_write_total: AtomicU64,
     watch_write_total: AtomicU64,
     dedupe_write_total: AtomicU64,
+    commit_prepare_ns_total: AtomicU64,
+    atomic_apply_ns_total: AtomicU64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -194,6 +201,7 @@ impl MetadataStore for HoltMetadataStore {
         version: Version,
         _purpose: ReadPurpose,
     ) -> Result<Option<ReadItem>, MetadataError> {
+        self.stats.get_total.fetch_add(1, Ordering::Relaxed);
         read_visible(
             &self.current_tree(family)?,
             family,
@@ -204,6 +212,7 @@ impl MetadataStore for HoltMetadataStore {
     }
 
     fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
+        self.stats.scan_total.fetch_add(1, Ordering::Relaxed);
         let limit = if request.limit == 0 {
             usize::MAX
         } else {
@@ -215,27 +224,41 @@ impl MetadataStore for HoltMetadataStore {
 
         if request.prefix.is_empty() {
             for entry in current.range() {
-                if push_visible_scan_item(
+                let outcome = push_visible_scan_item(
                     entry,
                     request.family,
                     request.version,
                     &history,
                     &mut out,
                     limit,
-                )? {
+                )?;
+                self.stats
+                    .scan_key_visited_total
+                    .fetch_add(outcome.visited as u64, Ordering::Relaxed);
+                self.stats
+                    .scan_key_returned_total
+                    .fetch_add(outcome.returned as u64, Ordering::Relaxed);
+                if outcome.done {
                     break;
                 }
             }
         } else {
             for entry in current.range().prefix(&request.prefix) {
-                if push_visible_scan_item(
+                let outcome = push_visible_scan_item(
                     entry,
                     request.family,
                     request.version,
                     &history,
                     &mut out,
                     limit,
-                )? {
+                )?;
+                self.stats
+                    .scan_key_visited_total
+                    .fetch_add(outcome.visited as u64, Ordering::Relaxed);
+                self.stats
+                    .scan_key_returned_total
+                    .fetch_add(outcome.returned as u64, Ordering::Relaxed);
+                if outcome.done {
                     break;
                 }
             }
@@ -257,7 +280,12 @@ impl MetadataStore for HoltMetadataStore {
             return Ok(encoded);
         }
 
+        let prepare_start = Instant::now();
         let plan = self.plan_command(&command)?;
+        self.stats.commit_prepare_ns_total.fetch_add(
+            prepare_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
         self.commit_planned_command(command, plan)
     }
 
@@ -465,6 +493,7 @@ impl HoltMetadataStore {
         };
         let dedupe_result = encode_dedupe_result(&result);
 
+        let atomic_start = Instant::now();
         let committed = self
             .db
             .atomic(|batch| {
@@ -580,6 +609,10 @@ impl HoltMetadataStore {
                 );
             })
             .map_err(to_backend_error)?;
+        self.stats.atomic_apply_ns_total.fetch_add(
+            atomic_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
         if !committed {
             if let Some(encoded) = self
                 .current_tree(RecordFamily::CommandDedupe)?
@@ -629,6 +662,10 @@ impl HoltMetadataStore {
 impl HoltMetadataStoreCounters {
     fn snapshot(&self) -> MetadataStoreStats {
         MetadataStoreStats {
+            get_total: self.get_total.load(Ordering::Relaxed),
+            scan_total: self.scan_total.load(Ordering::Relaxed),
+            scan_key_visited_total: self.scan_key_visited_total.load(Ordering::Relaxed),
+            scan_key_returned_total: self.scan_key_returned_total.load(Ordering::Relaxed),
             commit_total: self.commit_total.load(Ordering::Relaxed),
             dedupe_hit_total: self.dedupe_hit_total.load(Ordering::Relaxed),
             predicate_total: self.predicate_total.load(Ordering::Relaxed),
@@ -638,6 +675,8 @@ impl HoltMetadataStoreCounters {
             history_write_total: self.history_write_total.load(Ordering::Relaxed),
             watch_write_total: self.watch_write_total.load(Ordering::Relaxed),
             dedupe_write_total: self.dedupe_write_total.load(Ordering::Relaxed),
+            commit_prepare_ns_total: self.commit_prepare_ns_total.load(Ordering::Relaxed),
+            atomic_apply_ns_total: self.atomic_apply_ns_total.load(Ordering::Relaxed),
         }
     }
 }
@@ -708,6 +747,12 @@ fn decode_visible_value(
     Ok(None)
 }
 
+struct ScanPushOutcome {
+    done: bool,
+    visited: usize,
+    returned: usize,
+}
+
 fn push_visible_scan_item(
     entry: Result<RangeEntry, holt::Error>,
     family: RecordFamily,
@@ -715,10 +760,15 @@ fn push_visible_scan_item(
     history: &Tree,
     out: &mut Vec<ScanItem>,
     limit: usize,
-) -> Result<bool, MetadataError> {
+) -> Result<ScanPushOutcome, MetadataError> {
     let RangeEntry::Key { key, value, .. } = entry.map_err(to_backend_error)? else {
-        return Ok(false);
+        return Ok(ScanPushOutcome {
+            done: false,
+            visited: 0,
+            returned: 0,
+        });
     };
+    let mut returned = 0_usize;
     if let Some((commit, visible)) =
         decode_visible_value(family, &key, Some(&value), version, history)?
     {
@@ -727,8 +777,13 @@ fn push_visible_scan_item(
             value: Value(visible),
             version: commit,
         });
+        returned = 1;
     }
-    Ok(out.len() >= limit)
+    Ok(ScanPushOutcome {
+        done: out.len() >= limit,
+        visited: 1,
+        returned,
+    })
 }
 
 fn encode_current_value(version: Version, value: &[u8]) -> Vec<u8> {

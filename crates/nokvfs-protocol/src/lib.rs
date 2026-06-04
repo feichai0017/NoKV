@@ -281,6 +281,8 @@ pub struct WirePreparedArtifact {
     pub mount: u64,
     pub parent: u64,
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub path: Option<String>,
     pub inode: u64,
     pub generation: u64,
     pub mtime_ms: u64,

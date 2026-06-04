@@ -32,8 +32,8 @@ use crate::layout::{
     decode_object_gc_record, decode_snapshot_pin, decode_watch_event, dentry_key, dentry_prefix,
     encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
     encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
-    encode_watch_event, gc_object_key, gc_queue_prefix, inode_key, snapshot_pin_key,
-    snapshot_pin_prefix, watch_log_prefix,
+    encode_watch_event, gc_object_key, gc_queue_prefix, inode_key, path_index_key,
+    path_index_prefix, snapshot_pin_key, snapshot_pin_prefix, watch_log_prefix,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, put_chunked_ranges,
@@ -83,6 +83,16 @@ struct StagedArtifactBody {
     body: BodyDescriptor,
     chunks: Vec<ChunkManifest>,
     staged: StagedObjectSet,
+}
+
+struct ReplaceProjectionCommit<'a> {
+    kind: CommandKind,
+    projection: &'a DentryProjection,
+    chunks: &'a [ChunkManifest],
+    dentry_version: Version,
+    old_generation: Option<u64>,
+    version: Version,
+    path_index: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +178,7 @@ impl UpdateAttr {
 pub struct PreparedArtifact {
     pub parent: InodeId,
     pub name: DentryName,
+    pub path: Option<String>,
     pub inode: InodeId,
     pub generation: u64,
     pub mtime_ms: u64,
@@ -434,6 +445,19 @@ fn delete_mutation(family: RecordFamily, key: Vec<u8>) -> Mutation {
     }
 }
 
+fn put_projection_mutation(
+    family: RecordFamily,
+    key: Vec<u8>,
+    projection: &DentryProjection,
+) -> Mutation {
+    Mutation {
+        family,
+        key,
+        op: MutationOp::Put,
+        value: Some(Value(encode_dentry_projection(projection))),
+    }
+}
+
 fn ensure_unique_names(names: &[DentryName]) -> Result<(), MetadError> {
     let mut seen = HashSet::with_capacity(names.len());
     for name in names {
@@ -445,6 +469,22 @@ fn ensure_unique_names(names: &[DentryName]) -> Result<(), MetadError> {
         }
     }
     Ok(())
+}
+
+fn canonical_path(components: &[DentryName]) -> Result<String, MetadError> {
+    if components.is_empty() {
+        return Ok("/".to_owned());
+    }
+    let mut out = String::new();
+    for component in components {
+        out.push('/');
+        out.push_str(
+            std::str::from_utf8(component.as_bytes()).map_err(|_| {
+                MetadError::InvalidPath("path indexes require utf-8 paths".to_owned())
+            })?,
+        );
+    }
+    Ok(out)
 }
 
 fn create_watch_kind(kind: CommandKind) -> WatchEventKind {

@@ -169,6 +169,11 @@ where
         path: &str,
         version: Version,
     ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
+        if root == InodeId::root() {
+            if let Some(indexed) = self.lookup_path_index_at_version(path, version)? {
+                return Ok(Some(indexed));
+            }
+        }
         let mut components = parse_absolute_path(path)?;
         let Some(name) = components.pop() else {
             return Ok(None);
@@ -176,6 +181,47 @@ where
         let parent =
             self.resolve_components_as_directory_from_at_version(root, &components, version)?;
         self.lookup_plus_at_version(parent, &name, version)
+    }
+
+    pub(super) fn lookup_path_index_at_version(
+        &self,
+        path: &str,
+        version: Version,
+    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
+        let components = parse_absolute_path(path)?;
+        let Some((name, parent_components)) = components.split_last() else {
+            return Ok(None);
+        };
+        let key = path_index_key(self.mount, &components);
+        let Some(item) = self.metadata.get_versioned(
+            RecordFamily::PathIndex,
+            &key,
+            version,
+            ReadPurpose::UserStrong,
+        )?
+        else {
+            return Ok(None);
+        };
+        let indexed: DentryWithAttr = crate::layout::decode_dentry_projection(&item.value.0)
+            .map_err(|err| MetadError::Codec(err.to_string()))?
+            .into();
+        let parent = self.resolve_components_as_directory_from_at_version(
+            InodeId::root(),
+            parent_components,
+            version,
+        )?;
+        if parent != indexed.dentry.parent || *name != indexed.dentry.name {
+            return Ok(None);
+        }
+        let Some((canonical, canonical_version)) =
+            self.lookup_plus_at_version(parent, name, version)?
+        else {
+            return Ok(None);
+        };
+        if canonical_version == item.version && canonical == indexed {
+            return Ok(Some((canonical, canonical_version)));
+        }
+        Ok(None)
     }
 
     pub(super) fn stat_path_from_at_version(

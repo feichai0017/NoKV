@@ -113,6 +113,82 @@ fn path_methods_resolve_current_namespace_on_server_side() {
 }
 
 #[test]
+fn path_api_writes_and_uses_validated_path_index() {
+    let objects = MemoryObjectStore::new();
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects);
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let artifact = service
+        .create_file_path("/runs/checkpoint.bin", 0o644, 1000, 1000)
+        .unwrap();
+    let components = parse_absolute_path("/runs/checkpoint.bin").unwrap();
+    let key = path_index_key(MountId::new(1).unwrap(), &components);
+    let indexed = metadata
+        .get(
+            RecordFamily::PathIndex,
+            &key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .expect("path index entry");
+    let projection = decode_dentry_projection(&indexed.0).unwrap();
+    assert_eq!(DentryWithAttr::from(projection), artifact);
+
+    let before = metadata.metadata_store_stats();
+    assert_eq!(
+        service.lookup_path("/runs/checkpoint.bin").unwrap(),
+        Some(artifact)
+    );
+    let after = metadata.metadata_store_stats();
+    assert!(after.get_total > before.get_total);
+}
+
+#[test]
+fn directory_rename_removes_descendant_path_index_entries() {
+    let objects = MemoryObjectStore::new();
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects);
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let artifact = service
+        .create_file_path("/runs/checkpoint.bin", 0o644, 1000, 1000)
+        .unwrap();
+    let old_components = parse_absolute_path("/runs/checkpoint.bin").unwrap();
+    let old_key = path_index_key(MountId::new(1).unwrap(), &old_components);
+    assert!(metadata
+        .get(
+            RecordFamily::PathIndex,
+            &old_key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_some());
+
+    service.rename_path("/runs", "/archive").unwrap();
+
+    assert!(metadata
+        .get(
+            RecordFamily::PathIndex,
+            &old_key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_none());
+    assert!(matches!(
+        service.lookup_path("/runs/checkpoint.bin"),
+        Err(MetadError::NotFound)
+    ));
+    assert_eq!(
+        service.lookup_path("/archive/checkpoint.bin").unwrap(),
+        Some(artifact)
+    );
+}
+
+#[test]
 fn create_file_publishes_metadata_without_body_descriptor() {
     let service = service();
     let name = DentryName::new(b"empty.txt".to_vec()).unwrap();
@@ -351,7 +427,7 @@ fn create_files_in_dir_coalesces_into_one_metadata_command() {
     let after = metadata.metadata_store_stats();
     assert_eq!(entries.len(), 2);
     assert_eq!(after.commit_total - before.commit_total, 1);
-    assert_eq!(after.current_put_total - before.current_put_total, 4);
+    assert_eq!(after.current_put_total - before.current_put_total, 6);
     assert_eq!(after.current_delete_total - before.current_delete_total, 0);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
     assert_eq!(after.watch_write_total - before.watch_write_total, 2);

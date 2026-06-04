@@ -778,6 +778,7 @@ fn wire_prepared_artifact(mount: MountId, prepared: &PreparedArtifact) -> WirePr
         parent: prepared.parent.get(),
         name: String::from_utf8(prepared.name.as_bytes().to_vec())
             .expect("metadata prepared artifact names are utf-8"),
+        path: prepared.path.clone(),
         inode: prepared.inode.get(),
         generation: prepared.generation,
         mtime_ms: prepared.mtime_ms,
@@ -793,6 +794,7 @@ fn prepared_artifact(prepared: WirePreparedArtifact) -> Result<PreparedArtifact,
     Ok(PreparedArtifact {
         parent: inode_id(prepared.parent)?,
         name: dentry_name(prepared.name)?,
+        path: prepared.path,
         inode: inode_id(prepared.inode)?,
         generation: prepared.generation,
         mtime_ms: prepared.mtime_ms,

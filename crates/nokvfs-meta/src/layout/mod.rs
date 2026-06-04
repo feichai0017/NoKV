@@ -10,6 +10,7 @@ use nokvfs_types::{DentryName, InodeId, MountId, RecordFamily};
 
 pub const U64_WIDTH: usize = 8;
 const U32_WIDTH: usize = 4;
+const PATH_INDEX_TERMINATOR: u8 = 0xff;
 
 pub use codec::{
     decode_allocator_state, decode_body_descriptor, decode_chunk_manifest,
@@ -57,6 +58,22 @@ pub fn parent_key(mount: MountId, child: InodeId, parent: InodeId, name: &Dentry
     push_u64(&mut out, child.get());
     push_u64(&mut out, parent.get());
     out.extend_from_slice(name.as_bytes());
+    out
+}
+
+pub fn path_index_key(mount: MountId, components: &[DentryName]) -> Vec<u8> {
+    let mut out = path_index_prefix(mount, components);
+    out.push(PATH_INDEX_TERMINATOR);
+    out
+}
+
+pub fn path_index_prefix(mount: MountId, components: &[DentryName]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH + components.len() * U32_WIDTH);
+    push_u64(&mut out, mount.get());
+    for component in components {
+        push_u32(&mut out, component.as_bytes().len() as u32);
+        out.extend_from_slice(component.as_bytes());
+    }
     out
 }
 
@@ -165,6 +182,10 @@ fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_be_bytes());
 }
 
+fn push_u32(out: &mut Vec<u8>, value: u32) {
+    out.extend_from_slice(&value.to_be_bytes());
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -232,6 +253,18 @@ mod tests {
     #[test]
     fn big_endian_ids_keep_numeric_order() {
         assert!(inode_key(mount(), inode(2)) < inode_key(mount(), inode(10)));
+    }
+
+    #[test]
+    fn path_index_keys_are_component_prefix_safe() {
+        let parent = path_index_prefix(mount(), &[name(b"runs")]);
+        let parent_exact = path_index_key(mount(), &[name(b"runs")]);
+        let child = path_index_key(mount(), &[name(b"runs"), name(b"ckpt")]);
+        let sibling_prefix = path_index_key(mount(), &[name(b"runs-long")]);
+
+        assert!(child.starts_with(&parent));
+        assert!(!child.starts_with(&parent_exact));
+        assert!(!sibling_prefix.starts_with(&parent));
     }
 
     #[test]

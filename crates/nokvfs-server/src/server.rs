@@ -109,7 +109,11 @@ impl Server {
 
 fn metadata_store_json(stats: &nokvfs_meta::MetadataStoreStats) -> String {
     format!(
-        "{{\"commit_total\":{},\"dedupe_hit_total\":{},\"predicate_total\":{},\"prefix_empty_predicate_total\":{},\"current_put_total\":{},\"current_delete_total\":{},\"history_write_total\":{},\"watch_write_total\":{},\"dedupe_write_total\":{}}}",
+        "{{\"get_total\":{},\"scan_total\":{},\"scan_key_visited_total\":{},\"scan_key_returned_total\":{},\"commit_total\":{},\"dedupe_hit_total\":{},\"predicate_total\":{},\"prefix_empty_predicate_total\":{},\"current_put_total\":{},\"current_delete_total\":{},\"history_write_total\":{},\"watch_write_total\":{},\"dedupe_write_total\":{},\"commit_prepare_ns_total\":{},\"atomic_apply_ns_total\":{}}}",
+        stats.get_total,
+        stats.scan_total,
+        stats.scan_key_visited_total,
+        stats.scan_key_returned_total,
         stats.commit_total,
         stats.dedupe_hit_total,
         stats.predicate_total,
@@ -119,6 +123,8 @@ fn metadata_store_json(stats: &nokvfs_meta::MetadataStoreStats) -> String {
         stats.history_write_total,
         stats.watch_write_total,
         stats.dedupe_write_total,
+        stats.commit_prepare_ns_total,
+        stats.atomic_apply_ns_total,
     )
 }
 
