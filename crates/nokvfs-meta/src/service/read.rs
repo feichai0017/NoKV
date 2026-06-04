@@ -314,6 +314,13 @@ where
         match item {
             DelimitedScanItem::Key(item) => {
                 let name = path_index_child_name(prefix, &item.key, false)?;
+                if let Some(cached) =
+                    self.cached_validated_path_index(&item.key, item.version, version)?
+                {
+                    if cached.dentry.parent == parent && cached.dentry.name == name {
+                        return Ok(Some(cached));
+                    }
+                }
                 let indexed: DentryWithAttr =
                     crate::layout::decode_dentry_projection(&item.value.0)
                         .map_err(|err| MetadError::Codec(err.to_string()))?
@@ -324,6 +331,12 @@ where
                     return Ok(None);
                 };
                 if canonical_version == item.version && canonical == indexed {
+                    self.remember_validated_path_index(
+                        &item.key,
+                        item.version,
+                        version,
+                        &canonical,
+                    )?;
                     Ok(Some(canonical))
                 } else {
                     Ok(None)
@@ -462,6 +475,54 @@ where
         }
     }
 
+    fn cached_validated_path_index(
+        &self,
+        index_key: &[u8],
+        index_version: Version,
+        read_version: Version,
+    ) -> Result<Option<DentryWithAttr>, MetadError> {
+        let key = self.path_index_validation_cache_key(index_key, index_version, read_version);
+        let cache = self.path_index_validation_cache.lock().map_err(|err| {
+            MetadataError::Backend(format!(
+                "metadata path-index validation cache poisoned: {err}"
+            ))
+        })?;
+        Ok(cache.get(&key).cloned())
+    }
+
+    fn remember_validated_path_index(
+        &self,
+        index_key: &[u8],
+        index_version: Version,
+        read_version: Version,
+        entry: &DentryWithAttr,
+    ) -> Result<(), MetadError> {
+        let key = self.path_index_validation_cache_key(index_key, index_version, read_version);
+        let mut cache = self.path_index_validation_cache.lock().map_err(|err| {
+            MetadataError::Backend(format!(
+                "metadata path-index validation cache poisoned: {err}"
+            ))
+        })?;
+        if cache.len() >= PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, entry.clone());
+        Ok(())
+    }
+
+    fn path_index_validation_cache_key(
+        &self,
+        index_key: &[u8],
+        index_version: Version,
+        read_version: Version,
+    ) -> PathIndexValidationCacheKey {
+        PathIndexValidationCacheKey {
+            read_version: read_version.get(),
+            index_version: index_version.get(),
+            index_key: index_key.to_vec(),
+        }
+    }
+
     pub(super) fn lookup_path_from_at_version_for_purpose(
         &self,
         root: InodeId,
@@ -520,6 +581,10 @@ where
             self.path_index_miss_total.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         };
+        if let Some(cached) = self.cached_validated_path_index(&key, item.version, version)? {
+            self.path_index_hit_total.fetch_add(1, Ordering::Relaxed);
+            return Ok(Some((cached, item.version)));
+        }
         let indexed: DentryWithAttr = crate::layout::decode_dentry_projection(&item.value.0)
             .map_err(|err| MetadError::Codec(err.to_string()))?
             .into();
@@ -547,6 +612,7 @@ where
             return Ok(None);
         };
         if canonical_version == item.version && canonical == indexed {
+            self.remember_validated_path_index(&key, item.version, version, &canonical)?;
             self.path_index_hit_total.fetch_add(1, Ordering::Relaxed);
             return Ok(Some((canonical, canonical_version)));
         }

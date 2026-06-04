@@ -534,6 +534,7 @@ fn path_resolution_cache_reuses_parent_directory_for_indexed_stats() {
     publish_path_artifact(&service, "/runs/a.bin", "runs/a.bin", b"a");
     publish_path_artifact(&service, "/runs/b.bin", "runs/b.bin", b"b");
     service.path_resolution_cache.lock().unwrap().clear();
+    service.path_index_validation_cache.lock().unwrap().clear();
 
     let before_store = metadata.metadata_store_stats();
     let before_service = service.metadata_service_stats();
@@ -558,6 +559,33 @@ fn path_resolution_cache_reuses_parent_directory_for_indexed_stats() {
 }
 
 #[test]
+fn validated_path_index_cache_reuses_stat_validation_for_indexed_list() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let first = publish_path_artifact(&service, "/runs/a.bin", "runs/a.bin", b"a");
+    let second = publish_path_artifact(&service, "/runs/b.bin", "runs/b.bin", b"b");
+    service.path_resolution_cache.lock().unwrap().clear();
+    service.path_index_validation_cache.lock().unwrap().clear();
+
+    assert!(service.stat_path("/runs/a.bin").unwrap().is_some());
+    assert!(service.stat_path("/runs/b.bin").unwrap().is_some());
+
+    let before_store = metadata.metadata_store_stats();
+    let page = service.list_indexed_path_page("/runs", None, 10).unwrap();
+    let after_store = metadata.metadata_store_stats();
+
+    assert_eq!(page.entries, vec![first, second]);
+    assert_eq!(page.next_cursor, None);
+    assert_eq!(after_store.get_total - before_store.get_total, 0);
+}
+
+#[test]
 fn stale_path_index_falls_back_to_canonical_namespace() {
     let service = service();
     let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
@@ -579,6 +607,8 @@ fn stale_path_index_falls_back_to_canonical_namespace() {
         )
         .unwrap()
         .entry;
+
+    assert!(service.stat_path("/runs/checkpoint.bin").unwrap().is_some());
 
     service
         .rename(runs.attr.inode, &name, archive.attr.inode, name.clone())

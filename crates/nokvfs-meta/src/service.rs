@@ -58,6 +58,7 @@ const ALLOCATOR_VERSION_RESERVATION: u64 = 1024;
 const ALLOCATOR_INODE_RESERVATION: u64 = 1024;
 const BODY_DIGEST_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 const PATH_RESOLUTION_CACHE_MAX_ENTRIES: usize = 4096;
+const PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES: usize = 4096;
 
 const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 13] = [
     RecordFamily::System,
@@ -88,6 +89,13 @@ struct PathResolutionCacheKey {
     root: u64,
     version: u64,
     components_key: Vec<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PathIndexValidationCacheKey {
+    read_version: u64,
+    index_version: u64,
+    index_key: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -305,6 +313,7 @@ pub struct NoKvFs<M, O> {
     objects: O,
     allocator_gate: Mutex<()>,
     path_resolution_cache: Mutex<BTreeMap<PathResolutionCacheKey, InodeId>>,
+    path_index_validation_cache: Mutex<BTreeMap<PathIndexValidationCacheKey, DentryWithAttr>>,
     clock: AtomicU64,
     reserved_version: AtomicU64,
     next_inode: AtomicU64,
