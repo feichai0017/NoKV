@@ -449,15 +449,15 @@ fn bench_mdtest_easy(
     for entry in client.mkdirs(&dir_paths, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)? {
         checksum = checksum.wrapping_add(entry.attr.inode.get());
     }
+    let mut file_paths = Vec::with_capacity(shape.dirs * shape.files_per_dir);
     for dir in 0..shape.dirs {
         let dir_path = format!("/mdtest-easy/dir-{dir:05}");
         checksum = checksum.wrapping_add(dir as u64);
-        let paths = (0..shape.files_per_dir)
-            .map(|file| format!("{dir_path}/file-{file:05}"))
-            .collect::<Vec<_>>();
-        for entry in client.create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)? {
-            checksum = checksum.wrapping_add(entry.attr.inode.get());
-        }
+        file_paths
+            .extend((0..shape.files_per_dir).map(|file| format!("{dir_path}/file-{file:05}")));
+    }
+    for entry in client.create_files(&file_paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)? {
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
     }
     let operations = shape.dirs + shape.dirs * shape.files_per_dir + 1;
     Ok(row(RowInput {

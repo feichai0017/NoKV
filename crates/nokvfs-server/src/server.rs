@@ -456,7 +456,7 @@ pub(crate) mod tests {
     use nokvfs_types::MountId;
     use tempfile::tempdir;
 
-    fn test_options(root: &Path, metadata_log_path: Option<PathBuf>) -> ServerOptions {
+    pub(crate) fn test_options(root: &Path, metadata_log_path: Option<PathBuf>) -> ServerOptions {
         ServerOptions {
             bind: crate::options::DEFAULT_SERVER_BIND,
             mount: MountId::new(1).unwrap(),

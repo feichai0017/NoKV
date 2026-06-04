@@ -3,7 +3,7 @@ use std::net::TcpStream;
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 
-use nokvfs_meta::{DentryWithAttr, MetadError, PreparedArtifact};
+use nokvfs_meta::{CreateInDirPathBatch, DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_name_cursor, decode_request, encode_envelope, encode_name_cursor, MetadataProtocolError,
@@ -219,29 +219,38 @@ fn execute_batch(
             continue;
         };
 
-        let mut names = vec![parts.name.clone()];
+        let kind = parts.kind;
+        let mut groups = Vec::new();
+        let mut group = CreatePathGroup::from_parts(parts);
         while let Some(next) = iter.peek() {
             let Some(next_parts) = create_path_parts(next) else {
                 break;
             };
-            if !parts.can_coalesce_with(&next_parts) {
+            if next_parts.kind != kind {
                 break;
             }
-            names.push(next_parts.name);
             iter.next();
+            if group.can_absorb(&next_parts) {
+                group.names.push(next_parts.name);
+            } else {
+                groups.push(group);
+                group = CreatePathGroup::from_parts(next_parts);
+            }
         }
-        if names.len() == 1 {
-            results.push(execute_envelope(server, request));
-        } else {
+        groups.push(group);
+        if groups.len() == 1 {
+            let group = groups.pop().expect("one create group");
             results.extend(create_path_batch_envelopes(
                 server,
-                parts.kind,
-                &parts.parent_path,
-                names,
-                parts.mode,
-                parts.uid,
-                parts.gid,
+                kind,
+                &group.parent_path,
+                group.names,
+                group.mode,
+                group.uid,
+                group.gid,
             ));
+        } else {
+            results.extend(create_path_group_envelopes(server, kind, groups));
         }
     }
     Ok(MetadataRpcResult::Batch { results })
@@ -334,13 +343,30 @@ struct CreatePathParts {
     gid: u32,
 }
 
-impl CreatePathParts {
-    fn can_coalesce_with(&self, other: &Self) -> bool {
-        self.kind == other.kind
-            && self.parent_path == other.parent_path
-            && self.mode == other.mode
-            && self.uid == other.uid
-            && self.gid == other.gid
+struct CreatePathGroup {
+    parent_path: String,
+    names: Vec<String>,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+}
+
+impl CreatePathGroup {
+    fn from_parts(parts: CreatePathParts) -> Self {
+        Self {
+            parent_path: parts.parent_path,
+            names: vec![parts.name],
+            mode: parts.mode,
+            uid: parts.uid,
+            gid: parts.gid,
+        }
+    }
+
+    fn can_absorb(&self, parts: &CreatePathParts) -> bool {
+        self.parent_path == parts.parent_path
+            && self.mode == parts.mode
+            && self.uid == parts.uid
+            && self.gid == parts.gid
     }
 }
 
@@ -388,6 +414,79 @@ fn create_path_batch_envelopes(
                 execute_envelope(
                     server,
                     create_path_request(kind, parent_path, &name, mode, uid, gid),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn create_path_group_envelopes(
+    server: &Server,
+    kind: CreatePathKind,
+    groups: Vec<CreatePathGroup>,
+) -> Vec<MetadataRpcEnvelope> {
+    let parsed = groups
+        .iter()
+        .map(|group| {
+            let names = group
+                .names
+                .iter()
+                .map(|name| dentry_name(name.clone()))
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(ServerError::Metadata)?;
+            Ok(CreateInDirPathBatch {
+                parent_path: group.parent_path.clone(),
+                names,
+                mode: group.mode,
+                uid: group.uid,
+                gid: group.gid,
+            })
+        })
+        .collect::<Result<Vec<_>, ServerError>>();
+
+    let committed = parsed.map(|batches| {
+        let results: Vec<Result<Vec<DentryWithAttr>, MetadError>> = match kind {
+            CreatePathKind::Directory => server.service().create_dir_batches_in_dir_path(batches),
+            CreatePathKind::File => server.service().create_file_batches_in_dir_path(batches),
+        };
+        results
+    });
+
+    match committed {
+        Ok(group_results) => groups
+            .into_iter()
+            .zip(group_results)
+            .flat_map(|(group, result)| match result {
+                Ok(entries) => entries
+                    .iter()
+                    .map(|entry| {
+                        ok_envelope(MetadataRpcResult::Dentry {
+                            entry: Some(Box::new(wire_dentry(entry))),
+                        })
+                    })
+                    .collect::<Vec<_>>(),
+                Err(_) => create_path_batch_envelopes(
+                    server,
+                    kind,
+                    &group.parent_path,
+                    group.names,
+                    group.mode,
+                    group.uid,
+                    group.gid,
+                ),
+            })
+            .collect(),
+        Err(_) => groups
+            .into_iter()
+            .flat_map(|group| {
+                create_path_batch_envelopes(
+                    server,
+                    kind,
+                    &group.parent_path,
+                    group.names,
+                    group.mode,
+                    group.uid,
+                    group.gid,
                 )
             })
             .collect(),
@@ -936,11 +1035,12 @@ fn protocol_error(err: MetadataProtocolError) -> MetadError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::tests::test_server;
+    use crate::server::tests::{test_options, test_server};
     use nokvfs_protocol::{
         decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor,
         WireChunkManifest, WireMetadataError,
     };
+    use tempfile::tempdir;
 
     fn request_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
         let body = encode_request(&request).unwrap();
@@ -1178,6 +1278,68 @@ mod tests {
             other => panic!("unexpected readdir result: {other:?}"),
         };
         assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn rpc_batch_coalesces_multi_parent_create_files_into_shared_log_entry() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs/a".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs/b".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::Batch {
+                requests: vec![
+                    MetadataRpcRequest::CreateFilePath {
+                        path: "/runs/a/one.bin".to_owned(),
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                    MetadataRpcRequest::CreateFilePath {
+                        path: "/runs/b/two.bin".to_owned(),
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                ],
+            },
+        );
+
+        let results = match envelope.result.unwrap() {
+            MetadataRpcResult::Batch { results } => results,
+            other => panic!("unexpected batch result: {other:?}"),
+        };
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.ok));
+        assert!(server.stats_json().contains("\"max_commands_per_entry\":2"));
     }
 
     #[test]

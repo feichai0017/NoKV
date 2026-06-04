@@ -99,6 +99,15 @@ struct ReplaceProjectionCommit<'a> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreateInDirPathBatch {
+    pub parent_path: String,
+    pub names: Vec<DentryName>,
+    pub mode: u32,
+    pub uid: u32,
+    pub gid: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DentryWithAttr {
     pub dentry: DentryRecord,
     pub attr: InodeAttr,

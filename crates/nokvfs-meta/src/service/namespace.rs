@@ -1,5 +1,10 @@
 use super::*;
 
+struct PreparedCreateBatch {
+    entries: Vec<DentryWithAttr>,
+    command: MetadataCommand,
+}
+
 impl<M, O> NoKvFs<M, O>
 where
     M: MetadataStore,
@@ -408,6 +413,128 @@ where
         )?;
         self.record_create_dirs_batch(projections.len());
         Ok(projections.into_iter().map(Into::into).collect())
+    }
+
+    pub fn create_file_batches_in_dir_path(
+        &self,
+        batches: Vec<CreateInDirPathBatch>,
+    ) -> Vec<Result<Vec<DentryWithAttr>, MetadError>> {
+        self.create_batches_in_dir_path(CommandKind::CreateFiles, batches)
+    }
+
+    pub fn create_dir_batches_in_dir_path(
+        &self,
+        batches: Vec<CreateInDirPathBatch>,
+    ) -> Vec<Result<Vec<DentryWithAttr>, MetadError>> {
+        self.create_batches_in_dir_path(CommandKind::CreateDir, batches)
+    }
+
+    fn create_batches_in_dir_path(
+        &self,
+        kind: CommandKind,
+        batches: Vec<CreateInDirPathBatch>,
+    ) -> Vec<Result<Vec<DentryWithAttr>, MetadError>> {
+        let mut results = Vec::with_capacity(batches.len());
+        results.resize_with(batches.len(), || None);
+        let mut prepared = Vec::new();
+        for (index, batch) in batches.into_iter().enumerate() {
+            if batch.names.is_empty() {
+                results[index] = Some(Ok(Vec::new()));
+                continue;
+            }
+            match self.prepare_create_batch_in_dir_path(kind, batch) {
+                Ok(batch) => prepared.push((index, batch)),
+                Err(err) => results[index] = Some(Err(err)),
+            }
+        }
+
+        let commands = prepared
+            .iter()
+            .map(|(_, batch)| batch.command.clone())
+            .collect::<Vec<_>>();
+        let committed = self.metadata.commit_independent_batch(&commands);
+        for ((index, batch), result) in prepared.into_iter().zip(committed) {
+            match result {
+                Ok(_) => {
+                    self.record_create_batch(kind, batch.entries.len());
+                    results[index] = Some(Ok(batch.entries));
+                }
+                Err(err) => results[index] = Some(Err(err.into())),
+            }
+        }
+
+        results
+            .into_iter()
+            .map(|result| {
+                result.unwrap_or_else(|| {
+                    Err(
+                        MetadataError::Backend("batched create result was not recorded".to_owned())
+                            .into(),
+                    )
+                })
+            })
+            .collect()
+    }
+
+    fn prepare_create_batch_in_dir_path(
+        &self,
+        kind: CommandKind,
+        batch: CreateInDirPathBatch,
+    ) -> Result<PreparedCreateBatch, MetadError> {
+        ensure_unique_names(&batch.names)?;
+        let parent_components = parse_absolute_path(&batch.parent_path)?;
+        let parent = self.resolve_components_as_directory(&parent_components)?;
+        let version = self.next_version()?;
+        let inodes = self.next_inodes(batch.names.len())?;
+        let path_keys = batch
+            .names
+            .iter()
+            .map(|name| {
+                let mut components = parent_components.clone();
+                components.push(name.clone());
+                path_index_key(self.mount, &components)
+            })
+            .collect::<Vec<_>>();
+        let now_ms = current_time_ms();
+        let projections = batch
+            .names
+            .into_iter()
+            .zip(inodes)
+            .map(|(name, inode)| {
+                let attr = match kind {
+                    CommandKind::CreateDir => {
+                        directory_attr(inode, batch.mode, batch.uid, batch.gid, version.get())
+                    }
+                    CommandKind::CreateFiles => InodeAttr {
+                        inode,
+                        file_type: FileType::File,
+                        mode: batch.mode,
+                        uid: batch.uid,
+                        gid: batch.gid,
+                        size: 0,
+                        generation: version.get(),
+                        mtime_ms: now_ms,
+                        ctime_ms: now_ms,
+                    },
+                    _ => unreachable!("create batch only supports files and directories"),
+                };
+                projection(parent, name, attr, None)
+            })
+            .collect::<Vec<_>>();
+        let command =
+            self.create_projections_command(kind, &projections, version, Some(&path_keys))?;
+        Ok(PreparedCreateBatch {
+            entries: projections.into_iter().map(Into::into).collect(),
+            command,
+        })
+    }
+
+    fn record_create_batch(&self, kind: CommandKind, entries: usize) {
+        match kind {
+            CommandKind::CreateDir => self.record_create_dirs_batch(entries),
+            CommandKind::CreateFiles => self.record_create_files_batch(entries),
+            _ => {}
+        }
     }
 
     pub fn create_files_in_dir(
@@ -919,8 +1046,22 @@ where
         version: Version,
         path_indexes: Option<&[Vec<u8>]>,
     ) -> Result<(), MetadError> {
+        let command = self.create_projections_command(kind, projections, version, path_indexes)?;
+        self.commit_metadata(command)?;
+        Ok(())
+    }
+
+    fn create_projections_command(
+        &self,
+        kind: CommandKind,
+        projections: &[DentryProjection],
+        version: Version,
+        path_indexes: Option<&[Vec<u8>]>,
+    ) -> Result<MetadataCommand, MetadError> {
         let Some(first) = projections.first() else {
-            return Ok(());
+            return Err(MetadError::InvalidPath(
+                "batched create requires at least one projection".to_owned(),
+            ));
         };
         if let Some(path_indexes) = path_indexes {
             if path_indexes.len() != projections.len() {
@@ -984,7 +1125,7 @@ where
                 },
             ));
         }
-        self.commit_metadata(MetadataCommand {
+        Ok(MetadataCommand {
             request_id: request_id(kind_name(kind), self.mount, parent, version),
             kind,
             read_version: predecessor(version)?,
@@ -994,8 +1135,7 @@ where
             predicates,
             mutations,
             watch,
-        })?;
-        Ok(())
+        })
     }
 
     fn path_index_delete_mutations(&self, prefix: &[u8]) -> Result<Vec<Mutation>, MetadError> {

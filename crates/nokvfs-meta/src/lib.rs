@@ -23,8 +23,8 @@ pub use gc::{
 };
 pub use holtstore::HoltMetadataStore;
 pub use service::{
-    BodyReadPlan, DentryWithAttr, MetadError, MetadataServiceStats, NoKvFs, ObjectTransferStats,
-    PendingObjectCleanupOutcome, PreparedArtifact, PublishArtifact, PublishArtifactRange,
-    PublishArtifactSession, PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult,
-    UpdateAttr, XattrSetMode,
+    BodyReadPlan, CreateInDirPathBatch, DentryWithAttr, MetadError, MetadataServiceStats, NoKvFs,
+    ObjectTransferStats, PendingObjectCleanupOutcome, PreparedArtifact, PublishArtifact,
+    PublishArtifactRange, PublishArtifactSession, PublishArtifactStagedSession, ReadDirPlusPage,
+    RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
