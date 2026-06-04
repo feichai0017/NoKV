@@ -49,8 +49,8 @@ Environment:
   NOKV_FUSE_SMOKE_RUSTFS_BUCKET        bucket name (default: nokv-fuse-smoke)
 
 The smoke covers mkdir, file write/read, file fsync, directory fsync, rename,
-readdir, truncate, symlink/readlink, explicit xattr errors, access(2), rm, and
-rmdir through the mounted FUSE filesystem.
+readdir, truncate, symlink/readlink, xattr roundtrip, access(2), rm, and rmdir
+through the mounted FUSE filesystem.
 EOF
 }
 
@@ -185,6 +185,8 @@ run_python_smoke() {
     "$PYTHON_BIN" - "$MOUNT_DIR" <<'PY'
 import errno
 import os
+import shutil
+import subprocess
 import sys
 
 root = sys.argv[1]
@@ -230,24 +232,30 @@ link_path = os.path.join(renamed_dir, "latest")
 os.symlink("checkpoint.bin", link_path)
 assert os.readlink(link_path) == "checkpoint.bin"
 
-if hasattr(os, "setxattr") and hasattr(os, "getxattr") and hasattr(os, "listxattr"):
-    try:
-        os.setxattr(checkpoint, "user.nokvfs-smoke", b"value")
-    except OSError as err:
-        if err.errno not in {errno.EOPNOTSUPP, getattr(errno, "ENOTSUP", errno.EOPNOTSUPP), errno.EPERM}:
-            raise
-    else:
-        raise AssertionError("setxattr unexpectedly succeeded")
-
+if (
+    hasattr(os, "setxattr")
+    and hasattr(os, "getxattr")
+    and hasattr(os, "listxattr")
+    and hasattr(os, "removexattr")
+):
+    os.setxattr(checkpoint, "user.nokvfs-smoke", b"value")
+    assert os.getxattr(checkpoint, "user.nokvfs-smoke") == b"value"
+    assert "user.nokvfs-smoke" in os.listxattr(checkpoint)
+    os.removexattr(checkpoint, "user.nokvfs-smoke")
     try:
         os.getxattr(checkpoint, "user.nokvfs-smoke")
     except OSError as err:
-        if err.errno not in {getattr(errno, "ENODATA", 61), getattr(errno, "ENOATTR", 93), errno.EOPNOTSUPP, getattr(errno, "ENOTSUP", errno.EOPNOTSUPP)}:
+        if err.errno not in {getattr(errno, "ENODATA", 61), getattr(errno, "ENOATTR", 93)}:
             raise
     else:
-        raise AssertionError("getxattr unexpectedly succeeded")
-
-    os.listxattr(checkpoint)
+        raise AssertionError("removed xattr was still readable")
+elif shutil.which("xattr"):
+    subprocess.run(["xattr", "-w", "user.nokvfs-smoke", "value", checkpoint], check=True)
+    value = subprocess.check_output(["xattr", "-p", "user.nokvfs-smoke", checkpoint])
+    assert value.rstrip(b"\n") == b"value"
+    listed = subprocess.check_output(["xattr", checkpoint])
+    assert b"user.nokvfs-smoke" in listed.splitlines()
+    subprocess.run(["xattr", "-d", "user.nokvfs-smoke", checkpoint], check=True)
 else:
     print("warning: python xattr APIs are unavailable; skipping xattr smoke", file=sys.stderr)
 
