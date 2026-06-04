@@ -116,6 +116,35 @@ where
         self.read_dir_plus_at_version(parent, version)
     }
 
+    pub fn stat_path_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        path: &str,
+    ) -> Result<Option<PathMetadata>, MetadError> {
+        let pin = self
+            .snapshot_pin(snapshot_id)?
+            .ok_or(MetadError::NotFound)?;
+        let version = Version::new(pin.read_version)?;
+        self.stat_path_from_at_version(pin.root, path, version)
+    }
+
+    pub fn read_dir_plus_path_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        path: &str,
+    ) -> Result<Vec<DentryWithAttr>, MetadError> {
+        let pin = self
+            .snapshot_pin(snapshot_id)?
+            .ok_or(MetadError::NotFound)?;
+        let version = Version::new(pin.read_version)?;
+        let parent = self.resolve_components_as_directory_from_at_version(
+            pin.root,
+            &parse_absolute_path(path)?,
+            version,
+        )?;
+        self.read_dir_plus_at_version(parent, version)
+    }
+
     pub fn read_file_at_snapshot(
         &self,
         snapshot_id: u64,
@@ -160,6 +189,34 @@ where
         self.read_file_at_version(inode, &body, 0, body.size as usize, version)
     }
 
+    pub fn read_file_path_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        path: &str,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, MetadError> {
+        if len == 0 {
+            return Ok(Vec::new());
+        }
+        let pin = self
+            .snapshot_pin(snapshot_id)?
+            .ok_or(MetadError::NotFound)?;
+        let version = Version::new(pin.read_version)?;
+        let entry = self
+            .lookup_path_from_at_version(pin.root, path, version)?
+            .map(|(entry, _)| entry)
+            .ok_or(MetadError::NotFound)?;
+        if entry.attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        if offset >= entry.attr.size {
+            return Ok(Vec::new());
+        }
+        let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
+        self.read_file_at_version(entry.attr.inode, &body, offset, len, version)
+    }
+
     pub fn read_artifact_at_snapshot(
         &self,
         snapshot_id: u64,
@@ -183,14 +240,12 @@ where
         snapshot_id: u64,
         path: &str,
     ) -> Result<Vec<u8>, MetadError> {
-        let version = self.snapshot_read_version(snapshot_id)?;
-        let mut components = parse_absolute_path(path)?;
-        let name = components
-            .pop()
-            .ok_or_else(|| MetadError::InvalidPath("root has no file body".to_owned()))?;
-        let parent = self.resolve_components_as_directory_at_version(&components, version)?;
+        let pin = self
+            .snapshot_pin(snapshot_id)?
+            .ok_or(MetadError::NotFound)?;
+        let version = Version::new(pin.read_version)?;
         let entry = self
-            .lookup_plus_at_version(parent, &name, version)?
+            .lookup_path_from_at_version(pin.root, path, version)?
             .map(|(entry, _)| entry)
             .ok_or(MetadError::NotFound)?;
         if entry.attr.file_type != FileType::File {

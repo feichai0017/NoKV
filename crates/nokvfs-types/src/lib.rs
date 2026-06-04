@@ -11,6 +11,6 @@ mod types;
 pub use names::{parse_absolute_path, DentryName, NameError, PathError};
 pub use types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryProjection, DentryRecord, FileType,
-    InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, RecordFamily, SnapshotPin,
-    WatchCursor, WatchEvent, WatchEventKind, WatchRecord,
+    InodeAttr, InodeId, ModelError, MountId, ObjectGcRecord, PathMetadata, RecordFamily,
+    SnapshotPin, WatchCursor, WatchEvent, WatchEventKind, WatchRecord,
 };

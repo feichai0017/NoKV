@@ -11,7 +11,7 @@ mod remote;
 
 use nokvfs_meta::{MetadError, MetadataError};
 use nokvfs_object::ObjectError;
-use nokvfs_types::PathError;
+use nokvfs_types::{PathError, PathMetadata};
 
 pub use artifact::{
     normalize_artifact_path, ArtifactBackend, ArtifactInfo, ArtifactRepository,
@@ -31,6 +31,12 @@ pub struct ArtifactMetadata {
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceRead {
+    pub metadata: PathMetadata,
+    pub bytes: Vec<u8>,
 }
 
 #[derive(Debug)]

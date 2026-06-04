@@ -16,6 +16,7 @@ nokvfs-meta.workspace = true
 nokvfs-object.workspace = true
 nokvfs-server.workspace = true
 nokvfs-types.workspace = true
+sha2.workspace = true
 
 [[bin]]
 name = "nokv-fs"

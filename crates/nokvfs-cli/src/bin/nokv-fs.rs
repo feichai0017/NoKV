@@ -16,6 +16,7 @@ use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, Ob
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_server::{ServerOptions, DEFAULT_SERVER_BIND};
 use nokvfs_types::{FileType, MountId};
+use sha2::{Digest, Sha256};
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
 const DEFAULT_MODE_FILE: u32 = 0o644;
@@ -75,6 +76,7 @@ enum Command {
     },
     Mount {
         mountpoint: PathBuf,
+        read_only: bool,
     },
     MountSnapshot {
         snapshot_id: u64,
@@ -153,13 +155,14 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
             let manifest_id = default_manifest_id(&path)?;
+            let digest_uri = artifact_digest_uri(&bytes);
             let entry = client
                 .put_artifact(
                     &path,
                     bytes,
                     ArtifactMetadata {
                         producer: "nokv-fs".to_owned(),
-                        digest_uri: "unknown".to_owned(),
+                        digest_uri,
                         content_type: "application/octet-stream".to_owned(),
                         manifest_id,
                         mode: DEFAULT_MODE_FILE,
@@ -253,7 +256,10 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                     .unwrap_or("-")
             );
         }
-        Command::Mount { mountpoint } => {
+        Command::Mount {
+            mountpoint,
+            read_only,
+        } => {
             let service = Arc::new(open_service(&config)?);
             service
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
@@ -274,8 +280,19 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                     run_immediately: false,
                 },
             );
-            nokvfs_fuse::mount_shared(service, mountpoint, nokvfs_fuse::FuseOptions::default())
-                .map_err(from_io)?;
+            nokvfs_fuse::mount_shared(
+                service,
+                mountpoint,
+                nokvfs_fuse::FuseOptions {
+                    access: if read_only {
+                        nokvfs_fuse::FuseAccessMode::ReadOnly
+                    } else {
+                        nokvfs_fuse::FuseAccessMode::ReadWrite
+                    },
+                    ..nokvfs_fuse::FuseOptions::default()
+                },
+            )
+            .map_err(from_io)?;
         }
         Command::MountSnapshot {
             snapshot_id,
@@ -621,9 +638,19 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
             source: args[1].clone(),
             destination: args[2].clone(),
         }),
-        "mount" => exact_args(args, 2).map(|()| Command::Mount {
-            mountpoint: PathBuf::from(&args[1]),
-        }),
+        "mount" => match args {
+            [_, mountpoint] => Ok(Command::Mount {
+                mountpoint: PathBuf::from(mountpoint),
+                read_only: false,
+            }),
+            [_, flag, mountpoint] if flag == "--read-only" => Ok(Command::Mount {
+                mountpoint: PathBuf::from(mountpoint),
+                read_only: true,
+            }),
+            [_, flag, _] if flag.starts_with('-') => Err(CliError::UnknownOption(flag.clone())),
+            _ if args.len() < 2 => Err(CliError::MissingArgument("mountpoint")),
+            _ => Err(CliError::TooManyArguments),
+        },
         "mount-snapshot" => {
             exact_args(args, 3)?;
             Ok(Command::MountSnapshot {
@@ -727,6 +754,11 @@ fn default_manifest_id(path: &str) -> Result<String, CliError> {
     Ok(format!("artifacts/{trimmed}"))
 }
 
+fn artifact_digest_uri(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!("sha256:{digest:x}")
+}
+
 fn file_type_label(file_type: FileType) -> &'static str {
     match file_type {
         FileType::File => "file",
@@ -766,7 +798,7 @@ Usage:\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rmdir PATH\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount MOUNTPOINT\n\
+  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] MOUNTPOINT\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID MOUNTPOINT\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
@@ -1067,12 +1099,30 @@ mod tests {
     }
 
     #[test]
+    fn artifact_digest_uri_is_sha256_uri() {
+        assert_eq!(
+            artifact_digest_uri(b"body"),
+            "sha256:230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5"
+        );
+    }
+
+    #[test]
     fn parse_mount_command() {
         let (_config, command) = parse(vec![s("mount"), s("/tmp/nokv-fs")]).unwrap();
         assert_eq!(
             command,
             Command::Mount {
-                mountpoint: PathBuf::from("/tmp/nokv-fs")
+                mountpoint: PathBuf::from("/tmp/nokv-fs"),
+                read_only: false,
+            }
+        );
+        let (_config, command) =
+            parse(vec![s("mount"), s("--read-only"), s("/tmp/nokv-fs-ro")]).unwrap();
+        assert_eq!(
+            command,
+            Command::Mount {
+                mountpoint: PathBuf::from("/tmp/nokv-fs-ro"),
+                read_only: true,
             }
         );
         let (_config, command) =

@@ -1159,6 +1159,7 @@ dependencies = [
  "nokvfs-object",
  "nokvfs-server",
  "nokvfs-types",
+ "sha2 0.10.9",
  "tempfile",
 ]
 
@@ -1183,6 +1184,7 @@ dependencies = [
  "nokvfs-meta",
  "nokvfs-object",
  "nokvfs-types",
+ "sha2 0.10.9",
  "tempfile",
 ]
 
@@ -1193,6 +1195,7 @@ dependencies = [
  "holt",
  "nokvfs-object",
  "nokvfs-types",
+ "sha2 0.10.9",
  "tempfile",
 ]
 

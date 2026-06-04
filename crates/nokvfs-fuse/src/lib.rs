@@ -9,5 +9,5 @@ mod filesystem;
 mod invalidation;
 
 pub use attr::{file_attr, fuse_file_type};
-pub use filesystem::{mount, mount_shared, FuseOptions, FuseView, NoKvFuse};
+pub use filesystem::{mount, mount_shared, FuseAccessMode, FuseOptions, FuseView, NoKvFuse};
 pub use invalidation::FuseInvalidationOptions;

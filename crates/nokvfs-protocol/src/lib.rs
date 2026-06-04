@@ -8,7 +8,7 @@ use std::fmt;
 
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
-    InodeId, SnapshotPin,
+    InodeId, PathMetadata, SnapshotPin,
 };
 use serde::{Deserialize, Serialize};
 
@@ -33,6 +33,9 @@ pub enum MetadataRpcRequest {
         name: String,
     },
     LookupPath {
+        path: String,
+    },
+    StatPath {
         path: String,
     },
     ReadDirPlus {
@@ -114,6 +117,20 @@ pub enum MetadataRpcRequest {
     SnapshotSubtreePath {
         path: String,
     },
+    StatPathAtSnapshot {
+        snapshot_id: u64,
+        path: String,
+    },
+    ReadDirPlusPathAtSnapshot {
+        snapshot_id: u64,
+        path: String,
+    },
+    ReadFilePathAtSnapshot {
+        snapshot_id: u64,
+        path: String,
+        offset: u64,
+        len: u64,
+    },
     RetireSnapshot {
         snapshot_id: u64,
     },
@@ -153,6 +170,24 @@ pub struct MetadataRpcEnvelope {
     pub result: Option<MetadataRpcResult>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<WireMetadataError>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WireMetadataError {
+    NotFound,
+    NotFile,
+    NotDirectory,
+    MissingBodyDescriptor,
+    PredicateFailed,
+    StaleBodyGeneration { expected: u64, current: u64 },
+    InvalidPath { message: String },
+    Metadata { message: String },
+    Object { message: String },
+    Io { message: String },
+    Protocol { message: String },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -169,6 +204,9 @@ pub enum MetadataRpcResult {
     },
     Dentries {
         entries: Vec<WireDentryWithAttr>,
+    },
+    PathMetadata {
+        metadata: Option<WirePathMetadata>,
     },
     RenameReplace {
         entry: Box<WireDentryWithAttr>,
@@ -194,6 +232,12 @@ pub enum MetadataRpcResult {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WireDentryWithAttr {
     pub dentry: WireDentryRecord,
+    pub attr: WireInodeAttr,
+    pub body: Option<WireBodyDescriptor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WirePathMetadata {
     pub attr: WireInodeAttr,
     pub body: Option<WireBodyDescriptor>,
 }
@@ -313,6 +357,25 @@ impl WireDentryRecord {
             child: inode_id(self.child)?,
             child_type: parse_file_type(&self.child_type)?,
             attr_generation: self.attr_generation,
+        })
+    }
+}
+
+impl WirePathMetadata {
+    pub fn from_path_metadata(metadata: &PathMetadata) -> Self {
+        Self {
+            attr: WireInodeAttr::from_inode_attr(&metadata.attr),
+            body: metadata
+                .body
+                .as_ref()
+                .map(WireBodyDescriptor::from_body_descriptor),
+        }
+    }
+
+    pub fn into_path_metadata(self) -> Result<PathMetadata, MetadataProtocolError> {
+        Ok(PathMetadata {
+            attr: self.attr.into_inode_attr()?,
+            body: self.body.map(WireBodyDescriptor::into_body_descriptor),
         })
     }
 }
@@ -581,6 +644,7 @@ mod tests {
                 }),
             }),
             error: None,
+            error_kind: None,
         };
         let encoded = encode_envelope(&envelope).unwrap();
         assert_eq!(decode_envelope(&encoded).unwrap(), envelope);

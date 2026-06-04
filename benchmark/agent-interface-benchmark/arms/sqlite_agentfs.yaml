@@ -1,0 +1,81 @@
+arm_id: sqlite_agentfs_v1
+version: 1
+interface_name: SQLite AgentFS
+mode: warm_interface
+purpose: Filesystem-shaped inspection over the same Yanex corpus stored in a SQLite-backed AgentFS-style projection.
+
+data_scope:
+  corpus: yanex_experiment_metadata_origami_data_gen_project
+  visibility: projected_experiment_directories
+  mutation: read_only
+
+tool_contract:
+  - name: ls
+    purpose: List directory entries.
+    arguments:
+      path: string
+    returns: Entry names with type, size, and modified time when available.
+  - name: stat
+    purpose: Return metadata for a file or directory.
+    arguments:
+      path: string
+    returns: Type, size, modified time, digest when available, and stable path evidence.
+  - name: read
+    purpose: Read a file or byte range.
+    arguments:
+      path: string
+      offset: integer
+      limit: integer
+    returns: File content range plus path evidence.
+  - name: grep
+    purpose: Search text files by pattern.
+    arguments:
+      path: string
+      pattern: string
+      recursive: boolean
+    returns: Matching path, line, and snippet records.
+  - name: find
+    purpose: Find paths by name or glob pattern.
+    arguments:
+      path: string
+      pattern: string
+    returns: Matching paths with type metadata.
+
+layout:
+  root: /
+  runs: /runs/{experiment_id}/
+  metadata: /runs/{experiment_id}/metadata.json
+  params: /runs/{experiment_id}/params.yaml
+  metrics: /runs/{experiment_id}/metrics.json
+  dependencies: /runs/{experiment_id}/dependencies.json
+  artifacts: /runs/{experiment_id}/artifacts/
+  indexes:
+    experiments: /index/experiments.json
+    statuses: /index/status/{status}.json
+    tags: /index/tags/{tag}.json
+    scripts: /index/scripts/{script_name}.json
+
+evidence_conventions:
+  experiment: agentfs:///runs/{experiment_id}/metadata.json
+  param: agentfs:///runs/{experiment_id}/params.yaml#{param_path}
+  metric: agentfs:///runs/{experiment_id}/metrics.json#{metric_name}
+  dependency: agentfs:///runs/{experiment_id}/dependencies.json
+  artifact: agentfs:///runs/{experiment_id}/artifacts/{artifact_path}
+  index: agentfs:///{index_path}
+
+interface_guidance:
+  - Use /index files when a task requires scanning many experiments.
+  - Use stat before reading large files or artifact directories.
+  - Prefer reading metadata, params, metrics, and dependencies files before artifact bodies.
+  - Preserve exact paths in evidence because paths are the stable identifiers for this arm.
+
+forbidden_assumptions:
+  - Do not assume every run directory has params.yaml, metrics.json, dependencies.json, or artifacts.
+  - Do not assume directory ordering has semantic meaning.
+  - Do not infer structured relationships from filename similarity without file evidence.
+  - Do not call tools from the raw SQLite arm during this arm.
+
+example_paths:
+  - /runs/00023013/metadata.json
+  - /runs/00023013/metrics.json
+  - /index/tags/sweep.json

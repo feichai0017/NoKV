@@ -20,6 +20,7 @@ use nokvfs_meta::{
 };
 use nokvfs_object::{ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk};
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
+use sha2::{Digest, Sha256};
 
 use crate::attr::{file_attr, fuse_file_type};
 use crate::invalidation::{FuseInvalidationOptions, FuseInvalidationWorker, InvalidationRegistry};
@@ -31,6 +32,7 @@ pub struct FuseOptions {
     pub fs_name: String,
     pub threads: usize,
     pub view: FuseView,
+    pub access: FuseAccessMode,
     pub invalidation: FuseInvalidationOptions,
 }
 
@@ -38,6 +40,12 @@ pub struct FuseOptions {
 pub enum FuseView {
     Live,
     Snapshot { snapshot_id: u64, root: InodeId },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FuseAccessMode {
+    ReadWrite,
+    ReadOnly,
 }
 
 pub struct NoKvFuse<M, O> {
@@ -81,6 +89,7 @@ impl Default for FuseOptions {
             fs_name: "nokv-fs".to_owned(),
             threads: default_threads(),
             view: FuseView::Live,
+            access: FuseAccessMode::ReadWrite,
             invalidation: FuseInvalidationOptions::default(),
         }
     }
@@ -204,7 +213,7 @@ where
     }
 
     fn read_only(&self) -> bool {
-        self.options.view.is_read_only()
+        self.options.access.is_read_only() || self.options.view.is_read_only()
     }
 
     fn service_get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, MetadError> {
@@ -541,6 +550,28 @@ where
         Ok(())
     }
 
+    fn digest_handle_body(&self, fh: FileHandle, size: u64) -> Result<String, Errno> {
+        const DIGEST_CHUNK_SIZE: u32 = 8 * 1024 * 1024;
+
+        let mut hasher = Sha256::new();
+        let mut offset = 0_u64;
+        while offset < size {
+            let requested = (size - offset).min(u64::from(DIGEST_CHUNK_SIZE)) as u32;
+            let bytes = self
+                .read_from_handle(fh, offset, requested)?
+                .ok_or(Errno::EIO)?;
+            if bytes.is_empty() {
+                return Err(Errno::EIO);
+            }
+            hasher.update(&bytes);
+            offset = offset
+                .checked_add(u64::try_from(bytes.len()).map_err(|_| Errno::EINVAL)?)
+                .ok_or(Errno::EINVAL)?;
+        }
+        let digest = hasher.finalize();
+        Ok(format!("sha256:{digest:x}"))
+    }
+
     fn publish_handle(&self, fh: FileHandle) -> Result<(), Errno> {
         let Some(snapshot) = self
             .write_handles
@@ -554,6 +585,7 @@ where
         if !snapshot.dirty {
             return Ok(());
         }
+        let digest_uri = self.digest_handle_body(fh, snapshot.size)?;
         self.service
             .publish_prepared_artifact_staged_session(
                 snapshot.prepared.ok_or(Errno::EIO)?,
@@ -561,7 +593,7 @@ where
                     parent: snapshot.parent,
                     name: snapshot.name,
                     producer: "nokv-fuse".to_owned(),
-                    digest_uri: "unknown".to_owned(),
+                    digest_uri,
                     content_type: "application/octet-stream".to_owned(),
                     manifest_id: fuse_manifest_id(snapshot.parent, snapshot.inode),
                     size: snapshot.size,
@@ -624,7 +656,8 @@ where
 {
     let mut config = Config::default();
     let mut mount_options = vec![MountOption::FSName(options.fs_name.clone())];
-    if options.view.is_read_only() {
+    let read_only = options.access.is_read_only() || options.view.is_read_only();
+    if read_only {
         mount_options.push(MountOption::RO);
     } else {
         mount_options.push(MountOption::RW);
@@ -667,6 +700,12 @@ impl FuseView {
 
     fn is_read_only(self) -> bool {
         matches!(self, Self::Snapshot { .. })
+    }
+}
+
+impl FuseAccessMode {
+    fn is_read_only(self) -> bool {
+        matches!(self, Self::ReadOnly)
     }
 }
 
@@ -1553,6 +1592,20 @@ mod tests {
     }
 
     #[test]
+    fn live_view_can_be_configured_read_only() {
+        let service = service();
+        let fuse = NoKvFuse::new(
+            service,
+            FuseOptions {
+                access: FuseAccessMode::ReadOnly,
+                ..FuseOptions::default()
+            },
+        );
+
+        assert!(fuse.read_only());
+    }
+
+    #[test]
     fn write_handle_publish_updates_file_body() {
         let service = service();
         let name = DentryName::new(b"checkpoint".to_vec()).unwrap();
@@ -1579,6 +1632,15 @@ mod tests {
                 .read_file(created.attr.inode, 0, 8)
                 .expect("read published body"),
             expected
+        );
+        let body = fuse
+            .service()
+            .body_descriptor(created.attr.inode)
+            .expect("read body descriptor")
+            .expect("body descriptor exists");
+        assert_eq!(
+            body.digest_uri,
+            "sha256:7f35eb30d89706db2f03b9113f85c6509756d7ad5a7d19c80617d771bb9577db"
         );
         fuse.release_handle(handle).expect("release handle");
     }

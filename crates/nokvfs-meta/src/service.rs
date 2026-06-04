@@ -45,13 +45,15 @@ use nokvfs_object::{
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
     DentryProjection, DentryRecord, FileType, InodeAttr, InodeId, ModelError, MountId,
-    ObjectGcRecord, PathError, RecordFamily, SnapshotPin, WatchCursor, WatchEvent, WatchEventKind,
-    WatchRecord,
+    ObjectGcRecord, PathError, PathMetadata, RecordFamily, SnapshotPin, WatchCursor, WatchEvent,
+    WatchEventKind, WatchRecord,
 };
+use sha2::{Digest, Sha256};
 
 const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
 const ALLOCATOR_VERSION_RESERVATION: u64 = 1024;
 const ALLOCATOR_INODE_RESERVATION: u64 = 1024;
+const BODY_DIGEST_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
 const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 12] = [
     RecordFamily::System,
@@ -258,6 +260,52 @@ where
     M: MetadataStore,
     O: ObjectStore,
 {
+    fn resized_body_digest_uri(
+        &self,
+        inode: InodeId,
+        old_body: Option<&BodyDescriptor>,
+        new_size: u64,
+        read_version: Version,
+    ) -> Result<String, MetadError> {
+        let mut hasher = Sha256::new();
+        let mut offset = 0_u64;
+        let old_size = old_body.map(|body| body.size).unwrap_or(0);
+        let old_prefix_len = old_size.min(new_size);
+
+        if let Some(body) = old_body {
+            while offset < old_prefix_len {
+                let requested = usize::try_from((old_prefix_len - offset).min(
+                    u64::try_from(BODY_DIGEST_CHUNK_SIZE).map_err(|_| ObjectError::InvalidRange)?,
+                ))
+                .map_err(|_| ObjectError::InvalidRange)?;
+                let bytes =
+                    self.read_file_at_version(inode, body, offset, requested, read_version)?;
+                if bytes.is_empty() {
+                    return Err(ObjectError::InvalidRange.into());
+                }
+                hasher.update(&bytes);
+                offset = offset
+                    .checked_add(u64::try_from(bytes.len()).map_err(|_| ObjectError::InvalidRange)?)
+                    .ok_or(ObjectError::InvalidRange)?;
+            }
+        }
+
+        let mut zero_remaining = new_size.saturating_sub(old_prefix_len);
+        if zero_remaining > 0 {
+            let zeros = vec![0_u8; BODY_DIGEST_CHUNK_SIZE];
+            while zero_remaining > 0 {
+                let len = usize::try_from(zero_remaining.min(
+                    u64::try_from(BODY_DIGEST_CHUNK_SIZE).map_err(|_| ObjectError::InvalidRange)?,
+                ))
+                .map_err(|_| ObjectError::InvalidRange)?;
+                hasher.update(&zeros[..len]);
+                zero_remaining -= u64::try_from(len).map_err(|_| ObjectError::InvalidRange)?;
+            }
+        }
+
+        let digest = hasher.finalize();
+        Ok(format!("sha256:{digest:x}"))
+    }
 }
 
 impl<M, O> NoKvFs<M, O> where M: MetadataStore + MetadataStoreStatsProvider {}
@@ -370,6 +418,11 @@ fn current_time_ms() -> u64 {
         .unwrap_or_default()
         .as_millis();
     millis.min(u128::from(u64::MAX)) as u64
+}
+
+fn body_digest_uri(bytes: &[u8]) -> String {
+    let digest = Sha256::digest(bytes);
+    format!("sha256:{digest:x}")
 }
 
 fn delete_mutation(family: RecordFamily, key: Vec<u8>) -> Mutation {

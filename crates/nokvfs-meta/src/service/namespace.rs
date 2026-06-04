@@ -93,11 +93,12 @@ where
         }
         let version = self.next_version()?;
         let inode = self.next_inode()?;
+        let digest_uri = body_digest_uri(&target);
         let request = PublishArtifact {
             parent,
             name: name.clone(),
             producer: "nokvfs-symlink".to_owned(),
-            digest_uri: "unknown".to_owned(),
+            digest_uri,
             content_type: "text/plain; charset=utf-8".to_owned(),
             manifest_id: format!("symlink/{}/{}", parent.get(), inode.get()),
             bytes: target,
@@ -176,14 +177,13 @@ where
             if attr.file_type == FileType::Directory {
                 return Err(MetadError::NotFile);
             }
+            let read_version = self.read_version()?;
             old_generation = body.as_ref().map(|body| body.generation);
+            let digest_uri =
+                self.resized_body_digest_uri(entry.attr.inode, body.as_ref(), size, read_version)?;
             let old_chunks = old_generation
                 .map(|generation| {
-                    self.chunk_manifests_at_version(
-                        entry.attr.inode,
-                        generation,
-                        self.read_version()?,
-                    )
+                    self.chunk_manifests_at_version(entry.attr.inode, generation, read_version)
                 })
                 .transpose()?
                 .unwrap_or_default();
@@ -193,10 +193,7 @@ where
                     .as_ref()
                     .map(|body| body.producer.clone())
                     .unwrap_or_else(|| "nokvfs-metadata".to_owned()),
-                digest_uri: body
-                    .as_ref()
-                    .map(|body| body.digest_uri.clone())
-                    .unwrap_or_else(|| "unknown".to_owned()),
+                digest_uri,
                 size,
                 content_type: body
                     .as_ref()

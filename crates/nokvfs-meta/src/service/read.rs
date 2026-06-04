@@ -39,12 +39,8 @@ where
     }
 
     pub fn lookup_path(&self, path: &str) -> Result<Option<DentryWithAttr>, MetadError> {
-        let mut components = parse_absolute_path(path)?;
-        let Some(name) = components.pop() else {
-            return Ok(None);
-        };
-        let parent = self.resolve_components_as_directory(&components)?;
-        self.lookup_plus(parent, &name)
+        self.lookup_path_from_at_version(InodeId::root(), path, self.read_version()?)
+            .map(|entry| entry.map(|(entry, _)| entry))
     }
 
     pub(super) fn lookup_plus_versioned(
@@ -88,6 +84,10 @@ where
     pub fn read_dir_plus_path(&self, path: &str) -> Result<Vec<DentryWithAttr>, MetadError> {
         let parent = self.resolve_directory_path(path)?;
         self.read_dir_plus(parent)
+    }
+
+    pub fn stat_path(&self, path: &str) -> Result<Option<PathMetadata>, MetadError> {
+        self.stat_path_from_at_version(InodeId::root(), path, self.read_version()?)
     }
 
     pub(super) fn read_dir_plus_at_version(
@@ -140,7 +140,16 @@ where
         components: &[DentryName],
         version: Version,
     ) -> Result<InodeId, MetadError> {
-        let mut current = InodeId::root();
+        self.resolve_components_as_directory_from_at_version(InodeId::root(), components, version)
+    }
+
+    pub(super) fn resolve_components_as_directory_from_at_version(
+        &self,
+        root: InodeId,
+        components: &[DentryName],
+        version: Version,
+    ) -> Result<InodeId, MetadError> {
+        let mut current = root;
         for name in components {
             let entry = self
                 .lookup_plus_at_version(current, name, version)?
@@ -152,6 +161,47 @@ where
             current = entry.attr.inode;
         }
         Ok(current)
+    }
+
+    pub(super) fn lookup_path_from_at_version(
+        &self,
+        root: InodeId,
+        path: &str,
+        version: Version,
+    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
+        let mut components = parse_absolute_path(path)?;
+        let Some(name) = components.pop() else {
+            return Ok(None);
+        };
+        let parent =
+            self.resolve_components_as_directory_from_at_version(root, &components, version)?;
+        self.lookup_plus_at_version(parent, &name, version)
+    }
+
+    pub(super) fn stat_path_from_at_version(
+        &self,
+        root: InodeId,
+        path: &str,
+        version: Version,
+    ) -> Result<Option<PathMetadata>, MetadError> {
+        let components = parse_absolute_path(path)?;
+        if components.is_empty() {
+            let Some(attr) = self.get_attr_at_version(root, version)? else {
+                return Ok(None);
+            };
+            if attr.file_type == FileType::File {
+                let body = self.body_descriptor_at_version(root, attr.generation, version)?;
+                return Ok(Some(PathMetadata { attr, body }));
+            }
+            return Ok(Some(PathMetadata { attr, body: None }));
+        }
+        let Some((entry, _)) = self.lookup_path_from_at_version(root, path, version)? else {
+            return Ok(None);
+        };
+        Ok(Some(PathMetadata {
+            attr: entry.attr,
+            body: entry.body,
+        }))
     }
 
     pub fn read_artifact(&self, parent: InodeId, name: &DentryName) -> Result<Vec<u8>, MetadError> {

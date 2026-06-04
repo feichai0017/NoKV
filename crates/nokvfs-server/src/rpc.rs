@@ -7,8 +7,8 @@ use nokvfs_meta::{DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_request, encode_envelope, MetadataProtocolError, MetadataRpcEnvelope,
-    MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr,
-    WireObjectReadBlock, WirePreparedArtifact,
+    MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataError,
+    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -75,17 +75,17 @@ pub(crate) fn handle_rpc(server: &Server, body: &[u8]) -> String {
                 ok: true,
                 result: Some(result),
                 error: None,
+                error_kind: None,
             },
-            Err(err) => MetadataRpcEnvelope {
-                ok: false,
-                result: None,
-                error: Some(err.to_string()),
-            },
+            Err(err) => err_envelope(err),
         },
         Err(err) => MetadataRpcEnvelope {
             ok: false,
             result: None,
             error: Some(format!("invalid metadata rpc request: {err}")),
+            error_kind: Some(WireMetadataError::Protocol {
+                message: err.to_string(),
+            }),
         },
     };
     serde_json::to_string(&envelope).expect("metadata rpc envelope is serializable") + "\n"
@@ -98,17 +98,17 @@ fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerErro
                 ok: true,
                 result: Some(result),
                 error: None,
+                error_kind: None,
             },
-            Err(err) => MetadataRpcEnvelope {
-                ok: false,
-                result: None,
-                error: Some(err.to_string()),
-            },
+            Err(err) => err_envelope(err),
         },
         Err(err) => MetadataRpcEnvelope {
             ok: false,
             result: None,
             error: Some(format!("invalid metadata binary rpc request: {err}")),
+            error_kind: Some(WireMetadataError::Protocol {
+                message: err.to_string(),
+            }),
         },
     };
     encode_envelope(&envelope).map_err(|err| {
@@ -142,6 +142,7 @@ pub(crate) fn handle_framed_stream_after_magic(
                         ok: false,
                         result: None,
                         error: Some(err.to_string()),
+                        error_kind: Some(wire_server_error(&err)),
                     };
                     match encode_envelope(&envelope) {
                         Ok(response) => response,
@@ -290,14 +291,60 @@ fn ok_envelope(result: MetadataRpcResult) -> MetadataRpcEnvelope {
         ok: true,
         result: Some(result),
         error: None,
+        error_kind: None,
     }
 }
 
 fn err_envelope(err: ServerError) -> MetadataRpcEnvelope {
+    let error_kind = wire_server_error(&err);
     MetadataRpcEnvelope {
         ok: false,
         result: None,
         error: Some(err.to_string()),
+        error_kind: Some(error_kind),
+    }
+}
+
+fn wire_server_error(err: &ServerError) -> WireMetadataError {
+    match err {
+        ServerError::Io(err) => WireMetadataError::Io {
+            message: err.to_string(),
+        },
+        ServerError::Object(err) => WireMetadataError::Object {
+            message: err.to_string(),
+        },
+        ServerError::Metadata(err) => wire_metad_error(err),
+    }
+}
+
+fn wire_metad_error(err: &MetadError) -> WireMetadataError {
+    match err {
+        MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed) => {
+            WireMetadataError::PredicateFailed
+        }
+        MetadError::Metadata(err) => WireMetadataError::Metadata {
+            message: err.to_string(),
+        },
+        MetadError::Object(err) => WireMetadataError::Object {
+            message: err.to_string(),
+        },
+        MetadError::PublishArtifactFailed { source, .. } => wire_metad_error(source),
+        MetadError::StaleBodyGeneration { expected, current } => {
+            WireMetadataError::StaleBodyGeneration {
+                expected: *expected,
+                current: *current,
+            }
+        }
+        MetadError::InvalidPath(message) => WireMetadataError::InvalidPath {
+            message: message.clone(),
+        },
+        MetadError::NotFound => WireMetadataError::NotFound,
+        MetadError::NotFile => WireMetadataError::NotFile,
+        MetadError::NotDirectory => WireMetadataError::NotDirectory,
+        MetadError::MissingBodyDescriptor => WireMetadataError::MissingBodyDescriptor,
+        other => WireMetadataError::Metadata {
+            message: other.to_string(),
+        },
     }
 }
 
@@ -411,6 +458,12 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             let entry = server.service().lookup_path(&path)?;
             Ok(MetadataRpcResult::Dentry {
                 entry: entry.as_ref().map(|entry| Box::new(wire_dentry(entry))),
+            })
+        }
+        MetadataRpcRequest::StatPath { path } => {
+            let metadata = server.service().stat_path(&path)?;
+            Ok(MetadataRpcResult::PathMetadata {
+                metadata: metadata.as_ref().map(WirePathMetadata::from_path_metadata),
             })
         }
         MetadataRpcRequest::ReadDirPlus { parent } => {
@@ -599,6 +652,20 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 snapshot: nokvfs_protocol::WireSnapshotPin::from_snapshot_pin(&snapshot),
             })
         }
+        MetadataRpcRequest::StatPathAtSnapshot { snapshot_id, path } => {
+            let metadata = server.service().stat_path_at_snapshot(snapshot_id, &path)?;
+            Ok(MetadataRpcResult::PathMetadata {
+                metadata: metadata.as_ref().map(WirePathMetadata::from_path_metadata),
+            })
+        }
+        MetadataRpcRequest::ReadDirPlusPathAtSnapshot { snapshot_id, path } => {
+            let entries = server
+                .service()
+                .read_dir_plus_path_at_snapshot(snapshot_id, &path)?;
+            Ok(MetadataRpcResult::Dentries {
+                entries: entries.iter().map(wire_dentry).collect(),
+            })
+        }
         MetadataRpcRequest::RetireSnapshot { snapshot_id } => {
             let retired = server.service().retire_snapshot(snapshot_id)?;
             Ok(MetadataRpcResult::RetiredSnapshot { retired })
@@ -626,6 +693,23 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             let bytes = server
                 .service()
                 .read_artifact_path_at_snapshot(snapshot_id, &path)?;
+            Ok(MetadataRpcResult::FileBytes { bytes })
+        }
+        MetadataRpcRequest::ReadFilePathAtSnapshot {
+            snapshot_id,
+            path,
+            offset,
+            len,
+        } => {
+            let len = usize::try_from(len).map_err(|_| {
+                ServerError::Metadata(MetadError::Codec(
+                    "snapshot read length exceeds platform limit".to_owned(),
+                ))
+            })?;
+            let bytes =
+                server
+                    .service()
+                    .read_file_path_at_snapshot(snapshot_id, &path, offset, len)?;
             Ok(MetadataRpcResult::FileBytes { bytes })
         }
         MetadataRpcRequest::PrepareArtifact {
@@ -766,7 +850,9 @@ fn protocol_error(err: MetadataProtocolError) -> MetadError {
 mod tests {
     use super::*;
     use crate::server::tests::test_server;
-    use nokvfs_protocol::{WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest};
+    use nokvfs_protocol::{
+        WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest, WireMetadataError,
+    };
 
     #[test]
     fn rpc_creates_and_lists_directory() {
@@ -819,6 +905,10 @@ mod tests {
         assert!(results[1].ok);
         assert!(!results[2].ok);
         assert!(results[2].error.is_some());
+        assert_eq!(
+            results[2].error_kind,
+            Some(WireMetadataError::PredicateFailed)
+        );
     }
 
     #[test]

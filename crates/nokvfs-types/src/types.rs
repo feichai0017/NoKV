@@ -69,6 +69,12 @@ pub struct DentryProjection {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathMetadata {
+    pub attr: InodeAttr,
+    pub body: Option<BodyDescriptor>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BodyDescriptor {
     pub producer: String,
     pub digest_uri: String,

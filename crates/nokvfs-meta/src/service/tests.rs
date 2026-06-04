@@ -180,6 +180,10 @@ fn create_symlink_round_trips_target_and_unlinks_like_file() {
         b"runs/42/checkpoint.bin"
     );
     assert_eq!(
+        created.body.as_ref().unwrap().digest_uri,
+        "sha256:15a533489b90109ab69bd64dabcc260602c854b6b4a472b20aefa0eabcee3a24"
+    );
+    assert_eq!(
         service.lookup_plus(InodeId::root(), &name).unwrap(),
         Some(created.clone())
     );
@@ -245,6 +249,10 @@ fn update_attrs_truncates_and_extends_sparse_file() {
     assert_eq!(shrunk.attr.inode, published.attr.inode);
     assert_eq!(shrunk.attr.size, 3);
     assert_eq!(service.read_file(shrunk.attr.inode, 0, 8).unwrap(), b"abc");
+    assert_eq!(
+        shrunk.body.as_ref().unwrap().digest_uri,
+        "sha256:ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
+    );
 
     let grown = service
         .update_attrs(
@@ -260,6 +268,10 @@ fn update_attrs_truncates_and_extends_sparse_file() {
     assert_eq!(
         service.read_file(grown.attr.inode, 0, 8).unwrap(),
         b"abc\0\0\0"
+    );
+    assert_eq!(
+        grown.body.as_ref().unwrap().digest_uri,
+        "sha256:dd0b251b2bf91037a1e4fc8416a24ae00bcb9a8c252dc7e2361f2fc015f51c16"
     );
 }
 
@@ -781,6 +793,92 @@ fn snapshot_preserves_old_artifact_and_blocks_object_gc_until_retired() {
     assert_eq!(cleanup.records_removed, 1);
     assert!(objects.head(&old_object).unwrap().is_none());
     assert!(objects.head(&new_object).unwrap().is_some());
+}
+
+#[test]
+fn snapshot_path_reads_are_rooted_at_snapshot_subtree_and_support_ranges() {
+    let service = service();
+    let scope = service
+        .create_dir_path("/scope", 0o755, 1000, 1000)
+        .unwrap();
+    let nested = service
+        .create_dir_path("/scope/nested", 0o755, 1000, 1000)
+        .unwrap();
+    let outside = service
+        .create_dir_path("/outside", 0o755, 1000, 1000)
+        .unwrap();
+    let name = DentryName::new(b"model.bin".to_vec()).unwrap();
+    let inside_old = service
+        .publish_artifact(PublishArtifact {
+            parent: nested.attr.inode,
+            name: name.clone(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:inside-old".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "inside-old".to_owned(),
+            bytes: b"inside-old".to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+    service
+        .publish_artifact(PublishArtifact {
+            parent: outside.attr.inode,
+            name: name.clone(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:outside".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "outside".to_owned(),
+            bytes: b"outside".to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+    let snapshot = service.snapshot_subtree_path("/scope").unwrap();
+    service
+        .replace_artifact(PublishArtifact {
+            parent: nested.attr.inode,
+            name: name.clone(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:inside-new".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "inside-new".to_owned(),
+            bytes: b"inside-new".to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+
+    let root = service
+        .stat_path_at_snapshot(snapshot.snapshot_id, "/")
+        .unwrap()
+        .unwrap();
+    assert_eq!(root.attr.inode, scope.attr.inode);
+    assert_eq!(
+        service
+            .read_dir_plus_path_at_snapshot(snapshot.snapshot_id, "/")
+            .unwrap(),
+        vec![nested.clone()]
+    );
+    let file = service
+        .stat_path_at_snapshot(snapshot.snapshot_id, "/nested/model.bin")
+        .unwrap()
+        .unwrap();
+    assert_eq!(file.attr.generation, inside_old.attr.generation);
+    assert_eq!(file.body, inside_old.body);
+    assert_eq!(
+        service
+            .read_file_path_at_snapshot(snapshot.snapshot_id, "/nested/model.bin", 7, 3)
+            .unwrap(),
+        b"old"
+    );
+    assert!(matches!(
+        service.read_file_path_at_snapshot(snapshot.snapshot_id, "/outside/model.bin", 0, 7),
+        Err(MetadError::NotFound)
+    ));
 }
 
 #[test]
