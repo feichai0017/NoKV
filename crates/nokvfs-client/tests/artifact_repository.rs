@@ -39,6 +39,12 @@ fn artifact_repository_put_get_list_stat_and_overwrite() {
     assert_eq!(run_dir.len(), 1);
     assert_eq!(run_dir[0].path, "runs/run-1/metrics.json");
     assert_eq!(run_dir[0].size, Some(17));
+    repo.backend()
+        .create_file_path("/runs/run-1/plain.txt", 0o644, 1000, 1000)
+        .unwrap();
+    let run_dir = repo.list("runs/run-1").unwrap();
+    assert_eq!(run_dir.len(), 1);
+    assert_eq!(run_dir[0].path, "runs/run-1/metrics.json");
 
     assert!(repo.list("runs/run-1/metrics.json").unwrap().is_empty());
     assert_eq!(repo.stat("runs/run-1/metrics.json").unwrap(), info);

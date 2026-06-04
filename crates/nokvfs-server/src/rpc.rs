@@ -983,6 +983,24 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 next_name_hex: page.next_cursor.as_ref().map(encode_name_cursor),
             })
         }
+        MetadataRpcRequest::ReadIndexedPathPage {
+            path,
+            after_name_hex,
+            limit,
+        } => {
+            let after = after_name_hex
+                .as_deref()
+                .map(decode_name_cursor)
+                .transpose()
+                .map_err(protocol_error)?;
+            let page = server
+                .service()
+                .list_indexed_path_page(&path, after.as_ref(), limit)?;
+            Ok(MetadataRpcResult::DentriesPage {
+                entries: page.entries.iter().map(wire_dentry).collect(),
+                next_name_hex: page.next_cursor.as_ref().map(encode_name_cursor),
+            })
+        }
         MetadataRpcRequest::CreateDir {
             parent,
             name,
@@ -2386,6 +2404,95 @@ mod tests {
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].dentry.name_hex, "632e62696e");
         assert_eq!(cursor, None);
+    }
+
+    #[test]
+    fn rpc_lists_indexed_path_pages_without_plain_namespace_entries() {
+        let server = test_server();
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateFilePath {
+                path: "/runs/plain.txt".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        let prepared = match request_envelope(
+            &server,
+            MetadataRpcRequest::PrepareArtifactPath {
+                path: "/runs/metrics.json".to_owned(),
+                replace: false,
+            },
+        )
+        .result
+        .unwrap()
+        {
+            MetadataRpcResult::PreparedArtifact { prepared } => prepared,
+            other => panic!("unexpected prepare result: {other:?}"),
+        };
+        let published = request_envelope(
+            &server,
+            MetadataRpcRequest::PublishPreparedArtifact {
+                body: Box::new(WireBodyDescriptor {
+                    producer: "unit-test".to_owned(),
+                    digest_uri: "sha256:metrics".to_owned(),
+                    size: 2,
+                    content_type: "application/json".to_owned(),
+                    manifest_id: "metrics.json".to_owned(),
+                    generation: prepared.generation,
+                    chunk_size: 64 * 1024 * 1024,
+                    block_size: 4 * 1024 * 1024,
+                }),
+                chunks: vec![WireChunkManifest {
+                    chunk_index: 0,
+                    logical_offset: 0,
+                    len: 2,
+                    blocks: vec![WireBlockDescriptor {
+                        object_key: format!("blocks/1/{}/{}", prepared.inode, prepared.generation),
+                        logical_offset: 0,
+                        object_offset: 0,
+                        len: 2,
+                        digest_uri: "sha256:block".to_owned(),
+                    }],
+                }],
+                prepared,
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        assert!(published.ok, "unexpected publish error: {published:?}");
+
+        let page = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadIndexedPathPage {
+                path: "/runs".to_owned(),
+                after_name_hex: None,
+                limit: 100,
+            },
+        );
+        let entries = match page.result.unwrap() {
+            MetadataRpcResult::DentriesPage {
+                entries,
+                next_name_hex,
+            } => {
+                assert_eq!(next_name_hex, None);
+                entries
+            }
+            other => panic!("unexpected indexed page result: {other:?}"),
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].dentry.name_hex, "6d6574726963732e6a736f6e");
     }
 
     #[test]

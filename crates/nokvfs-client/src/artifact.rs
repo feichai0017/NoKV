@@ -16,6 +16,7 @@ const DEFAULT_ARTIFACT_UID: u32 = 1000;
 const DEFAULT_ARTIFACT_GID: u32 = 1000;
 const DEFAULT_ARTIFACT_PRODUCER: &str = "nokvfs-client";
 const DEFAULT_ARTIFACT_CONTENT_TYPE: &str = "application/octet-stream";
+const ARTIFACT_LIST_PAGE_SIZE: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactRepositoryOptions {
@@ -39,6 +40,8 @@ pub trait ArtifactBackend {
     fn lookup_path(&self, absolute_path: &str) -> Result<Option<DentryWithAttr>, ClientError>;
 
     fn list_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError>;
+
+    fn list_indexed_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError>;
 
     fn create_directory_path(
         &self,
@@ -184,7 +187,7 @@ where
         }
         let mut entries = self
             .backend
-            .list_path(&absolute_path)?
+            .list_indexed_path(&absolute_path)?
             .into_iter()
             .map(|entry| {
                 let child_path = child_artifact_path(&normalized, &entry)?;
@@ -283,6 +286,10 @@ where
         (*self).list_path(absolute_path)
     }
 
+    fn list_indexed_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
+        (*self).list_indexed_path(absolute_path)
+    }
+
     fn create_directory_path(
         &self,
         absolute_path: &str,
@@ -335,6 +342,31 @@ where
 
     fn list_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
         NoKvFs::read_dir_plus_path(self, absolute_path).map_err(ClientError::from)
+    }
+
+    fn list_indexed_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
+        let mut entries = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = NoKvFs::list_indexed_path_page(
+                self,
+                absolute_path,
+                cursor.as_ref(),
+                ARTIFACT_LIST_PAGE_SIZE,
+            )?;
+            let page_empty = page.entries.is_empty();
+            entries.extend(page.entries);
+            let Some(next_cursor) = page.next_cursor else {
+                break;
+            };
+            if page_empty || cursor.as_ref() == Some(&next_cursor) {
+                return Err(ClientError::Protocol(
+                    "indexed artifact list page cursor did not advance".to_owned(),
+                ));
+            }
+            cursor = Some(next_cursor);
+        }
+        Ok(entries)
     }
 
     fn create_directory_path(
@@ -400,6 +432,10 @@ where
 
     fn list_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
         self.metadata().list(absolute_path)
+    }
+
+    fn list_indexed_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
+        self.metadata().list_indexed(absolute_path)
     }
 
     fn create_directory_path(

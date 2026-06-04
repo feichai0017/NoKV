@@ -58,6 +58,11 @@ pub enum MetadataRpcRequest {
         after_name_hex: Option<String>,
         limit: usize,
     },
+    ReadIndexedPathPage {
+        path: String,
+        after_name_hex: Option<String>,
+        limit: usize,
+    },
     CreateDir {
         parent: u64,
         name: String,

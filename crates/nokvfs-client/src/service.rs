@@ -610,6 +610,26 @@ impl MetadataClient {
         Ok(entries)
     }
 
+    pub fn list_indexed(&self, path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
+        let mut entries = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = self.list_indexed_page(path, cursor.as_ref(), DEFAULT_LIST_PAGE_SIZE)?;
+            let page_empty = page.entries.is_empty();
+            entries.extend(page.entries);
+            let Some(next_cursor) = page.next_cursor else {
+                break;
+            };
+            if page_empty || cursor.as_ref() == Some(&next_cursor) {
+                return Err(ClientError::Protocol(
+                    "indexed metadata list page cursor did not advance".to_owned(),
+                ));
+            }
+            cursor = Some(next_cursor);
+        }
+        Ok(entries)
+    }
+
     pub fn list_page(
         &self,
         path: &str,
@@ -617,6 +637,35 @@ impl MetadataClient {
         limit: usize,
     ) -> Result<ClientReadDirPlusPage, ClientError> {
         match self.call(MetadataRpcRequest::ReadDirPlusPathPage {
+            path: path.to_owned(),
+            after_name_hex: after.map(encode_name_cursor),
+            limit,
+        })? {
+            MetadataRpcResult::DentriesPage {
+                entries,
+                next_name_hex,
+            } => Ok(ClientReadDirPlusPage {
+                entries: entries
+                    .into_iter()
+                    .map(wire_dentry)
+                    .collect::<Result<Vec<_>, _>>()?,
+                next_cursor: next_name_hex
+                    .as_deref()
+                    .map(decode_name_cursor)
+                    .transpose()
+                    .map_err(|err| ClientError::Protocol(err.to_string()))?,
+            }),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn list_indexed_page(
+        &self,
+        path: &str,
+        after: Option<&DentryName>,
+        limit: usize,
+    ) -> Result<ClientReadDirPlusPage, ClientError> {
+        match self.call(MetadataRpcRequest::ReadIndexedPathPage {
             path: path.to_owned(),
             after_name_hex: after.map(encode_name_cursor),
             limit,
@@ -1043,6 +1092,7 @@ fn request_requires_observed_position(request: &MetadataRpcRequest) -> bool {
             | MetadataRpcRequest::ReadDirPlusPage { .. }
             | MetadataRpcRequest::ReadDirPlusPath { .. }
             | MetadataRpcRequest::ReadDirPlusPathPage { .. }
+            | MetadataRpcRequest::ReadIndexedPathPage { .. }
             | MetadataRpcRequest::ReadBodyPlan { .. }
     )
 }
@@ -2220,6 +2270,49 @@ mod tests {
         let page = client
             .metadata()
             .list_page("/runs", Some(&after), 2)
+            .unwrap();
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].dentry.name.as_bytes(), b"b.bin");
+        assert_eq!(
+            page.next_cursor.as_ref().map(DentryName::as_bytes),
+            Some(b"b.bin".as_slice())
+        );
+    }
+
+    #[test]
+    fn service_indexed_list_page_uses_indexed_cursor_rpc() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::ReadIndexedPathPage {
+                    path,
+                    after_name_hex,
+                    limit
+                } if path == "/runs" && after_name_hex.as_deref() == Some("612e62696e") && limit == 2
+            ));
+            write_frame(
+                &mut stream,
+                request_id,
+                flags,
+                &response_body(
+                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"622e62696e","child":3,"child_type":"file","attr_generation":3},"attr":{"inode":3,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}],"next_name_hex":"622e62696e"}}"#,
+                ),
+            )
+            .unwrap();
+        });
+        let client = NoKvFsClient::connect(addr, MemoryObjectStore::new());
+        let after = DentryName::new(b"a.bin".to_vec()).unwrap();
+        let page = client
+            .metadata()
+            .list_indexed_page("/runs", Some(&after), 2)
             .unwrap();
         assert_eq!(page.entries.len(), 1);
         assert_eq!(page.entries[0].dentry.name.as_bytes(), b"b.bin");
