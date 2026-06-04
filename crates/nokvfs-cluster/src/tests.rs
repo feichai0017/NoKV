@@ -524,6 +524,43 @@ fn shared_log_metadata_store_persists_file_applied_frontier() {
 }
 
 #[test]
+fn shared_log_metadata_store_compacts_only_applied_prefix() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+
+    shared.commit_metadata(command(b"applied", 2)).unwrap();
+    shared
+        .log()
+        .append_batch(
+            LogTerm::new(1).unwrap(),
+            mount,
+            &[command(b"durable-but-unapplied", 3)],
+        )
+        .unwrap();
+
+    let frontier = shared
+        .compact_applied_log(LogIndex::new(3).unwrap())
+        .unwrap()
+        .unwrap();
+    assert_eq!(frontier.applied_position.index, LogIndex::new(1).unwrap());
+    assert_eq!(frontier.durable_position.index, LogIndex::new(2).unwrap());
+    assert_eq!(frontier.min_retained_index, LogIndex::new(2).unwrap());
+    assert_eq!(frontier.compact_through(), Some(LogIndex::new(1).unwrap()));
+    assert!(matches!(
+        shared.log().read_from(LogIndex::new(1).unwrap(), 0),
+        Err(SharedLogError::Compacted { .. })
+    ));
+    let tail = shared
+        .log()
+        .read_from(LogIndex::new(2).unwrap(), 0)
+        .unwrap();
+    assert_eq!(tail.len(), 1);
+    assert_eq!(tail[0].commands[0].request_id, b"durable-but-unapplied");
+}
+
+#[test]
 fn shared_log_metadata_store_rejects_failed_predicate_before_log_append() {
     let log = InMemorySharedLog::new();
     let store = HoltMetadataStore::open_memory().unwrap();

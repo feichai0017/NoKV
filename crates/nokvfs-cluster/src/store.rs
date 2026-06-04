@@ -8,9 +8,9 @@ use nokvfs_meta::command::{
 use nokvfs_types::{MountId, RecordFamily};
 
 use crate::{
-    AppliedFrontierStore, AppliedMetadataCommand, ApplyFrontier, DurableReceipt, LogIndex,
-    LogPosition, LogTerm, MemoryAppliedFrontierStore, MetadataGroup, MetadataLogSink, ReplayDriver,
-    ReplayError, ReplayOutcome, SharedLogError, SharedMetadataLog,
+    AppliedFrontierStore, AppliedMetadataCommand, ApplyFrontier, CheckpointFrontier,
+    DurableReceipt, LogIndex, LogPosition, LogTerm, MemoryAppliedFrontierStore, MetadataGroup,
+    MetadataLogSink, ReplayDriver, ReplayError, ReplayOutcome, SharedLogError, SharedMetadataLog,
 };
 
 #[derive(Debug)]
@@ -117,6 +117,49 @@ where
             .lock()
             .map(|frontier| *frontier)
             .unwrap_or(None)
+    }
+
+    pub fn checkpoint_frontier(
+        &self,
+        target_min_retained_index: LogIndex,
+    ) -> Result<Option<CheckpointFrontier>, SharedLogError> {
+        let Some(applied) = self.applied_frontier() else {
+            return Ok(None);
+        };
+        let committed = self.log.committed_index();
+        if committed == LogIndex::ZERO {
+            return Err(SharedLogError::Backend(
+                "applied frontier exists but shared log has no committed entries".to_owned(),
+            ));
+        }
+        let compact_index = previous_log_index(target_min_retained_index)
+            .map(|requested| requested.min(applied.position.index));
+        let min_retained_index = match compact_index {
+            Some(index) => next_retained_index(index)?,
+            None => target_min_retained_index,
+        };
+        Ok(Some(CheckpointFrontier {
+            durable_position: LogPosition {
+                term: self.term,
+                index: committed,
+            },
+            applied_position: applied.position,
+            min_retained_index,
+            max_commit_version: applied.commit_version,
+        }))
+    }
+
+    pub fn compact_applied_log(
+        &self,
+        target_min_retained_index: LogIndex,
+    ) -> Result<Option<CheckpointFrontier>, SharedLogError> {
+        let Some(frontier) = self.checkpoint_frontier(target_min_retained_index)? else {
+            return Ok(None);
+        };
+        if let Some(compact_through) = frontier.compact_through() {
+            self.log.compact_through(compact_through)?;
+        }
+        Ok(Some(frontier))
     }
 }
 
@@ -337,4 +380,19 @@ where
 
 fn frontier_position_is_newer(next: LogPosition, current: LogPosition) -> bool {
     (next.term, next.index) >= (current.term, current.index)
+}
+
+fn previous_log_index(index: LogIndex) -> Option<LogIndex> {
+    let previous = index.get().checked_sub(1)?;
+    if previous == 0 {
+        return None;
+    }
+    LogIndex::new(previous).ok()
+}
+
+fn next_retained_index(index: LogIndex) -> Result<LogIndex, SharedLogError> {
+    let next = index.get().checked_add(1).ok_or_else(|| {
+        SharedLogError::Backend(format!("log index overflow after {}", index.get()))
+    })?;
+    LogIndex::new(next)
 }

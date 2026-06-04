@@ -7,8 +7,8 @@ use std::sync::Arc;
 use std::thread;
 
 use nokvfs_cluster::{
-    ApplyFrontier, FileAppliedFrontierStore, FileSharedLog, LogTerm, SharedLogError,
-    SharedLogMetadataStore,
+    ApplyFrontier, CheckpointFrontier, FileAppliedFrontierStore, FileSharedLog, LogIndex, LogTerm,
+    SharedLogError, SharedLogMetadataStore,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -123,8 +123,9 @@ impl Server {
     pub fn run_manual_gc(&self, limit: usize) -> Result<String, ServerError> {
         let object = self.service.cleanup_pending_objects(limit)?;
         let history = self.service.cleanup_history(limit)?;
+        let metadata_log = self.compact_metadata_log()?;
         Ok(format!(
-            "{{\"object_gc\":{{\"scanned\":{},\"blocked_by_snapshots\":{},\"attempted\":{},\"deleted\":{},\"missing\":{},\"records_removed\":{}}},\"history_gc\":{{\"scanned\":{},\"removed\":{},\"retained_by_snapshots\":{}}}}}\n",
+            "{{\"object_gc\":{{\"scanned\":{},\"blocked_by_snapshots\":{},\"attempted\":{},\"deleted\":{},\"missing\":{},\"records_removed\":{}}},\"history_gc\":{{\"scanned\":{},\"removed\":{},\"retained_by_snapshots\":{}}},\"metadata_log\":{}}}\n",
             object.scanned,
             object.blocked_by_snapshots,
             object.attempted,
@@ -134,7 +135,32 @@ impl Server {
             history.scanned,
             history.removed,
             history.retained_by_snapshots,
+            metadata_log_gc_json(self.metadata_log_enabled, metadata_log),
         ))
+    }
+
+    fn compact_metadata_log(&self) -> Result<Option<CheckpointFrontier>, ServerError> {
+        let Some(metadata_log) = self.metadata_log.as_ref() else {
+            return Ok(None);
+        };
+        let Some(applied) = metadata_log.applied_frontier() else {
+            return Ok(None);
+        };
+        let target = applied
+            .position
+            .index
+            .get()
+            .checked_add(1)
+            .ok_or_else(|| {
+                ServerError::SharedLog(SharedLogError::Backend(format!(
+                    "metadata log index overflow after {}",
+                    applied.position.index.get()
+                )))
+            })
+            .and_then(|next| LogIndex::new(next).map_err(ServerError::SharedLog))?;
+        metadata_log
+            .compact_applied_log(target)
+            .map_err(ServerError::SharedLog)
     }
 }
 
@@ -169,6 +195,28 @@ fn metadata_log_json(enabled: bool, frontier: Option<ApplyFrontier>) -> String {
             frontier.commit_version.get(),
         ),
         None if enabled => "{\"enabled\":true,\"applied_term\":null,\"applied_index\":null,\"commit_version\":null}".to_owned(),
+        None => "{\"enabled\":false}".to_owned(),
+    }
+}
+
+fn metadata_log_gc_json(enabled: bool, frontier: Option<CheckpointFrontier>) -> String {
+    match frontier {
+        Some(frontier) => format!(
+            "{{\"enabled\":true,\"durable_term\":{},\"durable_index\":{},\"applied_term\":{},\"applied_index\":{},\"min_retained_index\":{},\"max_commit_version\":{},\"compacted_through\":{}}}",
+            frontier.durable_position.term.get(),
+            frontier.durable_position.index.get(),
+            frontier.applied_position.term.get(),
+            frontier.applied_position.index.get(),
+            frontier.min_retained_index.get(),
+            frontier.max_commit_version.get(),
+            frontier
+                .compact_through()
+                .map(|index| index.get().to_string())
+                .unwrap_or_else(|| "null".to_owned()),
+        ),
+        None if enabled => {
+            "{\"enabled\":true,\"durable_term\":null,\"durable_index\":null,\"applied_term\":null,\"applied_index\":null,\"min_retained_index\":null,\"max_commit_version\":null,\"compacted_through\":null}".to_owned()
+        }
         None => "{\"enabled\":false}".to_owned(),
     }
 }
@@ -285,6 +333,7 @@ pub(crate) mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
+    use nokvfs_cluster::SharedMetadataLog;
     use nokvfs_meta::{HistoryGcOptions, ObjectGcOptions};
     use nokvfs_object::{ObjectStoreConfig, S3ObjectStoreOptions};
     use nokvfs_types::MountId;
@@ -336,6 +385,28 @@ pub(crate) mod tests {
         let body = server.run_manual_gc(128).unwrap();
         assert!(body.contains("\"object_gc\""));
         assert!(body.contains("\"history_gc\""));
+        assert!(body.contains("\"metadata_log\":{\"enabled\":false}"));
+    }
+
+    #[test]
+    fn manual_gc_compacts_metadata_log_through_applied_frontier() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        server
+            .service()
+            .create_dir_path("/runs", 0o755, 1000, 1000)
+            .unwrap();
+        let applied = server.metadata_log_frontier().unwrap();
+
+        let body = server.run_manual_gc(128).unwrap();
+        assert!(body.contains("\"metadata_log\":{\"enabled\":true"));
+        assert!(body.contains("\"compacted_through\":"));
+        let log = server.metadata_log.as_ref().unwrap().log();
+        assert!(matches!(
+            log.read_from(applied.position.index, 0),
+            Err(SharedLogError::Compacted { .. })
+        ));
     }
 
     #[test]
