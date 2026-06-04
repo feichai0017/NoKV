@@ -17,6 +17,7 @@ pub struct InMemorySharedLog {
 #[derive(Debug)]
 struct InMemoryState {
     next_index: u64,
+    committed_position: Option<LogPosition>,
     compacted_through: LogIndex,
     entries: VecDeque<MetadataLogEntry>,
 }
@@ -26,6 +27,7 @@ impl Default for InMemorySharedLog {
         Self {
             inner: Mutex::new(InMemoryState {
                 next_index: 1,
+                committed_position: None,
                 compacted_through: LogIndex::ZERO,
                 entries: VecDeque::new(),
             }),
@@ -56,6 +58,7 @@ impl SharedMetadataLog for InMemorySharedLog {
         let index = LogIndex::new(inner.next_index)?;
         inner.next_index = inner.next_index.saturating_add(1);
         let position = LogPosition { term, index };
+        inner.committed_position = Some(position);
         let receipts = commands
             .iter()
             .enumerate()
@@ -116,12 +119,10 @@ impl SharedMetadataLog for InMemorySharedLog {
         Ok(())
     }
 
-    fn committed_index(&self) -> LogIndex {
+    fn committed_position(&self) -> Option<LogPosition> {
         self.inner
             .lock()
-            .map(|inner| {
-                LogIndex::new(inner.next_index.saturating_sub(1)).unwrap_or(LogIndex::ZERO)
-            })
-            .unwrap_or(LogIndex::ZERO)
+            .map(|inner| inner.committed_position)
+            .unwrap_or(None)
     }
 }

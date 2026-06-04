@@ -41,6 +41,7 @@ pub enum FileSharedLogSync {
 struct FileLogState {
     file: File,
     next_index: u64,
+    committed_position: Option<LogPosition>,
     compacted_through: LogIndex,
     entries: VecDeque<MetadataLogEntry>,
 }
@@ -68,6 +69,7 @@ impl FileSharedLog {
             inner: Mutex::new(FileLogState {
                 file,
                 next_index: recovered.next_index,
+                committed_position: recovered.committed_position,
                 compacted_through: recovered.compacted_through,
                 entries: recovered.entries,
             }),
@@ -99,6 +101,7 @@ impl SharedMetadataLog for FileSharedLog {
         };
         append_record(&mut inner.file, &encode_entry_record(&entry)?, self.sync)?;
         inner.next_index = inner.next_index.saturating_add(1);
+        inner.committed_position = Some(position);
         inner.entries.push_back(entry);
         Ok(commands
             .iter()
@@ -163,19 +166,18 @@ impl SharedMetadataLog for FileSharedLog {
         Ok(())
     }
 
-    fn committed_index(&self) -> LogIndex {
+    fn committed_position(&self) -> Option<LogPosition> {
         self.inner
             .lock()
-            .map(|inner| {
-                LogIndex::new(inner.next_index.saturating_sub(1)).unwrap_or(LogIndex::ZERO)
-            })
-            .unwrap_or(LogIndex::ZERO)
+            .map(|inner| inner.committed_position)
+            .unwrap_or(None)
     }
 }
 
 #[derive(Debug)]
 struct RecoveredLog {
     next_index: u64,
+    committed_position: Option<LogPosition>,
     compacted_through: LogIndex,
     entries: VecDeque<MetadataLogEntry>,
 }
@@ -184,6 +186,7 @@ fn recover(file: &mut File) -> Result<RecoveredLog, SharedLogError> {
     file.seek(SeekFrom::Start(0)).map_err(to_backend_error)?;
     let mut entries = VecDeque::new();
     let mut compacted_through = LogIndex::ZERO;
+    let mut committed_position = None;
     let mut next_index = 1_u64;
     loop {
         let frame_start = file.stream_position().map_err(to_backend_error)?;
@@ -199,6 +202,7 @@ fn recover(file: &mut File) -> Result<RecoveredLog, SharedLogError> {
         match decode_record(&payload)? {
             DecodedRecord::Entry(entry) => {
                 next_index = next_index.max(entry.position.index.get().saturating_add(1));
+                committed_position = Some(entry.position);
                 if entry.position.index > compacted_through {
                     entries.push_back(entry);
                 }
@@ -216,6 +220,7 @@ fn recover(file: &mut File) -> Result<RecoveredLog, SharedLogError> {
     }
     Ok(RecoveredLog {
         next_index,
+        committed_position,
         compacted_through,
         entries,
     })

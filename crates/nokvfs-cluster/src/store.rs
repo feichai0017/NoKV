@@ -296,12 +296,11 @@ where
         let Some(applied) = self.applied_frontier() else {
             return Ok(None);
         };
-        let committed = self.log.committed_index();
-        if committed == LogIndex::ZERO {
+        let Some(committed) = self.log.committed_position() else {
             return Err(SharedLogError::Backend(
                 "applied frontier exists but shared log has no committed entries".to_owned(),
             ));
-        }
+        };
         let compact_index = previous_log_index(target_min_retained_index)
             .map(|requested| requested.min(applied.position.index));
         let min_retained_index = match compact_index {
@@ -309,10 +308,7 @@ where
             None => target_min_retained_index,
         };
         Ok(Some(CheckpointFrontier {
-            durable_position: LogPosition {
-                term: self.term,
-                index: committed,
-            },
+            durable_position: committed,
             applied_position: applied.position,
             min_retained_index,
             max_commit_version: applied.commit_version,
@@ -351,13 +347,7 @@ where
             ReadFreshness::AppliedThrough(position) => {
                 (position.index != LogIndex::ZERO).then_some(position)
             }
-            ReadFreshness::CurrentCommitted => {
-                let index = self.log.committed_index();
-                (index != LogIndex::ZERO).then_some(LogPosition {
-                    term: self.term,
-                    index,
-                })
-            }
+            ReadFreshness::CurrentCommitted => self.log.committed_position(),
         }
     }
 }

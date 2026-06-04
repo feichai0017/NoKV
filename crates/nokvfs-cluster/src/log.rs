@@ -1,4 +1,4 @@
-use crate::{DurableReceipt, LogIndex, LogTerm, MetadataLogEntry, SharedLogError};
+use crate::{DurableReceipt, LogIndex, LogPosition, LogTerm, MetadataLogEntry, SharedLogError};
 use nokvfs_meta::command::MetadataCommand;
 use nokvfs_types::MountId;
 
@@ -18,5 +18,11 @@ pub trait SharedMetadataLog {
 
     fn compact_through(&self, index: LogIndex) -> Result<(), SharedLogError>;
 
-    fn committed_index(&self) -> LogIndex;
+    fn committed_position(&self) -> Option<LogPosition>;
+
+    fn committed_index(&self) -> LogIndex {
+        self.committed_position()
+            .map(|position| position.index)
+            .unwrap_or(LogIndex::ZERO)
+    }
 }

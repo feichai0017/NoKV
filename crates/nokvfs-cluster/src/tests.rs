@@ -451,6 +451,35 @@ fn file_shared_log_persists_compaction_marker_and_continues_indexes() {
 }
 
 #[test]
+fn file_shared_log_recovers_committed_position_after_full_compaction() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    {
+        let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
+        log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+            .unwrap();
+        log.append_batch(LogTerm::new(2).unwrap(), mount, &[command(b"b", 3)])
+            .unwrap();
+        log.compact_through(LogIndex::new(2).unwrap()).unwrap();
+    }
+
+    let reopened = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
+    assert_eq!(
+        reopened.committed_position(),
+        Some(LogPosition {
+            term: LogTerm::new(2).unwrap(),
+            index: LogIndex::new(2).unwrap(),
+        })
+    );
+    assert_eq!(reopened.committed_index().get(), 2);
+    assert!(matches!(
+        reopened.read_from(LogIndex::new(2).unwrap(), 0),
+        Err(SharedLogError::Compacted { .. })
+    ));
+}
+
+#[test]
 fn file_shared_log_no_sync_reopens_after_clean_close() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("metadata.log");
@@ -632,6 +661,52 @@ fn shared_log_metadata_store_enforces_receipt_read_freshness() {
 
     learner
         .ensure_read_freshness(ReadFreshness::AppliedThrough(receipt.position))
+        .unwrap();
+}
+
+#[test]
+fn shared_log_metadata_store_current_committed_uses_log_position_term() {
+    let log = InMemorySharedLog::new();
+    let leader = MetadataStoreSink {
+        store: HoltMetadataStore::open_memory().unwrap(),
+    };
+    let mount = MountId::new(1).unwrap();
+    MetadataGroup::new(&log, &leader, LogTerm::new(1).unwrap(), mount)
+        .commit_batch(&[command(b"a", 2)])
+        .unwrap();
+    MetadataGroup::new(&log, &leader, LogTerm::new(2).unwrap(), mount)
+        .commit_batch(&[command(b"b", 3)])
+        .unwrap();
+    let learner = SharedLogMetadataStore::new(
+        HoltMetadataStore::open_memory().unwrap(),
+        log,
+        LogTerm::new(99).unwrap(),
+        mount,
+    );
+
+    ReplayDriver::new(learner.log(), &learner)
+        .replay_from(LogIndex::new(1).unwrap(), 1)
+        .unwrap();
+
+    assert!(matches!(
+        learner.ensure_read_freshness(ReadFreshness::CurrentCommitted),
+        Err(SharedLogError::ReadNotFresh {
+            required,
+            applied: Some(applied),
+        }) if required == LogPosition {
+            term: LogTerm::new(2).unwrap(),
+            index: LogIndex::new(2).unwrap(),
+        } && applied == LogPosition {
+            term: LogTerm::new(1).unwrap(),
+            index: LogIndex::new(1).unwrap(),
+        }
+    ));
+
+    ReplayDriver::new(learner.log(), &learner)
+        .replay_from(LogIndex::new(2).unwrap(), 1)
+        .unwrap();
+    learner
+        .ensure_read_freshness(ReadFreshness::CurrentCommitted)
         .unwrap();
 }
 

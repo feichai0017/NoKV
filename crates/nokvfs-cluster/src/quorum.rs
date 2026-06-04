@@ -20,7 +20,7 @@ struct QuorumState {
     learners: BTreeMap<NodeId, ReplicaState>,
     committed_entries: VecDeque<MetadataLogEntry>,
     next_index: u64,
-    committed_index: LogIndex,
+    committed_position: Option<LogPosition>,
     compacted_through: LogIndex,
 }
 
@@ -67,7 +67,7 @@ impl InMemoryQuorumLog {
                 learners: learner_map,
                 committed_entries: VecDeque::new(),
                 next_index: 1,
-                committed_index: LogIndex::ZERO,
+                committed_position: None,
                 compacted_through: LogIndex::ZERO,
             }),
         })
@@ -268,7 +268,7 @@ impl SharedMetadataLog for InMemoryQuorumLog {
             }
         }
         inner.committed_entries.push_back(entry);
-        inner.committed_index = index;
+        inner.committed_position = Some(position);
 
         Ok(commands
             .iter()
@@ -321,11 +321,11 @@ impl SharedMetadataLog for InMemoryQuorumLog {
         Ok(())
     }
 
-    fn committed_index(&self) -> LogIndex {
+    fn committed_position(&self) -> Option<LogPosition> {
         self.inner
             .lock()
-            .map(|inner| inner.committed_index)
-            .unwrap_or(LogIndex::ZERO)
+            .map(|inner| inner.committed_position)
+            .unwrap_or(None)
     }
 }
 
