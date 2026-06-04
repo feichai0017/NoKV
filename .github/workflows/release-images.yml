@@ -12,6 +12,14 @@ on:
       version:
         description: "Release version, for example v0.1.0"
         required: true
+      rust_version:
+        description: "Rust toolchain image version"
+        required: true
+        default: "1.88"
+      debian_version:
+        description: "Debian image version"
+        required: true
+        default: "bookworm"
 
 permissions:
   contents: read
@@ -84,6 +92,11 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            RUST_VERSION=${{ inputs.rust_version }}
+            DEBIAN_VERSION=${{ inputs.debian_version }}
+            NOKV_PACKAGE=nokvfs-cli
+            NOKV_BINARY=nokv-fs
           push: true
           tags: ${{ steps.tags.outputs.ghcr }}
 
@@ -102,5 +115,10 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            RUST_VERSION=${{ inputs.rust_version }}
+            DEBIAN_VERSION=${{ inputs.debian_version }}
+            NOKV_PACKAGE=nokvfs-cli
+            NOKV_BINARY=nokv-fs
           push: true
           tags: ${{ steps.tags.outputs.dockerhub }}

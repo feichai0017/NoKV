@@ -17,11 +17,6 @@ on:
         options:
           - "true"
           - "false"
-      publish_bench:
-        description: "Also publish the benchmark crate"
-        required: true
-        default: false
-        type: boolean
 
 permissions:
   contents: read
@@ -53,9 +48,6 @@ jobs:
             nokvfs-server
             nokvfs-cli
           )
-          if [[ "${{ inputs.publish_bench }}" == "true" ]]; then
-            crates+=(nokvfs-bench)
-          fi
           {
             echo "list<<EOF"
             printf '%s\n' "${crates[@]}"

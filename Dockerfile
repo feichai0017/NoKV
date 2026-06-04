@@ -3,7 +3,14 @@
 
 # syntax=docker/dockerfile:1
 
-FROM rust:1.88-bookworm AS builder
+ARG RUST_VERSION=1.88
+ARG DEBIAN_VERSION=bookworm
+ARG NOKV_PACKAGE=nokvfs-cli
+ARG NOKV_BINARY=nokv-fs
+
+FROM rust:${RUST_VERSION}-${DEBIAN_VERSION} AS builder
+ARG NOKV_PACKAGE
+ARG NOKV_BINARY
 WORKDIR /workspace
 
 COPY Cargo.toml Cargo.lock ./
@@ -13,10 +20,10 @@ COPY bench ./bench
 RUN --mount=type=cache,target=/usr/local/cargo/registry \
     --mount=type=cache,target=/usr/local/cargo/git \
     --mount=type=cache,target=/workspace/target \
-    cargo build --release --locked -p nokvfs-cli --bin nokv-fs \
-    && cp /workspace/target/release/nokv-fs /usr/local/bin/nokv-fs
+    cargo build --release --locked -p "${NOKV_PACKAGE}" --bin "${NOKV_BINARY}" \
+    && cp "/workspace/target/release/${NOKV_BINARY}" /usr/local/bin/nokv-fs
 
-FROM debian:bookworm-slim
+FROM debian:${DEBIAN_VERSION}-slim
 RUN useradd --system --create-home --home-dir /var/lib/nokv nokv \
     && apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates fuse3 \
