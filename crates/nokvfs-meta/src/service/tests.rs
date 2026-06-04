@@ -530,6 +530,60 @@ fn update_root_attrs_changes_root_inode_without_dentry_projection() {
 }
 
 #[test]
+fn history_writes_are_snapshot_retention_driven() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+
+    let before_hot = metadata.metadata_store_stats();
+    service
+        .update_root_attrs(UpdateAttr {
+            mode: Some(0o700),
+            ..UpdateAttr::default()
+        })
+        .unwrap();
+    let after_hot = metadata.metadata_store_stats();
+    assert_eq!(
+        after_hot.history_write_total - before_hot.history_write_total,
+        0
+    );
+
+    let snapshot = service.snapshot_subtree(InodeId::root()).unwrap();
+    let snapshot_attr = service
+        .get_attr_at_snapshot(snapshot.snapshot_id, InodeId::root())
+        .unwrap()
+        .unwrap();
+    let before_retained = metadata.metadata_store_stats();
+    service
+        .update_root_attrs(UpdateAttr {
+            mode: Some(0o750),
+            ..UpdateAttr::default()
+        })
+        .unwrap();
+    let after_retained = metadata.metadata_store_stats();
+
+    assert_eq!(
+        after_retained.history_write_total - before_retained.history_write_total,
+        1
+    );
+    assert_eq!(
+        service
+            .get_attr_at_snapshot(snapshot.snapshot_id, InodeId::root())
+            .unwrap()
+            .unwrap(),
+        snapshot_attr
+    );
+    assert_eq!(
+        service.get_attr(InodeId::root()).unwrap().unwrap().mode,
+        0o750
+    );
+}
+
+#[test]
 fn create_file_hot_path_write_attribution_is_bounded() {
     let metadata = HoltMetadataStore::open_memory().unwrap();
     let service = NoKvFs::new(

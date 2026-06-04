@@ -112,6 +112,7 @@ struct CommandPlan {
     history_records: Vec<(RecordFamily, Vec<u8>, Vec<u8>)>,
     version_guards: Vec<VersionGuard>,
     prefix_empty_guards: Vec<PrefixEmptyGuard>,
+    retain_history: bool,
 }
 
 struct CurrentRecord {
@@ -431,21 +432,24 @@ impl HoltMetadataStore {
             }
         }
 
+        let retain_history = self.has_active_history_retention()?;
         let mut history_records = Vec::new();
-        for planned in &mutations {
-            if !family_requires_history(planned.mutation.family) {
-                continue;
-            }
-            if let Some(current) = self
-                .current_tree(planned.mutation.family)?
-                .get(&planned.mutation.key)
-                .map_err(to_backend_error)?
-            {
-                history_records.push((
-                    planned.mutation.family,
-                    planned.mutation.key.clone(),
-                    current,
-                ));
+        if retain_history {
+            for planned in &mutations {
+                if !family_requires_history(planned.mutation.family) {
+                    continue;
+                }
+                if let Some(current) = self
+                    .current_tree(planned.mutation.family)?
+                    .get(&planned.mutation.key)
+                    .map_err(to_backend_error)?
+                {
+                    history_records.push((
+                        planned.mutation.family,
+                        planned.mutation.key.clone(),
+                        current,
+                    ));
+                }
             }
         }
 
@@ -454,6 +458,7 @@ impl HoltMetadataStore {
             history_records,
             version_guards,
             prefix_empty_guards,
+            retain_history,
         })
     }
 
@@ -483,6 +488,7 @@ impl HoltMetadataStore {
             .iter()
             .filter(|planned| {
                 planned.mutation.op == MutationOp::Delete
+                    && plan.retain_history
                     && family_requires_history(planned.mutation.family)
             })
             .count() as u64;
@@ -513,6 +519,7 @@ impl HoltMetadataStore {
                 }
                 for planned in &plan.mutations {
                     if planned.mutation.op == MutationOp::Delete
+                        && plan.retain_history
                         && family_requires_history(planned.mutation.family)
                     {
                         batch.put(
@@ -683,6 +690,21 @@ impl HoltMetadataStoreCounters {
             commit_prepare_ns_total: self.commit_prepare_ns_total.load(Ordering::Relaxed),
             atomic_apply_ns_total: self.atomic_apply_ns_total.load(Ordering::Relaxed),
         }
+    }
+}
+
+impl HoltMetadataStore {
+    fn has_active_history_retention(&self) -> Result<bool, MetadataError> {
+        let snapshot = self.current_tree(RecordFamily::Snapshot)?;
+        for entry in snapshot.range() {
+            let RangeEntry::Key { value, .. } = entry.map_err(to_backend_error)? else {
+                continue;
+            };
+            if decode_current_value(&value)?.1.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
     }
 }
 
@@ -1000,6 +1022,29 @@ mod tests {
         }
     }
 
+    fn snapshot_pin_command(request_id: &[u8], commit: u64) -> MetadataCommand {
+        MetadataCommand {
+            request_id: request_id.to_vec(),
+            kind: CommandKind::SnapshotSubtree,
+            read_version: version(commit - 1),
+            commit_version: version(commit),
+            primary_family: RecordFamily::Snapshot,
+            primary_key: b"snapshot/1".to_vec(),
+            predicates: vec![PredicateRef {
+                family: RecordFamily::Snapshot,
+                key: b"snapshot/1".to_vec(),
+                predicate: Predicate::NotExists,
+            }],
+            mutations: vec![Mutation {
+                family: RecordFamily::Snapshot,
+                key: b"snapshot/1".to_vec(),
+                op: MutationOp::Put,
+                value: Some(Value(b"pin".to_vec())),
+            }],
+            watch: Vec::new(),
+        }
+    }
+
     #[test]
     fn commit_put_then_get_and_scan() {
         let store = HoltMetadataStore::open_memory().unwrap();
@@ -1088,11 +1133,14 @@ mod tests {
             .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
             .unwrap();
         store
+            .commit_metadata(snapshot_pin_command(b"snapshot-1", 3))
+            .unwrap();
+        store
             .commit_metadata(MetadataCommand {
                 request_id: b"req-delete".to_vec(),
                 kind: CommandKind::RemoveFile,
-                read_version: version(2),
-                commit_version: version(3),
+                read_version: version(3),
+                commit_version: version(4),
                 primary_family: RecordFamily::Dentry,
                 primary_key: b"dir/a".to_vec(),
                 predicates: vec![PredicateRef {
@@ -1115,7 +1163,7 @@ mod tests {
                 .get(
                     RecordFamily::Dentry,
                     b"dir/a",
-                    version(3),
+                    version(4),
                     ReadPurpose::UserStrong
                 )
                 .unwrap(),
@@ -1294,7 +1342,7 @@ mod tests {
     }
 
     #[test]
-    fn prune_history_removes_all_old_versions_without_snapshot_floor() {
+    fn hot_path_skips_history_without_snapshot_retention() {
         let store = HoltMetadataStore::open_memory().unwrap();
         store
             .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
@@ -1303,6 +1351,7 @@ mod tests {
             .commit_metadata(replace_command(b"dir/a", b"req-2", b"value-b", 2, 3))
             .unwrap();
 
+        assert_eq!(store.metadata_store_stats().history_write_total, 0);
         assert_eq!(
             store
                 .get(
@@ -1312,7 +1361,7 @@ mod tests {
                     ReadPurpose::Snapshot
                 )
                 .unwrap(),
-            Some(Value(b"value-a".to_vec()))
+            None
         );
         let outcome = store
             .prune_history(HistoryPruneRequest {
@@ -1320,7 +1369,7 @@ mod tests {
                 limit: 100,
             })
             .unwrap();
-        assert_eq!(outcome.removed, 1);
+        assert_eq!(outcome.removed, 0);
         assert_eq!(
             store
                 .get(
@@ -1352,15 +1401,20 @@ mod tests {
             .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
             .unwrap();
         store
-            .commit_metadata(replace_command(b"dir/a", b"req-2", b"value-b", 2, 3))
+            .commit_metadata(snapshot_pin_command(b"snapshot-1", 3))
             .unwrap();
         store
-            .commit_metadata(replace_command(b"dir/a", b"req-3", b"value-c", 3, 4))
+            .commit_metadata(replace_command(b"dir/a", b"req-2", b"value-b", 2, 4))
             .unwrap();
+        store
+            .commit_metadata(replace_command(b"dir/a", b"req-3", b"value-c", 4, 5))
+            .unwrap();
+
+        assert_eq!(store.metadata_store_stats().history_write_total, 2);
 
         let outcome = store
             .prune_history(HistoryPruneRequest {
-                retain_from: Some(version(4)),
+                retain_from: Some(version(5)),
                 limit: 100,
             })
             .unwrap();
@@ -1372,7 +1426,7 @@ mod tests {
                 .get(
                     RecordFamily::Dentry,
                     b"dir/a",
-                    version(3),
+                    version(4),
                     ReadPurpose::Snapshot
                 )
                 .unwrap(),
