@@ -79,3 +79,13 @@ impl LogIndex {
         self.0
     }
 }
+
+impl CheckpointFrontier {
+    pub fn compact_through(self) -> Option<LogIndex> {
+        let compacted = self.min_retained_index.get().checked_sub(1)?;
+        if compacted == 0 {
+            return None;
+        }
+        LogIndex::new(compacted).ok()
+    }
+}

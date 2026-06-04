@@ -1,7 +1,11 @@
 use std::sync::Mutex;
 
 use super::*;
-use nokvfs_meta::command::{CommandKind, MetadataCommand, Mutation, MutationOp, Value, Version};
+use nokvfs_meta::command::{
+    CommandKind, MetadataCommand, MetadataStore, MetadataStoreStatsProvider, Mutation, MutationOp,
+    ReadPurpose, Value, Version,
+};
+use nokvfs_meta::HoltMetadataStore;
 use nokvfs_types::{MountId, RecordFamily};
 
 fn version(raw: u64) -> Version {
@@ -32,6 +36,10 @@ struct RecordingSink {
     applied: Mutex<Vec<DurableReceipt>>,
 }
 
+struct MetadataStoreSink<M> {
+    store: M,
+}
+
 impl MetadataLogSink for RecordingSink {
     fn apply_command(
         &self,
@@ -44,6 +52,31 @@ impl MetadataLogSink for RecordingSink {
             receipt,
             applied_mutations: command.mutations.len(),
             watch_events: command.watch.len(),
+        })
+    }
+}
+
+impl<M> MetadataLogSink for MetadataStoreSink<M>
+where
+    M: MetadataStore,
+{
+    fn apply_command(
+        &self,
+        receipt: DurableReceipt,
+        command: MetadataCommand,
+    ) -> Result<AppliedMetadataCommand, ReplayError> {
+        let result = self
+            .store
+            .commit_metadata(command)
+            .map_err(|err| ReplayError::Apply {
+                position: receipt.position,
+                batch_position: receipt.batch_position,
+                message: err.to_string(),
+            })?;
+        Ok(AppliedMetadataCommand {
+            receipt,
+            applied_mutations: result.applied_mutations,
+            watch_events: result.watch_events,
         })
     }
 }
@@ -174,6 +207,117 @@ fn metadata_group_appends_and_applies_one_batch() {
         })
     );
     assert_eq!(log.committed_index().get(), 1);
+}
+
+#[test]
+fn replay_into_metadata_store_rebuilds_learner_state() {
+    let log = InMemorySharedLog::new();
+    let leader = MetadataStoreSink {
+        store: HoltMetadataStore::open_memory().unwrap(),
+    };
+    let learner = MetadataStoreSink {
+        store: HoltMetadataStore::open_memory().unwrap(),
+    };
+    let mount = MountId::new(1).unwrap();
+    let commands = vec![command(b"a", 2), command(b"b", 3)];
+
+    MetadataGroup::new(&log, &leader, LogTerm::new(1).unwrap(), mount)
+        .commit_batch(&commands)
+        .unwrap();
+
+    let outcome = ReplayDriver::new(&log, &learner)
+        .replay_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+
+    assert_eq!(outcome.commands, 2);
+    assert_eq!(
+        learner
+            .store
+            .get(
+                RecordFamily::Dentry,
+                b"a",
+                version(3),
+                ReadPurpose::UserStrong
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+    assert_eq!(
+        learner
+            .store
+            .get(
+                RecordFamily::Dentry,
+                b"b",
+                version(3),
+                ReadPurpose::UserStrong
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+}
+
+#[test]
+fn replay_into_metadata_store_is_idempotent_by_request_id() {
+    let log = InMemorySharedLog::new();
+    let learner = MetadataStoreSink {
+        store: HoltMetadataStore::open_memory().unwrap(),
+    };
+    let mount = MountId::new(1).unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+
+    ReplayDriver::new(&log, &learner)
+        .replay_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    ReplayDriver::new(&log, &learner)
+        .replay_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+
+    assert_eq!(learner.store.metadata_store_stats().dedupe_hit_total, 1);
+    assert_eq!(
+        learner
+            .store
+            .get(
+                RecordFamily::Dentry,
+                b"a",
+                version(2),
+                ReadPurpose::UserStrong
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+}
+
+#[test]
+fn checkpoint_frontier_compacts_before_first_retained_index() {
+    let frontier = CheckpointFrontier {
+        durable_position: LogPosition {
+            term: LogTerm::new(2).unwrap(),
+            index: LogIndex::new(12).unwrap(),
+        },
+        applied_position: LogPosition {
+            term: LogTerm::new(2).unwrap(),
+            index: LogIndex::new(10).unwrap(),
+        },
+        min_retained_index: LogIndex::new(7).unwrap(),
+        max_commit_version: version(30),
+    };
+
+    assert_eq!(frontier.compact_through(), Some(LogIndex::new(6).unwrap()));
+    assert_eq!(
+        CheckpointFrontier {
+            min_retained_index: LogIndex::new(1).unwrap(),
+            ..frontier
+        }
+        .compact_through(),
+        None
+    );
 }
 
 #[test]
