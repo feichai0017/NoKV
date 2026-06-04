@@ -48,6 +48,17 @@ aws --endpoint-url http://127.0.0.1:9000 \
   s3api create-bucket --bucket nokv
 ```
 
+For local end-to-end testing, the repository script can do these steps for a
+temporary RustFS directory and then run the NoKV-FS benchmark harness:
+
+```bash
+scripts/run-rustfs-e2e.sh
+```
+
+Use `NOKV_E2E_PROFILE`, `NOKV_E2E_WORKLOAD`, and
+`NOKV_E2E_OBJECT_CONCURRENCY` to change the benchmark shape without editing the
+script.
+
 ## Use RustFS With NoKV
 
 ```bash

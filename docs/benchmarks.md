@@ -25,6 +25,23 @@ The default object backend is a local RustFS endpoint at
 development credentials. Start RustFS first when running object-backed
 workloads.
 
+For a disposable local RustFS-backed end-to-end run, use the repository script:
+
+```bash
+scripts/run-rustfs-e2e.sh
+```
+
+The script starts RustFS with the AI training buffer profile, creates the
+default bucket, runs `nokv-fs-bench`, and removes its temporary RustFS data
+directory. Override the workload with environment variables, for example:
+
+```bash
+NOKV_E2E_PROFILE=standard \
+NOKV_E2E_WORKLOAD=checkpoint-publish \
+NOKV_E2E_OBJECT_CONCURRENCY=8 \
+scripts/run-rustfs-e2e.sh
+```
+
 The harness prints CSV:
 
 ```text
