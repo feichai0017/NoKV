@@ -9,8 +9,8 @@ use std::thread;
 use nokvfs_cluster::{
     compact_log_to_checkpoint, ApplyFrontier, CheckpointArtifact, CheckpointCatalog,
     CheckpointManifest, FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog,
-    FileSharedLogOptions, LogIndex, LogPosition, LogTerm, ReadFreshness, SharedLogError,
-    SharedLogMetadataStore, SharedLogRuntimeStats,
+    FileSharedLogOptions, LogIndex, LogPosition, LogTerm, SharedLogError, SharedLogMetadataStore,
+    SharedLogRuntimeStats,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -19,7 +19,7 @@ use nokvfs_meta::{
 use nokvfs_object::{ObjectError, S3ObjectStore};
 
 use crate::http;
-use crate::metadata::{FileLoggedMetadataStore, ServerMetadataStore};
+use crate::metadata::{FileLoggedMetadataStore, ServerMetadataLogStatus, ServerMetadataStore};
 use crate::options::ServerOptions;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
@@ -28,6 +28,7 @@ pub struct Server {
     service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
     metadata_log_enabled: bool,
     metadata_log_sync: nokvfs_cluster::FileSharedLogSync,
+    metadata_log_status: Option<Arc<dyn ServerMetadataLogStatus>>,
     metadata_log: Option<Arc<FileLoggedMetadataStore>>,
     metadata_checkpoint: Option<FileCheckpointCatalog>,
     object_gc: ObjectGcWorker,
@@ -54,6 +55,7 @@ impl Server {
         let metadata =
             HoltMetadataStore::open_file(&options.meta_path).map_err(MetadError::from)?;
         let mut metadata_log = None;
+        let mut metadata_log_status = None;
         let mut metadata_checkpoint = None;
         let metadata = match options.metadata_log_path.as_ref() {
             Some(path) => {
@@ -74,9 +76,11 @@ impl Server {
                 )
                 .map_err(|err| ServerError::SharedLog(SharedLogError::Backend(err.to_string())))?;
                 let logged = Arc::new(logged);
+                let status: Arc<dyn ServerMetadataLogStatus> = logged.clone();
                 metadata_log = Some(Arc::clone(&logged));
+                metadata_log_status = Some(status);
                 metadata_checkpoint = Some(checkpoint);
-                ServerMetadataStore::file_logged(logged)
+                ServerMetadataStore::shared_logged(logged)
             }
             None => ServerMetadataStore::direct(metadata),
         };
@@ -89,6 +93,7 @@ impl Server {
             service,
             metadata_log_enabled: metadata_log.is_some(),
             metadata_log_sync: options.metadata_log_sync,
+            metadata_log_status,
             metadata_log,
             metadata_checkpoint,
             object_gc,
@@ -123,11 +128,11 @@ impl Server {
         &self,
         position: LogPosition,
     ) -> Result<(), ServerError> {
-        let Some(metadata_log) = self.metadata_log.as_ref() else {
+        let Some(metadata_log) = self.metadata_log_status.as_ref() else {
             return Ok(());
         };
         metadata_log
-            .ensure_read_freshness(ReadFreshness::AppliedThrough(position))
+            .ensure_applied(position)
             .map_err(ServerError::SharedLog)
     }
 
@@ -271,13 +276,13 @@ fn metadata_checkpoint_artifact(id: &[u8]) -> Result<CheckpointArtifact, SharedL
 
 impl Server {
     fn metadata_log_frontier(&self) -> Option<ApplyFrontier> {
-        self.metadata_log
+        self.metadata_log_status
             .as_ref()
             .and_then(|metadata_log| metadata_log.applied_frontier())
     }
 
     fn metadata_log_runtime_stats(&self) -> Option<SharedLogRuntimeStats> {
-        self.metadata_log
+        self.metadata_log_status
             .as_ref()
             .map(|metadata_log| metadata_log.runtime_stats())
     }
@@ -472,11 +477,21 @@ pub(crate) mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use nokvfs_cluster::{FileSharedLogSync, SharedMetadataLog};
+    use nokvfs_cluster::{
+        FileSharedLogSync, InMemoryQuorumLog, NodeId, QuorumNodeLog, ReadFreshness,
+        SharedMetadataLog,
+    };
+    use nokvfs_meta::holtstore::HoltMetadataStore;
     use nokvfs_meta::{HistoryGcOptions, ObjectGcOptions};
     use nokvfs_object::{ObjectStoreConfig, S3ObjectStoreOptions};
     use nokvfs_types::MountId;
     use tempfile::tempdir;
+
+    use crate::metadata::{ServerMetadataBackend, ServerMetadataLogStatus, ServerMetadataStore};
+
+    fn node(raw: u64) -> NodeId {
+        NodeId::new(raw).unwrap()
+    }
 
     pub(crate) fn test_options(root: &Path, metadata_log_path: Option<PathBuf>) -> ServerOptions {
         ServerOptions {
@@ -514,6 +529,34 @@ pub(crate) mod tests {
     pub(crate) fn test_server() -> Server {
         let dir = tempdir().unwrap();
         Server::open(test_options(dir.path(), None)).unwrap()
+    }
+
+    fn test_server_with_shared_metadata(
+        root: &Path,
+        metadata: ServerMetadataStore,
+        metadata_log_status: Arc<dyn ServerMetadataLogStatus>,
+        bootstrap_root: bool,
+    ) -> Server {
+        let options = test_options(root, None);
+        let objects = options.object.open().unwrap();
+        let service = Arc::new(NoKvFs::open_existing(options.mount, metadata, objects).unwrap());
+        if bootstrap_root {
+            service
+                .bootstrap_root(DEFAULT_ROOT_MODE, options.uid, options.gid)
+                .unwrap();
+        }
+        let object_gc = ObjectGcWorker::spawn(Arc::clone(&service), options.object_gc);
+        let history_gc = HistoryGcWorker::spawn(Arc::clone(&service), options.history_gc);
+        Server {
+            service,
+            metadata_log_enabled: true,
+            metadata_log_sync: options.metadata_log_sync,
+            metadata_log_status: Some(metadata_log_status),
+            metadata_log: None,
+            metadata_checkpoint: None,
+            object_gc,
+            history_gc,
+        }
     }
 
     #[test]
@@ -626,6 +669,75 @@ pub(crate) mod tests {
             .lookup_path("/runs")
             .unwrap()
             .expect("created directory should survive metadata-log reopen");
+        assert_eq!(entry.attr.file_type, nokvfs_types::FileType::Directory);
+    }
+
+    #[test]
+    fn server_quorum_learner_enforces_require_applied_until_local_tail_replayed() {
+        let dir = tempdir().unwrap();
+        let log = Arc::new(
+            InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap(),
+        );
+        log.set_node_available(node(4), false).unwrap();
+        let mount = MountId::new(1).unwrap();
+        let term = LogTerm::new(1).unwrap();
+        let leader_logged = Arc::new(SharedLogMetadataStore::new(
+            HoltMetadataStore::open_memory().unwrap(),
+            QuorumNodeLog::new(Arc::clone(&log), node(1)).unwrap(),
+            term,
+            mount,
+        ));
+        let learner_logged = Arc::new(SharedLogMetadataStore::new(
+            HoltMetadataStore::open_memory().unwrap(),
+            QuorumNodeLog::new(Arc::clone(&log), node(4)).unwrap(),
+            term,
+            mount,
+        ));
+        let leader_backend: Arc<dyn ServerMetadataBackend> = leader_logged.clone();
+        let leader_status: Arc<dyn ServerMetadataLogStatus> = leader_logged.clone();
+        let leader = test_server_with_shared_metadata(
+            dir.path(),
+            ServerMetadataStore::shared_logged(leader_backend),
+            leader_status,
+            true,
+        );
+
+        leader
+            .service()
+            .create_dir_path("/runs", 0o755, 1000, 1000)
+            .unwrap();
+        let position = leader
+            .metadata_log_applied_position()
+            .expect("leader write should publish metadata position");
+
+        assert!(matches!(
+            learner_logged.ensure_read_freshness(ReadFreshness::AppliedThrough(position)),
+            Err(SharedLogError::ReadNotFresh {
+                required,
+                applied: None,
+            }) if required == position
+        ));
+
+        log.set_node_available(node(4), true).unwrap();
+        log.sync_learner(node(4)).unwrap();
+        let replay = learner_logged.replay_committed_tail(0).unwrap();
+
+        assert!(replay.entries >= 2);
+        assert!(replay.commands >= 2);
+        let learner_backend: Arc<dyn ServerMetadataBackend> = learner_logged.clone();
+        let learner_status: Arc<dyn ServerMetadataLogStatus> = learner_logged.clone();
+        let learner = test_server_with_shared_metadata(
+            dir.path(),
+            ServerMetadataStore::shared_logged(learner_backend),
+            learner_status,
+            false,
+        );
+        learner.ensure_metadata_log_applied(position).unwrap();
+        let entry = learner
+            .service()
+            .lookup_path("/runs")
+            .unwrap()
+            .expect("learner should serve the synced directory");
         assert_eq!(entry.attr.file_type, nokvfs_types::FileType::Directory);
     }
 }
