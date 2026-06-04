@@ -215,11 +215,21 @@ Covered workload shapes include:
 - `checkpoint-publish` object-backed checkpoint publish/read;
 - `training-read` dataset-shaped object reads;
 - `mlperf-dlio` generated MLPerf Storage/DLIO-style training and checkpoint
-  shape.
+  shape;
+- `metadata-ha-smoke` and `metadata-ha-fault-smoke` shared-log metadata HA
+  smoke workloads.
 
-These are local single-node service benchmarks. Distributed and training-cluster
-claims need separate runs that report replication, cache, object-store, and
-durability settings.
+For the fast AI-training product gate, run:
+
+```bash
+scripts/run-ai-training-smoke.sh
+```
+
+The default gate covers Holt metadata read concurrency, checkpoint publish,
+DLIO-style object reads/writes, shared-log HA, and shared-log fault catch-up.
+Most benchmark workloads are still local single-node service runs; HA workloads
+report shared-log metrics separately. Training-cluster claims need separate
+runs that report replication, cache, object-store, and durability settings.
 
 The local shared-log smoke starts RustFS plus three metadata voters and verifies
 that a leader-published artifact is readable through both followers:

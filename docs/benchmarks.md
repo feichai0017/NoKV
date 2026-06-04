@@ -42,6 +42,21 @@ NOKV_E2E_OBJECT_CONCURRENCY=8 \
 scripts/run-rustfs-e2e.sh
 ```
 
+For the current AI-training product smoke gate, use:
+
+```bash
+scripts/run-ai-training-smoke.sh
+```
+
+The default gate runs `metadata-concurrent-read`, `checkpoint-publish`,
+`mlperf-dlio`, `metadata-ha-smoke`, and `metadata-ha-fault-smoke`. This is the
+fast regression set for Holt-native metadata reads, chunked object publish, and
+the shared-log HA path. You can narrow it to a single workload while iterating:
+
+```bash
+scripts/run-ai-training-smoke.sh metadata-ha-fault-smoke
+```
+
 For a disposable local RustFS-backed FUSE semantics smoke, use:
 
 ```bash
@@ -141,12 +156,13 @@ for CI performance claims.
 
 ## Current Caveats
 
-The current harness runs a single-node `metad` process with a configured
-S3-compatible object backend. It does not include distributed metadata
-replication, FUSE kernel caching, Python DataLoader overhead, object-store
-multipart upload, or restart recovery.
+Most workloads run a single-node `metad` process with a configured
+S3-compatible object backend. `metadata-ha-smoke` and
+`metadata-ha-fault-smoke` are the exceptions: they start a local shared-log
+metadata topology and report log-entry, command, batch, and stale-read metrics.
 
-Treat metadata-only numbers as a single-node metadata-service baseline, and
-object-backed numbers as specific to the configured endpoint. Distributed and
-training-cluster claims need a separate benchmark that reports network,
-object-store, cache, and durability settings.
+The harness still does not include FUSE kernel caching, Python DataLoader
+overhead, object-store multipart upload, or a multi-machine training cluster.
+Treat metadata-only numbers as a metadata-service baseline, and object-backed
+numbers as specific to the configured endpoint. Cluster claims must report the
+metadata topology, network, object-store, cache, and durability settings.
