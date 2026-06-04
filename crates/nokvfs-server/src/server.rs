@@ -40,7 +40,7 @@ pub struct Server {
     metadata_log_sync: nokvfs_cluster::FileSharedLogSync,
     metadata_log_status: Option<Arc<dyn ServerMetadataLogStatus>>,
     metadata_log: Option<Arc<FileLoggedMetadataStore>>,
-    metadata_checkpoint: Option<FileCheckpointCatalog>,
+    metadata_checkpoint: Option<Arc<FileCheckpointCatalog>>,
     metadata_checkpoint_objects: Option<CheckpointObjectStore>,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
@@ -103,7 +103,8 @@ impl Server {
                     },
                 )?);
                 let frontier = FileAppliedFrontierStore::open(metadata_apply_frontier_path(path))?;
-                let checkpoint = FileCheckpointCatalog::open(metadata_checkpoint_path(path))?;
+                let checkpoint =
+                    Arc::new(FileCheckpointCatalog::open(metadata_checkpoint_path(path))?);
                 let membership_catalog =
                     FileMembershipCatalog::open(metadata_membership_path(path))?;
                 let membership = metadata_membership_for_node(
@@ -120,7 +121,7 @@ impl Server {
                     &metadata,
                     local_log.as_ref(),
                     &frontier,
-                    &checkpoint,
+                    checkpoint.as_ref(),
                     checkpoint_objects.as_ref(),
                     options.mount,
                     options.metadata_log_node,
@@ -130,6 +131,7 @@ impl Server {
                     membership.clone(),
                     Arc::clone(&local_log),
                     &options.metadata_log_peers,
+                    Some(Arc::clone(&checkpoint)),
                 );
                 let (logged, _replay) = SharedLogMetadataStore::recover_with_frontier_store(
                     metadata,

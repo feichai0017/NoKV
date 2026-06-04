@@ -272,13 +272,20 @@ printf 'nokv shared log smoke\n' >"$payload"
 curl -fsS --max-time 10 "http://$NODE1_ADDRESS/gc?limit=128" >/dev/null
 
 # Bring the third voter online only after the leader has published a metadata
-# checkpoint and compacted the initial log prefix. The control-plane bootstrap
-# must install the checkpoint and append any retained tail before the node can
-# serve reads.
+# checkpoint and compacted the initial log prefix. The next leader append must
+# automatically install the checkpoint and append the current entry before the
+# node can serve reads.
 start_node 3 "$NODE3_ADDRESS"
 wait_for_http "http://$NODE3_ADDRESS/healthz" "NoKV node 3"
-echo "Bootstrapping metadata node 3 from leader checkpoint"
-curl -fsS --max-time 10 "http://$NODE1_ADDRESS/metadata-log/bootstrap?learner=3" >/dev/null
+
+"$NOKV_FS_BIN" \
+    --server-bind "$NODE1_ADDRESS" \
+    --object-backend rustfs \
+    --s3-bucket "$RUSTFS_BUCKET" \
+    --s3-endpoint "$RUSTFS_ENDPOINT" \
+    --s3-access-key-id "$RUSTFS_ACCESS_KEY" \
+    --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
+    mkdir /runs/1/after-checkpoint
 
 echo "Reading artifact through metadata node 2"
 "$NOKV_FS_BIN" \
@@ -303,4 +310,4 @@ echo "Reading artifact through metadata node 3"
 cmp "$payload" "$restored2"
 cmp "$payload" "$restored3"
 
-echo "NoKV metadata shared-log smoke passed: leader compacted, late voter bootstrapped from checkpoint, and both followers read the artifact."
+echo "NoKV metadata shared-log smoke passed: leader compacted, late voter auto-bootstrapped from checkpoint, and both followers read the artifact."

@@ -3,8 +3,9 @@ use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 
 use nokvfs_cluster::{
-    DurableReceipt, FileSharedLog, LogIndex, LogPosition, LogTerm, MetadataLogEntry,
-    MetadataMembership, NodeId, SharedLogError, SharedMetadataLog,
+    CheckpointCatalog, DurableReceipt, FileCheckpointCatalog, FileSharedLog,
+    InstallCheckpointRequest, LearnerBootstrapPlan, LogIndex, LogPosition, LogTerm,
+    MetadataLogEntry, MetadataMembership, NodeId, SharedLogError, SharedMetadataLog,
 };
 use nokvfs_meta::command::MetadataCommand;
 use nokvfs_types::MountId;
@@ -17,6 +18,7 @@ pub(crate) struct MajorityMetadataLog {
     membership: MetadataMembership,
     local: Arc<FileSharedLog>,
     peers: BTreeMap<NodeId, Arc<dyn MetadataLogPeerAppender>>,
+    bootstrapper: Option<Arc<dyn MetadataLogPeerBootstrapper>>,
     append_gate: Mutex<()>,
 }
 
@@ -24,8 +26,20 @@ pub(crate) trait MetadataLogPeerAppender: Send + Sync {
     fn append_entry(&self, leader: NodeId, entry: &MetadataLogEntry) -> Result<(), SharedLogError>;
 }
 
+pub(crate) trait MetadataLogPeerBootstrapper: Send + Sync {
+    fn bootstrap_before(&self, peer: NodeId, before: LogIndex) -> Result<(), SharedLogError>;
+}
+
 pub(crate) struct FramedMetadataLogPeer {
     address: SocketAddr,
+}
+
+struct FramedMetadataLogPeerBootstrapper {
+    local_node: NodeId,
+    mount: MountId,
+    local: Arc<FileSharedLog>,
+    checkpoints: Arc<FileCheckpointCatalog>,
+    peers: BTreeMap<NodeId, SocketAddr>,
 }
 
 impl MajorityMetadataLog {
@@ -34,19 +48,32 @@ impl MajorityMetadataLog {
         membership: MetadataMembership,
         local: Arc<FileSharedLog>,
         peer_options: &[MetadataLogPeerOptions],
+        checkpoints: Option<Arc<FileCheckpointCatalog>>,
     ) -> Self {
-        let peers = peer_options
+        let peer_addresses = peer_options
             .iter()
-            .map(|peer| {
+            .map(|peer| (peer.node, peer.address))
+            .collect::<BTreeMap<_, _>>();
+        let peers = peer_addresses
+            .iter()
+            .map(|(node, address)| {
                 (
-                    peer.node,
-                    Arc::new(FramedMetadataLogPeer {
-                        address: peer.address,
-                    }) as Arc<dyn MetadataLogPeerAppender>,
+                    *node,
+                    Arc::new(FramedMetadataLogPeer { address: *address })
+                        as Arc<dyn MetadataLogPeerAppender>,
                 )
             })
             .collect();
-        Self::with_peers(local_node, membership, local, peers)
+        let bootstrapper = checkpoints.map(|checkpoints| {
+            Arc::new(FramedMetadataLogPeerBootstrapper {
+                local_node,
+                mount: membership.mount,
+                local: Arc::clone(&local),
+                checkpoints,
+                peers: peer_addresses,
+            }) as Arc<dyn MetadataLogPeerBootstrapper>
+        });
+        Self::with_peers(local_node, membership, local, peers, bootstrapper)
     }
 
     pub(crate) fn append_entry(
@@ -61,12 +88,14 @@ impl MajorityMetadataLog {
         membership: MetadataMembership,
         local: Arc<FileSharedLog>,
         peers: BTreeMap<NodeId, Arc<dyn MetadataLogPeerAppender>>,
+        bootstrapper: Option<Arc<dyn MetadataLogPeerBootstrapper>>,
     ) -> Self {
         Self {
             local_node,
             membership,
             local,
             peers,
+            bootstrapper,
             append_gate: Mutex::new(()),
         }
     }
@@ -104,7 +133,10 @@ impl MajorityMetadataLog {
             let Some(peer) = self.peers.get(voter) else {
                 continue;
             };
-            if self.append_peer_with_catchup(peer.as_ref(), &entry).is_ok() {
+            if self
+                .append_peer_with_catchup(*voter, peer.as_ref(), &entry)
+                .is_ok()
+            {
                 remote_successes = remote_successes.saturating_add(1);
             }
         }
@@ -120,16 +152,26 @@ impl MajorityMetadataLog {
 
     fn append_peer_with_catchup(
         &self,
+        peer_node: NodeId,
         peer: &dyn MetadataLogPeerAppender,
         entry: &MetadataLogEntry,
     ) -> Result<(), SharedLogError> {
         match peer.append_entry(self.local_node, entry) {
             Ok(()) => Ok(()),
             Err(first_err) => {
-                self.catch_up_peer(peer, entry.position.index)?;
+                match self.catch_up_peer(peer, entry.position.index) {
+                    Ok(()) => {}
+                    Err(SharedLogError::Compacted { .. }) => {
+                        let Some(bootstrapper) = self.bootstrapper.as_ref() else {
+                            return Err(first_err);
+                        };
+                        bootstrapper.bootstrap_before(peer_node, entry.position.index)?;
+                    }
+                    Err(err) => return Err(err),
+                }
                 peer.append_entry(self.local_node, entry).map_err(|retry_err| {
                     SharedLogError::Backend(format!(
-                        "metadata peer append failed after tail catch-up: {retry_err}; initial error: {first_err}"
+                        "metadata peer append failed after catch-up: {retry_err}; initial error: {first_err}"
                     ))
                 })
             }
@@ -200,6 +242,41 @@ impl MetadataLogPeerAppender for FramedMetadataLogPeer {
     }
 }
 
+impl MetadataLogPeerBootstrapper for FramedMetadataLogPeerBootstrapper {
+    fn bootstrap_before(&self, peer: NodeId, before: LogIndex) -> Result<(), SharedLogError> {
+        let address = *self
+            .peers
+            .get(&peer)
+            .ok_or(SharedLogError::UnknownNode(peer))?;
+        let checkpoint = self.checkpoints.latest_for_mount(self.mount)?.ok_or(
+            SharedLogError::CheckpointRequired {
+                node: peer,
+                compacted: before,
+            },
+        )?;
+        let replay_start = checkpoint.frontier.min_retained_index;
+        let checkpoint_only = InstallCheckpointRequest::from_plan(
+            self.local_node,
+            LearnerBootstrapPlan {
+                node: peer,
+                checkpoint: checkpoint.clone(),
+                replay_start,
+                replayed_index: checkpoint.frontier.applied_position.index,
+            },
+        );
+        rpc::call_install_metadata_checkpoint(address, checkpoint_only)
+            .map_err(|err| SharedLogError::Backend(err.to_string()))?;
+        for entry in self.local.read_from(replay_start, 0)? {
+            if entry.position.index >= before {
+                break;
+            }
+            rpc::call_append_metadata_log(address, self.local_node, &entry)
+                .map_err(|err| SharedLogError::Backend(err.to_string()))?;
+        }
+        Ok(())
+    }
+}
+
 fn majority(voters: usize) -> Result<usize, SharedLogError> {
     if voters == 0 {
         return Err(SharedLogError::NoVoters);
@@ -225,6 +302,11 @@ mod tests {
 
     struct FilePeer {
         log: Arc<FileSharedLog>,
+    }
+
+    struct CompactingBootstrapper {
+        log: Arc<FileSharedLog>,
+        calls: Mutex<Vec<(NodeId, LogIndex)>>,
     }
 
     impl RecordingPeer {
@@ -261,6 +343,16 @@ mod tests {
             entry: &MetadataLogEntry,
         ) -> Result<(), SharedLogError> {
             self.log.append_entry(entry.clone()).map(|_| ())
+        }
+    }
+
+    impl MetadataLogPeerBootstrapper for CompactingBootstrapper {
+        fn bootstrap_before(&self, peer: NodeId, before: LogIndex) -> Result<(), SharedLogError> {
+            self.calls.lock().unwrap().push((peer, before));
+            let compacted = before.get().checked_sub(1).ok_or_else(|| {
+                SharedLogError::Backend("test bootstrap before index underflow".to_owned())
+            })?;
+            self.log.compact_through(LogIndex::new(compacted)?)
         }
     }
 
@@ -330,7 +422,7 @@ mod tests {
         let mut peers = BTreeMap::new();
         peers.insert(node(2), peer2.clone() as Arc<dyn MetadataLogPeerAppender>);
         peers.insert(node(3), peer3.clone() as Arc<dyn MetadataLogPeerAppender>);
-        let log = MajorityMetadataLog::with_peers(node(1), membership(node(1)), local, peers);
+        let log = MajorityMetadataLog::with_peers(node(1), membership(node(1)), local, peers, None);
 
         let receipts = log
             .append_batch(term(1), mount(), &[command(b"a", 2)])
@@ -353,7 +445,7 @@ mod tests {
         let peer = Arc::new(RecordingPeer::failing());
         let mut peers = BTreeMap::new();
         peers.insert(node(2), peer as Arc<dyn MetadataLogPeerAppender>);
-        let log = MajorityMetadataLog::with_peers(node(1), membership(node(1)), local, peers);
+        let log = MajorityMetadataLog::with_peers(node(1), membership(node(1)), local, peers, None);
 
         let err = log
             .append_batch(term(1), mount(), &[command(b"a", 2)])
@@ -387,7 +479,7 @@ mod tests {
         let mut peers = BTreeMap::new();
         peers.insert(node(2), peer as Arc<dyn MetadataLogPeerAppender>);
         peers.insert(node(3), peer3 as Arc<dyn MetadataLogPeerAppender>);
-        let log = MajorityMetadataLog::with_peers(node(1), membership(node(1)), local, peers);
+        let log = MajorityMetadataLog::with_peers(node(1), membership(node(1)), local, peers, None);
 
         let receipts = log
             .append_batch(term(1), mount(), &[command(b"second", 3)])
@@ -401,10 +493,65 @@ mod tests {
     }
 
     #[test]
+    fn compacted_leader_bootstraps_peer_before_current_append() {
+        let (_leader_dir, local) = file_log();
+        local
+            .append_entry(entry(1, command(b"first", 2)))
+            .expect("leader should hold first entry");
+        local
+            .append_entry(entry(2, command(b"second", 3)))
+            .expect("leader should hold second entry");
+        local
+            .compact_through(LogIndex::new(2).unwrap())
+            .expect("leader should compact checkpointed prefix");
+        let (_peer_dir, peer_log) = file_log();
+        let peer = Arc::new(FilePeer {
+            log: Arc::clone(&peer_log),
+        });
+        let peer3 = Arc::new(RecordingPeer::ok());
+        let bootstrapper = Arc::new(CompactingBootstrapper {
+            log: Arc::clone(&peer_log),
+            calls: Mutex::new(Vec::new()),
+        });
+        let mut peers = BTreeMap::new();
+        peers.insert(node(2), peer as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(3), peer3 as Arc<dyn MetadataLogPeerAppender>);
+        let log = MajorityMetadataLog::with_peers(
+            node(1),
+            membership(node(1)),
+            local,
+            peers,
+            Some(bootstrapper.clone() as Arc<dyn MetadataLogPeerBootstrapper>),
+        );
+
+        let receipts = log
+            .append_batch(term(1), mount(), &[command(b"third", 4)])
+            .unwrap();
+
+        assert_eq!(receipts[0].position.index.get(), 3);
+        assert_eq!(
+            bootstrapper.calls.lock().unwrap().as_slice(),
+            &[(node(2), LogIndex::new(3).unwrap())]
+        );
+        assert!(matches!(
+            peer_log.read_from(LogIndex::new(1).unwrap(), 0),
+            Err(SharedLogError::Compacted { .. })
+        ));
+        let entries = peer_log.read_from(LogIndex::new(3).unwrap(), 0).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].commands[0].request_id, b"third");
+    }
+
+    #[test]
     fn non_leader_cannot_append() {
         let (_dir, local) = file_log();
-        let log =
-            MajorityMetadataLog::with_peers(node(2), membership(node(1)), local, BTreeMap::new());
+        let log = MajorityMetadataLog::with_peers(
+            node(2),
+            membership(node(1)),
+            local,
+            BTreeMap::new(),
+            None,
+        );
 
         let err = log
             .append_batch(term(1), mount(), &[command(b"a", 2)])
