@@ -5,9 +5,10 @@ use std::sync::{Arc, Mutex};
 
 use super::*;
 use nokvfs_meta::command::{
-    CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand,
-    MetadataError, MetadataStore, MetadataStoreStatsProvider, Mutation, MutationOp, Predicate,
-    PredicateRef, ReadItem, ReadPurpose, ScanItem, ScanRequest, Value, Version,
+    CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, KeyScanRequest,
+    MetadataCommand, MetadataError, MetadataStore, MetadataStoreStatsProvider, Mutation,
+    MutationOp, Predicate, PredicateRef, ReadItem, ReadPurpose, ScanItem, ScanRequest, Value,
+    Version,
 };
 use nokvfs_meta::HoltMetadataStore;
 use nokvfs_types::{MountId, RecordFamily};
@@ -601,6 +602,17 @@ fn shared_log_metadata_store_rejects_strong_reads_before_replay_catches_up() {
         Err(MetadataError::Backend(message))
             if message.contains("metadata read requires applied frontier")
     ));
+    assert!(matches!(
+        learner.scan_keys(KeyScanRequest {
+            family: RecordFamily::Dentry,
+            prefix: b"a".to_vec(),
+            start_after: None,
+            limit: 1,
+            purpose: ReadPurpose::UserStrong,
+        }),
+        Err(MetadataError::Backend(message))
+            if message.contains("metadata read requires applied frontier")
+    ));
     assert!(learner
         .get(
             RecordFamily::Dentry,
@@ -610,7 +622,7 @@ fn shared_log_metadata_store_rejects_strong_reads_before_replay_catches_up() {
         )
         .unwrap()
         .is_none());
-    assert_eq!(learner.runtime_stats().stale_read_total, 1);
+    assert_eq!(learner.runtime_stats().stale_read_total, 2);
 
     ReplayDriver::new(learner.log(), &learner)
         .replay_from(LogIndex::new(1).unwrap(), 0)
@@ -628,6 +640,18 @@ fn shared_log_metadata_store_rejects_strong_reads_before_replay_catches_up() {
             .unwrap()
             .0,
         b"value"
+    );
+    assert_eq!(
+        learner
+            .scan_keys(KeyScanRequest {
+                family: RecordFamily::Dentry,
+                prefix: b"a".to_vec(),
+                start_after: None,
+                limit: 1,
+                purpose: ReadPurpose::UserStrong,
+            })
+            .unwrap(),
+        vec![b"a".to_vec()]
     );
 }
 

@@ -154,6 +154,18 @@ pub struct ScanRequest {
     pub purpose: ReadPurpose,
 }
 
+/// Current-state key listing for metadata paths that do not need value bytes.
+///
+/// Snapshot reads that need historical visibility should use [`ScanRequest`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeyScanRequest {
+    pub family: RecordFamily,
+    pub prefix: Vec<u8>,
+    pub start_after: Option<Vec<u8>>,
+    pub limit: usize,
+    pub purpose: ReadPurpose,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanItem {
     pub key: Vec<u8>,
@@ -194,6 +206,18 @@ pub trait MetadataStore {
     }
 
     fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError>;
+
+    fn scan_keys(&self, request: KeyScanRequest) -> Result<Vec<Vec<u8>>, MetadataError> {
+        self.scan(ScanRequest {
+            family: request.family,
+            prefix: request.prefix,
+            start_after: request.start_after,
+            version: Version::new(u64::MAX)?,
+            limit: request.limit,
+            purpose: request.purpose,
+        })
+        .map(|items| items.into_iter().map(|item| item.key).collect())
+    }
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError>;
 

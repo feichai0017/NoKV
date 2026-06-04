@@ -1139,17 +1139,16 @@ where
     }
 
     fn path_index_delete_mutations(&self, prefix: &[u8]) -> Result<Vec<Mutation>, MetadError> {
-        let rows = self.metadata.scan(ScanRequest {
+        let keys = self.metadata.scan_keys(KeyScanRequest {
             family: RecordFamily::PathIndex,
             prefix: prefix.to_vec(),
             start_after: None,
-            version: self.read_version()?,
             limit: 0,
             purpose: ReadPurpose::WritePlanLocal,
         })?;
-        Ok(rows
+        Ok(keys
             .into_iter()
-            .map(|row| delete_mutation(RecordFamily::PathIndex, row.key))
+            .map(|key| delete_mutation(RecordFamily::PathIndex, key))
             .collect())
     }
 

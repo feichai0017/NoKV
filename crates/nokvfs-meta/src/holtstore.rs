@@ -10,12 +10,12 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::command::{
-    CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
-    MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, MutationOp, Predicate, ReadItem,
-    ReadPurpose, ScanItem, ScanRequest, Value, Version,
+    CommitResult, HistoryPruneOutcome, HistoryPruneRequest, KeyScanRequest, MetadataCommand,
+    MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, MutationOp,
+    Predicate, ReadItem, ReadPurpose, ScanItem, ScanRequest, Value, Version,
 };
 use crate::layout::{history_key, history_prefix};
-use holt::{RangeEntry, RecordVersion, Tree, TreeConfig, DB};
+use holt::{KeyRangeEntry, RangeEntry, RecordVersion, Tree, TreeConfig, DB};
 use nokvfs_types::RecordFamily;
 
 const VALUE_HEADER_LEN: usize = 9;
@@ -269,6 +269,43 @@ impl MetadataStore for HoltMetadataStore {
         self.stats
             .scan_key_returned_total
             .fetch_add(returned_total, Ordering::Relaxed);
+        Ok(out)
+    }
+
+    fn scan_keys(&self, request: KeyScanRequest) -> Result<Vec<Vec<u8>>, MetadataError> {
+        self.stats.scan_total.fetch_add(1, Ordering::Relaxed);
+        self.stats.record_scan_purpose(request.purpose);
+        let limit = if request.limit == 0 {
+            usize::MAX
+        } else {
+            request.limit
+        };
+        let current = self.current_tree(request.family)?;
+        let mut range = current.range_keys();
+        if !request.prefix.is_empty() {
+            range = range.prefix(&request.prefix);
+        }
+        if let Some(start_after) = request.start_after.as_deref() {
+            range = range.start_after(start_after);
+        }
+        let mut out = Vec::new();
+        let mut visited_total = 0_u64;
+        for entry in range {
+            let KeyRangeEntry::Key { key, .. } = entry.map_err(to_backend_error)? else {
+                continue;
+            };
+            visited_total += 1;
+            out.push(key);
+            if out.len() >= limit {
+                break;
+            }
+        }
+        self.stats
+            .scan_key_visited_total
+            .fetch_add(visited_total, Ordering::Relaxed);
+        self.stats
+            .scan_key_returned_total
+            .fetch_add(out.len() as u64, Ordering::Relaxed);
         Ok(out)
     }
 
@@ -1229,6 +1266,42 @@ mod tests {
 
         assert_eq!(scan.len(), 1);
         assert_eq!(scan[0].key, b"dir/b");
+        let after = store.metadata_store_stats();
+        assert_eq!(
+            after.scan_key_visited_total - before.scan_key_visited_total,
+            1
+        );
+        assert_eq!(
+            after.scan_key_returned_total - before.scan_key_returned_total,
+            1
+        );
+    }
+
+    #[test]
+    fn scan_keys_uses_key_only_range_with_start_after() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+        store
+            .commit_metadata(put_command(b"dir/b", b"req-2", b"value-b", 3))
+            .unwrap();
+        store
+            .commit_metadata(put_command(b"dir/c", b"req-3", b"value-c", 4))
+            .unwrap();
+
+        let before = store.metadata_store_stats();
+        let keys = store
+            .scan_keys(KeyScanRequest {
+                family: RecordFamily::Dentry,
+                prefix: b"dir/".to_vec(),
+                start_after: Some(b"dir/a".to_vec()),
+                limit: 1,
+                purpose: ReadPurpose::UserStrong,
+            })
+            .unwrap();
+
+        assert_eq!(keys, vec![b"dir/b".to_vec()]);
         let after = store.metadata_store_stats();
         assert_eq!(
             after.scan_key_visited_total - before.scan_key_visited_total,

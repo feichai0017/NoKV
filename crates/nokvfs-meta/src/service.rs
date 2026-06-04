@@ -23,9 +23,10 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::command::{
-    CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand,
-    MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, Mutation,
-    MutationOp, Predicate, PredicateRef, ReadPurpose, ScanRequest, Value, Version, WatchProjection,
+    CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, KeyScanRequest,
+    MetadataCommand, MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider,
+    Mutation, MutationOp, Predicate, PredicateRef, ReadPurpose, ScanRequest, Value, Version,
+    WatchProjection,
 };
 use crate::layout::{
     allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,

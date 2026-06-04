@@ -4,9 +4,9 @@ use std::sync::{
 };
 
 use nokvfs_meta::command::{
-    CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
-    MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, Mutation, MutationOp, Predicate,
-    PredicateRef, ReadItem, ReadPurpose, ScanItem, ScanRequest, Version,
+    CommitResult, HistoryPruneOutcome, HistoryPruneRequest, KeyScanRequest, MetadataCommand,
+    MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, Mutation,
+    MutationOp, Predicate, PredicateRef, ReadItem, ReadPurpose, ScanItem, ScanRequest, Version,
 };
 use nokvfs_types::{MountId, RecordFamily};
 
@@ -297,6 +297,16 @@ where
         self.store.scan(request)
     }
 
+    pub fn scan_keys_with_freshness(
+        &self,
+        request: KeyScanRequest,
+        freshness: ReadFreshness,
+    ) -> Result<Vec<Vec<u8>>, MetadataError> {
+        self.ensure_read_freshness(freshness)
+            .map_err(|err| MetadataError::Backend(err.to_string()))?;
+        self.store.scan_keys(request)
+    }
+
     pub fn checkpoint_frontier(
         &self,
         target_min_retained_index: LogIndex,
@@ -434,6 +444,11 @@ where
         self.scan_with_freshness(request, freshness)
     }
 
+    fn scan_keys(&self, request: KeyScanRequest) -> Result<Vec<Vec<u8>>, MetadataError> {
+        let freshness = freshness_for_read_purpose(request.purpose);
+        self.scan_keys_with_freshness(request, freshness)
+    }
+
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
         let results = self.commit_batch(std::slice::from_ref(&command))?;
         results.into_iter().next().ok_or_else(|| {
@@ -540,11 +555,10 @@ where
             }
             Predicate::PrefixEmpty => {
                 if !store
-                    .scan(ScanRequest {
+                    .scan_keys(KeyScanRequest {
                         family: predicate.family,
                         prefix: predicate.key.clone(),
                         start_after: None,
-                        version: max_version,
                         limit: 1,
                         purpose: ReadPurpose::WritePlanLocal,
                     })?

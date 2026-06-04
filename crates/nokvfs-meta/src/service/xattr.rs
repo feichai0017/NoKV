@@ -74,17 +74,16 @@ where
             return Err(MetadError::NotFound);
         }
         let prefix = xattr_prefix(self.mount, inode);
-        let rows = self.metadata.scan(ScanRequest {
+        let keys = self.metadata.scan_keys(KeyScanRequest {
             family: RecordFamily::Xattr,
             prefix: prefix.clone(),
             start_after: None,
-            version: self.read_version()?,
             limit: 0,
             purpose: ReadPurpose::UserStrong,
         })?;
-        Ok(rows
+        Ok(keys
             .into_iter()
-            .filter_map(|item| item.key.strip_prefix(prefix.as_slice()).map(<[u8]>::to_vec))
+            .filter_map(|key| key.strip_prefix(prefix.as_slice()).map(<[u8]>::to_vec))
             .collect())
     }
 
