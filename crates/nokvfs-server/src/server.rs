@@ -850,11 +850,12 @@ fn metadata_store_json(stats: &nokvfs_meta::MetadataStoreStats) -> String {
 
 fn metadata_service_json(stats: &nokvfs_meta::MetadataServiceStats) -> String {
     format!(
-        "{{\"path_index_lookup_total\":{},\"path_index_hit_total\":{},\"path_index_miss_total\":{},\"path_index_stale_total\":{},\"path_index_fallback_total\":{},\"create_files_batch_total\":{},\"create_files_entry_total\":{},\"create_dirs_batch_total\":{},\"create_dirs_entry_total\":{},\"read_dir_plus_total\":{},\"read_dir_plus_entry_total\":{},\"read_dir_plus_projection_hit_total\":{}}}",
+        "{{\"path_index_lookup_total\":{},\"path_index_hit_total\":{},\"path_index_miss_total\":{},\"path_index_stale_total\":{},\"path_index_scan_stale_total\":{},\"path_index_fallback_total\":{},\"create_files_batch_total\":{},\"create_files_entry_total\":{},\"create_dirs_batch_total\":{},\"create_dirs_entry_total\":{},\"read_dir_plus_total\":{},\"read_dir_plus_entry_total\":{},\"read_dir_plus_projection_hit_total\":{}}}",
         stats.path_index_lookup_total,
         stats.path_index_hit_total,
         stats.path_index_miss_total,
         stats.path_index_stale_total,
+        stats.path_index_scan_stale_total,
         stats.path_index_fallback_total,
         stats.create_files_batch_total,
         stats.create_files_entry_total,

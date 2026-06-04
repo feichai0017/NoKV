@@ -250,6 +250,7 @@ where
         });
         let scan_limit = requested.saturating_add(1);
         let mut entries = Vec::<DentryWithAttr>::with_capacity(scan_limit);
+        let mut stale_rows = 0_u64;
         loop {
             let rows = self.metadata.scan_delimited(DelimitedScanRequest {
                 family: RecordFamily::PathIndex,
@@ -268,6 +269,7 @@ where
             for item in rows {
                 last_marker = Some(delimited_scan_marker(&item));
                 let Some(entry) = self.indexed_path_child(parent, &prefix, item, version)? else {
+                    stale_rows += 1;
                     continue;
                 };
                 entries.push(entry);
@@ -294,6 +296,8 @@ where
             .fetch_add(entries.len() as u64, Ordering::Relaxed);
         self.read_dir_plus_projection_hit_total
             .fetch_add(entries.len() as u64, Ordering::Relaxed);
+        self.path_index_scan_stale_total
+            .fetch_add(stale_rows, Ordering::Relaxed);
         Ok(ReadDirPlusPage {
             entries,
             next_cursor,

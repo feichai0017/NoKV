@@ -133,6 +133,7 @@ struct ResultRow {
     path_index_hits: u64,
     path_index_misses: u64,
     path_index_stale: u64,
+    path_index_scan_stale: u64,
     path_index_fallback: u64,
     path_index_hit_rate: f64,
     create_files_batches: u64,
@@ -1105,6 +1106,7 @@ fn row(input: RowInput) -> ResultRow {
         path_index_hits,
         path_index_misses: input.stats.metadata_service.path_index_miss_total,
         path_index_stale: input.stats.metadata_service.path_index_stale_total,
+        path_index_scan_stale: input.stats.metadata_service.path_index_scan_stale_total,
         path_index_fallback: input.stats.metadata_service.path_index_fallback_total,
         path_index_hit_rate: ratio(path_index_hits, path_index_lookups),
         create_files_batches: input.stats.metadata_service.create_files_batch_total,
@@ -1136,7 +1138,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow) -> String {
@@ -1183,6 +1185,7 @@ fn csv_row(row: &ResultRow) -> String {
         row.path_index_hits.to_string(),
         row.path_index_misses.to_string(),
         row.path_index_stale.to_string(),
+        row.path_index_scan_stale.to_string(),
         row.path_index_fallback.to_string(),
         format!("{:.4}", row.path_index_hit_rate),
         row.create_files_batches.to_string(),
@@ -1346,6 +1349,10 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_service
                 .path_index_stale_total
                 .saturating_sub(before.metadata_service.path_index_stale_total),
+            path_index_scan_stale_total: after
+                .metadata_service
+                .path_index_scan_stale_total
+                .saturating_sub(before.metadata_service.path_index_scan_stale_total),
             path_index_fallback_total: after
                 .metadata_service
                 .path_index_fallback_total
@@ -1621,6 +1628,7 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             path_index_hit_total: json_u64(body, "path_index_hit_total")?,
             path_index_miss_total: json_u64(body, "path_index_miss_total")?,
             path_index_stale_total: json_u64(body, "path_index_stale_total")?,
+            path_index_scan_stale_total: json_u64(body, "path_index_scan_stale_total")?,
             path_index_fallback_total: json_u64(body, "path_index_fallback_total")?,
             create_files_batch_total: json_u64(body, "create_files_batch_total")?,
             create_files_entry_total: json_u64(body, "create_files_entry_total")?,
@@ -2241,7 +2249,7 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_log":{"enabled":true,"commit_entry_total":17,"commit_command_total":18,"max_commands_per_entry":19,"stale_read_total":38},"metadata_service":{"path_index_lookup_total":20,"path_index_hit_total":21,"path_index_miss_total":22,"path_index_stale_total":23,"path_index_fallback_total":24,"create_files_batch_total":25,"create_files_entry_total":26,"create_dirs_batch_total":27,"create_dirs_entry_total":28,"read_dir_plus_total":29,"read_dir_plus_entry_total":30,"read_dir_plus_projection_hit_total":31}}"#;
+        let body = r#"{"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_log":{"enabled":true,"commit_entry_total":17,"commit_command_total":18,"max_commands_per_entry":19,"stale_read_total":38},"metadata_service":{"path_index_lookup_total":20,"path_index_hit_total":21,"path_index_miss_total":22,"path_index_stale_total":23,"path_index_scan_stale_total":39,"path_index_fallback_total":24,"create_files_batch_total":25,"create_files_entry_total":26,"create_dirs_batch_total":27,"create_dirs_entry_total":28,"read_dir_plus_total":29,"read_dir_plus_entry_total":30,"read_dir_plus_projection_hit_total":31}}"#;
 
         assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
         assert_eq!(json_u64(body, "get_write_plan_local_total").unwrap(), 33);
@@ -2252,6 +2260,7 @@ mod tests {
         assert_eq!(json_u64(body, "max_commands_per_entry").unwrap(), 19);
         assert_eq!(json_u64(body, "stale_read_total").unwrap(), 38);
         assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 21);
+        assert_eq!(json_u64(body, "path_index_scan_stale_total").unwrap(), 39);
         assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 25);
         assert_eq!(json_u64(body, "create_dirs_entry_total").unwrap(), 28);
         assert_eq!(
@@ -2285,6 +2294,7 @@ mod tests {
                     path_index_lookup_total: 4,
                     path_index_hit_total: 3,
                     path_index_miss_total: 1,
+                    path_index_scan_stale_total: 2,
                     read_dir_plus_total: 2,
                     read_dir_plus_entry_total: 8,
                     read_dir_plus_projection_hit_total: 6,
@@ -2303,6 +2313,7 @@ mod tests {
         assert_eq!(row.metadata_prefix_empty_predicates, 2);
         assert_eq!(row.path_index_lookups, 4);
         assert_eq!(row.path_index_misses, 1);
+        assert_eq!(row.path_index_scan_stale, 2);
         assert_eq!(row.path_index_hit_rate, 0.75);
         assert_eq!(row.read_dir_plus_calls, 2);
         assert_eq!(row.read_dir_plus_projection_hit_rate, 0.75);
@@ -2311,6 +2322,7 @@ mod tests {
         let record = csv_row(&row);
         assert!(header.contains("metadata_prefix_empty_predicates"));
         assert!(header.contains("path_index_hit_rate"));
+        assert!(header.contains("path_index_scan_stale"));
         assert!(header.contains("read_dir_plus_projection_hit_rate"));
         assert_eq!(header.split(',').count(), record.split(',').count());
     }

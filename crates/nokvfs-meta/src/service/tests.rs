@@ -680,6 +680,12 @@ fn path_index_page_skips_stale_rows_without_truncating_visible_children() {
             - before_service.read_dir_plus_projection_hit_total,
         1
     );
+    assert!(
+        after_first_service.path_index_scan_stale_total
+            - before_service.path_index_scan_stale_total
+            >= 1,
+        "stale derived path-index rows should be reported separately from live entries"
+    );
 
     let second = service
         .list_indexed_path_page("/runs", first.next_cursor.as_ref(), 1)
