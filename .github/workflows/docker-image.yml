@@ -18,7 +18,8 @@ env:
   IMAGE_NAME: ghcr.io/feichai0017/nokv
 
 jobs:
-  build:
+  image:
+    name: image
     runs-on: ubuntu-latest
     steps:
       - name: Checkout

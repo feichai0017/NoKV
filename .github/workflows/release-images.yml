@@ -18,7 +18,8 @@ permissions:
   packages: write
 
 jobs:
-  publish:
+  images:
+    name: images
     runs-on: ubuntu-latest
     env:
       GHCR_IMAGE: ghcr.io/feichai0017/nokv
