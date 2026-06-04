@@ -5,21 +5,21 @@ SPDX-License-Identifier: Apache-2.0
 
 # Agent Review Instructions
 
-This repository uses `docs/guide/development/code_contract.md` as the source of truth
-for code structure, package boundaries, naming, errors, metrics, tests, DCO,
-and distributed-safety review.
+This repository uses `docs/development/code_contract.md` as the source of truth
+for Rust package boundaries, naming, errors, metrics, tests, DCO, and storage
+safety review.
 
 Before reviewing or editing a PR:
 
-1. Read `docs/guide/development/code_contract.md`.
-2. Use `docs/guide/development/pr_review_checklist.md`.
+1. Read `docs/development/code_contract.md`.
+2. Use `docs/development/pr_review_checklist.md`.
 3. Inspect the real changed files before relying on README or design docs.
 4. Report findings first, ordered by severity.
 
 Check for:
 
-- Scope drift across root, coordinator, raftstore, fsmeta, Peras, docs, and
-  benchmark files.
+- Scope drift across `nokvfs-types`, `nokvfs-meta`, `nokvfs-object`,
+  `nokvfs-client`, `nokvfs-fuse`, docs, and example files.
 - Missing DCO `Signed-off-by` trailers.
 - Package-boundary violations.
 - New helpers that reimplement standard library or existing repository helpers.
@@ -27,8 +27,8 @@ Check for:
 - Misplaced errors, metrics, stats, validation, recovery, or encoding code.
 - Vague file names, type names, interface names, or function names.
 - Redundant forwarding wrappers or compatibility shims.
-- Authority, freshness, durability, recovery, or GC ambiguity.
-- Generated-code drift.
+- Metadata durability, object-reference lifetime, watch/snapshot retention, or
+  GC ambiguity.
 - Missing regression, integration, recovery, or benchmark evidence.
 
 Do not suggest compatibility shims by default. NoKV accepts breaking changes

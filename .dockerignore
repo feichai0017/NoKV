@@ -1,21 +1,8 @@
 # Copyright 2024-2026 The NoKV Authors.
 # SPDX-License-Identifier: Apache-2.0
 
-# Git
 .git
-.gitmodules
-
-# Build artefacts
-/build
-/dist
-artifacts
-**/*.pprof
-benchmark/ycsb/data
-
-# Module caches
-.gocache
-.gomodcache
-
-# Docker
-Dockerfile
-.gitignore
+**/target
+**/node_modules
+docs/.vitepress/dist
+.DS_Store

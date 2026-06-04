@@ -16,9 +16,12 @@ permissions:
 
 env:
   IMAGE_NAME: ghcr.io/feichai0017/nokv
+  RUST_VERSION: "1.88"
+  DEBIAN_VERSION: bookworm
 
 jobs:
-  build:
+  image:
+    name: image
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -44,6 +47,11 @@ jobs:
           context: .
           file: ./Dockerfile
           platforms: linux/amd64,linux/arm64
+          build-args: |
+            RUST_VERSION=${{ env.RUST_VERSION }}
+            DEBIAN_VERSION=${{ env.DEBIAN_VERSION }}
+            NOKV_PACKAGE=nokvfs-cli
+            NOKV_BINARY=nokv-fs
           push: ${{ github.repository == 'feichai0017/NoKV' && github.ref == 'refs/heads/main' }}
           tags: |
             ${{ env.IMAGE_NAME }}:latest
