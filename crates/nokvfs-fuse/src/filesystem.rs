@@ -16,7 +16,7 @@ use fuser::{
 use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{
     DentryWithAttr, MetadError, NoKvFs, PreparedArtifact, PublishArtifactRange,
-    PublishArtifactStagedSession, RenameReplaceResult, UpdateAttr,
+    PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult, UpdateAttr,
 };
 use nokvfs_object::{ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk};
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
@@ -55,6 +55,7 @@ pub struct NoKvFuse<M, O> {
     names: RwLock<HashMap<u64, Vec<u8>>>,
     next_handle: AtomicU64,
     write_handles: RwLock<HashMap<u64, WriteHandle>>,
+    directory_handles: RwLock<HashMap<u64, DirectoryHandle>>,
     invalidation: Arc<InvalidationRegistry>,
 }
 
@@ -80,6 +81,23 @@ struct WriteHandle {
 struct DirtyExtent {
     chunks: Vec<StoredChunk>,
 }
+
+#[derive(Clone, Debug)]
+struct DirectoryHandle {
+    inode: InodeId,
+    attr: InodeAttr,
+    entries: Vec<DentryWithAttr>,
+    next_cursor: Option<DentryName>,
+    exhausted: bool,
+}
+
+#[cfg(not(test))]
+const FUSE_READDIR_PAGE_SIZE: usize = 1024;
+#[cfg(test)]
+const FUSE_READDIR_PAGE_SIZE: usize = 4;
+const FUSE_DOT_OFFSET: u64 = 1;
+const FUSE_DOT_DOT_OFFSET: u64 = 2;
+const FUSE_FIRST_CHILD_OFFSET: u64 = 3;
 
 impl Default for FuseOptions {
     fn default() -> Self {
@@ -125,6 +143,7 @@ where
             names: RwLock::new(HashMap::new()),
             next_handle: AtomicU64::new(1),
             write_handles: RwLock::new(HashMap::new()),
+            directory_handles: RwLock::new(HashMap::new()),
             invalidation,
         };
         fuse.register_watch_scope(fuse.options.view.root());
@@ -239,11 +258,35 @@ where
         }
     }
 
-    fn service_read_dir_plus(&self, inode: InodeId) -> Result<Vec<DentryWithAttr>, MetadError> {
+    fn service_read_dir_plus_page(
+        &self,
+        inode: InodeId,
+        after: Option<&DentryName>,
+        limit: usize,
+    ) -> Result<ReadDirPlusPage, MetadError> {
         match self.options.view {
-            FuseView::Live => self.service.read_dir_plus(inode),
+            FuseView::Live => self.service.read_dir_plus_page(inode, after, limit),
             FuseView::Snapshot { snapshot_id, .. } => {
-                self.service.read_dir_plus_at_snapshot(snapshot_id, inode)
+                let requested = limit.max(1);
+                let rows = self.service.read_dir_plus_at_snapshot(snapshot_id, inode)?;
+                let mut entries = rows
+                    .into_iter()
+                    .filter(|entry| {
+                        after.is_none_or(|cursor| entry.dentry.name.as_bytes() > cursor.as_bytes())
+                    })
+                    .take(requested.saturating_add(1))
+                    .collect::<Vec<_>>();
+                let has_more = entries.len() > requested;
+                entries.truncate(requested);
+                let next_cursor = if has_more {
+                    entries.last().map(|entry| entry.dentry.name.clone())
+                } else {
+                    None
+                };
+                Ok(ReadDirPlusPage {
+                    entries,
+                    next_cursor,
+                })
             }
         }
     }
@@ -323,7 +366,7 @@ where
             )
     }
 
-    fn directory_entries(&self, inode: InodeId) -> Result<(InodeAttr, Vec<DentryWithAttr>), Errno> {
+    fn allocate_directory_handle(&self, inode: InodeId) -> Result<FileHandle, Errno> {
         let attr = self
             .service_get_attr(inode)
             .map_err(errno)?
@@ -331,11 +374,72 @@ where
         if attr.file_type != FileType::Directory {
             return Err(Errno::ENOTDIR);
         }
-        let entries = self.service_read_dir_plus(inode).map_err(errno)?;
-        for entry in &entries {
-            self.remember_entry(entry);
+        let raw = self.next_handle.fetch_add(1, Ordering::Relaxed);
+        self.directory_handles
+            .write()
+            .map_err(|_| Errno::EIO)?
+            .insert(
+                raw,
+                DirectoryHandle {
+                    inode,
+                    attr,
+                    entries: Vec::new(),
+                    next_cursor: None,
+                    exhausted: false,
+                },
+            );
+        Ok(FileHandle(raw))
+    }
+
+    fn directory_handle_attr(&self, fh: FileHandle) -> Result<InodeAttr, Errno> {
+        self.directory_handles
+            .read()
+            .map_err(|_| Errno::EIO)?
+            .get(&fh.0)
+            .map(|handle| handle.attr.clone())
+            .ok_or(Errno::EBADF)
+    }
+
+    fn directory_child(
+        &self,
+        fh: FileHandle,
+        child_index: usize,
+    ) -> Result<Option<DentryWithAttr>, Errno> {
+        loop {
+            let fetch = {
+                let handles = self.directory_handles.read().map_err(|_| Errno::EIO)?;
+                let handle = handles.get(&fh.0).ok_or(Errno::EBADF)?;
+                if let Some(entry) = handle.entries.get(child_index) {
+                    return Ok(Some(entry.clone()));
+                }
+                if handle.exhausted {
+                    return Ok(None);
+                }
+                (handle.inode, handle.next_cursor.clone())
+            };
+            let page = self
+                .service_read_dir_plus_page(fetch.0, fetch.1.as_ref(), FUSE_READDIR_PAGE_SIZE)
+                .map_err(errno)?;
+            for entry in &page.entries {
+                self.remember_entry(entry);
+            }
+            let mut handles = self.directory_handles.write().map_err(|_| Errno::EIO)?;
+            let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
+            if handle.entries.get(child_index).is_some() || handle.next_cursor != fetch.1 {
+                continue;
+            }
+            handle.entries.extend(page.entries);
+            handle.next_cursor = page.next_cursor;
+            handle.exhausted = handle.next_cursor.is_none();
         }
-        Ok((attr, entries))
+    }
+
+    fn release_directory_handle(&self, fh: FileHandle) -> Result<(), Errno> {
+        self.directory_handles
+            .write()
+            .map_err(|_| Errno::EIO)?
+            .remove(&fh.0);
+        Ok(())
     }
 
     fn allocate_handle(&self, handle: WriteHandle) -> Result<FileHandle, Errno> {
@@ -924,9 +1028,9 @@ where
     fn opendir(&self, _req: &Request, ino: INodeNo, _flags: OpenFlags, reply: ReplyOpen) {
         match self
             .metadata_inode(ino)
-            .and_then(|inode| self.directory_entries(inode).map(|_| ()))
+            .and_then(|inode| self.allocate_directory_handle(inode))
         {
-            Ok(()) => reply.opened(FileHandle(0), FopenFlags::FOPEN_KEEP_CACHE),
+            Ok(handle) => reply.opened(handle, FopenFlags::FOPEN_KEEP_CACHE),
             Err(err) => reply.error(err),
         }
     }
@@ -935,7 +1039,7 @@ where
         &self,
         _req: &Request,
         ino: INodeNo,
-        _fh: FileHandle,
+        fh: FileHandle,
         offset: u64,
         mut reply: ReplyDirectory,
     ) {
@@ -946,20 +1050,45 @@ where
                 return;
             }
         };
-        let Ok((_attr, entries)) = self.directory_entries(inode) else {
-            reply.error(Errno::ENOENT);
+        if let Err(err) = self.directory_handle_attr(fh) {
+            reply.error(err);
             return;
-        };
+        }
         let parent = self.parent_of(inode);
-        if self.add_dirent(&mut reply, offset, 1, inode, FuseFileType::Directory, ".")
-            || self.add_dirent(&mut reply, offset, 2, parent, FuseFileType::Directory, "..")
-        {
+        if self.add_dirent(
+            &mut reply,
+            offset,
+            FUSE_DOT_OFFSET,
+            inode,
+            FuseFileType::Directory,
+            ".",
+        ) || self.add_dirent(
+            &mut reply,
+            offset,
+            FUSE_DOT_DOT_OFFSET,
+            parent,
+            FuseFileType::Directory,
+            "..",
+        ) {
             reply.ok();
             return;
         }
-        for (index, entry) in entries.iter().enumerate() {
-            let entry_offset = index as u64 + 3;
+        let Some(mut index) = child_index_from_offset(offset) else {
+            reply.ok();
+            return;
+        };
+        loop {
+            let entry = match self.directory_child(fh, index) {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            };
+            let entry_offset = child_offset(index);
             if offset >= entry_offset {
+                index = index.saturating_add(1);
                 continue;
             }
             if reply.add(
@@ -970,6 +1099,7 @@ where
             ) {
                 break;
             }
+            index = index.saturating_add(1);
         }
         reply.ok();
     }
@@ -978,7 +1108,7 @@ where
         &self,
         _req: &Request,
         ino: INodeNo,
-        _fh: FileHandle,
+        fh: FileHandle,
         offset: u64,
         mut reply: ReplyDirectoryPlus,
     ) {
@@ -989,8 +1119,15 @@ where
                 return;
             }
         };
-        let Ok((attr, entries)) = self.directory_entries(inode) else {
-            reply.error(Errno::ENOENT);
+        let attr = match self.directory_handle_attr(fh) {
+            Ok(attr) => attr,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        if attr.file_type != FileType::Directory {
+            reply.error(Errno::ENOTDIR);
             return;
         };
         let parent = self.parent_of(inode);
@@ -999,15 +1136,28 @@ where
             .ok()
             .flatten()
             .unwrap_or_else(|| attr.clone());
-        if self.add_dirent_plus(&mut reply, offset, 1, ".", &attr)
-            || self.add_dirent_plus(&mut reply, offset, 2, "..", &parent_attr)
+        if self.add_dirent_plus(&mut reply, offset, FUSE_DOT_OFFSET, ".", &attr)
+            || self.add_dirent_plus(&mut reply, offset, FUSE_DOT_DOT_OFFSET, "..", &parent_attr)
         {
             reply.ok();
             return;
         }
-        for (index, entry) in entries.iter().enumerate() {
-            let entry_offset = index as u64 + 3;
+        let Some(mut index) = child_index_from_offset(offset) else {
+            reply.ok();
+            return;
+        };
+        loop {
+            let entry = match self.directory_child(fh, index) {
+                Ok(Some(entry)) => entry,
+                Ok(None) => break,
+                Err(err) => {
+                    reply.error(err);
+                    return;
+                }
+            };
+            let entry_offset = child_offset(index);
             if offset >= entry_offset {
+                index = index.saturating_add(1);
                 continue;
             }
             if reply.add(
@@ -1020,8 +1170,23 @@ where
             ) {
                 break;
             }
+            index = index.saturating_add(1);
         }
         reply.ok();
+    }
+
+    fn releasedir(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _flags: OpenFlags,
+        reply: ReplyEmpty,
+    ) {
+        match self.release_directory_handle(fh) {
+            Ok(()) => reply.ok(),
+            Err(err) => reply.error(err),
+        }
     }
 
     fn mkdir(
@@ -1409,6 +1574,17 @@ fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
     format!("fuse/{}/{}", parent.get(), inode.get())
 }
 
+fn child_index_from_offset(offset: u64) -> Option<usize> {
+    let raw = offset.saturating_sub(FUSE_FIRST_CHILD_OFFSET);
+    usize::try_from(raw).ok()
+}
+
+fn child_offset(index: usize) -> u64 {
+    u64::try_from(index)
+        .unwrap_or(u64::MAX.saturating_sub(FUSE_FIRST_CHILD_OFFSET))
+        .saturating_add(FUSE_FIRST_CHILD_OFFSET)
+}
+
 fn errno(err: MetadError) -> Errno {
     match err {
         MetadError::Model(_) => Errno::EINVAL,
@@ -1456,6 +1632,59 @@ mod tests {
         assert_eq!(fuse.parent_of(child), InodeId::root());
         fuse.remember_parent(child, InodeId::new(9).unwrap());
         assert_eq!(fuse.parent_of(child), InodeId::new(9).unwrap());
+    }
+
+    #[test]
+    fn directory_handle_loads_live_entries_by_page() {
+        let service = service();
+        let total = FUSE_READDIR_PAGE_SIZE + 3;
+        let names = (0..total)
+            .map(|index| DentryName::new(format!("sample-{index:04}.bin").into_bytes()).unwrap())
+            .collect::<Vec<_>>();
+        service
+            .create_files_in_dir(InodeId::root(), names, 0o644, 1000, 1000)
+            .unwrap();
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        let handle = fuse
+            .allocate_directory_handle(InodeId::root())
+            .expect("open directory handle");
+
+        let before = fuse.service().metadata_service_stats();
+        let first = fuse
+            .directory_child(handle, 0)
+            .expect("load first child")
+            .expect("first child exists");
+        let after_first = fuse.service().metadata_service_stats();
+        assert_eq!(first.dentry.name.as_bytes(), b"sample-0000.bin");
+        assert_eq!(
+            after_first.read_dir_plus_entry_total - before.read_dir_plus_entry_total,
+            FUSE_READDIR_PAGE_SIZE as u64
+        );
+
+        let second_page_first = fuse
+            .directory_child(handle, FUSE_READDIR_PAGE_SIZE)
+            .expect("load second page")
+            .expect("second page has entries");
+        let after_second = fuse.service().metadata_service_stats();
+        assert_eq!(
+            second_page_first.dentry.name.as_bytes(),
+            format!("sample-{FUSE_READDIR_PAGE_SIZE:04}.bin").as_bytes()
+        );
+        assert_eq!(
+            after_second.read_dir_plus_entry_total - after_first.read_dir_plus_entry_total,
+            (total - FUSE_READDIR_PAGE_SIZE) as u64
+        );
+        assert!(fuse
+            .directory_child(handle, total)
+            .expect("load past end")
+            .is_none());
+
+        fuse.release_directory_handle(handle)
+            .expect("release directory handle");
+        assert_eq!(
+            fuse.directory_child(handle, 0).unwrap_err().code(),
+            Errno::EBADF.code()
+        );
     }
 
     #[cfg(target_os = "macos")]
@@ -1598,9 +1827,18 @@ mod tests {
             INodeNo(InodeId::ROOT_RAW)
         );
 
-        let (_attr, entries) = fuse.directory_entries(runs.attr.inode).unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0], old);
+        let handle = fuse
+            .allocate_directory_handle(runs.attr.inode)
+            .expect("open snapshot root directory");
+        let entry = fuse
+            .directory_child(handle, 0)
+            .expect("read snapshot directory")
+            .expect("snapshot entry exists");
+        assert_eq!(entry, old);
+        assert!(fuse
+            .directory_child(handle, 1)
+            .expect("read snapshot directory end")
+            .is_none());
         assert_eq!(
             fuse.service_read_file(old.attr.inode, 0, old.attr.size as usize)
                 .unwrap(),
