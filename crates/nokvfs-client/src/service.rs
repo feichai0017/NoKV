@@ -1119,6 +1119,9 @@ impl PipelinedConnection {
         let mut stream =
             TcpStream::connect(address).map_err(|err| ClientError::Io(err.to_string()))?;
         stream
+            .set_nodelay(true)
+            .map_err(|err| ClientError::Io(err.to_string()))?;
+        stream
             .write_all(FRAMED_RPC_MAGIC)
             .map_err(|err| ClientError::Io(err.to_string()))?;
         let reader = stream

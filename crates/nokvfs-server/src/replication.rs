@@ -31,7 +31,7 @@ pub(crate) trait MetadataLogPeerBootstrapper: Send + Sync {
 }
 
 pub(crate) struct FramedMetadataLogPeer {
-    address: SocketAddr,
+    client: rpc::FramedRpcClient,
 }
 
 struct FramedMetadataLogPeerBootstrapper {
@@ -59,7 +59,7 @@ impl MajorityMetadataLog {
             .map(|(node, address)| {
                 (
                     *node,
-                    Arc::new(FramedMetadataLogPeer { address: *address })
+                    Arc::new(FramedMetadataLogPeer::new(*address))
                         as Arc<dyn MetadataLogPeerAppender>,
                 )
             })
@@ -219,6 +219,14 @@ impl MajorityMetadataLog {
     }
 }
 
+impl FramedMetadataLogPeer {
+    fn new(address: SocketAddr) -> Self {
+        Self {
+            client: rpc::FramedRpcClient::new(address),
+        }
+    }
+}
+
 impl SharedMetadataLog for MajorityMetadataLog {
     fn append_batch(
         &self,
@@ -248,7 +256,7 @@ impl SharedMetadataLog for MajorityMetadataLog {
 
 impl MetadataLogPeerAppender for FramedMetadataLogPeer {
     fn append_entry(&self, leader: NodeId, entry: &MetadataLogEntry) -> Result<(), SharedLogError> {
-        rpc::call_append_metadata_log(self.address, leader, entry)
+        rpc::call_append_metadata_log_with_client(&self.client, leader, entry)
             .map_err(|err| SharedLogError::Backend(err.to_string()))
     }
 }
@@ -277,11 +285,12 @@ impl MetadataLogPeerBootstrapper for FramedMetadataLogPeerBootstrapper {
         );
         rpc::call_install_metadata_checkpoint(address, checkpoint_only)
             .map_err(|err| SharedLogError::Backend(err.to_string()))?;
+        let append_client = rpc::FramedRpcClient::new(address);
         for entry in self.local.read_from(replay_start, 0)? {
             if entry.position.index >= before {
                 break;
             }
-            rpc::call_append_metadata_log(address, self.local_node, &entry)
+            rpc::call_append_metadata_log_with_client(&append_client, self.local_node, &entry)
                 .map_err(|err| SharedLogError::Backend(err.to_string()))?;
         }
         Ok(())

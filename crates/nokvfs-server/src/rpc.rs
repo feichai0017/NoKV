@@ -1,6 +1,9 @@
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
-use std::sync::{mpsc, Arc, Mutex, OnceLock};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    mpsc, Arc, Mutex, OnceLock,
+};
 use std::thread;
 use std::time::Duration;
 
@@ -36,6 +39,12 @@ struct RpcWorkerPool {
     sender: mpsc::SyncSender<RpcJob>,
 }
 
+pub(crate) struct FramedRpcClient {
+    address: SocketAddr,
+    next_request_id: AtomicU64,
+    stream: Mutex<Option<TcpStream>>,
+}
+
 impl RpcWorkerPool {
     fn new(workers: usize, queue_capacity: usize) -> Self {
         let (sender, receiver) = mpsc::sync_channel::<RpcJob>(queue_capacity.max(workers));
@@ -66,6 +75,39 @@ impl RpcWorkerPool {
                 "metadata framed rpc worker pool stopped",
             ))
         })
+    }
+}
+
+impl FramedRpcClient {
+    pub(crate) fn new(address: SocketAddr) -> Self {
+        Self {
+            address,
+            next_request_id: AtomicU64::new(1),
+            stream: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn call(
+        &self,
+        request: &MetadataRpcRequest,
+    ) -> Result<MetadataRpcEnvelope, ServerError> {
+        let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
+        let mut stream = self
+            .stream
+            .lock()
+            .map_err(|_| ServerError::Io(io::Error::other("metadata peer rpc mutex poisoned")))?;
+        if stream.is_none() {
+            *stream = Some(open_framed_rpc_stream(self.address)?);
+        }
+        let result = call_framed_rpc_on_stream(
+            stream.as_mut().expect("framed rpc stream was initialized"),
+            request_id,
+            request,
+        );
+        if result.is_err() {
+            *stream = None;
+        }
+        result
     }
 }
 
@@ -111,6 +153,7 @@ pub(crate) fn handle_framed_stream_after_magic(
     server: Arc<Server>,
     mut stream: TcpStream,
 ) -> Result<(), ServerError> {
+    stream.set_nodelay(true).map_err(ServerError::Io)?;
     stream.set_read_timeout(None).map_err(ServerError::Io)?;
     stream.set_write_timeout(None).map_err(ServerError::Io)?;
     let writer = Arc::new(Mutex::new(stream.try_clone().map_err(ServerError::Io)?));
@@ -151,7 +194,13 @@ pub(crate) fn call_framed_rpc(
     request_id: u64,
     request: &MetadataRpcRequest,
 ) -> Result<MetadataRpcEnvelope, ServerError> {
+    let mut stream = open_framed_rpc_stream(address)?;
+    call_framed_rpc_on_stream(&mut stream, request_id, request)
+}
+
+fn open_framed_rpc_stream(address: SocketAddr) -> Result<TcpStream, ServerError> {
     let mut stream = TcpStream::connect(address).map_err(ServerError::Io)?;
+    stream.set_nodelay(true).map_err(ServerError::Io)?;
     stream
         .set_read_timeout(Some(OUTBOUND_FRAMED_RPC_TIMEOUT))
         .map_err(ServerError::Io)?;
@@ -161,14 +210,22 @@ pub(crate) fn call_framed_rpc(
     stream
         .write_all(FRAMED_RPC_MAGIC)
         .map_err(ServerError::Io)?;
+    Ok(stream)
+}
+
+fn call_framed_rpc_on_stream(
+    stream: &mut TcpStream,
+    request_id: u64,
+    request: &MetadataRpcRequest,
+) -> Result<MetadataRpcEnvelope, ServerError> {
     let payload = encode_request(request).map_err(|err| {
         ServerError::Io(io::Error::new(
             io::ErrorKind::InvalidData,
             format!("metadata framed rpc request encode failed: {err}"),
         ))
     })?;
-    write_frame(&mut stream, request_id, 0, &payload)?;
-    let Some(frame) = read_frame(&mut stream)? else {
+    write_frame(stream, request_id, 0, &payload)?;
+    let Some(frame) = read_frame(stream)? else {
         return Err(ServerError::Io(io::Error::new(
             io::ErrorKind::UnexpectedEof,
             "metadata framed rpc peer closed before response",
@@ -191,6 +248,20 @@ pub(crate) fn call_framed_rpc(
     })
 }
 
+pub(crate) fn call_append_metadata_log_with_client(
+    client: &FramedRpcClient,
+    leader: nokvfs_cluster::NodeId,
+    entry: &nokvfs_cluster::MetadataLogEntry,
+) -> Result<(), ServerError> {
+    let encoded =
+        nokvfs_cluster::encode_metadata_log_entry(entry).map_err(ServerError::SharedLog)?;
+    let envelope = client.call(&MetadataRpcRequest::AppendMetadataLog {
+        leader: leader.get(),
+        entry: encoded,
+    })?;
+    validate_append_metadata_log_response(envelope, entry)
+}
+
 pub(crate) fn call_append_metadata_log(
     address: SocketAddr,
     leader: nokvfs_cluster::NodeId,
@@ -206,6 +277,13 @@ pub(crate) fn call_append_metadata_log(
             entry: encoded,
         },
     )?;
+    validate_append_metadata_log_response(envelope, entry)
+}
+
+fn validate_append_metadata_log_response(
+    envelope: MetadataRpcEnvelope,
+    entry: &nokvfs_cluster::MetadataLogEntry,
+) -> Result<(), ServerError> {
     if !envelope.ok {
         return Err(ServerError::SharedLog(SharedLogError::Backend(
             envelope
@@ -2851,6 +2929,45 @@ mod tests {
         let workers = default_framed_rpc_worker_count();
         assert!(workers >= MIN_FRAMED_RPC_WORKERS);
         assert!(workers <= MAX_FRAMED_RPC_WORKERS);
+    }
+
+    #[test]
+    fn framed_rpc_client_reuses_peer_connection() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_thread = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+            let mut request_ids = Vec::new();
+            for _ in 0..2 {
+                let frame = read_frame(&mut stream).unwrap().unwrap();
+                request_ids.push(frame.request_id);
+                let response = encode_envelope(&MetadataRpcEnvelope {
+                    ok: true,
+                    result: Some(MetadataRpcResult::RetiredSnapshot { retired: false }),
+                    error: None,
+                    error_kind: None,
+                    metadata_position: None,
+                })
+                .unwrap();
+                write_frame(&mut stream, frame.request_id, frame.flags, &response).unwrap();
+            }
+            request_ids
+        });
+
+        let client = FramedRpcClient::new(addr);
+        let first = client
+            .call(&MetadataRpcRequest::RetireSnapshot { snapshot_id: 1 })
+            .unwrap();
+        let second = client
+            .call(&MetadataRpcRequest::RetireSnapshot { snapshot_id: 2 })
+            .unwrap();
+        assert!(first.ok);
+        assert!(second.ok);
+        assert_eq!(server_thread.join().unwrap(), vec![1, 2]);
     }
 
     #[test]
