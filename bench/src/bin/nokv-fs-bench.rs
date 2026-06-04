@@ -1496,6 +1496,10 @@ fn csv_row(row: &ResultRow) -> String {
 }
 
 fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
+    let atomic_apply_delta = after
+        .metadata_store
+        .atomic_apply_total
+        .saturating_sub(before.metadata_store.atomic_apply_total);
     BenchStats {
         object: ObjectTransferStats {
             object_puts: after
@@ -1617,15 +1621,16 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_store
                 .commit_prepare_ns_total
                 .saturating_sub(before.metadata_store.commit_prepare_ns_total),
-            atomic_apply_total: after
-                .metadata_store
-                .atomic_apply_total
-                .saturating_sub(before.metadata_store.atomic_apply_total),
+            atomic_apply_total: atomic_apply_delta,
             atomic_apply_command_total: after
                 .metadata_store
                 .atomic_apply_command_total
                 .saturating_sub(before.metadata_store.atomic_apply_command_total),
-            atomic_apply_max_batch: after.metadata_store.atomic_apply_max_batch,
+            atomic_apply_max_batch: if atomic_apply_delta == 0 {
+                0
+            } else {
+                after.metadata_store.atomic_apply_max_batch
+            },
             atomic_apply_ns_total: after
                 .metadata_store
                 .atomic_apply_ns_total
@@ -2702,6 +2707,26 @@ mod tests {
         assert!(header.contains("path_index_scan_stale"));
         assert!(header.contains("read_dir_plus_projection_hit_rate"));
         assert_eq!(header.split(',').count(), record.split(',').count());
+    }
+
+    #[test]
+    fn stats_delta_clears_atomic_apply_max_when_window_has_no_apply() {
+        let before = BenchStats {
+            metadata_store: MetadataStoreStats {
+                atomic_apply_total: 3,
+                atomic_apply_command_total: 16,
+                atomic_apply_max_batch: 8,
+                ..MetadataStoreStats::default()
+            },
+            ..BenchStats::default()
+        };
+        let after = before;
+
+        let delta = stats_delta(before, after);
+
+        assert_eq!(delta.metadata_store.atomic_apply_total, 0);
+        assert_eq!(delta.metadata_store.atomic_apply_command_total, 0);
+        assert_eq!(delta.metadata_store.atomic_apply_max_batch, 0);
     }
 
     #[test]
