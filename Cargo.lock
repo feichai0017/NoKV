@@ -1182,6 +1182,7 @@ version = "0.1.0"
 dependencies = [
  "nokvfs-meta",
  "nokvfs-types",
+ "tempfile",
 ]
 
 [[package]]

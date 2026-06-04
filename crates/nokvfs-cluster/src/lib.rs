@@ -7,6 +7,7 @@
 //! semantics.
 
 mod errors;
+mod file;
 mod group;
 mod log;
 mod memory;
@@ -15,6 +16,7 @@ mod replay;
 mod types;
 
 pub use errors::{ReplayError, SharedLogError};
+pub use file::FileSharedLog;
 pub use group::{MetadataGroup, MetadataGroupCommit};
 pub use log::SharedMetadataLog;
 pub use memory::InMemorySharedLog;

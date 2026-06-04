@@ -1,3 +1,5 @@
+use std::fs::OpenOptions;
+use std::io::Write;
 use std::sync::Mutex;
 
 use super::*;
@@ -7,6 +9,7 @@ use nokvfs_meta::command::{
 };
 use nokvfs_meta::HoltMetadataStore;
 use nokvfs_types::{MountId, RecordFamily};
+use tempfile::tempdir;
 
 fn version(raw: u64) -> Version {
     Version::new(raw).unwrap()
@@ -296,6 +299,121 @@ fn replay_into_metadata_store_is_idempotent_by_request_id() {
             .0,
         b"value"
     );
+}
+
+#[test]
+fn file_shared_log_reopens_entries_and_replays_into_metadata_store() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    {
+        let log = FileSharedLog::open(&path).unwrap();
+        log.append_batch(
+            LogTerm::new(1).unwrap(),
+            mount,
+            &[command(b"a", 2), command(b"b", 3)],
+        )
+        .unwrap();
+        log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"c", 4)])
+            .unwrap();
+        assert_eq!(log.committed_index().get(), 2);
+    }
+
+    let reopened = FileSharedLog::open(&path).unwrap();
+    assert_eq!(reopened.committed_index().get(), 2);
+    let entries = reopened.read_from(LogIndex::new(1).unwrap(), 0).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].commands[0].request_id, b"a");
+    assert_eq!(entries[0].commands[1].request_id, b"b");
+    assert_eq!(entries[1].commands[0].request_id, b"c");
+
+    let learner = MetadataStoreSink {
+        store: HoltMetadataStore::open_memory().unwrap(),
+    };
+    let outcome = ReplayDriver::new(&reopened, &learner)
+        .replay_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    assert_eq!(outcome.entries, 2);
+    assert_eq!(outcome.commands, 3);
+    assert_eq!(
+        learner
+            .store
+            .get(
+                RecordFamily::Dentry,
+                b"c",
+                version(4),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+}
+
+#[test]
+fn file_shared_log_persists_compaction_marker_and_continues_indexes() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    {
+        let log = FileSharedLog::open(&path).unwrap();
+        log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+            .unwrap();
+        log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)])
+            .unwrap();
+        log.compact_through(LogIndex::new(1).unwrap()).unwrap();
+    }
+
+    let reopened = FileSharedLog::open(&path).unwrap();
+    assert_eq!(reopened.committed_index().get(), 2);
+    assert!(matches!(
+        reopened.read_from(LogIndex::new(1).unwrap(), 10),
+        Err(SharedLogError::Compacted { .. })
+    ));
+    let entries = reopened.read_from(LogIndex::new(2).unwrap(), 10).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].commands[0].request_id, b"b");
+
+    let receipt = reopened
+        .append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"c", 4)])
+        .unwrap();
+    assert_eq!(receipt[0].position.index.get(), 3);
+    assert_eq!(reopened.committed_index().get(), 3);
+}
+
+#[test]
+fn file_shared_log_truncates_partial_tail_on_reopen() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    {
+        let log = FileSharedLog::open(&path).unwrap();
+        log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+            .unwrap();
+    }
+    {
+        let mut file = OpenOptions::new().append(true).open(&path).unwrap();
+        file.write_all(b"NKFSLG01").unwrap();
+        file.write_all(&128_u32.to_be_bytes()).unwrap();
+        file.write_all(b"partial").unwrap();
+        file.flush().unwrap();
+    }
+
+    let reopened = FileSharedLog::open(&path).unwrap();
+    assert_eq!(reopened.committed_index().get(), 1);
+    let receipt = reopened
+        .append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)])
+        .unwrap();
+    assert_eq!(receipt[0].position.index.get(), 2);
+
+    let reopened_again = FileSharedLog::open(&path).unwrap();
+    let entries = reopened_again
+        .read_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].commands[0].request_id, b"a");
+    assert_eq!(entries[1].commands[0].request_id, b"b");
 }
 
 #[test]

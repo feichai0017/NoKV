@@ -12,3 +12,6 @@ homepage.workspace = true
 [dependencies]
 nokvfs-meta.workspace = true
 nokvfs-types.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
