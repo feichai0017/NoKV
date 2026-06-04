@@ -39,14 +39,9 @@ where
         commands: &[MetadataCommand],
     ) -> Result<MetadataGroupCommit, ReplayError> {
         let durable_receipts = self.log.append_batch(self.term, self.mount, commands)?;
-        let mut applied = Vec::with_capacity(durable_receipts.len());
-        for (receipt, command) in durable_receipts
-            .iter()
-            .cloned()
-            .zip(commands.iter().cloned())
-        {
-            applied.push(self.sink.apply_command(receipt, command)?);
-        }
+        let applied = self
+            .sink
+            .apply_batch(durable_receipts.clone(), commands.to_vec())?;
         let frontier = applied.last().map(|applied| ApplyFrontier {
             position: applied.receipt.position,
             commit_version: applied.receipt.commit_version,

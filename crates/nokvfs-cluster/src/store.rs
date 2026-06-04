@@ -451,6 +451,37 @@ where
             watch_events: result.watch_events,
         })
     }
+
+    fn apply_batch(
+        &self,
+        receipts: Vec<DurableReceipt>,
+        commands: Vec<MetadataCommand>,
+    ) -> Result<Vec<AppliedMetadataCommand>, ReplayError> {
+        debug_assert_eq!(receipts.len(), commands.len());
+        let results = self.store.commit_independent_batch(&commands);
+        let mut applied = Vec::with_capacity(results.len());
+        let mut frontier = None;
+        for (receipt, result) in receipts.into_iter().zip(results) {
+            let result = result.map_err(|err| ReplayError::Apply {
+                position: receipt.position,
+                batch_position: receipt.batch_position,
+                message: err.to_string(),
+            })?;
+            frontier = Some(ApplyFrontier {
+                position: receipt.position,
+                commit_version: result.commit_version,
+            });
+            applied.push(AppliedMetadataCommand {
+                receipt,
+                applied_mutations: result.applied_mutations,
+                watch_events: result.watch_events,
+            });
+        }
+        if let Some(frontier) = frontier {
+            self.record_applied_frontier(frontier)?;
+        }
+        Ok(applied)
+    }
 }
 
 impl<M, L, F> MetadataStore for SharedLogMetadataStore<M, L, F>

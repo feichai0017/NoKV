@@ -73,6 +73,7 @@ fn checkpoint_artifact(id: &[u8]) -> CheckpointArtifact {
 #[derive(Default)]
 struct RecordingSink {
     applied: Mutex<Vec<DurableReceipt>>,
+    batch_calls: AtomicU64,
 }
 
 struct MetadataStoreSink<M> {
@@ -82,6 +83,12 @@ struct MetadataStoreSink<M> {
 #[derive(Default)]
 struct PredicateFailureStore {
     commit_calls: AtomicU64,
+}
+
+#[derive(Default)]
+struct BatchCountingStore {
+    commit_calls: AtomicU64,
+    batch_calls: AtomicU64,
 }
 
 impl MetadataLogSink for RecordingSink {
@@ -97,6 +104,19 @@ impl MetadataLogSink for RecordingSink {
             applied_mutations: command.mutations.len(),
             watch_events: command.watch.len(),
         })
+    }
+
+    fn apply_batch(
+        &self,
+        receipts: Vec<DurableReceipt>,
+        commands: Vec<MetadataCommand>,
+    ) -> Result<Vec<AppliedMetadataCommand>, ReplayError> {
+        self.batch_calls.fetch_add(1, Ordering::Relaxed);
+        receipts
+            .into_iter()
+            .zip(commands)
+            .map(|(receipt, command)| self.apply_command(receipt, command))
+            .collect()
     }
 }
 
@@ -147,6 +167,55 @@ impl MetadataStore for PredicateFailureStore {
             applied_mutations: command.mutations.len(),
             watch_events: command.watch.len(),
         })
+    }
+
+    fn prune_history(
+        &self,
+        _request: HistoryPruneRequest,
+    ) -> Result<HistoryPruneOutcome, MetadataError> {
+        Ok(HistoryPruneOutcome::default())
+    }
+}
+
+impl MetadataStore for BatchCountingStore {
+    fn get_versioned(
+        &self,
+        _family: RecordFamily,
+        _key: &[u8],
+        _version: Version,
+        _purpose: ReadPurpose,
+    ) -> Result<Option<ReadItem>, MetadataError> {
+        Ok(None)
+    }
+
+    fn scan(&self, _request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
+        Ok(Vec::new())
+    }
+
+    fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
+        self.commit_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(CommitResult {
+            commit_version: command.commit_version,
+            applied_mutations: command.mutations.len(),
+            watch_events: command.watch.len(),
+        })
+    }
+
+    fn commit_independent_batch(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Vec<Result<CommitResult, MetadataError>> {
+        self.batch_calls.fetch_add(1, Ordering::Relaxed);
+        commands
+            .iter()
+            .map(|command| {
+                Ok(CommitResult {
+                    commit_version: command.commit_version,
+                    applied_mutations: command.mutations.len(),
+                    watch_events: command.watch.len(),
+                })
+            })
+            .collect()
     }
 
     fn prune_history(
@@ -293,6 +362,7 @@ fn replay_driver_applies_commands_and_reports_frontier() {
 
     assert_eq!(outcome.entries, 2);
     assert_eq!(outcome.commands, 3);
+    assert_eq!(sink.batch_calls.load(Ordering::Relaxed), 2);
     assert_eq!(
         outcome.frontier,
         Some(ApplyFrontier {
@@ -323,6 +393,7 @@ fn metadata_group_appends_and_applies_one_batch() {
     assert_eq!(commit.durable_receipts.len(), 2);
     assert_eq!(commit.applied.len(), 2);
     assert_eq!(commit.applied[1].receipt.batch_position, 1);
+    assert_eq!(sink.batch_calls.load(Ordering::Relaxed), 1);
     assert_eq!(
         commit.frontier,
         Some(ApplyFrontier {
@@ -1054,6 +1125,27 @@ fn shared_log_metadata_store_commits_independent_batch_as_one_entry() {
     assert_eq!(entries[0].commands.len(), 2);
     assert_eq!(entries[0].commands[0].request_id, b"a");
     assert_eq!(entries[0].commands[1].request_id, b"b");
+}
+
+#[test]
+fn shared_log_metadata_store_applies_log_entry_as_inner_batch() {
+    let log = InMemorySharedLog::new();
+    let store = BatchCountingStore::default();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+
+    let results = shared
+        .commit_batch(&[command(b"a", 2), command(b"b", 3)])
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(shared.inner().batch_calls.load(Ordering::Relaxed), 1);
+    assert_eq!(shared.inner().commit_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(shared.applied_frontier().unwrap().position.index.get(), 1);
+    assert_eq!(
+        shared.applied_frontier().unwrap().commit_version,
+        version(3)
+    );
 }
 
 #[test]

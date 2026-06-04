@@ -11,6 +11,19 @@ pub trait MetadataLogSink {
         receipt: DurableReceipt,
         command: MetadataCommand,
     ) -> Result<AppliedMetadataCommand, ReplayError>;
+
+    fn apply_batch(
+        &self,
+        receipts: Vec<DurableReceipt>,
+        commands: Vec<MetadataCommand>,
+    ) -> Result<Vec<AppliedMetadataCommand>, ReplayError> {
+        debug_assert_eq!(receipts.len(), commands.len());
+        receipts
+            .into_iter()
+            .zip(commands)
+            .map(|(receipt, command)| self.apply_command(receipt, command))
+            .collect()
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -63,16 +76,21 @@ where
             });
         }
         outcome.entries += 1;
-        for (batch_position, command) in entry.commands.iter().cloned().enumerate() {
-            let receipt = DurableReceipt {
+        let receipts = entry
+            .commands
+            .iter()
+            .enumerate()
+            .map(|(batch_position, command)| DurableReceipt {
                 position: entry.position,
                 mount: entry.mount,
                 batch_position,
                 request_id: command.request_id.clone(),
                 commit_version: command.commit_version,
-            };
-            let applied = sink.apply_command(receipt, command)?;
-            outcome.commands += 1;
+            })
+            .collect::<Vec<_>>();
+        let applied = sink.apply_batch(receipts, entry.commands.clone())?;
+        outcome.commands += applied.len();
+        if let Some(applied) = applied.last() {
             outcome.frontier = Some(ApplyFrontier {
                 position: applied.receipt.position,
                 commit_version: applied.receipt.commit_version,
