@@ -30,6 +30,31 @@ SPDX-License-Identifier: Apache-2.0
     <a href="#-headline-evidence">Benchmarks</a> ·
     <a href="https://github.com/feichai0017/NoKV/discussions">Discussions</a>
   </p>
+
+  <h3>Recognized In The AI-Native Storage Ecosystem</h3>
+
+  <table>
+    <tr>
+      <td align="center" width="360">
+        <a href="https://landscape.cncf.io/?group=projects-and-products&item=runtime--cloud-native-storage--nokv">
+          <img src="./docs/public/img/recognition/cncf.svg" width="128" alt="Cloud Native Computing Foundation" />
+        </a>
+        <br />
+        <strong>Linux Foundation CNCF Landscape</strong>
+        <br />
+        <sub>Listed in AI Native Infra / Storage and Cloud Native Storage.</sub>
+      </td>
+      <td align="center" width="360">
+        <a href="https://dbdb.io/db/nokv">
+          <img src="./docs/public/img/recognition/dbdb.svg" width="128" alt="DBDB.io Database of Databases" />
+        </a>
+        <br />
+        <strong>DBDB.io Database of Databases</strong>
+        <br />
+        <sub>Historical database profile; current NoKV is the Rust filesystem product line.</sub>
+      </td>
+    </tr>
+  </table>
 </div>
 
 <br/>

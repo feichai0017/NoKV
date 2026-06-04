@@ -33,3 +33,15 @@ features:
 Copyright 2024-2026 The NoKV Authors.
 SPDX-License-Identifier: Apache-2.0
 -->
+
+<div style="text-align: center; margin: 4rem auto 2rem; max-width: 820px;">
+  <p style="color: var(--vp-c-text-2); font-size: 0.8rem; letter-spacing: 0.12em; text-transform: uppercase; margin-bottom: 1.75rem;">Recognized in the AI-Native Storage Ecosystem</p>
+  <p>
+    <a href="https://landscape.cncf.io/?group=projects-and-products&item=runtime--cloud-native-storage--nokv" target="_blank" rel="noreferrer" style="display: inline-block; margin: 0 2rem 1rem;">
+      <img src="/img/recognition/cncf.svg" alt="CNCF Landscape" width="190" />
+    </a>
+    <a href="https://dbdb.io/db/nokv" target="_blank" rel="noreferrer" style="display: inline-block; margin: 0 2rem 1rem;">
+      <img src="/img/recognition/dbdb.svg" alt="DBDB.io Database of Databases" width="190" />
+    </a>
+  </p>
+</div>
