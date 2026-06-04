@@ -243,29 +243,45 @@ where
     ) -> Result<ReadDirPlusPage, MetadError> {
         let requested = limit.max(1);
         let prefix = path_index_prefix(self.mount, components);
-        let start_after = after.map(|name| {
+        let mut start_after = after.map(|name| {
             let mut marker = components.to_vec();
             marker.push(name.clone());
             path_index_prefix(self.mount, &marker)
         });
-        let rows = self.metadata.scan_delimited(DelimitedScanRequest {
-            family: RecordFamily::PathIndex,
-            prefix: prefix.clone(),
-            start_after,
-            delimiter: PATH_INDEX_DELIMITER,
-            version,
-            limit: requested.saturating_add(1),
-            purpose: ReadPurpose::UserStrong,
-        })?;
-        let mut entries = Vec::<DentryWithAttr>::with_capacity(requested);
-        for item in rows {
-            if entries.len() > requested {
+        let scan_limit = requested.saturating_add(1);
+        let mut entries = Vec::<DentryWithAttr>::with_capacity(scan_limit);
+        loop {
+            let rows = self.metadata.scan_delimited(DelimitedScanRequest {
+                family: RecordFamily::PathIndex,
+                prefix: prefix.clone(),
+                start_after: start_after.clone(),
+                delimiter: PATH_INDEX_DELIMITER,
+                version,
+                limit: scan_limit,
+                purpose: ReadPurpose::UserStrong,
+            })?;
+            if rows.is_empty() {
                 break;
             }
-            let Some(entry) = self.indexed_path_child(parent, &prefix, item, version)? else {
-                continue;
+            let exhausted = rows.len() < scan_limit;
+            let mut last_marker = None;
+            for item in rows {
+                last_marker = Some(delimited_scan_marker(&item));
+                let Some(entry) = self.indexed_path_child(parent, &prefix, item, version)? else {
+                    continue;
+                };
+                entries.push(entry);
+                if entries.len() > requested {
+                    break;
+                }
+            }
+            if entries.len() > requested || exhausted {
+                break;
+            }
+            let Some(marker) = last_marker else {
+                break;
             };
-            entries.push(entry);
+            start_after = Some(marker);
         }
         let next_cursor = if entries.len() > requested {
             entries.truncate(requested);
@@ -273,6 +289,11 @@ where
         } else {
             None
         };
+        self.read_dir_plus_total.fetch_add(1, Ordering::Relaxed);
+        self.read_dir_plus_entry_total
+            .fetch_add(entries.len() as u64, Ordering::Relaxed);
+        self.read_dir_plus_projection_hit_total
+            .fetch_add(entries.len() as u64, Ordering::Relaxed);
         Ok(ReadDirPlusPage {
             entries,
             next_cursor,
@@ -835,4 +856,11 @@ fn path_index_child_name(
         ));
     }
     DentryName::new(suffix.to_vec()).map_err(|err| MetadError::Codec(err.to_string()))
+}
+
+fn delimited_scan_marker(item: &DelimitedScanItem) -> Vec<u8> {
+    match item {
+        DelimitedScanItem::Key(item) => item.key.clone(),
+        DelimitedScanItem::CommonPrefix(prefix) => prefix.clone(),
+    }
 }

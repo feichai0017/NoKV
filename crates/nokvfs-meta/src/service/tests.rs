@@ -632,6 +632,63 @@ fn path_index_page_lists_immediate_indexed_children_with_holt_delimiter() {
 }
 
 #[test]
+fn path_index_page_skips_stale_rows_without_truncating_visible_children() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_path("/archive", 0o755, 1000, 1000)
+        .unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_path("/runs/aaa", 0o755, 1000, 1000)
+        .unwrap();
+    publish_path_artifact(
+        &service,
+        "/runs/aaa/stale.bin",
+        "runs/aaa/stale.bin",
+        b"stale",
+    );
+    service.rename_path("/runs/aaa", "/archive/aaa").unwrap();
+    let first_valid = publish_path_artifact(&service, "/runs/bbb.bin", "runs/bbb.bin", b"bbb");
+    let second_valid = publish_path_artifact(&service, "/runs/ccc.bin", "runs/ccc.bin", b"ccc");
+
+    let before_store = metadata.metadata_store_stats();
+    let before_service = service.metadata_service_stats();
+    let first = service.list_indexed_path_page("/runs", None, 1).unwrap();
+    let after_first_store = metadata.metadata_store_stats();
+    let after_first_service = service.metadata_service_stats();
+    assert_eq!(first.entries, vec![first_valid]);
+    assert_eq!(
+        first.next_cursor.as_ref().map(DentryName::as_bytes),
+        Some(b"bbb.bin".as_slice())
+    );
+    assert!(
+        after_first_store.scan_key_returned_total - before_store.scan_key_returned_total > 2,
+        "stale index row should force an extra delimiter scan page"
+    );
+    assert_eq!(
+        after_first_service.read_dir_plus_entry_total - before_service.read_dir_plus_entry_total,
+        1
+    );
+    assert_eq!(
+        after_first_service.read_dir_plus_projection_hit_total
+            - before_service.read_dir_plus_projection_hit_total,
+        1
+    );
+
+    let second = service
+        .list_indexed_path_page("/runs", first.next_cursor.as_ref(), 1)
+        .unwrap();
+    assert_eq!(second.entries, vec![second_valid]);
+    assert_eq!(second.next_cursor, None);
+}
+
+#[test]
 fn directory_rename_leaves_descendant_path_index_as_derived_stale_cache() {
     let objects = MemoryObjectStore::new();
     let metadata = HoltMetadataStore::open_memory().unwrap();
