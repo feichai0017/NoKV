@@ -26,5 +26,5 @@ pub use service::{
     BodyReadPlan, DentryWithAttr, MetadError, MetadataServiceStats, NoKvFs, ObjectTransferStats,
     PendingObjectCleanupOutcome, PreparedArtifact, PublishArtifact, PublishArtifactRange,
     PublishArtifactSession, PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult,
-    UpdateAttr,
+    UpdateAttr, XattrSetMode,
 };

@@ -29,6 +29,7 @@ pub enum RecordFamily {
     Inode,
     Dentry,
     Parent,
+    Xattr,
     ChunkManifest,
     Session,
     PathIndex,

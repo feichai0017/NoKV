@@ -61,6 +61,19 @@ pub fn parent_key(mount: MountId, child: InodeId, parent: InodeId, name: &Dentry
     out
 }
 
+pub fn xattr_prefix(mount: MountId, inode: InodeId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH * 2);
+    push_u64(&mut out, mount.get());
+    push_u64(&mut out, inode.get());
+    out
+}
+
+pub fn xattr_key(mount: MountId, inode: InodeId, name: &[u8]) -> Vec<u8> {
+    let mut out = xattr_prefix(mount, inode);
+    out.extend_from_slice(name);
+    out
+}
+
 pub fn path_index_key(mount: MountId, components: &[DentryName]) -> Vec<u8> {
     let mut out = path_index_prefix(mount, components);
     out.push(PATH_INDEX_TERMINATOR);
@@ -166,15 +179,16 @@ pub fn family_tag(family: RecordFamily) -> u8 {
         RecordFamily::Inode => 2,
         RecordFamily::Dentry => 3,
         RecordFamily::Parent => 4,
-        RecordFamily::ChunkManifest => 5,
-        RecordFamily::Session => 6,
-        RecordFamily::PathIndex => 7,
-        RecordFamily::Watch => 8,
-        RecordFamily::Snapshot => 9,
-        RecordFamily::Gc => 10,
-        RecordFamily::CommandDedupe => 11,
-        RecordFamily::History => 12,
-        RecordFamily::System => 13,
+        RecordFamily::Xattr => 5,
+        RecordFamily::ChunkManifest => 6,
+        RecordFamily::Session => 7,
+        RecordFamily::PathIndex => 8,
+        RecordFamily::Watch => 9,
+        RecordFamily::Snapshot => 10,
+        RecordFamily::Gc => 11,
+        RecordFamily::CommandDedupe => 12,
+        RecordFamily::History => 13,
+        RecordFamily::System => 14,
     }
 }
 
@@ -265,6 +279,19 @@ mod tests {
         assert!(child.starts_with(&parent));
         assert!(!child.starts_with(&parent_exact));
         assert!(!sibling_prefix.starts_with(&parent));
+    }
+
+    #[test]
+    fn xattr_keys_for_one_inode_share_a_contiguous_prefix() {
+        let prefix = xattr_prefix(mount(), inode(9));
+        let a = xattr_key(mount(), inode(9), b"user.a");
+        let b = xattr_key(mount(), inode(9), b"user.b");
+        let other_inode = xattr_key(mount(), inode(10), b"user.a");
+
+        assert!(a.starts_with(&prefix));
+        assert!(b.starts_with(&prefix));
+        assert!(!other_inode.starts_with(&prefix));
+        assert!(a < b);
     }
 
     #[test]

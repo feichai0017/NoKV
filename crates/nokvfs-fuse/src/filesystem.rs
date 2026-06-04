@@ -16,7 +16,7 @@ use fuser::{
 use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{
     DentryWithAttr, MetadError, NoKvFs, PreparedArtifact, PublishArtifactRange,
-    PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult, UpdateAttr,
+    PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokvfs_object::{ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk};
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
@@ -98,6 +98,8 @@ const FUSE_READDIR_PAGE_SIZE: usize = 4;
 const FUSE_DOT_OFFSET: u64 = 1;
 const FUSE_DOT_DOT_OFFSET: u64 = 2;
 const FUSE_FIRST_CHILD_OFFSET: u64 = 3;
+const XATTR_CREATE: i32 = 0x1;
+const XATTR_REPLACE: i32 = 0x2;
 
 impl Default for FuseOptions {
     fn default() -> Self {
@@ -1210,37 +1212,127 @@ where
     fn setxattr(
         &self,
         _req: &Request,
-        _ino: INodeNo,
-        _name: &OsStr,
-        _value: &[u8],
-        _flags: i32,
-        _position: u32,
+        ino: INodeNo,
+        name: &OsStr,
+        value: &[u8],
+        flags: i32,
+        position: u32,
         reply: ReplyEmpty,
     ) {
-        reply.error(xattr_unsupported_error());
-    }
-
-    fn getxattr(
-        &self,
-        _req: &Request,
-        _ino: INodeNo,
-        _name: &OsStr,
-        _size: u32,
-        reply: ReplyXattr,
-    ) {
-        reply.error(xattr_missing_error());
-    }
-
-    fn listxattr(&self, _req: &Request, _ino: INodeNo, size: u32, reply: ReplyXattr) {
-        if size == 0 {
-            reply.size(0);
-        } else {
-            reply.data(&[]);
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        if position != 0 {
+            reply.error(xattr_unsupported_error());
+            return;
+        }
+        let inode = match self.metadata_inode(ino) {
+            Ok(inode) => inode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match xattr_name(name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let mode = match xattr_set_mode(flags) {
+            Ok(mode) => mode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.service.set_xattr(inode, name, value.to_vec(), mode) {
+            Ok(()) => reply.ok(),
+            Err(MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed))
+                if mode == XattrSetMode::Create =>
+            {
+                reply.error(Errno::EEXIST)
+            }
+            Err(MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed))
+                if mode == XattrSetMode::Replace =>
+            {
+                reply.error(xattr_missing_error())
+            }
+            Err(err) => reply.error(errno(err)),
         }
     }
 
-    fn removexattr(&self, _req: &Request, _ino: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
-        reply.error(xattr_missing_error());
+    fn getxattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, size: u32, reply: ReplyXattr) {
+        let inode = match self.metadata_inode(ino) {
+            Ok(inode) => inode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match xattr_name(name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.service.get_xattr(inode, name) {
+            Ok(Some(value)) => reply_xattr_data(value.as_slice(), size, reply),
+            Ok(None) => reply.error(xattr_missing_error()),
+            Err(err) => reply.error(errno(err)),
+        }
+    }
+
+    fn listxattr(&self, _req: &Request, ino: INodeNo, size: u32, reply: ReplyXattr) {
+        let inode = match self.metadata_inode(ino) {
+            Ok(inode) => inode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.service.list_xattr(inode) {
+            Ok(names) => {
+                let mut encoded = Vec::new();
+                for name in names {
+                    encoded.extend_from_slice(&name);
+                    encoded.push(0);
+                }
+                reply_xattr_data(&encoded, size, reply);
+            }
+            Err(err) => reply.error(errno(err)),
+        }
+    }
+
+    fn removexattr(&self, _req: &Request, ino: INodeNo, name: &OsStr, reply: ReplyEmpty) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let inode = match self.metadata_inode(ino) {
+            Ok(inode) => inode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match xattr_name(name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.service.remove_xattr(inode, name) {
+            Ok(()) => reply.ok(),
+            Err(MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed)) => {
+                reply.error(xattr_missing_error())
+            }
+            Err(err) => reply.error(errno(err)),
+        }
     }
 
     fn access(&self, req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
@@ -1666,6 +1758,39 @@ fn xattr_missing_error() -> Errno {
     Errno::NO_XATTR
 }
 
+fn xattr_name(name: &OsStr) -> Result<&[u8], Errno> {
+    let name = name.as_bytes();
+    if name.is_empty() || name.contains(&0) {
+        return Err(Errno::EINVAL);
+    }
+    Ok(name)
+}
+
+fn xattr_set_mode(flags: i32) -> Result<XattrSetMode, Errno> {
+    if flags & !(XATTR_CREATE | XATTR_REPLACE) != 0 {
+        return Err(Errno::EINVAL);
+    }
+    match (flags & XATTR_CREATE != 0, flags & XATTR_REPLACE != 0) {
+        (false, false) => Ok(XattrSetMode::Any),
+        (true, false) => Ok(XattrSetMode::Create),
+        (false, true) => Ok(XattrSetMode::Replace),
+        (true, true) => Err(Errno::EINVAL),
+    }
+}
+
+fn reply_xattr_data(data: &[u8], size: u32, reply: ReplyXattr) {
+    if size == 0 {
+        reply.size(u32::try_from(data.len()).unwrap_or(u32::MAX));
+        return;
+    }
+    let requested = usize::try_from(size).unwrap_or(usize::MAX);
+    if requested < data.len() {
+        reply.error(Errno::ERANGE);
+    } else {
+        reply.data(data);
+    }
+}
+
 fn validate_access_mask(mask: AccessFlags) -> Result<(), Errno> {
     let supported = AccessFlags::R_OK | AccessFlags::W_OK | AccessFlags::X_OK;
     if mask.bits() & !supported.bits() == 0 {
@@ -1823,6 +1948,26 @@ mod tests {
         assert_ne!(xattr_unsupported_error().code(), Errno::ENOSYS.code());
         assert_eq!(xattr_missing_error().code(), Errno::NO_XATTR.code());
         assert_ne!(xattr_missing_error().code(), Errno::ENOSYS.code());
+        assert_eq!(
+            xattr_name(OsStr::new("user.comment")).unwrap(),
+            b"user.comment"
+        );
+        assert_eq!(
+            xattr_name(OsStr::new("")).unwrap_err().code(),
+            Errno::EINVAL.code()
+        );
+        assert_eq!(xattr_set_mode(0).unwrap(), XattrSetMode::Any);
+        assert_eq!(xattr_set_mode(XATTR_CREATE).unwrap(), XattrSetMode::Create);
+        assert_eq!(
+            xattr_set_mode(XATTR_REPLACE).unwrap(),
+            XattrSetMode::Replace
+        );
+        assert_eq!(
+            xattr_set_mode(XATTR_CREATE | XATTR_REPLACE)
+                .unwrap_err()
+                .code(),
+            Errno::EINVAL.code()
+        );
     }
 
     #[test]

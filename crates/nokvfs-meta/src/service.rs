@@ -14,6 +14,7 @@ mod publish;
 mod read;
 mod snapshot;
 mod watch;
+mod xattr;
 
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
@@ -33,7 +34,8 @@ use crate::layout::{
     encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
     encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
     encode_watch_event, gc_object_key, gc_queue_prefix, inode_key, path_index_key,
-    path_index_prefix, snapshot_pin_key, snapshot_pin_prefix, watch_log_prefix,
+    path_index_prefix, snapshot_pin_key, snapshot_pin_prefix, watch_log_prefix, xattr_key,
+    xattr_prefix,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, put_chunked_ranges,
@@ -55,12 +57,13 @@ const ALLOCATOR_VERSION_RESERVATION: u64 = 1024;
 const ALLOCATOR_INODE_RESERVATION: u64 = 1024;
 const BODY_DIGEST_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 
-const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 12] = [
+const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 13] = [
     RecordFamily::System,
     RecordFamily::Mount,
     RecordFamily::Inode,
     RecordFamily::Dentry,
     RecordFamily::Parent,
+    RecordFamily::Xattr,
     RecordFamily::ChunkManifest,
     RecordFamily::Session,
     RecordFamily::PathIndex,
@@ -235,6 +238,13 @@ pub struct BodyReadPlan {
 pub struct RenameReplaceResult {
     pub entry: DentryWithAttr,
     pub replaced: Option<DentryWithAttr>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum XattrSetMode {
+    Any,
+    Create,
+    Replace,
 }
 
 #[derive(Debug)]
@@ -764,6 +774,8 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
         CommandKind::CreateDir => b"create-dir",
         CommandKind::CreateSymlink => b"create-symlink",
         CommandKind::UpdateAttr => b"update-attr",
+        CommandKind::SetXattr => b"set-xattr",
+        CommandKind::RemoveXattr => b"remove-xattr",
         CommandKind::Rename => b"rename",
         CommandKind::RenameReplace => b"rename-replace",
         CommandKind::RemoveFile => b"remove-file",

@@ -97,6 +97,87 @@ fn create_dir_then_lookup_and_readdir_use_dentry_projection() {
 }
 
 #[test]
+fn xattr_round_trips_lists_replaces_and_removes() {
+    let service = service();
+    let entry = service
+        .create_file(
+            InodeId::root(),
+            DentryName::new(b"note.txt".to_vec()).unwrap(),
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap();
+
+    service
+        .set_xattr(
+            entry.attr.inode,
+            b"user.comment",
+            b"first".to_vec(),
+            XattrSetMode::Create,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .get_xattr(entry.attr.inode, b"user.comment")
+            .unwrap(),
+        Some(b"first".to_vec())
+    );
+    assert_eq!(
+        service.list_xattr(entry.attr.inode).unwrap(),
+        vec![b"user.comment".to_vec()]
+    );
+    assert!(matches!(
+        service.set_xattr(
+            entry.attr.inode,
+            b"user.comment",
+            b"duplicate".to_vec(),
+            XattrSetMode::Create,
+        ),
+        Err(MetadError::Metadata(MetadataError::PredicateFailed))
+    ));
+
+    service
+        .set_xattr(
+            entry.attr.inode,
+            b"user.comment",
+            b"second".to_vec(),
+            XattrSetMode::Replace,
+        )
+        .unwrap();
+    assert_eq!(
+        service
+            .get_xattr(entry.attr.inode, b"user.comment")
+            .unwrap(),
+        Some(b"second".to_vec())
+    );
+    assert!(matches!(
+        service.set_xattr(
+            entry.attr.inode,
+            b"user.missing",
+            b"value".to_vec(),
+            XattrSetMode::Replace,
+        ),
+        Err(MetadError::Metadata(MetadataError::PredicateFailed))
+    ));
+
+    service
+        .remove_xattr(entry.attr.inode, b"user.comment")
+        .unwrap();
+    assert_eq!(
+        service
+            .get_xattr(entry.attr.inode, b"user.comment")
+            .unwrap(),
+        None
+    );
+    assert!(service.list_xattr(entry.attr.inode).unwrap().is_empty());
+    assert!(matches!(
+        service.remove_xattr(entry.attr.inode, b"user.comment"),
+        Err(MetadError::Metadata(MetadataError::PredicateFailed))
+    ));
+}
+
+#[test]
 fn path_methods_resolve_current_namespace_on_server_side() {
     let service = service();
     let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();

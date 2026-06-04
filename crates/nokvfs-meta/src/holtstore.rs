@@ -27,6 +27,7 @@ const MOUNT_CURRENT_TREE: &str = "mount_current";
 const INODE_CURRENT_TREE: &str = "inode_current";
 const DENTRY_CURRENT_TREE: &str = "dentry_current";
 const PARENT_CURRENT_TREE: &str = "parent_current";
+const XATTR_CURRENT_TREE: &str = "xattr_current";
 const CHUNK_MANIFEST_CURRENT_TREE: &str = "chunk_manifest_current";
 const SESSION_CURRENT_TREE: &str = "session_current";
 const PATH_INDEX_CURRENT_TREE: &str = "path_index_current";
@@ -36,12 +37,13 @@ const GC_CURRENT_TREE: &str = "gc_current";
 const COMMAND_DEDUPE_CURRENT_TREE: &str = "command_dedupe_current";
 const HISTORY_TREE: &str = "history";
 
-const REQUIRED_TREES: [&str; 13] = [
+const REQUIRED_TREES: [&str; 14] = [
     SYSTEM_CURRENT_TREE,
     MOUNT_CURRENT_TREE,
     INODE_CURRENT_TREE,
     DENTRY_CURRENT_TREE,
     PARENT_CURRENT_TREE,
+    XATTR_CURRENT_TREE,
     CHUNK_MANIFEST_CURRENT_TREE,
     SESSION_CURRENT_TREE,
     PATH_INDEX_CURRENT_TREE,
@@ -691,6 +693,7 @@ fn current_tree_name(family: RecordFamily) -> &'static str {
         RecordFamily::Inode => INODE_CURRENT_TREE,
         RecordFamily::Dentry => DENTRY_CURRENT_TREE,
         RecordFamily::Parent => PARENT_CURRENT_TREE,
+        RecordFamily::Xattr => XATTR_CURRENT_TREE,
         RecordFamily::ChunkManifest => CHUNK_MANIFEST_CURRENT_TREE,
         RecordFamily::Session => SESSION_CURRENT_TREE,
         RecordFamily::PathIndex => PATH_INDEX_CURRENT_TREE,

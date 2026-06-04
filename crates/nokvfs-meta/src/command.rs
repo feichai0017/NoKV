@@ -35,6 +35,8 @@ pub enum CommandKind {
     CreateDir,
     CreateSymlink,
     UpdateAttr,
+    SetXattr,
+    RemoveXattr,
     Rename,
     RenameReplace,
     RemoveFile,
