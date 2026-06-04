@@ -66,7 +66,13 @@ struct FamilyTrees {
 #[derive(Default)]
 struct HoltMetadataStoreCounters {
     get_total: AtomicU64,
+    get_user_strong_total: AtomicU64,
+    get_write_plan_local_total: AtomicU64,
+    get_snapshot_total: AtomicU64,
     scan_total: AtomicU64,
+    scan_user_strong_total: AtomicU64,
+    scan_write_plan_local_total: AtomicU64,
+    scan_snapshot_total: AtomicU64,
     scan_key_visited_total: AtomicU64,
     scan_key_returned_total: AtomicU64,
     commit_total: AtomicU64,
@@ -206,9 +212,10 @@ impl MetadataStore for HoltMetadataStore {
         family: RecordFamily,
         key: &[u8],
         version: Version,
-        _purpose: ReadPurpose,
+        purpose: ReadPurpose,
     ) -> Result<Option<ReadItem>, MetadataError> {
         self.stats.get_total.fetch_add(1, Ordering::Relaxed);
+        self.stats.record_get_purpose(purpose);
         read_visible(
             &self.current_tree(family)?,
             family,
@@ -220,6 +227,7 @@ impl MetadataStore for HoltMetadataStore {
 
     fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
         self.stats.scan_total.fetch_add(1, Ordering::Relaxed);
+        self.stats.record_scan_purpose(request.purpose);
         let limit = if request.limit == 0 {
             usize::MAX
         } else {
@@ -775,10 +783,34 @@ impl HoltMetadataStore {
 }
 
 impl HoltMetadataStoreCounters {
+    fn record_get_purpose(&self, purpose: ReadPurpose) {
+        match purpose {
+            ReadPurpose::UserStrong => &self.get_user_strong_total,
+            ReadPurpose::WritePlanLocal => &self.get_write_plan_local_total,
+            ReadPurpose::Snapshot => &self.get_snapshot_total,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_scan_purpose(&self, purpose: ReadPurpose) {
+        match purpose {
+            ReadPurpose::UserStrong => &self.scan_user_strong_total,
+            ReadPurpose::WritePlanLocal => &self.scan_write_plan_local_total,
+            ReadPurpose::Snapshot => &self.scan_snapshot_total,
+        }
+        .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn snapshot(&self) -> MetadataStoreStats {
         MetadataStoreStats {
             get_total: self.get_total.load(Ordering::Relaxed),
+            get_user_strong_total: self.get_user_strong_total.load(Ordering::Relaxed),
+            get_write_plan_local_total: self.get_write_plan_local_total.load(Ordering::Relaxed),
+            get_snapshot_total: self.get_snapshot_total.load(Ordering::Relaxed),
             scan_total: self.scan_total.load(Ordering::Relaxed),
+            scan_user_strong_total: self.scan_user_strong_total.load(Ordering::Relaxed),
+            scan_write_plan_local_total: self.scan_write_plan_local_total.load(Ordering::Relaxed),
+            scan_snapshot_total: self.scan_snapshot_total.load(Ordering::Relaxed),
             scan_key_visited_total: self.scan_key_visited_total.load(Ordering::Relaxed),
             scan_key_returned_total: self.scan_key_returned_total.load(Ordering::Relaxed),
             active_snapshot_pin_total: 0,

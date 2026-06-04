@@ -108,7 +108,13 @@ pub struct CommitResult {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct MetadataStoreStats {
     pub get_total: u64,
+    pub get_user_strong_total: u64,
+    pub get_write_plan_local_total: u64,
+    pub get_snapshot_total: u64,
     pub scan_total: u64,
+    pub scan_user_strong_total: u64,
+    pub scan_write_plan_local_total: u64,
+    pub scan_snapshot_total: u64,
     pub scan_key_visited_total: u64,
     pub scan_key_returned_total: u64,
     pub active_snapshot_pin_total: u64,

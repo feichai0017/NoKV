@@ -106,7 +106,13 @@ struct ResultRow {
     metadata_log_commands: u64,
     metadata_log_max_batch: u64,
     metadata_gets: u64,
+    metadata_get_user_strong: u64,
+    metadata_get_write_plan_local: u64,
+    metadata_get_snapshot: u64,
     metadata_scans: u64,
+    metadata_scan_user_strong: u64,
+    metadata_scan_write_plan_local: u64,
+    metadata_scan_snapshot: u64,
     metadata_scan_visited: u64,
     metadata_scan_returned: u64,
     metadata_current_puts: u64,
@@ -357,11 +363,11 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     let shape = shape(&config);
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
-    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_gets,metadata_scans,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_hits,path_index_stale,path_index_fallback,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_entries,read_dir_plus_projection_hits,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
+    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_hits,path_index_stale,path_index_fallback,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_entries,read_dir_plus_projection_hits,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
         println!(
-            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             row.workload,
             profile_name(row.profile),
             row.operations,
@@ -380,7 +386,13 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
             row.metadata_log_commands,
             row.metadata_log_max_batch,
             row.metadata_gets,
+            row.metadata_get_user_strong,
+            row.metadata_get_write_plan_local,
+            row.metadata_get_snapshot,
             row.metadata_scans,
+            row.metadata_scan_user_strong,
+            row.metadata_scan_write_plan_local,
+            row.metadata_scan_snapshot,
             row.metadata_scan_visited,
             row.metadata_scan_returned,
             row.metadata_current_puts,
@@ -822,7 +834,13 @@ fn row(input: RowInput) -> ResultRow {
         metadata_log_commands: input.stats.metadata_log.commit_command_total,
         metadata_log_max_batch: input.stats.metadata_log.max_commands_per_entry,
         metadata_gets: input.stats.metadata_store.get_total,
+        metadata_get_user_strong: input.stats.metadata_store.get_user_strong_total,
+        metadata_get_write_plan_local: input.stats.metadata_store.get_write_plan_local_total,
+        metadata_get_snapshot: input.stats.metadata_store.get_snapshot_total,
         metadata_scans: input.stats.metadata_store.scan_total,
+        metadata_scan_user_strong: input.stats.metadata_store.scan_user_strong_total,
+        metadata_scan_write_plan_local: input.stats.metadata_store.scan_write_plan_local_total,
+        metadata_scan_snapshot: input.stats.metadata_store.scan_snapshot_total,
         metadata_scan_visited: input.stats.metadata_store.scan_key_visited_total,
         metadata_scan_returned: input.stats.metadata_store.scan_key_returned_total,
         metadata_current_puts: input.stats.metadata_store.current_put_total,
@@ -882,10 +900,34 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_store
                 .get_total
                 .saturating_sub(before.metadata_store.get_total),
+            get_user_strong_total: after
+                .metadata_store
+                .get_user_strong_total
+                .saturating_sub(before.metadata_store.get_user_strong_total),
+            get_write_plan_local_total: after
+                .metadata_store
+                .get_write_plan_local_total
+                .saturating_sub(before.metadata_store.get_write_plan_local_total),
+            get_snapshot_total: after
+                .metadata_store
+                .get_snapshot_total
+                .saturating_sub(before.metadata_store.get_snapshot_total),
             scan_total: after
                 .metadata_store
                 .scan_total
                 .saturating_sub(before.metadata_store.scan_total),
+            scan_user_strong_total: after
+                .metadata_store
+                .scan_user_strong_total
+                .saturating_sub(before.metadata_store.scan_user_strong_total),
+            scan_write_plan_local_total: after
+                .metadata_store
+                .scan_write_plan_local_total
+                .saturating_sub(before.metadata_store.scan_write_plan_local_total),
+            scan_snapshot_total: after
+                .metadata_store
+                .scan_snapshot_total
+                .saturating_sub(before.metadata_store.scan_snapshot_total),
             scan_key_visited_total: after
                 .metadata_store
                 .scan_key_visited_total
@@ -1109,7 +1151,13 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
         object: ObjectTransferStats::default(),
         metadata_store: MetadataStoreStats {
             get_total: json_u64(body, "get_total")?,
+            get_user_strong_total: json_u64(body, "get_user_strong_total")?,
+            get_write_plan_local_total: json_u64(body, "get_write_plan_local_total")?,
+            get_snapshot_total: json_u64(body, "get_snapshot_total")?,
             scan_total: json_u64(body, "scan_total")?,
+            scan_user_strong_total: json_u64(body, "scan_user_strong_total")?,
+            scan_write_plan_local_total: json_u64(body, "scan_write_plan_local_total")?,
+            scan_snapshot_total: json_u64(body, "scan_snapshot_total")?,
             scan_key_visited_total: json_u64(body, "scan_key_visited_total")?,
             scan_key_returned_total: json_u64(body, "scan_key_returned_total")?,
             active_snapshot_pin_total: json_u64(body, "active_snapshot_pin_total")?,
@@ -1737,9 +1785,11 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"metadata_store":{"get_total":2,"scan_total":3,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_log":{"enabled":true,"commit_entry_total":17,"commit_command_total":18,"max_commands_per_entry":19},"metadata_service":{"path_index_lookup_total":20,"path_index_hit_total":21,"path_index_miss_total":22,"path_index_stale_total":23,"path_index_fallback_total":24,"create_files_batch_total":25,"create_files_entry_total":26,"create_dirs_batch_total":27,"create_dirs_entry_total":28,"read_dir_plus_total":29,"read_dir_plus_entry_total":30,"read_dir_plus_projection_hit_total":31}}"#;
+        let body = r#"{"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_log":{"enabled":true,"commit_entry_total":17,"commit_command_total":18,"max_commands_per_entry":19},"metadata_service":{"path_index_lookup_total":20,"path_index_hit_total":21,"path_index_miss_total":22,"path_index_stale_total":23,"path_index_fallback_total":24,"create_files_batch_total":25,"create_files_entry_total":26,"create_dirs_batch_total":27,"create_dirs_entry_total":28,"read_dir_plus_total":29,"read_dir_plus_entry_total":30,"read_dir_plus_projection_hit_total":31}}"#;
 
         assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
+        assert_eq!(json_u64(body, "get_write_plan_local_total").unwrap(), 33);
+        assert_eq!(json_u64(body, "scan_write_plan_local_total").unwrap(), 36);
         assert_eq!(json_u64(body, "scan_key_visited_total").unwrap(), 4);
         assert_eq!(json_u64(body, "commit_entry_total").unwrap(), 17);
         assert_eq!(json_u64(body, "commit_command_total").unwrap(), 18);
