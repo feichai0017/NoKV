@@ -8,8 +8,9 @@ use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_name_cursor, decode_request, encode_envelope, encode_name_cursor, MetadataProtocolError,
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
-    WireDentryWithAttr, WireMetadataError, WireMetadataLogEntry, WireMetadataPosition,
-    WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireDentryWithAttr, WireMetadataCheckpoint, WireMetadataError, WireMetadataLogEntry,
+    WireMetadataPosition, WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata,
+    WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -1166,6 +1167,17 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     .collect(),
             })
         }
+        MetadataRpcRequest::ReadMetadataCheckpoint { mount } => {
+            let mount = MountId::new(mount).map_err(|err| {
+                ServerError::Metadata(MetadError::Codec(format!(
+                    "invalid metadata checkpoint mount: {err}"
+                )))
+            })?;
+            let checkpoint = server.latest_metadata_checkpoint(mount)?;
+            Ok(MetadataRpcResult::MetadataCheckpoint {
+                checkpoint: checkpoint.as_ref().map(wire_metadata_checkpoint),
+            })
+        }
     }
 }
 
@@ -1255,6 +1267,22 @@ fn wire_metadata_receipt(receipt: &nokvfs_cluster::DurableReceipt) -> WireMetada
         batch_position: receipt.batch_position,
         request_id: receipt.request_id.clone(),
         commit_version: receipt.commit_version.get(),
+    }
+}
+
+fn wire_metadata_checkpoint(
+    checkpoint: &nokvfs_cluster::CheckpointManifest,
+) -> WireMetadataCheckpoint {
+    WireMetadataCheckpoint {
+        id: checkpoint.id.clone(),
+        mount: checkpoint.mount.get(),
+        durable_position: wire_log_position(checkpoint.frontier.durable_position),
+        applied_position: wire_log_position(checkpoint.frontier.applied_position),
+        min_retained_index: checkpoint.frontier.min_retained_index.get(),
+        max_commit_version: checkpoint.frontier.max_commit_version.get(),
+        artifact_uri: checkpoint.artifact.uri.clone(),
+        artifact_digest: checkpoint.artifact.digest.clone(),
+        artifact_size_bytes: checkpoint.artifact.size_bytes,
     }
 }
 
@@ -1425,6 +1453,72 @@ mod tests {
             .iter()
             .flat_map(|entry| entry.commands.iter())
             .any(|command| command.kind == nokvfs_meta::command::CommandKind::CreateFile));
+    }
+
+    #[test]
+    fn rpc_reads_latest_metadata_checkpoint_after_gc_publishes_manifest() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+
+        let before = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadMetadataCheckpoint { mount: 1 },
+        );
+        assert!(before.ok, "unexpected checkpoint read error: {before:?}");
+        assert!(matches!(
+            before.result.unwrap(),
+            MetadataRpcResult::MetadataCheckpoint { checkpoint: None }
+        ));
+
+        let created = request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        assert!(created.ok);
+        server.run_manual_gc(128).unwrap();
+
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadMetadataCheckpoint { mount: 1 },
+        );
+        assert!(
+            envelope.ok,
+            "unexpected checkpoint read error: {envelope:?}"
+        );
+        let checkpoint = match envelope.result.unwrap() {
+            MetadataRpcResult::MetadataCheckpoint {
+                checkpoint: Some(checkpoint),
+            } => checkpoint,
+            other => panic!("unexpected checkpoint result: {other:?}"),
+        };
+        assert_eq!(checkpoint.mount, 1);
+        assert!(checkpoint.id.starts_with(b"mount-1-term-1-index-"));
+        assert!(checkpoint.artifact_uri.starts_with(b"local-holt:"));
+        assert_eq!(checkpoint.artifact_size_bytes, 0);
+        assert!(checkpoint.min_retained_index >= checkpoint.applied_position.index);
+        assert!(checkpoint.max_commit_version >= 2);
+    }
+
+    #[test]
+    fn rpc_rejects_metadata_checkpoint_read_when_catalog_is_disabled() {
+        let server = test_server();
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadMetadataCheckpoint { mount: 1 },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("metadata checkpoint catalog is disabled")
+        ));
     }
 
     #[test]

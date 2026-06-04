@@ -185,6 +185,9 @@ pub enum MetadataRpcRequest {
         mount: u64,
         payload: Vec<u8>,
     },
+    ReadMetadataCheckpoint {
+        mount: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -287,6 +290,9 @@ pub enum MetadataRpcResult {
     MetadataLogAppend {
         position: WireMetadataPosition,
         receipts: Vec<WireMetadataReceipt>,
+    },
+    MetadataCheckpoint {
+        checkpoint: Option<WireMetadataCheckpoint>,
     },
 }
 
@@ -414,6 +420,19 @@ pub struct WireMetadataReceipt {
     pub batch_position: usize,
     pub request_id: Vec<u8>,
     pub commit_version: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataCheckpoint {
+    pub id: Vec<u8>,
+    pub mount: u64,
+    pub durable_position: WireMetadataPosition,
+    pub applied_position: WireMetadataPosition,
+    pub min_retained_index: u64,
+    pub max_commit_version: u64,
+    pub artifact_uri: Vec<u8>,
+    pub artifact_digest: Vec<u8>,
+    pub artifact_size_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -797,6 +816,39 @@ mod tests {
             error: None,
             error_kind: None,
             metadata_position: Some(WireMetadataPosition { term: 3, index: 11 }),
+        };
+        assert_eq!(
+            decode_envelope(&encode_envelope(&envelope).unwrap()).unwrap(),
+            envelope
+        );
+    }
+
+    #[test]
+    fn binary_codec_round_trips_metadata_checkpoint() {
+        let request = MetadataRpcRequest::ReadMetadataCheckpoint { mount: 1 };
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
+        );
+
+        let envelope = MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::MetadataCheckpoint {
+                checkpoint: Some(WireMetadataCheckpoint {
+                    id: b"checkpoint-1".to_vec(),
+                    mount: 1,
+                    durable_position: WireMetadataPosition { term: 2, index: 8 },
+                    applied_position: WireMetadataPosition { term: 2, index: 7 },
+                    min_retained_index: 8,
+                    max_commit_version: 9,
+                    artifact_uri: b"local-holt:checkpoint-1".to_vec(),
+                    artifact_digest: b"digest".to_vec(),
+                    artifact_size_bytes: 16,
+                }),
+            }),
+            error: None,
+            error_kind: None,
+            metadata_position: Some(WireMetadataPosition { term: 2, index: 7 }),
         };
         assert_eq!(
             decode_envelope(&encode_envelope(&envelope).unwrap()).unwrap(),

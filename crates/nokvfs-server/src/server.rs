@@ -178,6 +178,27 @@ impl Server {
         AppendMetadataBatchResponse::from_receipts(receipts).map_err(ServerError::SharedLog)
     }
 
+    pub(crate) fn latest_metadata_checkpoint(
+        &self,
+        mount: nokvfs_types::MountId,
+    ) -> Result<Option<CheckpointManifest>, ServerError> {
+        if mount != self.service.mount_id() {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                "metadata checkpoint mount {} does not match server mount {}",
+                mount.get(),
+                self.service.mount_id().get(),
+            ))));
+        }
+        let Some(checkpoints) = self.metadata_checkpoint.as_ref() else {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(
+                "metadata checkpoint catalog is disabled".to_owned(),
+            )));
+        };
+        checkpoints
+            .latest_for_mount(mount)
+            .map_err(ServerError::SharedLog)
+    }
+
     pub fn stats_json(&self) -> String {
         let objects = self.service.object_stats();
         let metadata = self.service.metadata_store_stats();

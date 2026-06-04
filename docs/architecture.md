@@ -149,5 +149,8 @@ replica catch-up via `ReadMetadataLog`. Each returned payload is encoded by
 batch via `AppendMetadataLog`, validate the leader id and term shape, append it
 to the local metadata log, and replay it into Holt state. The log rejects stale
 terms after a newer committed term, so an old leader cannot keep extending a
-local tail once a newer term has been observed. Checkpoint install, durable
-membership, and full leader/voter authorization are still the next HA steps.
+local tail once a newer term has been observed. The RPC path can also read the
+latest published checkpoint manifest for a mount, giving learners the frontier
+and artifact descriptor they need before replaying a retained tail. Actual
+checkpoint artifact transfer/install, durable membership, and full leader/voter
+authorization are still the next HA steps.
