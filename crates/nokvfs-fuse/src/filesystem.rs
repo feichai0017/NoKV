@@ -655,23 +655,7 @@ where
     O: ObjectStore + Send + Sync + 'static,
 {
     let mut config = Config::default();
-    let mut mount_options = vec![MountOption::FSName(options.fs_name.clone())];
-    let read_only = options.access.is_read_only() || options.view.is_read_only();
-    if read_only {
-        mount_options.push(MountOption::RO);
-    } else {
-        mount_options.push(MountOption::RW);
-    }
-    #[cfg(target_os = "macos")]
-    {
-        mount_options.push(MountOption::CUSTOM("fstypename=nokvfs".to_owned()));
-        mount_options.push(MountOption::CUSTOM(format!("volname={}", options.fs_name)));
-    }
-    #[cfg(not(target_os = "macos"))]
-    {
-        mount_options.push(MountOption::Subtype("nokv-fs".to_owned()));
-        mount_options.push(MountOption::NoAtime);
-    }
+    let mount_options = mount_options(&options);
     config.mount_options = mount_options;
     config.n_threads = Some(options.threads);
     let fuse = NoKvFuse::from_shared(Arc::clone(&service), options.clone());
@@ -688,6 +672,30 @@ where
         None
     };
     session.join()
+}
+
+fn mount_options(options: &FuseOptions) -> Vec<MountOption> {
+    let mut mount_options = vec![MountOption::FSName(options.fs_name.clone())];
+    if options.access.is_read_only() || options.view.is_read_only() {
+        mount_options.push(MountOption::RO);
+    } else {
+        mount_options.push(MountOption::RW);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        mount_options.push(MountOption::CUSTOM("fstypename=nokvfs".to_owned()));
+        mount_options.push(MountOption::CUSTOM(format!("volname={}", options.fs_name)));
+        // NoKV does not persist Finder/resource-fork metadata yet. Ask macFUSE
+        // to reject Apple sidecars instead of creating visible ._ files.
+        mount_options.push(MountOption::CUSTOM("noappledouble".to_owned()));
+        mount_options.push(MountOption::CUSTOM("noapplexattr".to_owned()));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        mount_options.push(MountOption::Subtype("nokv-fs".to_owned()));
+        mount_options.push(MountOption::NoAtime);
+    }
+    mount_options
 }
 
 impl FuseView {
@@ -1448,6 +1456,15 @@ mod tests {
         assert_eq!(fuse.parent_of(child), InodeId::root());
         fuse.remember_parent(child, InodeId::new(9).unwrap());
         assert_eq!(fuse.parent_of(child), InodeId::new(9).unwrap());
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_mount_options_disable_appledouble_sidecars() {
+        let options = mount_options(&FuseOptions::default());
+        let debug = format!("{options:?}");
+        assert!(debug.contains("noappledouble"));
+        assert!(debug.contains("noapplexattr"));
     }
 
     #[test]
