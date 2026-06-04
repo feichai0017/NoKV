@@ -18,6 +18,7 @@ use crate::server::{Server, ServerError};
 pub(crate) const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
 const FRAME_HEADER_BYTES: usize = 16;
 const MAX_FRAMED_RPC_BYTES: usize = 16 * 1024 * 1024;
+const MAX_FRAMED_RPC_BATCH: usize = 64;
 const MIN_FRAMED_RPC_WORKERS: usize = 4;
 const MAX_FRAMED_RPC_WORKERS: usize = 64;
 const FRAMED_RPC_QUEUE_PER_WORKER: usize = 256;
@@ -109,34 +110,171 @@ pub(crate) fn handle_framed_stream_after_magic(
         let Some(frame) = read_frame(&mut stream)? else {
             return Ok(());
         };
+        let mut frames = vec![frame];
+        drain_ready_frames(&mut stream, &mut frames)?;
         let server = Arc::clone(&server);
         let writer = Arc::clone(&writer);
         framed_rpc_worker_pool().submit(Box::new(move || {
-            let response = handle_binary_rpc(server.as_ref(), &frame.payload);
-            let response = match response {
-                Ok(response) => response,
-                Err(err) => {
-                    let envelope = MetadataRpcEnvelope {
-                        ok: false,
-                        result: None,
-                        error: Some(err.to_string()),
-                        error_kind: Some(wire_server_error(&err)),
-                    };
-                    match encode_envelope(&envelope) {
+            let responses = handle_binary_rpc_frames(server.as_ref(), frames);
+            for (request_id, flags, response) in responses {
+                let response = match response {
+                    Ok(response) => response,
+                    Err(err) => match encode_server_error(&err) {
                         Ok(response) => response,
                         Err(err) => {
                             eprintln!("metadata framed rpc error encode failed: {err}");
                             return;
                         }
-                    }
+                    },
+                };
+                let mut writer = writer.lock().expect("framed rpc writer");
+                if let Err(err) = write_frame(&mut writer, request_id, flags, &response) {
+                    eprintln!("metadata framed rpc response write failed: {err}");
+                    return;
                 }
-            };
-            let mut writer = writer.lock().expect("framed rpc writer");
-            if let Err(err) = write_frame(&mut writer, frame.request_id, frame.flags, &response) {
-                eprintln!("metadata framed rpc response write failed: {err}");
             }
         }))?;
     }
+}
+
+fn drain_ready_frames(
+    stream: &mut TcpStream,
+    frames: &mut Vec<RpcFrame>,
+) -> Result<(), ServerError> {
+    stream.set_nonblocking(true).map_err(ServerError::Io)?;
+    let drain = drain_ready_frames_nonblocking(stream, frames);
+    let restore = stream.set_nonblocking(false).map_err(ServerError::Io);
+    match (drain, restore) {
+        (Ok(()), Ok(())) => Ok(()),
+        (Err(err), _) => Err(err),
+        (Ok(()), Err(err)) => Err(err),
+    }
+}
+
+fn drain_ready_frames_nonblocking(
+    stream: &mut TcpStream,
+    frames: &mut Vec<RpcFrame>,
+) -> Result<(), ServerError> {
+    while frames.len() < MAX_FRAMED_RPC_BATCH {
+        let Some(_len) = peek_ready_frame_len(stream)? else {
+            return Ok(());
+        };
+        let Some(frame) = read_frame(stream)? else {
+            return Ok(());
+        };
+        frames.push(frame);
+    }
+    Ok(())
+}
+
+fn peek_ready_frame_len(stream: &TcpStream) -> Result<Option<usize>, ServerError> {
+    let mut header = [0_u8; FRAME_HEADER_BYTES];
+    let read = match stream.peek(&mut header) {
+        Ok(read) => read,
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => return Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::Interrupted => return Ok(None),
+        Err(err) => return Err(ServerError::Io(err)),
+    };
+    if read < FRAME_HEADER_BYTES {
+        return Ok(None);
+    }
+    let len = u32::from_be_bytes(header[12..16].try_into().expect("length header")) as usize;
+    if len > MAX_FRAMED_RPC_BYTES {
+        return Err(ServerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "metadata framed rpc request exceeds size limit",
+        )));
+    }
+    let total = FRAME_HEADER_BYTES + len;
+    let mut frame = vec![0_u8; total];
+    match stream.peek(&mut frame) {
+        Ok(read) if read >= total => Ok(Some(total)),
+        Ok(_) => Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::WouldBlock => Ok(None),
+        Err(err) if err.kind() == io::ErrorKind::Interrupted => Ok(None),
+        Err(err) => Err(ServerError::Io(err)),
+    }
+}
+
+fn handle_binary_rpc_frames(
+    server: &Server,
+    frames: Vec<RpcFrame>,
+) -> Vec<(u64, u32, Result<Vec<u8>, ServerError>)> {
+    if frames.len() <= 1 {
+        return frames
+            .into_iter()
+            .map(|frame| handle_binary_rpc_frame(server, frame))
+            .collect();
+    }
+
+    let mut requests = Vec::with_capacity(frames.len());
+    for frame in &frames {
+        match decode_request(&frame.payload) {
+            Ok(request) => requests.push(request),
+            Err(_) => {
+                return frames
+                    .into_iter()
+                    .map(|frame| handle_binary_rpc_frame(server, frame))
+                    .collect();
+            }
+        }
+    }
+
+    let Ok(MetadataRpcResult::Batch { results }) = execute_batch(server, requests) else {
+        return frames
+            .into_iter()
+            .map(|frame| handle_binary_rpc_frame(server, frame))
+            .collect();
+    };
+    if results.len() != frames.len() {
+        return frames
+            .into_iter()
+            .map(|frame| handle_binary_rpc_frame(server, frame))
+            .collect();
+    }
+
+    frames
+        .into_iter()
+        .zip(results)
+        .map(|(frame, envelope)| {
+            (
+                frame.request_id,
+                frame.flags,
+                encode_envelope(&envelope).map_err(|err| {
+                    ServerError::Io(io::Error::new(
+                        io::ErrorKind::InvalidData,
+                        format!("metadata binary rpc response encode failed: {err}"),
+                    ))
+                }),
+            )
+        })
+        .collect()
+}
+
+fn handle_binary_rpc_frame(
+    server: &Server,
+    frame: RpcFrame,
+) -> (u64, u32, Result<Vec<u8>, ServerError>) {
+    (
+        frame.request_id,
+        frame.flags,
+        handle_binary_rpc(server, &frame.payload),
+    )
+}
+
+fn encode_server_error(err: &ServerError) -> Result<Vec<u8>, ServerError> {
+    let envelope = MetadataRpcEnvelope {
+        ok: false,
+        result: None,
+        error: Some(err.to_string()),
+        error_kind: Some(wire_server_error(err)),
+    };
+    encode_envelope(&envelope).map_err(|err| {
+        ServerError::Io(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!("metadata binary rpc response encode failed: {err}"),
+        ))
+    })
 }
 
 fn framed_rpc_worker_pool() -> &'static RpcWorkerPool {
@@ -1040,6 +1178,7 @@ mod tests {
         decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor,
         WireChunkManifest, WireMetadataError,
     };
+    use std::net::TcpListener;
     use tempfile::tempdir;
 
     fn request_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
@@ -1339,6 +1478,75 @@ mod tests {
         };
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|result| result.ok));
+        assert!(server.stats_json().contains("\"max_commands_per_entry\":2"));
+    }
+
+    #[test]
+    fn framed_rpc_coalesces_pipelined_create_frames_into_shared_log_entry() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Arc::new(Server::open(test_options(dir.path(), Some(metadata_log))).unwrap());
+        server
+            .service()
+            .create_dir_path("/runs", 0o755, 1000, 1000)
+            .unwrap();
+        server
+            .service()
+            .create_dir_path("/runs/a", 0o755, 1000, 1000)
+            .unwrap();
+        server
+            .service()
+            .create_dir_path("/runs/b", 0o755, 1000, 1000)
+            .unwrap();
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let mut client = TcpStream::connect(addr).unwrap();
+        client.write_all(FRAMED_RPC_MAGIC).unwrap();
+        write_frame(
+            &mut client,
+            1,
+            0,
+            &encode_request(&MetadataRpcRequest::CreateFilePath {
+                path: "/runs/a/one.bin".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        write_frame(
+            &mut client,
+            2,
+            0,
+            &encode_request(&MetadataRpcRequest::CreateFilePath {
+                path: "/runs/b/two.bin".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+        client.shutdown(std::net::Shutdown::Write).unwrap();
+
+        let server_thread = {
+            let server = Arc::clone(&server);
+            thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                crate::http::handle_stream(server, stream).unwrap();
+            })
+        };
+
+        let first = read_frame(&mut client).unwrap().unwrap();
+        let second = read_frame(&mut client).unwrap().unwrap();
+        assert_eq!(first.request_id, 1);
+        assert_eq!(second.request_id, 2);
+        assert!(decode_envelope(&first.payload).unwrap().ok);
+        assert!(decode_envelope(&second.payload).unwrap().ok);
+        server_thread.join().unwrap();
+
         assert!(server.stats_json().contains("\"max_commands_per_entry\":2"));
     }
 
