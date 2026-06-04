@@ -410,7 +410,7 @@ fn read_file_plan_returns_ranges_without_fetching_objects() {
     let service = service();
     let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
     let published = service
-        .publish_artifact(artifact_request(name, "checkpoint/body", b"hello remote"))
+        .publish_artifact(artifact_request(name, "checkpoint/body", b"hello metadata"))
         .unwrap();
     let before = service.object_stats();
     let plan = service
@@ -435,7 +435,7 @@ fn read_file_plan_returns_ranges_without_fetching_objects() {
 #[test]
 fn prepared_artifact_publish_commits_manifest_without_object_fetch() {
     let service = service();
-    let name = DentryName::new(b"remote.bin".to_vec()).unwrap();
+    let name = DentryName::new(b"metadata.bin".to_vec()).unwrap();
     let prepared = service
         .prepare_artifact_create(InodeId::root(), name.clone())
         .unwrap();
@@ -467,7 +467,7 @@ fn prepared_artifact_publish_commits_manifest_without_object_fetch() {
 #[test]
 fn prepared_artifact_replace_rejects_stale_dentry_version() {
     let service = service();
-    let name = DentryName::new(b"replace-remote.bin".to_vec()).unwrap();
+    let name = DentryName::new(b"replace-metadata.bin".to_vec()).unwrap();
     service
         .publish_artifact(artifact_request(name.clone(), "old", b"old"))
         .unwrap();
@@ -496,7 +496,7 @@ fn prepared_artifact_replace_rejects_stale_dentry_version() {
 #[test]
 fn prepared_artifact_replace_retry_is_idempotent() {
     let service = service();
-    let name = DentryName::new(b"retry-remote.bin".to_vec()).unwrap();
+    let name = DentryName::new(b"retry-metadata.bin".to_vec()).unwrap();
     service
         .publish_artifact(artifact_request(name.clone(), "old", b"old"))
         .unwrap();

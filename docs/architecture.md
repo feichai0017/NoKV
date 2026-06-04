@@ -52,18 +52,18 @@ Failed metadata publish leaves staged objects for later garbage collection.
 `nokvfs-server` runs the same local `nokvfs-meta` service in a long-lived
 process. It owns health, readiness, stats, manual GC endpoints, and the first
 metadata RPC. The SDK hot path uses a length-prefixed framed RPC on the same
-port; HTTP stays as the health/stats/gc and `/rpc` debug surface. The RPC
+port; HTTP stays limited to health, stats, and manual GC control. The RPC
 supports both inode/name operations and path-oriented SDK operations, so
 server-side path resolution can avoid multi-round-trip nested creates. It also
 supports ordered non-atomic batches: each subrequest has its own result/error,
 but the batch removes per-operation network round trips for SDK workloads. The
-Rust SDK has a remote metadata client for namespace operations and a remote file
-client that uploads object blocks directly, asks `metad` to atomically publish
+Rust SDK has a metadata client for namespace operations and an object-backed
+file client that uploads object blocks directly, asks `metad` to atomically publish
 the body manifest, fetches body read plans, and reads object ranges directly
 from the configured object store. The server stats endpoint reports
 metadata-store write attribution counters so benchmark runs can distinguish
-current writes, history writes, watch writes, and dedupe writes. Remote FUSE is
-still future work.
+current writes, history writes, watch writes, and dedupe writes. A FUSE client
+over the metadata server is still future work.
 
 ## FUSE Path
 

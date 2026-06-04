@@ -1,7 +1,7 @@
 //! Wire protocol types for NoKV metadata RPC.
 //!
 //! This crate owns storage-neutral request and response DTOs shared by the
-//! server and remote clients. It does not execute metadata semantics, know Holt
+//! server and service clients. It does not execute metadata semantics, know Holt
 //! layout, own object-store behavior, or implement path resolution.
 
 use std::fmt;

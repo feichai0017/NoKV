@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nokvfs_client::{ArtifactMetadata, RemoteNoKvFsClient};
+use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, ObjectGcWorker};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
@@ -113,7 +113,7 @@ enum CliError {
     Client(String),
 }
 
-type Client = RemoteNoKvFsClient<S3ObjectStore>;
+type Client = NoKvFsClient<S3ObjectStore>;
 
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
@@ -378,7 +378,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
 
 fn open_client(config: &Config) -> Result<Client, CliError> {
     let objects = config.object.open().map_err(from_object)?;
-    Ok(RemoteNoKvFsClient::connect(config.server_bind, objects))
+    Ok(NoKvFsClient::connect(config.server_bind, objects))
 }
 
 fn control_get(config: &Config, path: &str) -> Result<String, CliError> {
@@ -859,7 +859,7 @@ mod tests {
     use std::net::TcpListener;
     use std::thread;
 
-    use nokvfs_client::RemoteNoKvFsClient;
+    use nokvfs_client::NoKvFsClient;
     use nokvfs_object::{MemoryObjectStore, ObjectKey, ObjectStore};
     use tempfile::tempdir;
 
@@ -924,13 +924,14 @@ mod tests {
     }
 
     #[test]
-    fn remote_sdk_round_trip_uses_server_metadata_and_client_object_store() {
+    fn service_sdk_round_trip_uses_server_metadata_and_client_object_store() {
         let store = MemoryObjectStore::new();
-        let client = RemoteNoKvFsClient::connect(spawn_test_server(), store.clone());
+        let client = NoKvFsClient::connect(spawn_test_server(), store.clone());
+        let body = b"hello metadata server";
         let entry = client
             .put_artifact(
                 "/checkpoint.bin",
-                b"hello remote server".to_vec(),
+                body.to_vec(),
                 ArtifactMetadata {
                     producer: "cli-test".to_owned(),
                     digest_uri: "sha256:demo".to_owned(),
@@ -942,7 +943,7 @@ mod tests {
                 },
             )
             .unwrap();
-        assert_eq!(entry.attr.size, 19);
+        assert_eq!(entry.attr.size, body.len() as u64);
         assert!(store
             .head(
                 &ObjectKey::new(format!(
@@ -954,10 +955,7 @@ mod tests {
             )
             .unwrap()
             .is_some());
-        assert_eq!(
-            client.cat("/checkpoint.bin").unwrap(),
-            b"hello remote server"
-        );
+        assert_eq!(client.cat("/checkpoint.bin").unwrap(), body);
         let listed = client.metadata().list("/").unwrap();
         assert_eq!(listed.len(), 1);
         assert_eq!(listed[0].attr.inode, entry.attr.inode);

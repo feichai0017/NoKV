@@ -7,7 +7,7 @@
 use std::fmt;
 
 mod artifact;
-mod remote;
+mod service;
 
 use nokvfs_meta::{MetadError, MetadataError};
 use nokvfs_object::ObjectError;
@@ -17,9 +17,8 @@ pub use artifact::{
     normalize_artifact_path, ArtifactBackend, ArtifactInfo, ArtifactRepository,
     ArtifactRepositoryOptions,
 };
-pub use remote::{
-    RemoteBodyReadPlan, RemoteMetadataClient, RemoteMetadataClientOptions, RemoteNoKvFsClient,
-    RemotePreparedArtifact,
+pub use service::{
+    ClientBodyReadPlan, ClientPreparedArtifact, MetadataClient, MetadataClientOptions, NoKvFsClient,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

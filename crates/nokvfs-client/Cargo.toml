@@ -1,7 +1,7 @@
 [package]
 name = "nokvfs-client"
 version = "0.1.0"
-description = "Rust SDK for local and remote NoKV metadata and object access."
+description = "Rust SDK for NoKV metadata and object access."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -14,8 +14,8 @@ nokvfs-meta.workspace = true
 nokvfs-object.workspace = true
 nokvfs-protocol.workspace = true
 nokvfs-types.workspace = true
-serde_json.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+serde_json.workspace = true
 tempfile.workspace = true

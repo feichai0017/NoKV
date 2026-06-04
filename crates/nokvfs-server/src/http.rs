@@ -136,7 +136,7 @@ fn handle_request(server: &Server, request: &HttpRequest) -> HttpResponse {
     handle_parts(server, &request.line, &request.body)
 }
 
-pub(crate) fn handle_parts(server: &Server, line: &str, body: &[u8]) -> HttpResponse {
+pub(crate) fn handle_parts(server: &Server, line: &str, _body: &[u8]) -> HttpResponse {
     let mut parts = line.split_whitespace();
     let method = parts.next().unwrap_or_default();
     let target = parts.next().unwrap_or_default();
@@ -145,9 +145,6 @@ pub(crate) fn handle_parts(server: &Server, line: &str, body: &[u8]) -> HttpResp
         ("GET", "/healthz") => HttpResponse::text("200 OK", "ok\n"),
         ("GET", "/readyz") => HttpResponse::text("200 OK", "ready\n"),
         ("GET", "/stats") => HttpResponse::json("200 OK", server.stats_json()),
-        // JSON RPC is a control/debug endpoint. The hot client path uses the
-        // framed binary protocol and both paths share the same RPC dispatcher.
-        ("POST", "/rpc") => HttpResponse::json_keep_alive("200 OK", rpc::handle_rpc(server, body)),
         ("GET", "/gc") | ("POST", "/gc") => {
             let limit = match gc_limit(query) {
                 Ok(limit) => limit,
@@ -204,15 +201,6 @@ impl HttpResponse {
             content_type: "application/json",
             body: body.into(),
             keep_alive: false,
-        }
-    }
-
-    fn json_keep_alive(status: &'static str, body: impl Into<String>) -> Self {
-        Self {
-            status,
-            content_type: "application/json",
-            body: body.into(),
-            keep_alive: true,
         }
     }
 }
@@ -290,15 +278,9 @@ mod tests {
     }
 
     #[test]
-    fn rpc_endpoint_executes_metadata_request() {
+    fn rpc_endpoint_is_not_a_control_http_api() {
         let server = test_server();
-        let response = handle_parts(
-            &server,
-            "POST /rpc HTTP/1.1",
-            br#"{"op":"create_dir","parent":1,"name":"runs","mode":493,"uid":1000,"gid":1000}"#,
-        );
-        assert_eq!(response.status, "200 OK");
-        assert!(response.body.contains("\"ok\":true"));
-        assert!(response.body.contains("\"name_hex\":\"72756e73\""));
+        let response = handle_parts(&server, "POST /rpc HTTP/1.1", &[]);
+        assert_eq!(response.status, "404 Not Found");
     }
 }

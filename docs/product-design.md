@@ -128,9 +128,9 @@ nokvfs-python
 ```
 
 The current repository implements a long-running single-node `nokvfs-server`,
-remote metadata RPC for the Rust SDK and CLI, and the FUSE frontend. Remote
-FUSE, CSI, Python, node-local cache, and distributed metadata shards remain
-product direction.
+framed metadata RPC for the Rust SDK and CLI, and the FUSE frontend. FUSE over
+the metadata server, CSI, Python, node-local cache, and distributed metadata
+shards remain product direction.
 
 ## Metadata Distribution
 
@@ -199,8 +199,8 @@ v0 local:
   CLI
   long-running local server with health, stats, manual GC endpoints, and
   framed metadata RPC plus HTTP debug/control endpoints
-  remote Rust metadata client for path and inode namespace operations
-  remote Rust file client for direct object upload, metadata publish, body read
+  Rust metadata client for path and inode namespace operations
+  Rust file client for direct object upload, metadata publish, body read
   plans, and direct object range reads
   close-to-open FUSE reads and buffered writes
   artifact publish
@@ -213,7 +213,7 @@ v0 local:
 
 v1 usable filesystem:
   fuller FUSE semantics beyond buffered write publish
-  remote FUSE over server metadata
+  FUSE over the metadata server
   Python/fsspec
   SDK watch consumer integration
 

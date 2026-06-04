@@ -1,7 +1,7 @@
 //! NoKV workload benchmark harness.
 //!
 //! This binary intentionally reports workload shape and durability caveats with
-//! every result. It runs a real `metad` process boundary with the remote SDK.
+//! every result. It runs a real `metad` process boundary with the service client.
 //! It is not a distributed replicated cluster benchmark.
 
 use std::env;
@@ -16,7 +16,7 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nokvfs_client::{ArtifactMetadata, RemoteNoKvFsClient};
+use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
 use nokvfs_meta::{
     DentryWithAttr, HistoryGcOptions, ObjectGcOptions, ObjectTransferStats, RenameReplaceResult,
 };
@@ -175,7 +175,7 @@ trait BenchClient: Sync {
     fn object_stats(&self) -> ObjectTransferStats;
 }
 
-impl BenchClient for RemoteNoKvFsClient<S3ObjectStore> {
+impl BenchClient for NoKvFsClient<S3ObjectStore> {
     fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), BenchError> {
         self.metadata()
             .bootstrap_root(mode, uid, gid)
@@ -227,7 +227,7 @@ impl BenchClient for RemoteNoKvFsClient<S3ObjectStore> {
         bytes: Vec<u8>,
         metadata: ArtifactMetadata,
     ) -> Result<DentryWithAttr, BenchError> {
-        RemoteNoKvFsClient::put_artifact(self, path, bytes, metadata).map_err(from_client)
+        NoKvFsClient::put_artifact(self, path, bytes, metadata).map_err(from_client)
     }
 
     fn rename_replace(
@@ -245,11 +245,11 @@ impl BenchClient for RemoteNoKvFsClient<S3ObjectStore> {
     }
 
     fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError> {
-        RemoteNoKvFsClient::cat(self, path).map_err(from_client)
+        NoKvFsClient::cat(self, path).map_err(from_client)
     }
 
     fn object_stats(&self) -> ObjectTransferStats {
-        RemoteNoKvFsClient::object_stats(self)
+        NoKvFsClient::object_stats(self)
     }
 }
 
@@ -717,7 +717,7 @@ fn stats_delta(before: ObjectTransferStats, after: ObjectTransferStats) -> Objec
 
 fn metadata_only_caveat(config: &Config) -> String {
     format!(
-        "metadata-only on remote Holt metadata, object_backend={}, no distributed replication",
+        "metadata-only on Holt metadata service, object_backend={}, no distributed replication",
         object_backend_name(config.object_backend)
     )
 }
@@ -731,14 +731,14 @@ fn object_caveat(config: &Config, path: &str) -> String {
     match config.object_backend {
         ObjectBackendKind::RustFs => {
             format!(
-                "{path}, remote Holt metadata, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
+                "{path}, Holt metadata service, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
                 config.object_concurrency,
                 config.read_repeats
             )
         }
         ObjectBackendKind::S3 => {
             format!(
-                "{path}, remote Holt metadata, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
+                "{path}, Holt metadata service, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
                 config.object_concurrency,
                 config.read_repeats
             )
@@ -747,10 +747,10 @@ fn object_caveat(config: &Config, path: &str) -> String {
 }
 
 fn client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
-    remote_client_for(config, workload)
+    service_client_for(config, workload)
 }
 
-fn remote_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
+fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
     let meta = config.root.join(workload).join("meta");
     let object = object_config_for(config, workload);
     let objects = object.clone().open().map_err(from_client)?;
@@ -778,7 +778,7 @@ fn remote_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCli
     thread::spawn(move || {
         let _ = server.serve(listener);
     });
-    let mut client = RemoteNoKvFsClient::connect(bind, objects);
+    let mut client = NoKvFsClient::connect(bind, objects);
     client.set_block_cache_enabled(config.block_cache);
     Ok(Box::new(client))
 }

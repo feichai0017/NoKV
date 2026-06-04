@@ -32,7 +32,7 @@ workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_sec
 ```
 
 The harness always starts a real single-node `metad` process and runs the Rust
-remote SDK against its framed metadata RPC. Object bytes are still read and
+service client against its framed metadata RPC. Object bytes are still read and
 written directly by the client against the configured S3-compatible object
 store. This keeps benchmark numbers attached to the deployable service
 boundary instead of an in-process metadata shortcut.

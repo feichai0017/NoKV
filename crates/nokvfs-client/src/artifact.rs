@@ -7,7 +7,7 @@ use nokvfs_types::FileType;
 use sha2::{Digest, Sha256};
 
 use crate::{
-    is_metadata_predicate_failed, is_not_found, ArtifactMetadata, ClientError, RemoteNoKvFsClient,
+    is_metadata_predicate_failed, is_not_found, ArtifactMetadata, ClientError, NoKvFsClient,
 };
 
 const DEFAULT_ARTIFACT_FILE_MODE: u32 = 0o644;
@@ -390,7 +390,7 @@ where
     }
 }
 
-impl<O> ArtifactBackend for RemoteNoKvFsClient<O>
+impl<O> ArtifactBackend for NoKvFsClient<O>
 where
     O: ObjectStore,
 {

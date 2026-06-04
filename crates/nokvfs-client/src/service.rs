@@ -32,13 +32,13 @@ const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
 const FRAME_HEADER_BYTES: usize = 16;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RemoteMetadataClientOptions {
+pub struct MetadataClientOptions {
     pub address: SocketAddr,
     pub timeout: Duration,
 }
 
-pub struct RemoteMetadataClient {
-    options: RemoteMetadataClientOptions,
+pub struct MetadataClient {
+    options: MetadataClientOptions,
     next_request_id: AtomicU64,
     connection: Mutex<Option<Arc<PipelinedConnection>>>,
 }
@@ -54,13 +54,13 @@ enum PendingFrame {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemoteBodyReadPlan {
+pub struct ClientBodyReadPlan {
     pub output_len: usize,
     pub blocks: Vec<ObjectReadBlock>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub struct RemotePreparedArtifact {
+pub struct ClientPreparedArtifact {
     pub mount: u64,
     pub parent: InodeId,
     pub name: DentryName,
@@ -73,8 +73,8 @@ pub struct RemotePreparedArtifact {
     pub old_generation: Option<u64>,
 }
 
-pub struct RemoteNoKvFsClient<O> {
-    metadata: RemoteMetadataClient,
+pub struct NoKvFsClient<O> {
+    metadata: MetadataClient,
     objects: O,
     block_cache: MemoryBlockCache,
     block_cache_enabled: bool,
@@ -85,7 +85,7 @@ pub struct RemoteNoKvFsClient<O> {
     manifest_blocks: AtomicU64,
 }
 
-impl RemoteMetadataClientOptions {
+impl MetadataClientOptions {
     pub fn new(address: SocketAddr) -> Self {
         Self {
             address,
@@ -94,11 +94,11 @@ impl RemoteMetadataClientOptions {
     }
 }
 
-impl<O> RemoteNoKvFsClient<O>
+impl<O> NoKvFsClient<O>
 where
     O: ObjectStore,
 {
-    pub fn new(metadata: RemoteMetadataClient, objects: O) -> Self {
+    pub fn new(metadata: MetadataClient, objects: O) -> Self {
         Self {
             metadata,
             objects,
@@ -113,10 +113,10 @@ where
     }
 
     pub fn connect(address: SocketAddr, objects: O) -> Self {
-        Self::new(RemoteMetadataClient::connect(address), objects)
+        Self::new(MetadataClient::connect(address), objects)
     }
 
-    pub fn metadata(&self) -> &RemoteMetadataClient {
+    pub fn metadata(&self) -> &MetadataClient {
         &self.metadata
     }
 
@@ -310,7 +310,7 @@ where
 
     fn stage_artifact_body(
         &self,
-        prepared: &RemotePreparedArtifact,
+        prepared: &ClientPreparedArtifact,
         bytes: &[u8],
         metadata: ArtifactMetadata,
     ) -> Result<(BodyDescriptor, Vec<ChunkManifest>, StagedObjectSet), ClientError> {
@@ -392,8 +392,8 @@ fn cleanup_staged_write_error<O: ObjectStore>(
     Ok(())
 }
 
-impl RemoteMetadataClient {
-    pub fn new(options: RemoteMetadataClientOptions) -> Self {
+impl MetadataClient {
+    pub fn new(options: MetadataClientOptions) -> Self {
         Self {
             options,
             next_request_id: AtomicU64::new(1),
@@ -402,7 +402,7 @@ impl RemoteMetadataClient {
     }
 
     pub fn connect(address: SocketAddr) -> Self {
-        Self::new(RemoteMetadataClientOptions::new(address))
+        Self::new(MetadataClientOptions::new(address))
     }
 
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), ClientError> {
@@ -603,7 +603,7 @@ impl RemoteMetadataClient {
         generation: u64,
         offset: u64,
         len: usize,
-    ) -> Result<RemoteBodyReadPlan, ClientError> {
+    ) -> Result<ClientBodyReadPlan, ClientError> {
         let len = u64::try_from(len)
             .map_err(|_| ClientError::Protocol("body read length exceeds u64".to_owned()))?;
         match self.call(MetadataRpcRequest::ReadBodyPlan {
@@ -656,7 +656,7 @@ impl RemoteMetadataClient {
         parent: InodeId,
         name: DentryName,
         replace: bool,
-    ) -> Result<RemotePreparedArtifact, ClientError> {
+    ) -> Result<ClientPreparedArtifact, ClientError> {
         match self.call(MetadataRpcRequest::PrepareArtifact {
             parent: parent.get(),
             name: rpc_name(&name)?,
@@ -671,7 +671,7 @@ impl RemoteMetadataClient {
         &self,
         path: &str,
         replace: bool,
-    ) -> Result<RemotePreparedArtifact, ClientError> {
+    ) -> Result<ClientPreparedArtifact, ClientError> {
         match self.call(MetadataRpcRequest::PrepareArtifactPath {
             path: path.to_owned(),
             replace,
@@ -683,7 +683,7 @@ impl RemoteMetadataClient {
 
     pub fn publish_prepared_artifact(
         &self,
-        prepared: RemotePreparedArtifact,
+        prepared: ClientPreparedArtifact,
         body: BodyDescriptor,
         chunks: Vec<ChunkManifest>,
         mode: u32,
@@ -909,7 +909,7 @@ fn rpc_read_error(err: io::Error) -> ClientError {
 
 fn rpc_name(name: &DentryName) -> Result<String, ClientError> {
     String::from_utf8(name.as_bytes().to_vec())
-        .map_err(|_| ClientError::InvalidName("remote rpc requires utf-8 names".to_owned()))
+        .map_err(|_| ClientError::InvalidName("metadata rpc requires utf-8 names".to_owned()))
 }
 
 fn wire_dentry(entry: WireDentryWithAttr) -> Result<DentryWithAttr, ClientError> {
@@ -926,8 +926,8 @@ fn wire_path_metadata(metadata: WirePathMetadata) -> Result<PathMetadata, Client
 
 fn wire_prepared_artifact(
     prepared: WirePreparedArtifact,
-) -> Result<RemotePreparedArtifact, ClientError> {
-    Ok(RemotePreparedArtifact {
+) -> Result<ClientPreparedArtifact, ClientError> {
+    Ok(ClientPreparedArtifact {
         mount: prepared.mount,
         parent: inode_id(prepared.parent)?,
         name: DentryName::new(prepared.name.into_bytes())
@@ -943,7 +943,7 @@ fn wire_prepared_artifact(
 }
 
 fn prepared_artifact_to_wire(
-    prepared: &RemotePreparedArtifact,
+    prepared: &ClientPreparedArtifact,
 ) -> Result<WirePreparedArtifact, ClientError> {
     Ok(WirePreparedArtifact {
         mount: prepared.mount,
@@ -967,8 +967,8 @@ fn chunk_to_wire(chunk: &ChunkManifest) -> WireChunkManifest {
     WireChunkManifest::from_chunk_manifest(chunk)
 }
 
-fn wire_body_read_plan(plan: WireBodyReadPlan) -> Result<RemoteBodyReadPlan, ClientError> {
-    Ok(RemoteBodyReadPlan {
+fn wire_body_read_plan(plan: WireBodyReadPlan) -> Result<ClientBodyReadPlan, ClientError> {
+    Ok(ClientBodyReadPlan {
         output_len: usize::try_from(plan.output_len).map_err(|_| {
             ClientError::Protocol("body read plan output length exceeds platform limit".to_owned())
         })?,
@@ -1029,7 +1029,7 @@ fn envelope_result(envelope: MetadataRpcEnvelope) -> Result<MetadataRpcResult, C
     if !envelope.ok {
         let message = envelope
             .error
-            .unwrap_or_else(|| "unknown remote error".to_owned());
+            .unwrap_or_else(|| "unknown metadata service error".to_owned());
         let Some(error) = envelope.error_kind else {
             return Err(ClientError::Protocol(format!(
                 "metadata rpc error is missing typed error_kind: {message}"
@@ -1175,22 +1175,22 @@ mod tests {
     }
 
     #[test]
-    fn remote_mkdir_sends_metadata_rpc() {
+    fn service_mkdir_sends_metadata_rpc() {
         let addr = serve_one(
             r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"72756e73","child":2,"child_type":"directory","attr_generation":1},"attr":{"inode":2,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":1,"mtime_ms":1,"ctime_ms":1},"body":null}}}"#,
         );
-        let client = RemoteMetadataClient::connect(addr);
+        let client = MetadataClient::connect(addr);
         let entry = client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
         assert_eq!(entry.attr.inode.get(), 2);
         assert_eq!(entry.dentry.name.as_bytes(), b"runs");
     }
 
     #[test]
-    fn remote_create_file_uses_single_path_rpc_for_nested_parent() {
+    fn service_create_file_uses_single_path_rpc_for_nested_parent() {
         let addr = serve_one(
             r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"636865636b706f696e742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
         );
-        let client = RemoteMetadataClient::connect(addr);
+        let client = MetadataClient::connect(addr);
         let entry = client
             .create_file("/runs/checkpoint.bin", 0o644, 1000, 1000)
             .unwrap();
@@ -1199,7 +1199,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_create_files_uses_single_coalesced_frame() {
+    fn service_create_files_uses_single_coalesced_frame() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -1223,7 +1223,7 @@ mod tests {
             );
             write_frame(&mut stream, request_id, flags, &response).unwrap();
         });
-        let client = RemoteMetadataClient::connect(addr);
+        let client = MetadataClient::connect(addr);
         let paths = vec!["/runs/a.bin".to_owned(), "/runs/b.bin".to_owned()];
         let entries = client.create_files(&paths, 0o644, 1000, 1000).unwrap();
         let entries = entries.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
@@ -1232,7 +1232,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_framed_rpc_accepts_out_of_order_responses() {
+    fn service_framed_rpc_accepts_out_of_order_responses() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -1252,7 +1252,7 @@ mod tests {
             write_frame(&mut stream, first.0, first.1, &first_response).unwrap();
         });
 
-        let client = Arc::new(RemoteMetadataClient::connect(addr));
+        let client = Arc::new(MetadataClient::connect(addr));
         let first = {
             let client = Arc::clone(&client);
             thread::spawn(move || client.create_file("/runs/a.bin", 0o644, 1000, 1000))
@@ -1269,9 +1269,9 @@ mod tests {
     }
 
     #[test]
-    fn remote_error_without_error_kind_is_protocol_error() {
+    fn service_error_without_error_kind_is_protocol_error() {
         let addr = serve_one(r#"{"ok":false,"error":"metadata command predicate failed"}"#);
-        let client = RemoteMetadataClient::connect(addr);
+        let client = MetadataClient::connect(addr);
         let err = client.mkdir("/runs", 0o755, 1000, 1000).unwrap_err();
         assert!(
             matches!(
@@ -1284,11 +1284,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_typed_error_maps_predicate_failed_to_metadata_error() {
+    fn service_typed_error_maps_predicate_failed_to_metadata_error() {
         let addr = serve_one(
             r#"{"ok":false,"error":"metadata command predicate failed","error_kind":{"type":"predicate_failed"}}"#,
         );
-        let client = RemoteMetadataClient::connect(addr);
+        let client = MetadataClient::connect(addr);
         let err = client.mkdir("/runs", 0o755, 1000, 1000).unwrap_err();
         assert!(matches!(
             err,
@@ -1299,11 +1299,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_typed_error_maps_stale_generation_to_metadata_error() {
+    fn service_typed_error_maps_stale_generation_to_metadata_error() {
         let addr = serve_one(
             r#"{"ok":false,"error":"body generation 7 is stale; current generation is 8","error_kind":{"type":"stale_body_generation","expected":7,"current":8}}"#,
         );
-        let client = RemoteMetadataClient::connect(addr);
+        let client = MetadataClient::connect(addr);
         let err = client
             .read_body_plan(InodeId::new(42).unwrap(), 7, 0, 1)
             .unwrap_err();
@@ -1317,11 +1317,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_typed_error_maps_backend_metadata_error() {
+    fn service_typed_error_maps_backend_metadata_error() {
         let addr = serve_one(
             r#"{"ok":false,"error":"metadata backend unavailable","error_kind":{"type":"metadata","message":"metadata backend unavailable"}}"#,
         );
-        let client = RemoteMetadataClient::connect(addr);
+        let client = MetadataClient::connect(addr);
         let err = client.mkdir("/runs", 0o755, 1000, 1000).unwrap_err();
         assert!(matches!(
             err,
@@ -1332,11 +1332,11 @@ mod tests {
     }
 
     #[test]
-    fn remote_typed_error_maps_backend_object_error() {
+    fn service_typed_error_maps_backend_object_error() {
         let addr = serve_one(
             r#"{"ok":false,"error":"object backend unavailable","error_kind":{"type":"object","message":"object backend unavailable"}}"#,
         );
-        let client = RemoteMetadataClient::connect(addr);
+        let client = MetadataClient::connect(addr);
         let err = client.mkdir("/runs", 0o755, 1000, 1000).unwrap_err();
         assert!(matches!(
             err,
@@ -1346,7 +1346,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_snapshot_cat_uses_snapshot_file_rpc() {
+    fn service_snapshot_cat_uses_snapshot_file_rpc() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -1366,12 +1366,12 @@ mod tests {
             );
             write_frame(&mut stream, request_id, flags, &response).unwrap();
         });
-        let client = RemoteNoKvFsClient::connect(addr, MemoryObjectStore::new());
+        let client = NoKvFsClient::connect(addr, MemoryObjectStore::new());
         assert_eq!(client.cat_snapshot(9, "/runs/checkpoint").unwrap(), b"old");
     }
 
     #[test]
-    fn remote_snapshot_namespace_methods_use_snapshot_rooted_rpcs() {
+    fn service_snapshot_namespace_methods_use_snapshot_rooted_rpcs() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -1436,7 +1436,7 @@ mod tests {
             .unwrap();
         });
 
-        let client = RemoteNoKvFsClient::connect(addr, MemoryObjectStore::new());
+        let client = NoKvFsClient::connect(addr, MemoryObjectStore::new());
         let root = client
             .metadata()
             .stat_path_at_snapshot(9, "/")
@@ -1453,7 +1453,7 @@ mod tests {
     }
 
     #[test]
-    fn remote_metadata_stat_path_uses_path_metadata_rpc() {
+    fn service_metadata_stat_path_uses_path_metadata_rpc() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
         thread::spawn(move || {
@@ -1478,17 +1478,17 @@ mod tests {
             .unwrap();
         });
 
-        let client = RemoteMetadataClient::connect(addr);
+        let client = MetadataClient::connect(addr);
         let metadata = client.stat_path("/artifact.bin").unwrap().unwrap();
         assert_eq!(metadata.attr.inode.get(), 42);
         assert_eq!(metadata.body.unwrap().digest_uri, "sha256:demo");
     }
 
     #[test]
-    fn remote_file_client_read_path_returns_metadata_and_checks_expected_generation() {
+    fn service_file_client_read_path_returns_metadata_and_checks_expected_generation() {
         let store = MemoryObjectStore::new();
         store
-            .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello remote")
+            .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello server")
             .unwrap();
         let addr = serve_many(vec![
             response_body(
@@ -1498,16 +1498,16 @@ mod tests {
                 r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
             ),
         ]);
-        let client = RemoteNoKvFsClient::connect(addr, store);
+        let client = NoKvFsClient::connect(addr, store);
         let read = client.read_path("/artifact.bin", 6, 6, Some(7)).unwrap();
-        assert_eq!(read.bytes, b"remote");
+        assert_eq!(read.bytes, b"server");
         assert_eq!(read.metadata.attr.generation, 7);
         assert_eq!(read.metadata.body.unwrap().digest_uri, "sha256:demo");
 
         let addr = serve_one(
             r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":{"producer":"unit-test","digest_uri":"sha256:new","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":8,"chunk_size":67108864,"block_size":4194304}}}}"#,
         );
-        let client = RemoteNoKvFsClient::connect(addr, MemoryObjectStore::new());
+        let client = NoKvFsClient::connect(addr, MemoryObjectStore::new());
         let err = client
             .read_path("/artifact.bin", 0, 6, Some(7))
             .unwrap_err();
@@ -1521,10 +1521,10 @@ mod tests {
     }
 
     #[test]
-    fn remote_file_client_reads_body_from_object_store() {
+    fn service_file_client_reads_body_from_object_store() {
         let store = MemoryObjectStore::new();
         store
-            .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello remote")
+            .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello server")
             .unwrap();
         let addr = serve_many(vec![
             response_body(
@@ -1534,13 +1534,13 @@ mod tests {
                 r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
             ),
         ]);
-        let client = RemoteNoKvFsClient::connect(addr, store);
+        let client = NoKvFsClient::connect(addr, store);
         let bytes = client.read("/artifact.bin", 6, 6).unwrap();
-        assert_eq!(bytes, b"remote");
+        assert_eq!(bytes, b"server");
     }
 
     #[test]
-    fn remote_file_client_uploads_blocks_then_publishes_metadata() {
+    fn service_file_client_uploads_blocks_then_publishes_metadata() {
         let store = MemoryObjectStore::new();
         let addr = serve_many(vec![
             response_body(
@@ -1550,7 +1550,7 @@ mod tests {
                 r#"{"ok":true,"result":{"type":"rename_replace","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":11,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":11,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"replaced":null}}"#,
             ),
         ]);
-        let client = RemoteNoKvFsClient::connect(addr, store.clone());
+        let client = NoKvFsClient::connect(addr, store.clone());
         let entry = client
             .put_artifact(
                 "/artifact.bin",
@@ -1564,12 +1564,12 @@ mod tests {
                 .head(&ObjectKey::new("blocks/1/42/7/0/0").unwrap())
                 .unwrap()
                 .is_some(),
-            "remote publish should upload object block before metadata commit"
+            "metadata publish should upload object block before metadata commit"
         );
     }
 
     #[test]
-    fn remote_file_client_cleans_staged_blocks_after_publish_failure() {
+    fn service_file_client_cleans_staged_blocks_after_publish_failure() {
         let store = MemoryObjectStore::new();
         let addr = serve_many(vec![
             response_body(
@@ -1579,7 +1579,7 @@ mod tests {
                 r#"{"ok":false,"error":"metadata command predicate failed","error_kind":{"type":"predicate_failed"}}"#,
             ),
         ]);
-        let client = RemoteNoKvFsClient::connect(addr, store.clone());
+        let client = NoKvFsClient::connect(addr, store.clone());
         let err = client
             .put_artifact(
                 "/artifact.bin",

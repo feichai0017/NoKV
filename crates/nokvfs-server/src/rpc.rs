@@ -68,29 +68,6 @@ struct RpcFrame {
     payload: Vec<u8>,
 }
 
-pub(crate) fn handle_rpc(server: &Server, body: &[u8]) -> String {
-    let envelope = match serde_json::from_slice::<MetadataRpcRequest>(body) {
-        Ok(request) => match execute(server, request) {
-            Ok(result) => MetadataRpcEnvelope {
-                ok: true,
-                result: Some(result),
-                error: None,
-                error_kind: None,
-            },
-            Err(err) => err_envelope(err),
-        },
-        Err(err) => MetadataRpcEnvelope {
-            ok: false,
-            result: None,
-            error: Some(format!("invalid metadata rpc request: {err}")),
-            error_kind: Some(WireMetadataError::Protocol {
-                message: err.to_string(),
-            }),
-        },
-    };
-    serde_json::to_string(&envelope).expect("metadata rpc envelope is serializable") + "\n"
-}
-
 fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerError> {
     let envelope = match decode_request(body) {
         Ok(request) => match execute(server, request) {
@@ -800,7 +777,7 @@ fn wire_prepared_artifact(mount: MountId, prepared: &PreparedArtifact) -> WirePr
         mount: mount.get(),
         parent: prepared.parent.get(),
         name: String::from_utf8(prepared.name.as_bytes().to_vec())
-            .expect("remote prepared artifact names are utf-8"),
+            .expect("metadata prepared artifact names are utf-8"),
         inode: prepared.inode.get(),
         generation: prepared.generation,
         mtime_ms: prepared.mtime_ms,
@@ -851,51 +828,114 @@ mod tests {
     use super::*;
     use crate::server::tests::test_server;
     use nokvfs_protocol::{
-        WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest, WireMetadataError,
+        decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor,
+        WireChunkManifest, WireMetadataError,
     };
+
+    fn request_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
+        let body = encode_request(&request).unwrap();
+        let response = handle_binary_rpc(server, &body).unwrap();
+        decode_envelope(&response).unwrap()
+    }
+
+    fn expect_dentry(envelope: MetadataRpcEnvelope) -> WireDentryWithAttr {
+        assert!(envelope.ok, "unexpected error envelope: {envelope:?}");
+        match envelope.result.unwrap() {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => *entry,
+            other => panic!("unexpected dentry result: {other:?}"),
+        }
+    }
 
     #[test]
     fn rpc_creates_and_lists_directory() {
         let server = test_server();
-        let response = handle_rpc(
+        let created = expect_dentry(request_envelope(
             &server,
-            br#"{"op":"create_dir","parent":1,"name":"runs","mode":493,"uid":1000,"gid":1000}"#,
-        );
-        assert!(response.contains("\"ok\":true"));
-        assert!(response.contains("\"name_hex\":\"72756e73\""));
+            MetadataRpcRequest::CreateDir {
+                parent: 1,
+                name: "runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        assert_eq!(created.dentry.name_hex, "72756e73");
 
-        let response = handle_rpc(&server, br#"{"op":"read_dir_plus","parent":1}"#);
-        assert!(response.contains("\"entries\""));
-        assert!(response.contains("\"name_hex\":\"72756e73\""));
+        let envelope = request_envelope(&server, MetadataRpcRequest::ReadDirPlus { parent: 1 });
+        let entries = match envelope.result.unwrap() {
+            MetadataRpcResult::Dentries { entries } => entries,
+            other => panic!("unexpected readdir result: {other:?}"),
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].dentry.name_hex, "72756e73");
     }
 
     #[test]
     fn rpc_path_ops_resolve_on_server_side() {
         let server = test_server();
-        let response = handle_rpc(
+        let dir = expect_dentry(request_envelope(
             &server,
-            br#"{"op":"create_dir_path","path":"/runs","mode":493,"uid":1000,"gid":1000}"#,
-        );
-        assert!(response.contains("\"ok\":true"));
-        let response = handle_rpc(
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        assert_eq!(dir.dentry.name_hex, "72756e73");
+        let file = expect_dentry(request_envelope(
             &server,
-            br#"{"op":"create_file_path","path":"/runs/checkpoint.bin","mode":420,"uid":1000,"gid":1000}"#,
+            MetadataRpcRequest::CreateFilePath {
+                path: "/runs/checkpoint.bin".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        assert_eq!(file.dentry.name_hex, "636865636b706f696e742e62696e");
+
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadDirPlusPath {
+                path: "/runs".to_owned(),
+            },
         );
-        assert!(response.contains("\"ok\":true"));
-        assert!(response.contains("\"name_hex\":\"636865636b706f696e742e62696e\""));
-        let response = handle_rpc(&server, br#"{"op":"read_dir_plus_path","path":"/runs"}"#);
-        assert!(response.contains("\"entries\""));
-        assert!(response.contains("\"name_hex\":\"636865636b706f696e742e62696e\""));
+        let entries = match envelope.result.unwrap() {
+            MetadataRpcResult::Dentries { entries } => entries,
+            other => panic!("unexpected readdir result: {other:?}"),
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].dentry.name_hex, "636865636b706f696e742e62696e");
     }
 
     #[test]
     fn rpc_batch_preserves_ordered_per_request_results() {
         let server = test_server();
-        let response = handle_rpc(
+        let envelope = request_envelope(
             &server,
-            br#"{"op":"batch","requests":[{"op":"create_dir_path","path":"/runs","mode":493,"uid":1000,"gid":1000},{"op":"create_file_path","path":"/runs/a.bin","mode":420,"uid":1000,"gid":1000},{"op":"create_file_path","path":"/runs/a.bin","mode":420,"uid":1000,"gid":1000}]}"#,
+            MetadataRpcRequest::Batch {
+                requests: vec![
+                    MetadataRpcRequest::CreateDirPath {
+                        path: "/runs".to_owned(),
+                        mode: 0o755,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                    MetadataRpcRequest::CreateFilePath {
+                        path: "/runs/a.bin".to_owned(),
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                    MetadataRpcRequest::CreateFilePath {
+                        path: "/runs/a.bin".to_owned(),
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                ],
+            },
         );
-        let envelope: MetadataRpcEnvelope = serde_json::from_str(&response).unwrap();
         let results = match envelope.result.unwrap() {
             MetadataRpcResult::Batch { results } => results,
             other => panic!("unexpected batch result: {other:?}"),
@@ -914,20 +954,27 @@ mod tests {
     #[test]
     fn rpc_reports_predicate_errors_without_panicking() {
         let server = test_server();
-        let response = handle_rpc(
+        let envelope = request_envelope(
             &server,
-            br#"{"op":"remove_empty_dir","parent":1,"name":"missing"}"#,
+            MetadataRpcRequest::RemoveEmptyDir {
+                parent: 1,
+                name: "missing".to_owned(),
+            },
         );
-        assert!(response.contains("\"ok\":false"));
-        assert!(response.contains("\"error\""));
+        assert!(!envelope.ok);
+        assert!(envelope.error.is_some());
     }
 
     #[test]
-    fn rpc_rejects_malformed_json() {
+    fn rpc_rejects_malformed_binary_request() {
         let server = test_server();
-        let response = handle_rpc(&server, b"not-json");
-        assert!(response.contains("\"ok\":false"));
-        assert!(response.contains("invalid metadata rpc request"));
+        let response = handle_binary_rpc(&server, b"not-msgpack").unwrap();
+        let envelope = decode_envelope(&response).unwrap();
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Protocol { .. })
+        ));
     }
 
     #[test]
@@ -940,11 +987,14 @@ mod tests {
     #[test]
     fn rpc_prepares_and_publishes_artifact_manifest() {
         let server = test_server();
-        let response = handle_rpc(
+        let envelope = request_envelope(
             &server,
-            br#"{"op":"prepare_artifact","parent":1,"name":"artifact.bin","replace":false}"#,
+            MetadataRpcRequest::PrepareArtifact {
+                parent: 1,
+                name: "artifact.bin".to_owned(),
+                replace: false,
+            },
         );
-        let envelope: MetadataRpcEnvelope = serde_json::from_str(&response).unwrap();
         let prepared = match envelope.result.unwrap() {
             MetadataRpcResult::PreparedArtifact { prepared } => prepared,
             other => panic!("unexpected prepare result: {other:?}"),
@@ -977,10 +1027,12 @@ mod tests {
             uid: 1000,
             gid: 1000,
         };
-        let request = serde_json::to_vec(&request).unwrap();
-        let response = handle_rpc(&server, &request);
-        assert!(response.contains("\"ok\":true"));
-        assert!(response.contains("\"name_hex\":\"61727469666163742e62696e\""));
-        assert!(response.contains("\"type\":\"rename_replace\""));
+        let envelope = request_envelope(&server, request);
+        let result = match envelope.result.unwrap() {
+            MetadataRpcResult::RenameReplace { entry, replaced } => (entry, replaced),
+            other => panic!("unexpected publish result: {other:?}"),
+        };
+        assert_eq!(result.0.dentry.name_hex, "61727469666163742e62696e");
+        assert!(result.1.is_none());
     }
 }
