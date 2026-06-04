@@ -1598,6 +1598,96 @@ fn quorum_log_learner_catches_up_without_voting() {
 }
 
 #[test]
+fn quorum_node_log_rejects_learner_writes() {
+    let log =
+        Arc::new(InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap());
+    let learner = QuorumNodeLog::new(Arc::clone(&log), node(4)).unwrap();
+    let mount = MountId::new(1).unwrap();
+
+    assert_eq!(learner.node(), node(4));
+    assert_eq!(learner.role(), QuorumNodeRole::Learner);
+    assert!(matches!(
+        learner.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)]),
+        Err(SharedLogError::LearnerCannotAppend(replica)) if replica == node(4)
+    ));
+    assert!(matches!(
+        learner.compact_through(LogIndex::new(1).unwrap()),
+        Err(SharedLogError::LearnerCannotCompact(replica)) if replica == node(4)
+    ));
+    assert_eq!(log.committed_index(), LogIndex::ZERO);
+}
+
+#[test]
+fn quorum_node_log_learner_replays_only_local_tail() {
+    let log =
+        Arc::new(InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap());
+    let mount = MountId::new(1).unwrap();
+    let term = LogTerm::new(1).unwrap();
+    let leader_log = QuorumNodeLog::new(Arc::clone(&log), node(1)).unwrap();
+    let learner_log = QuorumNodeLog::new(Arc::clone(&log), node(4)).unwrap();
+    let leader = SharedLogMetadataStore::new(
+        HoltMetadataStore::open_memory().unwrap(),
+        leader_log,
+        term,
+        mount,
+    );
+    let learner = SharedLogMetadataStore::new(
+        HoltMetadataStore::open_memory().unwrap(),
+        learner_log,
+        term,
+        mount,
+    );
+
+    log.set_node_available(node(4), false).unwrap();
+    leader.commit_metadata(command(b"a", 2)).unwrap();
+    let committed = log.committed_position().unwrap();
+
+    let replay = learner.replay_committed_tail(0).unwrap();
+    assert_eq!(replay.entries, 0);
+    assert!(matches!(
+        learner.ensure_read_freshness(ReadFreshness::AppliedThrough(committed)),
+        Err(SharedLogError::ReadNotFresh {
+            required,
+            applied: None,
+        }) if required == committed
+    ));
+    assert!(learner
+        .inner()
+        .get(
+            RecordFamily::Dentry,
+            b"a",
+            version(2),
+            ReadPurpose::WritePlanLocal,
+        )
+        .unwrap()
+        .is_none());
+
+    log.set_node_available(node(4), true).unwrap();
+    assert_eq!(log.sync_learner(node(4)).unwrap(), committed.index);
+    let replay = learner.replay_committed_tail(0).unwrap();
+
+    assert_eq!(replay.entries, 1);
+    assert_eq!(replay.commands, 1);
+    learner
+        .ensure_read_freshness(ReadFreshness::AppliedThrough(committed))
+        .unwrap();
+    assert_eq!(
+        learner
+            .inner()
+            .get(
+                RecordFamily::Dentry,
+                b"a",
+                version(2),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+}
+
+#[test]
 fn quorum_log_requires_checkpoint_for_learner_past_compaction() {
     let log = InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap();
     let mount = MountId::new(1).unwrap();

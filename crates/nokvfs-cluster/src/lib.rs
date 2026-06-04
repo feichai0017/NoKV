@@ -28,7 +28,7 @@ pub use frontier::{AppliedFrontierStore, FileAppliedFrontierStore, MemoryApplied
 pub use group::{MetadataGroup, MetadataGroupCommit};
 pub use log::SharedMetadataLog;
 pub use memory::InMemorySharedLog;
-pub use quorum::InMemoryQuorumLog;
+pub use quorum::{InMemoryQuorumLog, QuorumNodeLog, QuorumNodeRole};
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};
 pub use store::{SharedLogMetadataStore, SharedLogRuntimeStats};
 pub use types::{

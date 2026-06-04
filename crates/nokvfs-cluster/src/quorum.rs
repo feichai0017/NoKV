@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use nokvfs_meta::command::MetadataCommand;
 use nokvfs_types::MountId;
@@ -12,6 +12,19 @@ use crate::{
 #[derive(Debug)]
 pub struct InMemoryQuorumLog {
     inner: Mutex<QuorumState>,
+}
+
+#[derive(Clone, Debug)]
+pub struct QuorumNodeLog {
+    log: Arc<InMemoryQuorumLog>,
+    node: NodeId,
+    role: QuorumNodeRole,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum QuorumNodeRole {
+    Voter,
+    Learner,
 }
 
 #[derive(Debug)]
@@ -80,6 +93,13 @@ impl InMemoryQuorumLog {
             .ok_or(SharedLogError::UnknownNode(node))?;
         replica.available = available;
         Ok(())
+    }
+
+    pub fn node_role(&self, node: NodeId) -> Result<QuorumNodeRole, SharedLogError> {
+        let inner = self.lock()?;
+        inner
+            .node_role(node)
+            .ok_or(SharedLogError::UnknownNode(node))
     }
 
     pub fn sync_learner(&self, node: NodeId) -> Result<LogIndex, SharedLogError> {
@@ -196,6 +216,21 @@ impl InMemoryQuorumLog {
         self.inner
             .lock()
             .map_err(|_| SharedLogError::Backend("quorum log mutex poisoned".to_owned()))
+    }
+}
+
+impl QuorumNodeLog {
+    pub fn new(log: Arc<InMemoryQuorumLog>, node: NodeId) -> Result<Self, SharedLogError> {
+        let role = log.node_role(node)?;
+        Ok(Self { log, node, role })
+    }
+
+    pub fn node(&self) -> NodeId {
+        self.node
+    }
+
+    pub fn role(&self) -> QuorumNodeRole {
+        self.role
     }
 }
 
@@ -329,6 +364,39 @@ impl SharedMetadataLog for InMemoryQuorumLog {
     }
 }
 
+impl SharedMetadataLog for QuorumNodeLog {
+    fn append_batch(
+        &self,
+        term: LogTerm,
+        mount: MountId,
+        commands: &[MetadataCommand],
+    ) -> Result<Vec<DurableReceipt>, SharedLogError> {
+        match self.role {
+            QuorumNodeRole::Voter => self.log.append_batch(term, mount, commands),
+            QuorumNodeRole::Learner => Err(SharedLogError::LearnerCannotAppend(self.node)),
+        }
+    }
+
+    fn read_from(
+        &self,
+        start: LogIndex,
+        limit: usize,
+    ) -> Result<Vec<MetadataLogEntry>, SharedLogError> {
+        self.log.read_from_node(self.node, start, limit)
+    }
+
+    fn compact_through(&self, index: LogIndex) -> Result<(), SharedLogError> {
+        match self.role {
+            QuorumNodeRole::Voter => self.log.compact_through(index),
+            QuorumNodeRole::Learner => Err(SharedLogError::LearnerCannotCompact(self.node)),
+        }
+    }
+
+    fn committed_position(&self) -> Option<LogPosition> {
+        self.log.committed_position()
+    }
+}
+
 impl QuorumState {
     fn replica(&self, node: NodeId) -> Option<&ReplicaState> {
         self.voters.get(&node).or_else(|| self.learners.get(&node))
@@ -338,6 +406,16 @@ impl QuorumState {
         self.voters
             .get_mut(&node)
             .or_else(|| self.learners.get_mut(&node))
+    }
+
+    fn node_role(&self, node: NodeId) -> Option<QuorumNodeRole> {
+        if self.voters.contains_key(&node) {
+            Some(QuorumNodeRole::Voter)
+        } else if self.learners.contains_key(&node) {
+            Some(QuorumNodeRole::Learner)
+        } else {
+            None
+        }
     }
 }
 

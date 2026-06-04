@@ -17,6 +17,8 @@ pub enum SharedLogError {
         required: usize,
         available: usize,
     },
+    LearnerCannotAppend(NodeId),
+    LearnerCannotCompact(NodeId),
     Compacted {
         requested: LogIndex,
         compacted: LogIndex,
@@ -80,6 +82,16 @@ impl fmt::Display for SharedLogError {
                 f,
                 "metadata quorum log requires {} voters but only {} are available",
                 required, available
+            ),
+            Self::LearnerCannotAppend(node) => write!(
+                f,
+                "metadata quorum log learner {} cannot append entries",
+                node.get()
+            ),
+            Self::LearnerCannotCompact(node) => write!(
+                f,
+                "metadata quorum log learner {} cannot compact entries",
+                node.get()
             ),
             Self::Compacted {
                 requested,
