@@ -1064,8 +1064,12 @@ fn client_error_from_wire_error(error: WireMetadataError) -> ClientError {
         WireMetadataError::InvalidPath { message } => {
             ClientError::Metadata(nokvfs_meta::MetadError::InvalidPath(message))
         }
-        WireMetadataError::Metadata { message } => ClientError::Remote(message),
-        WireMetadataError::Object { message } => ClientError::Remote(message),
+        WireMetadataError::Metadata { message } => ClientError::Metadata(
+            nokvfs_meta::MetadError::Metadata(nokvfs_meta::MetadataError::Backend(message)),
+        ),
+        WireMetadataError::Object { message } => {
+            ClientError::Object(nokvfs_object::ObjectError::Backend(message))
+        }
         WireMetadataError::Io { message } => ClientError::Io(message),
         WireMetadataError::Protocol { message } => ClientError::Protocol(message),
     }
@@ -1309,6 +1313,35 @@ mod tests {
                 expected: 7,
                 current: 8
             })
+        ));
+    }
+
+    #[test]
+    fn remote_typed_error_maps_backend_metadata_error() {
+        let addr = serve_one(
+            r#"{"ok":false,"error":"metadata backend unavailable","error_kind":{"type":"metadata","message":"metadata backend unavailable"}}"#,
+        );
+        let client = RemoteMetadataClient::connect(addr);
+        let err = client.mkdir("/runs", 0o755, 1000, 1000).unwrap_err();
+        assert!(matches!(
+            err,
+            ClientError::Metadata(nokvfs_meta::MetadError::Metadata(
+                nokvfs_meta::MetadataError::Backend(ref message)
+            )) if message == "metadata backend unavailable"
+        ));
+    }
+
+    #[test]
+    fn remote_typed_error_maps_backend_object_error() {
+        let addr = serve_one(
+            r#"{"ok":false,"error":"object backend unavailable","error_kind":{"type":"object","message":"object backend unavailable"}}"#,
+        );
+        let client = RemoteMetadataClient::connect(addr);
+        let err = client.mkdir("/runs", 0o755, 1000, 1000).unwrap_err();
+        assert!(matches!(
+            err,
+            ClientError::Object(nokvfs_object::ObjectError::Backend(ref message))
+                if message == "object backend unavailable"
         ));
     }
 

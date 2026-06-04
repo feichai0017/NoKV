@@ -1,6 +1,6 @@
 //! Path-oriented Rust client for NoKV.
 //!
-//! This crate owns SDK ergonomics over the remote `metad` service. It does not
+//! This crate owns SDK ergonomics over the metadata service. It does not
 //! own metadata layout, Holt trees, object-store internals, FUSE, or metadata
 //! wire-format definitions.
 
@@ -53,7 +53,6 @@ pub enum ClientError {
     NotDirectory(String),
     Metadata(MetadError),
     Object(ObjectError),
-    Remote(String),
     Io(String),
     Protocol(String),
 }
@@ -96,7 +95,6 @@ impl fmt::Display for ClientError {
             Self::NotDirectory(path) => write!(f, "path component is not a directory: {path}"),
             Self::Metadata(err) => write!(f, "metadata service error: {err}"),
             Self::Object(err) => write!(f, "object store error: {err}"),
-            Self::Remote(err) => write!(f, "remote metadata error: {err}"),
             Self::Io(err) => write!(f, "io error: {err}"),
             Self::Protocol(err) => write!(f, "metadata protocol error: {err}"),
         }
