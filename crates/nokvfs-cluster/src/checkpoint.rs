@@ -7,11 +7,12 @@ use std::sync::Mutex;
 use nokvfs_types::MountId;
 
 use crate::{
-    CheckpointFrontier, CheckpointManifest, LogIndex, LogPosition, LogTerm, SharedLogError,
+    CheckpointArtifact, CheckpointFrontier, CheckpointManifest, LogIndex, LogPosition, LogTerm,
+    SharedLogError,
 };
 use nokvfs_meta::Version;
 
-const CHECKPOINT_MAGIC: &[u8; 8] = b"NKFSCKP1";
+const CHECKPOINT_MAGIC: &[u8; 8] = b"NKFSCKP2";
 
 pub trait CheckpointCatalog {
     fn publish(&self, manifest: CheckpointManifest) -> Result<(), SharedLogError>;
@@ -42,6 +43,9 @@ impl CheckpointCatalog for MemoryCheckpointCatalog {
     fn publish(&self, manifest: CheckpointManifest) -> Result<(), SharedLogError> {
         if manifest.id.is_empty() {
             return Err(SharedLogError::EmptyCheckpointId);
+        }
+        if manifest.artifact.uri.is_empty() {
+            return Err(SharedLogError::EmptyCheckpointArtifactUri);
         }
         let mut manifests = self
             .manifests
@@ -88,6 +92,9 @@ impl CheckpointCatalog for FileCheckpointCatalog {
     fn publish(&self, manifest: CheckpointManifest) -> Result<(), SharedLogError> {
         if manifest.id.is_empty() {
             return Err(SharedLogError::EmptyCheckpointId);
+        }
+        if manifest.artifact.uri.is_empty() {
+            return Err(SharedLogError::EmptyCheckpointArtifactUri);
         }
         let mut current = self
             .inner
@@ -186,9 +193,22 @@ fn checkpoint_temp_path(path: &Path) -> PathBuf {
 fn encode_manifest(manifest: &CheckpointManifest) -> Result<Vec<u8>, SharedLogError> {
     let id_len = u32::try_from(manifest.id.len())
         .map_err(|_| SharedLogError::Backend("checkpoint id is too large".to_owned()))?;
-    let mut out = Vec::with_capacity(8 + 4 + 7 * 8 + manifest.id.len());
+    let uri_len = u32::try_from(manifest.artifact.uri.len())
+        .map_err(|_| SharedLogError::Backend("checkpoint artifact uri is too large".to_owned()))?;
+    let digest_len = u32::try_from(manifest.artifact.digest.len()).map_err(|_| {
+        SharedLogError::Backend("checkpoint artifact digest is too large".to_owned())
+    })?;
+    let mut out = Vec::with_capacity(
+        8 + 3 * 4
+            + 8 * 8
+            + manifest.id.len()
+            + manifest.artifact.uri.len()
+            + manifest.artifact.digest.len(),
+    );
     out.extend_from_slice(CHECKPOINT_MAGIC);
     out.extend_from_slice(&id_len.to_be_bytes());
+    out.extend_from_slice(&uri_len.to_be_bytes());
+    out.extend_from_slice(&digest_len.to_be_bytes());
     push_u64(&mut out, manifest.mount.get());
     push_u64(&mut out, manifest.frontier.durable_position.term.get());
     push_u64(&mut out, manifest.frontier.durable_position.index.get());
@@ -196,7 +216,10 @@ fn encode_manifest(manifest: &CheckpointManifest) -> Result<Vec<u8>, SharedLogEr
     push_u64(&mut out, manifest.frontier.applied_position.index.get());
     push_u64(&mut out, manifest.frontier.min_retained_index.get());
     push_u64(&mut out, manifest.frontier.max_commit_version.get());
+    push_u64(&mut out, manifest.artifact.size_bytes);
     out.extend_from_slice(&manifest.id);
+    out.extend_from_slice(&manifest.artifact.uri);
+    out.extend_from_slice(&manifest.artifact.digest);
     Ok(out)
 }
 
@@ -204,6 +227,8 @@ fn decode_manifest(encoded: &[u8]) -> Result<CheckpointManifest, SharedLogError>
     let mut input = ManifestDecoder::new(encoded);
     input.magic()?;
     let id_len = input.u32()? as usize;
+    let uri_len = input.u32()? as usize;
+    let digest_len = input.u32()? as usize;
     let mount = MountId::new(input.u64()?)
         .map_err(|err| SharedLogError::Backend(format!("invalid checkpoint mount id: {err}")))?;
     let durable_term = LogTerm::new(input.u64()?)?;
@@ -213,7 +238,10 @@ fn decode_manifest(encoded: &[u8]) -> Result<CheckpointManifest, SharedLogError>
     let min_retained_index = LogIndex::new(input.u64()?)?;
     let max_commit_version =
         Version::new(input.u64()?).map_err(|err| SharedLogError::Backend(err.to_string()))?;
+    let size_bytes = input.u64()?;
     let id = input.bytes(id_len)?;
+    let uri = input.bytes(uri_len)?;
+    let digest = input.bytes(digest_len)?;
     input.finish()?;
     CheckpointManifest::new(
         id,
@@ -230,6 +258,7 @@ fn decode_manifest(encoded: &[u8]) -> Result<CheckpointManifest, SharedLogError>
             min_retained_index,
             max_commit_version,
         },
+        CheckpointArtifact::new(uri, digest, size_bytes)?,
     )
 }
 

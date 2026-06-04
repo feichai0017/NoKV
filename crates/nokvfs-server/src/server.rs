@@ -7,9 +7,9 @@ use std::sync::Arc;
 use std::thread;
 
 use nokvfs_cluster::{
-    ApplyFrontier, CheckpointCatalog, CheckpointManifest, FileAppliedFrontierStore,
-    FileCheckpointCatalog, FileSharedLog, LogIndex, LogTerm, SharedLogError,
-    SharedLogMetadataStore, SharedMetadataLog,
+    ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
+    FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog, LogIndex, LogTerm,
+    SharedLogError, SharedLogMetadataStore, SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -180,8 +180,9 @@ impl Server {
             .checkpoint()
             .map_err(MetadError::from)?;
         let mount = self.service.mount_id();
-        let manifest =
-            CheckpointManifest::new(metadata_checkpoint_id(mount, &frontier), mount, frontier)?;
+        let checkpoint_id = metadata_checkpoint_id(mount, &frontier);
+        let artifact = metadata_checkpoint_artifact(&checkpoint_id)?;
+        let manifest = CheckpointManifest::new(checkpoint_id, mount, frontier, artifact)?;
         checkpoints.publish(manifest.clone())?;
         if let Some(compact_through) = frontier.compact_through() {
             metadata_log
@@ -234,6 +235,14 @@ fn metadata_checkpoint_id(
     .into_bytes()
 }
 
+fn metadata_checkpoint_artifact(id: &[u8]) -> Result<CheckpointArtifact, SharedLogError> {
+    CheckpointArtifact::new(
+        format!("local-holt:{}", String::from_utf8_lossy(id)).into_bytes(),
+        Vec::new(),
+        0,
+    )
+}
+
 impl Server {
     fn metadata_log_frontier(&self) -> Option<ApplyFrontier> {
         self.metadata_log
@@ -258,8 +267,11 @@ fn metadata_log_json(enabled: bool, frontier: Option<ApplyFrontier>) -> String {
 fn metadata_log_gc_json(enabled: bool, manifest: Option<CheckpointManifest>) -> String {
     match manifest {
         Some(manifest) => format!(
-            "{{\"enabled\":true,\"checkpoint_id\":\"{}\",\"durable_term\":{},\"durable_index\":{},\"applied_term\":{},\"applied_index\":{},\"min_retained_index\":{},\"max_commit_version\":{},\"compacted_through\":{}}}",
+            "{{\"enabled\":true,\"checkpoint_id\":\"{}\",\"checkpoint_uri\":\"{}\",\"checkpoint_digest\":\"{}\",\"checkpoint_size_bytes\":{},\"durable_term\":{},\"durable_index\":{},\"applied_term\":{},\"applied_index\":{},\"min_retained_index\":{},\"max_commit_version\":{},\"compacted_through\":{}}}",
             escape_json_string(&String::from_utf8_lossy(&manifest.id)),
+            escape_json_string(&String::from_utf8_lossy(&manifest.artifact.uri)),
+            escape_json_string(&String::from_utf8_lossy(&manifest.artifact.digest)),
+            manifest.artifact.size_bytes,
             manifest.frontier.durable_position.term.get(),
             manifest.frontier.durable_position.index.get(),
             manifest.frontier.applied_position.term.get(),
@@ -273,7 +285,7 @@ fn metadata_log_gc_json(enabled: bool, manifest: Option<CheckpointManifest>) -> 
                 .unwrap_or_else(|| "null".to_owned()),
         ),
         None if enabled => {
-            "{\"enabled\":true,\"durable_term\":null,\"durable_index\":null,\"applied_term\":null,\"applied_index\":null,\"min_retained_index\":null,\"max_commit_version\":null,\"compacted_through\":null}".to_owned()
+            "{\"enabled\":true,\"checkpoint_id\":null,\"checkpoint_uri\":null,\"checkpoint_digest\":null,\"checkpoint_size_bytes\":null,\"durable_term\":null,\"durable_index\":null,\"applied_term\":null,\"applied_index\":null,\"min_retained_index\":null,\"max_commit_version\":null,\"compacted_through\":null}".to_owned()
         }
         None => "{\"enabled\":false}".to_owned(),
     }
@@ -466,6 +478,8 @@ pub(crate) mod tests {
             applied.position.index.get()
         );
         assert!(body.contains(&expected_checkpoint_id));
+        assert!(body.contains("\"checkpoint_uri\":\"local-holt:"));
+        assert!(body.contains("\"checkpoint_size_bytes\":0"));
         assert!(body.contains("\"compacted_through\":"));
         let checkpoint_path = metadata_checkpoint_path(&metadata_log);
         assert!(checkpoint_path.is_file());
@@ -477,6 +491,10 @@ pub(crate) mod tests {
         assert_eq!(
             checkpoint.id,
             metadata_checkpoint_id(server.service().mount_id(), &checkpoint.frontier)
+        );
+        assert_eq!(
+            checkpoint.artifact.uri,
+            metadata_checkpoint_artifact(&checkpoint.id).unwrap().uri
         );
         assert_eq!(
             checkpoint.frontier.applied_position.index,

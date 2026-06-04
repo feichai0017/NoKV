@@ -48,6 +48,15 @@ fn not_exists_command(id: &[u8], commit_version: u64) -> MetadataCommand {
     command
 }
 
+fn checkpoint_artifact(id: &[u8]) -> CheckpointArtifact {
+    CheckpointArtifact::new(
+        format!("local-holt:{}", String::from_utf8_lossy(id)).into_bytes(),
+        Vec::new(),
+        0,
+    )
+    .unwrap()
+}
+
 #[derive(Default)]
 struct RecordingSink {
     applied: Mutex<Vec<DurableReceipt>>,
@@ -759,6 +768,7 @@ fn memory_checkpoint_catalog_keeps_latest_manifest() {
             min_retained_index: LogIndex::new(3).unwrap(),
             max_commit_version: version(3),
         },
+        checkpoint_artifact(b"checkpoint-2"),
     )
     .unwrap();
     let older = CheckpointManifest::new(
@@ -776,6 +786,7 @@ fn memory_checkpoint_catalog_keeps_latest_manifest() {
             min_retained_index: LogIndex::new(2).unwrap(),
             max_commit_version: version(2),
         },
+        checkpoint_artifact(b"checkpoint-1"),
     )
     .unwrap();
 
@@ -787,16 +798,39 @@ fn memory_checkpoint_catalog_keeps_latest_manifest() {
         Some(newer.clone())
     );
     assert!(matches!(
-        CheckpointManifest::new(Vec::new(), mount, newer.frontier),
+        CheckpointManifest::new(
+            Vec::new(),
+            mount,
+            newer.frontier,
+            checkpoint_artifact(b"checkpoint-2")
+        ),
         Err(SharedLogError::EmptyCheckpointId)
+    ));
+    assert!(matches!(
+        CheckpointArtifact::new(Vec::new(), Vec::new(), 0),
+        Err(SharedLogError::EmptyCheckpointArtifactUri)
     ));
     assert!(matches!(
         catalog.publish(CheckpointManifest {
             id: Vec::new(),
             mount,
             frontier: newer.frontier,
+            artifact: checkpoint_artifact(b"checkpoint-2"),
         }),
         Err(SharedLogError::EmptyCheckpointId)
+    ));
+    assert!(matches!(
+        catalog.publish(CheckpointManifest {
+            id: b"checkpoint-2".to_vec(),
+            mount,
+            frontier: newer.frontier,
+            artifact: CheckpointArtifact {
+                uri: Vec::new(),
+                digest: Vec::new(),
+                size_bytes: 0,
+            },
+        }),
+        Err(SharedLogError::EmptyCheckpointArtifactUri)
     ));
 }
 
@@ -820,6 +854,7 @@ fn file_checkpoint_catalog_persists_latest_manifest() {
             min_retained_index: LogIndex::new(2).unwrap(),
             max_commit_version: version(2),
         },
+        checkpoint_artifact(b"checkpoint-1"),
     )
     .unwrap();
     let latest = CheckpointManifest::new(
@@ -837,6 +872,7 @@ fn file_checkpoint_catalog_persists_latest_manifest() {
             min_retained_index: LogIndex::new(3).unwrap(),
             max_commit_version: version(3),
         },
+        checkpoint_artifact(b"checkpoint-2"),
     )
     .unwrap();
 
@@ -1011,6 +1047,7 @@ fn quorum_log_bootstraps_learner_from_checkpoint_after_compaction() {
                     min_retained_index: LogIndex::new(3).unwrap(),
                     max_commit_version: version(3),
                 },
+                checkpoint_artifact(b"checkpoint-b"),
             )
             .unwrap(),
         )

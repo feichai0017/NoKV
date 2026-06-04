@@ -8,6 +8,7 @@ pub enum SharedLogError {
     ZeroIndex,
     ZeroNodeId,
     EmptyCheckpointId,
+    EmptyCheckpointArtifactUri,
     EmptyBatch,
     NoVoters,
     DuplicateNode(NodeId),
@@ -57,6 +58,9 @@ impl fmt::Display for SharedLogError {
             Self::ZeroIndex => write!(f, "log index must be non-zero"),
             Self::ZeroNodeId => write!(f, "cluster node id must be non-zero"),
             Self::EmptyCheckpointId => write!(f, "checkpoint id must not be empty"),
+            Self::EmptyCheckpointArtifactUri => {
+                write!(f, "checkpoint artifact uri must not be empty")
+            }
             Self::EmptyBatch => write!(f, "metadata log entry batch is empty"),
             Self::NoVoters => write!(f, "metadata quorum log requires at least one voter"),
             Self::DuplicateNode(node) => {

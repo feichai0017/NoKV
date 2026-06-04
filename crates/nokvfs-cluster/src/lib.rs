@@ -29,8 +29,9 @@ pub use quorum::InMemoryQuorumLog;
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};
 pub use store::SharedLogMetadataStore;
 pub use types::{
-    AppliedMetadataCommand, ApplyFrontier, CheckpointFrontier, CheckpointManifest, DurableReceipt,
-    LearnerBootstrapPlan, LogIndex, LogPosition, LogTerm, MetadataLogEntry, NodeId,
+    AppliedMetadataCommand, ApplyFrontier, CheckpointArtifact, CheckpointFrontier,
+    CheckpointManifest, DurableReceipt, LearnerBootstrapPlan, LogIndex, LogPosition, LogTerm,
+    MetadataLogEntry, NodeId,
 };
 
 #[cfg(test)]

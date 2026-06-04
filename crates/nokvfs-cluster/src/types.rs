@@ -56,10 +56,18 @@ pub struct CheckpointFrontier {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckpointArtifact {
+    pub uri: Vec<u8>,
+    pub digest: Vec<u8>,
+    pub size_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CheckpointManifest {
     pub id: Vec<u8>,
     pub mount: MountId,
     pub frontier: CheckpointFrontier,
+    pub artifact: CheckpointArtifact,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -126,15 +134,38 @@ impl CheckpointManifest {
         id: impl Into<Vec<u8>>,
         mount: MountId,
         frontier: CheckpointFrontier,
+        artifact: CheckpointArtifact,
     ) -> Result<Self, SharedLogError> {
         let id = id.into();
         if id.is_empty() {
             return Err(SharedLogError::EmptyCheckpointId);
         }
+        if artifact.uri.is_empty() {
+            return Err(SharedLogError::EmptyCheckpointArtifactUri);
+        }
         Ok(Self {
             id,
             mount,
             frontier,
+            artifact,
+        })
+    }
+}
+
+impl CheckpointArtifact {
+    pub fn new(
+        uri: impl Into<Vec<u8>>,
+        digest: impl Into<Vec<u8>>,
+        size_bytes: u64,
+    ) -> Result<Self, SharedLogError> {
+        let uri = uri.into();
+        if uri.is_empty() {
+            return Err(SharedLogError::EmptyCheckpointArtifactUri);
+        }
+        Ok(Self {
+            uri,
+            digest: digest.into(),
+            size_bytes,
         })
     }
 }
