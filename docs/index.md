@@ -3,8 +3,11 @@ title: NoKV
 layout: home
 hero:
   name: NoKV
-  text: Rust filesystem for AI training and agent workspaces.
-  tagline: Holt-backed metadata, S3-compatible object bodies, FUSE, and SDK paths for modern AI infrastructure.
+  text: A Rust filesystem for AI training and agent workspaces.
+  tagline: Holt-backed metadata, S3-compatible immutable object bodies, FUSE and SDK paths — a self-contained filesystem with no separate database to run.
+  image:
+    src: /img/logo.svg
+    alt: NoKV
   actions:
     - theme: brand
       text: Architecture
@@ -16,14 +19,14 @@ hero:
       text: Benchmarks
       link: /benchmarks
 features:
-  - title: Filesystem interface
-    details: Low-level FUSE, Rust SDK, and CLI entry points over the same inode/dentry metadata model.
-  - title: Holt metadata
-    details: MetadataCommand predicates, dentry projection, snapshots, typed watches, and object-reference GC.
-  - title: S3-compatible bodies
-    details: File bytes are chunked into immutable object blocks in RustFS, MinIO, Ceph RGW, AWS S3, or compatible services.
-  - title: AI workload shape
-    details: Designed around datasets, checkpoint publish, artifact replacement, read-only snapshots, and agent workspace views.
+  - title: Self-contained metadata
+    details: A path-native metadata engine (Holt) built in. No Redis, TiKV, or external database to operate — you run a filesystem, not a filesystem plus a database.
+  - title: Atomic checkpoints
+    details: Object bytes land first, then metadata publishes atomically as a new generation. Readers see a complete checkpoint or the previous one — never a half-written one.
+  - title: Built for AI training
+    details: ~127K metadata ops/s, single-scan directory listing, immutable cacheable blocks, dataset snapshots, and typed watch events — shaped around datasets, checkpoints, and agent workspaces.
+  - title: Object-backed bodies
+    details: File bytes are immutable blocks in S3, RustFS, MinIO, or Ceph RGW. Elastic, cheap, zero-ops byte durability — NoKV owns the namespace.
 ---
 
 <!--
