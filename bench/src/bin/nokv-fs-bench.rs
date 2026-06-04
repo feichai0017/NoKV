@@ -45,6 +45,7 @@ enum Workload {
     All,
     MetadataSmoke,
     MetadataHaSmoke,
+    MetadataHaFaultSmoke,
     MdtestEasy,
     MdtestHard,
     CheckpointPublish,
@@ -371,7 +372,7 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|metadata-ha-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] \
@@ -406,6 +407,9 @@ fn run_one(
     if workload == Workload::MetadataHaSmoke {
         return bench_metadata_ha_smoke(config, shape);
     }
+    if workload == Workload::MetadataHaFaultSmoke {
+        return bench_metadata_ha_fault_smoke(config, shape);
+    }
     let label = workload_name(workload);
     let client = client_for(config, label)?;
     client.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
@@ -417,6 +421,9 @@ fn run_one(
         Workload::MlperfDlio => bench_mlperf_dlio(client.as_ref(), config, shape),
         Workload::DemoDataset => bench_demo_dataset(client.as_ref(), config, shape),
         Workload::MetadataHaSmoke => unreachable!("metadata-ha-smoke executes before client setup"),
+        Workload::MetadataHaFaultSmoke => {
+            unreachable!("metadata-ha-fault-smoke executes before client setup")
+        }
         Workload::MetadataSmoke => unreachable!("metadata-smoke expands before execution"),
         Workload::All => unreachable!("all expands before execution"),
     }
@@ -611,6 +618,150 @@ fn bench_metadata_ha_smoke(
         shape: format!("voters=3 leader=1 peer_read=2 files={files}"),
         caveat: format!(
             "shared-log HA smoke over three metadata server processes, sync={}, peer read requires observed log position",
+            metadata_log_sync_name(config.metadata_log_sync)
+        ),
+    }))
+}
+
+fn bench_metadata_ha_fault_smoke(
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<ResultRow, BenchError> {
+    let workload = "metadata-ha-fault-smoke";
+    let root = config.root.join(workload);
+    fs::create_dir_all(&root).map_err(from_io)?;
+    let object = object_config_for(config, workload);
+    let objects = object.clone().open().map_err(from_client)?;
+    let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
+    let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
+    let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
+    let term = LogTerm::new(1).expect("benchmark metadata log term is non-zero");
+    let voters = vec![node_1, node_2, node_3];
+
+    let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_2 = listener_2.local_addr().map_err(from_io)?;
+    let addr_3 = reserve_local_addr()?;
+    let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_1 = listener_1.local_addr().map_err(from_io)?;
+    let peers = vec![
+        MetadataLogPeerOptions {
+            node: node_1,
+            address: addr_1,
+        },
+        MetadataLogPeerOptions {
+            node: node_2,
+            address: addr_2,
+        },
+        MetadataLogPeerOptions {
+            node: node_3,
+            address: addr_3,
+        },
+    ];
+    let cluster = MetadataHaClusterConfig {
+        root: root.clone(),
+        object,
+        leader: node_1,
+        term,
+        voters,
+        peers,
+        sync: config.metadata_log_sync,
+    };
+
+    start_metadata_log_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
+    wait_for_health(addr_2)?;
+    start_metadata_log_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
+    wait_for_health(addr_1)?;
+
+    let metadata =
+        MetadataClient::new(MetadataClientOptions::new(addr_1).with_read_endpoints(vec![addr_2]));
+    let client = NoKvFsClient::new(metadata, objects);
+    let before = fetch_server_stats(addr_1)?;
+    let start = Instant::now();
+    let mut checksum = 0_u64;
+    let files = shape.shared_files.clamp(16, 512);
+    client
+        .metadata()
+        .mkdir("/ha-fault", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(from_client)?;
+    let paths = (0..files)
+        .map(|index| format!("/ha-fault/file-{index:06}"))
+        .collect::<Vec<_>>();
+    for entry in client
+        .metadata()
+        .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
+        .map_err(from_client)?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(from_client)?
+    {
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
+    }
+    let first_observed = client
+        .metadata()
+        .observed_metadata_position()
+        .ok_or_else(|| {
+            BenchError::Client("metadata HA degraded write returned no log position".to_owned())
+        })?;
+    let peer_2 = MetadataClient::connect(addr_2);
+    peer_2.observe_metadata_position(first_observed);
+    let peer_2_entries = peer_2.list("/ha-fault").map_err(from_client)?;
+    if peer_2_entries.len() != files {
+        return Err(BenchError::Client(format!(
+            "metadata HA surviving peer read returned {} entries, expected {files}",
+            peer_2_entries.len()
+        )));
+    }
+
+    let listener_3 = TcpListener::bind(addr_3).map_err(from_io)?;
+    start_metadata_log_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
+    wait_for_health(addr_3)?;
+    let recovered = client
+        .metadata()
+        .create_file(
+            "/ha-fault/recovered-after-outage",
+            DEFAULT_MODE_FILE,
+            DEFAULT_UID,
+            DEFAULT_GID,
+        )
+        .map_err(from_client)?;
+    checksum = checksum.wrapping_add(recovered.attr.inode.get());
+    let recovered_observed = client
+        .metadata()
+        .observed_metadata_position()
+        .ok_or_else(|| {
+            BenchError::Client("metadata HA recovery write returned no log position".to_owned())
+        })?;
+    let peer_3 = MetadataClient::connect(addr_3);
+    peer_3.observe_metadata_position(recovered_observed);
+    let peer_3_entries = peer_3.list("/ha-fault").map_err(from_client)?;
+    let expected_after_recovery = files + 1;
+    if peer_3_entries.len() != expected_after_recovery {
+        return Err(BenchError::Client(format!(
+            "metadata HA recovered peer read returned {} entries, expected {expected_after_recovery}",
+            peer_3_entries.len()
+        )));
+    }
+    checksum = checksum
+        .wrapping_add(peer_2_entries.len() as u64)
+        .wrapping_add(peer_3_entries.len() as u64);
+    let stats = stats_delta(before, fetch_server_stats(addr_1)?);
+    Ok(row(RowInput {
+        workload,
+        profile: config.profile,
+        operations: files + 4,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: 0,
+        samples: 0,
+        stats,
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!(
+            "voters=3 leader=1 surviving_peer=2 recovered_peer=3 files={files}"
+        ),
+        caveat: format!(
+            "shared-log HA fault smoke: node3 unavailable for initial quorum commit, then restarted and caught up, sync={}",
             metadata_log_sync_name(config.metadata_log_sync)
         ),
     }))
@@ -1417,6 +1568,11 @@ fn wait_for_health(address: SocketAddr) -> Result<(), BenchError> {
     }
 }
 
+fn reserve_local_addr() -> Result<SocketAddr, BenchError> {
+    let listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    listener.local_addr().map_err(from_io)
+}
+
 fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
     let mut stream = TcpStream::connect(address).map_err(from_io)?;
     stream
@@ -1781,6 +1937,7 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
         "all" => Ok(Workload::All),
         "metadata-smoke" => Ok(Workload::MetadataSmoke),
         "metadata-ha-smoke" => Ok(Workload::MetadataHaSmoke),
+        "metadata-ha-fault-smoke" => Ok(Workload::MetadataHaFaultSmoke),
         "mdtest-easy" => Ok(Workload::MdtestEasy),
         "mdtest-hard" => Ok(Workload::MdtestHard),
         "checkpoint-publish" => Ok(Workload::CheckpointPublish),
@@ -1795,6 +1952,7 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
     match workload {
         Workload::All => vec![
             Workload::MetadataHaSmoke,
+            Workload::MetadataHaFaultSmoke,
             Workload::MdtestEasy,
             Workload::MdtestHard,
             Workload::CheckpointPublish,
@@ -1854,6 +2012,7 @@ fn workload_name(workload: Workload) -> &'static str {
         Workload::All => "all",
         Workload::MetadataSmoke => "metadata-smoke",
         Workload::MetadataHaSmoke => "metadata-ha-smoke",
+        Workload::MetadataHaFaultSmoke => "metadata-ha-fault-smoke",
         Workload::MdtestEasy => "mdtest-easy",
         Workload::MdtestHard => "mdtest-hard",
         Workload::CheckpointPublish => "checkpoint-publish",
@@ -2059,6 +2218,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_metadata_ha_fault_smoke_workload() {
+        let config = parse(vec![s("--workload"), s("metadata-ha-fault-smoke")]).unwrap();
+        assert_eq!(config.workload, Workload::MetadataHaFaultSmoke);
+    }
+
+    #[test]
     fn shape_applies_object_size_overrides() {
         let config = parse(vec![
             s("--profile"),
@@ -2156,6 +2321,7 @@ mod tests {
             expand_workloads(Workload::All),
             vec![
                 Workload::MetadataHaSmoke,
+                Workload::MetadataHaFaultSmoke,
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
                 Workload::CheckpointPublish,
