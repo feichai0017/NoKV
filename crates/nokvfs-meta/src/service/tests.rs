@@ -129,6 +129,129 @@ fn create_file_publishes_metadata_without_body_descriptor() {
 }
 
 #[test]
+fn create_symlink_round_trips_target_and_unlinks_like_file() {
+    let service = service();
+    let name = DentryName::new(b"latest".to_vec()).unwrap();
+    let created = service
+        .create_symlink(
+            InodeId::root(),
+            name.clone(),
+            b"runs/42/checkpoint.bin".to_vec(),
+            0o777,
+            1000,
+            1000,
+        )
+        .unwrap();
+
+    assert_eq!(created.attr.file_type, FileType::Symlink);
+    assert_eq!(created.attr.size, 22);
+    assert_eq!(
+        service.read_symlink(created.attr.inode).unwrap(),
+        b"runs/42/checkpoint.bin"
+    );
+    assert_eq!(
+        service.lookup_plus(InodeId::root(), &name).unwrap(),
+        Some(created.clone())
+    );
+
+    let removed = service.remove_file(InodeId::root(), &name).unwrap();
+    assert_eq!(removed.attr.file_type, FileType::Symlink);
+    assert_eq!(service.lookup_plus(InodeId::root(), &name).unwrap(), None);
+}
+
+#[test]
+fn snapshot_preserves_symlink_target() {
+    let service = service();
+    let name = DentryName::new(b"latest".to_vec()).unwrap();
+    let created = service
+        .create_symlink(
+            InodeId::root(),
+            name.clone(),
+            b"runs/old".to_vec(),
+            0o777,
+            1000,
+            1000,
+        )
+        .unwrap();
+    let snapshot = service.snapshot_subtree(InodeId::root()).unwrap();
+    service.remove_file(InodeId::root(), &name).unwrap();
+    service
+        .create_symlink(
+            InodeId::root(),
+            name,
+            b"runs/new".to_vec(),
+            0o777,
+            1000,
+            1000,
+        )
+        .unwrap();
+
+    assert_eq!(
+        service
+            .read_symlink_at_snapshot(snapshot.snapshot_id, created.attr.inode)
+            .unwrap(),
+        b"runs/old"
+    );
+}
+
+#[test]
+fn update_attrs_truncates_and_extends_sparse_file() {
+    let service = service();
+    let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+    let published = service
+        .publish_artifact(artifact_request(name.clone(), "checkpoint-v1", b"abcdef"))
+        .unwrap();
+
+    let shrunk = service
+        .update_attrs(
+            InodeId::root(),
+            &name,
+            UpdateAttr {
+                size: Some(3),
+                ..UpdateAttr::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(shrunk.attr.inode, published.attr.inode);
+    assert_eq!(shrunk.attr.size, 3);
+    assert_eq!(service.read_file(shrunk.attr.inode, 0, 8).unwrap(), b"abc");
+
+    let grown = service
+        .update_attrs(
+            InodeId::root(),
+            &name,
+            UpdateAttr {
+                size: Some(6),
+                ..UpdateAttr::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(grown.attr.size, 6);
+    assert_eq!(
+        service.read_file(grown.attr.inode, 0, 8).unwrap(),
+        b"abc\0\0\0"
+    );
+}
+
+#[test]
+fn update_root_attrs_changes_root_inode_without_dentry_projection() {
+    let service = service();
+    let updated = service
+        .update_root_attrs(UpdateAttr {
+            mode: Some(0o700),
+            uid: Some(42),
+            gid: Some(43),
+            ..UpdateAttr::default()
+        })
+        .unwrap();
+
+    assert_eq!(updated.mode, 0o700);
+    assert_eq!(updated.uid, 42);
+    assert_eq!(updated.gid, 43);
+    assert_eq!(service.get_attr(InodeId::root()).unwrap().unwrap(), updated);
+}
+
+#[test]
 fn create_file_hot_path_write_attribution_is_bounded() {
     let metadata = HoltMetadataStore::open_memory().unwrap();
     let service = NoKvFs::new(

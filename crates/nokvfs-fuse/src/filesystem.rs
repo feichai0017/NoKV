@@ -5,18 +5,18 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{
-    Config, Errno, FileAttr, FileHandle, FileType as FuseFileType, Filesystem, FopenFlags,
-    Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags, ReplyAttr, ReplyCreate,
-    ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen, ReplyWrite,
-    Request, WriteFlags,
+    BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType as FuseFileType, Filesystem,
+    FopenFlags, Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags, ReplyAttr,
+    ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen,
+    ReplyWrite, Request, TimeOrNow, WriteFlags,
 };
 use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{
     DentryWithAttr, MetadError, NoKvFs, PreparedArtifact, PublishArtifactRange,
-    PublishArtifactStagedSession,
+    PublishArtifactStagedSession, UpdateAttr,
 };
 use nokvfs_object::{ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk};
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
@@ -254,6 +254,15 @@ where
         }
     }
 
+    fn service_read_symlink(&self, inode: InodeId) -> Result<Vec<u8>, MetadError> {
+        match self.options.view {
+            FuseView::Live => self.service.read_symlink(inode),
+            FuseView::Snapshot { snapshot_id, .. } => {
+                self.service.read_symlink_at_snapshot(snapshot_id, inode)
+            }
+        }
+    }
+
     fn add_dirent(
         &self,
         reply: &mut ReplyDirectory,
@@ -385,6 +394,44 @@ where
             handle.dirty = true;
         }
         Ok(data.len())
+    }
+
+    fn truncate_handle(&self, fh: FileHandle, size: u64) -> Result<(), Errno> {
+        let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+        let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
+        if handle.prepared.is_none() {
+            handle.prepared = Some(
+                self.service
+                    .prepare_artifact_replace(handle.parent, handle.name.clone())
+                    .map_err(errno)?,
+            );
+        }
+        handle.size = size;
+        handle.dirty = true;
+        Ok(())
+    }
+
+    fn update_handle_attrs(
+        &self,
+        fh: FileHandle,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+    ) -> Result<bool, Errno> {
+        let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+        let Some(handle) = handles.get_mut(&fh.0) else {
+            return Ok(false);
+        };
+        if let Some(mode) = mode {
+            handle.mode = mode;
+        }
+        if let Some(uid) = uid {
+            handle.uid = uid;
+        }
+        if let Some(gid) = gid {
+            handle.gid = gid;
+        }
+        Ok(true)
     }
 
     fn read_from_handle(
@@ -625,7 +672,7 @@ where
         };
         match self.service_lookup_plus(parent, &name) {
             Ok(Some(entry)) => {
-                self.remember_parent(entry.attr.inode, parent);
+                self.remember_entry(&entry);
                 reply.entry(
                     &self.options.entry_ttl,
                     &self.view_file_attr(&entry.attr),
@@ -645,6 +692,109 @@ where
         }) {
             Ok(attr) => reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr)),
             Err(err) => reply.error(err),
+        }
+    }
+
+    fn setattr(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        mode: Option<u32>,
+        uid: Option<u32>,
+        gid: Option<u32>,
+        size: Option<u64>,
+        _atime: Option<TimeOrNow>,
+        mtime: Option<TimeOrNow>,
+        ctime: Option<SystemTime>,
+        fh: Option<FileHandle>,
+        _crtime: Option<SystemTime>,
+        _chgtime: Option<SystemTime>,
+        _bkuptime: Option<SystemTime>,
+        _flags: Option<BsdFileFlags>,
+        reply: ReplyAttr,
+    ) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let inode = match self.metadata_inode(ino) {
+            Ok(inode) => inode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let mut published_handle = false;
+        if let Some(fh) = fh {
+            if let Err(err) = self.update_handle_attrs(fh, mode, uid, gid) {
+                reply.error(err);
+                return;
+            }
+            if let Some(size) = size {
+                if let Err(err) = self.truncate_handle(fh, size) {
+                    reply.error(err);
+                    return;
+                }
+            }
+            if size.is_some() {
+                if let Err(err) = self.publish_handle(fh) {
+                    reply.error(err);
+                    return;
+                }
+                published_handle = true;
+            }
+        }
+        if published_handle && mtime.is_none() && ctime.is_none() {
+            match self.service_get_attr(inode) {
+                Ok(Some(attr)) => reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr)),
+                Ok(None) => reply.error(Errno::ENOENT),
+                Err(err) => reply.error(errno(err)),
+            }
+            return;
+        }
+        let changes = UpdateAttr {
+            mode: (!published_handle).then_some(mode).flatten(),
+            uid: (!published_handle).then_some(uid).flatten(),
+            gid: (!published_handle).then_some(gid).flatten(),
+            size: (!published_handle).then_some(size).flatten(),
+            mtime_ms: mtime.map(time_or_now_ms),
+            ctime_ms: ctime.map(system_time_ms),
+        };
+        if inode == self.options.view.root() {
+            match self.service.update_root_attrs(changes) {
+                Ok(attr) => reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr)),
+                Err(err) => reply.error(errno(err)),
+            }
+            return;
+        }
+        let parent = self.parent_of(inode);
+        let name = match self.name_of(inode) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.service.update_attrs(parent, &name, changes) {
+            Ok(entry) => {
+                self.remember_entry(&entry);
+                reply.attr(&self.options.attr_ttl, &self.view_file_attr(&entry.attr));
+            }
+            Err(err) => reply.error(errno(err)),
+        }
+    }
+
+    fn readlink(&self, _req: &Request, ino: INodeNo, reply: ReplyData) {
+        let inode = match self.metadata_inode(ino) {
+            Ok(inode) => inode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.service_read_symlink(inode) {
+            Ok(target) => reply.data(&target),
+            Err(err) => reply.error(errno(err)),
         }
     }
 
@@ -861,6 +1011,49 @@ where
         reply: ReplyEntry,
     ) {
         reply.error(Errno::EROFS);
+    }
+
+    fn symlink(
+        &self,
+        req: &Request,
+        parent: INodeNo,
+        link_name: &OsStr,
+        target: &Path,
+        reply: ReplyEntry,
+    ) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let parent = match self.metadata_inode(parent) {
+            Ok(parent) => parent,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match dentry_name(link_name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let target = target.as_os_str().as_bytes().to_vec();
+        match self
+            .service
+            .create_symlink(parent, name, target, 0o777, req.uid(), req.gid())
+        {
+            Ok(entry) => {
+                self.remember_entry(&entry);
+                reply.entry(
+                    &self.options.entry_ttl,
+                    &self.view_file_attr(&entry.attr),
+                    Generation(entry.attr.generation),
+                );
+            }
+            Err(err) => reply.error(errno(err)),
+        }
     }
 
     fn create(
@@ -1133,6 +1326,21 @@ fn dentry_name(name: &OsStr) -> Result<DentryName, Errno> {
     DentryName::new(name.as_bytes().to_vec()).map_err(|_| Errno::EINVAL)
 }
 
+fn time_or_now_ms(value: TimeOrNow) -> u64 {
+    match value {
+        TimeOrNow::SpecificTime(time) => system_time_ms(time),
+        TimeOrNow::Now => system_time_ms(SystemTime::now()),
+    }
+}
+
+fn system_time_ms(time: SystemTime) -> u64 {
+    let millis = time
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    millis.min(u128::from(u64::MAX)) as u64
+}
+
 fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
     format!("fuse/{}/{}", parent.get(), inode.get())
 }
@@ -1393,6 +1601,53 @@ mod tests {
                 .read_file(published.attr.inode, 0, 10)
                 .expect("read published body"),
             b"abcXYZghij"
+        );
+    }
+
+    #[test]
+    fn truncate_handle_republishes_manifest_without_reuploading_body() {
+        let service = service();
+        let published = service
+            .publish_artifact(PublishArtifact {
+                parent: InodeId::root(),
+                name: DentryName::new(b"checkpoint".to_vec()).unwrap(),
+                producer: "fuse-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: "checkpoint".to_owned(),
+                bytes: b"abcdefghij".to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        fuse.remember_entry(&published);
+        let handle = fuse
+            .open_write_handle(&published.attr, InodeId::root())
+            .expect("open write handle");
+        let before_truncate = fuse.service().object_stats();
+
+        fuse.truncate_handle(handle, 3).expect("truncate handle");
+        fuse.publish_handle(handle).expect("publish shrink");
+        let after_shrink = fuse.service().object_stats();
+        assert_eq!(after_shrink.object_puts, before_truncate.object_puts);
+        assert_eq!(
+            fuse.service()
+                .read_file(published.attr.inode, 0, 16)
+                .expect("read shrunk body"),
+            b"abc"
+        );
+
+        fuse.truncate_handle(handle, 6).expect("extend handle");
+        fuse.publish_handle(handle).expect("publish sparse extend");
+        let after_extend = fuse.service().object_stats();
+        assert_eq!(after_extend.object_puts, before_truncate.object_puts);
+        assert_eq!(
+            fuse.service()
+                .read_file(published.attr.inode, 0, 16)
+                .expect("read sparse body"),
+            b"abc\0\0\0"
         );
     }
 }

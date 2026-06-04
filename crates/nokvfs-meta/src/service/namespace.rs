@@ -76,6 +76,208 @@ where
         Ok(projection.into())
     }
 
+    pub fn create_symlink(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        target: Vec<u8>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, MetadError> {
+        if target.is_empty() || target.contains(&0) {
+            return Err(MetadError::InvalidPath(
+                "symlink target must be non-empty and must not contain NUL".to_owned(),
+            ));
+        }
+        let version = self.next_version()?;
+        let inode = self.next_inode()?;
+        let request = PublishArtifact {
+            parent,
+            name: name.clone(),
+            producer: "nokvfs-symlink".to_owned(),
+            digest_uri: "unknown".to_owned(),
+            content_type: "text/plain; charset=utf-8".to_owned(),
+            manifest_id: format!("symlink/{}/{}", parent.get(), inode.get()),
+            bytes: target,
+            mode,
+            uid,
+            gid,
+        };
+        let StagedArtifactBody {
+            body,
+            chunks,
+            staged,
+        } = self.stage_artifact_body(&request, inode, version)?;
+        let attr = InodeAttr {
+            inode,
+            file_type: FileType::Symlink,
+            mode,
+            uid,
+            gid,
+            size: body.size,
+            generation: version.get(),
+            mtime_ms: version.get(),
+            ctime_ms: version.get(),
+        };
+        let projection = projection(parent, name, attr, Some(body));
+        if let Err(err) = self.commit_create_projection_with_chunks(
+            CommandKind::CreateSymlink,
+            &projection,
+            &chunks,
+            version,
+        ) {
+            return Err(MetadError::PublishArtifactFailed {
+                source: Box::new(err),
+                staged,
+            });
+        }
+        Ok(projection.into())
+    }
+
+    pub fn update_attrs(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+        changes: UpdateAttr,
+    ) -> Result<DentryWithAttr, MetadError> {
+        let (entry, dentry_version) = self
+            .lookup_plus_versioned(parent, name)?
+            .ok_or(MetadError::NotFound)?;
+        if changes.is_empty() {
+            return Ok(entry);
+        }
+        let version = self.next_version()?;
+        let mut attr = entry.attr.clone();
+        if let Some(mode) = changes.mode {
+            attr.mode = mode;
+        }
+        if let Some(uid) = changes.uid {
+            attr.uid = uid;
+        }
+        if let Some(gid) = changes.gid {
+            attr.gid = gid;
+        }
+        if let Some(mtime_ms) = changes.mtime_ms {
+            attr.mtime_ms = mtime_ms;
+        }
+        attr.ctime_ms = changes.ctime_ms.unwrap_or(version.get());
+        attr.generation = version.get();
+
+        let mut body = entry.body.clone();
+        let mut chunks = Vec::new();
+        let mut old_generation = None;
+        if let Some(size) = changes.size {
+            if attr.file_type == FileType::Directory {
+                return Err(MetadError::NotFile);
+            }
+            old_generation = body.as_ref().map(|body| body.generation);
+            let old_chunks = old_generation
+                .map(|generation| {
+                    self.chunk_manifests_at_version(
+                        entry.attr.inode,
+                        generation,
+                        self.read_version()?,
+                    )
+                })
+                .transpose()?
+                .unwrap_or_default();
+            chunks = merge_session_chunks(size, old_chunks, Vec::new())?;
+            body = Some(BodyDescriptor {
+                producer: body
+                    .as_ref()
+                    .map(|body| body.producer.clone())
+                    .unwrap_or_else(|| "nokvfs-metadata".to_owned()),
+                digest_uri: body
+                    .as_ref()
+                    .map(|body| body.digest_uri.clone())
+                    .unwrap_or_else(|| "unknown".to_owned()),
+                size,
+                content_type: body
+                    .as_ref()
+                    .map(|body| body.content_type.clone())
+                    .unwrap_or_else(|| "application/octet-stream".to_owned()),
+                manifest_id: body
+                    .as_ref()
+                    .map(|body| body.manifest_id.clone())
+                    .unwrap_or_else(|| format!("metadata/{}/{}", parent.get(), attr.inode.get())),
+                generation: version.get(),
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE as u64,
+            });
+            attr.size = size;
+        }
+
+        let projection = projection(parent, name.clone(), attr, body);
+        self.commit_replace_projection_with_chunks(
+            CommandKind::UpdateAttr,
+            &projection,
+            &chunks,
+            dentry_version,
+            old_generation,
+            version,
+        )?;
+        Ok(projection.into())
+    }
+
+    pub fn update_root_attrs(&self, changes: UpdateAttr) -> Result<InodeAttr, MetadError> {
+        let key = inode_key(self.mount, InodeId::root());
+        let Some(item) = self.metadata.get_versioned(
+            RecordFamily::Inode,
+            &key,
+            self.read_version()?,
+            ReadPurpose::UserStrong,
+        )?
+        else {
+            return Err(MetadError::NotFound);
+        };
+        let mut attr =
+            decode_inode_attr(&item.value.0).map_err(|err| MetadError::Codec(err.to_string()))?;
+        if changes.is_empty() {
+            return Ok(attr);
+        }
+        if changes.size.is_some() {
+            return Err(MetadError::NotFile);
+        }
+        let version = self.next_version()?;
+        if let Some(mode) = changes.mode {
+            attr.mode = mode;
+        }
+        if let Some(uid) = changes.uid {
+            attr.uid = uid;
+        }
+        if let Some(gid) = changes.gid {
+            attr.gid = gid;
+        }
+        if let Some(mtime_ms) = changes.mtime_ms {
+            attr.mtime_ms = mtime_ms;
+        }
+        attr.ctime_ms = changes.ctime_ms.unwrap_or(version.get());
+        attr.generation = version.get();
+
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(b"update-root-attr", self.mount, InodeId::root(), version),
+            kind: CommandKind::UpdateAttr,
+            read_version: predecessor(version)?,
+            commit_version: version,
+            primary_family: RecordFamily::Inode,
+            primary_key: key.clone(),
+            predicates: vec![PredicateRef {
+                family: RecordFamily::Inode,
+                key: key.clone(),
+                predicate: Predicate::VersionEquals(item.version),
+            }],
+            mutations: vec![Mutation {
+                family: RecordFamily::Inode,
+                key,
+                op: MutationOp::Put,
+                value: Some(Value(encode_inode_attr(&attr))),
+            }],
+            watch: Vec::new(),
+        })?;
+        Ok(attr)
+    }
+
     pub fn create_dir_path(
         &self,
         path: &str,
@@ -154,7 +356,7 @@ where
         let (entry, dentry_version) = self
             .lookup_plus_versioned(parent, name)?
             .ok_or(MetadError::NotFound)?;
-        if entry.attr.file_type != FileType::File {
+        if entry.attr.file_type == FileType::Directory {
             return Err(MetadError::NotFile);
         }
         let version = self.next_version()?;
@@ -337,11 +539,11 @@ where
             return Err(MetadataError::PredicateFailed.into());
         }
         if replace {
-            if source.attr.file_type != FileType::File {
+            if source.attr.file_type == FileType::Directory {
                 return Err(MetadError::NotFile);
             }
             if let Some((entry, _)) = &destination {
-                if entry.attr.file_type != FileType::File {
+                if entry.attr.file_type == FileType::Directory {
                     return Err(MetadError::NotFile);
                 }
             }
@@ -635,6 +837,7 @@ where
 
     pub(super) fn commit_replace_projection_with_chunks(
         &self,
+        kind: CommandKind,
         projection: &DentryProjection,
         chunks: &[ChunkManifest],
         dentry_version: Version,
@@ -692,8 +895,8 @@ where
             }
         }
         self.commit_metadata(MetadataCommand {
-            request_id: request_id(b"replace-artifact", self.mount, inode, version),
-            kind: CommandKind::ReplaceArtifact,
+            request_id: request_id(kind_name(kind), self.mount, inode, version),
+            kind,
             read_version: predecessor(version)?,
             commit_version: version,
             primary_family: RecordFamily::Dentry,
@@ -714,7 +917,7 @@ where
             watch: vec![self.watch_projection(
                 projection.dentry.parent,
                 WatchEvent {
-                    kind: WatchEventKind::PublishArtifact,
+                    kind: create_watch_kind(kind),
                     parent: Some(projection.dentry.parent),
                     name: Some(projection.dentry.name.clone()),
                     inode,

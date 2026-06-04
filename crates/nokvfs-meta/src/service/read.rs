@@ -219,6 +219,20 @@ where
         self.read_file_at_version(inode, &body, offset, len, self.read_version()?)
     }
 
+    pub fn read_symlink(&self, inode: InodeId) -> Result<Vec<u8>, MetadError> {
+        let Some(attr) = self.get_attr(inode)? else {
+            return Err(MetadError::NotFound);
+        };
+        if attr.file_type != FileType::Symlink {
+            return Err(MetadError::NotFile);
+        }
+        let version = self.read_version()?;
+        let body = self
+            .body_descriptor_at_version(inode, attr.generation, version)?
+            .ok_or(MetadError::MissingBodyDescriptor)?;
+        self.read_file_at_version(inode, &body, 0, body.size as usize, version)
+    }
+
     pub fn read_file_plan(
         &self,
         inode: InodeId,

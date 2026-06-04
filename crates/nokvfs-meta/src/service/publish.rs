@@ -69,6 +69,7 @@ where
         let projection = projection(request.parent, request.name, attr, Some(body));
         let old_generation = existing.body.as_ref().map(|body| body.generation);
         if let Err(err) = self.commit_replace_projection_with_chunks(
+            CommandKind::ReplaceArtifact,
             &projection,
             &chunks,
             dentry_version,
@@ -188,6 +189,7 @@ where
                         .then_some(existing)
                 });
             self.commit_replace_projection_with_chunks(
+                CommandKind::ReplaceArtifact,
                 &projection,
                 &chunks,
                 expected_dentry_version,

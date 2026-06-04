@@ -33,6 +33,8 @@ pub enum CommandKind {
     CreateFile,
     CreateFiles,
     CreateDir,
+    CreateSymlink,
+    UpdateAttr,
     Rename,
     RenameReplace,
     RemoveFile,

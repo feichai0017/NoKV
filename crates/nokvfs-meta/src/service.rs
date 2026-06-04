@@ -140,6 +140,27 @@ pub struct PublishArtifactStagedSession {
     pub gid: u32,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct UpdateAttr {
+    pub mode: Option<u32>,
+    pub uid: Option<u32>,
+    pub gid: Option<u32>,
+    pub size: Option<u64>,
+    pub mtime_ms: Option<u64>,
+    pub ctime_ms: Option<u64>,
+}
+
+impl UpdateAttr {
+    fn is_empty(&self) -> bool {
+        self.mode.is_none()
+            && self.uid.is_none()
+            && self.gid.is_none()
+            && self.size.is_none()
+            && self.mtime_ms.is_none()
+            && self.ctime_ms.is_none()
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PreparedArtifact {
     pub parent: InodeId,
@@ -367,9 +388,10 @@ fn ensure_unique_names(names: &[DentryName]) -> Result<(), MetadError> {
 fn create_watch_kind(kind: CommandKind) -> WatchEventKind {
     match kind {
         CommandKind::PublishArtifact => WatchEventKind::PublishArtifact,
-        CommandKind::CreateFile | CommandKind::CreateFiles | CommandKind::CreateDir => {
-            WatchEventKind::Create
-        }
+        CommandKind::CreateFile
+        | CommandKind::CreateFiles
+        | CommandKind::CreateDir
+        | CommandKind::CreateSymlink => WatchEventKind::Create,
         _ => WatchEventKind::UpdateAttr,
     }
 }
@@ -611,6 +633,8 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
         CommandKind::CreateFile => b"create-file",
         CommandKind::CreateFiles => b"create-files",
         CommandKind::CreateDir => b"create-dir",
+        CommandKind::CreateSymlink => b"create-symlink",
+        CommandKind::UpdateAttr => b"update-attr",
         CommandKind::Rename => b"rename",
         CommandKind::RenameReplace => b"rename-replace",
         CommandKind::RemoveFile => b"remove-file",

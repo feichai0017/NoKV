@@ -25,5 +25,5 @@ pub use holtstore::HoltMetadataStore;
 pub use service::{
     BodyReadPlan, DentryWithAttr, MetadError, NoKvFs, ObjectTransferStats,
     PendingObjectCleanupOutcome, PreparedArtifact, PublishArtifact, PublishArtifactRange,
-    PublishArtifactSession, PublishArtifactStagedSession, RenameReplaceResult,
+    PublishArtifactSession, PublishArtifactStagedSession, RenameReplaceResult, UpdateAttr,
 };

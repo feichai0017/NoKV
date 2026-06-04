@@ -142,6 +142,24 @@ where
         self.read_file_at_version(inode, &body, offset, len, version)
     }
 
+    pub fn read_symlink_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        inode: InodeId,
+    ) -> Result<Vec<u8>, MetadError> {
+        let version = self.snapshot_read_version(snapshot_id)?;
+        let Some(attr) = self.get_attr_at_version(inode, version)? else {
+            return Err(MetadError::NotFound);
+        };
+        if attr.file_type != FileType::Symlink {
+            return Err(MetadError::NotFile);
+        }
+        let body = self
+            .body_descriptor_at_version(inode, attr.generation, version)?
+            .ok_or(MetadError::MissingBodyDescriptor)?;
+        self.read_file_at_version(inode, &body, 0, body.size as usize, version)
+    }
+
     pub fn read_artifact_at_snapshot(
         &self,
         snapshot_id: u64,
