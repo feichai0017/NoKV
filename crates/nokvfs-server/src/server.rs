@@ -825,7 +825,7 @@ fn metadata_log_gc_json(enabled: bool, manifest: Option<CheckpointManifest>) -> 
 
 fn metadata_store_json(stats: &nokvfs_meta::MetadataStoreStats) -> String {
     format!(
-        "{{\"get_total\":{},\"get_user_strong_total\":{},\"get_write_plan_local_total\":{},\"get_snapshot_total\":{},\"scan_total\":{},\"scan_user_strong_total\":{},\"scan_write_plan_local_total\":{},\"scan_snapshot_total\":{},\"scan_key_visited_total\":{},\"scan_key_returned_total\":{},\"history_lookup_total\":{},\"active_snapshot_pin_total\":{},\"commit_total\":{},\"dedupe_hit_total\":{},\"predicate_total\":{},\"prefix_empty_predicate_total\":{},\"current_put_total\":{},\"current_delete_total\":{},\"history_write_total\":{},\"watch_write_total\":{},\"dedupe_write_total\":{},\"commit_prepare_ns_total\":{},\"atomic_apply_ns_total\":{}}}",
+        "{{\"get_total\":{},\"get_user_strong_total\":{},\"get_write_plan_local_total\":{},\"get_snapshot_total\":{},\"scan_total\":{},\"scan_user_strong_total\":{},\"scan_write_plan_local_total\":{},\"scan_snapshot_total\":{},\"scan_key_visited_total\":{},\"scan_key_returned_total\":{},\"history_lookup_total\":{},\"active_snapshot_pin_total\":{},\"commit_total\":{},\"dedupe_hit_total\":{},\"predicate_total\":{},\"prefix_empty_predicate_total\":{},\"current_put_total\":{},\"current_delete_total\":{},\"history_write_total\":{},\"watch_write_total\":{},\"dedupe_write_total\":{},\"commit_prepare_ns_total\":{},\"atomic_apply_total\":{},\"atomic_apply_command_total\":{},\"atomic_apply_max_batch\":{},\"atomic_apply_ns_total\":{}}}",
         stats.get_total,
         stats.get_user_strong_total,
         stats.get_write_plan_local_total,
@@ -848,6 +848,9 @@ fn metadata_store_json(stats: &nokvfs_meta::MetadataStoreStats) -> String {
         stats.watch_write_total,
         stats.dedupe_write_total,
         stats.commit_prepare_ns_total,
+        stats.atomic_apply_total,
+        stats.atomic_apply_command_total,
+        stats.atomic_apply_max_batch,
         stats.atomic_apply_ns_total,
     )
 }

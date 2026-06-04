@@ -104,6 +104,9 @@ struct HoltMetadataStoreCounters {
     watch_write_total: AtomicU64,
     dedupe_write_total: AtomicU64,
     commit_prepare_ns_total: AtomicU64,
+    atomic_apply_total: AtomicU64,
+    atomic_apply_command_total: AtomicU64,
+    atomic_apply_max_batch: AtomicU64,
     atomic_apply_ns_total: AtomicU64,
 }
 
@@ -952,10 +955,8 @@ impl HoltMetadataStore {
                 }
             })
             .map_err(to_backend_error)?;
-        self.stats.atomic_apply_ns_total.fetch_add(
-            atomic_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
-            Ordering::Relaxed,
-        );
+        self.stats
+            .record_atomic_apply(batch_items.len(), atomic_start.elapsed());
         if !committed {
             return Ok(None);
         }
@@ -1081,10 +1082,7 @@ impl HoltMetadataStore {
                 enqueue_planned_command(batch, &command, &plan, &stats.dedupe_result);
             })
             .map_err(to_backend_error)?;
-        self.stats.atomic_apply_ns_total.fetch_add(
-            atomic_start.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
-            Ordering::Relaxed,
-        );
+        self.stats.record_atomic_apply(1, atomic_start.elapsed());
         if !committed {
             if let Some(encoded) = self.dedupe_result(&command.request_id)? {
                 self.stats.dedupe_hit_total.fetch_add(1, Ordering::Relaxed);
@@ -1181,6 +1179,18 @@ impl HoltMetadataStoreCounters {
         .fetch_add(1, Ordering::Relaxed);
     }
 
+    fn record_atomic_apply(&self, command_count: usize, elapsed: std::time::Duration) {
+        self.atomic_apply_total.fetch_add(1, Ordering::Relaxed);
+        self.atomic_apply_command_total
+            .fetch_add(command_count as u64, Ordering::Relaxed);
+        self.atomic_apply_max_batch
+            .fetch_max(command_count as u64, Ordering::Relaxed);
+        self.atomic_apply_ns_total.fetch_add(
+            elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
+        );
+    }
+
     fn snapshot(&self) -> MetadataStoreStats {
         MetadataStoreStats {
             get_total: self.get_total.load(Ordering::Relaxed),
@@ -1205,6 +1215,9 @@ impl HoltMetadataStoreCounters {
             watch_write_total: self.watch_write_total.load(Ordering::Relaxed),
             dedupe_write_total: self.dedupe_write_total.load(Ordering::Relaxed),
             commit_prepare_ns_total: self.commit_prepare_ns_total.load(Ordering::Relaxed),
+            atomic_apply_total: self.atomic_apply_total.load(Ordering::Relaxed),
+            atomic_apply_command_total: self.atomic_apply_command_total.load(Ordering::Relaxed),
+            atomic_apply_max_batch: self.atomic_apply_max_batch.load(Ordering::Relaxed),
             atomic_apply_ns_total: self.atomic_apply_ns_total.load(Ordering::Relaxed),
         }
     }
@@ -1996,7 +2009,11 @@ mod tests {
                 .unwrap(),
             Some(Value(b"value-b".to_vec()))
         );
-        assert_eq!(store.metadata_store_stats().commit_total, 2);
+        let stats = store.metadata_store_stats();
+        assert_eq!(stats.commit_total, 2);
+        assert_eq!(stats.atomic_apply_total, 1);
+        assert_eq!(stats.atomic_apply_command_total, 2);
+        assert_eq!(stats.atomic_apply_max_batch, 2);
     }
 
     #[test]
@@ -2034,7 +2051,11 @@ mod tests {
                 .unwrap(),
             Some(Value(b"value-c".to_vec()))
         );
-        assert_eq!(store.metadata_store_stats().commit_total, 2);
+        let stats = store.metadata_store_stats();
+        assert_eq!(stats.commit_total, 2);
+        assert_eq!(stats.atomic_apply_total, 2);
+        assert_eq!(stats.atomic_apply_command_total, 2);
+        assert_eq!(stats.atomic_apply_max_batch, 1);
     }
 
     #[test]

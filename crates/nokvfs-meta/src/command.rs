@@ -129,6 +129,9 @@ pub struct MetadataStoreStats {
     pub watch_write_total: u64,
     pub dedupe_write_total: u64,
     pub commit_prepare_ns_total: u64,
+    pub atomic_apply_total: u64,
+    pub atomic_apply_command_total: u64,
+    pub atomic_apply_max_batch: u64,
     pub atomic_apply_ns_total: u64,
 }
 
