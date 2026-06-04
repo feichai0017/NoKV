@@ -17,9 +17,9 @@ COPY Cargo.toml Cargo.lock ./
 COPY crates ./crates
 COPY bench ./bench
 
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/usr/local/cargo/git \
-    --mount=type=cache,target=/workspace/target \
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    --mount=type=cache,target=/workspace/target,sharing=locked \
     cargo build --release --locked -p "${NOKV_PACKAGE}" --bin "${NOKV_BINARY}" \
     && cp "/workspace/target/release/${NOKV_BINARY}" /usr/local/bin/nokv-fs
 
