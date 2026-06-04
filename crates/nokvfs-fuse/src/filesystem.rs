@@ -8,10 +8,10 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{
-    BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType as FuseFileType, Filesystem,
-    FopenFlags, Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags, ReplyAttr,
-    ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen,
-    ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
+    AccessFlags, BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType as FuseFileType,
+    Filesystem, FopenFlags, Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags,
+    ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry,
+    ReplyOpen, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{
@@ -1243,6 +1243,25 @@ where
         reply.error(xattr_missing_error());
     }
 
+    fn access(&self, req: &Request, ino: INodeNo, mask: AccessFlags, reply: ReplyEmpty) {
+        if let Err(err) = validate_access_mask(mask) {
+            reply.error(err);
+            return;
+        }
+        match self.metadata_inode(ino).and_then(|inode| {
+            self.service_get_attr(inode)
+                .map_err(errno)?
+                .ok_or(Errno::ENOENT)
+        }) {
+            Ok(_) if self.read_only() && mask.contains(AccessFlags::W_OK) => {
+                reply.error(Errno::EROFS)
+            }
+            Ok(attr) if access_allowed(&attr, req.uid(), req.gid(), mask) => reply.ok(),
+            Ok(_) => reply.error(Errno::EACCES),
+            Err(err) => reply.error(err),
+        }
+    }
+
     fn mkdir(
         &self,
         req: &Request,
@@ -1647,6 +1666,37 @@ fn xattr_missing_error() -> Errno {
     Errno::NO_XATTR
 }
 
+fn validate_access_mask(mask: AccessFlags) -> Result<(), Errno> {
+    let supported = AccessFlags::R_OK | AccessFlags::W_OK | AccessFlags::X_OK;
+    if mask.bits() & !supported.bits() == 0 {
+        Ok(())
+    } else {
+        Err(Errno::EINVAL)
+    }
+}
+
+fn access_allowed(attr: &InodeAttr, uid: u32, gid: u32, mask: AccessFlags) -> bool {
+    if mask.is_empty() {
+        return true;
+    }
+    if uid == 0 {
+        return !mask.contains(AccessFlags::X_OK)
+            || attr.file_type == FileType::Directory
+            || attr.mode & 0o111 != 0;
+    }
+    let shift = if uid == attr.uid {
+        6
+    } else if gid == attr.gid {
+        3
+    } else {
+        0
+    };
+    let perms = (attr.mode >> shift) & 0o7;
+    (!mask.contains(AccessFlags::R_OK) || perms & 0o4 != 0)
+        && (!mask.contains(AccessFlags::W_OK) || perms & 0o2 != 0)
+        && (!mask.contains(AccessFlags::X_OK) || perms & 0o1 != 0)
+}
+
 fn errno(err: MetadError) -> Errno {
     match err {
         MetadError::Model(_) => Errno::EINVAL,
@@ -1773,6 +1823,35 @@ mod tests {
         assert_ne!(xattr_unsupported_error().code(), Errno::ENOSYS.code());
         assert_eq!(xattr_missing_error().code(), Errno::NO_XATTR.code());
         assert_ne!(xattr_missing_error().code(), Errno::ENOSYS.code());
+    }
+
+    #[test]
+    fn access_helper_honors_owner_group_other_and_root_execute() {
+        let attr = InodeAttr {
+            inode: InodeId::new(42).unwrap(),
+            file_type: FileType::File,
+            mode: 0o640,
+            uid: 1000,
+            gid: 2000,
+            size: 0,
+            generation: 1,
+            mtime_ms: 1,
+            ctime_ms: 1,
+        };
+        assert!(access_allowed(&attr, 1000, 9, AccessFlags::R_OK));
+        assert!(access_allowed(&attr, 1000, 9, AccessFlags::W_OK));
+        assert!(access_allowed(&attr, 9, 2000, AccessFlags::R_OK));
+        assert!(!access_allowed(&attr, 9, 2000, AccessFlags::W_OK));
+        assert!(!access_allowed(&attr, 9, 9, AccessFlags::R_OK));
+        assert!(!access_allowed(&attr, 0, 0, AccessFlags::X_OK));
+
+        let executable_dir = InodeAttr {
+            file_type: FileType::Directory,
+            mode: 0o000,
+            ..attr.clone()
+        };
+        assert!(access_allowed(&executable_dir, 0, 0, AccessFlags::X_OK));
+        assert!(validate_access_mask(AccessFlags::from_bits_retain(0x4000)).is_err());
     }
 
     #[cfg(target_os = "macos")]
