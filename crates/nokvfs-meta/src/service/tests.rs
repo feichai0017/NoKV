@@ -1309,12 +1309,17 @@ fn read_dir_plus_page_returns_cursor_without_materializing_full_directory() {
 fn publish_artifact_stores_body_then_publishes_metadata() {
     let service = service();
     let name = DentryName::new(b"checkpoint.json".to_vec()).unwrap();
+    let before_publish = service.object_stats();
     let published = service
         .publish_artifact(PublishArtifact {
             content_type: "application/json".to_owned(),
             ..artifact_request(name.clone(), "runs/1/checkpoint.json", b"{\"x\":1}")
         })
         .unwrap();
+    assert_eq!(
+        service.object_stats().object_put_bytes,
+        before_publish.object_put_bytes + 7
+    );
 
     let lookup = service
         .lookup_plus(InodeId::root(), &name)
@@ -1347,7 +1352,12 @@ fn publish_artifact_stores_body_then_publishes_metadata() {
         .read_file(published.attr.inode, 2, 3)
         .expect("read cached file range");
     assert_eq!(cached, b"x\":");
-    assert!(service.object_stats().cache_hits > before_cache.cache_hits);
+    let after_cache = service.object_stats();
+    assert!(after_cache.cache_hits > before_cache.cache_hits);
+    assert_eq!(
+        after_cache.cache_hit_bytes,
+        before_cache.cache_hit_bytes + 3
+    );
 }
 
 #[test]
@@ -1506,6 +1516,7 @@ fn prepared_artifact_session_uploads_only_dirty_ranges_and_reuses_old_blocks() {
         .unwrap();
     let after = service.object_stats();
     assert_eq!(after.object_puts, before.object_puts + 1);
+    assert_eq!(after.object_put_bytes, before.object_put_bytes + 3);
     assert_eq!(replaced.entry.attr.inode, published.attr.inode);
     assert_eq!(
         service.read_file(published.attr.inode, 0, 10).unwrap(),

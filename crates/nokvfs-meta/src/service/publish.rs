@@ -318,6 +318,8 @@ where
             Ok(written) => {
                 self.object_puts
                     .fetch_add(written.object_puts as u64, Ordering::Relaxed);
+                self.object_put_bytes
+                    .fetch_add(written.object_put_bytes, Ordering::Relaxed);
                 Ok(written)
             }
             Err(err) => {
@@ -410,6 +412,8 @@ where
         let staged = written.staged_objects()?;
         self.object_puts
             .fetch_add(written.object_puts as u64, Ordering::Relaxed);
+        self.object_put_bytes
+            .fetch_add(written.object_put_bytes, Ordering::Relaxed);
         self.manifest_chunks
             .fetch_add(written.chunks.len() as u64, Ordering::Relaxed);
         self.manifest_blocks.fetch_add(
@@ -487,6 +491,8 @@ where
         let staged = written.staged_objects()?;
         self.object_puts
             .fetch_add(written.object_puts as u64, Ordering::Relaxed);
+        self.object_put_bytes
+            .fetch_add(written.object_put_bytes, Ordering::Relaxed);
 
         let old_chunks = if prepared.replace {
             prepared

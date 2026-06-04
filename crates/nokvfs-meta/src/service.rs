@@ -248,8 +248,11 @@ pub struct PreparedArtifact {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectTransferStats {
     pub object_puts: u64,
+    pub object_put_bytes: u64,
     pub object_gets: u64,
+    pub object_get_bytes: u64,
     pub cache_hits: u64,
+    pub cache_hit_bytes: u64,
     pub manifest_chunks: u64,
     pub manifest_blocks: u64,
 }
@@ -345,8 +348,11 @@ pub struct NoKvFs<M, O> {
     block_cache: MemoryBlockCache,
     block_cache_enabled: AtomicBool,
     object_puts: AtomicU64,
+    object_put_bytes: AtomicU64,
     object_gets: AtomicU64,
+    object_get_bytes: AtomicU64,
     cache_hits: AtomicU64,
+    cache_hit_bytes: AtomicU64,
     manifest_chunks: AtomicU64,
     manifest_blocks: AtomicU64,
     path_index_lookup_total: AtomicU64,

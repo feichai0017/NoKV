@@ -70,6 +70,7 @@ pub struct ChunkedWrite {
     pub block_size: u64,
     pub chunks: Vec<StoredChunk>,
     pub object_puts: usize,
+    pub object_put_bytes: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -119,7 +120,9 @@ pub struct ObjectReadBlock {
 pub struct BlockReadOutcome {
     pub bytes: Vec<u8>,
     pub object_gets: usize,
+    pub object_get_bytes: u64,
     pub cache_hits: usize,
+    pub cache_hit_bytes: u64,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -273,6 +276,7 @@ pub fn put_chunked_object<O: ObjectStore>(
     options.validate()?;
     let mut chunks = Vec::new();
     let mut object_puts = 0_usize;
+    let mut object_put_bytes = 0_u64;
     let mut staged = Vec::new();
     let mut offset = 0_usize;
     while offset < bytes.len() {
@@ -296,6 +300,7 @@ pub fn put_chunked_object<O: ObjectStore>(
                     staged: StagedObjectSet::new(staged.clone()),
                 })?;
             object_puts += 1;
+            object_put_bytes = object_put_bytes.saturating_add(block.len() as u64);
             staged.push(StagedObject {
                 key: info.key,
                 size: info.size,
@@ -325,6 +330,7 @@ pub fn put_chunked_object<O: ObjectStore>(
         block_size: options.block_size as u64,
         chunks,
         object_puts,
+        object_put_bytes,
     })
 }
 
@@ -345,6 +351,7 @@ pub fn put_chunked_ranges_with_block_index_base<O: ObjectStore>(
     options.validate()?;
     let mut chunks = BTreeMap::<u64, StoredChunk>::new();
     let mut object_puts = 0_usize;
+    let mut object_put_bytes = 0_u64;
     let mut staged = Vec::new();
     let mut max_end = 0_u64;
     let mut block_indexes = BTreeMap::<u64, u64>::new();
@@ -382,6 +389,7 @@ pub fn put_chunked_ranges_with_block_index_base<O: ObjectStore>(
                     staged: StagedObjectSet::new(staged.clone()),
                 })?;
             object_puts += 1;
+            object_put_bytes = object_put_bytes.saturating_add(block.len() as u64);
             staged.push(StagedObject {
                 key: info.key,
                 size: info.size,
@@ -421,6 +429,7 @@ pub fn put_chunked_ranges_with_block_index_base<O: ObjectStore>(
         block_size: options.block_size as u64,
         chunks,
         object_puts,
+        object_put_bytes,
     })
 }
 
@@ -451,13 +460,16 @@ pub fn read_object_blocks<O: ObjectStore>(
 ) -> Result<BlockReadOutcome, ObjectError> {
     let mut out = vec![0_u8; output_len];
     let mut object_gets = 0_usize;
+    let mut object_get_bytes = 0_u64;
     let mut cache_hits = 0_usize;
+    let mut cache_hit_bytes = 0_u64;
     for block in blocks {
         let key = ObjectKey::new(block.object_key.clone())?;
         let cache_key = format!("{}:{}:{}", key.as_str(), block.object_offset, block.len);
         let bytes = if let Some(cache) = cache {
             if let Some(cached) = cache.get(&cache_key)? {
                 cache_hits += 1;
+                cache_hit_bytes = cache_hit_bytes.saturating_add(cached.len() as u64);
                 cached
             } else {
                 let fetched = store.get(
@@ -466,14 +478,17 @@ pub fn read_object_blocks<O: ObjectStore>(
                 )?;
                 cache.put(cache_key, fetched.clone())?;
                 object_gets += 1;
+                object_get_bytes = object_get_bytes.saturating_add(fetched.len() as u64);
                 fetched
             }
         } else {
             object_gets += 1;
-            store.get(
+            let fetched = store.get(
                 &key,
                 Some(ObjectRange::new(block.object_offset, block.len)?),
-            )?
+            )?;
+            object_get_bytes = object_get_bytes.saturating_add(fetched.len() as u64);
+            fetched
         };
         let end = block
             .output_offset
@@ -487,7 +502,9 @@ pub fn read_object_blocks<O: ObjectStore>(
     Ok(BlockReadOutcome {
         bytes: out,
         object_gets,
+        object_get_bytes,
         cache_hits,
+        cache_hit_bytes,
     })
 }
 
@@ -850,6 +867,7 @@ mod tests {
         .unwrap();
         assert_eq!(written.size, 16);
         assert_eq!(written.object_puts, 4);
+        assert_eq!(written.object_put_bytes, 16);
         assert_eq!(written.chunks.len(), 2);
         assert_eq!(written.chunks[0].blocks.len(), 2);
         assert_eq!(written.chunks[0].blocks[0].object_key, "blocks/1/2/3/0/0");
@@ -873,7 +891,9 @@ mod tests {
         let read = read_object_blocks(&store, None, 5, &blocks).unwrap();
         assert_eq!(read.bytes, b"fghij");
         assert_eq!(read.object_gets, 2);
+        assert_eq!(read.object_get_bytes, 5);
         assert_eq!(read.cache_hits, 0);
+        assert_eq!(read.cache_hit_bytes, 0);
 
         let cleanup = delete_staged_objects(&store, &staged).unwrap();
         assert_eq!(cleanup.attempted, 4);
@@ -912,6 +932,7 @@ mod tests {
         .unwrap();
         assert_eq!(written.size, 15);
         assert_eq!(written.object_puts, 3);
+        assert_eq!(written.object_put_bytes, 8);
         assert_eq!(written.chunks.len(), 2);
         assert_eq!(written.chunks[0].chunk_index, 0);
         assert_eq!(written.chunks[0].blocks[0].logical_offset, 3);
@@ -944,9 +965,13 @@ mod tests {
         let first = read_object_blocks(&store, Some(&cache), 4, &blocks).unwrap();
         let second = read_object_blocks(&store, Some(&cache), 4, &blocks).unwrap();
         assert_eq!(first.object_gets, 1);
+        assert_eq!(first.object_get_bytes, 4);
         assert_eq!(first.cache_hits, 0);
+        assert_eq!(first.cache_hit_bytes, 0);
         assert_eq!(second.object_gets, 0);
+        assert_eq!(second.object_get_bytes, 0);
         assert_eq!(second.cache_hits, 1);
+        assert_eq!(second.cache_hit_bytes, 4);
     }
 
     #[derive(Clone)]

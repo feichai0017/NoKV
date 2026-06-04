@@ -931,8 +931,12 @@ where
         let outcome = read_object_blocks(&self.objects, cache, len, &plan)?;
         self.object_gets
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
+        self.object_get_bytes
+            .fetch_add(outcome.object_get_bytes, Ordering::Relaxed);
         self.cache_hits
             .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
+        self.cache_hit_bytes
+            .fetch_add(outcome.cache_hit_bytes, Ordering::Relaxed);
         Ok(outcome.bytes)
     }
 
@@ -945,8 +949,12 @@ where
         let outcome = read_object_blocks(&self.objects, cache, output_len, blocks)?;
         self.object_gets
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
+        self.object_get_bytes
+            .fetch_add(outcome.object_get_bytes, Ordering::Relaxed);
         self.cache_hits
             .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
+        self.cache_hit_bytes
+            .fetch_add(outcome.cache_hit_bytes, Ordering::Relaxed);
         Ok(outcome.bytes)
     }
 

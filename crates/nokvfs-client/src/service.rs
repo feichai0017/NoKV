@@ -126,8 +126,11 @@ pub struct NoKvFsClient<O> {
     block_cache: MemoryBlockCache,
     block_cache_enabled: bool,
     object_puts: AtomicU64,
+    object_put_bytes: AtomicU64,
     object_gets: AtomicU64,
+    object_get_bytes: AtomicU64,
     cache_hits: AtomicU64,
+    cache_hit_bytes: AtomicU64,
     manifest_chunks: AtomicU64,
     manifest_blocks: AtomicU64,
 }
@@ -158,8 +161,11 @@ where
             block_cache: MemoryBlockCache::default(),
             block_cache_enabled: true,
             object_puts: AtomicU64::new(0),
+            object_put_bytes: AtomicU64::new(0),
             object_gets: AtomicU64::new(0),
+            object_get_bytes: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
+            cache_hit_bytes: AtomicU64::new(0),
             manifest_chunks: AtomicU64::new(0),
             manifest_blocks: AtomicU64::new(0),
         }
@@ -184,8 +190,11 @@ where
     pub fn object_stats(&self) -> ObjectTransferStats {
         ObjectTransferStats {
             object_puts: self.object_puts.load(Ordering::Relaxed),
+            object_put_bytes: self.object_put_bytes.load(Ordering::Relaxed),
             object_gets: self.object_gets.load(Ordering::Relaxed),
+            object_get_bytes: self.object_get_bytes.load(Ordering::Relaxed),
             cache_hits: self.cache_hits.load(Ordering::Relaxed),
+            cache_hit_bytes: self.cache_hit_bytes.load(Ordering::Relaxed),
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
             manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
         }
@@ -279,8 +288,12 @@ where
             .map_err(ClientError::Object)?;
         self.object_gets
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
+        self.object_get_bytes
+            .fetch_add(outcome.object_get_bytes, Ordering::Relaxed);
         self.cache_hits
             .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
+        self.cache_hit_bytes
+            .fetch_add(outcome.cache_hit_bytes, Ordering::Relaxed);
         Ok(outcome.bytes)
     }
 
@@ -310,8 +323,12 @@ where
             .map_err(ClientError::Object)?;
         self.object_gets
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
+        self.object_get_bytes
+            .fetch_add(outcome.object_get_bytes, Ordering::Relaxed);
         self.cache_hits
             .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
+        self.cache_hit_bytes
+            .fetch_add(outcome.cache_hit_bytes, Ordering::Relaxed);
         Ok(outcome.bytes)
     }
 
@@ -387,6 +404,8 @@ where
         };
         self.object_puts
             .fetch_add(written.object_puts as u64, Ordering::Relaxed);
+        self.object_put_bytes
+            .fetch_add(written.object_put_bytes, Ordering::Relaxed);
         self.manifest_chunks
             .fetch_add(written.chunks.len() as u64, Ordering::Relaxed);
         self.manifest_blocks.fetch_add(

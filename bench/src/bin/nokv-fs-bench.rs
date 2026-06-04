@@ -102,8 +102,11 @@ struct ResultRow {
     mb_per_second: f64,
     samples_per_second: f64,
     object_puts: u64,
+    object_put_bytes: u64,
     object_gets: u64,
+    object_get_bytes: u64,
     cache_hits: u64,
+    cache_hit_bytes: u64,
     cache_hit_rate: f64,
     manifest_chunks: u64,
     manifest_blocks: u64,
@@ -1337,8 +1340,11 @@ fn row(input: RowInput) -> ResultRow {
         mb_per_second: input.bytes as f64 / 1_048_576_f64 / input.seconds.max(f64::MIN_POSITIVE),
         samples_per_second: input.samples as f64 / input.seconds.max(f64::MIN_POSITIVE),
         object_puts: input.stats.object.object_puts,
+        object_put_bytes: input.stats.object.object_put_bytes,
         object_gets: input.stats.object.object_gets,
+        object_get_bytes: input.stats.object.object_get_bytes,
         cache_hits: input.stats.object.cache_hits,
+        cache_hit_bytes: input.stats.object.cache_hit_bytes,
         cache_hit_rate: if cache_total == 0 {
             0.0
         } else {
@@ -1408,7 +1414,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow) -> String {
@@ -1421,8 +1427,11 @@ fn csv_row(row: &ResultRow) -> String {
         format!("{:.2}", row.mb_per_second),
         format!("{:.2}", row.samples_per_second),
         row.object_puts.to_string(),
+        row.object_put_bytes.to_string(),
         row.object_gets.to_string(),
+        row.object_get_bytes.to_string(),
         row.cache_hits.to_string(),
+        row.cache_hit_bytes.to_string(),
         format!("{:.4}", row.cache_hit_rate),
         row.manifest_chunks.to_string(),
         row.manifest_blocks.to_string(),
@@ -1484,14 +1493,26 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .object
                 .object_puts
                 .saturating_sub(before.object.object_puts),
+            object_put_bytes: after
+                .object
+                .object_put_bytes
+                .saturating_sub(before.object.object_put_bytes),
             object_gets: after
                 .object
                 .object_gets
                 .saturating_sub(before.object.object_gets),
+            object_get_bytes: after
+                .object
+                .object_get_bytes
+                .saturating_sub(before.object.object_get_bytes),
             cache_hits: after
                 .object
                 .cache_hits
                 .saturating_sub(before.object.cache_hits),
+            cache_hit_bytes: after
+                .object
+                .cache_hit_bytes
+                .saturating_sub(before.object.cache_hit_bytes),
             manifest_chunks: after
                 .object
                 .manifest_chunks
@@ -1867,7 +1888,16 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
         .map(|(_, body)| body)
         .ok_or_else(|| BenchError::Client("stats response missing body".to_owned()))?;
     Ok(BenchStats {
-        object: ObjectTransferStats::default(),
+        object: ObjectTransferStats {
+            object_puts: json_u64(body, "object_puts")?,
+            object_put_bytes: json_u64(body, "object_put_bytes")?,
+            object_gets: json_u64(body, "object_gets")?,
+            object_get_bytes: json_u64(body, "object_get_bytes")?,
+            cache_hits: json_u64(body, "cache_hits")?,
+            cache_hit_bytes: json_u64(body, "cache_hit_bytes")?,
+            manifest_chunks: json_u64(body, "manifest_chunks")?,
+            manifest_blocks: json_u64(body, "manifest_blocks")?,
+        },
         metadata_store: MetadataStoreStats {
             get_total: json_u64(body, "get_total")?,
             get_user_strong_total: json_u64(body, "get_user_strong_total")?,
@@ -2557,8 +2587,11 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_log":{"enabled":true,"commit_entry_total":17,"commit_command_total":18,"max_commands_per_entry":19,"stale_read_total":38},"metadata_service":{"path_index_lookup_total":20,"path_index_hit_total":21,"path_index_miss_total":22,"path_index_stale_total":23,"path_index_scan_stale_total":39,"path_index_fallback_total":24,"create_files_batch_total":25,"create_files_entry_total":26,"create_dirs_batch_total":27,"create_dirs_entry_total":28,"read_dir_plus_total":29,"read_dir_plus_entry_total":30,"read_dir_plus_projection_hit_total":31}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_log":{"enabled":true,"commit_entry_total":17,"commit_command_total":18,"max_commands_per_entry":19,"stale_read_total":38},"metadata_service":{"path_index_lookup_total":20,"path_index_hit_total":21,"path_index_miss_total":22,"path_index_stale_total":23,"path_index_scan_stale_total":39,"path_index_fallback_total":24,"create_files_batch_total":25,"create_files_entry_total":26,"create_dirs_batch_total":27,"create_dirs_entry_total":28,"read_dir_plus_total":29,"read_dir_plus_entry_total":30,"read_dir_plus_projection_hit_total":31}}"#;
 
+        assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
+        assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
+        assert_eq!(json_u64(body, "cache_hit_bytes").unwrap(), 46);
         assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
         assert_eq!(json_u64(body, "get_write_plan_local_total").unwrap(), 33);
         assert_eq!(json_u64(body, "scan_write_plan_local_total").unwrap(), 36);
