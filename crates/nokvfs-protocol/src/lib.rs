@@ -188,6 +188,11 @@ pub enum MetadataRpcRequest {
     ReadMetadataCheckpoint {
         mount: u64,
     },
+    PlanMetadataBootstrap {
+        leader: u64,
+        learner: u64,
+        mount: u64,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -293,6 +298,9 @@ pub enum MetadataRpcResult {
     },
     MetadataCheckpoint {
         checkpoint: Option<WireMetadataCheckpoint>,
+    },
+    MetadataBootstrapPlan {
+        plan: WireMetadataBootstrapPlan,
     },
 }
 
@@ -433,6 +441,15 @@ pub struct WireMetadataCheckpoint {
     pub artifact_uri: Vec<u8>,
     pub artifact_digest: Vec<u8>,
     pub artifact_size_bytes: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataBootstrapPlan {
+    pub leader: u64,
+    pub learner: u64,
+    pub checkpoint: WireMetadataCheckpoint,
+    pub replay_start_index: u64,
+    pub replayed_index: u64,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -849,6 +866,50 @@ mod tests {
             error: None,
             error_kind: None,
             metadata_position: Some(WireMetadataPosition { term: 2, index: 7 }),
+        };
+        assert_eq!(
+            decode_envelope(&encode_envelope(&envelope).unwrap()).unwrap(),
+            envelope
+        );
+    }
+
+    #[test]
+    fn binary_codec_round_trips_metadata_bootstrap_plan() {
+        let request = MetadataRpcRequest::PlanMetadataBootstrap {
+            leader: 1,
+            learner: 4,
+            mount: 1,
+        };
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
+        );
+
+        let checkpoint = WireMetadataCheckpoint {
+            id: b"checkpoint-1".to_vec(),
+            mount: 1,
+            durable_position: WireMetadataPosition { term: 2, index: 8 },
+            applied_position: WireMetadataPosition { term: 2, index: 7 },
+            min_retained_index: 8,
+            max_commit_version: 9,
+            artifact_uri: b"local-holt:checkpoint-1".to_vec(),
+            artifact_digest: b"digest".to_vec(),
+            artifact_size_bytes: 16,
+        };
+        let envelope = MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::MetadataBootstrapPlan {
+                plan: WireMetadataBootstrapPlan {
+                    leader: 1,
+                    learner: 4,
+                    checkpoint,
+                    replay_start_index: 8,
+                    replayed_index: 11,
+                },
+            }),
+            error: None,
+            error_kind: None,
+            metadata_position: Some(WireMetadataPosition { term: 2, index: 11 }),
         };
         assert_eq!(
             decode_envelope(&encode_envelope(&envelope).unwrap()).unwrap(),

@@ -10,8 +10,8 @@ use nokvfs_cluster::{
     compact_log_to_checkpoint, AppendMetadataBatchRequest, AppendMetadataBatchResponse,
     ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
     FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog, FileSharedLogOptions, LogIndex,
-    LogPosition, MetadataLogEntry, SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats,
-    SharedMetadataLog,
+    LogPosition, MetadataLogEntry, NodeId, SharedLogError, SharedLogMetadataStore,
+    SharedLogRuntimeStats, SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -197,6 +197,48 @@ impl Server {
         checkpoints
             .latest_for_mount(mount)
             .map_err(ServerError::SharedLog)
+    }
+
+    pub(crate) fn plan_metadata_bootstrap(
+        &self,
+        leader: NodeId,
+        learner: NodeId,
+        mount: nokvfs_types::MountId,
+    ) -> Result<nokvfs_cluster::InstallCheckpointRequest, ServerError> {
+        if mount != self.service.mount_id() {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                "metadata bootstrap mount {} does not match server mount {}",
+                mount.get(),
+                self.service.mount_id().get(),
+            ))));
+        }
+        let Some(metadata_log) = self.metadata_log.as_ref() else {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(
+                "metadata log is disabled".to_owned(),
+            )));
+        };
+        let checkpoint = self
+            .latest_metadata_checkpoint(mount)?
+            .ok_or(SharedLogError::CheckpointRequired {
+                node: learner,
+                compacted: LogIndex::ZERO,
+            })
+            .map_err(ServerError::SharedLog)?;
+        let replay_start = checkpoint.frontier.min_retained_index;
+        let tail = metadata_log.log().read_from(replay_start, 0)?;
+        let replayed_index = tail
+            .last()
+            .map(|entry| entry.position.index)
+            .unwrap_or(checkpoint.frontier.applied_position.index);
+        Ok(nokvfs_cluster::InstallCheckpointRequest::from_plan(
+            leader,
+            nokvfs_cluster::LearnerBootstrapPlan {
+                node: learner,
+                checkpoint,
+                replay_start,
+                replayed_index,
+            },
+        ))
     }
 
     pub fn stats_json(&self) -> String {

@@ -151,6 +151,7 @@ to the local metadata log, and replay it into Holt state. The log rejects stale
 terms after a newer committed term, so an old leader cannot keep extending a
 local tail once a newer term has been observed. The RPC path can also read the
 latest published checkpoint manifest for a mount, giving learners the frontier
-and artifact descriptor they need before replaying a retained tail. Actual
-checkpoint artifact transfer/install, durable membership, and full leader/voter
-authorization are still the next HA steps.
+and artifact descriptor they need before replaying a retained tail. A learner
+can request a bootstrap plan that pairs that checkpoint with the retained log
+tail range to replay. Actual checkpoint artifact transfer/install, durable
+membership, and full leader/voter authorization are still the next HA steps.

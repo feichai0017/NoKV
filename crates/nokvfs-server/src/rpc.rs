@@ -8,9 +8,9 @@ use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_name_cursor, decode_request, encode_envelope, encode_name_cursor, MetadataProtocolError,
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
-    WireDentryWithAttr, WireMetadataCheckpoint, WireMetadataError, WireMetadataLogEntry,
-    WireMetadataPosition, WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata,
-    WirePreparedArtifact,
+    WireDentryWithAttr, WireMetadataBootstrapPlan, WireMetadataCheckpoint, WireMetadataError,
+    WireMetadataLogEntry, WireMetadataPosition, WireMetadataReceipt, WireObjectReadBlock,
+    WirePathMetadata, WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -1178,6 +1178,23 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 checkpoint: checkpoint.as_ref().map(wire_metadata_checkpoint),
             })
         }
+        MetadataRpcRequest::PlanMetadataBootstrap {
+            leader,
+            learner,
+            mount,
+        } => {
+            let leader = nokvfs_cluster::NodeId::new(leader).map_err(ServerError::SharedLog)?;
+            let learner = nokvfs_cluster::NodeId::new(learner).map_err(ServerError::SharedLog)?;
+            let mount = MountId::new(mount).map_err(|err| {
+                ServerError::Metadata(MetadError::Codec(format!(
+                    "invalid metadata bootstrap mount: {err}"
+                )))
+            })?;
+            let plan = server.plan_metadata_bootstrap(leader, learner, mount)?;
+            Ok(MetadataRpcResult::MetadataBootstrapPlan {
+                plan: wire_metadata_bootstrap_plan(&plan),
+            })
+        }
     }
 }
 
@@ -1283,6 +1300,18 @@ fn wire_metadata_checkpoint(
         artifact_uri: checkpoint.artifact.uri.clone(),
         artifact_digest: checkpoint.artifact.digest.clone(),
         artifact_size_bytes: checkpoint.artifact.size_bytes,
+    }
+}
+
+fn wire_metadata_bootstrap_plan(
+    request: &nokvfs_cluster::InstallCheckpointRequest,
+) -> WireMetadataBootstrapPlan {
+    WireMetadataBootstrapPlan {
+        leader: request.leader.get(),
+        learner: request.plan.node.get(),
+        checkpoint: wire_metadata_checkpoint(&request.plan.checkpoint),
+        replay_start_index: request.plan.replay_start.get(),
+        replayed_index: request.plan.replayed_index.get(),
     }
 }
 
@@ -1518,6 +1547,81 @@ mod tests {
             envelope.error_kind,
             Some(WireMetadataError::Metadata { message })
                 if message.contains("metadata checkpoint catalog is disabled")
+        ));
+    }
+
+    #[test]
+    fn rpc_plans_metadata_bootstrap_from_checkpoint_and_retained_tail() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let created_before_checkpoint = request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        assert!(created_before_checkpoint.ok);
+        server.run_manual_gc(128).unwrap();
+
+        let created_after_checkpoint = request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/after-checkpoint".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        assert!(created_after_checkpoint.ok);
+        let after_position = created_after_checkpoint
+            .metadata_position
+            .expect("logged write should carry position");
+
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::PlanMetadataBootstrap {
+                leader: 1,
+                learner: 4,
+                mount: 1,
+            },
+        );
+        assert!(envelope.ok, "unexpected bootstrap plan error: {envelope:?}");
+        let plan = match envelope.result.unwrap() {
+            MetadataRpcResult::MetadataBootstrapPlan { plan } => plan,
+            other => panic!("unexpected bootstrap plan result: {other:?}"),
+        };
+        assert_eq!(plan.leader, 1);
+        assert_eq!(plan.learner, 4);
+        assert_eq!(plan.checkpoint.mount, 1);
+        assert!(plan.checkpoint.id.starts_with(b"mount-1-term-1-index-"));
+        assert_eq!(plan.replay_start_index, plan.checkpoint.min_retained_index);
+        assert_eq!(plan.replayed_index, after_position.index);
+        assert!(plan.replay_start_index <= plan.replayed_index);
+    }
+
+    #[test]
+    fn rpc_rejects_metadata_bootstrap_plan_without_checkpoint() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::PlanMetadataBootstrap {
+                leader: 1,
+                learner: 4,
+                mount: 1,
+            },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("requires a checkpoint")
         ));
     }
 
