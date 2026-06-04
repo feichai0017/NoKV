@@ -710,6 +710,39 @@ fn remove_empty_dir_deletes_empty_directory() {
 }
 
 #[test]
+fn remove_empty_dir_allows_directory_after_last_child_removed() {
+    let service = service();
+    let dir = DentryName::new(b"runs".to_vec()).unwrap();
+    let child = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+    let created = service
+        .create_dir(InodeId::root(), dir.clone(), 0o755, 1000, 1000)
+        .unwrap();
+    service
+        .publish_artifact(PublishArtifact {
+            parent: created.attr.inode,
+            name: child.clone(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "runs/checkpoint.bin".to_owned(),
+            bytes: b"payload".to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+
+    service.remove_file(created.attr.inode, &child).unwrap();
+    let removed = service.remove_empty_dir(InodeId::root(), &dir).unwrap();
+
+    assert_eq!(removed, created);
+    assert!(service
+        .lookup_plus(InodeId::root(), &dir)
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn rename_moves_dentry_without_changing_inode() {
     let service = service();
     let old_name = DentryName::new(b"old".to_vec()).unwrap();

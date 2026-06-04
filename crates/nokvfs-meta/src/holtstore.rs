@@ -445,7 +445,15 @@ impl HoltMetadataStore {
             .iter()
             .filter(|planned| planned.mutation.op == MutationOp::Delete)
             .count() as u64;
-        let history_write_count = plan.history_records.len() as u64;
+        let history_tombstone_count = plan
+            .mutations
+            .iter()
+            .filter(|planned| {
+                planned.mutation.op == MutationOp::Delete
+                    && family_requires_history(planned.mutation.family)
+            })
+            .count() as u64;
+        let history_write_count = plan.history_records.len() as u64 + history_tombstone_count;
         let watch_write_count = command.watch.len() as u64;
 
         let mut applied = 0_usize;
@@ -466,6 +474,21 @@ impl HoltMetadataStore {
                             HISTORY_TREE,
                             &history_key(family, &key, old_version.get()),
                             &current,
+                        );
+                    }
+                }
+                for planned in &plan.mutations {
+                    if planned.mutation.op == MutationOp::Delete
+                        && family_requires_history(planned.mutation.family)
+                    {
+                        batch.put(
+                            HISTORY_TREE,
+                            &history_key(
+                                planned.mutation.family,
+                                &planned.mutation.key,
+                                command.commit_version.get(),
+                            ),
+                            &encode_tombstone_value(command.commit_version),
                         );
                     }
                 }
@@ -522,18 +545,16 @@ impl HoltMetadataStore {
                             unreachable!("put mutation cannot use delete guard")
                         }
                         (MutationOp::Delete, MutationGuard::Always) => {
-                            batch.put(
+                            batch.delete(
                                 current_tree_name(planned.mutation.family),
                                 &planned.mutation.key,
-                                &encode_tombstone_value(command.commit_version),
                             );
                         }
                         (MutationOp::Delete, MutationGuard::DeleteIfVersion(version)) => {
-                            batch.compare_and_put(
+                            batch.delete_if_version(
                                 current_tree_name(planned.mutation.family),
                                 &planned.mutation.key,
                                 version,
-                                &encode_tombstone_value(command.commit_version),
                             );
                         }
                         (MutationOp::Delete, MutationGuard::PutIfAbsent)

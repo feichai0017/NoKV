@@ -6,12 +6,17 @@
 
 use std::fmt;
 
+mod artifact;
 mod remote;
 
-use nokvfs_meta::MetadError;
+use nokvfs_meta::{MetadError, MetadataError};
 use nokvfs_object::ObjectError;
 use nokvfs_types::PathError;
 
+pub use artifact::{
+    normalize_artifact_path, ArtifactBackend, ArtifactInfo, ArtifactRepository,
+    ArtifactRepositoryOptions,
+};
 pub use remote::{
     RemoteBodyReadPlan, RemoteMetadataClient, RemoteMetadataClientOptions, RemoteNoKvFsClient,
     RemotePreparedArtifact,
@@ -33,6 +38,9 @@ pub enum ClientError {
     EmptyPath,
     RelativePath,
     ParentTraversal,
+    InvalidArtifactPath(String),
+    ArtifactIsDirectory(String),
+    ArtifactIsFile(String),
     InvalidName(String),
     RootHasNoParent,
     NotFound(String),
@@ -73,6 +81,9 @@ impl fmt::Display for ClientError {
             Self::EmptyPath => write!(f, "path is empty"),
             Self::RelativePath => write!(f, "path must be absolute"),
             Self::ParentTraversal => write!(f, "path must not contain '..'"),
+            Self::InvalidArtifactPath(err) => write!(f, "invalid artifact path: {err}"),
+            Self::ArtifactIsDirectory(path) => write!(f, "artifact is a directory: {path}"),
+            Self::ArtifactIsFile(path) => write!(f, "artifact is a file: {path}"),
             Self::InvalidName(err) => write!(f, "invalid path component: {err}"),
             Self::RootHasNoParent => write!(f, "root path has no parent"),
             Self::NotFound(path) => write!(f, "path component not found: {path}"),
@@ -87,3 +98,17 @@ impl fmt::Display for ClientError {
 }
 
 impl std::error::Error for ClientError {}
+
+fn is_metadata_predicate_failed(err: &ClientError) -> bool {
+    matches!(
+        err,
+        ClientError::Metadata(MetadError::Metadata(MetadataError::PredicateFailed))
+    )
+}
+
+fn is_not_found(err: &ClientError) -> bool {
+    matches!(
+        err,
+        ClientError::NotFound(_) | ClientError::Metadata(MetadError::NotFound)
+    )
+}
