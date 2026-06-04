@@ -167,10 +167,27 @@ pub struct KeyScanRequest {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DelimitedScanRequest {
+    pub family: RecordFamily,
+    pub prefix: Vec<u8>,
+    pub start_after: Option<Vec<u8>>,
+    pub delimiter: u8,
+    pub version: Version,
+    pub limit: usize,
+    pub purpose: ReadPurpose,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ScanItem {
     pub key: Vec<u8>,
     pub value: Value,
     pub version: Version,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum DelimitedScanItem {
+    Key(ScanItem),
+    CommonPrefix(Vec<u8>),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -206,6 +223,34 @@ pub trait MetadataStore {
     }
 
     fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError>;
+
+    fn scan_delimited(
+        &self,
+        request: DelimitedScanRequest,
+    ) -> Result<Vec<DelimitedScanItem>, MetadataError> {
+        let limit = scan_limit(request.limit);
+        let mut out = Vec::new();
+        let start_after = request.start_after.as_deref();
+        for item in self.scan(ScanRequest {
+            family: request.family,
+            prefix: request.prefix.clone(),
+            start_after: request.start_after.clone(),
+            version: request.version,
+            limit: 0,
+            purpose: request.purpose,
+        })? {
+            let collapsed = collapse_delimited_scan_item(item, &request.prefix, request.delimiter);
+            if item_after_marker(&collapsed, start_after) {
+                if out.last() != Some(&collapsed) {
+                    out.push(collapsed);
+                }
+                if out.len() >= limit {
+                    break;
+                }
+            }
+        }
+        Ok(out)
+    }
 
     fn scan_keys(&self, request: KeyScanRequest) -> Result<Vec<Vec<u8>>, MetadataError> {
         self.scan(ScanRequest {
@@ -287,6 +332,33 @@ fn predicate_conflicts_with_mutation(predicate: &PredicateRef, mutation: &Mutati
                 &mutation.key,
             )
         }
+    }
+}
+
+fn scan_limit(limit: usize) -> usize {
+    if limit == 0 {
+        usize::MAX
+    } else {
+        limit
+    }
+}
+
+fn collapse_delimited_scan_item(item: ScanItem, prefix: &[u8], delimiter: u8) -> DelimitedScanItem {
+    let suffix = item.key.get(prefix.len()..).unwrap_or_default();
+    if let Some(offset) = suffix.iter().position(|byte| *byte == delimiter) {
+        DelimitedScanItem::CommonPrefix(item.key[..prefix.len() + offset + 1].to_vec())
+    } else {
+        DelimitedScanItem::Key(item)
+    }
+}
+
+fn item_after_marker(item: &DelimitedScanItem, start_after: Option<&[u8]>) -> bool {
+    let Some(start_after) = start_after else {
+        return true;
+    };
+    match item {
+        DelimitedScanItem::Key(item) => item.key.as_slice() > start_after,
+        DelimitedScanItem::CommonPrefix(prefix) => prefix.as_slice() > start_after,
     }
 }
 

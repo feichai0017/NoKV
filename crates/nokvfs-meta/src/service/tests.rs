@@ -85,6 +85,14 @@ impl MetadataStore for PurposeTrackingStore {
         self.inner.scan(request)
     }
 
+    fn scan_delimited(
+        &self,
+        request: crate::command::DelimitedScanRequest,
+    ) -> Result<Vec<crate::command::DelimitedScanItem>, MetadataError> {
+        self.record_scan(request.purpose);
+        self.inner.scan_delimited(request)
+    }
+
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
         self.inner.commit_metadata(command)
     }
@@ -148,6 +156,37 @@ fn artifact_request(name: DentryName, manifest_id: &str, bytes: &[u8]) -> Publis
         uid: 1000,
         gid: 1000,
     }
+}
+
+fn publish_path_artifact(
+    service: &NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+    path: &str,
+    manifest_id: &str,
+    bytes: &[u8],
+) -> DentryWithAttr {
+    let prepared = service.prepare_artifact_create_path(path).unwrap();
+    service
+        .publish_prepared_artifact_session(
+            prepared.clone(),
+            PublishArtifactSession {
+                parent: prepared.parent,
+                name: prepared.name,
+                producer: "unit-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: manifest_id.to_owned(),
+                size: bytes.len() as u64,
+                ranges: vec![PublishArtifactRange {
+                    offset: 0,
+                    bytes: bytes.to_vec(),
+                }],
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        )
+        .unwrap()
+        .entry
 }
 
 fn block_key(inode: InodeId, generation: u64, chunk: u64, block: u64) -> ObjectKey {
@@ -544,6 +583,52 @@ fn stale_path_index_falls_back_to_canonical_namespace() {
         after.path_index_fallback_total - before.path_index_fallback_total,
         1
     );
+}
+
+#[test]
+fn path_index_page_lists_immediate_indexed_children_with_holt_delimiter() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let epoch = service
+        .create_dir_path("/runs/epoch", 0o755, 1000, 1000)
+        .unwrap();
+    service
+        .create_file_path("/runs/plain.txt", 0o644, 1000, 1000)
+        .unwrap();
+    publish_path_artifact(&service, "/runs/top.bin", "runs/top.bin", b"top");
+    publish_path_artifact(
+        &service,
+        "/runs/epoch/ckpt.bin",
+        "runs/epoch/ckpt.bin",
+        b"ckpt",
+    );
+
+    let before = metadata.metadata_store_stats();
+    let first = service.list_indexed_path_page("/runs", None, 1).unwrap();
+    let after_first = metadata.metadata_store_stats();
+    assert_eq!(first.entries, vec![epoch]);
+    assert_eq!(
+        first.next_cursor.as_ref().map(DentryName::as_bytes),
+        Some(b"epoch".as_slice())
+    );
+    assert_eq!(
+        after_first.scan_key_returned_total - before.scan_key_returned_total,
+        2
+    );
+
+    let second = service
+        .list_indexed_path_page("/runs", first.next_cursor.as_ref(), 10)
+        .unwrap();
+    assert_eq!(second.entries.len(), 1);
+    assert_eq!(second.entries[0].dentry.name.as_bytes(), b"top.bin");
+    assert_eq!(second.entries[0].attr.file_type, FileType::File);
+    assert_eq!(second.next_cursor, None);
 }
 
 #[test]

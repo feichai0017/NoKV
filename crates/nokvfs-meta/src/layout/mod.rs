@@ -10,7 +10,7 @@ use nokvfs_types::{DentryName, InodeId, MountId, RecordFamily};
 
 pub const U64_WIDTH: usize = 8;
 const U32_WIDTH: usize = 4;
-const PATH_INDEX_TERMINATOR: u8 = 0xff;
+pub const PATH_INDEX_DELIMITER: u8 = b'/';
 
 pub use codec::{
     decode_allocator_state, decode_body_descriptor, decode_chunk_manifest,
@@ -75,18 +75,28 @@ pub fn xattr_key(mount: MountId, inode: InodeId, name: &[u8]) -> Vec<u8> {
 }
 
 pub fn path_index_key(mount: MountId, components: &[DentryName]) -> Vec<u8> {
-    let mut out = path_index_prefix(mount, components);
-    out.push(PATH_INDEX_TERMINATOR);
+    let mut out = path_index_root_prefix(mount);
+    for (index, component) in components.iter().enumerate() {
+        if index > 0 {
+            out.push(PATH_INDEX_DELIMITER);
+        }
+        out.extend_from_slice(component.as_bytes());
+    }
     out
 }
 
 pub fn path_index_prefix(mount: MountId, components: &[DentryName]) -> Vec<u8> {
-    let mut out = Vec::with_capacity(U64_WIDTH + components.len() * U32_WIDTH);
-    push_u64(&mut out, mount.get());
-    for component in components {
-        push_u32(&mut out, component.as_bytes().len() as u32);
-        out.extend_from_slice(component.as_bytes());
+    let mut out = path_index_key(mount, components);
+    if !out.ends_with(&[PATH_INDEX_DELIMITER]) {
+        out.push(PATH_INDEX_DELIMITER);
     }
+    out
+}
+
+fn path_index_root_prefix(mount: MountId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH + 1);
+    push_u64(&mut out, mount.get());
+    out.push(PATH_INDEX_DELIMITER);
     out
 }
 
@@ -196,10 +206,6 @@ fn push_u64(out: &mut Vec<u8>, value: u64) {
     out.extend_from_slice(&value.to_be_bytes());
 }
 
-fn push_u32(out: &mut Vec<u8>, value: u32) {
-    out.extend_from_slice(&value.to_be_bytes());
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -277,7 +283,7 @@ mod tests {
         let sibling_prefix = path_index_key(mount(), &[name(b"runs-long")]);
 
         assert!(child.starts_with(&parent));
-        assert!(!child.starts_with(&parent_exact));
+        assert!(!parent_exact.ends_with(&[PATH_INDEX_DELIMITER]));
         assert!(!sibling_prefix.starts_with(&parent));
     }
 

@@ -5,9 +5,9 @@ use nokvfs_cluster::{
     SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
 };
 use nokvfs_meta::command::{
-    CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
-    MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, ReadItem, ReadPurpose, ScanItem,
-    ScanRequest,
+    CommitResult, DelimitedScanItem, DelimitedScanRequest, HistoryPruneOutcome,
+    HistoryPruneRequest, KeyScanRequest, MetadataCommand, MetadataError, MetadataStore,
+    MetadataStoreStats, MetadataStoreStatsProvider, ReadItem, ReadPurpose, ScanItem, ScanRequest,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_types::RecordFamily;
@@ -83,6 +83,23 @@ impl MetadataStore for ServerMetadataStore {
         match self {
             Self::Direct(store) => store.scan(request),
             Self::SharedLogged(store) => store.scan(request),
+        }
+    }
+
+    fn scan_delimited(
+        &self,
+        request: DelimitedScanRequest,
+    ) -> Result<Vec<DelimitedScanItem>, MetadataError> {
+        match self {
+            Self::Direct(store) => store.scan_delimited(request),
+            Self::SharedLogged(store) => store.scan_delimited(request),
+        }
+    }
+
+    fn scan_keys(&self, request: KeyScanRequest) -> Result<Vec<Vec<u8>>, MetadataError> {
+        match self {
+            Self::Direct(store) => store.scan_keys(request),
+            Self::SharedLogged(store) => store.scan_keys(request),
         }
     }
 

@@ -23,10 +23,10 @@ use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::command::{
-    CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, KeyScanRequest,
-    MetadataCommand, MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider,
-    Mutation, MutationOp, Predicate, PredicateRef, ReadPurpose, ScanRequest, Value, Version,
-    WatchProjection,
+    CommandKind, CommitResult, DelimitedScanItem, DelimitedScanRequest, HistoryPruneOutcome,
+    HistoryPruneRequest, KeyScanRequest, MetadataCommand, MetadataError, MetadataStore,
+    MetadataStoreStats, MetadataStoreStatsProvider, Mutation, MutationOp, Predicate, PredicateRef,
+    ReadPurpose, ScanRequest, Value, Version, WatchProjection,
 };
 use crate::layout::{
     allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,
@@ -35,7 +35,8 @@ use crate::layout::{
     encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
     encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
     encode_watch_event, gc_object_key, gc_queue_prefix, inode_key, path_index_key,
-    snapshot_pin_key, snapshot_pin_prefix, watch_log_prefix, xattr_key, xattr_prefix,
+    path_index_prefix, snapshot_pin_key, snapshot_pin_prefix, watch_log_prefix, xattr_key,
+    xattr_prefix, PATH_INDEX_DELIMITER,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, put_chunked_ranges,

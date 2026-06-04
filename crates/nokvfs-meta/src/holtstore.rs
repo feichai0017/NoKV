@@ -10,10 +10,10 @@ use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
 use crate::command::{
-    metadata_commands_conflict, CommitResult, HistoryPruneOutcome, HistoryPruneRequest,
-    KeyScanRequest, MetadataCommand, MetadataError, MetadataStore, MetadataStoreStats,
-    MetadataStoreStatsProvider, MutationOp, Predicate, ReadItem, ReadPurpose, ScanItem,
-    ScanRequest, Value, Version,
+    metadata_commands_conflict, CommitResult, DelimitedScanItem, DelimitedScanRequest,
+    HistoryPruneOutcome, HistoryPruneRequest, KeyScanRequest, MetadataCommand, MetadataError,
+    MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, MutationOp, Predicate, ReadItem,
+    ReadPurpose, ScanItem, ScanRequest, Value, Version,
 };
 use crate::layout::{history_key, history_prefix};
 use holt::{DBAtomicBatch, KeyRangeEntry, RangeEntry, RecordVersion, Tree, TreeConfig, DB};
@@ -381,6 +381,56 @@ impl MetadataStore for HoltMetadataStore {
         }
         for entry in range {
             let outcome = push_visible_scan_item(
+                entry,
+                request.family,
+                request.version,
+                &history,
+                &mut out,
+                limit,
+                start_after,
+            )?;
+            visited_total += outcome.visited as u64;
+            returned_total += outcome.returned as u64;
+            if outcome.done {
+                break;
+            }
+        }
+        self.stats
+            .scan_key_visited_total
+            .fetch_add(visited_total, Ordering::Relaxed);
+        self.stats
+            .scan_key_returned_total
+            .fetch_add(returned_total, Ordering::Relaxed);
+        Ok(out)
+    }
+
+    fn scan_delimited(
+        &self,
+        request: DelimitedScanRequest,
+    ) -> Result<Vec<DelimitedScanItem>, MetadataError> {
+        self.stats.scan_total.fetch_add(1, Ordering::Relaxed);
+        self.stats.record_scan_purpose(request.purpose);
+        let limit = if request.limit == 0 {
+            usize::MAX
+        } else {
+            request.limit
+        };
+        let current = self.current_tree(request.family)?;
+        let history = self.history_tree()?;
+        let start_after = request.start_after.as_deref();
+        let mut out = Vec::new();
+        let mut visited_total = 0_u64;
+        let mut returned_total = 0_u64;
+
+        let mut range = current.range().delimiter(request.delimiter);
+        if !request.prefix.is_empty() {
+            range = range.prefix(&request.prefix);
+        }
+        if let Some(start_after) = start_after {
+            range = range.start_after(start_after);
+        }
+        for entry in range {
+            let outcome = push_visible_delimited_scan_item(
                 entry,
                 request.family,
                 request.version,
@@ -1441,6 +1491,64 @@ fn push_visible_scan_item(
     })
 }
 
+fn push_visible_delimited_scan_item(
+    entry: Result<RangeEntry, holt::Error>,
+    family: RecordFamily,
+    version: Version,
+    history: &Tree,
+    out: &mut Vec<DelimitedScanItem>,
+    limit: usize,
+    start_after: Option<&[u8]>,
+) -> Result<ScanPushOutcome, MetadataError> {
+    match entry.map_err(to_backend_error)? {
+        RangeEntry::Key { key, value, .. } => {
+            if start_after.is_some_and(|start_after| key.as_slice() <= start_after) {
+                return Ok(ScanPushOutcome {
+                    done: false,
+                    visited: 1,
+                    returned: 0,
+                });
+            }
+            let mut returned = 0_usize;
+            if let Some((commit, visible)) =
+                decode_visible_value(family, &key, Some(&value), version, history)?
+            {
+                out.push(DelimitedScanItem::Key(ScanItem {
+                    key,
+                    value: Value(visible),
+                    version: commit,
+                }));
+                returned = 1;
+            }
+            Ok(ScanPushOutcome {
+                done: out.len() >= limit,
+                visited: 1,
+                returned,
+            })
+        }
+        RangeEntry::CommonPrefix(prefix) => {
+            if start_after.is_some_and(|start_after| prefix.as_slice() <= start_after) {
+                return Ok(ScanPushOutcome {
+                    done: false,
+                    visited: 1,
+                    returned: 0,
+                });
+            }
+            out.push(DelimitedScanItem::CommonPrefix(prefix));
+            Ok(ScanPushOutcome {
+                done: out.len() >= limit,
+                visited: 1,
+                returned: 1,
+            })
+        }
+        _ => Ok(ScanPushOutcome {
+            done: false,
+            visited: 0,
+            returned: 0,
+        }),
+    }
+}
+
 fn encode_current_value(version: Version, value: &[u8]) -> Vec<u8> {
     let mut out = Vec::with_capacity(VALUE_HEADER_LEN + value.len());
     out.extend_from_slice(&version.get().to_be_bytes());
@@ -1579,8 +1687,8 @@ fn set_mutation_guard(
 mod tests {
     use super::*;
     use crate::command::{
-        CommandKind, HistoryPruneRequest, MetadataCommand, Mutation, PredicateRef, ScanRequest,
-        Value,
+        CommandKind, DelimitedScanItem, DelimitedScanRequest, HistoryPruneRequest, MetadataCommand,
+        Mutation, PredicateRef, ScanRequest, Value,
     };
     use std::sync::{Arc, Barrier};
     use std::thread;
@@ -1731,6 +1839,50 @@ mod tests {
         assert_eq!(
             after.scan_key_returned_total - before.scan_key_returned_total,
             1
+        );
+    }
+
+    #[test]
+    fn scan_delimited_uses_engine_common_prefix_rollup() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+        store
+            .commit_metadata(put_command(b"dir/sub/b", b"req-2", b"value-b", 3))
+            .unwrap();
+        store
+            .commit_metadata(put_command(b"dir/sub/c", b"req-3", b"value-c", 4))
+            .unwrap();
+
+        let before = store.metadata_store_stats();
+        let scan = store
+            .scan_delimited(DelimitedScanRequest {
+                family: RecordFamily::Dentry,
+                prefix: b"dir/".to_vec(),
+                start_after: None,
+                delimiter: b'/',
+                version: version(4),
+                limit: 10,
+                purpose: ReadPurpose::UserStrong,
+            })
+            .unwrap();
+
+        assert_eq!(
+            scan,
+            vec![
+                DelimitedScanItem::Key(ScanItem {
+                    key: b"dir/a".to_vec(),
+                    value: Value(b"value-a".to_vec()),
+                    version: version(2),
+                }),
+                DelimitedScanItem::CommonPrefix(b"dir/sub/".to_vec()),
+            ]
+        );
+        let after = store.metadata_store_stats();
+        assert_eq!(
+            after.scan_key_returned_total - before.scan_key_returned_total,
+            2
         );
     }
 

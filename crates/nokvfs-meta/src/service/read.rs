@@ -137,6 +137,18 @@ where
         self.read_dir_plus_page(parent, after, limit)
     }
 
+    pub fn list_indexed_path_page(
+        &self,
+        path: &str,
+        after: Option<&DentryName>,
+        limit: usize,
+    ) -> Result<ReadDirPlusPage, MetadError> {
+        let version = self.read_version()?;
+        let components = parse_absolute_path(path)?;
+        let parent = self.resolve_components_as_directory_at_version(&components, version)?;
+        self.list_indexed_components_page(parent, &components, after, limit, version)
+    }
+
     pub fn stat_path(&self, path: &str) -> Result<Option<PathMetadata>, MetadError> {
         self.stat_path_from_at_version(InodeId::root(), path, self.read_version()?)
     }
@@ -219,6 +231,86 @@ where
             entries,
             next_cursor,
         })
+    }
+
+    fn list_indexed_components_page(
+        &self,
+        parent: InodeId,
+        components: &[DentryName],
+        after: Option<&DentryName>,
+        limit: usize,
+        version: Version,
+    ) -> Result<ReadDirPlusPage, MetadError> {
+        let requested = limit.max(1);
+        let prefix = path_index_prefix(self.mount, components);
+        let start_after = after.map(|name| {
+            let mut marker = components.to_vec();
+            marker.push(name.clone());
+            path_index_prefix(self.mount, &marker)
+        });
+        let rows = self.metadata.scan_delimited(DelimitedScanRequest {
+            family: RecordFamily::PathIndex,
+            prefix: prefix.clone(),
+            start_after,
+            delimiter: PATH_INDEX_DELIMITER,
+            version,
+            limit: requested.saturating_add(1),
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        let mut entries = Vec::<DentryWithAttr>::with_capacity(requested);
+        for item in rows {
+            if entries.len() > requested {
+                break;
+            }
+            let Some(entry) = self.indexed_path_child(parent, &prefix, item, version)? else {
+                continue;
+            };
+            entries.push(entry);
+        }
+        let next_cursor = if entries.len() > requested {
+            entries.truncate(requested);
+            entries.last().map(|entry| entry.dentry.name.clone())
+        } else {
+            None
+        };
+        Ok(ReadDirPlusPage {
+            entries,
+            next_cursor,
+        })
+    }
+
+    fn indexed_path_child(
+        &self,
+        parent: InodeId,
+        prefix: &[u8],
+        item: DelimitedScanItem,
+        version: Version,
+    ) -> Result<Option<DentryWithAttr>, MetadError> {
+        match item {
+            DelimitedScanItem::Key(item) => {
+                let name = path_index_child_name(prefix, &item.key, false)?;
+                let indexed: DentryWithAttr =
+                    crate::layout::decode_dentry_projection(&item.value.0)
+                        .map_err(|err| MetadError::Codec(err.to_string()))?
+                        .into();
+                let Some((canonical, canonical_version)) =
+                    self.lookup_plus_at_version(parent, &name, version)?
+                else {
+                    return Ok(None);
+                };
+                if canonical_version == item.version && canonical == indexed {
+                    Ok(Some(canonical))
+                } else {
+                    Ok(None)
+                }
+            }
+            DelimitedScanItem::CommonPrefix(common) => {
+                let name = path_index_child_name(prefix, &common, true)?;
+                Ok(self
+                    .lookup_plus_at_version(parent, &name, version)?
+                    .map(|(entry, _)| entry))
+            }
+        }
     }
 
     pub(super) fn resolve_parent_path(
@@ -720,4 +812,27 @@ where
             })
             .collect()
     }
+}
+
+fn path_index_child_name(
+    prefix: &[u8],
+    key: &[u8],
+    common_prefix: bool,
+) -> Result<DentryName, MetadError> {
+    let mut suffix = key.strip_prefix(prefix).ok_or_else(|| {
+        MetadError::Codec("path index scan returned a key outside the requested prefix".to_owned())
+    })?;
+    if common_prefix {
+        suffix = suffix
+            .strip_suffix(&[PATH_INDEX_DELIMITER])
+            .ok_or_else(|| {
+                MetadError::Codec("path index common prefix is missing delimiter".to_owned())
+            })?;
+    }
+    if suffix.is_empty() || suffix.contains(&PATH_INDEX_DELIMITER) {
+        return Err(MetadError::Codec(
+            "path index scan returned a malformed child component".to_owned(),
+        ));
+    }
+    DentryName::new(suffix.to_vec()).map_err(|err| MetadError::Codec(err.to_string()))
 }
