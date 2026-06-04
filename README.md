@@ -7,7 +7,7 @@ SPDX-License-Identifier: Apache-2.0
   <img src="./docs/public/img/logo.svg" width="200" alt="NoKV" />
 
   <p>
-    <strong>Rust filesystem metadata for AI training and agent workspaces.</strong>
+    <strong>A metadata control plane for AI, ML, and agent workloads.</strong>
   </p>
 
   <h3>Recognized In The AI-Native Storage Ecosystem</h3>
@@ -36,7 +36,6 @@ SPDX-License-Identifier: Apache-2.0
   </table>
 
   <p>
-    <a href="https://github.com/avelino/awesome-go#databases-implemented-in-go"><img alt="Mentioned in Awesome" src="https://awesome.re/mentioned-badge.svg" /></a>
     <a href="https://pkg.go.dev/github.com/feichai0017/NoKV"><img alt="Go Reference" src="https://img.shields.io/badge/go.dev-reference-007d9c?logo=go&logoColor=white" /></a>
     <a href="https://goreportcard.com/report/github.com/feichai0017/NoKV"><img alt="Go Report Card" src="https://img.shields.io/badge/go%20report-A+-brightgreen" /></a>
     <a href="https://landscape.cncf.io/?group=projects-and-products&item=runtime--cloud-native-storage--nokv"><img alt="CNCF Landscape" src="https://img.shields.io/badge/CNCF%20Landscape-listed-5699C6?logo=cncf&logoColor=white" /></a>
@@ -54,210 +53,226 @@ SPDX-License-Identifier: Apache-2.0
 
 <br/>
 
-# NoKV
+## Goal
 
-NoKV is an open-source Rust filesystem for AI training and agent
-workspaces. It keeps filesystem metadata in Holt and stores file bodies in
-S3-compatible object storage such as AWS S3, RustFS, MinIO, or Ceph RGW.
+NoKV provides a shared metadata control plane for AI, ML, and agent workloads.
 
-The product target is a real file interface with metadata optimized for:
+The target workload is not generic key/value storage. It is the metadata around
+artifacts, workspaces, runs, checkpoints, traces, datasets, model outputs, and
+derived files. These records need durable namespace truth, point-in-time reads,
+watchable updates, and atomic publish semantics even when the actual bytes live
+outside NoKV.
 
-- AI training datasets with many files, manifests, and repeated directory
-  scans;
-- checkpoint and artifact publication where object bytes are uploaded first
-  and metadata publish must be atomic;
-- agent workspaces with scoped views, read-only snapshots, and typed watch
-  events;
-- DFS-style metadata services that want inode/dentry semantics without owning
-  the object body durability layer.
+NoKV's stable product core is `fsmeta`: a filesystem-shaped workspace metadata
+service backed by a local embedded KV engine today, with a distributed raftstore
+runtime for scale-out deployments.
 
-NoKV is not a general-purpose distributed KV database and does not implement
-object-store durability itself. Object bytes live in an external body store.
-NoKV owns namespace truth, metadata transactions, inode/dentry records,
-body descriptors, watch/snapshot state, and later distributed metadata shards.
+NoKV does not own object bodies, model weights, or POSIX file data. Those remain
+in object stores, local filesystems, model stores, or application-defined body
+stores. NoKV owns the metadata truth, namespace commit point, compact body
+references, and lifecycle coordination.
 
-## Current Status
+## Why
 
-The repository has been cut down to the Rust NoKV line. The current
-implementation is a basic usable local filesystem surface: it can mount with
-FUSE, create and list directories, write and read files through object-backed
-chunk manifests, rename or remove namespace entries, publish artifacts
-atomically, serve remote metadata clients, and expose read-only snapshot views.
+AI infrastructure has a metadata control-plane gap.
 
-It is not yet a production distributed DFS. Multi-node metadata replication,
-remote FUSE over the metadata server, and the remaining strict POSIX corners
-are still future work.
+A single run or agent session can produce prompts, tool outputs, model
+responses, checkpoints, logs, traces, evaluation artifacts, and derived
+datasets. Today those records are often split across:
 
-The current workspace contains:
+- object store prefixes for artifact bytes;
+- SQL tables for run metadata;
+- local files for checkpoints;
+- observability systems for traces;
+- framework-specific tracking stores;
+- custom glue code for workspace state.
+
+That split creates predictable pain:
+
+- no common metadata publish point for external artifact bodies;
+- partial writes and stale staged entries after crashes or retries;
+- expensive client-side directory reconstruction from generic KV scans;
+- duplicated indexing, lifecycle, and GC code across every AI stack;
+- weak workspace change feeds for collaborative or multi-agent systems;
+- framework lock-in around artifact layout and run metadata;
+- growing maintenance cost from stitching SQL, object-store listing, and
+  coordination logic into each new product.
+
+NoKV makes that metadata layer explicit.
+
+## Why NoKV?
+
+NoKV is purpose-built for metadata semantics, not generic storage wrapped in
+conventions.
+
+### Native metadata operations
+
+`fsmeta` exposes namespace operations directly: create, lookup, fused directory
+listing, atomic rename, overwrite publish, subtree move, snapshot, watch, writer
+sessions, quota, and remove. Applications do not have to rediscover those
+protocols with ad hoc `Get` / `Put` / `Scan` sequences.
+
+### Tunable local engine
+
+NoKV ships with its own embedded KV engine, WAL, LSM, MVCC, transaction path,
+watch plumbing, and metadata executor. The default development path is local
+and self-contained:
 
 ```text
-crates/
-  nokvfs-types   # mount, inode, dentry, body descriptor, watch types
-  nokvfs-protocol # metadata RPC wire DTOs
-  nokvfs-meta    # schema, MetadataCommand, Holt store, in-process metad
-  nokvfs-object  # S3-compatible object backend, including RustFS
-  nokvfs-client  # Rust SDK
-  nokvfs-fuse    # low-level FUSE frontend
-  nokvfs-server  # long-running local metad process and health/control plane
-  nokvfs-cli     # nokv-fs CLI binary
-
-bench/           # system workload benchmark harness
-
-docs/
-  architecture.md
-  product-design.md
-  metadata-schema.md
-  object-layout.md
-  ai-training.md
-  checkpointing.md
-
-examples/
-  pytorch/
-  k8s/
+application / SDK
+  -> fsmeta
+  -> fsmeta/runtime/local
+  -> local MVCC KV
 ```
 
-Implemented today:
+That keeps early integration work light: no SQL schema migration layer, no
+separate coordination service, no object-store prefix polling loop, and less
+application glue around every metadata operation.
 
-- local Holt-backed metadata store with inode/dentry canonical truth,
-  family trees, dentry projection, and snapshot-aware history;
-- S3-compatible object backend for AWS S3, RustFS, MinIO, and compatible
-  services;
-- in-memory object backend for package tests;
-- chunked object data plane with 64 MiB chunks, 4 MiB immutable object blocks,
-  range read plans, and metadata-published body manifests;
-- metadata commands with predicates, mutations, family trees, command dedupe,
-  and dentry projection;
-- staged object references and explicit cleanup helpers for failed artifact
-  publish paths;
-- durable pending-object GC queue and explicit cleanup API for removed or
-  replaced artifact bodies;
-- service-level background object GC worker, enabled by the live FUSE mount;
-- durable snapshot pins, snapshot-version artifact reads, and snapshot-protected
-  object cleanup;
-- snapshot-aware metadata history cleanup and background history GC worker;
-- read-only FUSE snapshot mounts rooted at a snapshot subtree;
-- durable typed watch replay for namespace and artifact publication events;
-- live FUSE mount invalidates kernel entry/inode caches from typed watch replay;
-- long-running local `nokvfs-server` process with health, stats, and manual
-  object/history GC endpoints;
-- framed metadata RPC v3 on `nokvfs-server` for bootstrap, lookup,
-  readdir-plus, create, remove, rename, snapshot, artifact publish, and
-  snapshot retirement, with pipelined request ids, out-of-order responses,
-  bounded server workers, and ordered non-atomic batch requests for remote SDK
-  throughput; HTTP `/rpc` remains available for debug requests;
-- remote Rust metadata client for path and inode namespace operations over the
-  framed RPC;
-- remote Rust file client that uploads object blocks directly, commits metadata
-  through `metad`, fetches body read plans, and reads object ranges directly
-  from the configured object store;
-- basic root bootstrap, directory create, artifact publish, lookup-plus,
-  readdir-plus, remove, rmdir, rename, and rename-replace in the in-process
-  service;
-- path-oriented Rust SDK for mkdir, artifact publish, lookup, list, cat,
-  remove, rmdir, rename, and rename-replace;
-- low-level FUSE frontend for lookup, getattr, readdir, open, range read,
-  snapshot read mounts, mkdir, create, dirty-range buffered write sessions,
-  flush/fsync/release publish, unlink, rmdir, and rename-replace;
-- `nokv-fs` local CLI: init, mkdir, put-artifact, ls, cat, rm, rmdir, rename,
-  rename-replace, mount, mount-snapshot, snapshot, cat-snapshot,
-  retire-snapshot, serve, and manual GC cleanup.
+### Distributed path when needed
 
-Not implemented yet:
+The same metadata contract can run on the distributed runtime:
 
-- remote FUSE over the metadata server;
-- full POSIX mmap, lock, truncate, and strict fsync semantics;
-- multi-node distributed metadata shards.
-
-## Quick Check
-
-```bash
-make test
+```text
+application / SDK
+  -> fsmeta client/server
+  -> fsmeta/runtime/raftstore
+  -> coordinator + meta/root + TSO + raftstore + transactions
 ```
 
-This runs:
+This path is for larger agent platforms, distributed workspace services, and
+DFS-scale namespace metadata. The local runtime remains the default product path
+for development and small deployments.
 
-```bash
-cargo test --workspace
-```
+### Bring your own data plane
 
-For a real S3-compatible object backend contract test, set:
+NoKV stores metadata and compact references. Artifact bytes stay outside NoKV.
 
-```bash
-export NOKV_FS_S3_BUCKET=nokv-fs-test
-export NOKV_FS_S3_ENDPOINT=http://127.0.0.1:9000
-export NOKV_FS_S3_REGION=auto
-export NOKV_FS_S3_ACCESS_KEY_ID=minioadmin
-export NOKV_FS_S3_SECRET_ACCESS_KEY=minioadmin
-cargo test -p nokvfs-object s3_object_store_contract_from_env
-```
+Examples:
 
-RustFS uses the same S3-compatible backend; it should be configured through
-the endpoint and credentials, not through a RustFS-specific code path.
+- local file body stores for tests and development;
+- S3/R2/GCS-style body stores for production;
+- model registry or dataset storage owned by another system;
+- application-defined checkpoint payload stores.
 
-## Local CLI Smoke
+The boundary is deliberate: NoKV owns namespace truth, body references, metadata
+versions, watches, and lifecycle coordination.
 
-```bash
-cargo run -p nokvfs-cli --bin nokv-fs -- init
-cargo run -p nokvfs-cli --bin nokv-fs -- mkdir /runs
-printf '{"step":1}' > /tmp/checkpoint.json
-cargo run -p nokvfs-cli --bin nokv-fs -- \
-  put-artifact /runs/checkpoint.json /tmp/checkpoint.json
-cargo run -p nokvfs-cli --bin nokv-fs -- ls /runs
-cargo run -p nokvfs-cli --bin nokv-fs -- cat /runs/checkpoint.json
-```
+## `fsmeta` - Workspace Namespace Metadata Service
 
-To mount the current FUSE frontend:
+`fsmeta` is the stable NoKV product contract.
 
-```bash
-mkdir -p /tmp/nokv-fs-mount
-cargo run -p nokvfs-cli --bin nokv-fs -- mount /tmp/nokv-fs-mount
-```
+It provides a durable, versioned, watchable namespace shaped like filesystem
+metadata. It is not a FUSE frontend, not a POSIX filesystem, and not an object
+store. It is the metadata kernel consumed by AI workload stores, artifact SDKs,
+workspace services, distributed filesystem frontends, and object namespace
+layers.
 
-The live mount starts background object and metadata-history GC workers. Use
-`--object-gc-interval-ms`, `--object-gc-limit`, `--history-gc-interval-ms`,
-and `--history-gc-limit` before `mount` to tune them.
+Native API surface is available through embedded Go via
+`fsmeta/runtime/local.Open` and through the distributed gRPC gateway
+`nokv-fsmeta`.
 
-To run the local metadata process without mounting FUSE:
+| Primitive | Semantics |
+|---|---|
+| `Create` | Atomically creates a dentry and inode. |
+| `Lookup` | Reads a dentry by `(mount, parent_inode, name)`. |
+| `LookupPlus` | Reads a dentry and inode attributes together. |
+| `ReadDir` | Scans one directory page by dentry prefix. |
+| `ReadDirPlus` | Scans dentries and batch-reads inode attrs under one snapshot version. |
+| `UpdateInode` | Updates size, mode, updated timestamp, and bounded opaque attrs. |
+| `Rename` | Moves one namespace entry when the destination does not exist. |
+| `RenameReplace` | Atomically publishes or overwrites a file entry, useful for artifact replacement. |
+| `RenameSubtree` | Moves a subtree root with rooted authority handoff. |
+| `Remove` | Removes one non-directory namespace entry and returns removed inode metadata. |
+| `RemoveDirectory` | Removes one empty directory after child-count verification. |
+| `Link` / `Unlink` | Non-directory hard-link semantics with link-count updates. |
+| `SnapshotSubtree` | Publishes an MVCC read-version token for point-in-time namespace reads. |
+| `WatchSubtree` | Prefix-scoped change feed with ready cursor, ack, replay, and overflow handling. |
+| Writer sessions | `OpenWriteSession`, `HeartbeatWriteSession`, `CloseWriteSession`, `ExpireWriteSessions`. |
+| Quota usage | Persistent quota counters plus rooted quota fences. |
 
-```bash
-cargo run -p nokvfs-cli --bin nokv-fs -- serve
-curl http://127.0.0.1:7777/healthz
-curl http://127.0.0.1:7777/stats
-curl -X POST http://127.0.0.1:7777/rpc \
-  -H 'content-type: application/json' \
-  -d '{"op":"read_dir_plus","parent":1}'
-curl -X POST http://127.0.0.1:7777/gc
-```
+`InodeRecord.OpaqueAttrs` is application-owned metadata capped at 16 KiB. It is
+for compact body references, checksums, media types, or small descriptors. It is
+not for storing artifact bodies or large trace payloads.
 
-Use `--server-bind ADDR` before `serve` to change the health/control address.
-The Rust SDK uses the server's framed metadata RPC on the same port; HTTP
-`/rpc` is kept for curl/debug visibility. `/stats` includes object counters,
-GC worker state, and metadata-store write attribution counters for current,
-history, watch, and dedupe writes.
+### Artifact publish model
 
-To mount a read-only snapshot view:
+Large bodies are written outside `fsmeta`. The metadata commit happens in
+`fsmeta`.
 
-```bash
-SNAPSHOT_ID=$(cargo run -q -p nokvfs-cli --bin nokv-fs -- snapshot /runs \
-  | sed -n 's/.* id=\([0-9][0-9]*\) .*/\1/p')
-mkdir -p /tmp/nokv-fs-snapshot
-cargo run -p nokvfs-cli --bin nokv-fs -- \
-  mount-snapshot "$SNAPSHOT_ID" /tmp/nokv-fs-snapshot
-```
+Typical flow:
 
-Linux builds use fuser's pure-Rust mount path. macOS builds require macFUSE
-and its `pkg-config` metadata so the CLI can perform a real FUSE mount.
+1. Write the body to a `BodyStore`.
+2. Encode the resulting body reference into inode opaque attrs.
+3. Create a hidden staged namespace entry.
+4. Publish it to the final path with `RenameReplace`.
 
-## Documentation
+Readers observe either the old body reference or the new one, never a
+half-published artifact path.
 
-- [Architecture](docs/architecture.md)
-- [Product Design](docs/product-design.md)
-- [Metadata Schema](docs/metadata-schema.md)
-- [Object Layout](docs/object-layout.md)
-- [AI Training](docs/ai-training.md)
-- [Checkpointing](docs/checkpointing.md)
-- [Code Contract](docs/development/code_contract.md)
+### Authority lifecycle
 
-## License
+Some metadata facts are rooted truth, while high-frequency inode and dentry
+updates remain data-plane writes.
 
-[Apache-2.0](./LICENSE)
+| Domain | Rooted truth | Runtime view |
+|---|---|---|
+| Mount | `MountRegistered` / `MountRetired` | Mount admission cache. |
+| Subtree authority | `SubtreeAuthorityDeclared` / `SubtreeHandoffStarted` / `SubtreeHandoffCompleted` | RenameSubtree era frontier and pending handoff repair. |
+| Snapshot epoch | `SnapshotEpochPublished` / `SnapshotEpochRetired` | Snapshot-version reads and MVCC-GC retention. |
+| Quota fence | `QuotaFenceUpdated` | Quota fence cache plus persisted usage counters. |
+| WatchSubtree | Not rooted truth | Raftstore apply observer plus fsmeta watch router. |
+
+Documentation: [`docs/guide/fsmeta.md`](docs/guide/fsmeta.md)
+
+## SDK Status
+
+| SDK | State |
+|---|---|
+| [`sdk/artifact/`](./sdk/artifact) | Go artifact namespace SDK over `fsmeta`, with a local file body store. |
+| [`sdk/artifact/python`](./sdk/artifact/python) | Python adapter for artifact-repository-style integrations and local tests. |
+| [`sdk/runmetadata/python`](./sdk/runmetadata/python) | In-memory prototype for run lifecycle, artifact refs, lineage, and recent artifact listing. |
+| [`sdk/runmetadata/typescript`](./sdk/runmetadata/typescript) | In-memory TypeScript prototype with the same run metadata direction. |
+| [`sdk/workspace`](./sdk/workspace) | Planned surface; directory exists but no implementation yet. |
+
+Current known gaps:
+
+- production Python NoKV/fsmeta client;
+- object-store-backed `BodyStore`;
+- body garbage collection and reference ownership policy;
+- staged-entry recovery policy;
+- durable run metadata backend;
+- workspace SDK;
+- full tracking/search/index plane for runs, metrics, traces, datasets, and
+  evaluations.
+
+## Headline Evidence
+
+### Underlying KV layer
+
+Apple M3 Pro - `records=1M` - `ops=1M` - `value_size=1000` - `conc=16`
+
+| Workload | Description | **NoKV** | Badger | Pebble |
+|---|---|---:|---:|---:|
+| **YCSB-A** | 50/50 read/update | **175,905** | 108,232 | 169,792 |
+| **YCSB-B** | 95/5 read/update | **525,631** | 188,893 | 137,483 |
+| **YCSB-C** | 100% read | **409,136** | 242,463 | 90,474 |
+| **YCSB-D** | 95% read, 5% insert latest | **632,031** | 284,205 | 198,139 |
+| **YCSB-E** | 95% scan, 5% insert | **45,620** | 15,027 | 40,793 |
+| **YCSB-F** | read-modify-write | **157,732** | 84,601 | 122,192 |
+
+Units: ops/sec. Full latency details live in
+[`benchmark/README.md`](./benchmark/README.md). Single-node localhost, not
+multi-host production.
+
+## Why NoKV vs X?
+
+| If you need... | You should probably use... | Where NoKV fits |
+|---|---|---|
+| A complete distributed filesystem | CephFS, JuiceFS | NoKV is not a filesystem. It can provide the metadata substrate a filesystem-shaped frontend consumes. |
+| A production object store | MinIO, Ceph RGW, S3-compatible storage | NoKV is not an object store. It provides namespace metadata and body references above an object backend. |
+| A custom AI workload metadata service | NoKV | NoKV gives you namespace, watch, snapshot, atomic publish, and local-first metadata execution without rebuilding the control plane. |
+| A production distributed KV | TiKV, FoundationDB, CockroachDB | NoKV does not compete with generic KV systems. It is metadata-native and can run on its own engine today. |
+| Production distributed SQL | CockroachDB, TiDB, Postgres | Use SQL for relational query workloads. Use NoKV when namespace semantics and metadata commit points are the core problem. |
+| Just an embedded LSM | Pebble, Badger | NoKV's engine is not a drop-in LSM library; it exists to serve the metadata runtime. |
+| A Raft library | etcd/raft, dragonboat | NoKV's raftstore is built on top of `etcd/raft` `RawNode`; owned code is the metadata/runtime integration. |
