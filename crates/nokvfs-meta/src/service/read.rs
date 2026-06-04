@@ -750,14 +750,16 @@ where
     }
 
     pub fn read_artifact(&self, parent: InodeId, name: &DentryName) -> Result<Vec<u8>, MetadError> {
+        let version = self.read_version()?;
         let entry = self
-            .lookup_plus(parent, name)?
+            .lookup_plus_at_version_for_purpose(parent, name, version, ReadPurpose::UserStrong)?
+            .map(|(entry, _)| entry)
             .ok_or(MetadError::NotFound)?;
         if entry.attr.file_type != FileType::File {
             return Err(MetadError::NotFile);
         }
         let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
-        self.read_file(entry.attr.inode, 0, body.size as usize)
+        self.read_file_at_version(entry.attr.inode, &body, 0, body.size as usize, version)
     }
 
     pub fn body_descriptor(&self, inode: InodeId) -> Result<Option<BodyDescriptor>, MetadError> {
