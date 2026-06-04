@@ -57,6 +57,7 @@ const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
 const ALLOCATOR_VERSION_RESERVATION: u64 = 1024;
 const ALLOCATOR_INODE_RESERVATION: u64 = 1024;
 const BODY_DIGEST_CHUNK_SIZE: usize = 8 * 1024 * 1024;
+const PATH_RESOLUTION_CACHE_MAX_ENTRIES: usize = 4096;
 
 const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 13] = [
     RecordFamily::System,
@@ -80,6 +81,13 @@ struct AllocatorState {
     // unused ids after a crash, but must never reuse a visible version/inode.
     last_commit_version: u64,
     next_inode: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct PathResolutionCacheKey {
+    root: u64,
+    version: u64,
+    components_key: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -296,6 +304,7 @@ pub struct NoKvFs<M, O> {
     metadata: M,
     objects: O,
     allocator_gate: Mutex<()>,
+    path_resolution_cache: Mutex<BTreeMap<PathResolutionCacheKey, InodeId>>,
     clock: AtomicU64,
     reserved_version: AtomicU64,
     next_inode: AtomicU64,

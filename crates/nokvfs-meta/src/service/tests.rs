@@ -522,6 +522,42 @@ fn prepared_artifact_path_publish_writes_and_uses_validated_path_index() {
 }
 
 #[test]
+fn path_resolution_cache_reuses_parent_directory_for_indexed_stats() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    publish_path_artifact(&service, "/runs/a.bin", "runs/a.bin", b"a");
+    publish_path_artifact(&service, "/runs/b.bin", "runs/b.bin", b"b");
+    service.path_resolution_cache.lock().unwrap().clear();
+
+    let before_store = metadata.metadata_store_stats();
+    let before_service = service.metadata_service_stats();
+    assert!(service.stat_path("/runs/a.bin").unwrap().is_some());
+    let after_first_store = metadata.metadata_store_stats();
+    assert!(service.stat_path("/runs/b.bin").unwrap().is_some());
+    let after_second_store = metadata.metadata_store_stats();
+    let after_service = service.metadata_service_stats();
+
+    let first_gets = after_first_store.get_total - before_store.get_total;
+    let second_gets = after_second_store.get_total - after_first_store.get_total;
+    assert_eq!(first_gets, 3);
+    assert_eq!(second_gets, 2);
+    assert_eq!(
+        after_service.path_index_hit_total - before_service.path_index_hit_total,
+        2
+    );
+    assert_eq!(
+        after_service.path_index_fallback_total - before_service.path_index_fallback_total,
+        0
+    );
+}
+
+#[test]
 fn stale_path_index_falls_back_to_canonical_namespace() {
     let service = service();
     let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();

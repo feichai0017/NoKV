@@ -391,8 +391,20 @@ where
         version: Version,
         purpose: ReadPurpose,
     ) -> Result<InodeId, MetadError> {
+        if components.is_empty() {
+            return Ok(root);
+        }
+        if let Some(cached) = self.cached_path_resolution(root, components, version)? {
+            return Ok(cached);
+        }
         let mut current = root;
-        for name in components {
+        for index in 0..components.len() {
+            let prefix = &components[..=index];
+            if let Some(cached) = self.cached_path_resolution(root, prefix, version)? {
+                current = cached;
+                continue;
+            }
+            let name = &components[index];
             let entry = self
                 .lookup_plus_at_version_for_purpose(current, name, version, purpose)?
                 .map(|(entry, _)| entry)
@@ -401,8 +413,53 @@ where
                 return Err(MetadError::NotDirectory);
             }
             current = entry.attr.inode;
+            self.remember_path_resolution(root, prefix, version, current)?;
         }
         Ok(current)
+    }
+
+    fn cached_path_resolution(
+        &self,
+        root: InodeId,
+        components: &[DentryName],
+        version: Version,
+    ) -> Result<Option<InodeId>, MetadError> {
+        let key = self.path_resolution_cache_key(root, components, version);
+        let cache = self.path_resolution_cache.lock().map_err(|err| {
+            MetadataError::Backend(format!("metadata path resolution cache poisoned: {err}"))
+        })?;
+        Ok(cache.get(&key).copied())
+    }
+
+    fn remember_path_resolution(
+        &self,
+        root: InodeId,
+        components: &[DentryName],
+        version: Version,
+        inode: InodeId,
+    ) -> Result<(), MetadError> {
+        let key = self.path_resolution_cache_key(root, components, version);
+        let mut cache = self.path_resolution_cache.lock().map_err(|err| {
+            MetadataError::Backend(format!("metadata path resolution cache poisoned: {err}"))
+        })?;
+        if cache.len() >= PATH_RESOLUTION_CACHE_MAX_ENTRIES {
+            cache.clear();
+        }
+        cache.insert(key, inode);
+        Ok(())
+    }
+
+    fn path_resolution_cache_key(
+        &self,
+        root: InodeId,
+        components: &[DentryName],
+        version: Version,
+    ) -> PathResolutionCacheKey {
+        PathResolutionCacheKey {
+            root: root.get(),
+            version: version.get(),
+            components_key: path_index_key(self.mount, components),
+        }
     }
 
     pub(super) fn lookup_path_from_at_version_for_purpose(
