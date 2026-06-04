@@ -7,8 +7,9 @@ use std::sync::Arc;
 use std::thread;
 
 use nokvfs_cluster::{
-    ApplyFrontier, CheckpointFrontier, FileAppliedFrontierStore, FileSharedLog, LogIndex, LogTerm,
-    SharedLogError, SharedLogMetadataStore,
+    ApplyFrontier, CheckpointCatalog, CheckpointManifest, FileAppliedFrontierStore,
+    FileCheckpointCatalog, FileSharedLog, LogIndex, LogTerm, SharedLogError,
+    SharedLogMetadataStore, SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -26,6 +27,7 @@ pub struct Server {
     service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
     metadata_log_enabled: bool,
     metadata_log: Option<Arc<FileLoggedMetadataStore>>,
+    metadata_checkpoint: Option<FileCheckpointCatalog>,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
 }
@@ -50,10 +52,12 @@ impl Server {
         let metadata =
             HoltMetadataStore::open_file(&options.meta_path).map_err(MetadError::from)?;
         let mut metadata_log = None;
+        let mut metadata_checkpoint = None;
         let metadata = match options.metadata_log_path.as_ref() {
             Some(path) => {
                 let log = FileSharedLog::open(path)?;
                 let frontier = FileAppliedFrontierStore::open(metadata_apply_frontier_path(path))?;
+                let checkpoint = FileCheckpointCatalog::open(metadata_checkpoint_path(path))?;
                 let (logged, _replay) = SharedLogMetadataStore::recover_with_frontier_store(
                     metadata,
                     log,
@@ -64,6 +68,7 @@ impl Server {
                 .map_err(|err| ServerError::SharedLog(SharedLogError::Backend(err.to_string())))?;
                 let logged = Arc::new(logged);
                 metadata_log = Some(Arc::clone(&logged));
+                metadata_checkpoint = Some(checkpoint);
                 ServerMetadataStore::file_logged(logged)
             }
             None => ServerMetadataStore::direct(metadata),
@@ -77,6 +82,7 @@ impl Server {
             service,
             metadata_log_enabled: metadata_log.is_some(),
             metadata_log,
+            metadata_checkpoint,
             object_gc,
             history_gc,
         })
@@ -141,8 +147,11 @@ impl Server {
         ))
     }
 
-    fn compact_metadata_log(&self) -> Result<Option<CheckpointFrontier>, ServerError> {
+    fn compact_metadata_log(&self) -> Result<Option<CheckpointManifest>, ServerError> {
         let Some(metadata_log) = self.metadata_log.as_ref() else {
+            return Ok(None);
+        };
+        let Some(checkpoints) = self.metadata_checkpoint.as_ref() else {
             return Ok(None);
         };
         let Some(applied) = metadata_log.applied_frontier() else {
@@ -160,9 +169,27 @@ impl Server {
                 )))
             })
             .and_then(|next| LogIndex::new(next).map_err(ServerError::SharedLog))?;
+        let Some(frontier) = metadata_log
+            .checkpoint_frontier(target)
+            .map_err(ServerError::SharedLog)?
+        else {
+            return Ok(None);
+        };
         metadata_log
-            .compact_applied_log(target)
-            .map_err(ServerError::SharedLog)
+            .inner()
+            .checkpoint()
+            .map_err(MetadError::from)?;
+        let mount = self.service.mount_id();
+        let manifest =
+            CheckpointManifest::new(metadata_checkpoint_id(mount, &frontier), mount, frontier)?;
+        checkpoints.publish(manifest.clone())?;
+        if let Some(compact_through) = frontier.compact_through() {
+            metadata_log
+                .log()
+                .compact_through(compact_through)
+                .map_err(ServerError::SharedLog)?;
+        }
+        Ok(Some(manifest))
     }
 }
 
@@ -178,6 +205,33 @@ fn metadata_apply_frontier_path(log_path: &Path) -> PathBuf {
         .unwrap_or_else(|| "metadata.log.apply".into());
     path.set_file_name(file_name);
     path
+}
+
+fn metadata_checkpoint_path(log_path: &Path) -> PathBuf {
+    let mut path = log_path.to_path_buf();
+    let file_name = log_path
+        .file_name()
+        .map(|name| {
+            let mut name = name.to_os_string();
+            name.push(".checkpoint");
+            name
+        })
+        .unwrap_or_else(|| "metadata.log.checkpoint".into());
+    path.set_file_name(file_name);
+    path
+}
+
+fn metadata_checkpoint_id(
+    mount: nokvfs_types::MountId,
+    frontier: &nokvfs_cluster::CheckpointFrontier,
+) -> Vec<u8> {
+    format!(
+        "mount-{}-term-{}-index-{}",
+        mount.get(),
+        frontier.applied_position.term.get(),
+        frontier.applied_position.index.get()
+    )
+    .into_bytes()
 }
 
 impl Server {
@@ -201,17 +255,19 @@ fn metadata_log_json(enabled: bool, frontier: Option<ApplyFrontier>) -> String {
     }
 }
 
-fn metadata_log_gc_json(enabled: bool, frontier: Option<CheckpointFrontier>) -> String {
-    match frontier {
-        Some(frontier) => format!(
-            "{{\"enabled\":true,\"durable_term\":{},\"durable_index\":{},\"applied_term\":{},\"applied_index\":{},\"min_retained_index\":{},\"max_commit_version\":{},\"compacted_through\":{}}}",
-            frontier.durable_position.term.get(),
-            frontier.durable_position.index.get(),
-            frontier.applied_position.term.get(),
-            frontier.applied_position.index.get(),
-            frontier.min_retained_index.get(),
-            frontier.max_commit_version.get(),
-            frontier
+fn metadata_log_gc_json(enabled: bool, manifest: Option<CheckpointManifest>) -> String {
+    match manifest {
+        Some(manifest) => format!(
+            "{{\"enabled\":true,\"checkpoint_id\":\"{}\",\"durable_term\":{},\"durable_index\":{},\"applied_term\":{},\"applied_index\":{},\"min_retained_index\":{},\"max_commit_version\":{},\"compacted_through\":{}}}",
+            escape_json_string(&String::from_utf8_lossy(&manifest.id)),
+            manifest.frontier.durable_position.term.get(),
+            manifest.frontier.durable_position.index.get(),
+            manifest.frontier.applied_position.term.get(),
+            manifest.frontier.applied_position.index.get(),
+            manifest.frontier.min_retained_index.get(),
+            manifest.frontier.max_commit_version.get(),
+            manifest
+                .frontier
                 .compact_through()
                 .map(|index| index.get().to_string())
                 .unwrap_or_else(|| "null".to_owned()),
@@ -394,7 +450,7 @@ pub(crate) mod tests {
     fn manual_gc_compacts_metadata_log_through_applied_frontier() {
         let dir = tempdir().unwrap();
         let metadata_log = dir.path().join("metadata.log");
-        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let server = Server::open(test_options(dir.path(), Some(metadata_log.clone()))).unwrap();
         server
             .service()
             .create_dir_path("/runs", 0o755, 1000, 1000)
@@ -403,7 +459,29 @@ pub(crate) mod tests {
 
         let body = server.run_manual_gc(128).unwrap();
         assert!(body.contains("\"metadata_log\":{\"enabled\":true"));
+        let expected_checkpoint_id = format!(
+            "\"checkpoint_id\":\"mount-{}-term-{}-index-{}\"",
+            server.service().mount_id().get(),
+            applied.position.term.get(),
+            applied.position.index.get()
+        );
+        assert!(body.contains(&expected_checkpoint_id));
         assert!(body.contains("\"compacted_through\":"));
+        let checkpoint_path = metadata_checkpoint_path(&metadata_log);
+        assert!(checkpoint_path.is_file());
+        let checkpoint = FileCheckpointCatalog::open(&checkpoint_path)
+            .unwrap()
+            .latest_for_mount(server.service().mount_id())
+            .unwrap()
+            .expect("manual GC should publish checkpoint manifest");
+        assert_eq!(
+            checkpoint.id,
+            metadata_checkpoint_id(server.service().mount_id(), &checkpoint.frontier)
+        );
+        assert_eq!(
+            checkpoint.frontier.applied_position.index,
+            applied.position.index
+        );
         let log = server.metadata_log.as_ref().unwrap().log();
         assert!(matches!(
             log.read_from(applied.position.index, 0),
