@@ -214,84 +214,33 @@ fn execute_batch(
     let mut results = Vec::with_capacity(requests.len());
     let mut iter = requests.into_iter().peekable();
     while let Some(request) = iter.next() {
-        let Some((parent_path, name, mode, uid, gid)) = create_dir_path_parts(&request) else {
-            if let Some((parent_path, name, mode, uid, gid)) = create_file_path_parts(&request) {
-                let mut names = vec![name];
-                while let Some(next) = iter.peek() {
-                    let Some((next_parent, next_name, next_mode, next_uid, next_gid)) =
-                        create_file_path_parts(next)
-                    else {
-                        break;
-                    };
-                    if next_parent != parent_path
-                        || next_mode != mode
-                        || next_uid != uid
-                        || next_gid != gid
-                    {
-                        break;
-                    }
-                    names.push(next_name);
-                    iter.next();
-                }
-                if names.len() == 1 {
-                    let path = child_path(&parent_path, &names.remove(0));
-                    results.push(execute_envelope(
-                        server,
-                        MetadataRpcRequest::CreateFilePath {
-                            path,
-                            mode,
-                            uid,
-                            gid,
-                        },
-                    ));
-                } else {
-                    results.extend(create_files_in_dir_path_envelopes(
-                        server,
-                        &parent_path,
-                        names,
-                        mode,
-                        uid,
-                        gid,
-                    ));
-                }
-                continue;
-            }
+        let Some(parts) = create_path_parts(&request) else {
             results.push(execute_envelope(server, request));
             continue;
         };
-        let mut names = vec![name];
+
+        let mut names = vec![parts.name.clone()];
         while let Some(next) = iter.peek() {
-            let Some((next_parent, next_name, next_mode, next_uid, next_gid)) =
-                create_dir_path_parts(next)
-            else {
+            let Some(next_parts) = create_path_parts(next) else {
                 break;
             };
-            if next_parent != parent_path || next_mode != mode || next_uid != uid || next_gid != gid
-            {
+            if !parts.can_coalesce_with(&next_parts) {
                 break;
             }
-            names.push(next_name);
+            names.push(next_parts.name);
             iter.next();
         }
         if names.len() == 1 {
-            let path = child_path(&parent_path, &names.remove(0));
-            results.push(execute_envelope(
-                server,
-                MetadataRpcRequest::CreateDirPath {
-                    path,
-                    mode,
-                    uid,
-                    gid,
-                },
-            ));
+            results.push(execute_envelope(server, request));
         } else {
-            results.extend(create_dirs_in_dir_path_envelopes(
+            results.extend(create_path_batch_envelopes(
                 server,
-                &parent_path,
+                parts.kind,
+                &parts.parent_path,
                 names,
-                mode,
-                uid,
-                gid,
+                parts.mode,
+                parts.uid,
+                parts.gid,
             ));
         }
     }
@@ -370,8 +319,34 @@ fn wire_metad_error(err: &MetadError) -> WireMetadataError {
     }
 }
 
-fn create_files_in_dir_path_envelopes(
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum CreatePathKind {
+    Directory,
+    File,
+}
+
+struct CreatePathParts {
+    kind: CreatePathKind,
+    parent_path: String,
+    name: String,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+}
+
+impl CreatePathParts {
+    fn can_coalesce_with(&self, other: &Self) -> bool {
+        self.kind == other.kind
+            && self.parent_path == other.parent_path
+            && self.mode == other.mode
+            && self.uid == other.uid
+            && self.gid == other.gid
+    }
+}
+
+fn create_path_batch_envelopes(
     server: &Server,
+    kind: CreatePathKind,
     parent_path: &str,
     names: Vec<String>,
     mode: u32,
@@ -384,10 +359,19 @@ fn create_files_in_dir_path_envelopes(
         .collect::<Result<Vec<_>, _>>()
         .map_err(ServerError::Metadata);
     let coalesced = parsed.and_then(|names| {
-        server
-            .service()
-            .create_files_in_dir_path(parent_path, names, mode, uid, gid)
-            .map_err(ServerError::Metadata)
+        match kind {
+            CreatePathKind::Directory => {
+                server
+                    .service()
+                    .create_dirs_in_dir_path(parent_path, names, mode, uid, gid)
+            }
+            CreatePathKind::File => {
+                server
+                    .service()
+                    .create_files_in_dir_path(parent_path, names, mode, uid, gid)
+            }
+        }
+        .map_err(ServerError::Metadata)
     });
     match coalesced {
         Ok(entries) => entries
@@ -403,90 +387,71 @@ fn create_files_in_dir_path_envelopes(
             .map(|name| {
                 execute_envelope(
                     server,
-                    MetadataRpcRequest::CreateFilePath {
-                        path: child_path(parent_path, &name),
-                        mode,
-                        uid,
-                        gid,
-                    },
+                    create_path_request(kind, parent_path, &name, mode, uid, gid),
                 )
             })
             .collect(),
     }
 }
 
-fn create_dirs_in_dir_path_envelopes(
-    server: &Server,
-    parent_path: &str,
-    names: Vec<String>,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-) -> Vec<MetadataRpcEnvelope> {
-    let parsed = names
-        .iter()
-        .map(|name| dentry_name(name.clone()))
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(ServerError::Metadata);
-    let coalesced = parsed.and_then(|names| {
-        server
-            .service()
-            .create_dirs_in_dir_path(parent_path, names, mode, uid, gid)
-            .map_err(ServerError::Metadata)
-    });
-    match coalesced {
-        Ok(entries) => entries
-            .iter()
-            .map(|entry| {
-                ok_envelope(MetadataRpcResult::Dentry {
-                    entry: Some(Box::new(wire_dentry(entry))),
-                })
-            })
-            .collect(),
-        Err(_) => names
-            .into_iter()
-            .map(|name| {
-                execute_envelope(
-                    server,
-                    MetadataRpcRequest::CreateDirPath {
-                        path: child_path(parent_path, &name),
-                        mode,
-                        uid,
-                        gid,
-                    },
-                )
-            })
-            .collect(),
-    }
-}
-
-fn create_dir_path_parts(request: &MetadataRpcRequest) -> Option<(String, String, u32, u32, u32)> {
+fn create_path_parts(request: &MetadataRpcRequest) -> Option<CreatePathParts> {
     match request {
         MetadataRpcRequest::CreateDirPath {
             path,
             mode,
             uid,
             gid,
-        } => {
-            let (parent_path, name) = split_parent_path(path)?;
-            Some((parent_path, name, *mode, *uid, *gid))
-        }
-        _ => None,
-    }
-}
-
-fn create_file_path_parts(request: &MetadataRpcRequest) -> Option<(String, String, u32, u32, u32)> {
-    match request {
+        } => create_path_parts_from_path(CreatePathKind::Directory, path, *mode, *uid, *gid),
         MetadataRpcRequest::CreateFilePath {
             path,
             mode,
             uid,
             gid,
-        } => {
-            let (parent_path, name) = split_parent_path(path)?;
-            Some((parent_path, name, *mode, *uid, *gid))
-        }
+        } => create_path_parts_from_path(CreatePathKind::File, path, *mode, *uid, *gid),
         _ => None,
+    }
+}
+
+fn create_path_parts_from_path(
+    kind: CreatePathKind,
+    path: &str,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+) -> Option<CreatePathParts> {
+    let (parent_path, name) = split_parent_path(path)?;
+    Some(CreatePathParts {
+        kind,
+        parent_path,
+        name,
+        mode,
+        uid,
+        gid,
+    })
+}
+
+fn create_path_request(
+    kind: CreatePathKind,
+    parent_path: &str,
+    name: &str,
+    mode: u32,
+    uid: u32,
+    gid: u32,
+) -> MetadataRpcRequest {
+    let path = child_path(parent_path, name);
+    match kind {
+        CreatePathKind::Directory => MetadataRpcRequest::CreateDirPath {
+            path,
+            mode,
+            uid,
+            gid,
+        },
+        CreatePathKind::File => MetadataRpcRequest::CreateFilePath {
+            path,
+            mode,
+            uid,
+            gid,
+        },
     }
 }
 
@@ -662,8 +627,9 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             uid,
             gid,
         } => Ok(MetadataRpcResult::Batch {
-            results: create_files_in_dir_path_envelopes(
+            results: create_path_batch_envelopes(
                 server,
+                CreatePathKind::File,
                 &parent_path,
                 names,
                 mode,
