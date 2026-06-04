@@ -80,6 +80,8 @@ pub struct ClientReadDirPlusPage {
     pub next_cursor: Option<DentryName>,
 }
 
+const DEFAULT_LIST_PAGE_SIZE: usize = 1024;
+
 pub struct NoKvFsClient<O> {
     metadata: MetadataClient,
     objects: O,
@@ -501,14 +503,23 @@ impl MetadataClient {
     }
 
     pub fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
-        match self.call(MetadataRpcRequest::ReadDirPlusPath {
-            path: path.to_owned(),
-        })? {
-            MetadataRpcResult::Dentries { entries } => {
-                entries.into_iter().map(wire_dentry).collect()
+        let mut entries = Vec::new();
+        let mut cursor = None;
+        loop {
+            let page = self.list_page(path, cursor.as_ref(), DEFAULT_LIST_PAGE_SIZE)?;
+            let page_empty = page.entries.is_empty();
+            entries.extend(page.entries);
+            let Some(next_cursor) = page.next_cursor else {
+                break;
+            };
+            if page_empty || cursor.as_ref() == Some(&next_cursor) {
+                return Err(ClientError::Protocol(
+                    "metadata list page cursor did not advance".to_owned(),
+                ));
             }
-            other => Err(unexpected_result(other)),
+            cursor = Some(next_cursor);
         }
+        Ok(entries)
     }
 
     pub fn list_page(
@@ -1530,6 +1541,69 @@ mod tests {
         assert_eq!(
             page.next_cursor.as_ref().map(DentryName::as_bytes),
             Some(b"b.bin".as_slice())
+        );
+    }
+
+    #[test]
+    fn service_list_uses_paged_rpc_until_cursor_is_exhausted() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::ReadDirPlusPathPage {
+                    path,
+                    after_name_hex,
+                    limit
+                } if path == "/runs" && after_name_hex.is_none() && limit == DEFAULT_LIST_PAGE_SIZE
+            ));
+            write_frame(
+                &mut stream,
+                request_id,
+                flags,
+                &response_body(
+                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"612e62696e","child":3,"child_type":"file","attr_generation":3},"attr":{"inode":3,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}],"next_name_hex":"612e62696e"}}"#,
+                ),
+            )
+            .unwrap();
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::ReadDirPlusPathPage {
+                    path,
+                    after_name_hex,
+                    limit
+                } if path == "/runs"
+                    && after_name_hex.as_deref() == Some("612e62696e")
+                    && limit == DEFAULT_LIST_PAGE_SIZE
+            ));
+            write_frame(
+                &mut stream,
+                request_id,
+                flags,
+                &response_body(
+                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"622e62696e","child":4,"child_type":"file","attr_generation":4},"attr":{"inode":4,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":4,"mtime_ms":4,"ctime_ms":4},"body":null}],"next_name_hex":null}}"#,
+                ),
+            )
+            .unwrap();
+        });
+        let client = NoKvFsClient::connect(addr, MemoryObjectStore::new());
+        let entries = client.metadata().list("/runs").unwrap();
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.dentry.name.as_bytes())
+                .collect::<Vec<_>>(),
+            vec![b"a.bin".as_slice(), b"b.bin".as_slice()]
         );
     }
 
