@@ -231,6 +231,8 @@ impl MetadataStore for HoltMetadataStore {
         let history = self.history_tree()?;
         let start_after = request.start_after.as_deref();
         let mut out = Vec::new();
+        let mut visited_total = 0_u64;
+        let mut returned_total = 0_u64;
 
         if request.prefix.is_empty() {
             for entry in current.range() {
@@ -243,12 +245,8 @@ impl MetadataStore for HoltMetadataStore {
                     limit,
                     start_after,
                 )?;
-                self.stats
-                    .scan_key_visited_total
-                    .fetch_add(outcome.visited as u64, Ordering::Relaxed);
-                self.stats
-                    .scan_key_returned_total
-                    .fetch_add(outcome.returned as u64, Ordering::Relaxed);
+                visited_total += outcome.visited as u64;
+                returned_total += outcome.returned as u64;
                 if outcome.done {
                     break;
                 }
@@ -264,17 +262,19 @@ impl MetadataStore for HoltMetadataStore {
                     limit,
                     start_after,
                 )?;
-                self.stats
-                    .scan_key_visited_total
-                    .fetch_add(outcome.visited as u64, Ordering::Relaxed);
-                self.stats
-                    .scan_key_returned_total
-                    .fetch_add(outcome.returned as u64, Ordering::Relaxed);
+                visited_total += outcome.visited as u64;
+                returned_total += outcome.returned as u64;
                 if outcome.done {
                     break;
                 }
             }
         }
+        self.stats
+            .scan_key_visited_total
+            .fetch_add(visited_total, Ordering::Relaxed);
+        self.stats
+            .scan_key_returned_total
+            .fetch_add(returned_total, Ordering::Relaxed);
         Ok(out)
     }
 

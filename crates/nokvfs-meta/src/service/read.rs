@@ -127,13 +127,15 @@ where
         self.read_dir_plus_entry_total
             .fetch_add(rows.len() as u64, Ordering::Relaxed);
         let mut entries = Vec::with_capacity(rows.len());
+        let mut projection_hits = 0_u64;
         for item in rows {
             let projection = crate::layout::decode_dentry_projection(&item.value.0)
                 .map_err(|err| MetadError::Codec(err.to_string()))?;
-            self.read_dir_plus_projection_hit_total
-                .fetch_add(1, Ordering::Relaxed);
+            projection_hits += 1;
             entries.push(projection.into());
         }
+        self.read_dir_plus_projection_hit_total
+            .fetch_add(projection_hits, Ordering::Relaxed);
         Ok(entries)
     }
 
@@ -159,13 +161,15 @@ where
         self.read_dir_plus_entry_total
             .fetch_add(returned as u64, Ordering::Relaxed);
         let mut entries = Vec::<DentryWithAttr>::with_capacity(returned);
+        let mut projection_hits = 0_u64;
         for item in rows.into_iter().take(returned) {
             let projection = crate::layout::decode_dentry_projection(&item.value.0)
                 .map_err(|err| MetadError::Codec(err.to_string()))?;
-            self.read_dir_plus_projection_hit_total
-                .fetch_add(1, Ordering::Relaxed);
+            projection_hits += 1;
             entries.push(projection.into());
         }
+        self.read_dir_plus_projection_hit_total
+            .fetch_add(projection_hits, Ordering::Relaxed);
         let next_cursor = if has_more {
             entries.last().map(|entry| entry.dentry.name.clone())
         } else {
