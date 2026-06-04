@@ -195,7 +195,8 @@ cargo run --release -p nokvfs-cli --bin nokv-fs -- \
 ```
 
 On macOS this requires macFUSE. NoKV passes `noappledouble` and `noapplexattr`
-mount options because xattr persistence is not implemented yet.
+mount options to avoid Finder/resource-fork AppleDouble sidecars; user xattr
+roundtrip is covered by the FUSE smoke test.
 
 ## Benchmarks
 
@@ -230,6 +231,9 @@ DLIO-style object reads/writes, shared-log HA, and shared-log fault catch-up.
 Most benchmark workloads are still local single-node service runs; HA workloads
 report shared-log metrics separately. Training-cluster claims need separate
 runs that report replication, cache, object-store, and durability settings.
+Run `scripts/run-ai-training-smoke.sh fuse-smoke` when the local machine has a
+working FUSE installation and you want the mounted POSIX smoke in the same
+workflow.
 
 The local shared-log smoke starts RustFS plus three metadata voters and verifies
 that a leader-published artifact is readable through both followers:

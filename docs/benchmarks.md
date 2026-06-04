@@ -57,6 +57,15 @@ the shared-log HA path. You can narrow it to a single workload while iterating:
 scripts/run-ai-training-smoke.sh metadata-ha-fault-smoke
 ```
 
+The gate also accepts the special workload `fuse-smoke` for the mounted POSIX
+semantics check. It is not part of the default list because it requires a
+working local FUSE installation and mount permissions:
+
+```bash
+scripts/run-ai-training-smoke.sh fuse-smoke
+NOKV_AI_SMOKE_INCLUDE_FUSE=1 scripts/run-ai-training-smoke.sh
+```
+
 For a disposable local RustFS-backed FUSE semantics smoke, use:
 
 ```bash

@@ -32,6 +32,9 @@ Usage: scripts/run-ai-training-smoke.sh [workload...]
 Runs the standard AI-training smoke gate. With no workload arguments, runs:
   ${DEFAULT_WORKLOADS[*]}
 
+Use the special workload name "fuse-smoke" to run the mounted POSIX/FUSE smoke,
+or set NOKV_AI_SMOKE_INCLUDE_FUSE=1 to append it to the default gate.
+
 Environment:
   NOKV_AI_SMOKE_PROFILE              smoke|standard|long (default: smoke)
   NOKV_AI_SMOKE_OBJECT_CONCURRENCY   object PUT/GET concurrency (default: 8)
@@ -52,6 +55,9 @@ fi
 workloads=("$@")
 if [[ "${#workloads[@]}" -eq 0 ]]; then
     workloads=("${DEFAULT_WORKLOADS[@]}")
+    if [[ "${NOKV_AI_SMOKE_INCLUDE_FUSE:-0}" == "1" ]]; then
+        workloads+=(fuse-smoke)
+    fi
 fi
 
 extra_args=()
@@ -62,6 +68,10 @@ fi
 
 for workload in "${workloads[@]}"; do
     echo "==> NoKV-FS smoke workload: $workload"
+    if [[ "$workload" == "fuse-smoke" ]]; then
+        "$ROOT_DIR/scripts/run-fuse-smoke.sh"
+        continue
+    fi
     NOKV_E2E_PROFILE="$PROFILE" \
         NOKV_E2E_WORKLOAD="$workload" \
         NOKV_E2E_OBJECT_CONCURRENCY="$OBJECT_CONCURRENCY" \
