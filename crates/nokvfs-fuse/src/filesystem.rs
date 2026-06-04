@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
+use std::fmt;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
@@ -77,12 +78,55 @@ struct WriteHandle {
     staged_chunks: Vec<StoredChunk>,
     staged: StagedObjectSet,
     next_block_index: u64,
+    sequential_digest: Option<SequentialDigest>,
     dirty: bool,
 }
 
 #[derive(Clone, Debug)]
 struct DirtyExtent {
     chunks: Vec<StoredChunk>,
+}
+
+#[derive(Clone)]
+struct SequentialDigest {
+    hasher: Sha256,
+    len: u64,
+}
+
+impl SequentialDigest {
+    fn new() -> Self {
+        Self {
+            hasher: Sha256::new(),
+            len: 0,
+        }
+    }
+
+    fn append(&mut self, offset: u64, data: &[u8]) -> bool {
+        if offset != self.len {
+            return false;
+        }
+        self.hasher.update(data);
+        self.len = self
+            .len
+            .saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
+        true
+    }
+
+    fn digest_uri_for_size(&self, size: u64) -> Option<String> {
+        if self.len != size {
+            return None;
+        }
+        let digest = self.hasher.clone().finalize();
+        Some(format!("sha256:{digest:x}"))
+    }
+}
+
+impl fmt::Debug for SequentialDigest {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SequentialDigest")
+            .field("len", &self.len)
+            .finish_non_exhaustive()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -522,6 +566,7 @@ where
             staged_chunks: Vec::new(),
             staged: StagedObjectSet::default(),
             next_block_index: 0,
+            sequential_digest: Some(SequentialDigest::new()),
             dirty: false,
         })
     }
@@ -577,6 +622,11 @@ where
             let _ = self.service.cleanup_staged_objects(&staged);
             return Err(Errno::ESTALE);
         }
+        if let Some(digest) = handle.sequential_digest.as_mut() {
+            if !digest.append(offset, data) {
+                handle.sequential_digest = None;
+            }
+        }
         let staged_objects = handle
             .staged
             .objects()
@@ -605,6 +655,12 @@ where
             );
         }
         handle.size = size;
+        match handle.sequential_digest.as_ref().map(|digest| digest.len) {
+            Some(len) if len == size => {}
+            Some(_) if size == 0 => handle.sequential_digest = Some(SequentialDigest::new()),
+            Some(_) => handle.sequential_digest = None,
+            None => {}
+        }
         handle.dirty = true;
         Ok(())
     }
@@ -754,7 +810,11 @@ where
         if !snapshot.dirty {
             return Ok(());
         }
-        let digest_uri = self.digest_handle_body(fh, snapshot.size)?;
+        let digest_uri = snapshot
+            .sequential_digest
+            .as_ref()
+            .and_then(|digest| digest.digest_uri_for_size(snapshot.size))
+            .map_or_else(|| self.digest_handle_body(fh, snapshot.size), Ok)?;
         self.service
             .publish_prepared_artifact_staged_session(
                 snapshot.prepared.ok_or(Errno::EIO)?,
@@ -787,6 +847,7 @@ where
             handle.staged = StagedObjectSet::default();
             handle.prepared = None;
             handle.next_block_index = 0;
+            handle.sequential_digest = Some(SequentialDigest::new());
             handle.dirty = false;
         }
         Ok(())
@@ -2394,6 +2455,37 @@ mod tests {
             "sha256:7f35eb30d89706db2f03b9113f85c6509756d7ad5a7d19c80617d771bb9577db"
         );
         fuse.release_handle(handle).expect("release handle");
+    }
+
+    #[test]
+    fn sequential_write_publish_uses_write_time_digest_without_object_reread() {
+        let service = service();
+        let name = DentryName::new(b"checkpoint".to_vec()).unwrap();
+        let created = service
+            .create_file(InodeId::root(), name, 0o644, 1000, 1000)
+            .unwrap();
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        fuse.remember_entry(&created);
+        let handle = fuse
+            .open_write_handle(&created.attr, InodeId::root())
+            .expect("open write handle");
+
+        assert_eq!(fuse.write_to_handle(handle, 0, b"0123").unwrap(), 4);
+        assert_eq!(fuse.write_to_handle(handle, 4, b"4567").unwrap(), 4);
+        let after_write = fuse.service().object_stats();
+        fuse.publish_handle(handle).expect("publish handle");
+        let after_publish = fuse.service().object_stats();
+
+        assert_eq!(after_publish.object_gets, after_write.object_gets);
+        let body = fuse
+            .service()
+            .body_descriptor(created.attr.inode)
+            .expect("read body descriptor")
+            .expect("body descriptor exists");
+        assert_eq!(
+            body.digest_uri,
+            "sha256:924592b9b103f14f833faafb67f480691f01988aa457c0061769f58cd47311bc"
+        );
     }
 
     #[test]
