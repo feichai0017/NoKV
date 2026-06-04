@@ -181,9 +181,7 @@ pub enum MetadataRpcRequest {
     },
     AppendMetadataLog {
         leader: u64,
-        term: u64,
-        mount: u64,
-        payload: Vec<u8>,
+        entry: Vec<u8>,
     },
     ReadMetadataCheckpoint {
         mount: u64,
@@ -822,9 +820,7 @@ mod tests {
     fn binary_codec_round_trips_metadata_log_append() {
         let request = MetadataRpcRequest::AppendMetadataLog {
             leader: 7,
-            term: 3,
-            mount: 1,
-            payload: b"command-batch".to_vec(),
+            entry: b"metadata-log-entry".to_vec(),
         };
         assert_eq!(
             decode_request(&encode_request(&request).unwrap()).unwrap(),

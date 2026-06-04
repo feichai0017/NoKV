@@ -1,17 +1,12 @@
-use nokvfs_meta::command::MetadataCommand;
-use nokvfs_types::MountId;
-
 use crate::{
-    DurableReceipt, LearnerBootstrapPlan, LogIndex, LogPosition, LogTerm, MetadataLogEntry, NodeId,
+    DurableReceipt, LearnerBootstrapPlan, LogIndex, LogPosition, MetadataLogEntry, NodeId,
     SharedLogError,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppendMetadataBatchRequest {
     pub leader: NodeId,
-    pub term: LogTerm,
-    pub mount: MountId,
-    pub commands: Vec<MetadataCommand>,
+    pub entry: MetadataLogEntry,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -48,21 +43,11 @@ pub struct InstallCheckpointResponse {
 }
 
 impl AppendMetadataBatchRequest {
-    pub fn new(
-        leader: NodeId,
-        term: LogTerm,
-        mount: MountId,
-        commands: Vec<MetadataCommand>,
-    ) -> Result<Self, SharedLogError> {
-        if commands.is_empty() {
+    pub fn new(leader: NodeId, entry: MetadataLogEntry) -> Result<Self, SharedLogError> {
+        if entry.commands.is_empty() {
             return Err(SharedLogError::EmptyBatch);
         }
-        Ok(Self {
-            leader,
-            term,
-            mount,
-            commands,
-        })
+        Ok(Self { leader, entry })
     }
 }
 

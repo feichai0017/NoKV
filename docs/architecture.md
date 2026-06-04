@@ -134,8 +134,8 @@ Shared-log HA is built around storage-neutral metadata replication contracts in
 not a raw KV mutation, Percolator transaction, or old raftstore command. The
 network boundary has three messages:
 
-- append a metadata command batch through a voter and receive per-command
-  durable receipts;
+- append a leader-assigned metadata log entry through a voter and receive
+  per-command durable receipts;
 - read committed log entries from a voter or learner tail, with the committed
   frontier reported explicitly;
 - plan learner bootstrap from a checkpoint manifest and the retained tail range.
@@ -148,11 +148,11 @@ part of the contract.
 The current framed RPC path can expose committed metadata log entries for
 replica catch-up via `ReadMetadataLog`. Each returned payload is encoded by
 `nokvfs-cluster`, so protocol framing does not need to understand
-`MetadataCommand` internals. It can also accept an externally ordered command
-batch via `AppendMetadataLog`, validate the leader id against the server's
-configured metadata-log membership, validate the term shape, append it to the
-local metadata log, and replay it into Holt state. A server with metadata log
-enabled publishes a durable membership catalog next to the log. Without explicit
+`MetadataCommand` internals. It can also accept an externally ordered log entry
+via `AppendMetadataLog`, validate the leader id against the server's configured
+metadata-log membership, validate the exact log position, append it to the local
+metadata log, and replay it into Holt state. A server with metadata log enabled
+publishes a durable membership catalog next to the log. Without explicit
 voters it starts as a single-voter group; with `--metadata-log-voters` and
 `--metadata-log-learners`, the initial multi-node membership is persisted before
 serving. Future membership changes must update that catalog at a higher term

@@ -1139,24 +1139,12 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 committed: committed.map(wire_log_position),
             })
         }
-        MetadataRpcRequest::AppendMetadataLog {
-            leader,
-            term,
-            mount,
-            payload,
-        } => {
+        MetadataRpcRequest::AppendMetadataLog { leader, entry } => {
             let leader = nokvfs_cluster::NodeId::new(leader).map_err(ServerError::SharedLog)?;
-            let term = nokvfs_cluster::LogTerm::new(term).map_err(ServerError::SharedLog)?;
-            let mount = MountId::new(mount).map_err(|err| {
-                ServerError::Metadata(MetadError::Codec(format!(
-                    "invalid metadata log mount: {err}"
-                )))
-            })?;
-            let commands = nokvfs_cluster::decode_metadata_command_batch(&payload)
+            let entry = nokvfs_cluster::decode_metadata_log_entry(&entry)
                 .map_err(ServerError::SharedLog)?;
-            let request =
-                nokvfs_cluster::AppendMetadataBatchRequest::new(leader, term, mount, commands)
-                    .map_err(ServerError::SharedLog)?;
+            let request = nokvfs_cluster::AppendMetadataBatchRequest::new(leader, entry)
+                .map_err(ServerError::SharedLog)?;
             let response = server.append_metadata_log_batch(request)?;
             Ok(MetadataRpcResult::MetadataLogAppend {
                 position: wire_log_position(response.position),
@@ -1397,20 +1385,41 @@ fn log_position(
 mod tests {
     use super::*;
     use crate::server::tests::{
-        open_test_server_with_checkpoint_objects, test_checkpoint_objects, test_options,
-        test_server,
+        open_test_server_with_checkpoint_objects, publish_test_metadata_membership,
+        test_checkpoint_objects, test_options, test_server,
     };
     use nokvfs_protocol::{
         decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor,
         WireChunkManifest, WireMetadataError,
     };
     use std::net::TcpListener;
+    use std::path::Path;
     use tempfile::tempdir;
 
     fn request_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
         let body = encode_request(&request).unwrap();
         let response = handle_binary_rpc(server, &body).unwrap();
         decode_envelope(&response).unwrap()
+    }
+
+    fn open_metadata_log_follower(root: &Path, metadata_log: &Path) -> Server {
+        publish_test_metadata_membership(
+            metadata_log,
+            nokvfs_cluster::MetadataMembership::new(
+                MountId::new(1).unwrap(),
+                nokvfs_cluster::LogTerm::new(1).unwrap(),
+                nokvfs_cluster::NodeId::new(1).unwrap(),
+                [
+                    nokvfs_cluster::NodeId::new(1).unwrap(),
+                    nokvfs_cluster::NodeId::new(2).unwrap(),
+                ],
+                [],
+            )
+            .unwrap(),
+        );
+        let mut options = test_options(root, Some(metadata_log.to_path_buf()));
+        options.metadata_log_node = nokvfs_cluster::NodeId::new(2).unwrap();
+        Server::open(options).unwrap()
     }
 
     fn expect_dentry(envelope: MetadataRpcEnvelope) -> WireDentryWithAttr {
@@ -1813,28 +1822,20 @@ mod tests {
         let leader_dir = tempdir().unwrap();
         let leader_log = leader_dir.path().join("metadata.log");
         let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+        let entries = create_file_log_tail_entries(&leader, "/model.bin");
 
         let replica_dir = tempdir().unwrap();
         let replica_log = replica_dir.path().join("metadata.log");
-        let replica = Server::open(test_options(replica_dir.path(), Some(replica_log))).unwrap();
-        let envelope = request_envelope(
-            &replica,
-            MetadataRpcRequest::AppendMetadataLog {
-                leader: 1,
-                term: 2,
-                mount: 1,
-                payload,
-            },
-        );
+        let replica = open_metadata_log_follower(replica_dir.path(), &replica_log);
+        let envelope = append_metadata_log_entries(&replica, &entries);
 
         assert!(envelope.ok, "unexpected append error: {envelope:?}");
         let (position, receipts) = match envelope.result.unwrap() {
             MetadataRpcResult::MetadataLogAppend { position, receipts } => (position, receipts),
             other => panic!("unexpected append result: {other:?}"),
         };
-        assert_eq!(position.term, 2);
-        assert!(receipts.len() >= 2);
+        assert!(position.index >= 2);
+        assert!(!receipts.is_empty());
         for (batch_position, receipt) in receipts.iter().enumerate() {
             assert_eq!(receipt.position, position);
             assert_eq!(receipt.mount, 1);
@@ -1862,19 +1863,17 @@ mod tests {
         let leader_dir = tempdir().unwrap();
         let leader_log = leader_dir.path().join("metadata.log");
         let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+        let entry = create_file_log_tail_entries(&leader, "/model.bin")
+            .into_iter()
+            .next()
+            .expect("leader log entry");
 
         let replica_dir = tempdir().unwrap();
         let replica_log = replica_dir.path().join("metadata.log");
         let replica = Server::open(test_options(replica_dir.path(), Some(replica_log))).unwrap();
         let envelope = request_envelope(
             &replica,
-            MetadataRpcRequest::AppendMetadataLog {
-                leader: 0,
-                term: 2,
-                mount: 1,
-                payload,
-            },
+            MetadataRpcRequest::AppendMetadataLog { leader: 0, entry },
         );
 
         assert!(!envelope.ok);
@@ -1890,7 +1889,10 @@ mod tests {
         let leader_dir = tempdir().unwrap();
         let leader_log = leader_dir.path().join("metadata.log");
         let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+        let entry = create_file_log_tail_entries(&leader, "/model.bin")
+            .into_iter()
+            .next()
+            .expect("leader log entry");
 
         let replica_dir = tempdir().unwrap();
         let replica_log = replica_dir.path().join("metadata.log");
@@ -1899,12 +1901,7 @@ mod tests {
         let replica = Server::open(options).unwrap();
         let envelope = request_envelope(
             &replica,
-            MetadataRpcRequest::AppendMetadataLog {
-                leader: 1,
-                term: 2,
-                mount: 1,
-                payload,
-            },
+            MetadataRpcRequest::AppendMetadataLog { leader: 1, entry },
         );
 
         assert!(!envelope.ok);
@@ -1920,30 +1917,26 @@ mod tests {
     fn rpc_rejects_stale_metadata_log_append_term() {
         let leader_dir = tempdir().unwrap();
         let leader_log = leader_dir.path().join("metadata.log");
-        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+        let mut leader_options = test_options(leader_dir.path(), Some(leader_log));
+        leader_options.metadata_log_term = nokvfs_cluster::LogTerm::new(3).unwrap();
+        let leader = Server::open(leader_options).unwrap();
+        let entries = create_file_log_tail_entries(&leader, "/model.bin");
 
         let replica_dir = tempdir().unwrap();
         let replica_log = replica_dir.path().join("metadata.log");
-        let replica = Server::open(test_options(replica_dir.path(), Some(replica_log))).unwrap();
-        let first = request_envelope(
-            &replica,
-            MetadataRpcRequest::AppendMetadataLog {
-                leader: 1,
-                term: 3,
-                mount: 1,
-                payload: payload.clone(),
-            },
-        );
+        let replica = open_metadata_log_follower(replica_dir.path(), &replica_log);
+        let first = append_metadata_log_entries(&replica, &entries);
         assert!(first.ok, "unexpected first append error: {first:?}");
 
         let stale = request_envelope(
             &replica,
             MetadataRpcRequest::AppendMetadataLog {
                 leader: 1,
-                term: 2,
-                mount: 1,
-                payload,
+                entry: encoded_metadata_log_entry(
+                    2,
+                    entries.len() as u64 + 1,
+                    vec![create_file_command(b"b", 3)],
+                ),
             },
         );
         assert!(!stale.ok);
@@ -1959,16 +1952,14 @@ mod tests {
         let leader_dir = tempdir().unwrap();
         let leader_log = leader_dir.path().join("metadata.log");
         let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+        let entry = create_file_log_tail_entries(&leader, "/model.bin")
+            .into_iter()
+            .next()
+            .expect("leader log entry");
         let server = test_server();
         let envelope = request_envelope(
             &server,
-            MetadataRpcRequest::AppendMetadataLog {
-                leader: 1,
-                term: 2,
-                mount: 1,
-                payload,
-            },
+            MetadataRpcRequest::AppendMetadataLog { leader: 1, entry },
         );
 
         assert!(!envelope.ok);
@@ -1981,20 +1972,19 @@ mod tests {
 
     #[test]
     fn rpc_rejects_metadata_log_append_for_wrong_mount() {
-        let leader_dir = tempdir().unwrap();
-        let leader_log = leader_dir.path().join("metadata.log");
-        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let payload = create_file_log_tail_payload(&leader, "/model.bin");
         let replica_dir = tempdir().unwrap();
         let replica_log = replica_dir.path().join("metadata.log");
-        let replica = Server::open(test_options(replica_dir.path(), Some(replica_log))).unwrap();
+        let replica = open_metadata_log_follower(replica_dir.path(), &replica_log);
         let envelope = request_envelope(
             &replica,
             MetadataRpcRequest::AppendMetadataLog {
                 leader: 1,
-                term: 2,
-                mount: 99,
-                payload,
+                entry: encoded_metadata_log_entry_for_mount(
+                    1,
+                    1,
+                    99,
+                    vec![create_file_command(b"a", 2)],
+                ),
             },
         );
 
@@ -2025,7 +2015,28 @@ mod tests {
         ));
     }
 
-    fn create_file_log_tail_payload(server: &Server, path: &str) -> Vec<u8> {
+    #[test]
+    fn rpc_rejects_non_contiguous_metadata_log_append() {
+        let replica_dir = tempdir().unwrap();
+        let replica_log = replica_dir.path().join("metadata.log");
+        let replica = open_metadata_log_follower(replica_dir.path(), &replica_log);
+        let envelope = request_envelope(
+            &replica,
+            MetadataRpcRequest::AppendMetadataLog {
+                leader: 1,
+                entry: encoded_metadata_log_entry(1, 2, vec![create_file_command(b"a", 2)]),
+            },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("expected append at index 1, got 2")
+        ));
+    }
+
+    fn create_file_log_tail_entries(server: &Server, path: &str) -> Vec<Vec<u8>> {
         let created = request_envelope(
             server,
             MetadataRpcRequest::CreateFilePath {
@@ -2047,18 +2058,78 @@ mod tests {
             MetadataRpcResult::MetadataLogEntries { entries, .. } => entries,
             other => panic!("unexpected metadata log result: {other:?}"),
         };
-        let commands = entries
-            .iter()
-            .flat_map(|entry| {
-                nokvfs_cluster::decode_metadata_log_entry(&entry.payload)
-                    .unwrap()
-                    .commands
-            })
-            .collect::<Vec<_>>();
-        assert!(commands
-            .iter()
-            .any(|command| command.kind == nokvfs_meta::command::CommandKind::CreateFile));
-        nokvfs_cluster::encode_metadata_command_batch(&commands).unwrap()
+        assert!(entries.iter().any(|entry| {
+            nokvfs_cluster::decode_metadata_log_entry(&entry.payload)
+                .unwrap()
+                .commands
+                .iter()
+                .any(|command| command.kind == nokvfs_meta::command::CommandKind::CreateFile)
+        }));
+        entries.into_iter().map(|entry| entry.payload).collect()
+    }
+
+    fn append_metadata_log_entries(server: &Server, entries: &[Vec<u8>]) -> MetadataRpcEnvelope {
+        let mut last = None;
+        for entry in entries {
+            last = Some(request_envelope(
+                server,
+                MetadataRpcRequest::AppendMetadataLog {
+                    leader: 1,
+                    entry: entry.clone(),
+                },
+            ));
+            if !last.as_ref().unwrap().ok {
+                break;
+            }
+        }
+        last.expect("at least one metadata log entry")
+    }
+
+    fn encoded_metadata_log_entry(
+        term: u64,
+        index: u64,
+        commands: Vec<nokvfs_meta::command::MetadataCommand>,
+    ) -> Vec<u8> {
+        encoded_metadata_log_entry_for_mount(term, index, 1, commands)
+    }
+
+    fn encoded_metadata_log_entry_for_mount(
+        term: u64,
+        index: u64,
+        mount: u64,
+        commands: Vec<nokvfs_meta::command::MetadataCommand>,
+    ) -> Vec<u8> {
+        nokvfs_cluster::encode_metadata_log_entry(&nokvfs_cluster::MetadataLogEntry {
+            position: nokvfs_cluster::LogPosition {
+                term: nokvfs_cluster::LogTerm::new(term).unwrap(),
+                index: nokvfs_cluster::LogIndex::new(index).unwrap(),
+            },
+            mount: MountId::new(mount).unwrap(),
+            commands,
+        })
+        .unwrap()
+    }
+
+    fn create_file_command(
+        request_id: &[u8],
+        commit_version: u64,
+    ) -> nokvfs_meta::command::MetadataCommand {
+        nokvfs_meta::command::MetadataCommand {
+            request_id: request_id.to_vec(),
+            kind: nokvfs_meta::command::CommandKind::CreateFile,
+            read_version: nokvfs_meta::Version::new(commit_version - 1).unwrap(),
+            commit_version: nokvfs_meta::Version::new(commit_version).unwrap(),
+            primary_family: nokvfs_types::RecordFamily::Dentry,
+            primary_key: request_id.to_vec(),
+            predicates: Vec::new(),
+            mutations: vec![nokvfs_meta::command::Mutation {
+                family: nokvfs_types::RecordFamily::Dentry,
+                key: request_id.to_vec(),
+                op: nokvfs_meta::command::MutationOp::Put,
+                value: Some(nokvfs_meta::command::Value(b"value".to_vec())),
+            }],
+            watch: Vec::new(),
+        }
     }
 
     #[test]

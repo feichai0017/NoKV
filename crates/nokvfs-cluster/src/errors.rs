@@ -28,6 +28,13 @@ pub enum SharedLogError {
         current: crate::LogTerm,
         proposed: crate::LogTerm,
     },
+    NonContiguousAppend {
+        expected: LogIndex,
+        actual: LogIndex,
+    },
+    ConflictingLogEntry {
+        position: LogPosition,
+    },
     UnauthorizedLeader {
         expected: NodeId,
         proposed: NodeId,
@@ -114,6 +121,18 @@ impl fmt::Display for SharedLogError {
                 "metadata log rejects stale term {}; current term is {}",
                 proposed.get(),
                 current.get()
+            ),
+            Self::NonContiguousAppend { expected, actual } => write!(
+                f,
+                "metadata log expected append at index {}, got {}",
+                expected.get(),
+                actual.get()
+            ),
+            Self::ConflictingLogEntry { position } => write!(
+                f,
+                "metadata log entry at {}:{} conflicts with existing entry",
+                position.term.get(),
+                position.index.get()
             ),
             Self::UnauthorizedLeader { expected, proposed } => write!(
                 f,

@@ -134,8 +134,14 @@ impl Server {
             }
             None => ServerMetadataStore::direct(metadata),
         };
+        let bootstrap_root = metadata_membership
+            .as_ref()
+            .map(|membership| membership.leader == options.metadata_log_node)
+            .unwrap_or(true);
         let service = Arc::new(NoKvFs::open_existing(options.mount, metadata, objects)?);
-        service.bootstrap_root(DEFAULT_ROOT_MODE, options.uid, options.gid)?;
+        if bootstrap_root {
+            service.bootstrap_root(DEFAULT_ROOT_MODE, options.uid, options.gid)?;
+        }
         let object_gc = ObjectGcWorker::spawn(Arc::clone(&service), options.object_gc);
         let history_gc = HistoryGcWorker::spawn(Arc::clone(&service), options.history_gc);
         Ok(Self {
@@ -207,10 +213,10 @@ impl Server {
         request: AppendMetadataBatchRequest,
     ) -> Result<AppendMetadataBatchResponse, ServerError> {
         self.authorize_metadata_log_leader(request.leader)?;
-        if request.mount != self.service.mount_id() {
+        if request.entry.mount != self.service.mount_id() {
             return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
                 "metadata log append mount {} does not match server mount {}",
-                request.mount.get(),
+                request.entry.mount.get(),
                 self.service.mount_id().get(),
             ))));
         }
@@ -219,10 +225,7 @@ impl Server {
                 "metadata log is disabled".to_owned(),
             )));
         };
-        let receipts =
-            metadata_log
-                .log()
-                .append_batch(request.term, request.mount, &request.commands)?;
+        let receipts = metadata_log.log().append_entry(request.entry)?;
         metadata_log
             .replay_committed_tail(0)
             .map_err(|err| ServerError::SharedLog(SharedLogError::Backend(err.to_string())))?;
@@ -941,6 +944,16 @@ pub(crate) mod tests {
             checkpoint_objects.clone(),
         )
         .unwrap()
+    }
+
+    pub(crate) fn publish_test_metadata_membership(
+        metadata_log_path: &Path,
+        membership: MetadataMembership,
+    ) {
+        FileMembershipCatalog::open(metadata_membership_path(metadata_log_path))
+            .unwrap()
+            .publish(membership)
+            .unwrap();
     }
 
     fn test_server_with_shared_metadata(

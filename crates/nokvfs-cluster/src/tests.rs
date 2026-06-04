@@ -472,6 +472,82 @@ fn file_shared_log_reopens_entries_and_replays_into_metadata_store() {
 }
 
 #[test]
+fn file_shared_log_appends_exact_entry_idempotently() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
+    let entry = MetadataLogEntry {
+        position: LogPosition {
+            term: LogTerm::new(2).unwrap(),
+            index: LogIndex::new(1).unwrap(),
+        },
+        mount,
+        commands: vec![command(b"a", 2), command(b"b", 3)],
+    };
+
+    let first = log.append_entry(entry.clone()).unwrap();
+    let retry = log.append_entry(entry).unwrap();
+
+    assert_eq!(first, retry);
+    assert_eq!(log.committed_index().get(), 1);
+    let entries = log.read_from(LogIndex::new(1).unwrap(), 0).unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].commands.len(), 2);
+}
+
+#[test]
+fn file_shared_log_rejects_conflicting_exact_entry() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
+    let position = LogPosition {
+        term: LogTerm::new(2).unwrap(),
+        index: LogIndex::new(1).unwrap(),
+    };
+    log.append_entry(MetadataLogEntry {
+        position,
+        mount,
+        commands: vec![command(b"a", 2)],
+    })
+    .unwrap();
+
+    assert_eq!(
+        log.append_entry(MetadataLogEntry {
+            position,
+            mount,
+            commands: vec![command(b"b", 3)],
+        }),
+        Err(SharedLogError::ConflictingLogEntry { position })
+    );
+}
+
+#[test]
+fn file_shared_log_rejects_non_contiguous_exact_entry() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
+    let actual = LogIndex::new(2).unwrap();
+
+    assert_eq!(
+        log.append_entry(MetadataLogEntry {
+            position: LogPosition {
+                term: LogTerm::new(2).unwrap(),
+                index: actual,
+            },
+            mount,
+            commands: vec![command(b"a", 2)],
+        }),
+        Err(SharedLogError::NonContiguousAppend {
+            expected: LogIndex::new(1).unwrap(),
+            actual,
+        })
+    );
+}
+
+#[test]
 fn file_shared_log_persists_compaction_marker_and_continues_indexes() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("metadata.log");
@@ -2001,16 +2077,22 @@ fn replication_append_request_commits_through_voter_log() {
         Arc::new(InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap());
     let leader_log = QuorumNodeLog::new(Arc::clone(&log), node(1)).unwrap();
     let mount = MountId::new(1).unwrap();
-    let request = AppendMetadataBatchRequest::new(
-        node(1),
-        LogTerm::new(2).unwrap(),
+    let entry = MetadataLogEntry {
+        position: LogPosition {
+            term: LogTerm::new(2).unwrap(),
+            index: LogIndex::new(1).unwrap(),
+        },
         mount,
-        vec![command(b"a", 2), command(b"b", 3)],
-    )
-    .unwrap();
+        commands: vec![command(b"a", 2), command(b"b", 3)],
+    };
+    let request = AppendMetadataBatchRequest::new(node(1), entry).unwrap();
 
     let receipts = leader_log
-        .append_batch(request.term, request.mount, &request.commands)
+        .append_batch(
+            request.entry.position.term,
+            request.entry.mount,
+            &request.entry.commands,
+        )
         .unwrap();
     let response = AppendMetadataBatchResponse::from_receipts(receipts).unwrap();
 
@@ -2033,9 +2115,14 @@ fn replication_append_request_rejects_empty_batch() {
     assert_eq!(
         AppendMetadataBatchRequest::new(
             node(1),
-            LogTerm::new(1).unwrap(),
-            MountId::new(1).unwrap(),
-            Vec::new(),
+            MetadataLogEntry {
+                position: LogPosition {
+                    term: LogTerm::new(1).unwrap(),
+                    index: LogIndex::new(1).unwrap(),
+                },
+                mount: MountId::new(1).unwrap(),
+                commands: Vec::new(),
+            },
         ),
         Err(SharedLogError::EmptyBatch)
     );
@@ -2051,16 +2138,22 @@ fn replication_append_request_rejects_learner_log() {
         Arc::new(InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap());
     let learner_log = QuorumNodeLog::new(Arc::clone(&log), node(4)).unwrap();
     let mount = MountId::new(1).unwrap();
-    let request = AppendMetadataBatchRequest::new(
-        node(4),
-        LogTerm::new(1).unwrap(),
+    let entry = MetadataLogEntry {
+        position: LogPosition {
+            term: LogTerm::new(1).unwrap(),
+            index: LogIndex::new(1).unwrap(),
+        },
         mount,
-        vec![command(b"a", 2)],
-    )
-    .unwrap();
+        commands: vec![command(b"a", 2)],
+    };
+    let request = AppendMetadataBatchRequest::new(node(4), entry).unwrap();
 
     assert!(matches!(
-        learner_log.append_batch(request.term, request.mount, &request.commands),
+        learner_log.append_batch(
+            request.entry.position.term,
+            request.entry.mount,
+            &request.entry.commands,
+        ),
         Err(SharedLogError::LearnerCannotAppend(replica)) if replica == node(4)
     ));
     assert_eq!(log.committed_index(), LogIndex::ZERO);

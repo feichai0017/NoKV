@@ -76,6 +76,59 @@ impl FileSharedLog {
             sync: options.sync,
         })
     }
+
+    pub fn append_entry(
+        &self,
+        entry: MetadataLogEntry,
+    ) -> Result<Vec<DurableReceipt>, SharedLogError> {
+        if entry.commands.is_empty() {
+            return Err(SharedLogError::EmptyBatch);
+        }
+        let mut inner = self
+            .inner
+            .lock()
+            .map_err(|_| SharedLogError::Backend("file shared log mutex poisoned".to_owned()))?;
+        if let Some(current) = inner.committed_position {
+            if entry.position.term < current.term {
+                return Err(SharedLogError::StaleTerm {
+                    current: current.term,
+                    proposed: entry.position.term,
+                });
+            }
+        }
+        if entry.position.index <= inner.compacted_through {
+            return Err(SharedLogError::Compacted {
+                requested: entry.position.index,
+                compacted: inner.compacted_through,
+            });
+        }
+        let expected = LogIndex::new(inner.next_index)?;
+        if entry.position.index < expected {
+            let existing = inner
+                .entries
+                .iter()
+                .find(|existing| existing.position.index == entry.position.index);
+            return match existing {
+                Some(existing) if existing == &entry => Ok(receipts_for_entry(existing)),
+                _ => Err(SharedLogError::ConflictingLogEntry {
+                    position: entry.position,
+                }),
+            };
+        }
+        if entry.position.index > expected {
+            return Err(SharedLogError::NonContiguousAppend {
+                expected,
+                actual: entry.position.index,
+            });
+        }
+
+        append_record(&mut inner.file, &encode_entry_record(&entry)?, self.sync)?;
+        inner.next_index = inner.next_index.saturating_add(1);
+        inner.committed_position = Some(entry.position);
+        let receipts = receipts_for_entry(&entry);
+        inner.entries.push_back(entry);
+        Ok(receipts)
+    }
 }
 
 impl SharedMetadataLog for FileSharedLog {
@@ -110,18 +163,9 @@ impl SharedMetadataLog for FileSharedLog {
         append_record(&mut inner.file, &encode_entry_record(&entry)?, self.sync)?;
         inner.next_index = inner.next_index.saturating_add(1);
         inner.committed_position = Some(position);
+        let receipts = receipts_for_entry(&entry);
         inner.entries.push_back(entry);
-        Ok(commands
-            .iter()
-            .enumerate()
-            .map(|(batch_position, command)| DurableReceipt {
-                position,
-                mount,
-                batch_position,
-                request_id: command.request_id.clone(),
-                commit_version: command.commit_version,
-            })
-            .collect())
+        Ok(receipts)
     }
 
     fn read_from(
@@ -180,6 +224,21 @@ impl SharedMetadataLog for FileSharedLog {
             .map(|inner| inner.committed_position)
             .unwrap_or(None)
     }
+}
+
+fn receipts_for_entry(entry: &MetadataLogEntry) -> Vec<DurableReceipt> {
+    entry
+        .commands
+        .iter()
+        .enumerate()
+        .map(|(batch_position, command)| DurableReceipt {
+            position: entry.position,
+            mount: entry.mount,
+            batch_position,
+            request_id: command.request_id.clone(),
+            commit_version: command.commit_version,
+        })
+        .collect()
 }
 
 #[derive(Debug)]
