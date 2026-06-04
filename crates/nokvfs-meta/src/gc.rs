@@ -95,6 +95,9 @@ impl ObjectGcWorker {
                     Ok(stopped) => stopped,
                     Err(_) => break,
                 };
+                if *stopped {
+                    break;
+                }
                 let (stopped, _) = match cvar.wait_timeout(stopped, options.interval) {
                     Ok(waited) => waited,
                     Err(_) => break,
@@ -158,6 +161,9 @@ impl HistoryGcWorker {
                     Ok(stopped) => stopped,
                     Err(_) => break,
                 };
+                if *stopped {
+                    break;
+                }
                 let (stopped, _) = match cvar.wait_timeout(stopped, options.interval) {
                     Ok(waited) => waited,
                     Err(_) => break,
@@ -248,6 +254,7 @@ mod tests {
     use crate::service::PublishArtifact;
     use nokvfs_object::{MemoryObjectStore, ObjectKey};
     use nokvfs_types::{DentryName, InodeId, MountId};
+    use std::time::Instant;
 
     fn service_with_objects() -> (
         Arc<NoKvFs<HoltMetadataStore, MemoryObjectStore>>,
@@ -280,6 +287,42 @@ mod tests {
 
     fn block_key(inode: InodeId, generation: u64) -> ObjectKey {
         ObjectKey::new(format!("blocks/1/{}/{}/0/0", inode.get(), generation)).unwrap()
+    }
+
+    #[test]
+    fn object_worker_stop_before_first_wait_does_not_sleep_interval() {
+        let (service, _) = service_with_objects();
+        let mut worker = ObjectGcWorker::spawn(
+            service,
+            ObjectGcOptions {
+                interval: Duration::from_secs(3600),
+                limit: 100,
+                run_immediately: false,
+            },
+        );
+
+        let started = Instant::now();
+        worker.stop();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
+    }
+
+    #[test]
+    fn history_worker_stop_before_first_wait_does_not_sleep_interval() {
+        let (service, _) = service_with_objects();
+        let mut worker = HistoryGcWorker::spawn(
+            service,
+            HistoryGcOptions {
+                interval: Duration::from_secs(3600),
+                limit: 100,
+                run_immediately: false,
+            },
+        );
+
+        let started = Instant::now();
+        worker.stop();
+
+        assert!(started.elapsed() < Duration::from_secs(1));
     }
 
     #[test]

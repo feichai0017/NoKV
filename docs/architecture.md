@@ -117,7 +117,10 @@ semantics such as inode/dentry updates, watch/snapshot policy, publish rules,
 and object GC decisions.
 
 The local shared-log implementation exposes an explicit sync policy. Use
-`--metadata-log-sync data` when the file log is the durable ordering source.
-Use `--metadata-log-sync none` only for local performance experiments or when a
-higher-level replicated log already owns durability; it flushes records to the
-OS but does not make each record power-loss durable.
+`nokv-fs serve` defaults to `--metadata-log .nokv-fs/metadata.log` so server
+mode records metadata commands through the shared-log path by default. Use
+`--no-metadata-log` only for local debugging. Use `--metadata-log-sync data`
+when the file log is the durable ordering source. Use `--metadata-log-sync none`
+only for local performance experiments or when a higher-level replicated log
+already owns durability; it flushes records to the OS but does not make each
+record power-loss durable.

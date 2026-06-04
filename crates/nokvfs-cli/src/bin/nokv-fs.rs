@@ -24,6 +24,7 @@ const DEFAULT_MODE_FILE: u32 = 0o644;
 const DEFAULT_UID: u32 = 1000;
 const DEFAULT_GID: u32 = 1000;
 const DEFAULT_GC_LIMIT: usize = 1024;
+const DEFAULT_METADATA_LOG: &str = ".nokv-fs/metadata.log";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Config {
@@ -414,7 +415,7 @@ fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, S3ObjectSto
 
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv-fs/meta");
-    let mut metadata_log = None;
+    let mut metadata_log = Some(PathBuf::from(DEFAULT_METADATA_LOG));
     let mut metadata_log_sync = FileSharedLogSync::Data;
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
@@ -436,6 +437,9 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             "--metadata-log" => {
                 index += 1;
                 metadata_log = Some(PathBuf::from(value(&args, index, "--metadata-log")?));
+            }
+            "--no-metadata-log" => {
+                metadata_log = None;
             }
             "--metadata-log-sync" => {
                 index += 1;
@@ -849,7 +853,8 @@ Object backends:\n\
   --history-gc-interval-ms MS      Background metadata history GC interval for live mount\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
-  --metadata-log PATH             Optional durable shared metadata log for serve\n\
+  --metadata-log PATH             Durable shared metadata log for serve\n\
+  --no-metadata-log               Disable metadata log for local/debug serve\n\
   --metadata-log-sync data|none   data fsyncs log records; none only flushes to the OS\n\
 \n\
 Defaults:\n\
@@ -862,7 +867,7 @@ Defaults:\n\
   --history-gc-interval-ms 30000\n\
   --history-gc-limit 1024\n\
   --server-bind 127.0.0.1:7777\n\
-  --metadata-log disabled\n\
+  --metadata-log .nokv-fs/metadata.log\n\
   --metadata-log-sync data\n\
   --mount 1"
     )
@@ -1027,6 +1032,10 @@ mod tests {
         assert_eq!(config.history_gc_interval, Duration::from_millis(60));
         assert_eq!(config.history_gc_limit, 11);
         assert_eq!(
+            config.metadata_log,
+            Some(PathBuf::from(DEFAULT_METADATA_LOG))
+        );
+        assert_eq!(
             config.server_bind,
             "127.0.0.1:17777".parse::<SocketAddr>().unwrap()
         );
@@ -1179,8 +1188,12 @@ mod tests {
 
     #[test]
     fn parse_serve_command() {
-        let (_config, command) = parse(vec![s("serve")]).unwrap();
+        let (config, command) = parse(vec![s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
+        assert_eq!(
+            config.metadata_log,
+            Some(PathBuf::from(DEFAULT_METADATA_LOG))
+        );
         assert!(matches!(
             parse(vec![s("serve"), s("extra")]),
             Err(CliError::TooManyArguments)
@@ -1289,6 +1302,18 @@ mod tests {
             Some(PathBuf::from(".nokv-fs/metadata.log"))
         );
         assert_eq!(config.metadata_log_sync, FileSharedLogSync::None);
+        let (disabled, command) = parse(vec![s("--no-metadata-log"), s("serve")]).unwrap();
+        assert_eq!(command, Command::Serve);
+        assert_eq!(disabled.metadata_log, None);
+        let (reenabled, command) = parse(vec![
+            s("--no-metadata-log"),
+            s("--metadata-log"),
+            s("custom.log"),
+            s("serve"),
+        ])
+        .unwrap();
+        assert_eq!(command, Command::Serve);
+        assert_eq!(reenabled.metadata_log, Some(PathBuf::from("custom.log")));
         assert!(matches!(
             parse(vec![s("--metadata-log-sync"), s("invalid"), s("serve")]),
             Err(CliError::UnknownOption(option)) if option == "--metadata-log-sync invalid"
