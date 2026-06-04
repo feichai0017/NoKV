@@ -28,6 +28,7 @@ const DEFAULT_ROOT_MODE: u32 = 0o755;
 pub struct Server {
     service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
     metadata_log_enabled: bool,
+    metadata_log_node: NodeId,
     metadata_log_sync: nokvfs_cluster::FileSharedLogSync,
     metadata_log_status: Option<Arc<dyn ServerMetadataLogStatus>>,
     metadata_log: Option<Arc<FileLoggedMetadataStore>>,
@@ -93,6 +94,7 @@ impl Server {
         Ok(Self {
             service,
             metadata_log_enabled: metadata_log.is_some(),
+            metadata_log_node: options.metadata_log_node,
             metadata_log_sync: options.metadata_log_sync,
             metadata_log_status,
             metadata_log,
@@ -155,6 +157,7 @@ impl Server {
         &self,
         request: AppendMetadataBatchRequest,
     ) -> Result<AppendMetadataBatchResponse, ServerError> {
+        self.authorize_metadata_log_leader(request.leader)?;
         if request.mount != self.service.mount_id() {
             return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
                 "metadata log append mount {} does not match server mount {}",
@@ -205,6 +208,7 @@ impl Server {
         learner: NodeId,
         mount: nokvfs_types::MountId,
     ) -> Result<nokvfs_cluster::InstallCheckpointRequest, ServerError> {
+        self.authorize_metadata_log_leader(leader)?;
         if mount != self.service.mount_id() {
             return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
                 "metadata bootstrap mount {} does not match server mount {}",
@@ -285,6 +289,16 @@ impl Server {
             history.retained_by_snapshots,
             metadata_log_gc_json(self.metadata_log_enabled, metadata_log),
         ))
+    }
+
+    fn authorize_metadata_log_leader(&self, leader: NodeId) -> Result<(), ServerError> {
+        if leader != self.metadata_log_node {
+            return Err(ServerError::SharedLog(SharedLogError::UnauthorizedLeader {
+                expected: self.metadata_log_node,
+                proposed: leader,
+            }));
+        }
+        Ok(())
     }
 
     fn compact_metadata_log(&self) -> Result<Option<CheckpointManifest>, ServerError> {
@@ -604,6 +618,7 @@ pub(crate) mod tests {
             mount: MountId::new(1).unwrap(),
             meta_path: root.join("meta"),
             metadata_log_path,
+            metadata_log_node: NodeId::new(1).unwrap(),
             metadata_log_term: LogTerm::new(1).unwrap(),
             metadata_log_sync: FileSharedLogSync::Data,
             object: ObjectStoreConfig::s3(S3ObjectStoreOptions {
@@ -656,6 +671,7 @@ pub(crate) mod tests {
         Server {
             service,
             metadata_log_enabled: true,
+            metadata_log_node: options.metadata_log_node,
             metadata_log_sync: options.metadata_log_sync,
             metadata_log_status: Some(metadata_log_status),
             metadata_log: None,

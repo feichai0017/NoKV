@@ -1626,6 +1626,31 @@ mod tests {
     }
 
     #[test]
+    fn rpc_rejects_metadata_bootstrap_plan_from_unauthorized_leader() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let mut options = test_options(dir.path(), Some(metadata_log));
+        options.metadata_log_node = nokvfs_cluster::NodeId::new(4).unwrap();
+        let server = Server::open(options).unwrap();
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::PlanMetadataBootstrap {
+                leader: 1,
+                learner: 5,
+                mount: 1,
+            },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("leader 1 is not authorized")
+                    && message.contains("expected leader 4")
+        ));
+    }
+
+    #[test]
     fn rpc_appends_metadata_log_batch_and_replays_state() {
         let leader_dir = tempdir().unwrap();
         let leader_log = leader_dir.path().join("metadata.log");
@@ -1699,6 +1724,37 @@ mod tests {
             envelope.error_kind,
             Some(WireMetadataError::Metadata { message })
                 if message.contains("cluster node id must be non-zero")
+        ));
+    }
+
+    #[test]
+    fn rpc_rejects_metadata_log_append_from_unauthorized_leader() {
+        let leader_dir = tempdir().unwrap();
+        let leader_log = leader_dir.path().join("metadata.log");
+        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
+        let payload = create_file_log_tail_payload(&leader, "/model.bin");
+
+        let replica_dir = tempdir().unwrap();
+        let replica_log = replica_dir.path().join("metadata.log");
+        let mut options = test_options(replica_dir.path(), Some(replica_log));
+        options.metadata_log_node = nokvfs_cluster::NodeId::new(4).unwrap();
+        let replica = Server::open(options).unwrap();
+        let envelope = request_envelope(
+            &replica,
+            MetadataRpcRequest::AppendMetadataLog {
+                leader: 1,
+                term: 2,
+                mount: 1,
+                payload,
+            },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("leader 1 is not authorized")
+                    && message.contains("expected leader 4")
         ));
     }
 

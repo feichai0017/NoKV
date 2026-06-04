@@ -134,8 +134,7 @@ network boundary has three messages:
   durable receipts;
 - read committed log entries from a voter or learner tail, with the committed
   frontier reported explicitly;
-- install a checkpoint on a learner and replay the retained tail from the
-  checkpoint frontier.
+- plan learner bootstrap from a checkpoint manifest and the retained tail range.
 
 This keeps filesystem semantics in `nokvfs-meta`, log ordering and learner
 freshness in `nokvfs-cluster`, and transport choices outside both layers.
@@ -146,12 +145,14 @@ The current framed RPC path can expose committed metadata log entries for
 replica catch-up via `ReadMetadataLog`. Each returned payload is encoded by
 `nokvfs-cluster`, so protocol framing does not need to understand
 `MetadataCommand` internals. It can also accept an externally ordered command
-batch via `AppendMetadataLog`, validate the leader id and term shape, append it
-to the local metadata log, and replay it into Holt state. The log rejects stale
-terms after a newer committed term, so an old leader cannot keep extending a
-local tail once a newer term has been observed. The RPC path can also read the
-latest published checkpoint manifest for a mount, giving learners the frontier
-and artifact descriptor they need before replaying a retained tail. A learner
-can request a bootstrap plan that pairs that checkpoint with the retained log
-tail range to replay. Actual checkpoint artifact transfer/install, durable
-membership, and full leader/voter authorization are still the next HA steps.
+batch via `AppendMetadataLog`, validate the leader id against the server's
+configured metadata-log node id, validate the term shape, append it to the
+local metadata log, and replay it into Holt state. The log rejects stale terms
+after a newer committed term, so an old leader cannot keep extending a local
+tail once a newer term has been observed. The RPC path can also read the latest
+published checkpoint manifest for a mount, giving learners the frontier and
+artifact descriptor they need before replaying a retained tail. A learner can
+request a bootstrap plan that pairs that checkpoint with the retained log tail
+range to replay. Actual checkpoint artifact transfer/install, durable
+membership, and full leader election/voter authorization are still the next HA
+steps.

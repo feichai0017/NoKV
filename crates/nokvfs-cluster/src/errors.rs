@@ -21,6 +21,10 @@ pub enum SharedLogError {
         current: crate::LogTerm,
         proposed: crate::LogTerm,
     },
+    UnauthorizedLeader {
+        expected: NodeId,
+        proposed: NodeId,
+    },
     LearnerCannotAppend(NodeId),
     LearnerCannotCompact(NodeId),
     Compacted {
@@ -92,6 +96,12 @@ impl fmt::Display for SharedLogError {
                 "metadata log rejects stale term {}; current term is {}",
                 proposed.get(),
                 current.get()
+            ),
+            Self::UnauthorizedLeader { expected, proposed } => write!(
+                f,
+                "metadata log leader {} is not authorized; expected leader {}",
+                proposed.get(),
+                expected.get()
             ),
             Self::LearnerCannotAppend(node) => write!(
                 f,
