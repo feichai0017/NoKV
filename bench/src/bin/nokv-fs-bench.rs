@@ -100,6 +100,9 @@ struct ResultRow {
     manifest_chunks: u64,
     manifest_blocks: u64,
     metadata_commits: u64,
+    metadata_log_entries: u64,
+    metadata_log_commands: u64,
+    metadata_log_max_batch: u64,
     metadata_gets: u64,
     metadata_scans: u64,
     metadata_scan_visited: u64,
@@ -149,7 +152,15 @@ struct RowInput {
 struct BenchStats {
     object: ObjectTransferStats,
     metadata_store: MetadataStoreStats,
+    metadata_log: MetadataLogBenchStats,
     metadata_service: MetadataServiceStats,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct MetadataLogBenchStats {
+    commit_entry_total: u64,
+    commit_command_total: u64,
+    max_commands_per_entry: u64,
 }
 
 #[derive(Debug)]
@@ -343,11 +354,11 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     let shape = shape(&config);
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
-    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_gets,metadata_scans,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_hits,path_index_stale,path_index_fallback,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_entries,read_dir_plus_projection_hits,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
+    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_gets,metadata_scans,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_hits,path_index_stale,path_index_fallback,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_entries,read_dir_plus_projection_hits,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
         println!(
-            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             row.workload,
             profile_name(row.profile),
             row.operations,
@@ -362,6 +373,9 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
             row.manifest_chunks,
             row.manifest_blocks,
             row.metadata_commits,
+            row.metadata_log_entries,
+            row.metadata_log_commands,
+            row.metadata_log_max_batch,
             row.metadata_gets,
             row.metadata_scans,
             row.metadata_scan_visited,
@@ -801,6 +815,9 @@ fn row(input: RowInput) -> ResultRow {
         manifest_chunks: input.stats.object.manifest_chunks,
         manifest_blocks: input.stats.object.manifest_blocks,
         metadata_commits: input.stats.metadata_store.commit_total,
+        metadata_log_entries: input.stats.metadata_log.commit_entry_total,
+        metadata_log_commands: input.stats.metadata_log.commit_command_total,
+        metadata_log_max_batch: input.stats.metadata_log.max_commands_per_entry,
         metadata_gets: input.stats.metadata_store.get_total,
         metadata_scans: input.stats.metadata_store.scan_total,
         metadata_scan_visited: input.stats.metadata_store.scan_key_visited_total,
@@ -919,6 +936,17 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_store
                 .atomic_apply_ns_total
                 .saturating_sub(before.metadata_store.atomic_apply_ns_total),
+        },
+        metadata_log: MetadataLogBenchStats {
+            commit_entry_total: after
+                .metadata_log
+                .commit_entry_total
+                .saturating_sub(before.metadata_log.commit_entry_total),
+            commit_command_total: after
+                .metadata_log
+                .commit_command_total
+                .saturating_sub(before.metadata_log.commit_command_total),
+            max_commands_per_entry: after.metadata_log.max_commands_per_entry,
         },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: after
@@ -1076,6 +1104,11 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             dedupe_write_total: json_u64(body, "dedupe_write_total")?,
             commit_prepare_ns_total: json_u64(body, "commit_prepare_ns_total")?,
             atomic_apply_ns_total: json_u64(body, "atomic_apply_ns_total")?,
+        },
+        metadata_log: MetadataLogBenchStats {
+            commit_entry_total: json_u64(body, "commit_entry_total")?,
+            commit_command_total: json_u64(body, "commit_command_total")?,
+            max_commands_per_entry: json_u64(body, "max_commands_per_entry")?,
         },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: json_u64(body, "path_index_lookup_total")?,
@@ -1633,16 +1666,19 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"metadata_store":{"get_total":2,"scan_total":3,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_service":{"path_index_lookup_total":17,"path_index_hit_total":18,"path_index_miss_total":19,"path_index_stale_total":20,"path_index_fallback_total":21,"create_files_batch_total":22,"create_files_entry_total":23,"create_dirs_batch_total":24,"create_dirs_entry_total":25,"read_dir_plus_total":26,"read_dir_plus_entry_total":27,"read_dir_plus_projection_hit_total":28}}"#;
+        let body = r#"{"metadata_store":{"get_total":2,"scan_total":3,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_log":{"enabled":true,"commit_entry_total":17,"commit_command_total":18,"max_commands_per_entry":19},"metadata_service":{"path_index_lookup_total":20,"path_index_hit_total":21,"path_index_miss_total":22,"path_index_stale_total":23,"path_index_fallback_total":24,"create_files_batch_total":25,"create_files_entry_total":26,"create_dirs_batch_total":27,"create_dirs_entry_total":28,"read_dir_plus_total":29,"read_dir_plus_entry_total":30,"read_dir_plus_projection_hit_total":31}}"#;
 
         assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
         assert_eq!(json_u64(body, "scan_key_visited_total").unwrap(), 4);
-        assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 18);
-        assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 22);
-        assert_eq!(json_u64(body, "create_dirs_entry_total").unwrap(), 25);
+        assert_eq!(json_u64(body, "commit_entry_total").unwrap(), 17);
+        assert_eq!(json_u64(body, "commit_command_total").unwrap(), 18);
+        assert_eq!(json_u64(body, "max_commands_per_entry").unwrap(), 19);
+        assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 21);
+        assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 25);
+        assert_eq!(json_u64(body, "create_dirs_entry_total").unwrap(), 28);
         assert_eq!(
             json_u64(body, "read_dir_plus_projection_hit_total").unwrap(),
-            28
+            31
         );
         assert!(json_u64(body, "missing_total").is_err());
     }

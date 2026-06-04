@@ -1,4 +1,7 @@
-use std::sync::Mutex;
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Mutex,
+};
 
 use nokvfs_meta::command::{
     CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
@@ -22,6 +25,21 @@ pub struct SharedLogMetadataStore<M, L, F = MemoryAppliedFrontierStore> {
     frontier_store: F,
     apply_gate: Mutex<()>,
     applied_frontier: Mutex<Option<ApplyFrontier>>,
+    runtime_stats: SharedLogRuntimeCounters,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SharedLogRuntimeStats {
+    pub commit_entry_total: u64,
+    pub commit_command_total: u64,
+    pub max_commands_per_entry: u64,
+}
+
+#[derive(Debug, Default)]
+struct SharedLogRuntimeCounters {
+    commit_entry_total: AtomicU64,
+    commit_command_total: AtomicU64,
+    max_commands_per_entry: AtomicU64,
 }
 
 impl<M, L> SharedLogMetadataStore<M, L, MemoryAppliedFrontierStore>
@@ -38,6 +56,7 @@ where
             frontier_store: MemoryAppliedFrontierStore::new(),
             apply_gate: Mutex::new(()),
             applied_frontier: Mutex::new(None),
+            runtime_stats: SharedLogRuntimeCounters::default(),
         }
     }
 
@@ -76,6 +95,7 @@ where
             frontier_store,
             apply_gate: Mutex::new(()),
             applied_frontier: Mutex::new(applied_frontier),
+            runtime_stats: SharedLogRuntimeCounters::default(),
         })
     }
 
@@ -153,6 +173,7 @@ where
         let commit = MetadataGroup::new(&self.log, self, self.term, self.mount)
             .commit_batch(commands)
             .map_err(|err| MetadataError::Backend(err.to_string()))?;
+        self.record_runtime_commit(commands.len());
         Ok(commit
             .applied
             .into_iter()
@@ -207,6 +228,23 @@ where
             .unwrap_or(None)
     }
 
+    pub fn runtime_stats(&self) -> SharedLogRuntimeStats {
+        SharedLogRuntimeStats {
+            commit_entry_total: self
+                .runtime_stats
+                .commit_entry_total
+                .load(Ordering::Relaxed),
+            commit_command_total: self
+                .runtime_stats
+                .commit_command_total
+                .load(Ordering::Relaxed),
+            max_commands_per_entry: self
+                .runtime_stats
+                .max_commands_per_entry
+                .load(Ordering::Relaxed),
+        }
+    }
+
     pub fn checkpoint_frontier(
         &self,
         target_min_retained_index: LogIndex,
@@ -248,6 +286,30 @@ where
             self.log.compact_through(compact_through)?;
         }
         Ok(Some(frontier))
+    }
+
+    fn record_runtime_commit(&self, command_count: usize) {
+        self.runtime_stats
+            .commit_entry_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.runtime_stats
+            .commit_command_total
+            .fetch_add(command_count as u64, Ordering::Relaxed);
+        record_max(
+            &self.runtime_stats.max_commands_per_entry,
+            command_count as u64,
+        );
+    }
+}
+
+fn record_max(value: &AtomicU64, candidate: u64) {
+    let mut current = value.load(Ordering::Relaxed);
+    while candidate > current {
+        match value.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
     }
 }
 

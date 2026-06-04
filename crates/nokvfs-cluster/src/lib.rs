@@ -27,7 +27,7 @@ pub use log::SharedMetadataLog;
 pub use memory::InMemorySharedLog;
 pub use quorum::InMemoryQuorumLog;
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};
-pub use store::SharedLogMetadataStore;
+pub use store::{SharedLogMetadataStore, SharedLogRuntimeStats};
 pub use types::{
     AppliedMetadataCommand, ApplyFrontier, CheckpointArtifact, CheckpointFrontier,
     CheckpointManifest, DurableReceipt, LearnerBootstrapPlan, LogIndex, LogPosition, LogTerm,

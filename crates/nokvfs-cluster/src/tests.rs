@@ -562,6 +562,10 @@ fn shared_log_metadata_store_commits_independent_batch_as_one_entry() {
 
     assert_eq!(results.len(), 2);
     assert_eq!(shared.log().committed_index().get(), 1);
+    let stats = shared.runtime_stats();
+    assert_eq!(stats.commit_entry_total, 1);
+    assert_eq!(stats.commit_command_total, 2);
+    assert_eq!(stats.max_commands_per_entry, 2);
     let entries = shared
         .log()
         .read_from(LogIndex::new(1).unwrap(), 0)

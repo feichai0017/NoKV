@@ -9,7 +9,7 @@ use std::thread;
 use nokvfs_cluster::{
     ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
     FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog, FileSharedLogOptions, LogIndex,
-    LogTerm, SharedLogError, SharedLogMetadataStore, SharedMetadataLog,
+    LogTerm, SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -132,6 +132,7 @@ impl Server {
                 self.metadata_log_enabled,
                 self.metadata_log_sync,
                 self.metadata_log_frontier(),
+                self.metadata_log_runtime_stats(),
             ),
             metadata_service_json(&metadata_service),
             object_gc_json(&object_gc),
@@ -260,26 +261,42 @@ impl Server {
             .as_ref()
             .and_then(|metadata_log| metadata_log.applied_frontier())
     }
+
+    fn metadata_log_runtime_stats(&self) -> Option<SharedLogRuntimeStats> {
+        self.metadata_log
+            .as_ref()
+            .map(|metadata_log| metadata_log.runtime_stats())
+    }
 }
 
 fn metadata_log_json(
     enabled: bool,
     sync: nokvfs_cluster::FileSharedLogSync,
     frontier: Option<ApplyFrontier>,
+    runtime: Option<SharedLogRuntimeStats>,
 ) -> String {
+    let runtime = runtime.unwrap_or_default();
     match frontier {
         Some(frontier) => format!(
-            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":{},\"applied_index\":{},\"commit_version\":{}}}",
+            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":{},\"applied_index\":{},\"commit_version\":{},\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{}}}",
             metadata_log_sync_name(sync),
             frontier.position.term.get(),
             frontier.position.index.get(),
             frontier.commit_version.get(),
+            runtime.commit_entry_total,
+            runtime.commit_command_total,
+            runtime.max_commands_per_entry,
         ),
         None if enabled => format!(
-            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":null,\"applied_index\":null,\"commit_version\":null}}",
-            metadata_log_sync_name(sync)
+            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":null,\"applied_index\":null,\"commit_version\":null,\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{}}}",
+            metadata_log_sync_name(sync),
+            runtime.commit_entry_total,
+            runtime.commit_command_total,
+            runtime.max_commands_per_entry,
         ),
-        None => "{\"enabled\":false}".to_owned(),
+        None => {
+            "{\"enabled\":false,\"commit_entry_total\":0,\"commit_command_total\":0,\"max_commands_per_entry\":0}".to_owned()
+        }
     }
 }
 
@@ -482,7 +499,7 @@ pub(crate) mod tests {
         let server = test_server();
         assert!(server
             .stats_json()
-            .contains("\"metadata_log\":{\"enabled\":false}"));
+            .contains("\"metadata_log\":{\"enabled\":false,\"commit_entry_total\":0"));
         let body = server.run_manual_gc(128).unwrap();
         assert!(body.contains("\"object_gc\""));
         assert!(body.contains("\"history_gc\""));
@@ -545,9 +562,20 @@ pub(crate) mod tests {
         let mut options = test_options(dir.path(), Some(metadata_log));
         options.metadata_log_sync = FileSharedLogSync::None;
         let server = Server::open(options).unwrap();
+        server
+            .service()
+            .create_dir_path("/runs", 0o755, 1000, 1000)
+            .unwrap();
 
         let stats = server.stats_json();
         assert!(stats.contains("\"metadata_log\":{\"enabled\":true,\"sync\":\"none\""));
+        assert!(stats.contains("\"commit_entry_total\":"));
+        assert!(stats.contains("\"commit_command_total\":"));
+        assert!(stats.contains("\"max_commands_per_entry\":"));
+        let runtime = server.metadata_log_runtime_stats().unwrap();
+        assert!(runtime.commit_entry_total >= 1);
+        assert_eq!(runtime.commit_entry_total, runtime.commit_command_total);
+        assert_eq!(runtime.max_commands_per_entry, 1);
     }
 
     #[test]
