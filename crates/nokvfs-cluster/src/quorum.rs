@@ -5,8 +5,8 @@ use nokvfs_meta::command::MetadataCommand;
 use nokvfs_types::MountId;
 
 use crate::{
-    DurableReceipt, LogIndex, LogPosition, LogTerm, MetadataLogEntry, NodeId, SharedLogError,
-    SharedMetadataLog,
+    CheckpointCatalog, DurableReceipt, LearnerBootstrapPlan, LogIndex, LogPosition, LogTerm,
+    MetadataLogEntry, NodeId, SharedLogError, SharedMetadataLog,
 };
 
 #[derive(Debug)]
@@ -29,6 +29,7 @@ struct ReplicaState {
     available: bool,
     entries: VecDeque<MetadataLogEntry>,
     compacted_through: LogIndex,
+    checkpoint_index: LogIndex,
 }
 
 impl InMemoryQuorumLog {
@@ -87,6 +88,69 @@ impl InMemoryQuorumLog {
             return Err(SharedLogError::UnknownNode(node));
         }
         sync_replica(&mut inner, node)
+    }
+
+    pub fn bootstrap_learner_from_checkpoint<C>(
+        &self,
+        node: NodeId,
+        mount: MountId,
+        checkpoints: &C,
+    ) -> Result<LearnerBootstrapPlan, SharedLogError>
+    where
+        C: CheckpointCatalog,
+    {
+        let compacted_through = {
+            let inner = self.lock()?;
+            if !inner.learners.contains_key(&node) {
+                return Err(SharedLogError::UnknownNode(node));
+            }
+            inner.compacted_through
+        };
+        let checkpoint =
+            checkpoints
+                .latest_for_mount(mount)?
+                .ok_or(SharedLogError::CheckpointRequired {
+                    node,
+                    compacted: compacted_through,
+                })?;
+        let checkpoint_compacted = checkpoint
+            .frontier
+            .compact_through()
+            .unwrap_or(LogIndex::ZERO);
+        if checkpoint_compacted < compacted_through {
+            return Err(SharedLogError::CheckpointTooOld {
+                node,
+                checkpoint_compacted,
+                required: compacted_through,
+            });
+        }
+        let replay_start = checkpoint.frontier.min_retained_index;
+        let replayed_index = {
+            let mut inner = self.lock()?;
+            if !inner.learners.contains_key(&node) {
+                return Err(SharedLogError::UnknownNode(node));
+            }
+            let entries = inner
+                .committed_entries
+                .iter()
+                .filter(|entry| entry.position.index >= replay_start)
+                .cloned()
+                .collect::<Vec<_>>();
+            let replica = inner
+                .replica_mut(node)
+                .ok_or(SharedLogError::UnknownNode(node))?;
+            replica.entries.clear();
+            replica.compacted_through = checkpoint_compacted;
+            replica.checkpoint_index = checkpoint.frontier.applied_position.index;
+            replica.entries.extend(entries);
+            replica.last_index()
+        };
+        Ok(LearnerBootstrapPlan {
+            node,
+            checkpoint,
+            replay_start,
+            replayed_index,
+        })
     }
 
     pub fn sync_node(&self, node: NodeId) -> Result<LogIndex, SharedLogError> {
@@ -283,6 +347,7 @@ impl ReplicaState {
             available: true,
             entries: VecDeque::new(),
             compacted_through: LogIndex::ZERO,
+            checkpoint_index: LogIndex::ZERO,
         }
     }
 
@@ -290,7 +355,7 @@ impl ReplicaState {
         self.entries
             .back()
             .map(|entry| entry.position.index)
-            .unwrap_or(LogIndex::ZERO)
+            .unwrap_or(self.checkpoint_index)
     }
 }
 

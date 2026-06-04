@@ -741,6 +741,66 @@ fn checkpoint_frontier_compacts_before_first_retained_index() {
 }
 
 #[test]
+fn memory_checkpoint_catalog_keeps_latest_manifest() {
+    let catalog = MemoryCheckpointCatalog::new();
+    let mount = MountId::new(1).unwrap();
+    let newer = CheckpointManifest::new(
+        b"checkpoint-2".to_vec(),
+        mount,
+        CheckpointFrontier {
+            durable_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(2).unwrap(),
+            },
+            applied_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(2).unwrap(),
+            },
+            min_retained_index: LogIndex::new(3).unwrap(),
+            max_commit_version: version(3),
+        },
+    )
+    .unwrap();
+    let older = CheckpointManifest::new(
+        b"checkpoint-1".to_vec(),
+        mount,
+        CheckpointFrontier {
+            durable_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(1).unwrap(),
+            },
+            applied_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(1).unwrap(),
+            },
+            min_retained_index: LogIndex::new(2).unwrap(),
+            max_commit_version: version(2),
+        },
+    )
+    .unwrap();
+
+    catalog.publish(newer.clone()).unwrap();
+    catalog.publish(older).unwrap();
+
+    assert_eq!(
+        catalog.latest_for_mount(mount).unwrap(),
+        Some(newer.clone())
+    );
+    assert!(matches!(
+        CheckpointManifest::new(Vec::new(), mount, newer.frontier),
+        Err(SharedLogError::EmptyCheckpointId)
+    ));
+    assert!(matches!(
+        catalog.publish(CheckpointManifest {
+            id: Vec::new(),
+            mount,
+            frontier: newer.frontier,
+        }),
+        Err(SharedLogError::EmptyCheckpointId)
+    ));
+}
+
+#[test]
 fn replay_rejects_non_contiguous_entries() {
     let mount = MountId::new(1).unwrap();
     let entries = vec![
@@ -861,6 +921,66 @@ fn quorum_log_requires_checkpoint_for_learner_past_compaction() {
         log.sync_learner(node(4)),
         Err(SharedLogError::Compacted { .. })
     ));
+}
+
+#[test]
+fn quorum_log_bootstraps_learner_from_checkpoint_after_compaction() {
+    let log = InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap();
+    let checkpoints = MemoryCheckpointCatalog::new();
+    let mount = MountId::new(1).unwrap();
+
+    log.set_node_available(node(4), false).unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)])
+        .unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"c", 4)])
+        .unwrap();
+    log.compact_through(LogIndex::new(2).unwrap()).unwrap();
+    log.set_node_available(node(4), true).unwrap();
+
+    assert!(matches!(
+        log.sync_learner(node(4)),
+        Err(SharedLogError::Compacted { .. })
+    ));
+    checkpoints
+        .publish(
+            CheckpointManifest::new(
+                b"checkpoint-b".to_vec(),
+                mount,
+                CheckpointFrontier {
+                    durable_position: LogPosition {
+                        term: LogTerm::new(1).unwrap(),
+                        index: LogIndex::new(3).unwrap(),
+                    },
+                    applied_position: LogPosition {
+                        term: LogTerm::new(1).unwrap(),
+                        index: LogIndex::new(2).unwrap(),
+                    },
+                    min_retained_index: LogIndex::new(3).unwrap(),
+                    max_commit_version: version(3),
+                },
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    let plan = log
+        .bootstrap_learner_from_checkpoint(node(4), mount, &checkpoints)
+        .unwrap();
+    assert_eq!(plan.node, node(4));
+    assert_eq!(plan.replay_start, LogIndex::new(3).unwrap());
+    assert_eq!(plan.replayed_index, LogIndex::new(3).unwrap());
+    assert_eq!(log.replica_committed_index(node(4)).unwrap().get(), 3);
+    assert!(matches!(
+        log.read_from_node(node(4), LogIndex::new(2).unwrap(), 0),
+        Err(SharedLogError::Compacted { .. })
+    ));
+    let tail = log
+        .read_from_node(node(4), LogIndex::new(3).unwrap(), 0)
+        .unwrap();
+    assert_eq!(tail.len(), 1);
+    assert_eq!(tail[0].commands[0].request_id, b"c");
 }
 
 #[test]

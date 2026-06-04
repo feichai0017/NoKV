@@ -7,6 +7,7 @@ pub enum SharedLogError {
     ZeroTerm,
     ZeroIndex,
     ZeroNodeId,
+    EmptyCheckpointId,
     EmptyBatch,
     NoVoters,
     DuplicateNode(NodeId),
@@ -18,6 +19,15 @@ pub enum SharedLogError {
     Compacted {
         requested: LogIndex,
         compacted: LogIndex,
+    },
+    CheckpointRequired {
+        node: NodeId,
+        compacted: LogIndex,
+    },
+    CheckpointTooOld {
+        node: NodeId,
+        checkpoint_compacted: LogIndex,
+        required: LogIndex,
     },
     Backend(String),
 }
@@ -46,6 +56,7 @@ impl fmt::Display for SharedLogError {
             Self::ZeroTerm => write!(f, "log term must be non-zero"),
             Self::ZeroIndex => write!(f, "log index must be non-zero"),
             Self::ZeroNodeId => write!(f, "cluster node id must be non-zero"),
+            Self::EmptyCheckpointId => write!(f, "checkpoint id must not be empty"),
             Self::EmptyBatch => write!(f, "metadata log entry batch is empty"),
             Self::NoVoters => write!(f, "metadata quorum log requires at least one voter"),
             Self::DuplicateNode(node) => {
@@ -70,6 +81,23 @@ impl fmt::Display for SharedLogError {
                 "requested log index {} was compacted through {}",
                 requested.get(),
                 compacted.get()
+            ),
+            Self::CheckpointRequired { node, compacted } => write!(
+                f,
+                "metadata quorum log node {} requires a checkpoint after compaction through {}",
+                node.get(),
+                compacted.get()
+            ),
+            Self::CheckpointTooOld {
+                node,
+                checkpoint_compacted,
+                required,
+            } => write!(
+                f,
+                "metadata checkpoint for node {} only covers compaction through {}, required {}",
+                node.get(),
+                checkpoint_compacted.get(),
+                required.get()
             ),
             Self::Backend(message) => write!(f, "{message}"),
         }

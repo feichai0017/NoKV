@@ -6,6 +6,7 @@
 //! another quorum log, but those details must not leak into filesystem metadata
 //! semantics.
 
+mod checkpoint;
 mod errors;
 mod file;
 mod frontier;
@@ -17,6 +18,7 @@ mod replay;
 mod store;
 mod types;
 
+pub use checkpoint::{CheckpointCatalog, MemoryCheckpointCatalog};
 pub use errors::{ReplayError, SharedLogError};
 pub use file::FileSharedLog;
 pub use frontier::{AppliedFrontierStore, FileAppliedFrontierStore, MemoryAppliedFrontierStore};
@@ -27,8 +29,8 @@ pub use quorum::InMemoryQuorumLog;
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};
 pub use store::SharedLogMetadataStore;
 pub use types::{
-    AppliedMetadataCommand, ApplyFrontier, CheckpointFrontier, DurableReceipt, LogIndex,
-    LogPosition, LogTerm, MetadataLogEntry, NodeId,
+    AppliedMetadataCommand, ApplyFrontier, CheckpointFrontier, CheckpointManifest, DurableReceipt,
+    LearnerBootstrapPlan, LogIndex, LogPosition, LogTerm, MetadataLogEntry, NodeId,
 };
 
 #[cfg(test)]

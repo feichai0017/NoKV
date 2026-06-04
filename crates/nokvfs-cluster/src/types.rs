@@ -55,6 +55,21 @@ pub struct CheckpointFrontier {
     pub max_commit_version: Version,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckpointManifest {
+    pub id: Vec<u8>,
+    pub mount: MountId,
+    pub frontier: CheckpointFrontier,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct LearnerBootstrapPlan {
+    pub node: NodeId,
+    pub checkpoint: CheckpointManifest,
+    pub replay_start: LogIndex,
+    pub replayed_index: LogIndex,
+}
+
 impl LogTerm {
     pub fn new(term: u64) -> Result<Self, SharedLogError> {
         if term == 0 {
@@ -103,5 +118,23 @@ impl CheckpointFrontier {
             return None;
         }
         LogIndex::new(compacted).ok()
+    }
+}
+
+impl CheckpointManifest {
+    pub fn new(
+        id: impl Into<Vec<u8>>,
+        mount: MountId,
+        frontier: CheckpointFrontier,
+    ) -> Result<Self, SharedLogError> {
+        let id = id.into();
+        if id.is_empty() {
+            return Err(SharedLogError::EmptyCheckpointId);
+        }
+        Ok(Self {
+            id,
+            mount,
+            frontier,
+        })
     }
 }
