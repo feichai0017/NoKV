@@ -35,8 +35,7 @@ use crate::layout::{
     encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
     encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
     encode_watch_event, gc_object_key, gc_queue_prefix, inode_key, path_index_key,
-    path_index_prefix, snapshot_pin_key, snapshot_pin_prefix, watch_log_prefix, xattr_key,
-    xattr_prefix,
+    snapshot_pin_key, snapshot_pin_prefix, watch_log_prefix, xattr_key, xattr_prefix,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, put_chunked_ranges,

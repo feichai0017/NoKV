@@ -466,7 +466,7 @@ fn stale_path_index_falls_back_to_canonical_namespace() {
 }
 
 #[test]
-fn directory_rename_removes_descendant_path_index_entries() {
+fn directory_rename_leaves_descendant_path_index_as_derived_stale_cache() {
     let objects = MemoryObjectStore::new();
     let metadata = HoltMetadataStore::open_memory().unwrap();
     let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects);
@@ -489,6 +489,19 @@ fn directory_rename_removes_descendant_path_index_entries() {
 
     service.rename_path("/runs", "/archive").unwrap();
 
+    let renamed_dir_key = path_index_key(
+        MountId::new(1).unwrap(),
+        &parse_absolute_path("/runs").unwrap(),
+    );
+    assert!(metadata
+        .get(
+            RecordFamily::PathIndex,
+            &renamed_dir_key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_none());
     assert!(metadata
         .get(
             RecordFamily::PathIndex,
@@ -497,7 +510,7 @@ fn directory_rename_removes_descendant_path_index_entries() {
             ReadPurpose::UserStrong,
         )
         .unwrap()
-        .is_none());
+        .is_some());
     assert!(matches!(
         service.lookup_path("/runs/checkpoint.bin"),
         Err(MetadError::NotFound)

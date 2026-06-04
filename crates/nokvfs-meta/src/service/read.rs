@@ -305,11 +305,18 @@ where
         let indexed: DentryWithAttr = crate::layout::decode_dentry_projection(&item.value.0)
             .map_err(|err| MetadError::Codec(err.to_string()))?
             .into();
-        let parent = self.resolve_components_as_directory_from_at_version(
+        let parent = match self.resolve_components_as_directory_from_at_version(
             InodeId::root(),
             parent_components,
             version,
-        )?;
+        ) {
+            Ok(parent) => parent,
+            Err(MetadError::NotFound | MetadError::NotDirectory) => {
+                self.path_index_stale_total.fetch_add(1, Ordering::Relaxed);
+                return Ok(None);
+            }
+            Err(err) => return Err(err),
+        };
         if parent != indexed.dentry.parent || *name != indexed.dentry.name {
             self.path_index_stale_total.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
