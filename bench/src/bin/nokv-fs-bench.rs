@@ -9,7 +9,8 @@ use std::error::Error;
 use std::fmt;
 use std::fs;
 use std::hint::black_box;
-use std::net::TcpListener;
+use std::io::{Read, Write};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
 use std::sync::Mutex;
@@ -18,7 +19,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
 use nokvfs_meta::{
-    DentryWithAttr, HistoryGcOptions, ObjectGcOptions, ObjectTransferStats, RenameReplaceResult,
+    DentryWithAttr, HistoryGcOptions, MetadataServiceStats, MetadataStoreStats, ObjectGcOptions,
+    ObjectTransferStats, RenameReplaceResult,
 };
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_server::{Server, ServerOptions};
@@ -96,6 +98,23 @@ struct ResultRow {
     cache_hit_rate: f64,
     manifest_chunks: u64,
     manifest_blocks: u64,
+    metadata_commits: u64,
+    metadata_gets: u64,
+    metadata_scans: u64,
+    metadata_scan_visited: u64,
+    metadata_scan_returned: u64,
+    metadata_current_puts: u64,
+    metadata_current_deletes: u64,
+    metadata_history_writes: u64,
+    metadata_watch_writes: u64,
+    metadata_dedupe_writes: u64,
+    metadata_commit_prepare_ns: u64,
+    metadata_atomic_apply_ns: u64,
+    path_index_hits: u64,
+    path_index_stale: u64,
+    path_index_fallback: u64,
+    read_dir_plus_entries: u64,
+    read_dir_plus_projection_hits: u64,
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
@@ -112,13 +131,20 @@ struct RowInput {
     seconds: f64,
     bytes: u64,
     samples: usize,
-    object_stats: ObjectTransferStats,
+    stats: BenchStats,
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
     checksum: u64,
     shape: String,
     caveat: String,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct BenchStats {
+    object: ObjectTransferStats,
+    metadata_store: MetadataStoreStats,
+    metadata_service: MetadataServiceStats,
 }
 
 #[derive(Debug)]
@@ -172,12 +198,18 @@ trait BenchClient: Sync {
     ) -> Result<RenameReplaceResult, BenchError>;
     fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError>;
     fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError>;
-    fn object_stats(&self) -> ObjectTransferStats;
+    fn stats(&self) -> Result<BenchStats, BenchError>;
 }
 
-impl BenchClient for NoKvFsClient<S3ObjectStore> {
+struct ServiceBenchClient {
+    client: NoKvFsClient<S3ObjectStore>,
+    stats_addr: SocketAddr,
+}
+
+impl BenchClient for ServiceBenchClient {
     fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), BenchError> {
-        self.metadata()
+        self.client
+            .metadata()
             .bootstrap_root(mode, uid, gid)
             .map_err(from_client)
     }
@@ -189,7 +221,8 @@ impl BenchClient for NoKvFsClient<S3ObjectStore> {
         uid: u32,
         gid: u32,
     ) -> Result<DentryWithAttr, BenchError> {
-        self.metadata()
+        self.client
+            .metadata()
             .mkdir(path, mode, uid, gid)
             .map_err(from_client)
     }
@@ -201,7 +234,8 @@ impl BenchClient for NoKvFsClient<S3ObjectStore> {
         uid: u32,
         gid: u32,
     ) -> Result<DentryWithAttr, BenchError> {
-        self.metadata()
+        self.client
+            .metadata()
             .create_file(path, mode, uid, gid)
             .map_err(from_client)
     }
@@ -213,7 +247,8 @@ impl BenchClient for NoKvFsClient<S3ObjectStore> {
         uid: u32,
         gid: u32,
     ) -> Result<Vec<DentryWithAttr>, BenchError> {
-        self.metadata()
+        self.client
+            .metadata()
             .create_files(paths, mode, uid, gid)
             .map_err(from_client)?
             .into_iter()
@@ -227,7 +262,7 @@ impl BenchClient for NoKvFsClient<S3ObjectStore> {
         bytes: Vec<u8>,
         metadata: ArtifactMetadata,
     ) -> Result<DentryWithAttr, BenchError> {
-        NoKvFsClient::put_artifact(self, path, bytes, metadata).map_err(from_client)
+        NoKvFsClient::put_artifact(&self.client, path, bytes, metadata).map_err(from_client)
     }
 
     fn rename_replace(
@@ -235,21 +270,24 @@ impl BenchClient for NoKvFsClient<S3ObjectStore> {
         source: &str,
         destination: &str,
     ) -> Result<RenameReplaceResult, BenchError> {
-        self.metadata()
+        self.client
+            .metadata()
             .rename_replace(source, destination)
             .map_err(from_client)
     }
 
     fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError> {
-        self.metadata().list(path).map_err(from_client)
+        self.client.metadata().list(path).map_err(from_client)
     }
 
     fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError> {
-        NoKvFsClient::cat(self, path).map_err(from_client)
+        NoKvFsClient::cat(&self.client, path).map_err(from_client)
     }
 
-    fn object_stats(&self) -> ObjectTransferStats {
-        NoKvFsClient::object_stats(self)
+    fn stats(&self) -> Result<BenchStats, BenchError> {
+        let mut stats = fetch_server_stats(self.stats_addr)?;
+        stats.object = NoKvFsClient::object_stats(&self.client);
+        Ok(stats)
     }
 }
 
@@ -272,11 +310,11 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     let shape = shape(&config);
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
-    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
+    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_gets,metadata_scans,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_hits,path_index_stale,path_index_fallback,read_dir_plus_entries,read_dir_plus_projection_hits,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
         println!(
-            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{}",
+            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             row.workload,
             profile_name(row.profile),
             row.operations,
@@ -290,6 +328,23 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
             row.cache_hit_rate,
             row.manifest_chunks,
             row.manifest_blocks,
+            row.metadata_commits,
+            row.metadata_gets,
+            row.metadata_scans,
+            row.metadata_scan_visited,
+            row.metadata_scan_returned,
+            row.metadata_current_puts,
+            row.metadata_current_deletes,
+            row.metadata_history_writes,
+            row.metadata_watch_writes,
+            row.metadata_dedupe_writes,
+            row.metadata_commit_prepare_ns,
+            row.metadata_atomic_apply_ns,
+            row.path_index_hits,
+            row.path_index_stale,
+            row.path_index_fallback,
+            row.read_dir_plus_entries,
+            row.read_dir_plus_projection_hits,
             row.object_concurrency,
             row.read_repeats,
             row.block_cache,
@@ -330,7 +385,7 @@ fn bench_mdtest_easy(
     config: &Config,
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
-    let before = client.object_stats();
+    let before = client.stats()?;
     let start = Instant::now();
     let mut checksum = 0_u64;
     for dir in 0..shape.dirs {
@@ -355,7 +410,7 @@ fn bench_mdtest_easy(
         seconds: start.elapsed().as_secs_f64(),
         bytes: 0,
         samples: 0,
-        object_stats: stats_delta(before, client.object_stats()),
+        stats: stats_delta(before, client.stats()?),
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -374,7 +429,7 @@ fn bench_mdtest_hard(
     shape: &WorkloadShape,
 ) -> Result<ResultRow, BenchError> {
     client.mkdir("/mdtest-hard", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
-    let before = client.object_stats();
+    let before = client.stats()?;
     let start = Instant::now();
     let mut checksum = 0_u64;
     let paths = (0..shape.shared_files)
@@ -390,7 +445,7 @@ fn bench_mdtest_hard(
         seconds: start.elapsed().as_secs_f64(),
         bytes: 0,
         samples: 0,
-        object_stats: stats_delta(before, client.object_stats()),
+        stats: stats_delta(before, client.stats()?),
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -416,7 +471,7 @@ fn bench_checkpoint_publish(
         artifact_metadata("checkpoint", "checkpoints/latest-initial"),
     )?;
 
-    let before = client.object_stats();
+    let before = client.stats()?;
     let start = Instant::now();
     let stage_checksum = run_parallel(shape.checkpoints, config.object_concurrency, |step| {
         let stage_path = format!("/checkpoints/.stage-{step:06}");
@@ -450,7 +505,7 @@ fn bench_checkpoint_publish(
         seconds: start.elapsed().as_secs_f64(),
         bytes: (shape.checkpoints * shape.checkpoint_bytes) as u64,
         samples: 0,
-        object_stats: stats_delta(before, client.object_stats()),
+        stats: stats_delta(before, client.stats()?),
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -480,7 +535,7 @@ fn bench_training_read(
         }
     }
 
-    let before = client.object_stats();
+    let before = client.stats()?;
     let start = Instant::now();
     let checksum = run_parallel(shape.dataset_dirs, config.object_concurrency, |shard| {
         let shard_path = format!("/dataset/shard-{shard:04}");
@@ -505,7 +560,7 @@ fn bench_training_read(
         seconds: start.elapsed().as_secs_f64(),
         bytes: (shape.dataset_dirs * shape.dataset_file_bytes * config.read_repeats) as u64,
         samples: shape.dataset_dirs * config.read_repeats,
-        object_stats: stats_delta(before, client.object_stats()),
+        stats: stats_delta(before, client.stats()?),
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -562,7 +617,7 @@ fn bench_mlperf_dlio(
     )?;
 
     let checkpoint_steps = shape.checkpoints.max(1) / 4;
-    let before = client.object_stats();
+    let before = client.stats()?;
     let start = Instant::now();
     let mut checksum = run_parallel(shape.dataset_dirs, config.object_concurrency, |shard| {
         let shard_path = format!("/mlperf-dlio/dataset/shard-{shard:04}");
@@ -603,7 +658,7 @@ fn bench_mlperf_dlio(
         bytes: (shape.dataset_dirs * shape.dataset_file_bytes * config.read_repeats
             + checkpoint_steps * shape.checkpoint_bytes) as u64,
         samples: shape.dataset_dirs * config.read_repeats,
-        object_stats: stats_delta(before, client.object_stats()),
+        stats: stats_delta(before, client.stats()?),
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -644,7 +699,7 @@ fn bench_demo_dataset(
         }
     }
 
-    let before = client.object_stats();
+    let before = client.stats()?;
     let start = Instant::now();
     let mut checksum = 0_u64;
     for class in 0..classes {
@@ -663,7 +718,7 @@ fn bench_demo_dataset(
         seconds: start.elapsed().as_secs_f64(),
         bytes: (classes * 2 * sample_bytes) as u64,
         samples: classes * 2,
-        object_stats: stats_delta(before, client.object_stats()),
+        stats: stats_delta(before, client.stats()?),
         object_concurrency: config.object_concurrency,
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
@@ -677,7 +732,7 @@ fn bench_demo_dataset(
 }
 
 fn row(input: RowInput) -> ResultRow {
-    let cache_total = input.object_stats.object_gets + input.object_stats.cache_hits;
+    let cache_total = input.stats.object.object_gets + input.stats.object.cache_hits;
     ResultRow {
         workload: input.workload,
         profile: input.profile,
@@ -686,16 +741,36 @@ fn row(input: RowInput) -> ResultRow {
         ops_per_second: input.operations as f64 / input.seconds.max(f64::MIN_POSITIVE),
         mb_per_second: input.bytes as f64 / 1_048_576_f64 / input.seconds.max(f64::MIN_POSITIVE),
         samples_per_second: input.samples as f64 / input.seconds.max(f64::MIN_POSITIVE),
-        object_puts: input.object_stats.object_puts,
-        object_gets: input.object_stats.object_gets,
-        cache_hits: input.object_stats.cache_hits,
+        object_puts: input.stats.object.object_puts,
+        object_gets: input.stats.object.object_gets,
+        cache_hits: input.stats.object.cache_hits,
         cache_hit_rate: if cache_total == 0 {
             0.0
         } else {
-            input.object_stats.cache_hits as f64 / cache_total as f64
+            input.stats.object.cache_hits as f64 / cache_total as f64
         },
-        manifest_chunks: input.object_stats.manifest_chunks,
-        manifest_blocks: input.object_stats.manifest_blocks,
+        manifest_chunks: input.stats.object.manifest_chunks,
+        manifest_blocks: input.stats.object.manifest_blocks,
+        metadata_commits: input.stats.metadata_store.commit_total,
+        metadata_gets: input.stats.metadata_store.get_total,
+        metadata_scans: input.stats.metadata_store.scan_total,
+        metadata_scan_visited: input.stats.metadata_store.scan_key_visited_total,
+        metadata_scan_returned: input.stats.metadata_store.scan_key_returned_total,
+        metadata_current_puts: input.stats.metadata_store.current_put_total,
+        metadata_current_deletes: input.stats.metadata_store.current_delete_total,
+        metadata_history_writes: input.stats.metadata_store.history_write_total,
+        metadata_watch_writes: input.stats.metadata_store.watch_write_total,
+        metadata_dedupe_writes: input.stats.metadata_store.dedupe_write_total,
+        metadata_commit_prepare_ns: input.stats.metadata_store.commit_prepare_ns_total,
+        metadata_atomic_apply_ns: input.stats.metadata_store.atomic_apply_ns_total,
+        path_index_hits: input.stats.metadata_service.path_index_hit_total,
+        path_index_stale: input.stats.metadata_service.path_index_stale_total,
+        path_index_fallback: input.stats.metadata_service.path_index_fallback_total,
+        read_dir_plus_entries: input.stats.metadata_service.read_dir_plus_entry_total,
+        read_dir_plus_projection_hits: input
+            .stats
+            .metadata_service
+            .read_dir_plus_projection_hit_total,
         object_concurrency: input.object_concurrency,
         read_repeats: input.read_repeats,
         block_cache: input.block_cache,
@@ -705,13 +780,127 @@ fn row(input: RowInput) -> ResultRow {
     }
 }
 
-fn stats_delta(before: ObjectTransferStats, after: ObjectTransferStats) -> ObjectTransferStats {
-    ObjectTransferStats {
-        object_puts: after.object_puts.saturating_sub(before.object_puts),
-        object_gets: after.object_gets.saturating_sub(before.object_gets),
-        cache_hits: after.cache_hits.saturating_sub(before.cache_hits),
-        manifest_chunks: after.manifest_chunks.saturating_sub(before.manifest_chunks),
-        manifest_blocks: after.manifest_blocks.saturating_sub(before.manifest_blocks),
+fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
+    BenchStats {
+        object: ObjectTransferStats {
+            object_puts: after
+                .object
+                .object_puts
+                .saturating_sub(before.object.object_puts),
+            object_gets: after
+                .object
+                .object_gets
+                .saturating_sub(before.object.object_gets),
+            cache_hits: after
+                .object
+                .cache_hits
+                .saturating_sub(before.object.cache_hits),
+            manifest_chunks: after
+                .object
+                .manifest_chunks
+                .saturating_sub(before.object.manifest_chunks),
+            manifest_blocks: after
+                .object
+                .manifest_blocks
+                .saturating_sub(before.object.manifest_blocks),
+        },
+        metadata_store: MetadataStoreStats {
+            get_total: after
+                .metadata_store
+                .get_total
+                .saturating_sub(before.metadata_store.get_total),
+            scan_total: after
+                .metadata_store
+                .scan_total
+                .saturating_sub(before.metadata_store.scan_total),
+            scan_key_visited_total: after
+                .metadata_store
+                .scan_key_visited_total
+                .saturating_sub(before.metadata_store.scan_key_visited_total),
+            scan_key_returned_total: after
+                .metadata_store
+                .scan_key_returned_total
+                .saturating_sub(before.metadata_store.scan_key_returned_total),
+            active_snapshot_pin_total: after.metadata_store.active_snapshot_pin_total,
+            commit_total: after
+                .metadata_store
+                .commit_total
+                .saturating_sub(before.metadata_store.commit_total),
+            dedupe_hit_total: after
+                .metadata_store
+                .dedupe_hit_total
+                .saturating_sub(before.metadata_store.dedupe_hit_total),
+            predicate_total: after
+                .metadata_store
+                .predicate_total
+                .saturating_sub(before.metadata_store.predicate_total),
+            prefix_empty_predicate_total: after
+                .metadata_store
+                .prefix_empty_predicate_total
+                .saturating_sub(before.metadata_store.prefix_empty_predicate_total),
+            current_put_total: after
+                .metadata_store
+                .current_put_total
+                .saturating_sub(before.metadata_store.current_put_total),
+            current_delete_total: after
+                .metadata_store
+                .current_delete_total
+                .saturating_sub(before.metadata_store.current_delete_total),
+            history_write_total: after
+                .metadata_store
+                .history_write_total
+                .saturating_sub(before.metadata_store.history_write_total),
+            watch_write_total: after
+                .metadata_store
+                .watch_write_total
+                .saturating_sub(before.metadata_store.watch_write_total),
+            dedupe_write_total: after
+                .metadata_store
+                .dedupe_write_total
+                .saturating_sub(before.metadata_store.dedupe_write_total),
+            commit_prepare_ns_total: after
+                .metadata_store
+                .commit_prepare_ns_total
+                .saturating_sub(before.metadata_store.commit_prepare_ns_total),
+            atomic_apply_ns_total: after
+                .metadata_store
+                .atomic_apply_ns_total
+                .saturating_sub(before.metadata_store.atomic_apply_ns_total),
+        },
+        metadata_service: MetadataServiceStats {
+            path_index_lookup_total: after
+                .metadata_service
+                .path_index_lookup_total
+                .saturating_sub(before.metadata_service.path_index_lookup_total),
+            path_index_hit_total: after
+                .metadata_service
+                .path_index_hit_total
+                .saturating_sub(before.metadata_service.path_index_hit_total),
+            path_index_miss_total: after
+                .metadata_service
+                .path_index_miss_total
+                .saturating_sub(before.metadata_service.path_index_miss_total),
+            path_index_stale_total: after
+                .metadata_service
+                .path_index_stale_total
+                .saturating_sub(before.metadata_service.path_index_stale_total),
+            path_index_fallback_total: after
+                .metadata_service
+                .path_index_fallback_total
+                .saturating_sub(before.metadata_service.path_index_fallback_total),
+            read_dir_plus_total: after
+                .metadata_service
+                .read_dir_plus_total
+                .saturating_sub(before.metadata_service.read_dir_plus_total),
+            read_dir_plus_entry_total: after
+                .metadata_service
+                .read_dir_plus_entry_total
+                .saturating_sub(before.metadata_service.read_dir_plus_entry_total),
+            read_dir_plus_projection_hit_total: after
+                .metadata_service
+                .read_dir_plus_projection_hit_total
+                .saturating_sub(before.metadata_service.read_dir_plus_projection_hit_total),
+        },
     }
 }
 
@@ -780,7 +969,77 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
     });
     let mut client = NoKvFsClient::connect(bind, objects);
     client.set_block_cache_enabled(config.block_cache);
-    Ok(Box::new(client))
+    Ok(Box::new(ServiceBenchClient {
+        client,
+        stats_addr: bind,
+    }))
+}
+
+fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
+    let mut stream = TcpStream::connect(address).map_err(from_io)?;
+    stream
+        .write_all(b"GET /stats HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+        .map_err(from_io)?;
+    let mut response = String::new();
+    stream.read_to_string(&mut response).map_err(from_io)?;
+    let body = response
+        .split_once("\r\n\r\n")
+        .map(|(_, body)| body)
+        .ok_or_else(|| BenchError::Client("stats response missing body".to_owned()))?;
+    Ok(BenchStats {
+        object: ObjectTransferStats::default(),
+        metadata_store: MetadataStoreStats {
+            get_total: json_u64(body, "get_total")?,
+            scan_total: json_u64(body, "scan_total")?,
+            scan_key_visited_total: json_u64(body, "scan_key_visited_total")?,
+            scan_key_returned_total: json_u64(body, "scan_key_returned_total")?,
+            active_snapshot_pin_total: json_u64(body, "active_snapshot_pin_total")?,
+            commit_total: json_u64(body, "commit_total")?,
+            dedupe_hit_total: json_u64(body, "dedupe_hit_total")?,
+            predicate_total: json_u64(body, "predicate_total")?,
+            prefix_empty_predicate_total: json_u64(body, "prefix_empty_predicate_total")?,
+            current_put_total: json_u64(body, "current_put_total")?,
+            current_delete_total: json_u64(body, "current_delete_total")?,
+            history_write_total: json_u64(body, "history_write_total")?,
+            watch_write_total: json_u64(body, "watch_write_total")?,
+            dedupe_write_total: json_u64(body, "dedupe_write_total")?,
+            commit_prepare_ns_total: json_u64(body, "commit_prepare_ns_total")?,
+            atomic_apply_ns_total: json_u64(body, "atomic_apply_ns_total")?,
+        },
+        metadata_service: MetadataServiceStats {
+            path_index_lookup_total: json_u64(body, "path_index_lookup_total")?,
+            path_index_hit_total: json_u64(body, "path_index_hit_total")?,
+            path_index_miss_total: json_u64(body, "path_index_miss_total")?,
+            path_index_stale_total: json_u64(body, "path_index_stale_total")?,
+            path_index_fallback_total: json_u64(body, "path_index_fallback_total")?,
+            read_dir_plus_total: json_u64(body, "read_dir_plus_total")?,
+            read_dir_plus_entry_total: json_u64(body, "read_dir_plus_entry_total")?,
+            read_dir_plus_projection_hit_total: json_u64(
+                body,
+                "read_dir_plus_projection_hit_total",
+            )?,
+        },
+    })
+}
+
+fn json_u64(body: &str, key: &str) -> Result<u64, BenchError> {
+    let needle = format!("\"{key}\":");
+    let start = body
+        .find(&needle)
+        .ok_or_else(|| BenchError::Client(format!("stats response missing {key}")))?
+        + needle.len();
+    let digits = body[start..]
+        .chars()
+        .take_while(char::is_ascii_digit)
+        .collect::<String>();
+    if digits.is_empty() {
+        return Err(BenchError::Client(format!(
+            "stats response has non-numeric {key}"
+        )));
+    }
+    digits
+        .parse()
+        .map_err(|err| BenchError::Client(format!("invalid stats value for {key}: {err}")))
 }
 
 fn artifact_metadata(producer: &str, manifest_id: &str) -> ArtifactMetadata {
@@ -1295,6 +1554,20 @@ mod tests {
         let shape = shape(&config);
         assert_eq!(shape.checkpoint_bytes, 8192);
         assert_eq!(shape.dataset_file_bytes, 4096);
+    }
+
+    #[test]
+    fn stats_json_parser_reads_metadata_fields() {
+        let body = r#"{"metadata_store":{"get_total":2,"scan_total":3,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_service":{"path_index_lookup_total":17,"path_index_hit_total":18,"path_index_miss_total":19,"path_index_stale_total":20,"path_index_fallback_total":21,"read_dir_plus_total":22,"read_dir_plus_entry_total":23,"read_dir_plus_projection_hit_total":24}}"#;
+
+        assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
+        assert_eq!(json_u64(body, "scan_key_visited_total").unwrap(), 4);
+        assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 18);
+        assert_eq!(
+            json_u64(body, "read_dir_plus_projection_hit_total").unwrap(),
+            24
+        );
+        assert!(json_u64(body, "missing_total").is_err());
     }
 
     #[test]
