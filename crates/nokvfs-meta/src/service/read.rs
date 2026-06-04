@@ -48,8 +48,14 @@ where
     }
 
     pub fn lookup_path(&self, path: &str) -> Result<Option<DentryWithAttr>, MetadError> {
-        self.lookup_path_from_at_version(InodeId::root(), path, self.read_version()?)
-            .map(|entry| entry.map(|(entry, _)| entry))
+        self.lookup_path_from_at_version_for_purpose_with_index(
+            InodeId::root(),
+            path,
+            self.read_version()?,
+            ReadPurpose::UserStrong,
+            false,
+        )
+        .map(|entry| entry.map(|(entry, _)| entry))
     }
 
     pub(super) fn lookup_plus_versioned(
@@ -282,15 +288,6 @@ where
         Ok(current)
     }
 
-    pub(super) fn lookup_path_from_at_version(
-        &self,
-        root: InodeId,
-        path: &str,
-        version: Version,
-    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
-        self.lookup_path_from_at_version_for_purpose(root, path, version, ReadPurpose::UserStrong)
-    }
-
     pub(super) fn lookup_path_from_at_version_for_purpose(
         &self,
         root: InodeId,
@@ -298,8 +295,19 @@ where
         version: Version,
         purpose: ReadPurpose,
     ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
+        self.lookup_path_from_at_version_for_purpose_with_index(root, path, version, purpose, true)
+    }
+
+    fn lookup_path_from_at_version_for_purpose_with_index(
+        &self,
+        root: InodeId,
+        path: &str,
+        version: Version,
+        purpose: ReadPurpose,
+        probe_path_index: bool,
+    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
         let mut components = parse_absolute_path(path)?;
-        if root == InodeId::root() && !components.is_empty() {
+        if probe_path_index && root == InodeId::root() && !components.is_empty() {
             if let Some(indexed) =
                 self.lookup_path_index_components_at_version(&components, version, purpose)?
             {

@@ -403,15 +403,11 @@ fn plain_path_create_uses_canonical_namespace_without_path_index() {
     let after = service.metadata_service_stats();
     assert_eq!(
         after.path_index_lookup_total - before.path_index_lookup_total,
-        1
-    );
-    assert_eq!(
-        after.path_index_miss_total - before.path_index_miss_total,
-        1
+        0
     );
     assert_eq!(
         after.path_index_fallback_total - before.path_index_fallback_total,
-        1
+        0
     );
 }
 
@@ -452,10 +448,12 @@ fn prepared_artifact_path_publish_writes_and_uses_validated_path_index() {
     assert_eq!(DentryWithAttr::from(projection), artifact);
 
     let before = service.metadata_service_stats();
-    assert_eq!(
-        service.lookup_path("/runs/checkpoint.bin").unwrap(),
-        Some(artifact)
-    );
+    let metadata = service
+        .stat_path("/runs/checkpoint.bin")
+        .unwrap()
+        .expect("artifact stat");
+    assert_eq!(metadata.attr, artifact.attr);
+    assert_eq!(metadata.body, artifact.body);
     let after = service.metadata_service_stats();
     assert_eq!(
         after.path_index_lookup_total - before.path_index_lookup_total,
@@ -468,7 +466,7 @@ fn prepared_artifact_path_publish_writes_and_uses_validated_path_index() {
     );
 
     let before = service.metadata_service_stats();
-    assert_eq!(service.lookup_path("/runs/missing.bin").unwrap(), None);
+    assert_eq!(service.stat_path("/runs/missing.bin").unwrap(), None);
     let after = service.metadata_service_stats();
     assert_eq!(
         after.path_index_lookup_total - before.path_index_lookup_total,
@@ -512,7 +510,7 @@ fn stale_path_index_falls_back_to_canonical_namespace() {
         .unwrap();
 
     let before = service.metadata_service_stats();
-    assert_eq!(service.lookup_path("/runs/checkpoint.bin").unwrap(), None);
+    assert_eq!(service.stat_path("/runs/checkpoint.bin").unwrap(), None);
     let after = service.metadata_service_stats();
     assert_eq!(
         after.path_index_lookup_total - before.path_index_lookup_total,
@@ -531,10 +529,12 @@ fn stale_path_index_falls_back_to_canonical_namespace() {
     moved_artifact.dentry.parent = archive.attr.inode;
 
     let before = service.metadata_service_stats();
-    assert_eq!(
-        service.lookup_path("/archive/checkpoint.bin").unwrap(),
-        Some(moved_artifact)
-    );
+    let metadata = service
+        .stat_path("/archive/checkpoint.bin")
+        .unwrap()
+        .expect("moved artifact stat");
+    assert_eq!(metadata.attr, moved_artifact.attr);
+    assert_eq!(metadata.body, moved_artifact.body);
     let after = service.metadata_service_stats();
     assert_eq!(
         after.path_index_miss_total - before.path_index_miss_total,
