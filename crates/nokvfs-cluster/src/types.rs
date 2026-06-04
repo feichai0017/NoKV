@@ -48,6 +48,13 @@ pub struct ApplyFrontier {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReadFreshness {
+    AnyApplied,
+    AppliedThrough(LogPosition),
+    CurrentCommitted,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct CheckpointFrontier {
     pub durable_position: LogPosition,
     pub applied_position: LogPosition,

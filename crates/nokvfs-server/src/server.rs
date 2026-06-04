@@ -278,7 +278,7 @@ fn metadata_log_json(
     let runtime = runtime.unwrap_or_default();
     match frontier {
         Some(frontier) => format!(
-            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":{},\"applied_index\":{},\"commit_version\":{},\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{}}}",
+            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":{},\"applied_index\":{},\"commit_version\":{},\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{},\"stale_read_total\":{}}}",
             metadata_log_sync_name(sync),
             frontier.position.term.get(),
             frontier.position.index.get(),
@@ -286,16 +286,18 @@ fn metadata_log_json(
             runtime.commit_entry_total,
             runtime.commit_command_total,
             runtime.max_commands_per_entry,
+            runtime.stale_read_total,
         ),
         None if enabled => format!(
-            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":null,\"applied_index\":null,\"commit_version\":null,\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{}}}",
+            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":null,\"applied_index\":null,\"commit_version\":null,\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{},\"stale_read_total\":{}}}",
             metadata_log_sync_name(sync),
             runtime.commit_entry_total,
             runtime.commit_command_total,
             runtime.max_commands_per_entry,
+            runtime.stale_read_total,
         ),
         None => {
-            "{\"enabled\":false,\"commit_entry_total\":0,\"commit_command_total\":0,\"max_commands_per_entry\":0}".to_owned()
+            "{\"enabled\":false,\"commit_entry_total\":0,\"commit_command_total\":0,\"max_commands_per_entry\":0,\"stale_read_total\":0}".to_owned()
         }
     }
 }

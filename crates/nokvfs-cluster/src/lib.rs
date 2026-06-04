@@ -31,7 +31,7 @@ pub use store::{SharedLogMetadataStore, SharedLogRuntimeStats};
 pub use types::{
     AppliedMetadataCommand, ApplyFrontier, CheckpointArtifact, CheckpointFrontier,
     CheckpointManifest, DurableReceipt, LearnerBootstrapPlan, LogIndex, LogPosition, LogTerm,
-    MetadataLogEntry, NodeId,
+    MetadataLogEntry, NodeId, ReadFreshness,
 };
 
 #[cfg(test)]

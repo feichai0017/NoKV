@@ -30,6 +30,10 @@ pub enum SharedLogError {
         checkpoint_compacted: LogIndex,
         required: LogIndex,
     },
+    ReadNotFresh {
+        required: LogPosition,
+        applied: Option<LogPosition>,
+    },
     Backend(String),
 }
 
@@ -103,6 +107,18 @@ impl fmt::Display for SharedLogError {
                 checkpoint_compacted.get(),
                 required.get()
             ),
+            Self::ReadNotFresh { required, applied } => {
+                let applied = applied
+                    .map(|position| format!("{}:{}", position.term.get(), position.index.get()))
+                    .unwrap_or_else(|| "none".to_owned());
+                write!(
+                    f,
+                    "metadata read requires applied frontier {}:{}, current applied frontier is {}",
+                    required.term.get(),
+                    required.index.get(),
+                    applied
+                )
+            }
             Self::Backend(message) => write!(f, "{message}"),
         }
     }

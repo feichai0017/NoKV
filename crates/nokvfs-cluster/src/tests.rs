@@ -550,6 +550,92 @@ fn shared_log_metadata_store_logs_before_applying_command() {
 }
 
 #[test]
+fn shared_log_metadata_store_rejects_strong_reads_before_replay_catches_up() {
+    let log = InMemorySharedLog::new();
+    let leader = MetadataStoreSink {
+        store: HoltMetadataStore::open_memory().unwrap(),
+    };
+    let mount = MountId::new(1).unwrap();
+    MetadataGroup::new(&log, &leader, LogTerm::new(1).unwrap(), mount)
+        .commit_batch(&[command(b"a", 2)])
+        .unwrap();
+
+    let learner = SharedLogMetadataStore::new(
+        HoltMetadataStore::open_memory().unwrap(),
+        log,
+        LogTerm::new(1).unwrap(),
+        mount,
+    );
+
+    assert!(matches!(
+        learner.get(RecordFamily::Dentry, b"a", version(2), ReadPurpose::UserStrong),
+        Err(MetadataError::Backend(message))
+            if message.contains("metadata read requires applied frontier")
+    ));
+    assert!(learner
+        .get(
+            RecordFamily::Dentry,
+            b"a",
+            version(2),
+            ReadPurpose::WritePlanLocal,
+        )
+        .unwrap()
+        .is_none());
+    assert_eq!(learner.runtime_stats().stale_read_total, 1);
+
+    ReplayDriver::new(learner.log(), &learner)
+        .replay_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+
+    assert_eq!(
+        learner
+            .get(
+                RecordFamily::Dentry,
+                b"a",
+                version(2),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+}
+
+#[test]
+fn shared_log_metadata_store_enforces_receipt_read_freshness() {
+    let log = InMemorySharedLog::new();
+    let leader = MetadataStoreSink {
+        store: HoltMetadataStore::open_memory().unwrap(),
+    };
+    let mount = MountId::new(1).unwrap();
+    let commit = MetadataGroup::new(&log, &leader, LogTerm::new(1).unwrap(), mount)
+        .commit_batch(&[command(b"a", 2)])
+        .unwrap();
+    let receipt = commit.durable_receipts[0].clone();
+    let learner = SharedLogMetadataStore::new(
+        HoltMetadataStore::open_memory().unwrap(),
+        log,
+        LogTerm::new(1).unwrap(),
+        mount,
+    );
+
+    assert!(matches!(
+        learner.ensure_read_freshness(ReadFreshness::AppliedThrough(receipt.position)),
+        Err(SharedLogError::ReadNotFresh { required, applied: None })
+            if required == receipt.position
+    ));
+
+    ReplayDriver::new(learner.log(), &learner)
+        .replay_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+
+    learner
+        .ensure_read_freshness(ReadFreshness::AppliedThrough(receipt.position))
+        .unwrap();
+}
+
+#[test]
 fn shared_log_metadata_store_commits_independent_batch_as_one_entry() {
     let log = InMemorySharedLog::new();
     let store = HoltMetadataStore::open_memory().unwrap();

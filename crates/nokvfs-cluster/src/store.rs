@@ -13,7 +13,8 @@ use nokvfs_types::{MountId, RecordFamily};
 use crate::{
     AppliedFrontierStore, AppliedMetadataCommand, ApplyFrontier, CheckpointFrontier,
     DurableReceipt, LogIndex, LogPosition, LogTerm, MemoryAppliedFrontierStore, MetadataGroup,
-    MetadataLogSink, ReplayDriver, ReplayError, ReplayOutcome, SharedLogError, SharedMetadataLog,
+    MetadataLogSink, ReadFreshness, ReplayDriver, ReplayError, ReplayOutcome, SharedLogError,
+    SharedMetadataLog,
 };
 
 #[derive(Debug)]
@@ -33,6 +34,7 @@ pub struct SharedLogRuntimeStats {
     pub commit_entry_total: u64,
     pub commit_command_total: u64,
     pub max_commands_per_entry: u64,
+    pub stale_read_total: u64,
 }
 
 #[derive(Debug, Default)]
@@ -40,6 +42,7 @@ struct SharedLogRuntimeCounters {
     commit_entry_total: AtomicU64,
     commit_command_total: AtomicU64,
     max_commands_per_entry: AtomicU64,
+    stale_read_total: AtomicU64,
 }
 
 impl<M, L> SharedLogMetadataStore<M, L, MemoryAppliedFrontierStore>
@@ -242,7 +245,48 @@ where
                 .runtime_stats
                 .max_commands_per_entry
                 .load(Ordering::Relaxed),
+            stale_read_total: self.runtime_stats.stale_read_total.load(Ordering::Relaxed),
         }
+    }
+
+    pub fn ensure_read_freshness(&self, freshness: ReadFreshness) -> Result<(), SharedLogError> {
+        let Some(required) = self.required_read_position(freshness) else {
+            return Ok(());
+        };
+        let applied = self.applied_frontier().map(|frontier| frontier.position);
+        if applied
+            .map(|applied| position_covers(applied, required))
+            .unwrap_or(false)
+        {
+            return Ok(());
+        }
+        self.runtime_stats
+            .stale_read_total
+            .fetch_add(1, Ordering::Relaxed);
+        Err(SharedLogError::ReadNotFresh { required, applied })
+    }
+
+    pub fn get_versioned_with_freshness(
+        &self,
+        family: RecordFamily,
+        key: &[u8],
+        version: Version,
+        purpose: ReadPurpose,
+        freshness: ReadFreshness,
+    ) -> Result<Option<ReadItem>, MetadataError> {
+        self.ensure_read_freshness(freshness)
+            .map_err(|err| MetadataError::Backend(err.to_string()))?;
+        self.store.get_versioned(family, key, version, purpose)
+    }
+
+    pub fn scan_with_freshness(
+        &self,
+        request: ScanRequest,
+        freshness: ReadFreshness,
+    ) -> Result<Vec<ScanItem>, MetadataError> {
+        self.ensure_read_freshness(freshness)
+            .map_err(|err| MetadataError::Backend(err.to_string()))?;
+        self.store.scan(request)
     }
 
     pub fn checkpoint_frontier(
@@ -300,6 +344,22 @@ where
             command_count as u64,
         );
     }
+
+    fn required_read_position(&self, freshness: ReadFreshness) -> Option<LogPosition> {
+        match freshness {
+            ReadFreshness::AnyApplied => None,
+            ReadFreshness::AppliedThrough(position) => {
+                (position.index != LogIndex::ZERO).then_some(position)
+            }
+            ReadFreshness::CurrentCommitted => {
+                let index = self.log.committed_index();
+                (index != LogIndex::ZERO).then_some(LogPosition {
+                    term: self.term,
+                    index,
+                })
+            }
+        }
+    }
 }
 
 fn record_max(value: &AtomicU64, candidate: u64) {
@@ -311,6 +371,17 @@ fn record_max(value: &AtomicU64, candidate: u64) {
             Err(observed) => current = observed,
         }
     }
+}
+
+fn freshness_for_read_purpose(purpose: ReadPurpose) -> ReadFreshness {
+    match purpose {
+        ReadPurpose::UserStrong => ReadFreshness::CurrentCommitted,
+        ReadPurpose::WritePlanLocal | ReadPurpose::Snapshot => ReadFreshness::AnyApplied,
+    }
+}
+
+fn position_covers(applied: LogPosition, required: LogPosition) -> bool {
+    applied.index >= required.index
 }
 
 impl<M, L, F> MetadataLogSink for SharedLogMetadataStore<M, L, F>
@@ -356,11 +427,13 @@ where
         version: nokvfs_meta::Version,
         purpose: ReadPurpose,
     ) -> Result<Option<ReadItem>, MetadataError> {
-        self.store.get_versioned(family, key, version, purpose)
+        let freshness = freshness_for_read_purpose(purpose);
+        self.get_versioned_with_freshness(family, key, version, purpose, freshness)
     }
 
     fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
-        self.store.scan(request)
+        let freshness = freshness_for_read_purpose(request.purpose);
+        self.scan_with_freshness(request, freshness)
     }
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
