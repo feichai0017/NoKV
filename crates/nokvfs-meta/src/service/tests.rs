@@ -374,7 +374,7 @@ fn path_methods_resolve_current_namespace_on_server_side() {
 }
 
 #[test]
-fn path_api_writes_and_uses_validated_path_index() {
+fn plain_path_create_uses_canonical_namespace_without_path_index() {
     let objects = MemoryObjectStore::new();
     let metadata = HoltMetadataStore::open_memory().unwrap();
     let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects);
@@ -385,6 +385,60 @@ fn path_api_writes_and_uses_validated_path_index() {
         .unwrap();
     let components = parse_absolute_path("/runs/checkpoint.bin").unwrap();
     let key = path_index_key(MountId::new(1).unwrap(), &components);
+    assert!(metadata
+        .get(
+            RecordFamily::PathIndex,
+            &key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_none());
+
+    let before = service.metadata_service_stats();
+    assert_eq!(
+        service.lookup_path("/runs/checkpoint.bin").unwrap(),
+        Some(artifact)
+    );
+    let after = service.metadata_service_stats();
+    assert_eq!(
+        after.path_index_lookup_total - before.path_index_lookup_total,
+        1
+    );
+    assert_eq!(
+        after.path_index_miss_total - before.path_index_miss_total,
+        1
+    );
+    assert_eq!(
+        after.path_index_fallback_total - before.path_index_fallback_total,
+        1
+    );
+}
+
+#[test]
+fn prepared_artifact_path_publish_writes_and_uses_validated_path_index() {
+    let objects = MemoryObjectStore::new();
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects);
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let prepared = service
+        .prepare_artifact_create_path("/runs/checkpoint.bin")
+        .unwrap();
+    let body = body_descriptor(prepared.generation, 6);
+    let artifact = service
+        .publish_prepared_artifact(
+            prepared.clone(),
+            body,
+            vec![one_chunk_manifest(prepared.inode, prepared.generation, 6)],
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap()
+        .entry;
+    let components = parse_absolute_path("/runs/checkpoint.bin").unwrap();
+    let key = path_index_key(MountId::new(1).unwrap(), &components);
     let indexed = metadata
         .get(
             RecordFamily::PathIndex,
@@ -393,7 +447,7 @@ fn path_api_writes_and_uses_validated_path_index() {
             ReadPurpose::UserStrong,
         )
         .unwrap()
-        .expect("path index entry");
+        .expect("artifact path index entry");
     let projection = decode_dentry_projection(&indexed.0).unwrap();
     assert_eq!(DentryWithAttr::from(projection), artifact);
 
@@ -438,9 +492,20 @@ fn stale_path_index_falls_back_to_canonical_namespace() {
         .create_dir_path("/archive", 0o755, 1000, 1000)
         .unwrap();
     let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
-    let artifact = service
-        .create_file_path("/runs/checkpoint.bin", 0o644, 1000, 1000)
+    let prepared = service
+        .prepare_artifact_create_path("/runs/checkpoint.bin")
         .unwrap();
+    let artifact = service
+        .publish_prepared_artifact(
+            prepared.clone(),
+            body_descriptor(prepared.generation, 6),
+            vec![one_chunk_manifest(prepared.inode, prepared.generation, 6)],
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap()
+        .entry;
 
     service
         .rename(runs.attr.inode, &name, archive.attr.inode, name.clone())
@@ -488,9 +553,20 @@ fn directory_rename_leaves_descendant_path_index_as_derived_stale_cache() {
     let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects);
     service.bootstrap_root(0o755, 1000, 1000).unwrap();
     service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
-    let artifact = service
-        .create_file_path("/runs/checkpoint.bin", 0o644, 1000, 1000)
+    let prepared = service
+        .prepare_artifact_create_path("/runs/checkpoint.bin")
         .unwrap();
+    let artifact = service
+        .publish_prepared_artifact(
+            prepared.clone(),
+            body_descriptor(prepared.generation, 6),
+            vec![one_chunk_manifest(prepared.inode, prepared.generation, 6)],
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap()
+        .entry;
     let old_components = parse_absolute_path("/runs/checkpoint.bin").unwrap();
     let old_key = path_index_key(MountId::new(1).unwrap(), &old_components);
     assert!(metadata
@@ -848,7 +924,7 @@ fn create_files_in_dir_coalesces_into_one_metadata_command() {
     let after_service = service.metadata_service_stats();
     assert_eq!(entries.len(), 2);
     assert_eq!(after.commit_total - before.commit_total, 1);
-    assert_eq!(after.current_put_total - before.current_put_total, 6);
+    assert_eq!(after.current_put_total - before.current_put_total, 4);
     assert_eq!(after.current_delete_total - before.current_delete_total, 0);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
     assert_eq!(after.watch_write_total - before.watch_write_total, 2);
@@ -898,7 +974,7 @@ fn create_dirs_in_dir_coalesces_into_one_metadata_command() {
         .iter()
         .all(|entry| entry.attr.file_type == FileType::Directory));
     assert_eq!(after.commit_total - before.commit_total, 1);
-    assert_eq!(after.current_put_total - before.current_put_total, 6);
+    assert_eq!(after.current_put_total - before.current_put_total, 4);
     assert_eq!(after.current_delete_total - before.current_delete_total, 0);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
     assert_eq!(after.watch_write_total - before.watch_write_total, 2);

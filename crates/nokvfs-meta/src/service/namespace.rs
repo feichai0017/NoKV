@@ -302,13 +302,7 @@ where
         let inode = self.next_inode()?;
         let attr = directory_attr(inode, mode, uid, gid, version.get());
         let projection = projection(parent, name.clone(), attr, None);
-        self.commit_create_projection_with_chunks_and_path_index(
-            CommandKind::CreateDir,
-            &projection,
-            &[],
-            version,
-            Some(path_index_key(self.mount, &components)),
-        )?;
+        self.commit_create_projection(CommandKind::CreateDir, &projection, version)?;
         Ok(projection.into())
     }
 
@@ -339,13 +333,7 @@ where
             ctime_ms: now_ms,
         };
         let projection = projection(parent, name.clone(), attr, None);
-        self.commit_create_projection_with_chunks_and_path_index(
-            CommandKind::CreateFile,
-            &projection,
-            &[],
-            version,
-            Some(path_index_key(self.mount, &components)),
-        )?;
+        self.commit_create_projection(CommandKind::CreateFile, &projection, version)?;
         Ok(projection.into())
     }
 
@@ -359,14 +347,7 @@ where
     ) -> Result<Vec<DentryWithAttr>, MetadError> {
         let parent_components = parse_absolute_path(parent_path)?;
         let parent = self.resolve_components_as_directory(&parent_components)?;
-        self.create_files_in_dir_with_parent_components(
-            parent,
-            names,
-            mode,
-            uid,
-            gid,
-            Some(parent_components),
-        )
+        self.create_files_in_dir_with_parent_components(parent, names, mode, uid, gid)
     }
 
     pub fn create_dirs_in_dir_path(
@@ -385,14 +366,6 @@ where
         ensure_unique_names(&names)?;
         let version = self.next_version()?;
         let inodes = self.next_inodes(names.len())?;
-        let path_keys = names
-            .iter()
-            .map(|name| {
-                let mut components = parent_components.clone();
-                components.push(name.clone());
-                path_index_key(self.mount, &components)
-            })
-            .collect::<Vec<_>>();
         let projections = names
             .into_iter()
             .zip(inodes)
@@ -409,7 +382,7 @@ where
             CommandKind::CreateDir,
             &projections,
             version,
-            Some(&path_keys),
+            None,
         )?;
         self.record_create_dirs_batch(projections.len());
         Ok(projections.into_iter().map(Into::into).collect())
@@ -486,15 +459,6 @@ where
         let parent = self.resolve_components_as_directory(&parent_components)?;
         let version = self.next_version()?;
         let inodes = self.next_inodes(batch.names.len())?;
-        let path_keys = batch
-            .names
-            .iter()
-            .map(|name| {
-                let mut components = parent_components.clone();
-                components.push(name.clone());
-                path_index_key(self.mount, &components)
-            })
-            .collect::<Vec<_>>();
         let now_ms = current_time_ms();
         let projections = batch
             .names
@@ -521,8 +485,7 @@ where
                 projection(parent, name, attr, None)
             })
             .collect::<Vec<_>>();
-        let command =
-            self.create_projections_command(kind, &projections, version, Some(&path_keys))?;
+        let command = self.create_projections_command(kind, &projections, version, None)?;
         Ok(PreparedCreateBatch {
             entries: projections.into_iter().map(Into::into).collect(),
             command,
@@ -548,7 +511,7 @@ where
         if names.is_empty() {
             return Ok(Vec::new());
         }
-        self.create_files_in_dir_with_parent_components(parent, names, mode, uid, gid, None)
+        self.create_files_in_dir_with_parent_components(parent, names, mode, uid, gid)
     }
 
     fn create_files_in_dir_with_parent_components(
@@ -558,7 +521,6 @@ where
         mode: u32,
         uid: u32,
         gid: u32,
-        parent_components: Option<Vec<DentryName>>,
     ) -> Result<Vec<DentryWithAttr>, MetadError> {
         if names.is_empty() {
             return Ok(Vec::new());
@@ -567,16 +529,6 @@ where
         let version = self.next_version()?;
         let inodes = self.next_inodes(names.len())?;
         let now_ms = current_time_ms();
-        let path_keys = parent_components.as_ref().map(|parent_components| {
-            names
-                .iter()
-                .map(|name| {
-                    let mut components = parent_components.clone();
-                    components.push(name.clone());
-                    path_index_key(self.mount, &components)
-                })
-                .collect::<Vec<_>>()
-        });
         let projections = names
             .into_iter()
             .zip(inodes)
@@ -599,7 +551,7 @@ where
             CommandKind::CreateFiles,
             &projections,
             version,
-            path_keys.as_deref(),
+            None,
         )?;
         self.record_create_files_batch(projections.len());
         Ok(projections.into_iter().map(Into::into).collect())
