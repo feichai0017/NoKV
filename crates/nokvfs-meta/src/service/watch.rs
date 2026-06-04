@@ -28,6 +28,7 @@ where
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Watch,
             prefix: watch_log_prefix(self.mount, scope),
+            start_after: None,
             version,
             limit: 0,
             purpose: ReadPurpose::UserStrong,

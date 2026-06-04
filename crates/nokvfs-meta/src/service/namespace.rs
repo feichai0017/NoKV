@@ -936,6 +936,7 @@ where
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::PathIndex,
             prefix: prefix.to_vec(),
+            start_after: None,
             version: self.read_version()?,
             limit: 0,
             purpose: ReadPurpose::WritePlanLocal,

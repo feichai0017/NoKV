@@ -6,9 +6,10 @@ use std::thread;
 use nokvfs_meta::{DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
-    decode_request, encode_envelope, MetadataProtocolError, MetadataRpcEnvelope,
-    MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataError,
-    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    decode_name_cursor, decode_request, encode_envelope, encode_name_cursor, MetadataProtocolError,
+    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
+    WireDentryWithAttr, WireMetadataError, WireObjectReadBlock, WirePathMetadata,
+    WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -449,10 +450,47 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 entries: entries.iter().map(wire_dentry).collect(),
             })
         }
+        MetadataRpcRequest::ReadDirPlusPage {
+            parent,
+            after_name_hex,
+            limit,
+        } => {
+            let after = after_name_hex
+                .as_deref()
+                .map(decode_name_cursor)
+                .transpose()
+                .map_err(protocol_error)?;
+            let page =
+                server
+                    .service()
+                    .read_dir_plus_page(inode_id(parent)?, after.as_ref(), limit)?;
+            Ok(MetadataRpcResult::DentriesPage {
+                entries: page.entries.iter().map(wire_dentry).collect(),
+                next_name_hex: page.next_cursor.as_ref().map(encode_name_cursor),
+            })
+        }
         MetadataRpcRequest::ReadDirPlusPath { path } => {
             let entries = server.service().read_dir_plus_path(&path)?;
             Ok(MetadataRpcResult::Dentries {
                 entries: entries.iter().map(wire_dentry).collect(),
+            })
+        }
+        MetadataRpcRequest::ReadDirPlusPathPage {
+            path,
+            after_name_hex,
+            limit,
+        } => {
+            let after = after_name_hex
+                .as_deref()
+                .map(decode_name_cursor)
+                .transpose()
+                .map_err(protocol_error)?;
+            let page = server
+                .service()
+                .read_dir_plus_path_page(&path, after.as_ref(), limit)?;
+            Ok(MetadataRpcResult::DentriesPage {
+                entries: page.entries.iter().map(wire_dentry).collect(),
+                next_name_hex: page.next_cursor.as_ref().map(encode_name_cursor),
             })
         }
         MetadataRpcRequest::CreateDir {
@@ -908,6 +946,70 @@ mod tests {
         };
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].dentry.name_hex, "636865636b706f696e742e62696e");
+    }
+
+    #[test]
+    fn rpc_lists_directory_pages_with_name_cursor() {
+        let server = test_server();
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        for name in ["a.bin", "b.bin", "c.bin"] {
+            expect_dentry(request_envelope(
+                &server,
+                MetadataRpcRequest::CreateFilePath {
+                    path: format!("/runs/{name}"),
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                },
+            ));
+        }
+
+        let first = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadDirPlusPathPage {
+                path: "/runs".to_owned(),
+                after_name_hex: None,
+                limit: 2,
+            },
+        );
+        let (entries, cursor) = match first.result.unwrap() {
+            MetadataRpcResult::DentriesPage {
+                entries,
+                next_name_hex,
+            } => (entries, next_name_hex),
+            other => panic!("unexpected page result: {other:?}"),
+        };
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].dentry.name_hex, "612e62696e");
+        assert_eq!(entries[1].dentry.name_hex, "622e62696e");
+        assert_eq!(cursor.as_deref(), Some("622e62696e"));
+
+        let second = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadDirPlusPathPage {
+                path: "/runs".to_owned(),
+                after_name_hex: cursor,
+                limit: 2,
+            },
+        );
+        let (entries, cursor) = match second.result.unwrap() {
+            MetadataRpcResult::DentriesPage {
+                entries,
+                next_name_hex,
+            } => (entries, next_name_hex),
+            other => panic!("unexpected page result: {other:?}"),
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].dentry.name_hex, "632e62696e");
+        assert_eq!(cursor, None);
     }
 
     #[test]

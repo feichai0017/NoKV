@@ -139,6 +139,7 @@ pub struct HistoryPruneOutcome {
 pub struct ScanRequest {
     pub family: RecordFamily,
     pub prefix: Vec<u8>,
+    pub start_after: Option<Vec<u8>>,
     pub version: Version,
     pub limit: usize,
     pub purpose: ReadPurpose,

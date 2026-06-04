@@ -103,6 +103,12 @@ pub struct DentryWithAttr {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReadDirPlusPage {
+    pub entries: Vec<DentryWithAttr>,
+    pub next_cursor: Option<DentryName>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PublishArtifact {
     pub parent: InodeId,
     pub name: DentryName,
@@ -387,6 +393,7 @@ fn recover_allocator_state<M: MetadataStore>(
         let rows = metadata.scan(ScanRequest {
             family,
             prefix: Vec::new(),
+            start_after: None,
             version: max_read,
             limit: 0,
             purpose: ReadPurpose::UserStrong,

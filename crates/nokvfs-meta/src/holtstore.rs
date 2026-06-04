@@ -220,6 +220,7 @@ impl MetadataStore for HoltMetadataStore {
         };
         let current = self.current_tree(request.family)?;
         let history = self.history_tree()?;
+        let start_after = request.start_after.as_deref();
         let mut out = Vec::new();
 
         if request.prefix.is_empty() {
@@ -231,6 +232,7 @@ impl MetadataStore for HoltMetadataStore {
                     &history,
                     &mut out,
                     limit,
+                    start_after,
                 )?;
                 self.stats
                     .scan_key_visited_total
@@ -251,6 +253,7 @@ impl MetadataStore for HoltMetadataStore {
                     &history,
                     &mut out,
                     limit,
+                    start_after,
                 )?;
                 self.stats
                     .scan_key_visited_total
@@ -760,6 +763,7 @@ fn push_visible_scan_item(
     history: &Tree,
     out: &mut Vec<ScanItem>,
     limit: usize,
+    start_after: Option<&[u8]>,
 ) -> Result<ScanPushOutcome, MetadataError> {
     let RangeEntry::Key { key, value, .. } = entry.map_err(to_backend_error)? else {
         return Ok(ScanPushOutcome {
@@ -768,6 +772,13 @@ fn push_visible_scan_item(
             returned: 0,
         });
     };
+    if start_after.is_some_and(|start_after| key.as_slice() <= start_after) {
+        return Ok(ScanPushOutcome {
+            done: false,
+            visited: 1,
+            returned: 0,
+        });
+    }
     let mut returned = 0_usize;
     if let Some((commit, visible)) =
         decode_visible_value(family, &key, Some(&value), version, history)?
@@ -1008,6 +1019,7 @@ mod tests {
             .scan(ScanRequest {
                 family: RecordFamily::Dentry,
                 prefix: b"dir/".to_vec(),
+                start_after: None,
                 version: version(2),
                 limit: 10,
                 purpose: ReadPurpose::UserStrong,
@@ -1015,6 +1027,34 @@ mod tests {
             .unwrap();
         assert_eq!(scan.len(), 1);
         assert_eq!(scan[0].key, b"dir/a");
+    }
+
+    #[test]
+    fn scan_start_after_skips_prior_prefix_keys() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+        store
+            .commit_metadata(put_command(b"dir/b", b"req-2", b"value-b", 3))
+            .unwrap();
+        store
+            .commit_metadata(put_command(b"dir/c", b"req-3", b"value-c", 4))
+            .unwrap();
+
+        let scan = store
+            .scan(ScanRequest {
+                family: RecordFamily::Dentry,
+                prefix: b"dir/".to_vec(),
+                start_after: Some(b"dir/a".to_vec()),
+                version: version(4),
+                limit: 1,
+                purpose: ReadPurpose::UserStrong,
+            })
+            .unwrap();
+
+        assert_eq!(scan.len(), 1);
+        assert_eq!(scan[0].key, b"dir/b");
     }
 
     #[test]

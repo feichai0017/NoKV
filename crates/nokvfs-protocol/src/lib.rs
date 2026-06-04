@@ -41,8 +41,18 @@ pub enum MetadataRpcRequest {
     ReadDirPlus {
         parent: u64,
     },
+    ReadDirPlusPage {
+        parent: u64,
+        after_name_hex: Option<String>,
+        limit: usize,
+    },
     ReadDirPlusPath {
         path: String,
+    },
+    ReadDirPlusPathPage {
+        path: String,
+        after_name_hex: Option<String>,
+        limit: usize,
     },
     CreateDir {
         parent: u64,
@@ -205,6 +215,10 @@ pub enum MetadataRpcResult {
     Dentries {
         entries: Vec<WireDentryWithAttr>,
     },
+    DentriesPage {
+        entries: Vec<WireDentryWithAttr>,
+        next_name_hex: Option<String>,
+    },
     PathMetadata {
         metadata: Option<WirePathMetadata>,
     },
@@ -249,6 +263,14 @@ pub struct WireDentryRecord {
     pub child: u64,
     pub child_type: String,
     pub attr_generation: u64,
+}
+
+pub fn encode_name_cursor(name: &DentryName) -> String {
+    hex_encode(name.as_bytes())
+}
+
+pub fn decode_name_cursor(raw: &str) -> Result<DentryName, MetadataProtocolError> {
+    DentryName::new(hex_decode(raw)?).map_err(|err| MetadataProtocolError::new(err.to_string()))
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

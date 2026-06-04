@@ -86,6 +86,26 @@ where
         self.read_dir_plus(parent)
     }
 
+    pub fn read_dir_plus_page(
+        &self,
+        parent: InodeId,
+        after: Option<&DentryName>,
+        limit: usize,
+    ) -> Result<ReadDirPlusPage, MetadError> {
+        let version = self.read_version()?;
+        self.read_dir_plus_page_at_version(parent, after, limit, version)
+    }
+
+    pub fn read_dir_plus_path_page(
+        &self,
+        path: &str,
+        after: Option<&DentryName>,
+        limit: usize,
+    ) -> Result<ReadDirPlusPage, MetadError> {
+        let parent = self.resolve_directory_path(path)?;
+        self.read_dir_plus_page(parent, after, limit)
+    }
+
     pub fn stat_path(&self, path: &str) -> Result<Option<PathMetadata>, MetadError> {
         self.stat_path_from_at_version(InodeId::root(), path, self.read_version()?)
     }
@@ -98,6 +118,7 @@ where
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Dentry,
             prefix: dentry_prefix(self.mount, parent),
+            start_after: None,
             version,
             limit: 0,
             purpose: ReadPurpose::UserStrong,
@@ -114,6 +135,46 @@ where
             entries.push(projection.into());
         }
         Ok(entries)
+    }
+
+    pub(super) fn read_dir_plus_page_at_version(
+        &self,
+        parent: InodeId,
+        after: Option<&DentryName>,
+        limit: usize,
+        version: Version,
+    ) -> Result<ReadDirPlusPage, MetadError> {
+        let requested = limit.max(1);
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::Dentry,
+            prefix: dentry_prefix(self.mount, parent),
+            start_after: after.map(|name| dentry_key(self.mount, parent, name)),
+            version,
+            limit: requested.saturating_add(1),
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        self.read_dir_plus_total.fetch_add(1, Ordering::Relaxed);
+        let has_more = rows.len() > requested;
+        let returned = rows.len().min(requested);
+        self.read_dir_plus_entry_total
+            .fetch_add(returned as u64, Ordering::Relaxed);
+        let mut entries = Vec::<DentryWithAttr>::with_capacity(returned);
+        for item in rows.into_iter().take(returned) {
+            let projection = crate::layout::decode_dentry_projection(&item.value.0)
+                .map_err(|err| MetadError::Codec(err.to_string()))?;
+            self.read_dir_plus_projection_hit_total
+                .fetch_add(1, Ordering::Relaxed);
+            entries.push(projection.into());
+        }
+        let next_cursor = if has_more {
+            entries.last().map(|entry| entry.dentry.name.clone())
+        } else {
+            None
+        };
+        Ok(ReadDirPlusPage {
+            entries,
+            next_cursor,
+        })
     }
 
     pub(super) fn resolve_parent_path(
@@ -503,6 +564,7 @@ where
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::ChunkManifest,
             prefix: chunk_manifest_prefix(self.mount, inode, generation),
+            start_after: None,
             version,
             limit: 0,
             purpose: ReadPurpose::WritePlanLocal,

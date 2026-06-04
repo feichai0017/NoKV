@@ -516,6 +516,78 @@ fn create_files_in_dir_coalesces_into_one_metadata_command() {
 }
 
 #[test]
+fn read_dir_plus_page_returns_cursor_without_materializing_full_directory() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service
+        .create_files_in_dir_path(
+            "/runs",
+            vec![
+                DentryName::new(b"a.bin".to_vec()).unwrap(),
+                DentryName::new(b"b.bin".to_vec()).unwrap(),
+                DentryName::new(b"c.bin".to_vec()).unwrap(),
+            ],
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap();
+    let runs = service.lookup_path("/runs").unwrap().unwrap();
+
+    let before_store = metadata.metadata_store_stats();
+    let first = service
+        .read_dir_plus_page(runs.attr.inode, None, 2)
+        .unwrap();
+    let after_first_store = metadata.metadata_store_stats();
+    assert_eq!(
+        first
+            .entries
+            .iter()
+            .map(|entry| entry.dentry.name.as_bytes())
+            .collect::<Vec<_>>(),
+        vec![b"a.bin".as_slice(), b"b.bin".as_slice()]
+    );
+    assert_eq!(
+        first.next_cursor.as_ref().map(DentryName::as_bytes),
+        Some(b"b.bin".as_slice())
+    );
+    assert_eq!(
+        after_first_store.scan_key_returned_total - before_store.scan_key_returned_total,
+        3
+    );
+
+    let before_service = service.metadata_service_stats();
+    let second = service
+        .read_dir_plus_page(runs.attr.inode, first.next_cursor.as_ref(), 2)
+        .unwrap();
+    let after_service = service.metadata_service_stats();
+    assert_eq!(
+        second
+            .entries
+            .iter()
+            .map(|entry| entry.dentry.name.as_bytes())
+            .collect::<Vec<_>>(),
+        vec![b"c.bin".as_slice()]
+    );
+    assert_eq!(second.next_cursor, None);
+    assert_eq!(
+        after_service.read_dir_plus_entry_total - before_service.read_dir_plus_entry_total,
+        1
+    );
+    assert_eq!(
+        after_service.read_dir_plus_projection_hit_total
+            - before_service.read_dir_plus_projection_hit_total,
+        1
+    );
+}
+
+#[test]
 fn publish_artifact_stores_body_then_publishes_metadata() {
     let service = service();
     let name = DentryName::new(b"checkpoint.json".to_vec()).unwrap();

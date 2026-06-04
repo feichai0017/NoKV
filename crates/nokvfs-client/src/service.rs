@@ -13,10 +13,10 @@ use nokvfs_object::{
     DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_protocol::{
-    decode_envelope, encode_request, MetadataProtocolError, MetadataRpcEnvelope,
-    MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest,
-    WireDentryWithAttr, WireMetadataError, WireObjectReadBlock, WirePathMetadata,
-    WirePreparedArtifact,
+    decode_envelope, decode_name_cursor, encode_name_cursor, encode_request, MetadataProtocolError,
+    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
+    WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr, WireMetadataError,
+    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
@@ -72,6 +72,12 @@ pub struct ClientPreparedArtifact {
     pub replace: bool,
     pub dentry_version: Option<u64>,
     pub old_generation: Option<u64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientReadDirPlusPage {
+    pub entries: Vec<DentryWithAttr>,
+    pub next_cursor: Option<DentryName>,
 }
 
 pub struct NoKvFsClient<O> {
@@ -501,6 +507,35 @@ impl MetadataClient {
             MetadataRpcResult::Dentries { entries } => {
                 entries.into_iter().map(wire_dentry).collect()
             }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn list_page(
+        &self,
+        path: &str,
+        after: Option<&DentryName>,
+        limit: usize,
+    ) -> Result<ClientReadDirPlusPage, ClientError> {
+        match self.call(MetadataRpcRequest::ReadDirPlusPathPage {
+            path: path.to_owned(),
+            after_name_hex: after.map(encode_name_cursor),
+            limit,
+        })? {
+            MetadataRpcResult::DentriesPage {
+                entries,
+                next_name_hex,
+            } => Ok(ClientReadDirPlusPage {
+                entries: entries
+                    .into_iter()
+                    .map(wire_dentry)
+                    .collect::<Result<Vec<_>, _>>()?,
+                next_cursor: next_name_hex
+                    .as_deref()
+                    .map(decode_name_cursor)
+                    .transpose()
+                    .map_err(|err| ClientError::Protocol(err.to_string()))?,
+            }),
             other => Err(unexpected_result(other)),
         }
     }
@@ -1452,6 +1487,49 @@ mod tests {
         assert_eq!(
             client.read_snapshot(9, "/nested/model.bin", 7, 3).unwrap(),
             b"old"
+        );
+    }
+
+    #[test]
+    fn service_list_page_uses_cursor_rpc() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::ReadDirPlusPathPage {
+                    path,
+                    after_name_hex,
+                    limit
+                } if path == "/runs" && after_name_hex.as_deref() == Some("612e62696e") && limit == 2
+            ));
+            write_frame(
+                &mut stream,
+                request_id,
+                flags,
+                &response_body(
+                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"622e62696e","child":3,"child_type":"file","attr_generation":3},"attr":{"inode":3,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}],"next_name_hex":"622e62696e"}}"#,
+                ),
+            )
+            .unwrap();
+        });
+        let client = NoKvFsClient::connect(addr, MemoryObjectStore::new());
+        let after = DentryName::new(b"a.bin".to_vec()).unwrap();
+        let page = client
+            .metadata()
+            .list_page("/runs", Some(&after), 2)
+            .unwrap();
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.entries[0].dentry.name.as_bytes(), b"b.bin");
+        assert_eq!(
+            page.next_cursor.as_ref().map(DentryName::as_bytes),
+            Some(b"b.bin".as_slice())
         );
     }
 

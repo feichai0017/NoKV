@@ -20,6 +20,7 @@ where
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Gc,
             prefix: gc_queue_prefix(self.mount),
+            start_after: None,
             version,
             limit,
             purpose: ReadPurpose::UserStrong,
@@ -95,6 +96,7 @@ where
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Snapshot,
             prefix: snapshot_pin_prefix(self.mount),
+            start_after: None,
             version: self.read_version()?,
             limit: 0,
             purpose: ReadPurpose::UserStrong,
@@ -121,6 +123,7 @@ where
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::ChunkManifest,
             prefix: chunk_manifest_prefix(self.mount, inode, generation),
+            start_after: None,
             version: self.read_version()?,
             limit: 0,
             purpose: ReadPurpose::WritePlanLocal,
