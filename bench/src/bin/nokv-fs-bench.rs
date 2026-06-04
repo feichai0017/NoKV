@@ -122,6 +122,7 @@ struct ResultRow {
     metadata_scan_snapshot: u64,
     metadata_scan_visited: u64,
     metadata_scan_returned: u64,
+    metadata_history_lookups: u64,
     metadata_current_puts: u64,
     metadata_current_deletes: u64,
     metadata_history_writes: u64,
@@ -1095,6 +1096,7 @@ fn row(input: RowInput) -> ResultRow {
         metadata_scan_snapshot: input.stats.metadata_store.scan_snapshot_total,
         metadata_scan_visited: input.stats.metadata_store.scan_key_visited_total,
         metadata_scan_returned: input.stats.metadata_store.scan_key_returned_total,
+        metadata_history_lookups: input.stats.metadata_store.history_lookup_total,
         metadata_current_puts: input.stats.metadata_store.current_put_total,
         metadata_current_deletes: input.stats.metadata_store.current_delete_total,
         metadata_history_writes: input.stats.metadata_store.history_write_total,
@@ -1138,7 +1140,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow) -> String {
@@ -1174,6 +1176,7 @@ fn csv_row(row: &ResultRow) -> String {
         row.metadata_scan_snapshot.to_string(),
         row.metadata_scan_visited.to_string(),
         row.metadata_scan_returned.to_string(),
+        row.metadata_history_lookups.to_string(),
         row.metadata_current_puts.to_string(),
         row.metadata_current_deletes.to_string(),
         row.metadata_history_writes.to_string(),
@@ -1271,6 +1274,10 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_store
                 .scan_key_returned_total
                 .saturating_sub(before.metadata_store.scan_key_returned_total),
+            history_lookup_total: after
+                .metadata_store
+                .history_lookup_total
+                .saturating_sub(before.metadata_store.history_lookup_total),
             active_snapshot_pin_total: after.metadata_store.active_snapshot_pin_total,
             commit_total: after
                 .metadata_store
@@ -1604,6 +1611,7 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             scan_snapshot_total: json_u64(body, "scan_snapshot_total")?,
             scan_key_visited_total: json_u64(body, "scan_key_visited_total")?,
             scan_key_returned_total: json_u64(body, "scan_key_returned_total")?,
+            history_lookup_total: json_u64(body, "history_lookup_total")?,
             active_snapshot_pin_total: json_u64(body, "active_snapshot_pin_total")?,
             commit_total: json_u64(body, "commit_total")?,
             dedupe_hit_total: json_u64(body, "dedupe_hit_total")?,
@@ -2249,12 +2257,13 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_log":{"enabled":true,"commit_entry_total":17,"commit_command_total":18,"max_commands_per_entry":19,"stale_read_total":38},"metadata_service":{"path_index_lookup_total":20,"path_index_hit_total":21,"path_index_miss_total":22,"path_index_stale_total":23,"path_index_scan_stale_total":39,"path_index_fallback_total":24,"create_files_batch_total":25,"create_files_entry_total":26,"create_dirs_batch_total":27,"create_dirs_entry_total":28,"read_dir_plus_total":29,"read_dir_plus_entry_total":30,"read_dir_plus_projection_hit_total":31}}"#;
+        let body = r#"{"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_log":{"enabled":true,"commit_entry_total":17,"commit_command_total":18,"max_commands_per_entry":19,"stale_read_total":38},"metadata_service":{"path_index_lookup_total":20,"path_index_hit_total":21,"path_index_miss_total":22,"path_index_stale_total":23,"path_index_scan_stale_total":39,"path_index_fallback_total":24,"create_files_batch_total":25,"create_files_entry_total":26,"create_dirs_batch_total":27,"create_dirs_entry_total":28,"read_dir_plus_total":29,"read_dir_plus_entry_total":30,"read_dir_plus_projection_hit_total":31}}"#;
 
         assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
         assert_eq!(json_u64(body, "get_write_plan_local_total").unwrap(), 33);
         assert_eq!(json_u64(body, "scan_write_plan_local_total").unwrap(), 36);
         assert_eq!(json_u64(body, "scan_key_visited_total").unwrap(), 4);
+        assert_eq!(json_u64(body, "history_lookup_total").unwrap(), 40);
         assert_eq!(json_u64(body, "commit_entry_total").unwrap(), 17);
         assert_eq!(json_u64(body, "commit_command_total").unwrap(), 18);
         assert_eq!(json_u64(body, "max_commands_per_entry").unwrap(), 19);
@@ -2286,6 +2295,7 @@ mod tests {
                     dedupe_hit_total: 1,
                     predicate_total: 8,
                     prefix_empty_predicate_total: 2,
+                    history_lookup_total: 5,
                     current_put_total: 12,
                     ..MetadataStoreStats::default()
                 },
@@ -2311,6 +2321,7 @@ mod tests {
 
         assert_eq!(row.metadata_dedupe_hits, 1);
         assert_eq!(row.metadata_prefix_empty_predicates, 2);
+        assert_eq!(row.metadata_history_lookups, 5);
         assert_eq!(row.path_index_lookups, 4);
         assert_eq!(row.path_index_misses, 1);
         assert_eq!(row.path_index_scan_stale, 2);
@@ -2321,6 +2332,7 @@ mod tests {
         let header = csv_header();
         let record = csv_row(&row);
         assert!(header.contains("metadata_prefix_empty_predicates"));
+        assert!(header.contains("metadata_history_lookups"));
         assert!(header.contains("path_index_hit_rate"));
         assert!(header.contains("path_index_scan_stale"));
         assert!(header.contains("read_dir_plus_projection_hit_rate"));

@@ -93,6 +93,7 @@ struct HoltMetadataStoreCounters {
     scan_snapshot_total: AtomicU64,
     scan_key_visited_total: AtomicU64,
     scan_key_returned_total: AtomicU64,
+    history_lookup_total: AtomicU64,
     commit_total: AtomicU64,
     dedupe_hit_total: AtomicU64,
     predicate_total: AtomicU64,
@@ -353,7 +354,9 @@ impl MetadataStore for HoltMetadataStore {
             family,
             key,
             version,
+            purpose,
             &self.history_tree()?,
+            &self.stats,
         )
     }
 
@@ -371,6 +374,13 @@ impl MetadataStore for HoltMetadataStore {
         let mut out = Vec::new();
         let mut visited_total = 0_u64;
         let mut returned_total = 0_u64;
+        let context = VisibleReadContext {
+            family: request.family,
+            version: request.version,
+            purpose: request.purpose,
+            history: &history,
+            stats: &self.stats,
+        };
 
         let mut range = current.range();
         if !request.prefix.is_empty() {
@@ -380,15 +390,7 @@ impl MetadataStore for HoltMetadataStore {
             range = range.start_after(start_after);
         }
         for entry in range {
-            let outcome = push_visible_scan_item(
-                entry,
-                request.family,
-                request.version,
-                &history,
-                &mut out,
-                limit,
-                start_after,
-            )?;
+            let outcome = push_visible_scan_item(entry, &context, &mut out, limit, start_after)?;
             visited_total += outcome.visited as u64;
             returned_total += outcome.returned as u64;
             if outcome.done {
@@ -421,6 +423,13 @@ impl MetadataStore for HoltMetadataStore {
         let mut out = Vec::new();
         let mut visited_total = 0_u64;
         let mut returned_total = 0_u64;
+        let context = VisibleReadContext {
+            family: request.family,
+            version: request.version,
+            purpose: request.purpose,
+            history: &history,
+            stats: &self.stats,
+        };
 
         let mut range = current.range().delimiter(request.delimiter);
         if !request.prefix.is_empty() {
@@ -430,15 +439,8 @@ impl MetadataStore for HoltMetadataStore {
             range = range.start_after(start_after);
         }
         for entry in range {
-            let outcome = push_visible_delimited_scan_item(
-                entry,
-                request.family,
-                request.version,
-                &history,
-                &mut out,
-                limit,
-                start_after,
-            )?;
+            let outcome =
+                push_visible_delimited_scan_item(entry, &context, &mut out, limit, start_after)?;
             visited_total += outcome.visited as u64;
             returned_total += outcome.returned as u64;
             if outcome.done {
@@ -1191,6 +1193,7 @@ impl HoltMetadataStoreCounters {
             scan_snapshot_total: self.scan_snapshot_total.load(Ordering::Relaxed),
             scan_key_visited_total: self.scan_key_visited_total.load(Ordering::Relaxed),
             scan_key_returned_total: self.scan_key_returned_total.load(Ordering::Relaxed),
+            history_lookup_total: self.history_lookup_total.load(Ordering::Relaxed),
             active_snapshot_pin_total: 0,
             commit_total: self.commit_total.load(Ordering::Relaxed),
             dedupe_hit_total: self.dedupe_hit_total.load(Ordering::Relaxed),
@@ -1254,10 +1257,19 @@ fn read_visible(
     family: RecordFamily,
     key: &[u8],
     version: Version,
+    purpose: ReadPurpose,
     history: &Tree,
+    stats: &HoltMetadataStoreCounters,
 ) -> Result<Option<ReadItem>, MetadataError> {
     let encoded = current.get(key).map_err(to_backend_error)?;
-    decode_visible_value(family, key, encoded.as_deref(), version, history).map(|value| {
+    let context = VisibleReadContext {
+        family,
+        version,
+        purpose,
+        history,
+        stats,
+    };
+    decode_visible_value(key, encoded.as_deref(), &context).map(|value| {
         value.map(|(version, bytes)| ReadItem {
             value: Value(bytes),
             version,
@@ -1420,28 +1432,44 @@ fn enqueue_planned_command(
 }
 
 fn decode_visible_value(
-    family: RecordFamily,
     key: &[u8],
     encoded: Option<&[u8]>,
-    version: Version,
-    history: &Tree,
+    context: &VisibleReadContext<'_>,
 ) -> Result<Option<(Version, Vec<u8>)>, MetadataError> {
     if let Some(encoded) = encoded {
         let (current_version, current_value) = decode_current_value(encoded)?;
-        if current_version <= version {
+        if current_version <= context.version {
             return Ok(current_value.map(|value| (current_version, value)));
         }
+    } else if context.purpose != ReadPurpose::Snapshot {
+        return Ok(None);
     }
-    for entry in history.range().prefix(&history_prefix(family, key)) {
+    context
+        .stats
+        .history_lookup_total
+        .fetch_add(1, Ordering::Relaxed);
+    for entry in context
+        .history
+        .range()
+        .prefix(&history_prefix(context.family, key))
+    {
         let RangeEntry::Key { value, .. } = entry.map_err(to_backend_error)? else {
             continue;
         };
         let (history_version, history_value) = decode_current_value(&value)?;
-        if history_version <= version {
+        if history_version <= context.version {
             return Ok(history_value.map(|value| (history_version, value)));
         }
     }
     Ok(None)
+}
+
+struct VisibleReadContext<'a> {
+    family: RecordFamily,
+    version: Version,
+    purpose: ReadPurpose,
+    history: &'a Tree,
+    stats: &'a HoltMetadataStoreCounters,
 }
 
 struct ScanPushOutcome {
@@ -1452,9 +1480,7 @@ struct ScanPushOutcome {
 
 fn push_visible_scan_item(
     entry: Result<RangeEntry, holt::Error>,
-    family: RecordFamily,
-    version: Version,
-    history: &Tree,
+    context: &VisibleReadContext<'_>,
     out: &mut Vec<ScanItem>,
     limit: usize,
     start_after: Option<&[u8]>,
@@ -1474,9 +1500,7 @@ fn push_visible_scan_item(
         });
     }
     let mut returned = 0_usize;
-    if let Some((commit, visible)) =
-        decode_visible_value(family, &key, Some(&value), version, history)?
-    {
+    if let Some((commit, visible)) = decode_visible_value(&key, Some(&value), context)? {
         out.push(ScanItem {
             key,
             value: Value(visible),
@@ -1493,9 +1517,7 @@ fn push_visible_scan_item(
 
 fn push_visible_delimited_scan_item(
     entry: Result<RangeEntry, holt::Error>,
-    family: RecordFamily,
-    version: Version,
-    history: &Tree,
+    context: &VisibleReadContext<'_>,
     out: &mut Vec<DelimitedScanItem>,
     limit: usize,
     start_after: Option<&[u8]>,
@@ -1510,9 +1532,7 @@ fn push_visible_delimited_scan_item(
                 });
             }
             let mut returned = 0_usize;
-            if let Some((commit, visible)) =
-                decode_visible_value(family, &key, Some(&value), version, history)?
-            {
+            if let Some((commit, visible)) = decode_visible_value(&key, Some(&value), context)? {
                 out.push(DelimitedScanItem::Key(ScanItem {
                     key,
                     value: Value(visible),
@@ -2157,6 +2177,7 @@ mod tests {
             })
             .unwrap();
 
+        let before_latest = store.metadata_store_stats();
         assert_eq!(
             store
                 .get(
@@ -2168,6 +2189,13 @@ mod tests {
                 .unwrap(),
             None
         );
+        let after_latest = store.metadata_store_stats();
+        assert_eq!(
+            after_latest.history_lookup_total - before_latest.history_lookup_total,
+            0,
+            "live current-missing reads should not scan history"
+        );
+        let before_snapshot = store.metadata_store_stats();
         assert_eq!(
             store
                 .get(
@@ -2178,6 +2206,12 @@ mod tests {
                 )
                 .unwrap(),
             Some(Value(b"value-a".to_vec()))
+        );
+        let after_snapshot = store.metadata_store_stats();
+        assert_eq!(
+            after_snapshot.history_lookup_total - before_snapshot.history_lookup_total,
+            1,
+            "snapshot reads must retain historical visibility"
         );
     }
 

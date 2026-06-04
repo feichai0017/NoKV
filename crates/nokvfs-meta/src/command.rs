@@ -117,6 +117,7 @@ pub struct MetadataStoreStats {
     pub scan_snapshot_total: u64,
     pub scan_key_visited_total: u64,
     pub scan_key_returned_total: u64,
+    pub history_lookup_total: u64,
     pub active_snapshot_pin_total: u64,
     pub commit_total: u64,
     pub dedupe_hit_total: u64,
