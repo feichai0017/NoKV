@@ -102,6 +102,9 @@ struct ResultRow {
     manifest_chunks: u64,
     manifest_blocks: u64,
     metadata_commits: u64,
+    metadata_dedupe_hits: u64,
+    metadata_predicates: u64,
+    metadata_prefix_empty_predicates: u64,
     metadata_log_entries: u64,
     metadata_log_commands: u64,
     metadata_log_max_batch: u64,
@@ -123,15 +126,20 @@ struct ResultRow {
     metadata_dedupe_writes: u64,
     metadata_commit_prepare_ns: u64,
     metadata_atomic_apply_ns: u64,
+    path_index_lookups: u64,
     path_index_hits: u64,
+    path_index_misses: u64,
     path_index_stale: u64,
     path_index_fallback: u64,
+    path_index_hit_rate: f64,
     create_files_batches: u64,
     create_files_entries: u64,
     create_dirs_batches: u64,
     create_dirs_entries: u64,
+    read_dir_plus_calls: u64,
     read_dir_plus_entries: u64,
     read_dir_plus_projection_hits: u64,
+    read_dir_plus_projection_hit_rate: f64,
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
@@ -365,62 +373,10 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     let shape = shape(&config);
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
-    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_hits,path_index_stale,path_index_fallback,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_entries,read_dir_plus_projection_hits,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
+    println!("{}", csv_header());
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
-        println!(
-            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
-            row.workload,
-            profile_name(row.profile),
-            row.operations,
-            row.seconds,
-            row.ops_per_second,
-            row.mb_per_second,
-            row.samples_per_second,
-            row.object_puts,
-            row.object_gets,
-            row.cache_hits,
-            row.cache_hit_rate,
-            row.manifest_chunks,
-            row.manifest_blocks,
-            row.metadata_commits,
-            row.metadata_log_entries,
-            row.metadata_log_commands,
-            row.metadata_log_max_batch,
-            row.metadata_log_stale_reads,
-            row.metadata_gets,
-            row.metadata_get_user_strong,
-            row.metadata_get_write_plan_local,
-            row.metadata_get_snapshot,
-            row.metadata_scans,
-            row.metadata_scan_user_strong,
-            row.metadata_scan_write_plan_local,
-            row.metadata_scan_snapshot,
-            row.metadata_scan_visited,
-            row.metadata_scan_returned,
-            row.metadata_current_puts,
-            row.metadata_current_deletes,
-            row.metadata_history_writes,
-            row.metadata_watch_writes,
-            row.metadata_dedupe_writes,
-            row.metadata_commit_prepare_ns,
-            row.metadata_atomic_apply_ns,
-            row.path_index_hits,
-            row.path_index_stale,
-            row.path_index_fallback,
-            row.create_files_batches,
-            row.create_files_entries,
-            row.create_dirs_batches,
-            row.create_dirs_entries,
-            row.read_dir_plus_entries,
-            row.read_dir_plus_projection_hits,
-            row.object_concurrency,
-            row.read_repeats,
-            row.block_cache,
-            row.checksum,
-            csv_field(&row.shape),
-            csv_field(&row.caveat)
-        );
+        println!("{}", csv_row(&row));
     }
 
     if !config.keep {
@@ -814,6 +770,13 @@ fn bench_demo_dataset(
 
 fn row(input: RowInput) -> ResultRow {
     let cache_total = input.stats.object.object_gets + input.stats.object.cache_hits;
+    let path_index_lookups = input.stats.metadata_service.path_index_lookup_total;
+    let path_index_hits = input.stats.metadata_service.path_index_hit_total;
+    let read_dir_plus_entries = input.stats.metadata_service.read_dir_plus_entry_total;
+    let read_dir_plus_projection_hits = input
+        .stats
+        .metadata_service
+        .read_dir_plus_projection_hit_total;
     ResultRow {
         workload: input.workload,
         profile: input.profile,
@@ -833,6 +796,9 @@ fn row(input: RowInput) -> ResultRow {
         manifest_chunks: input.stats.object.manifest_chunks,
         manifest_blocks: input.stats.object.manifest_blocks,
         metadata_commits: input.stats.metadata_store.commit_total,
+        metadata_dedupe_hits: input.stats.metadata_store.dedupe_hit_total,
+        metadata_predicates: input.stats.metadata_store.predicate_total,
+        metadata_prefix_empty_predicates: input.stats.metadata_store.prefix_empty_predicate_total,
         metadata_log_entries: input.stats.metadata_log.commit_entry_total,
         metadata_log_commands: input.stats.metadata_log.commit_command_total,
         metadata_log_max_batch: input.stats.metadata_log.max_commands_per_entry,
@@ -854,18 +820,23 @@ fn row(input: RowInput) -> ResultRow {
         metadata_dedupe_writes: input.stats.metadata_store.dedupe_write_total,
         metadata_commit_prepare_ns: input.stats.metadata_store.commit_prepare_ns_total,
         metadata_atomic_apply_ns: input.stats.metadata_store.atomic_apply_ns_total,
-        path_index_hits: input.stats.metadata_service.path_index_hit_total,
+        path_index_lookups,
+        path_index_hits,
+        path_index_misses: input.stats.metadata_service.path_index_miss_total,
         path_index_stale: input.stats.metadata_service.path_index_stale_total,
         path_index_fallback: input.stats.metadata_service.path_index_fallback_total,
+        path_index_hit_rate: ratio(path_index_hits, path_index_lookups),
         create_files_batches: input.stats.metadata_service.create_files_batch_total,
         create_files_entries: input.stats.metadata_service.create_files_entry_total,
         create_dirs_batches: input.stats.metadata_service.create_dirs_batch_total,
         create_dirs_entries: input.stats.metadata_service.create_dirs_entry_total,
-        read_dir_plus_entries: input.stats.metadata_service.read_dir_plus_entry_total,
-        read_dir_plus_projection_hits: input
-            .stats
-            .metadata_service
-            .read_dir_plus_projection_hit_total,
+        read_dir_plus_calls: input.stats.metadata_service.read_dir_plus_total,
+        read_dir_plus_entries,
+        read_dir_plus_projection_hits,
+        read_dir_plus_projection_hit_rate: ratio(
+            read_dir_plus_projection_hits,
+            read_dir_plus_entries,
+        ),
         object_concurrency: input.object_concurrency,
         read_repeats: input.read_repeats,
         block_cache: input.block_cache,
@@ -873,6 +844,82 @@ fn row(input: RowInput) -> ResultRow {
         shape: input.shape,
         caveat: input.caveat,
     }
+}
+
+fn ratio(numerator: u64, denominator: u64) -> f64 {
+    if denominator == 0 {
+        0.0
+    } else {
+        numerator as f64 / denominator as f64
+    }
+}
+
+fn csv_header() -> &'static str {
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+}
+
+fn csv_row(row: &ResultRow) -> String {
+    [
+        row.workload.to_owned(),
+        profile_name(row.profile).to_owned(),
+        row.operations.to_string(),
+        format!("{:.6}", row.seconds),
+        format!("{:.2}", row.ops_per_second),
+        format!("{:.2}", row.mb_per_second),
+        format!("{:.2}", row.samples_per_second),
+        row.object_puts.to_string(),
+        row.object_gets.to_string(),
+        row.cache_hits.to_string(),
+        format!("{:.4}", row.cache_hit_rate),
+        row.manifest_chunks.to_string(),
+        row.manifest_blocks.to_string(),
+        row.metadata_commits.to_string(),
+        row.metadata_dedupe_hits.to_string(),
+        row.metadata_predicates.to_string(),
+        row.metadata_prefix_empty_predicates.to_string(),
+        row.metadata_log_entries.to_string(),
+        row.metadata_log_commands.to_string(),
+        row.metadata_log_max_batch.to_string(),
+        row.metadata_log_stale_reads.to_string(),
+        row.metadata_gets.to_string(),
+        row.metadata_get_user_strong.to_string(),
+        row.metadata_get_write_plan_local.to_string(),
+        row.metadata_get_snapshot.to_string(),
+        row.metadata_scans.to_string(),
+        row.metadata_scan_user_strong.to_string(),
+        row.metadata_scan_write_plan_local.to_string(),
+        row.metadata_scan_snapshot.to_string(),
+        row.metadata_scan_visited.to_string(),
+        row.metadata_scan_returned.to_string(),
+        row.metadata_current_puts.to_string(),
+        row.metadata_current_deletes.to_string(),
+        row.metadata_history_writes.to_string(),
+        row.metadata_watch_writes.to_string(),
+        row.metadata_dedupe_writes.to_string(),
+        row.metadata_commit_prepare_ns.to_string(),
+        row.metadata_atomic_apply_ns.to_string(),
+        row.path_index_lookups.to_string(),
+        row.path_index_hits.to_string(),
+        row.path_index_misses.to_string(),
+        row.path_index_stale.to_string(),
+        row.path_index_fallback.to_string(),
+        format!("{:.4}", row.path_index_hit_rate),
+        row.create_files_batches.to_string(),
+        row.create_files_entries.to_string(),
+        row.create_dirs_batches.to_string(),
+        row.create_dirs_entries.to_string(),
+        row.read_dir_plus_calls.to_string(),
+        row.read_dir_plus_entries.to_string(),
+        row.read_dir_plus_projection_hits.to_string(),
+        format!("{:.4}", row.read_dir_plus_projection_hit_rate),
+        row.object_concurrency.to_string(),
+        row.read_repeats.to_string(),
+        row.block_cache.to_string(),
+        row.checksum.to_string(),
+        csv_field(&row.shape),
+        csv_field(&row.caveat),
+    ]
+    .join(",")
 }
 
 fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
@@ -1821,6 +1868,60 @@ mod tests {
             31
         );
         assert!(json_u64(body, "missing_total").is_err());
+    }
+
+    #[test]
+    fn csv_row_reports_hot_path_attribution() {
+        let row = row(RowInput {
+            workload: "mdtest-easy",
+            profile: Profile::Smoke,
+            operations: 10,
+            seconds: 0.5,
+            bytes: 0,
+            samples: 0,
+            stats: BenchStats {
+                object: ObjectTransferStats::default(),
+                metadata_store: MetadataStoreStats {
+                    commit_total: 4,
+                    dedupe_hit_total: 1,
+                    predicate_total: 8,
+                    prefix_empty_predicate_total: 2,
+                    current_put_total: 12,
+                    ..MetadataStoreStats::default()
+                },
+                metadata_log: MetadataLogBenchStats::default(),
+                metadata_service: MetadataServiceStats {
+                    path_index_lookup_total: 4,
+                    path_index_hit_total: 3,
+                    path_index_miss_total: 1,
+                    read_dir_plus_total: 2,
+                    read_dir_plus_entry_total: 8,
+                    read_dir_plus_projection_hit_total: 6,
+                    ..MetadataServiceStats::default()
+                },
+            },
+            object_concurrency: 1,
+            read_repeats: 1,
+            block_cache: true,
+            checksum: 99,
+            shape: "shape".to_owned(),
+            caveat: "caveat".to_owned(),
+        });
+
+        assert_eq!(row.metadata_dedupe_hits, 1);
+        assert_eq!(row.metadata_prefix_empty_predicates, 2);
+        assert_eq!(row.path_index_lookups, 4);
+        assert_eq!(row.path_index_misses, 1);
+        assert_eq!(row.path_index_hit_rate, 0.75);
+        assert_eq!(row.read_dir_plus_calls, 2);
+        assert_eq!(row.read_dir_plus_projection_hit_rate, 0.75);
+
+        let header = csv_header();
+        let record = csv_row(&row);
+        assert!(header.contains("metadata_prefix_empty_predicates"));
+        assert!(header.contains("path_index_hit_rate"));
+        assert!(header.contains("read_dir_plus_projection_hit_rate"));
+        assert_eq!(header.split(',').count(), record.split(',').count());
     }
 
     #[test]
