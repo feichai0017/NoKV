@@ -114,6 +114,10 @@ struct ResultRow {
     path_index_hits: u64,
     path_index_stale: u64,
     path_index_fallback: u64,
+    create_files_batches: u64,
+    create_files_entries: u64,
+    create_dirs_batches: u64,
+    create_dirs_entries: u64,
     read_dir_plus_entries: u64,
     read_dir_plus_projection_hits: u64,
     object_concurrency: usize,
@@ -339,11 +343,11 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     let shape = shape(&config);
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
-    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_gets,metadata_scans,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_hits,path_index_stale,path_index_fallback,read_dir_plus_entries,read_dir_plus_projection_hits,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
+    println!("workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_gets,metadata_scans,metadata_scan_visited,metadata_scan_returned,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_hits,path_index_stale,path_index_fallback,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_entries,read_dir_plus_projection_hits,object_concurrency,read_repeats,block_cache,checksum,shape,caveat");
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
         println!(
-            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
+            "{},{},{},{:.6},{:.2},{:.2},{:.2},{},{},{},{:.4},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}",
             row.workload,
             profile_name(row.profile),
             row.operations,
@@ -372,6 +376,10 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
             row.path_index_hits,
             row.path_index_stale,
             row.path_index_fallback,
+            row.create_files_batches,
+            row.create_files_entries,
+            row.create_dirs_batches,
+            row.create_dirs_entries,
             row.read_dir_plus_entries,
             row.read_dir_plus_projection_hits,
             row.object_concurrency,
@@ -807,6 +815,10 @@ fn row(input: RowInput) -> ResultRow {
         path_index_hits: input.stats.metadata_service.path_index_hit_total,
         path_index_stale: input.stats.metadata_service.path_index_stale_total,
         path_index_fallback: input.stats.metadata_service.path_index_fallback_total,
+        create_files_batches: input.stats.metadata_service.create_files_batch_total,
+        create_files_entries: input.stats.metadata_service.create_files_entry_total,
+        create_dirs_batches: input.stats.metadata_service.create_dirs_batch_total,
+        create_dirs_entries: input.stats.metadata_service.create_dirs_entry_total,
         read_dir_plus_entries: input.stats.metadata_service.read_dir_plus_entry_total,
         read_dir_plus_projection_hits: input
             .stats
@@ -929,6 +941,22 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_service
                 .path_index_fallback_total
                 .saturating_sub(before.metadata_service.path_index_fallback_total),
+            create_files_batch_total: after
+                .metadata_service
+                .create_files_batch_total
+                .saturating_sub(before.metadata_service.create_files_batch_total),
+            create_files_entry_total: after
+                .metadata_service
+                .create_files_entry_total
+                .saturating_sub(before.metadata_service.create_files_entry_total),
+            create_dirs_batch_total: after
+                .metadata_service
+                .create_dirs_batch_total
+                .saturating_sub(before.metadata_service.create_dirs_batch_total),
+            create_dirs_entry_total: after
+                .metadata_service
+                .create_dirs_entry_total
+                .saturating_sub(before.metadata_service.create_dirs_entry_total),
             read_dir_plus_total: after
                 .metadata_service
                 .read_dir_plus_total
@@ -1055,6 +1083,10 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             path_index_miss_total: json_u64(body, "path_index_miss_total")?,
             path_index_stale_total: json_u64(body, "path_index_stale_total")?,
             path_index_fallback_total: json_u64(body, "path_index_fallback_total")?,
+            create_files_batch_total: json_u64(body, "create_files_batch_total")?,
+            create_files_entry_total: json_u64(body, "create_files_entry_total")?,
+            create_dirs_batch_total: json_u64(body, "create_dirs_batch_total")?,
+            create_dirs_entry_total: json_u64(body, "create_dirs_entry_total")?,
             read_dir_plus_total: json_u64(body, "read_dir_plus_total")?,
             read_dir_plus_entry_total: json_u64(body, "read_dir_plus_entry_total")?,
             read_dir_plus_projection_hit_total: json_u64(
@@ -1601,14 +1633,16 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"metadata_store":{"get_total":2,"scan_total":3,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_service":{"path_index_lookup_total":17,"path_index_hit_total":18,"path_index_miss_total":19,"path_index_stale_total":20,"path_index_fallback_total":21,"read_dir_plus_total":22,"read_dir_plus_entry_total":23,"read_dir_plus_projection_hit_total":24}}"#;
+        let body = r#"{"metadata_store":{"get_total":2,"scan_total":3,"scan_key_visited_total":4,"scan_key_returned_total":5,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_ns_total":16},"metadata_service":{"path_index_lookup_total":17,"path_index_hit_total":18,"path_index_miss_total":19,"path_index_stale_total":20,"path_index_fallback_total":21,"create_files_batch_total":22,"create_files_entry_total":23,"create_dirs_batch_total":24,"create_dirs_entry_total":25,"read_dir_plus_total":26,"read_dir_plus_entry_total":27,"read_dir_plus_projection_hit_total":28}}"#;
 
         assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
         assert_eq!(json_u64(body, "scan_key_visited_total").unwrap(), 4);
         assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 18);
+        assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 22);
+        assert_eq!(json_u64(body, "create_dirs_entry_total").unwrap(), 25);
         assert_eq!(
             json_u64(body, "read_dir_plus_projection_hit_total").unwrap(),
-            24
+            28
         );
         assert!(json_u64(body, "missing_total").is_err());
     }

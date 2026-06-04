@@ -640,6 +640,7 @@ fn create_files_in_dir_coalesces_into_one_metadata_command() {
     service.bootstrap_root(0o755, 1000, 1000).unwrap();
     service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
     let before = metadata.metadata_store_stats();
+    let before_service = service.metadata_service_stats();
 
     let entries = service
         .create_files_in_dir_path(
@@ -655,6 +656,7 @@ fn create_files_in_dir_coalesces_into_one_metadata_command() {
         .unwrap();
 
     let after = metadata.metadata_store_stats();
+    let after_service = service.metadata_service_stats();
     assert_eq!(entries.len(), 2);
     assert_eq!(after.commit_total - before.commit_total, 1);
     assert_eq!(after.current_put_total - before.current_put_total, 6);
@@ -662,6 +664,14 @@ fn create_files_in_dir_coalesces_into_one_metadata_command() {
     assert_eq!(after.history_write_total - before.history_write_total, 0);
     assert_eq!(after.watch_write_total - before.watch_write_total, 2);
     assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 1);
+    assert_eq!(
+        after_service.create_files_batch_total - before_service.create_files_batch_total,
+        1
+    );
+    assert_eq!(
+        after_service.create_files_entry_total - before_service.create_files_entry_total,
+        2
+    );
     let listed = service.read_dir_plus_path("/runs").unwrap();
     assert_eq!(listed.len(), 2);
 }
@@ -677,6 +687,7 @@ fn create_dirs_in_dir_coalesces_into_one_metadata_command() {
     service.bootstrap_root(0o755, 1000, 1000).unwrap();
     service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
     let before = metadata.metadata_store_stats();
+    let before_service = service.metadata_service_stats();
 
     let entries = service
         .create_dirs_in_dir_path(
@@ -692,6 +703,7 @@ fn create_dirs_in_dir_coalesces_into_one_metadata_command() {
         .unwrap();
 
     let after = metadata.metadata_store_stats();
+    let after_service = service.metadata_service_stats();
     assert_eq!(entries.len(), 2);
     assert!(entries
         .iter()
@@ -702,6 +714,14 @@ fn create_dirs_in_dir_coalesces_into_one_metadata_command() {
     assert_eq!(after.history_write_total - before.history_write_total, 0);
     assert_eq!(after.watch_write_total - before.watch_write_total, 2);
     assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 1);
+    assert_eq!(
+        after_service.create_dirs_batch_total - before_service.create_dirs_batch_total,
+        1
+    );
+    assert_eq!(
+        after_service.create_dirs_entry_total - before_service.create_dirs_entry_total,
+        2
+    );
     let listed = service.read_dir_plus_path("/runs").unwrap();
     assert_eq!(listed.len(), 2);
 }

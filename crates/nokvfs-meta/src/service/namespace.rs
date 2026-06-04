@@ -406,6 +406,7 @@ where
             version,
             Some(&path_keys),
         )?;
+        self.record_create_dirs_batch(projections.len());
         Ok(projections.into_iter().map(Into::into).collect())
     }
 
@@ -473,7 +474,27 @@ where
             version,
             path_keys.as_deref(),
         )?;
+        self.record_create_files_batch(projections.len());
         Ok(projections.into_iter().map(Into::into).collect())
+    }
+
+    fn record_create_files_batch(&self, entries: usize) {
+        if entries <= 1 {
+            return;
+        }
+        self.create_files_batch_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.create_files_entry_total
+            .fetch_add(entries as u64, Ordering::Relaxed);
+    }
+
+    fn record_create_dirs_batch(&self, entries: usize) {
+        if entries <= 1 {
+            return;
+        }
+        self.create_dirs_batch_total.fetch_add(1, Ordering::Relaxed);
+        self.create_dirs_entry_total
+            .fetch_add(entries as u64, Ordering::Relaxed);
     }
 
     pub fn remove_file(
