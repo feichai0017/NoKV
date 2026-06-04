@@ -291,6 +291,12 @@ pub struct BodyReadPlan {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathReadPlan {
+    pub metadata: PathMetadata,
+    pub plan: BodyReadPlan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct RenameReplaceResult {
     pub entry: DentryWithAttr,
     pub replaced: Option<DentryWithAttr>,

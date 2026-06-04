@@ -159,6 +159,12 @@ pub enum MetadataRpcRequest {
         offset: u64,
         len: u64,
     },
+    ReadPathPlan {
+        path: String,
+        offset: u64,
+        len: u64,
+        expected_generation: Option<u64>,
+    },
     ReadArtifactPathAtSnapshot {
         snapshot_id: u64,
         path: String,
@@ -286,6 +292,10 @@ pub enum MetadataRpcResult {
         retired: bool,
     },
     BodyReadPlan {
+        plan: WireBodyReadPlan,
+    },
+    PathReadPlan {
+        metadata: WirePathMetadata,
         plan: WireBodyReadPlan,
     },
     FileBytes {

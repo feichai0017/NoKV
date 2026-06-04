@@ -623,7 +623,7 @@ where
         probe_path_index: bool,
     ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
         let mut components = parse_absolute_path(path)?;
-        if probe_path_index && root == InodeId::root() && !components.is_empty() {
+        if probe_path_index && root == InodeId::root() && components.len() > 1 {
             if let Some(indexed) =
                 self.lookup_path_index_components_at_version(&components, version, purpose)?
             {
@@ -904,6 +904,64 @@ where
         Ok(BodyReadPlan {
             output_len,
             blocks: self.read_plan(inode, &body, offset, output_len, version)?,
+        })
+    }
+
+    pub fn read_path_plan(
+        &self,
+        path: &str,
+        offset: u64,
+        len: usize,
+        expected_generation: Option<u64>,
+    ) -> Result<PathReadPlan, MetadError> {
+        let version = self.read_version()?;
+        let entry = self
+            .lookup_path_from_at_version_for_purpose(
+                InodeId::root(),
+                path,
+                version,
+                ReadPurpose::UserStrong,
+            )?
+            .map(|(entry, _)| entry)
+            .ok_or(MetadError::NotFound)?;
+        if entry.attr.file_type != FileType::File {
+            return Err(MetadError::NotFile);
+        }
+        if let Some(expected) = expected_generation {
+            if entry.attr.generation != expected {
+                return Err(MetadError::StaleBodyGeneration {
+                    expected,
+                    current: entry.attr.generation,
+                });
+            }
+        }
+        let body = entry
+            .body
+            .clone()
+            .ok_or(MetadError::MissingBodyDescriptor)?;
+        let output_len = if offset >= entry.attr.size {
+            0
+        } else {
+            len.min((entry.attr.size - offset) as usize)
+        };
+        let blocks = if output_len == 0 {
+            Vec::new()
+        } else {
+            self.read_plan_for_purpose(
+                entry.attr.inode,
+                &body,
+                offset,
+                output_len,
+                version,
+                ReadPurpose::UserStrong,
+            )?
+        };
+        Ok(PathReadPlan {
+            metadata: PathMetadata {
+                attr: entry.attr,
+                body: Some(body),
+            },
+            plan: BodyReadPlan { output_len, blocks },
         })
     }
 

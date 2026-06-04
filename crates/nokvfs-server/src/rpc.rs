@@ -1213,6 +1213,26 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 plan: wire_body_read_plan(&plan),
             })
         }
+        MetadataRpcRequest::ReadPathPlan {
+            path,
+            offset,
+            len,
+            expected_generation,
+        } => {
+            let len = usize::try_from(len).map_err(|_| {
+                ServerError::Metadata(MetadError::Codec(
+                    "path read length exceeds platform limit".to_owned(),
+                ))
+            })?;
+            let path_plan =
+                server
+                    .service()
+                    .read_path_plan(&path, offset, len, expected_generation)?;
+            Ok(MetadataRpcResult::PathReadPlan {
+                metadata: WirePathMetadata::from_path_metadata(&path_plan.metadata),
+                plan: wire_body_read_plan(&path_plan.plan),
+            })
+        }
         MetadataRpcRequest::ReadArtifactPathAtSnapshot { snapshot_id, path } => {
             let bytes = server
                 .service()
@@ -1622,6 +1642,82 @@ mod tests {
         };
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].dentry.name_hex, "72756e73");
+    }
+
+    #[test]
+    fn rpc_read_path_plan_returns_metadata_and_object_plan() {
+        let server = test_server();
+        let prepared = server
+            .service()
+            .prepare_artifact_create_path("/artifact.bin")
+            .unwrap();
+        let published = server
+            .service()
+            .publish_prepared_artifact(
+                prepared.clone(),
+                nokvfs_types::BodyDescriptor {
+                    producer: "rpc-test".to_owned(),
+                    digest_uri: "sha256:test".to_owned(),
+                    size: 12,
+                    content_type: "application/octet-stream".to_owned(),
+                    manifest_id: "artifact.bin".to_owned(),
+                    generation: prepared.generation,
+                    chunk_size: nokvfs_object::DEFAULT_CHUNK_SIZE,
+                    block_size: nokvfs_object::DEFAULT_BLOCK_SIZE as u64,
+                },
+                vec![nokvfs_types::ChunkManifest {
+                    chunk_index: 0,
+                    logical_offset: 0,
+                    len: 12,
+                    blocks: vec![nokvfs_types::BlockDescriptor {
+                        object_key: "blocks/demo".to_owned(),
+                        logical_offset: 0,
+                        object_offset: 0,
+                        len: 12,
+                        digest_uri: "sha256:test".to_owned(),
+                    }],
+                }],
+                0o644,
+                1000,
+                1000,
+            )
+            .unwrap()
+            .entry;
+
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadPathPlan {
+                path: "/artifact.bin".to_owned(),
+                offset: 6,
+                len: 6,
+                expected_generation: Some(published.attr.generation),
+            },
+        );
+        assert!(envelope.ok, "unexpected read path plan error: {envelope:?}");
+        let MetadataRpcResult::PathReadPlan { metadata, plan } = envelope.result.unwrap() else {
+            panic!("unexpected read path plan result")
+        };
+        assert_eq!(metadata.attr.inode, published.attr.inode.get());
+        assert_eq!(metadata.body.unwrap().digest_uri, "sha256:test");
+        assert_eq!(plan.output_len, 6);
+        assert_eq!(plan.blocks.len(), 1);
+        assert_eq!(plan.blocks[0].object_offset, 6);
+        assert_eq!(plan.blocks[0].len, 6);
+
+        let stale = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadPathPlan {
+                path: "/artifact.bin".to_owned(),
+                offset: 0,
+                len: 1,
+                expected_generation: Some(published.attr.generation - 1),
+            },
+        );
+        assert!(!stale.ok);
+        assert!(matches!(
+            stale.error_kind,
+            Some(WireMetadataError::StaleBodyGeneration { .. })
+        ));
     }
 
     #[test]

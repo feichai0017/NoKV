@@ -1420,6 +1420,39 @@ fn read_artifact_uses_dentry_projection_body_descriptor() {
 }
 
 #[test]
+fn read_path_plan_uses_dentry_projection_body_descriptor() {
+    let metadata = PurposeTrackingStore::new();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    let published = service
+        .publish_artifact(artifact_request(
+            DentryName::new(b"checkpoint.bin".to_vec()).unwrap(),
+            "checkpoint/body",
+            b"abcdef",
+        ))
+        .unwrap();
+
+    let before = metadata.counts();
+    let plan = service
+        .read_path_plan("/checkpoint.bin", 1, 3, Some(published.attr.generation))
+        .unwrap();
+    let after = metadata.counts();
+    assert_eq!(plan.metadata.attr.inode, published.attr.inode);
+    assert_eq!(plan.plan.output_len, 3);
+    assert_eq!(plan.plan.blocks.len(), 1);
+    assert_eq!(
+        after.user_strong_gets - before.user_strong_gets,
+        2,
+        "read_path_plan should read dentry projection and one chunk manifest"
+    );
+    assert_eq!(after.write_plan_gets, before.write_plan_gets);
+}
+
+#[test]
 fn read_file_plan_returns_ranges_without_fetching_objects() {
     let service = service();
     let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();

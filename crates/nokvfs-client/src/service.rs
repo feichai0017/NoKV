@@ -238,24 +238,10 @@ where
         len: usize,
         expected_generation: Option<u64>,
     ) -> Result<NamespaceRead, ClientError> {
-        let metadata = self
-            .metadata
-            .stat_path(path)?
-            .ok_or_else(|| ClientError::NotFound(path.to_owned()))?;
-        if metadata.attr.file_type != FileType::File {
-            return Err(ClientError::Metadata(nokvfs_meta::MetadError::NotFile));
-        }
-        if let Some(expected) = expected_generation {
-            if metadata.attr.generation != expected {
-                return Err(ClientError::Metadata(
-                    nokvfs_meta::MetadError::StaleBodyGeneration {
-                        expected,
-                        current: metadata.attr.generation,
-                    },
-                ));
-            }
-        }
-        let bytes = self.read_path_metadata(path, &metadata, offset, len)?;
+        let (metadata, plan) =
+            self.metadata
+                .read_path_plan(path, offset, len, expected_generation)?;
+        let bytes = self.read_planned_object_blocks(&plan)?;
         Ok(NamespaceRead { metadata, bytes })
     }
 
@@ -279,41 +265,16 @@ where
         let plan = self
             .metadata
             .read_body_plan(entry.attr.inode, body.generation, offset, len)?;
-        let cache = if self.block_cache_enabled {
-            Some(&self.block_cache)
-        } else {
-            None
-        };
-        let outcome = read_object_blocks(&self.objects, cache, plan.output_len, &plan.blocks)
-            .map_err(ClientError::Object)?;
-        self.object_gets
-            .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
-        self.object_get_bytes
-            .fetch_add(outcome.object_get_bytes, Ordering::Relaxed);
-        self.cache_hits
-            .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
-        self.cache_hit_bytes
-            .fetch_add(outcome.cache_hit_bytes, Ordering::Relaxed);
-        Ok(outcome.bytes)
+        self.read_planned_object_blocks(&plan)
     }
 
-    fn read_path_metadata(
+    fn read_planned_object_blocks(
         &self,
-        path: &str,
-        metadata: &PathMetadata,
-        offset: u64,
-        len: usize,
+        plan: &ClientBodyReadPlan,
     ) -> Result<Vec<u8>, ClientError> {
-        if len == 0 || offset >= metadata.attr.size {
+        if plan.output_len == 0 {
             return Ok(Vec::new());
         }
-        let body = metadata.body.as_ref().ok_or_else(|| {
-            ClientError::Protocol(format!("file {path} is missing body descriptor"))
-        })?;
-        let len = bounded_read_len(metadata.attr.size - offset, len)?;
-        let plan =
-            self.metadata
-                .read_body_plan(metadata.attr.inode, body.generation, offset, len)?;
         let cache = if self.block_cache_enabled {
             Some(&self.block_cache)
         } else {
@@ -820,6 +781,28 @@ impl MetadataClient {
         }
     }
 
+    pub fn read_path_plan(
+        &self,
+        path: &str,
+        offset: u64,
+        len: usize,
+        expected_generation: Option<u64>,
+    ) -> Result<(PathMetadata, ClientBodyReadPlan), ClientError> {
+        let len = u64::try_from(len)
+            .map_err(|_| ClientError::Protocol("path read length exceeds u64".to_owned()))?;
+        match self.call(MetadataRpcRequest::ReadPathPlan {
+            path: path.to_owned(),
+            offset,
+            len,
+            expected_generation,
+        })? {
+            MetadataRpcResult::PathReadPlan { metadata, plan } => {
+                Ok((wire_path_metadata(metadata)?, wire_body_read_plan(plan)?))
+            }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     pub fn read_artifact_at_snapshot(
         &self,
         snapshot_id: u64,
@@ -1113,6 +1096,7 @@ fn request_requires_observed_position(request: &MetadataRpcRequest) -> bool {
             | MetadataRpcRequest::ReadDirPlusPathPage { .. }
             | MetadataRpcRequest::ReadIndexedPathPage { .. }
             | MetadataRpcRequest::ReadBodyPlan { .. }
+            | MetadataRpcRequest::ReadPathPlan { .. }
     )
 }
 
@@ -2442,14 +2426,9 @@ mod tests {
         store
             .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello server")
             .unwrap();
-        let addr = serve_many(vec![
-            response_body(
-                r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
-            ),
-            response_body(
-                r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
-            ),
-        ]);
+        let addr = serve_one(
+            r#"{"ok":true,"result":{"type":"path_read_plan","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+        );
         let client = NoKvFsClient::connect(addr, store);
         let read = client.read_path("/artifact.bin", 6, 6, Some(7)).unwrap();
         assert_eq!(read.bytes, b"server");
@@ -2457,7 +2436,7 @@ mod tests {
         assert_eq!(read.metadata.body.unwrap().digest_uri, "sha256:demo");
 
         let addr = serve_one(
-            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":{"producer":"unit-test","digest_uri":"sha256:new","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":8,"chunk_size":67108864,"block_size":4194304}}}}"#,
+            r#"{"ok":false,"error":"stale body generation","error_kind":{"type":"stale_body_generation","expected":7,"current":8}}"#,
         );
         let client = NoKvFsClient::connect(addr, MemoryObjectStore::new());
         let err = client
