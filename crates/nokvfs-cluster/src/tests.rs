@@ -540,6 +540,53 @@ fn shared_log_metadata_store_logs_before_applying_command() {
 }
 
 #[test]
+fn shared_log_metadata_store_commits_independent_batch_as_one_entry() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+
+    let results = shared
+        .commit_batch(&[command(b"a", 2), command(b"b", 3)])
+        .unwrap();
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(shared.log().committed_index().get(), 1);
+    let entries = shared
+        .log()
+        .read_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    assert_eq!(entries.len(), 1);
+    assert_eq!(entries[0].commands.len(), 2);
+    assert_eq!(entries[0].commands[0].request_id, b"a");
+    assert_eq!(entries[0].commands[1].request_id, b"b");
+}
+
+#[test]
+fn shared_log_metadata_store_rejects_internal_batch_key_conflict_before_append() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+
+    assert_eq!(
+        shared.commit_batch(&[not_exists_command(b"a", 2), not_exists_command(b"a", 3)]),
+        Err(nokvfs_meta::MetadataError::PredicateFailed)
+    );
+    assert_eq!(shared.log().committed_index(), LogIndex::ZERO);
+    assert!(shared
+        .inner()
+        .get(
+            RecordFamily::Dentry,
+            b"a",
+            version(3),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn shared_log_metadata_store_allows_deduped_retry_after_predicate_changes() {
     let log = InMemorySharedLog::new();
     let store = HoltMetadataStore::open_memory().unwrap();
