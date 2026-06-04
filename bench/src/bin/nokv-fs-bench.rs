@@ -2,7 +2,8 @@
 //!
 //! This binary intentionally reports workload shape and durability caveats with
 //! every result. It runs a real `metad` process boundary with the service client.
-//! It is not a distributed replicated cluster benchmark.
+//! The metadata HA smoke workload also starts a real multi-server shared-log
+//! topology and verifies read-your-writes from a replicated peer.
 
 use std::env;
 use std::error::Error;
@@ -17,14 +18,14 @@ use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
-use nokvfs_cluster::FileSharedLogSync;
+use nokvfs_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
+use nokvfs_cluster::{FileSharedLogSync, LogTerm, NodeId};
 use nokvfs_meta::{
     DentryWithAttr, HistoryGcOptions, MetadataServiceStats, MetadataStoreStats, ObjectGcOptions,
     ObjectTransferStats, RenameReplaceResult,
 };
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
-use nokvfs_server::{Server, ServerOptions};
+use nokvfs_server::{MetadataLogPeerOptions, Server, ServerOptions};
 use nokvfs_types::MountId;
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
@@ -43,6 +44,7 @@ enum Profile {
 enum Workload {
     All,
     MetadataSmoke,
+    MetadataHaSmoke,
     MdtestEasy,
     MdtestHard,
     CheckpointPublish,
@@ -179,6 +181,17 @@ struct MetadataLogBenchStats {
     commit_command_total: u64,
     max_commands_per_entry: u64,
     stale_read_total: u64,
+}
+
+#[derive(Clone, Debug)]
+struct MetadataHaClusterConfig {
+    root: PathBuf,
+    object: ObjectStoreConfig,
+    leader: NodeId,
+    term: LogTerm,
+    voters: Vec<NodeId>,
+    peers: Vec<MetadataLogPeerOptions>,
+    sync: FileSharedLogSync,
 }
 
 #[derive(Debug)]
@@ -358,7 +371,7 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|metadata-ha-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] \
@@ -390,6 +403,9 @@ fn run_one(
     shape: &WorkloadShape,
     workload: Workload,
 ) -> Result<ResultRow, BenchError> {
+    if workload == Workload::MetadataHaSmoke {
+        return bench_metadata_ha_smoke(config, shape);
+    }
     let label = workload_name(workload);
     let client = client_for(config, label)?;
     client.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
@@ -400,6 +416,7 @@ fn run_one(
         Workload::TrainingRead => bench_training_read(client.as_ref(), config, shape),
         Workload::MlperfDlio => bench_mlperf_dlio(client.as_ref(), config, shape),
         Workload::DemoDataset => bench_demo_dataset(client.as_ref(), config, shape),
+        Workload::MetadataHaSmoke => unreachable!("metadata-ha-smoke executes before client setup"),
         Workload::MetadataSmoke => unreachable!("metadata-smoke expands before execution"),
         Workload::All => unreachable!("all expands before execution"),
     }
@@ -483,6 +500,119 @@ fn bench_mdtest_hard(
             shape.shared_files
         ),
         caveat: metadata_only_caveat(config),
+    }))
+}
+
+fn bench_metadata_ha_smoke(
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<ResultRow, BenchError> {
+    let workload = "metadata-ha-smoke";
+    let root = config.root.join(workload);
+    fs::create_dir_all(&root).map_err(from_io)?;
+    let object = object_config_for(config, workload);
+    let objects = object.clone().open().map_err(from_client)?;
+    let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
+    let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
+    let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
+    let term = LogTerm::new(1).expect("benchmark metadata log term is non-zero");
+    let voters = vec![node_1, node_2, node_3];
+
+    let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_2 = listener_2.local_addr().map_err(from_io)?;
+    let listener_3 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_3 = listener_3.local_addr().map_err(from_io)?;
+    let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_1 = listener_1.local_addr().map_err(from_io)?;
+    let peers = vec![
+        MetadataLogPeerOptions {
+            node: node_1,
+            address: addr_1,
+        },
+        MetadataLogPeerOptions {
+            node: node_2,
+            address: addr_2,
+        },
+        MetadataLogPeerOptions {
+            node: node_3,
+            address: addr_3,
+        },
+    ];
+    let cluster = MetadataHaClusterConfig {
+        root: root.clone(),
+        object,
+        leader: node_1,
+        term,
+        voters,
+        peers,
+        sync: config.metadata_log_sync,
+    };
+
+    start_metadata_log_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
+    wait_for_health(addr_2)?;
+    start_metadata_log_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
+    wait_for_health(addr_3)?;
+    start_metadata_log_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
+    wait_for_health(addr_1)?;
+
+    let metadata =
+        MetadataClient::new(MetadataClientOptions::new(addr_1).with_read_endpoints(vec![addr_2]));
+    let client = NoKvFsClient::new(metadata, objects);
+    let before = fetch_server_stats(addr_1)?;
+    let start = Instant::now();
+    let mut checksum = 0_u64;
+    let files = shape.shared_files.clamp(16, 512);
+    client
+        .metadata()
+        .mkdir("/ha", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(from_client)?;
+    let paths = (0..files)
+        .map(|index| format!("/ha/file-{index:06}"))
+        .collect::<Vec<_>>();
+    for entry in client
+        .metadata()
+        .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
+        .map_err(from_client)?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(from_client)?
+    {
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
+    }
+    let observed = client
+        .metadata()
+        .observed_metadata_position()
+        .ok_or_else(|| {
+            BenchError::Client("metadata HA write returned no log position".to_owned())
+        })?;
+    let peer_reader = MetadataClient::connect(addr_2);
+    peer_reader.observe_metadata_position(observed);
+    let peer_entries = peer_reader.list("/ha").map_err(from_client)?;
+    if peer_entries.len() != files {
+        return Err(BenchError::Client(format!(
+            "metadata HA peer read returned {} entries, expected {files}",
+            peer_entries.len()
+        )));
+    }
+    checksum = checksum.wrapping_add(peer_entries.len() as u64);
+    let stats = stats_delta(before, fetch_server_stats(addr_1)?);
+    Ok(row(RowInput {
+        workload,
+        profile: config.profile,
+        operations: files + 2,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: 0,
+        samples: 0,
+        stats,
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!("voters=3 leader=1 peer_read=2 files={files}"),
+        caveat: format!(
+            "shared-log HA smoke over three metadata server processes, sync={}, peer read requires observed log position",
+            metadata_log_sync_name(config.metadata_log_sync)
+        ),
     }))
 }
 
@@ -1200,6 +1330,93 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
     }))
 }
 
+fn server_options_for_node(
+    cluster: &MetadataHaClusterConfig,
+    node: NodeId,
+) -> Result<ServerOptions, BenchError> {
+    let node_root = cluster.root.join(format!("node-{}", node.get()));
+    fs::create_dir_all(&node_root).map_err(from_io)?;
+    Ok(ServerOptions {
+        bind: cluster
+            .peers
+            .iter()
+            .find(|peer| peer.node == node)
+            .map(|peer| peer.address)
+            .ok_or_else(|| {
+                BenchError::Client(format!("missing metadata peer for node {}", node.get()))
+            })?,
+        mount: MountId::new(1).expect("mount id is non-zero"),
+        meta_path: node_root.join("meta"),
+        metadata_log_path: Some(node_root.join("metadata.log")),
+        metadata_log_node: node,
+        metadata_log_leader: cluster.leader,
+        metadata_log_term: cluster.term,
+        metadata_log_voters: cluster.voters.clone(),
+        metadata_log_learners: Vec::new(),
+        metadata_log_peers: cluster
+            .peers
+            .iter()
+            .copied()
+            .filter(|peer| peer.node != node)
+            .collect(),
+        metadata_log_sync: cluster.sync,
+        object: cluster.object.clone(),
+        uid: DEFAULT_UID,
+        gid: DEFAULT_GID,
+        object_gc: ObjectGcOptions {
+            interval: Duration::from_secs(3600),
+            limit: 1024,
+            run_immediately: false,
+        },
+        history_gc: HistoryGcOptions {
+            interval: Duration::from_secs(3600),
+            limit: 1024,
+            run_immediately: false,
+        },
+    })
+}
+
+fn start_metadata_log_server(
+    listener: TcpListener,
+    options: ServerOptions,
+) -> Result<(), BenchError> {
+    let server = Server::open(options).map_err(from_client)?;
+    thread::spawn(move || {
+        let _ = server.serve(listener);
+    });
+    Ok(())
+}
+
+fn wait_for_health(address: SocketAddr) -> Result<(), BenchError> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        match TcpStream::connect(address) {
+            Ok(mut stream) => {
+                stream
+                    .write_all(
+                        b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+                    )
+                    .map_err(from_io)?;
+                let mut response = String::new();
+                stream.read_to_string(&mut response).map_err(from_io)?;
+                if response.contains("200 OK") && response.contains("ok") {
+                    return Ok(());
+                }
+            }
+            Err(err) if Instant::now() < deadline => {
+                let _ = err;
+            }
+            Err(err) => return Err(from_io(err)),
+        }
+        if Instant::now() >= deadline {
+            return Err(BenchError::Client(format!(
+                "metadata server {address} did not become healthy"
+            )));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
     let mut stream = TcpStream::connect(address).map_err(from_io)?;
     stream
@@ -1563,6 +1780,7 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
     match raw {
         "all" => Ok(Workload::All),
         "metadata-smoke" => Ok(Workload::MetadataSmoke),
+        "metadata-ha-smoke" => Ok(Workload::MetadataHaSmoke),
         "mdtest-easy" => Ok(Workload::MdtestEasy),
         "mdtest-hard" => Ok(Workload::MdtestHard),
         "checkpoint-publish" => Ok(Workload::CheckpointPublish),
@@ -1576,6 +1794,7 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
 fn expand_workloads(workload: Workload) -> Vec<Workload> {
     match workload {
         Workload::All => vec![
+            Workload::MetadataHaSmoke,
             Workload::MdtestEasy,
             Workload::MdtestHard,
             Workload::CheckpointPublish,
@@ -1634,6 +1853,7 @@ fn workload_name(workload: Workload) -> &'static str {
     match workload {
         Workload::All => "all",
         Workload::MetadataSmoke => "metadata-smoke",
+        Workload::MetadataHaSmoke => "metadata-ha-smoke",
         Workload::MdtestEasy => "mdtest-easy",
         Workload::MdtestHard => "mdtest-hard",
         Workload::CheckpointPublish => "checkpoint-publish",
@@ -1833,6 +2053,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_metadata_ha_smoke_workload() {
+        let config = parse(vec![s("--workload"), s("metadata-ha-smoke")]).unwrap();
+        assert_eq!(config.workload, Workload::MetadataHaSmoke);
+    }
+
+    #[test]
     fn shape_applies_object_size_overrides() {
         let config = parse(vec![
             s("--profile"),
@@ -1929,6 +2155,7 @@ mod tests {
         assert_eq!(
             expand_workloads(Workload::All),
             vec![
+                Workload::MetadataHaSmoke,
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
                 Workload::CheckpointPublish,
