@@ -32,16 +32,17 @@ const MAX_BATCH_RPC_REQUESTS: usize = 512;
 const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
 const FRAME_HEADER_BYTES: usize = 16;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MetadataClientOptions {
     pub address: SocketAddr,
+    pub read_endpoints: Vec<SocketAddr>,
     pub timeout: Duration,
 }
 
 pub struct MetadataClient {
     options: MetadataClientOptions,
     next_request_id: AtomicU64,
-    connection: Mutex<Option<Arc<PipelinedConnection>>>,
+    connections: Mutex<HashMap<SocketAddr, Arc<PipelinedConnection>>>,
     observed_position: Mutex<Option<WireMetadataPosition>>,
 }
 
@@ -135,8 +136,14 @@ impl MetadataClientOptions {
     pub fn new(address: SocketAddr) -> Self {
         Self {
             address,
+            read_endpoints: Vec::new(),
             timeout: DEFAULT_RPC_TIMEOUT,
         }
+    }
+
+    pub fn with_read_endpoints(mut self, endpoints: Vec<SocketAddr>) -> Self {
+        self.read_endpoints = endpoints;
+        self
     }
 }
 
@@ -443,7 +450,7 @@ impl MetadataClient {
         Self {
             options,
             next_request_id: AtomicU64::new(1),
-            connection: Mutex::new(None),
+            connections: Mutex::new(HashMap::new()),
             observed_position: Mutex::new(None),
         }
     }
@@ -877,11 +884,34 @@ impl MetadataClient {
     }
 
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
-        let request = self.request_with_observed_position(request);
-        let body =
-            encode_request(&request).map_err(|err| ClientError::Protocol(err.to_string()))?;
+        let mut fallback_error = None;
+        for address in self.request_endpoints(&request) {
+            let request = self.request_with_observed_position(request.clone());
+            match self.call_at(address, &request) {
+                Ok(result) => return Ok(result),
+                Err(err @ ClientError::ReadNotFresh { .. }) => {
+                    fallback_error = Some(err);
+                }
+                Err(err @ ClientError::Io(_)) => {
+                    self.drop_connection(address);
+                    fallback_error = Some(err);
+                }
+                Err(err) => return Err(err),
+            }
+        }
+        Err(fallback_error.unwrap_or_else(|| {
+            ClientError::Protocol("metadata request had no target endpoint".to_owned())
+        }))
+    }
+
+    fn call_at(
+        &self,
+        address: SocketAddr,
+        request: &MetadataRpcRequest,
+    ) -> Result<MetadataRpcResult, ClientError> {
+        let body = encode_request(request).map_err(|err| ClientError::Protocol(err.to_string()))?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
-        let connection = self.connection()?;
+        let connection = self.connection(address)?;
         let body = connection.call(request_id, &body, self.options.timeout)?;
         let envelope =
             decode_envelope(&body).map_err(|err| ClientError::Protocol(err.to_string()))?;
@@ -891,6 +921,22 @@ impl MetadataClient {
             }
         }
         envelope_result(envelope)
+    }
+
+    fn request_endpoints(&self, request: &MetadataRpcRequest) -> Vec<SocketAddr> {
+        if !request_requires_observed_position(request) {
+            return vec![self.options.address];
+        }
+        let mut endpoints = Vec::with_capacity(self.options.read_endpoints.len() + 1);
+        for endpoint in &self.options.read_endpoints {
+            if !endpoints.contains(endpoint) {
+                endpoints.push(*endpoint);
+            }
+        }
+        if !endpoints.contains(&self.options.address) {
+            endpoints.push(self.options.address);
+        }
+        endpoints
     }
 
     fn request_with_observed_position(&self, request: MetadataRpcRequest) -> MetadataRpcRequest {
@@ -920,14 +966,21 @@ impl MetadataClient {
         }
     }
 
-    fn connection(&self) -> Result<Arc<PipelinedConnection>, ClientError> {
-        let mut guard = self.connection.lock().expect("metadata rpc connection");
-        if let Some(connection) = &*guard {
+    fn connection(&self, address: SocketAddr) -> Result<Arc<PipelinedConnection>, ClientError> {
+        let mut guard = self.connections.lock().expect("metadata rpc connections");
+        if let Some(connection) = guard.get(&address) {
             return Ok(Arc::clone(connection));
         }
-        let connection = Arc::new(PipelinedConnection::connect(self.options.address)?);
-        *guard = Some(Arc::clone(&connection));
+        let connection = Arc::new(PipelinedConnection::connect(address)?);
+        guard.insert(address, Arc::clone(&connection));
         Ok(connection)
+    }
+
+    fn drop_connection(&self, address: SocketAddr) {
+        self.connections
+            .lock()
+            .expect("metadata rpc connections")
+            .remove(&address);
     }
 }
 
@@ -1447,6 +1500,20 @@ mod tests {
         encode_envelope(&envelope).unwrap()
     }
 
+    fn read_not_fresh_response(
+        required: WireMetadataPosition,
+        applied: Option<WireMetadataPosition>,
+    ) -> Vec<u8> {
+        encode_envelope(&MetadataRpcEnvelope {
+            ok: false,
+            result: None,
+            error: Some("metadata read is not fresh".to_owned()),
+            error_kind: Some(WireMetadataError::ReadNotFresh { required, applied }),
+            metadata_position: None,
+        })
+        .unwrap()
+    }
+
     fn dentry_response(parent: u64, name: &str, inode: u64, generation: u64) -> Vec<u8> {
         dentry_response_with_position(parent, name, inode, generation, None)
     }
@@ -1690,6 +1757,86 @@ mod tests {
         let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
 
         assert_eq!(metadata.attr.inode.get(), 40);
+    }
+
+    #[test]
+    fn service_client_routes_live_reads_to_learner_and_falls_back_on_stale() {
+        let position = WireMetadataPosition { term: 7, index: 11 };
+
+        let leader_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let leader_addr = leader_listener.local_addr().unwrap();
+        let learner_listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let learner_addr = learner_listener.local_addr().unwrap();
+
+        let leader = thread::spawn(move || {
+            let (mut stream, _) = leader_listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::CreateFilePath { path, .. } if path == "/runs/a.bin"
+            ));
+            let response = dentry_response_with_position(2, "a.bin", 40, 7, Some(position));
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::RequireApplied {
+                    position: observed,
+                    request,
+                } if observed == position
+                    && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
+            ));
+            let response = response_body(
+                r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+            );
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+        });
+
+        let learner = thread::spawn(move || {
+            let (mut stream, _) = learner_listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::RequireApplied {
+                    position: observed,
+                    request,
+                } if observed == position
+                    && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
+            ));
+            let response = read_not_fresh_response(
+                position,
+                Some(WireMetadataPosition {
+                    term: position.term,
+                    index: position.index - 1,
+                }),
+            );
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+        });
+
+        let client = MetadataClient::new(
+            MetadataClientOptions::new(leader_addr).with_read_endpoints(vec![learner_addr]),
+        );
+
+        client
+            .create_file("/runs/a.bin", 0o644, 1000, 1000)
+            .unwrap();
+        let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
+
+        assert_eq!(metadata.attr.inode.get(), 40);
+        leader.join().unwrap();
+        learner.join().unwrap();
     }
 
     #[test]

@@ -10,7 +10,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
+use nokvfs_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
 use nokvfs_cluster::{FileSharedLogSync, LogTerm, NodeId};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, ObjectGcWorker};
@@ -46,6 +46,7 @@ struct Config {
     history_gc_interval: Duration,
     history_gc_limit: usize,
     server_bind: SocketAddr,
+    metadata_read_endpoints: Vec<SocketAddr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -396,7 +397,11 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
 
 fn open_client(config: &Config) -> Result<Client, CliError> {
     let objects = config.object.open().map_err(from_object)?;
-    Ok(NoKvFsClient::connect(config.server_bind, objects))
+    let metadata = MetadataClient::new(
+        MetadataClientOptions::new(config.server_bind)
+            .with_read_endpoints(config.metadata_read_endpoints.clone()),
+    );
+    Ok(NoKvFsClient::new(metadata, objects))
 }
 
 fn control_get(config: &Config, path: &str) -> Result<String, CliError> {
@@ -445,6 +450,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut history_gc_interval = HistoryGcOptions::default().interval;
     let mut history_gc_limit = HistoryGcOptions::default().limit;
     let mut server_bind = DEFAULT_SERVER_BIND;
+    let mut metadata_read_endpoints = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
@@ -598,6 +604,13 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 server_bind =
                     parse_socket_addr(value(&args, index, "--server-bind")?, "server_bind")?;
             }
+            "--metadata-read-endpoint" => {
+                index += 1;
+                metadata_read_endpoints.push(parse_socket_addr(
+                    value(&args, index, "--metadata-read-endpoint")?,
+                    "metadata_read_endpoint",
+                )?);
+            }
             "--help" | "-h" => {
                 return Ok((
                     Config {
@@ -619,6 +632,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         history_gc_interval,
                         history_gc_limit,
                         server_bind,
+                        metadata_read_endpoints,
                     },
                     Command::Help,
                 ));
@@ -652,6 +666,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             history_gc_interval,
             history_gc_limit,
             server_bind,
+            metadata_read_endpoints,
         },
         command,
     ))
@@ -972,6 +987,7 @@ Object backends:\n\
   --history-gc-interval-ms MS      Background metadata history GC interval for live mount\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
+  --metadata-read-endpoint ADDR   Preferred metadata read endpoint; repeat for learners\n\
   --metadata-log PATH             Durable shared metadata log for serve\n\
   --no-metadata-log               Disable metadata log for local/debug serve\n\
   --metadata-log-node NODE        Local metadata log node id\n\
@@ -1178,7 +1194,36 @@ mod tests {
             config.server_bind,
             "127.0.0.1:17777".parse::<SocketAddr>().unwrap()
         );
+        assert!(config.metadata_read_endpoints.is_empty());
         assert_eq!(command, Command::Mkdir { path: s("/runs") });
+    }
+
+    #[test]
+    fn parse_metadata_read_endpoints() {
+        let (config, command) = parse(vec![
+            s("--server-bind"),
+            s("127.0.0.1:17777"),
+            s("--metadata-read-endpoint"),
+            s("127.0.0.1:17778"),
+            s("--metadata-read-endpoint"),
+            s("127.0.0.1:17779"),
+            s("ls"),
+            s("/runs"),
+        ])
+        .unwrap();
+
+        assert_eq!(command, Command::Ls { path: s("/runs") });
+        assert_eq!(
+            config.server_bind,
+            "127.0.0.1:17777".parse::<SocketAddr>().unwrap()
+        );
+        assert_eq!(
+            config.metadata_read_endpoints,
+            vec![
+                "127.0.0.1:17778".parse::<SocketAddr>().unwrap(),
+                "127.0.0.1:17779".parse::<SocketAddr>().unwrap()
+            ]
+        );
     }
 
     #[test]
