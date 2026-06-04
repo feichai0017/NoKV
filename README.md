@@ -108,13 +108,16 @@ Implemented today:
   metadata server access, and object range reads;
 - long-running `nokvfs-server` with health, readiness, stats, manual GC, and
   framed binary metadata RPC;
+- experimental metadata shared-log mode with explicit voter membership,
+  majority append, follower replay, and a local 3-voter smoke harness;
 - read-only snapshot mounts, snapshot-version reads, typed watch replay, and
   FUSE cache invalidation from watch events;
 - pending-object GC and metadata history GC tied to snapshot retention.
 
 Not implemented yet:
 
-- distributed metadata replication and high availability;
+- production-grade distributed metadata high availability, leader election,
+  background catch-up, and learner read scaling;
 - FUSE over the metadata server;
 - Python/fsspec and Kubernetes CSI packages;
 - full POSIX coverage such as hardlinks, xattrs, locks, special files,
@@ -215,6 +218,13 @@ Covered workload shapes include:
 These are local single-node service benchmarks. Distributed and training-cluster
 claims need separate runs that report replication, cache, object-store, and
 durability settings.
+
+The local shared-log smoke starts RustFS plus three metadata voters and verifies
+that a leader-published artifact is readable through both followers:
+
+```bash
+scripts/run-shared-log-smoke.sh
+```
 
 ## Design Notes
 

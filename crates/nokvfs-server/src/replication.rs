@@ -107,9 +107,6 @@ impl MajorityMetadataLog {
             };
             if peer.append_entry(self.local_node, &entry).is_ok() {
                 remote_successes = remote_successes.saturating_add(1);
-                if remote_successes >= required_remote {
-                    break;
-                }
             }
         }
         if remote_successes < required_remote {
@@ -315,9 +312,11 @@ mod tests {
     #[test]
     fn majority_append_writes_remote_before_local() {
         let (_dir, local) = file_log();
-        let peer = Arc::new(RecordingPeer::ok());
+        let peer2 = Arc::new(RecordingPeer::ok());
+        let peer3 = Arc::new(RecordingPeer::ok());
         let mut peers = BTreeMap::new();
-        peers.insert(node(2), peer.clone() as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(2), peer2.clone() as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(3), peer3.clone() as Arc<dyn MetadataLogPeerAppender>);
         let log = MajorityMetadataLog::with_peers(node(1), membership(node(1)), local, peers);
 
         let receipts = log
@@ -327,10 +326,12 @@ mod tests {
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].position.index.get(), 1);
         assert_eq!(log.committed_position().unwrap().index.get(), 1);
-        let entries = peer.entries.lock().unwrap();
-        assert_eq!(entries.len(), 1);
-        assert_eq!(entries[0].position.index.get(), 1);
-        assert_eq!(entries[0].commands[0].request_id, b"a");
+        for peer in [peer2, peer3] {
+            let entries = peer.entries.lock().unwrap();
+            assert_eq!(entries.len(), 1);
+            assert_eq!(entries[0].position.index.get(), 1);
+            assert_eq!(entries[0].commands[0].request_id, b"a");
+        }
     }
 
     #[test]

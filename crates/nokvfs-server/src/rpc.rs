@@ -1846,6 +1846,7 @@ mod tests {
         let metadata_log = dir.path().join("metadata.log");
         let mut options = test_options(dir.path(), Some(metadata_log));
         options.metadata_log_node = nokvfs_cluster::NodeId::new(4).unwrap();
+        options.metadata_log_leader = nokvfs_cluster::NodeId::new(4).unwrap();
         let server = Server::open(options).unwrap();
         let envelope = request_envelope(
             &server,
@@ -1946,6 +1947,7 @@ mod tests {
         let replica_log = replica_dir.path().join("metadata.log");
         let mut options = test_options(replica_dir.path(), Some(replica_log));
         options.metadata_log_node = nokvfs_cluster::NodeId::new(4).unwrap();
+        options.metadata_log_leader = nokvfs_cluster::NodeId::new(4).unwrap();
         let replica = Server::open(options).unwrap();
         let envelope = request_envelope(
             &replica,

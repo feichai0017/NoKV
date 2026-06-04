@@ -31,6 +31,7 @@ struct Config {
     meta: PathBuf,
     metadata_log: Option<PathBuf>,
     metadata_log_node: NodeId,
+    metadata_log_leader: NodeId,
     metadata_log_term: LogTerm,
     metadata_log_voters: Vec<NodeId>,
     metadata_log_learners: Vec<NodeId>,
@@ -333,6 +334,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 meta_path: config.meta,
                 metadata_log_path: config.metadata_log,
                 metadata_log_node: config.metadata_log_node,
+                metadata_log_leader: config.metadata_log_leader,
                 metadata_log_term: config.metadata_log_term,
                 metadata_log_voters: config.metadata_log_voters,
                 metadata_log_learners: config.metadata_log_learners,
@@ -427,6 +429,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv-fs/meta");
     let mut metadata_log = Some(PathBuf::from(DEFAULT_METADATA_LOG));
     let mut metadata_log_node = NodeId::new(1).expect("default metadata log node is non-zero");
+    let mut metadata_log_leader = None;
     let mut metadata_log_term = LogTerm::new(1).expect("default metadata log term is non-zero");
     let mut metadata_log_voters = Vec::new();
     let mut metadata_log_learners = Vec::new();
@@ -463,6 +466,14 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             "--metadata-log-node" => {
                 index += 1;
                 metadata_log_node = parse_node_id(value(&args, index, "--metadata-log-node")?)?;
+            }
+            "--metadata-log-leader" => {
+                index += 1;
+                metadata_log_leader = Some(parse_node_id(value(
+                    &args,
+                    index,
+                    "--metadata-log-leader",
+                )?)?);
             }
             "--metadata-log-voters" => {
                 index += 1;
@@ -593,6 +604,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         meta,
                         metadata_log,
                         metadata_log_node,
+                        metadata_log_leader: metadata_log_leader.unwrap_or(metadata_log_node),
                         metadata_log_term,
                         metadata_log_voters,
                         metadata_log_learners,
@@ -625,6 +637,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             meta,
             metadata_log,
             metadata_log_node,
+            metadata_log_leader: metadata_log_leader.unwrap_or(metadata_log_node),
             metadata_log_term,
             metadata_log_voters,
             metadata_log_learners,
@@ -961,7 +974,8 @@ Object backends:\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
   --metadata-log PATH             Durable shared metadata log for serve\n\
   --no-metadata-log               Disable metadata log for local/debug serve\n\
-  --metadata-log-node NODE        Local metadata log node id accepted as leader\n\
+  --metadata-log-node NODE        Local metadata log node id\n\
+  --metadata-log-leader NODE      Metadata log leader node id; defaults to local node\n\
   --metadata-log-term TERM        Shared metadata log term for serve\n\
   --metadata-log-voters CSV       Metadata voter node ids, e.g. 1,2,3\n\
   --metadata-log-learners CSV     Metadata learner node ids, e.g. 4,5\n\
@@ -980,6 +994,7 @@ Defaults:\n\
   --server-bind 127.0.0.1:7777\n\
   --metadata-log .nokv-fs/metadata.log\n\
   --metadata-log-node 1\n\
+  --metadata-log-leader <metadata-log-node>\n\
   --metadata-log-term 1\n\
   --metadata-log-voters <local node only>\n\
   --metadata-log-learners <empty>\n\
@@ -1046,6 +1061,7 @@ mod tests {
             meta_path: dir.path().join("meta"),
             metadata_log_path: None,
             metadata_log_node: NodeId::new(1).unwrap(),
+            metadata_log_leader: NodeId::new(1).unwrap(),
             metadata_log_term: LogTerm::new(1).unwrap(),
             metadata_log_voters: Vec::new(),
             metadata_log_learners: Vec::new(),
@@ -1416,6 +1432,8 @@ mod tests {
             s(".nokv-fs/metadata.log"),
             s("--metadata-log-node"),
             s("4"),
+            s("--metadata-log-leader"),
+            s("2"),
             s("--metadata-log-term"),
             s("7"),
             s("--metadata-log-voters"),
@@ -1437,6 +1455,7 @@ mod tests {
             Some(PathBuf::from(".nokv-fs/metadata.log"))
         );
         assert_eq!(config.metadata_log_node.get(), 4);
+        assert_eq!(config.metadata_log_leader.get(), 2);
         assert_eq!(config.metadata_log_term.get(), 7);
         assert_eq!(
             config
@@ -1469,6 +1488,11 @@ mod tests {
         let (disabled, command) = parse(vec![s("--no-metadata-log"), s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
         assert_eq!(disabled.metadata_log, None);
+        let (implicit_leader, command) =
+            parse(vec![s("--metadata-log-node"), s("4"), s("serve")]).unwrap();
+        assert_eq!(command, Command::Serve);
+        assert_eq!(implicit_leader.metadata_log_node.get(), 4);
+        assert_eq!(implicit_leader.metadata_log_leader.get(), 4);
         let (reenabled, command) = parse(vec![
             s("--no-metadata-log"),
             s("--metadata-log"),
@@ -1491,6 +1515,13 @@ mod tests {
         ));
         assert!(matches!(
             parse(vec![s("--metadata-log-node"), s("0"), s("serve")]),
+            Err(CliError::InvalidNumber {
+                field: "metadata_log_node",
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(vec![s("--metadata-log-leader"), s("0"), s("serve")]),
             Err(CliError::InvalidNumber {
                 field: "metadata_log_node",
                 ..

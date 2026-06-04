@@ -1119,6 +1119,8 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         metadata_log_path,
         metadata_log_node: nokvfs_cluster::NodeId::new(1)
             .expect("benchmark metadata log node is non-zero"),
+        metadata_log_leader: nokvfs_cluster::NodeId::new(1)
+            .expect("benchmark metadata log leader is non-zero"),
         metadata_log_term: nokvfs_cluster::LogTerm::new(1)
             .expect("benchmark metadata log term is non-zero"),
         metadata_log_voters: Vec::new(),

@@ -103,6 +103,7 @@ impl Server {
                     options.mount,
                     options.metadata_log_term,
                     options.metadata_log_node,
+                    options.metadata_log_leader,
                     &options.metadata_log_voters,
                     &options.metadata_log_learners,
                 )?;
@@ -526,6 +527,7 @@ fn metadata_membership_for_node(
     mount: nokvfs_types::MountId,
     fallback_term: nokvfs_cluster::LogTerm,
     node: NodeId,
+    leader: NodeId,
     configured_voters: &[NodeId],
     configured_learners: &[NodeId],
 ) -> Result<MetadataMembership, ServerError> {
@@ -537,7 +539,7 @@ fn metadata_membership_for_node(
                 MetadataMembership::new(
                     mount,
                     fallback_term,
-                    node,
+                    leader,
                     voters,
                     configured_learners.iter().copied(),
                 )?
@@ -545,7 +547,7 @@ fn metadata_membership_for_node(
                 MetadataMembership::new(
                     mount,
                     fallback_term,
-                    node,
+                    leader,
                     configured_voters.iter().copied(),
                     configured_learners.iter().copied(),
                 )?
@@ -902,6 +904,7 @@ pub(crate) mod tests {
             meta_path: root.join("meta"),
             metadata_log_path,
             metadata_log_node: NodeId::new(1).unwrap(),
+            metadata_log_leader: NodeId::new(1).unwrap(),
             metadata_log_term: LogTerm::new(1).unwrap(),
             metadata_log_voters: Vec::new(),
             metadata_log_learners: Vec::new(),
@@ -1113,6 +1116,7 @@ pub(crate) mod tests {
         let metadata_log = dir.path().join("metadata.log");
         let mut options = test_options(dir.path(), Some(metadata_log.clone()));
         options.metadata_log_node = node(4);
+        options.metadata_log_leader = node(4);
         options.metadata_log_term = LogTerm::new(7).unwrap();
         let server = Server::open(options).unwrap();
 
@@ -1139,6 +1143,7 @@ pub(crate) mod tests {
             mount,
             LogTerm::new(9).unwrap(),
             node(2),
+            node(1),
             &[node(1), node(2), node(3)],
             &[node(4)],
         )
@@ -1146,7 +1151,7 @@ pub(crate) mod tests {
 
         assert_eq!(membership.mount, mount);
         assert_eq!(membership.term, LogTerm::new(9).unwrap());
-        assert_eq!(membership.leader, node(2));
+        assert_eq!(membership.leader, node(1));
         assert_eq!(membership.voters, vec![node(1), node(2), node(3)]);
         assert_eq!(membership.learners, vec![node(4)]);
 
@@ -1156,7 +1161,7 @@ pub(crate) mod tests {
             .expect("server should publish configured metadata log membership");
         assert_eq!(membership.mount, mount);
         assert_eq!(membership.term, LogTerm::new(9).unwrap());
-        assert_eq!(membership.leader, node(2));
+        assert_eq!(membership.leader, node(1));
         assert_eq!(membership.voters, vec![node(1), node(2), node(3)]);
         assert_eq!(membership.learners, vec![node(4)]);
     }
@@ -1167,6 +1172,7 @@ pub(crate) mod tests {
         let metadata_log = dir.path().join("metadata.log");
         let mut options = test_options(dir.path(), Some(metadata_log.clone()));
         options.metadata_log_node = node(2);
+        options.metadata_log_leader = node(2);
         options.metadata_log_learners = vec![node(4)];
         let server = Server::open(options).unwrap();
 
@@ -1186,6 +1192,7 @@ pub(crate) mod tests {
         let metadata_log = dir.path().join("metadata.log");
         let mut options = test_options(dir.path(), Some(metadata_log));
         options.metadata_log_node = node(4);
+        options.metadata_log_leader = node(4);
         options.metadata_log_voters = vec![node(1), node(2), node(3)];
         options.metadata_log_learners = vec![node(4)];
 

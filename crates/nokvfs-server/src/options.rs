@@ -15,6 +15,7 @@ pub struct ServerOptions {
     pub meta_path: PathBuf,
     pub metadata_log_path: Option<PathBuf>,
     pub metadata_log_node: NodeId,
+    pub metadata_log_leader: NodeId,
     pub metadata_log_term: LogTerm,
     pub metadata_log_voters: Vec<NodeId>,
     pub metadata_log_learners: Vec<NodeId>,
