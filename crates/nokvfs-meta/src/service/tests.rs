@@ -553,6 +553,7 @@ fn history_writes_are_snapshot_retention_driven() {
     );
 
     let snapshot = service.snapshot_subtree(InodeId::root()).unwrap();
+    assert_eq!(metadata.metadata_store_stats().active_snapshot_pin_total, 1);
     let snapshot_attr = service
         .get_attr_at_snapshot(snapshot.snapshot_id, InodeId::root())
         .unwrap()
@@ -580,6 +581,21 @@ fn history_writes_are_snapshot_retention_driven() {
     assert_eq!(
         service.get_attr(InodeId::root()).unwrap().unwrap().mode,
         0o750
+    );
+
+    assert!(service.retire_snapshot(snapshot.snapshot_id).unwrap());
+    assert_eq!(metadata.metadata_store_stats().active_snapshot_pin_total, 0);
+    let before_retired_hot = metadata.metadata_store_stats();
+    service
+        .update_root_attrs(UpdateAttr {
+            mode: Some(0o755),
+            ..UpdateAttr::default()
+        })
+        .unwrap();
+    let after_retired_hot = metadata.metadata_store_stats();
+    assert_eq!(
+        after_retired_hot.history_write_total - before_retired_hot.history_write_total,
+        0
     );
 }
 
@@ -1651,6 +1667,7 @@ fn snapshot_pin_survives_service_reopen() {
         reopened.snapshot_pin(snapshot.snapshot_id).unwrap(),
         Some(snapshot)
     );
+    assert_eq!(reopened.metadata_store_stats().active_snapshot_pin_total, 1);
 }
 
 #[test]

@@ -59,6 +59,7 @@ pub struct HoltMetadataStore {
     db: DB,
     write_gate: Arc<Mutex<()>>,
     stats: Arc<HoltMetadataStoreCounters>,
+    active_snapshot_pins: Arc<AtomicU64>,
 }
 
 #[derive(Default)]
@@ -113,6 +114,7 @@ struct CommandPlan {
     version_guards: Vec<VersionGuard>,
     prefix_empty_guards: Vec<PrefixEmptyGuard>,
     retain_history: bool,
+    snapshot_retention_delta: i64,
 }
 
 struct CurrentRecord {
@@ -135,10 +137,12 @@ impl HoltMetadataStore {
         for tree in REQUIRED_TREES {
             db.open_or_create_tree(tree).map_err(to_backend_error)?;
         }
+        let active_snapshot_pins = count_active_snapshot_pins(&db)?;
         Ok(Self {
             db,
             write_gate: Arc::new(Mutex::new(())),
             stats: Arc::new(HoltMetadataStoreCounters::default()),
+            active_snapshot_pins: Arc::new(AtomicU64::new(active_snapshot_pins)),
         })
     }
 
@@ -192,7 +196,9 @@ impl HoltMetadataStore {
 
 impl MetadataStoreStatsProvider for HoltMetadataStore {
     fn metadata_store_stats(&self) -> MetadataStoreStats {
-        self.stats.snapshot()
+        let mut stats = self.stats.snapshot();
+        stats.active_snapshot_pin_total = self.active_snapshot_pins.load(Ordering::Relaxed);
+        stats
     }
 }
 
@@ -432,7 +438,8 @@ impl HoltMetadataStore {
             }
         }
 
-        let retain_history = self.has_active_history_retention()?;
+        let retain_history = self.has_active_history_retention();
+        let snapshot_retention_delta = self.snapshot_retention_delta(&mutations)?;
         let mut history_records = Vec::new();
         if retain_history {
             for planned in &mutations {
@@ -459,6 +466,7 @@ impl HoltMetadataStore {
             version_guards,
             prefix_empty_guards,
             retain_history,
+            snapshot_retention_delta,
         })
     }
 
@@ -494,6 +502,7 @@ impl HoltMetadataStore {
             .count() as u64;
         let history_write_count = plan.history_records.len() as u64 + history_tombstone_count;
         let watch_write_count = command.watch.len() as u64;
+        let snapshot_retention_delta = plan.snapshot_retention_delta;
 
         let mut applied = 0_usize;
         let mut watch_events = 0_usize;
@@ -640,6 +649,7 @@ impl HoltMetadataStore {
             return Err(MetadataError::PredicateFailed);
         }
 
+        self.apply_snapshot_retention_delta(snapshot_retention_delta);
         self.stats.commit_total.fetch_add(1, Ordering::Relaxed);
         self.stats
             .predicate_total
@@ -669,6 +679,44 @@ impl HoltMetadataStore {
             ..result
         })
     }
+
+    fn snapshot_retention_delta(
+        &self,
+        mutations: &[PlannedMutation],
+    ) -> Result<i64, MetadataError> {
+        let mut delta = 0_i64;
+        for planned in mutations
+            .iter()
+            .filter(|planned| planned.mutation.family == RecordFamily::Snapshot)
+        {
+            let old_active = self
+                .current_record(RecordFamily::Snapshot, &planned.mutation.key)?
+                .is_some_and(|record| record.value.is_some());
+            let new_active = planned.mutation.op == MutationOp::Put;
+            delta += i64::from(new_active) - i64::from(old_active);
+        }
+        Ok(delta)
+    }
+
+    fn has_active_history_retention(&self) -> bool {
+        self.active_snapshot_pins.load(Ordering::Relaxed) > 0
+    }
+
+    fn apply_snapshot_retention_delta(&self, delta: i64) {
+        if delta > 0 {
+            self.active_snapshot_pins
+                .fetch_add(delta as u64, Ordering::Relaxed);
+            return;
+        }
+        if delta < 0 {
+            let decrement = delta.unsigned_abs();
+            let _ = self.active_snapshot_pins.fetch_update(
+                Ordering::Relaxed,
+                Ordering::Relaxed,
+                |current| Some(current.saturating_sub(decrement)),
+            );
+        }
+    }
 }
 
 impl HoltMetadataStoreCounters {
@@ -678,6 +726,7 @@ impl HoltMetadataStoreCounters {
             scan_total: self.scan_total.load(Ordering::Relaxed),
             scan_key_visited_total: self.scan_key_visited_total.load(Ordering::Relaxed),
             scan_key_returned_total: self.scan_key_returned_total.load(Ordering::Relaxed),
+            active_snapshot_pin_total: 0,
             commit_total: self.commit_total.load(Ordering::Relaxed),
             dedupe_hit_total: self.dedupe_hit_total.load(Ordering::Relaxed),
             predicate_total: self.predicate_total.load(Ordering::Relaxed),
@@ -690,21 +739,6 @@ impl HoltMetadataStoreCounters {
             commit_prepare_ns_total: self.commit_prepare_ns_total.load(Ordering::Relaxed),
             atomic_apply_ns_total: self.atomic_apply_ns_total.load(Ordering::Relaxed),
         }
-    }
-}
-
-impl HoltMetadataStore {
-    fn has_active_history_retention(&self) -> Result<bool, MetadataError> {
-        let snapshot = self.current_tree(RecordFamily::Snapshot)?;
-        for entry in snapshot.range() {
-            let RangeEntry::Key { value, .. } = entry.map_err(to_backend_error)? else {
-                continue;
-            };
-            if decode_current_value(&value)?.1.is_some() {
-                return Ok(true);
-            }
-        }
-        Ok(false)
     }
 }
 
@@ -725,6 +759,22 @@ fn current_tree_name(family: RecordFamily) -> &'static str {
         RecordFamily::CommandDedupe => COMMAND_DEDUPE_CURRENT_TREE,
         RecordFamily::History => HISTORY_TREE,
     }
+}
+
+fn count_active_snapshot_pins(db: &DB) -> Result<u64, MetadataError> {
+    let snapshot = db
+        .open_tree(SNAPSHOT_CURRENT_TREE)
+        .map_err(to_backend_error)?;
+    let mut total = 0_u64;
+    for entry in snapshot.range() {
+        let RangeEntry::Key { value, .. } = entry.map_err(to_backend_error)? else {
+            continue;
+        };
+        if decode_current_value(&value)?.1.is_some() {
+            total += 1;
+        }
+    }
+    Ok(total)
 }
 
 fn family_requires_history(family: RecordFamily) -> bool {
