@@ -672,7 +672,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             }
             let result = server.service().publish_prepared_artifact(
                 prepared_artifact(prepared)?,
-                body.into_body_descriptor(),
+                (*body).into_body_descriptor(),
                 chunks
                     .into_iter()
                     .map(|chunk| chunk.into_chunk_manifest().map_err(protocol_error))
@@ -719,6 +719,8 @@ fn wire_prepared_artifact(mount: MountId, prepared: &PreparedArtifact) -> WirePr
             .expect("remote prepared artifact names are utf-8"),
         inode: prepared.inode.get(),
         generation: prepared.generation,
+        mtime_ms: prepared.mtime_ms,
+        ctime_ms: prepared.ctime_ms,
         replace: prepared.replace,
         dentry_version: prepared.dentry_version,
         old_generation: prepared.old_generation,
@@ -732,6 +734,8 @@ fn prepared_artifact(prepared: WirePreparedArtifact) -> Result<PreparedArtifact,
         name: dentry_name(prepared.name)?,
         inode: inode_id(prepared.inode)?,
         generation: prepared.generation,
+        mtime_ms: prepared.mtime_ms,
+        ctime_ms: prepared.ctime_ms,
         replace: prepared.replace,
         dentry_version: prepared.dentry_version,
         old_generation: prepared.old_generation,
@@ -856,7 +860,7 @@ mod tests {
             other => panic!("unexpected prepare result: {other:?}"),
         };
         let request = MetadataRpcRequest::PublishPreparedArtifact {
-            body: WireBodyDescriptor {
+            body: Box::new(WireBodyDescriptor {
                 producer: "unit-test".to_owned(),
                 digest_uri: "sha256:body".to_owned(),
                 size: 4,
@@ -865,7 +869,7 @@ mod tests {
                 generation: prepared.generation,
                 chunk_size: 64 * 1024 * 1024,
                 block_size: 4 * 1024 * 1024,
-            },
+            }),
             chunks: vec![WireChunkManifest {
                 chunk_index: 0,
                 logical_offset: 0,

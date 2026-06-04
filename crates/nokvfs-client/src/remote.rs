@@ -65,6 +65,8 @@ pub struct RemotePreparedArtifact {
     pub name: DentryName,
     pub inode: InodeId,
     pub generation: u64,
+    pub mtime_ms: u64,
+    pub ctime_ms: u64,
     pub replace: bool,
     pub dentry_version: Option<u64>,
     pub old_generation: Option<u64>,
@@ -556,7 +558,7 @@ impl RemoteMetadataClient {
     ) -> Result<RenameReplaceResult, ClientError> {
         match self.call(MetadataRpcRequest::PublishPreparedArtifact {
             prepared: prepared_artifact_to_wire(&prepared)?,
-            body: body_to_wire(&body),
+            body: Box::new(body_to_wire(&body)),
             chunks: chunks.iter().map(chunk_to_wire).collect(),
             mode,
             uid,
@@ -794,6 +796,8 @@ fn wire_prepared_artifact(
             .map_err(|err| ClientError::InvalidName(err.to_string()))?,
         inode: inode_id(prepared.inode)?,
         generation: prepared.generation,
+        mtime_ms: prepared.mtime_ms,
+        ctime_ms: prepared.ctime_ms,
         replace: prepared.replace,
         dentry_version: prepared.dentry_version,
         old_generation: prepared.old_generation,
@@ -809,6 +813,8 @@ fn prepared_artifact_to_wire(
         name: rpc_name(&prepared.name)?,
         inode: prepared.inode.get(),
         generation: prepared.generation,
+        mtime_ms: prepared.mtime_ms,
+        ctime_ms: prepared.ctime_ms,
         replace: prepared.replace,
         dentry_version: prepared.dentry_version,
         old_generation: prepared.old_generation,
@@ -1149,7 +1155,7 @@ mod tests {
         let store = MemoryObjectStore::new();
         let addr = serve_many(vec![
             response_body(
-                r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
+                r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"mtime_ms":1700000000000,"ctime_ms":1700000000000,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
             ),
             response_body(
                 r#"{"ok":true,"result":{"type":"rename_replace","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":11,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":11,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"replaced":null}}"#,
@@ -1178,7 +1184,7 @@ mod tests {
         let store = MemoryObjectStore::new();
         let addr = serve_many(vec![
             response_body(
-                r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
+                r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"mtime_ms":1700000000000,"ctime_ms":1700000000000,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
             ),
             response_body(r#"{"ok":false,"error":"metadata command predicate failed"}"#),
         ]);

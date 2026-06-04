@@ -16,7 +16,7 @@ use fuser::{
 use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{
     DentryWithAttr, MetadError, NoKvFs, PreparedArtifact, PublishArtifactRange,
-    PublishArtifactStagedSession, UpdateAttr,
+    PublishArtifactStagedSession, RenameReplaceResult, UpdateAttr,
 };
 use nokvfs_object::{ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk};
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
@@ -236,6 +236,26 @@ where
             FuseView::Snapshot { snapshot_id, .. } => {
                 self.service.read_dir_plus_at_snapshot(snapshot_id, inode)
             }
+        }
+    }
+
+    fn rename_entry(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+        new_parent: InodeId,
+        new_name: DentryName,
+    ) -> Result<RenameReplaceResult, MetadError> {
+        if self.service.lookup_plus(new_parent, &new_name)?.is_some() {
+            self.service
+                .rename_replace(parent, name, new_parent, new_name)
+        } else {
+            self.service
+                .rename(parent, name, new_parent, new_name)
+                .map(|entry| RenameReplaceResult {
+                    entry,
+                    replaced: None,
+                })
         }
     }
 
@@ -1219,10 +1239,7 @@ where
                 return;
             }
         };
-        match self
-            .service
-            .rename_replace(parent, &name, newparent, newname)
-        {
+        match self.rename_entry(parent, &name, newparent, newname) {
             Ok(result) => {
                 self.remember_entry(&result.entry);
                 if let Some(replaced) = result.replaced {
@@ -1392,6 +1409,45 @@ mod tests {
         assert_eq!(fuse.parent_of(child), InodeId::root());
         fuse.remember_parent(child, InodeId::new(9).unwrap());
         assert_eq!(fuse.parent_of(child), InodeId::new(9).unwrap());
+    }
+
+    #[test]
+    fn rename_entry_uses_plain_rename_for_missing_directory_target() {
+        let service = service();
+        let old_name = DentryName::new(b"old-dir".to_vec()).unwrap();
+        let new_name = DentryName::new(b"new-dir".to_vec()).unwrap();
+        let created = service
+            .create_dir(InodeId::root(), old_name.clone(), 0o755, 1000, 1000)
+            .unwrap();
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        fuse.remember_entry(&created);
+
+        let renamed = fuse
+            .rename_entry(
+                InodeId::root(),
+                &old_name,
+                InodeId::root(),
+                new_name.clone(),
+            )
+            .unwrap();
+
+        assert!(renamed.replaced.is_none());
+        assert_eq!(renamed.entry.attr.file_type, FileType::Directory);
+        assert_eq!(renamed.entry.dentry.name, new_name);
+        assert!(fuse
+            .service()
+            .lookup_plus(InodeId::root(), &old_name)
+            .unwrap()
+            .is_none());
+        assert_eq!(
+            fuse.service()
+                .lookup_plus(InodeId::root(), &new_name)
+                .unwrap()
+                .unwrap()
+                .attr
+                .file_type,
+            FileType::Directory
+        );
     }
 
     #[test]

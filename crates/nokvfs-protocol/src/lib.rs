@@ -138,7 +138,7 @@ pub enum MetadataRpcRequest {
     },
     PublishPreparedArtifact {
         prepared: WirePreparedArtifact,
-        body: WireBodyDescriptor,
+        body: Box<WireBodyDescriptor>,
         chunks: Vec<WireChunkManifest>,
         mode: u32,
         uid: u32,
@@ -239,6 +239,8 @@ pub struct WirePreparedArtifact {
     pub name: String,
     pub inode: u64,
     pub generation: u64,
+    pub mtime_ms: u64,
+    pub ctime_ms: u64,
     pub replace: bool,
     pub dentry_version: Option<u64>,
     pub old_generation: Option<u64>,

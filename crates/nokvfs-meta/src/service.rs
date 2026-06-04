@@ -19,6 +19,7 @@ use std::collections::{BTreeMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::command::{
     CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand,
@@ -167,6 +168,8 @@ pub struct PreparedArtifact {
     pub name: DentryName,
     pub inode: InodeId,
     pub generation: u64,
+    pub mtime_ms: u64,
+    pub ctime_ms: u64,
     pub replace: bool,
     pub dentry_version: Option<u64>,
     pub old_generation: Option<u64>,
@@ -315,10 +318,7 @@ fn recover_allocator_state<M: MetadataStore>(
                 RecordFamily::Inode => {
                     let attr = decode_inode_attr(&row.value.0)
                         .map_err(|err| MetadError::Codec(err.to_string()))?;
-                    last_commit_version = last_commit_version
-                        .max(attr.generation)
-                        .max(attr.mtime_ms)
-                        .max(attr.ctime_ms);
+                    last_commit_version = last_commit_version.max(attr.generation);
                     max_inode = max_inode.max(attr.inode.get());
                 }
                 RecordFamily::Dentry => {
@@ -350,6 +350,7 @@ fn reservation_upper_bound(required: u64, reservation: u64) -> u64 {
 }
 
 fn directory_attr(inode: InodeId, mode: u32, uid: u32, gid: u32, version: u64) -> InodeAttr {
+    let now_ms = current_time_ms();
     InodeAttr {
         inode,
         file_type: FileType::Directory,
@@ -358,9 +359,17 @@ fn directory_attr(inode: InodeId, mode: u32, uid: u32, gid: u32, version: u64) -
         gid,
         size: 0,
         generation: version,
-        mtime_ms: version,
-        ctime_ms: version,
+        mtime_ms: now_ms,
+        ctime_ms: now_ms,
     }
+}
+
+fn current_time_ms() -> u64 {
+    let millis = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis();
+    millis.min(u128::from(u64::MAX)) as u64
 }
 
 fn delete_mutation(family: RecordFamily, key: Vec<u8>) -> Mutation {

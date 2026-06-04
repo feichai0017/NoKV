@@ -60,6 +60,7 @@ where
     ) -> Result<DentryWithAttr, MetadError> {
         let version = self.next_version()?;
         let inode = self.next_inode()?;
+        let now_ms = current_time_ms();
         let attr = InodeAttr {
             inode,
             file_type: FileType::File,
@@ -68,8 +69,8 @@ where
             gid,
             size: 0,
             generation: version.get(),
-            mtime_ms: version.get(),
-            ctime_ms: version.get(),
+            mtime_ms: now_ms,
+            ctime_ms: now_ms,
         };
         let projection = projection(parent, name, attr, None);
         self.commit_create_projection(CommandKind::CreateFile, &projection, version)?;
@@ -109,6 +110,7 @@ where
             chunks,
             staged,
         } = self.stage_artifact_body(&request, inode, version)?;
+        let now_ms = current_time_ms();
         let attr = InodeAttr {
             inode,
             file_type: FileType::Symlink,
@@ -117,8 +119,8 @@ where
             gid,
             size: body.size,
             generation: version.get(),
-            mtime_ms: version.get(),
-            ctime_ms: version.get(),
+            mtime_ms: now_ms,
+            ctime_ms: now_ms,
         };
         let projection = projection(parent, name, attr, Some(body));
         if let Err(err) = self.commit_create_projection_with_chunks(
@@ -161,7 +163,10 @@ where
         if let Some(mtime_ms) = changes.mtime_ms {
             attr.mtime_ms = mtime_ms;
         }
-        attr.ctime_ms = changes.ctime_ms.unwrap_or(version.get());
+        if changes.size.is_some() && changes.mtime_ms.is_none() {
+            attr.mtime_ms = current_time_ms();
+        }
+        attr.ctime_ms = changes.ctime_ms.unwrap_or_else(current_time_ms);
         attr.generation = version.get();
 
         let mut body = entry.body.clone();
@@ -252,7 +257,7 @@ where
         if let Some(mtime_ms) = changes.mtime_ms {
             attr.mtime_ms = mtime_ms;
         }
-        attr.ctime_ms = changes.ctime_ms.unwrap_or(version.get());
+        attr.ctime_ms = changes.ctime_ms.unwrap_or_else(current_time_ms);
         attr.generation = version.get();
 
         self.commit_metadata(MetadataCommand {
@@ -326,6 +331,7 @@ where
         ensure_unique_names(&names)?;
         let version = self.next_version()?;
         let inodes = self.next_inodes(names.len())?;
+        let now_ms = current_time_ms();
         let projections = names
             .into_iter()
             .zip(inodes)
@@ -338,8 +344,8 @@ where
                     gid,
                     size: 0,
                     generation: version.get(),
-                    mtime_ms: version.get(),
-                    ctime_ms: version.get(),
+                    mtime_ms: now_ms,
+                    ctime_ms: now_ms,
                 };
                 projection(parent, name, attr, None)
             })

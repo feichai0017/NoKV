@@ -13,6 +13,7 @@ where
             chunks,
             staged,
         } = self.stage_artifact_body(&request, inode, version)?;
+        let now_ms = current_time_ms();
         let attr = InodeAttr {
             inode,
             file_type: FileType::File,
@@ -21,8 +22,8 @@ where
             gid: request.gid,
             size: body.size,
             generation: version.get(),
-            mtime_ms: version.get(),
-            ctime_ms: version.get(),
+            mtime_ms: now_ms,
+            ctime_ms: now_ms,
         };
         let projection = projection(request.parent, request.name, attr, Some(body));
         if let Err(err) = self.commit_create_projection_with_chunks(
@@ -55,6 +56,7 @@ where
             chunks,
             staged,
         } = self.stage_artifact_body(&request, existing.attr.inode, version)?;
+        let now_ms = current_time_ms();
         let attr = InodeAttr {
             inode: existing.attr.inode,
             file_type: FileType::File,
@@ -63,8 +65,8 @@ where
             gid: request.gid,
             size: body.size,
             generation: version.get(),
-            mtime_ms: version.get(),
-            ctime_ms: version.get(),
+            mtime_ms: now_ms,
+            ctime_ms: now_ms,
         };
         let projection = projection(request.parent, request.name, attr, Some(body));
         let old_generation = existing.body.as_ref().map(|body| body.generation);
@@ -103,11 +105,14 @@ where
         }
         let generation = self.next_version()?;
         let inode = self.next_inode()?;
+        let now_ms = current_time_ms();
         Ok(PreparedArtifact {
             parent,
             name,
             inode,
             generation: generation.get(),
+            mtime_ms: now_ms,
+            ctime_ms: now_ms,
             replace: false,
             dentry_version: None,
             old_generation: None,
@@ -131,11 +136,14 @@ where
             return Err(MetadError::NotFile);
         }
         let generation = self.next_version()?;
+        let now_ms = current_time_ms();
         Ok(PreparedArtifact {
             parent,
             name,
             inode: existing.attr.inode,
             generation: generation.get(),
+            mtime_ms: now_ms,
+            ctime_ms: now_ms,
             replace: true,
             dentry_version: Some(dentry_version.get()),
             old_generation: existing.body.as_ref().map(|body| body.generation),
@@ -169,8 +177,8 @@ where
             gid,
             size: body.size,
             generation: prepared.generation,
-            mtime_ms: prepared.generation,
-            ctime_ms: prepared.generation,
+            mtime_ms: prepared.mtime_ms,
+            ctime_ms: prepared.ctime_ms,
         };
         let projection = projection(prepared.parent, prepared.name.clone(), attr, Some(body));
         if prepared.replace {

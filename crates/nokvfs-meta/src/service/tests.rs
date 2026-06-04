@@ -129,6 +129,36 @@ fn create_file_publishes_metadata_without_body_descriptor() {
 }
 
 #[test]
+fn new_file_attrs_use_wall_clock_timestamps() {
+    let service = service();
+    let before = current_time_ms().saturating_sub(1_000);
+
+    let created = service
+        .create_file(
+            InodeId::root(),
+            DentryName::new(b"empty.txt".to_vec()).unwrap(),
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap();
+    assert!(created.attr.mtime_ms >= before);
+    assert!(created.attr.ctime_ms >= before);
+    assert!(created.attr.mtime_ms > created.attr.generation);
+
+    let published = service
+        .publish_artifact(artifact_request(
+            DentryName::new(b"artifact.bin".to_vec()).unwrap(),
+            "artifact",
+            b"body",
+        ))
+        .unwrap();
+    assert!(published.attr.mtime_ms >= before);
+    assert!(published.attr.ctime_ms >= before);
+    assert!(published.attr.mtime_ms > published.attr.generation);
+}
+
+#[test]
 fn create_symlink_round_trips_target_and_unlinks_like_file() {
     let service = service();
     let name = DentryName::new(b"latest".to_vec()).unwrap();
