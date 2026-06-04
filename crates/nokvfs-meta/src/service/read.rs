@@ -438,9 +438,12 @@ where
         version: Version,
     ) -> Result<Option<InodeId>, MetadError> {
         let key = self.path_resolution_cache_key(root, components, version);
-        let cache = self.path_resolution_cache.lock().map_err(|err| {
-            MetadataError::Backend(format!("metadata path resolution cache poisoned: {err}"))
-        })?;
+        let shard_index = path_cache_shard_index(&key);
+        let cache = self.path_resolution_cache[shard_index]
+            .lock()
+            .map_err(|err| {
+                MetadataError::Backend(format!("metadata path resolution cache poisoned: {err}"))
+            })?;
         Ok(cache.get(&key).copied())
     }
 
@@ -452,10 +455,13 @@ where
         inode: InodeId,
     ) -> Result<(), MetadError> {
         let key = self.path_resolution_cache_key(root, components, version);
-        let mut cache = self.path_resolution_cache.lock().map_err(|err| {
-            MetadataError::Backend(format!("metadata path resolution cache poisoned: {err}"))
-        })?;
-        if cache.len() >= PATH_RESOLUTION_CACHE_MAX_ENTRIES {
+        let shard_index = path_cache_shard_index(&key);
+        let mut cache = self.path_resolution_cache[shard_index]
+            .lock()
+            .map_err(|err| {
+                MetadataError::Backend(format!("metadata path resolution cache poisoned: {err}"))
+            })?;
+        if cache.len() >= PATH_RESOLUTION_CACHE_MAX_ENTRIES_PER_SHARD {
             cache.clear();
         }
         cache.insert(key, inode);
@@ -482,11 +488,14 @@ where
         read_version: Version,
     ) -> Result<Option<DentryWithAttr>, MetadError> {
         let key = self.path_index_validation_cache_key(index_key, index_version, read_version);
-        let cache = self.path_index_validation_cache.lock().map_err(|err| {
-            MetadataError::Backend(format!(
-                "metadata path-index validation cache poisoned: {err}"
-            ))
-        })?;
+        let shard_index = path_cache_shard_index(&key);
+        let cache = self.path_index_validation_cache[shard_index]
+            .lock()
+            .map_err(|err| {
+                MetadataError::Backend(format!(
+                    "metadata path-index validation cache poisoned: {err}"
+                ))
+            })?;
         Ok(cache.get(&key).cloned())
     }
 
@@ -498,12 +507,15 @@ where
         entry: &DentryWithAttr,
     ) -> Result<(), MetadError> {
         let key = self.path_index_validation_cache_key(index_key, index_version, read_version);
-        let mut cache = self.path_index_validation_cache.lock().map_err(|err| {
-            MetadataError::Backend(format!(
-                "metadata path-index validation cache poisoned: {err}"
-            ))
-        })?;
-        if cache.len() >= PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES {
+        let shard_index = path_cache_shard_index(&key);
+        let mut cache = self.path_index_validation_cache[shard_index]
+            .lock()
+            .map_err(|err| {
+                MetadataError::Backend(format!(
+                    "metadata path-index validation cache poisoned: {err}"
+                ))
+            })?;
+        if cache.len() >= PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES_PER_SHARD {
             cache.clear();
         }
         cache.insert(key, entry.clone());
@@ -520,6 +532,16 @@ where
             read_version: read_version.get(),
             index_version: index_version.get(),
             index_key: index_key.to_vec(),
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn clear_read_path_caches_for_test(&self) {
+        for shard in &self.path_resolution_cache {
+            shard.lock().unwrap().clear();
+        }
+        for shard in &self.path_index_validation_cache {
+            shard.lock().unwrap().clear();
         }
     }
 

@@ -16,8 +16,10 @@ mod snapshot;
 mod watch;
 mod xattr;
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashSet};
 use std::fmt;
+use std::hash::{Hash, Hasher};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -59,6 +61,11 @@ const ALLOCATOR_INODE_RESERVATION: u64 = 1024;
 const BODY_DIGEST_CHUNK_SIZE: usize = 8 * 1024 * 1024;
 const PATH_RESOLUTION_CACHE_MAX_ENTRIES: usize = 4096;
 const PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES: usize = 4096;
+const PATH_CACHE_SHARD_COUNT: usize = 64;
+const PATH_RESOLUTION_CACHE_MAX_ENTRIES_PER_SHARD: usize =
+    PATH_RESOLUTION_CACHE_MAX_ENTRIES / PATH_CACHE_SHARD_COUNT;
+const PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES_PER_SHARD: usize =
+    PATH_INDEX_VALIDATION_CACHE_MAX_ENTRIES / PATH_CACHE_SHARD_COUNT;
 
 const ALLOCATOR_RECOVERY_FAMILIES: [RecordFamily; 13] = [
     RecordFamily::System,
@@ -84,14 +91,14 @@ struct AllocatorState {
     next_inode: u64,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct PathResolutionCacheKey {
     root: u64,
     version: u64,
     components_key: Vec<u8>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 struct PathIndexValidationCacheKey {
     read_version: u64,
     index_version: u64,
@@ -312,8 +319,8 @@ pub struct NoKvFs<M, O> {
     metadata: M,
     objects: O,
     allocator_gate: Mutex<()>,
-    path_resolution_cache: Mutex<BTreeMap<PathResolutionCacheKey, InodeId>>,
-    path_index_validation_cache: Mutex<BTreeMap<PathIndexValidationCacheKey, DentryWithAttr>>,
+    path_resolution_cache: Vec<Mutex<BTreeMap<PathResolutionCacheKey, InodeId>>>,
+    path_index_validation_cache: Vec<Mutex<BTreeMap<PathIndexValidationCacheKey, DentryWithAttr>>>,
     clock: AtomicU64,
     reserved_version: AtomicU64,
     next_inode: AtomicU64,
@@ -338,6 +345,25 @@ pub struct NoKvFs<M, O> {
     read_dir_plus_total: AtomicU64,
     read_dir_plus_entry_total: AtomicU64,
     read_dir_plus_projection_hit_total: AtomicU64,
+}
+
+fn new_path_resolution_cache_shards() -> Vec<Mutex<BTreeMap<PathResolutionCacheKey, InodeId>>> {
+    (0..PATH_CACHE_SHARD_COUNT)
+        .map(|_| Mutex::new(BTreeMap::new()))
+        .collect()
+}
+
+fn new_path_index_validation_cache_shards(
+) -> Vec<Mutex<BTreeMap<PathIndexValidationCacheKey, DentryWithAttr>>> {
+    (0..PATH_CACHE_SHARD_COUNT)
+        .map(|_| Mutex::new(BTreeMap::new()))
+        .collect()
+}
+
+fn path_cache_shard_index<T: Hash>(key: &T) -> usize {
+    let mut hasher = DefaultHasher::new();
+    key.hash(&mut hasher);
+    (hasher.finish() as usize) % PATH_CACHE_SHARD_COUNT
 }
 
 impl<M, O> NoKvFs<M, O>
