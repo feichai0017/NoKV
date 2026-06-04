@@ -48,6 +48,7 @@ enum Workload {
     MetadataHaFaultSmoke,
     MdtestEasy,
     MdtestHard,
+    MetadataNegativeLookup,
     CheckpointPublish,
     TrainingRead,
     MlperfDlio,
@@ -258,6 +259,7 @@ trait BenchClient: Sync {
         source: &str,
         destination: &str,
     ) -> Result<RenameReplaceResult, BenchError>;
+    fn lookup(&self, path: &str) -> Result<Option<DentryWithAttr>, BenchError>;
     fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError>;
     fn cat(&self, path: &str) -> Result<Vec<u8>, BenchError>;
     fn stats(&self) -> Result<BenchStats, BenchError>;
@@ -354,6 +356,10 @@ impl BenchClient for ServiceBenchClient {
             .map_err(from_client)
     }
 
+    fn lookup(&self, path: &str) -> Result<Option<DentryWithAttr>, BenchError> {
+        self.client.metadata().lookup(path).map_err(from_client)
+    }
+
     fn list(&self, path: &str) -> Result<Vec<DentryWithAttr>, BenchError> {
         self.client.metadata().list(path).map_err(from_client)
     }
@@ -374,7 +380,7 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] \
@@ -418,6 +424,9 @@ fn run_one(
     match workload {
         Workload::MdtestEasy => bench_mdtest_easy(client.as_ref(), config, shape),
         Workload::MdtestHard => bench_mdtest_hard(client.as_ref(), config, shape),
+        Workload::MetadataNegativeLookup => {
+            bench_metadata_negative_lookup(client.as_ref(), config, shape)
+        }
         Workload::CheckpointPublish => bench_checkpoint_publish(client.as_ref(), config, shape),
         Workload::TrainingRead => bench_training_read(client.as_ref(), config, shape),
         Workload::MlperfDlio => bench_mlperf_dlio(client.as_ref(), config, shape),
@@ -507,6 +516,71 @@ fn bench_mdtest_hard(
         shape: format!(
             "shared_dir_files={} file_body=metadata-only",
             shape.shared_files
+        ),
+        caveat: metadata_only_caveat(config),
+    }))
+}
+
+fn bench_metadata_negative_lookup(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<ResultRow, BenchError> {
+    client.mkdir(
+        "/metadata-negative-lookup",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+    let dir_paths = (0..shape.dirs)
+        .map(|dir| format!("/metadata-negative-lookup/dir-{dir:05}"))
+        .collect::<Vec<_>>();
+    let mut checksum = 0_u64;
+    for entry in client.mkdirs(&dir_paths, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)? {
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
+    }
+
+    let mut present_paths = Vec::with_capacity(shape.dirs * shape.files_per_dir);
+    for dir in 0..shape.dirs {
+        let dir_path = format!("/metadata-negative-lookup/dir-{dir:05}");
+        present_paths
+            .extend((0..shape.files_per_dir).map(|file| format!("{dir_path}/present-{file:05}")));
+    }
+    for entry in client.create_files(&present_paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)? {
+        checksum = checksum.wrapping_add(entry.attr.inode.get());
+    }
+
+    let before = client.stats()?;
+    let start = Instant::now();
+    let mut probes = 0_usize;
+    for dir in 0..shape.dirs {
+        for file in 0..shape.files_per_dir {
+            let path = format!("/metadata-negative-lookup/dir-{dir:05}/missing-{file:05}");
+            if client.lookup(&path)?.is_some() {
+                return Err(BenchError::Client(format!(
+                    "negative lookup unexpectedly found {path}"
+                )));
+            }
+            checksum = checksum.wrapping_add(((dir as u64) << 32) ^ file as u64);
+            probes += 1;
+        }
+    }
+
+    Ok(row(RowInput {
+        workload: "metadata-negative-lookup",
+        profile: config.profile,
+        operations: probes,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: 0,
+        samples: 0,
+        stats: stats_delta(before, client.stats()?),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!(
+            "dirs={} missing_per_dir={} setup_present_per_dir={} file_body=metadata-only",
+            shape.dirs, shape.files_per_dir, shape.files_per_dir
         ),
         caveat: metadata_only_caveat(config),
     }))
@@ -1956,6 +2030,7 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
         "metadata-ha-fault-smoke" => Ok(Workload::MetadataHaFaultSmoke),
         "mdtest-easy" => Ok(Workload::MdtestEasy),
         "mdtest-hard" => Ok(Workload::MdtestHard),
+        "metadata-negative-lookup" => Ok(Workload::MetadataNegativeLookup),
         "checkpoint-publish" => Ok(Workload::CheckpointPublish),
         "training-read" => Ok(Workload::TrainingRead),
         "mlperf-dlio" => Ok(Workload::MlperfDlio),
@@ -1971,12 +2046,17 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
             Workload::MetadataHaFaultSmoke,
             Workload::MdtestEasy,
             Workload::MdtestHard,
+            Workload::MetadataNegativeLookup,
             Workload::CheckpointPublish,
             Workload::TrainingRead,
             Workload::MlperfDlio,
             Workload::DemoDataset,
         ],
-        Workload::MetadataSmoke => vec![Workload::MdtestEasy, Workload::MdtestHard],
+        Workload::MetadataSmoke => vec![
+            Workload::MdtestEasy,
+            Workload::MdtestHard,
+            Workload::MetadataNegativeLookup,
+        ],
         other => vec![other],
     }
 }
@@ -2031,6 +2111,7 @@ fn workload_name(workload: Workload) -> &'static str {
         Workload::MetadataHaFaultSmoke => "metadata-ha-fault-smoke",
         Workload::MdtestEasy => "mdtest-easy",
         Workload::MdtestHard => "mdtest-hard",
+        Workload::MetadataNegativeLookup => "metadata-negative-lookup",
         Workload::CheckpointPublish => "checkpoint-publish",
         Workload::TrainingRead => "training-read",
         Workload::MlperfDlio => "mlperf-dlio",
@@ -2240,6 +2321,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_metadata_negative_lookup_workload() {
+        let config = parse(vec![s("--workload"), s("metadata-negative-lookup")]).unwrap();
+        assert_eq!(config.workload, Workload::MetadataNegativeLookup);
+    }
+
+    #[test]
     fn shape_applies_object_size_overrides() {
         let config = parse(vec![
             s("--profile"),
@@ -2348,6 +2435,7 @@ mod tests {
                 Workload::MetadataHaFaultSmoke,
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
+                Workload::MetadataNegativeLookup,
                 Workload::CheckpointPublish,
                 Workload::TrainingRead,
                 Workload::MlperfDlio,
@@ -2360,7 +2448,11 @@ mod tests {
     fn metadata_smoke_expands_to_metadata_only_paths() {
         assert_eq!(
             expand_workloads(Workload::MetadataSmoke),
-            vec![Workload::MdtestEasy, Workload::MdtestHard]
+            vec![
+                Workload::MdtestEasy,
+                Workload::MdtestHard,
+                Workload::MetadataNegativeLookup
+            ]
         );
     }
 
