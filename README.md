@@ -210,6 +210,8 @@ cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
 Covered workload shapes include:
 
 - `mdtest-easy` and `mdtest-hard` metadata smoke workloads;
+- `metadata-negative-lookup`, `artifact-index-lookup`, and
+  `metadata-concurrent-read` Holt metadata read-path workloads;
 - `checkpoint-publish` object-backed checkpoint publish/read;
 - `training-read` dataset-shaped object reads;
 - `mlperf-dlio` generated MLPerf Storage/DLIO-style training and checkpoint

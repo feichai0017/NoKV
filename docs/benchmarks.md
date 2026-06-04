@@ -57,7 +57,7 @@ a performance benchmark.
 The harness prints CSV:
 
 ```text
-workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,object_concurrency,read_repeats,block_cache,checksum,shape,caveat
+workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,cache_hits,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat
 ```
 
 The harness always starts a real single-node `metad` process and runs the Rust
@@ -99,6 +99,19 @@ metadata-only, so this isolates namespace create cost.
 
 `mdtest-hard` creates many files in one shared directory. This stresses the hot
 directory dentry prefix and Holt current tree.
+
+`metadata-negative-lookup` creates present files, then times missing-path
+lookups in the same directory shape. It verifies that live misses do not fall
+back into history scans.
+
+`artifact-index-lookup` seeds artifact paths and times indexed `stat_path`
+lookups plus indexed directory listing. It measures the path-index fast path
+without object reads.
+
+`metadata-concurrent-read` uses the same artifact-index shape but runs
+`stat_path` and indexed list operations through parallel workers after warmup.
+Use it to measure metadata read concurrency, cache contention, and framed RPC
+worker behavior.
 
 `checkpoint-publish` writes checkpoint bodies to the configured
 S3-compatible object backend, then atomically promotes staged files with

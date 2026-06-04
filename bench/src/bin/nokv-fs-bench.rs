@@ -50,6 +50,7 @@ enum Workload {
     MdtestHard,
     MetadataNegativeLookup,
     ArtifactIndexLookup,
+    MetadataConcurrentRead,
     CheckpointPublish,
     TrainingRead,
     MlperfDlio,
@@ -394,7 +395,7 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] \
@@ -443,6 +444,9 @@ fn run_one(
         }
         Workload::ArtifactIndexLookup => {
             bench_artifact_index_lookup(client.as_ref(), config, shape)
+        }
+        Workload::MetadataConcurrentRead => {
+            bench_metadata_concurrent_read(client.as_ref(), config, shape)
         }
         Workload::CheckpointPublish => bench_checkpoint_publish(client.as_ref(), config, shape),
         Workload::TrainingRead => bench_training_read(client.as_ref(), config, shape),
@@ -672,6 +676,105 @@ fn bench_artifact_index_lookup(
         shape: format!(
             "runs={} artifacts_per_run={} timed_ops=stat_path_plus_indexed_list",
             shape.dirs, shape.files_per_dir
+        ),
+        caveat: metadata_only_caveat(config),
+    }))
+}
+
+fn bench_metadata_concurrent_read(
+    client: &dyn BenchClient,
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<ResultRow, BenchError> {
+    client.mkdir(
+        "/metadata-concurrent-read",
+        DEFAULT_MODE_DIR,
+        DEFAULT_UID,
+        DEFAULT_GID,
+    )?;
+    let run_paths = (0..shape.dirs)
+        .map(|run| format!("/metadata-concurrent-read/run-{run:05}"))
+        .collect::<Vec<_>>();
+    client.mkdirs(&run_paths, DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
+
+    let mut artifact_paths = Vec::with_capacity(shape.dirs * shape.files_per_dir);
+    for run in 0..shape.dirs {
+        let run_path = format!("/metadata-concurrent-read/run-{run:05}");
+        for artifact in 0..shape.files_per_dir {
+            let path = format!("{run_path}/artifact-{artifact:05}.bin");
+            let manifest_id =
+                format!("metadata-concurrent-read/run-{run:05}/artifact-{artifact:05}");
+            client.put_artifact(
+                &path,
+                vec![artifact as u8],
+                artifact_metadata("metadata-concurrent-read", &manifest_id),
+            )?;
+            artifact_paths.push(path);
+        }
+    }
+
+    for path in &artifact_paths {
+        client
+            .stat_path(path)?
+            .ok_or_else(|| BenchError::Client(format!("warmup stat missed indexed path {path}")))?;
+    }
+    for run_path in &run_paths {
+        let entries = client.list_indexed(run_path)?;
+        if entries.len() != shape.files_per_dir {
+            return Err(BenchError::Client(format!(
+                "warmup indexed list for {run_path} returned {} entries, expected {}",
+                entries.len(),
+                shape.files_per_dir
+            )));
+        }
+    }
+
+    let stat_ops = artifact_paths.len() * config.read_repeats;
+    let list_ops = run_paths.len() * config.read_repeats;
+    let operations = stat_ops + list_ops;
+    let before = client.stats()?;
+    let start = Instant::now();
+    let checksum = run_parallel(operations, config.object_concurrency, |op| {
+        if op < stat_ops {
+            let path = &artifact_paths[op % artifact_paths.len()];
+            let metadata = client.stat_path(path)?.ok_or_else(|| {
+                BenchError::Client(format!("concurrent stat missed indexed path {path}"))
+            })?;
+            Ok(metadata
+                .attr
+                .inode
+                .get()
+                .wrapping_add(metadata.attr.generation))
+        } else {
+            let index = op - stat_ops;
+            let run_path = &run_paths[index % run_paths.len()];
+            let entries = client.list_indexed(run_path)?;
+            if entries.len() != shape.files_per_dir {
+                return Err(BenchError::Client(format!(
+                    "concurrent indexed list for {run_path} returned {} entries, expected {}",
+                    entries.len(),
+                    shape.files_per_dir
+                )));
+            }
+            Ok(entries.len() as u64)
+        }
+    })?;
+
+    Ok(row(RowInput {
+        workload: "metadata-concurrent-read",
+        profile: config.profile,
+        operations,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: 0,
+        samples: 0,
+        stats: stats_delta(before, client.stats()?),
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!(
+            "runs={} artifacts_per_run={} read_repeats={} workers={} timed_ops=concurrent_stat_path_plus_indexed_list",
+            shape.dirs, shape.files_per_dir, config.read_repeats, config.object_concurrency
         ),
         caveat: metadata_only_caveat(config),
     }))
@@ -2123,6 +2226,7 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
         "mdtest-hard" => Ok(Workload::MdtestHard),
         "metadata-negative-lookup" => Ok(Workload::MetadataNegativeLookup),
         "artifact-index-lookup" => Ok(Workload::ArtifactIndexLookup),
+        "metadata-concurrent-read" => Ok(Workload::MetadataConcurrentRead),
         "checkpoint-publish" => Ok(Workload::CheckpointPublish),
         "training-read" => Ok(Workload::TrainingRead),
         "mlperf-dlio" => Ok(Workload::MlperfDlio),
@@ -2140,6 +2244,7 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
             Workload::MdtestHard,
             Workload::MetadataNegativeLookup,
             Workload::ArtifactIndexLookup,
+            Workload::MetadataConcurrentRead,
             Workload::CheckpointPublish,
             Workload::TrainingRead,
             Workload::MlperfDlio,
@@ -2149,6 +2254,7 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
             Workload::MdtestEasy,
             Workload::MdtestHard,
             Workload::MetadataNegativeLookup,
+            Workload::MetadataConcurrentRead,
         ],
         other => vec![other],
     }
@@ -2206,6 +2312,7 @@ fn workload_name(workload: Workload) -> &'static str {
         Workload::MdtestHard => "mdtest-hard",
         Workload::MetadataNegativeLookup => "metadata-negative-lookup",
         Workload::ArtifactIndexLookup => "artifact-index-lookup",
+        Workload::MetadataConcurrentRead => "metadata-concurrent-read",
         Workload::CheckpointPublish => "checkpoint-publish",
         Workload::TrainingRead => "training-read",
         Workload::MlperfDlio => "mlperf-dlio",
@@ -2427,6 +2534,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_metadata_concurrent_read_workload() {
+        let config = parse(vec![s("--workload"), s("metadata-concurrent-read")]).unwrap();
+        assert_eq!(config.workload, Workload::MetadataConcurrentRead);
+    }
+
+    #[test]
     fn shape_applies_object_size_overrides() {
         let config = parse(vec![
             s("--profile"),
@@ -2537,6 +2650,7 @@ mod tests {
                 Workload::MdtestHard,
                 Workload::MetadataNegativeLookup,
                 Workload::ArtifactIndexLookup,
+                Workload::MetadataConcurrentRead,
                 Workload::CheckpointPublish,
                 Workload::TrainingRead,
                 Workload::MlperfDlio,
@@ -2552,7 +2666,8 @@ mod tests {
             vec![
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
-                Workload::MetadataNegativeLookup
+                Workload::MetadataNegativeLookup,
+                Workload::MetadataConcurrentRead
             ]
         );
     }
