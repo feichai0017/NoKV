@@ -240,39 +240,27 @@ impl MetadataStore for HoltMetadataStore {
         let mut visited_total = 0_u64;
         let mut returned_total = 0_u64;
 
-        if request.prefix.is_empty() {
-            for entry in current.range() {
-                let outcome = push_visible_scan_item(
-                    entry,
-                    request.family,
-                    request.version,
-                    &history,
-                    &mut out,
-                    limit,
-                    start_after,
-                )?;
-                visited_total += outcome.visited as u64;
-                returned_total += outcome.returned as u64;
-                if outcome.done {
-                    break;
-                }
-            }
-        } else {
-            for entry in current.range().prefix(&request.prefix) {
-                let outcome = push_visible_scan_item(
-                    entry,
-                    request.family,
-                    request.version,
-                    &history,
-                    &mut out,
-                    limit,
-                    start_after,
-                )?;
-                visited_total += outcome.visited as u64;
-                returned_total += outcome.returned as u64;
-                if outcome.done {
-                    break;
-                }
+        let mut range = current.range();
+        if !request.prefix.is_empty() {
+            range = range.prefix(&request.prefix);
+        }
+        if let Some(start_after) = start_after {
+            range = range.start_after(start_after);
+        }
+        for entry in range {
+            let outcome = push_visible_scan_item(
+                entry,
+                request.family,
+                request.version,
+                &history,
+                &mut out,
+                limit,
+                start_after,
+            )?;
+            visited_total += outcome.visited as u64;
+            returned_total += outcome.returned as u64;
+            if outcome.done {
+                break;
             }
         }
         self.stats
@@ -1227,6 +1215,7 @@ mod tests {
             .commit_metadata(put_command(b"dir/c", b"req-3", b"value-c", 4))
             .unwrap();
 
+        let before = store.metadata_store_stats();
         let scan = store
             .scan(ScanRequest {
                 family: RecordFamily::Dentry,
@@ -1240,6 +1229,15 @@ mod tests {
 
         assert_eq!(scan.len(), 1);
         assert_eq!(scan[0].key, b"dir/b");
+        let after = store.metadata_store_stats();
+        assert_eq!(
+            after.scan_key_visited_total - before.scan_key_visited_total,
+            1
+        );
+        assert_eq!(
+            after.scan_key_returned_total - before.scan_key_returned_total,
+            1
+        );
     }
 
     #[test]
