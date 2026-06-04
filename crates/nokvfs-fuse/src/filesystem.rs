@@ -18,7 +18,10 @@ use nokvfs_meta::{
     DentryWithAttr, MetadError, NoKvFs, PreparedArtifact, PublishArtifactRange,
     PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
-use nokvfs_object::{ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk};
+use nokvfs_object::{
+    ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE,
+    DEFAULT_CHUNK_SIZE,
+};
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
 use sha2::{Digest, Sha256};
 
@@ -80,6 +83,13 @@ struct WriteHandle {
 #[derive(Clone, Debug)]
 struct DirtyExtent {
     chunks: Vec<StoredChunk>,
+}
+
+#[derive(Clone, Debug)]
+struct WriteStageReservation {
+    prepared: PreparedArtifact,
+    manifest_id: String,
+    block_index_base: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -520,9 +530,13 @@ where
         let end = offset
             .checked_add(u64::try_from(data.len()).map_err(|_| Errno::EINVAL)?)
             .ok_or(Errno::EINVAL)?;
-        let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
-        let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
-        if !data.is_empty() {
+        if data.is_empty() {
+            return Ok(0);
+        }
+        let reserved_blocks = staged_range_block_count(offset, data.len())?;
+        let reservation = {
+            let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+            let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
             if handle.prepared.is_none() {
                 handle.prepared = Some(
                     self.service
@@ -530,38 +544,53 @@ where
                         .map_err(errno)?,
                 );
             }
-            let prepared = handle.prepared.as_ref().ok_or(Errno::EIO)?;
-            let written = self
-                .service
-                .stage_prepared_artifact_ranges(
-                    prepared,
-                    &fuse_manifest_id(handle.parent, handle.inode),
-                    &[PublishArtifactRange {
-                        offset,
-                        bytes: data.to_vec(),
-                    }],
-                    handle.next_block_index,
-                )
-                .map_err(errno)?;
-            handle.next_block_index = handle
-                .next_block_index
-                .saturating_add(written.object_puts as u64);
-            let staged = written.staged_objects().map_err(|_| Errno::EIO)?;
-            let staged_objects = handle
-                .staged
-                .objects()
-                .iter()
-                .cloned()
-                .chain(staged.objects().iter().cloned())
-                .collect();
-            handle.staged = StagedObjectSet::new(staged_objects);
-            handle.staged_chunks.extend(written.chunks.clone());
-            handle.dirty_extents.push(DirtyExtent {
-                chunks: written.chunks,
-            });
-            handle.size = handle.size.max(end);
-            handle.dirty = true;
+            let prepared = handle.prepared.clone().ok_or(Errno::EIO)?;
+            let block_index_base = handle.next_block_index;
+            handle.next_block_index = handle.next_block_index.saturating_add(reserved_blocks);
+            WriteStageReservation {
+                prepared,
+                manifest_id: fuse_manifest_id(handle.parent, handle.inode),
+                block_index_base,
+            }
+        };
+        let written = self
+            .service
+            .stage_prepared_artifact_ranges(
+                &reservation.prepared,
+                &reservation.manifest_id,
+                &[PublishArtifactRange {
+                    offset,
+                    bytes: data.to_vec(),
+                }],
+                reservation.block_index_base,
+            )
+            .map_err(errno)?;
+        let staged = written.staged_objects().map_err(|_| Errno::EIO)?;
+        let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+        let Some(handle) = handles.get_mut(&fh.0) else {
+            let _ = self.service.cleanup_staged_objects(&staged);
+            return Err(Errno::EBADF);
+        };
+        if handle.prepared.as_ref().map(|prepared| prepared.generation)
+            != Some(reservation.prepared.generation)
+        {
+            let _ = self.service.cleanup_staged_objects(&staged);
+            return Err(Errno::ESTALE);
         }
+        let staged_objects = handle
+            .staged
+            .objects()
+            .iter()
+            .cloned()
+            .chain(staged.objects().iter().cloned())
+            .collect();
+        handle.staged = StagedObjectSet::new(staged_objects);
+        handle.staged_chunks.extend(written.chunks.clone());
+        handle.dirty_extents.push(DirtyExtent {
+            chunks: written.chunks,
+        });
+        handle.size = handle.size.max(end);
+        handle.dirty = true;
         Ok(data.len())
     }
 
@@ -1801,6 +1830,31 @@ fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
     format!("fuse/{}/{}", parent.get(), inode.get())
 }
 
+fn staged_range_block_count(offset: u64, len: usize) -> Result<u64, Errno> {
+    let mut range_offset = 0_usize;
+    let mut count = 0_u64;
+    while range_offset < len {
+        let logical_offset = offset
+            .checked_add(u64::try_from(range_offset).map_err(|_| Errno::EINVAL)?)
+            .ok_or(Errno::EINVAL)?;
+        let chunk_start = (logical_offset / DEFAULT_CHUNK_SIZE).saturating_mul(DEFAULT_CHUNK_SIZE);
+        let next_chunk = chunk_start
+            .checked_add(DEFAULT_CHUNK_SIZE)
+            .ok_or(Errno::EINVAL)?;
+        let remaining_in_chunk =
+            usize::try_from(next_chunk - logical_offset).map_err(|_| Errno::EINVAL)?;
+        let write_len = DEFAULT_BLOCK_SIZE
+            .min(remaining_in_chunk)
+            .min(len - range_offset);
+        if write_len == 0 {
+            return Err(Errno::EINVAL);
+        }
+        count = count.saturating_add(1);
+        range_offset += write_len;
+    }
+    Ok(count)
+}
+
 fn child_index_from_offset(offset: u64) -> Option<usize> {
     let raw = offset.saturating_sub(FUSE_FIRST_CHILD_OFFSET);
     usize::try_from(raw).ok()
@@ -2019,6 +2073,20 @@ mod tests {
         assert!(stat.bavail <= stat.bfree);
         assert!(stat.files > 0);
         assert!(stat.ffree <= stat.files);
+    }
+
+    #[test]
+    fn staged_range_block_count_matches_chunked_object_boundaries() {
+        assert_eq!(staged_range_block_count(0, 0).unwrap(), 0);
+        assert_eq!(staged_range_block_count(0, 1).unwrap(), 1);
+        assert_eq!(
+            staged_range_block_count(0, DEFAULT_BLOCK_SIZE + 1).unwrap(),
+            2
+        );
+        assert_eq!(
+            staged_range_block_count(DEFAULT_CHUNK_SIZE - 1, 2).unwrap(),
+            2
+        );
     }
 
     #[test]
@@ -2291,6 +2359,18 @@ mod tests {
 
         assert_eq!(fuse.write_to_handle(handle, 0, b"0123").unwrap(), 4);
         assert_eq!(fuse.write_to_handle(handle, 6, b"89").unwrap(), 2);
+        let staged_keys = fuse
+            .write_handles
+            .read()
+            .unwrap()
+            .get(&handle.0)
+            .unwrap()
+            .staged_chunks
+            .iter()
+            .flat_map(|chunk| chunk.blocks.iter().map(|block| block.object_key.clone()))
+            .collect::<Vec<_>>();
+        assert_eq!(staged_keys.len(), 2);
+        assert_ne!(staged_keys[0], staged_keys[1]);
         let expected = &[b'0', b'1', b'2', b'3', 0, 0, b'8', b'9'];
         assert_eq!(
             fuse.read_from_handle(handle, 0, 8).unwrap().unwrap(),
