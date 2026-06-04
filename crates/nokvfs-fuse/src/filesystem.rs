@@ -11,7 +11,7 @@ use fuser::{
     BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType as FuseFileType, Filesystem,
     FopenFlags, Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags, ReplyAttr,
     ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyOpen,
-    ReplyWrite, Request, TimeOrNow, WriteFlags,
+    ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use nokvfs_meta::command::MetadataStore;
 use nokvfs_meta::{
@@ -440,6 +440,10 @@ where
             .map_err(|_| Errno::EIO)?
             .remove(&fh.0);
         Ok(())
+    }
+
+    fn sync_directory_handle(&self, fh: FileHandle) -> Result<(), Errno> {
+        self.directory_handle_attr(fh).map(|_| ())
     }
 
     fn allocate_handle(&self, handle: WriteHandle) -> Result<FileHandle, Errno> {
@@ -1189,6 +1193,56 @@ where
         }
     }
 
+    fn fsyncdir(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        fh: FileHandle,
+        _datasync: bool,
+        reply: ReplyEmpty,
+    ) {
+        match self.sync_directory_handle(fh) {
+            Ok(()) => reply.ok(),
+            Err(err) => reply.error(err),
+        }
+    }
+
+    fn setxattr(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _name: &OsStr,
+        _value: &[u8],
+        _flags: i32,
+        _position: u32,
+        reply: ReplyEmpty,
+    ) {
+        reply.error(xattr_unsupported_error());
+    }
+
+    fn getxattr(
+        &self,
+        _req: &Request,
+        _ino: INodeNo,
+        _name: &OsStr,
+        _size: u32,
+        reply: ReplyXattr,
+    ) {
+        reply.error(xattr_missing_error());
+    }
+
+    fn listxattr(&self, _req: &Request, _ino: INodeNo, size: u32, reply: ReplyXattr) {
+        if size == 0 {
+            reply.size(0);
+        } else {
+            reply.data(&[]);
+        }
+    }
+
+    fn removexattr(&self, _req: &Request, _ino: INodeNo, _name: &OsStr, reply: ReplyEmpty) {
+        reply.error(xattr_missing_error());
+    }
+
     fn mkdir(
         &self,
         req: &Request,
@@ -1585,6 +1639,14 @@ fn child_offset(index: usize) -> u64 {
         .saturating_add(FUSE_FIRST_CHILD_OFFSET)
 }
 
+fn xattr_unsupported_error() -> Errno {
+    Errno::EOPNOTSUPP
+}
+
+fn xattr_missing_error() -> Errno {
+    Errno::NO_XATTR
+}
+
 fn errno(err: MetadError) -> Errno {
     match err {
         MetadError::Model(_) => Errno::EINVAL,
@@ -1685,6 +1747,32 @@ mod tests {
             fuse.directory_child(handle, 0).unwrap_err().code(),
             Errno::EBADF.code()
         );
+    }
+
+    #[test]
+    fn directory_fsync_requires_valid_directory_handle() {
+        let service = service();
+        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        let handle = fuse
+            .allocate_directory_handle(InodeId::root())
+            .expect("open directory handle");
+
+        fuse.sync_directory_handle(handle)
+            .expect("valid directory handle syncs");
+        fuse.release_directory_handle(handle)
+            .expect("release directory handle");
+        assert_eq!(
+            fuse.sync_directory_handle(handle).unwrap_err().code(),
+            Errno::EBADF.code()
+        );
+    }
+
+    #[test]
+    fn xattr_errors_are_explicit_not_unimplemented() {
+        assert_eq!(xattr_unsupported_error().code(), Errno::EOPNOTSUPP.code());
+        assert_ne!(xattr_unsupported_error().code(), Errno::ENOSYS.code());
+        assert_eq!(xattr_missing_error().code(), Errno::NO_XATTR.code());
+        assert_ne!(xattr_missing_error().code(), Errno::ENOSYS.code());
     }
 
     #[cfg(target_os = "macos")]
