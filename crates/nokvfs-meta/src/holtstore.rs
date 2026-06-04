@@ -37,29 +37,30 @@ const GC_CURRENT_TREE: &str = "gc_current";
 const COMMAND_DEDUPE_CURRENT_TREE: &str = "command_dedupe_current";
 const HISTORY_TREE: &str = "history";
 
-const REQUIRED_TREES: [&str; 14] = [
-    SYSTEM_CURRENT_TREE,
-    MOUNT_CURRENT_TREE,
-    INODE_CURRENT_TREE,
-    DENTRY_CURRENT_TREE,
-    PARENT_CURRENT_TREE,
-    XATTR_CURRENT_TREE,
-    CHUNK_MANIFEST_CURRENT_TREE,
-    SESSION_CURRENT_TREE,
-    PATH_INDEX_CURRENT_TREE,
-    WATCH_CURRENT_TREE,
-    SNAPSHOT_CURRENT_TREE,
-    GC_CURRENT_TREE,
-    COMMAND_DEDUPE_CURRENT_TREE,
-    HISTORY_TREE,
-];
-
 #[derive(Clone)]
 pub struct HoltMetadataStore {
     db: DB,
+    trees: Arc<FamilyTrees>,
     write_gate: Arc<Mutex<()>>,
     stats: Arc<HoltMetadataStoreCounters>,
     active_snapshot_pins: Arc<AtomicU64>,
+}
+
+struct FamilyTrees {
+    system_current: Tree,
+    mount_current: Tree,
+    inode_current: Tree,
+    dentry_current: Tree,
+    parent_current: Tree,
+    xattr_current: Tree,
+    chunk_manifest_current: Tree,
+    session_current: Tree,
+    path_index_current: Tree,
+    watch_current: Tree,
+    snapshot_current: Tree,
+    gc_current: Tree,
+    command_dedupe_current: Tree,
+    history: Tree,
 }
 
 #[derive(Default)]
@@ -134,12 +135,11 @@ impl HoltMetadataStore {
 
     pub fn open(config: TreeConfig) -> Result<Self, MetadataError> {
         let db = DB::open(config).map_err(to_backend_error)?;
-        for tree in REQUIRED_TREES {
-            db.open_or_create_tree(tree).map_err(to_backend_error)?;
-        }
+        let trees = Arc::new(open_family_trees(&db)?);
         let active_snapshot_pins = count_active_snapshot_pins(&db)?;
         Ok(Self {
             db,
+            trees,
             write_gate: Arc::new(Mutex::new(())),
             stats: Arc::new(HoltMetadataStoreCounters::default()),
             active_snapshot_pins: Arc::new(AtomicU64::new(active_snapshot_pins)),
@@ -151,13 +151,11 @@ impl HoltMetadataStore {
     }
 
     fn current_tree(&self, family: RecordFamily) -> Result<Tree, MetadataError> {
-        self.db
-            .open_tree(current_tree_name(family))
-            .map_err(to_backend_error)
+        self.trees.current(family)
     }
 
     fn history_tree(&self) -> Result<Tree, MetadataError> {
-        self.db.open_tree(HISTORY_TREE).map_err(to_backend_error)
+        Ok(self.trees.history.clone())
     }
 
     fn current_live_record(
@@ -365,6 +363,51 @@ impl MetadataStore for HoltMetadataStore {
         }
         Ok(outcome)
     }
+}
+
+impl FamilyTrees {
+    fn current(&self, family: RecordFamily) -> Result<Tree, MetadataError> {
+        let tree = match family {
+            RecordFamily::System => &self.system_current,
+            RecordFamily::Mount => &self.mount_current,
+            RecordFamily::Inode => &self.inode_current,
+            RecordFamily::Dentry => &self.dentry_current,
+            RecordFamily::Parent => &self.parent_current,
+            RecordFamily::Xattr => &self.xattr_current,
+            RecordFamily::ChunkManifest => &self.chunk_manifest_current,
+            RecordFamily::Session => &self.session_current,
+            RecordFamily::PathIndex => &self.path_index_current,
+            RecordFamily::Watch => &self.watch_current,
+            RecordFamily::Snapshot => &self.snapshot_current,
+            RecordFamily::Gc => &self.gc_current,
+            RecordFamily::CommandDedupe => &self.command_dedupe_current,
+            RecordFamily::History => &self.history,
+        };
+        Ok(tree.clone())
+    }
+}
+
+fn open_family_trees(db: &DB) -> Result<FamilyTrees, MetadataError> {
+    Ok(FamilyTrees {
+        system_current: open_or_create_tree(db, SYSTEM_CURRENT_TREE)?,
+        mount_current: open_or_create_tree(db, MOUNT_CURRENT_TREE)?,
+        inode_current: open_or_create_tree(db, INODE_CURRENT_TREE)?,
+        dentry_current: open_or_create_tree(db, DENTRY_CURRENT_TREE)?,
+        parent_current: open_or_create_tree(db, PARENT_CURRENT_TREE)?,
+        xattr_current: open_or_create_tree(db, XATTR_CURRENT_TREE)?,
+        chunk_manifest_current: open_or_create_tree(db, CHUNK_MANIFEST_CURRENT_TREE)?,
+        session_current: open_or_create_tree(db, SESSION_CURRENT_TREE)?,
+        path_index_current: open_or_create_tree(db, PATH_INDEX_CURRENT_TREE)?,
+        watch_current: open_or_create_tree(db, WATCH_CURRENT_TREE)?,
+        snapshot_current: open_or_create_tree(db, SNAPSHOT_CURRENT_TREE)?,
+        gc_current: open_or_create_tree(db, GC_CURRENT_TREE)?,
+        command_dedupe_current: open_or_create_tree(db, COMMAND_DEDUPE_CURRENT_TREE)?,
+        history: open_or_create_tree(db, HISTORY_TREE)?,
+    })
+}
+
+fn open_or_create_tree(db: &DB, name: &str) -> Result<Tree, MetadataError> {
+    db.open_or_create_tree(name).map_err(to_backend_error)
 }
 
 impl HoltMetadataStore {
