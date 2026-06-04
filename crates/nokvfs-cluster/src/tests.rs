@@ -326,7 +326,7 @@ fn file_shared_log_reopens_entries_and_replays_into_metadata_store() {
     let path = dir.path().join("metadata.log");
     let mount = MountId::new(1).unwrap();
     {
-        let log = FileSharedLog::open(&path).unwrap();
+        let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
         log.append_batch(
             LogTerm::new(1).unwrap(),
             mount,
@@ -338,7 +338,7 @@ fn file_shared_log_reopens_entries_and_replays_into_metadata_store() {
         assert_eq!(log.committed_index().get(), 2);
     }
 
-    let reopened = FileSharedLog::open(&path).unwrap();
+    let reopened = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
     assert_eq!(reopened.committed_index().get(), 2);
     let entries = reopened.read_from(LogIndex::new(1).unwrap(), 0).unwrap();
     assert_eq!(entries.len(), 2);
@@ -376,7 +376,7 @@ fn file_shared_log_persists_compaction_marker_and_continues_indexes() {
     let path = dir.path().join("metadata.log");
     let mount = MountId::new(1).unwrap();
     {
-        let log = FileSharedLog::open(&path).unwrap();
+        let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
         log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
             .unwrap();
         log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)])
@@ -384,7 +384,7 @@ fn file_shared_log_persists_compaction_marker_and_continues_indexes() {
         log.compact_through(LogIndex::new(1).unwrap()).unwrap();
     }
 
-    let reopened = FileSharedLog::open(&path).unwrap();
+    let reopened = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
     assert_eq!(reopened.committed_index().get(), 2);
     assert!(matches!(
         reopened.read_from(LogIndex::new(1).unwrap(), 10),
@@ -402,12 +402,36 @@ fn file_shared_log_persists_compaction_marker_and_continues_indexes() {
 }
 
 #[test]
+fn file_shared_log_no_sync_reopens_after_clean_close() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    let options = FileSharedLogOptions {
+        sync: FileSharedLogSync::None,
+    };
+    {
+        let log = FileSharedLog::open(&path, options).unwrap();
+        log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+            .unwrap();
+        log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)])
+            .unwrap();
+    }
+
+    let reopened = FileSharedLog::open(&path, options).unwrap();
+    assert_eq!(reopened.committed_index().get(), 2);
+    let entries = reopened.read_from(LogIndex::new(1).unwrap(), 0).unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].commands[0].request_id, b"a");
+    assert_eq!(entries[1].commands[0].request_id, b"b");
+}
+
+#[test]
 fn file_shared_log_truncates_partial_tail_on_reopen() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("metadata.log");
     let mount = MountId::new(1).unwrap();
     {
-        let log = FileSharedLog::open(&path).unwrap();
+        let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
         log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
             .unwrap();
     }
@@ -419,14 +443,14 @@ fn file_shared_log_truncates_partial_tail_on_reopen() {
         file.flush().unwrap();
     }
 
-    let reopened = FileSharedLog::open(&path).unwrap();
+    let reopened = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
     assert_eq!(reopened.committed_index().get(), 1);
     let receipt = reopened
         .append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)])
         .unwrap();
     assert_eq!(receipt[0].position.index.get(), 2);
 
-    let reopened_again = FileSharedLog::open(&path).unwrap();
+    let reopened_again = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
     let entries = reopened_again
         .read_from(LogIndex::new(1).unwrap(), 0)
         .unwrap();
@@ -540,7 +564,7 @@ fn shared_log_metadata_store_replays_tail_after_file_frontier() {
     let frontier_path = dir.path().join("metadata.log.apply");
     let mount = MountId::new(1).unwrap();
     {
-        let log = FileSharedLog::open(&log_path).unwrap();
+        let log = FileSharedLog::open(&log_path, FileSharedLogOptions::default()).unwrap();
         let store = HoltMetadataStore::open_file(&meta_path).unwrap();
         let frontier = FileAppliedFrontierStore::open(&frontier_path).unwrap();
         let shared = SharedLogMetadataStore::with_frontier_store(
@@ -562,7 +586,7 @@ fn shared_log_metadata_store_replays_tail_after_file_frontier() {
             .unwrap();
     }
 
-    let log = FileSharedLog::open(&log_path).unwrap();
+    let log = FileSharedLog::open(&log_path, FileSharedLogOptions::default()).unwrap();
     let store = HoltMetadataStore::open_file(&meta_path).unwrap();
     let frontier = FileAppliedFrontierStore::open(&frontier_path).unwrap();
     let (recovered, outcome) = SharedLogMetadataStore::recover_with_frontier_store(
@@ -679,7 +703,7 @@ fn shared_log_metadata_store_recovers_file_log_into_fresh_store() {
     let path = dir.path().join("metadata.log");
     let mount = MountId::new(1).unwrap();
     {
-        let log = FileSharedLog::open(&path).unwrap();
+        let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
         let store = HoltMetadataStore::open_memory().unwrap();
         let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
         shared
@@ -687,7 +711,7 @@ fn shared_log_metadata_store_recovers_file_log_into_fresh_store() {
             .unwrap();
     }
 
-    let log = FileSharedLog::open(&path).unwrap();
+    let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
     let store = HoltMetadataStore::open_memory().unwrap();
     let (recovered, outcome) =
         SharedLogMetadataStore::recover(store, log, LogTerm::new(1).unwrap(), mount).unwrap();

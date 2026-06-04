@@ -20,7 +20,7 @@ mod types;
 
 pub use checkpoint::{CheckpointCatalog, FileCheckpointCatalog, MemoryCheckpointCatalog};
 pub use errors::{ReplayError, SharedLogError};
-pub use file::FileSharedLog;
+pub use file::{FileSharedLog, FileSharedLogOptions, FileSharedLogSync};
 pub use frontier::{AppliedFrontierStore, FileAppliedFrontierStore, MemoryAppliedFrontierStore};
 pub use group::{MetadataGroup, MetadataGroupCommit};
 pub use log::SharedMetadataLog;

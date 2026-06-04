@@ -115,3 +115,9 @@ state machine storage engine and object bodies remaining in external storage.
 Holt is the metadata engine inside each shard. NoKV `metad` owns filesystem
 semantics such as inode/dentry updates, watch/snapshot policy, publish rules,
 and object GC decisions.
+
+The local shared-log implementation exposes an explicit sync policy. Use
+`--metadata-log-sync data` when the file log is the durable ordering source.
+Use `--metadata-log-sync none` only for local performance experiments or when a
+higher-level replicated log already owns durability; it flushes records to the
+OS but does not make each record power-loss durable.

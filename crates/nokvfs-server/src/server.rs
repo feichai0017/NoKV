@@ -8,8 +8,8 @@ use std::thread;
 
 use nokvfs_cluster::{
     ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
-    FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog, LogIndex, LogTerm,
-    SharedLogError, SharedLogMetadataStore, SharedMetadataLog,
+    FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog, FileSharedLogOptions, LogIndex,
+    LogTerm, SharedLogError, SharedLogMetadataStore, SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -26,6 +26,7 @@ const DEFAULT_ROOT_MODE: u32 = 0o755;
 pub struct Server {
     service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
     metadata_log_enabled: bool,
+    metadata_log_sync: nokvfs_cluster::FileSharedLogSync,
     metadata_log: Option<Arc<FileLoggedMetadataStore>>,
     metadata_checkpoint: Option<FileCheckpointCatalog>,
     object_gc: ObjectGcWorker,
@@ -55,7 +56,12 @@ impl Server {
         let mut metadata_checkpoint = None;
         let metadata = match options.metadata_log_path.as_ref() {
             Some(path) => {
-                let log = FileSharedLog::open(path)?;
+                let log = FileSharedLog::open(
+                    path,
+                    FileSharedLogOptions {
+                        sync: options.metadata_log_sync,
+                    },
+                )?;
                 let frontier = FileAppliedFrontierStore::open(metadata_apply_frontier_path(path))?;
                 let checkpoint = FileCheckpointCatalog::open(metadata_checkpoint_path(path))?;
                 let (logged, _replay) = SharedLogMetadataStore::recover_with_frontier_store(
@@ -81,6 +87,7 @@ impl Server {
         Ok(Self {
             service,
             metadata_log_enabled: metadata_log.is_some(),
+            metadata_log_sync: options.metadata_log_sync,
             metadata_log,
             metadata_checkpoint,
             object_gc,
@@ -121,7 +128,11 @@ impl Server {
             objects.manifest_chunks,
             objects.manifest_blocks,
             metadata_store_json(&metadata),
-            metadata_log_json(self.metadata_log_enabled, self.metadata_log_frontier()),
+            metadata_log_json(
+                self.metadata_log_enabled,
+                self.metadata_log_sync,
+                self.metadata_log_frontier(),
+            ),
             metadata_service_json(&metadata_service),
             object_gc_json(&object_gc),
             history_gc_json(&history_gc),
@@ -251,16 +262,31 @@ impl Server {
     }
 }
 
-fn metadata_log_json(enabled: bool, frontier: Option<ApplyFrontier>) -> String {
+fn metadata_log_json(
+    enabled: bool,
+    sync: nokvfs_cluster::FileSharedLogSync,
+    frontier: Option<ApplyFrontier>,
+) -> String {
     match frontier {
         Some(frontier) => format!(
-            "{{\"enabled\":true,\"applied_term\":{},\"applied_index\":{},\"commit_version\":{}}}",
+            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":{},\"applied_index\":{},\"commit_version\":{}}}",
+            metadata_log_sync_name(sync),
             frontier.position.term.get(),
             frontier.position.index.get(),
             frontier.commit_version.get(),
         ),
-        None if enabled => "{\"enabled\":true,\"applied_term\":null,\"applied_index\":null,\"commit_version\":null}".to_owned(),
+        None if enabled => format!(
+            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":null,\"applied_index\":null,\"commit_version\":null}}",
+            metadata_log_sync_name(sync)
+        ),
         None => "{\"enabled\":false}".to_owned(),
+    }
+}
+
+fn metadata_log_sync_name(sync: nokvfs_cluster::FileSharedLogSync) -> &'static str {
+    match sync {
+        nokvfs_cluster::FileSharedLogSync::Data => "data",
+        nokvfs_cluster::FileSharedLogSync::None => "none",
     }
 }
 
@@ -403,7 +429,7 @@ pub(crate) mod tests {
     use std::path::{Path, PathBuf};
     use std::time::Duration;
 
-    use nokvfs_cluster::SharedMetadataLog;
+    use nokvfs_cluster::{FileSharedLogSync, SharedMetadataLog};
     use nokvfs_meta::{HistoryGcOptions, ObjectGcOptions};
     use nokvfs_object::{ObjectStoreConfig, S3ObjectStoreOptions};
     use nokvfs_types::MountId;
@@ -415,6 +441,7 @@ pub(crate) mod tests {
             mount: MountId::new(1).unwrap(),
             meta_path: root.join("meta"),
             metadata_log_path,
+            metadata_log_sync: FileSharedLogSync::Data,
             object: ObjectStoreConfig::s3(S3ObjectStoreOptions {
                 bucket: "test".to_owned(),
                 root: "/".to_owned(),
@@ -505,6 +532,18 @@ pub(crate) mod tests {
             log.read_from(applied.position.index, 0),
             Err(SharedLogError::Compacted { .. })
         ));
+    }
+
+    #[test]
+    fn stats_reports_metadata_log_sync_policy() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let mut options = test_options(dir.path(), Some(metadata_log));
+        options.metadata_log_sync = FileSharedLogSync::None;
+        let server = Server::open(options).unwrap();
+
+        let stats = server.stats_json();
+        assert!(stats.contains("\"metadata_log\":{\"enabled\":true,\"sync\":\"none\""));
     }
 
     #[test]

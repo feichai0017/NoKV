@@ -11,6 +11,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
+use nokvfs_cluster::FileSharedLogSync;
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, ObjectGcWorker};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
@@ -28,6 +29,7 @@ const DEFAULT_GC_LIMIT: usize = 1024;
 struct Config {
     meta: PathBuf,
     metadata_log: Option<PathBuf>,
+    metadata_log_sync: FileSharedLogSync,
     object: ObjectStoreConfig,
     mount: MountId,
     uid: u32,
@@ -324,6 +326,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 mount: config.mount,
                 meta_path: config.meta,
                 metadata_log_path: config.metadata_log,
+                metadata_log_sync: config.metadata_log_sync,
                 object: config.object,
                 uid: config.uid,
                 gid: config.gid,
@@ -412,6 +415,7 @@ fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, S3ObjectSto
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv-fs/meta");
     let mut metadata_log = None;
+    let mut metadata_log_sync = FileSharedLogSync::Data;
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
     let mut mount = MountId::new(1).expect("default mount id is non-zero");
@@ -432,6 +436,11 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             "--metadata-log" => {
                 index += 1;
                 metadata_log = Some(PathBuf::from(value(&args, index, "--metadata-log")?));
+            }
+            "--metadata-log-sync" => {
+                index += 1;
+                metadata_log_sync =
+                    parse_metadata_log_sync(value(&args, index, "--metadata-log-sync")?)?;
             }
             "--object-backend" => {
                 index += 1;
@@ -538,6 +547,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                     Config {
                         meta,
                         metadata_log,
+                        metadata_log_sync,
                         object: object_config(object_backend, s3),
                         mount,
                         uid,
@@ -564,6 +574,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
         Config {
             meta,
             metadata_log,
+            metadata_log_sync,
             object: object_config(object_backend, s3),
             mount,
             uid,
@@ -583,6 +594,16 @@ fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, CliError> {
         "s3" => Ok(ObjectBackendKind::S3),
         "rustfs" => Ok(ObjectBackendKind::RustFs),
         _ => Err(CliError::UnknownOption(format!("--object-backend {raw}"))),
+    }
+}
+
+fn parse_metadata_log_sync(raw: &str) -> Result<FileSharedLogSync, CliError> {
+    match raw {
+        "data" => Ok(FileSharedLogSync::Data),
+        "none" => Ok(FileSharedLogSync::None),
+        _ => Err(CliError::UnknownOption(format!(
+            "--metadata-log-sync {raw}"
+        ))),
     }
 }
 
@@ -829,6 +850,7 @@ Object backends:\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
   --metadata-log PATH             Optional durable shared metadata log for serve\n\
+  --metadata-log-sync data|none   data fsyncs log records; none only flushes to the OS\n\
 \n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\
@@ -841,6 +863,7 @@ Defaults:\n\
   --history-gc-limit 1024\n\
   --server-bind 127.0.0.1:7777\n\
   --metadata-log disabled\n\
+  --metadata-log-sync data\n\
   --mount 1"
     )
 }
@@ -901,6 +924,7 @@ mod tests {
             mount: MountId::new(1).unwrap(),
             meta_path: dir.path().join("meta"),
             metadata_log_path: None,
+            metadata_log_sync: FileSharedLogSync::Data,
             object: fake_server_object_config(),
             uid: 1000,
             gid: 1000,
@@ -1254,6 +1278,8 @@ mod tests {
         let (config, command) = parse(vec![
             s("--metadata-log"),
             s(".nokv-fs/metadata.log"),
+            s("--metadata-log-sync"),
+            s("none"),
             s("serve"),
         ])
         .unwrap();
@@ -1262,5 +1288,10 @@ mod tests {
             config.metadata_log,
             Some(PathBuf::from(".nokv-fs/metadata.log"))
         );
+        assert_eq!(config.metadata_log_sync, FileSharedLogSync::None);
+        assert!(matches!(
+            parse(vec![s("--metadata-log-sync"), s("invalid"), s("serve")]),
+            Err(CliError::UnknownOption(option)) if option == "--metadata-log-sync invalid"
+        ));
     }
 }

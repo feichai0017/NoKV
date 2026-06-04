@@ -22,6 +22,19 @@ const RECORD_COMPACT: u8 = 2;
 #[derive(Debug)]
 pub struct FileSharedLog {
     inner: Mutex<FileLogState>,
+    sync: FileSharedLogSync,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileSharedLogOptions {
+    pub sync: FileSharedLogSync,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum FileSharedLogSync {
+    #[default]
+    Data,
+    None,
 }
 
 #[derive(Debug)]
@@ -33,7 +46,10 @@ struct FileLogState {
 }
 
 impl FileSharedLog {
-    pub fn open(path: impl AsRef<Path>) -> Result<Self, SharedLogError> {
+    pub fn open(
+        path: impl AsRef<Path>,
+        options: FileSharedLogOptions,
+    ) -> Result<Self, SharedLogError> {
         if let Some(parent) = path.as_ref().parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent).map_err(to_backend_error)?;
@@ -55,6 +71,7 @@ impl FileSharedLog {
                 compacted_through: recovered.compacted_through,
                 entries: recovered.entries,
             }),
+            sync: options.sync,
         })
     }
 }
@@ -80,7 +97,7 @@ impl SharedMetadataLog for FileSharedLog {
             mount,
             commands: commands.to_vec(),
         };
-        append_record(&mut inner.file, &encode_entry_record(&entry)?)?;
+        append_record(&mut inner.file, &encode_entry_record(&entry)?, self.sync)?;
         inner.next_index = inner.next_index.saturating_add(1);
         inner.entries.push_back(entry);
         Ok(commands
@@ -130,7 +147,11 @@ impl SharedMetadataLog for FileSharedLog {
         if compacted_through == inner.compacted_through {
             return Ok(());
         }
-        append_record(&mut inner.file, &encode_compact_record(compacted_through))?;
+        append_record(
+            &mut inner.file,
+            &encode_compact_record(compacted_through),
+            self.sync,
+        )?;
         inner.compacted_through = compacted_through;
         while inner
             .entries
@@ -200,14 +221,21 @@ fn recover(file: &mut File) -> Result<RecoveredLog, SharedLogError> {
     })
 }
 
-fn append_record(file: &mut File, payload: &[u8]) -> Result<(), SharedLogError> {
+fn append_record(
+    file: &mut File,
+    payload: &[u8],
+    sync: FileSharedLogSync,
+) -> Result<(), SharedLogError> {
     file.seek(SeekFrom::End(0)).map_err(to_backend_error)?;
     file.write_all(FRAME_MAGIC).map_err(to_backend_error)?;
     file.write_all(&(payload.len() as u32).to_be_bytes())
         .map_err(to_backend_error)?;
     file.write_all(payload).map_err(to_backend_error)?;
     file.flush().map_err(to_backend_error)?;
-    file.sync_data().map_err(to_backend_error)
+    match sync {
+        FileSharedLogSync::Data => file.sync_data().map_err(to_backend_error),
+        FileSharedLogSync::None => Ok(()),
+    }
 }
 
 enum FrameRead {

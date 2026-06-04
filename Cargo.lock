@@ -1143,6 +1143,7 @@ name = "nokvfs-bench"
 version = "0.1.0"
 dependencies = [
  "nokvfs-client",
+ "nokvfs-cluster",
  "nokvfs-meta",
  "nokvfs-object",
  "nokvfs-server",
@@ -1154,6 +1155,7 @@ name = "nokvfs-cli"
 version = "0.1.0"
 dependencies = [
  "nokvfs-client",
+ "nokvfs-cluster",
  "nokvfs-fuse",
  "nokvfs-meta",
  "nokvfs-object",

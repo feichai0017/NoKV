@@ -11,6 +11,7 @@ homepage.workspace = true
 
 [dependencies]
 nokvfs-client.workspace = true
+nokvfs-cluster.workspace = true
 nokvfs-meta.workspace = true
 nokvfs-object.workspace = true
 nokvfs-server.workspace = true

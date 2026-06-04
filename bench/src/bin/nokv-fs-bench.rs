@@ -18,6 +18,7 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nokvfs_client::{ArtifactMetadata, NoKvFsClient};
+use nokvfs_cluster::FileSharedLogSync;
 use nokvfs_meta::{
     DentryWithAttr, HistoryGcOptions, MetadataServiceStats, MetadataStoreStats, ObjectGcOptions,
     ObjectTransferStats, RenameReplaceResult,
@@ -950,6 +951,7 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: meta,
         metadata_log_path: None,
+        metadata_log_sync: FileSharedLogSync::Data,
         object,
         uid: DEFAULT_UID,
         gid: DEFAULT_GID,
