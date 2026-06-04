@@ -245,7 +245,7 @@ fn write_planning_reads_are_marked_local_while_user_reads_stay_strong() {
     assert_eq!(after_remove.user_strong_gets, after_lookup.user_strong_gets);
     assert!(after_remove.write_plan_gets > after_lookup.write_plan_gets);
 
-    service
+    let snapshot = service
         .snapshot_subtree(dir.attr.inode)
         .expect("snapshot subtree");
     let after_snapshot = metadata.counts();
@@ -254,6 +254,22 @@ fn write_planning_reads_are_marked_local_while_user_reads_stay_strong() {
         after_remove.user_strong_gets
     );
     assert!(after_snapshot.write_plan_gets > after_remove.write_plan_gets);
+
+    assert!(service
+        .get_attr_at_snapshot(snapshot.snapshot_id, dir.attr.inode)
+        .unwrap()
+        .is_some());
+    assert!(service
+        .read_dir_plus_at_snapshot(snapshot.snapshot_id, dir.attr.inode)
+        .unwrap()
+        .is_empty());
+    let after_snapshot_reads = metadata.counts();
+    assert_eq!(
+        after_snapshot_reads.user_strong_gets,
+        after_snapshot.user_strong_gets
+    );
+    assert!(after_snapshot_reads.snapshot_gets > after_snapshot.snapshot_gets);
+    assert!(after_snapshot_reads.snapshot_scans > after_snapshot.snapshot_scans);
 }
 
 #[test]

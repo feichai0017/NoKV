@@ -140,13 +140,22 @@ where
         parent: InodeId,
         version: Version,
     ) -> Result<Vec<DentryWithAttr>, MetadError> {
+        self.read_dir_plus_at_version_for_purpose(parent, version, ReadPurpose::UserStrong)
+    }
+
+    pub(super) fn read_dir_plus_at_version_for_purpose(
+        &self,
+        parent: InodeId,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Vec<DentryWithAttr>, MetadError> {
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Dentry,
             prefix: dentry_prefix(self.mount, parent),
             start_after: None,
             version,
             limit: 0,
-            purpose: ReadPurpose::UserStrong,
+            purpose,
         })?;
         self.read_dir_plus_total.fetch_add(1, Ordering::Relaxed);
         self.read_dir_plus_entry_total
@@ -244,10 +253,25 @@ where
         components: &[DentryName],
         version: Version,
     ) -> Result<InodeId, MetadError> {
+        self.resolve_components_as_directory_from_at_version_for_purpose(
+            root,
+            components,
+            version,
+            ReadPurpose::UserStrong,
+        )
+    }
+
+    pub(super) fn resolve_components_as_directory_from_at_version_for_purpose(
+        &self,
+        root: InodeId,
+        components: &[DentryName],
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<InodeId, MetadError> {
         let mut current = root;
         for name in components {
             let entry = self
-                .lookup_plus_at_version(current, name, version)?
+                .lookup_plus_at_version_for_purpose(current, name, version, purpose)?
                 .map(|(entry, _)| entry)
                 .ok_or(MetadError::NotFound)?;
             if entry.attr.file_type != FileType::Directory {
@@ -264,10 +288,20 @@ where
         path: &str,
         version: Version,
     ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
+        self.lookup_path_from_at_version_for_purpose(root, path, version, ReadPurpose::UserStrong)
+    }
+
+    pub(super) fn lookup_path_from_at_version_for_purpose(
+        &self,
+        root: InodeId,
+        path: &str,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
         let mut components = parse_absolute_path(path)?;
         if root == InodeId::root() && !components.is_empty() {
             if let Some(indexed) =
-                self.lookup_path_index_components_at_version(&components, version)?
+                self.lookup_path_index_components_at_version(&components, version, purpose)?
             {
                 return Ok(Some(indexed));
             }
@@ -277,27 +311,29 @@ where
         let Some(name) = components.pop() else {
             return Ok(None);
         };
-        let parent =
-            self.resolve_components_as_directory_from_at_version(root, &components, version)?;
-        self.lookup_plus_at_version(parent, &name, version)
+        let parent = self.resolve_components_as_directory_from_at_version_for_purpose(
+            root,
+            &components,
+            version,
+            purpose,
+        )?;
+        self.lookup_plus_at_version_for_purpose(parent, &name, version, purpose)
     }
 
     fn lookup_path_index_components_at_version(
         &self,
         components: &[DentryName],
         version: Version,
+        purpose: ReadPurpose,
     ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
         let Some((name, parent_components)) = components.split_last() else {
             return Ok(None);
         };
         self.path_index_lookup_total.fetch_add(1, Ordering::Relaxed);
         let key = path_index_key(self.mount, components);
-        let Some(item) = self.metadata.get_versioned(
-            RecordFamily::PathIndex,
-            &key,
-            version,
-            ReadPurpose::UserStrong,
-        )?
+        let Some(item) =
+            self.metadata
+                .get_versioned(RecordFamily::PathIndex, &key, version, purpose)?
         else {
             self.path_index_miss_total.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
@@ -305,10 +341,11 @@ where
         let indexed: DentryWithAttr = crate::layout::decode_dentry_projection(&item.value.0)
             .map_err(|err| MetadError::Codec(err.to_string()))?
             .into();
-        let parent = match self.resolve_components_as_directory_from_at_version(
+        let parent = match self.resolve_components_as_directory_from_at_version_for_purpose(
             InodeId::root(),
             parent_components,
             version,
+            purpose,
         ) {
             Ok(parent) => parent,
             Err(MetadError::NotFound | MetadError::NotDirectory) => {
@@ -322,7 +359,7 @@ where
             return Ok(None);
         }
         let Some((canonical, canonical_version)) =
-            self.lookup_plus_at_version(parent, name, version)?
+            self.lookup_plus_at_version_for_purpose(parent, name, version, purpose)?
         else {
             self.path_index_stale_total.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
@@ -341,18 +378,35 @@ where
         path: &str,
         version: Version,
     ) -> Result<Option<PathMetadata>, MetadError> {
+        self.stat_path_from_at_version_for_purpose(root, path, version, ReadPurpose::UserStrong)
+    }
+
+    pub(super) fn stat_path_from_at_version_for_purpose(
+        &self,
+        root: InodeId,
+        path: &str,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Option<PathMetadata>, MetadError> {
         let components = parse_absolute_path(path)?;
         if components.is_empty() {
-            let Some(attr) = self.get_attr_at_version(root, version)? else {
+            let Some(attr) = self.get_attr_at_version_for_purpose(root, version, purpose)? else {
                 return Ok(None);
             };
             if attr.file_type == FileType::File {
-                let body = self.body_descriptor_at_version(root, attr.generation, version)?;
+                let body = self.body_descriptor_at_version_for_purpose(
+                    root,
+                    attr.generation,
+                    version,
+                    purpose,
+                )?;
                 return Ok(Some(PathMetadata { attr, body }));
             }
             return Ok(Some(PathMetadata { attr, body: None }));
         }
-        let Some((entry, _)) = self.lookup_path_from_at_version(root, path, version)? else {
+        let Some((entry, _)) =
+            self.lookup_path_from_at_version_for_purpose(root, path, version, purpose)?
+        else {
             return Ok(None);
         };
         Ok(Some(PathMetadata {
@@ -388,14 +442,26 @@ where
         generation: u64,
         version: Version,
     ) -> Result<Option<BodyDescriptor>, MetadError> {
-        let summary_key =
-            chunk_manifest_key(self.mount, inode, generation, BODY_SUMMARY_CHUNK_INDEX);
-        let Some(value) = self.metadata.get(
-            RecordFamily::ChunkManifest,
-            &summary_key,
+        self.body_descriptor_at_version_for_purpose(
+            inode,
+            generation,
             version,
             ReadPurpose::UserStrong,
-        )?
+        )
+    }
+
+    pub(super) fn body_descriptor_at_version_for_purpose(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Option<BodyDescriptor>, MetadError> {
+        let summary_key =
+            chunk_manifest_key(self.mount, inode, generation, BODY_SUMMARY_CHUNK_INDEX);
+        let Some(value) =
+            self.metadata
+                .get(RecordFamily::ChunkManifest, &summary_key, version, purpose)?
         else {
             return Err(MetadError::MissingBodyDescriptor);
         };
@@ -496,6 +562,25 @@ where
         len: usize,
         version: Version,
     ) -> Result<Vec<u8>, MetadError> {
+        self.read_file_at_version_for_purpose(
+            inode,
+            body,
+            offset,
+            len,
+            version,
+            ReadPurpose::UserStrong,
+        )
+    }
+
+    pub(super) fn read_file_at_version_for_purpose(
+        &self,
+        inode: InodeId,
+        body: &BodyDescriptor,
+        offset: u64,
+        len: usize,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Vec<u8>, MetadError> {
         if len == 0 {
             return Ok(Vec::new());
         }
@@ -503,7 +588,7 @@ where
             return Ok(Vec::new());
         }
         let len = len.min((body.size - offset) as usize);
-        let plan = self.read_plan(inode, body, offset, len, version)?;
+        let plan = self.read_plan_for_purpose(inode, body, offset, len, version, purpose)?;
         let cache = if self.block_cache_enabled() {
             Some(&self.block_cache)
         } else {
@@ -539,6 +624,18 @@ where
         len: usize,
         version: Version,
     ) -> Result<Vec<ObjectReadBlock>, MetadError> {
+        self.read_plan_for_purpose(inode, body, offset, len, version, ReadPurpose::UserStrong)
+    }
+
+    pub(super) fn read_plan_for_purpose(
+        &self,
+        inode: InodeId,
+        body: &BodyDescriptor,
+        offset: u64,
+        len: usize,
+        version: Version,
+        purpose: ReadPurpose,
+    ) -> Result<Vec<ObjectReadBlock>, MetadError> {
         if body.chunk_size == 0 || body.block_size == 0 {
             return Err(ObjectError::InvalidChunkLayout.into());
         }
@@ -555,12 +652,9 @@ where
         let mut plan = Vec::new();
         for chunk_index in start_chunk..=end_chunk {
             let key = chunk_manifest_key(self.mount, inode, body.generation, chunk_index);
-            let Some(value) = self.metadata.get(
-                RecordFamily::ChunkManifest,
-                &key,
-                version,
-                ReadPurpose::UserStrong,
-            )?
+            let Some(value) =
+                self.metadata
+                    .get(RecordFamily::ChunkManifest, &key, version, purpose)?
             else {
                 return Err(MetadError::MissingBodyDescriptor);
             };

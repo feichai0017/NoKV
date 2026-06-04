@@ -86,11 +86,19 @@ where
     }
 
     pub fn snapshot_pin(&self, snapshot_id: u64) -> Result<Option<SnapshotPin>, MetadError> {
+        self.snapshot_pin_for_purpose(snapshot_id, ReadPurpose::UserStrong)
+    }
+
+    fn snapshot_pin_for_purpose(
+        &self,
+        snapshot_id: u64,
+        purpose: ReadPurpose,
+    ) -> Result<Option<SnapshotPin>, MetadError> {
         let value = self.metadata.get(
             RecordFamily::Snapshot,
             &snapshot_pin_key(self.mount, snapshot_id),
             self.read_version()?,
-            ReadPurpose::UserStrong,
+            purpose,
         )?;
         value
             .map(|value| {
@@ -105,7 +113,7 @@ where
         inode: InodeId,
     ) -> Result<Option<InodeAttr>, MetadError> {
         let version = self.snapshot_read_version(snapshot_id)?;
-        self.get_attr_at_version(inode, version)
+        self.get_attr_at_version_for_purpose(inode, version, ReadPurpose::Snapshot)
     }
 
     pub fn lookup_plus_at_snapshot(
@@ -115,7 +123,7 @@ where
         name: &DentryName,
     ) -> Result<Option<DentryWithAttr>, MetadError> {
         let version = self.snapshot_read_version(snapshot_id)?;
-        self.lookup_plus_at_version(parent, name, version)
+        self.lookup_plus_at_version_for_purpose(parent, name, version, ReadPurpose::Snapshot)
             .map(|entry| entry.map(|(entry, _)| entry))
     }
 
@@ -125,7 +133,7 @@ where
         parent: InodeId,
     ) -> Result<Vec<DentryWithAttr>, MetadError> {
         let version = self.snapshot_read_version(snapshot_id)?;
-        self.read_dir_plus_at_version(parent, version)
+        self.read_dir_plus_at_version_for_purpose(parent, version, ReadPurpose::Snapshot)
     }
 
     pub fn stat_path_at_snapshot(
@@ -134,10 +142,10 @@ where
         path: &str,
     ) -> Result<Option<PathMetadata>, MetadError> {
         let pin = self
-            .snapshot_pin(snapshot_id)?
+            .snapshot_pin_for_purpose(snapshot_id, ReadPurpose::Snapshot)?
             .ok_or(MetadError::NotFound)?;
         let version = Version::new(pin.read_version)?;
-        self.stat_path_from_at_version(pin.root, path, version)
+        self.stat_path_from_at_version_for_purpose(pin.root, path, version, ReadPurpose::Snapshot)
     }
 
     pub fn read_dir_plus_path_at_snapshot(
@@ -146,15 +154,16 @@ where
         path: &str,
     ) -> Result<Vec<DentryWithAttr>, MetadError> {
         let pin = self
-            .snapshot_pin(snapshot_id)?
+            .snapshot_pin_for_purpose(snapshot_id, ReadPurpose::Snapshot)?
             .ok_or(MetadError::NotFound)?;
         let version = Version::new(pin.read_version)?;
-        let parent = self.resolve_components_as_directory_from_at_version(
+        let parent = self.resolve_components_as_directory_from_at_version_for_purpose(
             pin.root,
             &parse_absolute_path(path)?,
             version,
+            ReadPurpose::Snapshot,
         )?;
-        self.read_dir_plus_at_version(parent, version)
+        self.read_dir_plus_at_version_for_purpose(parent, version, ReadPurpose::Snapshot)
     }
 
     pub fn read_file_at_snapshot(
@@ -168,7 +177,9 @@ where
             return Ok(Vec::new());
         }
         let version = self.snapshot_read_version(snapshot_id)?;
-        let Some(attr) = self.get_attr_at_version(inode, version)? else {
+        let Some(attr) =
+            self.get_attr_at_version_for_purpose(inode, version, ReadPurpose::Snapshot)?
+        else {
             return Err(MetadError::NotFound);
         };
         if attr.file_type != FileType::File {
@@ -178,9 +189,21 @@ where
             return Ok(Vec::new());
         }
         let body = self
-            .body_descriptor_at_version(inode, attr.generation, version)?
+            .body_descriptor_at_version_for_purpose(
+                inode,
+                attr.generation,
+                version,
+                ReadPurpose::Snapshot,
+            )?
             .ok_or(MetadError::MissingBodyDescriptor)?;
-        self.read_file_at_version(inode, &body, offset, len, version)
+        self.read_file_at_version_for_purpose(
+            inode,
+            &body,
+            offset,
+            len,
+            version,
+            ReadPurpose::Snapshot,
+        )
     }
 
     pub fn read_symlink_at_snapshot(
@@ -189,16 +212,30 @@ where
         inode: InodeId,
     ) -> Result<Vec<u8>, MetadError> {
         let version = self.snapshot_read_version(snapshot_id)?;
-        let Some(attr) = self.get_attr_at_version(inode, version)? else {
+        let Some(attr) =
+            self.get_attr_at_version_for_purpose(inode, version, ReadPurpose::Snapshot)?
+        else {
             return Err(MetadError::NotFound);
         };
         if attr.file_type != FileType::Symlink {
             return Err(MetadError::NotFile);
         }
         let body = self
-            .body_descriptor_at_version(inode, attr.generation, version)?
+            .body_descriptor_at_version_for_purpose(
+                inode,
+                attr.generation,
+                version,
+                ReadPurpose::Snapshot,
+            )?
             .ok_or(MetadError::MissingBodyDescriptor)?;
-        self.read_file_at_version(inode, &body, 0, body.size as usize, version)
+        self.read_file_at_version_for_purpose(
+            inode,
+            &body,
+            0,
+            body.size as usize,
+            version,
+            ReadPurpose::Snapshot,
+        )
     }
 
     pub fn read_file_path_at_snapshot(
@@ -212,11 +249,16 @@ where
             return Ok(Vec::new());
         }
         let pin = self
-            .snapshot_pin(snapshot_id)?
+            .snapshot_pin_for_purpose(snapshot_id, ReadPurpose::Snapshot)?
             .ok_or(MetadError::NotFound)?;
         let version = Version::new(pin.read_version)?;
         let entry = self
-            .lookup_path_from_at_version(pin.root, path, version)?
+            .lookup_path_from_at_version_for_purpose(
+                pin.root,
+                path,
+                version,
+                ReadPurpose::Snapshot,
+            )?
             .map(|(entry, _)| entry)
             .ok_or(MetadError::NotFound)?;
         if entry.attr.file_type != FileType::File {
@@ -226,7 +268,14 @@ where
             return Ok(Vec::new());
         }
         let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
-        self.read_file_at_version(entry.attr.inode, &body, offset, len, version)
+        self.read_file_at_version_for_purpose(
+            entry.attr.inode,
+            &body,
+            offset,
+            len,
+            version,
+            ReadPurpose::Snapshot,
+        )
     }
 
     pub fn read_artifact_at_snapshot(
@@ -237,14 +286,21 @@ where
     ) -> Result<Vec<u8>, MetadError> {
         let version = self.snapshot_read_version(snapshot_id)?;
         let entry = self
-            .lookup_plus_at_version(parent, name, version)?
+            .lookup_plus_at_version_for_purpose(parent, name, version, ReadPurpose::Snapshot)?
             .map(|(entry, _)| entry)
             .ok_or(MetadError::NotFound)?;
         if entry.attr.file_type != FileType::File {
             return Err(MetadError::NotFile);
         }
         let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
-        self.read_file_at_version(entry.attr.inode, &body, 0, body.size as usize, version)
+        self.read_file_at_version_for_purpose(
+            entry.attr.inode,
+            &body,
+            0,
+            body.size as usize,
+            version,
+            ReadPurpose::Snapshot,
+        )
     }
 
     pub fn read_artifact_path_at_snapshot(
@@ -253,23 +309,35 @@ where
         path: &str,
     ) -> Result<Vec<u8>, MetadError> {
         let pin = self
-            .snapshot_pin(snapshot_id)?
+            .snapshot_pin_for_purpose(snapshot_id, ReadPurpose::Snapshot)?
             .ok_or(MetadError::NotFound)?;
         let version = Version::new(pin.read_version)?;
         let entry = self
-            .lookup_path_from_at_version(pin.root, path, version)?
+            .lookup_path_from_at_version_for_purpose(
+                pin.root,
+                path,
+                version,
+                ReadPurpose::Snapshot,
+            )?
             .map(|(entry, _)| entry)
             .ok_or(MetadError::NotFound)?;
         if entry.attr.file_type != FileType::File {
             return Err(MetadError::NotFile);
         }
         let body = entry.body.ok_or(MetadError::MissingBodyDescriptor)?;
-        self.read_file_at_version(entry.attr.inode, &body, 0, body.size as usize, version)
+        self.read_file_at_version_for_purpose(
+            entry.attr.inode,
+            &body,
+            0,
+            body.size as usize,
+            version,
+            ReadPurpose::Snapshot,
+        )
     }
 
     pub(super) fn snapshot_read_version(&self, snapshot_id: u64) -> Result<Version, MetadError> {
         let pin = self
-            .snapshot_pin(snapshot_id)?
+            .snapshot_pin_for_purpose(snapshot_id, ReadPurpose::Snapshot)?
             .ok_or(MetadError::NotFound)?;
         Version::new(pin.read_version).map_err(Into::into)
     }
