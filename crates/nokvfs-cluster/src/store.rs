@@ -308,6 +308,13 @@ where
         })
     }
 
+    fn commit_independent_batch(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Vec<Result<CommitResult, MetadataError>> {
+        SharedLogMetadataStore::commit_independent_batch(self, commands)
+    }
+
     fn committed_request_result(
         &self,
         request_id: &[u8],

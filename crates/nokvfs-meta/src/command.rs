@@ -191,6 +191,17 @@ pub trait MetadataStore {
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError>;
 
+    fn commit_independent_batch(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Vec<Result<CommitResult, MetadataError>> {
+        commands
+            .iter()
+            .cloned()
+            .map(|command| self.commit_metadata(command))
+            .collect()
+    }
+
     fn committed_request_result(
         &self,
         _request_id: &[u8],

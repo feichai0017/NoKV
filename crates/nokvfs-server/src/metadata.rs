@@ -55,6 +55,16 @@ impl MetadataStore for ServerMetadataStore {
         }
     }
 
+    fn commit_independent_batch(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Vec<Result<CommitResult, MetadataError>> {
+        match self {
+            Self::Direct(store) => store.commit_independent_batch(commands),
+            Self::FileLogged(store) => store.commit_independent_batch(commands),
+        }
+    }
+
     fn committed_request_result(
         &self,
         request_id: &[u8],

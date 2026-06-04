@@ -618,6 +618,21 @@ fn shared_log_metadata_store_commit_independent_batch_groups_independent_command
 }
 
 #[test]
+fn shared_log_metadata_store_contract_batch_uses_shared_log_group_commit() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+    let metadata: &dyn MetadataStore = &shared;
+
+    let results = metadata.commit_independent_batch(&[command(b"a", 2), command(b"b", 3)]);
+
+    assert_eq!(results.len(), 2);
+    assert!(results.iter().all(Result::is_ok));
+    assert_eq!(shared.log().committed_index().get(), 1);
+}
+
+#[test]
 fn shared_log_metadata_store_commit_independent_batch_preserves_conflict_result_boundary() {
     let log = InMemorySharedLog::new();
     let store = HoltMetadataStore::open_memory().unwrap();
