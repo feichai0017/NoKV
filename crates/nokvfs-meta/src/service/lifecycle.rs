@@ -22,6 +22,14 @@ where
             cache_hits: AtomicU64::new(0),
             manifest_chunks: AtomicU64::new(0),
             manifest_blocks: AtomicU64::new(0),
+            path_index_lookup_total: AtomicU64::new(0),
+            path_index_hit_total: AtomicU64::new(0),
+            path_index_miss_total: AtomicU64::new(0),
+            path_index_stale_total: AtomicU64::new(0),
+            path_index_fallback_total: AtomicU64::new(0),
+            read_dir_plus_total: AtomicU64::new(0),
+            read_dir_plus_entry_total: AtomicU64::new(0),
+            read_dir_plus_projection_hit_total: AtomicU64::new(0),
         }
     }
 
@@ -43,6 +51,14 @@ where
             cache_hits: AtomicU64::new(0),
             manifest_chunks: AtomicU64::new(0),
             manifest_blocks: AtomicU64::new(0),
+            path_index_lookup_total: AtomicU64::new(0),
+            path_index_hit_total: AtomicU64::new(0),
+            path_index_miss_total: AtomicU64::new(0),
+            path_index_stale_total: AtomicU64::new(0),
+            path_index_fallback_total: AtomicU64::new(0),
+            read_dir_plus_total: AtomicU64::new(0),
+            read_dir_plus_entry_total: AtomicU64::new(0),
+            read_dir_plus_projection_hit_total: AtomicU64::new(0),
         })
     }
 
@@ -53,6 +69,21 @@ where
             cache_hits: self.cache_hits.load(Ordering::Relaxed),
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
             manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
+        }
+    }
+
+    pub fn metadata_service_stats(&self) -> MetadataServiceStats {
+        MetadataServiceStats {
+            path_index_lookup_total: self.path_index_lookup_total.load(Ordering::Relaxed),
+            path_index_hit_total: self.path_index_hit_total.load(Ordering::Relaxed),
+            path_index_miss_total: self.path_index_miss_total.load(Ordering::Relaxed),
+            path_index_stale_total: self.path_index_stale_total.load(Ordering::Relaxed),
+            path_index_fallback_total: self.path_index_fallback_total.load(Ordering::Relaxed),
+            read_dir_plus_total: self.read_dir_plus_total.load(Ordering::Relaxed),
+            read_dir_plus_entry_total: self.read_dir_plus_entry_total.load(Ordering::Relaxed),
+            read_dir_plus_projection_hit_total: self
+                .read_dir_plus_projection_hit_total
+                .load(Ordering::Relaxed),
         }
     }
 

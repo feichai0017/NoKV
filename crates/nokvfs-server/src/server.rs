@@ -73,10 +73,11 @@ impl Server {
     pub fn stats_json(&self) -> String {
         let objects = self.service.object_stats();
         let metadata = self.service.metadata_store_stats();
+        let metadata_service = self.service.metadata_service_stats();
         let object_gc = self.object_gc.state();
         let history_gc = self.history_gc.state();
         format!(
-            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_gets\":{},\"cache_hits\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
+            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_gets\":{},\"cache_hits\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
             self.service.block_cache_enabled(),
             objects.object_puts,
             objects.object_gets,
@@ -84,6 +85,7 @@ impl Server {
             objects.manifest_chunks,
             objects.manifest_blocks,
             metadata_store_json(&metadata),
+            metadata_service_json(&metadata_service),
             object_gc_json(&object_gc),
             history_gc_json(&history_gc),
         )
@@ -125,6 +127,20 @@ fn metadata_store_json(stats: &nokvfs_meta::MetadataStoreStats) -> String {
         stats.dedupe_write_total,
         stats.commit_prepare_ns_total,
         stats.atomic_apply_ns_total,
+    )
+}
+
+fn metadata_service_json(stats: &nokvfs_meta::MetadataServiceStats) -> String {
+    format!(
+        "{{\"path_index_lookup_total\":{},\"path_index_hit_total\":{},\"path_index_miss_total\":{},\"path_index_stale_total\":{},\"path_index_fallback_total\":{},\"read_dir_plus_total\":{},\"read_dir_plus_entry_total\":{},\"read_dir_plus_projection_hit_total\":{}}}",
+        stats.path_index_lookup_total,
+        stats.path_index_hit_total,
+        stats.path_index_miss_total,
+        stats.path_index_stale_total,
+        stats.path_index_fallback_total,
+        stats.read_dir_plus_total,
+        stats.read_dir_plus_entry_total,
+        stats.read_dir_plus_projection_hit_total,
     )
 }
 

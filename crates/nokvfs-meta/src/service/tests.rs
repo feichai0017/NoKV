@@ -90,6 +90,10 @@ fn create_dir_then_lookup_and_readdir_use_dentry_projection() {
 
     let entries = service.read_dir_plus(InodeId::root()).unwrap();
     assert_eq!(entries, vec![created]);
+    let stats = service.metadata_service_stats();
+    assert_eq!(stats.read_dir_plus_total, 1);
+    assert_eq!(stats.read_dir_plus_entry_total, 1);
+    assert_eq!(stats.read_dir_plus_projection_hit_total, 1);
 }
 
 #[test]
@@ -136,13 +140,88 @@ fn path_api_writes_and_uses_validated_path_index() {
     let projection = decode_dentry_projection(&indexed.0).unwrap();
     assert_eq!(DentryWithAttr::from(projection), artifact);
 
-    let before = metadata.metadata_store_stats();
+    let before = service.metadata_service_stats();
     assert_eq!(
         service.lookup_path("/runs/checkpoint.bin").unwrap(),
         Some(artifact)
     );
-    let after = metadata.metadata_store_stats();
-    assert!(after.get_total > before.get_total);
+    let after = service.metadata_service_stats();
+    assert_eq!(
+        after.path_index_lookup_total - before.path_index_lookup_total,
+        1
+    );
+    assert_eq!(after.path_index_hit_total - before.path_index_hit_total, 1);
+    assert_eq!(
+        after.path_index_fallback_total - before.path_index_fallback_total,
+        0
+    );
+
+    let before = service.metadata_service_stats();
+    assert_eq!(service.lookup_path("/runs/missing.bin").unwrap(), None);
+    let after = service.metadata_service_stats();
+    assert_eq!(
+        after.path_index_lookup_total - before.path_index_lookup_total,
+        1
+    );
+    assert_eq!(
+        after.path_index_miss_total - before.path_index_miss_total,
+        1
+    );
+    assert_eq!(
+        after.path_index_fallback_total - before.path_index_fallback_total,
+        1
+    );
+}
+
+#[test]
+fn stale_path_index_falls_back_to_canonical_namespace() {
+    let service = service();
+    let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let archive = service
+        .create_dir_path("/archive", 0o755, 1000, 1000)
+        .unwrap();
+    let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+    let artifact = service
+        .create_file_path("/runs/checkpoint.bin", 0o644, 1000, 1000)
+        .unwrap();
+
+    service
+        .rename(runs.attr.inode, &name, archive.attr.inode, name.clone())
+        .unwrap();
+
+    let before = service.metadata_service_stats();
+    assert_eq!(service.lookup_path("/runs/checkpoint.bin").unwrap(), None);
+    let after = service.metadata_service_stats();
+    assert_eq!(
+        after.path_index_lookup_total - before.path_index_lookup_total,
+        1
+    );
+    assert_eq!(
+        after.path_index_stale_total - before.path_index_stale_total,
+        1
+    );
+    assert_eq!(
+        after.path_index_fallback_total - before.path_index_fallback_total,
+        1
+    );
+
+    let mut moved_artifact = artifact;
+    moved_artifact.dentry.parent = archive.attr.inode;
+
+    let before = service.metadata_service_stats();
+    assert_eq!(
+        service.lookup_path("/archive/checkpoint.bin").unwrap(),
+        Some(moved_artifact)
+    );
+    let after = service.metadata_service_stats();
+    assert_eq!(
+        after.path_index_miss_total - before.path_index_miss_total,
+        1
+    );
+    assert_eq!(
+        after.path_index_fallback_total - before.path_index_fallback_total,
+        1
+    );
 }
 
 #[test]

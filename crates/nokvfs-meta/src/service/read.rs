@@ -102,13 +102,18 @@ where
             limit: 0,
             purpose: ReadPurpose::UserStrong,
         })?;
-        rows.into_iter()
-            .map(|item| {
-                crate::layout::decode_dentry_projection(&item.value.0)
-                    .map(Into::into)
-                    .map_err(|err| MetadError::Codec(err.to_string()))
-            })
-            .collect()
+        self.read_dir_plus_total.fetch_add(1, Ordering::Relaxed);
+        self.read_dir_plus_entry_total
+            .fetch_add(rows.len() as u64, Ordering::Relaxed);
+        let mut entries = Vec::with_capacity(rows.len());
+        for item in rows {
+            let projection = crate::layout::decode_dentry_projection(&item.value.0)
+                .map_err(|err| MetadError::Codec(err.to_string()))?;
+            self.read_dir_plus_projection_hit_total
+                .fetch_add(1, Ordering::Relaxed);
+            entries.push(projection.into());
+        }
+        Ok(entries)
     }
 
     pub(super) fn resolve_parent_path(
@@ -169,12 +174,16 @@ where
         path: &str,
         version: Version,
     ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
-        if root == InodeId::root() {
-            if let Some(indexed) = self.lookup_path_index_at_version(path, version)? {
+        let mut components = parse_absolute_path(path)?;
+        if root == InodeId::root() && !components.is_empty() {
+            if let Some(indexed) =
+                self.lookup_path_index_components_at_version(&components, version)?
+            {
                 return Ok(Some(indexed));
             }
+            self.path_index_fallback_total
+                .fetch_add(1, Ordering::Relaxed);
         }
-        let mut components = parse_absolute_path(path)?;
         let Some(name) = components.pop() else {
             return Ok(None);
         };
@@ -183,16 +192,16 @@ where
         self.lookup_plus_at_version(parent, &name, version)
     }
 
-    pub(super) fn lookup_path_index_at_version(
+    fn lookup_path_index_components_at_version(
         &self,
-        path: &str,
+        components: &[DentryName],
         version: Version,
     ) -> Result<Option<(DentryWithAttr, Version)>, MetadError> {
-        let components = parse_absolute_path(path)?;
         let Some((name, parent_components)) = components.split_last() else {
             return Ok(None);
         };
-        let key = path_index_key(self.mount, &components);
+        self.path_index_lookup_total.fetch_add(1, Ordering::Relaxed);
+        let key = path_index_key(self.mount, components);
         let Some(item) = self.metadata.get_versioned(
             RecordFamily::PathIndex,
             &key,
@@ -200,6 +209,7 @@ where
             ReadPurpose::UserStrong,
         )?
         else {
+            self.path_index_miss_total.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         };
         let indexed: DentryWithAttr = crate::layout::decode_dentry_projection(&item.value.0)
@@ -211,16 +221,20 @@ where
             version,
         )?;
         if parent != indexed.dentry.parent || *name != indexed.dentry.name {
+            self.path_index_stale_total.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         }
         let Some((canonical, canonical_version)) =
             self.lookup_plus_at_version(parent, name, version)?
         else {
+            self.path_index_stale_total.fetch_add(1, Ordering::Relaxed);
             return Ok(None);
         };
         if canonical_version == item.version && canonical == indexed {
+            self.path_index_hit_total.fetch_add(1, Ordering::Relaxed);
             return Ok(Some((canonical, canonical_version)));
         }
+        self.path_index_stale_total.fetch_add(1, Ordering::Relaxed);
         Ok(None)
     }
 

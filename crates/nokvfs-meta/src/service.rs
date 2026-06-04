@@ -198,6 +198,18 @@ pub struct ObjectTransferStats {
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct MetadataServiceStats {
+    pub path_index_lookup_total: u64,
+    pub path_index_hit_total: u64,
+    pub path_index_miss_total: u64,
+    pub path_index_stale_total: u64,
+    pub path_index_fallback_total: u64,
+    pub read_dir_plus_total: u64,
+    pub read_dir_plus_entry_total: u64,
+    pub read_dir_plus_projection_hit_total: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct PendingObjectCleanupOutcome {
     pub scanned: usize,
     pub blocked_by_snapshots: usize,
@@ -264,6 +276,14 @@ pub struct NoKvFs<M, O> {
     cache_hits: AtomicU64,
     manifest_chunks: AtomicU64,
     manifest_blocks: AtomicU64,
+    path_index_lookup_total: AtomicU64,
+    path_index_hit_total: AtomicU64,
+    path_index_miss_total: AtomicU64,
+    path_index_stale_total: AtomicU64,
+    path_index_fallback_total: AtomicU64,
+    read_dir_plus_total: AtomicU64,
+    read_dir_plus_entry_total: AtomicU64,
+    read_dir_plus_projection_hit_total: AtomicU64,
 }
 
 impl<M, O> NoKvFs<M, O>
