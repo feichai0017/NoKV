@@ -548,6 +548,31 @@ fn file_shared_log_rejects_non_contiguous_exact_entry() {
 }
 
 #[test]
+fn file_shared_log_compaction_marker_advances_empty_log_next_index() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.log");
+    let mount = MountId::new(1).unwrap();
+    {
+        let log = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
+        log.compact_through(LogIndex::new(7).unwrap()).unwrap();
+    }
+
+    let reopened = FileSharedLog::open(&path, FileSharedLogOptions::default()).unwrap();
+    let receipt = reopened
+        .append_entry(MetadataLogEntry {
+            position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(8).unwrap(),
+            },
+            mount,
+            commands: vec![command(b"after-checkpoint", 8)],
+        })
+        .unwrap();
+
+    assert_eq!(receipt[0].position.index, LogIndex::new(8).unwrap());
+}
+
+#[test]
 fn file_shared_log_persists_compaction_marker_and_continues_indexes() {
     let dir = tempdir().unwrap();
     let path = dir.path().join("metadata.log");

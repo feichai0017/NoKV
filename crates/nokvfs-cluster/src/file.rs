@@ -227,6 +227,9 @@ impl SharedMetadataLog for FileSharedLog {
             self.sync,
         )?;
         inner.compacted_through = compacted_through;
+        inner.next_index = inner
+            .next_index
+            .max(compacted_through.get().saturating_add(1));
         while inner
             .entries
             .front()
@@ -295,6 +298,7 @@ fn recover(file: &mut File) -> Result<RecoveredLog, SharedLogError> {
             }
             DecodedRecord::Compact(index) => {
                 compacted_through = compacted_through.max(index);
+                next_index = next_index.max(index.get().saturating_add(1));
                 while entries
                     .front()
                     .is_some_and(|entry| entry.position.index <= compacted_through)

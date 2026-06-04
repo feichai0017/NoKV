@@ -1,7 +1,8 @@
+use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::net::TcpListener;
+use std::net::{SocketAddr, TcpListener};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::thread;
@@ -25,6 +26,7 @@ use crate::http;
 use crate::metadata::{FileLoggedMetadataStore, ServerMetadataLogStatus, ServerMetadataStore};
 use crate::options::ServerOptions;
 use crate::replication::MajorityMetadataLog;
+use crate::rpc;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
 type CheckpointObjectStore = Arc<dyn ObjectStore + Send + Sync>;
@@ -34,6 +36,7 @@ pub struct Server {
     metadata_log_enabled: bool,
     metadata_log_node: NodeId,
     metadata_membership: Option<MetadataMembership>,
+    metadata_log_peers: BTreeMap<NodeId, SocketAddr>,
     metadata_log_sync: nokvfs_cluster::FileSharedLogSync,
     metadata_log_status: Option<Arc<dyn ServerMetadataLogStatus>>,
     metadata_log: Option<Arc<FileLoggedMetadataStore>>,
@@ -86,6 +89,11 @@ impl Server {
         let mut metadata_checkpoint = None;
         let mut metadata_checkpoint_objects = None;
         let mut metadata_membership = None;
+        let metadata_log_peers = options
+            .metadata_log_peers
+            .iter()
+            .map(|peer| (peer.node, peer.address))
+            .collect::<BTreeMap<_, _>>();
         let metadata = match options.metadata_log_path.as_ref() {
             Some(path) => {
                 let local_log = Arc::new(FileSharedLog::open(
@@ -157,6 +165,7 @@ impl Server {
             metadata_log_enabled: metadata_log.is_some(),
             metadata_log_node: options.metadata_log_node,
             metadata_membership,
+            metadata_log_peers,
             metadata_log_sync: options.metadata_log_sync,
             metadata_log_status,
             metadata_log,
@@ -346,6 +355,9 @@ impl Server {
         metadata_log
             .install_checkpoint_state(frontier, |store| store.install_checkpoint_image(&image))
             .map_err(ServerError::SharedLog)?;
+        if let Some(compact_through) = request.plan.checkpoint.frontier.compact_through() {
+            metadata_log.log().compact_through(compact_through)?;
+        }
         let replay = metadata_log
             .replay_committed_tail(0)
             .map_err(|err| ServerError::SharedLog(SharedLogError::Backend(err.to_string())))?;
@@ -360,11 +372,61 @@ impl Server {
                 request.plan.replayed_index.get()
             ))));
         }
+        self.service.refresh_allocator_state()?;
         Ok(InstallCheckpointResponse {
             learner: request.plan.node,
             replay_start: request.plan.replay_start,
             replayed_index,
         })
+    }
+
+    pub(crate) fn bootstrap_metadata_peer(
+        &self,
+        learner: NodeId,
+    ) -> Result<InstallCheckpointResponse, ServerError> {
+        self.authorize_metadata_log_leader(self.metadata_log_node)?;
+        if let Some(membership) = self.metadata_membership.as_ref() {
+            if !membership.is_voter(learner) && !membership.is_learner(learner) {
+                return Err(ServerError::SharedLog(SharedLogError::UnknownNode(learner)));
+            }
+        }
+        let address = self
+            .metadata_log_peers
+            .get(&learner)
+            .copied()
+            .ok_or(ServerError::SharedLog(SharedLogError::UnknownNode(learner)))?;
+        let request =
+            self.plan_metadata_bootstrap(self.metadata_log_node, learner, self.service.mount_id())?;
+        let checkpoint_only = InstallCheckpointRequest::from_plan(
+            request.leader,
+            nokvfs_cluster::LearnerBootstrapPlan {
+                node: request.plan.node,
+                checkpoint: request.plan.checkpoint.clone(),
+                replay_start: request.plan.replay_start,
+                replayed_index: request.plan.checkpoint.frontier.applied_position.index,
+            },
+        );
+        let mut install = rpc::call_install_metadata_checkpoint(address, checkpoint_only)?;
+        let Some(metadata_log) = self.metadata_log.as_ref() else {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(
+                "metadata log is disabled".to_owned(),
+            )));
+        };
+        for entry in metadata_log.log().read_from(request.plan.replay_start, 0)? {
+            if entry.position.index > request.plan.replayed_index {
+                break;
+            }
+            rpc::call_append_metadata_log(address, self.metadata_log_node, &entry)?;
+            install.replayed_index = entry.position.index;
+        }
+        if install.replayed_index < request.plan.replayed_index {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                "metadata peer bootstrap reached index {}, expected at least {}",
+                install.replayed_index.get(),
+                request.plan.replayed_index.get()
+            ))));
+        }
+        Ok(install)
     }
 
     pub fn stats_json(&self) -> String {
@@ -995,6 +1057,7 @@ pub(crate) mod tests {
                 )
                 .unwrap(),
             ),
+            metadata_log_peers: BTreeMap::new(),
             metadata_log_sync: options.metadata_log_sync,
             metadata_log_status: Some(metadata_log_status),
             metadata_log: None,
@@ -1203,6 +1266,32 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn server_rejects_metadata_peer_bootstrap_outside_membership() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+
+        assert!(matches!(
+            server.bootstrap_metadata_peer(node(9)),
+            Err(ServerError::SharedLog(SharedLogError::UnknownNode(unknown))) if unknown == node(9)
+        ));
+    }
+
+    #[test]
+    fn server_rejects_metadata_peer_bootstrap_without_peer_address() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let mut options = test_options(dir.path(), Some(metadata_log));
+        options.metadata_log_learners = vec![node(2)];
+        let server = Server::open(options).unwrap();
+
+        assert!(matches!(
+            server.bootstrap_metadata_peer(node(2)),
+            Err(ServerError::SharedLog(SharedLogError::UnknownNode(unknown))) if unknown == node(2)
+        ));
+    }
+
+    #[test]
     fn server_preserves_existing_metadata_log_membership_for_learner() {
         let dir = tempdir().unwrap();
         let metadata_log = dir.path().join("metadata.log");
@@ -1373,6 +1462,49 @@ pub(crate) mod tests {
         assert_eq!(before.attr.file_type, nokvfs_types::FileType::Directory);
         assert_eq!(after.attr.file_type, nokvfs_types::FileType::Directory);
         assert!(metadata_apply_frontier_path(&dir.path().join("metadata.log")).is_file());
+    }
+
+    #[test]
+    fn server_installs_leader_checkpoint_into_fresh_follower_store() {
+        let dir = tempdir().unwrap();
+        let checkpoint_objects = test_checkpoint_objects();
+        let leader_log = dir.path().join("leader-metadata.log");
+        let follower_log = dir.path().join("follower-metadata.log");
+        let leader = open_test_server_with_checkpoint_objects(
+            dir.path(),
+            Some(leader_log),
+            &checkpoint_objects,
+        );
+        leader
+            .service()
+            .create_dir_path("/runs", 0o755, 1000, 1000)
+            .unwrap();
+        leader
+            .service()
+            .create_dir_path("/runs/1", 0o755, 1000, 1000)
+            .unwrap();
+        leader.run_manual_gc(128).unwrap();
+
+        let mut follower_options = test_options(dir.path(), Some(follower_log));
+        follower_options.metadata_log_node = node(3);
+        follower_options.metadata_log_leader = node(1);
+        follower_options.metadata_log_voters = vec![node(1)];
+        follower_options.metadata_log_learners = vec![node(3)];
+        let follower =
+            Server::open_with_test_checkpoint_objects(follower_options, checkpoint_objects)
+                .unwrap();
+        let request = leader
+            .plan_metadata_bootstrap(node(1), node(3), leader.service().mount_id())
+            .unwrap();
+
+        follower.install_metadata_checkpoint(request).unwrap();
+
+        let entry = follower
+            .service()
+            .lookup_path("/runs/1")
+            .unwrap()
+            .expect("fresh follower should read checkpoint namespace");
+        assert_eq!(entry.attr.file_type, nokvfs_types::FileType::Directory);
     }
 
     #[test]

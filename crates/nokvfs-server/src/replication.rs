@@ -7,7 +7,6 @@ use nokvfs_cluster::{
     MetadataMembership, NodeId, SharedLogError, SharedMetadataLog,
 };
 use nokvfs_meta::command::MetadataCommand;
-use nokvfs_protocol::{MetadataRpcRequest, MetadataRpcResult};
 use nokvfs_types::MountId;
 
 use crate::options::MetadataLogPeerOptions;
@@ -194,54 +193,10 @@ impl SharedMetadataLog for MajorityMetadataLog {
     }
 }
 
-impl FramedMetadataLogPeer {
-    fn request_id(entry: &MetadataLogEntry) -> u64 {
-        entry.position.index.get()
-    }
-}
-
 impl MetadataLogPeerAppender for FramedMetadataLogPeer {
     fn append_entry(&self, leader: NodeId, entry: &MetadataLogEntry) -> Result<(), SharedLogError> {
-        let encoded = nokvfs_cluster::encode_metadata_log_entry(entry)?;
-        let envelope = rpc::call_framed_rpc(
-            self.address,
-            Self::request_id(entry),
-            &MetadataRpcRequest::AppendMetadataLog {
-                leader: leader.get(),
-                entry: encoded,
-            },
-        )
-        .map_err(|err| SharedLogError::Backend(err.to_string()))?;
-        if !envelope.ok {
-            return Err(SharedLogError::Backend(
-                envelope
-                    .error
-                    .unwrap_or_else(|| "metadata peer append failed".to_owned()),
-            ));
-        }
-        match envelope.result {
-            Some(MetadataRpcResult::MetadataLogAppend { position, .. }) => {
-                if position.term == entry.position.term.get()
-                    && position.index == entry.position.index.get()
-                {
-                    Ok(())
-                } else {
-                    Err(SharedLogError::Backend(format!(
-                        "metadata peer appended {}:{}, expected {}:{}",
-                        position.term,
-                        position.index,
-                        entry.position.term.get(),
-                        entry.position.index.get()
-                    )))
-                }
-            }
-            Some(other) => Err(SharedLogError::Backend(format!(
-                "metadata peer append returned unexpected result: {other:?}"
-            ))),
-            None => Err(SharedLogError::Backend(
-                "metadata peer append response had no result".to_owned(),
-            )),
-        }
+        rpc::call_append_metadata_log(self.address, leader, entry)
+            .map_err(|err| SharedLogError::Backend(err.to_string()))
     }
 }
 

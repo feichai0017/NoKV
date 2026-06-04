@@ -155,6 +155,24 @@ pub(crate) fn handle_parts(server: &Server, line: &str, _body: &[u8]) -> HttpRes
                 Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
             }
         }
+        ("GET", "/metadata-log/bootstrap") | ("POST", "/metadata-log/bootstrap") => {
+            let learner = match bootstrap_learner(query) {
+                Ok(learner) => learner,
+                Err(err) => return HttpResponse::text("400 Bad Request", format!("{err}\n")),
+            };
+            match server.bootstrap_metadata_peer(learner) {
+                Ok(install) => HttpResponse::json(
+                    "200 OK",
+                    format!(
+                        "{{\"learner\":{},\"replay_start_index\":{},\"replayed_index\":{}}}\n",
+                        install.learner.get(),
+                        install.replay_start.get(),
+                        install.replayed_index.get()
+                    ),
+                ),
+                Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
+            }
+        }
         (_, "/request-too-large") => {
             HttpResponse::text("413 Payload Too Large", "request too large\n")
         }
@@ -183,6 +201,25 @@ fn gc_limit(query: Option<&str>) -> Result<usize, String> {
         }
     }
     Ok(usize::MAX)
+}
+
+fn bootstrap_learner(query: Option<&str>) -> Result<nokvfs_cluster::NodeId, String> {
+    let Some(query) = query else {
+        return Err("missing learner query parameter".to_owned());
+    };
+    for pair in query.split('&') {
+        let Some((key, value)) = pair.split_once('=') else {
+            continue;
+        };
+        if key == "learner" {
+            let raw = value
+                .parse::<u64>()
+                .map_err(|_| format!("invalid metadata bootstrap learner {value}"))?;
+            return nokvfs_cluster::NodeId::new(raw)
+                .map_err(|err| format!("invalid metadata bootstrap learner {value}: {err}"));
+        }
+    }
+    Err("missing learner query parameter".to_owned())
 }
 
 impl HttpResponse {
@@ -269,6 +306,24 @@ mod tests {
     fn gc_endpoint_rejects_invalid_limit_query() {
         let server = test_server();
         let response = handle_parts(&server, "GET /gc?limit=bad HTTP/1.1", &[]);
+        assert_eq!(response.status, "400 Bad Request");
+    }
+
+    #[test]
+    fn metadata_log_bootstrap_endpoint_rejects_missing_learner() {
+        let server = test_server();
+        let response = handle_parts(&server, "GET /metadata-log/bootstrap HTTP/1.1", &[]);
+        assert_eq!(response.status, "400 Bad Request");
+    }
+
+    #[test]
+    fn metadata_log_bootstrap_endpoint_rejects_invalid_learner() {
+        let server = test_server();
+        let response = handle_parts(
+            &server,
+            "GET /metadata-log/bootstrap?learner=bad HTTP/1.1",
+            &[],
+        );
         assert_eq!(response.status, "400 Bad Request");
     }
 

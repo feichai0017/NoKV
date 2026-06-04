@@ -269,21 +269,18 @@ printf 'nokv shared log smoke\n' >"$payload"
     --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
     put-artifact /runs/1/checkpoint.txt "$payload"
 
-# Bring the third voter online after it missed the initial root and artifact
-# entries. The next leader append should push the retained tail before appending
-# the current entry.
+curl -fsS --max-time 10 "http://$NODE1_ADDRESS/gc?limit=128" >/dev/null
+
+# Bring the third voter online only after the leader has published a metadata
+# checkpoint and compacted the initial log prefix. The control-plane bootstrap
+# must install the checkpoint and append any retained tail before the node can
+# serve reads.
 start_node 3 "$NODE3_ADDRESS"
 wait_for_http "http://$NODE3_ADDRESS/healthz" "NoKV node 3"
+echo "Bootstrapping metadata node 3 from leader checkpoint"
+curl -fsS --max-time 10 "http://$NODE1_ADDRESS/metadata-log/bootstrap?learner=3" >/dev/null
 
-"$NOKV_FS_BIN" \
-    --server-bind "$NODE1_ADDRESS" \
-    --object-backend rustfs \
-    --s3-bucket "$RUSTFS_BUCKET" \
-    --s3-endpoint "$RUSTFS_ENDPOINT" \
-    --s3-access-key-id "$RUSTFS_ACCESS_KEY" \
-    --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
-    mkdir /runs/1/after-rejoin
-
+echo "Reading artifact through metadata node 2"
 "$NOKV_FS_BIN" \
     --server-bind "$NODE2_ADDRESS" \
     --object-backend rustfs \
@@ -293,6 +290,7 @@ wait_for_http "http://$NODE3_ADDRESS/healthz" "NoKV node 3"
     --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
     cat /runs/1/checkpoint.txt >"$restored2"
 
+echo "Reading artifact through metadata node 3"
 "$NOKV_FS_BIN" \
     --server-bind "$NODE3_ADDRESS" \
     --object-backend rustfs \
@@ -305,4 +303,4 @@ wait_for_http "http://$NODE3_ADDRESS/healthz" "NoKV node 3"
 cmp "$payload" "$restored2"
 cmp "$payload" "$restored3"
 
-echo "NoKV metadata shared-log smoke passed: leader wrote artifact, one voter rejoined, and both followers read it."
+echo "NoKV metadata shared-log smoke passed: leader compacted, late voter bootstrapped from checkpoint, and both followers read the artifact."

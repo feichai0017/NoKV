@@ -4,6 +4,7 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Duration;
 
+use nokvfs_cluster::SharedLogError;
 use nokvfs_meta::{CreateInDirPathBatch, DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
@@ -188,6 +189,109 @@ pub(crate) fn call_framed_rpc(
             format!("metadata framed rpc response decode failed: {err}"),
         ))
     })
+}
+
+pub(crate) fn call_append_metadata_log(
+    address: SocketAddr,
+    leader: nokvfs_cluster::NodeId,
+    entry: &nokvfs_cluster::MetadataLogEntry,
+) -> Result<(), ServerError> {
+    let encoded =
+        nokvfs_cluster::encode_metadata_log_entry(entry).map_err(ServerError::SharedLog)?;
+    let envelope = call_framed_rpc(
+        address,
+        entry.position.index.get(),
+        &MetadataRpcRequest::AppendMetadataLog {
+            leader: leader.get(),
+            entry: encoded,
+        },
+    )?;
+    if !envelope.ok {
+        return Err(ServerError::SharedLog(SharedLogError::Backend(
+            envelope
+                .error
+                .unwrap_or_else(|| "metadata peer append failed".to_owned()),
+        )));
+    }
+    match envelope.result {
+        Some(MetadataRpcResult::MetadataLogAppend { position, .. }) => {
+            if position.term == entry.position.term.get()
+                && position.index == entry.position.index.get()
+            {
+                Ok(())
+            } else {
+                Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                    "metadata peer appended {}:{}, expected {}:{}",
+                    position.term,
+                    position.index,
+                    entry.position.term.get(),
+                    entry.position.index.get()
+                ))))
+            }
+        }
+        Some(other) => Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+            "metadata peer append returned unexpected result: {other:?}"
+        )))),
+        None => Err(ServerError::SharedLog(SharedLogError::Backend(
+            "metadata peer append response had no result".to_owned(),
+        ))),
+    }
+}
+
+pub(crate) fn call_install_metadata_checkpoint(
+    address: SocketAddr,
+    request: nokvfs_cluster::InstallCheckpointRequest,
+) -> Result<nokvfs_cluster::InstallCheckpointResponse, ServerError> {
+    let learner = request.plan.node;
+    let replay_start = request.plan.replay_start;
+    let envelope = call_framed_rpc(
+        address,
+        learner.get(),
+        &MetadataRpcRequest::InstallMetadataCheckpoint {
+            plan: wire_metadata_bootstrap_plan(&request),
+        },
+    )?;
+    if !envelope.ok {
+        return Err(ServerError::SharedLog(SharedLogError::Backend(
+            envelope
+                .error
+                .unwrap_or_else(|| "metadata checkpoint install failed".to_owned()),
+        )));
+    }
+    match envelope.result {
+        Some(MetadataRpcResult::MetadataCheckpointInstall { install }) => {
+            let installed_learner =
+                nokvfs_cluster::NodeId::new(install.learner).map_err(ServerError::SharedLog)?;
+            if installed_learner != learner {
+                return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                    "metadata checkpoint install returned learner {}, expected {}",
+                    installed_learner.get(),
+                    learner.get()
+                ))));
+            }
+            let installed_replay_start = nokvfs_cluster::LogIndex::new(install.replay_start_index)
+                .map_err(ServerError::SharedLog)?;
+            if installed_replay_start != replay_start {
+                return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                    "metadata checkpoint install returned replay start {}, expected {}",
+                    installed_replay_start.get(),
+                    replay_start.get()
+                ))));
+            }
+            Ok(nokvfs_cluster::InstallCheckpointResponse {
+                learner,
+                replay_start,
+                replayed_index: nokvfs_cluster::LogIndex::new(install.replayed_index)
+                    .map_err(ServerError::SharedLog)?,
+            })
+        }
+        Some(other) => Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+            "metadata checkpoint install returned unexpected result: {other:?}"
+        )))),
+        None => Err(ServerError::SharedLog(SharedLogError::Backend(
+            "metadata checkpoint install response had no result".to_owned(),
+        ))),
+    }
 }
 
 fn drain_ready_frames(
