@@ -1,0 +1,14 @@
+[package]
+name = "nokvfs-cluster"
+version = "0.1.0"
+description = "Shared-log metadata replication contracts for NoKV-FS."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+nokvfs-meta.workspace = true
+nokvfs-types.workspace = true

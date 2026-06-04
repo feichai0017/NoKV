@@ -1177,6 +1177,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "nokvfs-cluster"
+version = "0.1.0"
+dependencies = [
+ "nokvfs-meta",
+ "nokvfs-types",
+]
+
+[[package]]
 name = "nokvfs-fuse"
 version = "0.1.0"
 dependencies = [
