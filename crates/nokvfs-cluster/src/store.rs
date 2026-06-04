@@ -249,6 +249,14 @@ where
         }
     }
 
+    pub fn replay_committed_tail(&self, limit: usize) -> Result<ReplayOutcome, ReplayError> {
+        let start = match self.applied_frontier() {
+            Some(frontier) => next_log_index(frontier.position.index)?,
+            None => first_available_replay_index(&self.log)?,
+        };
+        ReplayDriver::new(&self.log, self).replay_from(start, limit)
+    }
+
     pub fn ensure_read_freshness(&self, freshness: ReadFreshness) -> Result<(), SharedLogError> {
         let Some(required) = self.required_read_position(freshness) else {
             return Ok(());

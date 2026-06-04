@@ -1,7 +1,7 @@
 use std::fs::OpenOptions;
 use std::io::Write;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 use super::*;
 use nokvfs_meta::command::{
@@ -708,6 +708,127 @@ fn shared_log_metadata_store_current_committed_uses_log_position_term() {
     learner
         .ensure_read_freshness(ReadFreshness::CurrentCommitted)
         .unwrap();
+}
+
+#[test]
+fn shared_log_learner_replay_tail_enables_fresh_reads() {
+    let log = Arc::new(InMemoryQuorumLog::new([node(1), node(2), node(3)]).unwrap());
+    let mount = MountId::new(1).unwrap();
+    let term = LogTerm::new(1).unwrap();
+    let leader = SharedLogMetadataStore::new(
+        HoltMetadataStore::open_memory().unwrap(),
+        Arc::clone(&log),
+        term,
+        mount,
+    );
+    let learner = SharedLogMetadataStore::new(
+        HoltMetadataStore::open_memory().unwrap(),
+        Arc::clone(&log),
+        term,
+        mount,
+    );
+
+    leader.commit_metadata(command(b"a", 2)).unwrap();
+    let committed = log.committed_position().unwrap();
+
+    assert!(matches!(
+        learner.ensure_read_freshness(ReadFreshness::AppliedThrough(committed)),
+        Err(SharedLogError::ReadNotFresh {
+            required,
+            applied: None,
+        }) if required == committed
+    ));
+    assert!(matches!(
+        learner.get(RecordFamily::Dentry, b"a", version(2), ReadPurpose::UserStrong),
+        Err(MetadataError::Backend(message))
+            if message.contains("metadata read requires applied frontier")
+    ));
+
+    let outcome = learner.replay_committed_tail(0).unwrap();
+
+    assert_eq!(outcome.entries, 1);
+    assert_eq!(outcome.commands, 1);
+    learner
+        .ensure_read_freshness(ReadFreshness::AppliedThrough(committed))
+        .unwrap();
+    assert_eq!(
+        learner
+            .get(
+                RecordFamily::Dentry,
+                b"a",
+                version(2),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+}
+
+#[test]
+fn shared_log_learner_replay_tail_limit_keeps_future_reads_stale() {
+    let log = Arc::new(InMemoryQuorumLog::new([node(1), node(2), node(3)]).unwrap());
+    let mount = MountId::new(1).unwrap();
+    let term = LogTerm::new(1).unwrap();
+    let leader = SharedLogMetadataStore::new(
+        HoltMetadataStore::open_memory().unwrap(),
+        Arc::clone(&log),
+        term,
+        mount,
+    );
+    let learner = SharedLogMetadataStore::new(
+        HoltMetadataStore::open_memory().unwrap(),
+        Arc::clone(&log),
+        term,
+        mount,
+    );
+
+    leader.commit_metadata(command(b"a", 2)).unwrap();
+    leader.commit_metadata(command(b"b", 3)).unwrap();
+    let committed = log.committed_position().unwrap();
+
+    let first = learner.replay_committed_tail(1).unwrap();
+
+    assert_eq!(first.entries, 1);
+    assert_eq!(first.commands, 1);
+    assert!(matches!(
+        learner.ensure_read_freshness(ReadFreshness::AppliedThrough(committed)),
+        Err(SharedLogError::ReadNotFresh {
+            required,
+            applied: Some(applied),
+        }) if required == committed && applied.index.get() == 1
+    ));
+    assert!(learner
+        .get(
+            RecordFamily::Dentry,
+            b"b",
+            version(3),
+            ReadPurpose::WritePlanLocal,
+        )
+        .unwrap()
+        .is_none());
+
+    let second = learner.replay_committed_tail(0).unwrap();
+
+    assert_eq!(second.entries, 1);
+    assert_eq!(second.commands, 1);
+    learner
+        .ensure_read_freshness(ReadFreshness::AppliedThrough(committed))
+        .unwrap();
+    assert_eq!(
+        learner
+            .get(
+                RecordFamily::Dentry,
+                b"b",
+                version(3),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
 }
 
 #[test]
