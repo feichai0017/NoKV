@@ -1,5 +1,6 @@
 use std::error::Error;
 use std::fmt;
+use std::fs;
 use std::io;
 use std::net::TcpListener;
 use std::path::{Path, PathBuf};
@@ -19,6 +20,7 @@ use nokvfs_meta::{
     HistoryGcWorker, HistoryGcWorkerState, MetadError, NoKvFs, ObjectGcWorker, ObjectGcWorkerState,
 };
 use nokvfs_object::{ObjectError, S3ObjectStore};
+use sha2::{Digest, Sha256};
 
 use crate::http;
 use crate::metadata::{FileLoggedMetadataStore, ServerMetadataLogStatus, ServerMetadataStore};
@@ -35,6 +37,7 @@ pub struct Server {
     metadata_log_status: Option<Arc<dyn ServerMetadataLogStatus>>,
     metadata_log: Option<Arc<FileLoggedMetadataStore>>,
     metadata_checkpoint: Option<FileCheckpointCatalog>,
+    metadata_checkpoint_artifact_dir: Option<PathBuf>,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
 }
@@ -61,6 +64,7 @@ impl Server {
         let mut metadata_log = None;
         let mut metadata_log_status = None;
         let mut metadata_checkpoint = None;
+        let mut checkpoint_artifact_dir = None;
         let mut metadata_membership = None;
         let metadata = match options.metadata_log_path.as_ref() {
             Some(path) => {
@@ -72,6 +76,8 @@ impl Server {
                 )?;
                 let frontier = FileAppliedFrontierStore::open(metadata_apply_frontier_path(path))?;
                 let checkpoint = FileCheckpointCatalog::open(metadata_checkpoint_path(path))?;
+                let artifact_dir = metadata_checkpoint_artifact_dir(path);
+                fs::create_dir_all(&artifact_dir).map_err(ServerError::Io)?;
                 let membership_catalog =
                     FileMembershipCatalog::open(metadata_membership_path(path))?;
                 let membership = MetadataMembership::single_voter(
@@ -93,6 +99,7 @@ impl Server {
                 metadata_log = Some(Arc::clone(&logged));
                 metadata_log_status = Some(status);
                 metadata_checkpoint = Some(checkpoint);
+                checkpoint_artifact_dir = Some(artifact_dir);
                 metadata_membership = Some(membership);
                 ServerMetadataStore::shared_logged(logged)
             }
@@ -112,6 +119,7 @@ impl Server {
             metadata_log_status,
             metadata_log,
             metadata_checkpoint,
+            metadata_checkpoint_artifact_dir: checkpoint_artifact_dir,
             object_gc,
             history_gc,
         })
@@ -326,6 +334,9 @@ impl Server {
         let Some(checkpoints) = self.metadata_checkpoint.as_ref() else {
             return Ok(None);
         };
+        let Some(checkpoint_artifact_dir) = self.metadata_checkpoint_artifact_dir.as_ref() else {
+            return Ok(None);
+        };
         let Some(applied) = metadata_log.applied_frontier() else {
             return Ok(None);
         };
@@ -353,7 +364,12 @@ impl Server {
             .map_err(MetadError::from)?;
         let mount = self.service.mount_id();
         let checkpoint_id = metadata_checkpoint_id(mount, &frontier);
-        let artifact = metadata_checkpoint_artifact(&checkpoint_id)?;
+        let image = metadata_log
+            .inner()
+            .export_checkpoint_image()
+            .map_err(MetadError::from)?;
+        let artifact =
+            write_metadata_checkpoint_artifact(checkpoint_artifact_dir, &checkpoint_id, &image)?;
         let manifest = CheckpointManifest::new(checkpoint_id, mount, frontier, artifact)?;
         checkpoints.publish(manifest.clone())?;
         let outcome = compact_log_to_checkpoint(metadata_log.log(), manifest)
@@ -390,6 +406,20 @@ fn metadata_checkpoint_path(log_path: &Path) -> PathBuf {
     path
 }
 
+fn metadata_checkpoint_artifact_dir(log_path: &Path) -> PathBuf {
+    let mut path = log_path.to_path_buf();
+    let file_name = log_path
+        .file_name()
+        .map(|name| {
+            let mut name = name.to_os_string();
+            name.push(".checkpoint-images");
+            name
+        })
+        .unwrap_or_else(|| "metadata.log.checkpoint-images".into());
+    path.set_file_name(file_name);
+    path
+}
+
 fn metadata_membership_path(log_path: &Path) -> PathBuf {
     let mut path = log_path.to_path_buf();
     let file_name = log_path
@@ -417,11 +447,32 @@ fn metadata_checkpoint_id(
     .into_bytes()
 }
 
-fn metadata_checkpoint_artifact(id: &[u8]) -> Result<CheckpointArtifact, SharedLogError> {
+fn write_metadata_checkpoint_artifact(
+    dir: &Path,
+    id: &[u8],
+    image: &[u8],
+) -> Result<CheckpointArtifact, SharedLogError> {
+    fs::create_dir_all(dir).map_err(|err| {
+        SharedLogError::Backend(format!(
+            "create metadata checkpoint artifact dir {}: {err}",
+            dir.display()
+        ))
+    })?;
+    let name = String::from_utf8(id.to_vec()).map_err(|err| {
+        SharedLogError::Backend(format!("metadata checkpoint id is not utf-8: {err}"))
+    })?;
+    let path = dir.join(format!("{name}.nkmeta"));
+    fs::write(&path, image).map_err(|err| {
+        SharedLogError::Backend(format!(
+            "write metadata checkpoint artifact {}: {err}",
+            path.display()
+        ))
+    })?;
+    let digest = Sha256::digest(image).to_vec();
     CheckpointArtifact::new(
-        format!("local-holt:{}", String::from_utf8_lossy(id)).into_bytes(),
-        Vec::new(),
-        0,
+        format!("file:{}", path.display()).into_bytes(),
+        digest,
+        image.len() as u64,
     )
 }
 
@@ -632,6 +683,7 @@ pub(crate) mod tests {
         FileSharedLogSync, InMemoryQuorumLog, LogTerm, NodeId, QuorumNodeLog, ReadFreshness,
         SharedMetadataLog,
     };
+    use nokvfs_meta::command::{MetadataStore, ReadPurpose, ScanRequest};
     use nokvfs_meta::holtstore::HoltMetadataStore;
     use nokvfs_meta::{HistoryGcOptions, ObjectGcOptions};
     use nokvfs_object::{ObjectStoreConfig, S3ObjectStoreOptions};
@@ -716,6 +768,7 @@ pub(crate) mod tests {
             metadata_log_status: Some(metadata_log_status),
             metadata_log: None,
             metadata_checkpoint: None,
+            metadata_checkpoint_artifact_dir: None,
             object_gc,
             history_gc,
         }
@@ -753,8 +806,8 @@ pub(crate) mod tests {
             applied.position.index.get()
         );
         assert!(body.contains(&expected_checkpoint_id));
-        assert!(body.contains("\"checkpoint_uri\":\"local-holt:"));
-        assert!(body.contains("\"checkpoint_size_bytes\":0"));
+        assert!(body.contains("\"checkpoint_uri\":\"file:"));
+        assert!(!body.contains("\"checkpoint_size_bytes\":0"));
         assert!(body.contains("\"compacted_through\":"));
         let checkpoint_path = metadata_checkpoint_path(&metadata_log);
         assert!(checkpoint_path.is_file());
@@ -767,10 +820,25 @@ pub(crate) mod tests {
             checkpoint.id,
             metadata_checkpoint_id(server.service().mount_id(), &checkpoint.frontier)
         );
-        assert_eq!(
-            checkpoint.artifact.uri,
-            metadata_checkpoint_artifact(&checkpoint.id).unwrap().uri
-        );
+        assert!(checkpoint.artifact.size_bytes > 0);
+        assert!(!checkpoint.artifact.digest.is_empty());
+        let uri = String::from_utf8(checkpoint.artifact.uri.clone()).unwrap();
+        let image_path = uri.strip_prefix("file:").expect("checkpoint image URI");
+        let image = fs::read(image_path).unwrap();
+        assert_eq!(image.len() as u64, checkpoint.artifact.size_bytes);
+        let restored = HoltMetadataStore::open_memory().unwrap();
+        restored.install_checkpoint_image(&image).unwrap();
+        let restored_dentries = restored
+            .scan(ScanRequest {
+                family: nokvfs_types::RecordFamily::Dentry,
+                prefix: Vec::new(),
+                start_after: None,
+                version: nokvfs_meta::Version::new(u64::MAX).unwrap(),
+                limit: 10,
+                purpose: ReadPurpose::UserStrong,
+            })
+            .unwrap();
+        assert!(!restored_dentries.is_empty());
         assert_eq!(
             checkpoint.frontier.applied_position.index,
             applied.position.index

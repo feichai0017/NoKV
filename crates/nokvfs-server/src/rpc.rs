@@ -1528,8 +1528,9 @@ mod tests {
         };
         assert_eq!(checkpoint.mount, 1);
         assert!(checkpoint.id.starts_with(b"mount-1-term-1-index-"));
-        assert!(checkpoint.artifact_uri.starts_with(b"local-holt:"));
-        assert_eq!(checkpoint.artifact_size_bytes, 0);
+        assert!(checkpoint.artifact_uri.starts_with(b"file:"));
+        assert!(!checkpoint.artifact_digest.is_empty());
+        assert!(checkpoint.artifact_size_bytes > 0);
         assert!(checkpoint.min_retained_index >= checkpoint.applied_position.index);
         assert!(checkpoint.max_commit_version >= 2);
     }

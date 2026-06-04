@@ -22,6 +22,8 @@ use nokvfs_types::RecordFamily;
 const VALUE_HEADER_LEN: usize = 9;
 const VALUE_KIND_LIVE: u8 = 1;
 const VALUE_KIND_TOMBSTONE: u8 = 2;
+const CHECKPOINT_IMAGE_MAGIC: &[u8; 8] = b"NKFSMI01";
+const CHECKPOINT_IMAGE_VERSION: u8 = 1;
 
 const SYSTEM_CURRENT_TREE: &str = "system_current";
 const MOUNT_CURRENT_TREE: &str = "mount_current";
@@ -37,6 +39,21 @@ const SNAPSHOT_CURRENT_TREE: &str = "snapshot_current";
 const GC_CURRENT_TREE: &str = "gc_current";
 const COMMAND_DEDUPE_CURRENT_TREE: &str = "command_dedupe_current";
 const HISTORY_TREE: &str = "history";
+
+const TREE_ID_SYSTEM_CURRENT: u8 = 1;
+const TREE_ID_MOUNT_CURRENT: u8 = 2;
+const TREE_ID_INODE_CURRENT: u8 = 3;
+const TREE_ID_DENTRY_CURRENT: u8 = 4;
+const TREE_ID_PARENT_CURRENT: u8 = 5;
+const TREE_ID_XATTR_CURRENT: u8 = 6;
+const TREE_ID_CHUNK_MANIFEST_CURRENT: u8 = 7;
+const TREE_ID_SESSION_CURRENT: u8 = 8;
+const TREE_ID_PATH_INDEX_CURRENT: u8 = 9;
+const TREE_ID_WATCH_CURRENT: u8 = 10;
+const TREE_ID_SNAPSHOT_CURRENT: u8 = 11;
+const TREE_ID_GC_CURRENT: u8 = 12;
+const TREE_ID_COMMAND_DEDUPE_CURRENT: u8 = 13;
+const TREE_ID_HISTORY: u8 = 14;
 
 #[derive(Clone)]
 pub struct HoltMetadataStore {
@@ -155,6 +172,25 @@ struct CurrentRecord {
     value: Option<Vec<u8>>,
 }
 
+#[derive(Debug)]
+struct CheckpointImageRecord {
+    tree_id: u8,
+    key: Vec<u8>,
+    value: Vec<u8>,
+}
+
+#[derive(Clone)]
+struct CheckpointTreeSpec {
+    id: u8,
+    tree: Tree,
+}
+
+#[derive(Clone, Copy)]
+struct CheckpointTreeNameSpec {
+    id: u8,
+    name: &'static str,
+}
+
 impl HoltMetadataStore {
     pub fn open_memory() -> Result<Self, MetadataError> {
         Self::open(TreeConfig::memory())
@@ -179,6 +215,77 @@ impl HoltMetadataStore {
 
     pub fn checkpoint(&self) -> Result<(), MetadataError> {
         self.db.checkpoint().map_err(to_backend_error)
+    }
+
+    pub fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError> {
+        let specs = checkpoint_tree_specs();
+        let scopes = specs
+            .iter()
+            .map(|spec| (spec.name, b"".as_slice()))
+            .collect::<Vec<_>>();
+        self.db
+            .view(&scopes, |view| {
+                let mut records = Vec::new();
+                for spec in specs {
+                    let tree = view.tree(spec.name).ok_or(holt::Error::Internal(
+                        "metadata checkpoint view omitted tree",
+                    ))?;
+                    for entry in tree.range() {
+                        let RangeEntry::Key { key, value, .. } = entry? else {
+                            continue;
+                        };
+                        records.push(CheckpointImageRecord {
+                            tree_id: spec.id,
+                            key,
+                            value,
+                        });
+                    }
+                }
+                Ok(records)
+            })
+            .map_err(to_backend_error)
+            .and_then(|records| encode_checkpoint_image(&records))
+    }
+
+    pub fn install_checkpoint_image(&self, image: &[u8]) -> Result<(), MetadataError> {
+        let records = decode_checkpoint_image(image)?;
+        let existing = self.current_checkpoint_keys()?;
+        let committed = self
+            .db
+            .atomic(|batch| {
+                for (tree_id, key) in &existing {
+                    batch.delete(checkpoint_tree_name(*tree_id), key);
+                }
+                for record in &records {
+                    batch.put(
+                        checkpoint_tree_name(record.tree_id),
+                        &record.key,
+                        &record.value,
+                    );
+                }
+            })
+            .map_err(to_backend_error)?;
+        if !committed {
+            return Err(MetadataError::Backend(
+                "metadata checkpoint image install did not commit".to_owned(),
+            ));
+        }
+        self.active_snapshot_pins
+            .store(count_active_snapshot_pins(&self.db)?, Ordering::Relaxed);
+        Ok(())
+    }
+
+    fn current_checkpoint_keys(&self) -> Result<Vec<(u8, Vec<u8>)>, MetadataError> {
+        let mut keys = Vec::new();
+        for spec in self.trees.checkpoint_trees() {
+            for entry in spec.tree.range_keys() {
+                let KeyRangeEntry::Key { key, .. } = entry.map_err(to_backend_error)? else {
+                    continue;
+                };
+                keys.push((spec.id, key));
+            }
+        }
+        Ok(keys)
     }
 
     fn current_tree(&self, family: RecordFamily) -> Result<Tree, MetadataError> {
@@ -481,6 +588,222 @@ impl FamilyTrees {
         };
         Ok(tree.clone())
     }
+
+    fn checkpoint_trees(&self) -> Vec<CheckpointTreeSpec> {
+        checkpoint_tree_specs()
+            .iter()
+            .map(|spec| CheckpointTreeSpec {
+                id: spec.id,
+                tree: self.checkpoint_tree(spec.id),
+            })
+            .collect()
+    }
+
+    fn checkpoint_tree(&self, tree_id: u8) -> Tree {
+        match tree_id {
+            TREE_ID_SYSTEM_CURRENT => self.system_current.clone(),
+            TREE_ID_MOUNT_CURRENT => self.mount_current.clone(),
+            TREE_ID_INODE_CURRENT => self.inode_current.clone(),
+            TREE_ID_DENTRY_CURRENT => self.dentry_current.clone(),
+            TREE_ID_PARENT_CURRENT => self.parent_current.clone(),
+            TREE_ID_XATTR_CURRENT => self.xattr_current.clone(),
+            TREE_ID_CHUNK_MANIFEST_CURRENT => self.chunk_manifest_current.clone(),
+            TREE_ID_SESSION_CURRENT => self.session_current.clone(),
+            TREE_ID_PATH_INDEX_CURRENT => self.path_index_current.clone(),
+            TREE_ID_WATCH_CURRENT => self.watch_current.clone(),
+            TREE_ID_SNAPSHOT_CURRENT => self.snapshot_current.clone(),
+            TREE_ID_GC_CURRENT => self.gc_current.clone(),
+            TREE_ID_COMMAND_DEDUPE_CURRENT => self.command_dedupe_current.clone(),
+            TREE_ID_HISTORY => self.history.clone(),
+            _ => unreachable!("checkpoint tree registry returned unknown tree id"),
+        }
+    }
+}
+
+fn checkpoint_tree_specs() -> &'static [CheckpointTreeNameSpec] {
+    &[
+        CheckpointTreeNameSpec {
+            id: TREE_ID_SYSTEM_CURRENT,
+            name: SYSTEM_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_MOUNT_CURRENT,
+            name: MOUNT_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_INODE_CURRENT,
+            name: INODE_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_DENTRY_CURRENT,
+            name: DENTRY_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_PARENT_CURRENT,
+            name: PARENT_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_XATTR_CURRENT,
+            name: XATTR_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_CHUNK_MANIFEST_CURRENT,
+            name: CHUNK_MANIFEST_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_SESSION_CURRENT,
+            name: SESSION_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_PATH_INDEX_CURRENT,
+            name: PATH_INDEX_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_WATCH_CURRENT,
+            name: WATCH_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_SNAPSHOT_CURRENT,
+            name: SNAPSHOT_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_GC_CURRENT,
+            name: GC_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_COMMAND_DEDUPE_CURRENT,
+            name: COMMAND_DEDUPE_CURRENT_TREE,
+        },
+        CheckpointTreeNameSpec {
+            id: TREE_ID_HISTORY,
+            name: HISTORY_TREE,
+        },
+    ]
+}
+
+fn checkpoint_tree_name(tree_id: u8) -> &'static str {
+    checkpoint_tree_specs()
+        .iter()
+        .find(|spec| spec.id == tree_id)
+        .map(|spec| spec.name)
+        .expect("validated checkpoint tree id")
+}
+
+fn encode_checkpoint_image(records: &[CheckpointImageRecord]) -> Result<Vec<u8>, MetadataError> {
+    let mut out = Vec::new();
+    out.extend_from_slice(CHECKPOINT_IMAGE_MAGIC);
+    out.push(CHECKPOINT_IMAGE_VERSION);
+    out.extend_from_slice(&(records.len() as u64).to_be_bytes());
+    for record in records {
+        validate_checkpoint_tree_id(record.tree_id)?;
+        let key_len = u32::try_from(record.key.len()).map_err(|_| {
+            MetadataError::Backend("metadata checkpoint key exceeds u32 length".to_owned())
+        })?;
+        let value_len = u32::try_from(record.value.len()).map_err(|_| {
+            MetadataError::Backend("metadata checkpoint value exceeds u32 length".to_owned())
+        })?;
+        out.push(record.tree_id);
+        out.extend_from_slice(&key_len.to_be_bytes());
+        out.extend_from_slice(&value_len.to_be_bytes());
+        out.extend_from_slice(&record.key);
+        out.extend_from_slice(&record.value);
+    }
+    Ok(out)
+}
+
+fn decode_checkpoint_image(image: &[u8]) -> Result<Vec<CheckpointImageRecord>, MetadataError> {
+    let mut cursor = CheckpointImageCursor::new(image);
+    let magic = cursor.take(CHECKPOINT_IMAGE_MAGIC.len())?;
+    if magic != CHECKPOINT_IMAGE_MAGIC {
+        return Err(checkpoint_image_error("bad checkpoint image magic"));
+    }
+    let version = cursor.read_u8()?;
+    if version != CHECKPOINT_IMAGE_VERSION {
+        return Err(checkpoint_image_error(
+            "unsupported checkpoint image version",
+        ));
+    }
+    let count = cursor.read_u64()?;
+    let count = usize::try_from(count)
+        .map_err(|_| checkpoint_image_error("checkpoint image record count overflows usize"))?;
+    let mut records = Vec::with_capacity(count);
+    for _ in 0..count {
+        let tree_id = cursor.read_u8()?;
+        validate_checkpoint_tree_id(tree_id)?;
+        let key_len = cursor.read_u32()? as usize;
+        let value_len = cursor.read_u32()? as usize;
+        let key = cursor.take(key_len)?.to_vec();
+        let value = cursor.take(value_len)?.to_vec();
+        records.push(CheckpointImageRecord {
+            tree_id,
+            key,
+            value,
+        });
+    }
+    if !cursor.is_empty() {
+        return Err(checkpoint_image_error(
+            "checkpoint image has trailing bytes",
+        ));
+    }
+    Ok(records)
+}
+
+fn validate_checkpoint_tree_id(tree_id: u8) -> Result<(), MetadataError> {
+    if checkpoint_tree_specs()
+        .iter()
+        .any(|spec| spec.id == tree_id)
+    {
+        Ok(())
+    } else {
+        Err(checkpoint_image_error(
+            "checkpoint image references unknown tree",
+        ))
+    }
+}
+
+struct CheckpointImageCursor<'a> {
+    remaining: &'a [u8],
+}
+
+impl<'a> CheckpointImageCursor<'a> {
+    fn new(bytes: &'a [u8]) -> Self {
+        Self { remaining: bytes }
+    }
+
+    fn take(&mut self, len: usize) -> Result<&'a [u8], MetadataError> {
+        if self.remaining.len() < len {
+            return Err(checkpoint_image_error("truncated checkpoint image"));
+        }
+        let (head, tail) = self.remaining.split_at(len);
+        self.remaining = tail;
+        Ok(head)
+    }
+
+    fn read_u8(&mut self) -> Result<u8, MetadataError> {
+        Ok(self.take(1)?[0])
+    }
+
+    fn read_u32(&mut self) -> Result<u32, MetadataError> {
+        let bytes = self.take(4)?;
+        Ok(u32::from_be_bytes(
+            bytes.try_into().expect("slice length checked by take"),
+        ))
+    }
+
+    fn read_u64(&mut self) -> Result<u64, MetadataError> {
+        let bytes = self.take(8)?;
+        Ok(u64::from_be_bytes(
+            bytes.try_into().expect("slice length checked by take"),
+        ))
+    }
+
+    fn is_empty(&self) -> bool {
+        self.remaining.is_empty()
+    }
+}
+
+fn checkpoint_image_error(message: &str) -> MetadataError {
+    MetadataError::Backend(format!("metadata checkpoint image: {message}"))
 }
 
 fn open_family_trees(db: &DB) -> Result<FamilyTrees, MetadataError> {
@@ -1578,6 +1901,76 @@ mod tests {
             Some(Value(b"value-b".to_vec()))
         );
         assert!(store.metadata_store_stats().history_write_total > 0);
+    }
+
+    #[test]
+    fn checkpoint_image_round_trips_current_history_and_dedupe() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+        store
+            .commit_metadata(snapshot_pin_command(b"snapshot-1", 3))
+            .unwrap();
+        let replace = store
+            .commit_metadata(replace_command(b"dir/a", b"req-2", b"value-b", 2, 4))
+            .unwrap();
+
+        let image = store.export_checkpoint_image().unwrap();
+        let restored = HoltMetadataStore::open_memory().unwrap();
+        restored
+            .commit_metadata(put_command(b"stale/key", b"stale", b"stale-value", 2))
+            .unwrap();
+        restored.install_checkpoint_image(&image).unwrap();
+
+        assert_eq!(
+            restored
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(4),
+                    ReadPurpose::UserStrong
+                )
+                .unwrap(),
+            Some(Value(b"value-b".to_vec()))
+        );
+        assert_eq!(
+            restored
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(2),
+                    ReadPurpose::Snapshot
+                )
+                .unwrap(),
+            Some(Value(b"value-a".to_vec()))
+        );
+        assert_eq!(
+            restored
+                .get(
+                    RecordFamily::Dentry,
+                    b"stale/key",
+                    version(4),
+                    ReadPurpose::UserStrong
+                )
+                .unwrap(),
+            None
+        );
+        assert_eq!(
+            restored.committed_request_result(b"req-2").unwrap(),
+            Some(replace)
+        );
+        assert_eq!(restored.metadata_store_stats().active_snapshot_pin_total, 1);
+    }
+
+    #[test]
+    fn checkpoint_image_rejects_malformed_bytes() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        assert!(store.install_checkpoint_image(b"not-a-checkpoint").is_err());
+
+        let mut image = store.export_checkpoint_image().unwrap();
+        image.push(1);
+        assert!(store.install_checkpoint_image(&image).is_err());
     }
 
     #[test]

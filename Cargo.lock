@@ -1237,6 +1237,7 @@ dependencies = [
  "nokvfs-object",
  "nokvfs-protocol",
  "nokvfs-types",
+ "sha2 0.10.9",
  "tempfile",
 ]
 
