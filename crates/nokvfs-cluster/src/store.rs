@@ -4,9 +4,10 @@ use std::sync::{
 };
 
 use nokvfs_meta::command::{
-    CommitResult, HistoryPruneOutcome, HistoryPruneRequest, KeyScanRequest, MetadataCommand,
-    MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, Mutation,
-    MutationOp, Predicate, PredicateRef, ReadItem, ReadPurpose, ScanItem, ScanRequest, Version,
+    metadata_commands_conflict, CommitResult, HistoryPruneOutcome, HistoryPruneRequest,
+    KeyScanRequest, MetadataCommand, MetadataError, MetadataStore, MetadataStoreStats,
+    MetadataStoreStatsProvider, MutationOp, Predicate, ReadItem, ReadPurpose, ScanItem,
+    ScanRequest, Version,
 };
 use nokvfs_types::{MountId, RecordFamily};
 
@@ -609,65 +610,18 @@ fn command_conflicts_with_pending_batch(
     pending: &[(usize, MetadataCommand)],
     command: &MetadataCommand,
 ) -> bool {
-    pending.iter().any(|(_, previous)| {
-        previous.request_id == command.request_id
-            || commands_have_internal_conflict(command, previous)
-    })
+    pending
+        .iter()
+        .any(|(_, previous)| metadata_commands_conflict(command, previous))
 }
 
 fn command_conflicts_with_prior_commands(
     commands: &[MetadataCommand],
     command: &MetadataCommand,
 ) -> bool {
-    commands.iter().any(|previous| {
-        previous.request_id == command.request_id
-            || commands_have_internal_conflict(command, previous)
-    })
-}
-
-fn commands_have_internal_conflict(left: &MetadataCommand, right: &MetadataCommand) -> bool {
-    left.mutations.iter().any(|left_mutation| {
-        right.mutations.iter().any(|right_mutation| {
-            same_key(
-                left_mutation.family,
-                &left_mutation.key,
-                right_mutation.family,
-                &right_mutation.key,
-            )
-        })
-    }) || left.predicates.iter().any(|predicate| {
-        right
-            .mutations
-            .iter()
-            .any(|mutation| predicate_conflicts_with_mutation(predicate, mutation))
-    }) || right.predicates.iter().any(|predicate| {
-        left.mutations
-            .iter()
-            .any(|mutation| predicate_conflicts_with_mutation(predicate, mutation))
-    })
-}
-
-fn predicate_conflicts_with_mutation(predicate: &PredicateRef, mutation: &Mutation) -> bool {
-    match predicate.predicate {
-        Predicate::PrefixEmpty => {
-            predicate.family == mutation.family && mutation.key.starts_with(&predicate.key)
-        }
-        Predicate::Exists | Predicate::NotExists | Predicate::VersionEquals(_) => same_key(
-            predicate.family,
-            &predicate.key,
-            mutation.family,
-            &mutation.key,
-        ),
-    }
-}
-
-fn same_key(
-    left_family: RecordFamily,
-    left_key: &[u8],
-    right_family: RecordFamily,
-    right_key: &[u8],
-) -> bool {
-    left_family == right_family && left_key == right_key
+    commands
+        .iter()
+        .any(|previous| metadata_commands_conflict(command, previous))
 }
 
 impl<M, L, F> SharedLogMetadataStore<M, L, F>

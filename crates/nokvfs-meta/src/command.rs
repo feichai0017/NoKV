@@ -249,6 +249,56 @@ pub trait MetadataStoreStatsProvider {
     fn metadata_store_stats(&self) -> MetadataStoreStats;
 }
 
+pub fn metadata_commands_conflict(left: &MetadataCommand, right: &MetadataCommand) -> bool {
+    left.request_id == right.request_id
+        || left.mutations.iter().any(|left_mutation| {
+            right.mutations.iter().any(|right_mutation| {
+                same_metadata_key(
+                    left_mutation.family,
+                    &left_mutation.key,
+                    right_mutation.family,
+                    &right_mutation.key,
+                )
+            })
+        })
+        || left.predicates.iter().any(|predicate| {
+            right
+                .mutations
+                .iter()
+                .any(|mutation| predicate_conflicts_with_mutation(predicate, mutation))
+        })
+        || right.predicates.iter().any(|predicate| {
+            left.mutations
+                .iter()
+                .any(|mutation| predicate_conflicts_with_mutation(predicate, mutation))
+        })
+}
+
+fn predicate_conflicts_with_mutation(predicate: &PredicateRef, mutation: &Mutation) -> bool {
+    match predicate.predicate {
+        Predicate::PrefixEmpty => {
+            predicate.family == mutation.family && mutation.key.starts_with(&predicate.key)
+        }
+        Predicate::Exists | Predicate::NotExists | Predicate::VersionEquals(_) => {
+            same_metadata_key(
+                predicate.family,
+                &predicate.key,
+                mutation.family,
+                &mutation.key,
+            )
+        }
+    }
+}
+
+fn same_metadata_key(
+    left_family: RecordFamily,
+    left_key: &[u8],
+    right_family: RecordFamily,
+    right_key: &[u8],
+) -> bool {
+    left_family == right_family && left_key == right_key
+}
+
 impl Version {
     pub fn new(version: u64) -> Result<Self, MetadataError> {
         if version == 0 {
