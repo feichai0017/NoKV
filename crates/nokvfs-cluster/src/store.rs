@@ -8,8 +8,9 @@ use nokvfs_meta::command::{
 use nokvfs_types::{MountId, RecordFamily};
 
 use crate::{
-    AppliedMetadataCommand, DurableReceipt, LogIndex, LogTerm, MetadataGroup, MetadataLogSink,
-    ReplayDriver, ReplayError, ReplayOutcome, SharedLogError, SharedMetadataLog,
+    AppliedMetadataCommand, ApplyFrontier, DurableReceipt, LogIndex, LogPosition, LogTerm,
+    MetadataGroup, MetadataLogSink, ReplayDriver, ReplayError, ReplayOutcome, SharedLogError,
+    SharedMetadataLog,
 };
 
 #[derive(Debug)]
@@ -19,6 +20,7 @@ pub struct SharedLogMetadataStore<M, L> {
     term: LogTerm,
     mount: MountId,
     apply_gate: Mutex<()>,
+    applied_frontier: Mutex<Option<ApplyFrontier>>,
 }
 
 impl<M, L> SharedLogMetadataStore<M, L>
@@ -33,6 +35,7 @@ where
             term,
             mount,
             apply_gate: Mutex::new(()),
+            applied_frontier: Mutex::new(None),
         }
     }
 
@@ -80,6 +83,13 @@ where
     pub fn log(&self) -> &L {
         &self.log
     }
+
+    pub fn applied_frontier(&self) -> Option<ApplyFrontier> {
+        self.applied_frontier
+            .lock()
+            .map(|frontier| *frontier)
+            .unwrap_or(None)
+    }
 }
 
 impl<M, L> MetadataLogSink for SharedLogMetadataStore<M, L>
@@ -99,6 +109,10 @@ where
                 batch_position: receipt.batch_position,
                 message: err.to_string(),
             })?;
+        self.record_applied_frontier(ApplyFrontier {
+            position: receipt.position,
+            commit_version: result.commit_version,
+        })?;
         Ok(AppliedMetadataCommand {
             receipt,
             applied_mutations: result.applied_mutations,
@@ -191,7 +205,7 @@ where
                     )?
                     .is_none()
                 {
-                    return Err(MetadataError::PredicateFailed);
+                    return allow_if_deduped_retry(store, command);
                 }
             }
             Predicate::NotExists => {
@@ -201,7 +215,7 @@ where
                         && mutation.op == MutationOp::Put
                 });
                 if !writes_key {
-                    return Err(MetadataError::PredicateFailed);
+                    return allow_if_deduped_retry(store, command);
                 }
                 if store
                     .get_versioned(
@@ -212,7 +226,7 @@ where
                     )?
                     .is_some()
                 {
-                    return Err(MetadataError::PredicateFailed);
+                    return allow_if_deduped_retry(store, command);
                 }
             }
             Predicate::PrefixEmpty => {
@@ -227,7 +241,7 @@ where
                     })?
                     .is_empty()
                 {
-                    return Err(MetadataError::PredicateFailed);
+                    return allow_if_deduped_retry(store, command);
                 }
             }
             Predicate::VersionEquals(expected) => {
@@ -238,13 +252,48 @@ where
                     ReadPurpose::WritePlanLocal,
                 )?
                 else {
-                    return Err(MetadataError::PredicateFailed);
+                    return allow_if_deduped_retry(store, command);
                 };
                 if item.version != expected {
-                    return Err(MetadataError::PredicateFailed);
+                    return allow_if_deduped_retry(store, command);
                 }
             }
         }
     }
     Ok(())
+}
+
+fn allow_if_deduped_retry<M>(store: &M, command: &MetadataCommand) -> Result<(), MetadataError>
+where
+    M: MetadataStore,
+{
+    match store.commit_metadata(command.clone()) {
+        Ok(_) => Ok(()),
+        Err(MetadataError::PredicateFailed) => Err(MetadataError::PredicateFailed),
+        Err(err) => Err(err),
+    }
+}
+
+impl<M, L> SharedLogMetadataStore<M, L> {
+    fn record_applied_frontier(&self, frontier: ApplyFrontier) -> Result<(), ReplayError> {
+        let mut current = self
+            .applied_frontier
+            .lock()
+            .map_err(|_| ReplayError::Apply {
+                position: frontier.position,
+                batch_position: 0,
+                message: "shared-log applied frontier mutex poisoned".to_owned(),
+            })?;
+        if current
+            .map(|existing| frontier_position_is_newer(frontier.position, existing.position))
+            .unwrap_or(true)
+        {
+            *current = Some(frontier);
+        }
+        Ok(())
+    }
+}
+
+fn frontier_position_is_newer(next: LogPosition, current: LogPosition) -> bool {
+    (next.term, next.index) >= (current.term, current.index)
 }

@@ -1,35 +1,28 @@
-use nokvfs_cluster::{FileSharedLog, LogTerm, SharedLogMetadataStore};
+use std::sync::Arc;
+
+use nokvfs_cluster::{FileSharedLog, SharedLogMetadataStore};
 use nokvfs_meta::command::{
     CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand, MetadataError,
     MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, ReadItem, ReadPurpose, ScanItem,
     ScanRequest,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
-use nokvfs_types::{MountId, RecordFamily};
+use nokvfs_types::RecordFamily;
 
 pub(crate) type FileLoggedMetadataStore = SharedLogMetadataStore<HoltMetadataStore, FileSharedLog>;
 
 pub(crate) enum ServerMetadataStore {
-    Direct(HoltMetadataStore),
-    FileLogged(FileLoggedMetadataStore),
+    Direct(Box<HoltMetadataStore>),
+    FileLogged(Arc<FileLoggedMetadataStore>),
 }
 
 impl ServerMetadataStore {
     pub(crate) fn direct(store: HoltMetadataStore) -> Self {
-        Self::Direct(store)
+        Self::Direct(Box::new(store))
     }
 
-    pub(crate) fn file_logged(
-        store: HoltMetadataStore,
-        log: FileSharedLog,
-        mount: MountId,
-    ) -> Result<Self, nokvfs_cluster::SharedLogError> {
-        Ok(Self::FileLogged(SharedLogMetadataStore::new(
-            store,
-            log,
-            LogTerm::new(1)?,
-            mount,
-        )))
+    pub(crate) fn file_logged(store: Arc<FileLoggedMetadataStore>) -> Self {
+        Self::FileLogged(store)
     }
 }
 

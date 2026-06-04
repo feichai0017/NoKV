@@ -5,7 +5,9 @@ use std::net::TcpListener;
 use std::sync::Arc;
 use std::thread;
 
-use nokvfs_cluster::{FileSharedLog, SharedLogError};
+use nokvfs_cluster::{
+    ApplyFrontier, FileSharedLog, LogTerm, SharedLogError, SharedLogMetadataStore,
+};
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
     HistoryGcWorker, HistoryGcWorkerState, MetadError, NoKvFs, ObjectGcWorker, ObjectGcWorkerState,
@@ -13,13 +15,15 @@ use nokvfs_meta::{
 use nokvfs_object::{ObjectError, S3ObjectStore};
 
 use crate::http;
-use crate::metadata::ServerMetadataStore;
+use crate::metadata::{FileLoggedMetadataStore, ServerMetadataStore};
 use crate::options::ServerOptions;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
 
 pub struct Server {
     service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
+    metadata_log_enabled: bool,
+    metadata_log: Option<Arc<FileLoggedMetadataStore>>,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
 }
@@ -43,10 +47,18 @@ impl Server {
     pub fn open(options: ServerOptions) -> Result<Self, ServerError> {
         let metadata =
             HoltMetadataStore::open_file(&options.meta_path).map_err(MetadError::from)?;
+        let mut metadata_log = None;
         let metadata = match options.metadata_log_path.as_ref() {
             Some(path) => {
                 let log = FileSharedLog::open(path)?;
-                ServerMetadataStore::file_logged(metadata, log, options.mount)?
+                let logged = Arc::new(SharedLogMetadataStore::new(
+                    metadata,
+                    log,
+                    LogTerm::new(1)?,
+                    options.mount,
+                ));
+                metadata_log = Some(Arc::clone(&logged));
+                ServerMetadataStore::file_logged(logged)
             }
             None => ServerMetadataStore::direct(metadata),
         };
@@ -57,6 +69,8 @@ impl Server {
         let history_gc = HistoryGcWorker::spawn(Arc::clone(&service), options.history_gc);
         Ok(Self {
             service,
+            metadata_log_enabled: metadata_log.is_some(),
+            metadata_log,
             object_gc,
             history_gc,
         })
@@ -87,7 +101,7 @@ impl Server {
         let object_gc = self.object_gc.state();
         let history_gc = self.history_gc.state();
         format!(
-            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_gets\":{},\"cache_hits\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
+            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_gets\":{},\"cache_hits\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_log\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
             self.service.block_cache_enabled(),
             objects.object_puts,
             objects.object_gets,
@@ -95,6 +109,7 @@ impl Server {
             objects.manifest_chunks,
             objects.manifest_blocks,
             metadata_store_json(&metadata),
+            metadata_log_json(self.metadata_log_enabled, self.metadata_log_frontier()),
             metadata_service_json(&metadata_service),
             object_gc_json(&object_gc),
             history_gc_json(&history_gc),
@@ -116,6 +131,27 @@ impl Server {
             history.removed,
             history.retained_by_snapshots,
         ))
+    }
+}
+
+impl Server {
+    fn metadata_log_frontier(&self) -> Option<ApplyFrontier> {
+        self.metadata_log
+            .as_ref()
+            .and_then(|metadata_log| metadata_log.applied_frontier())
+    }
+}
+
+fn metadata_log_json(enabled: bool, frontier: Option<ApplyFrontier>) -> String {
+    match frontier {
+        Some(frontier) => format!(
+            "{{\"enabled\":true,\"applied_term\":{},\"applied_index\":{},\"commit_version\":{}}}",
+            frontier.position.term.get(),
+            frontier.position.index.get(),
+            frontier.commit_version.get(),
+        ),
+        None if enabled => "{\"enabled\":true,\"applied_term\":null,\"applied_index\":null,\"commit_version\":null}".to_owned(),
+        None => "{\"enabled\":false}".to_owned(),
     }
 }
 
@@ -276,6 +312,9 @@ pub(crate) mod tests {
     #[test]
     fn manual_gc_reports_empty_outcomes() {
         let server = test_server();
+        assert!(server
+            .stats_json()
+            .contains("\"metadata_log\":{\"enabled\":false}"));
         let body = server.run_manual_gc(128).unwrap();
         assert!(body.contains("\"object_gc\""));
         assert!(body.contains("\"history_gc\""));
@@ -292,6 +331,10 @@ pub(crate) mod tests {
                 .service()
                 .create_dir_path("/runs", 0o755, 1000, 1000)
                 .unwrap();
+            let stats = server.stats_json();
+            assert!(stats.contains("\"metadata_log\":{\"enabled\":true"));
+            assert!(stats.contains("\"applied_index\":"));
+            assert!(stats.contains("\"commit_version\":"));
         }
 
         let reopened = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();

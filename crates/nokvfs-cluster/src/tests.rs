@@ -38,6 +38,16 @@ fn command(id: &[u8], commit_version: u64) -> MetadataCommand {
     }
 }
 
+fn not_exists_command(id: &[u8], commit_version: u64) -> MetadataCommand {
+    let mut command = command(id, commit_version);
+    command.predicates = vec![PredicateRef {
+        family: RecordFamily::Dentry,
+        key: id.to_vec(),
+        predicate: Predicate::NotExists,
+    }];
+    command
+}
+
 #[derive(Default)]
 struct RecordingSink {
     applied: Mutex<Vec<DurableReceipt>>,
@@ -427,6 +437,16 @@ fn shared_log_metadata_store_logs_before_applying_command() {
     assert_eq!(result.commit_version, version(2));
     assert_eq!(shared.log().committed_index().get(), 1);
     assert_eq!(
+        shared.applied_frontier(),
+        Some(ApplyFrontier {
+            position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(1).unwrap(),
+            },
+            commit_version: version(2),
+        })
+    );
+    assert_eq!(
         shared
             .inner()
             .get(
@@ -445,6 +465,29 @@ fn shared_log_metadata_store_logs_before_applying_command() {
         .read_from(LogIndex::new(1).unwrap(), 0)
         .unwrap();
     assert_eq!(entries[0].commands[0].request_id, b"a");
+}
+
+#[test]
+fn shared_log_metadata_store_allows_deduped_retry_after_predicate_changes() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+
+    let first = shared.commit_metadata(not_exists_command(b"a", 2)).unwrap();
+    let retry = shared.commit_metadata(not_exists_command(b"a", 2)).unwrap();
+
+    assert_eq!(retry, first);
+    assert_eq!(
+        shared.applied_frontier(),
+        Some(ApplyFrontier {
+            position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(2).unwrap(),
+            },
+            commit_version: version(2),
+        })
+    );
 }
 
 #[test]
@@ -505,6 +548,16 @@ fn shared_log_metadata_store_recovers_file_log_into_fresh_store() {
     let result = recovered.commit_metadata(command(b"c", 4)).unwrap();
     assert_eq!(result.commit_version, version(4));
     assert_eq!(recovered.log().committed_index().get(), 2);
+    assert_eq!(
+        recovered.applied_frontier(),
+        Some(ApplyFrontier {
+            position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(2).unwrap(),
+            },
+            commit_version: version(4),
+        })
+    );
 }
 
 #[test]
