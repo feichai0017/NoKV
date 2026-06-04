@@ -939,7 +939,7 @@ mod tests {
             applied_position: WireMetadataPosition { term: 2, index: 7 },
             min_retained_index: 8,
             max_commit_version: 9,
-            artifact_uri: b"file:/tmp/checkpoint-1.nkmeta".to_vec(),
+            artifact_uri: b"object:metadata-checkpoints/checkpoint-1.nkmeta".to_vec(),
             artifact_digest: b"digest".to_vec(),
             artifact_size_bytes: 16,
         };

@@ -156,5 +156,6 @@ newer term has been observed. The RPC path can also read the latest published
 checkpoint manifest for a mount, giving learners the frontier and artifact
 descriptor they need before replaying a retained tail. A learner can request a
 bootstrap plan that pairs that checkpoint with the retained log tail range to
-replay. Actual checkpoint artifact transfer/install, leader election, and full
-multi-voter quorum transport are still the next HA steps.
+replay. Checkpoint images are stored in the configured object backend and
+verified by digest before installation. Leader election and full multi-voter
+quorum transport are still the next HA steps.

@@ -1396,7 +1396,10 @@ fn log_position(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::tests::{test_options, test_server};
+    use crate::server::tests::{
+        open_test_server_with_checkpoint_objects, test_checkpoint_objects, test_options,
+        test_server,
+    };
     use nokvfs_protocol::{
         decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor,
         WireChunkManifest, WireMetadataError,
@@ -1546,7 +1549,12 @@ mod tests {
     fn rpc_reads_latest_metadata_checkpoint_after_gc_publishes_manifest() {
         let dir = tempdir().unwrap();
         let metadata_log = dir.path().join("metadata.log");
-        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let checkpoint_objects = test_checkpoint_objects();
+        let server = open_test_server_with_checkpoint_objects(
+            dir.path(),
+            Some(metadata_log),
+            &checkpoint_objects,
+        );
 
         let before = request_envelope(
             &server,
@@ -1586,7 +1594,7 @@ mod tests {
         };
         assert_eq!(checkpoint.mount, 1);
         assert!(checkpoint.id.starts_with(b"mount-1-term-1-index-"));
-        assert!(checkpoint.artifact_uri.starts_with(b"file:"));
+        assert!(checkpoint.artifact_uri.starts_with(b"object:"));
         assert!(!checkpoint.artifact_digest.is_empty());
         assert!(checkpoint.artifact_size_bytes > 0);
         assert!(checkpoint.min_retained_index >= checkpoint.applied_position.index);
@@ -1613,7 +1621,12 @@ mod tests {
     fn rpc_plans_metadata_bootstrap_from_checkpoint_and_retained_tail() {
         let dir = tempdir().unwrap();
         let metadata_log = dir.path().join("metadata.log");
-        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let checkpoint_objects = test_checkpoint_objects();
+        let server = open_test_server_with_checkpoint_objects(
+            dir.path(),
+            Some(metadata_log),
+            &checkpoint_objects,
+        );
         let created_before_checkpoint = request_envelope(
             &server,
             MetadataRpcRequest::CreateDirPath {
@@ -1666,7 +1679,12 @@ mod tests {
     fn rpc_installs_metadata_checkpoint_and_replays_retained_tail() {
         let dir = tempdir().unwrap();
         let metadata_log = dir.path().join("metadata.log");
-        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let checkpoint_objects = test_checkpoint_objects();
+        let server = open_test_server_with_checkpoint_objects(
+            dir.path(),
+            Some(metadata_log),
+            &checkpoint_objects,
+        );
         let created_before_checkpoint = request_envelope(
             &server,
             MetadataRpcRequest::CreateDirPath {
