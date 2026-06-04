@@ -9,7 +9,7 @@ use std::thread;
 
 use nokvfs_cluster::{
     compact_log_to_checkpoint, AppendMetadataBatchRequest, AppendMetadataBatchResponse,
-    ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
+    AppliedFrontierStore, ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
     FileAppliedFrontierStore, FileCheckpointCatalog, FileMembershipCatalog, FileSharedLog,
     FileSharedLogOptions, InstallCheckpointRequest, InstallCheckpointResponse, LogIndex,
     LogPosition, MembershipCatalog, MetadataLogEntry, MetadataMembership, NodeId, SharedLogError,
@@ -87,6 +87,14 @@ impl Server {
                     options.metadata_log_node,
                 )?;
                 let log_term = membership.term;
+                install_startup_checkpoint_if_required(
+                    &metadata,
+                    &log,
+                    &frontier,
+                    &checkpoint,
+                    options.mount,
+                    options.metadata_log_node,
+                )?;
                 let (logged, _replay) = SharedLogMetadataStore::recover_with_frontier_store(
                     metadata,
                     log,
@@ -507,6 +515,49 @@ fn metadata_membership_for_node(
         return Err(ServerError::SharedLog(SharedLogError::UnknownNode(node)));
     }
     Ok(membership)
+}
+
+fn install_startup_checkpoint_if_required(
+    metadata: &HoltMetadataStore,
+    log: &FileSharedLog,
+    frontier: &FileAppliedFrontierStore,
+    checkpoints: &FileCheckpointCatalog,
+    mount: nokvfs_types::MountId,
+    node: NodeId,
+) -> Result<(), ServerError> {
+    if frontier.load()?.is_some() {
+        return Ok(());
+    }
+    let first_index = LogIndex::new(1)?;
+    let compacted = match log.read_from(first_index, 1) {
+        Ok(_) => return Ok(()),
+        Err(SharedLogError::Compacted { compacted, .. }) => compacted,
+        Err(err) => return Err(ServerError::SharedLog(err)),
+    };
+    let checkpoint = checkpoints
+        .latest_for_mount(mount)?
+        .ok_or(SharedLogError::CheckpointRequired { node, compacted })
+        .map_err(ServerError::SharedLog)?;
+    let checkpoint_compacted = checkpoint
+        .frontier
+        .compact_through()
+        .unwrap_or(LogIndex::ZERO);
+    if checkpoint_compacted < compacted {
+        return Err(ServerError::SharedLog(SharedLogError::CheckpointTooOld {
+            node,
+            checkpoint_compacted,
+            required: compacted,
+        }));
+    }
+    let image = read_metadata_checkpoint_artifact(&checkpoint.artifact)?;
+    metadata
+        .install_checkpoint_image(&image)
+        .map_err(|err| ServerError::SharedLog(SharedLogError::Backend(err.to_string())))?;
+    frontier.save(ApplyFrontier {
+        position: checkpoint.frontier.applied_position,
+        commit_version: checkpoint.frontier.max_commit_version,
+    })?;
+    Ok(())
 }
 
 fn metadata_checkpoint_id(
@@ -1100,6 +1151,75 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn server_rejects_fresh_startup_from_compacted_log_without_checkpoint() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log.clone()))).unwrap();
+        server
+            .service()
+            .create_dir_path("/runs", 0o755, 1000, 1000)
+            .unwrap();
+        let applied = server
+            .metadata_log_frontier()
+            .expect("create should apply through the metadata log");
+        server
+            .metadata_log
+            .as_ref()
+            .unwrap()
+            .log()
+            .compact_through(applied.position.index)
+            .unwrap();
+        drop(server);
+        remove_path_if_exists(&dir.path().join("meta"));
+        remove_path_if_exists(&metadata_apply_frontier_path(&metadata_log));
+
+        assert!(matches!(
+            Server::open(test_options(dir.path(), Some(metadata_log))),
+            Err(ServerError::SharedLog(SharedLogError::CheckpointRequired {
+                compacted,
+                ..
+            })) if compacted == applied.position.index
+        ));
+    }
+
+    #[test]
+    fn server_installs_checkpoint_before_replay_for_fresh_metadata_after_compaction() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        {
+            let server =
+                Server::open(test_options(dir.path(), Some(metadata_log.clone()))).unwrap();
+            server
+                .service()
+                .create_dir_path("/before-checkpoint", 0o755, 1000, 1000)
+                .unwrap();
+            server.run_manual_gc(128).unwrap();
+            server
+                .service()
+                .create_dir_path("/after-checkpoint", 0o755, 1000, 1000)
+                .unwrap();
+        }
+        remove_path_if_exists(&dir.path().join("meta"));
+        remove_path_if_exists(&metadata_apply_frontier_path(&metadata_log));
+
+        let reopened = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+
+        let before = reopened
+            .service()
+            .lookup_path("/before-checkpoint")
+            .unwrap()
+            .expect("checkpoint image should restore pre-compaction namespace");
+        let after = reopened
+            .service()
+            .lookup_path("/after-checkpoint")
+            .unwrap()
+            .expect("retained log tail should replay after checkpoint install");
+        assert_eq!(before.attr.file_type, nokvfs_types::FileType::Directory);
+        assert_eq!(after.attr.file_type, nokvfs_types::FileType::Directory);
+        assert!(metadata_apply_frontier_path(&dir.path().join("metadata.log")).is_file());
+    }
+
+    #[test]
     fn server_quorum_learner_enforces_require_applied_until_local_tail_replayed() {
         let dir = tempdir().unwrap();
         let log = Arc::new(
@@ -1166,5 +1286,14 @@ pub(crate) mod tests {
             .unwrap()
             .expect("learner should serve the synced directory");
         assert_eq!(entry.attr.file_type, nokvfs_types::FileType::Directory);
+    }
+
+    fn remove_path_if_exists(path: &Path) {
+        match fs::metadata(path) {
+            Ok(metadata) if metadata.is_dir() => fs::remove_dir_all(path).unwrap(),
+            Ok(_) => fs::remove_file(path).unwrap(),
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {}
+            Err(err) => panic!("stat {}: {err}", path.display()),
+        }
     }
 }
