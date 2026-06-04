@@ -1,4 +1,4 @@
-//! Metadata model execution for NoKV-FS.
+//! Metadata model execution for NoKV.
 //!
 //! This crate owns the Holt-friendly metadata layout, the storage-neutral
 //! metadata command contract, the Holt-backed metastore, and the in-process

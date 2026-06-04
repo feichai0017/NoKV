@@ -1,4 +1,4 @@
-//! Holt-friendly key layout for NoKV-FS metadata.
+//! Holt-friendly key layout for NoKV metadata.
 //!
 //! This crate owns ordered keys and family-local prefixes. It does not own
 //! namespace semantics, metadata execution, Holt tree handles, Raft state, or

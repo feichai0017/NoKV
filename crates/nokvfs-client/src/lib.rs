@@ -1,4 +1,4 @@
-//! Path-oriented Rust client for NoKV-FS.
+//! Path-oriented Rust client for NoKV.
 //!
 //! This crate owns SDK ergonomics over the remote `metad` service. It does not
 //! own metadata layout, Holt trees, object-store internals, FUSE, or metadata

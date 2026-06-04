@@ -1,4 +1,4 @@
-//! Wire protocol types for NoKV-FS metadata RPC.
+//! Wire protocol types for NoKV metadata RPC.
 //!
 //! This crate owns storage-neutral request and response DTOs shared by the
 //! server and remote clients. It does not execute metadata semantics, know Holt

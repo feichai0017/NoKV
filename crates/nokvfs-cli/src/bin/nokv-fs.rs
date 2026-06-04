@@ -1,4 +1,4 @@
-//! Minimal NoKV-FS command line interface.
+//! Minimal NoKV command line interface.
 
 use std::env;
 use std::error::Error;
@@ -754,7 +754,7 @@ fn from_object(err: impl Error) -> CliError {
 fn print_help(out: &mut impl Write) -> io::Result<()> {
     writeln!(
         out,
-        "NoKV-FS metadata client/server CLI\n\
+        "NoKV metadata client/server CLI\n\
 \n\
 Usage:\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] init\n\

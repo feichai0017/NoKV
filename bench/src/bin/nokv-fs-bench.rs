@@ -1,4 +1,4 @@
-//! NoKV-FS workload benchmark harness.
+//! NoKV workload benchmark harness.
 //!
 //! This binary intentionally reports workload shape and durability caveats with
 //! every result. It runs a real `metad` process boundary with the remote SDK.

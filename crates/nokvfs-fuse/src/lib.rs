@@ -1,4 +1,4 @@
-//! FUSE frontend for NoKV-FS.
+//! FUSE frontend for NoKV.
 //!
 //! This crate owns the low-level FUSE mapping from kernel inode operations to
 //! `metad` service calls. It does not own metadata layout, Holt state, object

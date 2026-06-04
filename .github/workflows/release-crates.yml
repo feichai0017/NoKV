@@ -1,0 +1,103 @@
+# Copyright 2024-2026 The NoKV Authors.
+# SPDX-License-Identifier: Apache-2.0
+
+name: Release Crates
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "Git ref to publish, for example v0.1.0"
+        required: true
+      dry_run:
+        description: "Package crates without publishing to crates.io"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+      publish_bench:
+        description: "Also publish the benchmark crate"
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout release ref
+        uses: actions/checkout@v6
+        with:
+          ref: ${{ inputs.ref }}
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Resolve crate list
+        id: crates
+        shell: bash
+        run: |
+          set -euo pipefail
+          crates=(
+            nokvfs-types
+            nokvfs-object
+            nokvfs-protocol
+            nokvfs-meta
+            nokvfs-client
+            nokvfs-fuse
+            nokvfs-server
+            nokvfs-cli
+          )
+          if [[ "${{ inputs.publish_bench }}" == "true" ]]; then
+            crates+=(nokvfs-bench)
+          fi
+          {
+            echo "list<<EOF"
+            printf '%s\n' "${crates[@]}"
+            echo "EOF"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Package crates
+        if: inputs.dry_run == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          args=()
+          while IFS= read -r crate; do
+            [[ -z "$crate" ]] && continue
+            args+=(-p "$crate")
+          done <<<"${{ steps.crates.outputs.list }}"
+          cargo package --locked "${args[@]}"
+
+      - name: Publish crates
+        if: inputs.dry_run == 'false'
+        shell: bash
+        env:
+          CRATES_IO_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${CRATES_IO_TOKEN:-}" ]]; then
+            echo "::error title=Missing crates.io token::Set the CRATES_IO_TOKEN repository secret."
+            exit 1
+          fi
+
+          while IFS= read -r crate; do
+            [[ -z "$crate" ]] && continue
+            version="$(cargo metadata --no-deps --format-version 1 \
+              | jq -r --arg crate "$crate" '.packages[] | select(.name == $crate) | .version')"
+            if [[ -z "$version" ]]; then
+              echo "::error title=Unknown crate::Unable to resolve $crate in workspace metadata."
+              exit 1
+            fi
+            if curl -fsS -o /dev/null "https://crates.io/api/v1/crates/${crate}/${version}"; then
+              echo "Skipping ${crate} ${version}; it already exists on crates.io."
+              continue
+            fi
+            cargo publish --locked -p "$crate" --token "$CRATES_IO_TOKEN"
+            sleep 30
+          done <<<"${{ steps.crates.outputs.list }}"

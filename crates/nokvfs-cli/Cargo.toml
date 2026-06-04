@@ -1,10 +1,13 @@
 [package]
 name = "nokvfs-cli"
 version = "0.1.0"
+description = "Command line interface for NoKV filesystem metadata and FUSE operations."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 nokvfs-client.workspace = true

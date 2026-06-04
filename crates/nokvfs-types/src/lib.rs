@@ -1,4 +1,4 @@
-//! Storage-engine-neutral NoKV-FS namespace model.
+//! Storage-engine-neutral NoKV namespace model.
 //!
 //! This crate owns filesystem metadata domain types: mounts, inodes, dentries,
 //! file attributes, body descriptors, record families, and typed watch events.

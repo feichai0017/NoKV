@@ -1,4 +1,4 @@
-//! Metadata transaction contract for NoKV-FS.
+//! Metadata transaction contract for NoKV.
 //!
 //! This crate owns the storage-engine-neutral commit contract between metad
 //! semantics and concrete metadata storage. It does not know about Holt trees,

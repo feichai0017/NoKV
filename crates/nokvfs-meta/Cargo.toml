@@ -1,10 +1,13 @@
 [package]
 name = "nokvfs-meta"
 version = "0.1.0"
+description = "Holt-backed inode/dentry metadata service core for NoKV."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 holt.workspace = true

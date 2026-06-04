@@ -1,4 +1,4 @@
-//! Object storage boundary for NoKV-FS file bodies.
+//! Object storage boundary for NoKV file bodies.
 //!
 //! This crate owns body-object keys, an S3-compatible object backend, and an
 //! in-memory object store for package tests. It does not own namespace metadata,
@@ -21,7 +21,7 @@ static OPENDAL_RUNTIME: LazyLock<tokio::runtime::Runtime> = LazyLock::new(|| {
         .enable_all()
         .thread_name("nokvfs-object")
         .build()
-        .expect("create NoKV-FS object runtime")
+        .expect("create NoKV object runtime")
 });
 
 pub trait ObjectStore {

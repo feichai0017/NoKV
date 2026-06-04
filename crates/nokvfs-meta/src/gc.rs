@@ -1,4 +1,4 @@
-//! Background garbage collection for NoKV-FS metadata.
+//! Background garbage collection for NoKV metadata.
 //!
 //! This module owns only background loops around service-level cleanup APIs.
 //! Durable queue formats, object deletes, history pruning rules, and metadata

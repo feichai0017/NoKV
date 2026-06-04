@@ -1,4 +1,4 @@
-//! Long-running NoKV-FS metadata service process.
+//! Long-running NoKV metadata service process.
 //!
 //! This crate owns process wiring and a small health/control endpoint around
 //! the in-process metadata service. It does not own namespace semantics,

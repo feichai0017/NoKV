@@ -1,10 +1,13 @@
 [package]
 name = "nokvfs-bench"
 version = "0.1.0"
+description = "NoKV system benchmark harness for metadata and AI training workloads."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
 
 [dependencies]
 nokvfs-client.workspace = true

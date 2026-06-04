@@ -1,4 +1,4 @@
-//! In-process NoKV-FS metadata service.
+//! In-process NoKV metadata service.
 //!
 //! This crate owns the first Rust-native service semantics over the
 //! storage-neutral metadata command contract. It compiles namespace operations

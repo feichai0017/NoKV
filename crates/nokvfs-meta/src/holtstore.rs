@@ -1,4 +1,4 @@
-//! Holt-backed metadata store for NoKV-FS.
+//! Holt-backed metadata store for NoKV.
 //!
 //! This crate owns the mapping from storage-engine-neutral metadata commands to
 //! Holt family trees. It does not own filesystem semantics, object storage,

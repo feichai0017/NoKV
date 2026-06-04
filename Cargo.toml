@@ -17,17 +17,19 @@ edition = "2021"
 rust-version = "1.88"
 license = "Apache-2.0"
 authors = ["The NoKV Authors"]
+repository = "https://github.com/feichai0017/NoKV"
+homepage = "https://nokv.io"
 
 [workspace.dependencies]
-nokvfs-types = { path = "crates/nokvfs-types" }
-nokvfs-protocol = { path = "crates/nokvfs-protocol" }
-nokvfs-meta = { path = "crates/nokvfs-meta" }
-nokvfs-object = { path = "crates/nokvfs-object" }
-nokvfs-client = { path = "crates/nokvfs-client" }
-nokvfs-fuse = { path = "crates/nokvfs-fuse" }
-nokvfs-server = { path = "crates/nokvfs-server" }
-nokvfs-cli = { path = "crates/nokvfs-cli" }
-nokvfs-bench = { path = "bench" }
+nokvfs-types = { path = "crates/nokvfs-types", version = "0.1.0" }
+nokvfs-protocol = { path = "crates/nokvfs-protocol", version = "0.1.0" }
+nokvfs-meta = { path = "crates/nokvfs-meta", version = "0.1.0" }
+nokvfs-object = { path = "crates/nokvfs-object", version = "0.1.0" }
+nokvfs-client = { path = "crates/nokvfs-client", version = "0.1.0" }
+nokvfs-fuse = { path = "crates/nokvfs-fuse", version = "0.1.0" }
+nokvfs-server = { path = "crates/nokvfs-server", version = "0.1.0" }
+nokvfs-cli = { path = "crates/nokvfs-cli", version = "0.1.0" }
+nokvfs-bench = { path = "bench", version = "0.1.0" }
 fuser = { version = "0.17.0", default-features = false }
 holt = { version = "0.4.2", default-features = false }
 opendal = { version = "0.57.0", default-features = false, features = ["blocking", "executors-tokio", "reqwest-rustls-tls", "services-s3"] }
