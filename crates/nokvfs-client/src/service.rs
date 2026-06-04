@@ -452,6 +452,17 @@ impl MetadataClient {
         Self::new(MetadataClientOptions::new(address))
     }
 
+    pub fn observed_metadata_position(&self) -> Option<ClientMetadataPosition> {
+        self.observed_position
+            .lock()
+            .expect("metadata observed position")
+            .map(wire_metadata_position)
+    }
+
+    pub fn observe_metadata_position(&self, position: ClientMetadataPosition) {
+        self.record_observed_position(metadata_position_to_wire(position));
+    }
+
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), ClientError> {
         match self.call(MetadataRpcRequest::BootstrapRoot { mode, uid, gid })? {
             MetadataRpcResult::InodeAttr { .. } => Ok(()),
@@ -1620,6 +1631,64 @@ mod tests {
             .create_file("/runs/a.bin", 0o644, 1000, 1000)
             .unwrap();
         let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
+        assert_eq!(metadata.attr.inode.get(), 40);
+    }
+
+    #[test]
+    fn service_client_exports_observed_metadata_position_from_write() {
+        let position = WireMetadataPosition { term: 7, index: 11 };
+        let addr = serve_one_request(move |request| {
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::CreateFilePath { path, .. } if path == "/runs/a.bin"
+            ));
+            dentry_response_with_position(2, "a.bin", 40, 7, Some(position))
+        });
+        let client = MetadataClient::connect(addr);
+
+        client
+            .create_file("/runs/a.bin", 0o644, 1000, 1000)
+            .unwrap();
+
+        assert_eq!(
+            client.observed_metadata_position(),
+            Some(ClientMetadataPosition {
+                term: position.term,
+                index: position.index,
+            })
+        );
+    }
+
+    #[test]
+    fn service_client_imports_observed_position_for_learner_reads() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::RequireApplied {
+                    position,
+                    request,
+                } if position == WireMetadataPosition { term: 7, index: 11 }
+                    && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
+            ));
+            let response = response_body(
+                r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+            );
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+        });
+        let client = MetadataClient::connect(addr);
+        client.observe_metadata_position(ClientMetadataPosition { term: 7, index: 11 });
+
+        let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
+
         assert_eq!(metadata.attr.inode.get(), 40);
     }
 
