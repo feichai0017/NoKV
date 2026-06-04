@@ -258,6 +258,26 @@ where
         ReplayDriver::new(&self.log, self).replay_from(start, limit)
     }
 
+    pub fn install_checkpoint_state<I>(
+        &self,
+        frontier: ApplyFrontier,
+        install: I,
+    ) -> Result<(), SharedLogError>
+    where
+        I: FnOnce(&M) -> Result<(), MetadataError>,
+    {
+        let _guard = self
+            .apply_gate
+            .lock()
+            .map_err(|_| SharedLogError::Backend("shared-log apply gate poisoned".to_owned()))?;
+        install(&self.store).map_err(|err| SharedLogError::Backend(err.to_string()))?;
+        self.frontier_store.save(frontier)?;
+        *self.applied_frontier.lock().map_err(|_| {
+            SharedLogError::Backend("shared-log applied frontier mutex poisoned".to_owned())
+        })? = Some(frontier);
+        Ok(())
+    }
+
     pub fn ensure_read_freshness(&self, freshness: ReadFreshness) -> Result<(), SharedLogError> {
         let Some(required) = self.required_read_position(freshness) else {
             return Ok(());

@@ -8,9 +8,9 @@ use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_name_cursor, decode_request, encode_envelope, encode_name_cursor, MetadataProtocolError,
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
-    WireDentryWithAttr, WireMetadataBootstrapPlan, WireMetadataCheckpoint, WireMetadataError,
-    WireMetadataLogEntry, WireMetadataPosition, WireMetadataReceipt, WireObjectReadBlock,
-    WirePathMetadata, WirePreparedArtifact,
+    WireDentryWithAttr, WireMetadataBootstrapPlan, WireMetadataCheckpoint,
+    WireMetadataCheckpointInstall, WireMetadataError, WireMetadataLogEntry, WireMetadataPosition,
+    WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -1195,6 +1195,17 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 plan: wire_metadata_bootstrap_plan(&plan),
             })
         }
+        MetadataRpcRequest::InstallMetadataCheckpoint { plan } => {
+            let request = metadata_checkpoint_install_request(plan)?;
+            let install = server.install_metadata_checkpoint(request)?;
+            Ok(MetadataRpcResult::MetadataCheckpointInstall {
+                install: WireMetadataCheckpointInstall {
+                    learner: install.learner.get(),
+                    replay_start_index: install.replay_start.get(),
+                    replayed_index: install.replayed_index.get(),
+                },
+            })
+        }
     }
 }
 
@@ -1313,6 +1324,53 @@ fn wire_metadata_bootstrap_plan(
         replay_start_index: request.plan.replay_start.get(),
         replayed_index: request.plan.replayed_index.get(),
     }
+}
+
+fn metadata_checkpoint_install_request(
+    plan: WireMetadataBootstrapPlan,
+) -> Result<nokvfs_cluster::InstallCheckpointRequest, ServerError> {
+    let leader = nokvfs_cluster::NodeId::new(plan.leader).map_err(ServerError::SharedLog)?;
+    let learner = nokvfs_cluster::NodeId::new(plan.learner).map_err(ServerError::SharedLog)?;
+    let checkpoint = metadata_checkpoint_manifest(plan.checkpoint)?;
+    let replay_start =
+        nokvfs_cluster::LogIndex::new(plan.replay_start_index).map_err(ServerError::SharedLog)?;
+    let replayed_index =
+        nokvfs_cluster::LogIndex::new(plan.replayed_index).map_err(ServerError::SharedLog)?;
+    Ok(nokvfs_cluster::InstallCheckpointRequest::from_plan(
+        leader,
+        nokvfs_cluster::LearnerBootstrapPlan {
+            node: learner,
+            checkpoint,
+            replay_start,
+            replayed_index,
+        },
+    ))
+}
+
+fn metadata_checkpoint_manifest(
+    checkpoint: WireMetadataCheckpoint,
+) -> Result<nokvfs_cluster::CheckpointManifest, ServerError> {
+    let mount = MountId::new(checkpoint.mount).map_err(|err| {
+        ServerError::Metadata(MetadError::Codec(format!(
+            "invalid metadata checkpoint mount: {err}"
+        )))
+    })?;
+    let frontier = nokvfs_cluster::CheckpointFrontier {
+        durable_position: log_position(checkpoint.durable_position)?,
+        applied_position: log_position(checkpoint.applied_position)?,
+        min_retained_index: nokvfs_cluster::LogIndex::new(checkpoint.min_retained_index)
+            .map_err(ServerError::SharedLog)?,
+        max_commit_version: nokvfs_meta::Version::new(checkpoint.max_commit_version)
+            .map_err(|err| ServerError::Metadata(MetadError::Codec(err.to_string())))?,
+    };
+    let artifact = nokvfs_cluster::CheckpointArtifact::new(
+        checkpoint.artifact_uri,
+        checkpoint.artifact_digest,
+        checkpoint.artifact_size_bytes,
+    )
+    .map_err(ServerError::SharedLog)?;
+    nokvfs_cluster::CheckpointManifest::new(checkpoint.id, mount, frontier, artifact)
+        .map_err(ServerError::SharedLog)
 }
 
 fn protocol_error(err: MetadataProtocolError) -> MetadError {
@@ -1602,6 +1660,87 @@ mod tests {
         assert_eq!(plan.replay_start_index, plan.checkpoint.min_retained_index);
         assert_eq!(plan.replayed_index, after_position.index);
         assert!(plan.replay_start_index <= plan.replayed_index);
+    }
+
+    #[test]
+    fn rpc_installs_metadata_checkpoint_and_replays_retained_tail() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let created_before_checkpoint = request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        assert!(created_before_checkpoint.ok);
+        server.run_manual_gc(128).unwrap();
+
+        let created_after_checkpoint = request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/after-checkpoint".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        assert!(created_after_checkpoint.ok);
+
+        let plan = match request_envelope(
+            &server,
+            MetadataRpcRequest::PlanMetadataBootstrap {
+                leader: 1,
+                learner: 1,
+                mount: 1,
+            },
+        )
+        .result
+        .unwrap()
+        {
+            MetadataRpcResult::MetadataBootstrapPlan { plan } => plan,
+            other => panic!("unexpected bootstrap plan result: {other:?}"),
+        };
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::InstallMetadataCheckpoint { plan },
+        );
+        assert!(
+            envelope.ok,
+            "unexpected checkpoint install error: {envelope:?}"
+        );
+        let install = match envelope.result.unwrap() {
+            MetadataRpcResult::MetadataCheckpointInstall { install } => install,
+            other => panic!("unexpected checkpoint install result: {other:?}"),
+        };
+        assert_eq!(install.learner, 1);
+        assert!(install.replay_start_index <= install.replayed_index);
+
+        assert!(matches!(
+            request_envelope(
+                &server,
+                MetadataRpcRequest::LookupPath {
+                    path: "/runs".to_owned(),
+                },
+            )
+            .result
+            .unwrap(),
+            MetadataRpcResult::Dentry { entry: Some(_) }
+        ));
+        assert!(matches!(
+            request_envelope(
+                &server,
+                MetadataRpcRequest::LookupPath {
+                    path: "/after-checkpoint".to_owned(),
+                },
+            )
+            .result
+            .unwrap(),
+            MetadataRpcResult::Dentry { entry: Some(_) }
+        ));
     }
 
     #[test]

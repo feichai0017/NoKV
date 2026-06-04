@@ -11,9 +11,9 @@ use nokvfs_cluster::{
     compact_log_to_checkpoint, AppendMetadataBatchRequest, AppendMetadataBatchResponse,
     ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
     FileAppliedFrontierStore, FileCheckpointCatalog, FileMembershipCatalog, FileSharedLog,
-    FileSharedLogOptions, LogIndex, LogPosition, MembershipCatalog, MetadataLogEntry,
-    MetadataMembership, NodeId, SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats,
-    SharedMetadataLog,
+    FileSharedLogOptions, InstallCheckpointRequest, InstallCheckpointResponse, LogIndex,
+    LogPosition, MembershipCatalog, MetadataLogEntry, MetadataMembership, NodeId, SharedLogError,
+    SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -266,6 +266,60 @@ impl Server {
         ))
     }
 
+    pub(crate) fn install_metadata_checkpoint(
+        &self,
+        request: InstallCheckpointRequest,
+    ) -> Result<InstallCheckpointResponse, ServerError> {
+        self.authorize_metadata_log_leader(request.leader)?;
+        if request.plan.node != self.metadata_log_node {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                "metadata checkpoint learner {} does not match server node {}",
+                request.plan.node.get(),
+                self.metadata_log_node.get()
+            ))));
+        }
+        if request.plan.checkpoint.mount != self.service.mount_id() {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                "metadata checkpoint mount {} does not match server mount {}",
+                request.plan.checkpoint.mount.get(),
+                self.service.mount_id().get()
+            ))));
+        }
+        let Some(metadata_log) = self.metadata_log.as_ref() else {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(
+                "metadata log is disabled".to_owned(),
+            )));
+        };
+
+        let image = read_metadata_checkpoint_artifact(&request.plan.checkpoint.artifact)?;
+        let frontier = ApplyFrontier {
+            position: request.plan.checkpoint.frontier.applied_position,
+            commit_version: request.plan.checkpoint.frontier.max_commit_version,
+        };
+        metadata_log
+            .install_checkpoint_state(frontier, |store| store.install_checkpoint_image(&image))
+            .map_err(ServerError::SharedLog)?;
+        let replay = metadata_log
+            .replay_committed_tail(0)
+            .map_err(|err| ServerError::SharedLog(SharedLogError::Backend(err.to_string())))?;
+        let replayed_index = replay
+            .frontier
+            .map(|frontier| frontier.position.index)
+            .unwrap_or(request.plan.checkpoint.frontier.applied_position.index);
+        if replayed_index < request.plan.replayed_index {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
+                "metadata checkpoint replay reached index {}, expected at least {}",
+                replayed_index.get(),
+                request.plan.replayed_index.get()
+            ))));
+        }
+        Ok(InstallCheckpointResponse {
+            learner: request.plan.node,
+            replay_start: request.plan.replay_start,
+            replayed_index,
+        })
+    }
+
     pub fn stats_json(&self) -> String {
         let objects = self.service.object_stats();
         let metadata = self.service.metadata_store_stats();
@@ -474,6 +528,38 @@ fn write_metadata_checkpoint_artifact(
         digest,
         image.len() as u64,
     )
+}
+
+fn read_metadata_checkpoint_artifact(
+    artifact: &CheckpointArtifact,
+) -> Result<Vec<u8>, SharedLogError> {
+    let uri = std::str::from_utf8(&artifact.uri).map_err(|err| {
+        SharedLogError::Backend(format!(
+            "metadata checkpoint artifact URI is not utf-8: {err}"
+        ))
+    })?;
+    let path = uri.strip_prefix("file:").ok_or_else(|| {
+        SharedLogError::Backend(format!(
+            "unsupported metadata checkpoint artifact URI scheme: {uri}"
+        ))
+    })?;
+    let image = fs::read(path).map_err(|err| {
+        SharedLogError::Backend(format!("read metadata checkpoint artifact {path}: {err}"))
+    })?;
+    if image.len() as u64 != artifact.size_bytes {
+        return Err(SharedLogError::Backend(format!(
+            "metadata checkpoint artifact size mismatch: expected {}, got {}",
+            artifact.size_bytes,
+            image.len()
+        )));
+    }
+    let digest = Sha256::digest(&image);
+    if digest.as_slice() != artifact.digest.as_slice() {
+        return Err(SharedLogError::Backend(
+            "metadata checkpoint artifact digest mismatch".to_owned(),
+        ));
+    }
+    Ok(image)
 }
 
 impl Server {

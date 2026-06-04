@@ -1001,6 +1001,60 @@ fn shared_log_metadata_store_commit_independent_batch_groups_independent_command
 }
 
 #[test]
+fn shared_log_metadata_store_installs_checkpoint_state_under_apply_gate() {
+    let source = HoltMetadataStore::open_memory().unwrap();
+    source
+        .commit_metadata(command(b"checkpoint-key", 2))
+        .unwrap();
+    let image = source.export_checkpoint_image().unwrap();
+
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    store.commit_metadata(command(b"stale-key", 2)).unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+    let frontier = ApplyFrontier {
+        position: LogPosition {
+            term: LogTerm::new(1).unwrap(),
+            index: LogIndex::new(7).unwrap(),
+        },
+        commit_version: version(2),
+    };
+
+    shared
+        .install_checkpoint_state(frontier, |store| store.install_checkpoint_image(&image))
+        .unwrap();
+
+    assert_eq!(shared.applied_frontier(), Some(frontier));
+    shared
+        .ensure_read_freshness(ReadFreshness::AppliedThrough(frontier.position))
+        .unwrap();
+    assert_eq!(
+        shared
+            .get(
+                RecordFamily::Dentry,
+                b"checkpoint-key",
+                version(2),
+                ReadPurpose::UserStrong,
+            )
+            .unwrap()
+            .unwrap()
+            .0,
+        b"value"
+    );
+    assert!(shared
+        .inner()
+        .get(
+            RecordFamily::Dentry,
+            b"stale-key",
+            version(2),
+            ReadPurpose::WritePlanLocal,
+        )
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn shared_log_metadata_store_contract_batch_uses_shared_log_group_commit() {
     let log = InMemorySharedLog::new();
     let store = HoltMetadataStore::open_memory().unwrap();
