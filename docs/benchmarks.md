@@ -42,6 +42,18 @@ NOKV_E2E_OBJECT_CONCURRENCY=8 \
 scripts/run-rustfs-e2e.sh
 ```
 
+For a disposable local RustFS-backed FUSE semantics smoke, use:
+
+```bash
+scripts/run-fuse-smoke.sh
+```
+
+The script builds `nokv-fs`, starts RustFS, mounts a temporary NoKV-FS FUSE
+filesystem, and exercises mkdir, file write/read, file fsync, directory fsync,
+rename, readdir, truncate, symlink/readlink, xattr error handling, access(2),
+rm, and rmdir through the mounted filesystem. This is a correctness smoke, not
+a performance benchmark.
+
 The harness prints CSV:
 
 ```text
