@@ -364,6 +364,51 @@ where
         )
     }
 
+    pub fn create_dirs_in_dir_path(
+        &self,
+        parent_path: &str,
+        names: Vec<DentryName>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<Vec<DentryWithAttr>, MetadError> {
+        let parent_components = parse_absolute_path(parent_path)?;
+        let parent = self.resolve_components_as_directory(&parent_components)?;
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        ensure_unique_names(&names)?;
+        let version = self.next_version()?;
+        let inodes = self.next_inodes(names.len())?;
+        let path_keys = names
+            .iter()
+            .map(|name| {
+                let mut components = parent_components.clone();
+                components.push(name.clone());
+                path_index_key(self.mount, &components)
+            })
+            .collect::<Vec<_>>();
+        let projections = names
+            .into_iter()
+            .zip(inodes)
+            .map(|(name, inode)| {
+                projection(
+                    parent,
+                    name,
+                    directory_attr(inode, mode, uid, gid, version.get()),
+                    None,
+                )
+            })
+            .collect::<Vec<_>>();
+        self.commit_create_projections_with_path_indexes(
+            CommandKind::CreateDir,
+            &projections,
+            version,
+            Some(&path_keys),
+        )?;
+        Ok(projections.into_iter().map(Into::into).collect())
+    }
+
     pub fn create_files_in_dir(
         &self,
         parent: InodeId,
