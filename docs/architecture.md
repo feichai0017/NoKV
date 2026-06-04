@@ -141,3 +141,9 @@ This keeps filesystem semantics in `nokvfs-meta`, log ordering and learner
 freshness in `nokvfs-cluster`, and transport choices outside both layers.
 V1 remains one metadata group per mount. Cross-mount atomic operations are not
 part of the contract.
+
+The current framed RPC path can expose committed metadata log entries for
+replica catch-up via `ReadMetadataLog`. Each returned payload is encoded by
+`nokvfs-cluster`, so protocol framing does not need to understand
+`MetadataCommand` internals. Network append, checkpoint install, and durable
+membership are still the next HA steps.

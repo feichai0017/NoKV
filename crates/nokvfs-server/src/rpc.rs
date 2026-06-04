@@ -8,8 +8,8 @@ use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_name_cursor, decode_request, encode_envelope, encode_name_cursor, MetadataProtocolError,
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
-    WireDentryWithAttr, WireMetadataError, WireMetadataPosition, WireObjectReadBlock,
-    WirePathMetadata, WirePreparedArtifact,
+    WireDentryWithAttr, WireMetadataError, WireMetadataLogEntry, WireMetadataPosition,
+    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -1126,6 +1126,18 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     .map(|entry| Box::new(wire_dentry(entry))),
             })
         }
+        MetadataRpcRequest::ReadMetadataLog { start_index, limit } => {
+            let start =
+                nokvfs_cluster::LogIndex::new(start_index).map_err(ServerError::SharedLog)?;
+            let (entries, committed) = server.read_metadata_log_tail(start, limit)?;
+            Ok(MetadataRpcResult::MetadataLogEntries {
+                entries: entries
+                    .iter()
+                    .map(wire_metadata_log_entry)
+                    .collect::<Result<Vec<_>, _>>()?,
+                committed: committed.map(wire_log_position),
+            })
+        }
     }
 }
 
@@ -1195,6 +1207,17 @@ fn wire_object_read_block(block: &ObjectReadBlock) -> WireObjectReadBlock {
         len: block.len as u64,
         output_offset: block.output_offset as u64,
     }
+}
+
+fn wire_metadata_log_entry(
+    entry: &nokvfs_cluster::MetadataLogEntry,
+) -> Result<WireMetadataLogEntry, ServerError> {
+    Ok(WireMetadataLogEntry {
+        position: wire_log_position(entry.position),
+        mount: entry.mount.get(),
+        payload: nokvfs_cluster::encode_metadata_log_entry(entry)
+            .map_err(ServerError::SharedLog)?,
+    })
 }
 
 fn protocol_error(err: MetadataProtocolError) -> MetadError {
@@ -1313,6 +1336,75 @@ mod tests {
             stale.error_kind,
             Some(WireMetadataError::ReadNotFresh { required, applied: Some(applied) })
                 if required.index == position.index + 1 && applied == position
+        ));
+    }
+
+    #[test]
+    fn rpc_reads_committed_metadata_log_tail() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let created = request_envelope(
+            &server,
+            MetadataRpcRequest::CreateFilePath {
+                path: "/model.bin".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        assert!(created.ok);
+
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadMetadataLog {
+                start_index: 1,
+                limit: 0,
+            },
+        );
+        assert!(
+            envelope.ok,
+            "unexpected metadata log read error: {envelope:?}"
+        );
+        let (entries, committed) = match envelope.result.unwrap() {
+            MetadataRpcResult::MetadataLogEntries { entries, committed } => (entries, committed),
+            other => panic!("unexpected metadata log result: {other:?}"),
+        };
+        let committed = committed.expect("metadata log read reports committed frontier");
+        assert!(committed.index >= 2);
+        assert!(entries.len() >= 2);
+
+        let decoded = entries
+            .iter()
+            .map(|entry| {
+                let decoded = nokvfs_cluster::decode_metadata_log_entry(&entry.payload).unwrap();
+                assert_eq!(entry.position, wire_log_position(decoded.position));
+                assert_eq!(entry.mount, decoded.mount.get());
+                decoded
+            })
+            .collect::<Vec<_>>();
+        assert!(decoded
+            .iter()
+            .flat_map(|entry| entry.commands.iter())
+            .any(|command| command.kind == nokvfs_meta::command::CommandKind::CreateFile));
+    }
+
+    #[test]
+    fn rpc_rejects_metadata_log_read_when_log_is_disabled() {
+        let server = test_server();
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadMetadataLog {
+                start_index: 1,
+                limit: 1,
+            },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("metadata log is disabled")
         ));
     }
 

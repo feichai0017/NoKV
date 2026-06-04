@@ -290,6 +290,19 @@ enum DecodedRecord {
     Compact(LogIndex),
 }
 
+pub fn encode_metadata_log_entry(entry: &MetadataLogEntry) -> Result<Vec<u8>, SharedLogError> {
+    encode_entry_record(entry)
+}
+
+pub fn decode_metadata_log_entry(payload: &[u8]) -> Result<MetadataLogEntry, SharedLogError> {
+    match decode_record(payload)? {
+        DecodedRecord::Entry(entry) => Ok(entry),
+        DecodedRecord::Compact(_) => Err(SharedLogError::Backend(
+            "metadata log payload is a compaction marker, not an entry".to_owned(),
+        )),
+    }
+}
+
 fn encode_entry_record(entry: &MetadataLogEntry) -> Result<Vec<u8>, SharedLogError> {
     let mut out = vec![RECORD_ENTRY];
     push_u64(&mut out, entry.position.term.get());

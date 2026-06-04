@@ -9,8 +9,8 @@ use std::thread;
 use nokvfs_cluster::{
     compact_log_to_checkpoint, ApplyFrontier, CheckpointArtifact, CheckpointCatalog,
     CheckpointManifest, FileAppliedFrontierStore, FileCheckpointCatalog, FileSharedLog,
-    FileSharedLogOptions, LogIndex, LogPosition, SharedLogError, SharedLogMetadataStore,
-    SharedLogRuntimeStats,
+    FileSharedLogOptions, LogIndex, LogPosition, MetadataLogEntry, SharedLogError,
+    SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -134,6 +134,20 @@ impl Server {
         metadata_log
             .ensure_applied(position)
             .map_err(ServerError::SharedLog)
+    }
+
+    pub(crate) fn read_metadata_log_tail(
+        &self,
+        start: LogIndex,
+        limit: usize,
+    ) -> Result<(Vec<MetadataLogEntry>, Option<LogPosition>), ServerError> {
+        let Some(metadata_log) = self.metadata_log.as_ref() else {
+            return Err(ServerError::SharedLog(SharedLogError::Backend(
+                "metadata log is disabled".to_owned(),
+            )));
+        };
+        let entries = metadata_log.log().read_from(start, limit)?;
+        Ok((entries, metadata_log.log().committed_position()))
     }
 
     pub fn stats_json(&self) -> String {

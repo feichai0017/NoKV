@@ -193,6 +193,23 @@ fn read_from_replays_log_entries_in_index_order() {
 }
 
 #[test]
+fn metadata_log_entry_codec_round_trips_command_batch() {
+    let entry = MetadataLogEntry {
+        position: LogPosition {
+            term: LogTerm::new(3).unwrap(),
+            index: LogIndex::new(9).unwrap(),
+        },
+        mount: MountId::new(1).unwrap(),
+        commands: vec![command(b"a", 2), not_exists_command(b"b", 3)],
+    };
+
+    let encoded = encode_metadata_log_entry(&entry).unwrap();
+    let decoded = decode_metadata_log_entry(&encoded).unwrap();
+
+    assert_eq!(decoded, entry);
+}
+
+#[test]
 fn compact_through_removes_old_entries_and_rejects_stale_reads() {
     let log = InMemorySharedLog::new();
     let mount = MountId::new(1).unwrap();

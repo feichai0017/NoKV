@@ -175,6 +175,10 @@ pub enum MetadataRpcRequest {
         uid: u32,
         gid: u32,
     },
+    ReadMetadataLog {
+        start_index: u64,
+        limit: usize,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -269,6 +273,10 @@ pub enum MetadataRpcResult {
     },
     PreparedArtifact {
         prepared: WirePreparedArtifact,
+    },
+    MetadataLogEntries {
+        entries: Vec<WireMetadataLogEntry>,
+        committed: Option<WireMetadataPosition>,
     },
 }
 
@@ -380,6 +388,13 @@ pub struct WireSnapshotPin {
     pub root: u64,
     pub read_version: u64,
     pub created_version: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataLogEntry {
+    pub position: WireMetadataPosition,
+    pub mount: u64,
+    pub payload: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -702,5 +717,36 @@ mod tests {
         };
         let encoded = encode_envelope(&envelope).unwrap();
         assert_eq!(decode_envelope(&encoded).unwrap(), envelope);
+    }
+
+    #[test]
+    fn binary_codec_round_trips_metadata_log_entries() {
+        let request = MetadataRpcRequest::ReadMetadataLog {
+            start_index: 7,
+            limit: 32,
+        };
+        assert_eq!(
+            decode_request(&encode_request(&request).unwrap()).unwrap(),
+            request
+        );
+
+        let envelope = MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::MetadataLogEntries {
+                entries: vec![WireMetadataLogEntry {
+                    position: WireMetadataPosition { term: 2, index: 7 },
+                    mount: 1,
+                    payload: b"entry-payload".to_vec(),
+                }],
+                committed: Some(WireMetadataPosition { term: 2, index: 8 }),
+            }),
+            error: None,
+            error_kind: None,
+            metadata_position: Some(WireMetadataPosition { term: 2, index: 8 }),
+        };
+        assert_eq!(
+            decode_envelope(&encode_envelope(&envelope).unwrap()).unwrap(),
+            envelope
+        );
     }
 }
