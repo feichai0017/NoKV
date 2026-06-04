@@ -61,6 +61,8 @@ struct Config {
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
+    metadata_log: bool,
+    metadata_log_sync: FileSharedLogSync,
     checkpoint_bytes: Option<usize>,
     sample_bytes: Option<usize>,
     keep: bool,
@@ -343,7 +345,8 @@ fn main() {
              [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
-             [--read-repeats N] [--block-cache on|off] [--keep]"
+             [--read-repeats N] [--block-cache on|off] \
+             [--metadata-log on|off] [--metadata-log-sync data|none] [--keep]"
         );
         std::process::exit(2);
     }
@@ -1003,8 +1006,9 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
 
 fn metadata_only_caveat(config: &Config) -> String {
     format!(
-        "metadata-only on Holt metadata service, object_backend={}, no distributed replication",
-        object_backend_name(config.object_backend)
+        "metadata-only on Holt metadata service, object_backend={}, {}",
+        object_backend_name(config.object_backend),
+        metadata_log_caveat(config)
     )
 }
 
@@ -1017,18 +1021,31 @@ fn object_caveat(config: &Config, path: &str) -> String {
     match config.object_backend {
         ObjectBackendKind::RustFs => {
             format!(
-                "{path}, Holt metadata service, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
+                "{path}, Holt metadata service, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}, {}",
                 config.object_concurrency,
-                config.read_repeats
+                config.read_repeats,
+                metadata_log_caveat(config)
             )
         }
         ObjectBackendKind::S3 => {
             format!(
-                "{path}, Holt metadata service, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}",
+                "{path}, Holt metadata service, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}, {}",
                 config.object_concurrency,
-                config.read_repeats
+                config.read_repeats,
+                metadata_log_caveat(config)
             )
         }
+    }
+}
+
+fn metadata_log_caveat(config: &Config) -> String {
+    if config.metadata_log {
+        format!(
+            "shared-log metadata enabled sync={}",
+            metadata_log_sync_name(config.metadata_log_sync)
+        )
+    } else {
+        "single-node metadata path, no distributed replication".to_owned()
     }
 }
 
@@ -1038,6 +1055,9 @@ fn client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, B
 
 fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
     let meta = config.root.join(workload).join("meta");
+    let metadata_log_path = config
+        .metadata_log
+        .then(|| config.root.join(workload).join("metadata.log"));
     let object = object_config_for(config, workload);
     let objects = object.clone().open().map_err(from_client)?;
     let listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
@@ -1046,8 +1066,8 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         bind,
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: meta,
-        metadata_log_path: None,
-        metadata_log_sync: FileSharedLogSync::Data,
+        metadata_log_path,
+        metadata_log_sync: config.metadata_log_sync,
         object,
         uid: DEFAULT_UID,
         gid: DEFAULT_GID,
@@ -1231,6 +1251,8 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
     let mut object_concurrency = 1_usize;
     let mut read_repeats = 1_usize;
     let mut block_cache = true;
+    let mut metadata_log = false;
+    let mut metadata_log_sync = FileSharedLogSync::Data;
     let mut checkpoint_bytes = None;
     let mut sample_bytes = None;
     let mut keep = false;
@@ -1318,6 +1340,17 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
                 index += 1;
                 block_cache = parse_block_cache(value(&args, index, "--block-cache")?)?;
             }
+            "--metadata-log" => {
+                index += 1;
+                let raw = value(&args, index, "--metadata-log")?;
+                metadata_log = parse_on_off(raw)
+                    .map_err(|_| BenchError::UnknownOption(format!("--metadata-log {raw}")))?;
+            }
+            "--metadata-log-sync" => {
+                index += 1;
+                metadata_log_sync =
+                    parse_metadata_log_sync(value(&args, index, "--metadata-log-sync")?)?;
+            }
             "--keep" => keep = true,
             "--help" | "-h" => {
                 return Err(BenchError::UnknownOption("--help".to_owned()));
@@ -1338,6 +1371,8 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
         object_concurrency,
         read_repeats,
         block_cache,
+        metadata_log,
+        metadata_log_sync,
         checkpoint_bytes,
         sample_bytes,
         keep,
@@ -1371,10 +1406,24 @@ fn parse_positive_usize(raw: &str, option: &'static str) -> Result<usize, BenchE
 }
 
 fn parse_block_cache(raw: &str) -> Result<bool, BenchError> {
+    parse_on_off(raw).map_err(|_| BenchError::UnknownOption(format!("--block-cache {raw}")))
+}
+
+fn parse_on_off(raw: &str) -> Result<bool, BenchError> {
     match raw {
         "on" | "true" | "1" => Ok(true),
         "off" | "false" | "0" => Ok(false),
-        _ => Err(BenchError::UnknownOption(format!("--block-cache {raw}"))),
+        _ => Err(BenchError::UnknownOption(raw.to_owned())),
+    }
+}
+
+fn parse_metadata_log_sync(raw: &str) -> Result<FileSharedLogSync, BenchError> {
+    match raw {
+        "data" => Ok(FileSharedLogSync::Data),
+        "none" => Ok(FileSharedLogSync::None),
+        _ => Err(BenchError::UnknownOption(format!(
+            "--metadata-log-sync {raw}"
+        ))),
     }
 }
 
@@ -1496,6 +1545,13 @@ fn object_backend_name(backend: ObjectBackendKind) -> &'static str {
     }
 }
 
+fn metadata_log_sync_name(sync: FileSharedLogSync) -> &'static str {
+    match sync {
+        FileSharedLogSync::Data => "data",
+        FileSharedLogSync::None => "none",
+    }
+}
+
 fn apply_rustfs_defaults(options: &mut S3ObjectStoreOptions) {
     if options.bucket.is_empty() {
         options.bucket = "nokv".to_owned();
@@ -1565,6 +1621,8 @@ mod tests {
         assert_eq!(config.object_backend, ObjectBackendKind::RustFs);
         assert_eq!(config.s3.bucket, "nokv");
         assert_eq!(config.s3.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
+        assert!(!config.metadata_log);
+        assert_eq!(config.metadata_log_sync, FileSharedLogSync::Data);
         assert!(!config.keep);
         assert!(config.root.to_string_lossy().contains("nokv-fs-bench"));
     }
@@ -1646,6 +1704,19 @@ mod tests {
         assert_eq!(config.sample_bytes, Some(65_536));
         assert_eq!(config.read_repeats, 3);
         assert!(!config.block_cache);
+    }
+
+    #[test]
+    fn parse_metadata_log_options() {
+        let config = parse(vec![
+            s("--metadata-log"),
+            s("on"),
+            s("--metadata-log-sync"),
+            s("none"),
+        ])
+        .unwrap();
+        assert!(config.metadata_log);
+        assert_eq!(config.metadata_log_sync, FileSharedLogSync::None);
     }
 
     #[test]
