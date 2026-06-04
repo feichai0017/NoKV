@@ -28,7 +28,13 @@ Yanex is a lightweight experiment tracking system. The relevant corpus fields ar
 
 Corpus archive:
 
-`/Users/wangchanghao/Downloads/yanex-experiment-metadata-origami-data-gen-project.tar.gz`
+Set `YANEX_CORPUS_TAR` to the fixed corpus snapshot before running the harness.
+For local experiments the archive is expected to be a `.tar.gz` file, for
+example:
+
+```bash
+export YANEX_CORPUS_TAR=/path/to/yanex-experiment-metadata-origami-data-gen-project.tar.gz
+```
 
 Observed corpus facts:
 
