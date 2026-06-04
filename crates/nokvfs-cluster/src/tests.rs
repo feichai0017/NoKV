@@ -1777,3 +1777,160 @@ fn quorum_membership_rejects_empty_or_duplicate_voters() {
         Err(SharedLogError::DuplicateNode(_))
     ));
 }
+
+#[test]
+fn replication_append_request_commits_through_voter_log() {
+    let log =
+        Arc::new(InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap());
+    let leader_log = QuorumNodeLog::new(Arc::clone(&log), node(1)).unwrap();
+    let mount = MountId::new(1).unwrap();
+    let request = AppendMetadataBatchRequest::new(
+        node(1),
+        LogTerm::new(2).unwrap(),
+        mount,
+        vec![command(b"a", 2), command(b"b", 3)],
+    )
+    .unwrap();
+
+    let receipts = leader_log
+        .append_batch(request.term, request.mount, &request.commands)
+        .unwrap();
+    let response = AppendMetadataBatchResponse::from_receipts(receipts).unwrap();
+
+    assert_eq!(request.leader, node(1));
+    assert_eq!(
+        response.position,
+        LogPosition {
+            term: LogTerm::new(2).unwrap(),
+            index: LogIndex::new(1).unwrap(),
+        }
+    );
+    assert_eq!(response.receipts.len(), 2);
+    assert_eq!(response.receipts[0].batch_position, 0);
+    assert_eq!(response.receipts[1].batch_position, 1);
+    assert_eq!(log.committed_position(), Some(response.position));
+}
+
+#[test]
+fn replication_append_request_rejects_empty_batch() {
+    assert_eq!(
+        AppendMetadataBatchRequest::new(
+            node(1),
+            LogTerm::new(1).unwrap(),
+            MountId::new(1).unwrap(),
+            Vec::new(),
+        ),
+        Err(SharedLogError::EmptyBatch)
+    );
+    assert_eq!(
+        AppendMetadataBatchResponse::from_receipts(Vec::new()),
+        Err(SharedLogError::EmptyBatch)
+    );
+}
+
+#[test]
+fn replication_append_request_rejects_learner_log() {
+    let log =
+        Arc::new(InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap());
+    let learner_log = QuorumNodeLog::new(Arc::clone(&log), node(4)).unwrap();
+    let mount = MountId::new(1).unwrap();
+    let request = AppendMetadataBatchRequest::new(
+        node(4),
+        LogTerm::new(1).unwrap(),
+        mount,
+        vec![command(b"a", 2)],
+    )
+    .unwrap();
+
+    assert!(matches!(
+        learner_log.append_batch(request.term, request.mount, &request.commands),
+        Err(SharedLogError::LearnerCannotAppend(replica)) if replica == node(4)
+    ));
+    assert_eq!(log.committed_index(), LogIndex::ZERO);
+}
+
+#[test]
+fn replication_read_request_reads_learner_local_tail() {
+    let log = InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap();
+    let mount = MountId::new(1).unwrap();
+    let request = ReadMetadataLogRequest::new(node(4), LogIndex::new(1).unwrap(), 0);
+
+    log.set_node_available(node(4), false).unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+    let stale = ReadMetadataLogResponse::new(
+        request.reader,
+        log.read_from_node(request.reader, request.start, request.limit)
+            .unwrap(),
+        log.committed_position(),
+    );
+    assert!(stale.entries.is_empty());
+    assert_eq!(
+        stale.committed,
+        Some(LogPosition {
+            term: LogTerm::new(1).unwrap(),
+            index: LogIndex::new(1).unwrap(),
+        })
+    );
+
+    log.set_node_available(node(4), true).unwrap();
+    assert_eq!(log.sync_learner(node(4)).unwrap().get(), 1);
+    let caught_up = ReadMetadataLogResponse::new(
+        request.reader,
+        log.read_from_node(request.reader, request.start, request.limit)
+            .unwrap(),
+        log.committed_position(),
+    );
+    assert_eq!(caught_up.reader, node(4));
+    assert_eq!(caught_up.entries.len(), 1);
+    assert_eq!(caught_up.entries[0].commands[0].request_id, b"a");
+}
+
+#[test]
+fn replication_checkpoint_request_describes_learner_bootstrap() {
+    let log = InMemoryQuorumLog::with_learners([node(1), node(2), node(3)], [node(4)]).unwrap();
+    let checkpoints = MemoryCheckpointCatalog::new();
+    let mount = MountId::new(1).unwrap();
+
+    log.set_node_available(node(4), false).unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"a", 2)])
+        .unwrap();
+    log.append_batch(LogTerm::new(1).unwrap(), mount, &[command(b"b", 3)])
+        .unwrap();
+    log.compact_through(LogIndex::new(1).unwrap()).unwrap();
+    checkpoints
+        .publish(
+            CheckpointManifest::new(
+                b"checkpoint-a".to_vec(),
+                mount,
+                CheckpointFrontier {
+                    durable_position: LogPosition {
+                        term: LogTerm::new(1).unwrap(),
+                        index: LogIndex::new(2).unwrap(),
+                    },
+                    applied_position: LogPosition {
+                        term: LogTerm::new(1).unwrap(),
+                        index: LogIndex::new(1).unwrap(),
+                    },
+                    min_retained_index: LogIndex::new(2).unwrap(),
+                    max_commit_version: version(2),
+                },
+                checkpoint_artifact(b"checkpoint-a"),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+
+    log.set_node_available(node(4), true).unwrap();
+    let plan = log
+        .bootstrap_learner_from_checkpoint(node(4), mount, &checkpoints)
+        .unwrap();
+    let request = InstallCheckpointRequest::from_plan(node(1), plan);
+    let response = InstallCheckpointResponse::from_plan(&request.plan);
+
+    assert_eq!(request.leader, node(1));
+    assert_eq!(request.plan.node, node(4));
+    assert_eq!(response.learner, node(4));
+    assert_eq!(response.replay_start, LogIndex::new(2).unwrap());
+    assert_eq!(response.replayed_index, LogIndex::new(2).unwrap());
+}

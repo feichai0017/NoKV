@@ -15,6 +15,7 @@ mod log;
 mod memory;
 mod quorum;
 mod replay;
+mod replication;
 mod store;
 mod types;
 
@@ -30,6 +31,10 @@ pub use log::SharedMetadataLog;
 pub use memory::InMemorySharedLog;
 pub use quorum::{InMemoryQuorumLog, QuorumNodeLog, QuorumNodeRole};
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};
+pub use replication::{
+    AppendMetadataBatchRequest, AppendMetadataBatchResponse, InstallCheckpointRequest,
+    InstallCheckpointResponse, ReadMetadataLogRequest, ReadMetadataLogResponse,
+};
 pub use store::{SharedLogMetadataStore, SharedLogRuntimeStats};
 pub use types::{
     AppliedMetadataCommand, ApplyFrontier, CheckpointArtifact, CheckpointFrontier,

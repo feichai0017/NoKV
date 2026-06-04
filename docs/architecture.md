@@ -124,3 +124,20 @@ Use `--metadata-log-sync data` when the file log is the durable ordering source.
 Use `--metadata-log-sync none` only for local performance experiments or when a
 higher-level replicated log already owns durability; it flushes records to the
 OS but does not make each record power-loss durable.
+
+Shared-log HA is built around storage-neutral metadata replication contracts in
+`nokvfs-cluster`. The replicated value is a batch of `MetadataCommand`s. It is
+not a raw KV mutation, Percolator transaction, or old raftstore command. The
+network boundary has three messages:
+
+- append a metadata command batch through a voter and receive per-command
+  durable receipts;
+- read committed log entries from a voter or learner tail, with the committed
+  frontier reported explicitly;
+- install a checkpoint on a learner and replay the retained tail from the
+  checkpoint frontier.
+
+This keeps filesystem semantics in `nokvfs-meta`, log ordering and learner
+freshness in `nokvfs-cluster`, and transport choices outside both layers.
+V1 remains one metadata group per mount. Cross-mount atomic operations are not
+part of the contract.
