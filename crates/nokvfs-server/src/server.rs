@@ -80,16 +80,17 @@ impl Server {
                 fs::create_dir_all(&artifact_dir).map_err(ServerError::Io)?;
                 let membership_catalog =
                     FileMembershipCatalog::open(metadata_membership_path(path))?;
-                let membership = MetadataMembership::single_voter(
+                let membership = metadata_membership_for_node(
+                    &membership_catalog,
                     options.mount,
                     options.metadata_log_term,
                     options.metadata_log_node,
                 )?;
-                membership_catalog.publish(membership.clone())?;
+                let log_term = membership.term;
                 let (logged, _replay) = SharedLogMetadataStore::recover_with_frontier_store(
                     metadata,
                     log,
-                    options.metadata_log_term,
+                    log_term,
                     options.mount,
                     frontier,
                 )
@@ -486,6 +487,26 @@ fn metadata_membership_path(log_path: &Path) -> PathBuf {
         .unwrap_or_else(|| "metadata.log.membership".into());
     path.set_file_name(file_name);
     path
+}
+
+fn metadata_membership_for_node(
+    catalog: &FileMembershipCatalog,
+    mount: nokvfs_types::MountId,
+    fallback_term: nokvfs_cluster::LogTerm,
+    node: NodeId,
+) -> Result<MetadataMembership, ServerError> {
+    let membership = match catalog.latest_for_mount(mount)? {
+        Some(membership) => membership,
+        None => {
+            let membership = MetadataMembership::single_voter(mount, fallback_term, node)?;
+            catalog.publish(membership.clone())?;
+            membership
+        }
+    };
+    if !membership.is_voter(node) && !membership.is_learner(node) {
+        return Err(ServerError::SharedLog(SharedLogError::UnknownNode(node)));
+    }
+    Ok(membership)
 }
 
 fn metadata_checkpoint_id(
@@ -980,6 +1001,73 @@ pub(crate) mod tests {
         assert_eq!(membership.leader, node(4));
         assert_eq!(membership.voters, vec![node(4)]);
         assert!(membership.learners.is_empty());
+    }
+
+    #[test]
+    fn server_preserves_existing_metadata_log_membership_for_learner() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let catalog = FileMembershipCatalog::open(metadata_membership_path(&metadata_log)).unwrap();
+        let membership = MetadataMembership::new(
+            MountId::new(1).unwrap(),
+            LogTerm::new(7).unwrap(),
+            node(1),
+            [node(1)],
+            [node(4)],
+        )
+        .unwrap();
+        catalog.publish(membership.clone()).unwrap();
+        let mut options = test_options(dir.path(), Some(metadata_log.clone()));
+        options.metadata_log_node = node(4);
+        options.metadata_log_term = LogTerm::new(99).unwrap();
+
+        let server = Server::open(options).unwrap();
+
+        assert_eq!(server.metadata_membership.as_ref(), Some(&membership));
+        let stored = FileMembershipCatalog::open(metadata_membership_path(&metadata_log))
+            .unwrap()
+            .latest_for_mount(server.service().mount_id())
+            .unwrap()
+            .expect("existing membership should survive server open");
+        assert_eq!(stored, membership);
+        assert!(matches!(
+            server.plan_metadata_bootstrap(node(1), node(4), server.service().mount_id()),
+            Err(ServerError::SharedLog(
+                SharedLogError::CheckpointRequired { .. }
+            ))
+        ));
+        assert!(matches!(
+            server.plan_metadata_bootstrap(node(4), node(4), server.service().mount_id()),
+            Err(ServerError::SharedLog(
+                SharedLogError::UnauthorizedLeader { expected, proposed }
+            )) if expected == node(1) && proposed == node(4)
+        ));
+    }
+
+    #[test]
+    fn server_rejects_metadata_log_node_outside_existing_membership() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let catalog = FileMembershipCatalog::open(metadata_membership_path(&metadata_log)).unwrap();
+        catalog
+            .publish(
+                MetadataMembership::new(
+                    MountId::new(1).unwrap(),
+                    LogTerm::new(7).unwrap(),
+                    node(1),
+                    [node(1)],
+                    [node(4)],
+                )
+                .unwrap(),
+            )
+            .unwrap();
+        let mut options = test_options(dir.path(), Some(metadata_log));
+        options.metadata_log_node = node(9);
+
+        assert!(matches!(
+            Server::open(options),
+            Err(ServerError::SharedLog(SharedLogError::UnknownNode(unknown))) if unknown == node(9)
+        ));
     }
 
     #[test]
