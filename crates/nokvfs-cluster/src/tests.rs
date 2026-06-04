@@ -801,6 +801,57 @@ fn memory_checkpoint_catalog_keeps_latest_manifest() {
 }
 
 #[test]
+fn file_checkpoint_catalog_persists_latest_manifest() {
+    let dir = tempdir().unwrap();
+    let path = dir.path().join("metadata.checkpoint");
+    let mount = MountId::new(1).unwrap();
+    let old = CheckpointManifest::new(
+        b"checkpoint-1".to_vec(),
+        mount,
+        CheckpointFrontier {
+            durable_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(1).unwrap(),
+            },
+            applied_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(1).unwrap(),
+            },
+            min_retained_index: LogIndex::new(2).unwrap(),
+            max_commit_version: version(2),
+        },
+    )
+    .unwrap();
+    let latest = CheckpointManifest::new(
+        b"checkpoint-2".to_vec(),
+        mount,
+        CheckpointFrontier {
+            durable_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(3).unwrap(),
+            },
+            applied_position: LogPosition {
+                term: LogTerm::new(1).unwrap(),
+                index: LogIndex::new(2).unwrap(),
+            },
+            min_retained_index: LogIndex::new(3).unwrap(),
+            max_commit_version: version(3),
+        },
+    )
+    .unwrap();
+
+    let catalog = FileCheckpointCatalog::open(&path).unwrap();
+    assert_eq!(catalog.latest_for_mount(mount).unwrap(), None);
+    catalog.publish(latest.clone()).unwrap();
+    catalog.publish(old).unwrap();
+
+    let reopened = FileCheckpointCatalog::open(&path).unwrap();
+    assert_eq!(reopened.latest_for_mount(mount).unwrap(), Some(latest));
+    assert!(path.is_file());
+    assert!(!path.with_file_name("metadata.checkpoint.tmp").is_file());
+}
+
+#[test]
 fn replay_rejects_non_contiguous_entries() {
     let mount = MountId::new(1).unwrap();
     let entries = vec![
