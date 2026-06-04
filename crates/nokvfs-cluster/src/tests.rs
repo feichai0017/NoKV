@@ -1,11 +1,13 @@
 use std::fs::OpenOptions;
 use std::io::Write;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Mutex;
 
 use super::*;
 use nokvfs_meta::command::{
-    CommandKind, MetadataCommand, MetadataStore, MetadataStoreStatsProvider, Mutation, MutationOp,
-    Predicate, PredicateRef, ReadPurpose, Value, Version,
+    CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand,
+    MetadataError, MetadataStore, MetadataStoreStatsProvider, Mutation, MutationOp, Predicate,
+    PredicateRef, ReadItem, ReadPurpose, ScanItem, ScanRequest, Value, Version,
 };
 use nokvfs_meta::HoltMetadataStore;
 use nokvfs_types::{MountId, RecordFamily};
@@ -66,6 +68,11 @@ struct MetadataStoreSink<M> {
     store: M,
 }
 
+#[derive(Default)]
+struct PredicateFailureStore {
+    commit_calls: AtomicU64,
+}
+
 impl MetadataLogSink for RecordingSink {
     fn apply_command(
         &self,
@@ -104,6 +111,38 @@ where
             applied_mutations: result.applied_mutations,
             watch_events: result.watch_events,
         })
+    }
+}
+
+impl MetadataStore for PredicateFailureStore {
+    fn get_versioned(
+        &self,
+        _family: RecordFamily,
+        _key: &[u8],
+        _version: Version,
+        _purpose: ReadPurpose,
+    ) -> Result<Option<ReadItem>, MetadataError> {
+        Ok(None)
+    }
+
+    fn scan(&self, _request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
+        Ok(Vec::new())
+    }
+
+    fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
+        self.commit_calls.fetch_add(1, Ordering::Relaxed);
+        Ok(CommitResult {
+            commit_version: command.commit_version,
+            applied_mutations: command.mutations.len(),
+            watch_events: command.watch.len(),
+        })
+    }
+
+    fn prune_history(
+        &self,
+        _request: HistoryPruneRequest,
+    ) -> Result<HistoryPruneOutcome, MetadataError> {
+        Ok(HistoryPruneOutcome::default())
     }
 }
 
@@ -521,6 +560,27 @@ fn shared_log_metadata_store_allows_deduped_retry_after_predicate_changes() {
             commit_version: version(2),
         })
     );
+}
+
+#[test]
+fn shared_log_metadata_store_does_not_probe_dedupe_by_committing_inner_store() {
+    let log = InMemorySharedLog::new();
+    let store = PredicateFailureStore::default();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+    let mut command = command(b"missing", 2);
+    command.predicates = vec![PredicateRef {
+        family: RecordFamily::Dentry,
+        key: b"missing".to_vec(),
+        predicate: Predicate::Exists,
+    }];
+
+    assert_eq!(
+        shared.commit_metadata(command),
+        Err(nokvfs_meta::MetadataError::PredicateFailed)
+    );
+    assert_eq!(shared.inner().commit_calls.load(Ordering::Relaxed), 0);
+    assert_eq!(shared.log().committed_index(), LogIndex::ZERO);
 }
 
 #[test]

@@ -55,6 +55,16 @@ impl MetadataStore for ServerMetadataStore {
         }
     }
 
+    fn committed_request_result(
+        &self,
+        request_id: &[u8],
+    ) -> Result<Option<CommitResult>, MetadataError> {
+        match self {
+            Self::Direct(store) => store.committed_request_result(request_id),
+            Self::FileLogged(store) => store.committed_request_result(request_id),
+        }
+    }
+
     fn prune_history(
         &self,
         request: HistoryPruneRequest,

@@ -299,6 +299,18 @@ impl MetadataStore for HoltMetadataStore {
         self.commit_planned_command(command, plan)
     }
 
+    fn committed_request_result(
+        &self,
+        request_id: &[u8],
+    ) -> Result<Option<CommitResult>, MetadataError> {
+        self.current_tree(RecordFamily::CommandDedupe)?
+            .get(request_id)
+            .map_err(to_backend_error)?
+            .as_deref()
+            .map(decode_dedupe_result)
+            .transpose()
+    }
+
     fn prune_history(
         &self,
         request: HistoryPruneRequest,

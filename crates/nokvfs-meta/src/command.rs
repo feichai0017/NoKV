@@ -191,6 +191,13 @@ pub trait MetadataStore {
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError>;
 
+    fn committed_request_result(
+        &self,
+        _request_id: &[u8],
+    ) -> Result<Option<CommitResult>, MetadataError> {
+        Ok(None)
+    }
+
     fn prune_history(
         &self,
         request: HistoryPruneRequest,

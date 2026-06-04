@@ -237,6 +237,13 @@ where
         })
     }
 
+    fn committed_request_result(
+        &self,
+        request_id: &[u8],
+    ) -> Result<Option<CommitResult>, MetadataError> {
+        self.store.committed_request_result(request_id)
+    }
+
     fn prune_history(
         &self,
         request: HistoryPruneRequest,
@@ -358,10 +365,9 @@ fn allow_if_deduped_retry<M>(store: &M, command: &MetadataCommand) -> Result<(),
 where
     M: MetadataStore,
 {
-    match store.commit_metadata(command.clone()) {
-        Ok(_) => Ok(()),
-        Err(MetadataError::PredicateFailed) => Err(MetadataError::PredicateFailed),
-        Err(err) => Err(err),
+    match store.committed_request_result(&command.request_id)? {
+        Some(_) => Ok(()),
+        None => Err(MetadataError::PredicateFailed),
     }
 }
 
