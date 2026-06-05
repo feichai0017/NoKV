@@ -304,6 +304,12 @@ pub trait MetadataStore {
     ) -> Result<HistoryPruneOutcome, MetadataError>;
 }
 
+pub trait MetadataCheckpointStore {
+    fn checkpoint(&self) -> Result<(), MetadataError>;
+    fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError>;
+    fn install_checkpoint_image(&self, image: &[u8]) -> Result<(), MetadataError>;
+}
+
 pub trait MetadataStoreStatsProvider {
     fn metadata_store_stats(&self) -> MetadataStoreStats;
 }

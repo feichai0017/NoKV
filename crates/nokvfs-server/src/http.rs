@@ -155,6 +155,10 @@ pub(crate) fn handle_parts(server: &Server, line: &str, _body: &[u8]) -> HttpRes
                 Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
             }
         }
+        ("POST", "/checkpoint") => match server.run_manual_checkpoint() {
+            Ok(body) => HttpResponse::json("200 OK", body),
+            Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
+        },
         (_, "/request-too-large") => {
             HttpResponse::text("413 Payload Too Large", "request too large\n")
         }
@@ -271,6 +275,16 @@ mod tests {
         let server = test_server();
         let response = handle_parts(&server, "GET /gc?limit=bad HTTP/1.1", &[]);
         assert_eq!(response.status, "400 Bad Request");
+    }
+
+    #[test]
+    fn checkpoint_endpoint_triggers_metadata_snapshot() {
+        let server = test_server();
+        server.service().bootstrap_root(0o755, 1000, 1000).unwrap();
+        let response = handle_parts(&server, "POST /checkpoint HTTP/1.1", &[]);
+        assert_eq!(response.status, "200 OK");
+        assert!(response.body.contains("\"metadata_raft\""));
+        assert!(response.body.contains("\"snapshot_index\""));
     }
 
     #[test]

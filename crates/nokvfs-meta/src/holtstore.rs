@@ -11,9 +11,9 @@ use std::time::Instant;
 
 use crate::command::{
     metadata_commands_conflict, CommitResult, DelimitedScanItem, DelimitedScanRequest,
-    HistoryPruneOutcome, HistoryPruneRequest, KeyScanRequest, MetadataCommand, MetadataError,
-    MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, MutationOp, Predicate, ReadItem,
-    ReadPurpose, ScanItem, ScanRequest, Value, Version,
+    HistoryPruneOutcome, HistoryPruneRequest, KeyScanRequest, MetadataCheckpointStore,
+    MetadataCommand, MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider,
+    MutationOp, Predicate, ReadItem, ReadPurpose, ScanItem, ScanRequest, Value, Version,
 };
 use crate::layout::{history_key, history_prefix};
 use holt::{DBAtomicBatch, KeyRangeEntry, RangeEntry, RecordVersion, Tree, TreeConfig, DB};
@@ -335,6 +335,20 @@ impl HoltMetadataStore {
             metadata_version: version,
             value,
         }))
+    }
+}
+
+impl MetadataCheckpointStore for HoltMetadataStore {
+    fn checkpoint(&self) -> Result<(), MetadataError> {
+        HoltMetadataStore::checkpoint(self)
+    }
+
+    fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError> {
+        HoltMetadataStore::export_checkpoint_image(self)
+    }
+
+    fn install_checkpoint_image(&self, image: &[u8]) -> Result<(), MetadataError> {
+        HoltMetadataStore::install_checkpoint_image(self, image)
     }
 }
 

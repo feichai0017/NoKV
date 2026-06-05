@@ -12,10 +12,10 @@ pub mod layout;
 pub mod service;
 
 pub use command::{
-    CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCommand,
-    MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, Mutation,
-    MutationOp, Predicate, PredicateRef, ReadPurpose, ScanItem, ScanRequest, Value, Version,
-    WatchProjection,
+    CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCheckpointStore,
+    MetadataCommand, MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider,
+    Mutation, MutationOp, Predicate, PredicateRef, ReadPurpose, ScanItem, ScanRequest, Value,
+    Version, WatchProjection,
 };
 pub use gc::{
     HistoryGcOptions, HistoryGcWorker, HistoryGcWorkerState, ObjectGcOptions, ObjectGcWorker,

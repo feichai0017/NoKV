@@ -195,6 +195,21 @@ impl Server {
             history.retained_by_snapshots,
         ))
     }
+
+    pub fn run_manual_checkpoint(&self) -> Result<String, ServerError> {
+        self.service
+            .metadata_store()
+            .trigger_openraft_snapshot()
+            .map_err(|err| ServerError::Metadata(MetadError::from(err)))?;
+        let stats = self.metadata_raft.stats();
+        Ok(format!(
+            r#"{{"metadata_raft":{{"node_id":{},"snapshot_index":{},"last_applied_index":{}}}}}
+"#,
+            stats.node_id,
+            optional_u64_json(stats.snapshot_index),
+            optional_u64_json(stats.last_applied_index),
+        ))
+    }
 }
 
 struct ConnectionWorkerPool {
@@ -580,21 +595,9 @@ pub(crate) mod tests {
     #[test]
     fn three_openraft_metadata_servers_replicate_client_write() {
         let (_dirs, mut servers) = start_three_openraft_test_servers();
-        let leader = wait_openraft_server_leader(&servers, None);
-        servers
-            .get(&leader)
-            .unwrap()
-            .server
-            .service()
-            .bootstrap_root(DEFAULT_ROOT_MODE, 1000, 1000)
-            .unwrap();
-        servers
-            .get(&leader)
-            .unwrap()
-            .server
-            .service()
-            .create_dir_path("/runs", 0o755, 1000, 1000)
-            .unwrap();
+        wait_openraft_server_leader(&servers, None);
+        bootstrap_root_on_openraft_servers(&servers, None);
+        create_dir_on_openraft_servers(&servers, "/runs", None);
 
         wait_path_on_openraft_servers(&servers, "/runs", None);
         for server in servers.values_mut() {
@@ -607,34 +610,16 @@ pub(crate) mod tests {
     fn three_openraft_metadata_servers_elect_new_leader_after_leader_crash() {
         let (_dirs, mut servers) = start_three_openraft_test_servers();
         let leader = wait_openraft_server_leader(&servers, None);
-        servers
-            .get(&leader)
-            .unwrap()
-            .server
-            .service()
-            .bootstrap_root(DEFAULT_ROOT_MODE, 1000, 1000)
-            .unwrap();
-        servers
-            .get(&leader)
-            .unwrap()
-            .server
-            .service()
-            .create_dir_path("/before-crash", 0o755, 1000, 1000)
-            .unwrap();
+        bootstrap_root_on_openraft_servers(&servers, None);
+        create_dir_on_openraft_servers(&servers, "/before-crash", None);
         wait_path_on_openraft_servers(&servers, "/before-crash", None);
 
         let failed = servers.get_mut(&leader).unwrap();
         failed.server.shutdown_metadata_raft().unwrap();
         failed.stop();
 
-        let new_leader = wait_openraft_server_leader(&servers, Some(leader));
-        servers
-            .get(&new_leader)
-            .unwrap()
-            .server
-            .service()
-            .create_dir_path("/after-crash", 0o755, 1000, 1000)
-            .unwrap();
+        wait_openraft_server_leader(&servers, Some(leader));
+        create_dir_on_openraft_servers(&servers, "/after-crash", Some(leader));
 
         wait_path_on_openraft_servers(&servers, "/after-crash", Some(leader));
         for (id, server) in servers.iter_mut() {
@@ -674,6 +659,68 @@ pub(crate) mod tests {
             servers.insert(id, running);
         }
         (dirs, servers)
+    }
+
+    fn bootstrap_root_on_openraft_servers(
+        servers: &BTreeMap<u64, RunningTestServer>,
+        excluded: Option<u64>,
+    ) {
+        retry_openraft_metadata_write(servers, excluded, |running| {
+            running
+                .server
+                .service()
+                .bootstrap_root(DEFAULT_ROOT_MODE, 1000, 1000)
+                .map(|_| ())
+        });
+    }
+
+    fn create_dir_on_openraft_servers(
+        servers: &BTreeMap<u64, RunningTestServer>,
+        path: &str,
+        excluded: Option<u64>,
+    ) {
+        retry_openraft_metadata_write(servers, excluded, |running| {
+            running
+                .server
+                .service()
+                .create_dir_path(path, 0o755, 1000, 1000)
+                .map(|_| ())
+        });
+    }
+
+    fn retry_openraft_metadata_write(
+        servers: &BTreeMap<u64, RunningTestServer>,
+        excluded: Option<u64>,
+        mut write: impl FnMut(&RunningTestServer) -> Result<(), MetadError>,
+    ) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        let mut last_forward = None;
+        loop {
+            for (id, running) in servers {
+                if excluded == Some(*id) {
+                    continue;
+                }
+                match write(running) {
+                    Ok(()) => return,
+                    Err(err) if is_forward_to_leader(&err) => {
+                        last_forward = Some(err.to_string());
+                    }
+                    Err(err) => panic!("OpenRaft metadata write failed on node {id}: {err}"),
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "OpenRaft metadata write never reached a leader; last forward={last_forward:?}"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn is_forward_to_leader(err: &MetadError) -> bool {
+        matches!(
+            err,
+            MetadError::Metadata(nokvfs_meta::MetadataError::ForwardToLeader { .. })
+        )
     }
 
     fn wait_openraft_server_leader(

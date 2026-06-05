@@ -18,8 +18,9 @@ use std::time::Duration;
 
 use nokvfs_meta::command::{
     CommitResult, DelimitedScanItem, DelimitedScanRequest, HistoryPruneOutcome,
-    HistoryPruneRequest, KeyScanRequest, MetadataCommand, MetadataError, MetadataStore,
-    MetadataStoreStats, MetadataStoreStatsProvider, ReadItem, ReadPurpose, ScanItem, ScanRequest,
+    HistoryPruneRequest, KeyScanRequest, MetadataCheckpointStore, MetadataCommand, MetadataError,
+    MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, ReadItem, ReadPurpose, ScanItem,
+    ScanRequest,
 };
 use nokvfs_protocol::{
     WireMetadataRaftAppendEntriesRequest, WireMetadataRaftAppendEntriesResponse,
@@ -35,11 +36,11 @@ use openraft::network::RaftNetworkFactory;
 use openraft::storage::LogFlushed;
 use openraft::storage::{RaftLogStorage, RaftStateMachine};
 use openraft::{
-    BasicNode, Config, LogId, Raft, RaftSnapshotBuilder, Snapshot, SnapshotMeta, StorageError,
-    StoredMembership,
+    BasicNode, Config, ErrorSubject, ErrorVerb, LogId, Raft, RaftSnapshotBuilder, Snapshot,
+    SnapshotMeta, StorageError, StoredMembership,
 };
 #[cfg(test)]
-use openraft::{ErrorSubject, ErrorVerb, LogState, RaftLogReader, Vote};
+use openraft::{LogState, RaftLogReader, Vote};
 
 use crate::file_log::{FileMetadataRaftLog, FileMetadataRaftLogOptions};
 use crate::log::{
@@ -78,8 +79,10 @@ struct MetadataRaftSnapshotImage {
 }
 
 #[derive(Clone, Debug)]
-pub struct MetadataRaftSnapshotBuilder {
-    image: MetadataRaftSnapshotImage,
+pub struct MetadataRaftSnapshotBuilder<M> {
+    store: M,
+    last_applied: Option<LogId<u64>>,
+    last_membership: StoredMembership<u64, BasicNode>,
 }
 
 #[cfg(test)]
@@ -173,7 +176,7 @@ impl InMemoryMetadataRaftLogInner {
 
 impl<M> MetadataRaftStateMachine<M>
 where
-    M: MetadataStore + Send + Sync + 'static,
+    M: MetadataCheckpointStore + MetadataStore + Clone + Send + Sync + 'static,
 {
     pub fn new(store: M) -> Self {
         Self {
@@ -198,7 +201,7 @@ where
 #[cfg(test)]
 impl<M> MetadataRaftStorage<M>
 where
-    M: MetadataStore + Send + Sync + 'static,
+    M: MetadataCheckpointStore + MetadataStore + Clone + Send + Sync + 'static,
 {
     pub fn in_memory(store: M) -> Self {
         Self {
@@ -210,7 +213,7 @@ where
 
 impl<M> OpenRaftMetadataStore<M>
 where
-    M: MetadataStore + Clone + Send + Sync + 'static,
+    M: MetadataCheckpointStore + MetadataStore + Clone + Send + Sync + 'static,
 {
     pub fn stats_handle(&self) -> OpenRaftMetadataStatsHandle {
         OpenRaftMetadataStatsHandle {
@@ -477,6 +480,32 @@ where
             .map_err(|err| MetadataError::Backend(format!("openraft shutdown: {err}")))
     }
 
+    pub fn trigger_snapshot(&self) -> Result<(), MetadataError> {
+        let target = self
+            .raft
+            .metrics()
+            .borrow()
+            .last_applied
+            .map(|log_id| log_id.index);
+        self.runtime
+            .block_on(self.raft.trigger().snapshot())
+            .map_err(|err| MetadataError::Backend(format!("openraft snapshot: {err}")))?;
+        if let Some(target) = target {
+            self.runtime
+                .block_on(self.raft.wait(Some(Duration::from_secs(3))).metrics(
+                    |metrics| {
+                        metrics
+                            .snapshot
+                            .map(|snapshot| snapshot.index >= target)
+                            .unwrap_or(false)
+                    },
+                    "metadata raft snapshot",
+                ))
+                .map_err(|err| MetadataError::Backend(format!("openraft snapshot wait: {err}")))?;
+        }
+        Ok(())
+    }
+
     pub fn handle_vote_rpc(
         &self,
         request: WireMetadataRaftVoteRequest,
@@ -552,7 +581,7 @@ where
 
 impl<M> MetadataStore for OpenRaftMetadataStore<M>
 where
-    M: MetadataStore + Clone + Send + Sync + 'static,
+    M: MetadataCheckpointStore + MetadataStore + Clone + Send + Sync + 'static,
 {
     fn get_versioned(
         &self,
@@ -614,7 +643,13 @@ where
 
 impl<M> MetadataStoreStatsProvider for OpenRaftMetadataStore<M>
 where
-    M: MetadataStore + MetadataStoreStatsProvider + Clone + Send + Sync + 'static,
+    M: MetadataCheckpointStore
+        + MetadataStore
+        + MetadataStoreStatsProvider
+        + Clone
+        + Send
+        + Sync
+        + 'static,
 {
     fn metadata_store_stats(&self) -> MetadataStoreStats {
         self.read_store.metadata_store_stats()
@@ -779,9 +814,9 @@ impl RaftLogStorage<MetadataRaftConfig> for InMemoryMetadataRaftLog {
 
 impl<M> RaftStateMachine<MetadataRaftConfig> for MetadataRaftStateMachine<M>
 where
-    M: MetadataStore + Send + Sync + 'static,
+    M: MetadataCheckpointStore + MetadataStore + Clone + Send + Sync + 'static,
 {
-    type SnapshotBuilder = MetadataRaftSnapshotBuilder;
+    type SnapshotBuilder = MetadataRaftSnapshotBuilder<M>;
 
     async fn applied_state(
         &mut self,
@@ -821,7 +856,9 @@ where
 
     async fn get_snapshot_builder(&mut self) -> Self::SnapshotBuilder {
         MetadataRaftSnapshotBuilder {
-            image: self.current_snapshot_image(),
+            store: self.store.clone(),
+            last_applied: self.last_applied,
+            last_membership: self.last_membership.clone(),
         }
     }
 
@@ -837,6 +874,9 @@ where
         snapshot: Box<Cursor<Vec<u8>>>,
     ) -> Result<(), StorageError<u64>> {
         let data = snapshot.into_inner();
+        self.store.install_checkpoint_image(&data).map_err(|err| {
+            metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Write, err)
+        })?;
         self.last_applied = meta.last_log_id;
         self.last_membership = meta.last_membership.clone();
         self.current_snapshot = Some(MetadataRaftSnapshotImage {
@@ -853,23 +893,25 @@ where
     }
 }
 
-impl<M> MetadataRaftStateMachine<M> {
-    fn current_snapshot_image(&self) -> MetadataRaftSnapshotImage {
-        let meta = SnapshotMeta {
-            last_log_id: self.last_applied,
-            last_membership: self.last_membership.clone(),
-            snapshot_id: snapshot_id(self.last_applied),
-        };
-        MetadataRaftSnapshotImage {
-            meta,
-            data: Vec::new(),
-        }
-    }
-}
-
-impl RaftSnapshotBuilder<MetadataRaftConfig> for MetadataRaftSnapshotBuilder {
+impl<M> RaftSnapshotBuilder<MetadataRaftConfig> for MetadataRaftSnapshotBuilder<M>
+where
+    M: MetadataCheckpointStore + Clone + Send + Sync + 'static,
+{
     async fn build_snapshot(&mut self) -> Result<Snapshot<MetadataRaftConfig>, StorageError<u64>> {
-        Ok(snapshot_from_image(self.image.clone()))
+        self.store.checkpoint().map_err(|err| {
+            metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Write, err)
+        })?;
+        let data = self.store.export_checkpoint_image().map_err(|err| {
+            metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Read, err)
+        })?;
+        Ok(snapshot_from_image(MetadataRaftSnapshotImage {
+            meta: SnapshotMeta {
+                last_log_id: self.last_applied,
+                last_membership: self.last_membership.clone(),
+                snapshot_id: snapshot_id(self.last_applied),
+            },
+            data,
+        }))
     }
 }
 
@@ -936,9 +978,16 @@ fn snapshot_id(last_applied: Option<LogId<u64>>) -> String {
     }
 }
 
-#[cfg(test)]
 fn storage_error(subject: ErrorSubject<u64>, verb: ErrorVerb, message: &str) -> StorageError<u64> {
     StorageError::from_io_error(subject, verb, std::io::Error::other(message.to_owned()))
+}
+
+fn metadata_storage_error(
+    subject: ErrorSubject<u64>,
+    verb: ErrorVerb,
+    err: MetadataError,
+) -> StorageError<u64> {
+    storage_error(subject, verb, &err.to_string())
 }
 
 #[cfg(test)]
@@ -1026,7 +1075,9 @@ mod tests {
     use nokvfs_types::RecordFamily;
     use openraft::entry::FromAppData;
     use openraft::storage::RaftLogStorageExt;
-    use openraft::{BasicNode, CommittedLeaderId, Config, LogId, Raft, RaftLogReader, Vote};
+    use openraft::{
+        BasicNode, CommittedLeaderId, Config, LogId, Raft, RaftLogReader, RaftSnapshotBuilder, Vote,
+    };
 
     use super::*;
     use crate::file_log::{FileMetadataRaftLog, FileMetadataRaftLogOptions};
@@ -1132,6 +1183,49 @@ mod tests {
                 .unwrap()
                 .unwrap();
             assert_eq!(value.0, b"inode=2".to_vec());
+        });
+    }
+
+    #[test]
+    fn state_machine_snapshot_installs_holt_checkpoint_image() {
+        runtime().block_on(async {
+            let store = HoltMetadataStore::open_memory().unwrap();
+            let mut sm = MetadataRaftStateMachine::new(store.clone());
+            let command = metadata_command(b"req-snapshot", b"dentry/snapshot", 6);
+            let entry = metadata_entry(2, 5, command);
+
+            sm.apply([entry.clone()]).await.unwrap();
+            let mut builder = sm.get_snapshot_builder().await;
+            let snapshot = builder.build_snapshot().await.unwrap();
+            assert!(
+                !snapshot.snapshot.get_ref().is_empty(),
+                "OpenRaft snapshot must include the Holt checkpoint image"
+            );
+
+            let restored = HoltMetadataStore::open_memory().unwrap();
+            let mut restored_sm = MetadataRaftStateMachine::new(restored.clone());
+            restored_sm
+                .install_snapshot(&snapshot.meta, snapshot.snapshot)
+                .await
+                .unwrap();
+
+            assert_eq!(
+                restored
+                    .get(
+                        RecordFamily::Dentry,
+                        b"dentry/snapshot",
+                        Version::new(6).unwrap(),
+                        ReadPurpose::UserStrong,
+                    )
+                    .unwrap()
+                    .unwrap()
+                    .0,
+                b"inode=2".to_vec()
+            );
+            assert_eq!(
+                restored_sm.applied_state().await.unwrap().0,
+                Some(entry.log_id)
+            );
         });
     }
 

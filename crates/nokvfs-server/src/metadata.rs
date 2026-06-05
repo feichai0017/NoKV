@@ -56,6 +56,12 @@ impl ServerMetadataStore {
             Self::OpenRaft(store) => store.shutdown(),
         }
     }
+
+    pub(crate) fn trigger_openraft_snapshot(&self) -> Result<(), MetadataError> {
+        match self {
+            Self::OpenRaft(store) => store.trigger_snapshot(),
+        }
+    }
 }
 
 impl MetadataStore for ServerMetadataStore {
