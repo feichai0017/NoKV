@@ -842,27 +842,44 @@ fn bench_metadata_ha_smoke(
     start_metadata_raft_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
     wait_for_health(addr_1)?;
 
-    let metadata =
-        MetadataClient::new(MetadataClientOptions::new(addr_1).with_read_endpoints(vec![addr_2]));
+    let cluster_nodes = [(node_1, addr_1), (node_2, addr_2), (node_3, addr_3)];
+    let (leader, leader_addr) = wait_metadata_raft_leader(&cluster_nodes)?;
+    let write_addr = cluster_nodes
+        .iter()
+        .find_map(|(node, address)| (*node != leader).then_some(*address))
+        .unwrap_or(leader_addr);
+    let peer_read_addr = cluster_nodes
+        .iter()
+        .find_map(|(node, address)| (*node != leader && *address != write_addr).then_some(*address))
+        .unwrap_or(write_addr);
+    let metadata = MetadataClient::new(
+        MetadataClientOptions::new(write_addr).with_read_endpoints(vec![peer_read_addr]),
+    );
     let client = NoKvFsClient::new(metadata, objects);
-    let before = fetch_server_stats(addr_1)?;
+    client
+        .metadata()
+        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(|err| BenchError::Client(format!("metadata-ha-smoke bootstrap root: {err}")))?;
+    let before = fetch_server_stats(leader_addr)?;
     let start = Instant::now();
     let mut checksum = 0_u64;
     let files = shape.shared_files.clamp(16, 512);
     client
         .metadata()
         .mkdir("/ha", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?;
+        .map_err(|err| BenchError::Client(format!("metadata-ha-smoke mkdir /ha: {err}")))?;
     let paths = (0..files)
         .map(|index| format!("/ha/file-{index:06}"))
         .collect::<Vec<_>>();
     for entry in client
         .metadata()
         .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?
+        .map_err(|err| BenchError::Client(format!("metadata-ha-smoke create files RPC: {err}")))?
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
-        .map_err(from_client)?
+        .map_err(|err| {
+            BenchError::Client(format!("metadata-ha-smoke create files result: {err}"))
+        })?
     {
         checksum = checksum.wrapping_add(entry.attr.inode.get());
     }
@@ -872,9 +889,11 @@ fn bench_metadata_ha_smoke(
         .ok_or_else(|| {
             BenchError::Client("metadata HA write returned no log position".to_owned())
         })?;
-    let peer_reader = MetadataClient::connect(addr_2);
+    let peer_reader = MetadataClient::connect(peer_read_addr);
     peer_reader.observe_metadata_position(observed);
-    let peer_entries = peer_reader.list("/ha").map_err(from_client)?;
+    let peer_entries = peer_reader
+        .list("/ha")
+        .map_err(|err| BenchError::Client(format!("metadata-ha-smoke peer list /ha: {err}")))?;
     if peer_entries.len() != files {
         return Err(BenchError::Client(format!(
             "metadata HA peer read returned {} entries, expected {files}",
@@ -882,7 +901,7 @@ fn bench_metadata_ha_smoke(
         )));
     }
     checksum = checksum.wrapping_add(peer_entries.len() as u64);
-    let stats = stats_delta(before, fetch_server_stats(addr_1)?);
+    let stats = stats_delta(before, fetch_server_stats(leader_addr)?);
     Ok(row(RowInput {
         workload,
         profile: config.profile,
@@ -895,7 +914,12 @@ fn bench_metadata_ha_smoke(
         read_repeats: config.read_repeats,
         block_cache: config.block_cache,
         checksum,
-        shape: format!("voters=3 leader=1 peer_read=2 files={files}"),
+        shape: format!(
+            "voters=3 leader={} write_endpoint={} peer_read={} files={files}",
+            leader.get(),
+            write_addr,
+            peer_read_addr
+        ),
         caveat: format!(
             "OpenRaft metadata HA smoke over three metadata server processes, sync={}, peer read requires observed log position",
             metadata_raft_log_sync_name(config.metadata_raft_log_sync)
@@ -952,6 +976,10 @@ fn bench_metadata_ha_fault_smoke(
     let metadata =
         MetadataClient::new(MetadataClientOptions::new(addr_1).with_read_endpoints(vec![addr_2]));
     let client = NoKvFsClient::new(metadata, objects);
+    client
+        .metadata()
+        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(|err| BenchError::Client(format!("metadata-ha-fault bootstrap root: {err}")))?;
     let before = fetch_server_stats(addr_1)?;
     let start = Instant::now();
     let mut checksum = 0_u64;
@@ -959,17 +987,19 @@ fn bench_metadata_ha_fault_smoke(
     client
         .metadata()
         .mkdir("/ha-fault", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?;
+        .map_err(|err| BenchError::Client(format!("metadata-ha-fault mkdir /ha-fault: {err}")))?;
     let paths = (0..files)
         .map(|index| format!("/ha-fault/file-{index:06}"))
         .collect::<Vec<_>>();
     for entry in client
         .metadata()
         .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
-        .map_err(from_client)?
+        .map_err(|err| BenchError::Client(format!("metadata-ha-fault create files RPC: {err}")))?
         .into_iter()
         .collect::<Result<Vec<_>, _>>()
-        .map_err(from_client)?
+        .map_err(|err| {
+            BenchError::Client(format!("metadata-ha-fault create files result: {err}"))
+        })?
     {
         checksum = checksum.wrapping_add(entry.attr.inode.get());
     }
@@ -981,7 +1011,9 @@ fn bench_metadata_ha_fault_smoke(
         })?;
     let peer_2 = MetadataClient::connect(addr_2);
     peer_2.observe_metadata_position(first_observed);
-    let peer_2_entries = peer_2.list("/ha-fault").map_err(from_client)?;
+    let peer_2_entries = peer_2
+        .list("/ha-fault")
+        .map_err(|err| BenchError::Client(format!("metadata-ha-fault peer2 list: {err}")))?;
     if peer_2_entries.len() != files {
         return Err(BenchError::Client(format!(
             "metadata HA surviving peer read returned {} entries, expected {files}",
@@ -1000,7 +1032,7 @@ fn bench_metadata_ha_fault_smoke(
             DEFAULT_UID,
             DEFAULT_GID,
         )
-        .map_err(from_client)?;
+        .map_err(|err| BenchError::Client(format!("metadata-ha-fault recovery create: {err}")))?;
     checksum = checksum.wrapping_add(recovered.attr.inode.get());
     let recovered_observed = client
         .metadata()
@@ -1010,7 +1042,9 @@ fn bench_metadata_ha_fault_smoke(
         })?;
     let peer_3 = MetadataClient::connect(addr_3);
     peer_3.observe_metadata_position(recovered_observed);
-    let peer_3_entries = peer_3.list("/ha-fault").map_err(from_client)?;
+    let peer_3_entries = peer_3
+        .list("/ha-fault")
+        .map_err(|err| BenchError::Client(format!("metadata-ha-fault peer3 list: {err}")))?;
     let expected_after_recovery = files + 1;
     if peer_3_entries.len() != expected_after_recovery {
         return Err(BenchError::Client(format!(
@@ -1869,6 +1903,39 @@ fn wait_for_health(address: SocketAddr) -> Result<(), BenchError> {
             return Err(BenchError::Client(format!(
                 "metadata server {address} did not become healthy"
             )));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
+fn wait_metadata_raft_leader(
+    nodes: &[(NodeId, SocketAddr)],
+) -> Result<(NodeId, SocketAddr), BenchError> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        for (_, address) in nodes {
+            let Ok(stats) = fetch_server_stats(*address) else {
+                continue;
+            };
+            if stats.metadata_raft.current_leader == 0 {
+                continue;
+            }
+            let leader = NodeId::new(stats.metadata_raft.current_leader).map_err(from_client)?;
+            let leader_addr = nodes
+                .iter()
+                .find_map(|(candidate, address)| (*candidate == leader).then_some(*address))
+                .ok_or_else(|| {
+                    BenchError::Client(format!(
+                        "metadata raft leader {} is not in benchmark node set",
+                        leader.get()
+                    ))
+                })?;
+            return Ok((leader, leader_addr));
+        }
+        if Instant::now() >= deadline {
+            return Err(BenchError::Client(
+                "metadata raft cluster did not elect a leader".to_owned(),
+            ));
         }
         thread::sleep(Duration::from_millis(10));
     }

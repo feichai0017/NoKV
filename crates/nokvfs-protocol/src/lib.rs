@@ -283,6 +283,10 @@ pub enum WireMetadataError {
         required: WireMetadataPosition,
         applied: Option<WireMetadataPosition>,
     },
+    ForwardToLeader {
+        leader_id: Option<u64>,
+        address: Option<String>,
+    },
     StaleBodyGeneration {
         expected: u64,
         current: u64,

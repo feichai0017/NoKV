@@ -209,6 +209,10 @@ pub enum MetadataError {
         applied_term: Option<u64>,
         applied_index: Option<u64>,
     },
+    ForwardToLeader {
+        leader_id: Option<u64>,
+        address: Option<String>,
+    },
     Backend(String),
 }
 
@@ -441,6 +445,16 @@ impl fmt::Display for MetadataError {
                         f,
                         ", current applied frontier is {applied_term}:{applied_index}"
                     )?;
+                }
+                Ok(())
+            }
+            Self::ForwardToLeader { leader_id, address } => {
+                write!(f, "metadata write must be forwarded to leader")?;
+                if let Some(leader_id) = leader_id {
+                    write!(f, " {leader_id}")?;
+                }
+                if let Some(address) = address {
+                    write!(f, " at {address}")?;
                 }
                 Ok(())
             }

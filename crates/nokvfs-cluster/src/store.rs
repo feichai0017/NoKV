@@ -472,7 +472,14 @@ where
         match self.runtime.block_on(self.raft.client_write(batch)) {
             Ok(response) => normalize_apply_results(commands.len(), response.data.results),
             Err(err) => {
-                let error = MetadataError::Backend(format!("openraft client write: {err}"));
+                let error = if let Some(forward) = err.forward_to_leader::<BasicNode>() {
+                    MetadataError::ForwardToLeader {
+                        leader_id: forward.leader_id,
+                        address: forward.leader_node.as_ref().map(|node| node.addr.clone()),
+                    }
+                } else {
+                    MetadataError::Backend(format!("openraft client write: {err}"))
+                };
                 commands.iter().map(|_| Err(error.clone())).collect()
             }
         }

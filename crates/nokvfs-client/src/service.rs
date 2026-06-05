@@ -1310,7 +1310,7 @@ impl MetadataClient {
     }
 
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
-        let endpoints = self.request_endpoints(&request);
+        let mut endpoints = self.request_endpoints(&request);
         if endpoints.is_empty() {
             return Err(ClientError::Protocol(
                 "metadata request had no target endpoint".to_owned(),
@@ -1321,23 +1321,43 @@ impl MetadataClient {
 
         loop {
             let mut saw_stale_read = false;
-            for address in &endpoints {
+            let mut saw_forward_to_leader = false;
+            let mut index = 0;
+            while index < endpoints.len() {
+                let address = endpoints[index];
+                index += 1;
                 let request = self.request_with_observed_position(request.clone());
-                match self.call_at(*address, &request) {
+                match self.call_at(address, &request) {
                     Ok(result) => return Ok(result),
                     Err(err @ ClientError::ReadNotFresh { .. }) => {
                         saw_stale_read = true;
                         fallback_error = Some(err);
                     }
+                    Err(
+                        err @ ClientError::ForwardToLeader {
+                            address: Some(leader),
+                            ..
+                        },
+                    ) => {
+                        saw_forward_to_leader = true;
+                        fallback_error = Some(err);
+                        if !endpoints.contains(&leader) {
+                            endpoints.insert(index, leader);
+                        }
+                    }
+                    Err(err @ ClientError::ForwardToLeader { address: None, .. }) => {
+                        saw_forward_to_leader = true;
+                        fallback_error = Some(err);
+                    }
                     Err(err @ ClientError::Io(_)) => {
-                        self.drop_connection(*address);
+                        self.drop_connection(address);
                         fallback_error = Some(err);
                     }
                     Err(err) => return Err(err),
                 }
             }
 
-            if !saw_stale_read {
+            if !saw_stale_read && !saw_forward_to_leader {
                 break;
             }
             let Some(delay) = read_not_fresh_retry_delay(started, self.options.timeout) else {
@@ -1371,7 +1391,7 @@ impl MetadataClient {
     }
 
     fn request_endpoints(&self, request: &MetadataRpcRequest) -> Vec<SocketAddr> {
-        if !request_requires_observed_position(request) {
+        if !request_uses_read_endpoints(request) {
             return vec![self.options.address];
         }
         let mut endpoints = Vec::with_capacity(self.options.read_endpoints.len() + 1);
@@ -1431,6 +1451,35 @@ impl MetadataClient {
     }
 }
 
+fn request_uses_read_endpoints(request: &MetadataRpcRequest) -> bool {
+    match request {
+        MetadataRpcRequest::Batch { requests } => {
+            !requests.is_empty() && requests.iter().all(request_uses_read_endpoints)
+        }
+        MetadataRpcRequest::RequireApplied { request, .. } => request_uses_read_endpoints(request),
+        MetadataRpcRequest::GetAttr { .. }
+        | MetadataRpcRequest::GetAttrAtSnapshot { .. }
+        | MetadataRpcRequest::LookupPlus { .. }
+        | MetadataRpcRequest::LookupPlusAtSnapshot { .. }
+        | MetadataRpcRequest::LookupPath { .. }
+        | MetadataRpcRequest::StatPath { .. }
+        | MetadataRpcRequest::ReadDirPlus { .. }
+        | MetadataRpcRequest::ReadDirPlusPage { .. }
+        | MetadataRpcRequest::ReadDirPlusAtSnapshot { .. }
+        | MetadataRpcRequest::ReadDirPlusPath { .. }
+        | MetadataRpcRequest::ReadDirPlusPathPage { .. }
+        | MetadataRpcRequest::ReadIndexedPathPage { .. }
+        | MetadataRpcRequest::ReadFileAtSnapshot { .. }
+        | MetadataRpcRequest::ReadFilePathAtSnapshot { .. }
+        | MetadataRpcRequest::ReadSymlink { .. }
+        | MetadataRpcRequest::ReadSymlinkAtSnapshot { .. }
+        | MetadataRpcRequest::ReadBodyPlan { .. }
+        | MetadataRpcRequest::ReadPathPlan { .. }
+        | MetadataRpcRequest::SnapshotPin { .. } => true,
+        _ => false,
+    }
+}
+
 fn create_files_request(
     paths: &[String],
     mode: u32,
@@ -1469,28 +1518,17 @@ fn create_files_request(
 }
 
 fn request_requires_observed_position(request: &MetadataRpcRequest) -> bool {
-    matches!(
-        request,
-        MetadataRpcRequest::GetAttr { .. }
-            | MetadataRpcRequest::GetAttrAtSnapshot { .. }
-            | MetadataRpcRequest::LookupPlus { .. }
-            | MetadataRpcRequest::LookupPlusAtSnapshot { .. }
-            | MetadataRpcRequest::LookupPath { .. }
-            | MetadataRpcRequest::StatPath { .. }
-            | MetadataRpcRequest::ReadDirPlus { .. }
-            | MetadataRpcRequest::ReadDirPlusPage { .. }
-            | MetadataRpcRequest::ReadDirPlusAtSnapshot { .. }
-            | MetadataRpcRequest::ReadDirPlusPath { .. }
-            | MetadataRpcRequest::ReadDirPlusPathPage { .. }
-            | MetadataRpcRequest::ReadIndexedPathPage { .. }
-            | MetadataRpcRequest::ReadFileAtSnapshot { .. }
-            | MetadataRpcRequest::ReadFilePathAtSnapshot { .. }
-            | MetadataRpcRequest::ReadSymlink { .. }
-            | MetadataRpcRequest::ReadSymlinkAtSnapshot { .. }
-            | MetadataRpcRequest::ReadBodyPlan { .. }
-            | MetadataRpcRequest::ReadPathPlan { .. }
-            | MetadataRpcRequest::SnapshotPin { .. }
-    )
+    match request {
+        MetadataRpcRequest::Batch { requests } => {
+            requests.iter().any(request_requires_observed_position)
+        }
+        MetadataRpcRequest::RequireApplied { .. }
+        | MetadataRpcRequest::BootstrapRoot { .. }
+        | MetadataRpcRequest::MetadataRaftVote { .. }
+        | MetadataRpcRequest::MetadataRaftAppendEntries { .. }
+        | MetadataRpcRequest::MetadataRaftInstallSnapshot { .. } => false,
+        _ => true,
+    }
 }
 
 fn read_not_fresh_retry_delay(started: Instant, timeout: Duration) -> Option<Duration> {
@@ -1827,6 +1865,20 @@ fn client_error_from_wire_error(error: WireMetadataError) -> ClientError {
             applied_term: applied.map(|position| position.term),
             applied_index: applied.map(|position| position.index),
         },
+        WireMetadataError::ForwardToLeader { leader_id, address } => {
+            let address = match address {
+                Some(address) => match address.parse::<SocketAddr>() {
+                    Ok(address) => Some(address),
+                    Err(err) => {
+                        return ClientError::Protocol(format!(
+                            "metadata leader address {address:?} is invalid: {err}"
+                        ));
+                    }
+                },
+                None => None,
+            };
+            ClientError::ForwardToLeader { leader_id, address }
+        }
         WireMetadataError::StaleBodyGeneration { expected, current } => {
             ClientError::Metadata(nokvfs_meta::MetadError::StaleBodyGeneration {
                 expected,
@@ -2212,6 +2264,33 @@ mod tests {
     }
 
     #[test]
+    fn service_client_imports_observed_position_for_write_planning() {
+        let position = WireMetadataPosition { term: 7, index: 11 };
+        let addr = serve_one_request(move |request| {
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::RequireApplied {
+                    position: observed,
+                    request,
+                } if observed == position
+                    && matches!(*request, MetadataRpcRequest::CreateFilePath { ref path, .. } if path == "/runs/a.bin")
+            ));
+            dentry_response_with_position(2, "a.bin", 40, 7, Some(position))
+        });
+        let client = MetadataClient::connect(addr);
+        client.observe_metadata_position(ClientMetadataPosition {
+            term: position.term,
+            index: position.index,
+        });
+
+        let entry = client
+            .create_file("/runs/a.bin", 0o644, 1000, 1000)
+            .unwrap();
+
+        assert_eq!(entry.attr.inode.get(), 40);
+    }
+
+    #[test]
     fn service_client_routes_live_reads_to_learner_and_falls_back_on_stale() {
         let position = WireMetadataPosition { term: 7, index: 11 };
 
@@ -2486,6 +2565,45 @@ mod tests {
     }
 
     #[test]
+    fn service_client_retries_forward_to_leader_endpoint() {
+        let leader_addr = serve_one_request(|request| {
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::BootstrapRoot {
+                    mode: 0o755,
+                    uid: 1000,
+                    gid: 1000
+                }
+            ));
+            response_body(
+                r#"{"ok":true,"result":{"type":"inode_attr","attr":null},"metadata_position":{"term":3,"index":9}}"#,
+            )
+        });
+        let follower_addr = serve_one_request(move |request| {
+            assert!(matches!(request, MetadataRpcRequest::BootstrapRoot { .. }));
+            encode_envelope(&MetadataRpcEnvelope {
+                ok: false,
+                result: None,
+                error: Some("forward to metadata leader".to_owned()),
+                error_kind: Some(WireMetadataError::ForwardToLeader {
+                    leader_id: Some(2),
+                    address: Some(leader_addr.to_string()),
+                }),
+                metadata_position: None,
+            })
+            .unwrap()
+        });
+        let client = MetadataClient::connect(follower_addr);
+
+        client.bootstrap_root(0o755, 1000, 1000).unwrap();
+
+        assert_eq!(
+            client.observed_metadata_position(),
+            Some(ClientMetadataPosition { term: 3, index: 9 })
+        );
+    }
+
+    #[test]
     fn service_typed_error_maps_read_not_fresh() {
         let err = client_error_from_wire_error(WireMetadataError::ReadNotFresh {
             required: WireMetadataPosition { term: 2, index: 8 },
@@ -2499,6 +2617,21 @@ mod tests {
                 applied_term: Some(2),
                 applied_index: Some(5),
             }
+        ));
+    }
+
+    #[test]
+    fn service_typed_error_maps_forward_to_leader() {
+        let err = client_error_from_wire_error(WireMetadataError::ForwardToLeader {
+            leader_id: Some(2),
+            address: Some("127.0.0.1:9922".to_owned()),
+        });
+        assert!(matches!(
+            err,
+            ClientError::ForwardToLeader {
+                leader_id: Some(2),
+                address: Some(address),
+            } if address.to_string() == "127.0.0.1:9922"
         ));
     }
 

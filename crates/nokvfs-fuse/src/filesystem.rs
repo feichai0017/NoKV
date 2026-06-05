@@ -2004,6 +2004,9 @@ fn errno(err: impl Into<FuseBackendError>) -> Errno {
         FuseBackendError::Client(nokvfs_client::ClientError::Metadata(err)) => metadata_errno(err),
         FuseBackendError::Client(nokvfs_client::ClientError::NotFound(_)) => Errno::ENOENT,
         FuseBackendError::Client(nokvfs_client::ClientError::NotDirectory(_)) => Errno::ENOTDIR,
+        FuseBackendError::Client(nokvfs_client::ClientError::ForwardToLeader { .. }) => {
+            Errno::EAGAIN
+        }
         FuseBackendError::Client(nokvfs_client::ClientError::Object(_))
         | FuseBackendError::Client(nokvfs_client::ClientError::Io(_))
         | FuseBackendError::Client(nokvfs_client::ClientError::Protocol(_))

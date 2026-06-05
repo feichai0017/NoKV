@@ -601,9 +601,9 @@ fn execute_batch(
                 group.mode,
                 group.uid,
                 group.gid,
-            ));
+            )?);
         } else {
-            results.extend(create_path_group_envelopes(server, kind, groups));
+            results.extend(create_path_group_envelopes(server, kind, groups)?);
         }
     }
     Ok(MetadataRpcResult::Batch { results })
@@ -682,6 +682,13 @@ fn wire_metad_error(err: &MetadError) -> WireMetadataError {
                 (Some(term), Some(index)) => Some(WireMetadataPosition { term, index }),
                 _ => None,
             },
+        },
+        MetadError::Metadata(nokvfs_meta::MetadataError::ForwardToLeader {
+            leader_id,
+            address,
+        }) => WireMetadataError::ForwardToLeader {
+            leader_id: *leader_id,
+            address: address.clone(),
         },
         MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed) => {
             WireMetadataError::PredicateFailed
@@ -796,7 +803,7 @@ fn create_path_batch_envelopes(
     mode: u32,
     uid: u32,
     gid: u32,
-) -> Vec<MetadataRpcEnvelope> {
+) -> Result<Vec<MetadataRpcEnvelope>, ServerError> {
     let parsed = names
         .iter()
         .map(|name| dentry_name(name.clone()))
@@ -818,7 +825,7 @@ fn create_path_batch_envelopes(
         .map_err(ServerError::Metadata)
     });
     match coalesced {
-        Ok(entries) => entries
+        Ok(entries) => Ok(entries
             .iter()
             .map(|entry| {
                 ok_envelope(
@@ -828,8 +835,9 @@ fn create_path_batch_envelopes(
                     },
                 )
             })
-            .collect(),
-        Err(_) => names
+            .collect()),
+        Err(err) if server_error_is_forward_to_leader(&err) => Err(err),
+        Err(_) => Ok(names
             .into_iter()
             .map(|name| {
                 execute_envelope(
@@ -837,8 +845,17 @@ fn create_path_batch_envelopes(
                     create_path_request(kind, parent_path, &name, mode, uid, gid),
                 )
             })
-            .collect(),
+            .collect()),
     }
+}
+
+fn server_error_is_forward_to_leader(err: &ServerError) -> bool {
+    matches!(
+        err,
+        ServerError::Metadata(MetadError::Metadata(
+            nokvfs_meta::MetadataError::ForwardToLeader { .. }
+        ))
+    )
 }
 
 fn remove_path_batch_envelopes(
@@ -887,7 +904,7 @@ fn create_path_group_envelopes(
     server: &Server,
     kind: CreatePathKind,
     groups: Vec<CreatePathGroup>,
-) -> Vec<MetadataRpcEnvelope> {
+) -> Result<Vec<MetadataRpcEnvelope>, ServerError> {
     let parsed = groups
         .iter()
         .map(|group| {
@@ -915,23 +932,40 @@ fn create_path_group_envelopes(
         results
     });
 
+    let mut out = Vec::new();
     match committed {
-        Ok(group_results) => groups
-            .into_iter()
-            .zip(group_results)
-            .flat_map(|(group, result)| match result {
-                Ok(entries) => entries
-                    .iter()
-                    .map(|entry| {
+        Ok(group_results) => {
+            for (group, result) in groups.into_iter().zip(group_results) {
+                match result {
+                    Ok(entries) => out.extend(entries.iter().map(|entry| {
                         ok_envelope(
                             server,
                             MetadataRpcResult::Dentry {
                                 entry: Some(Box::new(wire_dentry(entry))),
                             },
                         )
-                    })
-                    .collect::<Vec<_>>(),
-                Err(_) => create_path_batch_envelopes(
+                    })),
+                    Err(err) => {
+                        let err = ServerError::Metadata(err);
+                        if server_error_is_forward_to_leader(&err) {
+                            return Err(err);
+                        }
+                        out.extend(create_path_batch_envelopes(
+                            server,
+                            kind,
+                            &group.parent_path,
+                            group.names,
+                            group.mode,
+                            group.uid,
+                            group.gid,
+                        )?);
+                    }
+                }
+            }
+        }
+        Err(_) => {
+            for group in groups {
+                out.extend(create_path_batch_envelopes(
                     server,
                     kind,
                     &group.parent_path,
@@ -939,24 +973,11 @@ fn create_path_group_envelopes(
                     group.mode,
                     group.uid,
                     group.gid,
-                ),
-            })
-            .collect(),
-        Err(_) => groups
-            .into_iter()
-            .flat_map(|group| {
-                create_path_batch_envelopes(
-                    server,
-                    kind,
-                    &group.parent_path,
-                    group.names,
-                    group.mode,
-                    group.uid,
-                    group.gid,
-                )
-            })
-            .collect(),
+                )?);
+            }
+        }
     }
+    Ok(out)
 }
 
 fn remove_path_parts(request: &MetadataRpcRequest) -> Option<RemovePathParts> {
@@ -1079,6 +1100,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
         MetadataRpcRequest::Batch { requests } => execute_batch(server, requests),
         MetadataRpcRequest::RequireApplied { position, request } => {
             server.ensure_metadata_raft_applied(log_position(position)?)?;
+            server.refresh_metadata_view()?;
             execute(server, *request)
         }
         MetadataRpcRequest::BootstrapRoot { mode, uid, gid } => {
@@ -1330,7 +1352,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 mode,
                 uid,
                 gid,
-            ),
+            )?,
         }),
         MetadataRpcRequest::RemoveFile { parent, name } => {
             let entry = server
