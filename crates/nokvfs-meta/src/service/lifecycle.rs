@@ -121,6 +121,10 @@ where
         self.mount
     }
 
+    pub fn metadata_store(&self) -> &M {
+        &self.metadata
+    }
+
     pub fn set_block_cache_enabled(&self, enabled: bool) {
         self.block_cache_enabled.store(enabled, Ordering::Relaxed);
     }

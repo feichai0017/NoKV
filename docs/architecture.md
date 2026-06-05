@@ -116,52 +116,26 @@ Holt is the metadata engine inside each shard. NoKV `metad` owns filesystem
 semantics such as inode/dentry updates, watch/snapshot policy, publish rules,
 and object GC decisions.
 
-The local shared-log implementation exposes explicit term and sync policy.
-`nokv-fs serve` defaults to `--metadata-log .nokv-fs/metadata.log` and
-`--metadata-log-term 1`, so server mode records metadata commands through the
-shared-log path by default. Use `--no-metadata-log` only for local debugging.
-Use `--metadata-log-voters 1,2,3` and `--metadata-log-learners 4,5` to publish
-the initial metadata-log membership. If a durable membership catalog already
-exists beside the log, that catalog remains the source of truth and startup
-parameters cannot silently replace it. Use `--metadata-log-sync data` when the
-file log is the durable ordering source. Use `--metadata-log-sync none` only for
-local performance experiments or when a higher-level replicated log already
-owns durability; it flushes records to the OS but does not make each record
-power-loss durable.
+`nokv-fs serve` now defaults to a single-voter OpenRaft metadata group. The
+local OpenRaft log is stored under the configured metadata directory, and each
+application log entry contains a batch of semantic `MetadataCommand`s. It is not
+a raw KV mutation, Percolator transaction, or old raftstore command. The
+OpenRaft state machine applies committed batches through the storage-neutral
+metadata store trait, so filesystem semantics stay in `nokvfs-meta` while log
+ordering and recovery stay in `nokvfs-cluster`.
 
-Shared-log HA is built around storage-neutral metadata replication contracts in
-`nokvfs-cluster`. The replicated value is a batch of `MetadataCommand`s. It is
-not a raw KV mutation, Percolator transaction, or old raftstore command. The
-network boundary has three messages:
+The older `--metadata-log` shared-log path remains as a temporary regression and
+migration path while OpenRaft multi-node transport is being completed. When that
+option is omitted, the production server path is OpenRaft-backed. During this
+transition, `--metadata-log-sync data|none` still controls local log sync policy:
+use `data` when the local log is the durability boundary, and `none` only for
+local performance experiments or when a higher-level replicated log already owns
+durability.
 
-- append a leader-assigned metadata log entry through a voter and receive
-  per-command durable receipts;
-- read committed log entries from a voter or learner tail, with the committed
-  frontier reported explicitly;
-- plan learner bootstrap from a checkpoint manifest and the retained tail range.
-
-This keeps filesystem semantics in `nokvfs-meta`, log ordering and learner
-freshness in `nokvfs-cluster`, and transport choices outside both layers.
-V1 remains one metadata group per mount. Cross-mount atomic operations are not
-part of the contract.
-
-The current framed RPC path can expose committed metadata log entries for
-replica catch-up via `ReadMetadataLog`. Each returned payload is encoded by
-`nokvfs-cluster`, so protocol framing does not need to understand
-`MetadataCommand` internals. It can also accept an externally ordered log entry
-via `AppendMetadataLog`, validate the leader id against the server's configured
-metadata-log membership, validate the exact log position, append it to the local
-metadata log, and replay it into Holt state. A server with metadata log enabled
-publishes a durable membership catalog next to the log. Without explicit
-voters it starts as a single-voter group; with `--metadata-log-voters` and
-`--metadata-log-learners`, the initial multi-node membership is persisted before
-serving. Future membership changes must update that catalog at a higher term
-rather than silently changing voters in place. The log rejects stale terms after
-a newer committed term, so an old leader cannot keep extending a local tail once
-a newer term has been observed. The RPC path can also read the latest published
-checkpoint manifest for a mount, giving learners the frontier and artifact
-descriptor they need before replaying a retained tail. A learner can request a
-bootstrap plan that pairs that checkpoint with the retained log tail range to
-replay. Checkpoint images are stored in the configured object backend and
-verified by digest before installation. Leader election and full multi-voter
-quorum transport are still the next HA steps.
+The OpenRaft v1 target remains one metadata group per mount. Cross-mount atomic
+operations are not part of the contract. Multi-node HA will add voters and
+learners through OpenRaft membership, with storage-neutral transport DTOs for
+vote, append entries, and snapshot installation. Learners will bootstrap from
+the latest checkpoint artifact and then replay the retained OpenRaft tail.
+Checkpoint images are stored in the configured object backend and verified by
+digest before installation.

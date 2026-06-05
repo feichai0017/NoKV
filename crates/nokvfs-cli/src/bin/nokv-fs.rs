@@ -24,7 +24,6 @@ const DEFAULT_MODE_FILE: u32 = 0o644;
 const DEFAULT_UID: u32 = 1000;
 const DEFAULT_GID: u32 = 1000;
 const DEFAULT_GC_LIMIT: usize = 1024;
-const DEFAULT_METADATA_LOG: &str = ".nokv-fs/metadata.log";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Config {
@@ -433,7 +432,7 @@ fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, S3ObjectSto
 
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv-fs/meta");
-    let mut metadata_log = Some(PathBuf::from(DEFAULT_METADATA_LOG));
+    let mut metadata_log = None;
     let mut metadata_log_node = NodeId::new(1).expect("default metadata log node is non-zero");
     let mut metadata_log_leader = None;
     let mut metadata_log_term = LogTerm::new(1).expect("default metadata log term is non-zero");
@@ -997,8 +996,8 @@ Object backends:\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
   --metadata-read-endpoint ADDR   Preferred metadata read endpoint; repeat for learners\n\
-  --metadata-log PATH             Durable shared metadata log for serve\n\
-  --no-metadata-log               Disable metadata log for local/debug serve\n\
+  --metadata-log PATH             Legacy shared metadata log path; omitted uses OpenRaft\n\
+  --no-metadata-log               Use default OpenRaft metadata log under --meta\n\
   --metadata-log-node NODE        Local metadata log node id\n\
   --metadata-log-leader NODE      Metadata log leader node id; defaults to local node\n\
   --metadata-log-term TERM        Shared metadata log term for serve\n\
@@ -1017,7 +1016,7 @@ Defaults:\n\
   --history-gc-interval-ms 30000\n\
   --history-gc-limit 1024\n\
   --server-bind 127.0.0.1:7777\n\
-  --metadata-log .nokv-fs/metadata.log\n\
+  --metadata-log <omitted; OpenRaft stores its log under --meta>\n\
   --metadata-log-node 1\n\
   --metadata-log-leader <metadata-log-node>\n\
   --metadata-log-term 1\n\
@@ -1194,10 +1193,7 @@ mod tests {
         assert_eq!(config.object_gc_limit, 9);
         assert_eq!(config.history_gc_interval, Duration::from_millis(60));
         assert_eq!(config.history_gc_limit, 11);
-        assert_eq!(
-            config.metadata_log,
-            Some(PathBuf::from(DEFAULT_METADATA_LOG))
-        );
+        assert_eq!(config.metadata_log, None);
         assert_eq!(config.metadata_log_term.get(), 1);
         assert_eq!(
             config.server_bind,
@@ -1384,10 +1380,7 @@ mod tests {
     fn parse_serve_command() {
         let (config, command) = parse(vec![s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
-        assert_eq!(
-            config.metadata_log,
-            Some(PathBuf::from(DEFAULT_METADATA_LOG))
-        );
+        assert_eq!(config.metadata_log, None);
         assert!(matches!(
             parse(vec![s("serve"), s("extra")]),
             Err(CliError::TooManyArguments)

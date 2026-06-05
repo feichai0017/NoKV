@@ -205,6 +205,15 @@ pub enum MetadataRpcRequest {
     InstallMetadataCheckpoint {
         plan: WireMetadataBootstrapPlan,
     },
+    MetadataRaftVote {
+        request: WireMetadataRaftVoteRequest,
+    },
+    MetadataRaftAppendEntries {
+        request: WireMetadataRaftAppendEntriesRequest,
+    },
+    MetadataRaftInstallSnapshot {
+        request: WireMetadataRaftInstallSnapshotRequest,
+    },
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -257,6 +266,99 @@ pub enum WireMetadataError {
 pub struct WireMetadataPosition {
     pub term: u64,
     pub index: u64,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftLeaderId {
+    pub term: u64,
+    pub voted_for: Option<u64>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftVote {
+    pub leader_id: WireMetadataRaftLeaderId,
+    pub committed: bool,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftLogId {
+    pub leader_term: u64,
+    pub leader_node: u64,
+    pub index: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftNode {
+    pub id: u64,
+    pub address: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftMembership {
+    pub log_id: Option<WireMetadataRaftLogId>,
+    pub voter_configs: Vec<Vec<u64>>,
+    pub nodes: Vec<WireMetadataRaftNode>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftSnapshotMeta {
+    pub last_log_id: Option<WireMetadataRaftLogId>,
+    pub last_membership: WireMetadataRaftMembership,
+    pub snapshot_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftEntry {
+    pub log_id: WireMetadataRaftLogId,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftVoteRequest {
+    pub vote: WireMetadataRaftVote,
+    pub last_log_id: Option<WireMetadataRaftLogId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftVoteResponse {
+    pub vote: WireMetadataRaftVote,
+    pub vote_granted: bool,
+    pub last_log_id: Option<WireMetadataRaftLogId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftAppendEntriesRequest {
+    pub vote: WireMetadataRaftVote,
+    pub prev_log_id: Option<WireMetadataRaftLogId>,
+    pub entries: Vec<WireMetadataRaftEntry>,
+    pub leader_commit: Option<WireMetadataRaftLogId>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum WireMetadataRaftAppendEntriesResponse {
+    Success,
+    PartialSuccess {
+        matching: Option<WireMetadataRaftLogId>,
+    },
+    Conflict,
+    HigherVote {
+        vote: WireMetadataRaftVote,
+    },
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftInstallSnapshotRequest {
+    pub vote: WireMetadataRaftVote,
+    pub meta: WireMetadataRaftSnapshotMeta,
+    pub offset: u64,
+    pub data: Vec<u8>,
+    pub done: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireMetadataRaftInstallSnapshotResponse {
+    pub vote: WireMetadataRaftVote,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -320,6 +422,15 @@ pub enum MetadataRpcResult {
     },
     MetadataCheckpointInstall {
         install: WireMetadataCheckpointInstall,
+    },
+    MetadataRaftVote {
+        response: WireMetadataRaftVoteResponse,
+    },
+    MetadataRaftAppendEntries {
+        response: WireMetadataRaftAppendEntriesResponse,
+    },
+    MetadataRaftInstallSnapshot {
+        response: WireMetadataRaftInstallSnapshotResponse,
     },
 }
 
@@ -979,6 +1090,95 @@ mod tests {
             error: None,
             error_kind: None,
             metadata_position: Some(WireMetadataPosition { term: 2, index: 11 }),
+        };
+        assert_eq!(
+            decode_envelope(&encode_envelope(&envelope).unwrap()).unwrap(),
+            envelope
+        );
+    }
+
+    #[test]
+    fn binary_codec_round_trips_metadata_raft_rpc() {
+        let vote = WireMetadataRaftVote {
+            leader_id: WireMetadataRaftLeaderId {
+                term: 3,
+                voted_for: Some(2),
+            },
+            committed: true,
+        };
+        let log_id = WireMetadataRaftLogId {
+            leader_term: 3,
+            leader_node: 2,
+            index: 11,
+        };
+        let append = MetadataRpcRequest::MetadataRaftAppendEntries {
+            request: WireMetadataRaftAppendEntriesRequest {
+                vote,
+                prev_log_id: Some(log_id),
+                entries: vec![WireMetadataRaftEntry {
+                    log_id,
+                    payload: b"encoded-openraft-entry".to_vec(),
+                }],
+                leader_commit: Some(log_id),
+            },
+        };
+        assert_eq!(
+            decode_request(&encode_request(&append).unwrap()).unwrap(),
+            append
+        );
+
+        let vote_request = MetadataRpcRequest::MetadataRaftVote {
+            request: WireMetadataRaftVoteRequest {
+                vote,
+                last_log_id: Some(log_id),
+            },
+        };
+        assert_eq!(
+            decode_request(&encode_request(&vote_request).unwrap()).unwrap(),
+            vote_request
+        );
+
+        let snapshot = MetadataRpcRequest::MetadataRaftInstallSnapshot {
+            request: WireMetadataRaftInstallSnapshotRequest {
+                vote,
+                meta: WireMetadataRaftSnapshotMeta {
+                    last_log_id: Some(log_id),
+                    last_membership: WireMetadataRaftMembership {
+                        log_id: Some(log_id),
+                        voter_configs: vec![vec![1, 2, 3]],
+                        nodes: vec![
+                            WireMetadataRaftNode {
+                                id: 1,
+                                address: "127.0.0.1:7101".to_owned(),
+                            },
+                            WireMetadataRaftNode {
+                                id: 4,
+                                address: "127.0.0.1:7104".to_owned(),
+                            },
+                        ],
+                    },
+                    snapshot_id: "snapshot-3-11".to_owned(),
+                },
+                offset: 0,
+                data: b"snapshot-bytes".to_vec(),
+                done: true,
+            },
+        };
+        assert_eq!(
+            decode_request(&encode_request(&snapshot).unwrap()).unwrap(),
+            snapshot
+        );
+
+        let envelope = MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::MetadataRaftAppendEntries {
+                response: WireMetadataRaftAppendEntriesResponse::PartialSuccess {
+                    matching: Some(log_id),
+                },
+            }),
+            error: None,
+            error_kind: None,
+            metadata_position: None,
         };
         assert_eq!(
             decode_envelope(&encode_envelope(&envelope).unwrap()).unwrap(),

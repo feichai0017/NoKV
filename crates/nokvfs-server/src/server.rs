@@ -2,18 +2,20 @@ use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
 use std::io;
-use std::net::{SocketAddr, TcpListener};
+use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 
 use nokvfs_cluster::{
     compact_log_to_checkpoint, AppendMetadataBatchRequest, AppendMetadataBatchResponse,
     AppliedFrontierStore, ApplyFrontier, CheckpointArtifact, CheckpointCatalog, CheckpointManifest,
-    FileAppliedFrontierStore, FileCheckpointCatalog, FileMembershipCatalog, FileSharedLog,
-    FileSharedLogOptions, InstallCheckpointRequest, InstallCheckpointResponse, LogIndex,
-    LogPosition, MembershipCatalog, MetadataLogEntry, MetadataMembership, NodeId, SharedLogError,
-    SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
+    FileAppliedFrontierStore, FileCheckpointCatalog, FileMembershipCatalog,
+    FileMetadataRaftLogOptions, FileMetadataRaftLogSync, FileSharedLog, FileSharedLogOptions,
+    InstallCheckpointRequest, InstallCheckpointResponse, LogIndex, LogPosition, MembershipCatalog,
+    MetadataLogEntry, MetadataMembership, MetadataRaftRpcNetworkFactory, NodeId,
+    OpenRaftMetadataStats, OpenRaftMetadataStatsHandle, SharedLogError, SharedLogMetadataStore,
+    SharedLogRuntimeStats, SharedMetadataLog,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
@@ -23,12 +25,17 @@ use nokvfs_object::{ObjectError, ObjectKey, ObjectStore, S3ObjectStore};
 use sha2::{Digest, Sha256};
 
 use crate::http;
-use crate::metadata::{FileLoggedMetadataStore, ServerMetadataLogStatus, ServerMetadataStore};
+use crate::metadata::{
+    FileLoggedMetadataStore, OpenRaftLoggedMetadataStore, ServerMetadataLogStatus,
+    ServerMetadataStore,
+};
 use crate::options::ServerOptions;
 use crate::replication::{MajorityMetadataLog, MajorityMetadataLogReplicationStats};
 use crate::rpc;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
+const SERVER_CONNECTION_WORKERS: usize = 64;
+const SERVER_CONNECTION_QUEUE: usize = 1024;
 type CheckpointObjectStore = Arc<dyn ObjectStore + Send + Sync>;
 
 pub struct Server {
@@ -38,6 +45,7 @@ pub struct Server {
     metadata_membership: Option<MetadataMembership>,
     metadata_log_peers: BTreeMap<NodeId, SocketAddr>,
     metadata_log_sync: nokvfs_cluster::FileSharedLogSync,
+    metadata_raft: Option<OpenRaftMetadataStatsHandle>,
     metadata_log_status: Option<Arc<dyn ServerMetadataLogStatus>>,
     metadata_log: Option<Arc<FileLoggedMetadataStore>>,
     metadata_checkpoint: Option<Arc<FileCheckpointCatalog>>,
@@ -89,6 +97,7 @@ impl Server {
         let mut metadata_checkpoint = None;
         let mut metadata_checkpoint_objects = None;
         let mut metadata_membership = None;
+        let mut metadata_raft = None;
         let metadata_log_peers = options
             .metadata_log_peers
             .iter()
@@ -150,7 +159,23 @@ impl Server {
                 metadata_membership = Some(membership);
                 ServerMetadataStore::shared_logged(logged)
             }
-            None => ServerMetadataStore::direct(metadata),
+            None => {
+                let openraft =
+                    OpenRaftLoggedMetadataStore::new_single_voter_with_file_log_and_network(
+                        metadata,
+                        options.metadata_log_node,
+                        default_metadata_raft_log_path(&options.meta_path),
+                        FileMetadataRaftLogOptions {
+                            sync: metadata_raft_log_sync(options.metadata_log_sync),
+                        },
+                        MetadataRaftRpcNetworkFactory::new(
+                            rpc::MetadataRaftFramedRpcClient::default(),
+                        ),
+                    )
+                    .map_err(MetadError::from)?;
+                metadata_raft = Some(openraft.stats_handle());
+                ServerMetadataStore::openraft(openraft)
+            }
         };
         let bootstrap_root = metadata_membership
             .as_ref()
@@ -169,6 +194,7 @@ impl Server {
             metadata_membership,
             metadata_log_peers,
             metadata_log_sync: options.metadata_log_sync,
+            metadata_raft,
             metadata_log_status,
             metadata_log,
             metadata_checkpoint,
@@ -180,14 +206,14 @@ impl Server {
 
     pub fn serve(self, listener: TcpListener) -> Result<(), ServerError> {
         let server = Arc::new(self);
+        let workers = ConnectionWorkerPool::new(
+            Arc::clone(&server),
+            SERVER_CONNECTION_WORKERS,
+            SERVER_CONNECTION_QUEUE,
+        )?;
         for stream in listener.incoming() {
             let stream = stream.map_err(ServerError::Io)?;
-            let server = Arc::clone(&server);
-            thread::spawn(move || {
-                if let Err(err) = http::handle_stream(server, stream) {
-                    eprintln!("nokvfs-server connection failed: {err}");
-                }
-            });
+            workers.submit(stream)?;
         }
         Ok(())
     }
@@ -438,7 +464,7 @@ impl Server {
         let object_gc = self.object_gc.state();
         let history_gc = self.history_gc.state();
         format!(
-            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_log\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
+            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_raft\":{},\"metadata_log\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
             self.service.block_cache_enabled(),
             objects.object_puts,
             objects.object_put_bytes,
@@ -449,6 +475,7 @@ impl Server {
             objects.manifest_chunks,
             objects.manifest_blocks,
             metadata_store_json(&metadata),
+            metadata_raft_json(self.metadata_raft.as_ref().map(|handle| handle.stats())),
             metadata_log_json(
                 self.metadata_log_enabled,
                 self.metadata_log_sync,
@@ -548,6 +575,51 @@ impl Server {
     }
 }
 
+struct ConnectionWorkerPool {
+    sender: mpsc::SyncSender<TcpStream>,
+}
+
+impl ConnectionWorkerPool {
+    fn new(server: Arc<Server>, workers: usize, queue: usize) -> Result<Self, ServerError> {
+        let (sender, receiver) = mpsc::sync_channel::<TcpStream>(queue.max(workers));
+        let receiver = Arc::new(Mutex::new(receiver));
+        for worker in 0..workers {
+            let server = Arc::clone(&server);
+            let receiver = Arc::clone(&receiver);
+            thread::Builder::new()
+                .name(format!("nokvfs-conn-{worker}"))
+                .spawn(move || loop {
+                    let stream = {
+                        let receiver = match receiver.lock() {
+                            Ok(receiver) => receiver,
+                            Err(_) => return,
+                        };
+                        receiver.recv()
+                    };
+                    match stream {
+                        Ok(stream) => {
+                            if let Err(err) = http::handle_stream(Arc::clone(&server), stream) {
+                                eprintln!("nokvfs-server connection failed: {err}");
+                            }
+                        }
+                        Err(_) => return,
+                    }
+                })
+                .map_err(ServerError::Io)?;
+        }
+        Ok(Self { sender })
+    }
+
+    fn submit(&self, stream: TcpStream) -> Result<(), ServerError> {
+        self.sender.send(stream).map_err(|_| {
+            ServerError::Io(io::Error::new(
+                io::ErrorKind::BrokenPipe,
+                "nokvfs connection worker pool stopped",
+            ))
+        })
+    }
+}
+
 fn metadata_apply_frontier_path(log_path: &Path) -> PathBuf {
     let mut path = log_path.to_path_buf();
     let file_name = log_path
@@ -588,6 +660,17 @@ fn metadata_membership_path(log_path: &Path) -> PathBuf {
         .unwrap_or_else(|| "metadata.log.membership".into());
     path.set_file_name(file_name);
     path
+}
+
+fn default_metadata_raft_log_path(meta_path: &Path) -> PathBuf {
+    meta_path.join("metadata-raft.log")
+}
+
+fn metadata_raft_log_sync(sync: nokvfs_cluster::FileSharedLogSync) -> FileMetadataRaftLogSync {
+    match sync {
+        nokvfs_cluster::FileSharedLogSync::Data => FileMetadataRaftLogSync::Data,
+        nokvfs_cluster::FileSharedLogSync::None => FileMetadataRaftLogSync::None,
+    }
 }
 
 fn metadata_membership_for_node(
@@ -762,6 +845,34 @@ impl Server {
             .map(|metadata_log| metadata_log.log().replication_stats())
             .unwrap_or_default()
     }
+}
+
+fn metadata_raft_json(stats: Option<OpenRaftMetadataStats>) -> String {
+    match stats {
+        Some(stats) => format!(
+            "{{\"enabled\":true,\"node_id\":{},\"current_term\":{},\"state\":\"{}\",\"current_leader\":{},\"last_log_index\":{},\"last_applied_index\":{},\"snapshot_index\":{},\"purged_index\":{},\"millis_since_quorum_ack\":{},\"voter_count\":{},\"learner_count\":{}}}",
+            stats.node_id,
+            stats.current_term,
+            escape_json_string(&stats.state),
+            optional_u64_json(stats.current_leader),
+            optional_u64_json(stats.last_log_index),
+            optional_u64_json(stats.last_applied_index),
+            optional_u64_json(stats.snapshot_index),
+            optional_u64_json(stats.purged_index),
+            optional_u64_json(stats.millis_since_quorum_ack),
+            stats.voter_count,
+            stats.learner_count,
+        ),
+        None => {
+            "{\"enabled\":false,\"node_id\":null,\"current_term\":null,\"state\":null,\"current_leader\":null,\"last_log_index\":null,\"last_applied_index\":null,\"snapshot_index\":null,\"purged_index\":null,\"millis_since_quorum_ack\":null,\"voter_count\":0,\"learner_count\":0}".to_owned()
+        }
+    }
+}
+
+fn optional_u64_json(value: Option<u64>) -> String {
+    value
+        .map(|value| value.to_string())
+        .unwrap_or_else(|| "null".to_owned())
 }
 
 fn metadata_log_json(
@@ -1108,6 +1219,7 @@ pub(crate) mod tests {
             ),
             metadata_log_peers: BTreeMap::new(),
             metadata_log_sync: options.metadata_log_sync,
+            metadata_raft: None,
             metadata_log_status: Some(metadata_log_status),
             metadata_log: None,
             metadata_checkpoint: None,
@@ -1120,6 +1232,9 @@ pub(crate) mod tests {
     #[test]
     fn manual_gc_reports_empty_outcomes() {
         let server = test_server();
+        assert!(server
+            .stats_json()
+            .contains("\"metadata_raft\":{\"enabled\":true,\"node_id\":1"));
         assert!(server
             .stats_json()
             .contains("\"metadata_log\":{\"enabled\":false,\"commit_entry_total\":0"));

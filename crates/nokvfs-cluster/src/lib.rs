@@ -1,10 +1,9 @@
-//! Shared-log metadata replication contracts for NoKV-FS.
+//! Metadata replication contracts for NoKV-FS.
 //!
 //! This crate owns the metadata replication boundary above `nokvfs-meta`.
-//! Log entries contain semantic `MetadataCommand` batches, not raw storage
-//! mutations. Concrete implementations may use Raft, an external shared log, or
-//! another quorum log, but those details must not leak into filesystem metadata
-//! semantics.
+//! Replicated log entries contain semantic `MetadataCommand` batches, not raw
+//! storage mutations. OpenRaft is the production ordering mechanism; older
+//! shared-log types remain only until the server cutover removes that path.
 
 mod checkpoint;
 mod errors;
@@ -14,7 +13,11 @@ mod group;
 mod log;
 mod membership;
 mod memory;
+mod openraft_file_log;
 mod openraft_log;
+mod openraft_network;
+mod openraft_store;
+mod openraft_wire;
 mod quorum;
 mod replay;
 mod replication;
@@ -35,8 +38,10 @@ pub use group::{MetadataGroup, MetadataGroupCommit};
 pub use log::SharedMetadataLog;
 pub use membership::{FileMembershipCatalog, MembershipCatalog, MemoryMembershipCatalog};
 pub use memory::InMemorySharedLog;
-pub use openraft_log::{
-    MetadataRaftApplyBatchResult, MetadataRaftCommandBatch, MetadataRaftConfig, MetadataRaftEntry,
+pub use openraft_file_log::{FileMetadataRaftLogOptions, FileMetadataRaftLogSync};
+pub use openraft_network::{MetadataRaftRpcClient, MetadataRaftRpcNetworkFactory};
+pub use openraft_store::{
+    OpenRaftMetadataStats, OpenRaftMetadataStatsHandle, OpenRaftMetadataStore,
 };
 pub use quorum::{InMemoryQuorumLog, QuorumNodeLog, QuorumNodeRole};
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};

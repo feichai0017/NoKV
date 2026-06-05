@@ -1,8 +1,9 @@
 use std::sync::Arc;
 
 use nokvfs_cluster::{
-    AppliedFrontierStore, ApplyFrontier, FileAppliedFrontierStore, LogPosition, ReadFreshness,
-    SharedLogError, SharedLogMetadataStore, SharedLogRuntimeStats, SharedMetadataLog,
+    AppliedFrontierStore, ApplyFrontier, FileAppliedFrontierStore, LogPosition,
+    OpenRaftMetadataStore, ReadFreshness, SharedLogError, SharedLogMetadataStore,
+    SharedLogRuntimeStats, SharedMetadataLog,
 };
 use nokvfs_meta::command::{
     CommitResult, DelimitedScanItem, DelimitedScanRequest, HistoryPruneOutcome,
@@ -10,12 +11,18 @@ use nokvfs_meta::command::{
     MetadataStoreStats, MetadataStoreStatsProvider, ReadItem, ReadPurpose, ScanItem, ScanRequest,
 };
 use nokvfs_meta::holtstore::HoltMetadataStore;
+use nokvfs_protocol::{
+    WireMetadataRaftAppendEntriesRequest, WireMetadataRaftAppendEntriesResponse,
+    WireMetadataRaftInstallSnapshotRequest, WireMetadataRaftInstallSnapshotResponse,
+    WireMetadataRaftVoteRequest, WireMetadataRaftVoteResponse,
+};
 use nokvfs_types::RecordFamily;
 
 use crate::replication::MajorityMetadataLog;
 
 pub(crate) type FileLoggedMetadataStore =
     SharedLogMetadataStore<HoltMetadataStore, MajorityMetadataLog, FileAppliedFrontierStore>;
+pub(crate) type OpenRaftLoggedMetadataStore = OpenRaftMetadataStore<HoltMetadataStore>;
 
 pub(crate) trait ServerMetadataBackend:
     MetadataStore + MetadataStoreStatsProvider + Send + Sync
@@ -51,18 +58,52 @@ where
 }
 
 pub(crate) enum ServerMetadataStore {
-    Direct(Box<HoltMetadataStore>),
+    OpenRaft(Box<OpenRaftLoggedMetadataStore>),
     SharedLogged(Arc<dyn ServerMetadataBackend>),
 }
 
 impl ServerMetadataStore {
-    pub(crate) fn direct(store: HoltMetadataStore) -> Self {
-        Self::Direct(Box::new(store))
+    pub(crate) fn openraft(store: OpenRaftLoggedMetadataStore) -> Self {
+        Self::OpenRaft(Box::new(store))
     }
 
     pub(crate) fn shared_logged(store: Arc<dyn ServerMetadataBackend>) -> Self {
         Self::SharedLogged(store)
     }
+
+    pub(crate) fn handle_metadata_raft_vote(
+        &self,
+        request: WireMetadataRaftVoteRequest,
+    ) -> Result<WireMetadataRaftVoteResponse, MetadataError> {
+        match self {
+            Self::OpenRaft(store) => store.handle_vote_rpc(request),
+            Self::SharedLogged(_) => Err(metadata_raft_disabled()),
+        }
+    }
+
+    pub(crate) fn handle_metadata_raft_append_entries(
+        &self,
+        request: WireMetadataRaftAppendEntriesRequest,
+    ) -> Result<WireMetadataRaftAppendEntriesResponse, MetadataError> {
+        match self {
+            Self::OpenRaft(store) => store.handle_append_entries_rpc(request),
+            Self::SharedLogged(_) => Err(metadata_raft_disabled()),
+        }
+    }
+
+    pub(crate) fn handle_metadata_raft_install_snapshot(
+        &self,
+        request: WireMetadataRaftInstallSnapshotRequest,
+    ) -> Result<WireMetadataRaftInstallSnapshotResponse, MetadataError> {
+        match self {
+            Self::OpenRaft(store) => store.handle_install_snapshot_rpc(request),
+            Self::SharedLogged(_) => Err(metadata_raft_disabled()),
+        }
+    }
+}
+
+fn metadata_raft_disabled() -> MetadataError {
+    MetadataError::Backend("metadata OpenRaft group is not enabled".to_owned())
 }
 
 impl MetadataStore for ServerMetadataStore {
@@ -74,14 +115,14 @@ impl MetadataStore for ServerMetadataStore {
         purpose: ReadPurpose,
     ) -> Result<Option<ReadItem>, MetadataError> {
         match self {
-            Self::Direct(store) => store.get_versioned(family, key, version, purpose),
+            Self::OpenRaft(store) => store.get_versioned(family, key, version, purpose),
             Self::SharedLogged(store) => store.get_versioned(family, key, version, purpose),
         }
     }
 
     fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
         match self {
-            Self::Direct(store) => store.scan(request),
+            Self::OpenRaft(store) => store.scan(request),
             Self::SharedLogged(store) => store.scan(request),
         }
     }
@@ -91,21 +132,21 @@ impl MetadataStore for ServerMetadataStore {
         request: DelimitedScanRequest,
     ) -> Result<Vec<DelimitedScanItem>, MetadataError> {
         match self {
-            Self::Direct(store) => store.scan_delimited(request),
+            Self::OpenRaft(store) => store.scan_delimited(request),
             Self::SharedLogged(store) => store.scan_delimited(request),
         }
     }
 
     fn scan_keys(&self, request: KeyScanRequest) -> Result<Vec<Vec<u8>>, MetadataError> {
         match self {
-            Self::Direct(store) => store.scan_keys(request),
+            Self::OpenRaft(store) => store.scan_keys(request),
             Self::SharedLogged(store) => store.scan_keys(request),
         }
     }
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
         match self {
-            Self::Direct(store) => store.commit_metadata(command),
+            Self::OpenRaft(store) => store.commit_metadata(command),
             Self::SharedLogged(store) => store.commit_metadata(command),
         }
     }
@@ -115,7 +156,7 @@ impl MetadataStore for ServerMetadataStore {
         commands: &[MetadataCommand],
     ) -> Vec<Result<CommitResult, MetadataError>> {
         match self {
-            Self::Direct(store) => store.commit_independent_batch(commands),
+            Self::OpenRaft(store) => store.commit_independent_batch(commands),
             Self::SharedLogged(store) => store.commit_independent_batch(commands),
         }
     }
@@ -125,7 +166,7 @@ impl MetadataStore for ServerMetadataStore {
         request_id: &[u8],
     ) -> Result<Option<CommitResult>, MetadataError> {
         match self {
-            Self::Direct(store) => store.committed_request_result(request_id),
+            Self::OpenRaft(store) => store.committed_request_result(request_id),
             Self::SharedLogged(store) => store.committed_request_result(request_id),
         }
     }
@@ -135,7 +176,7 @@ impl MetadataStore for ServerMetadataStore {
         request: HistoryPruneRequest,
     ) -> Result<HistoryPruneOutcome, MetadataError> {
         match self {
-            Self::Direct(store) => store.prune_history(request),
+            Self::OpenRaft(store) => store.prune_history(request),
             Self::SharedLogged(store) => store.prune_history(request),
         }
     }
@@ -144,7 +185,7 @@ impl MetadataStore for ServerMetadataStore {
 impl MetadataStoreStatsProvider for ServerMetadataStore {
     fn metadata_store_stats(&self) -> MetadataStoreStats {
         match self {
-            Self::Direct(store) => store.metadata_store_stats(),
+            Self::OpenRaft(store) => store.metadata_store_stats(),
             Self::SharedLogged(store) => store.metadata_store_stats(),
         }
     }

@@ -287,6 +287,7 @@ mod tests {
         assert_eq!(response.status, "200 OK");
         assert!(response.body.contains("\"object_puts\":0"));
         assert!(response.body.contains("\"metadata_store\""));
+        assert!(response.body.contains("\"metadata_raft\""));
         assert!(response.body.contains("\"commit_total\""));
         assert!(response.body.contains("\"metadata_service\""));
         assert!(response.body.contains("\"path_index_hit_total\""));

@@ -36,7 +36,8 @@ impl MetadataRaftCommandBatch {
         Ok(Self { commands })
     }
 
-    pub fn command_count(&self) -> usize {
+    #[cfg(test)]
+    fn command_count(&self) -> usize {
         self.commands.len()
     }
 }

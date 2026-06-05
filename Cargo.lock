@@ -1475,9 +1475,11 @@ name = "nokvfs-cluster"
 version = "0.1.0"
 dependencies = [
  "nokvfs-meta",
+ "nokvfs-protocol",
  "nokvfs-types",
  "openraft",
  "tempfile",
+ "tokio",
 ]
 
 [[package]]

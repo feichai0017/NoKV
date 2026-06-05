@@ -1,7 +1,7 @@
 [package]
 name = "nokvfs-cluster"
 version = "0.1.0"
-description = "Shared-log metadata replication contracts for NoKV-FS."
+description = "OpenRaft metadata replication boundary for NoKV-FS."
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
@@ -11,8 +11,10 @@ homepage.workspace = true
 
 [dependencies]
 nokvfs-meta.workspace = true
+nokvfs-protocol.workspace = true
 nokvfs-types.workspace = true
 openraft.workspace = true
+tokio.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

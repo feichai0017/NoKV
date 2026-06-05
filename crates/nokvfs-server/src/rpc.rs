@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{
@@ -7,7 +8,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-use nokvfs_cluster::SharedLogError;
+use nokvfs_cluster::{MetadataRaftRpcClient, SharedLogError};
 use nokvfs_meta::{CreateInDirPathBatch, DentryWithAttr, MetadError, PreparedArtifact};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
@@ -15,7 +16,10 @@ use nokvfs_protocol::{
     encode_request, MetadataProtocolError, MetadataRpcEnvelope, MetadataRpcRequest,
     MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataBootstrapPlan,
     WireMetadataCheckpoint, WireMetadataCheckpointInstall, WireMetadataError, WireMetadataLogEntry,
-    WireMetadataPosition, WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata,
+    WireMetadataPosition, WireMetadataRaftAppendEntriesRequest,
+    WireMetadataRaftAppendEntriesResponse, WireMetadataRaftInstallSnapshotRequest,
+    WireMetadataRaftInstallSnapshotResponse, WireMetadataRaftVoteRequest,
+    WireMetadataRaftVoteResponse, WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata,
     WirePreparedArtifact,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
@@ -43,6 +47,11 @@ pub(crate) struct FramedRpcClient {
     address: SocketAddr,
     next_request_id: AtomicU64,
     stream: Mutex<Option<TcpStream>>,
+}
+
+#[derive(Clone, Default)]
+pub(crate) struct MetadataRaftFramedRpcClient {
+    peers: Arc<Mutex<BTreeMap<SocketAddr, Arc<FramedRpcClient>>>>,
 }
 
 impl RpcWorkerPool {
@@ -108,6 +117,90 @@ impl FramedRpcClient {
             *stream = None;
         }
         result
+    }
+}
+
+impl MetadataRaftFramedRpcClient {
+    fn call_peer(
+        &self,
+        address: &str,
+        request: &MetadataRpcRequest,
+    ) -> Result<MetadataRpcResult, SharedLogError> {
+        let address = address.parse::<SocketAddr>().map_err(|err| {
+            SharedLogError::Backend(format!("metadata raft peer address {address:?}: {err}"))
+        })?;
+        let client = {
+            let mut peers = self.peers.lock().map_err(|_| {
+                SharedLogError::Backend("metadata raft peer client cache poisoned".to_owned())
+            })?;
+            Arc::clone(
+                peers
+                    .entry(address)
+                    .or_insert_with(|| Arc::new(FramedRpcClient::new(address))),
+            )
+        };
+        let envelope = client
+            .call(request)
+            .map_err(|err| SharedLogError::Backend(format!("metadata raft peer rpc: {err}")))?;
+        if !envelope.ok {
+            return Err(SharedLogError::Backend(format!(
+                "metadata raft peer rejected rpc: {}",
+                envelope.error.unwrap_or_else(|| "unknown error".to_owned())
+            )));
+        }
+        envelope.result.ok_or_else(|| {
+            SharedLogError::Backend("metadata raft peer returned no result".to_owned())
+        })
+    }
+}
+
+impl MetadataRaftRpcClient for MetadataRaftFramedRpcClient {
+    fn vote_metadata_raft(
+        &self,
+        _target: u64,
+        address: &str,
+        request: WireMetadataRaftVoteRequest,
+    ) -> Result<WireMetadataRaftVoteResponse, SharedLogError> {
+        match self.call_peer(address, &MetadataRpcRequest::MetadataRaftVote { request })? {
+            MetadataRpcResult::MetadataRaftVote { response } => Ok(response),
+            other => Err(SharedLogError::Backend(format!(
+                "metadata raft vote returned unexpected result: {other:?}"
+            ))),
+        }
+    }
+
+    fn append_metadata_raft_entries(
+        &self,
+        _target: u64,
+        address: &str,
+        request: WireMetadataRaftAppendEntriesRequest,
+    ) -> Result<WireMetadataRaftAppendEntriesResponse, SharedLogError> {
+        match self.call_peer(
+            address,
+            &MetadataRpcRequest::MetadataRaftAppendEntries { request },
+        )? {
+            MetadataRpcResult::MetadataRaftAppendEntries { response } => Ok(response),
+            other => Err(SharedLogError::Backend(format!(
+                "metadata raft append entries returned unexpected result: {other:?}"
+            ))),
+        }
+    }
+
+    fn install_metadata_raft_snapshot(
+        &self,
+        _target: u64,
+        address: &str,
+        request: WireMetadataRaftInstallSnapshotRequest,
+    ) -> Result<WireMetadataRaftInstallSnapshotResponse, SharedLogError> {
+        match self.call_peer(
+            address,
+            &MetadataRpcRequest::MetadataRaftInstallSnapshot { request },
+        )? {
+            MetadataRpcResult::MetadataRaftInstallSnapshot { response } => Ok(response),
+            other => Err(SharedLogError::Backend(format!(
+                "metadata raft install snapshot returned unexpected result: {other:?}"
+            ))),
+        }
     }
 }
 
@@ -1603,6 +1696,30 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 },
             })
         }
+        MetadataRpcRequest::MetadataRaftVote { request } => {
+            let response = server
+                .service()
+                .metadata_store()
+                .handle_metadata_raft_vote(request)
+                .map_err(MetadError::from)?;
+            Ok(MetadataRpcResult::MetadataRaftVote { response })
+        }
+        MetadataRpcRequest::MetadataRaftAppendEntries { request } => {
+            let response = server
+                .service()
+                .metadata_store()
+                .handle_metadata_raft_append_entries(request)
+                .map_err(MetadError::from)?;
+            Ok(MetadataRpcResult::MetadataRaftAppendEntries { response })
+        }
+        MetadataRpcRequest::MetadataRaftInstallSnapshot { request } => {
+            let response = server
+                .service()
+                .metadata_store()
+                .handle_metadata_raft_install_snapshot(request)
+                .map_err(MetadError::from)?;
+            Ok(MetadataRpcResult::MetadataRaftInstallSnapshot { response })
+        }
     }
 }
 
@@ -1799,7 +1916,8 @@ mod tests {
     };
     use nokvfs_protocol::{
         decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor,
-        WireChunkManifest, WireMetadataError,
+        WireChunkManifest, WireMetadataError, WireMetadataRaftLeaderId, WireMetadataRaftVote,
+        WireMetadataRaftVoteRequest,
     };
     use std::net::TcpListener;
     use std::path::Path;
@@ -1839,6 +1957,19 @@ mod tests {
         }
     }
 
+    fn metadata_raft_vote_request(term: u64, voted_for: u64) -> WireMetadataRaftVoteRequest {
+        WireMetadataRaftVoteRequest {
+            vote: WireMetadataRaftVote {
+                leader_id: WireMetadataRaftLeaderId {
+                    term,
+                    voted_for: Some(voted_for),
+                },
+                committed: false,
+            },
+            last_log_id: None,
+        }
+    }
+
     #[test]
     fn rpc_creates_and_lists_directory() {
         let server = test_server();
@@ -1861,6 +1992,44 @@ mod tests {
         };
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].dentry.name_hex, "72756e73");
+    }
+
+    #[test]
+    fn rpc_accepts_metadata_raft_vote_on_openraft_store() {
+        let server = test_server();
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::MetadataRaftVote {
+                request: metadata_raft_vote_request(2, 2),
+            },
+        );
+
+        assert!(envelope.ok, "unexpected metadata raft error: {envelope:?}");
+        let response = match envelope.result.unwrap() {
+            MetadataRpcResult::MetadataRaftVote { response } => response,
+            other => panic!("unexpected metadata raft vote result: {other:?}"),
+        };
+        assert!(response.vote.leader_id.term >= 1);
+    }
+
+    #[test]
+    fn rpc_rejects_metadata_raft_vote_on_legacy_shared_log_store() {
+        let dir = tempdir().unwrap();
+        let metadata_log = dir.path().join("metadata.log");
+        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::MetadataRaftVote {
+                request: metadata_raft_vote_request(2, 2),
+            },
+        );
+
+        assert!(!envelope.ok);
+        assert!(matches!(
+            envelope.error_kind,
+            Some(WireMetadataError::Metadata { message })
+                if message.contains("metadata OpenRaft group is not enabled")
+        ));
     }
 
     #[test]
@@ -3299,6 +3468,29 @@ mod tests {
         server_thread.join().unwrap();
 
         assert!(server.stats_json().contains("\"max_commands_per_entry\":2"));
+    }
+
+    #[test]
+    fn metadata_raft_framed_rpc_client_sends_vote() {
+        let server = Arc::new(test_server());
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        let server_thread = {
+            let server = Arc::clone(&server);
+            thread::spawn(move || {
+                let (stream, _) = listener.accept().unwrap();
+                crate::http::handle_stream(server, stream).unwrap();
+            })
+        };
+
+        let client = MetadataRaftFramedRpcClient::default();
+        let response = client
+            .vote_metadata_raft(1, &addr.to_string(), metadata_raft_vote_request(2, 2))
+            .unwrap();
+
+        assert!(response.vote.leader_id.term >= 1);
+        drop(client);
+        server_thread.join().unwrap();
     }
 
     #[test]
