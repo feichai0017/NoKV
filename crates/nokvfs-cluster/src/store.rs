@@ -5,7 +5,7 @@
 //! storage-neutral `MetadataStore` trait; it does not know about Holt trees or
 //! filesystem service internals.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Debug;
 use std::io::Cursor;
 #[cfg(test)]
@@ -46,7 +46,7 @@ use crate::log::{
     MetadataRaftApplyBatchResult, MetadataRaftCommandBatch, MetadataRaftConfig, MetadataRaftEntry,
 };
 use crate::wire;
-use crate::NodeId;
+use crate::{LogIndex, LogPosition, LogTerm, NodeId};
 
 #[cfg(test)]
 #[derive(Clone, Debug, Default)]
@@ -372,6 +372,70 @@ where
         self.runtime
             .block_on(self.raft.initialize(members))
             .map_err(|err| MetadataError::Backend(format!("openraft initialize: {err}")))
+    }
+
+    pub fn add_learner(
+        &self,
+        node: NodeId,
+        address: impl Into<String>,
+        blocking: bool,
+    ) -> Result<LogPosition, MetadataError> {
+        let response = self
+            .runtime
+            .block_on(self.raft.add_learner(
+                node.get(),
+                BasicNode {
+                    addr: address.into(),
+                },
+                blocking,
+            ))
+            .map_err(|err| {
+                MetadataError::Backend(format!("openraft add learner {}: {err}", node.get()))
+            })?;
+        log_position_from_id(response.log_id)
+    }
+
+    pub fn replace_voters(
+        &self,
+        voters: &BTreeSet<NodeId>,
+        retain_removed_as_learners: bool,
+    ) -> Result<LogPosition, MetadataError> {
+        if voters.is_empty() {
+            return Err(MetadataError::Backend(
+                "metadata raft requires at least one voter".to_owned(),
+            ));
+        }
+        let voter_ids = voters
+            .iter()
+            .map(|node| node.get())
+            .collect::<BTreeSet<_>>();
+        let response = self
+            .runtime
+            .block_on(
+                self.raft
+                    .change_membership(voter_ids, retain_removed_as_learners),
+            )
+            .map_err(|err| MetadataError::Backend(format!("openraft change membership: {err}")))?;
+        log_position_from_id(response.log_id)
+    }
+
+    pub fn wait_for_membership_counts(
+        &self,
+        voters: usize,
+        learners: usize,
+        timeout: Duration,
+    ) -> Result<(), MetadataError> {
+        self.runtime
+            .block_on(self.raft.wait(Some(timeout)).metrics(
+                |metrics| {
+                    let membership = metrics.membership_config.membership();
+                    membership.voter_ids().count() == voters
+                        && membership.learner_ids().count() == learners
+                },
+                "metadata raft membership counts",
+            ))
+            .map_err(|err| MetadataError::Backend(format!("openraft membership wait: {err}")))?;
+        Ok(())
     }
 
     pub fn wait_for_leader(&self, timeout: Duration) -> Result<NodeId, MetadataError> {
@@ -934,6 +998,14 @@ fn metadata_raft_members(
         .collect())
 }
 
+fn log_position_from_id(log_id: LogId<u64>) -> Result<LogPosition, MetadataError> {
+    let term = LogTerm::new(log_id.leader_id.term)
+        .map_err(|err| MetadataError::Backend(format!("openraft returned invalid term: {err}")))?;
+    let index = LogIndex::new(log_id.index)
+        .map_err(|err| MetadataError::Backend(format!("openraft returned invalid index: {err}")))?;
+    Ok(LogPosition { term, index })
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
@@ -1211,6 +1283,75 @@ mod tests {
         cluster.shutdown_all(Some(leader));
     }
 
+    #[test]
+    fn openraft_membership_adds_promotes_and_removes_nodes() {
+        let mut cluster = TestMetadataRaftCluster::start_with_voters(&[1, 2, 3, 4], &[1, 2, 3]);
+        let leader = cluster.wait_for_leader(None);
+        cluster.wait_for_membership_counts(3, 0);
+        cluster
+            .node(leader)
+            .commit_metadata(metadata_command(
+                b"req-membership-bootstrap",
+                b"dentry/membership-bootstrap",
+                12,
+            ))
+            .unwrap();
+        cluster.wait_for_key_on_nodes(b"dentry/membership-bootstrap", 12, &[1, 2, 3]);
+
+        cluster
+            .node(leader)
+            .add_learner(NodeId::new(4).unwrap(), "metadata-raft-node-4", true)
+            .unwrap();
+        cluster.wait_for_membership_counts(3, 1);
+
+        let learner_command = metadata_command(b"req-learner", b"dentry/learner", 13);
+        cluster
+            .node(leader)
+            .commit_metadata(learner_command)
+            .unwrap();
+        cluster.wait_for_key_on_nodes(b"dentry/learner", 13, &[1, 2, 3, 4]);
+
+        cluster
+            .node(leader)
+            .replace_voters(&node_set(&[1, 2, 3, 4]), true)
+            .unwrap();
+        cluster.wait_for_membership_counts(4, 0);
+
+        let promoted_leader = cluster.wait_for_leader(None);
+        let promoted_command = metadata_command(b"req-promoted", b"dentry/promoted", 14);
+        cluster
+            .node(promoted_leader)
+            .commit_metadata(promoted_command)
+            .unwrap();
+        cluster.wait_for_key_on_nodes(b"dentry/promoted", 14, &[1, 2, 3, 4]);
+
+        cluster.restart_node(4);
+        cluster.wait_for_membership_counts(4, 0);
+        let restart_leader = cluster.wait_for_leader(None);
+        let restart_command = metadata_command(b"req-after-restart", b"dentry/after-restart", 15);
+        cluster
+            .node(restart_leader)
+            .commit_metadata(restart_command)
+            .unwrap();
+        cluster.wait_for_key_on_nodes(b"dentry/after-restart", 15, &[1, 2, 3, 4]);
+
+        cluster
+            .node(restart_leader)
+            .replace_voters(&node_set(&[1, 3, 4]), false)
+            .unwrap();
+        cluster.wait_for_membership_counts(3, 0);
+
+        let reduced_leader = cluster.wait_for_leader(Some(2));
+        let reduced_command = metadata_command(b"req-reduced", b"dentry/reduced", 16);
+        cluster
+            .node(reduced_leader)
+            .commit_metadata(reduced_command)
+            .unwrap();
+        cluster.wait_for_key_on_nodes(b"dentry/reduced", 16, &[1, 3, 4]);
+
+        cluster.shutdown_all(None);
+    }
+
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1253,6 +1394,12 @@ mod tests {
         }
     }
 
+    fn node_set(ids: &[u64]) -> BTreeSet<NodeId> {
+        ids.iter()
+            .map(|id| NodeId::new(*id).unwrap())
+            .collect::<BTreeSet<_>>()
+    }
+
     struct TestMetadataRaftCluster {
         _dir: tempfile::TempDir,
         client: DirectMetadataRaftRpcClient,
@@ -1261,10 +1408,14 @@ mod tests {
 
     impl TestMetadataRaftCluster {
         fn start(ids: &[u64]) -> Self {
+            Self::start_with_voters(ids, ids)
+        }
+
+        fn start_with_voters(ids: &[u64], voter_ids: &[u64]) -> Self {
             let dir = tempfile::tempdir().unwrap();
             let client = DirectMetadataRaftRpcClient::default();
             let mut voters = BTreeMap::new();
-            for id in ids {
+            for id in voter_ids {
                 voters.insert(
                     NodeId::new(*id).unwrap(),
                     format!("metadata-raft-node-{id}"),
@@ -1290,7 +1441,7 @@ mod tests {
             }
 
             nodes
-                .get(&ids[0])
+                .get(&voter_ids[0])
                 .unwrap()
                 .initialize_voters(&voters)
                 .unwrap();
@@ -1303,6 +1454,44 @@ mod tests {
 
         fn node(&self, id: u64) -> Arc<OpenRaftMetadataStore<HoltMetadataStore>> {
             Arc::clone(self.nodes.get(&id).unwrap())
+        }
+
+        fn restart_node(&mut self, id: u64) {
+            self.client.unregister(id);
+            if let Some(old) = self.nodes.remove(&id) {
+                old.shutdown().unwrap();
+            }
+            let node = NodeId::new(id).unwrap();
+            let store = HoltMetadataStore::open_raft_state_machine().unwrap();
+            let raft = Arc::new(
+                OpenRaftMetadataStore::new_uninitialized_with_file_log_and_network(
+                    store,
+                    node,
+                    self._dir.path().join(format!("metadata-raft-{id}.log")),
+                    FileMetadataRaftLogOptions::default(),
+                    MetadataRaftRpcNetworkFactory::new(self.client.clone()),
+                )
+                .unwrap(),
+            );
+            self.client.register(id, Arc::clone(&raft));
+            self.nodes.insert(id, raft);
+        }
+
+        fn wait_for_membership_counts(&self, voters: usize, learners: usize) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                if self.nodes.values().any(|node| {
+                    node.wait_for_membership_counts(voters, learners, Duration::from_millis(100))
+                        .is_ok()
+                }) {
+                    return;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "metadata raft cluster did not reach membership counts voters={voters} learners={learners}"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
         }
 
         fn wait_for_leader(&self, excluded: Option<u64>) -> u64 {
@@ -1328,14 +1517,23 @@ mod tests {
         }
 
         fn wait_for_key_on_all(&self, key: &[u8], version: u64, excluded: Option<u64>) {
+            let ids = self
+                .nodes
+                .keys()
+                .copied()
+                .filter(|id| excluded != Some(*id))
+                .collect::<Vec<_>>();
+            self.wait_for_key_on_nodes(key, version, &ids);
+        }
+
+        fn wait_for_key_on_nodes(&self, key: &[u8], version: u64, ids: &[u64]) {
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             loop {
-                let all_visible = self
-                    .nodes
-                    .iter()
-                    .filter(|(id, _)| excluded != Some(**id))
-                    .all(|(_, node)| {
-                        node.get(
+                let all_visible = ids.iter().all(|id| {
+                    self.nodes
+                        .get(id)
+                        .unwrap()
+                        .get(
                             RecordFamily::Dentry,
                             key,
                             Version::new(version).unwrap(),
@@ -1343,13 +1541,13 @@ mod tests {
                         )
                         .unwrap()
                         .is_some()
-                    });
+                });
                 if all_visible {
                     return;
                 }
                 assert!(
                     std::time::Instant::now() < deadline,
-                    "metadata raft key did not replicate to all live nodes"
+                    "metadata raft key did not replicate to requested nodes"
                 );
                 thread::sleep(Duration::from_millis(20));
             }
@@ -1372,6 +1570,7 @@ mod tests {
 
     impl DirectMetadataRaftRpcClient {
         fn register(&self, id: u64, peer: Arc<OpenRaftMetadataStore<HoltMetadataStore>>) {
+            self.unavailable.lock().unwrap().remove(&id);
             self.peers.lock().unwrap().insert(id, peer);
         }
 
