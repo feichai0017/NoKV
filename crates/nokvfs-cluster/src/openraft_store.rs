@@ -252,7 +252,27 @@ where
         let log = FileMetadataRaftLog::open(log_path, options)
             .map_err(|err| MetadataError::Backend(format!("openraft file log: {err}")))?;
         let should_initialize = log.last_log_id().is_none();
-        Self::new_single_voter_with_log_and_network(store, node, log, should_initialize, network)
+        let raft = Self::new_with_log_and_network(store, node, log, network)?;
+        if should_initialize {
+            raft.initialize_voters(&single_voter_members(node)?)?;
+        }
+        raft.wait_for_current_leader(node, Duration::from_secs(3))?;
+        Ok(raft)
+    }
+
+    pub fn new_uninitialized_with_file_log_and_network<N>(
+        store: M,
+        node: NodeId,
+        log_path: impl AsRef<Path>,
+        options: FileMetadataRaftLogOptions,
+        network: N,
+    ) -> Result<Self, MetadataError>
+    where
+        N: RaftNetworkFactory<MetadataRaftConfig> + Send + Sync + 'static,
+    {
+        let log = FileMetadataRaftLog::open(log_path, options)
+            .map_err(|err| MetadataError::Backend(format!("openraft file log: {err}")))?;
+        Self::new_with_log_and_network(store, node, log, network)
     }
 
     #[cfg(test)]
@@ -265,20 +285,19 @@ where
     where
         L: RaftLogStorage<MetadataRaftConfig> + Clone + Send + Sync + 'static,
     {
-        Self::new_single_voter_with_log_and_network(
-            store,
-            node,
-            log,
-            should_initialize,
-            NoopMetadataRaftNetworkFactory,
-        )
+        let raft =
+            Self::new_with_log_and_network(store, node, log, NoopMetadataRaftNetworkFactory)?;
+        if should_initialize {
+            raft.initialize_voters(&single_voter_members(node)?)?;
+        }
+        raft.wait_for_current_leader(node, Duration::from_secs(3))?;
+        Ok(raft)
     }
 
-    fn new_single_voter_with_log_and_network<L, N>(
+    fn new_with_log_and_network<L, N>(
         store: M,
         node: NodeId,
         log: L,
-        should_initialize: bool,
         network: N,
     ) -> Result<Self, MetadataError>
     where
@@ -314,22 +333,6 @@ where
             .await
             .map_err(|err| MetadataError::Backend(format!("openraft start: {err}")))?;
 
-            if should_initialize {
-                let mut members = BTreeMap::new();
-                members.insert(
-                    raft_node,
-                    BasicNode {
-                        addr: format!("local-{raft_node}"),
-                    },
-                );
-                raft.initialize(members)
-                    .await
-                    .map_err(|err| MetadataError::Backend(format!("openraft initialize: {err}")))?;
-            }
-            raft.wait(Some(Duration::from_secs(3)))
-                .current_leader(raft_node, "single-voter metadata raft leader")
-                .await
-                .map_err(|err| MetadataError::Backend(format!("openraft leader wait: {err}")))?;
             Ok::<_, MetadataError>(raft)
         })?;
         Ok(Self {
@@ -337,6 +340,49 @@ where
             raft,
             runtime,
         })
+    }
+
+    pub fn initialize_voters(
+        &self,
+        voters: &BTreeMap<NodeId, String>,
+    ) -> Result<(), MetadataError> {
+        let members = metadata_raft_members(voters)?;
+        self.runtime
+            .block_on(self.raft.initialize(members))
+            .map_err(|err| MetadataError::Backend(format!("openraft initialize: {err}")))
+    }
+
+    pub fn wait_for_leader(&self, timeout: Duration) -> Result<NodeId, MetadataError> {
+        let metrics = self
+            .runtime
+            .block_on(self.raft.wait(Some(timeout)).metrics(
+                |metrics| metrics.current_leader.is_some(),
+                "metadata raft leader",
+            ))
+            .map_err(|err| MetadataError::Backend(format!("openraft leader wait: {err}")))?;
+        let leader = metrics.current_leader.ok_or_else(|| {
+            MetadataError::Backend("openraft leader wait completed without leader".to_owned())
+        })?;
+        NodeId::new(leader).map_err(|err| {
+            MetadataError::Backend(format!(
+                "openraft reported invalid leader id {leader}: {err}"
+            ))
+        })
+    }
+
+    pub fn wait_for_current_leader(
+        &self,
+        leader: NodeId,
+        timeout: Duration,
+    ) -> Result<(), MetadataError> {
+        self.runtime
+            .block_on(
+                self.raft
+                    .wait(Some(timeout))
+                    .current_leader(leader.get(), "metadata raft leader"),
+            )
+            .map_err(|err| MetadataError::Backend(format!("openraft leader wait: {err}")))?;
+        Ok(())
     }
 
     pub fn shutdown(&self) -> Result<(), MetadataError> {
@@ -832,10 +878,38 @@ fn normalize_apply_results(
     results
 }
 
+fn single_voter_members(node: NodeId) -> Result<BTreeMap<NodeId, String>, MetadataError> {
+    let mut voters = BTreeMap::new();
+    voters.insert(node, format!("local-{}", node.get()));
+    Ok(voters)
+}
+
+fn metadata_raft_members(
+    voters: &BTreeMap<NodeId, String>,
+) -> Result<BTreeMap<u64, BasicNode>, MetadataError> {
+    if voters.is_empty() {
+        return Err(MetadataError::Backend(
+            "metadata raft voters cannot be empty".to_owned(),
+        ));
+    }
+    Ok(voters
+        .iter()
+        .map(|(node, address)| {
+            (
+                node.get(),
+                BasicNode {
+                    addr: address.clone(),
+                },
+            )
+        })
+        .collect())
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::BTreeMap;
-    use std::sync::Arc;
+    use std::collections::{BTreeMap, BTreeSet};
+    use std::sync::{Arc, Mutex};
+    use std::thread;
     use std::time::Duration;
 
     use nokvfs_meta::command::{
@@ -843,6 +917,11 @@ mod tests {
         Value, Version, WatchProjection,
     };
     use nokvfs_meta::holtstore::HoltMetadataStore;
+    use nokvfs_protocol::{
+        WireMetadataRaftAppendEntriesRequest, WireMetadataRaftAppendEntriesResponse,
+        WireMetadataRaftInstallSnapshotRequest, WireMetadataRaftInstallSnapshotResponse,
+        WireMetadataRaftVoteRequest, WireMetadataRaftVoteResponse,
+    };
     use nokvfs_types::RecordFamily;
     use openraft::entry::FromAppData;
     use openraft::storage::RaftLogStorageExt;
@@ -851,6 +930,8 @@ mod tests {
     use super::*;
     use crate::openraft_file_log::{FileMetadataRaftLog, FileMetadataRaftLogOptions};
     use crate::openraft_log::MetadataRaftCommandBatch;
+    use crate::openraft_network::{MetadataRaftRpcClient, MetadataRaftRpcNetworkFactory};
+    use crate::SharedLogError;
 
     #[test]
     fn in_memory_log_storage_round_trips_entries() {
@@ -1071,6 +1152,36 @@ mod tests {
         reopened.shutdown().unwrap();
     }
 
+    #[test]
+    fn three_node_openraft_group_replicates_client_write() {
+        let cluster = TestMetadataRaftCluster::start(&[1, 2, 3]);
+        let leader = cluster.wait_for_leader(None);
+
+        let command = metadata_command(b"req-three-node", b"dentry/three-node", 11);
+        let result = cluster.node(leader).commit_metadata(command).unwrap();
+        assert_eq!(result.commit_version, Version::new(11).unwrap());
+
+        cluster.wait_for_key_on_all(b"dentry/three-node", 11, None);
+        cluster.shutdown_all(None);
+    }
+
+    #[test]
+    fn three_node_openraft_group_elects_new_leader_after_leader_shutdown() {
+        let cluster = TestMetadataRaftCluster::start(&[1, 2, 3]);
+        let leader = cluster.wait_for_leader(None);
+
+        cluster.client.unregister(leader);
+        cluster.node(leader).shutdown().unwrap();
+        let new_leader = cluster.wait_for_leader(Some(leader));
+
+        let command = metadata_command(b"req-after-crash", b"dentry/after-crash", 12);
+        let result = cluster.node(new_leader).commit_metadata(command).unwrap();
+        assert_eq!(result.commit_version, Version::new(12).unwrap());
+
+        cluster.wait_for_key_on_all(b"dentry/after-crash", 12, Some(leader));
+        cluster.shutdown_all(Some(leader));
+    }
+
     fn runtime() -> tokio::runtime::Runtime {
         tokio::runtime::Builder::new_multi_thread()
             .worker_threads(2)
@@ -1110,6 +1221,189 @@ mod tests {
                 key: key.to_vec(),
                 event: b"create".to_vec(),
             }],
+        }
+    }
+
+    struct TestMetadataRaftCluster {
+        _dir: tempfile::TempDir,
+        client: DirectMetadataRaftRpcClient,
+        nodes: BTreeMap<u64, Arc<OpenRaftMetadataStore<HoltMetadataStore>>>,
+    }
+
+    impl TestMetadataRaftCluster {
+        fn start(ids: &[u64]) -> Self {
+            let dir = tempfile::tempdir().unwrap();
+            let client = DirectMetadataRaftRpcClient::default();
+            let mut voters = BTreeMap::new();
+            for id in ids {
+                voters.insert(
+                    NodeId::new(*id).unwrap(),
+                    format!("metadata-raft-node-{id}"),
+                );
+            }
+
+            let mut nodes = BTreeMap::new();
+            for id in ids {
+                let node = NodeId::new(*id).unwrap();
+                let store = HoltMetadataStore::open_file(dir.path().join(format!("metadata-{id}")))
+                    .unwrap();
+                let raft = Arc::new(
+                    OpenRaftMetadataStore::new_uninitialized_with_file_log_and_network(
+                        store,
+                        node,
+                        dir.path().join(format!("metadata-raft-{id}.log")),
+                        FileMetadataRaftLogOptions::default(),
+                        MetadataRaftRpcNetworkFactory::new(client.clone()),
+                    )
+                    .unwrap(),
+                );
+                client.register(*id, Arc::clone(&raft));
+                nodes.insert(*id, raft);
+            }
+
+            nodes
+                .get(&ids[0])
+                .unwrap()
+                .initialize_voters(&voters)
+                .unwrap();
+            Self {
+                _dir: dir,
+                client,
+                nodes,
+            }
+        }
+
+        fn node(&self, id: u64) -> Arc<OpenRaftMetadataStore<HoltMetadataStore>> {
+            Arc::clone(self.nodes.get(&id).unwrap())
+        }
+
+        fn wait_for_leader(&self, excluded: Option<u64>) -> u64 {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                for (id, node) in &self.nodes {
+                    if excluded == Some(*id) {
+                        continue;
+                    }
+                    if let Ok(leader) = node.wait_for_leader(Duration::from_millis(100)) {
+                        let leader = leader.get();
+                        if excluded != Some(leader) && self.nodes.contains_key(&leader) {
+                            return leader;
+                        }
+                    }
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "metadata raft cluster did not elect a usable leader"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        fn wait_for_key_on_all(&self, key: &[u8], version: u64, excluded: Option<u64>) {
+            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            loop {
+                let all_visible = self
+                    .nodes
+                    .iter()
+                    .filter(|(id, _)| excluded != Some(**id))
+                    .all(|(_, node)| {
+                        node.get(
+                            RecordFamily::Dentry,
+                            key,
+                            Version::new(version).unwrap(),
+                            ReadPurpose::UserStrong,
+                        )
+                        .unwrap()
+                        .is_some()
+                    });
+                if all_visible {
+                    return;
+                }
+                assert!(
+                    std::time::Instant::now() < deadline,
+                    "metadata raft key did not replicate to all live nodes"
+                );
+                thread::sleep(Duration::from_millis(20));
+            }
+        }
+
+        fn shutdown_all(&self, excluded: Option<u64>) {
+            for (id, node) in &self.nodes {
+                if excluded != Some(*id) {
+                    node.shutdown().unwrap();
+                }
+            }
+        }
+    }
+
+    #[derive(Clone, Default)]
+    struct DirectMetadataRaftRpcClient {
+        peers: Arc<Mutex<BTreeMap<u64, Arc<OpenRaftMetadataStore<HoltMetadataStore>>>>>,
+        unavailable: Arc<Mutex<BTreeSet<u64>>>,
+    }
+
+    impl DirectMetadataRaftRpcClient {
+        fn register(&self, id: u64, peer: Arc<OpenRaftMetadataStore<HoltMetadataStore>>) {
+            self.peers.lock().unwrap().insert(id, peer);
+        }
+
+        fn unregister(&self, id: u64) {
+            self.unavailable.lock().unwrap().insert(id);
+            self.peers.lock().unwrap().remove(&id);
+        }
+
+        fn peer(
+            &self,
+            target: u64,
+        ) -> Result<Arc<OpenRaftMetadataStore<HoltMetadataStore>>, SharedLogError> {
+            if self.unavailable.lock().unwrap().contains(&target) {
+                return Err(SharedLogError::Backend(format!(
+                    "metadata raft test peer {target} is unavailable"
+                )));
+            }
+            self.peers
+                .lock()
+                .unwrap()
+                .get(&target)
+                .cloned()
+                .ok_or_else(|| {
+                    SharedLogError::Backend(format!("metadata raft test peer {target} is unknown"))
+                })
+        }
+    }
+
+    impl MetadataRaftRpcClient for DirectMetadataRaftRpcClient {
+        fn vote_metadata_raft(
+            &self,
+            target: u64,
+            _address: &str,
+            request: WireMetadataRaftVoteRequest,
+        ) -> Result<WireMetadataRaftVoteResponse, SharedLogError> {
+            self.peer(target)?
+                .handle_vote_rpc(request)
+                .map_err(|err| SharedLogError::Backend(err.to_string()))
+        }
+
+        fn append_metadata_raft_entries(
+            &self,
+            target: u64,
+            _address: &str,
+            request: WireMetadataRaftAppendEntriesRequest,
+        ) -> Result<WireMetadataRaftAppendEntriesResponse, SharedLogError> {
+            self.peer(target)?
+                .handle_append_entries_rpc(request)
+                .map_err(|err| SharedLogError::Backend(err.to_string()))
+        }
+
+        fn install_metadata_raft_snapshot(
+            &self,
+            target: u64,
+            _address: &str,
+            request: WireMetadataRaftInstallSnapshotRequest,
+        ) -> Result<WireMetadataRaftInstallSnapshotResponse, SharedLogError> {
+            self.peer(target)?
+                .handle_install_snapshot_rpc(request)
+                .map_err(|err| SharedLogError::Backend(err.to_string()))
         }
     }
 }
