@@ -17,5 +17,7 @@ nokvfs-types.workspace = true
 sha2.workspace = true
 
 [dev-dependencies]
+nokvfs-cluster.workspace = true
+nokvfs-server.workspace = true
 serde_json.workspace = true
 tempfile.workspace = true

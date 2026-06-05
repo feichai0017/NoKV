@@ -15,9 +15,9 @@ use nokvfs_object::{
 use nokvfs_protocol::{
     decode_envelope, decode_name_cursor, encode_name_cursor, encode_request, MetadataProtocolError,
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
-    WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr, WireMetadataBootstrapPlan,
-    WireMetadataCheckpoint, WireMetadataCheckpointInstall, WireMetadataError, WireMetadataPosition,
-    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact, WireUpdateAttr,
+    WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr, WireMetadataError,
+    WireMetadataPosition, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireUpdateAttr,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
@@ -88,35 +88,6 @@ pub struct ClientReadDirPlusPage {
 pub struct ClientMetadataPosition {
     pub term: u64,
     pub index: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClientMetadataCheckpoint {
-    pub id: Vec<u8>,
-    pub mount: u64,
-    pub durable_position: ClientMetadataPosition,
-    pub applied_position: ClientMetadataPosition,
-    pub min_retained_index: u64,
-    pub max_commit_version: u64,
-    pub artifact_uri: Vec<u8>,
-    pub artifact_digest: Vec<u8>,
-    pub artifact_size_bytes: u64,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClientMetadataBootstrapPlan {
-    pub leader: u64,
-    pub learner: u64,
-    pub checkpoint: ClientMetadataCheckpoint,
-    pub replay_start_index: u64,
-    pub replayed_index: u64,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ClientMetadataCheckpointInstall {
-    pub learner: u64,
-    pub replay_start_index: u64,
-    pub replayed_index: u64,
 }
 
 const DEFAULT_LIST_PAGE_SIZE: usize = 1024;
@@ -1338,48 +1309,6 @@ impl MetadataClient {
         }
     }
 
-    pub fn read_metadata_checkpoint(
-        &self,
-        mount: u64,
-    ) -> Result<Option<ClientMetadataCheckpoint>, ClientError> {
-        match self.call(MetadataRpcRequest::ReadMetadataCheckpoint { mount })? {
-            MetadataRpcResult::MetadataCheckpoint { checkpoint } => {
-                checkpoint.map(wire_metadata_checkpoint).transpose()
-            }
-            other => Err(unexpected_result(other)),
-        }
-    }
-
-    pub fn plan_metadata_bootstrap(
-        &self,
-        leader: u64,
-        learner: u64,
-        mount: u64,
-    ) -> Result<ClientMetadataBootstrapPlan, ClientError> {
-        match self.call(MetadataRpcRequest::PlanMetadataBootstrap {
-            leader,
-            learner,
-            mount,
-        })? {
-            MetadataRpcResult::MetadataBootstrapPlan { plan } => wire_metadata_bootstrap_plan(plan),
-            other => Err(unexpected_result(other)),
-        }
-    }
-
-    pub fn install_metadata_checkpoint(
-        &self,
-        plan: ClientMetadataBootstrapPlan,
-    ) -> Result<ClientMetadataCheckpointInstall, ClientError> {
-        match self.call(MetadataRpcRequest::InstallMetadataCheckpoint {
-            plan: metadata_bootstrap_plan_to_wire(&plan),
-        })? {
-            MetadataRpcResult::MetadataCheckpointInstall { install } => {
-                Ok(wire_metadata_checkpoint_install(install))
-            }
-            other => Err(unexpected_result(other)),
-        }
-    }
-
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
         let endpoints = self.request_endpoints(&request);
         if endpoints.is_empty() {
@@ -1500,17 +1429,6 @@ impl MetadataClient {
             .expect("metadata rpc connections")
             .remove(&address);
     }
-}
-
-pub fn bootstrap_metadata_learner(
-    leader: &MetadataClient,
-    learner: &MetadataClient,
-    leader_node: u64,
-    learner_node: u64,
-    mount: u64,
-) -> Result<ClientMetadataCheckpointInstall, ClientError> {
-    let plan = leader.plan_metadata_bootstrap(leader_node, learner_node, mount)?;
-    learner.install_metadata_checkpoint(plan)
 }
 
 fn create_files_request(
@@ -1831,74 +1749,10 @@ fn wire_snapshot(snapshot: nokvfs_protocol::WireSnapshotPin) -> Result<SnapshotP
     snapshot.into_snapshot_pin().map_err(protocol_error)
 }
 
-fn wire_metadata_checkpoint(
-    checkpoint: WireMetadataCheckpoint,
-) -> Result<ClientMetadataCheckpoint, ClientError> {
-    Ok(ClientMetadataCheckpoint {
-        id: checkpoint.id,
-        mount: checkpoint.mount,
-        durable_position: wire_metadata_position(checkpoint.durable_position),
-        applied_position: wire_metadata_position(checkpoint.applied_position),
-        min_retained_index: checkpoint.min_retained_index,
-        max_commit_version: checkpoint.max_commit_version,
-        artifact_uri: checkpoint.artifact_uri,
-        artifact_digest: checkpoint.artifact_digest,
-        artifact_size_bytes: checkpoint.artifact_size_bytes,
-    })
-}
-
-fn wire_metadata_bootstrap_plan(
-    plan: WireMetadataBootstrapPlan,
-) -> Result<ClientMetadataBootstrapPlan, ClientError> {
-    Ok(ClientMetadataBootstrapPlan {
-        leader: plan.leader,
-        learner: plan.learner,
-        checkpoint: wire_metadata_checkpoint(plan.checkpoint)?,
-        replay_start_index: plan.replay_start_index,
-        replayed_index: plan.replayed_index,
-    })
-}
-
-fn wire_metadata_checkpoint_install(
-    install: WireMetadataCheckpointInstall,
-) -> ClientMetadataCheckpointInstall {
-    ClientMetadataCheckpointInstall {
-        learner: install.learner,
-        replay_start_index: install.replay_start_index,
-        replayed_index: install.replayed_index,
-    }
-}
-
 fn wire_metadata_position(position: WireMetadataPosition) -> ClientMetadataPosition {
     ClientMetadataPosition {
         term: position.term,
         index: position.index,
-    }
-}
-
-fn metadata_bootstrap_plan_to_wire(
-    plan: &ClientMetadataBootstrapPlan,
-) -> WireMetadataBootstrapPlan {
-    WireMetadataBootstrapPlan {
-        leader: plan.leader,
-        learner: plan.learner,
-        checkpoint: metadata_checkpoint_to_wire(&plan.checkpoint),
-        replay_start_index: plan.replay_start_index,
-        replayed_index: plan.replayed_index,
-    }
-}
-
-fn metadata_checkpoint_to_wire(checkpoint: &ClientMetadataCheckpoint) -> WireMetadataCheckpoint {
-    WireMetadataCheckpoint {
-        id: checkpoint.id.clone(),
-        mount: checkpoint.mount,
-        durable_position: metadata_position_to_wire(checkpoint.durable_position),
-        applied_position: metadata_position_to_wire(checkpoint.applied_position),
-        min_retained_index: checkpoint.min_retained_index,
-        max_commit_version: checkpoint.max_commit_version,
-        artifact_uri: checkpoint.artifact_uri.clone(),
-        artifact_digest: checkpoint.artifact_digest.clone(),
-        artifact_size_bytes: checkpoint.artifact_size_bytes,
     }
 }
 
@@ -2581,81 +2435,6 @@ mod tests {
         let second = second.join().unwrap().unwrap();
         assert_eq!(first.dentry.name.as_bytes(), b"a.bin");
         assert_eq!(second.dentry.name.as_bytes(), b"b.bin");
-    }
-
-    #[test]
-    fn service_bootstrap_metadata_learner_forwards_leader_plan_to_learner() {
-        let checkpoint = WireMetadataCheckpoint {
-            id: b"checkpoint-a".to_vec(),
-            mount: 1,
-            durable_position: WireMetadataPosition { term: 7, index: 12 },
-            applied_position: WireMetadataPosition { term: 7, index: 10 },
-            min_retained_index: 11,
-            max_commit_version: 99,
-            artifact_uri: b"file:/tmp/checkpoint-a.nkmeta".to_vec(),
-            artifact_digest: b"sha256:checkpoint-a".to_vec(),
-            artifact_size_bytes: 4096,
-        };
-        let plan = WireMetadataBootstrapPlan {
-            leader: 1,
-            learner: 4,
-            checkpoint,
-            replay_start_index: 11,
-            replayed_index: 12,
-        };
-        let leader_plan = plan.clone();
-        let leader_addr = serve_one_request(move |request| {
-            assert_eq!(
-                request,
-                MetadataRpcRequest::PlanMetadataBootstrap {
-                    leader: 1,
-                    learner: 4,
-                    mount: 1,
-                }
-            );
-            encode_envelope(&MetadataRpcEnvelope {
-                ok: true,
-                result: Some(MetadataRpcResult::MetadataBootstrapPlan { plan: leader_plan }),
-                error: None,
-                error_kind: None,
-                metadata_position: None,
-            })
-            .unwrap()
-        });
-        let learner_plan = plan.clone();
-        let learner_addr = serve_one_request(move |request| {
-            assert_eq!(
-                request,
-                MetadataRpcRequest::InstallMetadataCheckpoint { plan: learner_plan }
-            );
-            encode_envelope(&MetadataRpcEnvelope {
-                ok: true,
-                result: Some(MetadataRpcResult::MetadataCheckpointInstall {
-                    install: WireMetadataCheckpointInstall {
-                        learner: 4,
-                        replay_start_index: 11,
-                        replayed_index: 12,
-                    },
-                }),
-                error: None,
-                error_kind: None,
-                metadata_position: None,
-            })
-            .unwrap()
-        });
-        let leader = MetadataClient::connect(leader_addr);
-        let learner = MetadataClient::connect(learner_addr);
-
-        let install = bootstrap_metadata_learner(&leader, &learner, 1, 4, 1).unwrap();
-
-        assert_eq!(
-            install,
-            ClientMetadataCheckpointInstall {
-                learner: 4,
-                replay_start_index: 11,
-                replayed_index: 12,
-            }
-        );
     }
 
     #[test]

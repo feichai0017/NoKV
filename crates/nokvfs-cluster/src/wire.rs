@@ -17,9 +17,9 @@ use openraft::raft::{
 use openraft::{BasicNode, LeaderId, LogId, Membership, SnapshotMeta, StoredMembership, Vote};
 use std::collections::{BTreeMap, BTreeSet};
 
-use crate::openraft_file_log::{decode_metadata_raft_entry, encode_metadata_raft_entry};
-use crate::openraft_log::{MetadataRaftConfig, MetadataRaftEntry};
-use crate::SharedLogError;
+use crate::file_log::{decode_metadata_raft_entry, encode_metadata_raft_entry};
+use crate::log::{MetadataRaftConfig, MetadataRaftEntry};
+use crate::MetadataRaftError;
 
 pub fn wire_vote_request(request: &VoteRequest<u64>) -> WireMetadataRaftVoteRequest {
     WireMetadataRaftVoteRequest {
@@ -30,7 +30,7 @@ pub fn wire_vote_request(request: &VoteRequest<u64>) -> WireMetadataRaftVoteRequ
 
 pub fn vote_request(
     request: WireMetadataRaftVoteRequest,
-) -> Result<VoteRequest<u64>, SharedLogError> {
+) -> Result<VoteRequest<u64>, MetadataRaftError> {
     Ok(VoteRequest {
         vote: vote(request.vote)?,
         last_log_id: request.last_log_id.map(log_id).transpose()?,
@@ -47,7 +47,7 @@ pub fn wire_vote_response(response: &VoteResponse<u64>) -> WireMetadataRaftVoteR
 
 pub fn vote_response(
     response: WireMetadataRaftVoteResponse,
-) -> Result<VoteResponse<u64>, SharedLogError> {
+) -> Result<VoteResponse<u64>, MetadataRaftError> {
     Ok(VoteResponse {
         vote: vote(response.vote)?,
         vote_granted: response.vote_granted,
@@ -57,7 +57,7 @@ pub fn vote_response(
 
 pub fn wire_append_entries_request(
     request: &AppendEntriesRequest<MetadataRaftConfig>,
-) -> Result<WireMetadataRaftAppendEntriesRequest, SharedLogError> {
+) -> Result<WireMetadataRaftAppendEntriesRequest, MetadataRaftError> {
     Ok(WireMetadataRaftAppendEntriesRequest {
         vote: wire_vote(request.vote),
         prev_log_id: request.prev_log_id.map(wire_log_id),
@@ -72,7 +72,7 @@ pub fn wire_append_entries_request(
 
 pub fn append_entries_request(
     request: WireMetadataRaftAppendEntriesRequest,
-) -> Result<AppendEntriesRequest<MetadataRaftConfig>, SharedLogError> {
+) -> Result<AppendEntriesRequest<MetadataRaftConfig>, MetadataRaftError> {
     Ok(AppendEntriesRequest {
         vote: vote(request.vote)?,
         prev_log_id: request.prev_log_id.map(log_id).transpose()?,
@@ -106,7 +106,7 @@ pub fn wire_append_entries_response(
 
 pub fn append_entries_response(
     response: WireMetadataRaftAppendEntriesResponse,
-) -> Result<AppendEntriesResponse<u64>, SharedLogError> {
+) -> Result<AppendEntriesResponse<u64>, MetadataRaftError> {
     Ok(match response {
         WireMetadataRaftAppendEntriesResponse::Success => AppendEntriesResponse::Success,
         WireMetadataRaftAppendEntriesResponse::PartialSuccess { matching } => {
@@ -133,7 +133,7 @@ pub fn wire_install_snapshot_request(
 
 pub fn install_snapshot_request(
     request: WireMetadataRaftInstallSnapshotRequest,
-) -> Result<InstallSnapshotRequest<MetadataRaftConfig>, SharedLogError> {
+) -> Result<InstallSnapshotRequest<MetadataRaftConfig>, MetadataRaftError> {
     Ok(InstallSnapshotRequest {
         vote: vote(request.vote)?,
         meta: snapshot_meta(request.meta)?,
@@ -153,24 +153,24 @@ pub fn wire_install_snapshot_response(
 
 pub fn install_snapshot_response(
     response: WireMetadataRaftInstallSnapshotResponse,
-) -> Result<InstallSnapshotResponse<u64>, SharedLogError> {
+) -> Result<InstallSnapshotResponse<u64>, MetadataRaftError> {
     Ok(InstallSnapshotResponse {
         vote: vote(response.vote)?,
     })
 }
 
-fn wire_entry(entry: &MetadataRaftEntry) -> Result<WireMetadataRaftEntry, SharedLogError> {
+fn wire_entry(entry: &MetadataRaftEntry) -> Result<WireMetadataRaftEntry, MetadataRaftError> {
     Ok(WireMetadataRaftEntry {
         log_id: wire_log_id(entry.log_id),
         payload: encode_metadata_raft_entry(entry)?,
     })
 }
 
-fn entry(entry: WireMetadataRaftEntry) -> Result<MetadataRaftEntry, SharedLogError> {
+fn entry(entry: WireMetadataRaftEntry) -> Result<MetadataRaftEntry, MetadataRaftError> {
     let decoded = decode_metadata_raft_entry(&entry.payload)?;
     let expected = wire_log_id(decoded.log_id);
     if expected != entry.log_id {
-        return Err(SharedLogError::Backend(format!(
+        return Err(MetadataRaftError::Backend(format!(
             "metadata raft entry log id mismatch: wire {:?}, payload {:?}",
             entry.log_id, expected
         )));
@@ -188,7 +188,7 @@ fn wire_snapshot_meta(meta: &SnapshotMeta<u64, BasicNode>) -> WireMetadataRaftSn
 
 fn snapshot_meta(
     meta: WireMetadataRaftSnapshotMeta,
-) -> Result<SnapshotMeta<u64, BasicNode>, SharedLogError> {
+) -> Result<SnapshotMeta<u64, BasicNode>, MetadataRaftError> {
     Ok(SnapshotMeta {
         last_log_id: meta.last_log_id.map(log_id).transpose()?,
         last_membership: stored_membership(meta.last_membership)?,
@@ -219,7 +219,7 @@ fn wire_stored_membership(
 
 fn stored_membership(
     membership: WireMetadataRaftMembership,
-) -> Result<StoredMembership<u64, BasicNode>, SharedLogError> {
+) -> Result<StoredMembership<u64, BasicNode>, MetadataRaftError> {
     let configs = membership
         .voter_configs
         .into_iter()
@@ -246,9 +246,9 @@ fn wire_vote(vote: Vote<u64>) -> WireMetadataRaftVote {
     }
 }
 
-fn vote(vote: WireMetadataRaftVote) -> Result<Vote<u64>, SharedLogError> {
+fn vote(vote: WireMetadataRaftVote) -> Result<Vote<u64>, MetadataRaftError> {
     let voted_for = vote.leader_id.voted_for.ok_or_else(|| {
-        SharedLogError::Backend("metadata raft vote is missing voted_for node".to_owned())
+        MetadataRaftError::Backend("metadata raft vote is missing voted_for node".to_owned())
     })?;
     Ok(Vote {
         leader_id: LeaderId::new(vote.leader_id.term, voted_for),
@@ -264,7 +264,7 @@ fn wire_log_id(log_id: LogId<u64>) -> WireMetadataRaftLogId {
     }
 }
 
-fn log_id(log_id: WireMetadataRaftLogId) -> Result<LogId<u64>, SharedLogError> {
+fn log_id(log_id: WireMetadataRaftLogId) -> Result<LogId<u64>, MetadataRaftError> {
     Ok(LogId::new(
         openraft::CommittedLeaderId::new(log_id.leader_term, log_id.leader_node),
         log_id.index,
@@ -288,7 +288,7 @@ mod tests {
         let entry = MetadataRaftEntry {
             log_id: LogId::new(CommittedLeaderId::new(3, 2), 11),
             payload: EntryPayload::Normal(
-                crate::openraft_log::MetadataRaftCommandBatch::new(vec![metadata_command(
+                crate::log::MetadataRaftCommandBatch::new(vec![metadata_command(
                     b"request-1",
                     b"dentry/a",
                     2,
@@ -413,7 +413,7 @@ mod tests {
     #[test]
     fn entry_decode_rejects_mismatched_wire_log_id() {
         let entry = MetadataRaftEntry::from_app_data(
-            crate::openraft_log::MetadataRaftCommandBatch::new(vec![metadata_command(
+            crate::log::MetadataRaftCommandBatch::new(vec![metadata_command(
                 b"request-1",
                 b"dentry/a",
                 2,
@@ -425,7 +425,7 @@ mod tests {
 
         assert!(matches!(
             self::entry(wire),
-            Err(SharedLogError::Backend(message)) if message.contains("log id mismatch")
+            Err(MetadataRaftError::Backend(message)) if message.contains("log id mismatch")
         ));
     }
 

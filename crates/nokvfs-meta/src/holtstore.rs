@@ -199,6 +199,12 @@ impl HoltMetadataStore {
         Self::open(TreeConfig::memory())
     }
 
+    pub fn open_raft_state_machine() -> Result<Self, MetadataError> {
+        let mut config = TreeConfig::memory();
+        config.memory_flush_on_write = false;
+        Self::open(config)
+    }
+
     pub fn open_file(path: impl AsRef<Path>) -> Result<Self, MetadataError> {
         Self::open(TreeConfig::new(path.as_ref()))
     }

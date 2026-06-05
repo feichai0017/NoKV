@@ -124,18 +124,15 @@ OpenRaft state machine applies committed batches through the storage-neutral
 metadata store trait, so filesystem semantics stay in `nokvfs-meta` while log
 ordering and recovery stay in `nokvfs-cluster`.
 
-The older `--metadata-log` shared-log path remains as a temporary regression and
-migration path while OpenRaft multi-node transport is being completed. When that
-option is omitted, the production server path is OpenRaft-backed. During this
-transition, `--metadata-log-sync data|none` still controls local log sync policy:
-use `data` when the local log is the durability boundary, and `none` only for
-local performance experiments or when a higher-level replicated log already owns
-durability.
+There is no separate compatibility log path. `nokv-fs serve` always uses
+the OpenRaft metadata group path, including single-node deployments. The
+`--metadata-raft-log-sync data|none` option controls the OpenRaft file-log sync
+policy: use `data` when the local log is the durability boundary, and `none`
+only for local performance experiments where losing the process-local log is
+acceptable.
 
 The OpenRaft v1 target remains one metadata group per mount. Cross-mount atomic
-operations are not part of the contract. Multi-node HA will add voters and
-learners through OpenRaft membership, with storage-neutral transport DTOs for
-vote, append entries, and snapshot installation. Learners will bootstrap from
-the latest checkpoint artifact and then replay the retained OpenRaft tail.
-Checkpoint images are stored in the configured object backend and verified by
-digest before installation.
+operations are not part of the contract. Multi-node HA uses voters through
+storage-neutral transport DTOs for vote, append entries, and snapshot
+installation. Learner read scaling and object-backed checkpoint archive remain
+planned production hardening work.

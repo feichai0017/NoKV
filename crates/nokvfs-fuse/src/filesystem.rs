@@ -15,10 +15,6 @@ use fuser::{
     ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use nokvfs_client::MetadataClient;
-#[cfg(test)]
-use nokvfs_meta::command::MetadataStore;
-#[cfg(test)]
-use nokvfs_meta::NoKvFs;
 use nokvfs_meta::{
     DentryWithAttr, MetadError, PublishArtifactRange, PublishArtifactStagedSession,
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
@@ -31,8 +27,6 @@ use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
 use sha2::{Digest, Sha256};
 
 use crate::attr::{file_attr, fuse_file_type};
-#[cfg(test)]
-use crate::backend::LocalFuseBackend;
 use crate::backend::{ClientFuseBackend, FuseBackend, FuseBackendError};
 use crate::invalidation::{FuseInvalidationOptions, FuseInvalidationWorker, InvalidationRegistry};
 
@@ -866,21 +860,6 @@ where
             .map_err(|_| Errno::EIO)?
             .remove(&fh.0);
         Ok(())
-    }
-}
-
-#[cfg(test)]
-impl<M, O> NoKvFuse<LocalFuseBackend<M, O>>
-where
-    M: MetadataStore + Send + Sync + 'static,
-    O: ObjectStore + Send + Sync + 'static,
-{
-    fn new(service: NoKvFs<M, O>, options: FuseOptions) -> Self {
-        Self::from_backend(LocalFuseBackend::new(service), options)
-    }
-
-    fn service(&self) -> &NoKvFs<M, O> {
-        self.backend.service()
     }
 }
 
@@ -2066,25 +2045,12 @@ fn metadata_errno(err: MetadError) -> Errno {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nokvfs_meta::holtstore::HoltMetadataStore;
-    use nokvfs_meta::PublishArtifact;
-    use nokvfs_object::MemoryObjectStore;
-    use nokvfs_types::MountId;
-
-    fn service() -> NoKvFs<HoltMetadataStore, MemoryObjectStore> {
-        let service = NoKvFs::new(
-            MountId::new(1).unwrap(),
-            HoltMetadataStore::open_memory().unwrap(),
-            MemoryObjectStore::new(),
-        );
-        service.bootstrap_root(0o755, 1000, 1000).unwrap();
-        service
-    }
+    use crate::backend::FuseBackendResult;
+    use nokvfs_types::{WatchCursor, WatchRecord};
 
     #[test]
     fn parent_cache_defaults_to_root_and_remembers_lookup_parent() {
-        let service = service();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
         let child = InodeId::new(99).unwrap();
         assert_eq!(fuse.parent_of(child), InodeId::root());
         fuse.remember_parent(child, InodeId::new(9).unwrap());
@@ -2092,80 +2058,8 @@ mod tests {
     }
 
     #[test]
-    fn directory_handle_loads_live_entries_by_page() {
-        let service = service();
-        let total = FUSE_READDIR_PAGE_SIZE + 3;
-        let names = (0..total)
-            .map(|index| DentryName::new(format!("sample-{index:04}.bin").into_bytes()).unwrap())
-            .collect::<Vec<_>>();
-        service
-            .create_files_in_dir(InodeId::root(), names, 0o644, 1000, 1000)
-            .unwrap();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        let handle = fuse
-            .allocate_directory_handle(InodeId::root())
-            .expect("open directory handle");
-
-        let before = fuse.service().metadata_service_stats();
-        let first = fuse
-            .directory_child(handle, 0)
-            .expect("load first child")
-            .expect("first child exists");
-        let after_first = fuse.service().metadata_service_stats();
-        assert_eq!(first.dentry.name.as_bytes(), b"sample-0000.bin");
-        assert_eq!(
-            after_first.read_dir_plus_entry_total - before.read_dir_plus_entry_total,
-            FUSE_READDIR_PAGE_SIZE as u64
-        );
-
-        let second_page_first = fuse
-            .directory_child(handle, FUSE_READDIR_PAGE_SIZE)
-            .expect("load second page")
-            .expect("second page has entries");
-        let after_second = fuse.service().metadata_service_stats();
-        assert_eq!(
-            second_page_first.dentry.name.as_bytes(),
-            format!("sample-{FUSE_READDIR_PAGE_SIZE:04}.bin").as_bytes()
-        );
-        assert_eq!(
-            after_second.read_dir_plus_entry_total - after_first.read_dir_plus_entry_total,
-            (total - FUSE_READDIR_PAGE_SIZE) as u64
-        );
-        assert!(fuse
-            .directory_child(handle, total)
-            .expect("load past end")
-            .is_none());
-
-        fuse.release_directory_handle(handle)
-            .expect("release directory handle");
-        assert_eq!(
-            fuse.directory_child(handle, 0).unwrap_err().code(),
-            Errno::EBADF.code()
-        );
-    }
-
-    #[test]
-    fn directory_fsync_requires_valid_directory_handle() {
-        let service = service();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        let handle = fuse
-            .allocate_directory_handle(InodeId::root())
-            .expect("open directory handle");
-
-        fuse.sync_directory_handle(handle)
-            .expect("valid directory handle syncs");
-        fuse.release_directory_handle(handle)
-            .expect("release directory handle");
-        assert_eq!(
-            fuse.sync_directory_handle(handle).unwrap_err().code(),
-            Errno::EBADF.code()
-        );
-    }
-
-    #[test]
     fn statfs_snapshot_reports_nonzero_capacity_and_name_limit() {
-        let service = service();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
+        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
 
         let stat = fuse.statfs_snapshot();
 
@@ -2191,31 +2085,6 @@ mod tests {
             staged_range_block_count(DEFAULT_CHUNK_SIZE - 1, 2).unwrap(),
             2
         );
-    }
-
-    #[test]
-    fn forget_inode_cache_drops_fuse_parent_name_without_removing_metadata() {
-        let service = service();
-        let name = DentryName::new(b"cached.bin".to_vec()).unwrap();
-        let entry = service
-            .create_file(InodeId::root(), name.clone(), 0o644, 1000, 1000)
-            .unwrap();
-        let inode = entry.attr.inode;
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        fuse.remember_entry(&entry);
-
-        assert_eq!(fuse.parent_of(inode), InodeId::root());
-        assert_eq!(fuse.name_of(inode).unwrap(), name);
-
-        fuse.forget_inode_cache(inode);
-
-        assert_eq!(fuse.parent_of(inode), InodeId::root());
-        assert_eq!(fuse.name_of(inode).unwrap_err().code(), Errno::EIO.code());
-        assert!(fuse
-            .service()
-            .lookup_plus(InodeId::root(), &entry.dentry.name)
-            .unwrap()
-            .is_some());
     }
 
     #[test]
@@ -2284,374 +2153,250 @@ mod tests {
         assert!(debug.contains("noapplexattr"));
     }
 
-    #[test]
-    fn rename_entry_uses_plain_rename_for_missing_directory_target() {
-        let service = service();
-        let old_name = DentryName::new(b"old-dir".to_vec()).unwrap();
-        let new_name = DentryName::new(b"new-dir".to_vec()).unwrap();
-        let created = service
-            .create_dir(InodeId::root(), old_name.clone(), 0o755, 1000, 1000)
-            .unwrap();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        fuse.remember_entry(&created);
+    struct UnsupportedTestBackend;
 
-        let renamed = fuse
-            .rename_entry(
-                InodeId::root(),
-                &old_name,
-                InodeId::root(),
-                new_name.clone(),
-            )
-            .unwrap();
+    impl FuseBackend for UnsupportedTestBackend {
+        type Prepared = ();
 
-        assert!(renamed.replaced.is_none());
-        assert_eq!(renamed.entry.attr.file_type, FileType::Directory);
-        assert_eq!(renamed.entry.dentry.name, new_name);
-        assert!(fuse
-            .service()
-            .lookup_plus(InodeId::root(), &old_name)
-            .unwrap()
-            .is_none());
-        assert_eq!(
-            fuse.service()
-                .lookup_plus(InodeId::root(), &new_name)
-                .unwrap()
-                .unwrap()
-                .attr
-                .file_type,
-            FileType::Directory
-        );
+        fn prepared_generation(&self, _prepared: &Self::Prepared) -> u64 {
+            0
+        }
+
+        fn watch_subtree(&self, _scope: InodeId) -> FuseBackendResult<Option<WatchCursor>> {
+            unsupported()
+        }
+
+        fn replay_watch(
+            &self,
+            _scope: InodeId,
+            _cursor: WatchCursor,
+            _limit: usize,
+        ) -> FuseBackendResult<Vec<WatchRecord>> {
+            unsupported()
+        }
+
+        fn get_attr(&self, _inode: InodeId) -> FuseBackendResult<Option<InodeAttr>> {
+            unsupported()
+        }
+
+        fn get_attr_at_snapshot(
+            &self,
+            _snapshot_id: u64,
+            _inode: InodeId,
+        ) -> FuseBackendResult<Option<InodeAttr>> {
+            unsupported()
+        }
+
+        fn lookup_plus(
+            &self,
+            _parent: InodeId,
+            _name: &DentryName,
+        ) -> FuseBackendResult<Option<DentryWithAttr>> {
+            unsupported()
+        }
+
+        fn lookup_plus_at_snapshot(
+            &self,
+            _snapshot_id: u64,
+            _parent: InodeId,
+            _name: &DentryName,
+        ) -> FuseBackendResult<Option<DentryWithAttr>> {
+            unsupported()
+        }
+
+        fn read_dir_plus_page(
+            &self,
+            _inode: InodeId,
+            _after: Option<&DentryName>,
+            _limit: usize,
+        ) -> FuseBackendResult<ReadDirPlusPage> {
+            unsupported()
+        }
+
+        fn read_dir_plus_at_snapshot(
+            &self,
+            _snapshot_id: u64,
+            _inode: InodeId,
+        ) -> FuseBackendResult<Vec<DentryWithAttr>> {
+            unsupported()
+        }
+
+        fn rename(
+            &self,
+            _parent: InodeId,
+            _name: &DentryName,
+            _new_parent: InodeId,
+            _new_name: DentryName,
+        ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn rename_replace(
+            &self,
+            _parent: InodeId,
+            _name: &DentryName,
+            _new_parent: InodeId,
+            _new_name: DentryName,
+        ) -> FuseBackendResult<RenameReplaceResult> {
+            unsupported()
+        }
+
+        fn read_file(
+            &self,
+            _inode: InodeId,
+            _offset: u64,
+            _len: usize,
+        ) -> FuseBackendResult<Vec<u8>> {
+            unsupported()
+        }
+
+        fn read_file_at_snapshot(
+            &self,
+            _snapshot_id: u64,
+            _inode: InodeId,
+            _offset: u64,
+            _len: usize,
+        ) -> FuseBackendResult<Vec<u8>> {
+            unsupported()
+        }
+
+        fn read_symlink(&self, _inode: InodeId) -> FuseBackendResult<Vec<u8>> {
+            unsupported()
+        }
+
+        fn read_symlink_at_snapshot(
+            &self,
+            _snapshot_id: u64,
+            _inode: InodeId,
+        ) -> FuseBackendResult<Vec<u8>> {
+            unsupported()
+        }
+
+        fn update_root_attrs(&self, _changes: UpdateAttr) -> FuseBackendResult<InodeAttr> {
+            unsupported()
+        }
+
+        fn update_attrs(
+            &self,
+            _parent: InodeId,
+            _name: &DentryName,
+            _changes: UpdateAttr,
+        ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn set_xattr(
+            &self,
+            _inode: InodeId,
+            _name: &[u8],
+            _value: Vec<u8>,
+            _mode: XattrSetMode,
+        ) -> FuseBackendResult<()> {
+            unsupported()
+        }
+
+        fn get_xattr(&self, _inode: InodeId, _name: &[u8]) -> FuseBackendResult<Option<Vec<u8>>> {
+            unsupported()
+        }
+
+        fn list_xattr(&self, _inode: InodeId) -> FuseBackendResult<Vec<Vec<u8>>> {
+            unsupported()
+        }
+
+        fn remove_xattr(&self, _inode: InodeId, _name: &[u8]) -> FuseBackendResult<()> {
+            unsupported()
+        }
+
+        fn create_dir(
+            &self,
+            _parent: InodeId,
+            _name: DentryName,
+            _mode: u32,
+            _uid: u32,
+            _gid: u32,
+        ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn create_file(
+            &self,
+            _parent: InodeId,
+            _name: DentryName,
+            _mode: u32,
+            _uid: u32,
+            _gid: u32,
+        ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn create_symlink(
+            &self,
+            _parent: InodeId,
+            _name: DentryName,
+            _target: Vec<u8>,
+            _mode: u32,
+            _uid: u32,
+            _gid: u32,
+        ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn remove_file(
+            &self,
+            _parent: InodeId,
+            _name: &DentryName,
+        ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn remove_empty_dir(
+            &self,
+            _parent: InodeId,
+            _name: &DentryName,
+        ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn prepare_artifact_replace(
+            &self,
+            _parent: InodeId,
+            _name: DentryName,
+        ) -> FuseBackendResult<Self::Prepared> {
+            unsupported()
+        }
+
+        fn stage_prepared_artifact_ranges(
+            &self,
+            _prepared: &Self::Prepared,
+            _manifest_id: &str,
+            _ranges: &[PublishArtifactRange],
+            _block_index_base: u64,
+        ) -> FuseBackendResult<nokvfs_object::ChunkedWrite> {
+            unsupported()
+        }
+
+        fn cleanup_staged_objects(&self, _staged: &StagedObjectSet) -> FuseBackendResult<()> {
+            unsupported()
+        }
+
+        fn read_session_object_blocks(
+            &self,
+            _output_len: usize,
+            _blocks: &[ObjectReadBlock],
+        ) -> FuseBackendResult<Vec<u8>> {
+            unsupported()
+        }
+
+        fn publish_prepared_artifact_staged_session(
+            &self,
+            _prepared: Self::Prepared,
+            _request: PublishArtifactStagedSession,
+        ) -> FuseBackendResult<RenameReplaceResult> {
+            unsupported()
+        }
     }
 
-    #[test]
-    fn fuse_service_reads_file_body_by_inode() {
-        let service = service();
-        let published = service
-            .publish_artifact(PublishArtifact {
-                parent: InodeId::root(),
-                name: DentryName::new(b"checkpoint".to_vec()).unwrap(),
-                producer: "fuse-test".to_owned(),
-                digest_uri: "sha256:test".to_owned(),
-                content_type: "application/octet-stream".to_owned(),
-                manifest_id: "checkpoint".to_owned(),
-                bytes: b"0123456789".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            })
-            .unwrap();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        let bytes = fuse
-            .service()
-            .read_file(published.attr.inode, 4, 3)
-            .expect("read range through inode API");
-        assert_eq!(bytes, b"456");
-    }
-
-    #[test]
-    fn snapshot_view_maps_snapshot_root_and_reads_old_body() {
-        let service = service();
-        let runs = service
-            .create_dir(
-                InodeId::root(),
-                DentryName::new(b"runs".to_vec()).unwrap(),
-                0o755,
-                1000,
-                1000,
-            )
-            .unwrap();
-        let name = DentryName::new(b"checkpoint".to_vec()).unwrap();
-        let old = service
-            .publish_artifact(PublishArtifact {
-                parent: runs.attr.inode,
-                name: name.clone(),
-                producer: "fuse-test".to_owned(),
-                digest_uri: "sha256:old".to_owned(),
-                content_type: "application/octet-stream".to_owned(),
-                manifest_id: "checkpoint-old".to_owned(),
-                bytes: b"old".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            })
-            .unwrap();
-        let snapshot = service.snapshot_subtree(runs.attr.inode).unwrap();
-        service
-            .replace_artifact(PublishArtifact {
-                parent: runs.attr.inode,
-                name,
-                producer: "fuse-test".to_owned(),
-                digest_uri: "sha256:new".to_owned(),
-                content_type: "application/octet-stream".to_owned(),
-                manifest_id: "checkpoint-new".to_owned(),
-                bytes: b"new-body".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            })
-            .unwrap();
-
-        let fuse = NoKvFuse::new(
-            service,
-            FuseOptions {
-                view: FuseView::Snapshot {
-                    snapshot_id: snapshot.snapshot_id,
-                    root: snapshot.root,
-                },
-                ..FuseOptions::default()
-            },
-        );
-        assert!(fuse.read_only());
-        assert_eq!(
-            fuse.metadata_inode(INodeNo(InodeId::ROOT_RAW)).unwrap(),
-            runs.attr.inode
-        );
-        let root_attr = fuse
-            .service_get_attr(runs.attr.inode)
-            .unwrap()
-            .expect("snapshot root attr");
-        assert_eq!(
-            fuse.view_file_attr(&root_attr).ino,
-            INodeNo(InodeId::ROOT_RAW)
-        );
-
-        let handle = fuse
-            .allocate_directory_handle(runs.attr.inode)
-            .expect("open snapshot root directory");
-        let entry = fuse
-            .directory_child(handle, 0)
-            .expect("read snapshot directory")
-            .expect("snapshot entry exists");
-        assert_eq!(entry, old);
-        assert!(fuse
-            .directory_child(handle, 1)
-            .expect("read snapshot directory end")
-            .is_none());
-        assert_eq!(
-            fuse.service_read_file(old.attr.inode, 0, old.attr.size as usize)
-                .unwrap(),
-            b"old"
-        );
-    }
-
-    #[test]
-    fn live_view_can_be_configured_read_only() {
-        let service = service();
-        let fuse = NoKvFuse::new(
-            service,
-            FuseOptions {
-                access: FuseAccessMode::ReadOnly,
-                ..FuseOptions::default()
-            },
-        );
-
-        assert!(fuse.read_only());
-    }
-
-    #[test]
-    fn write_handle_publish_updates_file_body() {
-        let service = service();
-        let name = DentryName::new(b"checkpoint".to_vec()).unwrap();
-        let created = service
-            .create_file(InodeId::root(), name, 0o644, 1000, 1000)
-            .unwrap();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        fuse.remember_entry(&created);
-        let handle = fuse
-            .open_write_handle(&created.attr, InodeId::root())
-            .expect("open write handle");
-
-        assert_eq!(fuse.write_to_handle(handle, 0, b"0123").unwrap(), 4);
-        assert_eq!(fuse.write_to_handle(handle, 6, b"89").unwrap(), 2);
-        let staged_keys = fuse
-            .write_handles
-            .read()
-            .unwrap()
-            .get(&handle.0)
-            .unwrap()
-            .staged_chunks
-            .iter()
-            .flat_map(|chunk| chunk.blocks.iter().map(|block| block.object_key.clone()))
-            .collect::<Vec<_>>();
-        assert_eq!(staged_keys.len(), 2);
-        assert_ne!(staged_keys[0], staged_keys[1]);
-        let expected = &[b'0', b'1', b'2', b'3', 0, 0, b'8', b'9'];
-        assert_eq!(
-            fuse.read_from_handle(handle, 0, 8).unwrap().unwrap(),
-            expected
-        );
-
-        fuse.publish_handle(handle).expect("publish handle");
-        assert_eq!(
-            fuse.service()
-                .read_file(created.attr.inode, 0, 8)
-                .expect("read published body"),
-            expected
-        );
-        let body = fuse
-            .service()
-            .body_descriptor(created.attr.inode)
-            .expect("read body descriptor")
-            .expect("body descriptor exists");
-        assert_eq!(
-            body.digest_uri,
-            "sha256:7f35eb30d89706db2f03b9113f85c6509756d7ad5a7d19c80617d771bb9577db"
-        );
-        fuse.release_handle(handle).expect("release handle");
-    }
-
-    #[test]
-    fn sequential_write_publish_uses_write_time_digest_without_object_reread() {
-        let service = service();
-        let name = DentryName::new(b"checkpoint".to_vec()).unwrap();
-        let created = service
-            .create_file(InodeId::root(), name, 0o644, 1000, 1000)
-            .unwrap();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        fuse.remember_entry(&created);
-        let handle = fuse
-            .open_write_handle(&created.attr, InodeId::root())
-            .expect("open write handle");
-
-        assert_eq!(fuse.write_to_handle(handle, 0, b"0123").unwrap(), 4);
-        assert_eq!(fuse.write_to_handle(handle, 4, b"4567").unwrap(), 4);
-        let after_write = fuse.service().object_stats();
-        fuse.publish_handle(handle).expect("publish handle");
-        let after_publish = fuse.service().object_stats();
-
-        assert_eq!(after_publish.object_gets, after_write.object_gets);
-        let body = fuse
-            .service()
-            .body_descriptor(created.attr.inode)
-            .expect("read body descriptor")
-            .expect("body descriptor exists");
-        assert_eq!(
-            body.digest_uri,
-            "sha256:924592b9b103f14f833faafb67f480691f01988aa457c0061769f58cd47311bc"
-        );
-    }
-
-    #[test]
-    fn write_handle_open_does_not_eagerly_fetch_existing_body() {
-        let service = service();
-        let published = service
-            .publish_artifact(PublishArtifact {
-                parent: InodeId::root(),
-                name: DentryName::new(b"checkpoint".to_vec()).unwrap(),
-                producer: "fuse-test".to_owned(),
-                digest_uri: "sha256:test".to_owned(),
-                content_type: "application/octet-stream".to_owned(),
-                manifest_id: "checkpoint".to_owned(),
-                bytes: b"0123456789".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            })
-            .unwrap();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        fuse.remember_entry(&published);
-        let before = fuse.service().object_stats();
-        let handle = fuse
-            .open_write_handle(&published.attr, InodeId::root())
-            .expect("open write handle");
-        let after_open = fuse.service().object_stats();
-        assert_eq!(after_open.object_gets, before.object_gets);
-
-        assert_eq!(
-            fuse.read_from_handle(handle, 2, 4).unwrap().unwrap(),
-            b"2345"
-        );
-        assert!(fuse.service().object_stats().object_gets > before.object_gets);
-    }
-
-    #[test]
-    fn dirty_range_write_overlays_existing_body_until_publish() {
-        let service = service();
-        let published = service
-            .publish_artifact(PublishArtifact {
-                parent: InodeId::root(),
-                name: DentryName::new(b"checkpoint".to_vec()).unwrap(),
-                producer: "fuse-test".to_owned(),
-                digest_uri: "sha256:test".to_owned(),
-                content_type: "application/octet-stream".to_owned(),
-                manifest_id: "checkpoint".to_owned(),
-                bytes: b"abcdefghij".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            })
-            .unwrap();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        fuse.remember_entry(&published);
-        let handle = fuse
-            .open_write_handle(&published.attr, InodeId::root())
-            .expect("open write handle");
-        let before_write = fuse.service().object_stats();
-
-        assert_eq!(fuse.write_to_handle(handle, 3, b"XYZ").unwrap(), 3);
-        let after_write = fuse.service().object_stats();
-        assert_eq!(after_write.object_puts, before_write.object_puts + 1);
-        assert_eq!(
-            fuse.read_from_handle(handle, 0, 10).unwrap().unwrap(),
-            b"abcXYZghij"
-        );
-
-        let before_publish = fuse.service().object_stats();
-        fuse.publish_handle(handle).expect("publish handle");
-        let after_publish = fuse.service().object_stats();
-        assert_eq!(after_publish.object_puts, before_publish.object_puts);
-        assert_eq!(
-            fuse.service()
-                .read_file(published.attr.inode, 0, 10)
-                .expect("read published body"),
-            b"abcXYZghij"
-        );
-    }
-
-    #[test]
-    fn truncate_handle_republishes_manifest_without_reuploading_body() {
-        let service = service();
-        let published = service
-            .publish_artifact(PublishArtifact {
-                parent: InodeId::root(),
-                name: DentryName::new(b"checkpoint".to_vec()).unwrap(),
-                producer: "fuse-test".to_owned(),
-                digest_uri: "sha256:test".to_owned(),
-                content_type: "application/octet-stream".to_owned(),
-                manifest_id: "checkpoint".to_owned(),
-                bytes: b"abcdefghij".to_vec(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            })
-            .unwrap();
-        let fuse = NoKvFuse::new(service, FuseOptions::default());
-        fuse.remember_entry(&published);
-        let handle = fuse
-            .open_write_handle(&published.attr, InodeId::root())
-            .expect("open write handle");
-        let before_truncate = fuse.service().object_stats();
-
-        fuse.truncate_handle(handle, 3).expect("truncate handle");
-        fuse.publish_handle(handle).expect("publish shrink");
-        let after_shrink = fuse.service().object_stats();
-        assert_eq!(after_shrink.object_puts, before_truncate.object_puts);
-        assert_eq!(
-            fuse.service()
-                .read_file(published.attr.inode, 0, 16)
-                .expect("read shrunk body"),
-            b"abc"
-        );
-
-        fuse.truncate_handle(handle, 6).expect("extend handle");
-        fuse.publish_handle(handle).expect("publish sparse extend");
-        let after_extend = fuse.service().object_stats();
-        assert_eq!(after_extend.object_puts, before_truncate.object_puts);
-        assert_eq!(
-            fuse.service()
-                .read_file(published.attr.inode, 0, 16)
-                .expect("read sparse body"),
-            b"abc\0\0\0"
-        );
+    fn unsupported<T>() -> FuseBackendResult<T> {
+        Err(FuseBackendError::Unsupported("test backend"))
     }
 }

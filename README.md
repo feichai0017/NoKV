@@ -108,23 +108,22 @@ Implemented today:
   metadata server access, and object range reads;
 - long-running `nokvfs-server` with health, readiness, stats, manual GC, and
   framed binary metadata RPC;
-- experimental metadata shared-log mode with explicit voter membership,
-  majority append, follower replay, and a local 3-voter smoke harness;
+- OpenRaft metadata group support with explicit voter membership, persistent
+  Raft log storage, follower replay, and a local 3-voter smoke harness;
 - read-only snapshot mounts, snapshot-version reads, typed watch replay, and
   FUSE cache invalidation from watch events;
 - pending-object GC and metadata history GC tied to snapshot retention.
 
 Not implemented yet:
 
-- production-grade distributed metadata high availability, leader election,
-  background catch-up, and learner read scaling;
-- FUSE over the metadata server;
+- production-grade distributed metadata operations such as managed membership,
+  checkpoint archive, learner read scaling, and multi-machine deployment;
 - Python/fsspec and Kubernetes CSI packages;
 - full POSIX coverage such as hardlinks, xattrs, locks, special files,
   `statfs`, ACLs, and mature multi-client cache coherence.
 
-So NoKV is currently a usable single-node object-backed filesystem prototype,
-not yet a JuiceFS/3FS-class distributed filesystem.
+So NoKV is currently a usable object-backed filesystem with an OpenRaft-backed
+metadata server path, not yet a JuiceFS/3FS-class distributed filesystem.
 
 ## Repository Layout
 
@@ -217,7 +216,7 @@ Covered workload shapes include:
 - `training-read` dataset-shaped object reads;
 - `mlperf-dlio` generated MLPerf Storage/DLIO-style training and checkpoint
   shape;
-- `metadata-ha-smoke` and `metadata-ha-fault-smoke` shared-log metadata HA
+- `metadata-ha-smoke` and `metadata-ha-fault-smoke` OpenRaft metadata HA
   smoke workloads.
 
 For the fast AI-training product gate, run:
@@ -227,22 +226,20 @@ scripts/run-ai-training-smoke.sh
 ```
 
 The default gate covers Holt metadata read concurrency, checkpoint publish,
-DLIO-style object reads/writes, shared-log HA, and shared-log fault catch-up.
-Most benchmark workloads are still local single-node service runs; HA workloads
-report shared-log metrics separately. Training-cluster claims need separate
-runs that report replication, cache, object-store, and durability settings.
+DLIO-style object reads/writes, OpenRaft HA, and OpenRaft fault catch-up. Most
+benchmark workloads are still single-node service runs; HA workloads report
+OpenRaft state metrics separately. Training-cluster claims need separate runs
+that report replication, cache, object-store, and durability settings.
 Run `scripts/run-ai-training-smoke.sh fuse-smoke` when the local machine has a
 working FUSE installation and you want the mounted POSIX smoke in the same
-workflow. Run `scripts/run-ai-training-smoke.sh shared-log-smoke` when you want
-the heavier checkpoint/bootstrap shared-log smoke in the same entrypoint.
+workflow. Run `scripts/run-ai-training-smoke.sh metadata-raft-smoke` when you
+want the explicit 3-voter OpenRaft process smoke in the same entrypoint.
 
-The local shared-log smoke starts RustFS plus metadata voters and a learner,
-compacts through a metadata checkpoint, brings late replicas online, and
-verifies that a leader-published artifact is readable through the surviving
-voter, the late voter, and the learner:
+The local OpenRaft metadata smoke starts RustFS plus three metadata voters and
+verifies that a leader-published artifact is readable through follower voters:
 
 ```bash
-scripts/run-shared-log-smoke.sh
+scripts/run-metadata-raft-smoke.sh
 ```
 
 ## Design Notes

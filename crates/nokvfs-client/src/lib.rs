@@ -18,9 +18,8 @@ pub use artifact::{
     ArtifactRepositoryOptions,
 };
 pub use service::{
-    bootstrap_metadata_learner, ClientBodyReadPlan, ClientMetadataBootstrapPlan,
-    ClientMetadataCheckpoint, ClientMetadataCheckpointInstall, ClientMetadataPosition,
-    ClientPreparedArtifact, MetadataClient, MetadataClientOptions, NoKvFsClient,
+    ClientBodyReadPlan, ClientMetadataPosition, ClientPreparedArtifact, MetadataClient,
+    MetadataClientOptions, NoKvFsClient,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

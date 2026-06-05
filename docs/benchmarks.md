@@ -51,7 +51,8 @@ scripts/run-ai-training-smoke.sh
 The default gate runs `metadata-concurrent-read`, `checkpoint-publish`,
 `mlperf-dlio`, `metadata-ha-smoke`, and `metadata-ha-fault-smoke`. This is the
 fast regression set for Holt-native metadata reads, chunked object publish, and
-the shared-log HA path. You can narrow it to a single workload while iterating:
+the OpenRaft metadata HA path. You can narrow it to a single workload while
+iterating:
 
 ```bash
 scripts/run-ai-training-smoke.sh metadata-ha-fault-smoke
@@ -66,14 +67,13 @@ scripts/run-ai-training-smoke.sh fuse-smoke
 NOKV_AI_SMOKE_INCLUDE_FUSE=1 scripts/run-ai-training-smoke.sh
 ```
 
-The special workload `shared-log-smoke` runs the heavier checkpoint/bootstrap
-process smoke. It starts RustFS, two initial metadata voters, publishes data,
-compacts through a metadata checkpoint, then brings up a late voter and learner
-that must bootstrap from checkpoint plus retained tail:
+The special workload `metadata-raft-smoke` runs the explicit 3-voter OpenRaft
+process smoke. It starts RustFS, starts three metadata voters, publishes data
+through one endpoint, then reads the artifact through follower voters:
 
 ```bash
-scripts/run-ai-training-smoke.sh shared-log-smoke
-NOKV_AI_SMOKE_INCLUDE_SHARED_LOG_BOOTSTRAP=1 scripts/run-ai-training-smoke.sh
+scripts/run-ai-training-smoke.sh metadata-raft-smoke
+NOKV_AI_SMOKE_INCLUDE_METADATA_RAFT_SMOKE=1 scripts/run-ai-training-smoke.sh
 ```
 
 For a disposable local RustFS-backed FUSE semantics smoke, use:
@@ -88,10 +88,12 @@ rename, readdir, truncate, symlink/readlink, xattr error handling, access(2),
 rm, and rmdir through the mounted filesystem. This is a correctness smoke, not
 a performance benchmark.
 
-The harness prints CSV:
+The harness prints CSV. The exact column set is owned by
+`bench/src/bin/nokv-fs-bench.rs`; the important column families are:
 
 ```text
-workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_precheck_commands,metadata_log_precheck_predicates,metadata_log_precheck_ns,metadata_log_stale_reads,metadata_log_remote_voter_appends,metadata_log_remote_voter_successes,metadata_log_remote_voter_failures,metadata_log_remote_voter_quorum_successes,metadata_log_remote_voter_quorum_failures,metadata_log_remote_voter_quorum_wait_ns,metadata_log_learner_wakeups,metadata_log_learner_wakeup_coalesced,metadata_log_learner_wakeup_disconnected,metadata_log_learner_catchup_successes,metadata_log_learner_catchup_failures,metadata_log_learner_catchup_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat
+workload, profile, throughput, object stats, metadata store stats,
+metadata_raft_* state, path_index stats, ReadDirPlus projection stats, caveat
 ```
 
 Most benchmark workloads start a real single-node `metad` process and run the
@@ -108,22 +110,15 @@ subrequest still has its own success or error result.
 
 `metadata_atomic_applies`, `metadata_atomic_apply_commands`, and
 `metadata_atomic_apply_max_batch` report how command batching reaches the Holt
-atomic apply boundary. They are the key columns for checking whether RPC or
-shared-log batching reduced storage-engine apply calls rather than only
-coalescing requests above the metadata engine.
+atomic apply boundary. They are the key columns for checking whether request
+coalescing reduced storage-engine apply calls rather than only coalescing
+requests above the metadata engine.
 
-`metadata_log_precheck_commands`, `metadata_log_precheck_predicates`, and
-`metadata_log_precheck_ns` report leader-side shared-log predicate validation.
-These columns make the cost of log-before-apply checking visible separately
-from Holt's committed apply path.
-
-`metadata_log_remote_voter_*` columns report quorum replication attempts,
-success/failure counts, quorum outcomes, and quorum wait time. They are the
-primary fields for checking whether metadata writes are waiting on quorum
-network/disk rather than Holt apply. `metadata_log_learner_*` columns report
-asynchronous learner wakeups, coalesced wakeups, disconnected worker wakeups,
-catch-up outcomes, and catch-up time. They make read-scale learner lag visible
-without charging slow learners to the write quorum latency.
+`metadata_raft_*` columns report the OpenRaft state observed from the server
+stats endpoint: current term, leader, last log index, last applied index,
+snapshot/purge frontier, quorum freshness, and voter/learner counts. These
+fields show whether an HA smoke run actually advanced the replicated metadata
+group.
 
 Object-backed workloads can be scaled without editing code:
 
@@ -197,8 +192,8 @@ for CI performance claims.
 
 Most workloads run a single-node `metad` process with a configured
 S3-compatible object backend. `metadata-ha-smoke` and
-`metadata-ha-fault-smoke` are the exceptions: they start a local shared-log
-metadata topology and report log-entry, command, batch, and stale-read metrics.
+`metadata-ha-fault-smoke` are the exceptions: they start a local OpenRaft
+metadata topology and report Raft state plus metadata apply metrics.
 
 The harness still does not include FUSE kernel caching, Python DataLoader
 overhead, object-store multipart upload, or a multi-machine training cluster.

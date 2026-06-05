@@ -1461,9 +1461,11 @@ dependencies = [
 name = "nokvfs-client"
 version = "0.1.0"
 dependencies = [
+ "nokvfs-cluster",
  "nokvfs-meta",
  "nokvfs-object",
  "nokvfs-protocol",
+ "nokvfs-server",
  "nokvfs-types",
  "serde_json",
  "sha2 0.10.9",

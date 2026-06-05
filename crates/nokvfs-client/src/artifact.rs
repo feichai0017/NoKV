@@ -1,9 +1,6 @@
-use nokvfs_meta::{
-    DentryWithAttr, MetadError, MetadataStore, NoKvFs, PublishArtifactRange,
-    PublishArtifactSession, RenameReplaceResult,
-};
+use nokvfs_meta::{DentryWithAttr, MetadError, RenameReplaceResult};
 use nokvfs_object::ObjectStore;
-use nokvfs_types::{parse_absolute_path, DentryName, FileType};
+use nokvfs_types::FileType;
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -16,7 +13,6 @@ const DEFAULT_ARTIFACT_UID: u32 = 1000;
 const DEFAULT_ARTIFACT_GID: u32 = 1000;
 const DEFAULT_ARTIFACT_PRODUCER: &str = "nokvfs-client";
 const DEFAULT_ARTIFACT_CONTENT_TYPE: &str = "application/octet-stream";
-const ARTIFACT_LIST_PAGE_SIZE: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ArtifactRepositoryOptions {
@@ -396,139 +392,6 @@ where
     }
 }
 
-impl<M, O> ArtifactBackend for NoKvFs<M, O>
-where
-    M: MetadataStore,
-    O: ObjectStore,
-{
-    fn lookup_path(&self, absolute_path: &str) -> Result<Option<DentryWithAttr>, ClientError> {
-        NoKvFs::lookup_path(self, absolute_path).map_err(ClientError::from)
-    }
-
-    fn list_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
-        NoKvFs::read_dir_plus_path(self, absolute_path).map_err(ClientError::from)
-    }
-
-    fn list_indexed_path(&self, absolute_path: &str) -> Result<Vec<DentryWithAttr>, ClientError> {
-        let mut entries = Vec::new();
-        let mut cursor = None;
-        loop {
-            let page = NoKvFs::list_indexed_path_page(
-                self,
-                absolute_path,
-                cursor.as_ref(),
-                ARTIFACT_LIST_PAGE_SIZE,
-            )?;
-            let page_empty = page.entries.is_empty();
-            entries.extend(page.entries);
-            let Some(next_cursor) = page.next_cursor else {
-                break;
-            };
-            if page_empty || cursor.as_ref() == Some(&next_cursor) {
-                return Err(ClientError::Protocol(
-                    "indexed artifact list page cursor did not advance".to_owned(),
-                ));
-            }
-            cursor = Some(next_cursor);
-        }
-        Ok(entries)
-    }
-
-    fn create_directory_path(
-        &self,
-        absolute_path: &str,
-        mode: u32,
-        uid: u32,
-        gid: u32,
-    ) -> Result<DentryWithAttr, ClientError> {
-        NoKvFs::create_dir_path(self, absolute_path, mode, uid, gid).map_err(ClientError::from)
-    }
-
-    fn publish_new_artifact_path(
-        &self,
-        absolute_path: &str,
-        bytes: Vec<u8>,
-        metadata: ArtifactMetadata,
-    ) -> Result<DentryWithAttr, ClientError> {
-        let prepared = NoKvFs::prepare_artifact_create_path(self, absolute_path)?;
-        publish_prepared_bytes(self, prepared, bytes, metadata).map(|result| result.entry)
-    }
-
-    fn replace_artifact_path(
-        &self,
-        absolute_path: &str,
-        bytes: Vec<u8>,
-        metadata: ArtifactMetadata,
-    ) -> Result<RenameReplaceResult, ClientError> {
-        let prepared = NoKvFs::prepare_artifact_replace_path(self, absolute_path)?;
-        publish_prepared_bytes(self, prepared, bytes, metadata)
-    }
-
-    fn read_file_path(&self, absolute_path: &str) -> Result<Vec<u8>, ClientError> {
-        let entry = NoKvFs::lookup_path(self, absolute_path)?
-            .ok_or_else(|| ClientError::NotFound(strip_absolute_artifact_path(absolute_path)))?;
-        if entry.attr.file_type != FileType::File {
-            return Err(ClientError::ArtifactIsDirectory(
-                strip_absolute_artifact_path(absolute_path),
-            ));
-        }
-        let len = usize::try_from(entry.attr.size).map_err(|_| {
-            ClientError::Protocol("artifact size exceeds platform limit".to_owned())
-        })?;
-        NoKvFs::read_file(self, entry.attr.inode, 0, len).map_err(ClientError::from)
-    }
-
-    fn remove_file_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
-        NoKvFs::remove_file_path(self, absolute_path).map_err(ClientError::from)
-    }
-
-    fn remove_file_paths(
-        &self,
-        absolute_paths: &[String],
-    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
-        let Some((parent, names)) = same_parent_names(absolute_paths)? else {
-            let mut results = Vec::with_capacity(absolute_paths.len());
-            for path in absolute_paths {
-                results.push(NoKvFs::remove_file_path(self, path).map_err(ClientError::from));
-            }
-            return Ok(results);
-        };
-        NoKvFs::remove_files_in_dir_path(self, &parent, names)
-            .map(|results| {
-                results
-                    .into_iter()
-                    .map(|result| result.map_err(ClientError::from))
-                    .collect()
-            })
-            .map_err(ClientError::from)
-    }
-
-    fn remove_empty_dir_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
-        NoKvFs::remove_empty_dir_path(self, absolute_path).map_err(ClientError::from)
-    }
-
-    fn remove_empty_dir_paths(
-        &self,
-        absolute_paths: &[String],
-    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
-        let Some((parent, names)) = same_parent_names(absolute_paths)? else {
-            let mut results = Vec::with_capacity(absolute_paths.len());
-            for path in absolute_paths {
-                results.push(NoKvFs::remove_empty_dir_path(self, path).map_err(ClientError::from));
-            }
-            return Ok(results);
-        };
-        NoKvFs::remove_empty_dirs_in_dir_path(self, &parent, names)
-            .map(|results| {
-                results
-                    .into_iter()
-                    .map(|result| result.map_err(ClientError::from))
-                    .collect()
-            })
-            .map_err(ClientError::from)
-    }
-}
-
 impl<O> ArtifactBackend for NoKvFsClient<O>
 where
     O: ObjectStore,
@@ -600,41 +463,6 @@ where
     }
 }
 
-fn publish_prepared_bytes<M, O>(
-    service: &NoKvFs<M, O>,
-    prepared: nokvfs_meta::PreparedArtifact,
-    bytes: Vec<u8>,
-    metadata: ArtifactMetadata,
-) -> Result<RenameReplaceResult, ClientError>
-where
-    M: MetadataStore,
-    O: ObjectStore,
-{
-    let size = u64::try_from(bytes.len())
-        .map_err(|_| ClientError::Protocol("artifact size exceeds u64".to_owned()))?;
-    let ranges = if bytes.is_empty() {
-        Vec::new()
-    } else {
-        vec![PublishArtifactRange { offset: 0, bytes }]
-    };
-    let request = PublishArtifactSession {
-        parent: prepared.parent,
-        name: prepared.name.clone(),
-        producer: metadata.producer,
-        digest_uri: metadata.digest_uri,
-        content_type: metadata.content_type,
-        manifest_id: metadata.manifest_id,
-        size,
-        ranges,
-        mode: metadata.mode,
-        uid: metadata.uid,
-        gid: metadata.gid,
-    };
-    service
-        .publish_prepared_artifact_session(prepared, request)
-        .map_err(ClientError::from)
-}
-
 pub fn normalize_artifact_path(path: &str, allow_empty: bool) -> Result<String, ClientError> {
     if path.is_empty() {
         if allow_empty {
@@ -685,58 +513,6 @@ fn absolute_artifact_path(normalized_path: &str) -> String {
     } else {
         format!("/{normalized_path}")
     }
-}
-
-fn strip_absolute_artifact_path(absolute_path: &str) -> String {
-    absolute_path
-        .strip_prefix('/')
-        .unwrap_or(absolute_path)
-        .to_owned()
-}
-
-fn same_parent_names(
-    absolute_paths: &[String],
-) -> Result<Option<(String, Vec<DentryName>)>, ClientError> {
-    let mut parent_path = None::<String>;
-    let mut names = Vec::with_capacity(absolute_paths.len());
-    for path in absolute_paths {
-        let (parent, name) = absolute_parent_and_name(path)?;
-        if let Some(existing) = &parent_path {
-            if existing != &parent {
-                return Ok(None);
-            }
-        } else {
-            parent_path = Some(parent);
-        }
-        names.push(name);
-    }
-    Ok(parent_path.map(|parent| (parent, names)))
-}
-
-fn absolute_parent_and_name(path: &str) -> Result<(String, DentryName), ClientError> {
-    let components = parse_absolute_path(path)?;
-    let Some((name, parent_components)) = components.split_last() else {
-        return Err(ClientError::RootHasNoParent);
-    };
-    Ok((
-        absolute_path_from_components(parent_components)?,
-        name.clone(),
-    ))
-}
-
-fn absolute_path_from_components(components: &[DentryName]) -> Result<String, ClientError> {
-    if components.is_empty() {
-        return Ok("/".to_owned());
-    }
-    let mut out = String::new();
-    for component in components {
-        let name = std::str::from_utf8(component.as_bytes()).map_err(|_| {
-            ClientError::InvalidName("artifact paths require utf-8 names".to_owned())
-        })?;
-        out.push('/');
-        out.push_str(name);
-    }
-    Ok(out)
 }
 
 fn child_artifact_path(parent: &str, entry: &DentryWithAttr) -> Result<String, ClientError> {

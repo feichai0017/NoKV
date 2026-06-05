@@ -8,19 +8,18 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-use nokvfs_cluster::{MetadataRaftRpcClient, SharedLogError};
+use nokvfs_cluster::{MetadataRaftError, MetadataRaftRpcClient};
 use nokvfs_meta::{CreateInDirPathBatch, DentryWithAttr, MetadError, PreparedArtifact, UpdateAttr};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_envelope, decode_name_cursor, decode_request, encode_envelope, encode_name_cursor,
     encode_request, MetadataProtocolError, MetadataRpcEnvelope, MetadataRpcRequest,
-    MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataBootstrapPlan,
-    WireMetadataCheckpoint, WireMetadataCheckpointInstall, WireMetadataError, WireMetadataLogEntry,
+    MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataError,
     WireMetadataPosition, WireMetadataRaftAppendEntriesRequest,
     WireMetadataRaftAppendEntriesResponse, WireMetadataRaftInstallSnapshotRequest,
     WireMetadataRaftInstallSnapshotResponse, WireMetadataRaftVoteRequest,
-    WireMetadataRaftVoteResponse, WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata,
-    WirePreparedArtifact, WireUpdateAttr,
+    WireMetadataRaftVoteResponse, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireUpdateAttr,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -125,13 +124,13 @@ impl MetadataRaftFramedRpcClient {
         &self,
         address: &str,
         request: &MetadataRpcRequest,
-    ) -> Result<MetadataRpcResult, SharedLogError> {
+    ) -> Result<MetadataRpcResult, MetadataRaftError> {
         let address = address.parse::<SocketAddr>().map_err(|err| {
-            SharedLogError::Backend(format!("metadata raft peer address {address:?}: {err}"))
+            MetadataRaftError::Backend(format!("metadata raft peer address {address:?}: {err}"))
         })?;
         let client = {
             let mut peers = self.peers.lock().map_err(|_| {
-                SharedLogError::Backend("metadata raft peer client cache poisoned".to_owned())
+                MetadataRaftError::Backend("metadata raft peer client cache poisoned".to_owned())
             })?;
             Arc::clone(
                 peers
@@ -141,15 +140,15 @@ impl MetadataRaftFramedRpcClient {
         };
         let envelope = client
             .call(request)
-            .map_err(|err| SharedLogError::Backend(format!("metadata raft peer rpc: {err}")))?;
+            .map_err(|err| MetadataRaftError::Backend(format!("metadata raft peer rpc: {err}")))?;
         if !envelope.ok {
-            return Err(SharedLogError::Backend(format!(
+            return Err(MetadataRaftError::Backend(format!(
                 "metadata raft peer rejected rpc: {}",
                 envelope.error.unwrap_or_else(|| "unknown error".to_owned())
             )));
         }
         envelope.result.ok_or_else(|| {
-            SharedLogError::Backend("metadata raft peer returned no result".to_owned())
+            MetadataRaftError::Backend("metadata raft peer returned no result".to_owned())
         })
     }
 }
@@ -160,10 +159,10 @@ impl MetadataRaftRpcClient for MetadataRaftFramedRpcClient {
         _target: u64,
         address: &str,
         request: WireMetadataRaftVoteRequest,
-    ) -> Result<WireMetadataRaftVoteResponse, SharedLogError> {
+    ) -> Result<WireMetadataRaftVoteResponse, MetadataRaftError> {
         match self.call_peer(address, &MetadataRpcRequest::MetadataRaftVote { request })? {
             MetadataRpcResult::MetadataRaftVote { response } => Ok(response),
-            other => Err(SharedLogError::Backend(format!(
+            other => Err(MetadataRaftError::Backend(format!(
                 "metadata raft vote returned unexpected result: {other:?}"
             ))),
         }
@@ -174,13 +173,13 @@ impl MetadataRaftRpcClient for MetadataRaftFramedRpcClient {
         _target: u64,
         address: &str,
         request: WireMetadataRaftAppendEntriesRequest,
-    ) -> Result<WireMetadataRaftAppendEntriesResponse, SharedLogError> {
+    ) -> Result<WireMetadataRaftAppendEntriesResponse, MetadataRaftError> {
         match self.call_peer(
             address,
             &MetadataRpcRequest::MetadataRaftAppendEntries { request },
         )? {
             MetadataRpcResult::MetadataRaftAppendEntries { response } => Ok(response),
-            other => Err(SharedLogError::Backend(format!(
+            other => Err(MetadataRaftError::Backend(format!(
                 "metadata raft append entries returned unexpected result: {other:?}"
             ))),
         }
@@ -191,13 +190,13 @@ impl MetadataRaftRpcClient for MetadataRaftFramedRpcClient {
         _target: u64,
         address: &str,
         request: WireMetadataRaftInstallSnapshotRequest,
-    ) -> Result<WireMetadataRaftInstallSnapshotResponse, SharedLogError> {
+    ) -> Result<WireMetadataRaftInstallSnapshotResponse, MetadataRaftError> {
         match self.call_peer(
             address,
             &MetadataRpcRequest::MetadataRaftInstallSnapshot { request },
         )? {
             MetadataRpcResult::MetadataRaftInstallSnapshot { response } => Ok(response),
-            other => Err(SharedLogError::Backend(format!(
+            other => Err(MetadataRaftError::Backend(format!(
                 "metadata raft install snapshot returned unexpected result: {other:?}"
             ))),
         }
@@ -219,7 +218,7 @@ fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerErro
                 error: None,
                 error_kind: None,
                 metadata_position: server
-                    .metadata_log_applied_position()
+                    .metadata_raft_applied_position()
                     .map(wire_log_position),
             },
             Err(err) => err_envelope(err),
@@ -282,15 +281,6 @@ pub(crate) fn handle_framed_stream_after_magic(
     }
 }
 
-pub(crate) fn call_framed_rpc(
-    address: SocketAddr,
-    request_id: u64,
-    request: &MetadataRpcRequest,
-) -> Result<MetadataRpcEnvelope, ServerError> {
-    let mut stream = open_framed_rpc_stream(address)?;
-    call_framed_rpc_on_stream(&mut stream, request_id, request)
-}
-
 fn open_framed_rpc_stream(address: SocketAddr) -> Result<TcpStream, ServerError> {
     let mut stream = TcpStream::connect(address).map_err(ServerError::Io)?;
     stream.set_nodelay(true).map_err(ServerError::Io)?;
@@ -339,130 +329,6 @@ fn call_framed_rpc_on_stream(
             format!("metadata framed rpc response decode failed: {err}"),
         ))
     })
-}
-
-pub(crate) fn call_append_metadata_log_with_client(
-    client: &FramedRpcClient,
-    leader: nokvfs_cluster::NodeId,
-    entry: &nokvfs_cluster::MetadataLogEntry,
-) -> Result<(), ServerError> {
-    let encoded =
-        nokvfs_cluster::encode_metadata_log_entry(entry).map_err(ServerError::SharedLog)?;
-    let envelope = client.call(&MetadataRpcRequest::AppendMetadataLog {
-        leader: leader.get(),
-        entry: encoded,
-    })?;
-    validate_append_metadata_log_response(envelope, entry)
-}
-
-pub(crate) fn call_append_metadata_log(
-    address: SocketAddr,
-    leader: nokvfs_cluster::NodeId,
-    entry: &nokvfs_cluster::MetadataLogEntry,
-) -> Result<(), ServerError> {
-    let encoded =
-        nokvfs_cluster::encode_metadata_log_entry(entry).map_err(ServerError::SharedLog)?;
-    let envelope = call_framed_rpc(
-        address,
-        entry.position.index.get(),
-        &MetadataRpcRequest::AppendMetadataLog {
-            leader: leader.get(),
-            entry: encoded,
-        },
-    )?;
-    validate_append_metadata_log_response(envelope, entry)
-}
-
-fn validate_append_metadata_log_response(
-    envelope: MetadataRpcEnvelope,
-    entry: &nokvfs_cluster::MetadataLogEntry,
-) -> Result<(), ServerError> {
-    if !envelope.ok {
-        return Err(ServerError::SharedLog(SharedLogError::Backend(
-            envelope
-                .error
-                .unwrap_or_else(|| "metadata peer append failed".to_owned()),
-        )));
-    }
-    match envelope.result {
-        Some(MetadataRpcResult::MetadataLogAppend { position, .. }) => {
-            if position.term == entry.position.term.get()
-                && position.index == entry.position.index.get()
-            {
-                Ok(())
-            } else {
-                Err(ServerError::SharedLog(SharedLogError::Backend(format!(
-                    "metadata peer appended {}:{}, expected {}:{}",
-                    position.term,
-                    position.index,
-                    entry.position.term.get(),
-                    entry.position.index.get()
-                ))))
-            }
-        }
-        Some(other) => Err(ServerError::SharedLog(SharedLogError::Backend(format!(
-            "metadata peer append returned unexpected result: {other:?}"
-        )))),
-        None => Err(ServerError::SharedLog(SharedLogError::Backend(
-            "metadata peer append response had no result".to_owned(),
-        ))),
-    }
-}
-
-pub(crate) fn call_install_metadata_checkpoint(
-    address: SocketAddr,
-    request: nokvfs_cluster::InstallCheckpointRequest,
-) -> Result<nokvfs_cluster::InstallCheckpointResponse, ServerError> {
-    let learner = request.plan.node;
-    let replay_start = request.plan.replay_start;
-    let envelope = call_framed_rpc(
-        address,
-        learner.get(),
-        &MetadataRpcRequest::InstallMetadataCheckpoint {
-            plan: wire_metadata_bootstrap_plan(&request),
-        },
-    )?;
-    if !envelope.ok {
-        return Err(ServerError::SharedLog(SharedLogError::Backend(
-            envelope
-                .error
-                .unwrap_or_else(|| "metadata checkpoint install failed".to_owned()),
-        )));
-    }
-    match envelope.result {
-        Some(MetadataRpcResult::MetadataCheckpointInstall { install }) => {
-            let installed_learner =
-                nokvfs_cluster::NodeId::new(install.learner).map_err(ServerError::SharedLog)?;
-            if installed_learner != learner {
-                return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
-                    "metadata checkpoint install returned learner {}, expected {}",
-                    installed_learner.get(),
-                    learner.get()
-                ))));
-            }
-            let installed_replay_start = nokvfs_cluster::LogIndex::new(install.replay_start_index)
-                .map_err(ServerError::SharedLog)?;
-            if installed_replay_start != replay_start {
-                return Err(ServerError::SharedLog(SharedLogError::Backend(format!(
-                    "metadata checkpoint install returned replay start {}, expected {}",
-                    installed_replay_start.get(),
-                    replay_start.get()
-                ))));
-            }
-            Ok(nokvfs_cluster::InstallCheckpointResponse {
-                learner,
-                replay_start,
-                replayed_index: nokvfs_cluster::LogIndex::new(install.replayed_index)
-                    .map_err(ServerError::SharedLog)?,
-            })
-        }
-        Some(other) => Err(ServerError::SharedLog(SharedLogError::Backend(format!(
-            "metadata checkpoint install returned unexpected result: {other:?}"
-        )))),
-        None => Err(ServerError::SharedLog(SharedLogError::Backend(
-            "metadata checkpoint install response had no result".to_owned(),
-        ))),
-    }
 }
 
 fn drain_ready_frames(
@@ -757,7 +623,7 @@ fn ok_envelope(server: &Server, result: MetadataRpcResult) -> MetadataRpcEnvelop
         error: None,
         error_kind: None,
         metadata_position: server
-            .metadata_log_applied_position()
+            .metadata_raft_applied_position()
             .map(wire_log_position),
     }
 }
@@ -782,13 +648,13 @@ fn wire_server_error(err: &ServerError) -> WireMetadataError {
             message: err.to_string(),
         },
         ServerError::Metadata(err) => wire_metad_error(err),
-        ServerError::SharedLog(err) => wire_shared_log_error(err),
+        ServerError::MetadataRaft(err) => wire_metadata_raft_error(err),
     }
 }
 
-fn wire_shared_log_error(err: &nokvfs_cluster::SharedLogError) -> WireMetadataError {
+fn wire_metadata_raft_error(err: &nokvfs_cluster::MetadataRaftError) -> WireMetadataError {
     match err {
-        nokvfs_cluster::SharedLogError::ReadNotFresh { required, applied } => {
+        nokvfs_cluster::MetadataRaftError::ReadNotFresh { required, applied } => {
             WireMetadataError::ReadNotFresh {
                 required: wire_log_position(*required),
                 applied: applied.map(wire_log_position),
@@ -1212,7 +1078,7 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
     match request {
         MetadataRpcRequest::Batch { requests } => execute_batch(server, requests),
         MetadataRpcRequest::RequireApplied { position, request } => {
-            server.ensure_metadata_log_applied(log_position(position)?)?;
+            server.ensure_metadata_raft_applied(log_position(position)?)?;
             execute(server, *request)
         }
         MetadataRpcRequest::BootstrapRoot { mode, uid, gid } => {
@@ -1744,73 +1610,6 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     .map(|entry| Box::new(wire_dentry(entry))),
             })
         }
-        MetadataRpcRequest::ReadMetadataLog { start_index, limit } => {
-            let start =
-                nokvfs_cluster::LogIndex::new(start_index).map_err(ServerError::SharedLog)?;
-            let (entries, committed) = server.read_metadata_log_tail(start, limit)?;
-            Ok(MetadataRpcResult::MetadataLogEntries {
-                entries: entries
-                    .iter()
-                    .map(wire_metadata_log_entry)
-                    .collect::<Result<Vec<_>, _>>()?,
-                committed: committed.map(wire_log_position),
-            })
-        }
-        MetadataRpcRequest::AppendMetadataLog { leader, entry } => {
-            let leader = nokvfs_cluster::NodeId::new(leader).map_err(ServerError::SharedLog)?;
-            let entry = nokvfs_cluster::decode_metadata_log_entry(&entry)
-                .map_err(ServerError::SharedLog)?;
-            let request = nokvfs_cluster::AppendMetadataBatchRequest::new(leader, entry)
-                .map_err(ServerError::SharedLog)?;
-            let response = server.append_metadata_log_batch(request)?;
-            Ok(MetadataRpcResult::MetadataLogAppend {
-                position: wire_log_position(response.position),
-                receipts: response
-                    .receipts
-                    .iter()
-                    .map(wire_metadata_receipt)
-                    .collect(),
-            })
-        }
-        MetadataRpcRequest::ReadMetadataCheckpoint { mount } => {
-            let mount = MountId::new(mount).map_err(|err| {
-                ServerError::Metadata(MetadError::Codec(format!(
-                    "invalid metadata checkpoint mount: {err}"
-                )))
-            })?;
-            let checkpoint = server.latest_metadata_checkpoint(mount)?;
-            Ok(MetadataRpcResult::MetadataCheckpoint {
-                checkpoint: checkpoint.as_ref().map(wire_metadata_checkpoint),
-            })
-        }
-        MetadataRpcRequest::PlanMetadataBootstrap {
-            leader,
-            learner,
-            mount,
-        } => {
-            let leader = nokvfs_cluster::NodeId::new(leader).map_err(ServerError::SharedLog)?;
-            let learner = nokvfs_cluster::NodeId::new(learner).map_err(ServerError::SharedLog)?;
-            let mount = MountId::new(mount).map_err(|err| {
-                ServerError::Metadata(MetadError::Codec(format!(
-                    "invalid metadata bootstrap mount: {err}"
-                )))
-            })?;
-            let plan = server.plan_metadata_bootstrap(leader, learner, mount)?;
-            Ok(MetadataRpcResult::MetadataBootstrapPlan {
-                plan: wire_metadata_bootstrap_plan(&plan),
-            })
-        }
-        MetadataRpcRequest::InstallMetadataCheckpoint { plan } => {
-            let request = metadata_checkpoint_install_request(plan)?;
-            let install = server.install_metadata_checkpoint(request)?;
-            Ok(MetadataRpcResult::MetadataCheckpointInstall {
-                install: WireMetadataCheckpointInstall {
-                    learner: install.learner.get(),
-                    replay_start_index: install.replay_start.get(),
-                    replayed_index: install.replayed_index.get(),
-                },
-            })
-        }
         MetadataRpcRequest::MetadataRaftVote { request } => {
             let response = server
                 .service()
@@ -1863,10 +1662,7 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::ReadBodyPlan { .. }
         | MetadataRpcRequest::ReadPathPlan { .. }
         | MetadataRpcRequest::ReadArtifactPathAtSnapshot { .. }
-        | MetadataRpcRequest::SnapshotPin { .. }
-        | MetadataRpcRequest::ReadMetadataLog { .. }
-        | MetadataRpcRequest::ReadMetadataCheckpoint { .. }
-        | MetadataRpcRequest::PlanMetadataBootstrap { .. } => true,
+        | MetadataRpcRequest::SnapshotPin { .. } => true,
         MetadataRpcRequest::BootstrapRoot { .. }
         | MetadataRpcRequest::CreateDir { .. }
         | MetadataRpcRequest::CreateDirPath { .. }
@@ -1890,8 +1686,6 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::PrepareArtifact { .. }
         | MetadataRpcRequest::PrepareArtifactPath { .. }
         | MetadataRpcRequest::PublishPreparedArtifact { .. }
-        | MetadataRpcRequest::AppendMetadataLog { .. }
-        | MetadataRpcRequest::InstallMetadataCheckpoint { .. }
         | MetadataRpcRequest::MetadataRaftVote { .. }
         | MetadataRpcRequest::MetadataRaftAppendEntries { .. }
         | MetadataRpcRequest::MetadataRaftInstallSnapshot { .. } => false,
@@ -1977,102 +1771,6 @@ fn wire_object_read_block(block: &ObjectReadBlock) -> WireObjectReadBlock {
     }
 }
 
-fn wire_metadata_log_entry(
-    entry: &nokvfs_cluster::MetadataLogEntry,
-) -> Result<WireMetadataLogEntry, ServerError> {
-    Ok(WireMetadataLogEntry {
-        position: wire_log_position(entry.position),
-        mount: entry.mount.get(),
-        payload: nokvfs_cluster::encode_metadata_log_entry(entry)
-            .map_err(ServerError::SharedLog)?,
-    })
-}
-
-fn wire_metadata_receipt(receipt: &nokvfs_cluster::DurableReceipt) -> WireMetadataReceipt {
-    WireMetadataReceipt {
-        position: wire_log_position(receipt.position),
-        mount: receipt.mount.get(),
-        batch_position: receipt.batch_position,
-        request_id: receipt.request_id.clone(),
-        commit_version: receipt.commit_version.get(),
-    }
-}
-
-fn wire_metadata_checkpoint(
-    checkpoint: &nokvfs_cluster::CheckpointManifest,
-) -> WireMetadataCheckpoint {
-    WireMetadataCheckpoint {
-        id: checkpoint.id.clone(),
-        mount: checkpoint.mount.get(),
-        durable_position: wire_log_position(checkpoint.frontier.durable_position),
-        applied_position: wire_log_position(checkpoint.frontier.applied_position),
-        min_retained_index: checkpoint.frontier.min_retained_index.get(),
-        max_commit_version: checkpoint.frontier.max_commit_version.get(),
-        artifact_uri: checkpoint.artifact.uri.clone(),
-        artifact_digest: checkpoint.artifact.digest.clone(),
-        artifact_size_bytes: checkpoint.artifact.size_bytes,
-    }
-}
-
-fn wire_metadata_bootstrap_plan(
-    request: &nokvfs_cluster::InstallCheckpointRequest,
-) -> WireMetadataBootstrapPlan {
-    WireMetadataBootstrapPlan {
-        leader: request.leader.get(),
-        learner: request.plan.node.get(),
-        checkpoint: wire_metadata_checkpoint(&request.plan.checkpoint),
-        replay_start_index: request.plan.replay_start.get(),
-        replayed_index: request.plan.replayed_index.get(),
-    }
-}
-
-fn metadata_checkpoint_install_request(
-    plan: WireMetadataBootstrapPlan,
-) -> Result<nokvfs_cluster::InstallCheckpointRequest, ServerError> {
-    let leader = nokvfs_cluster::NodeId::new(plan.leader).map_err(ServerError::SharedLog)?;
-    let learner = nokvfs_cluster::NodeId::new(plan.learner).map_err(ServerError::SharedLog)?;
-    let checkpoint = metadata_checkpoint_manifest(plan.checkpoint)?;
-    let replay_start =
-        nokvfs_cluster::LogIndex::new(plan.replay_start_index).map_err(ServerError::SharedLog)?;
-    let replayed_index =
-        nokvfs_cluster::LogIndex::new(plan.replayed_index).map_err(ServerError::SharedLog)?;
-    Ok(nokvfs_cluster::InstallCheckpointRequest::from_plan(
-        leader,
-        nokvfs_cluster::LearnerBootstrapPlan {
-            node: learner,
-            checkpoint,
-            replay_start,
-            replayed_index,
-        },
-    ))
-}
-
-fn metadata_checkpoint_manifest(
-    checkpoint: WireMetadataCheckpoint,
-) -> Result<nokvfs_cluster::CheckpointManifest, ServerError> {
-    let mount = MountId::new(checkpoint.mount).map_err(|err| {
-        ServerError::Metadata(MetadError::Codec(format!(
-            "invalid metadata checkpoint mount: {err}"
-        )))
-    })?;
-    let frontier = nokvfs_cluster::CheckpointFrontier {
-        durable_position: log_position(checkpoint.durable_position)?,
-        applied_position: log_position(checkpoint.applied_position)?,
-        min_retained_index: nokvfs_cluster::LogIndex::new(checkpoint.min_retained_index)
-            .map_err(ServerError::SharedLog)?,
-        max_commit_version: nokvfs_meta::Version::new(checkpoint.max_commit_version)
-            .map_err(|err| ServerError::Metadata(MetadError::Codec(err.to_string())))?,
-    };
-    let artifact = nokvfs_cluster::CheckpointArtifact::new(
-        checkpoint.artifact_uri,
-        checkpoint.artifact_digest,
-        checkpoint.artifact_size_bytes,
-    )
-    .map_err(ServerError::SharedLog)?;
-    nokvfs_cluster::CheckpointManifest::new(checkpoint.id, mount, frontier, artifact)
-        .map_err(ServerError::SharedLog)
-}
-
 fn protocol_error(err: MetadataProtocolError) -> MetadError {
     MetadError::Codec(err.to_string())
 }
@@ -2088,51 +1786,26 @@ fn log_position(
     position: WireMetadataPosition,
 ) -> Result<nokvfs_cluster::LogPosition, ServerError> {
     Ok(nokvfs_cluster::LogPosition {
-        term: nokvfs_cluster::LogTerm::new(position.term).map_err(ServerError::SharedLog)?,
-        index: nokvfs_cluster::LogIndex::new(position.index).map_err(ServerError::SharedLog)?,
+        term: nokvfs_cluster::LogTerm::new(position.term).map_err(ServerError::MetadataRaft)?,
+        index: nokvfs_cluster::LogIndex::new(position.index).map_err(ServerError::MetadataRaft)?,
     })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::server::tests::{
-        open_test_server_with_checkpoint_objects, publish_test_metadata_membership,
-        test_checkpoint_objects, test_options, test_server,
-    };
+    use crate::server::tests::test_server;
     use nokvfs_protocol::{
         decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor,
         WireChunkManifest, WireMetadataError, WireMetadataRaftLeaderId, WireMetadataRaftVote,
         WireMetadataRaftVoteRequest,
     };
     use std::net::TcpListener;
-    use std::path::Path;
-    use tempfile::tempdir;
 
     fn request_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
         let body = encode_request(&request).unwrap();
         let response = handle_binary_rpc(server, &body).unwrap();
         decode_envelope(&response).unwrap()
-    }
-
-    fn open_metadata_log_follower(root: &Path, metadata_log: &Path) -> Server {
-        publish_test_metadata_membership(
-            metadata_log,
-            nokvfs_cluster::MetadataMembership::new(
-                MountId::new(1).unwrap(),
-                nokvfs_cluster::LogTerm::new(1).unwrap(),
-                nokvfs_cluster::NodeId::new(1).unwrap(),
-                [
-                    nokvfs_cluster::NodeId::new(1).unwrap(),
-                    nokvfs_cluster::NodeId::new(2).unwrap(),
-                ],
-                [],
-            )
-            .unwrap(),
-        );
-        let mut options = test_options(root, Some(metadata_log.to_path_buf()));
-        options.metadata_log_node = nokvfs_cluster::NodeId::new(2).unwrap();
-        Server::open(options).unwrap()
     }
 
     fn expect_dentry(envelope: MetadataRpcEnvelope) -> WireDentryWithAttr {
@@ -2241,7 +1914,7 @@ mod tests {
     }
 
     #[test]
-    fn rpc_accepts_metadata_raft_vote_on_openraft_store() {
+    fn rpc_accepts_metadata_raft_vote_on_store() {
         let server = test_server();
         let envelope = request_envelope(
             &server,
@@ -2256,26 +1929,6 @@ mod tests {
             other => panic!("unexpected metadata raft vote result: {other:?}"),
         };
         assert!(response.vote.leader_id.term >= 1);
-    }
-
-    #[test]
-    fn rpc_rejects_metadata_raft_vote_on_legacy_shared_log_store() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::MetadataRaftVote {
-                request: metadata_raft_vote_request(2, 2),
-            },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("metadata OpenRaft group is not enabled")
-        ));
     }
 
     #[test]
@@ -2352,686 +2005,6 @@ mod tests {
             stale.error_kind,
             Some(WireMetadataError::StaleBodyGeneration { .. })
         ));
-    }
-
-    #[test]
-    fn rpc_require_applied_enforces_shared_log_freshness() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
-        let created = request_envelope(
-            &server,
-            MetadataRpcRequest::CreateFilePath {
-                path: "/model.bin".to_owned(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            },
-        );
-        assert!(created.ok);
-        let position = created
-            .metadata_position
-            .expect("logged metadata response carries applied position");
-
-        let fresh = request_envelope(
-            &server,
-            MetadataRpcRequest::RequireApplied {
-                position,
-                request: Box::new(MetadataRpcRequest::StatPath {
-                    path: "/model.bin".to_owned(),
-                }),
-            },
-        );
-        assert!(fresh.ok, "unexpected stale response: {fresh:?}");
-
-        let stale = request_envelope(
-            &server,
-            MetadataRpcRequest::RequireApplied {
-                position: WireMetadataPosition {
-                    term: position.term,
-                    index: position.index + 1,
-                },
-                request: Box::new(MetadataRpcRequest::StatPath {
-                    path: "/model.bin".to_owned(),
-                }),
-            },
-        );
-        assert!(!stale.ok);
-        assert!(matches!(
-            stale.error_kind,
-            Some(WireMetadataError::ReadNotFresh { required, applied: Some(applied) })
-                if required.index == position.index + 1 && applied == position
-        ));
-    }
-
-    #[test]
-    fn rpc_reads_committed_metadata_log_tail() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
-        let created = request_envelope(
-            &server,
-            MetadataRpcRequest::CreateFilePath {
-                path: "/model.bin".to_owned(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            },
-        );
-        assert!(created.ok);
-
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::ReadMetadataLog {
-                start_index: 1,
-                limit: 0,
-            },
-        );
-        assert!(
-            envelope.ok,
-            "unexpected metadata log read error: {envelope:?}"
-        );
-        let (entries, committed) = match envelope.result.unwrap() {
-            MetadataRpcResult::MetadataLogEntries { entries, committed } => (entries, committed),
-            other => panic!("unexpected metadata log result: {other:?}"),
-        };
-        let committed = committed.expect("metadata log read reports committed frontier");
-        assert!(committed.index >= 2);
-        assert!(entries.len() >= 2);
-
-        let decoded = entries
-            .iter()
-            .map(|entry| {
-                let decoded = nokvfs_cluster::decode_metadata_log_entry(&entry.payload).unwrap();
-                assert_eq!(entry.position, wire_log_position(decoded.position));
-                assert_eq!(entry.mount, decoded.mount.get());
-                decoded
-            })
-            .collect::<Vec<_>>();
-        assert!(decoded
-            .iter()
-            .flat_map(|entry| entry.commands.iter())
-            .any(|command| command.kind == nokvfs_meta::command::CommandKind::CreateFile));
-    }
-
-    #[test]
-    fn rpc_reads_latest_metadata_checkpoint_after_gc_publishes_manifest() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let checkpoint_objects = test_checkpoint_objects();
-        let server = open_test_server_with_checkpoint_objects(
-            dir.path(),
-            Some(metadata_log),
-            &checkpoint_objects,
-        );
-
-        let before = request_envelope(
-            &server,
-            MetadataRpcRequest::ReadMetadataCheckpoint { mount: 1 },
-        );
-        assert!(before.ok, "unexpected checkpoint read error: {before:?}");
-        assert!(matches!(
-            before.result.unwrap(),
-            MetadataRpcResult::MetadataCheckpoint { checkpoint: None }
-        ));
-
-        let created = request_envelope(
-            &server,
-            MetadataRpcRequest::CreateDirPath {
-                path: "/runs".to_owned(),
-                mode: 0o755,
-                uid: 1000,
-                gid: 1000,
-            },
-        );
-        assert!(created.ok);
-        server.run_manual_gc(128).unwrap();
-
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::ReadMetadataCheckpoint { mount: 1 },
-        );
-        assert!(
-            envelope.ok,
-            "unexpected checkpoint read error: {envelope:?}"
-        );
-        let checkpoint = match envelope.result.unwrap() {
-            MetadataRpcResult::MetadataCheckpoint {
-                checkpoint: Some(checkpoint),
-            } => checkpoint,
-            other => panic!("unexpected checkpoint result: {other:?}"),
-        };
-        assert_eq!(checkpoint.mount, 1);
-        assert!(checkpoint.id.starts_with(b"mount-1-term-1-index-"));
-        assert!(checkpoint.artifact_uri.starts_with(b"object:"));
-        assert!(!checkpoint.artifact_digest.is_empty());
-        assert!(checkpoint.artifact_size_bytes > 0);
-        assert!(checkpoint.min_retained_index >= checkpoint.applied_position.index);
-        assert!(checkpoint.max_commit_version >= 2);
-    }
-
-    #[test]
-    fn rpc_rejects_metadata_checkpoint_read_when_catalog_is_disabled() {
-        let server = test_server();
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::ReadMetadataCheckpoint { mount: 1 },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("metadata checkpoint catalog is disabled")
-        ));
-    }
-
-    #[test]
-    fn rpc_plans_metadata_bootstrap_from_checkpoint_and_retained_tail() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let checkpoint_objects = test_checkpoint_objects();
-        let server = open_test_server_with_checkpoint_objects(
-            dir.path(),
-            Some(metadata_log),
-            &checkpoint_objects,
-        );
-        let created_before_checkpoint = request_envelope(
-            &server,
-            MetadataRpcRequest::CreateDirPath {
-                path: "/runs".to_owned(),
-                mode: 0o755,
-                uid: 1000,
-                gid: 1000,
-            },
-        );
-        assert!(created_before_checkpoint.ok);
-        server.run_manual_gc(128).unwrap();
-
-        let created_after_checkpoint = request_envelope(
-            &server,
-            MetadataRpcRequest::CreateDirPath {
-                path: "/after-checkpoint".to_owned(),
-                mode: 0o755,
-                uid: 1000,
-                gid: 1000,
-            },
-        );
-        assert!(created_after_checkpoint.ok);
-        let after_position = created_after_checkpoint
-            .metadata_position
-            .expect("logged write should carry position");
-
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::PlanMetadataBootstrap {
-                leader: 1,
-                learner: 4,
-                mount: 1,
-            },
-        );
-        assert!(envelope.ok, "unexpected bootstrap plan error: {envelope:?}");
-        let plan = match envelope.result.unwrap() {
-            MetadataRpcResult::MetadataBootstrapPlan { plan } => plan,
-            other => panic!("unexpected bootstrap plan result: {other:?}"),
-        };
-        assert_eq!(plan.leader, 1);
-        assert_eq!(plan.learner, 4);
-        assert_eq!(plan.checkpoint.mount, 1);
-        assert!(plan.checkpoint.id.starts_with(b"mount-1-term-1-index-"));
-        assert_eq!(plan.replay_start_index, plan.checkpoint.min_retained_index);
-        assert_eq!(plan.replayed_index, after_position.index);
-        assert!(plan.replay_start_index <= plan.replayed_index);
-    }
-
-    #[test]
-    fn rpc_installs_metadata_checkpoint_and_replays_retained_tail() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let checkpoint_objects = test_checkpoint_objects();
-        let server = open_test_server_with_checkpoint_objects(
-            dir.path(),
-            Some(metadata_log),
-            &checkpoint_objects,
-        );
-        let created_before_checkpoint = request_envelope(
-            &server,
-            MetadataRpcRequest::CreateDirPath {
-                path: "/runs".to_owned(),
-                mode: 0o755,
-                uid: 1000,
-                gid: 1000,
-            },
-        );
-        assert!(created_before_checkpoint.ok);
-        server.run_manual_gc(128).unwrap();
-
-        let created_after_checkpoint = request_envelope(
-            &server,
-            MetadataRpcRequest::CreateDirPath {
-                path: "/after-checkpoint".to_owned(),
-                mode: 0o755,
-                uid: 1000,
-                gid: 1000,
-            },
-        );
-        assert!(created_after_checkpoint.ok);
-
-        let plan = match request_envelope(
-            &server,
-            MetadataRpcRequest::PlanMetadataBootstrap {
-                leader: 1,
-                learner: 1,
-                mount: 1,
-            },
-        )
-        .result
-        .unwrap()
-        {
-            MetadataRpcResult::MetadataBootstrapPlan { plan } => plan,
-            other => panic!("unexpected bootstrap plan result: {other:?}"),
-        };
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::InstallMetadataCheckpoint { plan },
-        );
-        assert!(
-            envelope.ok,
-            "unexpected checkpoint install error: {envelope:?}"
-        );
-        let install = match envelope.result.unwrap() {
-            MetadataRpcResult::MetadataCheckpointInstall { install } => install,
-            other => panic!("unexpected checkpoint install result: {other:?}"),
-        };
-        assert_eq!(install.learner, 1);
-        assert!(install.replay_start_index <= install.replayed_index);
-
-        assert!(matches!(
-            request_envelope(
-                &server,
-                MetadataRpcRequest::LookupPath {
-                    path: "/runs".to_owned(),
-                },
-            )
-            .result
-            .unwrap(),
-            MetadataRpcResult::Dentry { entry: Some(_) }
-        ));
-        assert!(matches!(
-            request_envelope(
-                &server,
-                MetadataRpcRequest::LookupPath {
-                    path: "/after-checkpoint".to_owned(),
-                },
-            )
-            .result
-            .unwrap(),
-            MetadataRpcResult::Dentry { entry: Some(_) }
-        ));
-    }
-
-    #[test]
-    fn rpc_rejects_metadata_bootstrap_plan_without_checkpoint() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::PlanMetadataBootstrap {
-                leader: 1,
-                learner: 4,
-                mount: 1,
-            },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("requires a checkpoint")
-        ));
-    }
-
-    #[test]
-    fn rpc_rejects_metadata_bootstrap_plan_from_unauthorized_leader() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let mut options = test_options(dir.path(), Some(metadata_log));
-        options.metadata_log_node = nokvfs_cluster::NodeId::new(4).unwrap();
-        options.metadata_log_leader = nokvfs_cluster::NodeId::new(4).unwrap();
-        let server = Server::open(options).unwrap();
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::PlanMetadataBootstrap {
-                leader: 1,
-                learner: 5,
-                mount: 1,
-            },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("leader 1 is not authorized")
-                    && message.contains("expected leader 4")
-        ));
-    }
-
-    #[test]
-    fn rpc_appends_metadata_log_batch_and_replays_state() {
-        let leader_dir = tempdir().unwrap();
-        let leader_log = leader_dir.path().join("metadata.log");
-        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let entries = create_file_log_tail_entries(&leader, "/model.bin");
-
-        let replica_dir = tempdir().unwrap();
-        let replica_log = replica_dir.path().join("metadata.log");
-        let replica = open_metadata_log_follower(replica_dir.path(), &replica_log);
-        let envelope = append_metadata_log_entries(&replica, &entries);
-
-        assert!(envelope.ok, "unexpected append error: {envelope:?}");
-        let (position, receipts) = match envelope.result.unwrap() {
-            MetadataRpcResult::MetadataLogAppend { position, receipts } => (position, receipts),
-            other => panic!("unexpected append result: {other:?}"),
-        };
-        assert!(position.index >= 2);
-        assert!(!receipts.is_empty());
-        for (batch_position, receipt) in receipts.iter().enumerate() {
-            assert_eq!(receipt.position, position);
-            assert_eq!(receipt.mount, 1);
-            assert_eq!(receipt.batch_position, batch_position);
-            assert!(!receipt.request_id.is_empty());
-        }
-
-        let stat = request_envelope(
-            &replica,
-            MetadataRpcRequest::StatPath {
-                path: "/model.bin".to_owned(),
-            },
-        );
-        assert!(stat.ok, "replica did not apply appended log: {stat:?}");
-        match stat.result.unwrap() {
-            MetadataRpcResult::PathMetadata {
-                metadata: Some(metadata),
-            } => assert_eq!(metadata.attr.file_type, "file"),
-            other => panic!("unexpected stat result after append: {other:?}"),
-        }
-    }
-
-    #[test]
-    fn rpc_rejects_metadata_log_append_with_zero_leader() {
-        let leader_dir = tempdir().unwrap();
-        let leader_log = leader_dir.path().join("metadata.log");
-        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let entry = create_file_log_tail_entries(&leader, "/model.bin")
-            .into_iter()
-            .next()
-            .expect("leader log entry");
-
-        let replica_dir = tempdir().unwrap();
-        let replica_log = replica_dir.path().join("metadata.log");
-        let replica = Server::open(test_options(replica_dir.path(), Some(replica_log))).unwrap();
-        let envelope = request_envelope(
-            &replica,
-            MetadataRpcRequest::AppendMetadataLog { leader: 0, entry },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("cluster node id must be non-zero")
-        ));
-    }
-
-    #[test]
-    fn rpc_rejects_metadata_log_append_from_unauthorized_leader() {
-        let leader_dir = tempdir().unwrap();
-        let leader_log = leader_dir.path().join("metadata.log");
-        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let entry = create_file_log_tail_entries(&leader, "/model.bin")
-            .into_iter()
-            .next()
-            .expect("leader log entry");
-
-        let replica_dir = tempdir().unwrap();
-        let replica_log = replica_dir.path().join("metadata.log");
-        let mut options = test_options(replica_dir.path(), Some(replica_log));
-        options.metadata_log_node = nokvfs_cluster::NodeId::new(4).unwrap();
-        options.metadata_log_leader = nokvfs_cluster::NodeId::new(4).unwrap();
-        let replica = Server::open(options).unwrap();
-        let envelope = request_envelope(
-            &replica,
-            MetadataRpcRequest::AppendMetadataLog { leader: 1, entry },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("leader 1 is not authorized")
-                    && message.contains("expected leader 4")
-        ));
-    }
-
-    #[test]
-    fn rpc_rejects_stale_metadata_log_append_term() {
-        let leader_dir = tempdir().unwrap();
-        let leader_log = leader_dir.path().join("metadata.log");
-        let mut leader_options = test_options(leader_dir.path(), Some(leader_log));
-        leader_options.metadata_log_term = nokvfs_cluster::LogTerm::new(3).unwrap();
-        let leader = Server::open(leader_options).unwrap();
-        let entries = create_file_log_tail_entries(&leader, "/model.bin");
-
-        let replica_dir = tempdir().unwrap();
-        let replica_log = replica_dir.path().join("metadata.log");
-        let replica = open_metadata_log_follower(replica_dir.path(), &replica_log);
-        let first = append_metadata_log_entries(&replica, &entries);
-        assert!(first.ok, "unexpected first append error: {first:?}");
-
-        let stale = request_envelope(
-            &replica,
-            MetadataRpcRequest::AppendMetadataLog {
-                leader: 1,
-                entry: encoded_metadata_log_entry(
-                    2,
-                    entries.len() as u64 + 1,
-                    vec![create_file_command(b"b", 3)],
-                ),
-            },
-        );
-        assert!(!stale.ok);
-        assert!(matches!(
-            stale.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("rejects stale term")
-        ));
-    }
-
-    #[test]
-    fn rpc_rejects_metadata_log_append_when_log_is_disabled() {
-        let leader_dir = tempdir().unwrap();
-        let leader_log = leader_dir.path().join("metadata.log");
-        let leader = Server::open(test_options(leader_dir.path(), Some(leader_log))).unwrap();
-        let entry = create_file_log_tail_entries(&leader, "/model.bin")
-            .into_iter()
-            .next()
-            .expect("leader log entry");
-        let server = test_server();
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::AppendMetadataLog { leader: 1, entry },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("metadata log is disabled")
-        ));
-    }
-
-    #[test]
-    fn rpc_rejects_metadata_log_append_for_wrong_mount() {
-        let replica_dir = tempdir().unwrap();
-        let replica_log = replica_dir.path().join("metadata.log");
-        let replica = open_metadata_log_follower(replica_dir.path(), &replica_log);
-        let envelope = request_envelope(
-            &replica,
-            MetadataRpcRequest::AppendMetadataLog {
-                leader: 1,
-                entry: encoded_metadata_log_entry_for_mount(
-                    1,
-                    1,
-                    99,
-                    vec![create_file_command(b"a", 2)],
-                ),
-            },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("does not match server mount")
-        ));
-    }
-
-    #[test]
-    fn rpc_rejects_metadata_log_read_when_log_is_disabled() {
-        let server = test_server();
-        let envelope = request_envelope(
-            &server,
-            MetadataRpcRequest::ReadMetadataLog {
-                start_index: 1,
-                limit: 1,
-            },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("metadata log is disabled")
-        ));
-    }
-
-    #[test]
-    fn rpc_rejects_non_contiguous_metadata_log_append() {
-        let replica_dir = tempdir().unwrap();
-        let replica_log = replica_dir.path().join("metadata.log");
-        let replica = open_metadata_log_follower(replica_dir.path(), &replica_log);
-        let envelope = request_envelope(
-            &replica,
-            MetadataRpcRequest::AppendMetadataLog {
-                leader: 1,
-                entry: encoded_metadata_log_entry(1, 2, vec![create_file_command(b"a", 2)]),
-            },
-        );
-
-        assert!(!envelope.ok);
-        assert!(matches!(
-            envelope.error_kind,
-            Some(WireMetadataError::Metadata { message })
-                if message.contains("expected append at index 1, got 2")
-        ));
-    }
-
-    fn create_file_log_tail_entries(server: &Server, path: &str) -> Vec<Vec<u8>> {
-        let created = request_envelope(
-            server,
-            MetadataRpcRequest::CreateFilePath {
-                path: path.to_owned(),
-                mode: 0o644,
-                uid: 1000,
-                gid: 1000,
-            },
-        );
-        assert!(created.ok, "failed to create test file: {created:?}");
-        let log = request_envelope(
-            server,
-            MetadataRpcRequest::ReadMetadataLog {
-                start_index: 1,
-                limit: 0,
-            },
-        );
-        let entries = match log.result.unwrap() {
-            MetadataRpcResult::MetadataLogEntries { entries, .. } => entries,
-            other => panic!("unexpected metadata log result: {other:?}"),
-        };
-        assert!(entries.iter().any(|entry| {
-            nokvfs_cluster::decode_metadata_log_entry(&entry.payload)
-                .unwrap()
-                .commands
-                .iter()
-                .any(|command| command.kind == nokvfs_meta::command::CommandKind::CreateFile)
-        }));
-        entries.into_iter().map(|entry| entry.payload).collect()
-    }
-
-    fn append_metadata_log_entries(server: &Server, entries: &[Vec<u8>]) -> MetadataRpcEnvelope {
-        let mut last = None;
-        for entry in entries {
-            last = Some(request_envelope(
-                server,
-                MetadataRpcRequest::AppendMetadataLog {
-                    leader: 1,
-                    entry: entry.clone(),
-                },
-            ));
-            if !last.as_ref().unwrap().ok {
-                break;
-            }
-        }
-        last.expect("at least one metadata log entry")
-    }
-
-    fn encoded_metadata_log_entry(
-        term: u64,
-        index: u64,
-        commands: Vec<nokvfs_meta::command::MetadataCommand>,
-    ) -> Vec<u8> {
-        encoded_metadata_log_entry_for_mount(term, index, 1, commands)
-    }
-
-    fn encoded_metadata_log_entry_for_mount(
-        term: u64,
-        index: u64,
-        mount: u64,
-        commands: Vec<nokvfs_meta::command::MetadataCommand>,
-    ) -> Vec<u8> {
-        nokvfs_cluster::encode_metadata_log_entry(&nokvfs_cluster::MetadataLogEntry {
-            position: nokvfs_cluster::LogPosition {
-                term: nokvfs_cluster::LogTerm::new(term).unwrap(),
-                index: nokvfs_cluster::LogIndex::new(index).unwrap(),
-            },
-            mount: MountId::new(mount).unwrap(),
-            commands,
-        })
-        .unwrap()
-    }
-
-    fn create_file_command(
-        request_id: &[u8],
-        commit_version: u64,
-    ) -> nokvfs_meta::command::MetadataCommand {
-        nokvfs_meta::command::MetadataCommand {
-            request_id: request_id.to_vec(),
-            kind: nokvfs_meta::command::CommandKind::CreateFile,
-            read_version: nokvfs_meta::Version::new(commit_version - 1).unwrap(),
-            commit_version: nokvfs_meta::Version::new(commit_version).unwrap(),
-            primary_family: nokvfs_types::RecordFamily::Dentry,
-            primary_key: request_id.to_vec(),
-            predicates: Vec::new(),
-            mutations: vec![nokvfs_meta::command::Mutation {
-                family: nokvfs_types::RecordFamily::Dentry,
-                key: request_id.to_vec(),
-                op: nokvfs_meta::command::MutationOp::Put,
-                value: Some(nokvfs_meta::command::Value(b"value".to_vec())),
-            }],
-            watch: Vec::new(),
-        }
     }
 
     #[test]
@@ -3586,10 +2559,8 @@ mod tests {
     }
 
     #[test]
-    fn rpc_batch_coalesces_multi_parent_create_files_into_shared_log_entry() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let server = Server::open(test_options(dir.path(), Some(metadata_log))).unwrap();
+    fn rpc_batch_coalesces_multi_parent_create_files_into_metadata_batch() {
+        let server = test_server();
         expect_dentry(request_envelope(
             &server,
             MetadataRpcRequest::CreateDirPath {
@@ -3644,14 +2615,12 @@ mod tests {
         };
         assert_eq!(results.len(), 2);
         assert!(results.iter().all(|result| result.ok));
-        assert!(server.stats_json().contains("\"max_commands_per_entry\":2"));
+        assert!(server.stats_json().contains("\"atomic_apply_max_batch\":2"));
     }
 
     #[test]
-    fn framed_rpc_coalesces_pipelined_create_frames_into_shared_log_entry() {
-        let dir = tempdir().unwrap();
-        let metadata_log = dir.path().join("metadata.log");
-        let server = Arc::new(Server::open(test_options(dir.path(), Some(metadata_log))).unwrap());
+    fn framed_rpc_coalesces_pipelined_create_frames_into_metadata_batch() {
+        let server = Arc::new(test_server());
         server
             .service()
             .create_dir_path("/runs", 0o755, 1000, 1000)
@@ -3713,7 +2682,7 @@ mod tests {
         assert!(decode_envelope(&second.payload).unwrap().ok);
         server_thread.join().unwrap();
 
-        assert!(server.stats_json().contains("\"max_commands_per_entry\":2"));
+        assert!(server.stats_json().contains("\"atomic_apply_max_batch\":2"));
     }
 
     #[test]

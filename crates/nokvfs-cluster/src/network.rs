@@ -18,8 +18,8 @@ use openraft::raft::{
 };
 use openraft::BasicNode;
 
-use crate::openraft_log::MetadataRaftConfig;
-use crate::{openraft_wire, SharedLogError};
+use crate::log::MetadataRaftConfig;
+use crate::{wire, MetadataRaftError};
 
 pub trait MetadataRaftRpcClient: Clone + Send + Sync + 'static {
     fn vote_metadata_raft(
@@ -27,21 +27,21 @@ pub trait MetadataRaftRpcClient: Clone + Send + Sync + 'static {
         target: u64,
         address: &str,
         request: WireMetadataRaftVoteRequest,
-    ) -> Result<WireMetadataRaftVoteResponse, SharedLogError>;
+    ) -> Result<WireMetadataRaftVoteResponse, MetadataRaftError>;
 
     fn append_metadata_raft_entries(
         &self,
         target: u64,
         address: &str,
         request: WireMetadataRaftAppendEntriesRequest,
-    ) -> Result<WireMetadataRaftAppendEntriesResponse, SharedLogError>;
+    ) -> Result<WireMetadataRaftAppendEntriesResponse, MetadataRaftError>;
 
     fn install_metadata_raft_snapshot(
         &self,
         target: u64,
         address: &str,
         request: WireMetadataRaftInstallSnapshotRequest,
-    ) -> Result<WireMetadataRaftInstallSnapshotResponse, SharedLogError>;
+    ) -> Result<WireMetadataRaftInstallSnapshotResponse, MetadataRaftError>;
 }
 
 #[derive(Clone)]
@@ -88,7 +88,7 @@ where
         rpc: AppendEntriesRequest<MetadataRaftConfig>,
         _option: RPCOption,
     ) -> Result<AppendEntriesResponse<u64>, RPCError<u64, BasicNode, RaftError<u64>>> {
-        let request = openraft_wire::wire_append_entries_request(&rpc).map_err(rpc_error)?;
+        let request = wire::wire_append_entries_request(&rpc).map_err(rpc_error)?;
         let response = call_blocking({
             let client = self.client.clone();
             let address = self.address.clone();
@@ -96,7 +96,7 @@ where
             move || client.append_metadata_raft_entries(target, &address, request)
         })
         .await?;
-        openraft_wire::append_entries_response(response).map_err(rpc_error)
+        wire::append_entries_response(response).map_err(rpc_error)
     }
 
     async fn install_snapshot(
@@ -107,7 +107,7 @@ where
         InstallSnapshotResponse<u64>,
         RPCError<u64, BasicNode, RaftError<u64, InstallSnapshotError>>,
     > {
-        let request = openraft_wire::wire_install_snapshot_request(&rpc);
+        let request = wire::wire_install_snapshot_request(&rpc);
         let response = call_blocking({
             let client = self.client.clone();
             let address = self.address.clone();
@@ -115,7 +115,7 @@ where
             move || client.install_metadata_raft_snapshot(target, &address, request)
         })
         .await?;
-        openraft_wire::install_snapshot_response(response).map_err(rpc_error)
+        wire::install_snapshot_response(response).map_err(rpc_error)
     }
 
     async fn vote(
@@ -123,7 +123,7 @@ where
         rpc: VoteRequest<u64>,
         _option: RPCOption,
     ) -> Result<VoteResponse<u64>, RPCError<u64, BasicNode, RaftError<u64>>> {
-        let request = openraft_wire::wire_vote_request(&rpc);
+        let request = wire::wire_vote_request(&rpc);
         let response = call_blocking({
             let client = self.client.clone();
             let address = self.address.clone();
@@ -131,12 +131,12 @@ where
             move || client.vote_metadata_raft(target, &address, request)
         })
         .await?;
-        openraft_wire::vote_response(response).map_err(rpc_error)
+        wire::vote_response(response).map_err(rpc_error)
     }
 }
 
 async fn call_blocking<R, E>(
-    call: impl FnOnce() -> Result<R, SharedLogError> + Send + 'static,
+    call: impl FnOnce() -> Result<R, MetadataRaftError> + Send + 'static,
 ) -> Result<R, RPCError<u64, BasicNode, E>>
 where
     E: Error + 'static,
@@ -144,11 +144,15 @@ where
 {
     tokio::task::spawn_blocking(call)
         .await
-        .map_err(|err| rpc_error(SharedLogError::Backend(format!("metadata raft rpc: {err}"))))?
+        .map_err(|err| {
+            rpc_error(MetadataRaftError::Backend(format!(
+                "metadata raft rpc: {err}"
+            )))
+        })?
         .map_err(rpc_error)
 }
 
-fn rpc_error<E>(err: SharedLogError) -> RPCError<u64, BasicNode, E>
+fn rpc_error<E>(err: MetadataRaftError) -> RPCError<u64, BasicNode, E>
 where
     E: Error + 'static,
 {
@@ -182,7 +186,7 @@ mod tests {
             target: u64,
             address: &str,
             request: WireMetadataRaftVoteRequest,
-        ) -> Result<WireMetadataRaftVoteResponse, SharedLogError> {
+        ) -> Result<WireMetadataRaftVoteResponse, MetadataRaftError> {
             self.calls
                 .lock()
                 .unwrap()
@@ -199,7 +203,7 @@ mod tests {
             target: u64,
             address: &str,
             _request: WireMetadataRaftAppendEntriesRequest,
-        ) -> Result<WireMetadataRaftAppendEntriesResponse, SharedLogError> {
+        ) -> Result<WireMetadataRaftAppendEntriesResponse, MetadataRaftError> {
             self.calls
                 .lock()
                 .unwrap()
@@ -212,7 +216,7 @@ mod tests {
             target: u64,
             address: &str,
             request: WireMetadataRaftInstallSnapshotRequest,
-        ) -> Result<WireMetadataRaftInstallSnapshotResponse, SharedLogError> {
+        ) -> Result<WireMetadataRaftInstallSnapshotResponse, MetadataRaftError> {
             self.calls
                 .lock()
                 .unwrap()

@@ -4,7 +4,7 @@
 #
 # This is the fast evidence gate for the current product goal: Holt-native
 # metadata reads, object-backed checkpoint publish, DLIO-style generated data,
-# and shared-log metadata HA/fault recovery. Each workload gets its own
+# and OpenRaft metadata HA/fault recovery. Each workload gets its own
 # temporary RustFS instance through scripts/run-rustfs-e2e.sh so failures are
 # isolated and logs stay easy to inspect.
 
@@ -33,9 +33,9 @@ Runs the standard AI-training smoke gate. With no workload arguments, runs:
   ${DEFAULT_WORKLOADS[*]}
 
 Use the special workload name "fuse-smoke" to run the mounted POSIX/FUSE smoke.
-Use "shared-log-smoke" to run the checkpoint/bootstrap shared-log process
-smoke. Set NOKV_AI_SMOKE_INCLUDE_FUSE=1 or
-NOKV_AI_SMOKE_INCLUDE_SHARED_LOG_BOOTSTRAP=1 to append them to the default gate.
+Use "metadata-raft-smoke" to run the 3-voter OpenRaft process smoke. Set
+NOKV_AI_SMOKE_INCLUDE_FUSE=1 or NOKV_AI_SMOKE_INCLUDE_METADATA_RAFT_SMOKE=1 to
+append them to the default gate.
 
 Environment:
   NOKV_AI_SMOKE_PROFILE              smoke|standard|long (default: smoke)
@@ -60,8 +60,8 @@ if [[ "${#workloads[@]}" -eq 0 ]]; then
     if [[ "${NOKV_AI_SMOKE_INCLUDE_FUSE:-0}" == "1" ]]; then
         workloads+=(fuse-smoke)
     fi
-    if [[ "${NOKV_AI_SMOKE_INCLUDE_SHARED_LOG_BOOTSTRAP:-0}" == "1" ]]; then
-        workloads+=(shared-log-smoke)
+    if [[ "${NOKV_AI_SMOKE_INCLUDE_METADATA_RAFT_SMOKE:-0}" == "1" ]]; then
+        workloads+=(metadata-raft-smoke)
     fi
 fi
 
@@ -77,8 +77,8 @@ for workload in "${workloads[@]}"; do
         "$ROOT_DIR/scripts/run-fuse-smoke.sh"
         continue
     fi
-    if [[ "$workload" == "shared-log-smoke" ]]; then
-        "$ROOT_DIR/scripts/run-shared-log-smoke.sh"
+    if [[ "$workload" == "metadata-raft-smoke" ]]; then
+        "$ROOT_DIR/scripts/run-metadata-raft-smoke.sh"
         continue
     fi
     NOKV_E2E_PROFILE="$PROFILE" \

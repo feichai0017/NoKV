@@ -2,8 +2,8 @@
 //!
 //! This binary intentionally reports workload shape and durability caveats with
 //! every result. It runs a real `metad` process boundary with the service client.
-//! The metadata HA smoke workload also starts a real multi-server shared-log
-//! topology and verifies read-your-writes from a replicated peer.
+//! The metadata HA smoke workload also starts real multi-server OpenRaft
+//! metadata groups and verifies read-your-writes from a replicated peer.
 
 use std::env;
 use std::error::Error;
@@ -19,13 +19,13 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use nokvfs_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
-use nokvfs_cluster::{FileSharedLogSync, LogTerm, NodeId};
+use nokvfs_cluster::{FileMetadataRaftLogSync, NodeId};
 use nokvfs_meta::{
     DentryWithAttr, HistoryGcOptions, MetadataServiceStats, MetadataStoreStats, ObjectGcOptions,
     ObjectTransferStats, RenameReplaceResult,
 };
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
-use nokvfs_server::{MetadataLogPeerOptions, Server, ServerOptions};
+use nokvfs_server::{MetadataRaftPeerOptions, Server, ServerOptions};
 use nokvfs_types::{MountId, PathMetadata};
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
@@ -67,8 +67,7 @@ struct Config {
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
-    metadata_log: bool,
-    metadata_log_sync: FileSharedLogSync,
+    metadata_raft_log_sync: FileMetadataRaftLogSync,
     checkpoint_bytes: Option<usize>,
     sample_bytes: Option<usize>,
     keep: bool,
@@ -114,25 +113,15 @@ struct ResultRow {
     metadata_dedupe_hits: u64,
     metadata_predicates: u64,
     metadata_prefix_empty_predicates: u64,
-    metadata_log_entries: u64,
-    metadata_log_commands: u64,
-    metadata_log_max_batch: u64,
-    metadata_log_precheck_commands: u64,
-    metadata_log_precheck_predicates: u64,
-    metadata_log_precheck_ns: u64,
-    metadata_log_stale_reads: u64,
-    metadata_log_remote_voter_appends: u64,
-    metadata_log_remote_voter_successes: u64,
-    metadata_log_remote_voter_failures: u64,
-    metadata_log_remote_voter_quorum_successes: u64,
-    metadata_log_remote_voter_quorum_failures: u64,
-    metadata_log_remote_voter_quorum_wait_ns: u64,
-    metadata_log_learner_wakeups: u64,
-    metadata_log_learner_wakeup_coalesced: u64,
-    metadata_log_learner_wakeup_disconnected: u64,
-    metadata_log_learner_catchup_successes: u64,
-    metadata_log_learner_catchup_failures: u64,
-    metadata_log_learner_catchup_ns: u64,
+    metadata_raft_current_term: u64,
+    metadata_raft_current_leader: u64,
+    metadata_raft_last_log_index: u64,
+    metadata_raft_last_applied_index: u64,
+    metadata_raft_snapshot_index: u64,
+    metadata_raft_purged_index: u64,
+    metadata_raft_millis_since_quorum_ack: u64,
+    metadata_raft_voters: u64,
+    metadata_raft_learners: u64,
     metadata_gets: u64,
     metadata_get_user_strong: u64,
     metadata_get_write_plan_local: u64,
@@ -198,42 +187,30 @@ struct RowInput {
 struct BenchStats {
     object: ObjectTransferStats,
     metadata_store: MetadataStoreStats,
-    metadata_log: MetadataLogBenchStats,
+    metadata_raft: MetadataRaftBenchStats,
     metadata_service: MetadataServiceStats,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct MetadataLogBenchStats {
-    commit_entry_total: u64,
-    commit_command_total: u64,
-    max_commands_per_entry: u64,
-    precheck_command_total: u64,
-    precheck_predicate_total: u64,
-    precheck_ns_total: u64,
-    stale_read_total: u64,
-    remote_voter_append_total: u64,
-    remote_voter_append_success_total: u64,
-    remote_voter_append_failure_total: u64,
-    remote_voter_quorum_success_total: u64,
-    remote_voter_quorum_failure_total: u64,
-    remote_voter_quorum_wait_ns_total: u64,
-    learner_wakeup_total: u64,
-    learner_wakeup_coalesced_total: u64,
-    learner_wakeup_disconnected_total: u64,
-    learner_catchup_success_total: u64,
-    learner_catchup_failure_total: u64,
-    learner_catchup_ns_total: u64,
+struct MetadataRaftBenchStats {
+    current_term: u64,
+    current_leader: u64,
+    last_log_index: u64,
+    last_applied_index: u64,
+    snapshot_index: u64,
+    purged_index: u64,
+    millis_since_quorum_ack: u64,
+    voter_count: u64,
+    learner_count: u64,
 }
 
 #[derive(Clone, Debug)]
 struct MetadataHaClusterConfig {
     root: PathBuf,
     object: ObjectStoreConfig,
-    leader: NodeId,
-    term: LogTerm,
     voters: Vec<NodeId>,
-    peers: Vec<MetadataLogPeerOptions>,
-    sync: FileSharedLogSync,
+    peers: Vec<MetadataRaftPeerOptions>,
+    sync: FileMetadataRaftLogSync,
 }
 
 #[derive(Debug)]
@@ -435,7 +412,7 @@ fn main() {
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] \
-             [--metadata-log on|off] [--metadata-log-sync data|none] [--keep]"
+             [--metadata-raft-log-sync data|none] [--keep]"
         );
         std::process::exit(2);
     }
@@ -828,7 +805,6 @@ fn bench_metadata_ha_smoke(
     let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
     let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
     let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
-    let term = LogTerm::new(1).expect("benchmark metadata log term is non-zero");
     let voters = vec![node_1, node_2, node_3];
 
     let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
@@ -838,15 +814,15 @@ fn bench_metadata_ha_smoke(
     let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
     let addr_1 = listener_1.local_addr().map_err(from_io)?;
     let peers = vec![
-        MetadataLogPeerOptions {
+        MetadataRaftPeerOptions {
             node: node_1,
             address: addr_1,
         },
-        MetadataLogPeerOptions {
+        MetadataRaftPeerOptions {
             node: node_2,
             address: addr_2,
         },
-        MetadataLogPeerOptions {
+        MetadataRaftPeerOptions {
             node: node_3,
             address: addr_3,
         },
@@ -854,18 +830,16 @@ fn bench_metadata_ha_smoke(
     let cluster = MetadataHaClusterConfig {
         root: root.clone(),
         object,
-        leader: node_1,
-        term,
         voters,
         peers,
-        sync: config.metadata_log_sync,
+        sync: config.metadata_raft_log_sync,
     };
 
-    start_metadata_log_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
+    start_metadata_raft_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
     wait_for_health(addr_2)?;
-    start_metadata_log_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
+    start_metadata_raft_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
     wait_for_health(addr_3)?;
-    start_metadata_log_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
+    start_metadata_raft_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
     wait_for_health(addr_1)?;
 
     let metadata =
@@ -923,8 +897,8 @@ fn bench_metadata_ha_smoke(
         checksum,
         shape: format!("voters=3 leader=1 peer_read=2 files={files}"),
         caveat: format!(
-            "shared-log HA smoke over three metadata server processes, sync={}, peer read requires observed log position",
-            metadata_log_sync_name(config.metadata_log_sync)
+            "OpenRaft metadata HA smoke over three metadata server processes, sync={}, peer read requires observed log position",
+            metadata_raft_log_sync_name(config.metadata_raft_log_sync)
         ),
     }))
 }
@@ -941,7 +915,6 @@ fn bench_metadata_ha_fault_smoke(
     let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
     let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
     let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
-    let term = LogTerm::new(1).expect("benchmark metadata log term is non-zero");
     let voters = vec![node_1, node_2, node_3];
 
     let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
@@ -950,15 +923,15 @@ fn bench_metadata_ha_fault_smoke(
     let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
     let addr_1 = listener_1.local_addr().map_err(from_io)?;
     let peers = vec![
-        MetadataLogPeerOptions {
+        MetadataRaftPeerOptions {
             node: node_1,
             address: addr_1,
         },
-        MetadataLogPeerOptions {
+        MetadataRaftPeerOptions {
             node: node_2,
             address: addr_2,
         },
-        MetadataLogPeerOptions {
+        MetadataRaftPeerOptions {
             node: node_3,
             address: addr_3,
         },
@@ -966,16 +939,14 @@ fn bench_metadata_ha_fault_smoke(
     let cluster = MetadataHaClusterConfig {
         root: root.clone(),
         object,
-        leader: node_1,
-        term,
         voters,
         peers,
-        sync: config.metadata_log_sync,
+        sync: config.metadata_raft_log_sync,
     };
 
-    start_metadata_log_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
+    start_metadata_raft_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
     wait_for_health(addr_2)?;
-    start_metadata_log_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
+    start_metadata_raft_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
     wait_for_health(addr_1)?;
 
     let metadata =
@@ -1019,7 +990,7 @@ fn bench_metadata_ha_fault_smoke(
     }
 
     let listener_3 = TcpListener::bind(addr_3).map_err(from_io)?;
-    start_metadata_log_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
+    start_metadata_raft_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
     wait_for_health(addr_3)?;
     let recovered = client
         .metadata()
@@ -1067,8 +1038,8 @@ fn bench_metadata_ha_fault_smoke(
             "voters=3 leader=1 surviving_peer=2 recovered_peer=3 files={files}"
         ),
         caveat: format!(
-            "shared-log HA fault smoke: node3 unavailable for initial quorum commit, then restarted and caught up, sync={}",
-            metadata_log_sync_name(config.metadata_log_sync)
+            "OpenRaft metadata HA fault smoke: node3 unavailable for initial quorum commit, then restarted and caught up, sync={}",
+            metadata_raft_log_sync_name(config.metadata_raft_log_sync)
         ),
     }))
 }
@@ -1389,52 +1360,15 @@ fn row(input: RowInput) -> ResultRow {
         metadata_dedupe_hits: input.stats.metadata_store.dedupe_hit_total,
         metadata_predicates: input.stats.metadata_store.predicate_total,
         metadata_prefix_empty_predicates: input.stats.metadata_store.prefix_empty_predicate_total,
-        metadata_log_entries: input.stats.metadata_log.commit_entry_total,
-        metadata_log_commands: input.stats.metadata_log.commit_command_total,
-        metadata_log_max_batch: input.stats.metadata_log.max_commands_per_entry,
-        metadata_log_precheck_commands: input.stats.metadata_log.precheck_command_total,
-        metadata_log_precheck_predicates: input.stats.metadata_log.precheck_predicate_total,
-        metadata_log_precheck_ns: input.stats.metadata_log.precheck_ns_total,
-        metadata_log_stale_reads: input.stats.metadata_log.stale_read_total,
-        metadata_log_remote_voter_appends: input.stats.metadata_log.remote_voter_append_total,
-        metadata_log_remote_voter_successes: input
-            .stats
-            .metadata_log
-            .remote_voter_append_success_total,
-        metadata_log_remote_voter_failures: input
-            .stats
-            .metadata_log
-            .remote_voter_append_failure_total,
-        metadata_log_remote_voter_quorum_successes: input
-            .stats
-            .metadata_log
-            .remote_voter_quorum_success_total,
-        metadata_log_remote_voter_quorum_failures: input
-            .stats
-            .metadata_log
-            .remote_voter_quorum_failure_total,
-        metadata_log_remote_voter_quorum_wait_ns: input
-            .stats
-            .metadata_log
-            .remote_voter_quorum_wait_ns_total,
-        metadata_log_learner_wakeups: input.stats.metadata_log.learner_wakeup_total,
-        metadata_log_learner_wakeup_coalesced: input
-            .stats
-            .metadata_log
-            .learner_wakeup_coalesced_total,
-        metadata_log_learner_wakeup_disconnected: input
-            .stats
-            .metadata_log
-            .learner_wakeup_disconnected_total,
-        metadata_log_learner_catchup_successes: input
-            .stats
-            .metadata_log
-            .learner_catchup_success_total,
-        metadata_log_learner_catchup_failures: input
-            .stats
-            .metadata_log
-            .learner_catchup_failure_total,
-        metadata_log_learner_catchup_ns: input.stats.metadata_log.learner_catchup_ns_total,
+        metadata_raft_current_term: input.stats.metadata_raft.current_term,
+        metadata_raft_current_leader: input.stats.metadata_raft.current_leader,
+        metadata_raft_last_log_index: input.stats.metadata_raft.last_log_index,
+        metadata_raft_last_applied_index: input.stats.metadata_raft.last_applied_index,
+        metadata_raft_snapshot_index: input.stats.metadata_raft.snapshot_index,
+        metadata_raft_purged_index: input.stats.metadata_raft.purged_index,
+        metadata_raft_millis_since_quorum_ack: input.stats.metadata_raft.millis_since_quorum_ack,
+        metadata_raft_voters: input.stats.metadata_raft.voter_count,
+        metadata_raft_learners: input.stats.metadata_raft.learner_count,
         metadata_gets: input.stats.metadata_store.get_total,
         metadata_get_user_strong: input.stats.metadata_store.get_user_strong_total,
         metadata_get_write_plan_local: input.stats.metadata_store.get_write_plan_local_total,
@@ -1492,7 +1426,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_precheck_commands,metadata_log_precheck_predicates,metadata_log_precheck_ns,metadata_log_stale_reads,metadata_log_remote_voter_appends,metadata_log_remote_voter_successes,metadata_log_remote_voter_failures,metadata_log_remote_voter_quorum_successes,metadata_log_remote_voter_quorum_failures,metadata_log_remote_voter_quorum_wait_ns,metadata_log_learner_wakeups,metadata_log_learner_wakeup_coalesced,metadata_log_learner_wakeup_disconnected,metadata_log_learner_catchup_successes,metadata_log_learner_catchup_failures,metadata_log_learner_catchup_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow) -> String {
@@ -1517,25 +1451,15 @@ fn csv_row(row: &ResultRow) -> String {
         row.metadata_dedupe_hits.to_string(),
         row.metadata_predicates.to_string(),
         row.metadata_prefix_empty_predicates.to_string(),
-        row.metadata_log_entries.to_string(),
-        row.metadata_log_commands.to_string(),
-        row.metadata_log_max_batch.to_string(),
-        row.metadata_log_precheck_commands.to_string(),
-        row.metadata_log_precheck_predicates.to_string(),
-        row.metadata_log_precheck_ns.to_string(),
-        row.metadata_log_stale_reads.to_string(),
-        row.metadata_log_remote_voter_appends.to_string(),
-        row.metadata_log_remote_voter_successes.to_string(),
-        row.metadata_log_remote_voter_failures.to_string(),
-        row.metadata_log_remote_voter_quorum_successes.to_string(),
-        row.metadata_log_remote_voter_quorum_failures.to_string(),
-        row.metadata_log_remote_voter_quorum_wait_ns.to_string(),
-        row.metadata_log_learner_wakeups.to_string(),
-        row.metadata_log_learner_wakeup_coalesced.to_string(),
-        row.metadata_log_learner_wakeup_disconnected.to_string(),
-        row.metadata_log_learner_catchup_successes.to_string(),
-        row.metadata_log_learner_catchup_failures.to_string(),
-        row.metadata_log_learner_catchup_ns.to_string(),
+        row.metadata_raft_current_term.to_string(),
+        row.metadata_raft_current_leader.to_string(),
+        row.metadata_raft_last_log_index.to_string(),
+        row.metadata_raft_last_applied_index.to_string(),
+        row.metadata_raft_snapshot_index.to_string(),
+        row.metadata_raft_purged_index.to_string(),
+        row.metadata_raft_millis_since_quorum_ack.to_string(),
+        row.metadata_raft_voters.to_string(),
+        row.metadata_raft_learners.to_string(),
         row.metadata_gets.to_string(),
         row.metadata_get_user_strong.to_string(),
         row.metadata_get_write_plan_local.to_string(),
@@ -1723,81 +1647,7 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .atomic_apply_ns_total
                 .saturating_sub(before.metadata_store.atomic_apply_ns_total),
         },
-        metadata_log: MetadataLogBenchStats {
-            commit_entry_total: after
-                .metadata_log
-                .commit_entry_total
-                .saturating_sub(before.metadata_log.commit_entry_total),
-            commit_command_total: after
-                .metadata_log
-                .commit_command_total
-                .saturating_sub(before.metadata_log.commit_command_total),
-            max_commands_per_entry: after.metadata_log.max_commands_per_entry,
-            precheck_command_total: after
-                .metadata_log
-                .precheck_command_total
-                .saturating_sub(before.metadata_log.precheck_command_total),
-            precheck_predicate_total: after
-                .metadata_log
-                .precheck_predicate_total
-                .saturating_sub(before.metadata_log.precheck_predicate_total),
-            precheck_ns_total: after
-                .metadata_log
-                .precheck_ns_total
-                .saturating_sub(before.metadata_log.precheck_ns_total),
-            stale_read_total: after
-                .metadata_log
-                .stale_read_total
-                .saturating_sub(before.metadata_log.stale_read_total),
-            remote_voter_append_total: after
-                .metadata_log
-                .remote_voter_append_total
-                .saturating_sub(before.metadata_log.remote_voter_append_total),
-            remote_voter_append_success_total: after
-                .metadata_log
-                .remote_voter_append_success_total
-                .saturating_sub(before.metadata_log.remote_voter_append_success_total),
-            remote_voter_append_failure_total: after
-                .metadata_log
-                .remote_voter_append_failure_total
-                .saturating_sub(before.metadata_log.remote_voter_append_failure_total),
-            remote_voter_quorum_success_total: after
-                .metadata_log
-                .remote_voter_quorum_success_total
-                .saturating_sub(before.metadata_log.remote_voter_quorum_success_total),
-            remote_voter_quorum_failure_total: after
-                .metadata_log
-                .remote_voter_quorum_failure_total
-                .saturating_sub(before.metadata_log.remote_voter_quorum_failure_total),
-            remote_voter_quorum_wait_ns_total: after
-                .metadata_log
-                .remote_voter_quorum_wait_ns_total
-                .saturating_sub(before.metadata_log.remote_voter_quorum_wait_ns_total),
-            learner_wakeup_total: after
-                .metadata_log
-                .learner_wakeup_total
-                .saturating_sub(before.metadata_log.learner_wakeup_total),
-            learner_wakeup_coalesced_total: after
-                .metadata_log
-                .learner_wakeup_coalesced_total
-                .saturating_sub(before.metadata_log.learner_wakeup_coalesced_total),
-            learner_wakeup_disconnected_total: after
-                .metadata_log
-                .learner_wakeup_disconnected_total
-                .saturating_sub(before.metadata_log.learner_wakeup_disconnected_total),
-            learner_catchup_success_total: after
-                .metadata_log
-                .learner_catchup_success_total
-                .saturating_sub(before.metadata_log.learner_catchup_success_total),
-            learner_catchup_failure_total: after
-                .metadata_log
-                .learner_catchup_failure_total
-                .saturating_sub(before.metadata_log.learner_catchup_failure_total),
-            learner_catchup_ns_total: after
-                .metadata_log
-                .learner_catchup_ns_total
-                .saturating_sub(before.metadata_log.learner_catchup_ns_total),
-        },
+        metadata_raft: after.metadata_raft,
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: after
                 .metadata_service
@@ -1859,7 +1709,7 @@ fn metadata_only_caveat(config: &Config) -> String {
     format!(
         "metadata-only on Holt metadata service, object_backend={}, {}",
         object_backend_name(config.object_backend),
-        metadata_log_caveat(config)
+        metadata_raft_caveat(config)
     )
 }
 
@@ -1875,7 +1725,7 @@ fn object_caveat(config: &Config, path: &str) -> String {
                 "{path}, Holt metadata service, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}, {}",
                 config.object_concurrency,
                 config.read_repeats,
-                metadata_log_caveat(config)
+                metadata_raft_caveat(config)
             )
         }
         ObjectBackendKind::S3 => {
@@ -1883,21 +1733,17 @@ fn object_caveat(config: &Config, path: &str) -> String {
                 "{path}, Holt metadata service, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}, {}",
                 config.object_concurrency,
                 config.read_repeats,
-                metadata_log_caveat(config)
+                metadata_raft_caveat(config)
             )
         }
     }
 }
 
-fn metadata_log_caveat(config: &Config) -> String {
-    if config.metadata_log {
-        format!(
-            "shared-log metadata enabled sync={}",
-            metadata_log_sync_name(config.metadata_log_sync)
-        )
-    } else {
-        "single-node metadata path, no distributed replication".to_owned()
-    }
+fn metadata_raft_caveat(config: &Config) -> String {
+    format!(
+        "OpenRaft metadata group sync={}",
+        metadata_raft_log_sync_name(config.metadata_raft_log_sync)
+    )
 }
 
 fn client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
@@ -1906,9 +1752,6 @@ fn client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, B
 
 fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
     let meta = config.root.join(workload).join("meta");
-    let metadata_log_path = config
-        .metadata_log
-        .then(|| config.root.join(workload).join("metadata.log"));
     let object = object_config_for(config, workload);
     let objects = object.clone().open().map_err(from_client)?;
     let listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
@@ -1917,17 +1760,11 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         bind,
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: meta,
-        metadata_log_path,
-        metadata_log_node: nokvfs_cluster::NodeId::new(1)
-            .expect("benchmark metadata log node is non-zero"),
-        metadata_log_leader: nokvfs_cluster::NodeId::new(1)
-            .expect("benchmark metadata log leader is non-zero"),
-        metadata_log_term: nokvfs_cluster::LogTerm::new(1)
-            .expect("benchmark metadata log term is non-zero"),
-        metadata_log_voters: Vec::new(),
-        metadata_log_learners: Vec::new(),
-        metadata_log_peers: Vec::new(),
-        metadata_log_sync: config.metadata_log_sync,
+        metadata_raft_node: nokvfs_cluster::NodeId::new(1)
+            .expect("benchmark metadata raft node is non-zero"),
+        metadata_raft_voters: Vec::new(),
+        metadata_raft_peers: Vec::new(),
+        metadata_raft_log_sync: config.metadata_raft_log_sync,
         object,
         uid: DEFAULT_UID,
         gid: DEFAULT_GID,
@@ -1971,19 +1808,15 @@ fn server_options_for_node(
             })?,
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: node_root.join("meta"),
-        metadata_log_path: Some(node_root.join("metadata.log")),
-        metadata_log_node: node,
-        metadata_log_leader: cluster.leader,
-        metadata_log_term: cluster.term,
-        metadata_log_voters: cluster.voters.clone(),
-        metadata_log_learners: Vec::new(),
-        metadata_log_peers: cluster
+        metadata_raft_node: node,
+        metadata_raft_voters: cluster.voters.clone(),
+        metadata_raft_peers: cluster
             .peers
             .iter()
             .copied()
             .filter(|peer| peer.node != node)
             .collect(),
-        metadata_log_sync: cluster.sync,
+        metadata_raft_log_sync: cluster.sync,
         object: cluster.object.clone(),
         uid: DEFAULT_UID,
         gid: DEFAULT_GID,
@@ -2000,7 +1833,7 @@ fn server_options_for_node(
     })
 }
 
-fn start_metadata_log_server(
+fn start_metadata_raft_server(
     listener: TcpListener,
     options: ServerOptions,
 ) -> Result<(), BenchError> {
@@ -2096,26 +1929,16 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             atomic_apply_max_batch: json_u64(body, "atomic_apply_max_batch")?,
             atomic_apply_ns_total: json_u64(body, "atomic_apply_ns_total")?,
         },
-        metadata_log: MetadataLogBenchStats {
-            commit_entry_total: json_u64(body, "commit_entry_total")?,
-            commit_command_total: json_u64(body, "commit_command_total")?,
-            max_commands_per_entry: json_u64(body, "max_commands_per_entry")?,
-            precheck_command_total: json_u64(body, "precheck_command_total")?,
-            precheck_predicate_total: json_u64(body, "precheck_predicate_total")?,
-            precheck_ns_total: json_u64(body, "precheck_ns_total")?,
-            stale_read_total: json_u64(body, "stale_read_total")?,
-            remote_voter_append_total: json_u64(body, "remote_voter_append_total")?,
-            remote_voter_append_success_total: json_u64(body, "remote_voter_append_success_total")?,
-            remote_voter_append_failure_total: json_u64(body, "remote_voter_append_failure_total")?,
-            remote_voter_quorum_success_total: json_u64(body, "remote_voter_quorum_success_total")?,
-            remote_voter_quorum_failure_total: json_u64(body, "remote_voter_quorum_failure_total")?,
-            remote_voter_quorum_wait_ns_total: json_u64(body, "remote_voter_quorum_wait_ns_total")?,
-            learner_wakeup_total: json_u64(body, "learner_wakeup_total")?,
-            learner_wakeup_coalesced_total: json_u64(body, "learner_wakeup_coalesced_total")?,
-            learner_wakeup_disconnected_total: json_u64(body, "learner_wakeup_disconnected_total")?,
-            learner_catchup_success_total: json_u64(body, "learner_catchup_success_total")?,
-            learner_catchup_failure_total: json_u64(body, "learner_catchup_failure_total")?,
-            learner_catchup_ns_total: json_u64(body, "learner_catchup_ns_total")?,
+        metadata_raft: MetadataRaftBenchStats {
+            current_term: json_u64(body, "current_term")?,
+            current_leader: json_u64_or_zero(body, "current_leader"),
+            last_log_index: json_u64_or_zero(body, "last_log_index"),
+            last_applied_index: json_u64_or_zero(body, "last_applied_index"),
+            snapshot_index: json_u64_or_zero(body, "snapshot_index"),
+            purged_index: json_u64_or_zero(body, "purged_index"),
+            millis_since_quorum_ack: json_u64_or_zero(body, "millis_since_quorum_ack"),
+            voter_count: json_u64(body, "voter_count")?,
+            learner_count: json_u64(body, "learner_count")?,
         },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: json_u64(body, "path_index_lookup_total")?,
@@ -2156,6 +1979,10 @@ fn json_u64(body: &str, key: &str) -> Result<u64, BenchError> {
     digits
         .parse()
         .map_err(|err| BenchError::Client(format!("invalid stats value for {key}: {err}")))
+}
+
+fn json_u64_or_zero(body: &str, key: &str) -> u64 {
+    json_u64(body, key).unwrap_or(0)
 }
 
 fn artifact_metadata(producer: &str, manifest_id: &str) -> ArtifactMetadata {
@@ -2239,8 +2066,7 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
     let mut object_concurrency = 1_usize;
     let mut read_repeats = 1_usize;
     let mut block_cache = true;
-    let mut metadata_log = false;
-    let mut metadata_log_sync = FileSharedLogSync::Data;
+    let mut metadata_raft_log_sync = FileMetadataRaftLogSync::Data;
     let mut checkpoint_bytes = None;
     let mut sample_bytes = None;
     let mut keep = false;
@@ -2328,16 +2154,10 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
                 index += 1;
                 block_cache = parse_block_cache(value(&args, index, "--block-cache")?)?;
             }
-            "--metadata-log" => {
+            "--metadata-raft-log-sync" => {
                 index += 1;
-                let raw = value(&args, index, "--metadata-log")?;
-                metadata_log = parse_on_off(raw)
-                    .map_err(|_| BenchError::UnknownOption(format!("--metadata-log {raw}")))?;
-            }
-            "--metadata-log-sync" => {
-                index += 1;
-                metadata_log_sync =
-                    parse_metadata_log_sync(value(&args, index, "--metadata-log-sync")?)?;
+                metadata_raft_log_sync =
+                    parse_metadata_raft_log_sync(value(&args, index, "--metadata-raft-log-sync")?)?;
             }
             "--keep" => keep = true,
             "--help" | "-h" => {
@@ -2359,8 +2179,7 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
         object_concurrency,
         read_repeats,
         block_cache,
-        metadata_log,
-        metadata_log_sync,
+        metadata_raft_log_sync,
         checkpoint_bytes,
         sample_bytes,
         keep,
@@ -2405,12 +2224,12 @@ fn parse_on_off(raw: &str) -> Result<bool, BenchError> {
     }
 }
 
-fn parse_metadata_log_sync(raw: &str) -> Result<FileSharedLogSync, BenchError> {
+fn parse_metadata_raft_log_sync(raw: &str) -> Result<FileMetadataRaftLogSync, BenchError> {
     match raw {
-        "data" => Ok(FileSharedLogSync::Data),
-        "none" => Ok(FileSharedLogSync::None),
+        "data" => Ok(FileMetadataRaftLogSync::Data),
+        "none" => Ok(FileMetadataRaftLogSync::None),
         _ => Err(BenchError::UnknownOption(format!(
-            "--metadata-log-sync {raw}"
+            "--metadata-raft-log-sync {raw}"
         ))),
     }
 }
@@ -2553,10 +2372,10 @@ fn object_backend_name(backend: ObjectBackendKind) -> &'static str {
     }
 }
 
-fn metadata_log_sync_name(sync: FileSharedLogSync) -> &'static str {
+fn metadata_raft_log_sync_name(sync: FileMetadataRaftLogSync) -> &'static str {
     match sync {
-        FileSharedLogSync::Data => "data",
-        FileSharedLogSync::None => "none",
+        FileMetadataRaftLogSync::Data => "data",
+        FileMetadataRaftLogSync::None => "none",
     }
 }
 
@@ -2629,8 +2448,7 @@ mod tests {
         assert_eq!(config.object_backend, ObjectBackendKind::RustFs);
         assert_eq!(config.s3.bucket, "nokv");
         assert_eq!(config.s3.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
-        assert!(!config.metadata_log);
-        assert_eq!(config.metadata_log_sync, FileSharedLogSync::Data);
+        assert_eq!(config.metadata_raft_log_sync, FileMetadataRaftLogSync::Data);
         assert!(!config.keep);
         assert!(config.root.to_string_lossy().contains("nokv-fs-bench"));
     }
@@ -2715,16 +2533,9 @@ mod tests {
     }
 
     #[test]
-    fn parse_metadata_log_options() {
-        let config = parse(vec![
-            s("--metadata-log"),
-            s("on"),
-            s("--metadata-log-sync"),
-            s("none"),
-        ])
-        .unwrap();
-        assert!(config.metadata_log);
-        assert_eq!(config.metadata_log_sync, FileSharedLogSync::None);
+    fn parse_metadata_raft_options() {
+        let config = parse(vec![s("--metadata-raft-log-sync"), s("none")]).unwrap();
+        assert_eq!(config.metadata_raft_log_sync, FileMetadataRaftLogSync::None);
     }
 
     #[test]
@@ -2775,7 +2586,7 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_log":{"enabled":true,"commit_entry_total":20,"commit_command_total":21,"max_commands_per_entry":22,"precheck_command_total":35,"precheck_predicate_total":36,"precheck_ns_total":37,"stale_read_total":38,"remote_voter_append_total":41,"remote_voter_append_success_total":42,"remote_voter_append_failure_total":43,"remote_voter_quorum_success_total":44,"remote_voter_quorum_failure_total":45,"remote_voter_quorum_wait_ns_total":46,"learner_wakeup_total":47,"learner_wakeup_coalesced_total":48,"learner_wakeup_disconnected_total":49,"learner_catchup_success_total":50,"learner_catchup_failure_total":51,"learner_catchup_ns_total":52},"metadata_service":{"path_index_lookup_total":23,"path_index_hit_total":24,"path_index_miss_total":25,"path_index_stale_total":26,"path_index_scan_stale_total":39,"path_index_fallback_total":27,"create_files_batch_total":28,"create_files_entry_total":29,"create_dirs_batch_total":30,"create_dirs_entry_total":31,"read_dir_plus_total":32,"read_dir_plus_entry_total":33,"read_dir_plus_projection_hit_total":34}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1},"metadata_service":{"path_index_lookup_total":26,"path_index_hit_total":27,"path_index_miss_total":28,"path_index_stale_total":29,"path_index_scan_stale_total":30,"path_index_fallback_total":31,"create_files_batch_total":32,"create_files_entry_total":33,"create_dirs_batch_total":34,"create_dirs_entry_total":35,"read_dir_plus_total":36,"read_dir_plus_entry_total":37,"read_dir_plus_projection_hit_total":38}}"#;
 
         assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
         assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
@@ -2789,31 +2600,19 @@ mod tests {
         assert_eq!(json_u64(body, "atomic_apply_command_total").unwrap(), 17);
         assert_eq!(json_u64(body, "atomic_apply_max_batch").unwrap(), 18);
         assert_eq!(json_u64(body, "atomic_apply_ns_total").unwrap(), 19);
-        assert_eq!(json_u64(body, "commit_entry_total").unwrap(), 20);
-        assert_eq!(json_u64(body, "commit_command_total").unwrap(), 21);
-        assert_eq!(json_u64(body, "max_commands_per_entry").unwrap(), 22);
-        assert_eq!(json_u64(body, "precheck_command_total").unwrap(), 35);
-        assert_eq!(json_u64(body, "precheck_predicate_total").unwrap(), 36);
-        assert_eq!(json_u64(body, "precheck_ns_total").unwrap(), 37);
-        assert_eq!(json_u64(body, "stale_read_total").unwrap(), 38);
-        assert_eq!(json_u64(body, "remote_voter_append_total").unwrap(), 41);
-        assert_eq!(
-            json_u64(body, "remote_voter_quorum_wait_ns_total").unwrap(),
-            46
-        );
-        assert_eq!(json_u64(body, "learner_wakeup_total").unwrap(), 47);
-        assert_eq!(
-            json_u64(body, "learner_wakeup_coalesced_total").unwrap(),
-            48
-        );
-        assert_eq!(json_u64(body, "learner_catchup_ns_total").unwrap(), 52);
-        assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 24);
-        assert_eq!(json_u64(body, "path_index_scan_stale_total").unwrap(), 39);
-        assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 28);
-        assert_eq!(json_u64(body, "create_dirs_entry_total").unwrap(), 31);
+        assert_eq!(json_u64(body, "current_term").unwrap(), 20);
+        assert_eq!(json_u64(body, "last_log_index").unwrap(), 21);
+        assert_eq!(json_u64(body, "last_applied_index").unwrap(), 22);
+        assert_eq!(json_u64(body, "millis_since_quorum_ack").unwrap(), 25);
+        assert_eq!(json_u64(body, "voter_count").unwrap(), 3);
+        assert_eq!(json_u64(body, "learner_count").unwrap(), 1);
+        assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 27);
+        assert_eq!(json_u64(body, "path_index_scan_stale_total").unwrap(), 30);
+        assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 32);
+        assert_eq!(json_u64(body, "create_dirs_entry_total").unwrap(), 35);
         assert_eq!(
             json_u64(body, "read_dir_plus_projection_hit_total").unwrap(),
-            34
+            38
         );
         assert!(json_u64(body, "missing_total").is_err());
     }
@@ -2841,7 +2640,7 @@ mod tests {
                     atomic_apply_max_batch: 3,
                     ..MetadataStoreStats::default()
                 },
-                metadata_log: MetadataLogBenchStats::default(),
+                metadata_raft: MetadataRaftBenchStats::default(),
                 metadata_service: MetadataServiceStats {
                     path_index_lookup_total: 4,
                     path_index_hit_total: 3,
@@ -2879,8 +2678,8 @@ mod tests {
         assert!(header.contains("metadata_prefix_empty_predicates"));
         assert!(header.contains("metadata_history_lookups"));
         assert!(header.contains("metadata_atomic_apply_max_batch"));
-        assert!(header.contains("metadata_log_remote_voter_quorum_wait_ns"));
-        assert!(header.contains("metadata_log_learner_catchup_ns"));
+        assert!(header.contains("metadata_raft_last_applied_index"));
+        assert!(header.contains("metadata_raft_millis_since_quorum_ack"));
         assert!(header.contains("path_index_hit_rate"));
         assert!(header.contains("path_index_scan_stale"));
         assert!(header.contains("read_dir_plus_projection_hit_rate"));

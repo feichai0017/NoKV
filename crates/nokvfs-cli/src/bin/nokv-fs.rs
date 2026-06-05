@@ -10,10 +10,10 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use nokvfs_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
-use nokvfs_cluster::{FileSharedLogSync, LogTerm, NodeId};
+use nokvfs_cluster::{FileMetadataRaftLogSync, NodeId};
 use nokvfs_meta::{HistoryGcOptions, ObjectGcOptions};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
-use nokvfs_server::{MetadataLogPeerOptions, ServerOptions, DEFAULT_SERVER_BIND};
+use nokvfs_server::{MetadataRaftPeerOptions, ServerOptions, DEFAULT_SERVER_BIND};
 use nokvfs_types::{FileType, MountId};
 use sha2::{Digest, Sha256};
 
@@ -26,14 +26,10 @@ const DEFAULT_GC_LIMIT: usize = 1024;
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct Config {
     meta: PathBuf,
-    metadata_log: Option<PathBuf>,
-    metadata_log_node: NodeId,
-    metadata_log_leader: NodeId,
-    metadata_log_term: LogTerm,
-    metadata_log_voters: Vec<NodeId>,
-    metadata_log_learners: Vec<NodeId>,
-    metadata_log_peers: Vec<MetadataLogPeerOptions>,
-    metadata_log_sync: FileSharedLogSync,
+    metadata_raft_node: NodeId,
+    metadata_raft_voters: Vec<NodeId>,
+    metadata_raft_peers: Vec<MetadataRaftPeerOptions>,
+    metadata_raft_log_sync: FileMetadataRaftLogSync,
     object: ObjectStoreConfig,
     mount: MountId,
     uid: u32,
@@ -325,14 +321,10 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 bind: config.server_bind,
                 mount: config.mount,
                 meta_path: config.meta,
-                metadata_log_path: config.metadata_log,
-                metadata_log_node: config.metadata_log_node,
-                metadata_log_leader: config.metadata_log_leader,
-                metadata_log_term: config.metadata_log_term,
-                metadata_log_voters: config.metadata_log_voters,
-                metadata_log_learners: config.metadata_log_learners,
-                metadata_log_peers: config.metadata_log_peers,
-                metadata_log_sync: config.metadata_log_sync,
+                metadata_raft_node: config.metadata_raft_node,
+                metadata_raft_voters: config.metadata_raft_voters,
+                metadata_raft_peers: config.metadata_raft_peers,
+                metadata_raft_log_sync: config.metadata_raft_log_sync,
                 object: config.object,
                 uid: config.uid,
                 gid: config.gid,
@@ -417,14 +409,10 @@ fn control_get(config: &Config, path: &str) -> Result<String, CliError> {
 
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv-fs/meta");
-    let mut metadata_log = None;
-    let mut metadata_log_node = NodeId::new(1).expect("default metadata log node is non-zero");
-    let mut metadata_log_leader = None;
-    let mut metadata_log_term = LogTerm::new(1).expect("default metadata log term is non-zero");
-    let mut metadata_log_voters = Vec::new();
-    let mut metadata_log_learners = Vec::new();
-    let mut metadata_log_peers = Vec::new();
-    let mut metadata_log_sync = FileSharedLogSync::Data;
+    let mut metadata_raft_node = NodeId::new(1).expect("default metadata raft node is non-zero");
+    let mut metadata_raft_voters = Vec::new();
+    let mut metadata_raft_peers = Vec::new();
+    let mut metadata_raft_log_sync = FileMetadataRaftLogSync::Data;
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
     let mut mount = MountId::new(1).expect("default mount id is non-zero");
@@ -443,51 +431,27 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 index += 1;
                 meta = PathBuf::from(value(&args, index, "--meta")?);
             }
-            "--metadata-log" => {
+            "--metadata-raft-node" => {
                 index += 1;
-                metadata_log = Some(PathBuf::from(value(&args, index, "--metadata-log")?));
+                metadata_raft_node = parse_node_id(value(&args, index, "--metadata-raft-node")?)?;
             }
-            "--no-metadata-log" => {
-                metadata_log = None;
-            }
-            "--metadata-log-term" => {
+            "--metadata-raft-voters" => {
                 index += 1;
-                metadata_log_term = parse_log_term(value(&args, index, "--metadata-log-term")?)?;
+                metadata_raft_voters =
+                    parse_node_id_list(value(&args, index, "--metadata-raft-voters")?)?;
             }
-            "--metadata-log-node" => {
+            "--metadata-raft-peer" => {
                 index += 1;
-                metadata_log_node = parse_node_id(value(&args, index, "--metadata-log-node")?)?;
-            }
-            "--metadata-log-leader" => {
-                index += 1;
-                metadata_log_leader = Some(parse_node_id(value(
+                metadata_raft_peers.push(parse_metadata_raft_peer(value(
                     &args,
                     index,
-                    "--metadata-log-leader",
+                    "--metadata-raft-peer",
                 )?)?);
             }
-            "--metadata-log-voters" => {
+            "--metadata-raft-log-sync" => {
                 index += 1;
-                metadata_log_voters =
-                    parse_node_id_list(value(&args, index, "--metadata-log-voters")?)?;
-            }
-            "--metadata-log-learners" => {
-                index += 1;
-                metadata_log_learners =
-                    parse_node_id_list(value(&args, index, "--metadata-log-learners")?)?;
-            }
-            "--metadata-log-peer" => {
-                index += 1;
-                metadata_log_peers.push(parse_metadata_log_peer(value(
-                    &args,
-                    index,
-                    "--metadata-log-peer",
-                )?)?);
-            }
-            "--metadata-log-sync" => {
-                index += 1;
-                metadata_log_sync =
-                    parse_metadata_log_sync(value(&args, index, "--metadata-log-sync")?)?;
+                metadata_raft_log_sync =
+                    parse_metadata_raft_log_sync(value(&args, index, "--metadata-raft-log-sync")?)?;
             }
             "--object-backend" => {
                 index += 1;
@@ -600,14 +564,10 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 return Ok((
                     Config {
                         meta,
-                        metadata_log,
-                        metadata_log_node,
-                        metadata_log_leader: metadata_log_leader.unwrap_or(metadata_log_node),
-                        metadata_log_term,
-                        metadata_log_voters,
-                        metadata_log_learners,
-                        metadata_log_peers,
-                        metadata_log_sync,
+                        metadata_raft_node,
+                        metadata_raft_voters,
+                        metadata_raft_peers,
+                        metadata_raft_log_sync,
                         object: object_config(object_backend, s3),
                         mount,
                         uid,
@@ -634,14 +594,10 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     Ok((
         Config {
             meta,
-            metadata_log,
-            metadata_log_node,
-            metadata_log_leader: metadata_log_leader.unwrap_or(metadata_log_node),
-            metadata_log_term,
-            metadata_log_voters,
-            metadata_log_learners,
-            metadata_log_peers,
-            metadata_log_sync,
+            metadata_raft_node,
+            metadata_raft_voters,
+            metadata_raft_peers,
+            metadata_raft_log_sync,
             object: object_config(object_backend, s3),
             mount,
             uid,
@@ -665,28 +621,20 @@ fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, CliError> {
     }
 }
 
-fn parse_metadata_log_sync(raw: &str) -> Result<FileSharedLogSync, CliError> {
+fn parse_metadata_raft_log_sync(raw: &str) -> Result<FileMetadataRaftLogSync, CliError> {
     match raw {
-        "data" => Ok(FileSharedLogSync::Data),
-        "none" => Ok(FileSharedLogSync::None),
+        "data" => Ok(FileMetadataRaftLogSync::Data),
+        "none" => Ok(FileMetadataRaftLogSync::None),
         _ => Err(CliError::UnknownOption(format!(
-            "--metadata-log-sync {raw}"
+            "--metadata-raft-log-sync {raw}"
         ))),
     }
 }
 
-fn parse_log_term(raw: &str) -> Result<LogTerm, CliError> {
-    let parsed = parse_u64(raw, "metadata_log_term")?;
-    LogTerm::new(parsed).map_err(|_| CliError::InvalidNumber {
-        field: "metadata_log_term",
-        value: raw.to_owned(),
-    })
-}
-
 fn parse_node_id(raw: &str) -> Result<NodeId, CliError> {
-    let parsed = parse_u64(raw, "metadata_log_node")?;
+    let parsed = parse_u64(raw, "metadata_raft_node")?;
     NodeId::new(parsed).map_err(|_| CliError::InvalidNumber {
-        field: "metadata_log_node",
+        field: "metadata_raft_node",
         value: raw.to_owned(),
     })
 }
@@ -694,7 +642,7 @@ fn parse_node_id(raw: &str) -> Result<NodeId, CliError> {
 fn parse_node_id_list(raw: &str) -> Result<Vec<NodeId>, CliError> {
     if raw.is_empty() {
         return Err(CliError::InvalidNumber {
-            field: "metadata_log_nodes",
+            field: "metadata_raft_nodes",
             value: raw.to_owned(),
         });
     }
@@ -702,31 +650,31 @@ fn parse_node_id_list(raw: &str) -> Result<Vec<NodeId>, CliError> {
         .map(|part| {
             if part.is_empty() {
                 return Err(CliError::InvalidNumber {
-                    field: "metadata_log_nodes",
+                    field: "metadata_raft_nodes",
                     value: raw.to_owned(),
                 });
             }
-            let parsed = parse_u64(part, "metadata_log_nodes")?;
+            let parsed = parse_u64(part, "metadata_raft_nodes")?;
             NodeId::new(parsed).map_err(|_| CliError::InvalidNumber {
-                field: "metadata_log_nodes",
+                field: "metadata_raft_nodes",
                 value: raw.to_owned(),
             })
         })
         .collect()
 }
 
-fn parse_metadata_log_peer(raw: &str) -> Result<MetadataLogPeerOptions, CliError> {
+fn parse_metadata_raft_peer(raw: &str) -> Result<MetadataRaftPeerOptions, CliError> {
     let Some((node, address)) = raw.split_once('=') else {
         return Err(CliError::UnknownOption(format!(
-            "--metadata-log-peer {raw}"
+            "--metadata-raft-peer {raw}"
         )));
     };
-    Ok(MetadataLogPeerOptions {
+    Ok(MetadataRaftPeerOptions {
         node: parse_node_id(node).map_err(|_| CliError::InvalidNumber {
-            field: "metadata_log_peer_node",
+            field: "metadata_raft_peer_node",
             value: node.to_owned(),
         })?,
-        address: parse_socket_addr(address, "metadata_log_peer")?,
+        address: parse_socket_addr(address, "metadata_raft_peer")?,
     })
 }
 
@@ -977,15 +925,11 @@ Object backends:\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
   --metadata-read-endpoint ADDR   Preferred metadata read endpoint; repeat for learners\n\
-  --metadata-log PATH             Legacy shared metadata log path; omitted uses OpenRaft\n\
-  --no-metadata-log               Use default OpenRaft metadata log under --meta\n\
-  --metadata-log-node NODE        Local metadata log node id\n\
-  --metadata-log-leader NODE      Metadata log leader node id; defaults to local node\n\
-  --metadata-log-term TERM        Shared metadata log term for serve\n\
-  --metadata-log-voters CSV       Metadata voter node ids, e.g. 1,2,3\n\
-  --metadata-log-learners CSV     Metadata learner node ids, e.g. 4,5\n\
-  --metadata-log-peer NODE=ADDR   Metadata peer endpoint; repeat for remote voters and learners\n\
-  --metadata-log-sync data|none   data fsyncs log records; none only flushes to the OS\n\
+  --metadata-raft-node NODE       Local OpenRaft metadata node id\n\
+  --metadata-raft-voters CSV      OpenRaft voter node ids, e.g. 1,2,3\n\
+  --metadata-raft-peer NODE=ADDR  OpenRaft peer endpoint; repeat for remote voters\n\
+  --metadata-raft-log-sync data|none\n\
+                                  data fsyncs metadata Raft log records; none only flushes to the OS\n\
 \n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\
@@ -997,14 +941,10 @@ Defaults:\n\
   --history-gc-interval-ms 30000\n\
   --history-gc-limit 1024\n\
   --server-bind 127.0.0.1:7777\n\
-  --metadata-log <omitted; OpenRaft stores its log under --meta>\n\
-  --metadata-log-node 1\n\
-  --metadata-log-leader <metadata-log-node>\n\
-  --metadata-log-term 1\n\
-  --metadata-log-voters <local node only>\n\
-  --metadata-log-learners <empty>\n\
-  --metadata-log-peer <empty>\n\
-  --metadata-log-sync data\n\
+  --metadata-raft-node 1\n\
+  --metadata-raft-voters <local node only>\n\
+  --metadata-raft-peer <empty>\n\
+  --metadata-raft-log-sync data\n\
   --mount 1"
     )
 }
@@ -1064,14 +1004,10 @@ mod tests {
             bind,
             mount: MountId::new(1).unwrap(),
             meta_path: dir.path().join("meta"),
-            metadata_log_path: None,
-            metadata_log_node: NodeId::new(1).unwrap(),
-            metadata_log_leader: NodeId::new(1).unwrap(),
-            metadata_log_term: LogTerm::new(1).unwrap(),
-            metadata_log_voters: Vec::new(),
-            metadata_log_learners: Vec::new(),
-            metadata_log_peers: Vec::new(),
-            metadata_log_sync: FileSharedLogSync::Data,
+            metadata_raft_node: NodeId::new(1).unwrap(),
+            metadata_raft_voters: Vec::new(),
+            metadata_raft_peers: Vec::new(),
+            metadata_raft_log_sync: FileMetadataRaftLogSync::Data,
             object: fake_server_object_config(),
             uid: 1000,
             gid: 1000,
@@ -1102,7 +1038,7 @@ mod tests {
         assert_eq!(options.bucket, "nokv");
         assert_eq!(options.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
         assert_eq!(config.mount.get(), 1);
-        assert_eq!(config.metadata_log_node.get(), 1);
+        assert_eq!(config.metadata_raft_node.get(), 1);
         assert_eq!(config.server_bind, DEFAULT_SERVER_BIND);
         assert_eq!(command, Command::Ls { path: s("/") });
     }
@@ -1174,8 +1110,9 @@ mod tests {
         assert_eq!(config.object_gc_limit, 9);
         assert_eq!(config.history_gc_interval, Duration::from_millis(60));
         assert_eq!(config.history_gc_limit, 11);
-        assert_eq!(config.metadata_log, None);
-        assert_eq!(config.metadata_log_term.get(), 1);
+        assert_eq!(config.metadata_raft_node.get(), 1);
+        assert!(config.metadata_raft_voters.is_empty());
+        assert!(config.metadata_raft_peers.is_empty());
         assert_eq!(
             config.server_bind,
             "127.0.0.1:17777".parse::<SocketAddr>().unwrap()
@@ -1361,7 +1298,7 @@ mod tests {
     fn parse_serve_command() {
         let (config, command) = parse(vec![s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
-        assert_eq!(config.metadata_log, None);
+        assert_eq!(config.metadata_raft_node.get(), 1);
         assert!(matches!(
             parse(vec![s("serve"), s("extra")]),
             Err(CliError::TooManyArguments)
@@ -1455,40 +1392,26 @@ mod tests {
     }
 
     #[test]
-    fn parse_metadata_log_option_for_serve() {
+    fn parse_metadata_raft_options_for_serve() {
         let (config, command) = parse(vec![
-            s("--metadata-log"),
-            s(".nokv-fs/metadata.log"),
-            s("--metadata-log-node"),
+            s("--metadata-raft-node"),
             s("4"),
-            s("--metadata-log-leader"),
-            s("2"),
-            s("--metadata-log-term"),
-            s("7"),
-            s("--metadata-log-voters"),
+            s("--metadata-raft-voters"),
             s("1,2,3"),
-            s("--metadata-log-learners"),
-            s("4,5"),
-            s("--metadata-log-peer"),
+            s("--metadata-raft-peer"),
             s("2=127.0.0.1:7778"),
-            s("--metadata-log-peer"),
+            s("--metadata-raft-peer"),
             s("3=127.0.0.1:7779"),
-            s("--metadata-log-sync"),
+            s("--metadata-raft-log-sync"),
             s("none"),
             s("serve"),
         ])
         .unwrap();
         assert_eq!(command, Command::Serve);
-        assert_eq!(
-            config.metadata_log,
-            Some(PathBuf::from(".nokv-fs/metadata.log"))
-        );
-        assert_eq!(config.metadata_log_node.get(), 4);
-        assert_eq!(config.metadata_log_leader.get(), 2);
-        assert_eq!(config.metadata_log_term.get(), 7);
+        assert_eq!(config.metadata_raft_node.get(), 4);
         assert_eq!(
             config
-                .metadata_log_voters
+                .metadata_raft_voters
                 .iter()
                 .map(|node| node.get())
                 .collect::<Vec<_>>(),
@@ -1496,15 +1419,7 @@ mod tests {
         );
         assert_eq!(
             config
-                .metadata_log_learners
-                .iter()
-                .map(|node| node.get())
-                .collect::<Vec<_>>(),
-            vec![4, 5]
-        );
-        assert_eq!(
-            config
-                .metadata_log_peers
+                .metadata_raft_peers
                 .iter()
                 .map(|peer| (peer.node.get(), peer.address.to_string()))
                 .collect::<Vec<_>>(),
@@ -1513,71 +1428,37 @@ mod tests {
                 (3, "127.0.0.1:7779".to_owned())
             ]
         );
-        assert_eq!(config.metadata_log_sync, FileSharedLogSync::None);
-        let (disabled, command) = parse(vec![s("--no-metadata-log"), s("serve")]).unwrap();
+        assert_eq!(config.metadata_raft_log_sync, FileMetadataRaftLogSync::None);
+        let (node_only, command) =
+            parse(vec![s("--metadata-raft-node"), s("4"), s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
-        assert_eq!(disabled.metadata_log, None);
-        let (implicit_leader, command) =
-            parse(vec![s("--metadata-log-node"), s("4"), s("serve")]).unwrap();
-        assert_eq!(command, Command::Serve);
-        assert_eq!(implicit_leader.metadata_log_node.get(), 4);
-        assert_eq!(implicit_leader.metadata_log_leader.get(), 4);
-        let (reenabled, command) = parse(vec![
-            s("--no-metadata-log"),
-            s("--metadata-log"),
-            s("custom.log"),
-            s("serve"),
-        ])
-        .unwrap();
-        assert_eq!(command, Command::Serve);
-        assert_eq!(reenabled.metadata_log, Some(PathBuf::from("custom.log")));
+        assert_eq!(node_only.metadata_raft_node.get(), 4);
         assert!(matches!(
-            parse(vec![s("--metadata-log-sync"), s("invalid"), s("serve")]),
-            Err(CliError::UnknownOption(option)) if option == "--metadata-log-sync invalid"
+            parse(vec![s("--metadata-raft-log-sync"), s("invalid"), s("serve")]),
+            Err(CliError::UnknownOption(option)) if option == "--metadata-raft-log-sync invalid"
         ));
         assert!(matches!(
-            parse(vec![s("--metadata-log-term"), s("0"), s("serve")]),
+            parse(vec![s("--metadata-raft-node"), s("0"), s("serve")]),
             Err(CliError::InvalidNumber {
-                field: "metadata_log_term",
+                field: "metadata_raft_node",
                 ..
             })
         ));
         assert!(matches!(
-            parse(vec![s("--metadata-log-node"), s("0"), s("serve")]),
+            parse(vec![s("--metadata-raft-voters"), s("1,,3"), s("serve")]),
             Err(CliError::InvalidNumber {
-                field: "metadata_log_node",
+                field: "metadata_raft_nodes",
                 ..
             })
         ));
         assert!(matches!(
-            parse(vec![s("--metadata-log-leader"), s("0"), s("serve")]),
-            Err(CliError::InvalidNumber {
-                field: "metadata_log_node",
-                ..
-            })
+            parse(vec![s("--metadata-raft-peer"), s("2"), s("serve")]),
+            Err(CliError::UnknownOption(option)) if option == "--metadata-raft-peer 2"
         ));
         assert!(matches!(
-            parse(vec![s("--metadata-log-voters"), s("1,,3"), s("serve")]),
-            Err(CliError::InvalidNumber {
-                field: "metadata_log_nodes",
-                ..
-            })
-        ));
-        assert!(matches!(
-            parse(vec![s("--metadata-log-learners"), s("0"), s("serve")]),
-            Err(CliError::InvalidNumber {
-                field: "metadata_log_nodes",
-                ..
-            })
-        ));
-        assert!(matches!(
-            parse(vec![s("--metadata-log-peer"), s("2"), s("serve")]),
-            Err(CliError::UnknownOption(option)) if option == "--metadata-log-peer 2"
-        ));
-        assert!(matches!(
-            parse(vec![s("--metadata-log-peer"), s("2=bad"), s("serve")]),
+            parse(vec![s("--metadata-raft-peer"), s("2=bad"), s("serve")]),
             Err(CliError::InvalidAddress {
-                field: "metadata_log_peer",
+                field: "metadata_raft_peer",
                 ..
             })
         ));
