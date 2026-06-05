@@ -14,6 +14,7 @@ mod group;
 mod log;
 mod membership;
 mod memory;
+mod openraft_log;
 mod quorum;
 mod replay;
 mod replication;
@@ -34,6 +35,9 @@ pub use group::{MetadataGroup, MetadataGroupCommit};
 pub use log::SharedMetadataLog;
 pub use membership::{FileMembershipCatalog, MembershipCatalog, MemoryMembershipCatalog};
 pub use memory::InMemorySharedLog;
+pub use openraft_log::{
+    MetadataRaftApplyBatchResult, MetadataRaftCommandBatch, MetadataRaftConfig, MetadataRaftEntry,
+};
 pub use quorum::{InMemoryQuorumLog, QuorumNodeLog, QuorumNodeRole};
 pub use replay::{replay_entries, MetadataLogSink, ReplayDriver, ReplayOutcome};
 pub use replication::{
