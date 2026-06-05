@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Barrier, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -47,6 +47,7 @@ enum Workload {
     MetadataHaSmoke,
     MetadataHaFaultSmoke,
     MetadataHaLearnerRead,
+    MetadataHaCoalescingSmoke,
     MdtestEasy,
     MdtestHard,
     MetadataNegativeLookup,
@@ -127,6 +128,8 @@ struct ResultRow {
     metadata_raft_proposal_commands: u64,
     metadata_raft_proposal_max_batch: u64,
     metadata_raft_proposal_ns: u64,
+    metadata_raft_proposal_queue_wait_ns: u64,
+    metadata_raft_proposal_queue_max_wait_ns: u64,
     metadata_gets: u64,
     metadata_get_user_strong: u64,
     metadata_get_write_plan_local: u64,
@@ -211,6 +214,8 @@ struct MetadataRaftBenchStats {
     proposal_command_total: u64,
     proposal_max_batch: u64,
     proposal_ns_total: u64,
+    proposal_queue_wait_ns_total: u64,
+    proposal_queue_max_wait_ns: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -418,7 +423,7 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|metadata-ha-learner-read|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|metadata-ha-learner-read|metadata-ha-coalescing-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] \
@@ -459,6 +464,9 @@ fn run_one(
     if workload == Workload::MetadataHaLearnerRead {
         return bench_metadata_ha_learner_read(config, shape);
     }
+    if workload == Workload::MetadataHaCoalescingSmoke {
+        return bench_metadata_ha_coalescing_smoke(config, shape);
+    }
     let label = workload_name(workload);
     let client = client_for(config, label)?;
     client.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
@@ -482,8 +490,8 @@ fn run_one(
         Workload::MetadataHaFaultSmoke => {
             unreachable!("metadata-ha-fault-smoke executes before client setup")
         }
-        Workload::MetadataHaLearnerRead => {
-            unreachable!("metadata-ha-learner-read executes before client setup")
+        Workload::MetadataHaLearnerRead | Workload::MetadataHaCoalescingSmoke => {
+            unreachable!("metadata HA special workloads execute before client setup")
         }
         Workload::MetadataSmoke => unreachable!("metadata-smoke expands before execution"),
         Workload::All => unreachable!("all expands before execution"),
@@ -939,6 +947,166 @@ fn bench_metadata_ha_smoke(
         ),
         caveat: format!(
             "OpenRaft metadata HA smoke over three metadata server processes, sync={}, peer read requires observed log position",
+            metadata_raft_log_sync_name(config.metadata_raft_log_sync)
+        ),
+    }))
+}
+
+fn bench_metadata_ha_coalescing_smoke(
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<ResultRow, BenchError> {
+    let workload = "metadata-ha-coalescing-smoke";
+    let root = config.root.join(workload);
+    fs::create_dir_all(&root).map_err(from_io)?;
+    let object = object_config_for(config, workload);
+    let objects = object.clone().open().map_err(from_client)?;
+    let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
+    let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
+    let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
+    let voters = vec![node_1, node_2, node_3];
+
+    let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_2 = listener_2.local_addr().map_err(from_io)?;
+    let listener_3 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_3 = listener_3.local_addr().map_err(from_io)?;
+    let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_1 = listener_1.local_addr().map_err(from_io)?;
+    let peers = vec![
+        MetadataRaftPeerOptions {
+            node: node_1,
+            address: addr_1,
+        },
+        MetadataRaftPeerOptions {
+            node: node_2,
+            address: addr_2,
+        },
+        MetadataRaftPeerOptions {
+            node: node_3,
+            address: addr_3,
+        },
+    ];
+    let cluster = MetadataHaClusterConfig {
+        root: root.clone(),
+        object,
+        voters,
+        learners: Vec::new(),
+        peers,
+        sync: config.metadata_raft_log_sync,
+    };
+
+    start_metadata_raft_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
+    wait_for_health(addr_2)?;
+    start_metadata_raft_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
+    wait_for_health(addr_3)?;
+    start_metadata_raft_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
+    wait_for_health(addr_1)?;
+
+    let cluster_nodes = [(node_1, addr_1), (node_2, addr_2), (node_3, addr_3)];
+    let (leader, leader_addr) = wait_metadata_raft_leader(&cluster_nodes)?;
+    let write_addr = cluster_nodes
+        .iter()
+        .find_map(|(node, address)| (*node != leader).then_some(*address))
+        .unwrap_or(leader_addr);
+    let peer_read_addr = cluster_nodes
+        .iter()
+        .find_map(|(node, address)| (*node != leader && *address != write_addr).then_some(*address))
+        .unwrap_or(write_addr);
+    let metadata = MetadataClient::new(
+        MetadataClientOptions::new(write_addr).with_read_endpoints(vec![peer_read_addr]),
+    );
+    let client = NoKvFsClient::new(metadata, objects);
+    client
+        .metadata()
+        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(|err| {
+            BenchError::Client(format!(
+                "metadata-ha-coalescing-smoke bootstrap root: {err}"
+            ))
+        })?;
+    client
+        .metadata()
+        .mkdir("/coalesce", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(|err| {
+            BenchError::Client(format!(
+                "metadata-ha-coalescing-smoke mkdir /coalesce: {err}"
+            ))
+        })?;
+    let before = fetch_server_stats(leader_addr)?;
+    let start = Instant::now();
+    let files = shape.shared_files.clamp(16, 512);
+    let workers = config.object_concurrency.clamp(2, 64).min(files);
+    let barrier = Arc::new(Barrier::new(workers));
+    let checksum = Arc::new(AtomicU64::new(0));
+    let mut handles = Vec::new();
+    for worker in 0..workers {
+        let barrier = Arc::clone(&barrier);
+        let checksum = Arc::clone(&checksum);
+        let options =
+            MetadataClientOptions::new(write_addr).with_read_endpoints(vec![peer_read_addr]);
+        handles.push(thread::spawn(move || -> Result<(), BenchError> {
+            let metadata = MetadataClient::new(options);
+            barrier.wait();
+            for index in (worker..files).step_by(workers) {
+                let entry = metadata
+                    .create_file(
+                        &format!("/coalesce/file-{index:06}"),
+                        DEFAULT_MODE_FILE,
+                        DEFAULT_UID,
+                        DEFAULT_GID,
+                    )
+                    .map_err(|err| {
+                        BenchError::Client(format!(
+                            "metadata-ha-coalescing-smoke create file {index}: {err}"
+                        ))
+                    })?;
+                checksum.fetch_add(entry.attr.inode.get(), Ordering::Relaxed);
+            }
+            Ok(())
+        }));
+    }
+    for handle in handles {
+        handle.join().map_err(|_| {
+            BenchError::Client("metadata HA coalescing worker panicked".to_owned())
+        })??;
+    }
+
+    let leader_reader = MetadataClient::connect(leader_addr);
+    let entries = leader_reader.list("/coalesce").map_err(|err| {
+        BenchError::Client(format!(
+            "metadata-ha-coalescing-smoke leader list /coalesce: {err}"
+        ))
+    })?;
+    if entries.len() != files {
+        return Err(BenchError::Client(format!(
+            "metadata HA coalescing leader read returned {} entries, expected {files}",
+            entries.len()
+        )));
+    }
+    let stats = stats_delta(before, fetch_server_stats(leader_addr)?);
+    Ok(row(RowInput {
+        workload,
+        profile: config.profile,
+        operations: files + 1,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: 0,
+        samples: 0,
+        stats,
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum: checksum
+            .load(Ordering::Relaxed)
+            .wrapping_add(entries.len() as u64),
+        shape: format!(
+            "voters=3 leader={} write_endpoint={} peer_read={} files={} workers={workers}",
+            leader.get(),
+            write_addr,
+            peer_read_addr,
+            files
+        ),
+        caveat: format!(
+            "OpenRaft coalescing smoke over concurrent independent create_file RPCs, sync={}",
             metadata_raft_log_sync_name(config.metadata_raft_log_sync)
         ),
     }))
@@ -1592,6 +1760,14 @@ fn row(input: RowInput) -> ResultRow {
         metadata_raft_proposal_commands: input.stats.metadata_raft.proposal_command_total,
         metadata_raft_proposal_max_batch: input.stats.metadata_raft.proposal_max_batch,
         metadata_raft_proposal_ns: input.stats.metadata_raft.proposal_ns_total,
+        metadata_raft_proposal_queue_wait_ns: input
+            .stats
+            .metadata_raft
+            .proposal_queue_wait_ns_total,
+        metadata_raft_proposal_queue_max_wait_ns: input
+            .stats
+            .metadata_raft
+            .proposal_queue_max_wait_ns,
         metadata_gets: input.stats.metadata_store.get_total,
         metadata_get_user_strong: input.stats.metadata_store.get_user_strong_total,
         metadata_get_write_plan_local: input.stats.metadata_store.get_write_plan_local_total,
@@ -1649,7 +1825,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_raft_proposal_batches,metadata_raft_proposal_commands,metadata_raft_proposal_max_batch,metadata_raft_proposal_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_raft_proposal_batches,metadata_raft_proposal_commands,metadata_raft_proposal_max_batch,metadata_raft_proposal_ns,metadata_raft_proposal_queue_wait_ns,metadata_raft_proposal_queue_max_wait_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow) -> String {
@@ -1687,6 +1863,8 @@ fn csv_row(row: &ResultRow) -> String {
         row.metadata_raft_proposal_commands.to_string(),
         row.metadata_raft_proposal_max_batch.to_string(),
         row.metadata_raft_proposal_ns.to_string(),
+        row.metadata_raft_proposal_queue_wait_ns.to_string(),
+        row.metadata_raft_proposal_queue_max_wait_ns.to_string(),
         row.metadata_gets.to_string(),
         row.metadata_get_user_strong.to_string(),
         row.metadata_get_write_plan_local.to_string(),
@@ -1902,6 +2080,15 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_raft
                 .proposal_ns_total
                 .saturating_sub(before.metadata_raft.proposal_ns_total),
+            proposal_queue_wait_ns_total: after
+                .metadata_raft
+                .proposal_queue_wait_ns_total
+                .saturating_sub(before.metadata_raft.proposal_queue_wait_ns_total),
+            proposal_queue_max_wait_ns: if proposal_delta == 0 {
+                0
+            } else {
+                after.metadata_raft.proposal_queue_max_wait_ns
+            },
         },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: after
@@ -2261,6 +2448,8 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             proposal_command_total: json_u64(body, "proposal_command_total")?,
             proposal_max_batch: json_u64(body, "proposal_max_batch")?,
             proposal_ns_total: json_u64(body, "proposal_ns_total")?,
+            proposal_queue_wait_ns_total: json_u64(body, "proposal_queue_wait_ns_total")?,
+            proposal_queue_max_wait_ns: json_u64(body, "proposal_queue_max_wait_ns")?,
         },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: json_u64(body, "path_index_lookup_total")?,
@@ -2582,6 +2771,7 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
         "metadata-ha-smoke" => Ok(Workload::MetadataHaSmoke),
         "metadata-ha-fault-smoke" => Ok(Workload::MetadataHaFaultSmoke),
         "metadata-ha-learner-read" => Ok(Workload::MetadataHaLearnerRead),
+        "metadata-ha-coalescing-smoke" => Ok(Workload::MetadataHaCoalescingSmoke),
         "mdtest-easy" => Ok(Workload::MdtestEasy),
         "mdtest-hard" => Ok(Workload::MdtestHard),
         "metadata-negative-lookup" => Ok(Workload::MetadataNegativeLookup),
@@ -2601,6 +2791,7 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
             Workload::MetadataHaSmoke,
             Workload::MetadataHaFaultSmoke,
             Workload::MetadataHaLearnerRead,
+            Workload::MetadataHaCoalescingSmoke,
             Workload::MdtestEasy,
             Workload::MdtestHard,
             Workload::MetadataNegativeLookup,
@@ -2670,6 +2861,7 @@ fn workload_name(workload: Workload) -> &'static str {
         Workload::MetadataHaSmoke => "metadata-ha-smoke",
         Workload::MetadataHaFaultSmoke => "metadata-ha-fault-smoke",
         Workload::MetadataHaLearnerRead => "metadata-ha-learner-read",
+        Workload::MetadataHaCoalescingSmoke => "metadata-ha-coalescing-smoke",
         Workload::MdtestEasy => "mdtest-easy",
         Workload::MdtestHard => "mdtest-hard",
         Workload::MetadataNegativeLookup => "metadata-negative-lookup",
@@ -2882,6 +3074,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_metadata_ha_coalescing_smoke_workload() {
+        let config = parse(vec![s("--workload"), s("metadata-ha-coalescing-smoke")]).unwrap();
+        assert_eq!(config.workload, Workload::MetadataHaCoalescingSmoke);
+    }
+
+    #[test]
     fn parse_metadata_negative_lookup_workload() {
         let config = parse(vec![s("--workload"), s("metadata-negative-lookup")]).unwrap();
         assert_eq!(config.workload, Workload::MetadataNegativeLookup);
@@ -2917,7 +3115,7 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1,"proposal_batch_total":26,"proposal_command_total":27,"proposal_max_batch":28,"proposal_ns_total":29},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1,"proposal_batch_total":26,"proposal_command_total":27,"proposal_max_batch":28,"proposal_ns_total":29,"proposal_queue_wait_ns_total":30,"proposal_queue_max_wait_ns":31},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
 
         assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
         assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
@@ -2941,6 +3139,8 @@ mod tests {
         assert_eq!(json_u64(body, "proposal_command_total").unwrap(), 27);
         assert_eq!(json_u64(body, "proposal_max_batch").unwrap(), 28);
         assert_eq!(json_u64(body, "proposal_ns_total").unwrap(), 29);
+        assert_eq!(json_u64(body, "proposal_queue_wait_ns_total").unwrap(), 30);
+        assert_eq!(json_u64(body, "proposal_queue_max_wait_ns").unwrap(), 31);
         assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 31);
         assert_eq!(json_u64(body, "path_index_scan_stale_total").unwrap(), 34);
         assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 36);
@@ -3049,6 +3249,7 @@ mod tests {
                 Workload::MetadataHaSmoke,
                 Workload::MetadataHaFaultSmoke,
                 Workload::MetadataHaLearnerRead,
+                Workload::MetadataHaCoalescingSmoke,
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
                 Workload::MetadataNegativeLookup,

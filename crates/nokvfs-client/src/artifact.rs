@@ -394,7 +394,7 @@ where
 
 impl<O> ArtifactBackend for NoKvFsClient<O>
 where
-    O: ObjectStore,
+    O: ObjectStore + Send + Sync + 'static,
 {
     fn lookup_path(&self, absolute_path: &str) -> Result<Option<DentryWithAttr>, ClientError> {
         self.metadata().lookup(absolute_path)

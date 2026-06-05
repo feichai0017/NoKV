@@ -418,7 +418,7 @@ fn metadata_checkpoint_archive_key(
 
 fn metadata_raft_json(stats: OpenRaftMetadataStats) -> String {
     format!(
-        "{{\"enabled\":true,\"node_id\":{},\"current_term\":{},\"state\":\"{}\",\"current_leader\":{},\"last_log_index\":{},\"last_applied_index\":{},\"snapshot_index\":{},\"purged_index\":{},\"millis_since_quorum_ack\":{},\"voter_count\":{},\"learner_count\":{},\"proposal_batch_total\":{},\"proposal_command_total\":{},\"proposal_max_batch\":{},\"proposal_ns_total\":{}}}",
+        "{{\"enabled\":true,\"node_id\":{},\"current_term\":{},\"state\":\"{}\",\"current_leader\":{},\"last_log_index\":{},\"last_applied_index\":{},\"snapshot_index\":{},\"purged_index\":{},\"millis_since_quorum_ack\":{},\"voter_count\":{},\"learner_count\":{},\"proposal_batch_total\":{},\"proposal_command_total\":{},\"proposal_max_batch\":{},\"proposal_ns_total\":{},\"proposal_queue_wait_ns_total\":{},\"proposal_queue_max_wait_ns\":{}}}",
         stats.node_id,
         stats.current_term,
         escape_json_string(&stats.state),
@@ -434,6 +434,8 @@ fn metadata_raft_json(stats: OpenRaftMetadataStats) -> String {
         stats.proposal_command_total,
         stats.proposal_max_batch,
         stats.proposal_ns_total,
+        stats.proposal_queue_wait_ns_total,
+        stats.proposal_queue_max_wait_ns,
     )
 }
 
@@ -586,7 +588,7 @@ pub(crate) mod tests {
         NodeId::new(raw).unwrap()
     }
 
-    pub(crate) fn test_options(root: &Path, _unused_legacy_log: Option<&Path>) -> ServerOptions {
+    pub(crate) fn test_options(root: &Path) -> ServerOptions {
         ServerOptions {
             bind: crate::options::DEFAULT_SERVER_BIND,
             mount: MountId::new(1).unwrap(),
@@ -625,7 +627,7 @@ pub(crate) mod tests {
 
     pub(crate) fn test_server() -> Server {
         let dir = tempdir().unwrap();
-        Server::open(test_options(dir.path(), None)).unwrap()
+        Server::open(test_options(dir.path())).unwrap()
     }
 
     fn start_openraft_test_server(
@@ -636,7 +638,7 @@ pub(crate) mod tests {
         peers: Vec<MetadataRaftPeerOptions>,
     ) -> RunningTestServer {
         let address = listener.local_addr().unwrap();
-        let mut options = test_options(root, None);
+        let mut options = test_options(root);
         options.bind = address;
         options.metadata_raft_node = node_id;
         options.metadata_raft_voters = voters.to_vec();

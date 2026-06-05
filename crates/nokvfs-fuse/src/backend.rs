@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::Arc;
 
 use nokvfs_client::{ClientError, ClientPreparedArtifact, MetadataClient};
 use nokvfs_meta::{
@@ -6,14 +7,12 @@ use nokvfs_meta::{
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokvfs_object::{
-    delete_staged_objects, put_chunked_ranges_with_block_index_base, read_object_blocks,
-    ChunkWriteOptions, ChunkWriteRange, ChunkedWrite, MemoryBlockCache, ObjectError,
-    ObjectReadBlock, ObjectStore, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    put_chunked_ranges_parallel, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
+    FileReadPipeline, FileWritePipeline, ObjectBlockCache, ObjectError, ObjectPrefetchOptions,
+    ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectStore, DEFAULT_BLOCK_SIZE,
+    DEFAULT_CHUNK_SIZE, DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
-use nokvfs_types::{
-    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, InodeAttr, InodeId, WatchCursor,
-    WatchRecord,
-};
+use nokvfs_types::{DentryName, InodeAttr, InodeId, WatchCursor, WatchRecord};
 
 pub(crate) type FuseBackendResult<T> = Result<T, FuseBackendError>;
 
@@ -79,6 +78,16 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         new_name: DentryName,
     ) -> FuseBackendResult<RenameReplaceResult>;
     fn read_file(&self, inode: InodeId, offset: u64, len: usize) -> FuseBackendResult<Vec<u8>>;
+    fn read_file_with_pipeline(
+        &self,
+        inode: InodeId,
+        offset: u64,
+        len: usize,
+        pipeline: &mut FileReadPipeline,
+    ) -> FuseBackendResult<Vec<u8>> {
+        let _ = pipeline;
+        self.read_file(inode, offset, len)
+    }
     fn read_file_at_snapshot(
         &self,
         snapshot_id: u64,
@@ -145,6 +154,11 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         parent: InodeId,
         name: DentryName,
     ) -> FuseBackendResult<Self::Prepared>;
+    fn new_write_pipeline(
+        &self,
+        prepared: &Self::Prepared,
+        manifest_id: &str,
+    ) -> FuseBackendResult<FileWritePipeline>;
     fn stage_prepared_artifact_ranges(
         &self,
         prepared: &Self::Prepared,
@@ -170,17 +184,56 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
 
 pub(crate) struct ClientFuseBackend<O> {
     metadata: MetadataClient,
-    objects: O,
-    block_cache: MemoryBlockCache,
+    objects: Arc<O>,
+    block_cache: ObjectBlockCache,
+    prefetcher: ObjectPrefetcher<Arc<O>>,
+    upload_workers: usize,
 }
 
-impl<O> ClientFuseBackend<O> {
+impl<O> ClientFuseBackend<O>
+where
+    O: ObjectStore + Send + Sync + 'static,
+{
     pub(crate) fn new(metadata: MetadataClient, objects: O) -> Self {
+        Self::with_block_cache_and_upload_workers(
+            metadata,
+            objects,
+            ObjectBlockCache::default(),
+            DEFAULT_S3_MULTIPART_CONCURRENCY,
+        )
+    }
+
+    pub(crate) fn with_block_cache_and_upload_workers(
+        metadata: MetadataClient,
+        objects: O,
+        block_cache: ObjectBlockCache,
+        upload_workers: usize,
+    ) -> Self {
+        let objects = Arc::new(objects);
+        let prefetcher = ObjectPrefetcher::new(
+            Arc::clone(&objects),
+            block_cache.clone(),
+            ObjectPrefetchOptions::default(),
+        );
         Self {
             metadata,
             objects,
-            block_cache: MemoryBlockCache::default(),
+            block_cache,
+            prefetcher,
+            upload_workers: upload_workers.max(1),
         }
+    }
+
+    fn prefetch_read_blocks(&self, inode: InodeId, generation: u64, offset: u64, len: usize) {
+        if len == 0 {
+            return;
+        }
+        let Ok(plan) = self.metadata.read_body_plan(inode, generation, offset, len) else {
+            return;
+        };
+        let _ = self
+            .prefetcher
+            .submit(ObjectPrefetchRequest::new(plan.output_len, plan.blocks));
     }
 }
 
@@ -335,12 +388,45 @@ where
             .metadata
             .read_body_plan(inode, attr.generation, offset, len)
             .map_err(FuseBackendError::from)?;
-        let read = read_object_blocks(
+        let read =
+            self.objects
+                .read_blocks(Some(&self.block_cache), plan.output_len, &plan.blocks)?;
+        Ok(read.bytes)
+    }
+
+    fn read_file_with_pipeline(
+        &self,
+        inode: InodeId,
+        offset: u64,
+        len: usize,
+        pipeline: &mut FileReadPipeline,
+    ) -> FuseBackendResult<Vec<u8>> {
+        let Some(attr) = self
+            .metadata
+            .get_attr(inode)
+            .map_err(FuseBackendError::from)?
+        else {
+            return Err(FuseBackendError::Metadata(MetadError::NotFound));
+        };
+        if len == 0 || offset >= attr.size {
+            return Ok(Vec::new());
+        }
+        let plan = self
+            .metadata
+            .read_body_plan(inode, attr.generation, offset, len)
+            .map_err(FuseBackendError::from)?;
+        let read = pipeline.read_blocks(
             &self.objects,
             Some(&self.block_cache),
+            attr.size,
+            offset,
             plan.output_len,
             &plan.blocks,
         )?;
+        if let Some(hint) = read.readahead {
+            self.prefetch_read_blocks(inode, attr.generation, hint.offset, hint.len);
+        }
+        let read = read.blocks;
         Ok(read.bytes)
     }
 
@@ -488,7 +574,7 @@ where
                 bytes: range.bytes.clone(),
             })
             .collect::<Vec<_>>();
-        put_chunked_ranges_with_block_index_base(
+        put_chunked_ranges_parallel(
             &self.objects,
             &dirty_ranges,
             ChunkWriteOptions {
@@ -500,7 +586,24 @@ where
                 block_size: DEFAULT_BLOCK_SIZE,
             },
             block_index_base,
+            self.upload_workers,
         )
+        .map_err(Into::into)
+    }
+
+    fn new_write_pipeline(
+        &self,
+        prepared: &Self::Prepared,
+        manifest_id: &str,
+    ) -> FuseBackendResult<FileWritePipeline> {
+        FileWritePipeline::new(ChunkWriteOptions {
+            manifest_id: manifest_id.to_owned(),
+            mount: prepared.mount,
+            inode: prepared.inode.get(),
+            generation: prepared.generation,
+            chunk_size: DEFAULT_CHUNK_SIZE,
+            block_size: DEFAULT_BLOCK_SIZE,
+        })
         .map_err(Into::into)
     }
 
@@ -508,7 +611,8 @@ where
         &self,
         staged: &nokvfs_object::StagedObjectSet,
     ) -> FuseBackendResult<()> {
-        delete_staged_objects(&self.objects, staged)
+        self.objects
+            .delete_staged(staged)
             .map(|_| ())
             .map_err(Into::into)
     }
@@ -518,7 +622,9 @@ where
         output_len: usize,
         blocks: &[ObjectReadBlock],
     ) -> FuseBackendResult<Vec<u8>> {
-        let read = read_object_blocks(&self.objects, Some(&self.block_cache), output_len, blocks)?;
+        let read = self
+            .objects
+            .read_blocks(Some(&self.block_cache), output_len, blocks)?;
         Ok(read.bytes)
     }
 
@@ -528,54 +634,19 @@ where
         request: PublishArtifactStagedSession,
     ) -> FuseBackendResult<RenameReplaceResult> {
         if prepared.parent != request.parent || prepared.name != request.name {
-            let _ = delete_staged_objects(&self.objects, &request.staged);
+            let _ = self.objects.delete_staged(&request.staged);
             return Err(FuseBackendError::Metadata(
                 MetadError::InvalidPreparedArtifact(
                     "prepared artifact target does not match staged publish session".to_owned(),
                 ),
             ));
         }
-        let body = BodyDescriptor {
-            producer: request.producer,
-            digest_uri: request.digest_uri,
-            size: request.size,
-            content_type: request.content_type,
-            manifest_id: request.manifest_id,
-            generation: prepared.generation,
-            chunk_size: DEFAULT_CHUNK_SIZE,
-            block_size: DEFAULT_BLOCK_SIZE as u64,
-        };
+        let staged = request.staged.clone();
         self.metadata
-            .publish_prepared_artifact(
-                prepared,
-                body,
-                request.chunks.into_iter().map(chunk_manifest).collect(),
-                request.mode,
-                request.uid,
-                request.gid,
-            )
+            .publish_prepared_artifact_staged_session(prepared, request)
             .map_err(|err| {
-                let _ = delete_staged_objects(&self.objects, &request.staged);
+                let _ = self.objects.delete_staged(&staged);
                 FuseBackendError::from(err)
             })
-    }
-}
-
-fn chunk_manifest(chunk: nokvfs_object::StoredChunk) -> ChunkManifest {
-    ChunkManifest {
-        chunk_index: chunk.chunk_index,
-        logical_offset: chunk.logical_offset,
-        len: chunk.len,
-        blocks: chunk
-            .blocks
-            .into_iter()
-            .map(|block| BlockDescriptor {
-                object_key: block.object_key,
-                logical_offset: block.logical_offset,
-                object_offset: block.object_offset,
-                len: block.len,
-                digest_uri: block.digest_uri,
-            })
-            .collect(),
     }
 }

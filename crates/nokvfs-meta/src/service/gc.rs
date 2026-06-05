@@ -9,7 +9,7 @@ where
         &self,
         staged: &StagedObjectSet,
     ) -> Result<ObjectCleanupOutcome, MetadError> {
-        delete_staged_objects(&self.objects, staged).map_err(Into::into)
+        self.objects.delete_staged(staged).map_err(Into::into)
     }
 
     pub fn cleanup_pending_objects(

@@ -231,6 +231,19 @@ pub enum MetadataRpcRequest {
         uid: u32,
         gid: u32,
     },
+    PublishPreparedArtifactStagedSession {
+        prepared: WirePreparedArtifact,
+        producer: String,
+        digest_uri: String,
+        content_type: String,
+        manifest_id: String,
+        size: u64,
+        chunks: Vec<WireChunkManifest>,
+        staged: WireStagedObjectSet,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
     MetadataRaftAddLearner {
         node: u64,
         address: String,
@@ -560,6 +573,17 @@ pub struct WireBlockDescriptor {
     pub object_offset: u64,
     pub len: u64,
     pub digest_uri: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireStagedObjectSet {
+    pub objects: Vec<WireStagedObject>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireStagedObject {
+    pub key: String,
+    pub size: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

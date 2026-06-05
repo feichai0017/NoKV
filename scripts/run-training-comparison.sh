@@ -19,6 +19,10 @@ WORKLOAD="${NOKV_COMPARE_WORKLOAD:-mlperf-dlio}"
 SYNC_MODE="${NOKV_COMPARE_METADATA_RAFT_SYNC:-none}"
 JUICEFS_MOUNT="${JUICEFS_MOUNT:-}"
 JUICEFS_FSYNC="${JUICEFS_FSYNC:-0}"
+RUSTFS_ENDPOINT="${NOKV_COMPARE_RUSTFS_ENDPOINT:-}"
+RUSTFS_BUCKET="${NOKV_COMPARE_RUSTFS_BUCKET:-nokv}"
+RUSTFS_ACCESS_KEY="${NOKV_COMPARE_RUSTFS_ACCESS_KEY:-rustfsadmin}"
+RUSTFS_SECRET_KEY="${NOKV_COMPARE_RUSTFS_SECRET_KEY:-rustfsadmin}"
 
 case "$PROFILE" in
 smoke)
@@ -69,6 +73,11 @@ Environment:
   NOKV_COMPARE_READ_REPEATS         read repeats for both paths (default: 1)
   NOKV_COMPARE_BLOCK_CACHE          NoKV block cache on|off (default: on)
   NOKV_COMPARE_METADATA_RAFT_SYNC   data|none (default: none)
+  NOKV_COMPARE_RUSTFS_ENDPOINT      existing RustFS/S3 endpoint for NoKV-FS
+  NOKV_COMPARE_RUSTFS_BUCKET        NoKV-FS bucket at that endpoint (default: nokv)
+  NOKV_COMPARE_RUSTFS_ACCESS_KEY    access key for existing endpoint
+  NOKV_COMPARE_RUSTFS_SECRET_KEY    secret key for existing endpoint
+  NOKV_COMPARE_JUICEFS_BUCKET       JuiceFS bucket name for reporting
   JUICEFS_MOUNT                     existing JuiceFS mount path for comparison
   JUICEFS_FSYNC                     1 to fsync JuiceFS checkpoint writes
 
@@ -95,15 +104,35 @@ require_cmd() {
 }
 
 echo "==> NoKV-FS $WORKLOAD profile=$PROFILE sync=$SYNC_MODE"
-NOKV_E2E_PROFILE="$PROFILE" \
-    NOKV_E2E_WORKLOAD="$WORKLOAD" \
-    NOKV_E2E_OBJECT_CONCURRENCY="$OBJECT_CONCURRENCY" \
-    NOKV_E2E_READ_REPEATS="$READ_REPEATS" \
-    NOKV_E2E_BLOCK_CACHE="$BLOCK_CACHE" \
-    "$ROOT_DIR/scripts/run-rustfs-e2e.sh" \
-    --metadata-raft-log-sync "$SYNC_MODE" \
-    --sample-bytes "$SAMPLE_BYTES" \
-    --checkpoint-bytes "$CHECKPOINT_BYTES"
+if [[ -n "$RUSTFS_ENDPOINT" ]]; then
+    (
+        cd "$ROOT_DIR"
+        cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
+            --profile "$PROFILE" \
+            --workload "$WORKLOAD" \
+            --object-backend rustfs \
+            --s3-bucket "$RUSTFS_BUCKET" \
+            --s3-endpoint "$RUSTFS_ENDPOINT" \
+            --s3-access-key-id "$RUSTFS_ACCESS_KEY" \
+            --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
+            --object-concurrency "$OBJECT_CONCURRENCY" \
+            --read-repeats "$READ_REPEATS" \
+            --block-cache "$BLOCK_CACHE" \
+            --metadata-raft-log-sync "$SYNC_MODE" \
+            --sample-bytes "$SAMPLE_BYTES" \
+            --checkpoint-bytes "$CHECKPOINT_BYTES"
+    )
+else
+    NOKV_E2E_PROFILE="$PROFILE" \
+        NOKV_E2E_WORKLOAD="$WORKLOAD" \
+        NOKV_E2E_OBJECT_CONCURRENCY="$OBJECT_CONCURRENCY" \
+        NOKV_E2E_READ_REPEATS="$READ_REPEATS" \
+        NOKV_E2E_BLOCK_CACHE="$BLOCK_CACHE" \
+        "$ROOT_DIR/scripts/run-rustfs-e2e.sh" \
+        --metadata-raft-log-sync "$SYNC_MODE" \
+        --sample-bytes "$SAMPLE_BYTES" \
+        --checkpoint-bytes "$CHECKPOINT_BYTES"
+fi
 
 if [[ -z "$JUICEFS_MOUNT" ]]; then
     echo "JUICEFS_MOUNT is not set; skipped JuiceFS same-shape comparison." >&2
@@ -118,6 +147,9 @@ if [[ ! -d "$JUICEFS_MOUNT" ]]; then
 fi
 
 echo "==> JuiceFS same-shape workload mount=$JUICEFS_MOUNT profile=$PROFILE"
+NOKV_COMPARE_PROFILE="$PROFILE" \
+NOKV_COMPARE_RUSTFS_ENDPOINT="${RUSTFS_ENDPOINT:-existing-mount}" \
+NOKV_COMPARE_JUICEFS_BUCKET="${NOKV_COMPARE_JUICEFS_BUCKET:-existing-mount}" \
 JUICEFS_MOUNT="$JUICEFS_MOUNT" \
 JUICEFS_FSYNC="$JUICEFS_FSYNC" \
 DATASET_DIRS="$DATASET_DIRS" \
@@ -190,11 +222,15 @@ try:
     samples = dataset_dirs * read_repeats
     operations = dataset_dirs * (1 + read_repeats) + checkpoint_steps * 2
     mib = bytes_total / 1024 / 1024
-    print("target,workload,operations,seconds,ops_per_second,mb_per_second,samples_per_second,checksum,shape,caveat")
+    print("system,profile,workload,endpoint,bucket,fsync,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_gets,checksum,shape,caveat")
     print(
-        "juicefs_mount,same_shape_dlio,"
+        "juicefs,"
+        f"{os.environ.get('NOKV_COMPARE_PROFILE', 'smoke')},same_shape_dlio,"
+        f"{os.environ.get('NOKV_COMPARE_RUSTFS_ENDPOINT', 'existing-mount')},"
+        f"{os.environ.get('NOKV_COMPARE_JUICEFS_BUCKET', 'existing-mount')},"
+        f"{'on' if do_fsync else 'off'},"
         f"{operations},{seconds:.6f},{operations / seconds:.2f},{mib / seconds:.2f},"
-        f"{samples / seconds:.2f},{checksum},"
+        f"{samples / seconds:.2f},unknown,unknown,{checksum},"
         f"\"dataset_dirs={dataset_dirs} files_per_dir={files_per_dir} sample_bytes={sample_bytes} "
         f"checkpoint_steps={checkpoint_steps} checkpoint_bytes={checkpoint_bytes}\","
         f"\"existing JuiceFS mount, fsync={'on' if do_fsync else 'off'}, same generated shape as NoKV-FS local bench\""

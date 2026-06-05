@@ -41,11 +41,9 @@ use crate::layout::{
     xattr_key, xattr_prefix, PATH_INDEX_DELIMITER,
 };
 use nokvfs_object::{
-    delete_staged_objects, put_chunked_object, put_chunked_ranges,
-    put_chunked_ranges_with_block_index_base, read_object_blocks, ChunkWriteOptions,
-    ChunkWriteRange, ChunkedWrite, MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectKey,
-    ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE,
-    DEFAULT_CHUNK_SIZE,
+    ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite, MemoryBlockCache,
+    ObjectCleanupOutcome, ObjectError, ObjectKey, ObjectReadBlock, ObjectStore, StagedObjectSet,
+    StoredChunk, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,

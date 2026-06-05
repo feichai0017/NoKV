@@ -1,0 +1,320 @@
+use std::marker::PhantomData;
+use std::sync::mpsc::{self, TrySendError};
+use std::sync::{Arc, Mutex};
+use std::thread;
+
+use crate::cache::{BlockCache, ObjectBlockCache};
+use crate::chunk::{
+    BlockReadOutcome, ChunkStore, ChunkWriteOptions, ChunkedWrite, DirtyChunkExtent,
+    ObjectReadBlock, StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE,
+};
+use crate::store::ObjectError;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileWritePipeline {
+    options: ChunkWriteOptions,
+    staged_chunks: Vec<StoredChunk>,
+    staged: StagedObjectSet,
+    dirty_extents: Vec<DirtyChunkExtent>,
+    next_block_index: u64,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct FileReadPipeline {
+    options: FileReadPipelineOptions,
+    last_read_end: Option<u64>,
+    stats: FileReadPipelineStats,
+}
+
+#[derive(Clone)]
+pub struct ObjectPrefetcher<O, C = ObjectBlockCache> {
+    sender: mpsc::SyncSender<ObjectPrefetchRequest>,
+    stats: Arc<Mutex<ObjectPrefetchStats>>,
+    _state: PhantomData<(O, C)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileReadPipelineOptions {
+    pub max_readahead_bytes: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObjectPrefetchOptions {
+    pub queue_capacity: usize,
+    pub workers: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FileReadPipelineStats {
+    pub reads: u64,
+    pub read_bytes: u64,
+    pub sequential_reads: u64,
+    pub readahead_hints: u64,
+    pub readahead_hint_bytes: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FileReadOutcome {
+    pub blocks: BlockReadOutcome,
+    pub readahead: Option<ReadAheadHint>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ReadAheadHint {
+    pub offset: u64,
+    pub len: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectPrefetchRequest {
+    pub output_len: usize,
+    pub blocks: Vec<ObjectReadBlock>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObjectPrefetchStats {
+    pub enqueued: u64,
+    pub dropped: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub object_gets: u64,
+    pub object_get_bytes: u64,
+    pub cache_hits: u64,
+    pub cache_hit_bytes: u64,
+}
+
+impl FileWritePipeline {
+    pub fn new(options: ChunkWriteOptions) -> Result<Self, ObjectError> {
+        options.validate()?;
+        Ok(Self {
+            options,
+            staged_chunks: Vec::new(),
+            staged: StagedObjectSet::default(),
+            dirty_extents: Vec::new(),
+            next_block_index: 0,
+        })
+    }
+
+    pub fn options(&self) -> &ChunkWriteOptions {
+        &self.options
+    }
+
+    pub fn reserve_blocks(&mut self, block_count: u64) -> u64 {
+        let base = self.next_block_index;
+        self.next_block_index = self.next_block_index.saturating_add(block_count);
+        base
+    }
+
+    pub fn record_write(&mut self, written: ChunkedWrite) -> Result<(), ObjectError> {
+        let staged = written.staged_objects()?;
+        let staged_objects = self
+            .staged
+            .objects()
+            .iter()
+            .cloned()
+            .chain(staged.objects().iter().cloned())
+            .collect();
+        self.staged = StagedObjectSet::new(staged_objects);
+        self.staged_chunks.extend(written.chunks.clone());
+        self.dirty_extents.push(DirtyChunkExtent {
+            chunks: written.chunks,
+        });
+        Ok(())
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.staged.is_empty()
+    }
+
+    pub fn staged_chunks(&self) -> &[StoredChunk] {
+        &self.staged_chunks
+    }
+
+    pub fn staged_objects(&self) -> &StagedObjectSet {
+        &self.staged
+    }
+
+    pub fn dirty_extents(&self) -> &[DirtyChunkExtent] {
+        &self.dirty_extents
+    }
+}
+
+impl Default for FileReadPipelineOptions {
+    fn default() -> Self {
+        Self {
+            max_readahead_bytes: DEFAULT_BLOCK_SIZE,
+        }
+    }
+}
+
+impl Default for ObjectPrefetchOptions {
+    fn default() -> Self {
+        Self {
+            queue_capacity: 64,
+            workers: 1,
+        }
+    }
+}
+
+impl FileReadPipeline {
+    pub fn new(options: FileReadPipelineOptions) -> Self {
+        Self {
+            options,
+            last_read_end: None,
+            stats: FileReadPipelineStats::default(),
+        }
+    }
+
+    pub fn read_blocks<S, C>(
+        &mut self,
+        store: &S,
+        cache: Option<&C>,
+        file_size: u64,
+        offset: u64,
+        output_len: usize,
+        blocks: &[ObjectReadBlock],
+    ) -> Result<FileReadOutcome, ObjectError>
+    where
+        S: ChunkStore,
+        C: BlockCache + ?Sized,
+    {
+        let read = store.read_blocks(cache, output_len, blocks)?;
+        let sequential = self.last_read_end == Some(offset);
+        let read_end = offset
+            .checked_add(u64::try_from(output_len).map_err(|_| ObjectError::InvalidRange)?)
+            .ok_or(ObjectError::InvalidRange)?;
+        self.last_read_end = Some(read_end);
+        self.stats.reads = self.stats.reads.saturating_add(1);
+        self.stats.read_bytes = self.stats.read_bytes.saturating_add(output_len as u64);
+        let readahead =
+            if sequential && read_end < file_size && self.options.max_readahead_bytes > 0 {
+                self.stats.sequential_reads = self.stats.sequential_reads.saturating_add(1);
+                let len = self
+                    .options
+                    .max_readahead_bytes
+                    .min(usize::try_from(file_size - read_end).unwrap_or(usize::MAX));
+                self.stats.readahead_hints = self.stats.readahead_hints.saturating_add(1);
+                self.stats.readahead_hint_bytes =
+                    self.stats.readahead_hint_bytes.saturating_add(len as u64);
+                Some(ReadAheadHint {
+                    offset: read_end,
+                    len,
+                })
+            } else {
+                None
+            };
+        Ok(FileReadOutcome {
+            blocks: read,
+            readahead,
+        })
+    }
+
+    pub fn stats(&self) -> FileReadPipelineStats {
+        self.stats
+    }
+}
+
+impl ObjectPrefetchRequest {
+    pub fn new(output_len: usize, blocks: Vec<ObjectReadBlock>) -> Self {
+        Self { output_len, blocks }
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.output_len == 0 || self.blocks.is_empty()
+    }
+}
+
+impl<O, C> ObjectPrefetcher<O, C>
+where
+    O: ChunkStore + Clone + Send + 'static,
+    C: BlockCache + Clone + Send + 'static,
+{
+    pub fn new(store: O, cache: C, options: ObjectPrefetchOptions) -> Self {
+        let capacity = options.queue_capacity.max(1);
+        let workers = options.workers.max(1);
+        let (sender, receiver) = mpsc::sync_channel::<ObjectPrefetchRequest>(capacity);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let stats = Arc::new(Mutex::new(ObjectPrefetchStats::default()));
+        for worker in 0..workers {
+            let store = store.clone();
+            let cache = cache.clone();
+            let receiver = Arc::clone(&receiver);
+            let stats = Arc::clone(&stats);
+            let name = format!("nokvfs-prefetch-{worker}");
+            let _ = thread::Builder::new().name(name).spawn(move || loop {
+                let request = {
+                    let Ok(receiver) = receiver.lock() else {
+                        break;
+                    };
+                    match receiver.recv() {
+                        Ok(request) => request,
+                        Err(_) => break,
+                    }
+                };
+                match store.read_blocks(Some(&cache), request.output_len, &request.blocks) {
+                    Ok(outcome) => {
+                        if let Ok(mut stats) = stats.lock() {
+                            stats.completed = stats.completed.saturating_add(1);
+                            stats.object_gets =
+                                stats.object_gets.saturating_add(outcome.object_gets as u64);
+                            stats.object_get_bytes = stats
+                                .object_get_bytes
+                                .saturating_add(outcome.object_get_bytes);
+                            stats.cache_hits =
+                                stats.cache_hits.saturating_add(outcome.cache_hits as u64);
+                            stats.cache_hit_bytes = stats
+                                .cache_hit_bytes
+                                .saturating_add(outcome.cache_hit_bytes);
+                        }
+                    }
+                    Err(_) => {
+                        if let Ok(mut stats) = stats.lock() {
+                            stats.failed = stats.failed.saturating_add(1);
+                        }
+                    }
+                }
+            });
+        }
+        Self {
+            sender,
+            stats,
+            _state: PhantomData,
+        }
+    }
+
+    pub fn submit(&self, request: ObjectPrefetchRequest) -> Result<bool, ObjectError> {
+        if request.is_empty() {
+            return Ok(false);
+        }
+        match self.sender.try_send(request) {
+            Ok(()) => {
+                self.with_stats(|stats| {
+                    stats.enqueued = stats.enqueued.saturating_add(1);
+                })?;
+                Ok(true)
+            }
+            Err(TrySendError::Full(_)) => {
+                self.with_stats(|stats| {
+                    stats.dropped = stats.dropped.saturating_add(1);
+                })?;
+                Ok(false)
+            }
+            Err(TrySendError::Disconnected(_)) => Err(ObjectError::Backend(
+                "object prefetch worker stopped".to_owned(),
+            )),
+        }
+    }
+
+    pub fn stats(&self) -> Result<ObjectPrefetchStats, ObjectError> {
+        self.stats
+            .lock()
+            .map_err(ObjectError::from_poisoned_lock)
+            .map(|stats| *stats)
+    }
+
+    fn with_stats(&self, update: impl FnOnce(&mut ObjectPrefetchStats)) -> Result<(), ObjectError> {
+        let mut stats = self.stats.lock().map_err(ObjectError::from_poisoned_lock)?;
+        update(&mut stats);
+        Ok(())
+    }
+}

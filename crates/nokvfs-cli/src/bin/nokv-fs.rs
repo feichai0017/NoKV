@@ -85,11 +85,12 @@ enum Command {
     },
     Mount {
         mountpoint: PathBuf,
-        read_only: bool,
+        options: MountCliOptions,
     },
     MountSnapshot {
         snapshot_id: u64,
         mountpoint: PathBuf,
+        options: MountCliOptions,
     },
     Serve,
     Gc {
@@ -108,6 +109,15 @@ enum Command {
     Help,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct MountCliOptions {
+    read_only: bool,
+    kernel_cache: bool,
+    direct_io: bool,
+    entry_ttl: Duration,
+    attr_ttl: Duration,
+}
+
 #[derive(Debug)]
 enum CliError {
     MissingValue(&'static str),
@@ -120,6 +130,32 @@ enum CliError {
     InvalidNumber { field: &'static str, value: String },
     Io(String),
     Client(String),
+}
+
+impl Default for MountCliOptions {
+    fn default() -> Self {
+        let defaults = nokvfs_fuse::FuseOptions::default();
+        Self {
+            read_only: false,
+            kernel_cache: defaults.kernel_cache,
+            direct_io: defaults.direct_io,
+            entry_ttl: defaults.entry_ttl,
+            attr_ttl: defaults.attr_ttl,
+        }
+    }
+}
+
+impl MountCliOptions {
+    fn fuse_options(self, access: nokvfs_fuse::FuseAccessMode) -> nokvfs_fuse::FuseOptions {
+        nokvfs_fuse::FuseOptions {
+            access,
+            entry_ttl: self.entry_ttl,
+            attr_ttl: self.attr_ttl,
+            kernel_cache: self.kernel_cache,
+            direct_io: self.direct_io,
+            ..nokvfs_fuse::FuseOptions::default()
+        }
+    }
 }
 
 type Client = NoKvFsClient<S3ObjectStore>;
@@ -268,7 +304,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
         }
         Command::Mount {
             mountpoint,
-            read_only,
+            options,
         } => {
             let metadata = MetadataClient::new(
                 MetadataClientOptions::new(config.server_bind)
@@ -282,20 +318,18 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 metadata,
                 objects,
                 mountpoint,
-                nokvfs_fuse::FuseOptions {
-                    access: if read_only {
-                        nokvfs_fuse::FuseAccessMode::ReadOnly
-                    } else {
-                        nokvfs_fuse::FuseAccessMode::ReadWrite
-                    },
-                    ..nokvfs_fuse::FuseOptions::default()
-                },
+                options.fuse_options(if options.read_only {
+                    nokvfs_fuse::FuseAccessMode::ReadOnly
+                } else {
+                    nokvfs_fuse::FuseAccessMode::ReadWrite
+                }),
             )
             .map_err(from_io)?;
         }
         Command::MountSnapshot {
             snapshot_id,
             mountpoint,
+            options,
         } => {
             let metadata = MetadataClient::new(
                 MetadataClientOptions::new(config.server_bind)
@@ -316,7 +350,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                         snapshot_id,
                         root: snapshot.root,
                     },
-                    ..nokvfs_fuse::FuseOptions::default()
+                    ..options.fuse_options(nokvfs_fuse::FuseAccessMode::ReadOnly)
                 },
             )
             .map_err(from_io)?;
@@ -774,24 +808,22 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
             source: args[1].clone(),
             destination: args[2].clone(),
         }),
-        "mount" => match args {
-            [_, mountpoint] => Ok(Command::Mount {
-                mountpoint: PathBuf::from(mountpoint),
-                read_only: false,
-            }),
-            [_, flag, mountpoint] if flag == "--read-only" => Ok(Command::Mount {
-                mountpoint: PathBuf::from(mountpoint),
-                read_only: true,
-            }),
-            [_, flag, _] if flag.starts_with('-') => Err(CliError::UnknownOption(flag.clone())),
-            _ if args.len() < 2 => Err(CliError::MissingArgument("mountpoint")),
-            _ => Err(CliError::TooManyArguments),
-        },
+        "mount" => {
+            let (options, mountpoint) = parse_mount_args(args, 1, true)?;
+            Ok(Command::Mount {
+                mountpoint,
+                options,
+            })
+        }
         "mount-snapshot" => {
-            exact_args(args, 3)?;
+            if args.len() < 3 {
+                return Err(CliError::MissingArgument("snapshot id and mountpoint"));
+            }
+            let (options, mountpoint) = parse_mount_args(args, 2, false)?;
             Ok(Command::MountSnapshot {
                 snapshot_id: parse_u64(&args[1], "snapshot_id")?,
-                mountpoint: PathBuf::from(&args[2]),
+                mountpoint,
+                options,
             })
         }
         "serve" => exact_args(args, 1).map(|()| Command::Serve),
@@ -823,6 +855,60 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
         "help" => Ok(Command::Help),
         other => Err(CliError::UnknownCommand(other.to_owned())),
     }
+}
+
+fn parse_mount_args(
+    args: &[String],
+    start_index: usize,
+    allow_read_only: bool,
+) -> Result<(MountCliOptions, PathBuf), CliError> {
+    let mut options = MountCliOptions::default();
+    let mut mountpoint = None;
+    let mut index = start_index;
+    while index < args.len() {
+        match args[index].as_str() {
+            "--read-only" if allow_read_only => {
+                options.read_only = true;
+                index += 1;
+            }
+            "--read-only" => return Err(CliError::UnknownOption(args[index].clone())),
+            "--no-kernel-cache" => {
+                options.kernel_cache = false;
+                index += 1;
+            }
+            "--direct-io" => {
+                options.direct_io = true;
+                index += 1;
+            }
+            "--entry-ttl-ms" => {
+                index += 1;
+                options.entry_ttl = Duration::from_millis(parse_u64(
+                    value(args, index, "--entry-ttl-ms")?,
+                    "entry_ttl_ms",
+                )?);
+                index += 1;
+            }
+            "--attr-ttl-ms" => {
+                index += 1;
+                options.attr_ttl = Duration::from_millis(parse_u64(
+                    value(args, index, "--attr-ttl-ms")?,
+                    "attr_ttl_ms",
+                )?);
+                index += 1;
+            }
+            option if option.starts_with('-') => {
+                return Err(CliError::UnknownOption(option.to_owned()))
+            }
+            raw => {
+                if mountpoint.replace(PathBuf::from(raw)).is_some() {
+                    return Err(CliError::TooManyArguments);
+                }
+                index += 1;
+            }
+        }
+    }
+    let mountpoint = mountpoint.ok_or(CliError::MissingArgument("mountpoint"))?;
+    Ok((options, mountpoint))
 }
 
 fn exact_args(args: &[String], expected: usize) -> Result<(), CliError> {
@@ -938,8 +1024,8 @@ Usage:\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rmdir PATH\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
-  nokv-fs [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] MOUNTPOINT\n\
-  nokv-fs [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID MOUNTPOINT\n\
+  nokv-fs [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] MOUNTPOINT\n\
+  nokv-fs [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] MOUNTPOINT\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\
@@ -966,6 +1052,12 @@ Object backends:\n\
   --metadata-raft-peer NODE=ADDR  OpenRaft peer endpoint; repeat for remote voters\n\
   --metadata-raft-log-sync data|none\n\
                                   data fsyncs metadata Raft log records; none only flushes to the OS\n\
+\n\
+Mount cache options:\n\
+  --no-kernel-cache              Do not ask FUSE to keep file/directory cache on open\n\
+  --direct-io                    Ask FUSE to bypass kernel page cache for file handles\n\
+  --entry-ttl-ms MS              Kernel dentry cache TTL\n\
+  --attr-ttl-ms MS               Kernel attribute cache TTL\n\
 \n\
 Defaults:\n\
   --meta .nokv-fs/meta\n\
@@ -1310,7 +1402,7 @@ mod tests {
             command,
             Command::Mount {
                 mountpoint: PathBuf::from("/tmp/nokv-fs"),
-                read_only: false,
+                options: MountCliOptions::default(),
             }
         );
         let (_config, command) =
@@ -1319,16 +1411,52 @@ mod tests {
             command,
             Command::Mount {
                 mountpoint: PathBuf::from("/tmp/nokv-fs-ro"),
-                read_only: true,
+                options: MountCliOptions {
+                    read_only: true,
+                    ..MountCliOptions::default()
+                },
             }
         );
-        let (_config, command) =
-            parse(vec![s("mount-snapshot"), s("42"), s("/tmp/nokv-fs-ro")]).unwrap();
+        let (_config, command) = parse(vec![
+            s("mount"),
+            s("--no-kernel-cache"),
+            s("--direct-io"),
+            s("--entry-ttl-ms"),
+            s("0"),
+            s("--attr-ttl-ms"),
+            s("250"),
+            s("/tmp/nokv-fs-cache"),
+        ])
+        .unwrap();
+        assert_eq!(
+            command,
+            Command::Mount {
+                mountpoint: PathBuf::from("/tmp/nokv-fs-cache"),
+                options: MountCliOptions {
+                    kernel_cache: false,
+                    direct_io: true,
+                    entry_ttl: Duration::from_millis(0),
+                    attr_ttl: Duration::from_millis(250),
+                    ..MountCliOptions::default()
+                },
+            }
+        );
+        let (_config, command) = parse(vec![
+            s("mount-snapshot"),
+            s("42"),
+            s("--direct-io"),
+            s("/tmp/nokv-fs-ro"),
+        ])
+        .unwrap();
         assert_eq!(
             command,
             Command::MountSnapshot {
                 snapshot_id: 42,
-                mountpoint: PathBuf::from("/tmp/nokv-fs-ro")
+                mountpoint: PathBuf::from("/tmp/nokv-fs-ro"),
+                options: MountCliOptions {
+                    direct_io: true,
+                    ..MountCliOptions::default()
+                },
             }
         );
         assert!(matches!(

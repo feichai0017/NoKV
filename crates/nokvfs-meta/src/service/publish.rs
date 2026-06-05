@@ -302,8 +302,7 @@ where
                 bytes: range.bytes.clone(),
             })
             .collect::<Vec<_>>();
-        match put_chunked_ranges_with_block_index_base(
-            &self.objects,
+        match self.objects.write_ranges_with_block_index_base(
             &dirty_ranges,
             ChunkWriteOptions {
                 manifest_id: manifest_id.to_owned(),
@@ -324,7 +323,7 @@ where
             }
             Err(err) => {
                 if let ObjectError::StagedWriteFailed { staged, .. } = &err {
-                    let _ = delete_staged_objects(&self.objects, staged);
+                    let _ = self.objects.delete_staged(staged);
                 }
                 Err(err.into())
             }
@@ -397,8 +396,7 @@ where
         inode: InodeId,
         version: Version,
     ) -> Result<StagedArtifactBody, MetadError> {
-        let written = put_chunked_object(
-            &self.objects,
+        let written = self.objects.write_bytes(
             &request.bytes,
             ChunkWriteOptions {
                 manifest_id: request.manifest_id.clone(),
@@ -476,8 +474,7 @@ where
                 bytes: range.bytes.clone(),
             })
             .collect::<Vec<_>>();
-        let written = put_chunked_ranges(
-            &self.objects,
+        let written = self.objects.write_ranges(
             &dirty_ranges,
             ChunkWriteOptions {
                 manifest_id: request.manifest_id.clone(),

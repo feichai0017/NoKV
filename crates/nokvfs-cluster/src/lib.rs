@@ -16,5 +16,8 @@ mod wire;
 pub use errors::MetadataRaftError;
 pub use file_log::{FileMetadataRaftLogOptions, FileMetadataRaftLogSync};
 pub use network::{MetadataRaftRpcClient, MetadataRaftRpcNetworkFactory};
-pub use store::{OpenRaftMetadataStats, OpenRaftMetadataStatsHandle, OpenRaftMetadataStore};
+pub use store::{
+    OpenRaftMetadataStats, OpenRaftMetadataStatsHandle, OpenRaftMetadataStore,
+    ProposalCoalescerOptions,
+};
 pub use types::{LogIndex, LogPosition, LogTerm, NodeId};

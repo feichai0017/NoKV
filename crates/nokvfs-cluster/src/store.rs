@@ -5,16 +5,14 @@
 //! storage-neutral `MetadataStore` trait; it does not know about Holt trees or
 //! filesystem service internals.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt::Debug;
 use std::io::Cursor;
 #[cfg(test)]
 use std::ops::RangeBounds;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
-#[cfg(test)]
-use std::sync::Mutex;
+use std::sync::{Arc, Condvar, Mutex};
 use std::time::{Duration, Instant};
 
 use nokvfs_meta::command::{
@@ -98,6 +96,7 @@ pub struct OpenRaftMetadataStore<M> {
     raft: Raft<MetadataRaftConfig>,
     runtime: tokio::runtime::Runtime,
     counters: Arc<OpenRaftMetadataCounters>,
+    coalescer: Arc<ProposalCoalescer>,
 }
 
 #[derive(Clone)]
@@ -123,6 +122,8 @@ pub struct OpenRaftMetadataStats {
     pub proposal_command_total: u64,
     pub proposal_max_batch: u64,
     pub proposal_ns_total: u64,
+    pub proposal_queue_wait_ns_total: u64,
+    pub proposal_queue_max_wait_ns: u64,
 }
 
 #[derive(Default)]
@@ -131,6 +132,56 @@ struct OpenRaftMetadataCounters {
     proposal_command_total: AtomicU64,
     proposal_max_batch: AtomicU64,
     proposal_ns_total: AtomicU64,
+    proposal_queue_wait_ns_total: AtomicU64,
+    proposal_queue_max_wait_ns: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ProposalCoalescerOptions {
+    pub max_commands: usize,
+    pub max_bytes: usize,
+    pub max_delay: Duration,
+}
+
+#[derive(Debug)]
+struct ProposalCoalescer {
+    options: ProposalCoalescerOptions,
+    inner: Mutex<ProposalCoalescerState>,
+    cvar: Condvar,
+}
+
+#[derive(Debug, Default)]
+struct ProposalCoalescerState {
+    queue: VecDeque<QueuedProposal>,
+    draining: bool,
+}
+
+#[derive(Debug)]
+struct QueuedProposal {
+    command: MetadataCommand,
+    estimated_bytes: usize,
+    enqueued_at: Instant,
+    result: Arc<Mutex<Option<Result<CommitResult, MetadataError>>>>,
+}
+
+impl Default for ProposalCoalescerOptions {
+    fn default() -> Self {
+        Self {
+            max_commands: 64,
+            max_bytes: 1024 * 1024,
+            max_delay: Duration::from_micros(200),
+        }
+    }
+}
+
+impl ProposalCoalescer {
+    fn new(options: ProposalCoalescerOptions) -> Self {
+        Self {
+            options,
+            inner: Mutex::new(ProposalCoalescerState::default()),
+            cvar: Condvar::new(),
+        }
+    }
 }
 
 impl<M> Debug for OpenRaftMetadataStore<M> {
@@ -179,6 +230,14 @@ impl OpenRaftMetadataStatsHandle {
             proposal_command_total: self.counters.proposal_command_total.load(Ordering::Relaxed),
             proposal_max_batch: self.counters.proposal_max_batch.load(Ordering::Relaxed),
             proposal_ns_total: self.counters.proposal_ns_total.load(Ordering::Relaxed),
+            proposal_queue_wait_ns_total: self
+                .counters
+                .proposal_queue_wait_ns_total
+                .load(Ordering::Relaxed),
+            proposal_queue_max_wait_ns: self
+                .counters
+                .proposal_queue_max_wait_ns
+                .load(Ordering::Relaxed),
         }
     }
 }
@@ -402,6 +461,7 @@ where
             raft,
             runtime,
             counters: Arc::new(OpenRaftMetadataCounters::default()),
+            coalescer: Arc::new(ProposalCoalescer::new(ProposalCoalescerOptions::default())),
         })
     }
 
@@ -593,7 +653,7 @@ where
         Ok(wire::wire_install_snapshot_response(&response))
     }
 
-    fn commit_batch_via_raft(
+    fn commit_batch_direct(
         &self,
         commands: &[MetadataCommand],
     ) -> Vec<Result<CommitResult, MetadataError>> {
@@ -635,6 +695,145 @@ where
         );
         result
     }
+
+    fn commit_single_via_coalescer(
+        &self,
+        command: MetadataCommand,
+    ) -> Result<CommitResult, MetadataError> {
+        if self.coalescer.options.max_commands <= 1 {
+            return self
+                .commit_batch_direct(std::slice::from_ref(&command))
+                .into_iter()
+                .next()
+                .unwrap_or_else(|| {
+                    Err(MetadataError::Backend(
+                        "openraft commit returned no result".to_owned(),
+                    ))
+                });
+        }
+        let result = Arc::new(Mutex::new(None));
+        let queued = QueuedProposal {
+            estimated_bytes: estimated_command_bytes(&command),
+            command,
+            enqueued_at: Instant::now(),
+            result: Arc::clone(&result),
+        };
+        {
+            let mut state = self.coalescer.inner.lock().map_err(|_| {
+                MetadataError::Backend("metadata raft coalescer lock poisoned".to_owned())
+            })?;
+            state.queue.push_back(queued);
+            self.coalescer.cvar.notify_all();
+        }
+        loop {
+            if let Some(result) = result
+                .lock()
+                .map_err(|_| {
+                    MetadataError::Backend("metadata raft proposal result lock poisoned".to_owned())
+                })?
+                .take()
+            {
+                return result;
+            }
+            let mut should_drain = false;
+            {
+                let mut state = self.coalescer.inner.lock().map_err(|_| {
+                    MetadataError::Backend("metadata raft coalescer lock poisoned".to_owned())
+                })?;
+                if !state.draining {
+                    state.draining = true;
+                    should_drain = true;
+                } else {
+                    drop(self.coalescer.cvar.wait(state).map_err(|_| {
+                        MetadataError::Backend(
+                            "metadata raft coalescer wait lock poisoned".to_owned(),
+                        )
+                    })?);
+                }
+            }
+            if should_drain {
+                self.drain_coalesced_proposals();
+            }
+        }
+    }
+
+    fn drain_coalesced_proposals(&self) {
+        let mut proposals = {
+            let mut state = match self.coalescer.inner.lock() {
+                Ok(state) => state,
+                Err(_) => return,
+            };
+            let mut queue_len = state.queue.len();
+            let mut deadline = Instant::now() + self.coalescer.options.max_delay;
+            while !coalescer_should_flush(&state, self.coalescer.options) {
+                let now = Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                let timeout = deadline.saturating_duration_since(now);
+                let (next_state, _) = match self.coalescer.cvar.wait_timeout(state, timeout) {
+                    Ok(pair) => pair,
+                    Err(_) => return,
+                };
+                state = next_state;
+                if state.queue.len() > queue_len {
+                    queue_len = state.queue.len();
+                    deadline = Instant::now() + self.coalescer.options.max_delay;
+                }
+            }
+            let mut bytes = 0_usize;
+            let mut count = 0_usize;
+            for queued in &state.queue {
+                let next_bytes = bytes.saturating_add(queued.estimated_bytes);
+                if count > 0 && next_bytes > self.coalescer.options.max_bytes {
+                    break;
+                }
+                bytes = next_bytes;
+                count += 1;
+                if count >= self.coalescer.options.max_commands {
+                    break;
+                }
+            }
+            state.queue.drain(..count).collect::<Vec<_>>()
+        };
+        if proposals.is_empty() {
+            if let Ok(mut state) = self.coalescer.inner.lock() {
+                state.draining = false;
+                self.coalescer.cvar.notify_all();
+            }
+            return;
+        }
+        let now = Instant::now();
+        let queue_wait_ns = proposals
+            .iter()
+            .map(|proposal| {
+                u64::try_from(now.duration_since(proposal.enqueued_at).as_nanos())
+                    .unwrap_or(u64::MAX)
+            })
+            .collect::<Vec<_>>();
+        let commands = proposals
+            .iter()
+            .map(|proposal| proposal.command.clone())
+            .collect::<Vec<_>>();
+        let results = self.commit_batch_direct(&commands);
+        for (proposal, result) in proposals.drain(..).zip(results) {
+            if let Ok(mut slot) = proposal.result.lock() {
+                *slot = Some(result);
+            }
+        }
+        for wait_ns in queue_wait_ns {
+            self.counters
+                .proposal_queue_wait_ns_total
+                .fetch_add(wait_ns, Ordering::Relaxed);
+            self.counters
+                .proposal_queue_max_wait_ns
+                .fetch_max(wait_ns, Ordering::Relaxed);
+        }
+        if let Ok(mut state) = self.coalescer.inner.lock() {
+            state.draining = false;
+            self.coalescer.cvar.notify_all();
+        }
+    }
 }
 
 impl<M> MetadataStore for OpenRaftMetadataStore<M>
@@ -667,21 +866,14 @@ where
     }
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
-        self.commit_batch_via_raft(std::slice::from_ref(&command))
-            .into_iter()
-            .next()
-            .unwrap_or_else(|| {
-                Err(MetadataError::Backend(
-                    "openraft commit returned no result".to_owned(),
-                ))
-            })
+        self.commit_single_via_coalescer(command)
     }
 
     fn commit_independent_batch(
         &self,
         commands: &[MetadataCommand],
     ) -> Vec<Result<CommitResult, MetadataError>> {
-        self.commit_batch_via_raft(commands)
+        self.commit_batch_direct(commands)
     }
 
     fn committed_request_result(
@@ -1078,6 +1270,56 @@ fn normalize_apply_results(
     results
 }
 
+fn coalescer_should_flush(
+    state: &ProposalCoalescerState,
+    options: ProposalCoalescerOptions,
+) -> bool {
+    if state.queue.is_empty() {
+        return true;
+    }
+    if state.queue.len() >= options.max_commands.max(1) {
+        return true;
+    }
+    let bytes = state
+        .queue
+        .iter()
+        .map(|proposal| proposal.estimated_bytes)
+        .fold(0_usize, usize::saturating_add);
+    bytes >= options.max_bytes.max(1)
+}
+
+fn estimated_command_bytes(command: &MetadataCommand) -> usize {
+    let predicates = command
+        .predicates
+        .iter()
+        .map(|predicate| predicate.key.len() + 16)
+        .fold(0_usize, usize::saturating_add);
+    let mutations = command
+        .mutations
+        .iter()
+        .map(|mutation| {
+            mutation.key.len()
+                + mutation
+                    .value
+                    .as_ref()
+                    .map(|value| value.0.len())
+                    .unwrap_or(0)
+                + 16
+        })
+        .fold(0_usize, usize::saturating_add);
+    let watches = command
+        .watch
+        .iter()
+        .map(|watch| watch.key.len() + watch.event.len() + 16)
+        .fold(0_usize, usize::saturating_add);
+    64_usize
+        .saturating_add(command.request_id.len())
+        .saturating_add(command.primary_key.len())
+        .saturating_add(predicates)
+        .saturating_add(mutations)
+        .saturating_add(watches)
+}
+
 fn single_voter_members(node: NodeId) -> Result<BTreeMap<NodeId, String>, MetadataError> {
     let mut voters = BTreeMap::new();
     voters.insert(node, format!("local-{}", node.get()));
@@ -1116,7 +1358,7 @@ fn log_position_from_id(log_id: LogId<u64>) -> Result<LogPosition, MetadataError
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
-    use std::sync::{Arc, Mutex};
+    use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
     use std::time::Duration;
 
@@ -1406,6 +1648,45 @@ mod tests {
             .unwrap();
         assert_eq!(value.0, b"inode=2".to_vec());
 
+        raft_store.shutdown().unwrap();
+    }
+
+    #[test]
+    fn openraft_metadata_store_coalesces_concurrent_single_command_commits() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        let raft_store = Arc::new(
+            OpenRaftMetadataStore::new_single_voter(store, NodeId::new(1).unwrap())
+                .expect("single voter OpenRaft store opens"),
+        );
+        let barrier = Arc::new(Barrier::new(16));
+        let mut handles = Vec::new();
+        for index in 0..16_u64 {
+            let raft_store = Arc::clone(&raft_store);
+            let barrier = Arc::clone(&barrier);
+            handles.push(thread::spawn(move || {
+                let request_id = format!("req-coalesced-{index}");
+                let key = format!("dentry/coalesced-{index}");
+                barrier.wait();
+                raft_store
+                    .commit_metadata(metadata_command(
+                        request_id.as_bytes(),
+                        key.as_bytes(),
+                        100 + index,
+                    ))
+                    .unwrap();
+            }));
+        }
+        for handle in handles {
+            handle.join().unwrap();
+        }
+
+        let stats = raft_store.stats_handle().stats();
+        assert!(
+            stats.proposal_max_batch > 1,
+            "expected coalesced raft proposal batch, got max={}",
+            stats.proposal_max_batch
+        );
+        assert!(stats.proposal_queue_wait_ns_total > 0);
         raft_store.shutdown().unwrap();
     }
 

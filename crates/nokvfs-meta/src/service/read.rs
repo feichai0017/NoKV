@@ -1005,7 +1005,7 @@ where
         } else {
             None
         };
-        let outcome = read_object_blocks(&self.objects, cache, len, &plan)?;
+        let outcome = self.objects.read_blocks(cache, len, &plan)?;
         self.object_gets
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
         self.object_get_bytes
@@ -1023,7 +1023,7 @@ where
         blocks: &[ObjectReadBlock],
     ) -> Result<Vec<u8>, MetadError> {
         let cache = self.block_cache_enabled().then_some(&self.block_cache);
-        let outcome = read_object_blocks(&self.objects, cache, output_len, blocks)?;
+        let outcome = self.objects.read_blocks(cache, output_len, blocks)?;
         self.object_gets
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
         self.object_get_bytes

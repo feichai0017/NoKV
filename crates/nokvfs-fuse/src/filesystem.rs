@@ -20,8 +20,8 @@ use nokvfs_meta::{
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokvfs_object::{
-    ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE,
-    DEFAULT_CHUNK_SIZE,
+    DirtyChunkExtent, FileReadPipeline, FileWritePipeline, ObjectReadBlock, ObjectStore,
+    DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
 use sha2::{Digest, Sha256};
@@ -36,6 +36,8 @@ pub struct FuseOptions {
     pub attr_ttl: Duration,
     pub fs_name: String,
     pub threads: usize,
+    pub kernel_cache: bool,
+    pub direct_io: bool,
     pub view: FuseView,
     pub access: FuseAccessMode,
     pub invalidation: FuseInvalidationOptions,
@@ -59,9 +61,16 @@ pub(crate) struct NoKvFuse<B: FuseBackend> {
     parents: RwLock<HashMap<u64, u64>>,
     names: RwLock<HashMap<u64, Vec<u8>>>,
     next_handle: AtomicU64,
+    read_handles: RwLock<HashMap<u64, ReadHandle>>,
     write_handles: RwLock<HashMap<u64, WriteHandle<B::Prepared>>>,
     directory_handles: RwLock<HashMap<u64, DirectoryHandle>>,
     invalidation: Arc<InvalidationRegistry>,
+}
+
+#[derive(Clone, Debug)]
+struct ReadHandle {
+    inode: InodeId,
+    reader: FileReadPipeline,
 }
 
 #[derive(Clone, Debug)]
@@ -75,17 +84,9 @@ struct WriteHandle<P> {
     gid: u32,
     base_size: u64,
     size: u64,
-    dirty_extents: Vec<DirtyExtent>,
-    staged_chunks: Vec<StoredChunk>,
-    staged: StagedObjectSet,
-    next_block_index: u64,
+    writer: Option<FileWritePipeline>,
     sequential_digest: Option<SequentialDigest>,
     dirty: bool,
-}
-
-#[derive(Clone, Debug)]
-struct DirtyExtent {
-    chunks: Vec<StoredChunk>,
 }
 
 #[derive(Clone)]
@@ -167,6 +168,8 @@ impl Default for FuseOptions {
             attr_ttl: Duration::from_secs(1),
             fs_name: "nokv-fs".to_owned(),
             threads: default_threads(),
+            kernel_cache: true,
+            direct_io: false,
             view: FuseView::Live,
             access: FuseAccessMode::ReadWrite,
             invalidation: FuseInvalidationOptions::default(),
@@ -203,6 +206,7 @@ where
             parents: RwLock::new(parents),
             names: RwLock::new(HashMap::new()),
             next_handle: AtomicU64::new(1),
+            read_handles: RwLock::new(HashMap::new()),
             write_handles: RwLock::new(HashMap::new()),
             directory_handles: RwLock::new(HashMap::new()),
             invalidation,
@@ -314,6 +318,24 @@ where
         out
     }
 
+    fn read_open_flags(&self) -> FopenFlags {
+        if self.options.direct_io {
+            FopenFlags::FOPEN_DIRECT_IO
+        } else if self.options.kernel_cache {
+            FopenFlags::FOPEN_KEEP_CACHE
+        } else {
+            FopenFlags::empty()
+        }
+    }
+
+    fn write_open_flags(&self) -> FopenFlags {
+        if self.options.direct_io {
+            FopenFlags::FOPEN_DIRECT_IO
+        } else {
+            FopenFlags::empty()
+        }
+    }
+
     fn read_only(&self) -> bool {
         self.options.access.is_read_only() || self.options.view.is_read_only()
     }
@@ -402,6 +424,24 @@ where
     ) -> Result<Vec<u8>, FuseBackendError> {
         match self.options.view {
             FuseView::Live => self.backend.read_file(inode, offset, len),
+            FuseView::Snapshot { snapshot_id, .. } => {
+                self.backend
+                    .read_file_at_snapshot(snapshot_id, inode, offset, len)
+            }
+        }
+    }
+
+    fn service_read_file_with_pipeline(
+        &self,
+        inode: InodeId,
+        offset: u64,
+        len: usize,
+        pipeline: &mut FileReadPipeline,
+    ) -> Result<Vec<u8>, FuseBackendError> {
+        match self.options.view {
+            FuseView::Live => self
+                .backend
+                .read_file_with_pipeline(inode, offset, len, pipeline),
             FuseView::Snapshot { snapshot_id, .. } => {
                 self.backend
                     .read_file_at_snapshot(snapshot_id, inode, offset, len)
@@ -529,6 +569,56 @@ where
         self.directory_handle_attr(fh).map(|_| ())
     }
 
+    fn allocate_read_handle(&self, inode: InodeId) -> Result<FileHandle, Errno> {
+        let raw = self.next_handle.fetch_add(1, Ordering::Relaxed);
+        self.read_handles.write().map_err(|_| Errno::EIO)?.insert(
+            raw,
+            ReadHandle {
+                inode,
+                reader: FileReadPipeline::default(),
+            },
+        );
+        Ok(FileHandle(raw))
+    }
+
+    fn read_from_read_handle(
+        &self,
+        fh: FileHandle,
+        offset: u64,
+        size: u32,
+    ) -> Result<Option<Vec<u8>>, Errno> {
+        let Some((inode, mut reader)) = self
+            .read_handles
+            .read()
+            .map_err(|_| Errno::EIO)?
+            .get(&fh.0)
+            .map(|handle| (handle.inode, handle.reader.clone()))
+        else {
+            return Ok(None);
+        };
+        let bytes = self
+            .service_read_file_with_pipeline(inode, offset, size as usize, &mut reader)
+            .map_err(errno)?;
+        if let Some(handle) = self
+            .read_handles
+            .write()
+            .map_err(|_| Errno::EIO)?
+            .get_mut(&fh.0)
+        {
+            handle.reader = reader;
+        }
+        Ok(Some(bytes))
+    }
+
+    fn release_read_handle(&self, fh: FileHandle) -> Result<bool, Errno> {
+        Ok(self
+            .read_handles
+            .write()
+            .map_err(|_| Errno::EIO)?
+            .remove(&fh.0)
+            .is_some())
+    }
+
     fn allocate_handle(&self, handle: WriteHandle<B::Prepared>) -> Result<FileHandle, Errno> {
         let raw = self.next_handle.fetch_add(1, Ordering::Relaxed);
         self.write_handles
@@ -559,10 +649,7 @@ where
             gid: attr.gid,
             base_size: attr.size,
             size: attr.size,
-            dirty_extents: Vec::new(),
-            staged_chunks: Vec::new(),
-            staged: StagedObjectSet::default(),
-            next_block_index: 0,
+            writer: None,
             sequential_digest: Some(SequentialDigest::new()),
             dirty: false,
         })
@@ -587,11 +674,21 @@ where
                 );
             }
             let prepared = handle.prepared.clone().ok_or(Errno::EIO)?;
-            let block_index_base = handle.next_block_index;
-            handle.next_block_index = handle.next_block_index.saturating_add(reserved_blocks);
+            if handle.writer.is_none() {
+                handle.writer = Some(
+                    self.backend
+                        .new_write_pipeline(
+                            &prepared,
+                            &fuse_manifest_id(handle.parent, handle.inode),
+                        )
+                        .map_err(errno)?,
+                );
+            }
+            let writer = handle.writer.as_mut().ok_or(Errno::EIO)?;
+            let block_index_base = writer.reserve_blocks(reserved_blocks);
             WriteStageReservation {
                 prepared,
-                manifest_id: fuse_manifest_id(handle.parent, handle.inode),
+                manifest_id: writer.options().manifest_id.clone(),
                 block_index_base,
             }
         };
@@ -627,18 +724,12 @@ where
                 handle.sequential_digest = None;
             }
         }
-        let staged_objects = handle
-            .staged
-            .objects()
-            .iter()
-            .cloned()
-            .chain(staged.objects().iter().cloned())
-            .collect();
-        handle.staged = StagedObjectSet::new(staged_objects);
-        handle.staged_chunks.extend(written.chunks.clone());
-        handle.dirty_extents.push(DirtyExtent {
-            chunks: written.chunks,
-        });
+        handle
+            .writer
+            .as_mut()
+            .ok_or(Errno::EIO)?
+            .record_write(written)
+            .map_err(|_| Errno::EIO)?;
         handle.size = handle.size.max(end);
         handle.dirty = true;
         Ok(data.len())
@@ -651,6 +742,14 @@ where
             handle.prepared = Some(
                 self.backend
                     .prepare_artifact_replace(handle.parent, handle.name.clone())
+                    .map_err(errno)?,
+            );
+        }
+        if handle.writer.is_none() {
+            let prepared = handle.prepared.as_ref().ok_or(Errno::EIO)?;
+            handle.writer = Some(
+                self.backend
+                    .new_write_pipeline(prepared, &fuse_manifest_id(handle.parent, handle.inode))
                     .map_err(errno)?,
             );
         }
@@ -720,7 +819,9 @@ where
                 .map_err(errno)?;
             bytes[..base.len()].copy_from_slice(&base);
         }
-        self.overlay_dirty_extents(&mut bytes, offset, &handle.dirty_extents)?;
+        if let Some(writer) = &handle.writer {
+            self.overlay_dirty_extents(&mut bytes, offset, writer.dirty_extents())?;
+        }
         Ok(Some(bytes))
     }
 
@@ -728,7 +829,7 @@ where
         &self,
         output: &mut [u8],
         output_offset: u64,
-        extents: &[DirtyExtent],
+        extents: &[DirtyChunkExtent],
     ) -> Result<(), Errno> {
         if output.is_empty() {
             return Ok(());
@@ -826,8 +927,18 @@ where
                     content_type: "application/octet-stream".to_owned(),
                     manifest_id: fuse_manifest_id(snapshot.parent, snapshot.inode),
                     size: snapshot.size,
-                    chunks: snapshot.staged_chunks,
-                    staged: snapshot.staged,
+                    chunks: snapshot
+                        .writer
+                        .as_ref()
+                        .ok_or(Errno::EIO)?
+                        .staged_chunks()
+                        .to_vec(),
+                    staged: snapshot
+                        .writer
+                        .as_ref()
+                        .ok_or(Errno::EIO)?
+                        .staged_objects()
+                        .clone(),
                     mode: snapshot.mode,
                     uid: snapshot.uid,
                     gid: snapshot.gid,
@@ -842,11 +953,8 @@ where
         {
             handle.base_size = snapshot.size;
             handle.size = snapshot.size;
-            handle.dirty_extents.clear();
-            handle.staged_chunks.clear();
-            handle.staged = StagedObjectSet::default();
             handle.prepared = None;
-            handle.next_block_index = 0;
+            handle.writer = None;
             handle.sequential_digest = Some(SequentialDigest::new());
             handle.dirty = false;
         }
@@ -1123,7 +1231,10 @@ where
                 .ok_or(Errno::ENOENT)
         }) {
             Ok(attr) if attr.file_type == FileType::File => match flags.acc_mode() {
-                OpenAccMode::O_RDONLY => reply.opened(FileHandle(0), FopenFlags::FOPEN_KEEP_CACHE),
+                OpenAccMode::O_RDONLY => match self.allocate_read_handle(attr.inode) {
+                    Ok(fh) => reply.opened(fh, self.read_open_flags()),
+                    Err(err) => reply.error(err),
+                },
                 OpenAccMode::O_WRONLY | OpenAccMode::O_RDWR => {
                     if self.read_only() {
                         reply.error(Errno::EROFS);
@@ -1131,7 +1242,7 @@ where
                     }
                     let parent = self.parent_of(attr.inode);
                     match self.open_write_handle(&attr, parent) {
-                        Ok(fh) => reply.opened(fh, FopenFlags::empty()),
+                        Ok(fh) => reply.opened(fh, self.write_open_flags()),
                         Err(err) => reply.error(err),
                     }
                 }
@@ -1163,6 +1274,17 @@ where
                 return;
             }
         }
+        match self.read_from_read_handle(fh, offset, size) {
+            Ok(Some(bytes)) => {
+                reply.data(&bytes);
+                return;
+            }
+            Ok(None) => {}
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        }
         match self.metadata_inode(ino).and_then(|inode| {
             self.service_read_file(inode, offset, size as usize)
                 .map_err(errno)
@@ -1177,7 +1299,7 @@ where
             .metadata_inode(ino)
             .and_then(|inode| self.allocate_directory_handle(inode))
         {
-            Ok(handle) => reply.opened(handle, FopenFlags::FOPEN_KEEP_CACHE),
+            Ok(handle) => reply.opened(handle, self.read_open_flags()),
             Err(err) => reply.error(err),
         }
     }
@@ -1645,7 +1767,7 @@ where
                             &self.view_file_attr(&entry.attr),
                             Generation(entry.attr.generation),
                             handle,
-                            FopenFlags::empty(),
+                            self.write_open_flags(),
                         );
                     }
                     Err(err) => reply.error(err),
@@ -1835,8 +1957,22 @@ where
         reply: ReplyEmpty,
     ) {
         if self.read_only() {
-            reply.ok();
+            match self.release_read_handle(fh) {
+                Ok(_) => reply.ok(),
+                Err(err) => reply.error(err),
+            }
             return;
+        }
+        match self.release_read_handle(fh) {
+            Ok(true) => {
+                reply.ok();
+                return;
+            }
+            Ok(false) => {}
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
         }
         match self.release_handle(fh) {
             Ok(()) => reply.ok(),
@@ -2077,6 +2213,33 @@ mod tests {
     }
 
     #[test]
+    fn open_flags_follow_fuse_cache_options() {
+        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        assert_eq!(fuse.read_open_flags(), FopenFlags::FOPEN_KEEP_CACHE);
+        assert_eq!(fuse.write_open_flags(), FopenFlags::empty());
+
+        let fuse = NoKvFuse::from_backend(
+            UnsupportedTestBackend,
+            FuseOptions {
+                kernel_cache: false,
+                ..FuseOptions::default()
+            },
+        );
+        assert_eq!(fuse.read_open_flags(), FopenFlags::empty());
+        assert_eq!(fuse.write_open_flags(), FopenFlags::empty());
+
+        let fuse = NoKvFuse::from_backend(
+            UnsupportedTestBackend,
+            FuseOptions {
+                direct_io: true,
+                ..FuseOptions::default()
+            },
+        );
+        assert_eq!(fuse.read_open_flags(), FopenFlags::FOPEN_DIRECT_IO);
+        assert_eq!(fuse.write_open_flags(), FopenFlags::FOPEN_DIRECT_IO);
+    }
+
+    #[test]
     fn staged_range_block_count_matches_chunked_object_boundaries() {
         assert_eq!(staged_range_block_count(0, 0).unwrap(), 0);
         assert_eq!(staged_range_block_count(0, 1).unwrap(), 1);
@@ -2088,6 +2251,22 @@ mod tests {
             staged_range_block_count(DEFAULT_CHUNK_SIZE - 1, 2).unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn read_handle_uses_pipeline_and_is_released() {
+        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let inode = InodeId::new(7).unwrap();
+        let fh = fuse.allocate_read_handle(inode).unwrap();
+
+        let first = fuse.read_from_read_handle(fh, 0, 4).unwrap().unwrap();
+        let second = fuse.read_from_read_handle(fh, 4, 4).unwrap().unwrap();
+
+        assert_eq!(first, b"abcd");
+        assert_eq!(second, b"efgh");
+        assert!(fuse.release_read_handle(fh).unwrap());
+        assert!(!fuse.release_read_handle(fh).unwrap());
+        assert!(fuse.read_from_read_handle(fh, 0, 4).unwrap().is_none());
     }
 
     #[test]
@@ -2253,6 +2432,34 @@ mod tests {
             unsupported()
         }
 
+        fn read_file_with_pipeline(
+            &self,
+            _inode: InodeId,
+            offset: u64,
+            len: usize,
+            pipeline: &mut FileReadPipeline,
+        ) -> FuseBackendResult<Vec<u8>> {
+            let store = nokvfs_object::MemoryObjectStore::new();
+            let key = nokvfs_object::ObjectKey::new("blocks/test/read").unwrap();
+            store.put(&key, b"abcdefghijklmnop").unwrap();
+            let outcome = pipeline
+                .read_blocks::<_, nokvfs_object::MemoryBlockCache>(
+                    &store,
+                    None,
+                    16,
+                    offset,
+                    len,
+                    &[ObjectReadBlock {
+                        object_key: key.as_str().to_owned(),
+                        object_offset: offset,
+                        len,
+                        output_offset: 0,
+                    }],
+                )
+                .unwrap();
+            Ok(outcome.blocks.bytes)
+        }
+
         fn read_file_at_snapshot(
             &self,
             _snapshot_id: u64,
@@ -2368,6 +2575,14 @@ mod tests {
             unsupported()
         }
 
+        fn new_write_pipeline(
+            &self,
+            _prepared: &Self::Prepared,
+            _manifest_id: &str,
+        ) -> FuseBackendResult<FileWritePipeline> {
+            unsupported()
+        }
+
         fn stage_prepared_artifact_ranges(
             &self,
             _prepared: &Self::Prepared,
@@ -2378,7 +2593,10 @@ mod tests {
             unsupported()
         }
 
-        fn cleanup_staged_objects(&self, _staged: &StagedObjectSet) -> FuseBackendResult<()> {
+        fn cleanup_staged_objects(
+            &self,
+            _staged: &nokvfs_object::StagedObjectSet,
+        ) -> FuseBackendResult<()> {
             unsupported()
         }
 

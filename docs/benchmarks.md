@@ -59,20 +59,47 @@ iterating:
 scripts/run-ai-training-smoke.sh metadata-ha-fault-smoke
 ```
 
-For a local NoKV-FS versus JuiceFS same-shape comparison, mount JuiceFS first
-and pass its mountpoint to the comparison script:
+For a local NoKV-FS versus JuiceFS same-shape comparison, use the managed
+RustFS + Redis + JuiceFS script. It starts one RustFS endpoint, creates isolated
+`nokv` and `juicefs` buckets, formats JuiceFS over Redis, mounts it, and then
+runs both systems against the same generated workload shape:
+
+```bash
+NOKV_COMPARE_PROFILE=standard \
+scripts/run-juicefs-rustfs-comparison.sh
+```
+
+That script compares the NoKV benchmark/client path with a mounted JuiceFS
+filesystem. To compare the mounted filesystem boundary for both systems, use
+the FUSE-vs-FUSE script instead:
+
+```bash
+NOKV_COMPARE_PROFILE=standard \
+scripts/run-fuse-juicefs-rustfs-comparison.sh
+```
+
+The FUSE script starts NoKV-FS through `nokv-fs serve` plus `nokv-fs mount`,
+starts JuiceFS against Redis, and runs the same generated dataset/checkpoint
+shape through both mountpoints. On macOS it disables JuiceFS AppleDouble
+sidecar generation by default so `._` files do not pollute the comparison.
+
+The script does not install tools globally. Set `NOKV_RUSTFS_BIN`,
+`NOKV_REDIS_BIN`, `NOKV_JUICEFS_BIN`, or `NOKV_AWS_BIN` to point at local
+binaries; missing tools fail with install commands.
+
+If you already have a JuiceFS mount and object endpoint, pass that mountpoint to
+the lower-level comparison script:
 
 ```bash
 JUICEFS_MOUNT=/mnt/jfs \
 NOKV_COMPARE_PROFILE=standard \
+NOKV_COMPARE_RUSTFS_ENDPOINT=http://127.0.0.1:9000 \
 scripts/run-training-comparison.sh
 ```
 
-The script runs NoKV-FS through the RustFS-backed `mlperf-dlio` workload, then
-runs a generated dataset/checkpoint workload with the same shape inside the
-existing JuiceFS mount. This is useful for local engineering comparisons. It is
-not an MLCommons official submission result and does not replace running the
-official MLPerf Storage or DLIO harness against a NoKV-FS FUSE mount.
+These scripts produce local engineering evidence only. They are not MLCommons
+official submission results and do not replace running the official MLPerf
+Storage or DLIO harness against a NoKV-FS FUSE mount.
 
 The gate also accepts the special workload `fuse-smoke` for the mounted POSIX
 semantics check. It is not part of the default list because it requires a
@@ -91,6 +118,20 @@ through one endpoint, then reads the artifact through follower voters:
 scripts/run-ai-training-smoke.sh metadata-raft-smoke
 NOKV_AI_SMOKE_INCLUDE_METADATA_RAFT_SMOKE=1 scripts/run-ai-training-smoke.sh
 ```
+
+For direct benchmark rows, use the `metadata-ha-*` workloads:
+
+```bash
+scripts/run-rustfs-e2e.sh --metadata-raft-log-sync none \
+  --workload metadata-ha-smoke
+scripts/run-rustfs-e2e.sh --metadata-raft-log-sync none \
+  --workload metadata-ha-coalescing-smoke
+```
+
+`metadata-ha-smoke` validates normal replicated writes, follower reads, and
+OpenRaft state. `metadata-ha-coalescing-smoke` fires concurrent independent
+`create_file` requests so `metadata_raft_proposal_max_batch` can verify Raft
+proposal coalescing.
 
 For a disposable local RustFS-backed FUSE semantics smoke, use:
 
