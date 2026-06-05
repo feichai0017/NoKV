@@ -2,6 +2,7 @@ use std::sync::{
     atomic::{AtomicU64, Ordering},
     Mutex,
 };
+use std::time::Instant;
 
 use nokvfs_meta::command::{
     metadata_commands_conflict, CommitResult, DelimitedScanItem, DelimitedScanRequest,
@@ -35,6 +36,9 @@ pub struct SharedLogRuntimeStats {
     pub commit_entry_total: u64,
     pub commit_command_total: u64,
     pub max_commands_per_entry: u64,
+    pub precheck_command_total: u64,
+    pub precheck_predicate_total: u64,
+    pub precheck_ns_total: u64,
     pub stale_read_total: u64,
 }
 
@@ -43,6 +47,9 @@ struct SharedLogRuntimeCounters {
     commit_entry_total: AtomicU64,
     commit_command_total: AtomicU64,
     max_commands_per_entry: AtomicU64,
+    precheck_command_total: AtomicU64,
+    precheck_predicate_total: AtomicU64,
+    precheck_ns_total: AtomicU64,
     stale_read_total: AtomicU64,
 }
 
@@ -146,14 +153,14 @@ where
         let mut pending = Vec::new();
         for (index, command) in commands.iter().cloned().enumerate() {
             if command_conflicts_with_pending_batch(&pending, &command) {
-                self.commit_pending_batch(&mut pending, &mut results);
+                self.commit_prevalidated_pending_batch(&mut pending, &mut results);
             }
-            match validate_against_current_store(&self.store, &command) {
+            match self.validate_command_for_log_append(&command) {
                 Ok(()) => pending.push((index, command)),
                 Err(err) => results[index] = Some(Err(err)),
             }
         }
-        self.commit_pending_batch(&mut pending, &mut results);
+        self.commit_prevalidated_pending_batch(&mut pending, &mut results);
         results
             .into_iter()
             .map(|result| {
@@ -171,9 +178,14 @@ where
         commands: &[MetadataCommand],
     ) -> Result<Vec<CommitResult>, MetadataError> {
         validate_batch_independence(commands)?;
-        for command in commands {
-            validate_against_current_store(&self.store, command)?;
-        }
+        self.validate_commands_for_log_append(commands)?;
+        self.commit_prevalidated_batch_locked(commands)
+    }
+
+    fn commit_prevalidated_batch_locked(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Result<Vec<CommitResult>, MetadataError> {
         let commit = MetadataGroup::new(&self.log, self, self.term, self.mount)
             .commit_batch(commands)
             .map_err(|err| MetadataError::Backend(err.to_string()))?;
@@ -189,7 +201,7 @@ where
             .collect())
     }
 
-    fn commit_pending_batch(
+    fn commit_prevalidated_pending_batch(
         &self,
         pending: &mut Vec<(usize, MetadataCommand)>,
         results: &mut [Option<Result<CommitResult, MetadataError>>],
@@ -202,7 +214,7 @@ where
             .iter()
             .map(|(_, command)| command.clone())
             .collect::<Vec<_>>();
-        match self.commit_batch_locked(&commands) {
+        match self.commit_prevalidated_batch_locked(&commands) {
             Ok(committed) => {
                 for (index, result) in indexes.into_iter().zip(committed) {
                     results[index] = Some(Ok(result));
@@ -246,6 +258,15 @@ where
                 .runtime_stats
                 .max_commands_per_entry
                 .load(Ordering::Relaxed),
+            precheck_command_total: self
+                .runtime_stats
+                .precheck_command_total
+                .load(Ordering::Relaxed),
+            precheck_predicate_total: self
+                .runtime_stats
+                .precheck_predicate_total
+                .load(Ordering::Relaxed),
+            precheck_ns_total: self.runtime_stats.precheck_ns_total.load(Ordering::Relaxed),
             stale_read_total: self.runtime_stats.stale_read_total.load(Ordering::Relaxed),
         }
     }
@@ -387,6 +408,45 @@ where
         record_max(
             &self.runtime_stats.max_commands_per_entry,
             command_count as u64,
+        );
+    }
+
+    fn validate_command_for_log_append(
+        &self,
+        command: &MetadataCommand,
+    ) -> Result<(), MetadataError> {
+        let started = Instant::now();
+        let result = validate_against_current_store(&self.store, command);
+        self.record_runtime_precheck(std::slice::from_ref(command), started.elapsed());
+        result
+    }
+
+    fn validate_commands_for_log_append(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Result<(), MetadataError> {
+        let started = Instant::now();
+        let result = commands
+            .iter()
+            .try_for_each(|command| validate_against_current_store(&self.store, command));
+        self.record_runtime_precheck(commands, started.elapsed());
+        result
+    }
+
+    fn record_runtime_precheck(&self, commands: &[MetadataCommand], elapsed: std::time::Duration) {
+        self.runtime_stats
+            .precheck_command_total
+            .fetch_add(commands.len() as u64, Ordering::Relaxed);
+        self.runtime_stats.precheck_predicate_total.fetch_add(
+            commands
+                .iter()
+                .map(|command| command.predicates.len() as u64)
+                .sum::<u64>(),
+            Ordering::Relaxed,
+        );
+        self.runtime_stats.precheck_ns_total.fetch_add(
+            elapsed.as_nanos().min(u128::from(u64::MAX)) as u64,
+            Ordering::Relaxed,
         );
     }
 

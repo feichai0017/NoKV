@@ -1117,6 +1117,8 @@ fn shared_log_metadata_store_commits_independent_batch_as_one_entry() {
     assert_eq!(stats.commit_entry_total, 1);
     assert_eq!(stats.commit_command_total, 2);
     assert_eq!(stats.max_commands_per_entry, 2);
+    assert_eq!(stats.precheck_command_total, 2);
+    assert_eq!(stats.precheck_predicate_total, 0);
     let entries = shared
         .log()
         .read_from(LogIndex::new(1).unwrap(), 0)
@@ -1185,6 +1187,12 @@ fn shared_log_metadata_store_commit_independent_batch_groups_independent_command
     assert_eq!(results[0].as_ref().unwrap().commit_version, version(2));
     assert_eq!(results[1].as_ref().unwrap().commit_version, version(3));
     assert_eq!(shared.log().committed_index().get(), 1);
+    let stats = shared.runtime_stats();
+    assert_eq!(stats.commit_entry_total, 1);
+    assert_eq!(stats.commit_command_total, 2);
+    assert_eq!(stats.max_commands_per_entry, 2);
+    assert_eq!(stats.precheck_command_total, 2);
+    assert_eq!(stats.precheck_predicate_total, 0);
     let entries = shared
         .log()
         .read_from(LogIndex::new(1).unwrap(), 0)
