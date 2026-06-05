@@ -6,7 +6,7 @@
 
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 use std::time::Instant;
 
 use crate::command::{
@@ -59,7 +59,6 @@ const TREE_ID_HISTORY: u8 = 14;
 pub struct HoltMetadataStore {
     db: DB,
     trees: Arc<FamilyTrees>,
-    write_gate: Arc<Mutex<()>>,
     stats: Arc<HoltMetadataStoreCounters>,
     active_snapshot_pins: Arc<AtomicU64>,
 }
@@ -211,7 +210,6 @@ impl HoltMetadataStore {
         Ok(Self {
             db,
             trees,
-            write_gate: Arc::new(Mutex::new(())),
             stats: Arc::new(HoltMetadataStoreCounters::default()),
             active_snapshot_pins: Arc::new(AtomicU64::new(active_snapshot_pins)),
         })
@@ -561,10 +559,6 @@ impl MetadataStore for HoltMetadataStore {
         &self,
         request: HistoryPruneRequest,
     ) -> Result<HistoryPruneOutcome, MetadataError> {
-        let _guard = self
-            .write_gate
-            .lock()
-            .map_err(|_| MetadataError::Backend("holt metadata write gate poisoned".to_owned()))?;
         let remove_limit = if request.limit == 0 {
             usize::MAX
         } else {
@@ -611,10 +605,10 @@ impl MetadataStore for HoltMetadataStore {
 
         outcome.removed = keys_to_remove.len();
         if !keys_to_remove.is_empty() {
-            self.db
+            history
                 .atomic(|batch| {
                     for key in &keys_to_remove {
-                        batch.delete(HISTORY_TREE, key);
+                        batch.delete(key);
                     }
                 })
                 .map_err(to_backend_error)?;
