@@ -657,16 +657,19 @@ where
                 },
             ],
             mutations,
-            watch: vec![self.watch_projection(
-                parent,
-                WatchEvent {
-                    kind: WatchEventKind::Remove,
-                    parent: Some(parent),
-                    name: Some(name.clone()),
-                    inode: entry.attr.inode,
-                    version: version.get(),
-                },
-            )],
+            watch: self
+                .watch_projection(
+                    parent,
+                    WatchEvent {
+                        kind: WatchEventKind::Remove,
+                        parent: Some(parent),
+                        name: Some(name.clone()),
+                        inode: entry.attr.inode,
+                        version: version.get(),
+                    },
+                )
+                .into_iter()
+                .collect(),
         };
         Ok(PreparedRemoveFile { entry, command })
     }
@@ -793,16 +796,19 @@ where
                 },
             ],
             mutations,
-            watch: vec![self.watch_projection(
-                parent,
-                WatchEvent {
-                    kind: WatchEventKind::Remove,
-                    parent: Some(parent),
-                    name: Some(name.clone()),
-                    inode: entry.attr.inode,
-                    version: version.get(),
-                },
-            )],
+            watch: self
+                .watch_projection(
+                    parent,
+                    WatchEvent {
+                        kind: WatchEventKind::Remove,
+                        parent: Some(parent),
+                        name: Some(name.clone()),
+                        inode: entry.attr.inode,
+                        version: version.get(),
+                    },
+                )
+                .into_iter()
+                .collect(),
         };
         Ok(PreparedRemoveEmptyDir { entry, command })
     }
@@ -1050,7 +1056,7 @@ where
         }
         let mut watch = Vec::new();
         if let Some(replaced) = &replaced {
-            watch.push(self.watch_projection(
+            if let Some(event) = self.watch_projection(
                 new_parent,
                 WatchEvent {
                     kind: WatchEventKind::Remove,
@@ -1059,9 +1065,11 @@ where
                     inode: replaced.attr.inode,
                     version: version.get(),
                 },
-            ));
+            ) {
+                watch.push(event);
+            }
         }
-        watch.push(self.watch_projection(
+        if let Some(event) = self.watch_projection(
             parent,
             WatchEvent {
                 kind: WatchEventKind::Remove,
@@ -1070,8 +1078,10 @@ where
                 inode: source.attr.inode,
                 version: version.get(),
             },
-        ));
-        watch.push(self.watch_projection(
+        ) {
+            watch.push(event);
+        }
+        if let Some(event) = self.watch_projection(
             new_parent,
             WatchEvent {
                 kind: WatchEventKind::Rename,
@@ -1080,7 +1090,9 @@ where
                 inode: source.attr.inode,
                 version: version.get(),
             },
-        ));
+        ) {
+            watch.push(event);
+        }
 
         self.commit_metadata(MetadataCommand {
             request_id: request_id(
@@ -1228,7 +1240,7 @@ where
                     projection,
                 ));
             }
-            watch.push(self.watch_projection(
+            if let Some(event) = self.watch_projection(
                 projection.dentry.parent,
                 WatchEvent {
                     kind: create_watch_kind(kind),
@@ -1237,7 +1249,9 @@ where
                     inode,
                     version: version.get(),
                 },
-            ));
+            ) {
+                watch.push(event);
+            }
         }
         Ok(MetadataCommand {
             request_id: request_id(kind_name(kind), self.mount, parent, version),
@@ -1335,16 +1349,19 @@ where
                 },
             ],
             mutations,
-            watch: vec![self.watch_projection(
-                projection.dentry.parent,
-                WatchEvent {
-                    kind: create_watch_kind(kind),
-                    parent: Some(projection.dentry.parent),
-                    name: Some(projection.dentry.name.clone()),
-                    inode,
-                    version: version.get(),
-                },
-            )],
+            watch: self
+                .watch_projection(
+                    projection.dentry.parent,
+                    WatchEvent {
+                        kind: create_watch_kind(kind),
+                        parent: Some(projection.dentry.parent),
+                        name: Some(projection.dentry.name.clone()),
+                        inode,
+                        version: version.get(),
+                    },
+                )
+                .into_iter()
+                .collect(),
         })?;
         Ok(())
     }
@@ -1434,16 +1451,19 @@ where
                 },
             ],
             mutations,
-            watch: vec![self.watch_projection(
-                projection.dentry.parent,
-                WatchEvent {
-                    kind: create_watch_kind(kind),
-                    parent: Some(projection.dentry.parent),
-                    name: Some(projection.dentry.name.clone()),
-                    inode,
-                    version: version.get(),
-                },
-            )],
+            watch: self
+                .watch_projection(
+                    projection.dentry.parent,
+                    WatchEvent {
+                        kind: create_watch_kind(kind),
+                        parent: Some(projection.dentry.parent),
+                        name: Some(projection.dentry.name.clone()),
+                        inode,
+                        version: version.get(),
+                    },
+                )
+                .into_iter()
+                .collect(),
         })?;
         Ok(())
     }

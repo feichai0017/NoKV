@@ -1272,7 +1272,7 @@ fn create_file_hot_path_write_attribution_is_bounded() {
     assert_eq!(after.current_put_total - before.current_put_total, 2);
     assert_eq!(after.current_delete_total - before.current_delete_total, 0);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
-    assert_eq!(after.watch_write_total - before.watch_write_total, 1);
+    assert_eq!(after.watch_write_total - before.watch_write_total, 0);
     assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 1);
 }
 
@@ -1309,7 +1309,7 @@ fn create_files_in_dir_coalesces_into_one_metadata_command() {
     assert_eq!(after.current_put_total - before.current_put_total, 4);
     assert_eq!(after.current_delete_total - before.current_delete_total, 0);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
-    assert_eq!(after.watch_write_total - before.watch_write_total, 2);
+    assert_eq!(after.watch_write_total - before.watch_write_total, 0);
     assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 1);
     assert_eq!(
         after_service.create_files_batch_total - before_service.create_files_batch_total,
@@ -1359,7 +1359,7 @@ fn create_dirs_in_dir_coalesces_into_one_metadata_command() {
     assert_eq!(after.current_put_total - before.current_put_total, 4);
     assert_eq!(after.current_delete_total - before.current_delete_total, 0);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
-    assert_eq!(after.watch_write_total - before.watch_write_total, 2);
+    assert_eq!(after.watch_write_total - before.watch_write_total, 0);
     assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 1);
     assert_eq!(
         after_service.create_dirs_batch_total - before_service.create_dirs_batch_total,
@@ -1414,7 +1414,7 @@ fn remove_files_in_dir_coalesces_into_one_holt_apply() {
     assert_eq!(after.commit_total - before.commit_total, 2);
     assert_eq!(after.current_delete_total - before.current_delete_total, 4);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
-    assert_eq!(after.watch_write_total - before.watch_write_total, 2);
+    assert_eq!(after.watch_write_total - before.watch_write_total, 0);
     assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 2);
     assert_eq!(after.atomic_apply_total - before.atomic_apply_total, 1);
     assert_eq!(
@@ -1469,7 +1469,7 @@ fn remove_empty_dirs_in_dir_coalesces_into_one_holt_apply() {
     assert_eq!(after.commit_total - before.commit_total, 2);
     assert_eq!(after.current_delete_total - before.current_delete_total, 4);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
-    assert_eq!(after.watch_write_total - before.watch_write_total, 2);
+    assert_eq!(after.watch_write_total - before.watch_write_total, 0);
     assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 2);
     assert_eq!(after.atomic_apply_total - before.atomic_apply_total, 1);
     assert_eq!(
@@ -2488,6 +2488,7 @@ fn watch_replay_survives_service_reopen() {
     let metadata = HoltMetadataStore::open_file(dir.path().join("meta")).unwrap();
     let service = NoKvFs::new(MountId::new(1).unwrap(), metadata.clone(), objects.clone());
     service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    let cursor = service.watch_subtree(InodeId::root()).unwrap();
     let name = DentryName::new(b"runs".to_vec()).unwrap();
     let created = service
         .create_dir(InodeId::root(), name.clone(), 0o755, 1000, 1000)
@@ -2495,9 +2496,7 @@ fn watch_replay_survives_service_reopen() {
     drop(service);
 
     let reopened = NoKvFs::open_existing(MountId::new(1).unwrap(), metadata, objects).unwrap();
-    let events = reopened
-        .replay_watch(InodeId::root(), WatchCursor::default(), 100)
-        .unwrap();
+    let events = reopened.replay_watch(InodeId::root(), cursor, 100).unwrap();
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].event.kind, WatchEventKind::Create);
     assert_eq!(events[0].event.name, Some(name));

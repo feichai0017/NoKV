@@ -351,6 +351,7 @@ pub struct NoKvFs<M, O> {
     reserved_next_inode: AtomicU64,
     block_cache: MemoryBlockCache,
     block_cache_enabled: AtomicBool,
+    watch_logging_enabled: AtomicBool,
     object_puts: AtomicU64,
     object_put_bytes: AtomicU64,
     object_gets: AtomicU64,

@@ -90,6 +90,15 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         let _ = pipeline;
         self.read_file(inode, offset, len)
     }
+    fn read_file_with_known_attr_pipeline(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+        pipeline: &mut FileReadPipeline,
+    ) -> FuseBackendResult<Vec<u8>> {
+        self.read_file_with_pipeline(attr.inode, offset, len, pipeline)
+    }
     fn read_file_at_snapshot(
         &self,
         snapshot_id: u64,
@@ -461,6 +470,34 @@ where
         }
         let read = read.blocks;
         Ok(read.bytes)
+    }
+
+    fn read_file_with_known_attr_pipeline(
+        &self,
+        attr: &InodeAttr,
+        offset: u64,
+        len: usize,
+        pipeline: &mut FileReadPipeline,
+    ) -> FuseBackendResult<Vec<u8>> {
+        if len == 0 || offset >= attr.size {
+            return Ok(Vec::new());
+        }
+        let plan = self
+            .metadata
+            .read_body_plan(attr.inode, attr.generation, offset, len)
+            .map_err(FuseBackendError::from)?;
+        let read = pipeline.read_blocks(
+            &self.objects,
+            Some(&self.block_cache),
+            attr.size,
+            offset,
+            plan.output_len,
+            &plan.blocks,
+        )?;
+        if let Some(hint) = read.readahead {
+            self.prefetch_read_blocks(attr.inode, attr.generation, hint.offset, hint.len);
+        }
+        Ok(read.blocks.bytes)
     }
 
     fn read_file_at_snapshot(

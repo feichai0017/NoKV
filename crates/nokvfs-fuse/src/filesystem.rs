@@ -69,7 +69,7 @@ pub(crate) struct NoKvFuse<B: FuseBackend> {
 
 #[derive(Clone, Debug)]
 struct ReadHandle {
-    inode: InodeId,
+    attr: InodeAttr,
     reader: FileReadPipeline,
 }
 
@@ -85,8 +85,15 @@ struct WriteHandle<P> {
     base_size: u64,
     size: u64,
     writer: Option<FileWritePipeline>,
+    buffered: Vec<BufferedWriteRange>,
     sequential_digest: Option<SequentialDigest>,
     dirty: bool,
+}
+
+#[derive(Clone, Debug)]
+struct BufferedWriteRange {
+    offset: u64,
+    bytes: Vec<u8>,
 }
 
 #[derive(Clone)]
@@ -136,6 +143,7 @@ struct WriteStageReservation<P> {
     prepared: P,
     manifest_id: String,
     block_index_base: u64,
+    ranges: Vec<BufferedWriteRange>,
 }
 
 #[derive(Clone, Debug)]
@@ -160,6 +168,7 @@ const STATFS_BLOCK_SIZE: u32 = 4096;
 const STATFS_TOTAL_BYTES: u64 = 1 << 40;
 const STATFS_TOTAL_FILES: u64 = 1 << 32;
 const STATFS_NAME_MAX: u32 = 255;
+const FUSE_WRITEBACK_UPLOAD_THRESHOLD: usize = 1024 * 1024;
 
 impl Default for FuseOptions {
     fn default() -> Self {
@@ -431,9 +440,9 @@ where
         }
     }
 
-    fn service_read_file_with_pipeline(
+    fn service_read_file_with_known_attr_pipeline(
         &self,
-        inode: InodeId,
+        attr: &InodeAttr,
         offset: u64,
         len: usize,
         pipeline: &mut FileReadPipeline,
@@ -441,10 +450,10 @@ where
         match self.options.view {
             FuseView::Live => self
                 .backend
-                .read_file_with_pipeline(inode, offset, len, pipeline),
+                .read_file_with_known_attr_pipeline(attr, offset, len, pipeline),
             FuseView::Snapshot { snapshot_id, .. } => {
                 self.backend
-                    .read_file_at_snapshot(snapshot_id, inode, offset, len)
+                    .read_file_at_snapshot(snapshot_id, attr.inode, offset, len)
             }
         }
     }
@@ -569,12 +578,12 @@ where
         self.directory_handle_attr(fh).map(|_| ())
     }
 
-    fn allocate_read_handle(&self, inode: InodeId) -> Result<FileHandle, Errno> {
+    fn allocate_read_handle(&self, attr: InodeAttr) -> Result<FileHandle, Errno> {
         let raw = self.next_handle.fetch_add(1, Ordering::Relaxed);
         self.read_handles.write().map_err(|_| Errno::EIO)?.insert(
             raw,
             ReadHandle {
-                inode,
+                attr,
                 reader: FileReadPipeline::default(),
             },
         );
@@ -587,17 +596,17 @@ where
         offset: u64,
         size: u32,
     ) -> Result<Option<Vec<u8>>, Errno> {
-        let Some((inode, mut reader)) = self
+        let Some((attr, mut reader)) = self
             .read_handles
             .read()
             .map_err(|_| Errno::EIO)?
             .get(&fh.0)
-            .map(|handle| (handle.inode, handle.reader.clone()))
+            .map(|handle| (handle.attr.clone(), handle.reader.clone()))
         else {
             return Ok(None);
         };
         let bytes = self
-            .service_read_file_with_pipeline(inode, offset, size as usize, &mut reader)
+            .service_read_file_with_known_attr_pipeline(&attr, offset, size as usize, &mut reader)
             .map_err(errno)?;
         if let Some(handle) = self
             .read_handles
@@ -650,6 +659,7 @@ where
             base_size: attr.size,
             size: attr.size,
             writer: None,
+            buffered: Vec::new(),
             sequential_digest: Some(SequentialDigest::new()),
             dirty: false,
         })
@@ -662,8 +672,7 @@ where
         if data.is_empty() {
             return Ok(0);
         }
-        let reserved_blocks = staged_range_block_count(offset, data.len())?;
-        let reservation = {
+        {
             let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
             let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
             if handle.prepared.is_none() {
@@ -684,54 +693,16 @@ where
                         .map_err(errno)?,
                 );
             }
-            let writer = handle.writer.as_mut().ok_or(Errno::EIO)?;
-            let block_index_base = writer.reserve_blocks(reserved_blocks);
-            WriteStageReservation {
-                prepared,
-                manifest_id: writer.options().manifest_id.clone(),
-                block_index_base,
+            if let Some(digest) = handle.sequential_digest.as_mut() {
+                if !digest.append(offset, data) {
+                    handle.sequential_digest = None;
+                }
             }
-        };
-        let pending = self
-            .backend
-            .stage_prepared_artifact_ranges_async(
-                &reservation.prepared,
-                &reservation.manifest_id,
-                &[PublishArtifactRange {
-                    offset,
-                    bytes: data.to_vec(),
-                }],
-                reservation.block_index_base,
-            )
-            .map_err(errno)?;
-        let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
-        let Some(handle) = handles.get_mut(&fh.0) else {
-            drop(handles);
-            self.cleanup_completed_pending(pending)?;
-            return Err(Errno::EBADF);
-        };
-        if handle
-            .prepared
-            .as_ref()
-            .map(|prepared| self.backend.prepared_generation(prepared))
-            != Some(self.backend.prepared_generation(&reservation.prepared))
-        {
-            drop(handles);
-            self.cleanup_completed_pending(pending)?;
-            return Err(Errno::ESTALE);
+            push_buffered_write(&mut handle.buffered, offset, data);
+            handle.size = handle.size.max(end);
+            handle.dirty = true;
         }
-        if let Some(digest) = handle.sequential_digest.as_mut() {
-            if !digest.append(offset, data) {
-                handle.sequential_digest = None;
-            }
-        }
-        handle
-            .writer
-            .as_mut()
-            .ok_or(Errno::EIO)?
-            .record_pending_write(pending);
-        handle.size = handle.size.max(end);
-        handle.dirty = true;
+        self.flush_handle_buffers(fh, false)?;
         Ok(data.len())
     }
 
@@ -839,6 +810,7 @@ where
         if let Some(writer) = &handle.writer {
             self.overlay_dirty_extents(&mut bytes, offset, writer.dirty_extents())?;
         }
+        self.overlay_buffered_ranges(&mut bytes, offset, &handle.buffered)?;
         Ok(Some(bytes))
     }
 
@@ -900,6 +872,79 @@ where
         }
     }
 
+    fn flush_handle_buffers(&self, fh: FileHandle, force: bool) -> Result<(), Errno> {
+        loop {
+            let reservation = {
+                let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+                let Some(handle) = handles.get_mut(&fh.0) else {
+                    return Err(Errno::EBADF);
+                };
+                let ranges = take_buffered_upload_ranges(&mut handle.buffered, force)?;
+                if ranges.is_empty() {
+                    return Ok(());
+                }
+                let prepared = handle.prepared.clone().ok_or(Errno::EIO)?;
+                let writer = handle.writer.as_mut().ok_or(Errno::EIO)?;
+                let block_count = buffered_ranges_block_count(&ranges)?;
+                let block_index_base = writer.reserve_blocks(block_count);
+                WriteStageReservation {
+                    prepared,
+                    manifest_id: writer.options().manifest_id.clone(),
+                    block_index_base,
+                    ranges,
+                }
+            };
+            let publish_ranges = buffered_publish_ranges(&reservation.ranges);
+            let pending = match self.backend.stage_prepared_artifact_ranges_async(
+                &reservation.prepared,
+                &reservation.manifest_id,
+                &publish_ranges,
+                reservation.block_index_base,
+            ) {
+                Ok(pending) => pending,
+                Err(err) => {
+                    self.restore_buffered_ranges(fh, reservation.ranges);
+                    return Err(errno(err));
+                }
+            };
+            let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+            let Some(handle) = handles.get_mut(&fh.0) else {
+                drop(handles);
+                self.cleanup_completed_pending(pending)?;
+                return Err(Errno::EBADF);
+            };
+            if handle
+                .prepared
+                .as_ref()
+                .map(|prepared| self.backend.prepared_generation(prepared))
+                != Some(self.backend.prepared_generation(&reservation.prepared))
+            {
+                drop(handles);
+                self.cleanup_completed_pending(pending)?;
+                return Err(Errno::ESTALE);
+            }
+            handle
+                .writer
+                .as_mut()
+                .ok_or(Errno::EIO)?
+                .record_pending_write(pending);
+            if !force {
+                return Ok(());
+            }
+        }
+    }
+
+    fn restore_buffered_ranges(&self, fh: FileHandle, ranges: Vec<BufferedWriteRange>) {
+        let Ok(mut handles) = self.write_handles.write() else {
+            return;
+        };
+        let Some(handle) = handles.get_mut(&fh.0) else {
+            return;
+        };
+        let current = std::mem::take(&mut handle.buffered);
+        handle.buffered = ranges.into_iter().chain(current).collect();
+    }
+
     fn overlay_dirty_extents(
         &self,
         output: &mut [u8],
@@ -951,6 +996,38 @@ where
         Ok(())
     }
 
+    fn overlay_buffered_ranges(
+        &self,
+        output: &mut [u8],
+        output_offset: u64,
+        ranges: &[BufferedWriteRange],
+    ) -> Result<(), Errno> {
+        if output.is_empty() {
+            return Ok(());
+        }
+        let output_limit = output_offset
+            .checked_add(u64::try_from(output.len()).map_err(|_| Errno::EINVAL)?)
+            .ok_or(Errno::EINVAL)?;
+        for range in ranges {
+            let range_end = range
+                .offset
+                .checked_add(u64::try_from(range.bytes.len()).map_err(|_| Errno::EINVAL)?)
+                .ok_or(Errno::EINVAL)?;
+            let start = range.offset.max(output_offset);
+            let end = range_end.min(output_limit);
+            if start >= end {
+                continue;
+            }
+            let source_start = usize::try_from(start - range.offset).map_err(|_| Errno::EINVAL)?;
+            let source_end = usize::try_from(end - range.offset).map_err(|_| Errno::EINVAL)?;
+            let output_start = usize::try_from(start - output_offset).map_err(|_| Errno::EINVAL)?;
+            let output_end = usize::try_from(end - output_offset).map_err(|_| Errno::EINVAL)?;
+            output[output_start..output_end]
+                .copy_from_slice(&range.bytes[source_start..source_end]);
+        }
+        Ok(())
+    }
+
     fn digest_handle_body(&self, fh: FileHandle, size: u64) -> Result<String, Errno> {
         const DIGEST_CHUNK_SIZE: u32 = 8 * 1024 * 1024;
 
@@ -982,6 +1059,7 @@ where
         if !has_write_handle {
             return Ok(());
         }
+        self.flush_handle_buffers(fh, true)?;
         self.drain_handle_uploads(fh)?;
         let Some(snapshot) = self
             .write_handles
@@ -1315,7 +1393,7 @@ where
                 .ok_or(Errno::ENOENT)
         }) {
             Ok(attr) if attr.file_type == FileType::File => match flags.acc_mode() {
-                OpenAccMode::O_RDONLY => match self.allocate_read_handle(attr.inode) {
+                OpenAccMode::O_RDONLY => match self.allocate_read_handle(attr) {
                     Ok(fh) => reply.opened(fh, self.read_open_flags()),
                     Err(err) => reply.error(err),
                 },
@@ -2135,6 +2213,75 @@ fn staged_range_block_count(offset: u64, len: usize) -> Result<u64, Errno> {
     Ok(count)
 }
 
+fn push_buffered_write(ranges: &mut Vec<BufferedWriteRange>, offset: u64, data: &[u8]) {
+    if let Some(last) = ranges.last_mut() {
+        let last_end = last.offset.saturating_add(last.bytes.len() as u64);
+        if last_end == offset {
+            last.bytes.extend_from_slice(data);
+            return;
+        }
+    }
+    ranges.push(BufferedWriteRange {
+        offset,
+        bytes: data.to_vec(),
+    });
+}
+
+fn take_buffered_upload_ranges(
+    ranges: &mut Vec<BufferedWriteRange>,
+    force: bool,
+) -> Result<Vec<BufferedWriteRange>, Errno> {
+    let mut upload = Vec::new();
+    let mut retained = Vec::new();
+    for mut range in ranges.drain(..) {
+        if range.bytes.is_empty() {
+            continue;
+        }
+        let upload_len = if force {
+            range.bytes.len()
+        } else {
+            (range.bytes.len() / FUSE_WRITEBACK_UPLOAD_THRESHOLD) * FUSE_WRITEBACK_UPLOAD_THRESHOLD
+        };
+        if upload_len == 0 {
+            retained.push(range);
+            continue;
+        }
+        if upload_len == range.bytes.len() {
+            upload.push(range);
+            continue;
+        }
+        let tail = range.bytes.split_off(upload_len);
+        let tail_offset = range
+            .offset
+            .checked_add(u64::try_from(upload_len).map_err(|_| Errno::EINVAL)?)
+            .ok_or(Errno::EINVAL)?;
+        upload.push(range);
+        retained.push(BufferedWriteRange {
+            offset: tail_offset,
+            bytes: tail,
+        });
+    }
+    *ranges = retained;
+    Ok(upload)
+}
+
+fn buffered_ranges_block_count(ranges: &[BufferedWriteRange]) -> Result<u64, Errno> {
+    ranges.iter().try_fold(0_u64, |count, range| {
+        staged_range_block_count(range.offset, range.bytes.len())
+            .map(|next| count.saturating_add(next))
+    })
+}
+
+fn buffered_publish_ranges(ranges: &[BufferedWriteRange]) -> Vec<PublishArtifactRange> {
+    ranges
+        .iter()
+        .map(|range| PublishArtifactRange {
+            offset: range.offset,
+            bytes: range.bytes.clone(),
+        })
+        .collect()
+}
+
 fn cleanup_written_objects<B: FuseBackend>(
     backend: &B,
     written: &ChunkedWrite,
@@ -2346,10 +2493,72 @@ mod tests {
     }
 
     #[test]
+    fn buffered_writes_coalesce_until_upload_threshold_is_ready() {
+        let mut buffered = Vec::new();
+        push_buffered_write(
+            &mut buffered,
+            0,
+            &vec![1; FUSE_WRITEBACK_UPLOAD_THRESHOLD / 2],
+        );
+        assert!(take_buffered_upload_ranges(&mut buffered, false)
+            .unwrap()
+            .is_empty());
+
+        push_buffered_write(
+            &mut buffered,
+            (FUSE_WRITEBACK_UPLOAD_THRESHOLD / 2) as u64,
+            &vec![2; FUSE_WRITEBACK_UPLOAD_THRESHOLD / 2],
+        );
+        let upload = take_buffered_upload_ranges(&mut buffered, false).unwrap();
+
+        assert!(buffered.is_empty());
+        assert_eq!(upload.len(), 1);
+        assert_eq!(upload[0].offset, 0);
+        assert_eq!(upload[0].bytes.len(), FUSE_WRITEBACK_UPLOAD_THRESHOLD);
+        assert_eq!(upload[0].bytes[0], 1);
+        assert_eq!(upload[0].bytes[FUSE_WRITEBACK_UPLOAD_THRESHOLD / 2], 2);
+    }
+
+    #[test]
+    fn buffered_upload_keeps_tail_until_flush() {
+        let mut buffered = Vec::new();
+        push_buffered_write(
+            &mut buffered,
+            0,
+            &vec![7; FUSE_WRITEBACK_UPLOAD_THRESHOLD + 17],
+        );
+
+        let upload = take_buffered_upload_ranges(&mut buffered, false).unwrap();
+        assert_eq!(upload.len(), 1);
+        assert_eq!(upload[0].bytes.len(), FUSE_WRITEBACK_UPLOAD_THRESHOLD);
+        assert_eq!(buffered.len(), 1);
+        assert_eq!(buffered[0].offset, FUSE_WRITEBACK_UPLOAD_THRESHOLD as u64);
+        assert_eq!(buffered[0].bytes.len(), 17);
+
+        let tail = take_buffered_upload_ranges(&mut buffered, true).unwrap();
+        assert_eq!(tail.len(), 1);
+        assert_eq!(tail[0].offset, FUSE_WRITEBACK_UPLOAD_THRESHOLD as u64);
+        assert_eq!(tail[0].bytes.len(), 17);
+        assert!(buffered.is_empty());
+    }
+
+    #[test]
     fn read_handle_uses_pipeline_and_is_released() {
         let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
         let inode = InodeId::new(7).unwrap();
-        let fh = fuse.allocate_read_handle(inode).unwrap();
+        let fh = fuse
+            .allocate_read_handle(InodeAttr {
+                inode,
+                file_type: FileType::File,
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+                size: 16,
+                generation: 1,
+                mtime_ms: 1,
+                ctime_ms: 1,
+            })
+            .unwrap();
 
         let first = fuse.read_from_read_handle(fh, 0, 4).unwrap().unwrap();
         let second = fuse.read_from_read_handle(fh, 4, 4).unwrap().unwrap();

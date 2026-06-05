@@ -12,6 +12,7 @@ where
         if attr.file_type != FileType::Directory {
             return Err(MetadError::NotDirectory);
         }
+        self.watch_logging_enabled.store(true, Ordering::Relaxed);
         Ok(WatchCursor {
             version: self.read_version()?.get(),
             event_id: u64::MAX,
@@ -56,11 +57,17 @@ where
         Ok(out)
     }
 
-    pub(super) fn watch_projection(&self, scope: InodeId, event: WatchEvent) -> WatchProjection {
-        WatchProjection {
-            family: RecordFamily::Watch,
-            key: watch_log_prefix(self.mount, scope),
-            event: encode_watch_event(&event),
-        }
+    pub(super) fn watch_projection(
+        &self,
+        scope: InodeId,
+        event: WatchEvent,
+    ) -> Option<WatchProjection> {
+        self.watch_logging_enabled
+            .load(Ordering::Relaxed)
+            .then(|| WatchProjection {
+                family: RecordFamily::Watch,
+                key: watch_log_prefix(self.mount, scope),
+                event: encode_watch_event(&event),
+            })
     }
 }
