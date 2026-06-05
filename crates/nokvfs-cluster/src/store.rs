@@ -1191,6 +1191,54 @@ mod tests {
     }
 
     #[test]
+    fn file_metadata_raft_log_compacts_after_purge() {
+        runtime().block_on(async {
+            let dir = tempfile::tempdir().unwrap();
+            let path = dir.path().join("metadata-raft.log");
+            let entries = (1..=12)
+                .map(|index| {
+                    metadata_entry(
+                        4,
+                        index,
+                        metadata_command(
+                            format!("req-compact-{index}").as_bytes(),
+                            format!("dentry/compact/{index}").as_bytes(),
+                            index + 20,
+                        ),
+                    )
+                })
+                .collect::<Vec<_>>();
+            let mut log =
+                FileMetadataRaftLog::open(&path, FileMetadataRaftLogOptions::default()).unwrap();
+            log.blocking_append(entries.clone()).await.unwrap();
+            let before = std::fs::metadata(&path).unwrap().len();
+
+            log.purge(entries[9].log_id).await.unwrap();
+            let after = std::fs::metadata(&path).unwrap().len();
+            assert!(
+                after < before,
+                "purge should compact the physical metadata raft log: before={before} after={after}"
+            );
+            drop(log);
+
+            let mut reopened =
+                FileMetadataRaftLog::open(&path, FileMetadataRaftLogOptions::default()).unwrap();
+            assert_eq!(
+                reopened.get_log_state().await.unwrap().last_purged_log_id,
+                Some(entries[9].log_id)
+            );
+            assert_eq!(
+                reopened.try_get_log_entries(1..11).await.unwrap(),
+                Vec::<MetadataRaftEntry>::new()
+            );
+            assert_eq!(
+                reopened.try_get_log_entries(11..13).await.unwrap(),
+                entries[10..].to_vec()
+            );
+        });
+    }
+
+    #[test]
     fn state_machine_snapshot_installs_holt_checkpoint_image() {
         runtime().block_on(async {
             let store = HoltMetadataStore::open_memory().unwrap();

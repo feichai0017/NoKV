@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::ops::RangeBounds;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use openraft::entry::EntryPayload;
@@ -45,6 +45,7 @@ pub enum FileMetadataRaftLogSync {
 
 #[derive(Debug)]
 struct FileMetadataRaftLogState {
+    path: PathBuf,
     file: File,
     vote: Option<Vote<u64>>,
     committed: Option<LogId<u64>>,
@@ -79,7 +80,8 @@ impl FileMetadataRaftLog {
         path: impl AsRef<Path>,
         options: FileMetadataRaftLogOptions,
     ) -> Result<Self, MetadataRaftError> {
-        if let Some(parent) = path.as_ref().parent() {
+        let path_ref = path.as_ref();
+        if let Some(parent) = path_ref.parent() {
             if !parent.as_os_str().is_empty() {
                 fs::create_dir_all(parent).map_err(to_backend_error)?;
             }
@@ -89,12 +91,13 @@ impl FileMetadataRaftLog {
             .write(true)
             .create(true)
             .truncate(false)
-            .open(path)
+            .open(path_ref)
             .map_err(to_backend_error)?;
         let recovered = recover(&mut file)?;
         file.seek(SeekFrom::End(0)).map_err(to_backend_error)?;
         Ok(Self {
             inner: Arc::new(Mutex::new(FileMetadataRaftLogState {
+                path: path_ref.to_path_buf(),
                 file,
                 vote: recovered.vote,
                 committed: recovered.committed,
@@ -303,8 +306,68 @@ impl RaftLogStorage<MetadataRaftConfig> for FileMetadataRaftLog {
         .map_err(log_storage_error)?;
         purge_through(&mut inner.entries, log_id);
         inner.last_purged_log_id = Some(log_id);
+        compact_log_file(&mut inner, self.sync).map_err(log_storage_error)?;
         Ok(())
     }
+}
+
+fn compact_log_file(
+    inner: &mut FileMetadataRaftLogState,
+    sync: FileMetadataRaftLogSync,
+) -> Result<(), MetadataRaftError> {
+    let compact_path = inner.path.with_extension("compact");
+    let mut compacted = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .truncate(true)
+        .open(&compact_path)
+        .map_err(to_backend_error)?;
+    if let Some(vote) = inner.vote {
+        append_record(
+            &mut compacted,
+            &encode_vote_record(Some(vote)).map_err(to_backend_error)?,
+            FileMetadataRaftLogSync::None,
+        )?;
+    }
+    if let Some(committed) = inner.committed {
+        append_record(
+            &mut compacted,
+            &encode_committed_record(Some(committed)),
+            FileMetadataRaftLogSync::None,
+        )?;
+    }
+    if let Some(purged) = inner.last_purged_log_id {
+        append_record(
+            &mut compacted,
+            &encode_log_id_record(RECORD_PURGE, purged),
+            FileMetadataRaftLogSync::None,
+        )?;
+    }
+    for entry in inner.entries.values() {
+        append_record(
+            &mut compacted,
+            &encode_entry_record(entry).map_err(to_backend_error)?,
+            FileMetadataRaftLogSync::None,
+        )?;
+    }
+    compacted.flush().map_err(to_backend_error)?;
+    if sync == FileMetadataRaftLogSync::Data {
+        compacted.sync_data().map_err(to_backend_error)?;
+    }
+    drop(compacted);
+    fs::rename(&compact_path, &inner.path).map_err(to_backend_error)?;
+    inner.file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(false)
+        .truncate(false)
+        .open(&inner.path)
+        .map_err(to_backend_error)?;
+    inner
+        .file
+        .seek(SeekFrom::End(0))
+        .map_err(to_backend_error)?;
+    Ok(())
 }
 
 fn recover(file: &mut File) -> Result<RecoveredRaftLog, MetadataRaftError> {
