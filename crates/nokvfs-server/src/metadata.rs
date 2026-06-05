@@ -62,6 +62,12 @@ impl ServerMetadataStore {
             Self::OpenRaft(store) => store.trigger_snapshot(),
         }
     }
+
+    pub(crate) fn export_openraft_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError> {
+        match self {
+            Self::OpenRaft(store) => store.export_checkpoint_image(),
+        }
+    }
 }
 
 impl MetadataStore for ServerMetadataStore {

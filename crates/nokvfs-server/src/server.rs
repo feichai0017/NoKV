@@ -15,7 +15,7 @@ use nokvfs_meta::holtstore::HoltMetadataStore;
 use nokvfs_meta::{
     HistoryGcWorker, HistoryGcWorkerState, MetadError, NoKvFs, ObjectGcWorker, ObjectGcWorkerState,
 };
-use nokvfs_object::{ObjectError, S3ObjectStore};
+use nokvfs_object::{ObjectError, ObjectKey, ObjectStore, S3ObjectStore};
 
 use crate::http;
 use crate::metadata::{OpenRaftLoggedMetadataStore, ServerMetadataStore};
@@ -29,6 +29,8 @@ const SERVER_CONNECTION_QUEUE: usize = 1024;
 pub struct Server {
     service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
     metadata_raft: OpenRaftMetadataStatsHandle,
+    metadata_checkpoint_archive_prefix: Option<String>,
+    checkpoint_archive_objects: S3ObjectStore,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
 }
@@ -82,6 +84,8 @@ impl Server {
         } else {
             false
         };
+        let metadata_checkpoint_archive_prefix = options.metadata_checkpoint_archive_prefix.clone();
+        let checkpoint_archive_objects = objects.clone();
         let metadata = ServerMetadataStore::openraft(openraft);
         let service = Arc::new(NoKvFs::open_existing(options.mount, metadata, objects)?);
         if bootstrap_root {
@@ -92,6 +96,8 @@ impl Server {
         Ok(Self {
             service,
             metadata_raft,
+            metadata_checkpoint_archive_prefix,
+            checkpoint_archive_objects,
             object_gc,
             history_gc,
         })
@@ -202,12 +208,35 @@ impl Server {
             .trigger_openraft_snapshot()
             .map_err(|err| ServerError::Metadata(MetadError::from(err)))?;
         let stats = self.metadata_raft.stats();
+        let archive = match &self.metadata_checkpoint_archive_prefix {
+            Some(prefix) => {
+                let image = self
+                    .service
+                    .metadata_store()
+                    .export_openraft_checkpoint_image()
+                    .map_err(|err| ServerError::Metadata(MetadError::from(err)))?;
+                let key =
+                    metadata_checkpoint_archive_key(prefix, stats.node_id, stats.snapshot_index);
+                let key = ObjectKey::new(key).map_err(ServerError::Object)?;
+                let info = self
+                    .checkpoint_archive_objects
+                    .put(&key, &image)
+                    .map_err(ServerError::Object)?;
+                format!(
+                    "{{\"enabled\":true,\"key\":\"{}\",\"bytes\":{}}}",
+                    escape_json_string(info.key.as_str()),
+                    info.size
+                )
+            }
+            None => "{\"enabled\":false,\"key\":null,\"bytes\":0}".to_owned(),
+        };
         Ok(format!(
-            r#"{{"metadata_raft":{{"node_id":{},"snapshot_index":{},"last_applied_index":{}}}}}
+            r#"{{"metadata_raft":{{"node_id":{},"snapshot_index":{},"last_applied_index":{}}},"archive":{}}}
 "#,
             stats.node_id,
             optional_u64_json(stats.snapshot_index),
             optional_u64_json(stats.last_applied_index),
+            archive,
         ))
     }
 }
@@ -304,6 +333,16 @@ fn metadata_raft_node_address(
         .ok_or(ServerError::MetadataRaft(MetadataRaftError::UnknownNode(
             node,
         )))
+}
+
+fn metadata_checkpoint_archive_key(
+    prefix: &str,
+    node_id: u64,
+    snapshot_index: Option<u64>,
+) -> String {
+    let prefix = prefix.trim_matches('/');
+    let snapshot_index = snapshot_index.unwrap_or(0);
+    format!("{prefix}/node-{node_id}/snapshot-{snapshot_index}.nkfsc")
 }
 
 fn metadata_raft_json(stats: OpenRaftMetadataStats) -> String {
@@ -481,6 +520,7 @@ pub(crate) mod tests {
             metadata_raft_voters: Vec::new(),
             metadata_raft_peers: Vec::new(),
             metadata_raft_log_sync: FileMetadataRaftLogSync::Data,
+            metadata_checkpoint_archive_prefix: None,
             object: ObjectStoreConfig::s3(S3ObjectStoreOptions {
                 bucket: "test".to_owned(),
                 root: "/".to_owned(),

@@ -12,8 +12,11 @@ use std::time::Duration;
 use nokvfs_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
 use nokvfs_cluster::{FileMetadataRaftLogSync, NodeId};
 use nokvfs_meta::{HistoryGcOptions, ObjectGcOptions};
-use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
-use nokvfs_server::{MetadataRaftPeerOptions, ServerOptions, DEFAULT_SERVER_BIND};
+use nokvfs_object::{ObjectKey, ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
+use nokvfs_server::{
+    MetadataRaftPeerOptions, ServerOptions, DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX,
+    DEFAULT_SERVER_BIND,
+};
 use nokvfs_types::{FileType, MountId};
 use sha2::{Digest, Sha256};
 
@@ -30,6 +33,7 @@ struct Config {
     metadata_raft_voters: Vec<NodeId>,
     metadata_raft_peers: Vec<MetadataRaftPeerOptions>,
     metadata_raft_log_sync: FileMetadataRaftLogSync,
+    metadata_checkpoint_archive_prefix: Option<String>,
     object: ObjectStoreConfig,
     mount: MountId,
     uid: u32,
@@ -325,6 +329,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 metadata_raft_voters: config.metadata_raft_voters,
                 metadata_raft_peers: config.metadata_raft_peers,
                 metadata_raft_log_sync: config.metadata_raft_log_sync,
+                metadata_checkpoint_archive_prefix: config.metadata_checkpoint_archive_prefix,
                 object: config.object,
                 uid: config.uid,
                 gid: config.gid,
@@ -413,6 +418,8 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut metadata_raft_voters = Vec::new();
     let mut metadata_raft_peers = Vec::new();
     let mut metadata_raft_log_sync = FileMetadataRaftLogSync::Data;
+    let mut metadata_checkpoint_archive_prefix =
+        Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX.to_owned());
     let mut object_backend = ObjectBackendKind::RustFs;
     let mut s3 = S3ObjectStoreOptions::new("");
     let mut mount = MountId::new(1).expect("default mount id is non-zero");
@@ -452,6 +459,16 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 index += 1;
                 metadata_raft_log_sync =
                     parse_metadata_raft_log_sync(value(&args, index, "--metadata-raft-log-sync")?)?;
+            }
+            "--metadata-checkpoint-archive-prefix" => {
+                index += 1;
+                metadata_checkpoint_archive_prefix = Some(parse_archive_prefix(
+                    value(&args, index, "--metadata-checkpoint-archive-prefix")?,
+                    "--metadata-checkpoint-archive-prefix",
+                )?);
+            }
+            "--no-metadata-checkpoint-archive" => {
+                metadata_checkpoint_archive_prefix = None;
             }
             "--object-backend" => {
                 index += 1;
@@ -568,6 +585,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         metadata_raft_voters,
                         metadata_raft_peers,
                         metadata_raft_log_sync,
+                        metadata_checkpoint_archive_prefix,
                         object: object_config(object_backend, s3),
                         mount,
                         uid,
@@ -598,6 +616,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             metadata_raft_voters,
             metadata_raft_peers,
             metadata_raft_log_sync,
+            metadata_checkpoint_archive_prefix,
             object: object_config(object_backend, s3),
             mount,
             uid,
@@ -629,6 +648,12 @@ fn parse_metadata_raft_log_sync(raw: &str) -> Result<FileMetadataRaftLogSync, Cl
             "--metadata-raft-log-sync {raw}"
         ))),
     }
+}
+
+fn parse_archive_prefix(raw: &str, option: &str) -> Result<String, CliError> {
+    let prefix = raw.trim_matches('/');
+    ObjectKey::new(prefix).map_err(|_| CliError::UnknownOption(format!("{option} {raw}")))?;
+    Ok(prefix.to_owned())
 }
 
 fn parse_node_id(raw: &str) -> Result<NodeId, CliError> {
@@ -945,6 +970,8 @@ Defaults:\n\
   --metadata-raft-voters <local node only>\n\
   --metadata-raft-peer <empty>\n\
   --metadata-raft-log-sync data\n\
+  --metadata-checkpoint-archive-prefix metadata/checkpoints\n\
+  --no-metadata-checkpoint-archive\n\
   --mount 1"
     )
 }
@@ -1008,6 +1035,7 @@ mod tests {
             metadata_raft_voters: Vec::new(),
             metadata_raft_peers: Vec::new(),
             metadata_raft_log_sync: FileMetadataRaftLogSync::Data,
+            metadata_checkpoint_archive_prefix: None,
             object: fake_server_object_config(),
             uid: 1000,
             gid: 1000,
@@ -1039,6 +1067,10 @@ mod tests {
         assert_eq!(options.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
         assert_eq!(config.mount.get(), 1);
         assert_eq!(config.metadata_raft_node.get(), 1);
+        assert_eq!(
+            config.metadata_checkpoint_archive_prefix.as_deref(),
+            Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX)
+        );
         assert_eq!(config.server_bind, DEFAULT_SERVER_BIND);
         assert_eq!(command, Command::Ls { path: s("/") });
     }
@@ -1429,10 +1461,29 @@ mod tests {
             ]
         );
         assert_eq!(config.metadata_raft_log_sync, FileMetadataRaftLogSync::None);
+        assert_eq!(
+            config.metadata_checkpoint_archive_prefix.as_deref(),
+            Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX)
+        );
         let (node_only, command) =
             parse(vec![s("--metadata-raft-node"), s("4"), s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
         assert_eq!(node_only.metadata_raft_node.get(), 4);
+        let (archive, command) = parse(vec![
+            s("--metadata-checkpoint-archive-prefix"),
+            s("/custom/checkpoints/"),
+            s("serve"),
+        ])
+        .unwrap();
+        assert_eq!(command, Command::Serve);
+        assert_eq!(
+            archive.metadata_checkpoint_archive_prefix.as_deref(),
+            Some("custom/checkpoints")
+        );
+        let (disabled, command) =
+            parse(vec![s("--no-metadata-checkpoint-archive"), s("serve")]).unwrap();
+        assert_eq!(command, Command::Serve);
+        assert_eq!(disabled.metadata_checkpoint_archive_prefix, None);
         assert!(matches!(
             parse(vec![s("--metadata-raft-log-sync"), s("invalid"), s("serve")]),
             Err(CliError::UnknownOption(option)) if option == "--metadata-raft-log-sync invalid"

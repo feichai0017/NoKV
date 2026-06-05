@@ -285,6 +285,7 @@ mod tests {
         assert_eq!(response.status, "200 OK");
         assert!(response.body.contains("\"metadata_raft\""));
         assert!(response.body.contains("\"snapshot_index\""));
+        assert!(response.body.contains("\"archive\":{\"enabled\":false"));
     }
 
     #[test]

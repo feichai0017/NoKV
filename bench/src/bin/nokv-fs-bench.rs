@@ -1799,6 +1799,7 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         metadata_raft_voters: Vec::new(),
         metadata_raft_peers: Vec::new(),
         metadata_raft_log_sync: config.metadata_raft_log_sync,
+        metadata_checkpoint_archive_prefix: None,
         object,
         uid: DEFAULT_UID,
         gid: DEFAULT_GID,
@@ -1851,6 +1852,7 @@ fn server_options_for_node(
             .filter(|peer| peer.node != node)
             .collect(),
         metadata_raft_log_sync: cluster.sync,
+        metadata_checkpoint_archive_prefix: None,
         object: cluster.object.clone(),
         uid: DEFAULT_UID,
         gid: DEFAULT_GID,

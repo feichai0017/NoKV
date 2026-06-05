@@ -7,6 +7,7 @@ use nokvfs_object::ObjectStoreConfig;
 use nokvfs_types::MountId;
 
 pub const DEFAULT_SERVER_BIND: SocketAddr = SocketAddr::new(IpAddr::V4(Ipv4Addr::LOCALHOST), 7777);
+pub const DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX: &str = "metadata/checkpoints";
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ServerOptions {
@@ -17,6 +18,7 @@ pub struct ServerOptions {
     pub metadata_raft_voters: Vec<NodeId>,
     pub metadata_raft_peers: Vec<MetadataRaftPeerOptions>,
     pub metadata_raft_log_sync: FileMetadataRaftLogSync,
+    pub metadata_checkpoint_archive_prefix: Option<String>,
     pub object: ObjectStoreConfig,
     pub uid: u32,
     pub gid: u32,

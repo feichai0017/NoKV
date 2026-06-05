@@ -506,6 +506,10 @@ where
         Ok(())
     }
 
+    pub fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError> {
+        self.read_store.export_checkpoint_image()
+    }
+
     pub fn handle_vote_rpc(
         &self,
         request: WireMetadataRaftVoteRequest,
