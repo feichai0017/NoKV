@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
+use std::sync::mpsc::{channel, sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -180,22 +180,35 @@ impl MajorityMetadataLog {
             })
             .collect::<Vec<_>>();
         let mut remote_successes = 0_usize;
-        thread::scope(|scope| {
-            let handles = targets
-                .into_iter()
-                .map(|(voter, peer)| {
-                    scope.spawn(move || {
-                        self.append_peer_with_catchup(voter, peer.as_ref(), entry)
-                            .is_ok()
-                    })
-                })
-                .collect::<Vec<_>>();
-            for handle in handles {
-                if handle.join().unwrap_or(false) {
-                    remote_successes = remote_successes.saturating_add(1);
+        let remote_total = targets.len();
+        let (result_tx, result_rx) = channel();
+        for (voter, peer) in targets {
+            let result_tx = result_tx.clone();
+            let local_node = self.local_node;
+            let local = Arc::clone(&self.local);
+            let bootstrapper = self.bootstrapper.clone();
+            let entry = entry.clone();
+            thread::spawn(move || {
+                let result = append_peer_with_catchup_from_log(
+                    local_node,
+                    local.as_ref(),
+                    bootstrapper.as_deref(),
+                    voter,
+                    peer.as_ref(),
+                    &entry,
+                );
+                let _ = result_tx.send(result.is_ok());
+            });
+        }
+        drop(result_tx);
+        for remote_result in result_rx.iter().take(remote_total) {
+            if remote_result {
+                remote_successes = remote_successes.saturating_add(1);
+                if remote_successes >= required_remote {
+                    return Ok(());
                 }
             }
-        });
+        }
         if remote_successes < required_remote {
             return Err(SharedLogError::NoQuorum {
                 required: quorum,
@@ -209,22 +222,6 @@ impl MajorityMetadataLog {
         for replicator in self.learner_replicators.values() {
             replicator.enqueue(entry);
         }
-    }
-
-    fn append_peer_with_catchup(
-        &self,
-        peer_node: NodeId,
-        peer: &dyn MetadataLogPeerAppender,
-        entry: &MetadataLogEntry,
-    ) -> Result<(), SharedLogError> {
-        append_peer_with_catchup_from_log(
-            self.local_node,
-            self.local.as_ref(),
-            self.bootstrapper.as_deref(),
-            peer_node,
-            peer,
-            entry,
-        )
     }
 
     fn validate_local_append(&self, term: LogTerm) -> Result<(), SharedLogError> {
@@ -704,7 +701,10 @@ mod tests {
         assert_eq!(receipts.len(), 1);
         assert_eq!(receipts[0].position.index.get(), 1);
         assert_eq!(log.committed_position().unwrap().index.get(), 1);
-        for peer in [peer2, peer3] {
+        for peer in [&peer2, &peer3] {
+            wait_until("remote voter should eventually receive entry", || {
+                peer.entries.lock().unwrap().len() == 1
+            });
             let entries = peer.entries.lock().unwrap();
             assert_eq!(entries.len(), 1);
             assert_eq!(entries[0].position.index.get(), 1);
@@ -728,8 +728,54 @@ mod tests {
             .unwrap();
 
         assert_eq!(receipts[0].position.index.get(), 1);
+        wait_until("remote voter 2 should receive concurrent append", || {
+            peer2.entries.lock().unwrap().len() == 1
+        });
+        wait_until("remote voter 3 should receive concurrent append", || {
+            peer3.entries.lock().unwrap().len() == 1
+        });
         assert_eq!(peer2.entries.lock().unwrap().len(), 1);
         assert_eq!(peer3.entries.lock().unwrap().len(), 1);
+    }
+
+    #[test]
+    fn majority_append_returns_after_quorum_without_waiting_for_slow_voter() {
+        let (_dir, local) = file_log();
+        let slow_state = Arc::new((Mutex::new(BlockingPeerState::default()), Condvar::new()));
+        let peer2 = Arc::new(BlockingPeer::new(Arc::clone(&slow_state)));
+        let peer3 = Arc::new(RecordingPeer::ok());
+        let mut peers = BTreeMap::new();
+        peers.insert(node(2), peer2 as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(3), peer3 as Arc<dyn MetadataLogPeerAppender>);
+        let log = Arc::new(MajorityMetadataLog::with_peers(
+            node(1),
+            membership(node(1)),
+            local,
+            peers,
+            None,
+        ));
+        let (done_tx, done_rx) = mpsc::channel();
+        let writer_log = Arc::clone(&log);
+        let writer = thread::spawn(move || {
+            let result = writer_log.append_batch(term(1), mount(), &[command(b"a", 2)]);
+            done_tx
+                .send(result.map(|receipts| receipts[0].position.index))
+                .unwrap();
+        });
+
+        wait_until("slow voter append should start", || {
+            let (lock, _) = &*slow_state;
+            lock.lock().unwrap().started > 0
+        });
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_millis(100))
+                .unwrap()
+                .unwrap(),
+            LogIndex::new(1).unwrap()
+        );
+        release_blocking_peer(&slow_state);
+        writer.join().unwrap();
     }
 
     #[test]
@@ -779,6 +825,13 @@ mod tests {
             .unwrap();
 
         assert_eq!(receipts[0].position.index.get(), 2);
+        wait_until("lagging voter should catch up in background", || {
+            peer_log
+                .read_from(LogIndex::new(1).unwrap(), 0)
+                .unwrap()
+                .len()
+                == 2
+        });
         let entries = peer_log.read_from(LogIndex::new(1).unwrap(), 0).unwrap();
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].commands[0].request_id, b"first");
@@ -822,6 +875,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(receipts[0].position.index.get(), 3);
+        wait_until("compacted voter should bootstrap in background", || {
+            !bootstrapper.calls.lock().unwrap().is_empty()
+        });
         assert_eq!(
             bootstrapper.calls.lock().unwrap().as_slice(),
             &[(node(2), LogIndex::new(3).unwrap())]
