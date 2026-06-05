@@ -1,5 +1,7 @@
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::mpsc::{sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
 
@@ -14,12 +16,15 @@ use nokvfs_types::MountId;
 use crate::options::MetadataLogPeerOptions;
 use crate::rpc;
 
+const LEARNER_REPLICATION_QUEUE_CAPACITY: usize = 1024;
+
 pub(crate) struct MajorityMetadataLog {
     local_node: NodeId,
     membership: MetadataMembership,
     local: Arc<FileSharedLog>,
     peers: BTreeMap<NodeId, Arc<dyn MetadataLogPeerAppender>>,
     bootstrapper: Option<Arc<dyn MetadataLogPeerBootstrapper>>,
+    learner_replicators: BTreeMap<NodeId, LearnerReplicator>,
     append_gate: Mutex<()>,
 }
 
@@ -41,6 +46,12 @@ struct FramedMetadataLogPeerBootstrapper {
     local: Arc<FileSharedLog>,
     checkpoints: Arc<FileCheckpointCatalog>,
     peers: BTreeMap<NodeId, SocketAddr>,
+}
+
+struct LearnerReplicator {
+    sender: SyncSender<()>,
+    target_index: Arc<AtomicU64>,
+    _worker: thread::JoinHandle<()>,
 }
 
 impl MajorityMetadataLog {
@@ -91,12 +102,31 @@ impl MajorityMetadataLog {
         peers: BTreeMap<NodeId, Arc<dyn MetadataLogPeerAppender>>,
         bootstrapper: Option<Arc<dyn MetadataLogPeerBootstrapper>>,
     ) -> Self {
+        let learner_replicators = membership
+            .learners
+            .iter()
+            .filter_map(|learner| {
+                peers.get(learner).map(|peer| {
+                    (
+                        *learner,
+                        LearnerReplicator::spawn(
+                            local_node,
+                            *learner,
+                            Arc::clone(&local),
+                            Arc::clone(peer),
+                            bootstrapper.clone(),
+                        ),
+                    )
+                })
+            })
+            .collect();
         Self {
             local_node,
             membership,
             local,
             peers,
             bootstrapper,
+            learner_replicators,
             append_gate: Mutex::new(()),
         }
     }
@@ -176,11 +206,8 @@ impl MajorityMetadataLog {
     }
 
     fn replicate_learners_after_commit(&self, entry: &MetadataLogEntry) {
-        for learner in &self.membership.learners {
-            let Some(peer) = self.peers.get(learner) else {
-                continue;
-            };
-            let _ = self.append_peer_with_catchup(*learner, peer.as_ref(), entry);
+        for replicator in self.learner_replicators.values() {
+            replicator.enqueue(entry);
         }
     }
 
@@ -190,41 +217,14 @@ impl MajorityMetadataLog {
         peer: &dyn MetadataLogPeerAppender,
         entry: &MetadataLogEntry,
     ) -> Result<(), SharedLogError> {
-        match peer.append_entry(self.local_node, entry) {
-            Ok(()) => Ok(()),
-            Err(first_err) => {
-                match self.catch_up_peer(peer, entry.position.index) {
-                    Ok(()) => {}
-                    Err(SharedLogError::Compacted { .. }) => {
-                        let Some(bootstrapper) = self.bootstrapper.as_ref() else {
-                            return Err(first_err);
-                        };
-                        bootstrapper.bootstrap_before(peer_node, entry.position.index)?;
-                    }
-                    Err(err) => return Err(err),
-                }
-                peer.append_entry(self.local_node, entry).map_err(|retry_err| {
-                    SharedLogError::Backend(format!(
-                        "metadata peer append failed after catch-up: {retry_err}; initial error: {first_err}"
-                    ))
-                })
-            }
-        }
-    }
-
-    fn catch_up_peer(
-        &self,
-        peer: &dyn MetadataLogPeerAppender,
-        before: LogIndex,
-    ) -> Result<(), SharedLogError> {
-        let entries = self.local.read_from(LogIndex::new(1)?, 0)?;
-        for entry in entries {
-            if entry.position.index >= before {
-                break;
-            }
-            peer.append_entry(self.local_node, &entry)?;
-        }
-        Ok(())
+        append_peer_with_catchup_from_log(
+            self.local_node,
+            self.local.as_ref(),
+            self.bootstrapper.as_deref(),
+            peer_node,
+            peer,
+            entry,
+        )
     }
 
     fn validate_local_append(&self, term: LogTerm) -> Result<(), SharedLogError> {
@@ -239,6 +239,44 @@ impl MajorityMetadataLog {
             });
         }
         Ok(())
+    }
+}
+
+impl LearnerReplicator {
+    fn spawn(
+        local_node: NodeId,
+        learner: NodeId,
+        local: Arc<FileSharedLog>,
+        peer: Arc<dyn MetadataLogPeerAppender>,
+        bootstrapper: Option<Arc<dyn MetadataLogPeerBootstrapper>>,
+    ) -> Self {
+        let (sender, receiver) = sync_channel::<()>(LEARNER_REPLICATION_QUEUE_CAPACITY);
+        let target_index = Arc::new(AtomicU64::new(0));
+        let worker_target_index = Arc::clone(&target_index);
+        let worker = thread::spawn(move || {
+            while receiver.recv().is_ok() {
+                replicate_learner_to_target(
+                    local_node,
+                    local.as_ref(),
+                    bootstrapper.as_deref(),
+                    learner,
+                    peer.as_ref(),
+                    worker_target_index.as_ref(),
+                );
+            }
+        });
+        Self {
+            sender,
+            target_index,
+            _worker: worker,
+        }
+    }
+
+    fn enqueue(&self, entry: &MetadataLogEntry) {
+        record_max(&self.target_index, entry.position.index.get());
+        match self.sender.try_send(()) {
+            Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
+        }
     }
 }
 
@@ -327,6 +365,99 @@ fn majority(voters: usize) -> Result<usize, SharedLogError> {
     Ok(voters / 2 + 1)
 }
 
+fn replicate_learner_to_target(
+    local_node: NodeId,
+    local: &FileSharedLog,
+    bootstrapper: Option<&dyn MetadataLogPeerBootstrapper>,
+    learner: NodeId,
+    peer: &dyn MetadataLogPeerAppender,
+    target_index: &AtomicU64,
+) {
+    loop {
+        let target = target_index.load(Ordering::Relaxed);
+        let Some(entry) = read_target_entry(local, target) else {
+            return;
+        };
+        let _ = append_peer_with_catchup_from_log(
+            local_node,
+            local,
+            bootstrapper,
+            learner,
+            peer,
+            &entry,
+        );
+        if target_index.load(Ordering::Relaxed) == target {
+            return;
+        }
+    }
+}
+
+fn read_target_entry(local: &FileSharedLog, raw_index: u64) -> Option<MetadataLogEntry> {
+    let index = LogIndex::new(raw_index).ok()?;
+    local
+        .read_from(index, 1)
+        .ok()?
+        .into_iter()
+        .find(|entry| entry.position.index == index)
+}
+
+fn record_max(value: &AtomicU64, candidate: u64) {
+    let mut current = value.load(Ordering::Relaxed);
+    while candidate > current {
+        match value.compare_exchange_weak(current, candidate, Ordering::Relaxed, Ordering::Relaxed)
+        {
+            Ok(_) => return,
+            Err(observed) => current = observed,
+        }
+    }
+}
+
+fn append_peer_with_catchup_from_log(
+    local_node: NodeId,
+    local: &FileSharedLog,
+    bootstrapper: Option<&dyn MetadataLogPeerBootstrapper>,
+    peer_node: NodeId,
+    peer: &dyn MetadataLogPeerAppender,
+    entry: &MetadataLogEntry,
+) -> Result<(), SharedLogError> {
+    match peer.append_entry(local_node, entry) {
+        Ok(()) => Ok(()),
+        Err(first_err) => {
+            match catch_up_peer_from_log(local_node, local, peer, entry.position.index) {
+                Ok(()) => {}
+                Err(SharedLogError::Compacted { .. }) => {
+                    let Some(bootstrapper) = bootstrapper else {
+                        return Err(first_err);
+                    };
+                    bootstrapper.bootstrap_before(peer_node, entry.position.index)?;
+                }
+                Err(err) => return Err(err),
+            }
+            peer.append_entry(local_node, entry).map_err(|retry_err| {
+                SharedLogError::Backend(format!(
+                    "metadata peer append failed after catch-up: {retry_err}; initial error: {first_err}"
+                ))
+            })
+        }
+    }
+}
+
+fn catch_up_peer_from_log(
+    local_node: NodeId,
+    local: &FileSharedLog,
+    peer: &dyn MetadataLogPeerAppender,
+    before: LogIndex,
+) -> Result<(), SharedLogError> {
+    let entries = local.read_from(LogIndex::new(1)?, 0)?;
+    for entry in entries {
+        if entry.position.index >= before {
+            break;
+        }
+        peer.append_entry(local_node, &entry)?;
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -335,7 +466,7 @@ mod tests {
         CommandKind, Mutation, MutationOp, PredicateRef, Value, Version, WatchProjection,
     };
     use nokvfs_types::RecordFamily;
-    use std::sync::{Condvar, Mutex};
+    use std::sync::{mpsc, Condvar, Mutex};
     use std::time::Duration;
     use tempfile::{tempdir, TempDir};
 
@@ -347,6 +478,16 @@ mod tests {
     struct CoordinatedPeer {
         state: Arc<(Mutex<usize>, Condvar)>,
         entries: Mutex<Vec<MetadataLogEntry>>,
+    }
+
+    #[derive(Default)]
+    struct BlockingPeerState {
+        started: usize,
+        release: bool,
+    }
+
+    struct BlockingPeer {
+        state: Arc<(Mutex<BlockingPeerState>, Condvar)>,
     }
 
     struct FilePeer {
@@ -383,6 +524,12 @@ mod tests {
         }
     }
 
+    impl BlockingPeer {
+        fn new(state: Arc<(Mutex<BlockingPeerState>, Condvar)>) -> Self {
+            Self { state }
+        }
+    }
+
     impl MetadataLogPeerAppender for RecordingPeer {
         fn append_entry(
             &self,
@@ -413,6 +560,23 @@ mod tests {
                 ));
             }
             self.entries.lock().unwrap().push(entry.clone());
+            Ok(())
+        }
+    }
+
+    impl MetadataLogPeerAppender for BlockingPeer {
+        fn append_entry(
+            &self,
+            _leader: NodeId,
+            _entry: &MetadataLogEntry,
+        ) -> Result<(), SharedLogError> {
+            let (lock, cvar) = &*self.state;
+            let mut state = lock.lock().unwrap();
+            state.started = state.started.saturating_add(1);
+            cvar.notify_all();
+            while !state.release {
+                state = cvar.wait(state).unwrap();
+            }
             Ok(())
         }
     }
@@ -489,6 +653,23 @@ mod tests {
         )
         .unwrap();
         (dir, Arc::new(log))
+    }
+
+    fn wait_until(message: &str, condition: impl Fn() -> bool) {
+        for _ in 0..100 {
+            if condition() {
+                return;
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+        assert!(condition(), "{message}");
+    }
+
+    fn release_blocking_peer(state: &Arc<(Mutex<BlockingPeerState>, Condvar)>) {
+        let (lock, cvar) = &**state;
+        let mut state = lock.lock().unwrap();
+        state.release = true;
+        cvar.notify_all();
     }
 
     fn membership(leader: NodeId) -> MetadataMembership {
@@ -680,9 +861,54 @@ mod tests {
             .unwrap();
 
         assert_eq!(receipts[0].position.index.get(), 1);
+        wait_until("learner should receive committed entry", || {
+            learner4.entries.lock().unwrap().len() == 1
+        });
         let learner_entries = learner4.entries.lock().unwrap();
         assert_eq!(learner_entries.len(), 1);
         assert_eq!(learner_entries[0].commands[0].request_id, b"a");
+    }
+
+    #[test]
+    fn learner_append_does_not_block_quorum_commit() {
+        let (_dir, local) = file_log();
+        let voter2 = Arc::new(RecordingPeer::ok());
+        let voter3 = Arc::new(RecordingPeer::ok());
+        let learner_state = Arc::new((Mutex::new(BlockingPeerState::default()), Condvar::new()));
+        let learner4 = Arc::new(BlockingPeer::new(Arc::clone(&learner_state)));
+        let mut peers = BTreeMap::new();
+        peers.insert(node(2), voter2 as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(3), voter3 as Arc<dyn MetadataLogPeerAppender>);
+        peers.insert(node(4), learner4 as Arc<dyn MetadataLogPeerAppender>);
+        let log = Arc::new(MajorityMetadataLog::with_peers(
+            node(1),
+            membership_with_learner(node(1)),
+            local,
+            peers,
+            None,
+        ));
+        let (done_tx, done_rx) = mpsc::channel();
+        let writer_log = Arc::clone(&log);
+        let writer = thread::spawn(move || {
+            let result = writer_log.append_batch(term(1), mount(), &[command(b"a", 2)]);
+            done_tx
+                .send(result.map(|receipts| receipts[0].position.index))
+                .unwrap();
+        });
+
+        wait_until("blocking learner append should start", || {
+            let (lock, _) = &*learner_state;
+            lock.lock().unwrap().started > 0
+        });
+        assert_eq!(
+            done_rx
+                .recv_timeout(Duration::from_millis(100))
+                .unwrap()
+                .unwrap(),
+            LogIndex::new(1).unwrap()
+        );
+        release_blocking_peer(&learner_state);
+        writer.join().unwrap();
     }
 
     #[test]
@@ -712,6 +938,9 @@ mod tests {
 
         assert_eq!(receipts[0].position.index.get(), 1);
         assert_eq!(log.committed_position().unwrap().index.get(), 1);
+        wait_until("learner failure should be attempted in background", || {
+            learner4.entries.lock().unwrap().len() >= 2
+        });
         let attempts = learner4.entries.lock().unwrap();
         assert_eq!(attempts.len(), 2);
         assert_eq!(attempts[0].commands[0].request_id, b"a");
@@ -757,6 +986,9 @@ mod tests {
             .unwrap();
 
         assert_eq!(receipts[0].position.index.get(), 3);
+        wait_until("learner bootstrap should run in background", || {
+            !bootstrapper.calls.lock().unwrap().is_empty()
+        });
         assert_eq!(
             bootstrapper.calls.lock().unwrap().as_slice(),
             &[(node(4), LogIndex::new(3).unwrap())]
