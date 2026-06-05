@@ -29,7 +29,7 @@ use crate::{ArtifactMetadata, ClientError, NamespaceRead};
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
 const READ_NOT_FRESH_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
-const MAX_BATCH_RPC_REQUESTS: usize = 512;
+const MAX_BATCH_RPC_REQUESTS: usize = 128;
 const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
 const FRAME_HEADER_BYTES: usize = 16;
 
@@ -1974,6 +1974,57 @@ mod tests {
         dentry_response_with_position(parent, name, inode, generation, None)
     }
 
+    fn dentry_batch_response(names: &[String], first_inode: u64) -> Vec<u8> {
+        let results = names
+            .iter()
+            .enumerate()
+            .map(|(idx, name)| {
+                let inode = first_inode + u64::try_from(idx).expect("test index fits u64");
+                MetadataRpcEnvelope {
+                    ok: true,
+                    result: Some(MetadataRpcResult::Dentry {
+                        entry: Some(Box::new(WireDentryWithAttr {
+                            dentry: WireDentryRecord {
+                                parent: 2,
+                                name_hex: name
+                                    .as_bytes()
+                                    .iter()
+                                    .map(|byte| format!("{byte:02x}"))
+                                    .collect::<String>(),
+                                child: inode,
+                                child_type: "file".to_owned(),
+                                attr_generation: inode,
+                            },
+                            attr: WireInodeAttr {
+                                inode,
+                                file_type: "file".to_owned(),
+                                mode: 0o644,
+                                uid: 1000,
+                                gid: 1000,
+                                size: 0,
+                                generation: inode,
+                                mtime_ms: inode,
+                                ctime_ms: inode,
+                            },
+                            body: None,
+                        })),
+                    }),
+                    error: None,
+                    error_kind: None,
+                    metadata_position: None,
+                }
+            })
+            .collect();
+        encode_envelope(&MetadataRpcEnvelope {
+            ok: true,
+            result: Some(MetadataRpcResult::Batch { results }),
+            error: None,
+            error_kind: None,
+            metadata_position: None,
+        })
+        .unwrap()
+    }
+
     fn dentry_response_with_position(
         parent: u64,
         name: &str,
@@ -2401,6 +2452,63 @@ mod tests {
         let entries = entries.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(entries[0].attr.inode.get(), 40);
         assert_eq!(entries[1].attr.inode.get(), 41);
+    }
+
+    #[test]
+    fn service_create_files_splits_large_coalesced_batches() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            let first_names = match request {
+                MetadataRpcRequest::CreateFilesInDirPath {
+                    parent_path, names, ..
+                } => {
+                    assert_eq!(parent_path, "/runs");
+                    assert_eq!(names.len(), MAX_BATCH_RPC_REQUESTS);
+                    names
+                }
+                other => panic!("unexpected first request: {other:?}"),
+            };
+            let response = dentry_batch_response(&first_names, 40);
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            let second_names = match request {
+                MetadataRpcRequest::CreateFilesInDirPath {
+                    parent_path, names, ..
+                } => {
+                    assert_eq!(parent_path, "/runs");
+                    assert_eq!(names.len(), 1);
+                    names
+                }
+                other => panic!("unexpected second request: {other:?}"),
+            };
+            let response = dentry_batch_response(
+                &second_names,
+                40 + u64::try_from(first_names.len()).expect("test batch fits u64"),
+            );
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+        });
+        let client = MetadataClient::connect(addr);
+        let paths = (0..=MAX_BATCH_RPC_REQUESTS)
+            .map(|idx| format!("/runs/file-{idx:03}.bin"))
+            .collect::<Vec<_>>();
+        let entries = client.create_files(&paths, 0o644, 1000, 1000).unwrap();
+        let entries = entries.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(entries.len(), MAX_BATCH_RPC_REQUESTS + 1);
+        assert_eq!(entries[0].attr.inode.get(), 40);
+        assert_eq!(
+            entries[MAX_BATCH_RPC_REQUESTS].attr.inode.get(),
+            40 + u64::try_from(MAX_BATCH_RPC_REQUESTS).expect("test batch fits u64")
+        );
     }
 
     #[test]

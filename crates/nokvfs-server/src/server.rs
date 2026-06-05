@@ -63,18 +63,32 @@ impl Server {
         let metadata = HoltMetadataStore::open_raft_state_machine().map_err(MetadError::from)?;
         let voters = metadata_raft_voters_for_options(&options)?;
         let voter_count = voters.len();
-        let openraft =
+        let log_path = default_metadata_raft_log_path(&options.meta_path);
+        let log_options = FileMetadataRaftLogOptions {
+            sync: options.metadata_raft_log_sync,
+        };
+        let network =
+            MetadataRaftRpcNetworkFactory::new(rpc::MetadataRaftFramedRpcClient::default());
+        let bootstrap_node = metadata_raft_bootstrap_node(&voters)?;
+        let openraft = if options.metadata_raft_node == bootstrap_node {
             OpenRaftLoggedMetadataStore::new_initialized_voter_group_with_file_log_and_network(
                 metadata,
                 options.metadata_raft_node,
-                default_metadata_raft_log_path(&options.meta_path),
-                FileMetadataRaftLogOptions {
-                    sync: options.metadata_raft_log_sync,
-                },
-                MetadataRaftRpcNetworkFactory::new(rpc::MetadataRaftFramedRpcClient::default()),
+                log_path,
+                log_options,
+                network,
                 &voters,
             )
-            .map_err(MetadError::from)?;
+        } else {
+            OpenRaftLoggedMetadataStore::new_uninitialized_with_file_log_and_network(
+                metadata,
+                options.metadata_raft_node,
+                log_path,
+                log_options,
+                network,
+            )
+        }
+        .map_err(MetadError::from)?;
         let metadata_raft = openraft.stats_handle();
         let bootstrap_root = if voter_count == 1 {
             openraft
@@ -316,6 +330,16 @@ fn metadata_raft_voters_for_options(
         )));
     }
     Ok(voters)
+}
+
+fn metadata_raft_bootstrap_node(
+    voters: &std::collections::BTreeMap<NodeId, String>,
+) -> Result<NodeId, ServerError> {
+    voters
+        .keys()
+        .next()
+        .copied()
+        .ok_or(ServerError::MetadataRaft(MetadataRaftError::NoVoters))
 }
 
 fn metadata_raft_node_address(
