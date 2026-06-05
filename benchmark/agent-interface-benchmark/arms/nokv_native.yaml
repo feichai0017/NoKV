@@ -1,0 +1,159 @@
+arm_id: nokv_native_v1
+version: 1
+interface_name: NoKV Native Namespace Baseline
+mode: warm_interface
+purpose: Baseline agent adapter over NoKV metadata service namespace operations for the fixed Yanex corpus stored in NoKV.
+
+native_definition:
+  meaning: >
+    Native means the agent-facing tools map directly to NoKV meta/client
+    operations whose semantics are implemented in product crates, not in the
+    benchmark harness. The harness may translate OpenAI tool calls into SDK
+    calls and enforce argument limits, but it must not own the search, filter,
+    sort, card, pagination, or evidence semantics being measured.
+  current_v1_status: >
+    This arm currently exposes only the raw NoKV namespace baseline:
+    ReadDirPlus-style list, path stat, and byte-range read over
+    nokvfs-meta::NoKvFs. It is not the final agent-native product surface.
+  target_product_boundary:
+    meta: nokvfs-meta implements namespace cards, typed metadata indexes, constrained find, structured reads, snapshot/generation consistency, and evidence-producing results.
+    protocol: nokvfs-protocol exposes storage-neutral RPC DTOs for those operations.
+    client: nokvfs-client exposes ergonomic Rust SDK calls and may apply argument limits without reimplementing metadata semantics.
+    harness: benchmark harness stays a thin OpenAI tool adapter over nokvfs-client or nokvfs-meta.
+
+data_scope:
+  corpus: yanex_experiment_metadata_origami_data_gen_project
+  visibility: nokv_native_namespace
+  mutation: read_only_for_benchmark
+
+tool_contract:
+  - name: list
+    purpose: List children for a NoKV path using ReadDirPlus-style namespace metadata.
+    arguments:
+      path: string
+    returns: Child entries with path, file type, inode, size, generation, and body descriptor when present.
+  - name: stat
+    purpose: Return NoKV metadata for a path without reading the body.
+    arguments:
+      path: string
+    returns: File type, inode, size, mode, timestamps, generation, body descriptor, and stable path evidence.
+  - name: read
+    purpose: Read a NoKV file body or byte range.
+    arguments:
+      path: string
+      offset: integer
+      limit: integer
+      expected_generation: integer
+    returns: Body range plus the generation and body descriptor used for the read.
+    constraints:
+      - expected_generation may be omitted when generation stability is not required.
+      - If expected_generation is supplied and the current path generation differs, the tool must return a generation mismatch instead of reading.
+
+target_native_tool_contract:
+  - name: ls
+    purpose: Return a paginated directory card, not a POSIX-only entry list.
+    returns:
+      - entry_count
+      - entries with record_count, schema, sample, evidence, generation, and body descriptor when available
+      - next_cursor
+      - truncated
+  - name: stat
+    purpose: Return a typed path card without reading the full body.
+    returns:
+      - file or directory kind
+      - entry_count or record_count when known
+      - record_count provenance: live_namespace, materialized_index, or approximate
+      - schema
+      - sample
+      - body descriptor
+      - generation or snapshot id
+      - evidence handle
+  - name: read
+    purpose: Return structured pages for typed JSON/YAML/index content by default.
+    constraints:
+      - raw byte reads require explicit format=bytes
+      - structured pages must include cursor, next_cursor, truncated, and evidence
+  - name: find
+    purpose: Search typed namespace metadata without traversing or reading every body.
+    arguments:
+      path: string
+      filter: constrained predicate grammar
+      sort: declared sortable fields only
+      limit: integer
+      cursor: string
+      include: declared projection set
+    constraints:
+      - allowed fields, operators, sortable fields, and facets are declared by stat/catalog cards.
+      - arbitrary JSON expressions, joins, group-by, or task-specific helpers are forbidden.
+      - unsupported predicates must fail clearly instead of degrading to hidden full traversal.
+
+namespace_layout:
+  root: /yanex/
+  runs: /yanex/runs/{experiment_id}/
+  metadata: /yanex/runs/{experiment_id}/metadata.json
+  params: /yanex/runs/{experiment_id}/params.yaml
+  metrics: /yanex/runs/{experiment_id}/metrics.json
+  dependencies: /yanex/runs/{experiment_id}/dependencies.json
+  artifacts: /yanex/runs/{experiment_id}/artifacts/
+  indexes:
+    experiments: /yanex/index/experiments.json
+    statuses: /yanex/index/status/{status}.json
+    tags: /yanex/index/tags/{tag}.json
+    scripts: /yanex/index/scripts/{script_name}.json
+
+target_index_layout:
+  description: >
+    Indexes should be addressable as both files and typed namespace facets. A
+    large /index/*.json body is not enough for an agent-native surface.
+  high_value_facets:
+    - status
+    - script
+    - artifact name, existence, and size
+    - metric name plus latest/min/max by run
+    - parameter path and value
+    - git dirty state and patch availability
+
+nokv_metadata:
+  stable_fields:
+    - path
+    - file_type
+    - inode
+    - size_bytes
+    - mode
+    - generation
+    - body_descriptor
+    - digest_uri
+    - manifest_id
+    - content_type
+  consistency:
+    - A path plus generation identifies the inspected live namespace version.
+    - Snapshot id plus path identifies a pinned namespace read.
+    - Body descriptors are metadata summaries, not file content.
+
+evidence_conventions:
+  experiment: nokv-native:///yanex/runs/{experiment_id}/metadata.json@generation:{generation}
+  param: nokv-native:///yanex/runs/{experiment_id}/params.yaml@generation:{generation}#{param_path}
+  metric: nokv-native:///yanex/runs/{experiment_id}/metrics.json@generation:{generation}#{metric_name}
+  dependency: nokv-native:///yanex/runs/{experiment_id}/dependencies.json@generation:{generation}
+  artifact: nokv-native:///yanex/runs/{experiment_id}/artifacts/{artifact_path}@generation:{generation}
+  index: nokv-native:///{index_path}@generation:{generation}
+
+interface_guidance:
+  - Use list/stat metadata to avoid reading unnecessary object bodies.
+  - Include generation in evidence when live path metadata is used.
+  - Use expected_generation on read when generation stability matters.
+  - Keep broad discovery generic: use indexes or namespace traversal, not semantic handle search.
+  - Treat this v1 arm as a raw namespace baseline. Do not claim it has the target find/card/structured-read surface until those operations are implemented in NoKV product crates.
+
+forbidden_assumptions:
+  - Do not use semantic handles such as run://, metric://, lineage://, or git:// in this arm.
+  - Do not assume two reads of the same path saw the same object unless generation matches.
+  - Do not treat a body descriptor as human-readable content without calling read.
+  - Do not use task-specific helper operations such as find_best_run.
+  - Do not treat file size as record count.
+  - Do not infer that a materialized /index/*.json file is a NoKV automatic index unless its card says so.
+
+example_paths:
+  - /yanex/runs/00023013/metadata.json
+  - /yanex/runs/00023013/metrics.json
+  - /yanex/index/tags/sweep.json

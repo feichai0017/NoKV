@@ -19,3 +19,6 @@ work_test/
 testdata/
 coverage.out
 *.pprof
+
+# Local benchmark corpus materializations
+benchmark/data/yanex-demo/

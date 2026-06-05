@@ -1,0 +1,65 @@
+arm_id: sqlite_agentfs_v1
+version: 1
+interface_name: SQLite AgentFS Projection
+mode: warm_interface
+purpose: Filesystem-shaped projection over the same SQLite materialization.
+
+data_scope:
+  corpus: yanex_experiment_metadata_origami_data_gen_project
+  visibility: sqlite_filesystem_projection
+  mutation: read_only_for_benchmark
+
+tool_contract:
+  - name: ls
+    purpose: List directory entries in the SQLite-backed projection.
+    arguments:
+      path: string
+    returns: Compact entries with path, type, size, and evidence.
+  - name: stat
+    purpose: Return metadata for one projected path without reading the file body.
+    arguments:
+      path: string
+    returns: Path type, size, and evidence.
+  - name: read
+    purpose: Read a byte range from one projected file.
+    arguments:
+      path: string
+      offset: integer
+      limit: integer
+    returns: Byte range and evidence.
+  - name: grep
+    purpose: Search projected text files by substring pattern.
+    arguments:
+      path: string
+      pattern: string
+      recursive: boolean
+    returns: Matching file snippets, bytes read, and truncation state.
+  - name: find
+    purpose: Find projected paths by name or wildcard-like pattern.
+    arguments:
+      path: string
+      pattern: string
+    returns: Matching projected entries.
+
+namespace_layout:
+  root: /
+  runs: /runs/{experiment_id}/
+  metadata: /runs/{experiment_id}/metadata.json
+  params: /runs/{experiment_id}/params.yaml
+  metrics: /runs/{experiment_id}/metrics.json
+  dependencies: /runs/{experiment_id}/dependencies.json
+  artifacts: /runs/{experiment_id}/artifacts/
+  indexes: /index/
+
+evidence_conventions:
+  path: agentfs://{path}
+
+interface_guidance:
+  - Use ls/stat before reading large bodies.
+  - Use /index paths for simple facet discovery when available.
+  - Prefer find/grep over full recursive reads.
+
+forbidden_assumptions:
+  - Do not write SQL directly in this arm.
+  - Do not assume file size is record count.
+  - Do not infer missing artifacts exist unless stat/read confirms them.

@@ -1,0 +1,51 @@
+arm_id: sqlite_raw_v1
+version: 1
+interface_name: Raw SQLite
+mode: warm_interface
+purpose: Baseline relational interface over the fixed Yanex corpus materialized in SQLite.
+
+data_scope:
+  corpus: yanex_experiment_metadata_origami_data_gen_project
+  visibility: sqlite_tables
+  mutation: read_only_for_benchmark
+
+tool_contract:
+  - name: show_schema
+    purpose: Return the SQLite schema for tables and indexes.
+    arguments: {}
+    returns: SQL DDL text and a schema evidence handle.
+  - name: query
+    purpose: Execute a bounded read-only SQL query.
+    arguments:
+      sql: string
+    returns: Rows with stable evidence handles when the result contains known Yanex identifiers or blob refs.
+    constraints:
+      - Only SELECT, WITH, and EXPLAIN statements are allowed.
+      - Mutations and pragmas are rejected.
+  - name: read_blob
+    purpose: Read a byte range from a blob_ref returned by SQL rows.
+    arguments:
+      blob_ref: string
+      offset: integer
+      limit: integer
+    returns: Byte range and blob evidence.
+
+evidence_conventions:
+  schema: sqlite://schema
+  experiment: sqlite://experiments/{experiment_id}
+  param: sqlite://params/{experiment_id}/{param_path}
+  metric: sqlite://metrics/{experiment_id}/{metric_name}/{step}
+  artifact: sqlite://artifacts/{experiment_id}/{artifact_path}
+  git_state: sqlite://git_state/{experiment_id}
+  blob: sqlite://blobs/{blob_ref}
+
+interface_guidance:
+  - Inspect the schema before writing non-trivial SQL.
+  - Prefer aggregate SQL for structured analytics.
+  - Use read_blob only when task evidence requires artifact body bytes.
+  - Cite row and blob evidence handles returned by query/read_blob.
+
+forbidden_assumptions:
+  - Do not mutate the database.
+  - Do not invent evidence handles that are not supported by returned rows.
+  - Do not read blobs when metadata rows already answer the task.

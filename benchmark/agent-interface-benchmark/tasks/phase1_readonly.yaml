@@ -1,0 +1,294 @@
+task_set_id: yanex_phase1_readonly_v1
+version: 1
+scope: read_only_agent_interface
+tasks:
+  - task_id: status_counts
+    category: structured_analytics
+    prompt: |
+      Count Yanex experiments by status and return the total number of runs.
+
+      Required answer shape:
+      {
+        "status_counts": [{"status": string, "count": integer}],
+        "total_runs": integer
+      }
+      Sort status_counts by descending count, then status ascending. Cite evidence for the counts.
+    gold_sql: |
+      SELECT status, COUNT(*) AS count
+      FROM experiments
+      GROUP BY status
+      ORDER BY count DESC, status ASC;
+    expected:
+      kind: status_counts
+      answer_key: status_counts
+      columns: [status, count]
+  - task_id: completed_scripts_top5
+    category: structured_analytics
+    prompt: |
+      Among completed experiments, return the top 5 script names by run count.
+
+      Required answer shape:
+      {
+        "scripts": [{"script": string, "count": integer}]
+      }
+      Sort by descending count, then script ascending. Cite evidence for the counts.
+    gold_sql: |
+      SELECT script_path AS script, COUNT(*) AS count
+      FROM experiments
+      WHERE status = 'completed'
+      GROUP BY script_path
+      ORDER BY count DESC, script ASC
+      LIMIT 5;
+    expected:
+      kind: rows_exact
+      answer_key: scripts
+      columns: [script, count]
+  - task_id: train_best_min_val_loss
+    category: structured_analytics
+    prompt: |
+      For completed train.py runs, find the 5 runs with the lowest observed val_loss.
+
+      Required answer shape:
+      {
+        "runs": [{"experiment_id": string, "min_val_loss": number}]
+      }
+      Sort by min_val_loss ascending, then experiment_id ascending. Include run_ids with the same experiment_id order. Cite metric and experiment evidence.
+    gold_sql: |
+      SELECT e.experiment_id, MIN(m.value) AS min_val_loss
+      FROM experiments e
+      JOIN metrics m ON e.experiment_id = m.experiment_id
+      WHERE e.status = 'completed'
+        AND e.script_path = 'train.py'
+        AND m.metric_name = 'val_loss'
+        AND m.value IS NOT NULL
+      GROUP BY e.experiment_id
+      ORDER BY min_val_loss ASC, e.experiment_id ASC
+      LIMIT 5;
+    expected:
+      kind: rows_exact
+      answer_key: runs
+      run_id_column: experiment_id
+      columns: [experiment_id, min_val_loss]
+  - task_id: train_lr_batch_loss_top5
+    category: structured_analytics
+    prompt: |
+      For completed train.py runs, group by origami.training.learning_rate and origami.training.batch_size. For each group, compute the average of each run's minimum val_loss. Return the 5 groups with the lowest average.
+
+      Required answer shape:
+      {
+        "groups": [{"learning_rate": string, "batch_size": string, "run_count": integer, "avg_min_val_loss": number}]
+      }
+      Sort by avg_min_val_loss ascending, then learning_rate ascending, then batch_size ascending. Cite evidence for params, metrics, and completed train.py filtering.
+    gold_sql: |
+      WITH run_min AS (
+        SELECT e.experiment_id, MIN(m.value) AS min_val_loss
+        FROM experiments e
+        JOIN metrics m ON e.experiment_id = m.experiment_id
+        WHERE e.status = 'completed'
+          AND e.script_path = 'train.py'
+          AND m.metric_name = 'val_loss'
+          AND m.value IS NOT NULL
+        GROUP BY e.experiment_id
+      ),
+      joined AS (
+        SELECT
+          lr.value_json AS learning_rate,
+          bs.value_json AS batch_size,
+          run_min.min_val_loss
+        FROM run_min
+        JOIN params lr ON lr.experiment_id = run_min.experiment_id
+          AND lr.param_path = 'origami.training.learning_rate'
+        JOIN params bs ON bs.experiment_id = run_min.experiment_id
+          AND bs.param_path = 'origami.training.batch_size'
+      )
+      SELECT learning_rate, batch_size, COUNT(*) AS run_count, AVG(min_val_loss) AS avg_min_val_loss
+      FROM joined
+      GROUP BY learning_rate, batch_size
+      ORDER BY avg_min_val_loss ASC, learning_rate ASC, batch_size ASC
+      LIMIT 5;
+    expected:
+      kind: rows_exact
+      answer_key: groups
+      columns: [learning_rate, batch_size, run_count, avg_min_val_loss]
+  - task_id: eval_best_utility_tstr
+    category: exploratory_evidence
+    prompt: |
+      Find the completed eval.py run with the highest utility_tstr_roc_auc. Return that run and the related utility_trtr_roc_auc, fidelity, detection_roc_auc, and privacy_dcr_score values when present.
+
+      Required answer shape:
+      {
+        "best_run": {
+          "experiment_id": string,
+          "utility_tstr_roc_auc": number,
+          "utility_trtr_roc_auc": number|null,
+          "fidelity": number|null,
+          "detection_roc_auc": number|null,
+          "privacy_dcr_score": number|null
+        }
+      }
+      Include run_ids with the selected experiment_id. Cite metric evidence for every returned metric.
+    gold_sql: |
+      WITH latest AS (
+        SELECT experiment_id, metric_name, value
+        FROM metrics
+        WHERE metric_name IN (
+          'utility_tstr_roc_auc',
+          'utility_trtr_roc_auc',
+          'fidelity',
+          'detection_roc_auc',
+          'privacy_dcr_score'
+        )
+        AND value IS NOT NULL
+        GROUP BY experiment_id, metric_name
+        HAVING step = MAX(step)
+      ),
+      candidate AS (
+        SELECT e.experiment_id, l.value AS utility_tstr_roc_auc
+        FROM experiments e
+        JOIN latest l ON l.experiment_id = e.experiment_id
+        WHERE e.status = 'completed'
+          AND e.script_path = 'eval.py'
+          AND l.metric_name = 'utility_tstr_roc_auc'
+        ORDER BY l.value DESC, e.experiment_id ASC
+        LIMIT 1
+      )
+      SELECT
+        candidate.experiment_id,
+        candidate.utility_tstr_roc_auc,
+        trtr.value AS utility_trtr_roc_auc,
+        fidelity.value AS fidelity,
+        detection.value AS detection_roc_auc,
+        privacy.value AS privacy_dcr_score
+      FROM candidate
+      LEFT JOIN latest trtr ON trtr.experiment_id = candidate.experiment_id AND trtr.metric_name = 'utility_trtr_roc_auc'
+      LEFT JOIN latest fidelity ON fidelity.experiment_id = candidate.experiment_id AND fidelity.metric_name = 'fidelity'
+      LEFT JOIN latest detection ON detection.experiment_id = candidate.experiment_id AND detection.metric_name = 'detection_roc_auc'
+      LEFT JOIN latest privacy ON privacy.experiment_id = candidate.experiment_id AND privacy.metric_name = 'privacy_dcr_score';
+    expected:
+      kind: first_row_object
+      answer_key: best_run
+      run_id_column: experiment_id
+      columns:
+        - experiment_id
+        - utility_tstr_roc_auc
+        - utility_trtr_roc_auc
+        - fidelity
+        - detection_roc_auc
+        - privacy_dcr_score
+  - task_id: cancelled_runs_stderr
+    category: exploratory_evidence
+    prompt: |
+      Find all non-completed runs. For each one, report the run status and stderr.txt size when stderr.txt exists.
+
+      Required answer shape:
+      {
+        "runs": [{"experiment_id": string, "status": string, "stderr_size_bytes": integer|null}]
+      }
+      Sort by experiment_id ascending. Include run_ids in the same order. Cite metadata and stderr artifact/path evidence.
+    gold_sql: |
+      SELECT e.experiment_id, e.status, a.size_bytes AS stderr_size_bytes
+      FROM experiments e
+      LEFT JOIN artifacts a ON a.experiment_id = e.experiment_id
+        AND a.artifact_path = 'stderr.txt'
+        AND a."exists" = 1
+      WHERE e.status != 'completed'
+      ORDER BY e.experiment_id ASC;
+    expected:
+      kind: rows_exact
+      answer_key: runs
+      run_id_column: experiment_id
+      columns: [experiment_id, status, stderr_size_bytes]
+  - task_id: dirty_git_missing_patches
+    category: exploratory_evidence
+    prompt: |
+      Identify dirty-git runs whose declared git patch artifact is unavailable. Return up to 10 such runs.
+
+      Required answer shape:
+      {
+        "runs": [{"experiment_id": string, "patch_file": string, "artifact_exists": boolean}]
+      }
+      Sort by experiment_id ascending. Include run_ids in the same order. If there are none, return an empty array and explain the absence in missing_evidence. Cite git state and artifact evidence.
+    gold_sql: |
+      SELECT g.experiment_id, g.patch_file, COALESCE(a."exists", 0) AS artifact_exists
+      FROM git_state g
+      LEFT JOIN artifacts a ON a.experiment_id = g.experiment_id
+        AND a.artifact_path = g.patch_file
+      WHERE g.dirty = 1
+        AND g.patch_file IS NOT NULL
+        AND COALESCE(a."exists", 0) = 0
+      ORDER BY g.experiment_id ASC
+      LIMIT 10;
+    expected:
+      kind: rows_exact
+      answer_key: runs
+      run_id_column: experiment_id
+      columns: [experiment_id, patch_file, artifact_exists]
+  - task_id: largest_stderr_files
+    category: exploratory_evidence
+    prompt: |
+      Find the 5 largest stderr.txt artifacts and return their run status and byte size.
+
+      Required answer shape:
+      {
+        "runs": [{"experiment_id": string, "status": string, "stderr_size_bytes": integer}]
+      }
+      Sort by stderr_size_bytes descending, then experiment_id ascending. Include run_ids in the same order. Use metadata/stat evidence and avoid reading full stderr bodies unless needed.
+    gold_sql: |
+      SELECT e.experiment_id, e.status, a.size_bytes AS stderr_size_bytes
+      FROM artifacts a
+      JOIN experiments e ON e.experiment_id = a.experiment_id
+      WHERE a.artifact_path = 'stderr.txt'
+        AND a."exists" = 1
+      ORDER BY a.size_bytes DESC, e.experiment_id ASC
+      LIMIT 5;
+    expected:
+      kind: rows_exact
+      answer_key: runs
+      run_id_column: experiment_id
+      columns: [experiment_id, status, stderr_size_bytes]
+  - task_id: index_completed_consistency
+    category: namespace_evidence
+    prompt: |
+      Verify that the completed-run index count matches the completed count from run metadata.
+
+      Required answer shape:
+      {
+        "metadata_completed_count": integer,
+        "index_completed_count": integer,
+        "consistent": boolean
+      }
+      Cite evidence for both the run metadata/source count and the completed index.
+    gold_sql: |
+      SELECT
+        (SELECT COUNT(*) FROM experiments WHERE status = 'completed') AS metadata_completed_count,
+        (SELECT COUNT(*) FROM files WHERE path = '/index/status/completed.json') AS completed_index_file_count,
+        (SELECT CAST(content AS TEXT) FROM files WHERE path = '/index/status/completed.json') AS completed_index_json;
+    expected:
+      kind: index_count_consistency
+      answer_key: null
+      columns: [metadata_completed_count, completed_index_file_count, completed_index_json]
+  - task_id: stdout_availability_by_script
+    category: namespace_evidence
+    prompt: |
+      For each script name, count completed runs and count how many of those runs have stdout.txt available.
+
+      Required answer shape:
+      {
+        "scripts": [{"script": string, "completed_runs": integer, "stdout_available": integer}]
+      }
+      Sort by completed_runs descending, then script ascending. Cite evidence for run metadata and stdout artifact availability.
+    gold_sql: |
+      SELECT
+        e.script_path AS script,
+        COUNT(*) AS completed_runs,
+        SUM(CASE WHEN a."exists" = 1 THEN 1 ELSE 0 END) AS stdout_available
+      FROM experiments e
+      LEFT JOIN artifacts a ON a.experiment_id = e.experiment_id
+        AND a.artifact_path = 'stdout.txt'
+      WHERE e.status = 'completed'
+      GROUP BY e.script_path
+      ORDER BY completed_runs DESC, script ASC;
+    expected:
+      kind: rows_exact
+      answer_key: scripts
+      columns: [script, completed_runs, stdout_available]

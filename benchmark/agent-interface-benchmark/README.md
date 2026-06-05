@@ -1,0 +1,216 @@
+# Yanex Agent Interface Benchmark
+
+This directory contains the experimental Yanex agent-interface benchmark
+harness. It compares how different agent-facing surfaces affect correctness,
+evidence quality, token cost, tool calls, and bytes read over the same fixed
+Yanex experiment corpus.
+
+This is not a storage-engine throughput benchmark. The product benchmark for
+metadata, training-read, and checkpoint workloads lives in the root `bench/`
+crate and is documented in `docs/benchmarks.md`.
+
+## Current Status
+
+The harness is a local experimental benchmark tree. It is not part of
+`origin/main` at the time this README was written.
+
+The current NoKV product crates now expose the intended low-level native
+namespace surface:
+
+- `nokvfs-meta`: `stat_card`, `list_page`, `find_paths`, and `read_page`;
+- `nokvfs-protocol`: `StatCard`, `ListPage`, `FindPaths`, and `ReadPage` RPC
+  DTOs;
+- `nokvfs-client`: SDK methods for the same operations;
+- `nokvfs-server`: framed metadata RPC handlers for the same operations.
+
+The benchmark arm named `nokv_native_v1` is still a raw namespace baseline in
+this harness. It currently exposes only `list`, `stat`, and byte-range `read`
+over NoKV namespace metadata. Do not report `nokv_native_v1` as the final
+agent-native product surface until the harness is switched to the product API
+above.
+
+## Corpus
+
+The benchmark uses a fixed Yanex experiment tracking corpus. The materialized
+state includes:
+
+- experiment metadata;
+- params;
+- metrics;
+- dependencies;
+- artifacts;
+- git state;
+- generated read-only index files.
+
+Default local data root:
+
+```text
+benchmark/data/yanex-demo
+```
+
+Expected local layout after preparation:
+
+```text
+benchmark/data/yanex-demo/
+  corpus/
+  sqlite/yanex.db
+  nokv/meta
+  rustfs/
+  manifest.json
+  results/
+```
+
+The local corpus archive path is intentionally not committed. Pass it with
+`--archive` when preparing data.
+
+## Arms
+
+The Phase 1 harness compares four read-only arms:
+
+| Arm | Surface |
+| --- | --- |
+| `sqlite_raw_v1` | Raw SQLite schema/query/blob tools. |
+| `sqlite_agentfs_v1` | Filesystem-shaped projection backed by SQLite. |
+| `nokv_posix_v1` | POSIX/FUSE view over NoKV. |
+| `nokv_native_v1` | NoKV raw namespace metadata baseline. |
+
+The fixed Phase 1 tasks live in `tasks/phase1_readonly.yaml`. The rubric lives
+in `rubric/phase1_readonly.yaml`.
+
+## Valid Comparisons
+
+The benchmark has two core A/B comparisons:
+
+- Raw SQLite tools vs NoKV Native Namespace.
+- SQLite AgentFS vs NoKV POSIX FUSE.
+
+Other cross-arm comparisons are useful only as sensitivity/context. For
+example, comparing raw SQL directly with POSIX tools can explain behavior, but
+it should not be presented as the main product claim because the surfaces expose
+different levels of structure.
+
+## NoKV Native Definition
+
+In this benchmark, "NoKV native" must mean that the agent-facing tools map to
+NoKV product APIs. The harness may adapt OpenAI tool calls into SDK calls and
+enforce limits, but it must not own the measured metadata semantics.
+
+Target native behavior:
+
+- `ls`/`stat` return typed directory/file cards, not POSIX-only entries.
+- `entry_count`, `record_count`, `schema`, `sample`, and body descriptors are
+  first-class fields.
+- `read` defaults to structured pagination; raw bytes require explicit
+  `format = "bytes"`.
+- `find(path, filter, sort, limit, cursor, include)` is the core exploration
+  primitive.
+- `find` uses a constrained predicate grammar declared by stat/catalog cards.
+- every result includes evidence, snapshot/generation identity, truncation
+  state, and `next_cursor` when more results exist.
+- `record_count` includes provenance: live namespace, structured body,
+  materialized index, or approximate.
+
+Generated `/index/*.json` files must not become hidden answer files. They can
+support facet-count tasks, but they are not a substitute for product-level
+typed index namespaces or future derived metric/set-pipeline APIs.
+
+## Prepare Data
+
+Start RustFS:
+
+```bash
+./benchmark/agent-interface-benchmark/scripts/start_rustfs.sh
+```
+
+Prepare the fixed corpus:
+
+```bash
+cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- prepare \
+  --archive /path/to/yanex-experiment-metadata-origami-data-gen-project.tar.gz \
+  --data-root benchmark/data/yanex-demo \
+  --reset
+```
+
+Verify materialization:
+
+```bash
+cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- verify \
+  --data-root benchmark/data/yanex-demo
+```
+
+Optional NoKV POSIX/FUSE mount:
+
+```bash
+./benchmark/agent-interface-benchmark/scripts/mount_nokv_posix.sh \
+  benchmark/data/yanex-demo/fuse
+```
+
+## Run Phase 1
+
+Set OpenAI credentials and model:
+
+```bash
+export OPENAI_API_KEY=...
+export OPENAI_MODEL=gpt-5-mini
+```
+
+Run one task for one arm:
+
+```bash
+./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+  --arm nokv_native_v1 \
+  --task-id largest_stderr_files \
+  --repeats 1 \
+  --output-jsonl benchmark/data/yanex-demo/results/phase1.jsonl
+```
+
+Run all fixed Phase 1 tasks for all arms:
+
+```bash
+./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+  --repeats 10 \
+  --output-jsonl benchmark/data/yanex-demo/results/phase1.jsonl
+```
+
+`nokv_posix_v1` requires `--nokv-posix-root` unless the wrapper script receives a
+mounted FUSE root through the environment.
+
+## Direct Tool Checks
+
+Inspect the tool registry:
+
+```bash
+cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- tools \
+  --arm nokv_native_v1
+```
+
+Inspect a NoKV raw namespace path:
+
+```bash
+cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- nokv-stat \
+  --data-root benchmark/data/yanex-demo \
+  --path /yanex/runs/00023013/metadata.json
+```
+
+Inspect SQLite schema:
+
+```bash
+cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml -- sqlite-show-schema \
+  --db benchmark/data/yanex-demo/sqlite/yanex.db
+```
+
+## Next Work
+
+The next benchmark-specific PR should switch `nokv_native_v1` from raw
+`list`/`stat`/`read` to the product native surface:
+
+- map `ls` to `list_page`;
+- map `stat` to `stat_card`;
+- map `read` to `read_page`;
+- add `find` over `find_paths`;
+- include stat/catalog metadata in arm cards;
+- add typed high-value facet namespaces for status, script, artifact name/size,
+  metric latest/min/max by run, params, and git patch availability.
+
+Do not implement these semantics in the harness as benchmark-only shortcuts.
+The harness should remain a thin adapter over `nokvfs-client` or `nokvfs-meta`.
