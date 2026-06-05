@@ -1206,6 +1206,9 @@ fn child_path(parent: &str, name: &str) -> String {
 }
 
 fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ServerError> {
+    if refreshes_metadata_view(&request) {
+        server.refresh_metadata_view()?;
+    }
     match request {
         MetadataRpcRequest::Batch { requests } => execute_batch(server, requests),
         MetadataRpcRequest::RequireApplied { position, request } => {
@@ -1720,6 +1723,56 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 .map_err(MetadError::from)?;
             Ok(MetadataRpcResult::MetadataRaftInstallSnapshot { response })
         }
+    }
+}
+
+fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
+    match request {
+        MetadataRpcRequest::Batch { requests } => requests.iter().any(refreshes_metadata_view),
+        MetadataRpcRequest::RequireApplied { request, .. } => refreshes_metadata_view(request),
+        MetadataRpcRequest::GetAttr { .. }
+        | MetadataRpcRequest::LookupPlus { .. }
+        | MetadataRpcRequest::LookupPath { .. }
+        | MetadataRpcRequest::StatPath { .. }
+        | MetadataRpcRequest::ReadDirPlus { .. }
+        | MetadataRpcRequest::ReadDirPlusPage { .. }
+        | MetadataRpcRequest::ReadDirPlusPath { .. }
+        | MetadataRpcRequest::ReadDirPlusPathPage { .. }
+        | MetadataRpcRequest::ReadIndexedPathPage { .. }
+        | MetadataRpcRequest::StatPathAtSnapshot { .. }
+        | MetadataRpcRequest::ReadDirPlusPathAtSnapshot { .. }
+        | MetadataRpcRequest::ReadFilePathAtSnapshot { .. }
+        | MetadataRpcRequest::ReadBodyPlan { .. }
+        | MetadataRpcRequest::ReadPathPlan { .. }
+        | MetadataRpcRequest::ReadArtifactPathAtSnapshot { .. }
+        | MetadataRpcRequest::ReadMetadataLog { .. }
+        | MetadataRpcRequest::ReadMetadataCheckpoint { .. }
+        | MetadataRpcRequest::PlanMetadataBootstrap { .. } => true,
+        MetadataRpcRequest::BootstrapRoot { .. }
+        | MetadataRpcRequest::CreateDir { .. }
+        | MetadataRpcRequest::CreateDirPath { .. }
+        | MetadataRpcRequest::CreateFile { .. }
+        | MetadataRpcRequest::CreateFilePath { .. }
+        | MetadataRpcRequest::CreateFilesInDirPath { .. }
+        | MetadataRpcRequest::RemoveFile { .. }
+        | MetadataRpcRequest::RemoveFilePath { .. }
+        | MetadataRpcRequest::RemoveEmptyDir { .. }
+        | MetadataRpcRequest::RemoveEmptyDirPath { .. }
+        | MetadataRpcRequest::Rename { .. }
+        | MetadataRpcRequest::RenamePath { .. }
+        | MetadataRpcRequest::RenameReplace { .. }
+        | MetadataRpcRequest::RenameReplacePath { .. }
+        | MetadataRpcRequest::SnapshotSubtree { .. }
+        | MetadataRpcRequest::SnapshotSubtreePath { .. }
+        | MetadataRpcRequest::RetireSnapshot { .. }
+        | MetadataRpcRequest::PrepareArtifact { .. }
+        | MetadataRpcRequest::PrepareArtifactPath { .. }
+        | MetadataRpcRequest::PublishPreparedArtifact { .. }
+        | MetadataRpcRequest::AppendMetadataLog { .. }
+        | MetadataRpcRequest::InstallMetadataCheckpoint { .. }
+        | MetadataRpcRequest::MetadataRaftVote { .. }
+        | MetadataRpcRequest::MetadataRaftAppendEntries { .. }
+        | MetadataRpcRequest::MetadataRaftInstallSnapshot { .. } => false,
     }
 }
 

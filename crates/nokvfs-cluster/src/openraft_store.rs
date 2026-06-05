@@ -249,14 +249,36 @@ where
     where
         N: RaftNetworkFactory<MetadataRaftConfig> + Send + Sync + 'static,
     {
+        let raft = Self::new_initialized_voter_group_with_file_log_and_network(
+            store,
+            node,
+            log_path,
+            options,
+            network,
+            &single_voter_members(node)?,
+        )?;
+        raft.wait_for_current_leader(node, Duration::from_secs(3))?;
+        Ok(raft)
+    }
+
+    pub fn new_initialized_voter_group_with_file_log_and_network<N>(
+        store: M,
+        node: NodeId,
+        log_path: impl AsRef<Path>,
+        options: FileMetadataRaftLogOptions,
+        network: N,
+        voters: &BTreeMap<NodeId, String>,
+    ) -> Result<Self, MetadataError>
+    where
+        N: RaftNetworkFactory<MetadataRaftConfig> + Send + Sync + 'static,
+    {
         let log = FileMetadataRaftLog::open(log_path, options)
             .map_err(|err| MetadataError::Backend(format!("openraft file log: {err}")))?;
         let should_initialize = log.last_log_id().is_none();
         let raft = Self::new_with_log_and_network(store, node, log, network)?;
         if should_initialize {
-            raft.initialize_voters(&single_voter_members(node)?)?;
+            raft.initialize_voters(voters)?;
         }
-        raft.wait_for_current_leader(node, Duration::from_secs(3))?;
         Ok(raft)
     }
 

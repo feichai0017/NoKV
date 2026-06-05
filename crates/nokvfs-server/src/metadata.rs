@@ -100,6 +100,14 @@ impl ServerMetadataStore {
             Self::SharedLogged(_) => Err(metadata_raft_disabled()),
         }
     }
+
+    #[cfg(test)]
+    pub(crate) fn shutdown_openraft(&self) -> Result<(), MetadataError> {
+        match self {
+            Self::OpenRaft(store) => store.shutdown(),
+            Self::SharedLogged(_) => Err(metadata_raft_disabled()),
+        }
+    }
 }
 
 fn metadata_raft_disabled() -> MetadataError {

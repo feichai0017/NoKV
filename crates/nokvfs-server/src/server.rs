@@ -6,6 +6,7 @@ use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+use std::time::Duration;
 
 use nokvfs_cluster::{
     compact_log_to_checkpoint, AppendMetadataBatchRequest, AppendMetadataBatchResponse,
@@ -98,6 +99,7 @@ impl Server {
         let mut metadata_checkpoint_objects = None;
         let mut metadata_membership = None;
         let mut metadata_raft = None;
+        let bootstrap_root;
         let metadata_log_peers = options
             .metadata_log_peers
             .iter()
@@ -157,11 +159,17 @@ impl Server {
                 metadata_checkpoint = Some(checkpoint);
                 metadata_checkpoint_objects = Some(checkpoint_objects);
                 metadata_membership = Some(membership);
+                bootstrap_root = metadata_membership
+                    .as_ref()
+                    .map(|membership| membership.leader == options.metadata_log_node)
+                    .unwrap_or(true);
                 ServerMetadataStore::shared_logged(logged)
             }
             None => {
+                let voters = metadata_raft_voters_for_options(&options)?;
+                let voter_count = voters.len();
                 let openraft =
-                    OpenRaftLoggedMetadataStore::new_single_voter_with_file_log_and_network(
+                    OpenRaftLoggedMetadataStore::new_initialized_voter_group_with_file_log_and_network(
                         metadata,
                         options.metadata_log_node,
                         default_metadata_raft_log_path(&options.meta_path),
@@ -171,16 +179,21 @@ impl Server {
                         MetadataRaftRpcNetworkFactory::new(
                             rpc::MetadataRaftFramedRpcClient::default(),
                         ),
+                        &voters,
                     )
                     .map_err(MetadError::from)?;
+                if voter_count == 1 {
+                    openraft
+                        .wait_for_current_leader(options.metadata_log_node, Duration::from_secs(3))
+                        .map_err(MetadError::from)?;
+                    bootstrap_root = true;
+                } else {
+                    bootstrap_root = false;
+                }
                 metadata_raft = Some(openraft.stats_handle());
                 ServerMetadataStore::openraft(openraft)
             }
         };
-        let bootstrap_root = metadata_membership
-            .as_ref()
-            .map(|membership| membership.leader == options.metadata_log_node)
-            .unwrap_or(true);
         let service = Arc::new(NoKvFs::open_existing(options.mount, metadata, objects)?);
         if bootstrap_root {
             service.bootstrap_root(DEFAULT_ROOT_MODE, options.uid, options.gid)?;
@@ -220,6 +233,20 @@ impl Server {
 
     pub(crate) fn service(&self) -> &NoKvFs<ServerMetadataStore, S3ObjectStore> {
         &self.service
+    }
+
+    pub(crate) fn refresh_metadata_view(&self) -> Result<(), ServerError> {
+        self.service
+            .refresh_allocator_state()
+            .map_err(ServerError::Metadata)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn shutdown_metadata_raft(&self) -> Result<(), ServerError> {
+        self.service
+            .metadata_store()
+            .shutdown_openraft()
+            .map_err(|err| ServerError::Metadata(MetadError::from(err)))
     }
 
     pub(crate) fn metadata_log_applied_position(&self) -> Option<LogPosition> {
@@ -673,6 +700,52 @@ fn metadata_raft_log_sync(sync: nokvfs_cluster::FileSharedLogSync) -> FileMetada
     }
 }
 
+fn metadata_raft_voters_for_options(
+    options: &ServerOptions,
+) -> Result<BTreeMap<NodeId, String>, ServerError> {
+    if !options.metadata_log_learners.is_empty() {
+        return Err(ServerError::SharedLog(SharedLogError::Backend(
+            "OpenRaft metadata learners are not wired yet".to_owned(),
+        )));
+    }
+    let configured_voters = if options.metadata_log_voters.is_empty() {
+        vec![options.metadata_log_node]
+    } else {
+        options.metadata_log_voters.clone()
+    };
+    let mut voters = BTreeMap::new();
+    for node in configured_voters {
+        let address = metadata_raft_node_address(options, node)?;
+        if voters.insert(node, address).is_some() {
+            return Err(ServerError::SharedLog(SharedLogError::DuplicateNode(node)));
+        }
+    }
+    if voters.is_empty() {
+        return Err(ServerError::SharedLog(SharedLogError::NoVoters));
+    }
+    if !voters.contains_key(&options.metadata_log_node) {
+        return Err(ServerError::SharedLog(SharedLogError::UnknownNode(
+            options.metadata_log_node,
+        )));
+    }
+    Ok(voters)
+}
+
+fn metadata_raft_node_address(
+    options: &ServerOptions,
+    node: NodeId,
+) -> Result<String, ServerError> {
+    if node == options.metadata_log_node {
+        return Ok(options.bind.to_string());
+    }
+    options
+        .metadata_log_peers
+        .iter()
+        .find(|peer| peer.node == node)
+        .map(|peer| peer.address.to_string())
+        .ok_or(ServerError::SharedLog(SharedLogError::UnknownNode(node)))
+}
+
 fn metadata_membership_for_node(
     catalog: &FileMembershipCatalog,
     mount: nokvfs_types::MountId,
@@ -1100,6 +1173,8 @@ pub(crate) mod tests {
 
     use super::*;
     use std::path::{Path, PathBuf};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::thread::JoinHandle;
     use std::time::Duration;
 
     use nokvfs_cluster::{
@@ -1114,6 +1189,7 @@ pub(crate) mod tests {
     use tempfile::tempdir;
 
     use crate::metadata::{ServerMetadataBackend, ServerMetadataLogStatus, ServerMetadataStore};
+    use crate::MetadataLogPeerOptions;
 
     fn node(raw: u64) -> NodeId {
         NodeId::new(raw).unwrap()
@@ -1177,6 +1253,75 @@ pub(crate) mod tests {
             checkpoint_objects.clone(),
         )
         .unwrap()
+    }
+
+    fn start_openraft_test_server(
+        root: &Path,
+        listener: TcpListener,
+        node_id: NodeId,
+        voters: &[NodeId],
+        peers: Vec<MetadataLogPeerOptions>,
+    ) -> RunningTestServer {
+        let address = listener.local_addr().unwrap();
+        let mut options = test_options(root, None);
+        options.bind = address;
+        options.metadata_log_node = node_id;
+        options.metadata_log_voters = voters.to_vec();
+        options.metadata_log_peers = peers;
+        let server = Arc::new(Server::open(options).unwrap());
+        RunningTestServer::spawn(server, listener, address)
+    }
+
+    struct RunningTestServer {
+        server: Arc<Server>,
+        address: SocketAddr,
+        stop: Arc<AtomicBool>,
+        thread: Option<JoinHandle<()>>,
+    }
+
+    impl RunningTestServer {
+        fn spawn(server: Arc<Server>, listener: TcpListener, address: SocketAddr) -> Self {
+            listener.set_nonblocking(true).unwrap();
+            let stop = Arc::new(AtomicBool::new(false));
+            let thread_stop = Arc::clone(&stop);
+            let thread_server = Arc::clone(&server);
+            let thread = thread::spawn(move || {
+                while !thread_stop.load(Ordering::SeqCst) {
+                    match listener.accept() {
+                        Ok((stream, _)) => {
+                            let server = Arc::clone(&thread_server);
+                            thread::spawn(move || {
+                                let _ = crate::http::handle_stream(server, stream);
+                            });
+                        }
+                        Err(err) if err.kind() == io::ErrorKind::WouldBlock => {
+                            thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(_) => break,
+                    }
+                }
+            });
+            Self {
+                server,
+                address,
+                stop,
+                thread: Some(thread),
+            }
+        }
+
+        fn stop(&mut self) {
+            self.stop.store(true, Ordering::SeqCst);
+            let _ = TcpStream::connect(self.address);
+            if let Some(thread) = self.thread.take() {
+                thread.join().unwrap();
+            }
+        }
+    }
+
+    impl Drop for RunningTestServer {
+        fn drop(&mut self) {
+            self.stop();
+        }
     }
 
     pub(crate) fn publish_test_metadata_membership(
@@ -1245,6 +1390,74 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn three_openraft_metadata_servers_replicate_client_write() {
+        let (_dirs, mut servers) = start_three_openraft_test_servers();
+        let leader = wait_openraft_server_leader(&servers, None);
+        servers
+            .get(&leader)
+            .unwrap()
+            .server
+            .service()
+            .bootstrap_root(DEFAULT_ROOT_MODE, 1000, 1000)
+            .unwrap();
+        servers
+            .get(&leader)
+            .unwrap()
+            .server
+            .service()
+            .create_dir_path("/runs", 0o755, 1000, 1000)
+            .unwrap();
+
+        wait_path_on_openraft_servers(&servers, "/runs", None);
+        for server in servers.values_mut() {
+            server.server.shutdown_metadata_raft().unwrap();
+            server.stop();
+        }
+    }
+
+    #[test]
+    fn three_openraft_metadata_servers_elect_new_leader_after_leader_crash() {
+        let (_dirs, mut servers) = start_three_openraft_test_servers();
+        let leader = wait_openraft_server_leader(&servers, None);
+        servers
+            .get(&leader)
+            .unwrap()
+            .server
+            .service()
+            .bootstrap_root(DEFAULT_ROOT_MODE, 1000, 1000)
+            .unwrap();
+        servers
+            .get(&leader)
+            .unwrap()
+            .server
+            .service()
+            .create_dir_path("/before-crash", 0o755, 1000, 1000)
+            .unwrap();
+        wait_path_on_openraft_servers(&servers, "/before-crash", None);
+
+        let failed = servers.get_mut(&leader).unwrap();
+        failed.server.shutdown_metadata_raft().unwrap();
+        failed.stop();
+
+        let new_leader = wait_openraft_server_leader(&servers, Some(leader));
+        servers
+            .get(&new_leader)
+            .unwrap()
+            .server
+            .service()
+            .create_dir_path("/after-crash", 0o755, 1000, 1000)
+            .unwrap();
+
+        wait_path_on_openraft_servers(&servers, "/after-crash", Some(leader));
+        for (id, server) in servers.iter_mut() {
+            if *id != leader {
+                server.server.shutdown_metadata_raft().unwrap();
+                server.stop();
+            }
+        }
+    }
+
+    #[test]
     fn manual_gc_compacts_metadata_log_through_applied_frontier() {
         let dir = tempdir().unwrap();
         let metadata_log = dir.path().join("metadata.log");
@@ -1310,6 +1523,123 @@ pub(crate) mod tests {
             log.read_from(applied.position.index, 0),
             Err(SharedLogError::Compacted { .. })
         ));
+    }
+
+    fn start_three_openraft_test_servers(
+    ) -> (Vec<tempfile::TempDir>, BTreeMap<u64, RunningTestServer>) {
+        let mut listeners = BTreeMap::new();
+        let mut addresses = BTreeMap::new();
+        for id in 1..=3 {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            addresses.insert(id, listener.local_addr().unwrap());
+            listeners.insert(id, listener);
+        }
+        let voters = vec![node(1), node(2), node(3)];
+        let mut dirs = Vec::new();
+        let mut servers = BTreeMap::new();
+        for id in 1..=3 {
+            let dir = tempdir().unwrap();
+            let peers = addresses
+                .iter()
+                .filter(|(peer_id, _)| **peer_id != id)
+                .map(|(peer_id, address)| MetadataLogPeerOptions {
+                    node: node(*peer_id),
+                    address: *address,
+                })
+                .collect::<Vec<_>>();
+            let listener = listeners.remove(&id).unwrap();
+            let running =
+                start_openraft_test_server(dir.path(), listener, node(id), &voters, peers);
+            dirs.push(dir);
+            servers.insert(id, running);
+        }
+        (dirs, servers)
+    }
+
+    fn wait_openraft_server_leader(
+        servers: &BTreeMap<u64, RunningTestServer>,
+        excluded: Option<u64>,
+    ) -> u64 {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            for (id, running) in servers {
+                if excluded == Some(*id) {
+                    continue;
+                }
+                let Some(handle) = running.server.metadata_raft.as_ref() else {
+                    continue;
+                };
+                let Some(leader) = handle.stats().current_leader else {
+                    continue;
+                };
+                if excluded != Some(leader) && servers.contains_key(&leader) {
+                    return leader;
+                }
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "OpenRaft metadata servers did not elect a usable leader"
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn wait_path_on_openraft_servers(
+        servers: &BTreeMap<u64, RunningTestServer>,
+        path: &str,
+        excluded: Option<u64>,
+    ) {
+        let deadline = std::time::Instant::now() + Duration::from_secs(10);
+        loop {
+            let all_visible =
+                servers
+                    .iter()
+                    .filter(|(id, _)| excluded != Some(**id))
+                    .all(|(_, running)| {
+                        running.server.refresh_metadata_view().unwrap();
+                        running
+                            .server
+                            .service()
+                            .lookup_path(path)
+                            .unwrap()
+                            .is_some()
+                    });
+            if all_visible {
+                return;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "OpenRaft metadata write did not replicate to all live servers: {}",
+                openraft_server_path_states(servers, path, excluded)
+            );
+            thread::sleep(Duration::from_millis(20));
+        }
+    }
+
+    fn openraft_server_path_states(
+        servers: &BTreeMap<u64, RunningTestServer>,
+        path: &str,
+        excluded: Option<u64>,
+    ) -> String {
+        servers
+            .iter()
+            .filter(|(id, _)| excluded != Some(**id))
+            .map(|(id, running)| {
+                let stats = running.server.metadata_raft.as_ref().unwrap().stats();
+                running.server.refresh_metadata_view().unwrap();
+                let visible = running
+                    .server
+                    .service()
+                    .lookup_path(path)
+                    .unwrap()
+                    .is_some();
+                format!(
+                    "node={id} leader={:?} state={} applied={:?} visible={visible}",
+                    stats.current_leader, stats.state, stats.last_applied_index
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("; ")
     }
 
     #[test]
