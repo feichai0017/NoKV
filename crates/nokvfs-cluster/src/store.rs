@@ -152,6 +152,17 @@ where
         };
         let mut pending = Vec::new();
         for (index, command) in commands.iter().cloned().enumerate() {
+            match self.store.committed_request_result(&command.request_id) {
+                Ok(Some(result)) => {
+                    results[index] = Some(Ok(result));
+                    continue;
+                }
+                Ok(None) => {}
+                Err(err) => {
+                    results[index] = Some(Err(err));
+                    continue;
+                }
+            }
             if command_conflicts_with_pending_batch(&pending, &command) {
                 self.commit_prevalidated_pending_batch(&mut pending, &mut results);
             }
@@ -177,6 +188,9 @@ where
         &self,
         commands: &[MetadataCommand],
     ) -> Result<Vec<CommitResult>, MetadataError> {
+        if let Some(results) = self.committed_batch_results(commands)? {
+            return Ok(results);
+        }
         validate_batch_independence(commands)?;
         self.validate_commands_for_log_append(commands)?;
         self.commit_prevalidated_batch_locked(commands)
@@ -409,6 +423,20 @@ where
             &self.runtime_stats.max_commands_per_entry,
             command_count as u64,
         );
+    }
+
+    fn committed_batch_results(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Result<Option<Vec<CommitResult>>, MetadataError> {
+        let mut results = Vec::with_capacity(commands.len());
+        for command in commands {
+            let Some(result) = self.store.committed_request_result(&command.request_id)? else {
+                return Ok(None);
+            };
+            results.push(result);
+        }
+        Ok(Some(results))
     }
 
     fn validate_command_for_log_append(

@@ -1315,11 +1315,16 @@ fn shared_log_metadata_store_allows_deduped_retry_after_predicate_changes() {
         Some(ApplyFrontier {
             position: LogPosition {
                 term: LogTerm::new(1).unwrap(),
-                index: LogIndex::new(2).unwrap(),
+                index: LogIndex::new(1).unwrap(),
             },
             commit_version: version(2),
         })
     );
+    assert_eq!(shared.log().committed_index().get(), 1);
+    let stats = shared.runtime_stats();
+    assert_eq!(stats.commit_entry_total, 1);
+    assert_eq!(stats.commit_command_total, 1);
+    assert_eq!(stats.precheck_command_total, 1);
 }
 
 #[test]
@@ -1341,6 +1346,36 @@ fn shared_log_metadata_store_does_not_probe_dedupe_by_committing_inner_store() {
     );
     assert_eq!(shared.inner().commit_calls.load(Ordering::Relaxed), 0);
     assert_eq!(shared.log().committed_index(), LogIndex::ZERO);
+}
+
+#[test]
+fn shared_log_metadata_store_independent_batch_skips_deduped_commands() {
+    let log = InMemorySharedLog::new();
+    let store = HoltMetadataStore::open_memory().unwrap();
+    let mount = MountId::new(1).unwrap();
+    let shared = SharedLogMetadataStore::new(store, log, LogTerm::new(1).unwrap(), mount);
+
+    let first = shared.commit_metadata(not_exists_command(b"a", 2)).unwrap();
+    let results = shared
+        .commit_independent_batch(&[not_exists_command(b"a", 2), not_exists_command(b"b", 3)]);
+
+    assert_eq!(results.len(), 2);
+    assert_eq!(results[0], Ok(first));
+    assert_eq!(results[1].as_ref().unwrap().commit_version, version(3));
+    assert_eq!(shared.log().committed_index().get(), 2);
+    let entries = shared
+        .log()
+        .read_from(LogIndex::new(1).unwrap(), 0)
+        .unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0].commands.len(), 1);
+    assert_eq!(entries[0].commands[0].request_id, b"a");
+    assert_eq!(entries[1].commands.len(), 1);
+    assert_eq!(entries[1].commands[0].request_id, b"b");
+    let stats = shared.runtime_stats();
+    assert_eq!(stats.commit_entry_total, 2);
+    assert_eq!(stats.commit_command_total, 2);
+    assert_eq!(stats.precheck_command_total, 2);
 }
 
 #[test]
