@@ -11,6 +11,7 @@ homepage.workspace = true
 
 [dependencies]
 fuser.workspace = true
+nokvfs-client.workspace = true
 nokvfs-meta.workspace = true
 nokvfs-object.workspace = true
 nokvfs-types.workspace = true

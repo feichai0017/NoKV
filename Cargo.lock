@@ -1487,6 +1487,7 @@ name = "nokvfs-fuse"
 version = "0.1.0"
 dependencies = [
  "fuser",
+ "nokvfs-client",
  "nokvfs-meta",
  "nokvfs-object",
  "nokvfs-types",

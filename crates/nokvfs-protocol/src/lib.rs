@@ -32,7 +32,16 @@ pub enum MetadataRpcRequest {
     GetAttr {
         inode: u64,
     },
+    GetAttrAtSnapshot {
+        snapshot_id: u64,
+        inode: u64,
+    },
     LookupPlus {
+        parent: u64,
+        name: String,
+    },
+    LookupPlusAtSnapshot {
+        snapshot_id: u64,
         parent: u64,
         name: String,
     },
@@ -49,6 +58,10 @@ pub enum MetadataRpcRequest {
         parent: u64,
         after_name_hex: Option<String>,
         limit: usize,
+    },
+    ReadDirPlusAtSnapshot {
+        snapshot_id: u64,
+        parent: u64,
     },
     ReadDirPlusPath {
         path: String,
@@ -82,6 +95,22 @@ pub enum MetadataRpcRequest {
         mode: u32,
         uid: u32,
         gid: u32,
+    },
+    CreateSymlink {
+        parent: u64,
+        name: String,
+        target: Vec<u8>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
+    UpdateAttrs {
+        parent: u64,
+        name: String,
+        changes: WireUpdateAttr,
+    },
+    UpdateRootAttrs {
+        changes: WireUpdateAttr,
     },
     CreateFilePath {
         path: String,
@@ -133,6 +162,9 @@ pub enum MetadataRpcRequest {
     SnapshotSubtree {
         root: u64,
     },
+    SnapshotPin {
+        snapshot_id: u64,
+    },
     SnapshotSubtreePath {
         path: String,
     },
@@ -149,6 +181,19 @@ pub enum MetadataRpcRequest {
         path: String,
         offset: u64,
         len: u64,
+    },
+    ReadFileAtSnapshot {
+        snapshot_id: u64,
+        inode: u64,
+        offset: u64,
+        len: u64,
+    },
+    ReadSymlink {
+        inode: u64,
+    },
+    ReadSymlinkAtSnapshot {
+        snapshot_id: u64,
+        inode: u64,
     },
     RetireSnapshot {
         snapshot_id: u64,
@@ -214,6 +259,22 @@ pub enum MetadataRpcRequest {
     MetadataRaftInstallSnapshot {
         request: WireMetadataRaftInstallSnapshotRequest,
     },
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireUpdateAttr {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mode: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub uid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub gid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub size: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mtime_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub ctime_ms: Option<u64>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -389,6 +450,9 @@ pub enum MetadataRpcResult {
     },
     Snapshot {
         snapshot: WireSnapshotPin,
+    },
+    SnapshotPin {
+        snapshot: Option<WireSnapshotPin>,
     },
     RetiredSnapshot {
         retired: bool,

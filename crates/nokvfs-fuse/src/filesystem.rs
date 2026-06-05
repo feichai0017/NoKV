@@ -14,10 +14,14 @@ use fuser::{
     ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry,
     ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
+use nokvfs_client::MetadataClient;
+#[cfg(test)]
 use nokvfs_meta::command::MetadataStore;
+#[cfg(test)]
+use nokvfs_meta::NoKvFs;
 use nokvfs_meta::{
-    DentryWithAttr, MetadError, NoKvFs, PreparedArtifact, PublishArtifactRange,
-    PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
+    DentryWithAttr, MetadError, PublishArtifactRange, PublishArtifactStagedSession,
+    ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokvfs_object::{
     ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE,
@@ -27,6 +31,9 @@ use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
 use sha2::{Digest, Sha256};
 
 use crate::attr::{file_attr, fuse_file_type};
+#[cfg(test)]
+use crate::backend::LocalFuseBackend;
+use crate::backend::{ClientFuseBackend, FuseBackend, FuseBackendError};
 use crate::invalidation::{FuseInvalidationOptions, FuseInvalidationWorker, InvalidationRegistry};
 
 #[derive(Clone, Debug)]
@@ -52,23 +59,23 @@ pub enum FuseAccessMode {
     ReadOnly,
 }
 
-pub struct NoKvFuse<M, O> {
-    service: Arc<NoKvFs<M, O>>,
+pub(crate) struct NoKvFuse<B: FuseBackend> {
+    backend: Arc<B>,
     options: FuseOptions,
     parents: RwLock<HashMap<u64, u64>>,
     names: RwLock<HashMap<u64, Vec<u8>>>,
     next_handle: AtomicU64,
-    write_handles: RwLock<HashMap<u64, WriteHandle>>,
+    write_handles: RwLock<HashMap<u64, WriteHandle<B::Prepared>>>,
     directory_handles: RwLock<HashMap<u64, DirectoryHandle>>,
     invalidation: Arc<InvalidationRegistry>,
 }
 
 #[derive(Clone, Debug)]
-struct WriteHandle {
+struct WriteHandle<P> {
     inode: InodeId,
     parent: InodeId,
     name: DentryName,
-    prepared: Option<PreparedArtifact>,
+    prepared: Option<P>,
     mode: u32,
     uid: u32,
     gid: u32,
@@ -130,8 +137,8 @@ impl fmt::Debug for SequentialDigest {
 }
 
 #[derive(Clone, Debug)]
-struct WriteStageReservation {
-    prepared: PreparedArtifact,
+struct WriteStageReservation<P> {
+    prepared: P,
     manifest_id: String,
     block_index_base: u64,
 }
@@ -183,21 +190,21 @@ fn default_threads() -> usize {
     1
 }
 
-impl<M, O> NoKvFuse<M, O>
+impl<B> NoKvFuse<B>
 where
-    M: MetadataStore,
-    O: ObjectStore,
+    B: FuseBackend,
 {
-    pub fn new(service: NoKvFs<M, O>, options: FuseOptions) -> Self {
-        Self::from_shared(Arc::new(service), options)
+    #[cfg(test)]
+    pub(crate) fn from_backend(backend: B, options: FuseOptions) -> Self {
+        Self::from_shared_backend(Arc::new(backend), options)
     }
 
-    pub fn from_shared(service: Arc<NoKvFs<M, O>>, options: FuseOptions) -> Self {
+    pub(crate) fn from_shared_backend(backend: Arc<B>, options: FuseOptions) -> Self {
         let mut parents = HashMap::new();
         parents.insert(options.view.root().get(), options.view.root().get());
         let invalidation = Arc::new(InvalidationRegistry::default());
         let fuse = Self {
-            service,
+            backend,
             options,
             parents: RwLock::new(parents),
             names: RwLock::new(HashMap::new()),
@@ -208,10 +215,6 @@ where
         };
         fuse.register_watch_scope(fuse.options.view.root());
         fuse
-    }
-
-    pub fn service(&self) -> &NoKvFs<M, O> {
-        &self.service
     }
 
     fn remember_parent(&self, child: InodeId, parent: InodeId) {
@@ -264,7 +267,7 @@ where
         if self.options.view != FuseView::Live {
             return;
         }
-        if let Ok(cursor) = self.service.watch_subtree(scope) {
+        if let Ok(Some(cursor)) = self.backend.watch_subtree(scope) {
             self.invalidation.register_scope(scope, cursor);
         }
     }
@@ -321,11 +324,11 @@ where
         self.options.access.is_read_only() || self.options.view.is_read_only()
     }
 
-    fn service_get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, MetadError> {
+    fn service_get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, FuseBackendError> {
         match self.options.view {
-            FuseView::Live => self.service.get_attr(inode),
+            FuseView::Live => self.backend.get_attr(inode),
             FuseView::Snapshot { snapshot_id, .. } => {
-                self.service.get_attr_at_snapshot(snapshot_id, inode)
+                self.backend.get_attr_at_snapshot(snapshot_id, inode)
             }
         }
     }
@@ -334,11 +337,11 @@ where
         &self,
         parent: InodeId,
         name: &DentryName,
-    ) -> Result<Option<DentryWithAttr>, MetadError> {
+    ) -> Result<Option<DentryWithAttr>, FuseBackendError> {
         match self.options.view {
-            FuseView::Live => self.service.lookup_plus(parent, name),
+            FuseView::Live => self.backend.lookup_plus(parent, name),
             FuseView::Snapshot { snapshot_id, .. } => {
-                self.service
+                self.backend
                     .lookup_plus_at_snapshot(snapshot_id, parent, name)
             }
         }
@@ -349,12 +352,12 @@ where
         inode: InodeId,
         after: Option<&DentryName>,
         limit: usize,
-    ) -> Result<ReadDirPlusPage, MetadError> {
+    ) -> Result<ReadDirPlusPage, FuseBackendError> {
         match self.options.view {
-            FuseView::Live => self.service.read_dir_plus_page(inode, after, limit),
+            FuseView::Live => self.backend.read_dir_plus_page(inode, after, limit),
             FuseView::Snapshot { snapshot_id, .. } => {
                 let requested = limit.max(1);
-                let rows = self.service.read_dir_plus_at_snapshot(snapshot_id, inode)?;
+                let rows = self.backend.read_dir_plus_at_snapshot(snapshot_id, inode)?;
                 let mut entries = rows
                     .into_iter()
                     .filter(|entry| {
@@ -383,12 +386,12 @@ where
         name: &DentryName,
         new_parent: InodeId,
         new_name: DentryName,
-    ) -> Result<RenameReplaceResult, MetadError> {
-        if self.service.lookup_plus(new_parent, &new_name)?.is_some() {
-            self.service
+    ) -> Result<RenameReplaceResult, FuseBackendError> {
+        if self.backend.lookup_plus(new_parent, &new_name)?.is_some() {
+            self.backend
                 .rename_replace(parent, name, new_parent, new_name)
         } else {
-            self.service
+            self.backend
                 .rename(parent, name, new_parent, new_name)
                 .map(|entry| RenameReplaceResult {
                     entry,
@@ -402,21 +405,21 @@ where
         inode: InodeId,
         offset: u64,
         len: usize,
-    ) -> Result<Vec<u8>, MetadError> {
+    ) -> Result<Vec<u8>, FuseBackendError> {
         match self.options.view {
-            FuseView::Live => self.service.read_file(inode, offset, len),
+            FuseView::Live => self.backend.read_file(inode, offset, len),
             FuseView::Snapshot { snapshot_id, .. } => {
-                self.service
+                self.backend
                     .read_file_at_snapshot(snapshot_id, inode, offset, len)
             }
         }
     }
 
-    fn service_read_symlink(&self, inode: InodeId) -> Result<Vec<u8>, MetadError> {
+    fn service_read_symlink(&self, inode: InodeId) -> Result<Vec<u8>, FuseBackendError> {
         match self.options.view {
-            FuseView::Live => self.service.read_symlink(inode),
+            FuseView::Live => self.backend.read_symlink(inode),
             FuseView::Snapshot { snapshot_id, .. } => {
-                self.service.read_symlink_at_snapshot(snapshot_id, inode)
+                self.backend.read_symlink_at_snapshot(snapshot_id, inode)
             }
         }
     }
@@ -532,7 +535,7 @@ where
         self.directory_handle_attr(fh).map(|_| ())
     }
 
-    fn allocate_handle(&self, handle: WriteHandle) -> Result<FileHandle, Errno> {
+    fn allocate_handle(&self, handle: WriteHandle<B::Prepared>) -> Result<FileHandle, Errno> {
         let raw = self.next_handle.fetch_add(1, Ordering::Relaxed);
         self.write_handles
             .write()
@@ -584,7 +587,7 @@ where
             let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
             if handle.prepared.is_none() {
                 handle.prepared = Some(
-                    self.service
+                    self.backend
                         .prepare_artifact_replace(handle.parent, handle.name.clone())
                         .map_err(errno)?,
                 );
@@ -599,7 +602,7 @@ where
             }
         };
         let written = self
-            .service
+            .backend
             .stage_prepared_artifact_ranges(
                 &reservation.prepared,
                 &reservation.manifest_id,
@@ -613,13 +616,16 @@ where
         let staged = written.staged_objects().map_err(|_| Errno::EIO)?;
         let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
         let Some(handle) = handles.get_mut(&fh.0) else {
-            let _ = self.service.cleanup_staged_objects(&staged);
+            let _ = self.backend.cleanup_staged_objects(&staged);
             return Err(Errno::EBADF);
         };
-        if handle.prepared.as_ref().map(|prepared| prepared.generation)
-            != Some(reservation.prepared.generation)
+        if handle
+            .prepared
+            .as_ref()
+            .map(|prepared| self.backend.prepared_generation(prepared))
+            != Some(self.backend.prepared_generation(&reservation.prepared))
         {
-            let _ = self.service.cleanup_staged_objects(&staged);
+            let _ = self.backend.cleanup_staged_objects(&staged);
             return Err(Errno::ESTALE);
         }
         if let Some(digest) = handle.sequential_digest.as_mut() {
@@ -649,7 +655,7 @@ where
         let handle = handles.get_mut(&fh.0).ok_or(Errno::EBADF)?;
         if handle.prepared.is_none() {
             handle.prepared = Some(
-                self.service
+                self.backend
                     .prepare_artifact_replace(handle.parent, handle.name.clone())
                     .map_err(errno)?,
             );
@@ -754,7 +760,7 @@ where
                         .ok_or(Errno::EINVAL)?;
                     let len = usize::try_from(end - start).map_err(|_| Errno::EINVAL)?;
                     let bytes = self
-                        .service
+                        .backend
                         .read_session_object_blocks(
                             len,
                             &[ObjectReadBlock {
@@ -815,7 +821,7 @@ where
             .as_ref()
             .and_then(|digest| digest.digest_uri_for_size(snapshot.size))
             .map_or_else(|| self.digest_handle_body(fh, snapshot.size), Ok)?;
-        self.service
+        self.backend
             .publish_prepared_artifact_staged_session(
                 snapshot.prepared.ok_or(Errno::EIO)?,
                 PublishArtifactStagedSession {
@@ -863,37 +869,56 @@ where
     }
 }
 
-pub fn mount<M, O>(
-    service: NoKvFs<M, O>,
-    mountpoint: impl AsRef<Path>,
-    options: FuseOptions,
-) -> io::Result<()>
+#[cfg(test)]
+impl<M, O> NoKvFuse<LocalFuseBackend<M, O>>
 where
     M: MetadataStore + Send + Sync + 'static,
     O: ObjectStore + Send + Sync + 'static,
 {
-    mount_shared(Arc::new(service), mountpoint, options)
+    fn new(service: NoKvFs<M, O>, options: FuseOptions) -> Self {
+        Self::from_backend(LocalFuseBackend::new(service), options)
+    }
+
+    fn service(&self) -> &NoKvFs<M, O> {
+        self.backend.service()
+    }
 }
 
-pub fn mount_shared<M, O>(
-    service: Arc<NoKvFs<M, O>>,
+pub fn mount_client<O>(
+    metadata: MetadataClient,
+    objects: O,
     mountpoint: impl AsRef<Path>,
     options: FuseOptions,
 ) -> io::Result<()>
 where
-    M: MetadataStore + Send + Sync + 'static,
     O: ObjectStore + Send + Sync + 'static,
+{
+    mount_backend(
+        ClientFuseBackend::new(metadata, objects),
+        mountpoint,
+        options,
+    )
+}
+
+fn mount_backend<B>(
+    backend: B,
+    mountpoint: impl AsRef<Path>,
+    options: FuseOptions,
+) -> io::Result<()>
+where
+    B: FuseBackend,
 {
     let mut config = Config::default();
     let mount_options = mount_options(&options);
     config.mount_options = mount_options;
     config.n_threads = Some(options.threads);
-    let fuse = NoKvFuse::from_shared(Arc::clone(&service), options.clone());
+    let backend = Arc::new(backend);
+    let fuse = NoKvFuse::from_shared_backend(Arc::clone(&backend), options.clone());
     let registry = fuse.invalidation_registry();
     let session = fuser::spawn_mount2(fuse, mountpoint, &config)?;
     let _invalidation_worker = if options.view == FuseView::Live {
         Some(FuseInvalidationWorker::spawn(
-            service,
+            backend,
             session.notifier(),
             registry,
             options.invalidation,
@@ -959,10 +984,9 @@ struct FuseStatfs {
     frsize: u32,
 }
 
-impl<M, O> Filesystem for NoKvFuse<M, O>
+impl<B> Filesystem for NoKvFuse<B>
 where
-    M: MetadataStore + Send + Sync + 'static,
-    O: ObjectStore + Send + Sync + 'static,
+    B: FuseBackend,
 {
     fn forget(&self, _req: &Request, ino: INodeNo, _nlookup: u64) {
         if let Ok(inode) = self.metadata_inode(ino) {
@@ -1076,7 +1100,7 @@ where
             ctime_ms: ctime.map(system_time_ms),
         };
         if inode == self.options.view.root() {
-            match self.service.update_root_attrs(changes) {
+            match self.backend.update_root_attrs(changes) {
                 Ok(attr) => reply.attr(&self.options.attr_ttl, &self.view_file_attr(&attr)),
                 Err(err) => reply.error(errno(err)),
             }
@@ -1090,7 +1114,7 @@ where
                 return;
             }
         };
-        match self.service.update_attrs(parent, &name, changes) {
+        match self.backend.update_attrs(parent, &name, changes) {
             Ok(entry) => {
                 self.remember_entry(&entry);
                 reply.attr(&self.options.attr_ttl, &self.view_file_attr(&entry.attr));
@@ -1400,18 +1424,14 @@ where
                 return;
             }
         };
-        match self.service.set_xattr(inode, name, value.to_vec(), mode) {
+        match self.backend.set_xattr(inode, name, value.to_vec(), mode) {
             Ok(()) => reply.ok(),
-            Err(MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed))
-                if mode == XattrSetMode::Create =>
-            {
-                reply.error(Errno::EEXIST)
-            }
-            Err(MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed))
-                if mode == XattrSetMode::Replace =>
-            {
-                reply.error(xattr_missing_error())
-            }
+            Err(FuseBackendError::Metadata(MetadError::Metadata(
+                nokvfs_meta::MetadataError::PredicateFailed,
+            ))) if mode == XattrSetMode::Create => reply.error(Errno::EEXIST),
+            Err(FuseBackendError::Metadata(MetadError::Metadata(
+                nokvfs_meta::MetadataError::PredicateFailed,
+            ))) if mode == XattrSetMode::Replace => reply.error(xattr_missing_error()),
             Err(err) => reply.error(errno(err)),
         }
     }
@@ -1431,7 +1451,7 @@ where
                 return;
             }
         };
-        match self.service.get_xattr(inode, name) {
+        match self.backend.get_xattr(inode, name) {
             Ok(Some(value)) => reply_xattr_data(value.as_slice(), size, reply),
             Ok(None) => reply.error(xattr_missing_error()),
             Err(err) => reply.error(errno(err)),
@@ -1446,7 +1466,7 @@ where
                 return;
             }
         };
-        match self.service.list_xattr(inode) {
+        match self.backend.list_xattr(inode) {
             Ok(names) => {
                 let mut encoded = Vec::new();
                 for name in names {
@@ -1478,11 +1498,11 @@ where
                 return;
             }
         };
-        match self.service.remove_xattr(inode, name) {
+        match self.backend.remove_xattr(inode, name) {
             Ok(()) => reply.ok(),
-            Err(MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed)) => {
-                reply.error(xattr_missing_error())
-            }
+            Err(FuseBackendError::Metadata(MetadError::Metadata(
+                nokvfs_meta::MetadataError::PredicateFailed,
+            ))) => reply.error(xattr_missing_error()),
             Err(err) => reply.error(errno(err)),
         }
     }
@@ -1534,7 +1554,7 @@ where
             }
         };
         match self
-            .service
+            .backend
             .create_dir(parent, name, mode & !umask, req.uid(), req.gid())
         {
             Ok(entry) => {
@@ -1590,7 +1610,7 @@ where
         };
         let target = target.as_os_str().as_bytes().to_vec();
         match self
-            .service
+            .backend
             .create_symlink(parent, name, target, 0o777, req.uid(), req.gid())
         {
             Ok(entry) => {
@@ -1634,7 +1654,7 @@ where
             }
         };
         match self
-            .service
+            .backend
             .create_file(parent, name, mode & !umask, req.uid(), req.gid())
         {
             Ok(entry) => {
@@ -1675,7 +1695,7 @@ where
                 return;
             }
         };
-        match self.service.remove_file(parent, &name) {
+        match self.backend.remove_file(parent, &name) {
             Ok(entry) => {
                 if let Ok(mut parents) = self.parents.write() {
                     parents.remove(&entry.attr.inode.get());
@@ -1708,7 +1728,7 @@ where
                 return;
             }
         };
-        match self.service.remove_empty_dir(parent, &name) {
+        match self.backend.remove_empty_dir(parent, &name) {
             Ok(entry) => {
                 if let Ok(mut parents) = self.parents.write() {
                     parents.remove(&entry.attr.inode.get());
@@ -1999,7 +2019,30 @@ fn access_allowed(attr: &InodeAttr, uid: u32, gid: u32, mask: AccessFlags) -> bo
         && (!mask.contains(AccessFlags::X_OK) || perms & 0o1 != 0)
 }
 
-fn errno(err: MetadError) -> Errno {
+fn errno(err: impl Into<FuseBackendError>) -> Errno {
+    match err.into() {
+        FuseBackendError::Metadata(err) => metadata_errno(err),
+        FuseBackendError::Client(nokvfs_client::ClientError::Metadata(err)) => metadata_errno(err),
+        FuseBackendError::Client(nokvfs_client::ClientError::NotFound(_)) => Errno::ENOENT,
+        FuseBackendError::Client(nokvfs_client::ClientError::NotDirectory(_)) => Errno::ENOTDIR,
+        FuseBackendError::Client(nokvfs_client::ClientError::Object(_))
+        | FuseBackendError::Client(nokvfs_client::ClientError::Io(_))
+        | FuseBackendError::Client(nokvfs_client::ClientError::Protocol(_))
+        | FuseBackendError::Client(nokvfs_client::ClientError::ReadNotFresh { .. })
+        | FuseBackendError::Client(nokvfs_client::ClientError::EmptyPath)
+        | FuseBackendError::Client(nokvfs_client::ClientError::RelativePath)
+        | FuseBackendError::Client(nokvfs_client::ClientError::ParentTraversal)
+        | FuseBackendError::Client(nokvfs_client::ClientError::InvalidArtifactPath(_))
+        | FuseBackendError::Client(nokvfs_client::ClientError::ArtifactIsDirectory(_))
+        | FuseBackendError::Client(nokvfs_client::ClientError::ArtifactIsFile(_))
+        | FuseBackendError::Client(nokvfs_client::ClientError::InvalidName(_))
+        | FuseBackendError::Client(nokvfs_client::ClientError::RootHasNoParent)
+        | FuseBackendError::Object(_) => Errno::EIO,
+        FuseBackendError::Unsupported(_) => xattr_unsupported_error(),
+    }
+}
+
+fn metadata_errno(err: MetadError) -> Errno {
     match err {
         MetadError::Model(_) => Errno::EINVAL,
         MetadError::InvalidPath(_) => Errno::EINVAL,

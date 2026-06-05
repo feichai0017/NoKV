@@ -7,10 +7,9 @@ use std::thread::{self, JoinHandle};
 use std::time::Duration;
 
 use fuser::{INodeNo, Notifier};
-use nokvfs_meta::command::MetadataStore;
-use nokvfs_meta::NoKvFs;
-use nokvfs_object::ObjectStore;
 use nokvfs_types::{DentryName, InodeId, WatchCursor, WatchEvent, WatchRecord};
+
+use crate::backend::FuseBackend;
 
 const DEFAULT_INTERVAL: Duration = Duration::from_millis(250);
 const DEFAULT_LIMIT: usize = 1024;
@@ -68,15 +67,14 @@ impl Default for FuseInvalidationOptions {
 }
 
 impl FuseInvalidationWorker {
-    pub(crate) fn spawn<M, O>(
-        service: Arc<NoKvFs<M, O>>,
+    pub(crate) fn spawn<B>(
+        backend: Arc<B>,
         notifier: Notifier,
         registry: Arc<InvalidationRegistry>,
         options: FuseInvalidationOptions,
     ) -> Self
     where
-        M: MetadataStore + Send + Sync + 'static,
-        O: ObjectStore + Send + Sync + 'static,
+        B: FuseBackend,
     {
         let options = options.normalized();
         let stop = Arc::new((Mutex::new(false), Condvar::new()));
@@ -85,7 +83,13 @@ impl FuseInvalidationWorker {
         let worker_state = Arc::clone(&state);
         let handle = thread::spawn(move || {
             if options.run_immediately {
-                run_once(&service, &notifier, &registry, options.limit, &worker_state);
+                run_once(
+                    &*backend,
+                    &notifier,
+                    &registry,
+                    options.limit,
+                    &worker_state,
+                );
             }
             loop {
                 let (lock, cvar) = &*worker_stop;
@@ -101,7 +105,13 @@ impl FuseInvalidationWorker {
                     break;
                 }
                 drop(stopped);
-                run_once(&service, &notifier, &registry, options.limit, &worker_state);
+                run_once(
+                    &*backend,
+                    &notifier,
+                    &registry,
+                    options.limit,
+                    &worker_state,
+                );
             }
         });
         Self {
@@ -170,17 +180,16 @@ impl FuseInvalidationOptions {
     }
 }
 
-fn run_once<M, O>(
-    service: &NoKvFs<M, O>,
+fn run_once<B>(
+    backend: &B,
     notifier: &Notifier,
     registry: &InvalidationRegistry,
     limit: usize,
     state: &Mutex<FuseInvalidationWorkerState>,
 ) where
-    M: MetadataStore,
-    O: ObjectStore,
+    B: FuseBackend,
 {
-    let result = replay_registered_scopes(service, notifier, registry, limit);
+    let result = replay_registered_scopes(backend, notifier, registry, limit);
     if let Ok(mut state) = state.lock() {
         state.iterations += 1;
         match result {
@@ -197,19 +206,18 @@ fn run_once<M, O>(
     }
 }
 
-fn replay_registered_scopes<M, O>(
-    service: &NoKvFs<M, O>,
+fn replay_registered_scopes<B>(
+    backend: &B,
     notifier: &Notifier,
     registry: &InvalidationRegistry,
     limit: usize,
 ) -> io::Result<InvalidationCounts>
 where
-    M: MetadataStore,
-    O: ObjectStore,
+    B: FuseBackend,
 {
     let mut totals = InvalidationCounts::default();
     for (scope, cursor) in registry.scopes() {
-        let records = service
+        let records = backend
             .replay_watch(scope, cursor, limit)
             .map_err(|err| io::Error::other(err.to_string()))?;
         let Some(last) = records.last().map(|record| record.cursor) else {

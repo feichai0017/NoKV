@@ -7,13 +7,11 @@ use std::fs;
 use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use nokvfs_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
 use nokvfs_cluster::{FileSharedLogSync, LogTerm, NodeId};
-use nokvfs_meta::holtstore::HoltMetadataStore;
-use nokvfs_meta::{HistoryGcOptions, HistoryGcWorker, NoKvFs, ObjectGcOptions, ObjectGcWorker};
+use nokvfs_meta::{HistoryGcOptions, ObjectGcOptions};
 use nokvfs_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_server::{MetadataLogPeerOptions, ServerOptions, DEFAULT_SERVER_BIND};
 use nokvfs_types::{FileType, MountId};
@@ -271,28 +269,17 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             mountpoint,
             read_only,
         } => {
-            let service = Arc::new(open_service(&config)?);
-            service
+            let metadata = MetadataClient::new(
+                MetadataClientOptions::new(config.server_bind)
+                    .with_read_endpoints(config.metadata_read_endpoints.clone()),
+            );
+            let objects = config.object.open().map_err(from_object)?;
+            metadata
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
-            let _gc_worker = ObjectGcWorker::spawn(
-                Arc::clone(&service),
-                ObjectGcOptions {
-                    interval: config.object_gc_interval,
-                    limit: config.object_gc_limit,
-                    run_immediately: false,
-                },
-            );
-            let _history_gc_worker = HistoryGcWorker::spawn(
-                Arc::clone(&service),
-                HistoryGcOptions {
-                    interval: config.history_gc_interval,
-                    limit: config.history_gc_limit,
-                    run_immediately: false,
-                },
-            );
-            nokvfs_fuse::mount_shared(
-                service,
+            nokvfs_fuse::mount_client(
+                metadata,
+                objects,
                 mountpoint,
                 nokvfs_fuse::FuseOptions {
                     access: if read_only {
@@ -309,13 +296,18 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             snapshot_id,
             mountpoint,
         } => {
-            let service = open_service(&config)?;
-            let snapshot = service
+            let metadata = MetadataClient::new(
+                MetadataClientOptions::new(config.server_bind)
+                    .with_read_endpoints(config.metadata_read_endpoints.clone()),
+            );
+            let objects = config.object.open().map_err(from_object)?;
+            let snapshot = metadata
                 .snapshot_pin(snapshot_id)
                 .map_err(from_client)?
                 .ok_or_else(|| CliError::Client(format!("snapshot {snapshot_id} not found")))?;
-            nokvfs_fuse::mount(
-                service,
+            nokvfs_fuse::mount_client(
+                metadata,
+                objects,
                 mountpoint,
                 nokvfs_fuse::FuseOptions {
                     fs_name: format!("nokv-fs-snapshot-{snapshot_id}"),
@@ -421,13 +413,6 @@ fn control_get(config: &Config, path: &str) -> Result<String, CliError> {
         return Err(CliError::Client(response));
     }
     Ok(body.to_owned())
-}
-
-fn open_service(config: &Config) -> Result<NoKvFs<HoltMetadataStore, S3ObjectStore>, CliError> {
-    let metadata = HoltMetadataStore::open_file(&config.meta).map_err(from_metadata)?;
-    let objects = config.object.open().map_err(from_object)?;
-    NoKvFs::open_existing(config.mount, metadata, objects)
-        .map_err(|err| CliError::Client(err.to_string()))
 }
 
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
@@ -951,10 +936,6 @@ fn from_client(err: impl Error) -> CliError {
     CliError::Client(err.to_string())
 }
 
-fn from_metadata(err: impl Error) -> CliError {
-    CliError::Client(err.to_string())
-}
-
 fn from_object(err: impl Error) -> CliError {
     CliError::Client(err.to_string())
 }
@@ -974,8 +955,8 @@ Usage:\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rmdir PATH\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] MOUNTPOINT\n\
-  nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID MOUNTPOINT\n\
+  nokv-fs [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] MOUNTPOINT\n\
+  nokv-fs [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID MOUNTPOINT\n\
   nokv-fs [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
   nokv-fs [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\

@@ -6,7 +6,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 use std::{collections::HashMap, io};
 
-use nokvfs_meta::{DentryWithAttr, ObjectTransferStats, RenameReplaceResult};
+use nokvfs_meta::{DentryWithAttr, ObjectTransferStats, RenameReplaceResult, UpdateAttr};
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, put_chunked_reader, read_object_blocks,
     ChunkWriteOptions, ChunkedWrite, MemoryBlockCache, ObjectError, ObjectReadBlock, ObjectStore,
@@ -17,11 +17,11 @@ use nokvfs_protocol::{
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
     WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr, WireMetadataBootstrapPlan,
     WireMetadataCheckpoint, WireMetadataCheckpointInstall, WireMetadataError, WireMetadataPosition,
-    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact, WireUpdateAttr,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
-    InodeId, PathMetadata, SnapshotPin,
+    InodeAttr, InodeId, PathMetadata, SnapshotPin,
 };
 
 use crate::{ArtifactMetadata, ClientError, NamespaceRead};
@@ -540,6 +540,199 @@ impl MetadataClient {
         }
     }
 
+    pub fn get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, ClientError> {
+        match self.call(MetadataRpcRequest::GetAttr { inode: inode.get() })? {
+            MetadataRpcResult::InodeAttr { attr } => attr
+                .map(|attr| attr.into_inode_attr().map_err(protocol_error))
+                .transpose(),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn get_attr_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        inode: InodeId,
+    ) -> Result<Option<InodeAttr>, ClientError> {
+        match self.call(MetadataRpcRequest::GetAttrAtSnapshot {
+            snapshot_id,
+            inode: inode.get(),
+        })? {
+            MetadataRpcResult::InodeAttr { attr } => attr
+                .map(|attr| attr.into_inode_attr().map_err(protocol_error))
+                .transpose(),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn lookup_plus(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+    ) -> Result<Option<DentryWithAttr>, ClientError> {
+        match self.call(MetadataRpcRequest::LookupPlus {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+        })? {
+            MetadataRpcResult::Dentry { entry } => {
+                entry.map(|entry| wire_dentry(*entry)).transpose()
+            }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn lookup_plus_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        parent: InodeId,
+        name: DentryName,
+    ) -> Result<Option<DentryWithAttr>, ClientError> {
+        match self.call(MetadataRpcRequest::LookupPlusAtSnapshot {
+            snapshot_id,
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+        })? {
+            MetadataRpcResult::Dentry { entry } => {
+                entry.map(|entry| wire_dentry(*entry)).transpose()
+            }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn read_dir_plus_page(
+        &self,
+        parent: InodeId,
+        after: Option<&DentryName>,
+        limit: usize,
+    ) -> Result<ClientReadDirPlusPage, ClientError> {
+        match self.call(MetadataRpcRequest::ReadDirPlusPage {
+            parent: parent.get(),
+            after_name_hex: after.map(encode_name_cursor),
+            limit,
+        })? {
+            MetadataRpcResult::DentriesPage {
+                entries,
+                next_name_hex,
+            } => Ok(ClientReadDirPlusPage {
+                entries: entries
+                    .into_iter()
+                    .map(wire_dentry)
+                    .collect::<Result<Vec<_>, _>>()?,
+                next_cursor: next_name_hex
+                    .as_deref()
+                    .map(decode_name_cursor)
+                    .transpose()
+                    .map_err(|err| ClientError::Protocol(err.to_string()))?,
+            }),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn read_dir_plus_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        parent: InodeId,
+    ) -> Result<Vec<DentryWithAttr>, ClientError> {
+        match self.call(MetadataRpcRequest::ReadDirPlusAtSnapshot {
+            snapshot_id,
+            parent: parent.get(),
+        })? {
+            MetadataRpcResult::Dentries { entries } => {
+                entries.into_iter().map(wire_dentry).collect()
+            }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn create_dir(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::CreateDir {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            mode,
+            uid,
+            gid,
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn create_file_in_dir(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::CreateFile {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            mode,
+            uid,
+            gid,
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn create_symlink(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        target: Vec<u8>,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::CreateSymlink {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            target,
+            mode,
+            uid,
+            gid,
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn update_attrs(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        changes: UpdateAttr,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::UpdateAttrs {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            changes: update_attr_to_wire(changes),
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn update_root_attrs(&self, changes: UpdateAttr) -> Result<InodeAttr, ClientError> {
+        match self.call(MetadataRpcRequest::UpdateRootAttrs {
+            changes: update_attr_to_wire(changes),
+        })? {
+            MetadataRpcResult::InodeAttr { attr: Some(attr) } => {
+                attr.into_inode_attr().map_err(protocol_error)
+            }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     pub fn mkdir(
         &self,
         path: &str,
@@ -792,6 +985,20 @@ impl MetadataClient {
         }
     }
 
+    pub fn remove_file(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::RemoveFile {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     pub fn remove_many(
         &self,
         paths: &[String],
@@ -819,6 +1026,20 @@ impl MetadataClient {
     pub fn rmdir(&self, path: &str) -> Result<DentryWithAttr, ClientError> {
         match self.call(MetadataRpcRequest::RemoveEmptyDirPath {
             path: path.to_owned(),
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn remove_empty_dir(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::RemoveEmptyDir {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
         })? {
             MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
             other => Err(unexpected_result(other)),
@@ -859,6 +1080,24 @@ impl MetadataClient {
         }
     }
 
+    pub fn rename_in_dir(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        new_parent: InodeId,
+        new_name: DentryName,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::Rename {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            new_parent: new_parent.get(),
+            new_name: rpc_name(&new_name)?,
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     pub fn rename_replace(
         &self,
         source: &str,
@@ -876,11 +1115,46 @@ impl MetadataClient {
         }
     }
 
+    pub fn rename_replace_in_dir(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        new_parent: InodeId,
+        new_name: DentryName,
+    ) -> Result<RenameReplaceResult, ClientError> {
+        match self.call(MetadataRpcRequest::RenameReplace {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            new_parent: new_parent.get(),
+            new_name: rpc_name(&new_name)?,
+        })? {
+            MetadataRpcResult::RenameReplace { entry, replaced } => Ok(RenameReplaceResult {
+                entry: wire_dentry(*entry)?,
+                replaced: replaced.map(|entry| wire_dentry(*entry)).transpose()?,
+            }),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     pub fn snapshot(&self, path: &str) -> Result<SnapshotPin, ClientError> {
         match self.call(MetadataRpcRequest::SnapshotSubtreePath {
             path: path.to_owned(),
         })? {
             MetadataRpcResult::Snapshot { snapshot } => wire_snapshot(snapshot),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn snapshot_subtree(&self, root: InodeId) -> Result<SnapshotPin, ClientError> {
+        match self.call(MetadataRpcRequest::SnapshotSubtree { root: root.get() })? {
+            MetadataRpcResult::Snapshot { snapshot } => wire_snapshot(snapshot),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn snapshot_pin(&self, snapshot_id: u64) -> Result<Option<SnapshotPin>, ClientError> {
+        match self.call(MetadataRpcRequest::SnapshotPin { snapshot_id })? {
+            MetadataRpcResult::SnapshotPin { snapshot } => snapshot.map(wire_snapshot).transpose(),
             other => Err(unexpected_result(other)),
         }
     }
@@ -962,6 +1236,47 @@ impl MetadataClient {
             path: path.to_owned(),
             offset,
             len,
+        })? {
+            MetadataRpcResult::FileBytes { bytes } => Ok(bytes),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn read_file_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        inode: InodeId,
+        offset: u64,
+        len: usize,
+    ) -> Result<Vec<u8>, ClientError> {
+        let len = u64::try_from(len)
+            .map_err(|_| ClientError::Protocol("snapshot read length exceeds u64".to_owned()))?;
+        match self.call(MetadataRpcRequest::ReadFileAtSnapshot {
+            snapshot_id,
+            inode: inode.get(),
+            offset,
+            len,
+        })? {
+            MetadataRpcResult::FileBytes { bytes } => Ok(bytes),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn read_symlink(&self, inode: InodeId) -> Result<Vec<u8>, ClientError> {
+        match self.call(MetadataRpcRequest::ReadSymlink { inode: inode.get() })? {
+            MetadataRpcResult::FileBytes { bytes } => Ok(bytes),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn read_symlink_at_snapshot(
+        &self,
+        snapshot_id: u64,
+        inode: InodeId,
+    ) -> Result<Vec<u8>, ClientError> {
+        match self.call(MetadataRpcRequest::ReadSymlinkAtSnapshot {
+            snapshot_id,
+            inode: inode.get(),
         })? {
             MetadataRpcResult::FileBytes { bytes } => Ok(bytes),
             other => Err(unexpected_result(other)),
@@ -1239,16 +1554,24 @@ fn request_requires_observed_position(request: &MetadataRpcRequest) -> bool {
     matches!(
         request,
         MetadataRpcRequest::GetAttr { .. }
+            | MetadataRpcRequest::GetAttrAtSnapshot { .. }
             | MetadataRpcRequest::LookupPlus { .. }
+            | MetadataRpcRequest::LookupPlusAtSnapshot { .. }
             | MetadataRpcRequest::LookupPath { .. }
             | MetadataRpcRequest::StatPath { .. }
             | MetadataRpcRequest::ReadDirPlus { .. }
             | MetadataRpcRequest::ReadDirPlusPage { .. }
+            | MetadataRpcRequest::ReadDirPlusAtSnapshot { .. }
             | MetadataRpcRequest::ReadDirPlusPath { .. }
             | MetadataRpcRequest::ReadDirPlusPathPage { .. }
             | MetadataRpcRequest::ReadIndexedPathPage { .. }
+            | MetadataRpcRequest::ReadFileAtSnapshot { .. }
+            | MetadataRpcRequest::ReadFilePathAtSnapshot { .. }
+            | MetadataRpcRequest::ReadSymlink { .. }
+            | MetadataRpcRequest::ReadSymlinkAtSnapshot { .. }
             | MetadataRpcRequest::ReadBodyPlan { .. }
             | MetadataRpcRequest::ReadPathPlan { .. }
+            | MetadataRpcRequest::SnapshotPin { .. }
     )
 }
 
@@ -1408,6 +1731,17 @@ fn rpc_read_error(err: io::Error) -> ClientError {
 fn rpc_name(name: &DentryName) -> Result<String, ClientError> {
     String::from_utf8(name.as_bytes().to_vec())
         .map_err(|_| ClientError::InvalidName("metadata rpc requires utf-8 names".to_owned()))
+}
+
+fn update_attr_to_wire(changes: UpdateAttr) -> WireUpdateAttr {
+    WireUpdateAttr {
+        mode: changes.mode,
+        uid: changes.uid,
+        gid: changes.gid,
+        size: changes.size,
+        mtime_ms: changes.mtime_ms,
+        ctime_ms: changes.ctime_ms,
+    }
 }
 
 fn wire_dentry(entry: WireDentryWithAttr) -> Result<DentryWithAttr, ClientError> {

@@ -9,7 +9,7 @@ use std::thread;
 use std::time::Duration;
 
 use nokvfs_cluster::{MetadataRaftRpcClient, SharedLogError};
-use nokvfs_meta::{CreateInDirPathBatch, DentryWithAttr, MetadError, PreparedArtifact};
+use nokvfs_meta::{CreateInDirPathBatch, DentryWithAttr, MetadError, PreparedArtifact, UpdateAttr};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_envelope, decode_name_cursor, decode_request, encode_envelope, encode_name_cursor,
@@ -20,7 +20,7 @@ use nokvfs_protocol::{
     WireMetadataRaftAppendEntriesResponse, WireMetadataRaftInstallSnapshotRequest,
     WireMetadataRaftInstallSnapshotResponse, WireMetadataRaftVoteRequest,
     WireMetadataRaftVoteResponse, WireMetadataReceipt, WireObjectReadBlock, WirePathMetadata,
-    WirePreparedArtifact,
+    WirePreparedArtifact, WireUpdateAttr,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -1229,10 +1229,34 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     .map(nokvfs_protocol::WireInodeAttr::from_inode_attr),
             })
         }
+        MetadataRpcRequest::GetAttrAtSnapshot { snapshot_id, inode } => {
+            let attr = server
+                .service()
+                .get_attr_at_snapshot(snapshot_id, inode_id(inode)?)?;
+            Ok(MetadataRpcResult::InodeAttr {
+                attr: attr
+                    .as_ref()
+                    .map(nokvfs_protocol::WireInodeAttr::from_inode_attr),
+            })
+        }
         MetadataRpcRequest::LookupPlus { parent, name } => {
             let entry = server
                 .service()
                 .lookup_plus(inode_id(parent)?, &dentry_name(name)?)?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: entry.as_ref().map(|entry| Box::new(wire_dentry(entry))),
+            })
+        }
+        MetadataRpcRequest::LookupPlusAtSnapshot {
+            snapshot_id,
+            parent,
+            name,
+        } => {
+            let entry = server.service().lookup_plus_at_snapshot(
+                snapshot_id,
+                inode_id(parent)?,
+                &dentry_name(name)?,
+            )?;
             Ok(MetadataRpcResult::Dentry {
                 entry: entry.as_ref().map(|entry| Box::new(wire_dentry(entry))),
             })
@@ -1272,6 +1296,17 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             Ok(MetadataRpcResult::DentriesPage {
                 entries: page.entries.iter().map(wire_dentry).collect(),
                 next_name_hex: page.next_cursor.as_ref().map(encode_name_cursor),
+            })
+        }
+        MetadataRpcRequest::ReadDirPlusAtSnapshot {
+            snapshot_id,
+            parent,
+        } => {
+            let entries = server
+                .service()
+                .read_dir_plus_at_snapshot(snapshot_id, inode_id(parent)?)?;
+            Ok(MetadataRpcResult::Dentries {
+                entries: entries.iter().map(wire_dentry).collect(),
             })
         }
         MetadataRpcRequest::ReadDirPlusPath { path } => {
@@ -1361,6 +1396,46 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             )?;
             Ok(MetadataRpcResult::Dentry {
                 entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
+        MetadataRpcRequest::CreateSymlink {
+            parent,
+            name,
+            target,
+            mode,
+            uid,
+            gid,
+        } => {
+            let entry = server.service().create_symlink(
+                inode_id(parent)?,
+                dentry_name(name)?,
+                target,
+                mode,
+                uid,
+                gid,
+            )?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
+        MetadataRpcRequest::UpdateAttrs {
+            parent,
+            name,
+            changes,
+        } => {
+            let entry = server.service().update_attrs(
+                inode_id(parent)?,
+                &dentry_name(name)?,
+                update_attr(changes),
+            )?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
+        MetadataRpcRequest::UpdateRootAttrs { changes } => {
+            let attr = server.service().update_root_attrs(update_attr(changes))?;
+            Ok(MetadataRpcResult::InodeAttr {
+                attr: Some(nokvfs_protocol::WireInodeAttr::from_inode_attr(&attr)),
             })
         }
         MetadataRpcRequest::CreateFilePath {
@@ -1485,6 +1560,14 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 snapshot: nokvfs_protocol::WireSnapshotPin::from_snapshot_pin(&snapshot),
             })
         }
+        MetadataRpcRequest::SnapshotPin { snapshot_id } => {
+            let snapshot = server.service().snapshot_pin(snapshot_id)?;
+            Ok(MetadataRpcResult::SnapshotPin {
+                snapshot: snapshot
+                    .as_ref()
+                    .map(nokvfs_protocol::WireSnapshotPin::from_snapshot_pin),
+            })
+        }
         MetadataRpcRequest::SnapshotSubtreePath { path } => {
             let snapshot = server.service().snapshot_subtree_path(&path)?;
             Ok(MetadataRpcResult::Snapshot {
@@ -1569,6 +1652,35 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 server
                     .service()
                     .read_file_path_at_snapshot(snapshot_id, &path, offset, len)?;
+            Ok(MetadataRpcResult::FileBytes { bytes })
+        }
+        MetadataRpcRequest::ReadFileAtSnapshot {
+            snapshot_id,
+            inode,
+            offset,
+            len,
+        } => {
+            let len = usize::try_from(len).map_err(|_| {
+                ServerError::Metadata(MetadError::Codec(
+                    "snapshot read length exceeds platform limit".to_owned(),
+                ))
+            })?;
+            let bytes = server.service().read_file_at_snapshot(
+                snapshot_id,
+                inode_id(inode)?,
+                offset,
+                len,
+            )?;
+            Ok(MetadataRpcResult::FileBytes { bytes })
+        }
+        MetadataRpcRequest::ReadSymlink { inode } => {
+            let bytes = server.service().read_symlink(inode_id(inode)?)?;
+            Ok(MetadataRpcResult::FileBytes { bytes })
+        }
+        MetadataRpcRequest::ReadSymlinkAtSnapshot { snapshot_id, inode } => {
+            let bytes = server
+                .service()
+                .read_symlink_at_snapshot(snapshot_id, inode_id(inode)?)?;
             Ok(MetadataRpcResult::FileBytes { bytes })
         }
         MetadataRpcRequest::PrepareArtifact {
@@ -1731,20 +1843,27 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         MetadataRpcRequest::Batch { requests } => requests.iter().any(refreshes_metadata_view),
         MetadataRpcRequest::RequireApplied { request, .. } => refreshes_metadata_view(request),
         MetadataRpcRequest::GetAttr { .. }
+        | MetadataRpcRequest::GetAttrAtSnapshot { .. }
         | MetadataRpcRequest::LookupPlus { .. }
+        | MetadataRpcRequest::LookupPlusAtSnapshot { .. }
         | MetadataRpcRequest::LookupPath { .. }
         | MetadataRpcRequest::StatPath { .. }
         | MetadataRpcRequest::ReadDirPlus { .. }
         | MetadataRpcRequest::ReadDirPlusPage { .. }
+        | MetadataRpcRequest::ReadDirPlusAtSnapshot { .. }
         | MetadataRpcRequest::ReadDirPlusPath { .. }
         | MetadataRpcRequest::ReadDirPlusPathPage { .. }
         | MetadataRpcRequest::ReadIndexedPathPage { .. }
         | MetadataRpcRequest::StatPathAtSnapshot { .. }
         | MetadataRpcRequest::ReadDirPlusPathAtSnapshot { .. }
+        | MetadataRpcRequest::ReadFileAtSnapshot { .. }
         | MetadataRpcRequest::ReadFilePathAtSnapshot { .. }
+        | MetadataRpcRequest::ReadSymlink { .. }
+        | MetadataRpcRequest::ReadSymlinkAtSnapshot { .. }
         | MetadataRpcRequest::ReadBodyPlan { .. }
         | MetadataRpcRequest::ReadPathPlan { .. }
         | MetadataRpcRequest::ReadArtifactPathAtSnapshot { .. }
+        | MetadataRpcRequest::SnapshotPin { .. }
         | MetadataRpcRequest::ReadMetadataLog { .. }
         | MetadataRpcRequest::ReadMetadataCheckpoint { .. }
         | MetadataRpcRequest::PlanMetadataBootstrap { .. } => true,
@@ -1752,6 +1871,9 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::CreateDir { .. }
         | MetadataRpcRequest::CreateDirPath { .. }
         | MetadataRpcRequest::CreateFile { .. }
+        | MetadataRpcRequest::CreateSymlink { .. }
+        | MetadataRpcRequest::UpdateAttrs { .. }
+        | MetadataRpcRequest::UpdateRootAttrs { .. }
         | MetadataRpcRequest::CreateFilePath { .. }
         | MetadataRpcRequest::CreateFilesInDirPath { .. }
         | MetadataRpcRequest::RemoveFile { .. }
@@ -1782,6 +1904,17 @@ fn inode_id(raw: u64) -> Result<InodeId, MetadError> {
 
 fn dentry_name(name: String) -> Result<DentryName, MetadError> {
     DentryName::new(name.into_bytes()).map_err(|err| MetadError::Codec(err.to_string()))
+}
+
+fn update_attr(wire: WireUpdateAttr) -> UpdateAttr {
+    UpdateAttr {
+        mode: wire.mode,
+        uid: wire.uid,
+        gid: wire.gid,
+        size: wire.size,
+        mtime_ms: wire.mtime_ms,
+        ctime_ms: wire.ctime_ms,
+    }
 }
 
 fn wire_dentry(entry: &DentryWithAttr) -> WireDentryWithAttr {
@@ -2010,6 +2143,14 @@ mod tests {
         }
     }
 
+    fn expect_attr(envelope: MetadataRpcEnvelope) -> nokvfs_protocol::WireInodeAttr {
+        assert!(envelope.ok, "unexpected error envelope: {envelope:?}");
+        match envelope.result.unwrap() {
+            MetadataRpcResult::InodeAttr { attr: Some(attr) } => attr,
+            other => panic!("unexpected attr result: {other:?}"),
+        }
+    }
+
     fn metadata_raft_vote_request(term: u64, voted_for: u64) -> WireMetadataRaftVoteRequest {
         WireMetadataRaftVoteRequest {
             vote: WireMetadataRaftVote {
@@ -2045,6 +2186,58 @@ mod tests {
         };
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].dentry.name_hex, "72756e73");
+    }
+
+    #[test]
+    fn rpc_supports_remote_fuse_inode_operations() {
+        let server = test_server();
+        let file = expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateFile {
+                parent: 1,
+                name: "checkpoint.bin".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        let updated = expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::UpdateAttrs {
+                parent: 1,
+                name: "checkpoint.bin".to_owned(),
+                changes: WireUpdateAttr {
+                    size: Some(128),
+                    ..WireUpdateAttr::default()
+                },
+            },
+        ));
+        assert_eq!(updated.attr.inode, file.attr.inode);
+        assert_eq!(updated.attr.size, 128);
+
+        let root = expect_attr(request_envelope(
+            &server,
+            MetadataRpcRequest::UpdateRootAttrs {
+                changes: WireUpdateAttr {
+                    mode: Some(0o700),
+                    ..WireUpdateAttr::default()
+                },
+            },
+        ));
+        assert_eq!(root.mode, 0o700);
+
+        let snapshot = request_envelope(&server, MetadataRpcRequest::SnapshotSubtree { root: 1 });
+        let snapshot_id = match snapshot.result.unwrap() {
+            MetadataRpcResult::Snapshot { snapshot } => snapshot.snapshot_id,
+            other => panic!("unexpected snapshot result: {other:?}"),
+        };
+        let pin = request_envelope(&server, MetadataRpcRequest::SnapshotPin { snapshot_id });
+        match pin.result.unwrap() {
+            MetadataRpcResult::SnapshotPin {
+                snapshot: Some(snapshot),
+            } => assert_eq!(snapshot.snapshot_id, snapshot_id),
+            other => panic!("unexpected snapshot pin result: {other:?}"),
+        }
     }
 
     #[test]
