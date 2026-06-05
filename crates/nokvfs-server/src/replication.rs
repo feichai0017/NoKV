@@ -549,10 +549,8 @@ fn record_max(value: &AtomicU64, candidate: u64) {
 }
 
 fn record_elapsed_ns(value: &AtomicU64, started: Instant) {
-    value.fetch_add(
-        started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
-        Ordering::Relaxed,
-    );
+    let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
+    value.fetch_add(elapsed.max(1), Ordering::Relaxed);
 }
 
 fn append_peer_with_catchup_from_log(
