@@ -709,6 +709,30 @@ impl MetadataClient {
         }
     }
 
+    pub fn remove_many(
+        &self,
+        paths: &[String],
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        let mut entries = Vec::with_capacity(paths.len());
+        for chunk in paths.chunks(MAX_BATCH_RPC_REQUESTS) {
+            let requests = chunk
+                .iter()
+                .map(|path| MetadataRpcRequest::RemoveFilePath { path: path.clone() })
+                .collect();
+            let results: Vec<Result<MetadataRpcResult, ClientError>> =
+                match self.call(MetadataRpcRequest::Batch { requests })? {
+                    MetadataRpcResult::Batch { results } => {
+                        results.into_iter().map(envelope_result).collect()
+                    }
+                    other => return Err(unexpected_result(other)),
+                };
+            for result in results {
+                entries.push(result.and_then(dentry_result));
+            }
+        }
+        Ok(entries)
+    }
+
     pub fn rmdir(&self, path: &str) -> Result<DentryWithAttr, ClientError> {
         match self.call(MetadataRpcRequest::RemoveEmptyDirPath {
             path: path.to_owned(),
@@ -1923,6 +1947,44 @@ mod tests {
         let client = MetadataClient::connect(addr);
         let paths = vec!["/runs/a.bin".to_owned(), "/runs/b.bin".to_owned()];
         let entries = client.create_files(&paths, 0o644, 1000, 1000).unwrap();
+        let entries = entries.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
+        assert_eq!(entries[0].attr.inode.get(), 40);
+        assert_eq!(entries[1].attr.inode.get(), 41);
+    }
+
+    #[test]
+    fn service_remove_many_uses_single_batch_frame() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            match request {
+                MetadataRpcRequest::Batch { requests } => {
+                    assert_eq!(requests.len(), 2);
+                    assert!(matches!(
+                        &requests[0],
+                        MetadataRpcRequest::RemoveFilePath { path } if path == "/runs/a.bin"
+                    ));
+                    assert!(matches!(
+                        &requests[1],
+                        MetadataRpcRequest::RemoveFilePath { path } if path == "/runs/b.bin"
+                    ));
+                }
+                other => panic!("unexpected request: {other:?}"),
+            }
+            let response = response_body(
+                r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
+            );
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+        });
+        let client = MetadataClient::connect(addr);
+        let paths = vec!["/runs/a.bin".to_owned(), "/runs/b.bin".to_owned()];
+        let entries = client.remove_many(&paths).unwrap();
         let entries = entries.into_iter().collect::<Result<Vec<_>, _>>().unwrap();
         assert_eq!(entries[0].attr.inode.get(), 40);
         assert_eq!(entries[1].attr.inode.get(), 41);

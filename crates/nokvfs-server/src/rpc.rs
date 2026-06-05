@@ -589,7 +589,26 @@ fn execute_batch(
     let mut iter = requests.into_iter().peekable();
     while let Some(request) = iter.next() {
         let Some(parts) = create_path_parts(&request) else {
-            results.push(execute_envelope(server, request));
+            let Some(parts) = remove_file_path_parts(&request) else {
+                results.push(execute_envelope(server, request));
+                continue;
+            };
+            let mut group = RemoveFilePathGroup::from_parts(parts);
+            while let Some(next) = iter.peek() {
+                let Some(next_parts) = remove_file_path_parts(next) else {
+                    break;
+                };
+                if !group.can_absorb(&next_parts) {
+                    break;
+                }
+                iter.next();
+                group.names.push(next_parts.name);
+            }
+            results.extend(remove_file_path_batch_envelopes(
+                server,
+                &group.parent_path,
+                group.names,
+            ));
             continue;
         };
 
@@ -760,6 +779,29 @@ impl CreatePathGroup {
     }
 }
 
+struct RemoveFilePathParts {
+    parent_path: String,
+    name: String,
+}
+
+struct RemoveFilePathGroup {
+    parent_path: String,
+    names: Vec<String>,
+}
+
+impl RemoveFilePathGroup {
+    fn from_parts(parts: RemoveFilePathParts) -> Self {
+        Self {
+            parent_path: parts.parent_path,
+            names: vec![parts.name],
+        }
+    }
+
+    fn can_absorb(&self, parts: &RemoveFilePathParts) -> bool {
+        self.parent_path == parts.parent_path && !self.names.contains(&parts.name)
+    }
+}
+
 fn create_path_batch_envelopes(
     server: &Server,
     kind: CreatePathKind,
@@ -807,6 +849,49 @@ fn create_path_batch_envelopes(
                 execute_envelope(
                     server,
                     create_path_request(kind, parent_path, &name, mode, uid, gid),
+                )
+            })
+            .collect(),
+    }
+}
+
+fn remove_file_path_batch_envelopes(
+    server: &Server,
+    parent_path: &str,
+    names: Vec<String>,
+) -> Vec<MetadataRpcEnvelope> {
+    let parsed = names
+        .iter()
+        .map(|name| dentry_name(name.clone()))
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(ServerError::Metadata);
+    let committed = parsed.and_then(|names| {
+        server
+            .service()
+            .remove_files_in_dir_path(parent_path, names)
+            .map_err(ServerError::Metadata)
+    });
+    match committed {
+        Ok(results) => results
+            .into_iter()
+            .map(|result| match result {
+                Ok(entry) => ok_envelope(
+                    server,
+                    MetadataRpcResult::Dentry {
+                        entry: Some(Box::new(wire_dentry(&entry))),
+                    },
+                ),
+                Err(err) => err_envelope(ServerError::Metadata(err)),
+            })
+            .collect(),
+        Err(_) => names
+            .into_iter()
+            .map(|name| {
+                execute_envelope(
+                    server,
+                    MetadataRpcRequest::RemoveFilePath {
+                        path: child_path(parent_path, &name),
+                    },
                 )
             })
             .collect(),
@@ -886,6 +971,16 @@ fn create_path_group_envelopes(
                 )
             })
             .collect(),
+    }
+}
+
+fn remove_file_path_parts(request: &MetadataRpcRequest) -> Option<RemoveFilePathParts> {
+    match request {
+        MetadataRpcRequest::RemoveFilePath { path } => {
+            let (parent_path, name) = split_parent_path(path)?;
+            Some(RemoveFilePathParts { parent_path, name })
+        }
+        _ => None,
     }
 }
 
@@ -2765,6 +2860,137 @@ mod tests {
             other => panic!("unexpected readdir result: {other:?}"),
         };
         assert_eq!(entries.len(), 2);
+    }
+
+    #[test]
+    fn rpc_batch_coalesces_same_parent_remove_file_paths() {
+        let server = test_server();
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        let created = request_envelope(
+            &server,
+            MetadataRpcRequest::Batch {
+                requests: vec![
+                    MetadataRpcRequest::CreateFilePath {
+                        path: "/runs/a.bin".to_owned(),
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                    MetadataRpcRequest::CreateFilePath {
+                        path: "/runs/b.bin".to_owned(),
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                    MetadataRpcRequest::CreateFilePath {
+                        path: "/runs/keep.bin".to_owned(),
+                        mode: 0o644,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                ],
+            },
+        );
+        let created = match created.result.unwrap() {
+            MetadataRpcResult::Batch { results } => results,
+            other => panic!("unexpected create batch result: {other:?}"),
+        };
+        assert!(created.iter().all(|result| result.ok));
+        let before = server.service().metadata_store_stats();
+
+        let removed = request_envelope(
+            &server,
+            MetadataRpcRequest::Batch {
+                requests: vec![
+                    MetadataRpcRequest::RemoveFilePath {
+                        path: "/runs/a.bin".to_owned(),
+                    },
+                    MetadataRpcRequest::RemoveFilePath {
+                        path: "/runs/b.bin".to_owned(),
+                    },
+                ],
+            },
+        );
+
+        let results = match removed.result.unwrap() {
+            MetadataRpcResult::Batch { results } => results,
+            other => panic!("unexpected remove batch result: {other:?}"),
+        };
+        let after = server.service().metadata_store_stats();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.ok));
+        assert_eq!(after.commit_total - before.commit_total, 2);
+        assert_eq!(after.atomic_apply_total - before.atomic_apply_total, 1);
+        assert_eq!(
+            after.atomic_apply_command_total - before.atomic_apply_command_total,
+            2
+        );
+        let listed = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadDirPlusPath {
+                path: "/runs".to_owned(),
+            },
+        );
+        let entries = match listed.result.unwrap() {
+            MetadataRpcResult::Dentries { entries } => entries,
+            other => panic!("unexpected readdir result: {other:?}"),
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].dentry.name_hex, "6b6565702e62696e");
+    }
+
+    #[test]
+    fn rpc_batch_keeps_duplicate_remove_file_paths_independent() {
+        let server = test_server();
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateFilePath {
+                path: "/runs/a.bin".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+
+        let removed = request_envelope(
+            &server,
+            MetadataRpcRequest::Batch {
+                requests: vec![
+                    MetadataRpcRequest::RemoveFilePath {
+                        path: "/runs/a.bin".to_owned(),
+                    },
+                    MetadataRpcRequest::RemoveFilePath {
+                        path: "/runs/a.bin".to_owned(),
+                    },
+                ],
+            },
+        );
+
+        let results = match removed.result.unwrap() {
+            MetadataRpcResult::Batch { results } => results,
+            other => panic!("unexpected remove batch result: {other:?}"),
+        };
+        assert_eq!(results.len(), 2);
+        assert!(results[0].ok);
+        assert!(!results[1].ok);
+        assert_eq!(results[1].error_kind, Some(WireMetadataError::NotFound));
     }
 
     #[test]

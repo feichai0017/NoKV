@@ -69,6 +69,17 @@ pub trait ArtifactBackend {
 
     fn remove_file_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError>;
 
+    fn remove_file_paths(
+        &self,
+        absolute_paths: &[String],
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        let mut results = Vec::with_capacity(absolute_paths.len());
+        for path in absolute_paths {
+            results.push(self.remove_file_path(path));
+        }
+        Ok(results)
+    }
+
     fn remove_empty_dir_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError>;
 }
 
@@ -255,8 +266,26 @@ where
 
     fn delete_directory_children(&self, normalized_path: &str) -> Result<(), ClientError> {
         let children = self.list(normalized_path)?;
+        let mut file_paths = Vec::new();
+        let mut directories = Vec::new();
         for child in children {
-            self.delete(&child.path)?;
+            if child.is_dir {
+                directories.push(child.path);
+            } else {
+                file_paths.push(absolute_artifact_path(&child.path));
+            }
+        }
+        if !file_paths.is_empty() {
+            for result in self.backend.remove_file_paths(&file_paths)? {
+                match result {
+                    Ok(_) => {}
+                    Err(err) if is_not_found(&err) => {}
+                    Err(err) => return Err(err),
+                }
+            }
+        }
+        for directory in directories {
+            self.delete(&directory)?;
         }
         Ok(())
     }
@@ -324,6 +353,13 @@ where
 
     fn remove_file_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
         (*self).remove_file_path(absolute_path)
+    }
+
+    fn remove_file_paths(
+        &self,
+        absolute_paths: &[String],
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        (*self).remove_file_paths(absolute_paths)
     }
 
     fn remove_empty_dir_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
@@ -472,6 +508,13 @@ where
 
     fn remove_file_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
         self.metadata().remove(absolute_path)
+    }
+
+    fn remove_file_paths(
+        &self,
+        absolute_paths: &[String],
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        self.metadata().remove_many(absolute_paths)
     }
 
     fn remove_empty_dir_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {

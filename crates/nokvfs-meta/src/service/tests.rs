@@ -1234,6 +1234,59 @@ fn create_dirs_in_dir_coalesces_into_one_metadata_command() {
 }
 
 #[test]
+fn remove_files_in_dir_coalesces_into_one_holt_apply() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service
+        .create_files_in_dir_path(
+            "/runs",
+            vec![
+                DentryName::new(b"a.bin".to_vec()).unwrap(),
+                DentryName::new(b"b.bin".to_vec()).unwrap(),
+                DentryName::new(b"keep.bin".to_vec()).unwrap(),
+            ],
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap();
+    let before = metadata.metadata_store_stats();
+
+    let removed = service
+        .remove_files_in_dir_path(
+            "/runs",
+            vec![
+                DentryName::new(b"a.bin".to_vec()).unwrap(),
+                DentryName::new(b"b.bin".to_vec()).unwrap(),
+            ],
+        )
+        .unwrap();
+
+    let after = metadata.metadata_store_stats();
+    assert_eq!(removed.len(), 2);
+    assert!(removed.iter().all(Result::is_ok));
+    assert_eq!(after.commit_total - before.commit_total, 2);
+    assert_eq!(after.current_delete_total - before.current_delete_total, 6);
+    assert_eq!(after.history_write_total - before.history_write_total, 0);
+    assert_eq!(after.watch_write_total - before.watch_write_total, 2);
+    assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 2);
+    assert_eq!(after.atomic_apply_total - before.atomic_apply_total, 1);
+    assert_eq!(
+        after.atomic_apply_command_total - before.atomic_apply_command_total,
+        2
+    );
+    let listed = service.read_dir_plus_path("/runs").unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].dentry.name.as_bytes(), b"keep.bin");
+}
+
+#[test]
 fn read_dir_plus_page_returns_cursor_without_materializing_full_directory() {
     let metadata = HoltMetadataStore::open_memory().unwrap();
     let service = NoKvFs::new(

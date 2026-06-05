@@ -5,6 +5,11 @@ struct PreparedCreateBatch {
     command: MetadataCommand,
 }
 
+struct PreparedRemoveFile {
+    entry: DentryWithAttr,
+    command: MetadataCommand,
+}
+
 impl<M, O> NoKvFs<M, O>
 where
     M: MetadataStore,
@@ -590,13 +595,25 @@ where
         name: &DentryName,
         path_index: Option<Vec<u8>>,
     ) -> Result<DentryWithAttr, MetadError> {
+        let version = self.next_version()?;
+        let prepared = self.prepare_remove_file(parent, name, path_index, version)?;
+        self.commit_metadata(prepared.command)?;
+        Ok(prepared.entry)
+    }
+
+    fn prepare_remove_file(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+        path_index: Option<Vec<u8>>,
+        version: Version,
+    ) -> Result<PreparedRemoveFile, MetadError> {
         let (entry, dentry_version) = self
             .lookup_plus_for_write_plan(parent, name)?
             .ok_or(MetadError::NotFound)?;
         if entry.attr.file_type == FileType::Directory {
             return Err(MetadError::NotFile);
         }
-        let version = self.next_version()?;
         let key = dentry_key(self.mount, parent, name);
         let mut mutations = vec![
             delete_mutation(RecordFamily::Dentry, key.clone()),
@@ -613,7 +630,7 @@ where
                 &HashSet::new(),
             )?);
         }
-        self.commit_metadata(MetadataCommand {
+        let command = MetadataCommand {
             request_id: request_id(b"remove-file", self.mount, entry.attr.inode, version),
             kind: CommandKind::RemoveFile,
             read_version: predecessor(version)?,
@@ -643,8 +660,8 @@ where
                     version: version.get(),
                 },
             )],
-        })?;
-        Ok(entry)
+        };
+        Ok(PreparedRemoveFile { entry, command })
     }
 
     pub fn remove_file_path(&self, path: &str) -> Result<DentryWithAttr, MetadError> {
@@ -654,6 +671,57 @@ where
         };
         let parent = self.resolve_components_as_directory(parent_components)?;
         self.remove_file_inner(parent, name, Some(path_index_key(self.mount, &components)))
+    }
+
+    pub fn remove_files_in_dir_path(
+        &self,
+        parent_path: &str,
+        names: Vec<DentryName>,
+    ) -> Result<Vec<Result<DentryWithAttr, MetadError>>, MetadError> {
+        if names.is_empty() {
+            return Ok(Vec::new());
+        }
+        ensure_unique_names(&names)?;
+        let parent_components = parse_absolute_path(parent_path)?;
+        let parent = self.resolve_components_as_directory(&parent_components)?;
+        let mut results = Vec::with_capacity(names.len());
+        results.resize_with(names.len(), || None);
+        let mut prepared = Vec::new();
+        for (index, name) in names.into_iter().enumerate() {
+            let version = self.next_version()?;
+            let mut path_components = parent_components.clone();
+            path_components.push(name.clone());
+            match self.prepare_remove_file(
+                parent,
+                &name,
+                Some(path_index_key(self.mount, &path_components)),
+                version,
+            ) {
+                Ok(remove) => prepared.push((index, remove)),
+                Err(err) => results[index] = Some(Err(err)),
+            }
+        }
+
+        let commands = prepared
+            .iter()
+            .map(|(_, remove)| remove.command.clone())
+            .collect::<Vec<_>>();
+        let committed = self.metadata.commit_independent_batch(&commands);
+        for ((index, remove), result) in prepared.into_iter().zip(committed) {
+            results[index] = Some(result.map(|_| remove.entry).map_err(Into::into));
+        }
+
+        Ok(results
+            .into_iter()
+            .map(|result| {
+                result.unwrap_or_else(|| {
+                    Err(
+                        MetadataError::Backend("batched remove result was not recorded".to_owned())
+                            .into(),
+                    )
+                })
+            })
+            .collect())
     }
 
     pub fn remove_empty_dir(
