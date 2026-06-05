@@ -113,6 +113,250 @@ fn path_methods_resolve_current_namespace_on_server_side() {
 }
 
 #[test]
+fn namespace_cards_report_directory_and_file_metadata() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service
+        .publish_artifact(PublishArtifact {
+            parent: service.resolve_directory_path("/runs").unwrap(),
+            name: DentryName::new(b"metrics.json".to_vec()).unwrap(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "application/json".to_owned(),
+            manifest_id: "runs/metrics.json".to_owned(),
+            bytes: br#"["loss","accuracy"]"#.to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+
+    let runs = service.stat_card("/runs").unwrap().unwrap();
+    assert_eq!(runs.path, "/runs");
+    assert_eq!(runs.kind, NamespaceCardKind::Directory);
+    assert_eq!(runs.entry_count, Some(1));
+    assert!(runs.evidence.contains("nokv-native:///runs@generation:"));
+    assert!(runs.snapshot_id.is_some());
+    assert!(runs.catalog.filterable.iter().any(|field| {
+        field.field == NamespaceFindField::FileName
+            && field.operators.contains(&NamespacePredicateOp::Suffix)
+    }));
+    assert!(runs
+        .catalog
+        .sortable
+        .contains(&NamespaceSortField::SizeBytes));
+    assert!(runs
+        .catalog
+        .facetable
+        .contains(&NamespaceFindField::FileType));
+    assert!(runs.catalog.projections.contains(&NamespaceInclude::Body));
+
+    let file = service.stat_card("/runs/metrics.json").unwrap().unwrap();
+    assert_eq!(file.kind, NamespaceCardKind::File);
+    assert_eq!(file.size_bytes, Some(19));
+    assert_eq!(file.body.as_ref().unwrap().content_type, "application/json");
+    assert_eq!(
+        file.schema.as_ref().unwrap().record_type,
+        NamespaceRecordType::JsonArray
+    );
+    assert_eq!(file.record_count.as_ref().unwrap().count, 2);
+    assert_eq!(
+        file.record_count.as_ref().unwrap().provenance,
+        RecordCountProvenance::StructuredBody
+    );
+    assert_eq!(
+        file.sample,
+        vec!["\"loss\"".to_owned(), "\"accuracy\"".to_owned()]
+    );
+}
+
+#[test]
+fn namespace_list_pages_are_cursor_bounded() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service
+        .create_files_in_dir_path(
+            "/runs",
+            vec![
+                DentryName::new(b"a.txt".to_vec()).unwrap(),
+                DentryName::new(b"b.txt".to_vec()).unwrap(),
+            ],
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap();
+
+    let page = service
+        .list_page(
+            "/runs",
+            NamespaceListOptions {
+                limit: 1,
+                ..NamespaceListOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(page.path, "/runs");
+    assert_eq!(page.entry_count, 2);
+    assert_eq!(page.entries.len(), 1);
+    assert_eq!(page.entries[0].name, "a.txt");
+    assert_eq!(page.next_cursor, Some("1".to_owned()));
+    assert!(page.truncated);
+
+    let next = service
+        .list_page(
+            "/runs",
+            NamespaceListOptions {
+                limit: 1,
+                cursor: Some(page.next_cursor.unwrap()),
+            },
+        )
+        .unwrap();
+    assert_eq!(next.entries[0].name, "b.txt");
+    assert_eq!(next.next_cursor, None);
+    assert!(!next.truncated);
+}
+
+#[test]
+fn namespace_find_uses_declared_predicates_and_sort_fields() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let parent = service.resolve_directory_path("/runs").unwrap();
+    for (name, bytes) in [
+        ("small.stderr.txt", b"err".as_slice()),
+        ("large.stderr.txt", b"larger error".as_slice()),
+        ("stdout.txt", b"out".as_slice()),
+    ] {
+        service
+            .publish_artifact(PublishArtifact {
+                parent,
+                name: DentryName::new(name.as_bytes().to_vec()).unwrap(),
+                producer: "unit-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                content_type: "text/plain".to_owned(),
+                manifest_id: format!("runs/{name}"),
+                bytes: bytes.to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+    }
+
+    let result = service
+        .find_paths(NamespaceFindRequest {
+            path: "/runs".to_owned(),
+            predicates: vec![NamespacePredicate {
+                field: NamespaceFindField::FileName,
+                op: NamespacePredicateOp::Suffix,
+                value: NamespacePredicateValue::String("stderr.txt".to_owned()),
+            }],
+            sort: vec![NamespaceSort {
+                field: NamespaceSortField::SizeBytes,
+                direction: NamespaceSortDirection::Desc,
+            }],
+            include: Vec::new(),
+            limit: 1,
+            cursor: None,
+        })
+        .unwrap();
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].path, "/runs/large.stderr.txt");
+    assert_eq!(result.matches[0].size_bytes, Some(12));
+    assert_eq!(result.next_cursor, Some("1".to_owned()));
+    assert!(result.truncated);
+    assert!(result.scanned_entries >= 3);
+    assert!(result.matches[0].body.is_none());
+    assert!(result.matches[0].schema.is_none());
+    assert!(result.matches[0].sample.is_empty());
+
+    let unsupported = service.find_paths(NamespaceFindRequest {
+        path: "/runs".to_owned(),
+        predicates: vec![NamespacePredicate {
+            field: NamespaceFindField::BodyContentType,
+            op: NamespacePredicateOp::GreaterThan,
+            value: NamespacePredicateValue::String("text/plain".to_owned()),
+        }],
+        sort: Vec::new(),
+        include: Vec::new(),
+        limit: 10,
+        cursor: None,
+    });
+    assert!(matches!(unsupported, Err(MetadError::InvalidQuery(_))));
+}
+
+#[test]
+fn namespace_read_defaults_to_structured_json_pages_and_requires_bytes_format_for_raw() {
+    let service = service();
+    let published = service
+        .publish_artifact(PublishArtifact {
+            parent: InodeId::root(),
+            name: DentryName::new(b"index.json".to_vec()).unwrap(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "application/json".to_owned(),
+            manifest_id: "index.json".to_owned(),
+            bytes: br#"["a","b","c"]"#.to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+
+    let structured = service
+        .read_page(
+            "/index.json",
+            NamespaceReadOptions {
+                limit: 2,
+                ..NamespaceReadOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(structured.format, NamespaceReadFormat::Structured);
+    assert_eq!(structured.record_count, Some(3));
+    assert_eq!(
+        structured.items,
+        vec![
+            NamespaceReadItem {
+                index: 0,
+                value_json: "\"a\"".to_owned(),
+                evidence: format!(
+                    "nokv-native:///index.json@generation:{}#item:0",
+                    published.attr.generation
+                ),
+            },
+            NamespaceReadItem {
+                index: 1,
+                value_json: "\"b\"".to_owned(),
+                evidence: format!(
+                    "nokv-native:///index.json@generation:{}#item:1",
+                    published.attr.generation
+                ),
+            },
+        ]
+    );
+    assert_eq!(structured.next_cursor, Some("2".to_owned()));
+    assert!(structured.truncated);
+    assert!(structured.bytes.is_none());
+
+    let bytes = service
+        .read_page(
+            "/index.json",
+            NamespaceReadOptions {
+                format: NamespaceReadFormat::Bytes,
+                offset: 0,
+                limit: 4,
+                expected_generation: Some(published.attr.generation),
+                ..NamespaceReadOptions::default()
+            },
+        )
+        .unwrap();
+    assert_eq!(bytes.format, NamespaceReadFormat::Bytes);
+    assert_eq!(bytes.bytes.as_deref(), Some(br#"["a""#.as_slice()));
+    assert!(bytes.items.is_empty());
+}
+
+#[test]
 fn create_file_publishes_metadata_without_body_descriptor() {
     let service = service();
     let name = DentryName::new(b"empty.txt".to_vec()).unwrap();

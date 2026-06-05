@@ -5,6 +5,7 @@
 //! into `MetadataCommand`s and stores file bodies through an object-store
 //! boundary. It does not own Holt trees, Raft replication, FUSE, or protobuf.
 
+mod agent;
 mod allocator;
 mod command;
 mod gc;
@@ -49,6 +50,16 @@ use nokvfs_types::{
     WatchEventKind, WatchRecord,
 };
 use sha2::{Digest, Sha256};
+
+pub use agent::{
+    NamespaceBodyDescriptor, NamespaceCard, NamespaceCardKind, NamespaceFilterCapability,
+    NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceInclude,
+    NamespaceListOptions, NamespaceListPage, NamespacePredicate, NamespacePredicateOp,
+    NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem,
+    NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType,
+    NamespaceSchema, NamespaceSort, NamespaceSortDirection, NamespaceSortField,
+    RecordCountProvenance,
+};
 
 const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;
 const ALLOCATOR_VERSION_RESERVATION: u64 = 1024;
@@ -223,6 +234,7 @@ pub enum MetadError {
         bytes: u64,
     },
     InvalidPreparedArtifact(String),
+    InvalidQuery(String),
     StaleBodyGeneration {
         expected: u64,
         current: u64,
@@ -773,6 +785,7 @@ impl fmt::Display for MetadError {
             Self::InvalidPreparedArtifact(err) => {
                 write!(f, "invalid prepared artifact: {err}")
             }
+            Self::InvalidQuery(err) => write!(f, "invalid namespace query: {err}"),
             Self::StaleBodyGeneration { expected, current } => write!(
                 f,
                 "body generation {expected} is stale; current generation is {current}"

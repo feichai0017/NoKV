@@ -44,6 +44,21 @@ pub enum MetadataRpcRequest {
     ReadDirPlusPath {
         path: String,
     },
+    StatCard {
+        path: String,
+    },
+    ListPage {
+        path: String,
+        cursor: Option<String>,
+        limit: u64,
+    },
+    FindPaths {
+        request: Box<WireNamespaceFindRequest>,
+    },
+    ReadPage {
+        path: String,
+        options: Box<WireNamespaceReadOptions>,
+    },
     CreateDir {
         parent: u64,
         name: String,
@@ -184,6 +199,7 @@ pub enum WireMetadataError {
     PredicateFailed,
     StaleBodyGeneration { expected: u64, current: u64 },
     InvalidPath { message: String },
+    InvalidQuery { message: String },
     Metadata { message: String },
     Object { message: String },
     Io { message: String },
@@ -207,6 +223,18 @@ pub enum MetadataRpcResult {
     },
     PathMetadata {
         metadata: Option<WirePathMetadata>,
+    },
+    NamespaceCard {
+        card: Option<Box<WireNamespaceCard>>,
+    },
+    NamespaceListPage {
+        page: Box<WireNamespaceListPage>,
+    },
+    NamespaceFindResult {
+        result: Box<WireNamespaceFindResult>,
+    },
+    NamespaceReadPage {
+        page: Box<WireNamespaceReadPage>,
     },
     RenameReplace {
         entry: Box<WireDentryWithAttr>,
@@ -240,6 +268,214 @@ pub struct WireDentryWithAttr {
 pub struct WirePathMetadata {
     pub attr: WireInodeAttr,
     pub body: Option<WireBodyDescriptor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespaceCardKind {
+    File,
+    Directory,
+    Symlink,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespaceRecordType {
+    DirectoryEntries,
+    JsonArray,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireRecordCountProvenance {
+    LiveNamespace,
+    StructuredBody,
+    MaterializedIndex,
+    Approximate,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceRecordCount {
+    pub count: u64,
+    pub provenance: WireRecordCountProvenance,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceSchema {
+    pub record_type: WireNamespaceRecordType,
+    pub fields: Vec<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespaceInclude {
+    Body,
+    Schema,
+    Sample,
+    Catalog,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceFilterCapability {
+    pub field: WireNamespaceFindField,
+    pub operators: Vec<WireNamespacePredicateOp>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceQueryCatalog {
+    pub filterable: Vec<WireNamespaceFilterCapability>,
+    pub sortable: Vec<WireNamespaceSortField>,
+    pub facetable: Vec<WireNamespaceFindField>,
+    pub projections: Vec<WireNamespaceInclude>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceCard {
+    pub path: String,
+    pub name: String,
+    pub kind: WireNamespaceCardKind,
+    pub evidence: String,
+    pub snapshot_id: Option<u64>,
+    pub inode: u64,
+    pub generation: u64,
+    pub size_bytes: Option<u64>,
+    pub entry_count: Option<u64>,
+    pub record_count: Option<WireNamespaceRecordCount>,
+    pub schema: Option<WireNamespaceSchema>,
+    pub sample: Vec<String>,
+    pub body: Option<WireBodyDescriptor>,
+    pub catalog: WireNamespaceQueryCatalog,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceListPage {
+    pub path: String,
+    pub evidence: String,
+    pub snapshot_id: Option<u64>,
+    pub entry_count: u64,
+    pub entries: Vec<WireNamespaceCard>,
+    pub next_cursor: Option<String>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespaceFindField {
+    Path,
+    FileName,
+    FileType,
+    SizeBytes,
+    BodyContentType,
+    BodyProducer,
+    BodyManifestId,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespacePredicateOp {
+    Eq,
+    Prefix,
+    Suffix,
+    Contains,
+    GreaterThan,
+    GreaterThanOrEqual,
+    LessThan,
+    LessThanOrEqual,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum WireNamespacePredicateValue {
+    String(String),
+    U64(u64),
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespacePredicate {
+    pub field: WireNamespaceFindField,
+    pub op: WireNamespacePredicateOp,
+    pub value: WireNamespacePredicateValue,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespaceSortField {
+    Path,
+    FileName,
+    SizeBytes,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespaceSortDirection {
+    Asc,
+    Desc,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceSort {
+    pub field: WireNamespaceSortField,
+    pub direction: WireNamespaceSortDirection,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceFindRequest {
+    pub path: String,
+    pub predicates: Vec<WireNamespacePredicate>,
+    pub sort: Vec<WireNamespaceSort>,
+    pub include: Vec<WireNamespaceInclude>,
+    pub cursor: Option<String>,
+    pub limit: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceFindResult {
+    pub path: String,
+    pub evidence: String,
+    pub snapshot_id: Option<u64>,
+    pub matches: Vec<WireNamespaceCard>,
+    pub next_cursor: Option<String>,
+    pub truncated: bool,
+    pub scanned_entries: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespaceReadFormat {
+    Structured,
+    Bytes,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceReadOptions {
+    pub format: WireNamespaceReadFormat,
+    pub cursor: Option<String>,
+    pub offset: u64,
+    pub limit: u64,
+    pub expected_generation: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceReadItem {
+    pub index: u64,
+    pub value_json: String,
+    pub evidence: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceReadPage {
+    pub path: String,
+    pub evidence: String,
+    pub snapshot_id: Option<u64>,
+    pub generation: u64,
+    pub total_size_bytes: u64,
+    pub format: WireNamespaceReadFormat,
+    pub record_count: Option<u64>,
+    pub cursor: Option<String>,
+    pub next_cursor: Option<String>,
+    pub truncated: bool,
+    pub items: Vec<WireNamespaceReadItem>,
+    pub bytes: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

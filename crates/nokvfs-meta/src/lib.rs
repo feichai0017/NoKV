@@ -23,7 +23,14 @@ pub use gc::{
 };
 pub use holtstore::HoltMetadataStore;
 pub use service::{
-    BodyReadPlan, DentryWithAttr, MetadError, NoKvFs, ObjectTransferStats,
+    BodyReadPlan, DentryWithAttr, MetadError, NamespaceBodyDescriptor, NamespaceCard,
+    NamespaceCardKind, NamespaceFilterCapability, NamespaceFindField, NamespaceFindRequest,
+    NamespaceFindResult, NamespaceInclude, NamespaceListOptions, NamespaceListPage,
+    NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue, NamespaceQueryCatalog,
+    NamespaceReadFormat, NamespaceReadItem, NamespaceReadOptions, NamespaceReadPage,
+    NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
+    NamespaceSortDirection, NamespaceSortField, NoKvFs, ObjectTransferStats,
     PendingObjectCleanupOutcome, PreparedArtifact, PublishArtifact, PublishArtifactRange,
-    PublishArtifactSession, PublishArtifactStagedSession, RenameReplaceResult, UpdateAttr,
+    PublishArtifactSession, PublishArtifactStagedSession, RecordCountProvenance,
+    RenameReplaceResult, UpdateAttr,
 };

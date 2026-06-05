@@ -3,12 +3,26 @@ use std::net::TcpStream;
 use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 
-use nokvfs_meta::{DentryWithAttr, MetadError, PreparedArtifact};
+use nokvfs_meta::{
+    DentryWithAttr, MetadError, NamespaceCard, NamespaceCardKind, NamespaceFilterCapability,
+    NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceInclude,
+    NamespaceListPage, NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue,
+    NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadOptions, NamespaceReadPage,
+    NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
+    NamespaceSortDirection, NamespaceSortField, PreparedArtifact, RecordCountProvenance,
+};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_request, encode_envelope, MetadataProtocolError, MetadataRpcEnvelope,
     MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataError,
-    WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireNamespaceCard, WireNamespaceCardKind, WireNamespaceFilterCapability,
+    WireNamespaceFindField, WireNamespaceFindRequest, WireNamespaceFindResult,
+    WireNamespaceInclude, WireNamespaceListPage, WireNamespacePredicate, WireNamespacePredicateOp,
+    WireNamespacePredicateValue, WireNamespaceQueryCatalog, WireNamespaceReadFormat,
+    WireNamespaceReadItem, WireNamespaceReadOptions, WireNamespaceReadPage,
+    WireNamespaceRecordCount, WireNamespaceRecordType, WireNamespaceSchema, WireNamespaceSort,
+    WireNamespaceSortDirection, WireNamespaceSortField, WireObjectReadBlock, WirePathMetadata,
+    WirePreparedArtifact, WireRecordCountProvenance,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -315,6 +329,9 @@ fn wire_metad_error(err: &MetadError) -> WireMetadataError {
         MetadError::InvalidPath(message) => WireMetadataError::InvalidPath {
             message: message.clone(),
         },
+        MetadError::InvalidQuery(message) => WireMetadataError::InvalidQuery {
+            message: message.clone(),
+        },
         MetadError::NotFound => WireMetadataError::NotFound,
         MetadError::NotFile => WireMetadataError::NotFile,
         MetadError::NotDirectory => WireMetadataError::NotDirectory,
@@ -453,6 +470,47 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             let entries = server.service().read_dir_plus_path(&path)?;
             Ok(MetadataRpcResult::Dentries {
                 entries: entries.iter().map(wire_dentry).collect(),
+            })
+        }
+        MetadataRpcRequest::StatCard { path } => {
+            let card = server.service().stat_card(&path)?;
+            Ok(MetadataRpcResult::NamespaceCard {
+                card: card
+                    .as_ref()
+                    .map(|card| Box::new(wire_namespace_card(card))),
+            })
+        }
+        MetadataRpcRequest::ListPage {
+            path,
+            cursor,
+            limit,
+        } => {
+            let limit = usize::try_from(limit).map_err(|_| {
+                ServerError::Metadata(MetadError::InvalidQuery(
+                    "namespace list limit exceeds platform limit".to_owned(),
+                ))
+            })?;
+            let page = server
+                .service()
+                .list_page(&path, nokvfs_meta::NamespaceListOptions { cursor, limit })?;
+            Ok(MetadataRpcResult::NamespaceListPage {
+                page: Box::new(wire_namespace_list_page(&page)?),
+            })
+        }
+        MetadataRpcRequest::FindPaths { request } => {
+            let result = server
+                .service()
+                .find_paths(namespace_find_request(*request)?)?;
+            Ok(MetadataRpcResult::NamespaceFindResult {
+                result: Box::new(wire_namespace_find_result(&result)?),
+            })
+        }
+        MetadataRpcRequest::ReadPage { path, options } => {
+            let page = server
+                .service()
+                .read_page(&path, namespace_read_options(*options)?)?;
+            Ok(MetadataRpcResult::NamespaceReadPage {
+                page: Box::new(wire_namespace_read_page(&page)?),
             })
         }
         MetadataRpcRequest::CreateDir {
@@ -810,6 +868,316 @@ fn wire_body_read_plan(plan: &nokvfs_meta::BodyReadPlan) -> WireBodyReadPlan {
     }
 }
 
+fn wire_namespace_card(card: &NamespaceCard) -> WireNamespaceCard {
+    WireNamespaceCard {
+        path: card.path.clone(),
+        name: card.name.clone(),
+        kind: wire_namespace_card_kind(&card.kind),
+        evidence: card.evidence.clone(),
+        snapshot_id: card.snapshot_id,
+        inode: card.inode.get(),
+        generation: card.generation,
+        size_bytes: card.size_bytes,
+        entry_count: card.entry_count.map(|count| count as u64),
+        record_count: card.record_count.as_ref().map(wire_namespace_record_count),
+        schema: card.schema.as_ref().map(wire_namespace_schema),
+        sample: card.sample.clone(),
+        body: card
+            .body
+            .as_ref()
+            .map(|body| nokvfs_protocol::WireBodyDescriptor {
+                producer: body.producer.clone(),
+                digest_uri: body.digest_uri.clone(),
+                size: body.size,
+                content_type: body.content_type.clone(),
+                manifest_id: body.manifest_id.clone(),
+                generation: body.generation,
+                chunk_size: body.chunk_size,
+                block_size: body.block_size,
+            }),
+        catalog: wire_namespace_query_catalog(&card.catalog),
+    }
+}
+
+fn wire_namespace_card_kind(kind: &NamespaceCardKind) -> WireNamespaceCardKind {
+    match kind {
+        NamespaceCardKind::File => WireNamespaceCardKind::File,
+        NamespaceCardKind::Directory => WireNamespaceCardKind::Directory,
+        NamespaceCardKind::Symlink => WireNamespaceCardKind::Symlink,
+    }
+}
+
+fn wire_namespace_record_count(count: &NamespaceRecordCount) -> WireNamespaceRecordCount {
+    WireNamespaceRecordCount {
+        count: count.count as u64,
+        provenance: match count.provenance {
+            RecordCountProvenance::LiveNamespace => WireRecordCountProvenance::LiveNamespace,
+            RecordCountProvenance::StructuredBody => WireRecordCountProvenance::StructuredBody,
+            RecordCountProvenance::MaterializedIndex => {
+                WireRecordCountProvenance::MaterializedIndex
+            }
+            RecordCountProvenance::Approximate => WireRecordCountProvenance::Approximate,
+        },
+    }
+}
+
+fn wire_namespace_schema(schema: &NamespaceSchema) -> WireNamespaceSchema {
+    WireNamespaceSchema {
+        record_type: match schema.record_type {
+            NamespaceRecordType::DirectoryEntries => WireNamespaceRecordType::DirectoryEntries,
+            NamespaceRecordType::JsonArray => WireNamespaceRecordType::JsonArray,
+        },
+        fields: schema.fields.clone(),
+    }
+}
+
+fn wire_namespace_query_catalog(catalog: &NamespaceQueryCatalog) -> WireNamespaceQueryCatalog {
+    WireNamespaceQueryCatalog {
+        filterable: catalog
+            .filterable
+            .iter()
+            .map(wire_namespace_filter_capability)
+            .collect(),
+        sortable: catalog
+            .sortable
+            .iter()
+            .map(wire_namespace_sort_field)
+            .collect(),
+        facetable: catalog
+            .facetable
+            .iter()
+            .map(wire_namespace_find_field)
+            .collect(),
+        projections: catalog
+            .projections
+            .iter()
+            .map(wire_namespace_include)
+            .collect(),
+    }
+}
+
+fn wire_namespace_filter_capability(
+    capability: &NamespaceFilterCapability,
+) -> WireNamespaceFilterCapability {
+    WireNamespaceFilterCapability {
+        field: wire_namespace_find_field(&capability.field),
+        operators: capability
+            .operators
+            .iter()
+            .map(wire_namespace_predicate_op)
+            .collect(),
+    }
+}
+
+fn wire_namespace_include(include: &NamespaceInclude) -> WireNamespaceInclude {
+    match include {
+        NamespaceInclude::Body => WireNamespaceInclude::Body,
+        NamespaceInclude::Schema => WireNamespaceInclude::Schema,
+        NamespaceInclude::Sample => WireNamespaceInclude::Sample,
+        NamespaceInclude::Catalog => WireNamespaceInclude::Catalog,
+    }
+}
+
+fn wire_namespace_find_field(field: &NamespaceFindField) -> WireNamespaceFindField {
+    match field {
+        NamespaceFindField::Path => WireNamespaceFindField::Path,
+        NamespaceFindField::FileName => WireNamespaceFindField::FileName,
+        NamespaceFindField::FileType => WireNamespaceFindField::FileType,
+        NamespaceFindField::SizeBytes => WireNamespaceFindField::SizeBytes,
+        NamespaceFindField::BodyContentType => WireNamespaceFindField::BodyContentType,
+        NamespaceFindField::BodyProducer => WireNamespaceFindField::BodyProducer,
+        NamespaceFindField::BodyManifestId => WireNamespaceFindField::BodyManifestId,
+    }
+}
+
+fn wire_namespace_predicate_op(op: &NamespacePredicateOp) -> WireNamespacePredicateOp {
+    match op {
+        NamespacePredicateOp::Eq => WireNamespacePredicateOp::Eq,
+        NamespacePredicateOp::Prefix => WireNamespacePredicateOp::Prefix,
+        NamespacePredicateOp::Suffix => WireNamespacePredicateOp::Suffix,
+        NamespacePredicateOp::Contains => WireNamespacePredicateOp::Contains,
+        NamespacePredicateOp::GreaterThan => WireNamespacePredicateOp::GreaterThan,
+        NamespacePredicateOp::GreaterThanOrEqual => WireNamespacePredicateOp::GreaterThanOrEqual,
+        NamespacePredicateOp::LessThan => WireNamespacePredicateOp::LessThan,
+        NamespacePredicateOp::LessThanOrEqual => WireNamespacePredicateOp::LessThanOrEqual,
+    }
+}
+
+fn wire_namespace_sort_field(field: &NamespaceSortField) -> WireNamespaceSortField {
+    match field {
+        NamespaceSortField::Path => WireNamespaceSortField::Path,
+        NamespaceSortField::FileName => WireNamespaceSortField::FileName,
+        NamespaceSortField::SizeBytes => WireNamespaceSortField::SizeBytes,
+    }
+}
+
+fn wire_namespace_list_page(
+    page: &NamespaceListPage,
+) -> Result<WireNamespaceListPage, ServerError> {
+    Ok(WireNamespaceListPage {
+        path: page.path.clone(),
+        evidence: page.evidence.clone(),
+        snapshot_id: page.snapshot_id,
+        entry_count: page.entry_count as u64,
+        entries: page.entries.iter().map(wire_namespace_card).collect(),
+        next_cursor: page.next_cursor.clone(),
+        truncated: page.truncated,
+    })
+}
+
+fn wire_namespace_find_result(
+    result: &NamespaceFindResult,
+) -> Result<WireNamespaceFindResult, ServerError> {
+    Ok(WireNamespaceFindResult {
+        path: result.path.clone(),
+        evidence: result.evidence.clone(),
+        snapshot_id: result.snapshot_id,
+        matches: result.matches.iter().map(wire_namespace_card).collect(),
+        next_cursor: result.next_cursor.clone(),
+        truncated: result.truncated,
+        scanned_entries: result.scanned_entries as u64,
+    })
+}
+
+fn wire_namespace_read_page(
+    page: &NamespaceReadPage,
+) -> Result<WireNamespaceReadPage, ServerError> {
+    Ok(WireNamespaceReadPage {
+        path: page.path.clone(),
+        evidence: page.evidence.clone(),
+        snapshot_id: page.snapshot_id,
+        generation: page.generation,
+        total_size_bytes: page.total_size_bytes,
+        format: match page.format {
+            NamespaceReadFormat::Structured => WireNamespaceReadFormat::Structured,
+            NamespaceReadFormat::Bytes => WireNamespaceReadFormat::Bytes,
+        },
+        record_count: page.record_count.map(|count| count as u64),
+        cursor: page.cursor.clone(),
+        next_cursor: page.next_cursor.clone(),
+        truncated: page.truncated,
+        items: page
+            .items
+            .iter()
+            .map(|item| WireNamespaceReadItem {
+                index: item.index as u64,
+                value_json: item.value_json.clone(),
+                evidence: item.evidence.clone(),
+            })
+            .collect(),
+        bytes: page.bytes.clone(),
+    })
+}
+
+fn namespace_find_request(
+    request: WireNamespaceFindRequest,
+) -> Result<NamespaceFindRequest, ServerError> {
+    Ok(NamespaceFindRequest {
+        path: request.path,
+        predicates: request
+            .predicates
+            .into_iter()
+            .map(namespace_predicate)
+            .collect::<Result<Vec<_>, _>>()?,
+        sort: request
+            .sort
+            .into_iter()
+            .map(namespace_sort)
+            .collect::<Vec<_>>(),
+        include: request
+            .include
+            .into_iter()
+            .map(namespace_include)
+            .collect::<Vec<_>>(),
+        cursor: request.cursor,
+        limit: usize::try_from(request.limit).map_err(|_| {
+            ServerError::Metadata(MetadError::InvalidQuery(
+                "namespace find limit exceeds platform limit".to_owned(),
+            ))
+        })?,
+    })
+}
+
+fn namespace_include(include: WireNamespaceInclude) -> NamespaceInclude {
+    match include {
+        WireNamespaceInclude::Body => NamespaceInclude::Body,
+        WireNamespaceInclude::Schema => NamespaceInclude::Schema,
+        WireNamespaceInclude::Sample => NamespaceInclude::Sample,
+        WireNamespaceInclude::Catalog => NamespaceInclude::Catalog,
+    }
+}
+
+fn namespace_predicate(
+    predicate: WireNamespacePredicate,
+) -> Result<NamespacePredicate, ServerError> {
+    Ok(NamespacePredicate {
+        field: namespace_find_field(predicate.field),
+        op: namespace_predicate_op(predicate.op),
+        value: match predicate.value {
+            WireNamespacePredicateValue::String(value) => NamespacePredicateValue::String(value),
+            WireNamespacePredicateValue::U64(value) => NamespacePredicateValue::U64(value),
+        },
+    })
+}
+
+fn namespace_find_field(field: WireNamespaceFindField) -> NamespaceFindField {
+    match field {
+        WireNamespaceFindField::Path => NamespaceFindField::Path,
+        WireNamespaceFindField::FileName => NamespaceFindField::FileName,
+        WireNamespaceFindField::FileType => NamespaceFindField::FileType,
+        WireNamespaceFindField::SizeBytes => NamespaceFindField::SizeBytes,
+        WireNamespaceFindField::BodyContentType => NamespaceFindField::BodyContentType,
+        WireNamespaceFindField::BodyProducer => NamespaceFindField::BodyProducer,
+        WireNamespaceFindField::BodyManifestId => NamespaceFindField::BodyManifestId,
+    }
+}
+
+fn namespace_predicate_op(op: WireNamespacePredicateOp) -> NamespacePredicateOp {
+    match op {
+        WireNamespacePredicateOp::Eq => NamespacePredicateOp::Eq,
+        WireNamespacePredicateOp::Prefix => NamespacePredicateOp::Prefix,
+        WireNamespacePredicateOp::Suffix => NamespacePredicateOp::Suffix,
+        WireNamespacePredicateOp::Contains => NamespacePredicateOp::Contains,
+        WireNamespacePredicateOp::GreaterThan => NamespacePredicateOp::GreaterThan,
+        WireNamespacePredicateOp::GreaterThanOrEqual => NamespacePredicateOp::GreaterThanOrEqual,
+        WireNamespacePredicateOp::LessThan => NamespacePredicateOp::LessThan,
+        WireNamespacePredicateOp::LessThanOrEqual => NamespacePredicateOp::LessThanOrEqual,
+    }
+}
+
+fn namespace_sort(sort: WireNamespaceSort) -> NamespaceSort {
+    NamespaceSort {
+        field: match sort.field {
+            WireNamespaceSortField::Path => NamespaceSortField::Path,
+            WireNamespaceSortField::FileName => NamespaceSortField::FileName,
+            WireNamespaceSortField::SizeBytes => NamespaceSortField::SizeBytes,
+        },
+        direction: match sort.direction {
+            WireNamespaceSortDirection::Asc => NamespaceSortDirection::Asc,
+            WireNamespaceSortDirection::Desc => NamespaceSortDirection::Desc,
+        },
+    }
+}
+
+fn namespace_read_options(
+    options: WireNamespaceReadOptions,
+) -> Result<NamespaceReadOptions, ServerError> {
+    Ok(NamespaceReadOptions {
+        format: match options.format {
+            WireNamespaceReadFormat::Structured => NamespaceReadFormat::Structured,
+            WireNamespaceReadFormat::Bytes => NamespaceReadFormat::Bytes,
+        },
+        cursor: options.cursor,
+        offset: options.offset,
+        limit: usize::try_from(options.limit).map_err(|_| {
+            ServerError::Metadata(MetadError::InvalidQuery(
+                "namespace read limit exceeds platform limit".to_owned(),
+            ))
+        })?,
+        expected_generation: options.expected_generation,
+    })
+}
+
 fn wire_object_read_block(block: &ObjectReadBlock) -> WireObjectReadBlock {
     WireObjectReadBlock {
         object_key: block.object_key.clone(),
@@ -906,6 +1274,80 @@ mod tests {
         };
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].dentry.name_hex, "636865636b706f696e742e62696e");
+    }
+
+    #[test]
+    fn rpc_namespace_card_and_list_page_use_service_surface() {
+        let server = test_server();
+        request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        request_envelope(
+            &server,
+            MetadataRpcRequest::CreateFilePath {
+                path: "/runs/a.bin".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+        request_envelope(
+            &server,
+            MetadataRpcRequest::CreateFilePath {
+                path: "/runs/b.bin".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::StatCard {
+                path: "/runs".to_owned(),
+            },
+        );
+        let card = match envelope.result.unwrap() {
+            MetadataRpcResult::NamespaceCard { card: Some(card) } => card,
+            other => panic!("unexpected namespace card result: {other:?}"),
+        };
+        assert_eq!(card.path, "/runs");
+        assert_eq!(card.entry_count, Some(2));
+        assert_eq!(
+            card.record_count.as_ref().unwrap().provenance,
+            nokvfs_protocol::WireRecordCountProvenance::LiveNamespace
+        );
+        assert!(card
+            .catalog
+            .sortable
+            .contains(&nokvfs_protocol::WireNamespaceSortField::SizeBytes));
+        assert!(card
+            .catalog
+            .projections
+            .contains(&nokvfs_protocol::WireNamespaceInclude::Body));
+
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::ListPage {
+                path: "/runs".to_owned(),
+                cursor: None,
+                limit: 1,
+            },
+        );
+        let page = match envelope.result.unwrap() {
+            MetadataRpcResult::NamespaceListPage { page } => page,
+            other => panic!("unexpected namespace list result: {other:?}"),
+        };
+        assert_eq!(page.entry_count, 2);
+        assert_eq!(page.entries.len(), 1);
+        assert_eq!(page.next_cursor, Some("1".to_owned()));
+        assert!(page.truncated);
     }
 
     #[test]
