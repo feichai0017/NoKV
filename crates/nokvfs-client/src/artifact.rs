@@ -3,7 +3,7 @@ use nokvfs_meta::{
     PublishArtifactSession, RenameReplaceResult,
 };
 use nokvfs_object::ObjectStore;
-use nokvfs_types::FileType;
+use nokvfs_types::{parse_absolute_path, DentryName, FileType};
 use sha2::{Digest, Sha256};
 
 use crate::{
@@ -81,6 +81,17 @@ pub trait ArtifactBackend {
     }
 
     fn remove_empty_dir_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError>;
+
+    fn remove_empty_dir_paths(
+        &self,
+        absolute_paths: &[String],
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        let mut results = Vec::with_capacity(absolute_paths.len());
+        for path in absolute_paths {
+            results.push(self.remove_empty_dir_path(path));
+        }
+        Ok(results)
+    }
 }
 
 pub struct ArtifactRepository<B> {
@@ -284,8 +295,19 @@ where
                 }
             }
         }
+        let mut directory_paths = Vec::with_capacity(directories.len());
         for directory in directories {
-            self.delete(&directory)?;
+            self.delete_directory_children(&directory)?;
+            directory_paths.push(absolute_artifact_path(&directory));
+        }
+        if !directory_paths.is_empty() {
+            for result in self.backend.remove_empty_dir_paths(&directory_paths)? {
+                match result {
+                    Ok(_) => {}
+                    Err(err) if is_not_found(&err) => {}
+                    Err(err) => return Err(err),
+                }
+            }
         }
         Ok(())
     }
@@ -364,6 +386,13 @@ where
 
     fn remove_empty_dir_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
         (*self).remove_empty_dir_path(absolute_path)
+    }
+
+    fn remove_empty_dir_paths(
+        &self,
+        absolute_paths: &[String],
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        (*self).remove_empty_dir_paths(absolute_paths)
     }
 }
 
@@ -453,8 +482,50 @@ where
         NoKvFs::remove_file_path(self, absolute_path).map_err(ClientError::from)
     }
 
+    fn remove_file_paths(
+        &self,
+        absolute_paths: &[String],
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        let Some((parent, names)) = same_parent_names(absolute_paths)? else {
+            let mut results = Vec::with_capacity(absolute_paths.len());
+            for path in absolute_paths {
+                results.push(NoKvFs::remove_file_path(self, path).map_err(ClientError::from));
+            }
+            return Ok(results);
+        };
+        NoKvFs::remove_files_in_dir_path(self, &parent, names)
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(|result| result.map_err(ClientError::from))
+                    .collect()
+            })
+            .map_err(ClientError::from)
+    }
+
     fn remove_empty_dir_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
         NoKvFs::remove_empty_dir_path(self, absolute_path).map_err(ClientError::from)
+    }
+
+    fn remove_empty_dir_paths(
+        &self,
+        absolute_paths: &[String],
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        let Some((parent, names)) = same_parent_names(absolute_paths)? else {
+            let mut results = Vec::with_capacity(absolute_paths.len());
+            for path in absolute_paths {
+                results.push(NoKvFs::remove_empty_dir_path(self, path).map_err(ClientError::from));
+            }
+            return Ok(results);
+        };
+        NoKvFs::remove_empty_dirs_in_dir_path(self, &parent, names)
+            .map(|results| {
+                results
+                    .into_iter()
+                    .map(|result| result.map_err(ClientError::from))
+                    .collect()
+            })
+            .map_err(ClientError::from)
     }
 }
 
@@ -519,6 +590,13 @@ where
 
     fn remove_empty_dir_path(&self, absolute_path: &str) -> Result<DentryWithAttr, ClientError> {
         self.metadata().rmdir(absolute_path)
+    }
+
+    fn remove_empty_dir_paths(
+        &self,
+        absolute_paths: &[String],
+    ) -> Result<Vec<Result<DentryWithAttr, ClientError>>, ClientError> {
+        self.metadata().rmdir_many(absolute_paths)
     }
 }
 
@@ -614,6 +692,51 @@ fn strip_absolute_artifact_path(absolute_path: &str) -> String {
         .strip_prefix('/')
         .unwrap_or(absolute_path)
         .to_owned()
+}
+
+fn same_parent_names(
+    absolute_paths: &[String],
+) -> Result<Option<(String, Vec<DentryName>)>, ClientError> {
+    let mut parent_path = None::<String>;
+    let mut names = Vec::with_capacity(absolute_paths.len());
+    for path in absolute_paths {
+        let (parent, name) = absolute_parent_and_name(path)?;
+        if let Some(existing) = &parent_path {
+            if existing != &parent {
+                return Ok(None);
+            }
+        } else {
+            parent_path = Some(parent);
+        }
+        names.push(name);
+    }
+    Ok(parent_path.map(|parent| (parent, names)))
+}
+
+fn absolute_parent_and_name(path: &str) -> Result<(String, DentryName), ClientError> {
+    let components = parse_absolute_path(path)?;
+    let Some((name, parent_components)) = components.split_last() else {
+        return Err(ClientError::RootHasNoParent);
+    };
+    Ok((
+        absolute_path_from_components(parent_components)?,
+        name.clone(),
+    ))
+}
+
+fn absolute_path_from_components(components: &[DentryName]) -> Result<String, ClientError> {
+    if components.is_empty() {
+        return Ok("/".to_owned());
+    }
+    let mut out = String::new();
+    for component in components {
+        let name = std::str::from_utf8(component.as_bytes()).map_err(|_| {
+            ClientError::InvalidName("artifact paths require utf-8 names".to_owned())
+        })?;
+        out.push('/');
+        out.push_str(name);
+    }
+    Ok(out)
 }
 
 fn child_artifact_path(parent: &str, entry: &DentryWithAttr) -> Result<String, ClientError> {

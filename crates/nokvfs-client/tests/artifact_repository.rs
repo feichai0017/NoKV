@@ -94,6 +94,25 @@ fn artifact_repository_delete_recursively_and_keeps_root_usable() {
 }
 
 #[test]
+fn artifact_repository_delete_batches_sibling_directory_cleanup() {
+    let repo = repository();
+    repo.put_bytes("runs/a/file.txt", b"a".to_vec()).unwrap();
+    repo.put_bytes("runs/b/file.txt", b"b".to_vec()).unwrap();
+
+    let before = repo.backend().metadata_store_stats();
+    repo.delete("runs").unwrap();
+    let after = repo.backend().metadata_store_stats();
+
+    assert!(repo.list("").unwrap().is_empty());
+    assert_eq!(after.atomic_apply_total - before.atomic_apply_total, 4);
+    assert_eq!(
+        after.atomic_apply_command_total - before.atomic_apply_command_total,
+        5
+    );
+    assert!(after.atomic_apply_max_batch >= 2);
+}
+
+#[test]
 fn artifact_repository_delete_missing_path_is_noop() {
     let repo = repository();
 
