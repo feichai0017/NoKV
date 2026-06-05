@@ -25,7 +25,7 @@ use sha2::{Digest, Sha256};
 use crate::http;
 use crate::metadata::{FileLoggedMetadataStore, ServerMetadataLogStatus, ServerMetadataStore};
 use crate::options::ServerOptions;
-use crate::replication::MajorityMetadataLog;
+use crate::replication::{MajorityMetadataLog, MajorityMetadataLogReplicationStats};
 use crate::rpc;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
@@ -454,6 +454,7 @@ impl Server {
                 self.metadata_log_sync,
                 self.metadata_log_frontier(),
                 self.metadata_log_runtime_stats(),
+                self.metadata_log_replication_stats(),
             ),
             metadata_service_json(&metadata_service),
             object_gc_json(&object_gc),
@@ -754,6 +755,13 @@ impl Server {
             .as_ref()
             .map(|metadata_log| metadata_log.runtime_stats())
     }
+
+    fn metadata_log_replication_stats(&self) -> MajorityMetadataLogReplicationStats {
+        self.metadata_log
+            .as_ref()
+            .map(|metadata_log| metadata_log.log().replication_stats())
+            .unwrap_or_default()
+    }
 }
 
 fn metadata_log_json(
@@ -761,11 +769,12 @@ fn metadata_log_json(
     sync: nokvfs_cluster::FileSharedLogSync,
     frontier: Option<ApplyFrontier>,
     runtime: Option<SharedLogRuntimeStats>,
+    replication: MajorityMetadataLogReplicationStats,
 ) -> String {
     let runtime = runtime.unwrap_or_default();
     match frontier {
         Some(frontier) => format!(
-            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":{},\"applied_index\":{},\"commit_version\":{},\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{},\"precheck_command_total\":{},\"precheck_predicate_total\":{},\"precheck_ns_total\":{},\"stale_read_total\":{}}}",
+            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":{},\"applied_index\":{},\"commit_version\":{},\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{},\"precheck_command_total\":{},\"precheck_predicate_total\":{},\"precheck_ns_total\":{},\"stale_read_total\":{},\"remote_voter_append_total\":{},\"remote_voter_append_success_total\":{},\"remote_voter_append_failure_total\":{},\"remote_voter_quorum_success_total\":{},\"remote_voter_quorum_failure_total\":{},\"remote_voter_quorum_wait_ns_total\":{},\"learner_wakeup_total\":{},\"learner_wakeup_coalesced_total\":{},\"learner_wakeup_disconnected_total\":{},\"learner_catchup_success_total\":{},\"learner_catchup_failure_total\":{},\"learner_catchup_ns_total\":{}}}",
             metadata_log_sync_name(sync),
             frontier.position.term.get(),
             frontier.position.index.get(),
@@ -777,9 +786,21 @@ fn metadata_log_json(
             runtime.precheck_predicate_total,
             runtime.precheck_ns_total,
             runtime.stale_read_total,
+            replication.remote_voter_append_total,
+            replication.remote_voter_append_success_total,
+            replication.remote_voter_append_failure_total,
+            replication.remote_voter_quorum_success_total,
+            replication.remote_voter_quorum_failure_total,
+            replication.remote_voter_quorum_wait_ns_total,
+            replication.learner_wakeup_total,
+            replication.learner_wakeup_coalesced_total,
+            replication.learner_wakeup_disconnected_total,
+            replication.learner_catchup_success_total,
+            replication.learner_catchup_failure_total,
+            replication.learner_catchup_ns_total,
         ),
         None if enabled => format!(
-            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":null,\"applied_index\":null,\"commit_version\":null,\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{},\"precheck_command_total\":{},\"precheck_predicate_total\":{},\"precheck_ns_total\":{},\"stale_read_total\":{}}}",
+            "{{\"enabled\":true,\"sync\":\"{}\",\"applied_term\":null,\"applied_index\":null,\"commit_version\":null,\"commit_entry_total\":{},\"commit_command_total\":{},\"max_commands_per_entry\":{},\"precheck_command_total\":{},\"precheck_predicate_total\":{},\"precheck_ns_total\":{},\"stale_read_total\":{},\"remote_voter_append_total\":{},\"remote_voter_append_success_total\":{},\"remote_voter_append_failure_total\":{},\"remote_voter_quorum_success_total\":{},\"remote_voter_quorum_failure_total\":{},\"remote_voter_quorum_wait_ns_total\":{},\"learner_wakeup_total\":{},\"learner_wakeup_coalesced_total\":{},\"learner_wakeup_disconnected_total\":{},\"learner_catchup_success_total\":{},\"learner_catchup_failure_total\":{},\"learner_catchup_ns_total\":{}}}",
             metadata_log_sync_name(sync),
             runtime.commit_entry_total,
             runtime.commit_command_total,
@@ -788,9 +809,21 @@ fn metadata_log_json(
             runtime.precheck_predicate_total,
             runtime.precheck_ns_total,
             runtime.stale_read_total,
+            replication.remote_voter_append_total,
+            replication.remote_voter_append_success_total,
+            replication.remote_voter_append_failure_total,
+            replication.remote_voter_quorum_success_total,
+            replication.remote_voter_quorum_failure_total,
+            replication.remote_voter_quorum_wait_ns_total,
+            replication.learner_wakeup_total,
+            replication.learner_wakeup_coalesced_total,
+            replication.learner_wakeup_disconnected_total,
+            replication.learner_catchup_success_total,
+            replication.learner_catchup_failure_total,
+            replication.learner_catchup_ns_total,
         ),
         None => {
-            "{\"enabled\":false,\"commit_entry_total\":0,\"commit_command_total\":0,\"max_commands_per_entry\":0,\"precheck_command_total\":0,\"precheck_predicate_total\":0,\"precheck_ns_total\":0,\"stale_read_total\":0}".to_owned()
+            "{\"enabled\":false,\"commit_entry_total\":0,\"commit_command_total\":0,\"max_commands_per_entry\":0,\"precheck_command_total\":0,\"precheck_predicate_total\":0,\"precheck_ns_total\":0,\"stale_read_total\":0,\"remote_voter_append_total\":0,\"remote_voter_append_success_total\":0,\"remote_voter_append_failure_total\":0,\"remote_voter_quorum_success_total\":0,\"remote_voter_quorum_failure_total\":0,\"remote_voter_quorum_wait_ns_total\":0,\"learner_wakeup_total\":0,\"learner_wakeup_coalesced_total\":0,\"learner_wakeup_disconnected_total\":0,\"learner_catchup_success_total\":0,\"learner_catchup_failure_total\":0,\"learner_catchup_ns_total\":0}".to_owned()
         }
     }
 }
@@ -1183,6 +1216,10 @@ pub(crate) mod tests {
         assert!(stats.contains("\"commit_entry_total\":"));
         assert!(stats.contains("\"commit_command_total\":"));
         assert!(stats.contains("\"max_commands_per_entry\":"));
+        assert!(stats.contains("\"remote_voter_append_total\":"));
+        assert!(stats.contains("\"remote_voter_quorum_wait_ns_total\":"));
+        assert!(stats.contains("\"learner_wakeup_total\":"));
+        assert!(stats.contains("\"learner_catchup_ns_total\":"));
         let runtime = server.metadata_log_runtime_stats().unwrap();
         assert!(runtime.commit_entry_total >= 1);
         assert_eq!(runtime.commit_entry_total, runtime.commit_command_total);

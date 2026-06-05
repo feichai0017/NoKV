@@ -4,6 +4,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, sync_channel, SyncSender, TrySendError};
 use std::sync::{Arc, Mutex};
 use std::thread;
+use std::time::Instant;
 
 use nokvfs_cluster::{
     CheckpointCatalog, DurableReceipt, FileCheckpointCatalog, FileSharedLog,
@@ -25,7 +26,40 @@ pub(crate) struct MajorityMetadataLog {
     peers: BTreeMap<NodeId, Arc<dyn MetadataLogPeerAppender>>,
     bootstrapper: Option<Arc<dyn MetadataLogPeerBootstrapper>>,
     learner_replicators: BTreeMap<NodeId, LearnerReplicator>,
+    replication_stats: Arc<MajorityMetadataLogReplicationCounters>,
     append_gate: Mutex<()>,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct MajorityMetadataLogReplicationStats {
+    pub remote_voter_append_total: u64,
+    pub remote_voter_append_success_total: u64,
+    pub remote_voter_append_failure_total: u64,
+    pub remote_voter_quorum_success_total: u64,
+    pub remote_voter_quorum_failure_total: u64,
+    pub remote_voter_quorum_wait_ns_total: u64,
+    pub learner_wakeup_total: u64,
+    pub learner_wakeup_coalesced_total: u64,
+    pub learner_wakeup_disconnected_total: u64,
+    pub learner_catchup_success_total: u64,
+    pub learner_catchup_failure_total: u64,
+    pub learner_catchup_ns_total: u64,
+}
+
+#[derive(Debug, Default)]
+struct MajorityMetadataLogReplicationCounters {
+    remote_voter_append_total: AtomicU64,
+    remote_voter_append_success_total: AtomicU64,
+    remote_voter_append_failure_total: AtomicU64,
+    remote_voter_quorum_success_total: AtomicU64,
+    remote_voter_quorum_failure_total: AtomicU64,
+    remote_voter_quorum_wait_ns_total: AtomicU64,
+    learner_wakeup_total: AtomicU64,
+    learner_wakeup_coalesced_total: AtomicU64,
+    learner_wakeup_disconnected_total: AtomicU64,
+    learner_catchup_success_total: AtomicU64,
+    learner_catchup_failure_total: AtomicU64,
+    learner_catchup_ns_total: AtomicU64,
 }
 
 pub(crate) trait MetadataLogPeerAppender: Send + Sync {
@@ -51,6 +85,7 @@ struct FramedMetadataLogPeerBootstrapper {
 struct LearnerReplicator {
     sender: SyncSender<()>,
     target_index: Arc<AtomicU64>,
+    replication_stats: Arc<MajorityMetadataLogReplicationCounters>,
     _worker: thread::JoinHandle<()>,
 }
 
@@ -102,6 +137,7 @@ impl MajorityMetadataLog {
         peers: BTreeMap<NodeId, Arc<dyn MetadataLogPeerAppender>>,
         bootstrapper: Option<Arc<dyn MetadataLogPeerBootstrapper>>,
     ) -> Self {
+        let replication_stats = Arc::new(MajorityMetadataLogReplicationCounters::default());
         let learner_replicators = membership
             .learners
             .iter()
@@ -115,6 +151,7 @@ impl MajorityMetadataLog {
                             Arc::clone(&local),
                             Arc::clone(peer),
                             bootstrapper.clone(),
+                            Arc::clone(&replication_stats),
                         ),
                     )
                 })
@@ -127,7 +164,61 @@ impl MajorityMetadataLog {
             peers,
             bootstrapper,
             learner_replicators,
+            replication_stats,
             append_gate: Mutex::new(()),
+        }
+    }
+
+    pub(crate) fn replication_stats(&self) -> MajorityMetadataLogReplicationStats {
+        MajorityMetadataLogReplicationStats {
+            remote_voter_append_total: self
+                .replication_stats
+                .remote_voter_append_total
+                .load(Ordering::Relaxed),
+            remote_voter_append_success_total: self
+                .replication_stats
+                .remote_voter_append_success_total
+                .load(Ordering::Relaxed),
+            remote_voter_append_failure_total: self
+                .replication_stats
+                .remote_voter_append_failure_total
+                .load(Ordering::Relaxed),
+            remote_voter_quorum_success_total: self
+                .replication_stats
+                .remote_voter_quorum_success_total
+                .load(Ordering::Relaxed),
+            remote_voter_quorum_failure_total: self
+                .replication_stats
+                .remote_voter_quorum_failure_total
+                .load(Ordering::Relaxed),
+            remote_voter_quorum_wait_ns_total: self
+                .replication_stats
+                .remote_voter_quorum_wait_ns_total
+                .load(Ordering::Relaxed),
+            learner_wakeup_total: self
+                .replication_stats
+                .learner_wakeup_total
+                .load(Ordering::Relaxed),
+            learner_wakeup_coalesced_total: self
+                .replication_stats
+                .learner_wakeup_coalesced_total
+                .load(Ordering::Relaxed),
+            learner_wakeup_disconnected_total: self
+                .replication_stats
+                .learner_wakeup_disconnected_total
+                .load(Ordering::Relaxed),
+            learner_catchup_success_total: self
+                .replication_stats
+                .learner_catchup_success_total
+                .load(Ordering::Relaxed),
+            learner_catchup_failure_total: self
+                .replication_stats
+                .learner_catchup_failure_total
+                .load(Ordering::Relaxed),
+            learner_catchup_ns_total: self
+                .replication_stats
+                .learner_catchup_ns_total
+                .load(Ordering::Relaxed),
         }
     }
 
@@ -182,13 +273,18 @@ impl MajorityMetadataLog {
         let mut remote_successes = 0_usize;
         let remote_total = targets.len();
         let (result_tx, result_rx) = channel();
+        let quorum_started = Instant::now();
         for (voter, peer) in targets {
             let result_tx = result_tx.clone();
             let local_node = self.local_node;
             let local = Arc::clone(&self.local);
             let bootstrapper = self.bootstrapper.clone();
             let entry = entry.clone();
+            let replication_stats = Arc::clone(&self.replication_stats);
             thread::spawn(move || {
+                replication_stats
+                    .remote_voter_append_total
+                    .fetch_add(1, Ordering::Relaxed);
                 let result = append_peer_with_catchup_from_log(
                     local_node,
                     local.as_ref(),
@@ -197,6 +293,15 @@ impl MajorityMetadataLog {
                     peer.as_ref(),
                     &entry,
                 );
+                if result.is_ok() {
+                    replication_stats
+                        .remote_voter_append_success_total
+                        .fetch_add(1, Ordering::Relaxed);
+                } else {
+                    replication_stats
+                        .remote_voter_append_failure_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
                 let _ = result_tx.send(result.is_ok());
             });
         }
@@ -205,11 +310,25 @@ impl MajorityMetadataLog {
             if remote_result {
                 remote_successes = remote_successes.saturating_add(1);
                 if remote_successes >= required_remote {
+                    self.replication_stats
+                        .remote_voter_quorum_success_total
+                        .fetch_add(1, Ordering::Relaxed);
+                    record_elapsed_ns(
+                        &self.replication_stats.remote_voter_quorum_wait_ns_total,
+                        quorum_started,
+                    );
                     return Ok(());
                 }
             }
         }
         if remote_successes < required_remote {
+            self.replication_stats
+                .remote_voter_quorum_failure_total
+                .fetch_add(1, Ordering::Relaxed);
+            record_elapsed_ns(
+                &self.replication_stats.remote_voter_quorum_wait_ns_total,
+                quorum_started,
+            );
             return Err(SharedLogError::NoQuorum {
                 required: quorum,
                 available: remote_successes.saturating_add(1),
@@ -246,13 +365,16 @@ impl LearnerReplicator {
         local: Arc<FileSharedLog>,
         peer: Arc<dyn MetadataLogPeerAppender>,
         bootstrapper: Option<Arc<dyn MetadataLogPeerBootstrapper>>,
+        replication_stats: Arc<MajorityMetadataLogReplicationCounters>,
     ) -> Self {
         let (sender, receiver) = sync_channel::<()>(LEARNER_REPLICATION_QUEUE_CAPACITY);
         let target_index = Arc::new(AtomicU64::new(0));
         let worker_target_index = Arc::clone(&target_index);
+        let worker_replication_stats = Arc::clone(&replication_stats);
         let worker = thread::spawn(move || {
             while receiver.recv().is_ok() {
-                replicate_learner_to_target(
+                let started = Instant::now();
+                let result = replicate_learner_to_target(
                     local_node,
                     local.as_ref(),
                     bootstrapper.as_deref(),
@@ -260,19 +382,43 @@ impl LearnerReplicator {
                     peer.as_ref(),
                     worker_target_index.as_ref(),
                 );
+                if result.is_ok() {
+                    worker_replication_stats
+                        .learner_catchup_success_total
+                        .fetch_add(1, Ordering::Relaxed);
+                } else {
+                    worker_replication_stats
+                        .learner_catchup_failure_total
+                        .fetch_add(1, Ordering::Relaxed);
+                }
+                record_elapsed_ns(&worker_replication_stats.learner_catchup_ns_total, started);
             }
         });
         Self {
             sender,
             target_index,
+            replication_stats,
             _worker: worker,
         }
     }
 
     fn enqueue(&self, entry: &MetadataLogEntry) {
         record_max(&self.target_index, entry.position.index.get());
+        self.replication_stats
+            .learner_wakeup_total
+            .fetch_add(1, Ordering::Relaxed);
         match self.sender.try_send(()) {
-            Ok(()) | Err(TrySendError::Full(_)) | Err(TrySendError::Disconnected(_)) => {}
+            Ok(()) => {}
+            Err(TrySendError::Full(_)) => {
+                self.replication_stats
+                    .learner_wakeup_coalesced_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                self.replication_stats
+                    .learner_wakeup_disconnected_total
+                    .fetch_add(1, Ordering::Relaxed);
+            }
         }
     }
 }
@@ -369,22 +515,15 @@ fn replicate_learner_to_target(
     learner: NodeId,
     peer: &dyn MetadataLogPeerAppender,
     target_index: &AtomicU64,
-) {
+) -> Result<(), SharedLogError> {
     loop {
         let target = target_index.load(Ordering::Relaxed);
         let Some(entry) = read_target_entry(local, target) else {
-            return;
+            return Ok(());
         };
-        let _ = append_peer_with_catchup_from_log(
-            local_node,
-            local,
-            bootstrapper,
-            learner,
-            peer,
-            &entry,
-        );
+        append_peer_with_catchup_from_log(local_node, local, bootstrapper, learner, peer, &entry)?;
         if target_index.load(Ordering::Relaxed) == target {
-            return;
+            return Ok(());
         }
     }
 }
@@ -407,6 +546,13 @@ fn record_max(value: &AtomicU64, candidate: u64) {
             Err(observed) => current = observed,
         }
     }
+}
+
+fn record_elapsed_ns(value: &AtomicU64, started: Instant) {
+    value.fetch_add(
+        started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64,
+        Ordering::Relaxed,
+    );
 }
 
 fn append_peer_with_catchup_from_log(
@@ -710,6 +856,15 @@ mod tests {
             assert_eq!(entries[0].position.index.get(), 1);
             assert_eq!(entries[0].commands[0].request_id, b"a");
         }
+        wait_until("remote voter stats should include both voters", || {
+            let stats = log.replication_stats();
+            stats.remote_voter_append_success_total == 2
+                && stats.remote_voter_quorum_success_total == 1
+        });
+        let stats = log.replication_stats();
+        assert_eq!(stats.remote_voter_append_total, 2);
+        assert_eq!(stats.remote_voter_append_failure_total, 0);
+        assert!(stats.remote_voter_quorum_wait_ns_total > 0);
     }
 
     #[test]
@@ -965,6 +1120,13 @@ mod tests {
         );
         release_blocking_peer(&learner_state);
         writer.join().unwrap();
+        wait_until("learner catch-up stats should advance", || {
+            let stats = log.replication_stats();
+            stats.learner_wakeup_total == 1 && stats.learner_catchup_success_total == 1
+        });
+        let stats = log.replication_stats();
+        assert_eq!(stats.learner_catchup_failure_total, 0);
+        assert!(stats.learner_catchup_ns_total > 0);
     }
 
     #[test]

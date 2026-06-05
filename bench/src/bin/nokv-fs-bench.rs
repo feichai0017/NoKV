@@ -121,6 +121,18 @@ struct ResultRow {
     metadata_log_precheck_predicates: u64,
     metadata_log_precheck_ns: u64,
     metadata_log_stale_reads: u64,
+    metadata_log_remote_voter_appends: u64,
+    metadata_log_remote_voter_successes: u64,
+    metadata_log_remote_voter_failures: u64,
+    metadata_log_remote_voter_quorum_successes: u64,
+    metadata_log_remote_voter_quorum_failures: u64,
+    metadata_log_remote_voter_quorum_wait_ns: u64,
+    metadata_log_learner_wakeups: u64,
+    metadata_log_learner_wakeup_coalesced: u64,
+    metadata_log_learner_wakeup_disconnected: u64,
+    metadata_log_learner_catchup_successes: u64,
+    metadata_log_learner_catchup_failures: u64,
+    metadata_log_learner_catchup_ns: u64,
     metadata_gets: u64,
     metadata_get_user_strong: u64,
     metadata_get_write_plan_local: u64,
@@ -199,6 +211,18 @@ struct MetadataLogBenchStats {
     precheck_predicate_total: u64,
     precheck_ns_total: u64,
     stale_read_total: u64,
+    remote_voter_append_total: u64,
+    remote_voter_append_success_total: u64,
+    remote_voter_append_failure_total: u64,
+    remote_voter_quorum_success_total: u64,
+    remote_voter_quorum_failure_total: u64,
+    remote_voter_quorum_wait_ns_total: u64,
+    learner_wakeup_total: u64,
+    learner_wakeup_coalesced_total: u64,
+    learner_wakeup_disconnected_total: u64,
+    learner_catchup_success_total: u64,
+    learner_catchup_failure_total: u64,
+    learner_catchup_ns_total: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -1372,6 +1396,45 @@ fn row(input: RowInput) -> ResultRow {
         metadata_log_precheck_predicates: input.stats.metadata_log.precheck_predicate_total,
         metadata_log_precheck_ns: input.stats.metadata_log.precheck_ns_total,
         metadata_log_stale_reads: input.stats.metadata_log.stale_read_total,
+        metadata_log_remote_voter_appends: input.stats.metadata_log.remote_voter_append_total,
+        metadata_log_remote_voter_successes: input
+            .stats
+            .metadata_log
+            .remote_voter_append_success_total,
+        metadata_log_remote_voter_failures: input
+            .stats
+            .metadata_log
+            .remote_voter_append_failure_total,
+        metadata_log_remote_voter_quorum_successes: input
+            .stats
+            .metadata_log
+            .remote_voter_quorum_success_total,
+        metadata_log_remote_voter_quorum_failures: input
+            .stats
+            .metadata_log
+            .remote_voter_quorum_failure_total,
+        metadata_log_remote_voter_quorum_wait_ns: input
+            .stats
+            .metadata_log
+            .remote_voter_quorum_wait_ns_total,
+        metadata_log_learner_wakeups: input.stats.metadata_log.learner_wakeup_total,
+        metadata_log_learner_wakeup_coalesced: input
+            .stats
+            .metadata_log
+            .learner_wakeup_coalesced_total,
+        metadata_log_learner_wakeup_disconnected: input
+            .stats
+            .metadata_log
+            .learner_wakeup_disconnected_total,
+        metadata_log_learner_catchup_successes: input
+            .stats
+            .metadata_log
+            .learner_catchup_success_total,
+        metadata_log_learner_catchup_failures: input
+            .stats
+            .metadata_log
+            .learner_catchup_failure_total,
+        metadata_log_learner_catchup_ns: input.stats.metadata_log.learner_catchup_ns_total,
         metadata_gets: input.stats.metadata_store.get_total,
         metadata_get_user_strong: input.stats.metadata_store.get_user_strong_total,
         metadata_get_write_plan_local: input.stats.metadata_store.get_write_plan_local_total,
@@ -1429,7 +1492,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_precheck_commands,metadata_log_precheck_predicates,metadata_log_precheck_ns,metadata_log_stale_reads,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_log_entries,metadata_log_commands,metadata_log_max_batch,metadata_log_precheck_commands,metadata_log_precheck_predicates,metadata_log_precheck_ns,metadata_log_stale_reads,metadata_log_remote_voter_appends,metadata_log_remote_voter_successes,metadata_log_remote_voter_failures,metadata_log_remote_voter_quorum_successes,metadata_log_remote_voter_quorum_failures,metadata_log_remote_voter_quorum_wait_ns,metadata_log_learner_wakeups,metadata_log_learner_wakeup_coalesced,metadata_log_learner_wakeup_disconnected,metadata_log_learner_catchup_successes,metadata_log_learner_catchup_failures,metadata_log_learner_catchup_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow) -> String {
@@ -1461,6 +1524,18 @@ fn csv_row(row: &ResultRow) -> String {
         row.metadata_log_precheck_predicates.to_string(),
         row.metadata_log_precheck_ns.to_string(),
         row.metadata_log_stale_reads.to_string(),
+        row.metadata_log_remote_voter_appends.to_string(),
+        row.metadata_log_remote_voter_successes.to_string(),
+        row.metadata_log_remote_voter_failures.to_string(),
+        row.metadata_log_remote_voter_quorum_successes.to_string(),
+        row.metadata_log_remote_voter_quorum_failures.to_string(),
+        row.metadata_log_remote_voter_quorum_wait_ns.to_string(),
+        row.metadata_log_learner_wakeups.to_string(),
+        row.metadata_log_learner_wakeup_coalesced.to_string(),
+        row.metadata_log_learner_wakeup_disconnected.to_string(),
+        row.metadata_log_learner_catchup_successes.to_string(),
+        row.metadata_log_learner_catchup_failures.to_string(),
+        row.metadata_log_learner_catchup_ns.to_string(),
         row.metadata_gets.to_string(),
         row.metadata_get_user_strong.to_string(),
         row.metadata_get_write_plan_local.to_string(),
@@ -1674,6 +1749,54 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_log
                 .stale_read_total
                 .saturating_sub(before.metadata_log.stale_read_total),
+            remote_voter_append_total: after
+                .metadata_log
+                .remote_voter_append_total
+                .saturating_sub(before.metadata_log.remote_voter_append_total),
+            remote_voter_append_success_total: after
+                .metadata_log
+                .remote_voter_append_success_total
+                .saturating_sub(before.metadata_log.remote_voter_append_success_total),
+            remote_voter_append_failure_total: after
+                .metadata_log
+                .remote_voter_append_failure_total
+                .saturating_sub(before.metadata_log.remote_voter_append_failure_total),
+            remote_voter_quorum_success_total: after
+                .metadata_log
+                .remote_voter_quorum_success_total
+                .saturating_sub(before.metadata_log.remote_voter_quorum_success_total),
+            remote_voter_quorum_failure_total: after
+                .metadata_log
+                .remote_voter_quorum_failure_total
+                .saturating_sub(before.metadata_log.remote_voter_quorum_failure_total),
+            remote_voter_quorum_wait_ns_total: after
+                .metadata_log
+                .remote_voter_quorum_wait_ns_total
+                .saturating_sub(before.metadata_log.remote_voter_quorum_wait_ns_total),
+            learner_wakeup_total: after
+                .metadata_log
+                .learner_wakeup_total
+                .saturating_sub(before.metadata_log.learner_wakeup_total),
+            learner_wakeup_coalesced_total: after
+                .metadata_log
+                .learner_wakeup_coalesced_total
+                .saturating_sub(before.metadata_log.learner_wakeup_coalesced_total),
+            learner_wakeup_disconnected_total: after
+                .metadata_log
+                .learner_wakeup_disconnected_total
+                .saturating_sub(before.metadata_log.learner_wakeup_disconnected_total),
+            learner_catchup_success_total: after
+                .metadata_log
+                .learner_catchup_success_total
+                .saturating_sub(before.metadata_log.learner_catchup_success_total),
+            learner_catchup_failure_total: after
+                .metadata_log
+                .learner_catchup_failure_total
+                .saturating_sub(before.metadata_log.learner_catchup_failure_total),
+            learner_catchup_ns_total: after
+                .metadata_log
+                .learner_catchup_ns_total
+                .saturating_sub(before.metadata_log.learner_catchup_ns_total),
         },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: after
@@ -1981,6 +2104,18 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             precheck_predicate_total: json_u64(body, "precheck_predicate_total")?,
             precheck_ns_total: json_u64(body, "precheck_ns_total")?,
             stale_read_total: json_u64(body, "stale_read_total")?,
+            remote_voter_append_total: json_u64(body, "remote_voter_append_total")?,
+            remote_voter_append_success_total: json_u64(body, "remote_voter_append_success_total")?,
+            remote_voter_append_failure_total: json_u64(body, "remote_voter_append_failure_total")?,
+            remote_voter_quorum_success_total: json_u64(body, "remote_voter_quorum_success_total")?,
+            remote_voter_quorum_failure_total: json_u64(body, "remote_voter_quorum_failure_total")?,
+            remote_voter_quorum_wait_ns_total: json_u64(body, "remote_voter_quorum_wait_ns_total")?,
+            learner_wakeup_total: json_u64(body, "learner_wakeup_total")?,
+            learner_wakeup_coalesced_total: json_u64(body, "learner_wakeup_coalesced_total")?,
+            learner_wakeup_disconnected_total: json_u64(body, "learner_wakeup_disconnected_total")?,
+            learner_catchup_success_total: json_u64(body, "learner_catchup_success_total")?,
+            learner_catchup_failure_total: json_u64(body, "learner_catchup_failure_total")?,
+            learner_catchup_ns_total: json_u64(body, "learner_catchup_ns_total")?,
         },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: json_u64(body, "path_index_lookup_total")?,
@@ -2640,7 +2775,7 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_log":{"enabled":true,"commit_entry_total":20,"commit_command_total":21,"max_commands_per_entry":22,"precheck_command_total":35,"precheck_predicate_total":36,"precheck_ns_total":37,"stale_read_total":38},"metadata_service":{"path_index_lookup_total":23,"path_index_hit_total":24,"path_index_miss_total":25,"path_index_stale_total":26,"path_index_scan_stale_total":39,"path_index_fallback_total":27,"create_files_batch_total":28,"create_files_entry_total":29,"create_dirs_batch_total":30,"create_dirs_entry_total":31,"read_dir_plus_total":32,"read_dir_plus_entry_total":33,"read_dir_plus_projection_hit_total":34}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_log":{"enabled":true,"commit_entry_total":20,"commit_command_total":21,"max_commands_per_entry":22,"precheck_command_total":35,"precheck_predicate_total":36,"precheck_ns_total":37,"stale_read_total":38,"remote_voter_append_total":41,"remote_voter_append_success_total":42,"remote_voter_append_failure_total":43,"remote_voter_quorum_success_total":44,"remote_voter_quorum_failure_total":45,"remote_voter_quorum_wait_ns_total":46,"learner_wakeup_total":47,"learner_wakeup_coalesced_total":48,"learner_wakeup_disconnected_total":49,"learner_catchup_success_total":50,"learner_catchup_failure_total":51,"learner_catchup_ns_total":52},"metadata_service":{"path_index_lookup_total":23,"path_index_hit_total":24,"path_index_miss_total":25,"path_index_stale_total":26,"path_index_scan_stale_total":39,"path_index_fallback_total":27,"create_files_batch_total":28,"create_files_entry_total":29,"create_dirs_batch_total":30,"create_dirs_entry_total":31,"read_dir_plus_total":32,"read_dir_plus_entry_total":33,"read_dir_plus_projection_hit_total":34}}"#;
 
         assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
         assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
@@ -2661,6 +2796,17 @@ mod tests {
         assert_eq!(json_u64(body, "precheck_predicate_total").unwrap(), 36);
         assert_eq!(json_u64(body, "precheck_ns_total").unwrap(), 37);
         assert_eq!(json_u64(body, "stale_read_total").unwrap(), 38);
+        assert_eq!(json_u64(body, "remote_voter_append_total").unwrap(), 41);
+        assert_eq!(
+            json_u64(body, "remote_voter_quorum_wait_ns_total").unwrap(),
+            46
+        );
+        assert_eq!(json_u64(body, "learner_wakeup_total").unwrap(), 47);
+        assert_eq!(
+            json_u64(body, "learner_wakeup_coalesced_total").unwrap(),
+            48
+        );
+        assert_eq!(json_u64(body, "learner_catchup_ns_total").unwrap(), 52);
         assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 24);
         assert_eq!(json_u64(body, "path_index_scan_stale_total").unwrap(), 39);
         assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 28);
@@ -2733,6 +2879,8 @@ mod tests {
         assert!(header.contains("metadata_prefix_empty_predicates"));
         assert!(header.contains("metadata_history_lookups"));
         assert!(header.contains("metadata_atomic_apply_max_batch"));
+        assert!(header.contains("metadata_log_remote_voter_quorum_wait_ns"));
+        assert!(header.contains("metadata_log_learner_catchup_ns"));
         assert!(header.contains("path_index_hit_rate"));
         assert!(header.contains("path_index_scan_stale"));
         assert!(header.contains("read_dir_plus_projection_hit_rate"));
