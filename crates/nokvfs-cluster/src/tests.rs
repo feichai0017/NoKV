@@ -843,9 +843,18 @@ fn shared_log_metadata_store_rejects_strong_reads_before_replay_catches_up() {
     );
 
     assert!(matches!(
-        learner.get(RecordFamily::Dentry, b"a", version(2), ReadPurpose::UserStrong),
-        Err(MetadataError::Backend(message))
-            if message.contains("metadata read requires applied frontier")
+        learner.get(
+            RecordFamily::Dentry,
+            b"a",
+            version(2),
+            ReadPurpose::UserStrong
+        ),
+        Err(MetadataError::ReadNotFresh {
+            required_term: 1,
+            required_index: 1,
+            applied_term: None,
+            applied_index: None,
+        })
     ));
     assert!(matches!(
         learner.scan_keys(KeyScanRequest {
@@ -855,8 +864,12 @@ fn shared_log_metadata_store_rejects_strong_reads_before_replay_catches_up() {
             limit: 1,
             purpose: ReadPurpose::UserStrong,
         }),
-        Err(MetadataError::Backend(message))
-            if message.contains("metadata read requires applied frontier")
+        Err(MetadataError::ReadNotFresh {
+            required_term: 1,
+            required_index: 1,
+            applied_term: None,
+            applied_index: None,
+        })
     ));
     assert!(learner
         .get(
@@ -1008,9 +1021,18 @@ fn shared_log_learner_replay_tail_enables_fresh_reads() {
         }) if required == committed
     ));
     assert!(matches!(
-        learner.get(RecordFamily::Dentry, b"a", version(2), ReadPurpose::UserStrong),
-        Err(MetadataError::Backend(message))
-            if message.contains("metadata read requires applied frontier")
+        learner.get(
+            RecordFamily::Dentry,
+            b"a",
+            version(2),
+            ReadPurpose::UserStrong
+        ),
+        Err(MetadataError::ReadNotFresh {
+            required_term: 1,
+            required_index: 1,
+            applied_term: None,
+            applied_index: None,
+        })
     ));
 
     let outcome = learner.replay_committed_tail(0).unwrap();

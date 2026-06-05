@@ -3,7 +3,7 @@ use std::net::{SocketAddr, TcpStream};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use std::{collections::HashMap, io};
 
 use nokvfs_meta::{DentryWithAttr, ObjectTransferStats, RenameReplaceResult};
@@ -27,6 +27,7 @@ use nokvfs_types::{
 use crate::{ArtifactMetadata, ClientError, NamespaceRead};
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
+const READ_NOT_FRESH_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BATCH_RPC_REQUESTS: usize = 512;
 const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
@@ -1065,21 +1066,42 @@ impl MetadataClient {
     }
 
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
-        let mut fallback_error = None;
-        for address in self.request_endpoints(&request) {
-            let request = self.request_with_observed_position(request.clone());
-            match self.call_at(address, &request) {
-                Ok(result) => return Ok(result),
-                Err(err @ ClientError::ReadNotFresh { .. }) => {
-                    fallback_error = Some(err);
-                }
-                Err(err @ ClientError::Io(_)) => {
-                    self.drop_connection(address);
-                    fallback_error = Some(err);
-                }
-                Err(err) => return Err(err),
-            }
+        let endpoints = self.request_endpoints(&request);
+        if endpoints.is_empty() {
+            return Err(ClientError::Protocol(
+                "metadata request had no target endpoint".to_owned(),
+            ));
         }
+        let started = Instant::now();
+        let mut fallback_error = None;
+
+        loop {
+            let mut saw_stale_read = false;
+            for address in &endpoints {
+                let request = self.request_with_observed_position(request.clone());
+                match self.call_at(*address, &request) {
+                    Ok(result) => return Ok(result),
+                    Err(err @ ClientError::ReadNotFresh { .. }) => {
+                        saw_stale_read = true;
+                        fallback_error = Some(err);
+                    }
+                    Err(err @ ClientError::Io(_)) => {
+                        self.drop_connection(*address);
+                        fallback_error = Some(err);
+                    }
+                    Err(err) => return Err(err),
+                }
+            }
+
+            if !saw_stale_read {
+                break;
+            }
+            let Some(delay) = read_not_fresh_retry_delay(started, self.options.timeout) else {
+                break;
+            };
+            thread::sleep(delay);
+        }
+
         Err(fallback_error.unwrap_or_else(|| {
             ClientError::Protocol("metadata request had no target endpoint".to_owned())
         }))
@@ -1228,6 +1250,14 @@ fn request_requires_observed_position(request: &MetadataRpcRequest) -> bool {
             | MetadataRpcRequest::ReadBodyPlan { .. }
             | MetadataRpcRequest::ReadPathPlan { .. }
     )
+}
+
+fn read_not_fresh_retry_delay(started: Instant, timeout: Duration) -> Option<Duration> {
+    let elapsed = started.elapsed();
+    if elapsed >= timeout {
+        return None;
+    }
+    Some((timeout - elapsed).min(READ_NOT_FRESH_RETRY_INTERVAL))
 }
 
 fn rpc_parent_and_name(path: &str) -> Result<(String, String), ClientError> {
@@ -1913,6 +1943,54 @@ mod tests {
     }
 
     #[test]
+    fn service_client_retries_stale_single_endpoint_until_fresh() {
+        let position = WireMetadataPosition { term: 7, index: 11 };
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr().unwrap();
+        thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+            stream.read_exact(&mut magic).unwrap();
+            assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+            for response in [
+                read_not_fresh_response(
+                    position,
+                    Some(WireMetadataPosition {
+                        term: position.term,
+                        index: position.index - 1,
+                    }),
+                ),
+                response_body(
+                    r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+                ),
+            ] {
+                let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+                let request = decode_request(&request).unwrap();
+                assert!(matches!(
+                    request,
+                    MetadataRpcRequest::RequireApplied {
+                        position: observed,
+                        request,
+                    } if observed == position
+                        && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
+                ));
+                write_frame(&mut stream, request_id, flags, &response).unwrap();
+            }
+        });
+
+        let client = MetadataClient::connect(addr);
+        client.observe_metadata_position(ClientMetadataPosition {
+            term: position.term,
+            index: position.index,
+        });
+
+        let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
+
+        assert_eq!(metadata.attr.inode.get(), 40);
+    }
+
+    #[test]
     fn service_client_imports_observed_position_for_learner_reads() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let addr = listener.local_addr().unwrap();
@@ -2296,11 +2374,10 @@ mod tests {
 
     #[test]
     fn service_typed_error_maps_read_not_fresh() {
-        let addr = serve_one(
-            r#"{"ok":false,"error":"metadata read requires applied frontier 2:8","error_kind":{"type":"read_not_fresh","required":{"term":2,"index":8},"applied":{"term":2,"index":5}}}"#,
-        );
-        let client = MetadataClient::connect(addr);
-        let err = client.stat_path("/artifact.bin").unwrap_err();
+        let err = client_error_from_wire_error(WireMetadataError::ReadNotFresh {
+            required: WireMetadataPosition { term: 2, index: 8 },
+            applied: Some(WireMetadataPosition { term: 2, index: 5 }),
+        });
         assert!(matches!(
             err,
             ClientError::ReadNotFresh {

@@ -203,6 +203,12 @@ pub enum MetadataError {
     PutWithoutValue,
     DeleteWithValue,
     PredicateFailed,
+    ReadNotFresh {
+        required_term: u64,
+        required_index: u64,
+        applied_term: Option<u64>,
+        applied_index: Option<u64>,
+    },
     Backend(String),
 }
 
@@ -420,6 +426,24 @@ impl fmt::Display for MetadataError {
             Self::PutWithoutValue => write!(f, "put mutation is missing value"),
             Self::DeleteWithValue => write!(f, "delete mutation has a value"),
             Self::PredicateFailed => write!(f, "metadata command predicate failed"),
+            Self::ReadNotFresh {
+                required_term,
+                required_index,
+                applied_term,
+                applied_index,
+            } => {
+                write!(
+                    f,
+                    "metadata read requires applied frontier {required_term}:{required_index}"
+                )?;
+                if let (Some(applied_term), Some(applied_index)) = (applied_term, applied_index) {
+                    write!(
+                        f,
+                        ", current applied frontier is {applied_term}:{applied_index}"
+                    )?;
+                }
+                Ok(())
+            }
             Self::Backend(err) => write!(f, "metadata backend error: {err}"),
         }
     }

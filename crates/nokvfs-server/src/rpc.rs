@@ -709,6 +709,21 @@ fn wire_shared_log_error(err: &nokvfs_cluster::SharedLogError) -> WireMetadataEr
 
 fn wire_metad_error(err: &MetadError) -> WireMetadataError {
     match err {
+        MetadError::Metadata(nokvfs_meta::MetadataError::ReadNotFresh {
+            required_term,
+            required_index,
+            applied_term,
+            applied_index,
+        }) => WireMetadataError::ReadNotFresh {
+            required: WireMetadataPosition {
+                term: *required_term,
+                index: *required_index,
+            },
+            applied: match (*applied_term, *applied_index) {
+                (Some(term), Some(index)) => Some(WireMetadataPosition { term, index }),
+                _ => None,
+            },
+        },
         MetadError::Metadata(nokvfs_meta::MetadataError::PredicateFailed) => {
             WireMetadataError::PredicateFailed
         }

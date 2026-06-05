@@ -339,7 +339,7 @@ where
         freshness: ReadFreshness,
     ) -> Result<Option<ReadItem>, MetadataError> {
         self.ensure_read_freshness(freshness)
-            .map_err(|err| MetadataError::Backend(err.to_string()))?;
+            .map_err(metadata_error_from_shared_log)?;
         self.store.get_versioned(family, key, version, purpose)
     }
 
@@ -349,7 +349,7 @@ where
         freshness: ReadFreshness,
     ) -> Result<Vec<ScanItem>, MetadataError> {
         self.ensure_read_freshness(freshness)
-            .map_err(|err| MetadataError::Backend(err.to_string()))?;
+            .map_err(metadata_error_from_shared_log)?;
         self.store.scan(request)
     }
 
@@ -359,7 +359,7 @@ where
         freshness: ReadFreshness,
     ) -> Result<Vec<Vec<u8>>, MetadataError> {
         self.ensure_read_freshness(freshness)
-            .map_err(|err| MetadataError::Backend(err.to_string()))?;
+            .map_err(metadata_error_from_shared_log)?;
         self.store.scan_keys(request)
     }
 
@@ -369,7 +369,7 @@ where
         freshness: ReadFreshness,
     ) -> Result<Vec<DelimitedScanItem>, MetadataError> {
         self.ensure_read_freshness(freshness)
-            .map_err(|err| MetadataError::Backend(err.to_string()))?;
+            .map_err(metadata_error_from_shared_log)?;
         self.store.scan_delimited(request)
     }
 
@@ -779,6 +779,18 @@ fn command_conflicts_with_prior_commands(
     commands
         .iter()
         .any(|previous| metadata_commands_conflict(command, previous))
+}
+
+fn metadata_error_from_shared_log(err: SharedLogError) -> MetadataError {
+    match err {
+        SharedLogError::ReadNotFresh { required, applied } => MetadataError::ReadNotFresh {
+            required_term: required.term.get(),
+            required_index: required.index.get(),
+            applied_term: applied.map(|position| position.term.get()),
+            applied_index: applied.map(|position| position.index.get()),
+        },
+        other => MetadataError::Backend(other.to_string()),
+    }
 }
 
 impl<M, L, F> SharedLogMetadataStore<M, L, F>
