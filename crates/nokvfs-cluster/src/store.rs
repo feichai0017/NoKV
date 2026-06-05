@@ -11,10 +11,11 @@ use std::io::Cursor;
 #[cfg(test)]
 use std::ops::RangeBounds;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 #[cfg(test)]
 use std::sync::Mutex;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use nokvfs_meta::command::{
     CommitResult, DelimitedScanItem, DelimitedScanRequest, HistoryPruneOutcome,
@@ -96,11 +97,13 @@ pub struct OpenRaftMetadataStore<M> {
     read_store: M,
     raft: Raft<MetadataRaftConfig>,
     runtime: tokio::runtime::Runtime,
+    counters: Arc<OpenRaftMetadataCounters>,
 }
 
 #[derive(Clone)]
 pub struct OpenRaftMetadataStatsHandle {
     metrics: tokio::sync::watch::Receiver<openraft::RaftMetrics<u64, BasicNode>>,
+    counters: Arc<OpenRaftMetadataCounters>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -116,6 +119,18 @@ pub struct OpenRaftMetadataStats {
     pub millis_since_quorum_ack: Option<u64>,
     pub voter_count: usize,
     pub learner_count: usize,
+    pub proposal_batch_total: u64,
+    pub proposal_command_total: u64,
+    pub proposal_max_batch: u64,
+    pub proposal_ns_total: u64,
+}
+
+#[derive(Default)]
+struct OpenRaftMetadataCounters {
+    proposal_batch_total: AtomicU64,
+    proposal_command_total: AtomicU64,
+    proposal_max_batch: AtomicU64,
+    proposal_ns_total: AtomicU64,
 }
 
 impl<M> Debug for OpenRaftMetadataStore<M> {
@@ -160,6 +175,10 @@ impl OpenRaftMetadataStatsHandle {
             millis_since_quorum_ack: metrics.millis_since_quorum_ack,
             voter_count,
             learner_count,
+            proposal_batch_total: self.counters.proposal_batch_total.load(Ordering::Relaxed),
+            proposal_command_total: self.counters.proposal_command_total.load(Ordering::Relaxed),
+            proposal_max_batch: self.counters.proposal_max_batch.load(Ordering::Relaxed),
+            proposal_ns_total: self.counters.proposal_ns_total.load(Ordering::Relaxed),
         }
     }
 }
@@ -218,6 +237,7 @@ where
     pub fn stats_handle(&self) -> OpenRaftMetadataStatsHandle {
         OpenRaftMetadataStatsHandle {
             metrics: self.raft.metrics(),
+            counters: Arc::clone(&self.counters),
         }
     }
 
@@ -275,6 +295,23 @@ where
     where
         N: RaftNetworkFactory<MetadataRaftConfig> + Send + Sync + 'static,
     {
+        let (raft, _) = Self::new_voter_group_with_file_log_and_network(
+            store, node, log_path, options, network, voters,
+        )?;
+        Ok(raft)
+    }
+
+    pub fn new_voter_group_with_file_log_and_network<N>(
+        store: M,
+        node: NodeId,
+        log_path: impl AsRef<Path>,
+        options: FileMetadataRaftLogOptions,
+        network: N,
+        voters: &BTreeMap<NodeId, String>,
+    ) -> Result<(Self, bool), MetadataError>
+    where
+        N: RaftNetworkFactory<MetadataRaftConfig> + Send + Sync + 'static,
+    {
         let log = FileMetadataRaftLog::open(log_path, options)
             .map_err(|err| MetadataError::Backend(format!("openraft file log: {err}")))?;
         let should_initialize = log.last_log_id().is_none();
@@ -282,7 +319,7 @@ where
         if should_initialize {
             raft.initialize_voters(voters)?;
         }
-        Ok(raft)
+        Ok((raft, should_initialize))
     }
 
     pub fn new_uninitialized_with_file_log_and_network<N>(
@@ -364,6 +401,7 @@ where
             read_store: store,
             raft,
             runtime,
+            counters: Arc::new(OpenRaftMetadataCounters::default()),
         })
     }
 
@@ -566,7 +604,9 @@ where
             Ok(batch) => batch,
             Err(err) => return commands.iter().map(|_| Err(err.clone())).collect(),
         };
-        match self.runtime.block_on(self.raft.client_write(batch)) {
+        let started = Instant::now();
+        let command_count = commands.len();
+        let result = match self.runtime.block_on(self.raft.client_write(batch)) {
             Ok(response) => normalize_apply_results(commands.len(), response.data.results),
             Err(err) => {
                 let error = if let Some(forward) = err.forward_to_leader::<BasicNode>() {
@@ -579,7 +619,21 @@ where
                 };
                 commands.iter().map(|_| Err(error.clone())).collect()
             }
-        }
+        };
+        self.counters
+            .proposal_batch_total
+            .fetch_add(1, Ordering::Relaxed);
+        self.counters
+            .proposal_command_total
+            .fetch_add(command_count as u64, Ordering::Relaxed);
+        self.counters
+            .proposal_max_batch
+            .fetch_max(command_count as u64, Ordering::Relaxed);
+        self.counters.proposal_ns_total.fetch_add(
+            u64::try_from(started.elapsed().as_nanos()).unwrap_or(u64::MAX),
+            Ordering::Relaxed,
+        );
+        result
     }
 }
 

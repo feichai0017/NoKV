@@ -23,6 +23,7 @@ DEFAULT_WORKLOADS=(
     mlperf-dlio
     metadata-ha-smoke
     metadata-ha-fault-smoke
+    metadata-ha-learner-read
 )
 
 usage() {

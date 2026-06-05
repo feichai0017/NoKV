@@ -231,6 +231,11 @@ pub enum MetadataRpcRequest {
         uid: u32,
         gid: u32,
     },
+    MetadataRaftAddLearner {
+        node: u64,
+        address: String,
+        blocking: bool,
+    },
     MetadataRaftVote {
         request: WireMetadataRaftVoteRequest,
     },
@@ -454,6 +459,9 @@ pub enum MetadataRpcResult {
     },
     PreparedArtifact {
         prepared: WirePreparedArtifact,
+    },
+    MetadataPosition {
+        position: WireMetadataPosition,
     },
     MetadataRaftVote {
         response: WireMetadataRaftVoteResponse,

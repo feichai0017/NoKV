@@ -16,6 +16,7 @@ pub struct ServerOptions {
     pub meta_path: PathBuf,
     pub metadata_raft_node: NodeId,
     pub metadata_raft_voters: Vec<NodeId>,
+    pub metadata_raft_learners: Vec<NodeId>,
     pub metadata_raft_peers: Vec<MetadataRaftPeerOptions>,
     pub metadata_raft_log_sync: FileMetadataRaftLogSync,
     pub metadata_checkpoint_archive_prefix: Option<String>,

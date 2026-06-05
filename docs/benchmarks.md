@@ -49,14 +49,30 @@ scripts/run-ai-training-smoke.sh
 ```
 
 The default gate runs `metadata-concurrent-read`, `checkpoint-publish`,
-`mlperf-dlio`, `metadata-ha-smoke`, and `metadata-ha-fault-smoke`. This is the
-fast regression set for Holt-native metadata reads, chunked object publish, and
-the OpenRaft metadata HA path. You can narrow it to a single workload while
+`mlperf-dlio`, `metadata-ha-smoke`, `metadata-ha-fault-smoke`, and
+`metadata-ha-learner-read`. This is the fast regression set for Holt-native
+metadata reads, chunked object publish, learner read freshness, and the
+OpenRaft metadata HA path. You can narrow it to a single workload while
 iterating:
 
 ```bash
 scripts/run-ai-training-smoke.sh metadata-ha-fault-smoke
 ```
+
+For a local NoKV-FS versus JuiceFS same-shape comparison, mount JuiceFS first
+and pass its mountpoint to the comparison script:
+
+```bash
+JUICEFS_MOUNT=/mnt/jfs \
+NOKV_COMPARE_PROFILE=standard \
+scripts/run-training-comparison.sh
+```
+
+The script runs NoKV-FS through the RustFS-backed `mlperf-dlio` workload, then
+runs a generated dataset/checkpoint workload with the same shape inside the
+existing JuiceFS mount. This is useful for local engineering comparisons. It is
+not an MLCommons official submission result and does not replace running the
+official MLPerf Storage or DLIO harness against a NoKV-FS FUSE mount.
 
 The gate also accepts the special workload `fuse-smoke` for the mounted POSIX
 semantics check. It is not part of the default list because it requires a
@@ -87,6 +103,32 @@ filesystem, and exercises mkdir, file write/read, file fsync, directory fsync,
 rename, readdir, truncate, symlink/readlink, xattr error handling, access(2),
 rm, and rmdir through the mounted filesystem. This is a correctness smoke, not
 a performance benchmark.
+
+For JuiceFS-style mounted-filesystem compatibility gates, mount NoKV-FS first
+and run the external-suite driver against that mountpoint:
+
+```bash
+NOKV_FUSE_MOUNT=/mnt/nokv \
+scripts/run-fuse-compat-gate.sh
+```
+
+The default compatibility gate runs a small namespace/data smoke plus xattr
+roundtrip. Heavier suites are opt-in because they require external tools and
+will expose unsupported POSIX semantics until NoKV-FS reaches the full POSIX
+gate:
+
+```bash
+NOKV_FUSE_MOUNT=/mnt/nokv \
+NOKV_FUSE_COMPAT_TESTS="basic xattr pjdfstest ltp" \
+scripts/run-fuse-compat-gate.sh
+```
+
+This mirrors the way mature FUSE filesystems such as JuiceFS validate the
+mounted boundary: `pjdfstest` for syscall-level POSIX behavior, LTP filesystem
+groups for kernel-facing semantics, randomized filesystem operation tests for
+state-space coverage, and separate performance runs for mdtest/fio/object-store
+paths. NoKV keeps the default CI smoke smaller, then uses these external gates
+when claiming POSIX compatibility.
 
 The harness prints CSV. The exact column set is owned by
 `bench/src/bin/nokv-fs-bench.rs`; the important column families are:
@@ -119,6 +161,11 @@ stats endpoint: current term, leader, last log index, last applied index,
 snapshot/purge frontier, quorum freshness, and voter/learner counts. These
 fields show whether an HA smoke run actually advanced the replicated metadata
 group.
+
+`metadata_raft_proposal_batches`, `metadata_raft_proposal_commands`,
+`metadata_raft_proposal_max_batch`, and `metadata_raft_proposal_ns` report the
+OpenRaft proposal layer. Use these together with the Holt apply columns to
+distinguish Raft-entry coalescing from state-machine apply coalescing.
 
 Object-backed workloads can be scaled without editing code:
 
@@ -162,6 +209,11 @@ without object reads.
 Use it to measure metadata read concurrency, cache contention, and framed RPC
 worker behavior.
 
+`metadata-ha-learner-read` starts a local 3-voter OpenRaft metadata group plus
+one learner. It writes through a voter endpoint, imports the write receipt into
+a learner-only metadata client, then times repeated learner directory reads.
+This isolates read-your-writes freshness and learner-side read scaling.
+
 `checkpoint-publish` writes checkpoint bodies to the configured
 S3-compatible object backend, then atomically promotes staged files with
 `rename_replace`. This measures object put plus metadata publish, not metadata
@@ -188,12 +240,32 @@ for CI performance claims.
 | `standard` | Local performance baseline: 1 MiB checkpoints and 16 KiB samples. |
 | `long` | Larger local stress run: 8 MiB checkpoints and 256 KiB samples. |
 
+## JuiceFS-Style Evidence Ladder
+
+JuiceFS is a useful reference because its tests are layered rather than a
+single benchmark number:
+
+| Layer | JuiceFS practice | NoKV-FS equivalent |
+| --- | --- | --- |
+| Quick mounted smoke | `juicefs bench` and targeted mount checks | `scripts/run-fuse-smoke.sh` |
+| POSIX compatibility | `pjdfstest`, LTP fs/fsx/io/fcntl groups, xattr tests | `scripts/run-fuse-compat-gate.sh` with `pjdfstest ltp xattr` |
+| Random operation stress | Hypothesis fs state machines and long random-test runs with create/read/ls/delete/rename/link/truncate/walk mixes | Planned NoKV mounted random-operation gate; current coverage is unit/contract tests plus FUSE smoke |
+| Metadata regression | mdtest scenarios across metadata engines, current-vs-previous comparison with tolerance | `mdtest-easy`, `mdtest-hard`, `metadata-ha-*`; current-vs-baseline comparison still needs an automated gate |
+| Data path regression | fio and object-store bench paths | `checkpoint-publish`, `training-read`, `mlperf-dlio`, and future object microbench expansion |
+| Long-run stress | vdbench and scheduled workflows | Planned long profile plus multi-node OpenRaft/object-store soak |
+
+Use this ladder when interpreting results. A NoKV metadata microbench can prove
+a Holt/OpenRaft hot path improved; it cannot by itself prove POSIX correctness,
+object-store behavior, or training-cluster readiness.
+
 ## Current Caveats
 
 Most workloads run a single-node `metad` process with a configured
 S3-compatible object backend. `metadata-ha-smoke` and
-`metadata-ha-fault-smoke` are the exceptions: they start a local OpenRaft
-metadata topology and report Raft state plus metadata apply metrics.
+`metadata-ha-fault-smoke` are the write-path HA exceptions:
+they start a local OpenRaft metadata topology and report Raft state plus
+metadata apply metrics. `metadata-ha-learner-read` adds a learner and reports
+read metrics from that learner node.
 
 The harness still does not include FUSE kernel caching, Python DataLoader
 overhead, object-store multipart upload, or a multi-machine training cluster.

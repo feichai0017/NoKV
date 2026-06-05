@@ -14,7 +14,7 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -46,6 +46,7 @@ enum Workload {
     MetadataSmoke,
     MetadataHaSmoke,
     MetadataHaFaultSmoke,
+    MetadataHaLearnerRead,
     MdtestEasy,
     MdtestHard,
     MetadataNegativeLookup,
@@ -122,6 +123,10 @@ struct ResultRow {
     metadata_raft_millis_since_quorum_ack: u64,
     metadata_raft_voters: u64,
     metadata_raft_learners: u64,
+    metadata_raft_proposal_batches: u64,
+    metadata_raft_proposal_commands: u64,
+    metadata_raft_proposal_max_batch: u64,
+    metadata_raft_proposal_ns: u64,
     metadata_gets: u64,
     metadata_get_user_strong: u64,
     metadata_get_write_plan_local: u64,
@@ -202,6 +207,10 @@ struct MetadataRaftBenchStats {
     millis_since_quorum_ack: u64,
     voter_count: u64,
     learner_count: u64,
+    proposal_batch_total: u64,
+    proposal_command_total: u64,
+    proposal_max_batch: u64,
+    proposal_ns_total: u64,
 }
 
 #[derive(Clone, Debug)]
@@ -209,6 +218,7 @@ struct MetadataHaClusterConfig {
     root: PathBuf,
     object: ObjectStoreConfig,
     voters: Vec<NodeId>,
+    learners: Vec<NodeId>,
     peers: Vec<MetadataRaftPeerOptions>,
     sync: FileMetadataRaftLogSync,
 }
@@ -408,7 +418,7 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-fs-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|metadata-ha-learner-read|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
              [--read-repeats N] [--block-cache on|off] \
@@ -446,6 +456,9 @@ fn run_one(
     if workload == Workload::MetadataHaFaultSmoke {
         return bench_metadata_ha_fault_smoke(config, shape);
     }
+    if workload == Workload::MetadataHaLearnerRead {
+        return bench_metadata_ha_learner_read(config, shape);
+    }
     let label = workload_name(workload);
     let client = client_for(config, label)?;
     client.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
@@ -468,6 +481,9 @@ fn run_one(
         Workload::MetadataHaSmoke => unreachable!("metadata-ha-smoke executes before client setup"),
         Workload::MetadataHaFaultSmoke => {
             unreachable!("metadata-ha-fault-smoke executes before client setup")
+        }
+        Workload::MetadataHaLearnerRead => {
+            unreachable!("metadata-ha-learner-read executes before client setup")
         }
         Workload::MetadataSmoke => unreachable!("metadata-smoke expands before execution"),
         Workload::All => unreachable!("all expands before execution"),
@@ -831,6 +847,7 @@ fn bench_metadata_ha_smoke(
         root: root.clone(),
         object,
         voters,
+        learners: Vec::new(),
         peers,
         sync: config.metadata_raft_log_sync,
     };
@@ -964,6 +981,7 @@ fn bench_metadata_ha_fault_smoke(
         root: root.clone(),
         object,
         voters,
+        learners: Vec::new(),
         peers,
         sync: config.metadata_raft_log_sync,
     };
@@ -1073,6 +1091,173 @@ fn bench_metadata_ha_fault_smoke(
         ),
         caveat: format!(
             "OpenRaft metadata HA fault smoke: node3 unavailable for initial quorum commit, then restarted and caught up, sync={}",
+            metadata_raft_log_sync_name(config.metadata_raft_log_sync)
+        ),
+    }))
+}
+
+fn bench_metadata_ha_learner_read(
+    config: &Config,
+    shape: &WorkloadShape,
+) -> Result<ResultRow, BenchError> {
+    let workload = "metadata-ha-learner-read";
+    let root = config.root.join(workload);
+    fs::create_dir_all(&root).map_err(from_io)?;
+    let object = object_config_for(config, workload);
+    let objects = object.clone().open().map_err(from_client)?;
+    let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
+    let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
+    let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
+    let learner = NodeId::new(4).expect("benchmark node id is non-zero");
+    let voters = vec![node_1, node_2, node_3];
+    let learners = vec![learner];
+
+    let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_2 = listener_2.local_addr().map_err(from_io)?;
+    let listener_3 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_3 = listener_3.local_addr().map_err(from_io)?;
+    let learner_listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let learner_addr = learner_listener.local_addr().map_err(from_io)?;
+    let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+    let addr_1 = listener_1.local_addr().map_err(from_io)?;
+    let peers = vec![
+        MetadataRaftPeerOptions {
+            node: node_1,
+            address: addr_1,
+        },
+        MetadataRaftPeerOptions {
+            node: node_2,
+            address: addr_2,
+        },
+        MetadataRaftPeerOptions {
+            node: node_3,
+            address: addr_3,
+        },
+        MetadataRaftPeerOptions {
+            node: learner,
+            address: learner_addr,
+        },
+    ];
+    let cluster = MetadataHaClusterConfig {
+        root: root.clone(),
+        object,
+        voters,
+        learners,
+        peers,
+        sync: config.metadata_raft_log_sync,
+    };
+
+    start_metadata_raft_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
+    wait_for_health(addr_2)?;
+    start_metadata_raft_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
+    wait_for_health(addr_3)?;
+    start_metadata_raft_server(
+        learner_listener,
+        server_options_for_node(&cluster, learner)?,
+    )?;
+    wait_for_health(learner_addr)?;
+    start_metadata_raft_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
+    wait_for_health(addr_1)?;
+
+    let cluster_nodes = [
+        (node_1, addr_1),
+        (node_2, addr_2),
+        (node_3, addr_3),
+        (learner, learner_addr),
+    ];
+    let (leader, leader_addr) = wait_metadata_raft_leader(&cluster_nodes)?;
+    MetadataClient::connect(leader_addr)
+        .add_metadata_raft_learner(learner.get(), learner_addr, true)
+        .map_err(|err| BenchError::Client(format!("{workload} add learner: {err}")))?;
+    wait_metadata_raft_membership_counts(&cluster_nodes, 3, 1)?;
+    let write_addr = cluster_nodes
+        .iter()
+        .find_map(|(node, address)| (*node != leader && *node != learner).then_some(*address))
+        .unwrap_or(leader_addr);
+    let metadata = MetadataClient::new(
+        MetadataClientOptions::new(write_addr).with_read_endpoints(vec![learner_addr]),
+    );
+    let client = NoKvFsClient::new(metadata, objects);
+    client
+        .metadata()
+        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(|err| BenchError::Client(format!("{workload} bootstrap root: {err}")))?;
+    client
+        .metadata()
+        .mkdir("/ha-learner", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+        .map_err(|err| BenchError::Client(format!("{workload} mkdir /ha-learner: {err}")))?;
+    let files = shape.shared_files.clamp(16, 512);
+    let paths = (0..files)
+        .map(|index| format!("/ha-learner/file-{index:06}"))
+        .collect::<Vec<_>>();
+    for entry in client
+        .metadata()
+        .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
+        .map_err(|err| BenchError::Client(format!("{workload} create files RPC: {err}")))?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| BenchError::Client(format!("{workload} create files result: {err}")))?
+    {
+        black_box(entry.attr.inode.get());
+    }
+    let observed = client
+        .metadata()
+        .observed_metadata_position()
+        .ok_or_else(|| {
+            BenchError::Client("learner read setup returned no log position".to_owned())
+        })?;
+    let reader = Arc::new(MetadataClient::connect(learner_addr));
+    reader.observe_metadata_position(observed);
+    let warm = reader
+        .list("/ha-learner")
+        .map_err(|err| BenchError::Client(format!("{workload} warm learner list: {err}")))?;
+    if warm.len() != files {
+        return Err(BenchError::Client(format!(
+            "learner warm read returned {} entries, expected {files}",
+            warm.len()
+        )));
+    }
+
+    let read_ops = shape.shared_files.clamp(16, 512) * config.read_repeats;
+    let before = fetch_server_stats(learner_addr)?;
+    let start = Instant::now();
+    let checksum = run_parallel(read_ops, config.object_concurrency, |_| {
+        let entries = reader
+            .list("/ha-learner")
+            .map_err(|err| BenchError::Client(format!("{workload} learner list: {err}")))?;
+        if entries.len() != files {
+            return Err(BenchError::Client(format!(
+                "learner read returned {} entries, expected {files}",
+                entries.len()
+            )));
+        }
+        Ok(entries
+            .first()
+            .map(|entry| entry.attr.inode.get())
+            .unwrap_or(0)
+            .wrapping_add(entries.len() as u64))
+    })?;
+    let stats = stats_delta(before, fetch_server_stats(learner_addr)?);
+    Ok(row(RowInput {
+        workload,
+        profile: config.profile,
+        operations: read_ops,
+        seconds: start.elapsed().as_secs_f64(),
+        bytes: 0,
+        samples: 0,
+        stats,
+        object_concurrency: config.object_concurrency,
+        read_repeats: config.read_repeats,
+        block_cache: config.block_cache,
+        checksum,
+        shape: format!(
+            "voters=3 learners=1 leader={} write_endpoint={} learner_read={} files={files} read_ops={read_ops}",
+            leader.get(),
+            write_addr,
+            learner_addr
+        ),
+        caveat: format!(
+            "OpenRaft learner read smoke over three voters plus one learner, sync={}, learner reads require observed log position",
             metadata_raft_log_sync_name(config.metadata_raft_log_sync)
         ),
     }))
@@ -1403,6 +1588,10 @@ fn row(input: RowInput) -> ResultRow {
         metadata_raft_millis_since_quorum_ack: input.stats.metadata_raft.millis_since_quorum_ack,
         metadata_raft_voters: input.stats.metadata_raft.voter_count,
         metadata_raft_learners: input.stats.metadata_raft.learner_count,
+        metadata_raft_proposal_batches: input.stats.metadata_raft.proposal_batch_total,
+        metadata_raft_proposal_commands: input.stats.metadata_raft.proposal_command_total,
+        metadata_raft_proposal_max_batch: input.stats.metadata_raft.proposal_max_batch,
+        metadata_raft_proposal_ns: input.stats.metadata_raft.proposal_ns_total,
         metadata_gets: input.stats.metadata_store.get_total,
         metadata_get_user_strong: input.stats.metadata_store.get_user_strong_total,
         metadata_get_write_plan_local: input.stats.metadata_store.get_write_plan_local_total,
@@ -1460,7 +1649,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_raft_proposal_batches,metadata_raft_proposal_commands,metadata_raft_proposal_max_batch,metadata_raft_proposal_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow) -> String {
@@ -1494,6 +1683,10 @@ fn csv_row(row: &ResultRow) -> String {
         row.metadata_raft_millis_since_quorum_ack.to_string(),
         row.metadata_raft_voters.to_string(),
         row.metadata_raft_learners.to_string(),
+        row.metadata_raft_proposal_batches.to_string(),
+        row.metadata_raft_proposal_commands.to_string(),
+        row.metadata_raft_proposal_max_batch.to_string(),
+        row.metadata_raft_proposal_ns.to_string(),
         row.metadata_gets.to_string(),
         row.metadata_get_user_strong.to_string(),
         row.metadata_get_write_plan_local.to_string(),
@@ -1545,6 +1738,10 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
         .metadata_store
         .atomic_apply_total
         .saturating_sub(before.metadata_store.atomic_apply_total);
+    let proposal_delta = after
+        .metadata_raft
+        .proposal_batch_total
+        .saturating_sub(before.metadata_raft.proposal_batch_total);
     BenchStats {
         object: ObjectTransferStats {
             object_puts: after
@@ -1681,7 +1878,31 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .atomic_apply_ns_total
                 .saturating_sub(before.metadata_store.atomic_apply_ns_total),
         },
-        metadata_raft: after.metadata_raft,
+        metadata_raft: MetadataRaftBenchStats {
+            current_term: after.metadata_raft.current_term,
+            current_leader: after.metadata_raft.current_leader,
+            last_log_index: after.metadata_raft.last_log_index,
+            last_applied_index: after.metadata_raft.last_applied_index,
+            snapshot_index: after.metadata_raft.snapshot_index,
+            purged_index: after.metadata_raft.purged_index,
+            millis_since_quorum_ack: after.metadata_raft.millis_since_quorum_ack,
+            voter_count: after.metadata_raft.voter_count,
+            learner_count: after.metadata_raft.learner_count,
+            proposal_batch_total: proposal_delta,
+            proposal_command_total: after
+                .metadata_raft
+                .proposal_command_total
+                .saturating_sub(before.metadata_raft.proposal_command_total),
+            proposal_max_batch: if proposal_delta == 0 {
+                0
+            } else {
+                after.metadata_raft.proposal_max_batch
+            },
+            proposal_ns_total: after
+                .metadata_raft
+                .proposal_ns_total
+                .saturating_sub(before.metadata_raft.proposal_ns_total),
+        },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: after
                 .metadata_service
@@ -1797,6 +2018,7 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         metadata_raft_node: nokvfs_cluster::NodeId::new(1)
             .expect("benchmark metadata raft node is non-zero"),
         metadata_raft_voters: Vec::new(),
+        metadata_raft_learners: Vec::new(),
         metadata_raft_peers: Vec::new(),
         metadata_raft_log_sync: config.metadata_raft_log_sync,
         metadata_checkpoint_archive_prefix: None,
@@ -1845,6 +2067,7 @@ fn server_options_for_node(
         meta_path: node_root.join("meta"),
         metadata_raft_node: node,
         metadata_raft_voters: cluster.voters.clone(),
+        metadata_raft_learners: cluster.learners.clone(),
         metadata_raft_peers: cluster
             .peers
             .iter()
@@ -1943,6 +2166,32 @@ fn wait_metadata_raft_leader(
     }
 }
 
+fn wait_metadata_raft_membership_counts(
+    nodes: &[(NodeId, SocketAddr)],
+    voters: u64,
+    learners: u64,
+) -> Result<(), BenchError> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        for (_, address) in nodes {
+            let Ok(stats) = fetch_server_stats(*address) else {
+                continue;
+            };
+            if stats.metadata_raft.voter_count == voters
+                && stats.metadata_raft.learner_count == learners
+            {
+                return Ok(());
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(BenchError::Client(format!(
+                "metadata raft membership did not reach voters={voters} learners={learners}"
+            )));
+        }
+        thread::sleep(Duration::from_millis(10));
+    }
+}
+
 fn reserve_local_addr() -> Result<SocketAddr, BenchError> {
     let listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
     listener.local_addr().map_err(from_io)
@@ -2008,6 +2257,10 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             millis_since_quorum_ack: json_u64_or_zero(body, "millis_since_quorum_ack"),
             voter_count: json_u64(body, "voter_count")?,
             learner_count: json_u64(body, "learner_count")?,
+            proposal_batch_total: json_u64(body, "proposal_batch_total")?,
+            proposal_command_total: json_u64(body, "proposal_command_total")?,
+            proposal_max_batch: json_u64(body, "proposal_max_batch")?,
+            proposal_ns_total: json_u64(body, "proposal_ns_total")?,
         },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: json_u64(body, "path_index_lookup_total")?,
@@ -2328,6 +2581,7 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
         "metadata-smoke" => Ok(Workload::MetadataSmoke),
         "metadata-ha-smoke" => Ok(Workload::MetadataHaSmoke),
         "metadata-ha-fault-smoke" => Ok(Workload::MetadataHaFaultSmoke),
+        "metadata-ha-learner-read" => Ok(Workload::MetadataHaLearnerRead),
         "mdtest-easy" => Ok(Workload::MdtestEasy),
         "mdtest-hard" => Ok(Workload::MdtestHard),
         "metadata-negative-lookup" => Ok(Workload::MetadataNegativeLookup),
@@ -2346,6 +2600,7 @@ fn expand_workloads(workload: Workload) -> Vec<Workload> {
         Workload::All => vec![
             Workload::MetadataHaSmoke,
             Workload::MetadataHaFaultSmoke,
+            Workload::MetadataHaLearnerRead,
             Workload::MdtestEasy,
             Workload::MdtestHard,
             Workload::MetadataNegativeLookup,
@@ -2414,6 +2669,7 @@ fn workload_name(workload: Workload) -> &'static str {
         Workload::MetadataSmoke => "metadata-smoke",
         Workload::MetadataHaSmoke => "metadata-ha-smoke",
         Workload::MetadataHaFaultSmoke => "metadata-ha-fault-smoke",
+        Workload::MetadataHaLearnerRead => "metadata-ha-learner-read",
         Workload::MdtestEasy => "mdtest-easy",
         Workload::MdtestHard => "mdtest-hard",
         Workload::MetadataNegativeLookup => "metadata-negative-lookup",
@@ -2620,6 +2876,12 @@ mod tests {
     }
 
     #[test]
+    fn parse_metadata_ha_learner_read_workload() {
+        let config = parse(vec![s("--workload"), s("metadata-ha-learner-read")]).unwrap();
+        assert_eq!(config.workload, Workload::MetadataHaLearnerRead);
+    }
+
+    #[test]
     fn parse_metadata_negative_lookup_workload() {
         let config = parse(vec![s("--workload"), s("metadata-negative-lookup")]).unwrap();
         assert_eq!(config.workload, Workload::MetadataNegativeLookup);
@@ -2655,7 +2917,7 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1},"metadata_service":{"path_index_lookup_total":26,"path_index_hit_total":27,"path_index_miss_total":28,"path_index_stale_total":29,"path_index_scan_stale_total":30,"path_index_fallback_total":31,"create_files_batch_total":32,"create_files_entry_total":33,"create_dirs_batch_total":34,"create_dirs_entry_total":35,"read_dir_plus_total":36,"read_dir_plus_entry_total":37,"read_dir_plus_projection_hit_total":38}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1,"proposal_batch_total":26,"proposal_command_total":27,"proposal_max_batch":28,"proposal_ns_total":29},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
 
         assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
         assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
@@ -2675,13 +2937,17 @@ mod tests {
         assert_eq!(json_u64(body, "millis_since_quorum_ack").unwrap(), 25);
         assert_eq!(json_u64(body, "voter_count").unwrap(), 3);
         assert_eq!(json_u64(body, "learner_count").unwrap(), 1);
-        assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 27);
-        assert_eq!(json_u64(body, "path_index_scan_stale_total").unwrap(), 30);
-        assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 32);
-        assert_eq!(json_u64(body, "create_dirs_entry_total").unwrap(), 35);
+        assert_eq!(json_u64(body, "proposal_batch_total").unwrap(), 26);
+        assert_eq!(json_u64(body, "proposal_command_total").unwrap(), 27);
+        assert_eq!(json_u64(body, "proposal_max_batch").unwrap(), 28);
+        assert_eq!(json_u64(body, "proposal_ns_total").unwrap(), 29);
+        assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 31);
+        assert_eq!(json_u64(body, "path_index_scan_stale_total").unwrap(), 34);
+        assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 36);
+        assert_eq!(json_u64(body, "create_dirs_entry_total").unwrap(), 39);
         assert_eq!(
             json_u64(body, "read_dir_plus_projection_hit_total").unwrap(),
-            38
+            42
         );
         assert!(json_u64(body, "missing_total").is_err());
     }
@@ -2782,6 +3048,7 @@ mod tests {
             vec![
                 Workload::MetadataHaSmoke,
                 Workload::MetadataHaFaultSmoke,
+                Workload::MetadataHaLearnerRead,
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
                 Workload::MetadataNegativeLookup,

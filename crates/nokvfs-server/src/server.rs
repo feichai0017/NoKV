@@ -62,6 +62,8 @@ impl Server {
     ) -> Result<Self, ServerError> {
         let metadata = HoltMetadataStore::open_raft_state_machine().map_err(MetadError::from)?;
         let voters = metadata_raft_voters_for_options(&options)?;
+        let learners = metadata_raft_learners_for_options(&options, &voters)?;
+        validate_metadata_raft_local_node(&options, &voters, &learners)?;
         let voter_count = voters.len();
         let log_path = default_metadata_raft_log_path(&options.meta_path);
         let log_options = FileMetadataRaftLogOptions {
@@ -70,8 +72,8 @@ impl Server {
         let network =
             MetadataRaftRpcNetworkFactory::new(rpc::MetadataRaftFramedRpcClient::default());
         let bootstrap_node = metadata_raft_bootstrap_node(&voters)?;
-        let openraft = if options.metadata_raft_node == bootstrap_node {
-            OpenRaftLoggedMetadataStore::new_initialized_voter_group_with_file_log_and_network(
+        let (openraft, _initialized_membership) = if options.metadata_raft_node == bootstrap_node {
+            OpenRaftLoggedMetadataStore::new_voter_group_with_file_log_and_network(
                 metadata,
                 options.metadata_raft_node,
                 log_path,
@@ -87,6 +89,7 @@ impl Server {
                 log_options,
                 network,
             )
+            .map(|store| (store, false))
         }
         .map_err(MetadError::from)?;
         let metadata_raft = openraft.stats_handle();
@@ -163,6 +166,19 @@ impl Server {
             required,
             applied,
         }))
+    }
+
+    pub(crate) fn add_metadata_raft_learner(
+        &self,
+        node: NodeId,
+        address: String,
+        blocking: bool,
+    ) -> Result<LogPosition, ServerError> {
+        self.service
+            .metadata_store()
+            .add_metadata_raft_learner(node, address, blocking)
+            .map_err(MetadError::from)
+            .map_err(ServerError::Metadata)
     }
 
     #[cfg(test)]
@@ -324,12 +340,43 @@ fn metadata_raft_voters_for_options(
     if voters.is_empty() {
         return Err(ServerError::MetadataRaft(MetadataRaftError::NoVoters));
     }
-    if !voters.contains_key(&options.metadata_raft_node) {
-        return Err(ServerError::MetadataRaft(MetadataRaftError::UnknownNode(
-            options.metadata_raft_node,
-        )));
-    }
     Ok(voters)
+}
+
+fn metadata_raft_learners_for_options(
+    options: &ServerOptions,
+    voters: &std::collections::BTreeMap<NodeId, String>,
+) -> Result<std::collections::BTreeMap<NodeId, String>, ServerError> {
+    let mut learners = std::collections::BTreeMap::new();
+    for node in &options.metadata_raft_learners {
+        if voters.contains_key(node) {
+            return Err(ServerError::MetadataRaft(MetadataRaftError::DuplicateNode(
+                *node,
+            )));
+        }
+        let address = metadata_raft_node_address(options, *node)?;
+        if learners.insert(*node, address).is_some() {
+            return Err(ServerError::MetadataRaft(MetadataRaftError::DuplicateNode(
+                *node,
+            )));
+        }
+    }
+    Ok(learners)
+}
+
+fn validate_metadata_raft_local_node(
+    options: &ServerOptions,
+    voters: &std::collections::BTreeMap<NodeId, String>,
+    learners: &std::collections::BTreeMap<NodeId, String>,
+) -> Result<(), ServerError> {
+    if voters.contains_key(&options.metadata_raft_node)
+        || learners.contains_key(&options.metadata_raft_node)
+    {
+        return Ok(());
+    }
+    Err(ServerError::MetadataRaft(MetadataRaftError::UnknownNode(
+        options.metadata_raft_node,
+    )))
 }
 
 fn metadata_raft_bootstrap_node(
@@ -371,7 +418,7 @@ fn metadata_checkpoint_archive_key(
 
 fn metadata_raft_json(stats: OpenRaftMetadataStats) -> String {
     format!(
-        "{{\"enabled\":true,\"node_id\":{},\"current_term\":{},\"state\":\"{}\",\"current_leader\":{},\"last_log_index\":{},\"last_applied_index\":{},\"snapshot_index\":{},\"purged_index\":{},\"millis_since_quorum_ack\":{},\"voter_count\":{},\"learner_count\":{}}}",
+        "{{\"enabled\":true,\"node_id\":{},\"current_term\":{},\"state\":\"{}\",\"current_leader\":{},\"last_log_index\":{},\"last_applied_index\":{},\"snapshot_index\":{},\"purged_index\":{},\"millis_since_quorum_ack\":{},\"voter_count\":{},\"learner_count\":{},\"proposal_batch_total\":{},\"proposal_command_total\":{},\"proposal_max_batch\":{},\"proposal_ns_total\":{}}}",
         stats.node_id,
         stats.current_term,
         escape_json_string(&stats.state),
@@ -383,6 +430,10 @@ fn metadata_raft_json(stats: OpenRaftMetadataStats) -> String {
         optional_u64_json(stats.millis_since_quorum_ack),
         stats.voter_count,
         stats.learner_count,
+        stats.proposal_batch_total,
+        stats.proposal_command_total,
+        stats.proposal_max_batch,
+        stats.proposal_ns_total,
     )
 }
 
@@ -542,6 +593,7 @@ pub(crate) mod tests {
             meta_path: root.join("meta"),
             metadata_raft_node: NodeId::new(1).unwrap(),
             metadata_raft_voters: Vec::new(),
+            metadata_raft_learners: Vec::new(),
             metadata_raft_peers: Vec::new(),
             metadata_raft_log_sync: FileMetadataRaftLogSync::Data,
             metadata_checkpoint_archive_prefix: None,

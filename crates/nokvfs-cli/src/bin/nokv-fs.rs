@@ -31,6 +31,7 @@ struct Config {
     meta: PathBuf,
     metadata_raft_node: NodeId,
     metadata_raft_voters: Vec<NodeId>,
+    metadata_raft_learners: Vec<NodeId>,
     metadata_raft_peers: Vec<MetadataRaftPeerOptions>,
     metadata_raft_log_sync: FileMetadataRaftLogSync,
     metadata_checkpoint_archive_prefix: Option<String>,
@@ -327,6 +328,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 meta_path: config.meta,
                 metadata_raft_node: config.metadata_raft_node,
                 metadata_raft_voters: config.metadata_raft_voters,
+                metadata_raft_learners: config.metadata_raft_learners,
                 metadata_raft_peers: config.metadata_raft_peers,
                 metadata_raft_log_sync: config.metadata_raft_log_sync,
                 metadata_checkpoint_archive_prefix: config.metadata_checkpoint_archive_prefix,
@@ -416,6 +418,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv-fs/meta");
     let mut metadata_raft_node = NodeId::new(1).expect("default metadata raft node is non-zero");
     let mut metadata_raft_voters = Vec::new();
+    let mut metadata_raft_learners = Vec::new();
     let mut metadata_raft_peers = Vec::new();
     let mut metadata_raft_log_sync = FileMetadataRaftLogSync::Data;
     let mut metadata_checkpoint_archive_prefix =
@@ -446,6 +449,11 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 index += 1;
                 metadata_raft_voters =
                     parse_node_id_list(value(&args, index, "--metadata-raft-voters")?)?;
+            }
+            "--metadata-raft-learners" => {
+                index += 1;
+                metadata_raft_learners =
+                    parse_node_id_list(value(&args, index, "--metadata-raft-learners")?)?;
             }
             "--metadata-raft-peer" => {
                 index += 1;
@@ -583,6 +591,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         meta,
                         metadata_raft_node,
                         metadata_raft_voters,
+                        metadata_raft_learners,
                         metadata_raft_peers,
                         metadata_raft_log_sync,
                         metadata_checkpoint_archive_prefix,
@@ -614,6 +623,7 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             meta,
             metadata_raft_node,
             metadata_raft_voters,
+            metadata_raft_learners,
             metadata_raft_peers,
             metadata_raft_log_sync,
             metadata_checkpoint_archive_prefix,
@@ -952,6 +962,7 @@ Object backends:\n\
   --metadata-read-endpoint ADDR   Preferred metadata read endpoint; repeat for learners\n\
   --metadata-raft-node NODE       Local OpenRaft metadata node id\n\
   --metadata-raft-voters CSV      OpenRaft voter node ids, e.g. 1,2,3\n\
+  --metadata-raft-learners CSV    OpenRaft learner node ids, e.g. 4,5\n\
   --metadata-raft-peer NODE=ADDR  OpenRaft peer endpoint; repeat for remote voters\n\
   --metadata-raft-log-sync data|none\n\
                                   data fsyncs metadata Raft log records; none only flushes to the OS\n\
@@ -968,6 +979,7 @@ Defaults:\n\
   --server-bind 127.0.0.1:7777\n\
   --metadata-raft-node 1\n\
   --metadata-raft-voters <local node only>\n\
+  --metadata-raft-learners <empty>\n\
   --metadata-raft-peer <empty>\n\
   --metadata-raft-log-sync data\n\
   --metadata-checkpoint-archive-prefix metadata/checkpoints\n\
@@ -1033,6 +1045,7 @@ mod tests {
             meta_path: dir.path().join("meta"),
             metadata_raft_node: NodeId::new(1).unwrap(),
             metadata_raft_voters: Vec::new(),
+            metadata_raft_learners: Vec::new(),
             metadata_raft_peers: Vec::new(),
             metadata_raft_log_sync: FileMetadataRaftLogSync::Data,
             metadata_checkpoint_archive_prefix: None,
@@ -1144,6 +1157,7 @@ mod tests {
         assert_eq!(config.history_gc_limit, 11);
         assert_eq!(config.metadata_raft_node.get(), 1);
         assert!(config.metadata_raft_voters.is_empty());
+        assert!(config.metadata_raft_learners.is_empty());
         assert!(config.metadata_raft_peers.is_empty());
         assert_eq!(
             config.server_bind,
@@ -1430,6 +1444,8 @@ mod tests {
             s("4"),
             s("--metadata-raft-voters"),
             s("1,2,3"),
+            s("--metadata-raft-learners"),
+            s("4"),
             s("--metadata-raft-peer"),
             s("2=127.0.0.1:7778"),
             s("--metadata-raft-peer"),
@@ -1448,6 +1464,14 @@ mod tests {
                 .map(|node| node.get())
                 .collect::<Vec<_>>(),
             vec![1, 2, 3]
+        );
+        assert_eq!(
+            config
+                .metadata_raft_learners
+                .iter()
+                .map(|node| node.get())
+                .collect::<Vec<_>>(),
+            vec![4]
         );
         assert_eq!(
             config

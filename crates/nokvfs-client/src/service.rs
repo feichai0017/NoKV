@@ -511,6 +511,24 @@ impl MetadataClient {
         }
     }
 
+    pub fn add_metadata_raft_learner(
+        &self,
+        node: u64,
+        address: SocketAddr,
+        blocking: bool,
+    ) -> Result<ClientMetadataPosition, ClientError> {
+        match self.call(MetadataRpcRequest::MetadataRaftAddLearner {
+            node,
+            address: address.to_string(),
+            blocking,
+        })? {
+            MetadataRpcResult::MetadataPosition { position } => {
+                Ok(wire_metadata_position(position))
+            }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     pub fn get_attr(&self, inode: InodeId) -> Result<Option<InodeAttr>, ClientError> {
         match self.call(MetadataRpcRequest::GetAttr { inode: inode.get() })? {
             MetadataRpcResult::InodeAttr { attr } => attr
@@ -1524,6 +1542,7 @@ fn request_requires_observed_position(request: &MetadataRpcRequest) -> bool {
         }
         MetadataRpcRequest::RequireApplied { .. }
         | MetadataRpcRequest::BootstrapRoot { .. }
+        | MetadataRpcRequest::MetadataRaftAddLearner { .. }
         | MetadataRpcRequest::MetadataRaftVote { .. }
         | MetadataRpcRequest::MetadataRaftAppendEntries { .. }
         | MetadataRpcRequest::MetadataRaftInstallSnapshot { .. } => false,

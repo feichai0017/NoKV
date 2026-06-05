@@ -1,4 +1,4 @@
-use nokvfs_cluster::OpenRaftMetadataStore;
+use nokvfs_cluster::{LogPosition, NodeId, OpenRaftMetadataStore};
 use nokvfs_meta::command::{
     CommitResult, DelimitedScanItem, DelimitedScanRequest, HistoryPruneOutcome,
     HistoryPruneRequest, KeyScanRequest, MetadataCommand, MetadataError, MetadataStore,
@@ -47,6 +47,17 @@ impl ServerMetadataStore {
     ) -> Result<WireMetadataRaftInstallSnapshotResponse, MetadataError> {
         match self {
             Self::OpenRaft(store) => store.handle_install_snapshot_rpc(request),
+        }
+    }
+
+    pub(crate) fn add_metadata_raft_learner(
+        &self,
+        node: NodeId,
+        address: String,
+        blocking: bool,
+    ) -> Result<LogPosition, MetadataError> {
+        match self {
+            Self::OpenRaft(store) => store.add_learner(node, address, blocking),
         }
     }
 

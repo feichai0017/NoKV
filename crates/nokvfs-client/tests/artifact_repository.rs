@@ -28,6 +28,7 @@ fn spawn_test_server() -> SocketAddr {
         meta_path: dir.path().join("meta"),
         metadata_raft_node: NodeId::new(1).unwrap(),
         metadata_raft_voters: Vec::new(),
+        metadata_raft_learners: Vec::new(),
         metadata_raft_peers: Vec::new(),
         metadata_raft_log_sync: FileMetadataRaftLogSync::Data,
         metadata_checkpoint_archive_prefix: None,

@@ -8,7 +8,7 @@ use std::sync::{
 use std::thread;
 use std::time::Duration;
 
-use nokvfs_cluster::{MetadataRaftError, MetadataRaftRpcClient};
+use nokvfs_cluster::{MetadataRaftError, MetadataRaftRpcClient, NodeId};
 use nokvfs_meta::{CreateInDirPathBatch, DentryWithAttr, MetadError, PreparedArtifact, UpdateAttr};
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
@@ -1632,6 +1632,17 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     .map(|entry| Box::new(wire_dentry(entry))),
             })
         }
+        MetadataRpcRequest::MetadataRaftAddLearner {
+            node,
+            address,
+            blocking,
+        } => {
+            let node = NodeId::new(node).map_err(ServerError::MetadataRaft)?;
+            let position = server.add_metadata_raft_learner(node, address, blocking)?;
+            Ok(MetadataRpcResult::MetadataPosition {
+                position: wire_log_position(position),
+            })
+        }
         MetadataRpcRequest::MetadataRaftVote { request } => {
             let response = server
                 .service()
@@ -1708,6 +1719,7 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::PrepareArtifact { .. }
         | MetadataRpcRequest::PrepareArtifactPath { .. }
         | MetadataRpcRequest::PublishPreparedArtifact { .. }
+        | MetadataRpcRequest::MetadataRaftAddLearner { .. }
         | MetadataRpcRequest::MetadataRaftVote { .. }
         | MetadataRpcRequest::MetadataRaftAppendEntries { .. }
         | MetadataRpcRequest::MetadataRaftInstallSnapshot { .. } => false,
