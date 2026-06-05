@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::mpsc::{channel, sync_channel, SyncSender, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::thread;
 use std::time::Instant;
 
@@ -18,6 +18,13 @@ use crate::options::MetadataLogPeerOptions;
 use crate::rpc;
 
 const LEARNER_REPLICATION_QUEUE_CAPACITY: usize = 1024;
+const MIN_REMOTE_VOTER_APPEND_WORKERS: usize = 4;
+const MAX_REMOTE_VOTER_APPEND_WORKERS: usize = 64;
+const REMOTE_VOTER_APPEND_QUEUE_PER_WORKER: usize = 256;
+
+type RemoteVoterAppendJob = Box<dyn FnOnce() + Send + 'static>;
+
+static REMOTE_VOTER_APPEND_WORKERS: OnceLock<RemoteVoterAppendWorkerPool> = OnceLock::new();
 
 pub(crate) struct MajorityMetadataLog {
     local_node: NodeId,
@@ -87,6 +94,41 @@ struct LearnerReplicator {
     target_index: Arc<AtomicU64>,
     replication_stats: Arc<MajorityMetadataLogReplicationCounters>,
     _worker: thread::JoinHandle<()>,
+}
+
+struct RemoteVoterAppendWorkerPool {
+    sender: SyncSender<RemoteVoterAppendJob>,
+}
+
+impl RemoteVoterAppendWorkerPool {
+    fn new(workers: usize, queue_capacity: usize) -> Self {
+        let (sender, receiver) = sync_channel::<RemoteVoterAppendJob>(queue_capacity.max(workers));
+        let receiver = Arc::new(Mutex::new(receiver));
+        for worker in 0..workers {
+            let receiver = Arc::clone(&receiver);
+            thread::Builder::new()
+                .name(format!("nokvfs-voter-append-{worker}"))
+                .spawn(move || loop {
+                    let job = {
+                        let receiver = receiver.lock().expect("remote voter append receiver");
+                        receiver.recv()
+                    };
+                    match job {
+                        Ok(job) => job(),
+                        Err(_) => return,
+                    }
+                })
+                .expect("spawn remote voter append worker");
+        }
+        Self { sender }
+    }
+
+    fn submit(
+        &self,
+        job: RemoteVoterAppendJob,
+    ) -> Result<(), std::sync::mpsc::SendError<RemoteVoterAppendJob>> {
+        self.sender.send(job)
+    }
 }
 
 impl MajorityMetadataLog {
@@ -276,12 +318,13 @@ impl MajorityMetadataLog {
         let quorum_started = Instant::now();
         for (voter, peer) in targets {
             let result_tx = result_tx.clone();
+            let enqueue_failure_tx = result_tx.clone();
             let local_node = self.local_node;
             let local = Arc::clone(&self.local);
             let bootstrapper = self.bootstrapper.clone();
             let entry = entry.clone();
             let replication_stats = Arc::clone(&self.replication_stats);
-            thread::spawn(move || {
+            let job = Box::new(move || {
                 replication_stats
                     .remote_voter_append_total
                     .fetch_add(1, Ordering::Relaxed);
@@ -304,6 +347,17 @@ impl MajorityMetadataLog {
                 }
                 let _ = result_tx.send(result.is_ok());
             });
+            if let Err(err) = remote_voter_append_worker_pool().submit(job) {
+                let job = err.0;
+                drop(job);
+                self.replication_stats
+                    .remote_voter_append_total
+                    .fetch_add(1, Ordering::Relaxed);
+                self.replication_stats
+                    .remote_voter_append_failure_total
+                    .fetch_add(1, Ordering::Relaxed);
+                let _ = enqueue_failure_tx.send(false);
+            }
         }
         drop(result_tx);
         for remote_result in result_rx.iter().take(remote_total) {
@@ -551,6 +605,26 @@ fn record_max(value: &AtomicU64, candidate: u64) {
 fn record_elapsed_ns(value: &AtomicU64, started: Instant) {
     let elapsed = started.elapsed().as_nanos().min(u128::from(u64::MAX)) as u64;
     value.fetch_add(elapsed.max(1), Ordering::Relaxed);
+}
+
+fn remote_voter_append_worker_pool() -> &'static RemoteVoterAppendWorkerPool {
+    REMOTE_VOTER_APPEND_WORKERS.get_or_init(|| {
+        let workers = default_remote_voter_append_worker_count();
+        RemoteVoterAppendWorkerPool::new(
+            workers,
+            workers.saturating_mul(REMOTE_VOTER_APPEND_QUEUE_PER_WORKER),
+        )
+    })
+}
+
+fn default_remote_voter_append_worker_count() -> usize {
+    thread::available_parallelism()
+        .map(|parallelism| parallelism.get().saturating_mul(4))
+        .unwrap_or(MIN_REMOTE_VOTER_APPEND_WORKERS)
+        .clamp(
+            MIN_REMOTE_VOTER_APPEND_WORKERS,
+            MAX_REMOTE_VOTER_APPEND_WORKERS,
+        )
 }
 
 fn append_peer_with_catchup_from_log(
