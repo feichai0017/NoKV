@@ -522,6 +522,141 @@ fn prepared_artifact_path_publish_writes_and_uses_validated_path_index() {
 }
 
 #[test]
+fn artifact_path_rename_moves_live_path_index() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let archive = service
+        .create_dir_path("/archive", 0o755, 1000, 1000)
+        .unwrap();
+    let artifact = publish_path_artifact(&service, "/runs/a.bin", "runs/a.bin", b"a");
+    let old_components = parse_absolute_path("/runs/a.bin").unwrap();
+    let new_components = parse_absolute_path("/archive/a.bin").unwrap();
+    let old_key = path_index_key(MountId::new(1).unwrap(), &old_components);
+    let new_key = path_index_key(MountId::new(1).unwrap(), &new_components);
+    assert!(metadata
+        .get(
+            RecordFamily::PathIndex,
+            &old_key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_some());
+
+    let renamed = service
+        .rename_path("/runs/a.bin", "/archive/a.bin")
+        .unwrap();
+    let old_index = metadata
+        .get(
+            RecordFamily::PathIndex,
+            &old_key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap();
+    let new_index = metadata
+        .get(
+            RecordFamily::PathIndex,
+            &new_key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .expect("renamed artifact path index");
+
+    assert!(old_index.is_none());
+    assert_eq!(renamed.attr.inode, artifact.attr.inode);
+    let indexed = decode_dentry_projection(&new_index.0).unwrap();
+    assert_eq!(indexed.dentry.parent, archive.attr.inode);
+    assert_eq!(indexed.dentry.name.as_bytes(), b"a.bin");
+    assert_eq!(indexed.attr.inode, artifact.attr.inode);
+}
+
+#[test]
+fn plain_directory_path_rename_does_not_create_path_index() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let source_components = parse_absolute_path("/runs").unwrap();
+    let destination_components = parse_absolute_path("/archive").unwrap();
+    let source_key = path_index_key(MountId::new(1).unwrap(), &source_components);
+    let destination_key = path_index_key(MountId::new(1).unwrap(), &destination_components);
+    let before = metadata.metadata_store_stats();
+
+    let renamed = service.rename_path("/runs", "/archive").unwrap();
+    let after = metadata.metadata_store_stats();
+
+    assert_eq!(renamed.attr.inode, runs.attr.inode);
+    assert_eq!(after.current_put_total - before.current_put_total, 1);
+    assert_eq!(after.current_delete_total - before.current_delete_total, 1);
+    assert!(metadata
+        .get(
+            RecordFamily::PathIndex,
+            &source_key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_none());
+    assert!(metadata
+        .get(
+            RecordFamily::PathIndex,
+            &destination_key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_none());
+}
+
+#[test]
+fn artifact_path_remove_deletes_live_path_index() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    publish_path_artifact(&service, "/runs/a.bin", "runs/a.bin", b"a");
+    let components = parse_absolute_path("/runs/a.bin").unwrap();
+    let key = path_index_key(MountId::new(1).unwrap(), &components);
+    assert!(metadata
+        .get(
+            RecordFamily::PathIndex,
+            &key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_some());
+
+    service.remove_file_path("/runs/a.bin").unwrap();
+
+    assert!(metadata
+        .get(
+            RecordFamily::PathIndex,
+            &key,
+            Version::new(u64::MAX).unwrap(),
+            ReadPurpose::UserStrong,
+        )
+        .unwrap()
+        .is_none());
+}
+
+#[test]
 fn path_resolution_cache_reuses_parent_directory_for_indexed_stats() {
     let metadata = HoltMetadataStore::open_memory().unwrap();
     let service = NoKvFs::new(
@@ -1272,7 +1407,7 @@ fn remove_files_in_dir_coalesces_into_one_holt_apply() {
     assert_eq!(removed.len(), 2);
     assert!(removed.iter().all(Result::is_ok));
     assert_eq!(after.commit_total - before.commit_total, 2);
-    assert_eq!(after.current_delete_total - before.current_delete_total, 6);
+    assert_eq!(after.current_delete_total - before.current_delete_total, 4);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
     assert_eq!(after.watch_write_total - before.watch_write_total, 2);
     assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 2);
@@ -1327,7 +1462,7 @@ fn remove_empty_dirs_in_dir_coalesces_into_one_holt_apply() {
     assert!(removed[0].is_ok());
     assert!(removed[1].is_ok());
     assert_eq!(after.commit_total - before.commit_total, 2);
-    assert_eq!(after.current_delete_total - before.current_delete_total, 6);
+    assert_eq!(after.current_delete_total - before.current_delete_total, 4);
     assert_eq!(after.history_write_total - before.history_write_total, 0);
     assert_eq!(after.watch_write_total - before.watch_write_total, 2);
     assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 2);

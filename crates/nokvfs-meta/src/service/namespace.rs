@@ -598,10 +598,10 @@ where
         &self,
         parent: InodeId,
         name: &DentryName,
-        path_index: Option<Vec<u8>>,
+        path_components: Option<&[DentryName]>,
     ) -> Result<DentryWithAttr, MetadError> {
         let version = self.next_version()?;
-        let prepared = self.prepare_remove_file(parent, name, path_index, version)?;
+        let prepared = self.prepare_remove_file(parent, name, path_components, version)?;
         self.commit_metadata(prepared.command)?;
         Ok(prepared.entry)
     }
@@ -610,7 +610,7 @@ where
         &self,
         parent: InodeId,
         name: &DentryName,
-        path_index: Option<Vec<u8>>,
+        path_components: Option<&[DentryName]>,
         version: Version,
     ) -> Result<PreparedRemoveFile, MetadError> {
         let (entry, dentry_version) = self
@@ -624,7 +624,9 @@ where
             delete_mutation(RecordFamily::Dentry, key.clone()),
             delete_mutation(RecordFamily::Inode, inode_key(self.mount, entry.attr.inode)),
         ];
-        if let Some(path_index) = path_index {
+        if let Some(path_index) =
+            self.live_path_index_key_for_entry(path_components, parent, name, &entry, version)?
+        {
             mutations.push(delete_mutation(RecordFamily::PathIndex, path_index));
         }
         if let Some(body) = &entry.body {
@@ -675,7 +677,7 @@ where
             return Err(MetadError::InvalidPath("root has no parent".to_owned()));
         };
         let parent = self.resolve_components_as_directory(parent_components)?;
-        self.remove_file_inner(parent, name, Some(path_index_key(self.mount, &components)))
+        self.remove_file_inner(parent, name, Some(&components))
     }
 
     pub fn remove_files_in_dir_path(
@@ -696,12 +698,7 @@ where
             let version = self.next_version()?;
             let mut path_components = parent_components.clone();
             path_components.push(name.clone());
-            match self.prepare_remove_file(
-                parent,
-                &name,
-                Some(path_index_key(self.mount, &path_components)),
-                version,
-            ) {
+            match self.prepare_remove_file(parent, &name, Some(&path_components), version) {
                 Ok(remove) => prepared.push((index, remove)),
                 Err(err) => results[index] = Some(Err(err)),
             }
@@ -741,10 +738,10 @@ where
         &self,
         parent: InodeId,
         name: &DentryName,
-        path_index: Option<Vec<u8>>,
+        path_components: Option<&[DentryName]>,
     ) -> Result<DentryWithAttr, MetadError> {
         let version = self.next_version()?;
-        let prepared = self.prepare_remove_empty_dir(parent, name, path_index, version)?;
+        let prepared = self.prepare_remove_empty_dir(parent, name, path_components, version)?;
         map_remove_empty_dir_commit(self.metadata.commit_metadata(prepared.command))?;
         Ok(prepared.entry)
     }
@@ -753,7 +750,7 @@ where
         &self,
         parent: InodeId,
         name: &DentryName,
-        path_index: Option<Vec<u8>>,
+        path_components: Option<&[DentryName]>,
         version: Version,
     ) -> Result<PreparedRemoveEmptyDir, MetadError> {
         let (entry, dentry_version) = self
@@ -771,7 +768,9 @@ where
             delete_mutation(RecordFamily::Dentry, source_key.clone()),
             delete_mutation(RecordFamily::Inode, inode_key(self.mount, entry.attr.inode)),
         ];
-        if let Some(path_index) = path_index {
+        if let Some(path_index) =
+            self.live_path_index_key_for_entry(path_components, parent, name, &entry, version)?
+        {
             mutations.push(delete_mutation(RecordFamily::PathIndex, path_index));
         }
         let command = MetadataCommand {
@@ -814,7 +813,7 @@ where
             return Err(MetadError::InvalidPath("root has no parent".to_owned()));
         };
         let parent = self.resolve_components_as_directory(parent_components)?;
-        self.remove_empty_dir_inner(parent, name, Some(path_index_key(self.mount, &components)))
+        self.remove_empty_dir_inner(parent, name, Some(&components))
     }
 
     pub fn remove_empty_dirs_in_dir_path(
@@ -835,12 +834,7 @@ where
             let version = self.next_version()?;
             let mut path_components = parent_components.clone();
             path_components.push(name.clone());
-            match self.prepare_remove_empty_dir(
-                parent,
-                &name,
-                Some(path_index_key(self.mount, &path_components)),
-                version,
-            ) {
+            match self.prepare_remove_empty_dir(parent, &name, Some(&path_components), version) {
                 Ok(remove) => prepared.push((index, remove)),
                 Err(err) => results[index] = Some(Err(err)),
             }
@@ -900,10 +894,7 @@ where
             new_parent,
             new_name.clone(),
             false,
-            Some((
-                path_index_key(self.mount, &source_components),
-                path_index_key(self.mount, &destination_components),
-            )),
+            Some((&source_components, &destination_components)),
         )
         .map(|outcome| outcome.entry)
     }
@@ -939,10 +930,7 @@ where
             new_parent,
             new_name.clone(),
             true,
-            Some((
-                path_index_key(self.mount, &source_components),
-                path_index_key(self.mount, &destination_components),
-            )),
+            Some((&source_components, &destination_components)),
         )
     }
 
@@ -953,7 +941,7 @@ where
         new_parent: InodeId,
         new_name: DentryName,
         replace: bool,
-        path_index: Option<(Vec<u8>, Vec<u8>)>,
+        path_index: Option<(&[DentryName], &[DentryName])>,
     ) -> Result<RenameReplaceResult, MetadError> {
         let (source, source_version) = self
             .lookup_plus_for_write_plan(parent, name)?
@@ -1025,7 +1013,20 @@ where
                 value: Some(Value(encode_dentry_projection(&projection))),
             },
         ];
-        if let Some((source_path, destination_path)) = path_index {
+        if let Some(source_path) = self.live_path_index_key_for_entry(
+            path_index.map(|(source, _)| source),
+            parent,
+            name,
+            &source,
+            version,
+        )? {
+            let destination_path = path_index
+                .map(|(_, destination)| path_index_key(self.mount, destination))
+                .ok_or_else(|| {
+                    MetadataError::Backend(
+                        "live source path index requires destination path context".to_owned(),
+                    )
+                })?;
             mutations.push(delete_mutation(RecordFamily::PathIndex, source_path));
             mutations.push(put_projection_mutation(
                 RecordFamily::PathIndex,
@@ -1109,6 +1110,38 @@ where
             entry: projection.into(),
             replaced,
         })
+    }
+
+    fn live_path_index_key_for_entry(
+        &self,
+        components: Option<&[DentryName]>,
+        parent: InodeId,
+        name: &DentryName,
+        entry: &DentryWithAttr,
+        version: Version,
+    ) -> Result<Option<Vec<u8>>, MetadError> {
+        let Some(components) = components else {
+            return Ok(None);
+        };
+        if entry.body.is_none() {
+            return Ok(None);
+        }
+        let key = path_index_key(self.mount, components);
+        let Some(item) = self.metadata.get_versioned(
+            RecordFamily::PathIndex,
+            &key,
+            predecessor(version)?,
+            ReadPurpose::WritePlanLocal,
+        )?
+        else {
+            return Ok(None);
+        };
+        let indexed = crate::layout::decode_dentry_projection(&item.value.0)
+            .map_err(|err| MetadError::Codec(err.to_string()))?;
+        let matches_canonical = indexed.attr.inode == entry.attr.inode
+            && indexed.dentry.parent == parent
+            && indexed.dentry.name == *name;
+        Ok(matches_canonical.then_some(key))
     }
 
     pub(super) fn commit_create_projection(
