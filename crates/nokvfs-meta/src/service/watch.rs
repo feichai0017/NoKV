@@ -28,9 +28,14 @@ where
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Watch,
             prefix: watch_log_prefix(self.mount, scope),
-            start_after: None,
+            start_after: Some(watch_log_key(
+                self.mount,
+                scope,
+                after.version,
+                after.event_id,
+            )),
             version,
-            limit: 0,
+            limit,
             purpose: ReadPurpose::UserStrong,
         })?;
         let mut out = Vec::new();

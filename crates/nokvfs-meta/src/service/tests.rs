@@ -2246,6 +2246,59 @@ fn watch_replay_returns_typed_events_after_cursor() {
 }
 
 #[test]
+fn watch_replay_resumes_from_cursor_without_scanning_old_events() {
+    let service = service();
+    let cursor = service.watch_subtree(InodeId::root()).unwrap();
+    for name in ["a", "b", "c"] {
+        service
+            .create_dir(
+                InodeId::root(),
+                DentryName::new(name.as_bytes().to_vec()).unwrap(),
+                0o755,
+                1000,
+                1000,
+            )
+            .unwrap();
+    }
+
+    let before_first = service.metadata_store_stats();
+    let first = service.replay_watch(InodeId::root(), cursor, 1).unwrap();
+    let after_first = service.metadata_store_stats();
+    assert_eq!(first.len(), 1);
+    assert_eq!(
+        first[0].event.name.as_ref().map(DentryName::as_bytes),
+        Some(b"a".as_slice())
+    );
+    assert_eq!(
+        after_first.scan_key_visited_total - before_first.scan_key_visited_total,
+        1
+    );
+    assert_eq!(
+        after_first.scan_key_returned_total - before_first.scan_key_returned_total,
+        1
+    );
+
+    let before_second = service.metadata_store_stats();
+    let second = service
+        .replay_watch(InodeId::root(), first[0].cursor, 1)
+        .unwrap();
+    let after_second = service.metadata_store_stats();
+    assert_eq!(second.len(), 1);
+    assert_eq!(
+        second[0].event.name.as_ref().map(DentryName::as_bytes),
+        Some(b"b".as_slice())
+    );
+    assert_eq!(
+        after_second.scan_key_visited_total - before_second.scan_key_visited_total,
+        1
+    );
+    assert_eq!(
+        after_second.scan_key_returned_total - before_second.scan_key_returned_total,
+        1
+    );
+}
+
+#[test]
 fn rename_replay_notifies_old_and_new_parent_scopes() {
     let service = service();
     let old_parent_name = DentryName::new(b"old-parent".to_vec()).unwrap();
