@@ -1287,6 +1287,64 @@ fn remove_files_in_dir_coalesces_into_one_holt_apply() {
 }
 
 #[test]
+fn remove_empty_dirs_in_dir_coalesces_into_one_holt_apply() {
+    let metadata = HoltMetadataStore::open_memory().unwrap();
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        metadata.clone(),
+        MemoryObjectStore::new(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_batches_in_dir_path(vec![CreateInDirPathBatch {
+            parent_path: "/runs".to_owned(),
+            names: vec![
+                DentryName::new(b"a".to_vec()).unwrap(),
+                DentryName::new(b"b".to_vec()).unwrap(),
+                DentryName::new(b"keep".to_vec()).unwrap(),
+            ],
+            mode: 0o755,
+            uid: 1000,
+            gid: 1000,
+        }])
+        .remove(0)
+        .unwrap();
+    let before = metadata.metadata_store_stats();
+
+    let removed = service
+        .remove_empty_dirs_in_dir_path(
+            "/runs",
+            vec![
+                DentryName::new(b"a".to_vec()).unwrap(),
+                DentryName::new(b"b".to_vec()).unwrap(),
+            ],
+        )
+        .unwrap();
+
+    let after = metadata.metadata_store_stats();
+    assert_eq!(removed.len(), 2);
+    assert!(removed[0].is_ok());
+    assert!(removed[1].is_ok());
+    assert_eq!(after.commit_total - before.commit_total, 2);
+    assert_eq!(after.current_delete_total - before.current_delete_total, 6);
+    assert_eq!(after.history_write_total - before.history_write_total, 0);
+    assert_eq!(after.watch_write_total - before.watch_write_total, 2);
+    assert_eq!(after.dedupe_write_total - before.dedupe_write_total, 2);
+    assert_eq!(after.atomic_apply_total - before.atomic_apply_total, 1);
+    assert_eq!(
+        after.atomic_apply_command_total - before.atomic_apply_command_total,
+        2
+    );
+    let listed = service.read_dir_plus_path("/runs").unwrap();
+    let names = listed
+        .iter()
+        .map(|entry| entry.dentry.name.as_bytes())
+        .collect::<Vec<_>>();
+    assert_eq!(names, vec![b"keep".as_slice()]);
+}
+
+#[test]
 fn read_dir_plus_page_returns_cursor_without_materializing_full_directory() {
     let metadata = HoltMetadataStore::open_memory().unwrap();
     let service = NoKvFs::new(

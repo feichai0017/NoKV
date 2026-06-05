@@ -589,13 +589,13 @@ fn execute_batch(
     let mut iter = requests.into_iter().peekable();
     while let Some(request) = iter.next() {
         let Some(parts) = create_path_parts(&request) else {
-            let Some(parts) = remove_file_path_parts(&request) else {
+            let Some(parts) = remove_path_parts(&request) else {
                 results.push(execute_envelope(server, request));
                 continue;
             };
-            let mut group = RemoveFilePathGroup::from_parts(parts);
+            let mut group = RemovePathGroup::from_parts(parts);
             while let Some(next) = iter.peek() {
-                let Some(next_parts) = remove_file_path_parts(next) else {
+                let Some(next_parts) = remove_path_parts(next) else {
                     break;
                 };
                 if !group.can_absorb(&next_parts) {
@@ -604,8 +604,9 @@ fn execute_batch(
                 iter.next();
                 group.names.push(next_parts.name);
             }
-            results.extend(remove_file_path_batch_envelopes(
+            results.extend(remove_path_batch_envelopes(
                 server,
+                group.kind,
                 &group.parent_path,
                 group.names,
             ));
@@ -743,6 +744,12 @@ enum CreatePathKind {
     File,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum RemovePathKind {
+    File,
+    EmptyDir,
+}
+
 struct CreatePathParts {
     kind: CreatePathKind,
     parent_path: String,
@@ -779,26 +786,31 @@ impl CreatePathGroup {
     }
 }
 
-struct RemoveFilePathParts {
+struct RemovePathParts {
+    kind: RemovePathKind,
     parent_path: String,
     name: String,
 }
 
-struct RemoveFilePathGroup {
+struct RemovePathGroup {
+    kind: RemovePathKind,
     parent_path: String,
     names: Vec<String>,
 }
 
-impl RemoveFilePathGroup {
-    fn from_parts(parts: RemoveFilePathParts) -> Self {
+impl RemovePathGroup {
+    fn from_parts(parts: RemovePathParts) -> Self {
         Self {
+            kind: parts.kind,
             parent_path: parts.parent_path,
             names: vec![parts.name],
         }
     }
 
-    fn can_absorb(&self, parts: &RemoveFilePathParts) -> bool {
-        self.parent_path == parts.parent_path && !self.names.contains(&parts.name)
+    fn can_absorb(&self, parts: &RemovePathParts) -> bool {
+        self.kind == parts.kind
+            && self.parent_path == parts.parent_path
+            && !self.names.contains(&parts.name)
     }
 }
 
@@ -855,8 +867,9 @@ fn create_path_batch_envelopes(
     }
 }
 
-fn remove_file_path_batch_envelopes(
+fn remove_path_batch_envelopes(
     server: &Server,
+    kind: RemovePathKind,
     parent_path: &str,
     names: Vec<String>,
 ) -> Vec<MetadataRpcEnvelope> {
@@ -866,10 +879,15 @@ fn remove_file_path_batch_envelopes(
         .collect::<Result<Vec<_>, _>>()
         .map_err(ServerError::Metadata);
     let committed = parsed.and_then(|names| {
-        server
-            .service()
-            .remove_files_in_dir_path(parent_path, names)
-            .map_err(ServerError::Metadata)
+        match kind {
+            RemovePathKind::File => server
+                .service()
+                .remove_files_in_dir_path(parent_path, names),
+            RemovePathKind::EmptyDir => server
+                .service()
+                .remove_empty_dirs_in_dir_path(parent_path, names),
+        }
+        .map_err(ServerError::Metadata)
     });
     match committed {
         Ok(results) => results
@@ -886,14 +904,7 @@ fn remove_file_path_batch_envelopes(
             .collect(),
         Err(_) => names
             .into_iter()
-            .map(|name| {
-                execute_envelope(
-                    server,
-                    MetadataRpcRequest::RemoveFilePath {
-                        path: child_path(parent_path, &name),
-                    },
-                )
-            })
+            .map(|name| execute_envelope(server, remove_path_request(kind, parent_path, &name)))
             .collect(),
     }
 }
@@ -974,11 +985,23 @@ fn create_path_group_envelopes(
     }
 }
 
-fn remove_file_path_parts(request: &MetadataRpcRequest) -> Option<RemoveFilePathParts> {
+fn remove_path_parts(request: &MetadataRpcRequest) -> Option<RemovePathParts> {
     match request {
         MetadataRpcRequest::RemoveFilePath { path } => {
             let (parent_path, name) = split_parent_path(path)?;
-            Some(RemoveFilePathParts { parent_path, name })
+            Some(RemovePathParts {
+                kind: RemovePathKind::File,
+                parent_path,
+                name,
+            })
+        }
+        MetadataRpcRequest::RemoveEmptyDirPath { path } => {
+            let (parent_path, name) = split_parent_path(path)?;
+            Some(RemovePathParts {
+                kind: RemovePathKind::EmptyDir,
+                parent_path,
+                name,
+            })
         }
         _ => None,
     }
@@ -1042,6 +1065,14 @@ fn create_path_request(
             uid,
             gid,
         },
+    }
+}
+
+fn remove_path_request(kind: RemovePathKind, parent_path: &str, name: &str) -> MetadataRpcRequest {
+    let path = child_path(parent_path, name);
+    match kind {
+        RemovePathKind::File => MetadataRpcRequest::RemoveFilePath { path },
+        RemovePathKind::EmptyDir => MetadataRpcRequest::RemoveEmptyDirPath { path },
     }
 }
 
@@ -2986,6 +3017,137 @@ mod tests {
         let results = match removed.result.unwrap() {
             MetadataRpcResult::Batch { results } => results,
             other => panic!("unexpected remove batch result: {other:?}"),
+        };
+        assert_eq!(results.len(), 2);
+        assert!(results[0].ok);
+        assert!(!results[1].ok);
+        assert_eq!(results[1].error_kind, Some(WireMetadataError::NotFound));
+    }
+
+    #[test]
+    fn rpc_batch_coalesces_same_parent_remove_empty_dir_paths() {
+        let server = test_server();
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        let created = request_envelope(
+            &server,
+            MetadataRpcRequest::Batch {
+                requests: vec![
+                    MetadataRpcRequest::CreateDirPath {
+                        path: "/runs/a".to_owned(),
+                        mode: 0o755,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                    MetadataRpcRequest::CreateDirPath {
+                        path: "/runs/b".to_owned(),
+                        mode: 0o755,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                    MetadataRpcRequest::CreateDirPath {
+                        path: "/runs/keep".to_owned(),
+                        mode: 0o755,
+                        uid: 1000,
+                        gid: 1000,
+                    },
+                ],
+            },
+        );
+        let created = match created.result.unwrap() {
+            MetadataRpcResult::Batch { results } => results,
+            other => panic!("unexpected create batch result: {other:?}"),
+        };
+        assert!(created.iter().all(|result| result.ok));
+        let before = server.service().metadata_store_stats();
+
+        let removed = request_envelope(
+            &server,
+            MetadataRpcRequest::Batch {
+                requests: vec![
+                    MetadataRpcRequest::RemoveEmptyDirPath {
+                        path: "/runs/a".to_owned(),
+                    },
+                    MetadataRpcRequest::RemoveEmptyDirPath {
+                        path: "/runs/b".to_owned(),
+                    },
+                ],
+            },
+        );
+
+        let results = match removed.result.unwrap() {
+            MetadataRpcResult::Batch { results } => results,
+            other => panic!("unexpected rmdir batch result: {other:?}"),
+        };
+        let after = server.service().metadata_store_stats();
+        assert_eq!(results.len(), 2);
+        assert!(results.iter().all(|result| result.ok));
+        assert_eq!(after.commit_total - before.commit_total, 2);
+        assert_eq!(after.atomic_apply_total - before.atomic_apply_total, 1);
+        assert_eq!(
+            after.atomic_apply_command_total - before.atomic_apply_command_total,
+            2
+        );
+        let listed = request_envelope(
+            &server,
+            MetadataRpcRequest::ReadDirPlusPath {
+                path: "/runs".to_owned(),
+            },
+        );
+        let entries = match listed.result.unwrap() {
+            MetadataRpcResult::Dentries { entries } => entries,
+            other => panic!("unexpected readdir result: {other:?}"),
+        };
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].dentry.name_hex, "6b656570");
+    }
+
+    #[test]
+    fn rpc_batch_keeps_duplicate_remove_empty_dir_paths_independent() {
+        let server = test_server();
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+        expect_dentry(request_envelope(
+            &server,
+            MetadataRpcRequest::CreateDirPath {
+                path: "/runs/a".to_owned(),
+                mode: 0o755,
+                uid: 1000,
+                gid: 1000,
+            },
+        ));
+
+        let removed = request_envelope(
+            &server,
+            MetadataRpcRequest::Batch {
+                requests: vec![
+                    MetadataRpcRequest::RemoveEmptyDirPath {
+                        path: "/runs/a".to_owned(),
+                    },
+                    MetadataRpcRequest::RemoveEmptyDirPath {
+                        path: "/runs/a".to_owned(),
+                    },
+                ],
+            },
+        );
+
+        let results = match removed.result.unwrap() {
+            MetadataRpcResult::Batch { results } => results,
+            other => panic!("unexpected rmdir batch result: {other:?}"),
         };
         assert_eq!(results.len(), 2);
         assert!(results[0].ok);
