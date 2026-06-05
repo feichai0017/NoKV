@@ -20,11 +20,11 @@ use nokvfs_protocol::{
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
     WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr, WireMetadataError,
     WireMetadataPosition, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
-    WireStagedObject, WireStagedObjectSet, WireUpdateAttr,
+    WireSliceManifest, WireStagedObject, WireStagedObjectSet, WireUpdateAttr,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
-    InodeAttr, InodeId, PathMetadata, SnapshotPin,
+    InodeAttr, InodeId, PathMetadata, SliceManifest, SnapshotPin,
 };
 
 use crate::{ArtifactMetadata, ClientError, NamespaceRead};
@@ -529,17 +529,22 @@ where
                 chunk_index: chunk.chunk_index,
                 logical_offset: chunk.logical_offset,
                 len: chunk.len,
-                blocks: chunk
-                    .blocks
-                    .iter()
-                    .map(|block| BlockDescriptor {
-                        object_key: block.object_key.clone(),
-                        logical_offset: block.logical_offset,
-                        object_offset: block.object_offset,
-                        len: block.len,
-                        digest_uri: block.digest_uri.clone(),
-                    })
-                    .collect(),
+                slices: vec![SliceManifest {
+                    slice_id: 1,
+                    logical_offset: chunk.logical_offset,
+                    len: chunk.len,
+                    blocks: chunk
+                        .blocks
+                        .iter()
+                        .map(|block| BlockDescriptor {
+                            object_key: block.object_key.clone(),
+                            logical_offset: block.logical_offset,
+                            object_offset: block.object_offset,
+                            len: block.len,
+                            digest_uri: block.digest_uri.clone(),
+                        })
+                        .collect(),
+                }],
             })
             .collect();
         Ok((
@@ -1897,17 +1902,22 @@ fn stored_chunk_to_wire(chunk: &StoredChunk) -> WireChunkManifest {
         chunk_index: chunk.chunk_index,
         logical_offset: chunk.logical_offset,
         len: chunk.len,
-        blocks: chunk
-            .blocks
-            .iter()
-            .map(|block| nokvfs_protocol::WireBlockDescriptor {
-                object_key: block.object_key.clone(),
-                logical_offset: block.logical_offset,
-                object_offset: block.object_offset,
-                len: block.len,
-                digest_uri: block.digest_uri.clone(),
-            })
-            .collect(),
+        slices: vec![WireSliceManifest {
+            slice_id: 1,
+            logical_offset: chunk.logical_offset,
+            len: chunk.len,
+            blocks: chunk
+                .blocks
+                .iter()
+                .map(|block| nokvfs_protocol::WireBlockDescriptor {
+                    object_key: block.object_key.clone(),
+                    logical_offset: block.logical_offset,
+                    object_offset: block.object_offset,
+                    len: block.len,
+                    digest_uri: block.digest_uri.clone(),
+                })
+                .collect(),
+        }],
     }
 }
 

@@ -3,7 +3,7 @@ use crate::server::tests::test_server;
 use nokvfs_protocol::{
     decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest,
     WireMetadataError, WireMetadataRaftLeaderId, WireMetadataRaftVote, WireMetadataRaftVoteRequest,
-    WireStagedObjectSet,
+    WireSliceManifest, WireStagedObjectSet,
 };
 use std::net::TcpListener;
 
@@ -161,12 +161,17 @@ fn rpc_read_path_plan_returns_metadata_and_object_plan() {
                 chunk_index: 0,
                 logical_offset: 0,
                 len: 12,
-                blocks: vec![nokvfs_types::BlockDescriptor {
-                    object_key: "blocks/demo".to_owned(),
+                slices: vec![nokvfs_types::SliceManifest {
+                    slice_id: 1,
                     logical_offset: 0,
-                    object_offset: 0,
                     len: 12,
-                    digest_uri: "sha256:test".to_owned(),
+                    blocks: vec![nokvfs_types::BlockDescriptor {
+                        object_key: "blocks/demo".to_owned(),
+                        logical_offset: 0,
+                        object_offset: 0,
+                        len: 12,
+                        digest_uri: "sha256:test".to_owned(),
+                    }],
                 }],
             }],
             0o644,
@@ -365,12 +370,17 @@ fn rpc_lists_indexed_path_pages_without_plain_namespace_entries() {
                 chunk_index: 0,
                 logical_offset: 0,
                 len: 2,
-                blocks: vec![WireBlockDescriptor {
-                    object_key: format!("blocks/1/{}/{}", prepared.inode, prepared.generation),
+                slices: vec![WireSliceManifest {
+                    slice_id: 1,
                     logical_offset: 0,
-                    object_offset: 0,
                     len: 2,
-                    digest_uri: "sha256:block".to_owned(),
+                    blocks: vec![WireBlockDescriptor {
+                        object_key: format!("blocks/1/{}/{}", prepared.inode, prepared.generation),
+                        logical_offset: 0,
+                        object_offset: 0,
+                        len: 2,
+                        digest_uri: "sha256:block".to_owned(),
+                    }],
                 }],
             }],
             prepared,
@@ -1015,12 +1025,17 @@ fn rpc_prepares_and_publishes_artifact_manifest() {
             chunk_index: 0,
             logical_offset: 0,
             len: 4,
-            blocks: vec![WireBlockDescriptor {
-                object_key: format!("blocks/1/{}/{}", prepared.inode, prepared.generation),
+            slices: vec![WireSliceManifest {
+                slice_id: 1,
                 logical_offset: 0,
-                object_offset: 0,
                 len: 4,
-                digest_uri: "sha256:block".to_owned(),
+                blocks: vec![WireBlockDescriptor {
+                    object_key: format!("blocks/1/{}/{}", prepared.inode, prepared.generation),
+                    logical_offset: 0,
+                    object_offset: 0,
+                    len: 4,
+                    digest_uri: "sha256:block".to_owned(),
+                }],
             }],
         }],
         prepared,
@@ -1072,12 +1087,17 @@ fn rpc_staged_session_publish_preserves_old_prefix_on_shrink() {
                 chunk_index: 0,
                 logical_offset: 0,
                 len: 14,
-                blocks: vec![WireBlockDescriptor {
-                    object_key: old_object_key.clone(),
+                slices: vec![WireSliceManifest {
+                    slice_id: 1,
                     logical_offset: 0,
-                    object_offset: 0,
                     len: 14,
-                    digest_uri: "sha256:block-old".to_owned(),
+                    blocks: vec![WireBlockDescriptor {
+                        object_key: old_object_key.clone(),
+                        logical_offset: 0,
+                        object_offset: 0,
+                        len: 14,
+                        digest_uri: "sha256:block-old".to_owned(),
+                    }],
                 }],
             }],
             prepared,

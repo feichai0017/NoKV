@@ -1848,8 +1848,9 @@ fn stored_chunk(chunk: nokvfs_protocol::WireChunkManifest) -> Result<StoredChunk
         logical_offset: chunk.logical_offset,
         len: chunk.len,
         blocks: chunk
-            .blocks
+            .slices
             .into_iter()
+            .flat_map(|slice| slice.blocks.into_iter())
             .map(|block| {
                 Ok(StoredBlock {
                     object_key: block.object_key,

@@ -566,6 +566,69 @@ fn writeback_cache_rejects_capacity_overflow() {
 }
 
 #[test]
+fn object_writeback_uploader_uploads_cached_ranges_and_clears_tickets() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryObjectStore::new();
+    let cache = WritebackCache::new(WritebackCacheOptions {
+        root: dir.path().join("writeback"),
+        max_bytes: 1024,
+        max_items: 8,
+    })
+    .unwrap();
+    let ticket = cache
+        .stage("blocks/1/2/3/0/0".to_owned(), b"checkpoint")
+        .unwrap();
+    let uploader = ObjectWritebackUploader::new(
+        store.clone(),
+        cache.clone(),
+        ObjectWritebackOptions {
+            queue_capacity: 4,
+            workers: 1,
+            upload_workers_per_request: 1,
+        },
+    );
+    let pending = uploader
+        .submit(ObjectWritebackRequest {
+            ranges: vec![WritebackUploadRange {
+                logical_offset: 0,
+                ticket: ticket.clone(),
+            }],
+            options: ChunkWriteOptions {
+                manifest_id: "artifacts/checkpoint".to_owned(),
+                mount: 1,
+                inode: 2,
+                generation: 3,
+                chunk_size: 64,
+                block_size: 16,
+            },
+            block_index_base: 0,
+        })
+        .unwrap();
+    let written = pending.wait().unwrap();
+    assert_eq!(written.object_puts, 1);
+    assert_eq!(written.object_put_bytes, 10);
+    assert_eq!(written.chunks[0].blocks[0].object_key, "blocks/1/2/3/0/0");
+    let stats = uploader.stats().unwrap();
+    assert_eq!(stats.enqueued, 1);
+    assert_eq!(stats.completed, 1);
+    assert_eq!(stats.uploaded_bytes, 10);
+    assert!(cache.read(&ticket).is_err());
+    let read = read_object_blocks_with_cache(
+        &store,
+        None::<&MemoryBlockCache>,
+        10,
+        &[ObjectReadBlock {
+            object_key: "blocks/1/2/3/0/0".to_owned(),
+            object_offset: 0,
+            len: 10,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(read.bytes, b"checkpoint");
+}
+
+#[test]
 fn object_prefetcher_accepts_disk_backed_block_cache() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryObjectStore::new();

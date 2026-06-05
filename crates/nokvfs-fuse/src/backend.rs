@@ -9,8 +9,10 @@ use nokvfs_meta::{
 use nokvfs_object::{
     put_chunked_ranges_parallel, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
     FileReadPipeline, FileWritePipeline, ObjectBlockCache, ObjectError, ObjectPrefetchOptions,
-    ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectStore, DEFAULT_BLOCK_SIZE,
-    DEFAULT_CHUNK_SIZE, DEFAULT_S3_MULTIPART_CONCURRENCY,
+    ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectStore, ObjectWritebackOptions,
+    ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
+    WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
 use nokvfs_types::{DentryName, InodeAttr, InodeId, WatchCursor, WatchRecord};
 
@@ -166,6 +168,16 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         ranges: &[PublishArtifactRange],
         block_index_base: u64,
     ) -> FuseBackendResult<ChunkedWrite>;
+    fn stage_prepared_artifact_ranges_async(
+        &self,
+        prepared: &Self::Prepared,
+        manifest_id: &str,
+        ranges: &[PublishArtifactRange],
+        block_index_base: u64,
+    ) -> FuseBackendResult<PendingChunkedWrite> {
+        self.stage_prepared_artifact_ranges(prepared, manifest_id, ranges, block_index_base)
+            .map(|written| PendingChunkedWrite::ready(Ok(written)))
+    }
     fn cleanup_staged_objects(
         &self,
         staged: &nokvfs_object::StagedObjectSet,
@@ -187,6 +199,8 @@ pub(crate) struct ClientFuseBackend<O> {
     objects: Arc<O>,
     block_cache: ObjectBlockCache,
     prefetcher: ObjectPrefetcher<Arc<O>>,
+    writeback_cache: Option<WritebackCache>,
+    writeback_uploader: Option<ObjectWritebackUploader<Arc<O>>>,
     upload_workers: usize,
 }
 
@@ -215,11 +229,30 @@ where
             block_cache.clone(),
             ObjectPrefetchOptions::default(),
         );
+        let writeback_cache = WritebackCache::new(WritebackCacheOptions {
+            root: std::env::temp_dir().join(format!("nokvfs-writeback-{}", std::process::id())),
+            max_bytes: 8 * 1024 * 1024 * 1024,
+            max_items: 16 * 1024,
+        })
+        .ok();
+        let writeback_uploader = writeback_cache.as_ref().map(|cache| {
+            ObjectWritebackUploader::new(
+                Arc::clone(&objects),
+                cache.clone(),
+                ObjectWritebackOptions {
+                    queue_capacity: 256,
+                    workers: upload_workers.max(1),
+                    upload_workers_per_request: upload_workers.max(1),
+                },
+            )
+        });
         Self {
             metadata,
             objects,
             block_cache,
             prefetcher,
+            writeback_cache,
+            writeback_uploader,
             upload_workers: upload_workers.max(1),
         }
     }
@@ -605,6 +638,68 @@ where
             block_size: DEFAULT_BLOCK_SIZE,
         })
         .map_err(Into::into)
+    }
+
+    fn stage_prepared_artifact_ranges_async(
+        &self,
+        prepared: &Self::Prepared,
+        manifest_id: &str,
+        ranges: &[PublishArtifactRange],
+        block_index_base: u64,
+    ) -> FuseBackendResult<PendingChunkedWrite> {
+        let (Some(writeback_cache), Some(writeback_uploader)) =
+            (&self.writeback_cache, &self.writeback_uploader)
+        else {
+            return self
+                .stage_prepared_artifact_ranges(prepared, manifest_id, ranges, block_index_base)
+                .map(|written| PendingChunkedWrite::ready(Ok(written)));
+        };
+        let mut upload_ranges = Vec::new();
+        for range in ranges.iter().filter(|range| !range.bytes.is_empty()) {
+            let key = format!(
+                "{manifest_id}:{}:{}:{}",
+                prepared.generation,
+                range.offset,
+                range.bytes.len()
+            );
+            let ticket = writeback_cache.stage(key, &range.bytes)?;
+            upload_ranges.push(WritebackUploadRange {
+                logical_offset: range.offset,
+                ticket,
+            });
+        }
+        if upload_ranges.is_empty() {
+            return Ok(PendingChunkedWrite::ready(Ok(ChunkedWrite {
+                manifest_id: manifest_id.to_owned(),
+                size: 0,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE as u64,
+                chunks: Vec::new(),
+                object_puts: 0,
+                object_put_bytes: 0,
+            })));
+        }
+        let request = ObjectWritebackRequest {
+            ranges: upload_ranges.clone(),
+            options: ChunkWriteOptions {
+                manifest_id: manifest_id.to_owned(),
+                mount: prepared.mount,
+                inode: prepared.inode.get(),
+                generation: prepared.generation,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+            block_index_base,
+        };
+        match writeback_uploader.submit(request) {
+            Ok(pending) => Ok(pending),
+            Err(err) => {
+                for range in upload_ranges {
+                    let _ = writeback_cache.remove(&range.ticket);
+                }
+                Err(err.into())
+            }
+        }
     }
 
     fn cleanup_staged_objects(

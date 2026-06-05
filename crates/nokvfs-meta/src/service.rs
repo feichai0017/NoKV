@@ -41,15 +41,15 @@ use crate::layout::{
     xattr_key, xattr_prefix, PATH_INDEX_DELIMITER,
 };
 use nokvfs_object::{
-    ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite, MemoryBlockCache,
-    ObjectCleanupOutcome, ObjectError, ObjectKey, ObjectReadBlock, ObjectStore, StagedObjectSet,
-    StoredChunk, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    plan_slice_reads, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
+    MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectKey, ObjectReadBlock, ObjectStore,
+    StagedObjectSet, StoredBlock, StoredChunk, StoredSlice, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
     DentryProjection, DentryRecord, FileType, InodeAttr, InodeId, ModelError, MountId,
-    ObjectGcRecord, PathError, PathMetadata, RecordFamily, SnapshotPin, WatchCursor, WatchEvent,
-    WatchEventKind, WatchRecord,
+    ObjectGcRecord, PathError, PathMetadata, RecordFamily, SliceManifest, SnapshotPin, WatchCursor,
+    WatchEvent, WatchEventKind, WatchRecord,
 };
 use sha2::{Digest, Sha256};
 
@@ -659,15 +659,26 @@ fn validate_prepared_artifact(
             ));
         }
         covered = covered.saturating_add(chunk.len);
-        for block in &chunk.blocks {
-            let block_end = block
+        for slice in &chunk.slices {
+            let slice_end = slice
                 .logical_offset
-                .checked_add(block.len)
+                .checked_add(slice.len)
                 .ok_or(ObjectError::InvalidRange)?;
-            if block_end > chunk_end || block.logical_offset < chunk.logical_offset {
+            if slice_end > chunk_end || slice.logical_offset < chunk.logical_offset {
                 return Err(MetadError::InvalidPreparedArtifact(
-                    "block descriptor is outside chunk range".to_owned(),
+                    "slice descriptor is outside chunk range".to_owned(),
                 ));
+            }
+            for block in &slice.blocks {
+                let block_end = block
+                    .logical_offset
+                    .checked_add(block.len)
+                    .ok_or(ObjectError::InvalidRange)?;
+                if block_end > slice_end || block.logical_offset < slice.logical_offset {
+                    return Err(MetadError::InvalidPreparedArtifact(
+                        "block descriptor is outside slice range".to_owned(),
+                    ));
+                }
             }
         }
     }
@@ -722,17 +733,40 @@ fn merge_session_chunks(
         }
     }
     for old_chunk in old_chunks {
-        for block in old_chunk.blocks {
-            let Some(block) = clip_block_to_size(block, size)? else {
+        for old_slice in old_chunk.slices {
+            let mut blocks = Vec::new();
+            for block in old_slice.blocks {
+                let Some(block) = clip_block_to_size(block, size)? else {
+                    continue;
+                };
+                blocks.push(block);
+            }
+            if blocks.is_empty() {
                 continue;
-            };
-            let chunk_index = block.logical_offset / DEFAULT_CHUNK_SIZE;
+            }
+            let chunk_index = old_slice.logical_offset / DEFAULT_CHUNK_SIZE;
+            let logical_offset = blocks
+                .iter()
+                .map(|block| block.logical_offset)
+                .min()
+                .unwrap_or(old_slice.logical_offset);
+            let end = blocks
+                .iter()
+                .map(|block| block.logical_offset.saturating_add(block.len))
+                .max()
+                .unwrap_or(logical_offset);
             ensure_manifest_chunk(&mut chunks, chunk_index, size)
-                .blocks
-                .push(block);
+                .slices
+                .push(SliceManifest {
+                    slice_id: old_slice.slice_id,
+                    logical_offset,
+                    len: end.saturating_sub(logical_offset),
+                    blocks,
+                });
         }
     }
     for dirty_chunk in dirty_chunks {
+        let mut blocks = Vec::new();
         for block in dirty_chunk.blocks {
             let block = BlockDescriptor {
                 object_key: block.object_key,
@@ -744,11 +778,30 @@ fn merge_session_chunks(
             let Some(block) = clip_block_to_size(block, size)? else {
                 continue;
             };
-            let chunk_index = block.logical_offset / DEFAULT_CHUNK_SIZE;
-            ensure_manifest_chunk(&mut chunks, chunk_index, size)
-                .blocks
-                .push(block);
+            blocks.push(block);
         }
+        if blocks.is_empty() {
+            continue;
+        }
+        let chunk_index = dirty_chunk.chunk_index;
+        let logical_offset = blocks
+            .iter()
+            .map(|block| block.logical_offset)
+            .min()
+            .unwrap_or(dirty_chunk.logical_offset);
+        let end = blocks
+            .iter()
+            .map(|block| block.logical_offset.saturating_add(block.len))
+            .max()
+            .unwrap_or(logical_offset);
+        let chunk = ensure_manifest_chunk(&mut chunks, chunk_index, size);
+        let slice_id = next_slice_id(chunk);
+        chunk.slices.push(SliceManifest {
+            slice_id,
+            logical_offset,
+            len: end.saturating_sub(logical_offset),
+            blocks,
+        });
     }
     Ok(chunks.into_values().collect())
 }
@@ -769,9 +822,19 @@ fn ensure_manifest_chunk(
             chunk_index,
             logical_offset,
             len,
-            blocks: Vec::new(),
+            slices: Vec::new(),
         }
     })
+}
+
+fn next_slice_id(chunk: &ChunkManifest) -> u64 {
+    chunk
+        .slices
+        .iter()
+        .map(|slice| slice.slice_id)
+        .max()
+        .unwrap_or(0)
+        .saturating_add(1)
 }
 
 fn clip_block_to_size(
@@ -796,8 +859,21 @@ fn clip_block_to_size(
 fn chunk_object_keys(chunks: &[ChunkManifest]) -> HashSet<String> {
     chunks
         .iter()
-        .flat_map(|chunk| chunk.blocks.iter().map(|block| block.object_key.clone()))
+        .flat_map(|chunk| {
+            chunk
+                .slices
+                .iter()
+                .flat_map(|slice| slice.blocks.iter().map(|block| block.object_key.clone()))
+        })
         .collect()
+}
+
+fn manifest_block_count(chunks: &[ChunkManifest]) -> u64 {
+    chunks
+        .iter()
+        .flat_map(|chunk| chunk.slices.iter())
+        .map(|slice| slice.blocks.len() as u64)
+        .sum()
 }
 
 fn watch_cursor_from_key(key: &[u8]) -> Result<WatchCursor, MetadError> {

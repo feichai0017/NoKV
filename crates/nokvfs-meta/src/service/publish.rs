@@ -359,13 +359,8 @@ where
         let chunks = merge_session_chunks(request.size, old_chunks, request.chunks)?;
         self.manifest_chunks
             .fetch_add(chunks.len() as u64, Ordering::Relaxed);
-        self.manifest_blocks.fetch_add(
-            chunks
-                .iter()
-                .map(|chunk| chunk.blocks.len() as u64)
-                .sum::<u64>(),
-            Ordering::Relaxed,
-        );
+        self.manifest_blocks
+            .fetch_add(manifest_block_count(&chunks), Ordering::Relaxed);
         let body = BodyDescriptor {
             producer: request.producer,
             digest_uri: request.digest_uri,
@@ -429,17 +424,22 @@ where
                 chunk_index: chunk.chunk_index,
                 logical_offset: chunk.logical_offset,
                 len: chunk.len,
-                blocks: chunk
-                    .blocks
-                    .into_iter()
-                    .map(|block| BlockDescriptor {
-                        object_key: block.object_key,
-                        logical_offset: block.logical_offset,
-                        object_offset: block.object_offset,
-                        len: block.len,
-                        digest_uri: block.digest_uri,
-                    })
-                    .collect(),
+                slices: vec![SliceManifest {
+                    slice_id: 1,
+                    logical_offset: chunk.logical_offset,
+                    len: chunk.len,
+                    blocks: chunk
+                        .blocks
+                        .into_iter()
+                        .map(|block| BlockDescriptor {
+                            object_key: block.object_key,
+                            logical_offset: block.logical_offset,
+                            object_offset: block.object_offset,
+                            len: block.len,
+                            digest_uri: block.digest_uri,
+                        })
+                        .collect(),
+                }],
             })
             .collect();
         Ok(StagedArtifactBody {
@@ -509,13 +509,8 @@ where
         let chunks = merge_session_chunks(request.size, old_chunks, written.chunks)?;
         self.manifest_chunks
             .fetch_add(chunks.len() as u64, Ordering::Relaxed);
-        self.manifest_blocks.fetch_add(
-            chunks
-                .iter()
-                .map(|chunk| chunk.blocks.len() as u64)
-                .sum::<u64>(),
-            Ordering::Relaxed,
-        );
+        self.manifest_blocks
+            .fetch_add(manifest_block_count(&chunks), Ordering::Relaxed);
         Ok(StagedArtifactBody {
             body: BodyDescriptor {
                 producer: request.producer.clone(),

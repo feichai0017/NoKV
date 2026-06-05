@@ -8,7 +8,7 @@ use std::fmt;
 
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
-    InodeId, PathMetadata, SnapshotPin,
+    InodeId, PathMetadata, SliceManifest, SnapshotPin,
 };
 use serde::{Deserialize, Serialize};
 
@@ -563,6 +563,14 @@ pub struct WireChunkManifest {
     pub chunk_index: u64,
     pub logical_offset: u64,
     pub len: u64,
+    pub slices: Vec<WireSliceManifest>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireSliceManifest {
+    pub slice_id: u64,
+    pub logical_offset: u64,
+    pub len: u64,
     pub blocks: Vec<WireBlockDescriptor>,
 }
 
@@ -723,10 +731,10 @@ impl WireChunkManifest {
             chunk_index: chunk.chunk_index,
             logical_offset: chunk.logical_offset,
             len: chunk.len,
-            blocks: chunk
-                .blocks
+            slices: chunk
+                .slices
                 .iter()
-                .map(WireBlockDescriptor::from_block_descriptor)
+                .map(WireSliceManifest::from_slice_manifest)
                 .collect(),
         }
     }
@@ -734,6 +742,34 @@ impl WireChunkManifest {
     pub fn into_chunk_manifest(self) -> Result<ChunkManifest, MetadataProtocolError> {
         Ok(ChunkManifest {
             chunk_index: self.chunk_index,
+            logical_offset: self.logical_offset,
+            len: self.len,
+            slices: self
+                .slices
+                .into_iter()
+                .map(WireSliceManifest::into_slice_manifest)
+                .collect::<Result<Vec<_>, _>>()?,
+        })
+    }
+}
+
+impl WireSliceManifest {
+    pub fn from_slice_manifest(slice: &SliceManifest) -> Self {
+        Self {
+            slice_id: slice.slice_id,
+            logical_offset: slice.logical_offset,
+            len: slice.len,
+            blocks: slice
+                .blocks
+                .iter()
+                .map(WireBlockDescriptor::from_block_descriptor)
+                .collect(),
+        }
+    }
+
+    pub fn into_slice_manifest(self) -> Result<SliceManifest, MetadataProtocolError> {
+        Ok(SliceManifest {
+            slice_id: self.slice_id,
             logical_offset: self.logical_offset,
             len: self.len,
             blocks: self

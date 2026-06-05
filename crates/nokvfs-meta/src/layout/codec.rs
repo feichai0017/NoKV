@@ -2,7 +2,8 @@ use std::fmt;
 
 use nokvfs_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
-    FileType, InodeAttr, InodeId, ObjectGcRecord, SnapshotPin, WatchEvent, WatchEventKind,
+    FileType, InodeAttr, InodeId, ObjectGcRecord, SliceManifest, SnapshotPin, WatchEvent,
+    WatchEventKind,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -149,13 +150,19 @@ pub fn encode_chunk_manifest(manifest: &ChunkManifest) -> Vec<u8> {
     push_u64(&mut out, manifest.chunk_index);
     push_u64(&mut out, manifest.logical_offset);
     push_u64(&mut out, manifest.len);
-    push_u32(&mut out, manifest.blocks.len() as u32);
-    for block in &manifest.blocks {
-        put_string(&mut out, &block.object_key);
-        push_u64(&mut out, block.logical_offset);
-        push_u64(&mut out, block.object_offset);
-        push_u64(&mut out, block.len);
-        put_string(&mut out, &block.digest_uri);
+    push_u32(&mut out, manifest.slices.len() as u32);
+    for slice in &manifest.slices {
+        push_u64(&mut out, slice.slice_id);
+        push_u64(&mut out, slice.logical_offset);
+        push_u64(&mut out, slice.len);
+        push_u32(&mut out, slice.blocks.len() as u32);
+        for block in &slice.blocks {
+            put_string(&mut out, &block.object_key);
+            push_u64(&mut out, block.logical_offset);
+            push_u64(&mut out, block.object_offset);
+            push_u64(&mut out, block.len);
+            put_string(&mut out, &block.digest_uri);
+        }
     }
     out
 }
@@ -165,15 +172,28 @@ pub fn decode_chunk_manifest(bytes: &[u8]) -> Result<ChunkManifest, CodecError> 
     let chunk_index = input.u64()?;
     let logical_offset = input.u64()?;
     let len = input.u64()?;
-    let block_count = input.u32()? as usize;
-    let mut blocks = Vec::with_capacity(block_count);
-    for _ in 0..block_count {
-        blocks.push(BlockDescriptor {
-            object_key: input.string()?,
-            logical_offset: input.u64()?,
-            object_offset: input.u64()?,
-            len: input.u64()?,
-            digest_uri: input.string()?,
+    let slice_count = input.u32()? as usize;
+    let mut slices = Vec::with_capacity(slice_count);
+    for _ in 0..slice_count {
+        let slice_id = input.u64()?;
+        let logical_offset = input.u64()?;
+        let len = input.u64()?;
+        let block_count = input.u32()? as usize;
+        let mut blocks = Vec::with_capacity(block_count);
+        for _ in 0..block_count {
+            blocks.push(BlockDescriptor {
+                object_key: input.string()?,
+                logical_offset: input.u64()?,
+                object_offset: input.u64()?,
+                len: input.u64()?,
+                digest_uri: input.string()?,
+            });
+        }
+        slices.push(SliceManifest {
+            slice_id,
+            logical_offset,
+            len,
+            blocks,
         });
     }
     input.finish()?;
@@ -181,7 +201,7 @@ pub fn decode_chunk_manifest(bytes: &[u8]) -> Result<ChunkManifest, CodecError> 
         chunk_index,
         logical_offset,
         len,
-        blocks,
+        slices,
     })
 }
 

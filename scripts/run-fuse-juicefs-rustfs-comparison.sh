@@ -49,6 +49,7 @@ Darwin)
     ;;
 esac
 JUICEFS_MOUNT_OPTIONS="${NOKV_COMPARE_JUICEFS_MOUNT_OPTIONS:-$DEFAULT_JUICEFS_MOUNT_OPTIONS}"
+NOKV_MOUNT_OPTIONS="${NOKV_COMPARE_NOKV_MOUNT_OPTIONS:-}"
 
 case "$PROFILE" in
 smoke)
@@ -120,6 +121,7 @@ Environment:
   NOKV_COMPARE_RUSTFS_BUCKET              NoKV bucket (default: nokv-fuse)
   NOKV_COMPARE_JUICEFS_BUCKET             JuiceFS bucket (default: juicefs-fuse)
   NOKV_COMPARE_JUICEFS_MOUNT_OPTIONS      JuiceFS FUSE options; macOS default disables AppleDouble
+  NOKV_COMPARE_NOKV_MOUNT_OPTIONS         extra nokv-fs mount args, e.g. "--no-kernel-cache"
   NOKV_COMPARE_KEEP_WORKDIR=1             keep temp data and logs
 
 Shape overrides:
@@ -367,62 +369,141 @@ def count_appledouble(path: Path) -> int:
         count += sum(1 for name in files if name.startswith("._"))
     return count
 
-def run_one(system: str, mount: Path, bucket: str) -> str:
+def row(system: str, workload: str, bucket: str, operations: int, seconds: float, bytes_total: int, samples: int, seed_seconds: float, checksum: int, sidecars: int, shape: str) -> str:
+    mib = bytes_total / 1024 / 1024
+    caveat = (
+        "local engineering FUSE comparison; same RustFS endpoint and generated shape; "
+        "not an official MLPerf result"
+    )
+    return (
+        f"{system},{profile},{workload},{endpoint},{bucket},"
+        f"{'on' if do_fsync else 'off'},"
+        f"{operations},{seconds:.6f},{operations / seconds if seconds > 0 else 0:.2f},"
+        f"{mib / seconds if seconds > 0 else 0:.2f},"
+        f"{samples / seconds if seconds > 0 else 0:.2f},{seed_seconds:.6f},"
+        f"{checksum},{sidecars},\"{shape}\",\"{caveat}\""
+    )
+
+def run_metadata_create_list(system: str, root: Path, bucket: str) -> str:
+    metadata_root = root / "metadata"
+    start = time.perf_counter()
+    metadata_root.mkdir()
+    created = 1
+    checksum = 0
+    for shard in range(dataset_dirs):
+        shard_dir = metadata_root / f"dir-{shard:04d}"
+        shard_dir.mkdir()
+        created += 1
+        for file_index in range(files_per_dir):
+            path = shard_dir / f"file-{file_index:05d}.bin"
+            with path.open("wb"):
+                pass
+            created += 1
+        entries = visible_entries(shard_dir)
+        checksum += len(entries)
+    seconds = time.perf_counter() - start
+    shape = (
+        f"dataset_dirs={dataset_dirs} files_per_dir={files_per_dir} "
+        "file_body=metadata-only"
+    )
+    return row(
+        system,
+        "metadata_create_list",
+        bucket,
+        created + dataset_dirs,
+        seconds,
+        0,
+        0,
+        0.0,
+        checksum,
+        count_appledouble(metadata_root),
+        shape,
+    )
+
+def run_checkpoint_write(system: str, root: Path, bucket: str) -> str:
+    checkpoints = root / "checkpoints"
+    checkpoints.mkdir()
+    write_file(checkpoints / "latest.ckpt", payload(0, checkpoint_bytes))
+    start = time.perf_counter()
+    checksum = 0
+    for step in range(checkpoint_steps):
+        stage = checkpoints / f".stage-{step:06d}"
+        data = payload(step, checkpoint_bytes)
+        write_file(stage, data)
+        os.replace(stage, checkpoints / "latest.ckpt")
+        checksum += data[0] if data else 0
+    seconds = time.perf_counter() - start
+    shape = (
+        f"checkpoint_steps={checkpoint_steps} checkpoint_bytes={checkpoint_bytes}"
+    )
+    return row(
+        system,
+        "checkpoint_write",
+        bucket,
+        checkpoint_steps * 2,
+        seconds,
+        checkpoint_steps * checkpoint_bytes,
+        0,
+        0.0,
+        checksum,
+        count_appledouble(checkpoints),
+        shape,
+    )
+
+def seed_training_dataset(dataset: Path) -> float:
+    start = time.perf_counter()
+    dataset.mkdir()
+    for shard in range(dataset_dirs):
+        shard_dir = dataset / f"shard-{shard:04d}"
+        shard_dir.mkdir()
+        for file_index in range(files_per_dir):
+            write_file(
+                shard_dir / f"sample-{file_index:05d}.bin",
+                payload(shard * 31 + file_index * 17, sample_bytes),
+            )
+    return time.perf_counter() - start
+
+def run_training_read(system: str, root: Path, bucket: str) -> str:
+    dataset = root / "dataset"
+    seed_seconds = seed_training_dataset(dataset)
+    start = time.perf_counter()
+    checksum = 0
+    samples = 0
+    for _ in range(read_repeats):
+        for shard in range(dataset_dirs):
+            shard_dir = dataset / f"shard-{shard:04d}"
+            for entry in visible_entries(shard_dir):
+                try:
+                    data = entry.read_bytes()
+                except OSError as err:
+                    raise RuntimeError(f"{system} training read failed for {entry}: {err}") from err
+                checksum += len(data)
+                samples += 1
+    seconds = time.perf_counter() - start
+    shape = (
+        f"dataset_dirs={dataset_dirs} files_per_dir={files_per_dir} "
+        f"sample_bytes={sample_bytes} read_repeats={read_repeats}"
+    )
+    return row(
+        system,
+        "training_read",
+        bucket,
+        samples,
+        seconds,
+        samples * sample_bytes,
+        samples,
+        seed_seconds,
+        checksum,
+        count_appledouble(dataset),
+        shape,
+    )
+
+def run_one(system: str, mount: Path, bucket: str) -> None:
     root = Path(tempfile.mkdtemp(prefix=f"nokv-fuse-compare-{system}-", dir=mount))
     try:
-        dataset = root / "dataset"
-        checkpoints = root / "checkpoints"
-        seed_start = time.perf_counter()
-        dataset.mkdir()
-        checkpoints.mkdir()
-        for shard in range(dataset_dirs):
-            shard_dir = dataset / f"shard-{shard:04d}"
-            shard_dir.mkdir()
-            for file_index in range(files_per_dir):
-                write_file(
-                    shard_dir / f"sample-{file_index:05d}.bin",
-                    payload(shard * 31 + file_index * 17, sample_bytes),
-                )
-        write_file(checkpoints / "latest.ckpt", payload(0, checkpoint_bytes))
-        seed_seconds = time.perf_counter() - seed_start
-
-        start = time.perf_counter()
-        checksum = 0
-        for shard in range(dataset_dirs):
-            shard_dir = dataset / f"shard-{shard:04d}"
-            entries = visible_entries(shard_dir)
-            checksum += len(entries)
-            if entries:
-                first = entries[0]
-                for _ in range(read_repeats):
-                    checksum += len(first.read_bytes())
-        for step in range(checkpoint_steps):
-            stage = checkpoints / f".stage-{step:06d}"
-            write_file(stage, payload(step, checkpoint_bytes))
-            os.replace(stage, checkpoints / "latest.ckpt")
-        seconds = time.perf_counter() - start
-
-        bytes_total = dataset_dirs * sample_bytes * read_repeats + checkpoint_steps * checkpoint_bytes
-        samples = dataset_dirs * read_repeats
-        operations = dataset_dirs * (1 + read_repeats) + checkpoint_steps * 2
-        mib = bytes_total / 1024 / 1024
-        sidecars = count_appledouble(root)
-        shape = (
-            f"dataset_dirs={dataset_dirs} files_per_dir={files_per_dir} "
-            f"sample_bytes={sample_bytes} checkpoint_steps={checkpoint_steps} "
-            f"checkpoint_bytes={checkpoint_bytes}"
-        )
-        caveat = (
-            "local engineering FUSE comparison; same RustFS endpoint and generated shape; "
-            "not an official MLPerf result"
-        )
-        return (
-            f"{system},{profile},fuse_same_shape,{endpoint},{bucket},"
-            f"{'on' if do_fsync else 'off'},"
-            f"{operations},{seconds:.6f},{operations / seconds:.2f},{mib / seconds:.2f},"
-            f"{samples / seconds:.2f},{seed_seconds:.6f},{checksum},{sidecars},"
-            f"\"{shape}\",\"{caveat}\""
-        )
+        print(run_metadata_create_list(system, root, bucket), flush=True)
+        print(run_checkpoint_write(system, root, bucket), flush=True)
+        print(run_training_read(system, root, bucket), flush=True)
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
@@ -431,8 +512,8 @@ print(
     "ops_per_second,MiB_per_second,samples_per_second,seed_seconds,checksum,"
     "sidecar_files,shape,caveat"
 )
-print(run_one("nokvfs-fuse", nokv_mount, nokv_bucket))
-print(run_one("juicefs-fuse", juicefs_mount, juicefs_bucket))
+run_one("nokvfs-fuse", nokv_mount, nokv_bucket)
+run_one("juicefs-fuse", juicefs_mount, juicefs_bucket)
 PY
 }
 
@@ -518,6 +599,10 @@ SERVER_PID=$!
 wait_for_metadata_server
 
 echo "Mounting NoKV-FS at $NOKV_MOUNT" >&2
+NOKV_MOUNT_ARGS=()
+if [[ -n "$NOKV_MOUNT_OPTIONS" ]]; then
+    read -r -a NOKV_MOUNT_ARGS <<<"$NOKV_MOUNT_OPTIONS"
+fi
 "$NOKV_FS_BIN" \
     --server-bind "$SERVER_ADDRESS" \
     --object-backend rustfs \
@@ -527,7 +612,7 @@ echo "Mounting NoKV-FS at $NOKV_MOUNT" >&2
     --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
     --uid "$(id -u)" \
     --gid "$(id -g)" \
-    mount "$NOKV_MOUNT" >"$NOKV_MOUNT_LOG" 2>&1 &
+    mount "${NOKV_MOUNT_ARGS[@]}" "$NOKV_MOUNT" >"$NOKV_MOUNT_LOG" 2>&1 &
 NOKV_MOUNT_PID=$!
 wait_for_mount "$NOKV_MOUNT" NoKV-FS "$NOKV_MOUNT_PID"
 

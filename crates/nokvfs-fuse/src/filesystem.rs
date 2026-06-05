@@ -20,8 +20,8 @@ use nokvfs_meta::{
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokvfs_object::{
-    DirtyChunkExtent, FileReadPipeline, FileWritePipeline, ObjectReadBlock, ObjectStore,
-    DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    ChunkedWrite, DirtyChunkExtent, FileReadPipeline, FileWritePipeline, ObjectError,
+    ObjectReadBlock, ObjectStore, PendingChunkedWrite, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_types::{DentryName, FileType, InodeAttr, InodeId};
 use sha2::{Digest, Sha256};
@@ -692,9 +692,9 @@ where
                 block_index_base,
             }
         };
-        let written = self
+        let pending = self
             .backend
-            .stage_prepared_artifact_ranges(
+            .stage_prepared_artifact_ranges_async(
                 &reservation.prepared,
                 &reservation.manifest_id,
                 &[PublishArtifactRange {
@@ -704,10 +704,10 @@ where
                 reservation.block_index_base,
             )
             .map_err(errno)?;
-        let staged = written.staged_objects().map_err(|_| Errno::EIO)?;
         let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
         let Some(handle) = handles.get_mut(&fh.0) else {
-            let _ = self.backend.cleanup_staged_objects(&staged);
+            drop(handles);
+            self.cleanup_completed_pending(pending)?;
             return Err(Errno::EBADF);
         };
         if handle
@@ -716,7 +716,8 @@ where
             .map(|prepared| self.backend.prepared_generation(prepared))
             != Some(self.backend.prepared_generation(&reservation.prepared))
         {
-            let _ = self.backend.cleanup_staged_objects(&staged);
+            drop(handles);
+            self.cleanup_completed_pending(pending)?;
             return Err(Errno::ESTALE);
         }
         if let Some(digest) = handle.sequential_digest.as_mut() {
@@ -728,8 +729,7 @@ where
             .writer
             .as_mut()
             .ok_or(Errno::EIO)?
-            .record_write(written)
-            .map_err(|_| Errno::EIO)?;
+            .record_pending_write(pending);
         handle.size = handle.size.max(end);
         handle.dirty = true;
         Ok(data.len())
@@ -805,6 +805,23 @@ where
         if offset >= handle.size {
             return Ok(Some(Vec::new()));
         }
+        if handle
+            .writer
+            .as_ref()
+            .map(|writer| writer.has_pending_uploads())
+            .unwrap_or(false)
+        {
+            self.drain_handle_uploads(fh)?;
+        }
+        let Some(handle) = self
+            .write_handles
+            .read()
+            .map_err(|_| Errno::EIO)?
+            .get(&fh.0)
+            .cloned()
+        else {
+            return Ok(None);
+        };
         let output_len = u64::from(size)
             .min(handle.size.saturating_sub(offset))
             .try_into()
@@ -823,6 +840,64 @@ where
             self.overlay_dirty_extents(&mut bytes, offset, writer.dirty_extents())?;
         }
         Ok(Some(bytes))
+    }
+
+    fn cleanup_completed_pending(&self, pending: PendingChunkedWrite) -> Result<(), Errno> {
+        match pending.wait() {
+            Ok(written) => cleanup_written_objects(&*self.backend, &written),
+            Err(err) => Err(self.cleanup_object_error(err)),
+        }
+    }
+
+    fn cleanup_object_error(&self, err: ObjectError) -> Errno {
+        if let ObjectError::StagedWriteFailed { staged, .. } = &err {
+            let _ = self.backend.cleanup_staged_objects(staged);
+        }
+        errno(err)
+    }
+
+    fn drain_handle_uploads(&self, fh: FileHandle) -> Result<(), Errno> {
+        loop {
+            let pending = {
+                let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+                let Some(handle) = handles.get_mut(&fh.0) else {
+                    return Err(Errno::EBADF);
+                };
+                let Some(writer) = handle.writer.as_mut() else {
+                    return Ok(());
+                };
+                writer.take_pending_uploads()
+            };
+            if pending.is_empty() {
+                return Ok(());
+            }
+            let mut completed = Vec::with_capacity(pending.len());
+            for upload in pending {
+                completed.push(
+                    upload
+                        .wait()
+                        .map_err(|err| self.cleanup_object_error(err))?,
+                );
+            }
+            let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
+            let Some(handle) = handles.get_mut(&fh.0) else {
+                drop(handles);
+                for written in completed {
+                    cleanup_written_objects(&*self.backend, &written)?;
+                }
+                return Err(Errno::EBADF);
+            };
+            let Some(writer) = handle.writer.as_mut() else {
+                drop(handles);
+                for written in completed {
+                    cleanup_written_objects(&*self.backend, &written)?;
+                }
+                return Err(Errno::EIO);
+            };
+            for written in completed {
+                writer.record_write(written).map_err(errno)?;
+            }
+        }
     }
 
     fn overlay_dirty_extents(
@@ -899,6 +974,15 @@ where
     }
 
     fn publish_handle(&self, fh: FileHandle) -> Result<(), Errno> {
+        let has_write_handle = self
+            .write_handles
+            .read()
+            .map_err(|_| Errno::EIO)?
+            .contains_key(&fh.0);
+        if !has_write_handle {
+            return Ok(());
+        }
+        self.drain_handle_uploads(fh)?;
         let Some(snapshot) = self
             .write_handles
             .read()
@@ -2049,6 +2133,14 @@ fn staged_range_block_count(offset: u64, len: usize) -> Result<u64, Errno> {
         range_offset += write_len;
     }
     Ok(count)
+}
+
+fn cleanup_written_objects<B: FuseBackend>(
+    backend: &B,
+    written: &ChunkedWrite,
+) -> Result<(), Errno> {
+    let staged = written.staged_objects().map_err(errno)?;
+    backend.cleanup_staged_objects(&staged).map_err(errno)
 }
 
 fn child_index_from_offset(offset: u64) -> Option<usize> {

@@ -92,6 +92,14 @@ pub struct ChunkManifest {
     pub chunk_index: u64,
     pub logical_offset: u64,
     pub len: u64,
+    pub slices: Vec<SliceManifest>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SliceManifest {
+    pub slice_id: u64,
+    pub logical_offset: u64,
+    pub len: u64,
     pub blocks: Vec<BlockDescriptor>,
 }
 

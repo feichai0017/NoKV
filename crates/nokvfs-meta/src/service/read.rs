@@ -1079,27 +1079,33 @@ where
             };
             let manifest = decode_chunk_manifest(&value.0)
                 .map_err(|err| MetadError::Codec(err.to_string()))?;
-            for block in manifest.blocks {
-                let block_start = block.logical_offset;
-                let block_end = block_start
-                    .checked_add(block.len)
-                    .ok_or(ObjectError::InvalidRange)?;
-                let overlap_start = block_start.max(offset);
-                let overlap_end = block_end.min(end);
-                if overlap_start >= overlap_end {
-                    continue;
-                }
-                let object_offset = block
-                    .object_offset
-                    .checked_add(overlap_start - block_start)
-                    .ok_or(ObjectError::InvalidRange)?;
-                plan.push(ObjectReadBlock {
-                    object_key: block.object_key,
-                    object_offset,
-                    len: (overlap_end - overlap_start) as usize,
-                    output_offset: (overlap_start - offset) as usize,
-                });
-            }
+            let slices = manifest
+                .slices
+                .iter()
+                .map(|slice| StoredSlice {
+                    slice_id: slice.slice_id,
+                    logical_offset: slice.logical_offset,
+                    len: slice.len,
+                    chunks: vec![StoredChunk {
+                        chunk_index: manifest.chunk_index,
+                        logical_offset: manifest.logical_offset,
+                        len: manifest.len,
+                        blocks: slice
+                            .blocks
+                            .iter()
+                            .map(|block| StoredBlock {
+                                object_key: block.object_key.clone(),
+                                logical_offset: block.logical_offset,
+                                object_offset: block.object_offset,
+                                len: block.len,
+                                digest_uri: block.digest_uri.clone(),
+                            })
+                            .collect(),
+                    }],
+                })
+                .collect::<Vec<_>>();
+            let slice_plan = plan_slice_reads(&slices, offset, len)?;
+            plan.extend(slice_plan.blocks);
         }
         Ok(plan)
     }

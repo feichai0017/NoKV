@@ -218,12 +218,17 @@ fn one_chunk_manifest(inode: InodeId, generation: u64, len: u64) -> ChunkManifes
         chunk_index: 0,
         logical_offset: 0,
         len,
-        blocks: vec![BlockDescriptor {
-            object_key: block_key(inode, generation, 0, 0).as_str().to_owned(),
+        slices: vec![SliceManifest {
+            slice_id: 1,
             logical_offset: 0,
-            object_offset: 0,
             len,
-            digest_uri: "sha256:block".to_owned(),
+            blocks: vec![BlockDescriptor {
+                object_key: block_key(inode, generation, 0, 0).as_str().to_owned(),
+                logical_offset: 0,
+                object_offset: 0,
+                len,
+                digest_uri: "sha256:block".to_owned(),
+            }],
         }],
     }
 }

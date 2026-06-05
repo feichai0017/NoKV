@@ -1,21 +1,23 @@
 use std::marker::PhantomData;
 use std::sync::mpsc::{self, TrySendError};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 
-use crate::cache::{BlockCache, ObjectBlockCache};
+use crate::cache::{BlockCache, ObjectBlockCache, WritebackCache, WritebackTicket};
 use crate::chunk::{
-    BlockReadOutcome, ChunkStore, ChunkWriteOptions, ChunkedWrite, DirtyChunkExtent,
-    ObjectReadBlock, StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE,
+    put_chunked_ranges_parallel, BlockReadOutcome, ChunkStore, ChunkWriteOptions, ChunkWriteRange,
+    ChunkedWrite, DirtyChunkExtent, ObjectReadBlock, StagedObjectSet, StoredChunk,
+    DEFAULT_BLOCK_SIZE,
 };
-use crate::store::ObjectError;
+use crate::store::{ObjectError, ObjectStore};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct FileWritePipeline {
     options: ChunkWriteOptions,
     staged_chunks: Vec<StoredChunk>,
     staged: StagedObjectSet,
     dirty_extents: Vec<DirtyChunkExtent>,
+    pending_uploads: Vec<PendingChunkedWrite>,
     next_block_index: u64,
 }
 
@@ -33,6 +35,18 @@ pub struct ObjectPrefetcher<O, C = ObjectBlockCache> {
     _state: PhantomData<(O, C)>,
 }
 
+#[derive(Clone)]
+pub struct ObjectWritebackUploader<O> {
+    sender: mpsc::SyncSender<ObjectWritebackJob>,
+    stats: Arc<Mutex<ObjectWritebackStats>>,
+    _state: PhantomData<O>,
+}
+
+#[derive(Clone, Debug)]
+pub struct PendingChunkedWrite {
+    inner: Arc<PendingChunkedWriteInner>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct FileReadPipelineOptions {
     pub max_readahead_bytes: usize,
@@ -42,6 +56,13 @@ pub struct FileReadPipelineOptions {
 pub struct ObjectPrefetchOptions {
     pub queue_capacity: usize,
     pub workers: usize,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ObjectWritebackOptions {
+    pub queue_capacity: usize,
+    pub workers: usize,
+    pub upload_workers_per_request: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -71,6 +92,19 @@ pub struct ObjectPrefetchRequest {
     pub blocks: Vec<ObjectReadBlock>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct WritebackUploadRange {
+    pub logical_offset: u64,
+    pub ticket: WritebackTicket,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectWritebackRequest {
+    pub ranges: Vec<WritebackUploadRange>,
+    pub options: ChunkWriteOptions,
+    pub block_index_base: u64,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectPrefetchStats {
     pub enqueued: u64,
@@ -83,6 +117,26 @@ pub struct ObjectPrefetchStats {
     pub cache_hit_bytes: u64,
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ObjectWritebackStats {
+    pub enqueued: u64,
+    pub completed: u64,
+    pub failed: u64,
+    pub staged_bytes: u64,
+    pub uploaded_bytes: u64,
+}
+
+struct ObjectWritebackJob {
+    request: ObjectWritebackRequest,
+    pending: PendingChunkedWrite,
+}
+
+#[derive(Debug)]
+struct PendingChunkedWriteInner {
+    state: Mutex<Option<Result<ChunkedWrite, ObjectError>>>,
+    ready: Condvar,
+}
+
 impl FileWritePipeline {
     pub fn new(options: ChunkWriteOptions) -> Result<Self, ObjectError> {
         options.validate()?;
@@ -91,6 +145,7 @@ impl FileWritePipeline {
             staged_chunks: Vec::new(),
             staged: StagedObjectSet::default(),
             dirty_extents: Vec::new(),
+            pending_uploads: Vec::new(),
             next_block_index: 0,
         })
     }
@@ -122,8 +177,20 @@ impl FileWritePipeline {
         Ok(())
     }
 
+    pub fn record_pending_write(&mut self, pending: PendingChunkedWrite) {
+        self.pending_uploads.push(pending);
+    }
+
+    pub fn take_pending_uploads(&mut self) -> Vec<PendingChunkedWrite> {
+        std::mem::take(&mut self.pending_uploads)
+    }
+
+    pub fn has_pending_uploads(&self) -> bool {
+        !self.pending_uploads.is_empty()
+    }
+
     pub fn is_empty(&self) -> bool {
-        self.staged.is_empty()
+        self.staged.is_empty() && self.pending_uploads.is_empty()
     }
 
     pub fn staged_chunks(&self) -> &[StoredChunk] {
@@ -152,6 +219,54 @@ impl Default for ObjectPrefetchOptions {
         Self {
             queue_capacity: 64,
             workers: 1,
+        }
+    }
+}
+
+impl Default for ObjectWritebackOptions {
+    fn default() -> Self {
+        Self {
+            queue_capacity: 64,
+            workers: 2,
+            upload_workers_per_request: 1,
+        }
+    }
+}
+
+impl PendingChunkedWrite {
+    pub fn ready(result: Result<ChunkedWrite, ObjectError>) -> Self {
+        let pending = Self {
+            inner: Arc::new(PendingChunkedWriteInner {
+                state: Mutex::new(None),
+                ready: Condvar::new(),
+            }),
+        };
+        pending.complete(result);
+        pending
+    }
+
+    pub fn wait(&self) -> Result<ChunkedWrite, ObjectError> {
+        let mut state = self
+            .inner
+            .state
+            .lock()
+            .map_err(ObjectError::from_poisoned_lock)?;
+        loop {
+            if let Some(result) = state.as_ref() {
+                return result.clone();
+            }
+            state = self
+                .inner
+                .ready
+                .wait(state)
+                .map_err(ObjectError::from_poisoned_lock)?;
+        }
+    }
+
+    fn complete(&self, result: Result<ChunkedWrite, ObjectError>) {
+        if let Ok(mut state) = self.inner.state.lock() {
+            *state = Some(result);
+            self.inner.ready.notify_all();
         }
     }
 }
@@ -317,4 +432,129 @@ where
         update(&mut stats);
         Ok(())
     }
+}
+
+impl<O> ObjectWritebackUploader<O>
+where
+    O: ObjectStore + Clone + Send + Sync + 'static,
+{
+    pub fn new(store: O, cache: WritebackCache, options: ObjectWritebackOptions) -> Self {
+        let capacity = options.queue_capacity.max(1);
+        let workers = options.workers.max(1);
+        let (sender, receiver) = mpsc::sync_channel::<ObjectWritebackJob>(capacity);
+        let receiver = Arc::new(Mutex::new(receiver));
+        let stats = Arc::new(Mutex::new(ObjectWritebackStats::default()));
+        for worker in 0..workers {
+            let store = store.clone();
+            let cache = cache.clone();
+            let receiver = Arc::clone(&receiver);
+            let stats = Arc::clone(&stats);
+            let upload_workers = options.upload_workers_per_request.max(1);
+            let name = format!("nokvfs-writeback-{worker}");
+            let _ = thread::Builder::new().name(name).spawn(move || loop {
+                let job = {
+                    let Ok(receiver) = receiver.lock() else {
+                        break;
+                    };
+                    match receiver.recv() {
+                        Ok(job) => job,
+                        Err(_) => break,
+                    }
+                };
+                let result = upload_writeback_request(&store, &cache, job.request, upload_workers);
+                if let Ok(mut stats) = stats.lock() {
+                    match &result {
+                        Ok(written) => {
+                            stats.completed = stats.completed.saturating_add(1);
+                            stats.uploaded_bytes = stats
+                                .uploaded_bytes
+                                .saturating_add(written.object_put_bytes);
+                        }
+                        Err(_) => {
+                            stats.failed = stats.failed.saturating_add(1);
+                        }
+                    }
+                }
+                job.pending.complete(result);
+            });
+        }
+        Self {
+            sender,
+            stats,
+            _state: PhantomData,
+        }
+    }
+
+    pub fn submit(
+        &self,
+        request: ObjectWritebackRequest,
+    ) -> Result<PendingChunkedWrite, ObjectError> {
+        let staged_bytes = request
+            .ranges
+            .iter()
+            .map(|range| range.ticket.len())
+            .sum::<u64>();
+        let pending = PendingChunkedWrite {
+            inner: Arc::new(PendingChunkedWriteInner {
+                state: Mutex::new(None),
+                ready: Condvar::new(),
+            }),
+        };
+        self.sender
+            .send(ObjectWritebackJob {
+                request,
+                pending: pending.clone(),
+            })
+            .map_err(|_| ObjectError::Backend("object writeback worker stopped".to_owned()))?;
+        self.with_stats(|stats| {
+            stats.enqueued = stats.enqueued.saturating_add(1);
+            stats.staged_bytes = stats.staged_bytes.saturating_add(staged_bytes);
+        })?;
+        Ok(pending)
+    }
+
+    pub fn stats(&self) -> Result<ObjectWritebackStats, ObjectError> {
+        self.stats
+            .lock()
+            .map_err(ObjectError::from_poisoned_lock)
+            .map(|stats| *stats)
+    }
+
+    fn with_stats(
+        &self,
+        update: impl FnOnce(&mut ObjectWritebackStats),
+    ) -> Result<(), ObjectError> {
+        let mut stats = self.stats.lock().map_err(ObjectError::from_poisoned_lock)?;
+        update(&mut stats);
+        Ok(())
+    }
+}
+
+fn upload_writeback_request<O>(
+    store: &O,
+    cache: &WritebackCache,
+    request: ObjectWritebackRequest,
+    workers: usize,
+) -> Result<ChunkedWrite, ObjectError>
+where
+    O: ObjectStore + Sync,
+{
+    let mut ranges = Vec::with_capacity(request.ranges.len());
+    for range in &request.ranges {
+        ranges.push(ChunkWriteRange {
+            logical_offset: range.logical_offset,
+            bytes: cache.read(&range.ticket)?,
+        });
+    }
+    let result = put_chunked_ranges_parallel(
+        store,
+        &ranges,
+        request.options,
+        request.block_index_base,
+        workers,
+    );
+    for range in &request.ranges {
+        let _ = cache.remove(&range.ticket);
+    }
+    result
 }

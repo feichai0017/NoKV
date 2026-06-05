@@ -133,7 +133,12 @@ where
             if chunk_index_from_manifest_key(&row.key)? != BODY_SUMMARY_CHUNK_INDEX {
                 let manifest = decode_chunk_manifest(&row.value.0)
                     .map_err(|err| MetadError::Codec(err.to_string()))?;
-                for (block_index, block) in manifest.blocks.iter().enumerate() {
+                for (block_index, block) in manifest
+                    .slices
+                    .iter()
+                    .flat_map(|slice| slice.blocks.iter())
+                    .enumerate()
+                {
                     if retained_object_keys.contains(&block.object_key) {
                         continue;
                     }
