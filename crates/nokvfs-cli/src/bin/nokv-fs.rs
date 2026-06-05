@@ -159,18 +159,19 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             println!("dir {} inode={}", path, entry.attr.inode.get());
         }
         Command::PutArtifact { path, source } => {
-            let bytes = fs::read(&source).map_err(from_io)?;
+            let mut digest_source = fs::File::open(&source).map_err(from_io)?;
+            let digest_uri = artifact_digest_reader(&mut digest_source)?;
+            let source_reader = fs::File::open(&source).map_err(from_io)?;
             let client = open_client(&config)?;
             client
                 .metadata()
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
                 .map_err(from_client)?;
             let manifest_id = default_manifest_id(&path)?;
-            let digest_uri = artifact_digest_uri(&bytes);
             let entry = client
-                .put_artifact(
+                .put_artifact_from_reader(
                     &path,
-                    bytes,
+                    source_reader,
                     ArtifactMetadata {
                         producer: "nokv-fs".to_owned(),
                         digest_uri,
@@ -922,9 +923,17 @@ fn default_manifest_id(path: &str) -> Result<String, CliError> {
     Ok(format!("artifacts/{trimmed}"))
 }
 
-fn artifact_digest_uri(bytes: &[u8]) -> String {
-    let digest = Sha256::digest(bytes);
-    format!("sha256:{digest:x}")
+fn artifact_digest_reader(reader: &mut impl Read) -> Result<String, CliError> {
+    let mut digest = Sha256::new();
+    let mut buffer = [0_u8; 1024 * 1024];
+    loop {
+        let read = reader.read(&mut buffer).map_err(from_io)?;
+        if read == 0 {
+            break;
+        }
+        digest.update(&buffer[..read]);
+    }
+    Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
 fn file_type_label(file_type: FileType) -> &'static str {
@@ -1326,9 +1335,10 @@ mod tests {
     }
 
     #[test]
-    fn artifact_digest_uri_is_sha256_uri() {
+    fn artifact_digest_reader_is_sha256_uri() {
+        let mut reader = io::Cursor::new(b"body".to_vec());
         assert_eq!(
-            artifact_digest_uri(b"body"),
+            artifact_digest_reader(&mut reader).unwrap(),
             "sha256:230d8358dc8e8890b4c58deeb62912ee2f20357ae92a5cc861b98e68fe31acb5"
         );
     }

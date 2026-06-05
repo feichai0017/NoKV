@@ -6,6 +6,7 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
+use std::io::{self, Read};
 use std::path::{Component, Path};
 use std::sync::{Arc, LazyLock, Mutex};
 
@@ -326,6 +327,92 @@ pub fn put_chunked_object<O: ObjectStore>(
     Ok(ChunkedWrite {
         manifest_id: options.manifest_id,
         size: bytes.len() as u64,
+        chunk_size: options.chunk_size,
+        block_size: options.block_size as u64,
+        chunks,
+        object_puts,
+        object_put_bytes,
+    })
+}
+
+pub fn put_chunked_reader<O, R>(
+    store: &O,
+    mut reader: R,
+    options: ChunkWriteOptions,
+) -> Result<ChunkedWrite, ObjectError>
+where
+    O: ObjectStore,
+    R: Read,
+{
+    options.validate()?;
+    let mut chunks = BTreeMap::<u64, StoredChunk>::new();
+    let mut object_puts = 0_usize;
+    let mut object_put_bytes = 0_u64;
+    let mut staged = Vec::new();
+    let mut offset = 0_u64;
+    let mut buffer = vec![0_u8; options.block_size];
+    loop {
+        let chunk_index = offset / options.chunk_size;
+        let chunk_start = chunk_index.saturating_mul(options.chunk_size);
+        let next_chunk = chunk_start
+            .checked_add(options.chunk_size)
+            .ok_or(ObjectError::InvalidRange)?;
+        let remaining_in_chunk =
+            usize::try_from(next_chunk - offset).map_err(|_| ObjectError::InvalidRange)?;
+        let target_len = options.block_size.min(remaining_in_chunk);
+        let read_len = read_chunk_block(&mut reader, &mut buffer[..target_len]).map_err(|err| {
+            ObjectError::StagedWriteFailed {
+                source: format!("object reader error: {err}"),
+                staged: StagedObjectSet::new(staged.clone()),
+            }
+        })?;
+        if read_len == 0 {
+            break;
+        }
+        let block_index = (offset - chunk_start) / (options.block_size as u64);
+        let object_key = block_object_key(&options, chunk_index, block_index);
+        let key = ObjectKey::new(object_key.clone())?;
+        let block = &buffer[..read_len];
+        let info = store
+            .put(&key, block)
+            .map_err(|err| ObjectError::StagedWriteFailed {
+                source: err.to_string(),
+                staged: StagedObjectSet::new(staged.clone()),
+            })?;
+        object_puts += 1;
+        object_put_bytes = object_put_bytes.saturating_add(read_len as u64);
+        staged.push(StagedObject {
+            key: info.key,
+            size: info.size,
+        });
+        chunks
+            .entry(chunk_index)
+            .or_insert_with(|| StoredChunk {
+                chunk_index,
+                logical_offset: chunk_start,
+                len: 0,
+                blocks: Vec::new(),
+            })
+            .blocks
+            .push(StoredBlock {
+                object_key,
+                logical_offset: offset,
+                object_offset: 0,
+                len: read_len as u64,
+                digest_uri: block_digest_uri(block),
+            });
+        offset = offset
+            .checked_add(read_len as u64)
+            .ok_or(ObjectError::InvalidRange)?;
+    }
+    let mut chunks = chunks.into_values().collect::<Vec<_>>();
+    for chunk in &mut chunks {
+        let chunk_end = offset.min(chunk.logical_offset.saturating_add(options.chunk_size));
+        chunk.len = chunk_end.saturating_sub(chunk.logical_offset);
+    }
+    Ok(ChunkedWrite {
+        manifest_id: options.manifest_id,
+        size: offset,
         chunk_size: options.chunk_size,
         block_size: options.block_size as u64,
         chunks,
@@ -775,6 +862,18 @@ fn block_digest_uri(bytes: &[u8]) -> String {
     format!("fnv64:{hash:016x}")
 }
 
+fn read_chunk_block<R: Read>(reader: &mut R, buffer: &mut [u8]) -> io::Result<usize> {
+    let mut filled = 0_usize;
+    while filled < buffer.len() {
+        let read = reader.read(&mut buffer[filled..])?;
+        if read == 0 {
+            break;
+        }
+        filled += read;
+    }
+    Ok(filled)
+}
+
 impl ObjectError {
     fn from_backend(err: impl fmt::Display) -> Self {
         Self::Backend(err.to_string())
@@ -903,6 +1002,103 @@ mod tests {
         assert_eq!(cleanup.attempted, 4);
         assert_eq!(cleanup.deleted, 0);
         assert_eq!(cleanup.missing, 4);
+    }
+
+    #[test]
+    fn chunked_reader_matches_chunked_object_layout() {
+        let store = MemoryObjectStore::new();
+        let bytes = b"abcdefghijklmnop".to_vec();
+        let written = put_chunked_reader(
+            &store,
+            bytes.as_slice(),
+            ChunkWriteOptions {
+                manifest_id: "artifacts/checkpoint".to_owned(),
+                mount: 1,
+                inode: 2,
+                generation: 3,
+                chunk_size: 8,
+                block_size: 4,
+            },
+        )
+        .unwrap();
+        assert_eq!(written.size, 16);
+        assert_eq!(written.object_puts, 4);
+        assert_eq!(written.object_put_bytes, 16);
+        assert_eq!(written.chunks.len(), 2);
+        assert_eq!(written.chunks[0].logical_offset, 0);
+        assert_eq!(written.chunks[0].len, 8);
+        assert_eq!(written.chunks[1].logical_offset, 8);
+        assert_eq!(written.chunks[1].len, 8);
+        assert_eq!(written.chunks[0].blocks[0].object_key, "blocks/1/2/3/0/0");
+        assert_eq!(written.chunks[0].blocks[1].object_key, "blocks/1/2/3/0/1");
+        assert_eq!(written.chunks[1].blocks[0].object_key, "blocks/1/2/3/1/0");
+        assert_eq!(
+            store
+                .get(&ObjectKey::new("blocks/1/2/3/1/1").unwrap(), None)
+                .unwrap(),
+            b"mnop"
+        );
+    }
+
+    struct FailAfterReader {
+        bytes: Vec<u8>,
+        offset: usize,
+        fail_after: usize,
+    }
+
+    impl Read for FailAfterReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            if self.offset >= self.fail_after {
+                return Err(io::Error::other("injected reader failure"));
+            }
+            let end = self
+                .bytes
+                .len()
+                .min(self.fail_after)
+                .min(self.offset + buf.len());
+            if end == self.offset {
+                return Ok(0);
+            }
+            let len = end - self.offset;
+            buf[..len].copy_from_slice(&self.bytes[self.offset..end]);
+            self.offset = end;
+            Ok(len)
+        }
+    }
+
+    #[test]
+    fn chunked_reader_failure_returns_staged_objects_for_cleanup() {
+        let store = MemoryObjectStore::new();
+        let err = put_chunked_reader(
+            &store,
+            FailAfterReader {
+                bytes: b"abcdefgh".to_vec(),
+                offset: 0,
+                fail_after: 4,
+            },
+            ChunkWriteOptions {
+                manifest_id: "artifacts/checkpoint".to_owned(),
+                mount: 1,
+                inode: 2,
+                generation: 3,
+                chunk_size: 8,
+                block_size: 4,
+            },
+        )
+        .unwrap_err();
+        let staged = match err {
+            ObjectError::StagedWriteFailed { source, staged } => {
+                assert!(source.contains("injected reader failure"));
+                staged
+            }
+            err => panic!("unexpected object error: {err:?}"),
+        };
+        assert_eq!(staged.len(), 1);
+        assert!(store.head(&staged.objects()[0].key).unwrap().is_some());
+
+        let cleanup = delete_staged_objects(&store, &staged).unwrap();
+        assert_eq!(cleanup.deleted, 1);
+        assert!(store.head(&staged.objects()[0].key).unwrap().is_none());
     }
 
     #[test]

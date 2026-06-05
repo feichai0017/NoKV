@@ -8,9 +8,9 @@ use std::{collections::HashMap, io};
 
 use nokvfs_meta::{DentryWithAttr, ObjectTransferStats, RenameReplaceResult};
 use nokvfs_object::{
-    delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
-    MemoryBlockCache, ObjectError, ObjectReadBlock, ObjectStore, StagedObjectSet,
-    DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    delete_staged_objects, put_chunked_object, put_chunked_reader, read_object_blocks,
+    ChunkWriteOptions, ChunkedWrite, MemoryBlockCache, ObjectError, ObjectReadBlock, ObjectStore,
+    StagedObjectSet, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokvfs_protocol::{
     decode_envelope, decode_name_cursor, encode_name_cursor, encode_request, MetadataProtocolError,
@@ -316,6 +316,29 @@ where
         }
     }
 
+    pub fn put_artifact_from_reader<R: Read>(
+        &self,
+        path: &str,
+        reader: R,
+        metadata: ArtifactMetadata,
+    ) -> Result<DentryWithAttr, ClientError> {
+        let prepared = self.metadata.prepare_artifact_path(path, false)?;
+        let mode = metadata.mode;
+        let uid = metadata.uid;
+        let gid = metadata.gid;
+        let (body, chunks, staged) = self.stage_artifact_reader(&prepared, reader, metadata)?;
+        match self
+            .metadata
+            .publish_prepared_artifact(prepared, body, chunks, mode, uid, gid)
+        {
+            Ok(result) => Ok(result.entry),
+            Err(err) => {
+                delete_staged_objects(&self.objects, &staged).map_err(ClientError::Object)?;
+                Err(err)
+            }
+        }
+    }
+
     pub fn put_artifact_replace(
         &self,
         path: &str,
@@ -339,6 +362,29 @@ where
         }
     }
 
+    pub fn put_artifact_replace_from_reader<R: Read>(
+        &self,
+        path: &str,
+        reader: R,
+        metadata: ArtifactMetadata,
+    ) -> Result<RenameReplaceResult, ClientError> {
+        let prepared = self.metadata.prepare_artifact_path(path, true)?;
+        let mode = metadata.mode;
+        let uid = metadata.uid;
+        let gid = metadata.gid;
+        let (body, chunks, staged) = self.stage_artifact_reader(&prepared, reader, metadata)?;
+        match self
+            .metadata
+            .publish_prepared_artifact(prepared, body, chunks, mode, uid, gid)
+        {
+            Ok(result) => Ok(result),
+            Err(err) => {
+                delete_staged_objects(&self.objects, &staged).map_err(ClientError::Object)?;
+                Err(err)
+            }
+        }
+    }
+
     fn stage_artifact_body(
         &self,
         prepared: &ClientPreparedArtifact,
@@ -349,7 +395,7 @@ where
             &self.objects,
             bytes,
             ChunkWriteOptions {
-                manifest_id: metadata.manifest_id,
+                manifest_id: metadata.manifest_id.clone(),
                 mount: prepared.mount,
                 inode: prepared.inode.get(),
                 generation: prepared.generation,
@@ -363,6 +409,42 @@ where
                 return Err(ClientError::Object(err));
             }
         };
+        self.finish_staged_artifact(prepared, metadata, written)
+    }
+
+    fn stage_artifact_reader<R: Read>(
+        &self,
+        prepared: &ClientPreparedArtifact,
+        reader: R,
+        metadata: ArtifactMetadata,
+    ) -> Result<(BodyDescriptor, Vec<ChunkManifest>, StagedObjectSet), ClientError> {
+        let written = match put_chunked_reader(
+            &self.objects,
+            reader,
+            ChunkWriteOptions {
+                manifest_id: metadata.manifest_id.clone(),
+                mount: prepared.mount,
+                inode: prepared.inode.get(),
+                generation: prepared.generation,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            },
+        ) {
+            Ok(written) => written,
+            Err(err) => {
+                cleanup_staged_write_error(&self.objects, &err)?;
+                return Err(ClientError::Object(err));
+            }
+        };
+        self.finish_staged_artifact(prepared, metadata, written)
+    }
+
+    fn finish_staged_artifact(
+        &self,
+        prepared: &ClientPreparedArtifact,
+        metadata: ArtifactMetadata,
+        written: ChunkedWrite,
+    ) -> Result<(BodyDescriptor, Vec<ChunkManifest>, StagedObjectSet), ClientError> {
         self.object_puts
             .fetch_add(written.object_puts as u64, Ordering::Relaxed);
         self.object_put_bytes
