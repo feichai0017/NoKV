@@ -684,6 +684,14 @@ fn object_writeback_uploader_keeps_cached_ranges_after_upload_failure() {
     assert_eq!(upload_stats.enqueued, 1);
     assert_eq!(upload_stats.completed, 0);
     assert_eq!(upload_stats.failed, 1);
+
+    assert_eq!(pending.discard_writeback_cache().unwrap(), 1);
+    assert!(cache.read(&ticket).is_err());
+    let cache_stats = cache.stats().unwrap();
+    assert_eq!(cache_stats.active_items, 0);
+    assert_eq!(cache_stats.active_bytes, 0);
+    assert_eq!(cache_stats.removed, 1);
+    assert_eq!(pending.discard_writeback_cache().unwrap(), 0);
 }
 
 #[test]

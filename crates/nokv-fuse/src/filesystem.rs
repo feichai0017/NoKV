@@ -936,7 +936,10 @@ where
     fn cleanup_completed_pending(&self, pending: PendingChunkedWrite) -> Result<(), Errno> {
         match pending.wait() {
             Ok(written) => cleanup_written_objects(&*self.backend, &written),
-            Err(err) => Err(self.cleanup_object_error(err)),
+            Err(err) => {
+                let _ = pending.discard_writeback_cache();
+                Err(self.cleanup_object_error(err))
+            }
         }
     }
 
@@ -967,6 +970,7 @@ where
                     Ok(written) => completed.push(written),
                     Err(err) => {
                         let errno = self.cleanup_object_error(err);
+                        let _ = upload.pending.discard_writeback_cache();
                         if first_error.is_none() {
                             first_error = Some(errno);
                         }

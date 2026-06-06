@@ -38,12 +38,14 @@ pub struct ObjectPrefetcher<O, C = ObjectBlockCache> {
 pub struct ObjectWritebackUploader<O> {
     sender: mpsc::SyncSender<ObjectWritebackJob>,
     stats: Arc<Mutex<ObjectWritebackStats>>,
+    cache: WritebackCache,
     _state: PhantomData<O>,
 }
 
 #[derive(Clone, Debug)]
 pub struct PendingChunkedWrite {
     inner: Arc<PendingChunkedWriteInner>,
+    writeback: Option<PendingWritebackCache>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -136,6 +138,12 @@ struct PendingChunkedWriteInner {
     ready: Condvar,
 }
 
+#[derive(Clone, Debug)]
+struct PendingWritebackCache {
+    cache: WritebackCache,
+    tickets: Vec<WritebackTicket>,
+}
+
 impl FileWritePipeline {
     pub fn new(options: ChunkWriteOptions) -> Result<Self, ObjectError> {
         options.validate()?;
@@ -226,6 +234,7 @@ impl PendingChunkedWrite {
                 state: Mutex::new(None),
                 ready: Condvar::new(),
             }),
+            writeback: None,
         };
         pending.complete(result);
         pending
@@ -247,6 +256,19 @@ impl PendingChunkedWrite {
                 .wait(state)
                 .map_err(ObjectError::from_poisoned_lock)?;
         }
+    }
+
+    pub fn discard_writeback_cache(&self) -> Result<usize, ObjectError> {
+        let Some(writeback) = &self.writeback else {
+            return Ok(0);
+        };
+        let mut removed = 0_usize;
+        for ticket in &writeback.tickets {
+            if writeback.cache.remove(ticket)? {
+                removed = removed.saturating_add(1);
+            }
+        }
+        Ok(removed)
     }
 
     fn complete(&self, result: Result<ChunkedWrite, ObjectError>) {
@@ -467,6 +489,7 @@ where
         Self {
             sender,
             stats,
+            cache,
             _state: PhantomData,
         }
     }
@@ -480,10 +503,19 @@ where
             .iter()
             .map(|range| range.ticket.len())
             .sum::<u64>();
+        let tickets = request
+            .ranges
+            .iter()
+            .map(|range| range.ticket.clone())
+            .collect::<Vec<_>>();
         let pending = PendingChunkedWrite {
             inner: Arc::new(PendingChunkedWriteInner {
                 state: Mutex::new(None),
                 ready: Condvar::new(),
+            }),
+            writeback: Some(PendingWritebackCache {
+                cache: self.cache.clone(),
+                tickets,
             }),
         };
         self.sender
