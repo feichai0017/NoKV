@@ -17,16 +17,17 @@ use nokv_object::{
     ObjectKey, ObjectReadBlock, StagedObject, StagedObjectSet, StoredBlock, StoredChunk,
 };
 use nokv_protocol::{
-    decode_envelope, decode_file_type, decode_name_cursor, decode_request, decode_xattr_name,
-    encode_envelope, encode_name_cursor, encode_request, encode_xattr_name, MetadataProtocolError,
-    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
-    WireDentryWithAttr, WireMetadataError, WireMetadataPosition,
-    WireMetadataRaftAppendEntriesRequest, WireMetadataRaftAppendEntriesResponse,
-    WireMetadataRaftInstallSnapshotRequest, WireMetadataRaftInstallSnapshotResponse,
-    WireMetadataRaftVoteRequest, WireMetadataRaftVoteResponse, WireObjectReadBlock,
-    WirePathMetadata, WirePreparedArtifact, WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
+    decode_advisory_lock_kind, decode_envelope, decode_file_type, decode_name_cursor,
+    decode_request, decode_xattr_name, encode_envelope, encode_name_cursor, encode_request,
+    encode_xattr_name, MetadataProtocolError, MetadataRpcEnvelope, MetadataRpcRequest,
+    MetadataRpcResult, WireAdvisoryLock, WireBodyReadPlan, WireDentryWithAttr, WireMetadataError,
+    WireMetadataPosition, WireMetadataRaftAppendEntriesRequest,
+    WireMetadataRaftAppendEntriesResponse, WireMetadataRaftInstallSnapshotRequest,
+    WireMetadataRaftInstallSnapshotResponse, WireMetadataRaftVoteRequest,
+    WireMetadataRaftVoteResponse, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
 };
-use nokv_types::{DentryName, InodeId, MountId, SpecialNodeSpec};
+use nokv_types::{AdvisoryLockRequest, DentryName, InodeId, MountId, SpecialNodeSpec};
 
 use crate::server::{Server, ServerError};
 
@@ -710,6 +711,9 @@ fn wire_metad_error(err: &MetadError) -> WireMetadataError {
                 current: *current,
             }
         }
+        MetadError::LockConflict(lock) => WireMetadataError::LockConflict {
+            lock: WireAdvisoryLock::from_advisory_lock(lock),
+        },
         MetadError::InvalidPath(message) => WireMetadataError::InvalidPath {
             message: message.clone(),
         },
@@ -1383,6 +1387,47 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             server.service().remove_xattr(inode_id(inode)?, &name)?;
             Ok(MetadataRpcResult::Unit)
         }
+        MetadataRpcRequest::GetAdvisoryLock {
+            inode,
+            owner,
+            start,
+            end,
+            kind,
+            pid,
+        } => {
+            let lock = server.service().get_advisory_lock(AdvisoryLockRequest {
+                inode: inode_id(inode)?,
+                owner,
+                start,
+                end,
+                kind: decode_advisory_lock_kind(&kind).map_err(protocol_error)?,
+                pid,
+                wait: false,
+            })?;
+            Ok(MetadataRpcResult::AdvisoryLock {
+                lock: lock.as_ref().map(WireAdvisoryLock::from_advisory_lock),
+            })
+        }
+        MetadataRpcRequest::SetAdvisoryLock {
+            inode,
+            owner,
+            start,
+            end,
+            kind,
+            pid,
+            wait,
+        } => {
+            server.service().set_advisory_lock(AdvisoryLockRequest {
+                inode: inode_id(inode)?,
+                owner,
+                start,
+                end,
+                kind: decode_advisory_lock_kind(&kind).map_err(protocol_error)?,
+                pid,
+                wait,
+            })?;
+            Ok(MetadataRpcResult::Unit)
+        }
         MetadataRpcRequest::CreateFilePath {
             path,
             mode,
@@ -1811,6 +1856,8 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::UpdateAttrs { .. }
         | MetadataRpcRequest::UpdateRootAttrs { .. }
         | MetadataRpcRequest::SetXattr { .. }
+        | MetadataRpcRequest::GetAdvisoryLock { .. }
+        | MetadataRpcRequest::SetAdvisoryLock { .. }
         | MetadataRpcRequest::RemoveXattr { .. }
         | MetadataRpcRequest::CreateFilePath { .. }
         | MetadataRpcRequest::CreateFilesInDirPath { .. }

@@ -13,7 +13,10 @@ use nokv_object::{
     ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
     WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
-use nokv_types::{DentryName, InodeAttr, InodeId, SpecialNodeSpec, WatchCursor, WatchRecord};
+use nokv_types::{
+    AdvisoryLock, AdvisoryLockRequest, DentryName, InodeAttr, InodeId, SpecialNodeSpec,
+    WatchCursor, WatchRecord,
+};
 
 use crate::filesystem::FuseOptions;
 
@@ -129,6 +132,11 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
     fn get_xattr(&self, inode: InodeId, name: &[u8]) -> FuseBackendResult<Option<Vec<u8>>>;
     fn list_xattr(&self, inode: InodeId) -> FuseBackendResult<Vec<Vec<u8>>>;
     fn remove_xattr(&self, inode: InodeId, name: &[u8]) -> FuseBackendResult<()>;
+    fn get_advisory_lock(
+        &self,
+        request: AdvisoryLockRequest,
+    ) -> FuseBackendResult<Option<AdvisoryLock>>;
+    fn set_advisory_lock(&self, request: AdvisoryLockRequest) -> FuseBackendResult<()>;
     fn create_dir(
         &self,
         parent: InodeId,
@@ -570,6 +578,17 @@ where
 
     fn remove_xattr(&self, inode: InodeId, name: &[u8]) -> FuseBackendResult<()> {
         self.metadata.remove_xattr(inode, name).map_err(Into::into)
+    }
+
+    fn get_advisory_lock(
+        &self,
+        request: AdvisoryLockRequest,
+    ) -> FuseBackendResult<Option<AdvisoryLock>> {
+        self.metadata.get_advisory_lock(request).map_err(Into::into)
+    }
+
+    fn set_advisory_lock(&self, request: AdvisoryLockRequest) -> FuseBackendResult<()> {
+        self.metadata.set_advisory_lock(request).map_err(Into::into)
     }
 
     fn create_dir(

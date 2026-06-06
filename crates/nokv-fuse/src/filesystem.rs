@@ -12,7 +12,7 @@ use fuser::{
     AccessFlags, BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType as FuseFileType,
     Filesystem, FopenFlags, Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags,
     ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry,
-    ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
+    ReplyLock, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use nokv_client::MetadataClient;
 use nokv_meta::{
@@ -24,7 +24,10 @@ use nokv_object::{
     FileWritePipeline, ObjectError, ObjectPrefetchOptions, ObjectReadBlock, ObjectStore,
     PendingChunkedWrite, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE, DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
-use nokv_types::{DentryName, FileType, InodeAttr, InodeId, SpecialNodeSpec};
+use nokv_types::{
+    AdvisoryLockKind, AdvisoryLockRequest, DentryName, FileType, InodeAttr, InodeId,
+    SpecialNodeSpec,
+};
 use sha2::{Digest, Sha256};
 
 use crate::attr::{file_attr, fuse_file_type};
@@ -76,6 +79,17 @@ pub enum FuseView {
 pub enum FuseAccessMode {
     ReadWrite,
     ReadOnly,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct FuseLockRequest {
+    ino: INodeNo,
+    owner: fuser::LockOwner,
+    start: u64,
+    end: u64,
+    typ: i32,
+    pid: u32,
+    wait: bool,
 }
 
 pub(crate) struct NoKvFuse<B: FuseBackend> {
@@ -384,6 +398,21 @@ where
             return Ok(self.options.view.root());
         }
         inode_id(ino)
+    }
+
+    fn advisory_lock_request(
+        &self,
+        request: FuseLockRequest,
+    ) -> Result<AdvisoryLockRequest, Errno> {
+        Ok(AdvisoryLockRequest {
+            inode: self.metadata_inode(request.ino)?,
+            owner: request.owner.0,
+            start: request.start,
+            end: request.end,
+            kind: advisory_lock_kind_from_fuse(request.typ)?,
+            pid: request.pid,
+            wait: request.wait,
+        })
     }
 
     fn fuse_ino(&self, inode: InodeId) -> INodeNo {
@@ -2241,6 +2270,77 @@ where
         }
     }
 
+    fn getlk(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        lock_owner: fuser::LockOwner,
+        start: u64,
+        end: u64,
+        typ: i32,
+        pid: u32,
+        reply: ReplyLock,
+    ) {
+        let request = match self.advisory_lock_request(FuseLockRequest {
+            ino,
+            owner: lock_owner,
+            start,
+            end,
+            typ,
+            pid,
+            wait: false,
+        }) {
+            Ok(request) => request,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.backend.get_advisory_lock(request) {
+            Ok(Some(lock)) => match advisory_lock_kind_to_fuse(lock.kind) {
+                Ok(typ) => reply.locked(lock.start, lock.end, typ, lock.pid),
+                Err(err) => reply.error(err),
+            },
+            Ok(None) => reply.locked(start, end, i32::from(libc::F_UNLCK), 0),
+            Err(err) => reply.error(errno(err)),
+        }
+    }
+
+    fn setlk(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        _fh: FileHandle,
+        lock_owner: fuser::LockOwner,
+        start: u64,
+        end: u64,
+        typ: i32,
+        pid: u32,
+        sleep: bool,
+        reply: ReplyEmpty,
+    ) {
+        let request = match self.advisory_lock_request(FuseLockRequest {
+            ino,
+            owner: lock_owner,
+            start,
+            end,
+            typ,
+            pid,
+            wait: sleep,
+        }) {
+            Ok(request) => request,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.backend.set_advisory_lock(request) {
+            Ok(()) => reply.ok(),
+            Err(err) => reply.error(errno(err)),
+        }
+    }
+
     fn fsync(
         &self,
         _req: &Request,
@@ -2273,6 +2373,26 @@ fn file_type_from_mknod_mode(mode: u32) -> Result<FileType, Errno> {
         MODE_SOCKET => Ok(FileType::Socket),
         MODE_DIRECTORY | MODE_SYMLINK => Err(Errno::EINVAL),
         _ => Err(Errno::EINVAL),
+    }
+}
+
+fn advisory_lock_kind_from_fuse(typ: i32) -> Result<AdvisoryLockKind, Errno> {
+    if typ == i32::from(libc::F_RDLCK) {
+        Ok(AdvisoryLockKind::Read)
+    } else if typ == i32::from(libc::F_WRLCK) {
+        Ok(AdvisoryLockKind::Write)
+    } else if typ == i32::from(libc::F_UNLCK) {
+        Ok(AdvisoryLockKind::Unlock)
+    } else {
+        Err(Errno::EINVAL)
+    }
+}
+
+fn advisory_lock_kind_to_fuse(kind: AdvisoryLockKind) -> Result<i32, Errno> {
+    match kind {
+        AdvisoryLockKind::Read => Ok(i32::from(libc::F_RDLCK)),
+        AdvisoryLockKind::Write => Ok(i32::from(libc::F_WRLCK)),
+        AdvisoryLockKind::Unlock => Ok(i32::from(libc::F_UNLCK)),
     }
 }
 
@@ -2513,6 +2633,7 @@ fn errno(err: impl Into<FuseBackendError>) -> Errno {
         FuseBackendError::Client(nokv_client::ClientError::NotFound(_)) => Errno::ENOENT,
         FuseBackendError::Client(nokv_client::ClientError::NotDirectory(_)) => Errno::ENOTDIR,
         FuseBackendError::Client(nokv_client::ClientError::ForwardToLeader { .. }) => Errno::EAGAIN,
+        FuseBackendError::Client(nokv_client::ClientError::LockConflict(_)) => Errno::EAGAIN,
         FuseBackendError::Client(nokv_client::ClientError::Object(_))
         | FuseBackendError::Client(nokv_client::ClientError::Io(_))
         | FuseBackendError::Client(nokv_client::ClientError::Protocol(_))
@@ -2539,6 +2660,7 @@ fn metadata_errno(err: MetadError) -> Errno {
         MetadError::DirectoryNotEmpty => Errno::ENOTEMPTY,
         MetadError::CannotRemoveRoot => Errno::EBUSY,
         MetadError::StaleBodyGeneration { .. } => Errno::ESTALE,
+        MetadError::LockConflict(_) => Errno::EAGAIN,
         MetadError::MissingBodyDescriptor
         | MetadError::Metadata(_)
         | MetadError::Object(_)
@@ -2973,6 +3095,17 @@ mod tests {
         }
 
         fn remove_xattr(&self, _inode: InodeId, _name: &[u8]) -> FuseBackendResult<()> {
+            unsupported()
+        }
+
+        fn get_advisory_lock(
+            &self,
+            _request: AdvisoryLockRequest,
+        ) -> FuseBackendResult<Option<nokv_types::AdvisoryLock>> {
+            unsupported()
+        }
+
+        fn set_advisory_lock(&self, _request: AdvisoryLockRequest) -> FuseBackendResult<()> {
             unsupported()
         }
 

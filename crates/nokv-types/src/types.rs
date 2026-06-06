@@ -67,6 +67,34 @@ pub struct SpecialNodeSpec {
     pub gid: u32,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum AdvisoryLockKind {
+    Read,
+    Write,
+    Unlock,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvisoryLock {
+    pub inode: InodeId,
+    pub owner: u64,
+    pub start: u64,
+    pub end: u64,
+    pub kind: AdvisoryLockKind,
+    pub pid: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvisoryLockRequest {
+    pub inode: InodeId,
+    pub owner: u64,
+    pub start: u64,
+    pub end: u64,
+    pub kind: AdvisoryLockKind,
+    pub pid: u32,
+    pub wait: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DentryRecord {
     pub parent: InodeId,

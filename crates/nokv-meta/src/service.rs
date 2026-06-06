@@ -9,6 +9,7 @@ mod allocator;
 mod command;
 mod gc;
 mod lifecycle;
+mod lock;
 mod namespace;
 mod publish;
 mod read;
@@ -24,6 +25,7 @@ use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use self::lock::AdvisoryLockTable;
 use crate::command::{
     CommandKind, CommitResult, DelimitedScanItem, DelimitedScanRequest, HistoryPruneOutcome,
     HistoryPruneRequest, KeyScanRequest, MetadataCommand, MetadataError, MetadataStore,
@@ -46,7 +48,7 @@ use nokv_object::{
     StagedObjectSet, StoredBlock, StoredChunk, StoredSlice, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{
-    parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
+    parse_absolute_path, AdvisoryLock, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
     DentryProjection, DentryRecord, FileType, InodeAttr, InodeId, ModelError, MountId,
     ObjectGcRecord, PathError, PathMetadata, RecordFamily, SliceManifest, SnapshotPin,
     SpecialNodeSpec, WatchCursor, WatchEvent, WatchEventKind, WatchRecord,
@@ -328,6 +330,7 @@ pub enum MetadError {
         expected: u64,
         current: u64,
     },
+    LockConflict(AdvisoryLock),
     AllocatorExhausted,
     InvalidPath(String),
     NotFound,
@@ -347,6 +350,7 @@ pub struct NoKvFs<M, O> {
     path_index_lookup_cache:
         Vec<Mutex<BTreeMap<PathIndexLookupCacheKey, PathIndexLookupCacheValue>>>,
     path_index_validation_cache: Vec<Mutex<BTreeMap<PathIndexValidationCacheKey, DentryWithAttr>>>,
+    advisory_locks: Mutex<AdvisoryLockTable>,
     clock: AtomicU64,
     reserved_version: AtomicU64,
     next_inode: AtomicU64,
@@ -1129,6 +1133,15 @@ impl fmt::Display for MetadError {
             Self::StaleBodyGeneration { expected, current } => write!(
                 f,
                 "body generation {expected} is stale; current generation is {current}"
+            ),
+            Self::LockConflict(lock) => write!(
+                f,
+                "advisory lock conflicts with {:?} lock on inode {} range {}..={} owned by {}",
+                lock.kind,
+                lock.inode.get(),
+                lock.start,
+                lock.end,
+                lock.owner
             ),
             Self::AllocatorExhausted => write!(f, "inode allocator is exhausted"),
             Self::InvalidPath(err) => write!(f, "invalid path: {err}"),

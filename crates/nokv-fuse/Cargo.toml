@@ -11,6 +11,7 @@ homepage.workspace = true
 
 [dependencies]
 fuser.workspace = true
+libc.workspace = true
 nokv-client.workspace = true
 nokv-meta.workspace = true
 nokv-object.workspace = true

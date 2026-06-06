@@ -2,6 +2,7 @@ use super::*;
 use crate::command::{ReadItem, ScanItem};
 use crate::holtstore::HoltMetadataStore;
 use nokv_object::MemoryObjectStore;
+use nokv_types::{AdvisoryLockKind, AdvisoryLockRequest};
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -1131,6 +1132,104 @@ fn create_special_node_persists_type_and_rdev_without_body() {
         service.lookup_plus(InodeId::root(), &char_name).unwrap(),
         None
     );
+}
+
+#[test]
+fn advisory_locks_detect_conflicts_and_support_partial_unlock() {
+    let service = service();
+    let name = DentryName::new(b"locked.bin".to_vec()).unwrap();
+    let file = service
+        .create_file(InodeId::root(), name, 0o644, 1000, 1000)
+        .unwrap();
+    let inode = file.attr.inode;
+    let read_owner = 11;
+    let write_owner = 22;
+
+    service
+        .set_advisory_lock(AdvisoryLockRequest {
+            inode,
+            owner: read_owner,
+            start: 0,
+            end: 99,
+            kind: AdvisoryLockKind::Read,
+            pid: 1100,
+            wait: false,
+        })
+        .unwrap();
+    service
+        .set_advisory_lock(AdvisoryLockRequest {
+            inode,
+            owner: 33,
+            start: 20,
+            end: 30,
+            kind: AdvisoryLockKind::Read,
+            pid: 3300,
+            wait: false,
+        })
+        .unwrap();
+
+    let conflict = service
+        .get_advisory_lock(AdvisoryLockRequest {
+            inode,
+            owner: write_owner,
+            start: 50,
+            end: 60,
+            kind: AdvisoryLockKind::Write,
+            pid: 2200,
+            wait: false,
+        })
+        .unwrap()
+        .unwrap();
+    assert_eq!(conflict.owner, read_owner);
+    assert_eq!(conflict.kind, AdvisoryLockKind::Read);
+    assert!(matches!(
+        service.set_advisory_lock(AdvisoryLockRequest {
+            inode,
+            owner: write_owner,
+            start: 50,
+            end: 60,
+            kind: AdvisoryLockKind::Write,
+            pid: 2200,
+            wait: false,
+        }),
+        Err(MetadError::LockConflict(_))
+    ));
+
+    service
+        .set_advisory_lock(AdvisoryLockRequest {
+            inode,
+            owner: read_owner,
+            start: 40,
+            end: 70,
+            kind: AdvisoryLockKind::Unlock,
+            pid: 1100,
+            wait: false,
+        })
+        .unwrap();
+    assert!(service
+        .get_advisory_lock(AdvisoryLockRequest {
+            inode,
+            owner: write_owner,
+            start: 50,
+            end: 60,
+            kind: AdvisoryLockKind::Write,
+            pid: 2200,
+            wait: false,
+        })
+        .unwrap()
+        .is_none());
+    assert!(service
+        .get_advisory_lock(AdvisoryLockRequest {
+            inode,
+            owner: write_owner,
+            start: 10,
+            end: 20,
+            kind: AdvisoryLockKind::Write,
+            pid: 2200,
+            wait: false,
+        })
+        .unwrap()
+        .is_some());
 }
 
 #[test]

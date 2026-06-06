@@ -7,8 +7,8 @@
 use std::fmt;
 
 use nokv_types::{
-    BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryRecord, FileType, InodeAttr,
-    InodeId, PathMetadata, SliceManifest, SnapshotPin,
+    AdvisoryLock, AdvisoryLockKind, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
+    DentryRecord, FileType, InodeAttr, InodeId, PathMetadata, SliceManifest, SnapshotPin,
 };
 use serde::{Deserialize, Serialize};
 
@@ -137,6 +137,23 @@ pub enum MetadataRpcRequest {
     RemoveXattr {
         inode: u64,
         name_hex: String,
+    },
+    GetAdvisoryLock {
+        inode: u64,
+        owner: u64,
+        start: u64,
+        end: u64,
+        kind: String,
+        pid: u32,
+    },
+    SetAdvisoryLock {
+        inode: u64,
+        owner: u64,
+        start: u64,
+        end: u64,
+        kind: String,
+        pid: u32,
+        wait: bool,
     },
     CreateFilePath {
         path: String,
@@ -343,6 +360,9 @@ pub enum WireMetadataError {
         expected: u64,
         current: u64,
     },
+    LockConflict {
+        lock: WireAdvisoryLock,
+    },
     InvalidPath {
         message: String,
     },
@@ -511,6 +531,9 @@ pub enum MetadataRpcResult {
     XattrNames {
         names_hex: Vec<String>,
     },
+    AdvisoryLock {
+        lock: Option<WireAdvisoryLock>,
+    },
     PreparedArtifact {
         prepared: WirePreparedArtifact,
     },
@@ -533,6 +556,16 @@ pub struct WireDentryWithAttr {
     pub dentry: WireDentryRecord,
     pub attr: WireInodeAttr,
     pub body: Option<WireBodyDescriptor>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireAdvisoryLock {
+    pub inode: u64,
+    pub owner: u64,
+    pub start: u64,
+    pub end: u64,
+    pub kind: String,
+    pub pid: u32,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -572,6 +605,14 @@ pub fn encode_file_type(file_type: FileType) -> &'static str {
 
 pub fn decode_file_type(raw: &str) -> Result<FileType, MetadataProtocolError> {
     parse_file_type(raw)
+}
+
+pub fn encode_advisory_lock_kind(kind: AdvisoryLockKind) -> &'static str {
+    advisory_lock_kind_label(kind)
+}
+
+pub fn decode_advisory_lock_kind(raw: &str) -> Result<AdvisoryLockKind, MetadataProtocolError> {
+    parse_advisory_lock_kind(raw)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -753,6 +794,30 @@ impl WireInodeAttr {
             generation: self.generation,
             mtime_ms: self.mtime_ms,
             ctime_ms: self.ctime_ms,
+        })
+    }
+}
+
+impl WireAdvisoryLock {
+    pub fn from_advisory_lock(lock: &AdvisoryLock) -> Self {
+        Self {
+            inode: lock.inode.get(),
+            owner: lock.owner,
+            start: lock.start,
+            end: lock.end,
+            kind: advisory_lock_kind_label(lock.kind).to_owned(),
+            pid: lock.pid,
+        }
+    }
+
+    pub fn into_advisory_lock(self) -> Result<AdvisoryLock, MetadataProtocolError> {
+        Ok(AdvisoryLock {
+            inode: inode_id(self.inode)?,
+            owner: self.owner,
+            start: self.start,
+            end: self.end,
+            kind: parse_advisory_lock_kind(&self.kind)?,
+            pid: self.pid,
         })
     }
 }
@@ -952,6 +1017,25 @@ fn parse_file_type(raw: &str) -> Result<FileType, MetadataProtocolError> {
     }
 }
 
+fn advisory_lock_kind_label(kind: AdvisoryLockKind) -> &'static str {
+    match kind {
+        AdvisoryLockKind::Read => "read",
+        AdvisoryLockKind::Write => "write",
+        AdvisoryLockKind::Unlock => "unlock",
+    }
+}
+
+fn parse_advisory_lock_kind(raw: &str) -> Result<AdvisoryLockKind, MetadataProtocolError> {
+    match raw {
+        "read" => Ok(AdvisoryLockKind::Read),
+        "write" => Ok(AdvisoryLockKind::Write),
+        "unlock" => Ok(AdvisoryLockKind::Unlock),
+        other => Err(MetadataProtocolError::new(format!(
+            "unknown advisory lock kind {other}"
+        ))),
+    }
+}
+
 fn hex_encode(bytes: &[u8]) -> String {
     const HEX: &[u8; 16] = b"0123456789abcdef";
     let mut out = String::with_capacity(bytes.len() * 2);
@@ -1027,6 +1111,33 @@ mod tests {
         assert_eq!(wire.file_type, "char_device");
         assert_eq!(wire.rdev, 0x1234);
         assert_eq!(wire.into_inode_attr().unwrap(), attr);
+    }
+
+    #[test]
+    fn wire_advisory_lock_round_trips_kind_and_range() {
+        let lock = AdvisoryLock {
+            inode: InodeId::new(42).unwrap(),
+            owner: 7,
+            start: 10,
+            end: 99,
+            kind: AdvisoryLockKind::Write,
+            pid: 1234,
+        };
+        let wire = WireAdvisoryLock::from_advisory_lock(&lock);
+        assert_eq!(wire.kind, "write");
+        assert_eq!(wire.into_advisory_lock().unwrap(), lock);
+
+        let request = MetadataRpcRequest::SetAdvisoryLock {
+            inode: 42,
+            owner: 7,
+            start: 10,
+            end: 99,
+            kind: "write".to_owned(),
+            pid: 1234,
+            wait: false,
+        };
+        let encoded = encode_request(&request).unwrap();
+        assert_eq!(decode_request(&encoded).unwrap(), request);
     }
 
     #[test]

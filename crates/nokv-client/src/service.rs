@@ -16,16 +16,17 @@ use nokv_object::{
     StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_protocol::{
-    decode_envelope, decode_name_cursor, decode_xattr_name, encode_file_type, encode_name_cursor,
-    encode_request, encode_xattr_name, MetadataProtocolError, MetadataRpcEnvelope,
-    MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest,
-    WireDentryWithAttr, WireMetadataError, WireMetadataPosition, WireObjectReadBlock,
-    WirePathMetadata, WirePreparedArtifact, WireSliceManifest, WireStagedObject,
-    WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
+    decode_envelope, decode_name_cursor, decode_xattr_name, encode_advisory_lock_kind,
+    encode_file_type, encode_name_cursor, encode_request, encode_xattr_name, MetadataProtocolError,
+    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireAdvisoryLock,
+    WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr, WireMetadataError,
+    WireMetadataPosition, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireSliceManifest, WireStagedObject, WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
 };
 use nokv_types::{
-    parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
-    InodeAttr, InodeId, PathMetadata, SliceManifest, SnapshotPin, SpecialNodeSpec,
+    parse_absolute_path, AdvisoryLock, AdvisoryLockRequest, BlockDescriptor, BodyDescriptor,
+    ChunkManifest, DentryName, FileType, InodeAttr, InodeId, PathMetadata, SliceManifest,
+    SnapshotPin, SpecialNodeSpec,
 };
 
 use crate::{ArtifactMetadata, ClientError, NamespaceRead};
@@ -890,6 +891,38 @@ impl MetadataClient {
         match self.call(MetadataRpcRequest::RemoveXattr {
             inode: inode.get(),
             name_hex: encode_xattr_name(name),
+        })? {
+            MetadataRpcResult::Unit => Ok(()),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn get_advisory_lock(
+        &self,
+        request: AdvisoryLockRequest,
+    ) -> Result<Option<AdvisoryLock>, ClientError> {
+        match self.call(MetadataRpcRequest::GetAdvisoryLock {
+            inode: request.inode.get(),
+            owner: request.owner,
+            start: request.start,
+            end: request.end,
+            kind: encode_advisory_lock_kind(request.kind).to_owned(),
+            pid: request.pid,
+        })? {
+            MetadataRpcResult::AdvisoryLock { lock } => lock.map(wire_advisory_lock).transpose(),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn set_advisory_lock(&self, request: AdvisoryLockRequest) -> Result<(), ClientError> {
+        match self.call(MetadataRpcRequest::SetAdvisoryLock {
+            inode: request.inode.get(),
+            owner: request.owner,
+            start: request.start,
+            end: request.end,
+            kind: encode_advisory_lock_kind(request.kind).to_owned(),
+            pid: request.pid,
+            wait: request.wait,
         })? {
             MetadataRpcResult::Unit => Ok(()),
             other => Err(unexpected_result(other)),
@@ -2058,6 +2091,10 @@ fn wire_metadata_position(position: WireMetadataPosition) -> ClientMetadataPosit
     }
 }
 
+fn wire_advisory_lock(lock: WireAdvisoryLock) -> Result<AdvisoryLock, ClientError> {
+    lock.into_advisory_lock().map_err(protocol_error)
+}
+
 fn metadata_position_to_wire(position: ClientMetadataPosition) -> WireMetadataPosition {
     WireMetadataPosition {
         term: position.term,
@@ -2150,6 +2187,10 @@ fn client_error_from_wire_error(error: WireMetadataError) -> ClientError {
         WireMetadataError::StaleBodyGeneration { expected, current } => {
             ClientError::Metadata(nokv_meta::MetadError::StaleBodyGeneration { expected, current })
         }
+        WireMetadataError::LockConflict { lock } => match wire_advisory_lock(lock) {
+            Ok(lock) => ClientError::LockConflict(lock),
+            Err(err) => err,
+        },
         WireMetadataError::InvalidPath { message } => {
             ClientError::Metadata(nokv_meta::MetadError::InvalidPath(message))
         }

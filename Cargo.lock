@@ -1489,6 +1489,7 @@ name = "nokv-fuse"
 version = "0.1.0"
 dependencies = [
  "fuser",
+ "libc",
  "nokv-client",
  "nokv-meta",
  "nokv-object",

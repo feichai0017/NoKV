@@ -1,6 +1,7 @@
 use super::*;
 use nokv_object::{MemoryObjectStore, ObjectKey};
 use nokv_protocol::{decode_request, encode_envelope, WireDentryRecord, WireInodeAttr};
+use nokv_types::AdvisoryLockKind;
 use std::net::TcpListener;
 use std::thread;
 
@@ -295,6 +296,71 @@ fn service_create_special_node_sends_typed_rpc() {
         .unwrap();
     assert_eq!(entry.attr.file_type, FileType::CharDevice);
     assert_eq!(entry.attr.rdev, 0x1234);
+}
+
+#[test]
+fn service_advisory_lock_sends_typed_rpc_and_maps_conflict() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+        stream.read_exact(&mut magic).unwrap();
+        assert_eq!(&magic, FRAMED_RPC_MAGIC);
+        for response in [
+            response_body(r#"{"ok":true,"result":{"type":"unit"}}"#),
+            response_body(
+                r#"{"ok":false,"error":"lock conflict","error_kind":{"type":"lock_conflict","lock":{"inode":42,"owner":7,"start":0,"end":99,"kind":"write","pid":700}}}"#,
+            ),
+        ] {
+            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+            let request = decode_request(&request).unwrap();
+            assert!(matches!(
+                request,
+                MetadataRpcRequest::SetAdvisoryLock {
+                    inode: 42,
+                    owner: 9,
+                    start: 10,
+                    end: 20,
+                    kind,
+                    pid: 900,
+                    wait: false,
+                } if kind == "read"
+            ));
+            write_frame(&mut stream, request_id, flags, &response).unwrap();
+        }
+    });
+    let client = MetadataClient::connect(addr);
+    let err = client
+        .set_advisory_lock(AdvisoryLockRequest {
+            inode: InodeId::new(42).unwrap(),
+            owner: 9,
+            start: 10,
+            end: 20,
+            kind: AdvisoryLockKind::Read,
+            pid: 900,
+            wait: false,
+        })
+        .and_then(|_| {
+            client.set_advisory_lock(AdvisoryLockRequest {
+                inode: InodeId::new(42).unwrap(),
+                owner: 9,
+                start: 10,
+                end: 20,
+                kind: AdvisoryLockKind::Read,
+                pid: 900,
+                wait: false,
+            })
+        })
+        .unwrap_err();
+    match err {
+        ClientError::LockConflict(lock) => {
+            assert_eq!(lock.inode, InodeId::new(42).unwrap());
+            assert_eq!(lock.owner, 7);
+            assert_eq!(lock.kind, AdvisoryLockKind::Write);
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
 }
 
 #[test]

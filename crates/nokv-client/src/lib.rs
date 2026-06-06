@@ -11,7 +11,7 @@ mod service;
 
 use nokv_meta::{MetadError, MetadataError};
 use nokv_object::ObjectError;
-use nokv_types::{PathError, PathMetadata};
+use nokv_types::{AdvisoryLock, PathError, PathMetadata};
 
 pub use artifact::{
     normalize_artifact_path, ArtifactBackend, ArtifactInfo, ArtifactRepository,
@@ -61,6 +61,7 @@ pub enum ClientError {
         leader_id: Option<u64>,
         address: Option<std::net::SocketAddr>,
     },
+    LockConflict(AdvisoryLock),
     Metadata(MetadError),
     Object(ObjectError),
     Io(String),
@@ -126,6 +127,15 @@ impl fmt::Display for ClientError {
                 }
                 Ok(())
             }
+            Self::LockConflict(lock) => write!(
+                f,
+                "advisory lock conflicts with {:?} lock on inode {} range {}..={} owned by {}",
+                lock.kind,
+                lock.inode.get(),
+                lock.start,
+                lock.end,
+                lock.owner
+            ),
             Self::Metadata(err) => write!(f, "metadata service error: {err}"),
             Self::Object(err) => write!(f, "object store error: {err}"),
             Self::Io(err) => write!(f, "io error: {err}"),

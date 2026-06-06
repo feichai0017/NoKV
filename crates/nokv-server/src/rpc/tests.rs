@@ -186,6 +186,71 @@ fn rpc_supports_remote_fuse_inode_operations() {
 }
 
 #[test]
+fn rpc_supports_remote_fuse_advisory_locks() {
+    let server = test_server();
+    let file = expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::CreateFile {
+            parent: 1,
+            name: "locked.bin".to_owned(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        },
+    ));
+    let set = request_envelope(
+        &server,
+        MetadataRpcRequest::SetAdvisoryLock {
+            inode: file.attr.inode,
+            owner: 7,
+            start: 0,
+            end: 99,
+            kind: "write".to_owned(),
+            pid: 700,
+            wait: false,
+        },
+    );
+    assert!(set.ok, "unexpected set lock error: {set:?}");
+
+    let get = request_envelope(
+        &server,
+        MetadataRpcRequest::GetAdvisoryLock {
+            inode: file.attr.inode,
+            owner: 8,
+            start: 10,
+            end: 20,
+            kind: "read".to_owned(),
+            pid: 800,
+        },
+    );
+    match get.result.unwrap() {
+        MetadataRpcResult::AdvisoryLock { lock: Some(lock) } => {
+            assert_eq!(lock.owner, 7);
+            assert_eq!(lock.kind, "write");
+        }
+        other => panic!("unexpected lock result: {other:?}"),
+    }
+
+    let conflict = request_envelope(
+        &server,
+        MetadataRpcRequest::SetAdvisoryLock {
+            inode: file.attr.inode,
+            owner: 8,
+            start: 10,
+            end: 20,
+            kind: "read".to_owned(),
+            pid: 800,
+            wait: false,
+        },
+    );
+    assert!(!conflict.ok);
+    assert!(matches!(
+        conflict.error_kind,
+        Some(WireMetadataError::LockConflict { .. })
+    ));
+}
+
+#[test]
 fn rpc_accepts_metadata_raft_vote_on_store() {
     let server = test_server();
     let envelope = request_envelope(
