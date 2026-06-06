@@ -51,6 +51,22 @@ fn response_body(json: &str) -> Vec<u8> {
     encode_envelope(&envelope).unwrap()
 }
 
+#[test]
+fn read_pipeline_cache_evicts_oldest_unused_pipeline() {
+    let mut cache = ReadPipelineCache::new(2);
+    cache.insert("a#1".to_owned(), FileReadPipeline::default());
+    cache.insert("b#1".to_owned(), FileReadPipeline::default());
+
+    let pipeline = cache.take("a#1");
+    cache.insert("a#1".to_owned(), pipeline);
+    cache.insert("c#1".to_owned(), FileReadPipeline::default());
+
+    assert_eq!(cache.len(), 2);
+    assert!(cache.contains("a#1"));
+    assert!(cache.contains("c#1"));
+    assert!(!cache.contains("b#1"));
+}
+
 fn read_not_fresh_response(
     required: WireMetadataPosition,
     applied: Option<WireMetadataPosition>,

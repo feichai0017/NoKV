@@ -4,7 +4,10 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
-use std::{collections::HashMap, io};
+use std::{
+    collections::{HashMap, VecDeque},
+    io,
+};
 
 use nokv_meta::{
     DentryWithAttr, ObjectTransferStats, PublishArtifactStagedSession, RenameReplaceResult,
@@ -37,6 +40,7 @@ const MAX_RPC_RESPONSE_BYTES: usize = 16 * 1024 * 1024;
 const MAX_BATCH_RPC_REQUESTS: usize = 128;
 const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
 const FRAME_HEADER_BYTES: usize = 16;
+const MAX_READ_PIPELINES: usize = 1024;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MetadataClientOptions {
@@ -102,7 +106,7 @@ pub struct NoKvFsClient<O> {
     objects: Arc<O>,
     block_cache: ObjectBlockCache,
     prefetcher: ObjectPrefetcher<Arc<O>>,
-    read_pipelines: Mutex<HashMap<String, FileReadPipeline>>,
+    read_pipelines: Mutex<ReadPipelineCache>,
     block_cache_enabled: bool,
     object_puts: AtomicU64,
     object_put_bytes: AtomicU64,
@@ -114,6 +118,13 @@ pub struct NoKvFsClient<O> {
     cache_hit_bytes: AtomicU64,
     manifest_chunks: AtomicU64,
     manifest_blocks: AtomicU64,
+}
+
+#[derive(Debug)]
+struct ReadPipelineCache {
+    capacity: usize,
+    pipelines: HashMap<String, FileReadPipeline>,
+    order: VecDeque<String>,
 }
 
 impl MetadataClientOptions {
@@ -155,7 +166,7 @@ where
             objects,
             block_cache,
             prefetcher,
-            read_pipelines: Mutex::new(HashMap::new()),
+            read_pipelines: Mutex::new(ReadPipelineCache::new(MAX_READ_PIPELINES)),
             block_cache_enabled: true,
             object_puts: AtomicU64::new(0),
             object_put_bytes: AtomicU64::new(0),
@@ -330,10 +341,7 @@ where
             let mut pipelines = self.read_pipelines.lock().map_err(|err| {
                 ClientError::Protocol(format!("read pipeline lock poisoned: {err}"))
             })?;
-            pipelines
-                .entry(pipeline_key.to_owned())
-                .or_default()
-                .clone()
+            pipelines.take(pipeline_key)
         };
         let outcome = pipeline
             .read_blocks(
@@ -605,6 +613,43 @@ fn cleanup_staged_write_error<O: ObjectStore>(
         objects.delete_staged(staged).map_err(ClientError::Object)?;
     }
     Ok(())
+}
+
+impl ReadPipelineCache {
+    fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            pipelines: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    fn take(&mut self, key: &str) -> FileReadPipeline {
+        self.order.retain(|existing| existing != key);
+        self.pipelines.remove(key).unwrap_or_default()
+    }
+
+    fn insert(&mut self, key: String, pipeline: FileReadPipeline) {
+        self.order.retain(|existing| existing != &key);
+        self.order.push_back(key.clone());
+        self.pipelines.insert(key, pipeline);
+        while self.pipelines.len() > self.capacity {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.pipelines.remove(&oldest);
+        }
+    }
+
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.pipelines.len()
+    }
+
+    #[cfg(test)]
+    fn contains(&self, key: &str) -> bool {
+        self.pipelines.contains_key(key)
+    }
 }
 
 impl MetadataClient {
