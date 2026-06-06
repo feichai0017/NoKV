@@ -14,7 +14,7 @@ tool_contract:
     purpose: Return the SQLite schema for tables and indexes.
     arguments: {}
     returns: SQL DDL text and a schema evidence handle.
-  - name: query
+  - name: query_sql
     purpose: Execute a bounded read-only SQL query.
     arguments:
       sql: string
@@ -39,11 +39,66 @@ evidence_conventions:
   git_state: sqlite://git_state/{experiment_id}
   blob: sqlite://blobs/{blob_ref}
 
+materialized_view_schema_hint:
+  description: Raw SQLite exposes base Yanex tables plus ETL-maintained agent-index materialization tables over the same corpus facts.
+  tables:
+    run_agent_index:
+      purpose: one row per run with commonly queried run, artifact, metric, parameter, git, and group summaries.
+      primary_key: experiment_id
+    run_agent_index_values:
+      purpose: entity-attribute-value rows using the same catalog field ids as the NoKV native find index.
+      columns: [experiment_id, field, value_kind, value_text, value_u64]
+    run_agent_index_catalog:
+      purpose: field capability table declaring value kind, sortable/facetable flags, and supported operators.
+  catalog_field_ids:
+    - run.id
+    - run.name
+    - run.status
+    - run.project
+    - run.script
+    - run.tag
+    - artifact.path
+    - artifact.name
+    - artifact.type
+    - artifact.count
+    - artifact.size_bytes
+    - artifact.stdout_available
+    - artifact.stdout_size_bytes
+    - artifact.stderr_available
+    - artifact.stderr_size_bytes
+    - param.origami.training.learning_rate
+    - param.origami.training.batch_size
+    - metric.val_loss.min
+    - metric.val_loss.min_scaled
+    - metric.utility_tstr_roc_auc.latest
+    - metric.utility_tstr_roc_auc.latest_scaled
+    - metric.utility_trtr_roc_auc.latest
+    - metric.utility_trtr_roc_auc.latest_scaled
+    - metric.fidelity.latest
+    - metric.fidelity.latest_scaled
+    - metric.detection_roc_auc.latest
+    - metric.detection_roc_auc.latest_scaled
+    - metric.privacy_dcr_score.latest
+    - metric.privacy_dcr_score.latest_scaled
+    - group.lr_batch.key
+    - group.lr_batch.learning_rate
+    - group.lr_batch.batch_size
+    - group.lr_batch.representative
+    - group.lr_batch.run_count
+    - group.lr_batch.avg_min_val_loss
+    - group.lr_batch.avg_min_val_loss_scaled
+    - git.patch_file
+    - git.patch_declared
+    - git.patch_available
+    - git.dirty
+    - git.has_uncommitted_changes
+
 interface_guidance:
   - Inspect the schema before writing non-trivial SQL.
   - Prefer aggregate SQL for structured analytics.
+  - Use run_agent_index or run_agent_index_values when the materialized schema directly covers the needed read-only fact.
   - Use read_blob only when task evidence requires artifact body bytes.
-  - Cite row and blob evidence handles returned by query/read_blob.
+  - Cite row and blob evidence handles returned by query_sql/read_blob.
 
 forbidden_assumptions:
   - Do not mutate the database.

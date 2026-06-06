@@ -20,14 +20,14 @@ namespace surface:
 - `nokvfs-meta`: `stat_card`, `list_page`, `find_paths`, and `read_page`;
 - `nokvfs-protocol`: `StatCard`, `ListPage`, `FindPaths`, and `ReadPage` RPC
   DTOs;
-- `nokvfs-client`: SDK methods for the same operations;
+- `nokvfs-client`: SDK methods plus the product-native agent adapter exposing
+  `ls`, `stat`, `read`, and `find`;
 - `nokvfs-server`: framed metadata RPC handlers for the same operations.
 
-The benchmark arm named `nokv_native_v1` is still a raw namespace baseline in
-this harness. It currently exposes only `list`, `stat`, and byte-range `read`
-over NoKV namespace metadata. Do not report `nokv_native_v1` as the final
-agent-native product surface until the harness is switched to the product API
-above.
+The benchmark arm named `nokv_native_v1` now uses the `nokvfs-client` agent
+adapter. The harness translates OpenAI tool calls into product API calls, but
+does not own the measured card, find, structured read, index catalog,
+pagination, consistency, or evidence semantics.
 
 ## Corpus
 
@@ -69,10 +69,10 @@ The Phase 1 harness compares four read-only arms:
 
 | Arm | Surface |
 | --- | --- |
-| `sqlite_raw_v1` | Raw SQLite schema/query/blob tools. |
+| `sqlite_raw_v1` | Raw SQLite schema/query/blob tools plus ETL-maintained agent-index materialization tables. |
 | `sqlite_agentfs_v1` | Filesystem-shaped projection backed by SQLite. |
 | `nokv_posix_v1` | POSIX/FUSE view over NoKV. |
-| `nokv_native_v1` | NoKV raw namespace metadata baseline. |
+| `nokv_native_v1` | NoKV product-native agent adapter. |
 
 The fixed Phase 1 tasks live in `tasks/phase1_readonly.yaml`. The rubric lives
 in `rubric/phase1_readonly.yaml`.
@@ -151,7 +151,7 @@ Set OpenAI credentials and model:
 
 ```bash
 export OPENAI_API_KEY=...
-export OPENAI_MODEL=gpt-5-mini
+export OPENAI_MODEL=gpt-5.5
 ```
 
 Run one task for one arm:
@@ -192,6 +192,10 @@ cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml
   --path /yanex/runs/00023013/metadata.json
 ```
 
+The `nokv-*` direct commands above remain raw debugging commands. The benchmark
+arm uses the product-native `ls`/`stat`/`read`/`find` adapter exposed by
+`nokvfs-client`.
+
 Inspect SQLite schema:
 
 ```bash
@@ -201,16 +205,12 @@ cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml
 
 ## Next Work
 
-The next benchmark-specific PR should switch `nokv_native_v1` from raw
-`list`/`stat`/`read` to the product native surface:
+The next benchmark-specific PR should run the full `sqlite_raw_v1` vs
+`nokv_native_v1` Phase 1 batch and use the metric output to decide the next
+NoKV API increment. V1 must produce correctness, evidence, token, tool, bytes,
+and wall-time metrics; outperforming SQL is not the first PR gate.
 
-- map `ls` to `list_page`;
-- map `stat` to `stat_card`;
-- map `read` to `read_page`;
-- add `find` over `find_paths`;
-- include stat/catalog metadata in arm cards;
-- add typed high-value facet namespaces for status, script, artifact name/size,
-  metric latest/min/max by run, params, and git patch availability.
-
-Do not implement these semantics in the harness as benchmark-only shortcuts.
+Useful follow-up product increments include typed facets for metric
+latest/min/max by run, params, dependencies, and richer git patch availability.
+Do not implement those semantics in the harness as benchmark-only shortcuts.
 The harness should remain a thin adapter over `nokvfs-client` or `nokvfs-meta`.

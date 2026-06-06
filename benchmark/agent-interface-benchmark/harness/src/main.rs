@@ -17,8 +17,13 @@ use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use flate2::read::GzDecoder;
-use nokvfs_client::{ArtifactRepository, ArtifactRepositoryOptions};
-use nokvfs_meta::{HoltMetadataStore, NoKvFs};
+use nokvfs_client::{
+    agent_tool_definitions, execute_agent_tool, ArtifactRepository, ArtifactRepositoryOptions,
+};
+use nokvfs_meta::{
+    HoltMetadataStore, NamespaceFindField, NamespaceIndexField, NamespaceIndexRegistration,
+    NamespaceIndexRow, NamespaceIndexValue, NamespacePredicateOp, NamespacePredicateValue, NoKvFs,
+};
 use nokvfs_object::{S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_types::{BodyDescriptor, FileType, InodeAttr, MountId};
 use rusqlite::{params, Connection, OptionalExtension};
@@ -38,14 +43,34 @@ const DEFAULT_SECRET_KEY: &str = "rustfsadmin";
 const RUNS_PREFIX: &str = "/runs";
 const NOKV_PREFIX: &str = "yanex";
 const DEFAULT_REPEATS: usize = 10;
+const METRIC_SCALE: f64 = 1_000_000_000_000.0;
+const METRIC_SORT_OFFSET: i128 = 10_000_000_000_000;
+const PARAM_INDEX_FIELDS: &[(&str, &str)] = &[
+    (
+        "origami.training.learning_rate",
+        "param.origami.training.learning_rate",
+    ),
+    (
+        "origami.training.batch_size",
+        "param.origami.training.batch_size",
+    ),
+];
+const LATEST_METRIC_INDEX_FIELDS: &[&str] = &[
+    "utility_tstr_roc_auc",
+    "utility_trtr_roc_auc",
+    "fidelity",
+    "detection_roc_auc",
+    "privacy_dcr_score",
+];
 const TOOL_CALL_TIMEOUT_MS: u64 = 30_000;
 const SQLITE_PROGRESS_OPS: i32 = 1_000;
+const CHAT_COMPLETION_MAX_ATTEMPTS: usize = 3;
 
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
         eprintln!("error: {err}");
         eprintln!(
-            "\nUsage:\n  harness prepare --archive PATH --data-root PATH [--reset] [s3 options]\n  harness verify --data-root PATH [--run-id ID] [--nokv-posix-root PATH] [s3 options]\n  harness tools --arm ARM\n  harness list-tasks\n  harness show-task --task-id ID\n  harness gold --data-root PATH --task-id ID\n  harness judge --data-root PATH --arm ARM --task-id ID --answer-json PATH\n  harness run-task --data-root PATH --arm ARM --task-id ID --output-jsonl PATH [--model MODEL] [--max-completion-tokens N]\n  harness run-batch --data-root PATH --output-jsonl PATH [--repeats N|--repeat N] [--arm ARM] [--task-id ID]\n  harness sqlite-show-schema --db PATH\n  harness sqlite-query --db PATH --sql SQL\n  harness sqlite-read-blob --db PATH --blob-ref REF --offset N --limit N\n  harness agentfs-ls|agentfs-stat|agentfs-read|agentfs-grep|agentfs-find --data-root PATH --path PATH [...]\n  harness nokv-list|nokv-stat|nokv-read --data-root PATH --path PATH [...]\n"
+            "\nUsage:\n  harness prepare --archive PATH --data-root PATH [--reset] [s3 options]\n  harness nokv-register-indexes --data-root PATH [s3 options]\n  harness verify --data-root PATH [--run-id ID] [--nokv-posix-root PATH] [s3 options]\n  harness tools --arm ARM\n  harness list-tasks\n  harness show-task --task-id ID\n  harness gold --data-root PATH --task-id ID\n  harness judge --data-root PATH --arm ARM --task-id ID --answer-json PATH\n  harness run-task --data-root PATH --arm ARM --task-id ID --output-jsonl PATH [--model MODEL] [--max-completion-tokens N]\n  harness run-batch --data-root PATH --output-jsonl PATH [--repeats N|--repeat N] [--arm ARM] [--task-id ID]\n  harness sqlite-show-schema --db PATH\n  harness sqlite-query --db PATH --sql SQL\n  harness sqlite-read-blob --db PATH --blob-ref REF --offset N --limit N\n  harness agentfs-ls|agentfs-stat|agentfs-read|agentfs-grep|agentfs-find --data-root PATH --path PATH [...]\n  harness nokv-list|nokv-stat|nokv-read --data-root PATH --path PATH [...]\n"
         );
         std::process::exit(2);
     }
@@ -58,6 +83,7 @@ fn run(args: Vec<String>) -> Result<(), HarnessError> {
     let options = Options::parse(&args[1..])?;
     match command {
         "prepare" => prepare(options),
+        "nokv-register-indexes" => nokv_register_indexes(options),
         "verify" => verify(options).map(|report| {
             println!(
                 "{}",
@@ -182,6 +208,20 @@ struct DerivedIndexes {
     script_counts: BTreeMap<String, usize>,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq, Ord, PartialOrd)]
+struct LrBatchKey {
+    learning_rate: String,
+    batch_size: String,
+}
+
+#[derive(Clone, Debug)]
+struct LrBatchGroupSummary {
+    key: LrBatchKey,
+    run_count: usize,
+    avg_min_val_loss: f64,
+    representative_run_id: String,
+}
+
 #[derive(Clone, Debug, Serialize)]
 struct RunSummary {
     experiment_id: String,
@@ -232,6 +272,9 @@ struct SqliteMaterializationReport {
     raw_missing_artifacts_checked: usize,
     agentfs_files_checked: usize,
     index_files_checked: usize,
+    agent_index_rows_checked: usize,
+    agent_index_values_checked: usize,
+    agent_index_catalog_checked: usize,
     mismatches: Vec<String>,
 }
 
@@ -486,7 +529,8 @@ struct ChatCompletionRequest {
     model: String,
     messages: Vec<ChatMessage>,
     tools: Vec<OpenAiTool>,
-    temperature: f64,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<f64>,
     max_completion_tokens: usize,
     response_format: Value,
 }
@@ -2034,6 +2078,16 @@ fn print_tool_registry(options: Options) -> Result<(), HarnessError> {
 }
 
 fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError> {
+    if arm == "nokv_native_v1" {
+        return Ok(agent_tool_definitions()
+            .into_iter()
+            .map(|tool| ToolDefinition {
+                name: tool.name.to_owned(),
+                description: tool.description.to_owned(),
+                parameters: tool.parameters,
+            })
+            .collect());
+    }
     let names = match arm {
         "sqlite_raw_v1" => vec![
             (
@@ -2077,23 +2131,6 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
                 "find",
                 "Find paths by name or wildcard pattern.",
                 json!({"type":"object","required":["path","pattern"],"properties":{"path":{"type":"string"},"pattern":{"type":"string"}},"additionalProperties":false}),
-            ),
-        ],
-        "nokv_native_v1" => vec![
-            (
-                "list",
-                "List NoKV namespace children with metadata.",
-                json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"}},"additionalProperties":false}),
-            ),
-            (
-                "stat",
-                "Return NoKV path metadata, generation, and body descriptor.",
-                json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"}},"additionalProperties":false}),
-            ),
-            (
-                "read",
-                "Read a NoKV file byte range with optional expected_generation check.",
-                json!({"type":"object","required":["path","offset","limit"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536},"expected_generation":{"type":["integer","null"],"minimum":1}},"additionalProperties":false}),
             ),
         ],
         other => {
@@ -2219,7 +2256,18 @@ fn judge(options: Options) -> Result<(), HarnessError> {
     .map_err(from_sql)?;
     let answer = serde_json::from_slice(&fs::read(answer_json).map_err(from_io)?)
         .map_err(|err| HarnessError::Json(err.to_string()))?;
-    print_json(&judge_answer(&conn, &task, &arm, &answer)?)
+    let nokv_for_evidence = if arm == "nokv_native_v1" {
+        Some(open_existing_nokv(&nokv_meta_path(&data_root), &options.s3)?)
+    } else {
+        None
+    };
+    print_json(&judge_answer(
+        &conn,
+        &task,
+        &arm,
+        &answer,
+        nokv_for_evidence.as_ref(),
+    )?)
 }
 
 fn run_benchmark_task(options: Options) -> Result<(), HarnessError> {
@@ -2322,7 +2370,7 @@ fn run_benchmark_task_once(
             model: model.clone(),
             messages: messages.clone(),
             tools: openai_tools.clone(),
-            temperature: 0.0,
+            temperature: None,
             max_completion_tokens,
             response_format: json!({"type": "json_object"}),
         };
@@ -2509,7 +2557,18 @@ fn run_benchmark_task_once(
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or_default();
-    let judge_result = match judge_answer(&conn, &task, arm, &final_answer) {
+    let nokv_for_evidence = if arm == "nokv_native_v1" {
+        Some(open_existing_nokv(&nokv_meta_path(&data_root), &options.s3)?)
+    } else {
+        None
+    };
+    let judge_result = match judge_answer(
+        &conn,
+        &task,
+        arm,
+        &final_answer,
+        nokv_for_evidence.as_ref(),
+    ) {
         Ok(judge_result) => judge_result,
         Err(err) if is_recoverable_run_judge_error(&err) => {
             let error = err.to_string();
@@ -2740,26 +2799,45 @@ fn send_chat_completion(
     api_key: &str,
     request: &ChatCompletionRequest,
 ) -> Result<ChatCompletionResponse, HarnessError> {
-    let response = client
-        .post(endpoint)
-        .bearer_auth(api_key)
-        .json(request)
-        .send()
-        .map_err(|err| HarnessError::Http(err.to_string()))?;
-    let status = response.status();
-    let text = response
-        .text()
-        .map_err(|err| HarnessError::Http(err.to_string()))?;
-    if !status.is_success() {
-        return Err(HarnessError::Http(format!(
-            "OpenAI chat completion HTTP {status}: {text}"
-        )));
+    for attempt in 1..=CHAT_COMPLETION_MAX_ATTEMPTS {
+        let response = match client
+            .post(endpoint)
+            .bearer_auth(api_key)
+            .json(request)
+            .send()
+        {
+            Ok(response) => response,
+            Err(err) if attempt < CHAT_COMPLETION_MAX_ATTEMPTS => {
+                thread::sleep(Duration::from_millis(500 * attempt as u64));
+                if err.is_timeout() || err.is_connect() || err.is_request() {
+                    continue;
+                }
+                return Err(HarnessError::Http(err.to_string()));
+            }
+            Err(err) => return Err(HarnessError::Http(err.to_string())),
+        };
+        let status = response.status();
+        let text = response
+            .text()
+            .map_err(|err| HarnessError::Http(err.to_string()))?;
+        if !status.is_success() {
+            if attempt < CHAT_COMPLETION_MAX_ATTEMPTS
+                && (status.as_u16() == 429 || status.is_server_error())
+            {
+                thread::sleep(Duration::from_millis(500 * attempt as u64));
+                continue;
+            }
+            return Err(HarnessError::Http(format!(
+                "OpenAI chat completion HTTP {status}: {text}"
+            )));
+        }
+        return serde_json::from_str(&text).map_err(|err| {
+            HarnessError::Json(format!(
+                "OpenAI chat completion response parse error: {err}; {text}"
+            ))
+        });
     }
-    serde_json::from_str(&text).map_err(|err| {
-        HarnessError::Json(format!(
-            "OpenAI chat completion response parse error: {err}; {text}"
-        ))
-    })
+    unreachable!("chat completion attempts loop always returns")
 }
 
 fn is_recoverable_run_api_error(err: &HarnessError) -> bool {
@@ -2908,13 +2986,16 @@ impl ArmRuntime {
         s3: &S3Options,
     ) -> Result<Self, HarnessError> {
         match arm {
-            "sqlite_raw_v1" => Ok(Self::SqliteRaw {
-                conn: Connection::open_with_flags(
-                    sqlite_path(data_root),
-                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-                )
-                .map_err(from_sql)?,
-            }),
+            "sqlite_raw_v1" => {
+                ensure_sqlite_agent_index_materialization(data_root)?;
+                Ok(Self::SqliteRaw {
+                    conn: Connection::open_with_flags(
+                        sqlite_path(data_root),
+                        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+                    )
+                    .map_err(from_sql)?,
+                })
+            }
             "sqlite_agentfs_v1" => Ok(Self::SqliteAgentFs {
                 conn: Connection::open_with_flags(
                     sqlite_path(data_root),
@@ -3074,17 +3155,8 @@ fn execute_nokv_tool(
     name: &str,
     args: &Value,
 ) -> Result<Value, HarnessError> {
-    let path = required_string_arg(args, "path")?;
     match name {
-        "list" => to_json_value(nokv_list_tool(service, &path)?),
-        "stat" => to_json_value(nokv_stat_tool(service, &path)?),
-        "read" => to_json_value(nokv_read_tool(
-            service,
-            &path,
-            optional_u64_arg(args, "offset").unwrap_or(0),
-            required_usize_arg(args, "limit")?,
-            optional_u64_arg(args, "expected_generation"),
-        )?),
+        "ls" | "stat" | "read" | "find" => execute_agent_tool(service, name, args).map_err(from_nokv),
         other => Err(HarnessError::Corpus(format!(
             "unknown NoKV native tool {other}"
         ))),
@@ -3221,6 +3293,7 @@ fn judge_answer(
     task: &BenchmarkTask,
     arm: &str,
     answer: &Value,
+    nokv_native: Option<&NoKvFs<HoltMetadataStore, S3ObjectStore>>,
 ) -> Result<JudgeResult, HarnessError> {
     let gold_rows = query_gold_rows(conn, task)?;
     let mut mismatches = Vec::new();
@@ -3311,7 +3384,7 @@ fn judge_answer(
         other => mismatches.push(format!("unsupported expected kind {other}")),
     }
 
-    let (evidence_checked, evidence_supported) = evidence_support(conn, arm, answer)?;
+    let (evidence_checked, evidence_supported) = evidence_support(conn, arm, answer, nokv_native)?;
     let evidence_precision = if evidence_checked == 0 {
         None
     } else {
@@ -3456,6 +3529,7 @@ fn evidence_support(
     conn: &Connection,
     arm: &str,
     answer: &Value,
+    nokv_native: Option<&NoKvFs<HoltMetadataStore, S3ObjectStore>>,
 ) -> Result<(usize, usize), HarnessError> {
     let evidence = answer
         .get("evidence")
@@ -3466,7 +3540,7 @@ fn evidence_support(
         .collect::<Vec<_>>();
     let mut supported = 0;
     for handle in &evidence {
-        if evidence_handle_supported(conn, arm, handle)? {
+        if evidence_handle_supported(conn, arm, handle, nokv_native)? {
             supported += 1;
         }
     }
@@ -3477,6 +3551,7 @@ fn evidence_handle_supported(
     conn: &Connection,
     arm: &str,
     handle: &str,
+    nokv_native: Option<&NoKvFs<HoltMetadataStore, S3ObjectStore>>,
 ) -> Result<bool, HarnessError> {
     match arm {
         "sqlite_raw_v1" => sqlite_evidence_supported(conn, handle),
@@ -3494,12 +3569,18 @@ fn evidence_handle_supported(
             )? > 0)
         }
         "nokv_posix_v1" => Ok(handle.starts_with("nokv-fuse:///yanex/")),
-        "nokv_native_v1" => Ok(handle.starts_with("nokv-native:///yanex/")),
+        "nokv_native_v1" => nokv_native_evidence_supported(conn, handle, nokv_native),
         _ => Ok(false),
     }
 }
 
 fn sqlite_evidence_supported(conn: &Connection, handle: &str) -> Result<bool, HarnessError> {
+    if handle == "sqlite://schema" {
+        return Ok(sqlite_count(
+            conn,
+            "SELECT COUNT(*) FROM sqlite_schema WHERE sql IS NOT NULL",
+        )? > 0);
+    }
     if let Some(id) = handle.strip_prefix("sqlite://experiments/") {
         return Ok(sqlite_count(
             conn,
@@ -3569,6 +3650,83 @@ fn sqlite_evidence_supported(conn: &Connection, handle: &str) -> Result<bool, Ha
         )? > 0);
     }
     Ok(false)
+}
+
+struct NoKvEvidenceHandle {
+    path: String,
+    generation: Option<u64>,
+}
+
+fn nokv_native_evidence_supported(
+    conn: &Connection,
+    handle: &str,
+    service: Option<&NoKvFs<HoltMetadataStore, S3ObjectStore>>,
+) -> Result<bool, HarnessError> {
+    let Some(parsed) = parse_nokv_native_evidence_handle(handle) else {
+        return Ok(false);
+    };
+    if let Some(service) = service {
+        let Some(metadata) = service.stat_path(&parsed.path).map_err(from_nokv)? else {
+            return Ok(false);
+        };
+        return Ok(parsed
+            .generation
+            .map(|generation| generation == metadata.attr.generation)
+            .unwrap_or(true));
+    }
+    let Some(sqlite_path) = sqlite_path_for_nokv_native_path(&parsed.path) else {
+        return Ok(false);
+    };
+    Ok(sqlite_count(
+        conn,
+        &format!(
+            "SELECT COUNT(*) FROM files WHERE path = '{}'",
+            escape_sql_literal(&sqlite_path)
+        ),
+    )? > 0)
+}
+
+fn parse_nokv_native_evidence_handle(handle: &str) -> Option<NoKvEvidenceHandle> {
+    let value = handle.strip_prefix("nokv-native://")?;
+    let value = value.split('#').next().unwrap_or(value);
+    let (path, generation) = match value.rsplit_once("@generation:") {
+        Some((path, generation)) => {
+            let generation = generation.parse::<u64>().ok()?;
+            if generation == 0 {
+                return None;
+            }
+            (path, Some(generation))
+        }
+        None => (value, None),
+    };
+    if !(path == "/yanex" || path.starts_with("/yanex/")) {
+        return None;
+    }
+    Some(NoKvEvidenceHandle {
+        path: path.to_owned(),
+        generation,
+    })
+}
+
+fn sqlite_path_for_nokv_native_path(path: &str) -> Option<String> {
+    if path == "/yanex" || path == "/yanex/" {
+        return Some("/".to_owned());
+    }
+    if let Some(rest) = path.strip_prefix("/yanex/runs") {
+        return Some(if rest.is_empty() {
+            "/runs".to_owned()
+        } else {
+            format!("/runs{rest}")
+        });
+    }
+    if let Some(rest) = path.strip_prefix("/yanex/index") {
+        return Some(if rest.is_empty() {
+            "/index".to_owned()
+        } else {
+            format!("/index{rest}")
+        });
+    }
+    None
 }
 
 impl BenchmarkRunTelemetry {
@@ -3779,7 +3937,42 @@ fn verify_sqlite_materialization(
     }
 
     verify_missing_artifacts(conn, &files, &mut report)?;
+    verify_sqlite_agent_index(conn, &mut report)?;
     Ok(report)
+}
+
+fn verify_sqlite_agent_index(
+    conn: &Connection,
+    report: &mut SqliteMaterializationReport,
+) -> Result<(), HarnessError> {
+    if !sqlite_agent_index_materialization_current(conn)? {
+        report
+            .mismatches
+            .push("run_agent_index materialization is missing or stale".to_owned());
+        return Ok(());
+    }
+
+    report.agent_index_rows_checked = sqlite_count(conn, "SELECT COUNT(*) FROM run_agent_index")?;
+    report.agent_index_values_checked =
+        sqlite_count(conn, "SELECT COUNT(*) FROM run_agent_index_values")?;
+    report.agent_index_catalog_checked =
+        sqlite_count(conn, "SELECT COUNT(*) FROM run_agent_index_catalog")?;
+
+    let missing_rows = sqlite_count(
+        conn,
+        r#"
+        SELECT COUNT(*)
+        FROM experiments AS e
+        LEFT JOIN run_agent_index AS i ON i.experiment_id = e.experiment_id
+        WHERE i.experiment_id IS NULL
+        "#,
+    )?;
+    if missing_rows != 0 {
+        report
+            .mismatches
+            .push(format!("run_agent_index misses {missing_rows} experiments"));
+    }
+    Ok(())
 }
 
 fn verify_nokv_namespace(
@@ -4535,6 +4728,7 @@ fn prepare_sqlite(
     for run in runs {
         insert_run(&tx, run)?;
     }
+    insert_agent_index_materialization(&tx, runs)?;
     for run in runs {
         insert_agentfs_run_files(&tx, run)?;
     }
@@ -4545,6 +4739,94 @@ fn prepare_sqlite(
     tx.commit().map_err(from_sql)?;
     Ok(())
 }
+
+fn ensure_sqlite_agent_index_materialization(data_root: &Path) -> Result<(), HarnessError> {
+    let sqlite_path = sqlite_path(data_root);
+    let mut conn = Connection::open(&sqlite_path).map_err(from_sql)?;
+    if sqlite_agent_index_materialization_current(&conn)? {
+        return Ok(());
+    }
+
+    let runs = load_runs(&data_root.join("corpus"))?;
+    refresh_sqlite_agent_index_materialization(&mut conn, &runs)
+}
+
+fn refresh_sqlite_agent_index_materialization(
+    conn: &mut Connection,
+    runs: &[CorpusRun],
+) -> Result<(), HarnessError> {
+    let tx = conn.transaction().map_err(from_sql)?;
+    drop_agent_index_schema(&tx)?;
+    create_agent_index_schema(&tx)?;
+    insert_agent_index_materialization(&tx, runs)?;
+    tx.commit().map_err(from_sql)
+}
+
+fn sqlite_agent_index_materialization_current(conn: &Connection) -> Result<bool, HarnessError> {
+    for table in [
+        "run_agent_index",
+        "run_agent_index_values",
+        "run_agent_index_catalog",
+    ] {
+        if !sqlite_table_exists(conn, table)? {
+            return Ok(false);
+        }
+    }
+    if conn.prepare(RUN_AGENT_INDEX_SCHEMA_PROBE_SQL).is_err() {
+        return Ok(false);
+    }
+
+    let run_count = sqlite_count(conn, "SELECT COUNT(*) FROM experiments")?;
+    let index_count = sqlite_count(conn, "SELECT COUNT(*) FROM run_agent_index")?;
+    let catalog_count = sqlite_count(conn, "SELECT COUNT(*) FROM run_agent_index_catalog")?;
+    Ok(run_count == index_count && catalog_count == nokv_agent_index_fields().len())
+}
+
+fn sqlite_table_exists(conn: &Connection, table: &str) -> Result<bool, HarnessError> {
+    let exists: i64 = conn
+        .query_row(
+            "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1)",
+            params![table],
+            |row| row.get(0),
+        )
+        .map_err(from_sql)?;
+    Ok(exists != 0)
+}
+
+const RUN_AGENT_INDEX_SCHEMA_PROBE_SQL: &str = r#"
+    SELECT
+        experiment_id,
+        run_name,
+        run_status,
+        run_project,
+        run_script,
+        artifact_count,
+        artifact_stdout_available,
+        artifact_stdout_size_bytes,
+        artifact_stderr_available,
+        artifact_stderr_size_bytes,
+        param_origami_training_learning_rate,
+        param_origami_training_batch_size,
+        metric_val_loss_min,
+        metric_utility_tstr_roc_auc_latest,
+        metric_utility_trtr_roc_auc_latest,
+        metric_fidelity_latest,
+        metric_detection_roc_auc_latest,
+        metric_privacy_dcr_score_latest,
+        group_lr_batch_key,
+        group_lr_batch_learning_rate,
+        group_lr_batch_batch_size,
+        group_lr_batch_representative,
+        group_lr_batch_run_count,
+        group_lr_batch_avg_min_val_loss,
+        git_patch_file,
+        git_patch_declared,
+        git_patch_available,
+        git_dirty,
+        git_has_uncommitted_changes
+    FROM run_agent_index
+    LIMIT 0
+"#;
 
 fn create_schema(conn: &Connection) -> Result<(), HarnessError> {
     conn.execute_batch(
@@ -4624,6 +4906,80 @@ fn create_schema(conn: &Connection) -> Result<(), HarnessError> {
         CREATE INDEX idx_experiments_script ON experiments(script_path);
         CREATE INDEX idx_metrics_name_value ON metrics(metric_name, value);
         CREATE INDEX idx_artifacts_blob_ref ON artifacts(blob_ref);
+        "#,
+    )
+    .map_err(from_sql)?;
+    create_agent_index_schema(conn)
+}
+
+fn create_agent_index_schema(conn: &Connection) -> Result<(), HarnessError> {
+    conn.execute_batch(
+        r#"
+        CREATE TABLE IF NOT EXISTS run_agent_index (
+            experiment_id TEXT PRIMARY KEY,
+            run_name TEXT,
+            run_status TEXT,
+            run_project TEXT,
+            run_script TEXT,
+            artifact_count INTEGER NOT NULL,
+            artifact_stdout_available INTEGER NOT NULL,
+            artifact_stdout_size_bytes INTEGER NOT NULL,
+            artifact_stderr_available INTEGER NOT NULL,
+            artifact_stderr_size_bytes INTEGER NOT NULL,
+            param_origami_training_learning_rate TEXT,
+            param_origami_training_batch_size TEXT,
+            metric_val_loss_min REAL,
+            metric_utility_tstr_roc_auc_latest REAL,
+            metric_utility_trtr_roc_auc_latest REAL,
+            metric_fidelity_latest REAL,
+            metric_detection_roc_auc_latest REAL,
+            metric_privacy_dcr_score_latest REAL,
+            group_lr_batch_key TEXT,
+            group_lr_batch_learning_rate TEXT,
+            group_lr_batch_batch_size TEXT,
+            group_lr_batch_representative INTEGER,
+            group_lr_batch_run_count INTEGER,
+            group_lr_batch_avg_min_val_loss REAL,
+            git_patch_file TEXT,
+            git_patch_declared INTEGER NOT NULL,
+            git_patch_available INTEGER NOT NULL,
+            git_dirty INTEGER NOT NULL,
+            git_has_uncommitted_changes INTEGER NOT NULL
+        );
+        CREATE TABLE IF NOT EXISTS run_agent_index_values (
+            experiment_id TEXT NOT NULL,
+            field TEXT NOT NULL,
+            value_kind TEXT NOT NULL,
+            value_text TEXT NOT NULL,
+            value_u64 INTEGER,
+            PRIMARY KEY (experiment_id, field, value_kind, value_text)
+        );
+        CREATE TABLE IF NOT EXISTS run_agent_index_catalog (
+            field TEXT PRIMARY KEY,
+            value_kind TEXT NOT NULL,
+            sortable INTEGER NOT NULL,
+            facetable INTEGER NOT NULL,
+            operators_json TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_run_agent_index_status_script ON run_agent_index(run_status, run_script);
+        CREATE INDEX IF NOT EXISTS idx_run_agent_index_val_loss ON run_agent_index(metric_val_loss_min);
+        CREATE INDEX IF NOT EXISTS idx_run_agent_index_values_field_text ON run_agent_index_values(field, value_text);
+        CREATE INDEX IF NOT EXISTS idx_run_agent_index_values_field_u64 ON run_agent_index_values(field, value_u64);
+        "#,
+    )
+    .map_err(from_sql)
+}
+
+fn drop_agent_index_schema(conn: &Connection) -> Result<(), HarnessError> {
+    conn.execute_batch(
+        r#"
+        DROP INDEX IF EXISTS idx_run_agent_index_values_field_u64;
+        DROP INDEX IF EXISTS idx_run_agent_index_values_field_text;
+        DROP INDEX IF EXISTS idx_run_agent_index_val_loss;
+        DROP INDEX IF EXISTS idx_run_agent_index_status_script;
+        DROP TABLE IF EXISTS run_agent_index_values;
+        DROP TABLE IF EXISTS run_agent_index_catalog;
+        DROP TABLE IF EXISTS run_agent_index;
         "#,
     )
     .map_err(from_sql)
@@ -4943,6 +5299,171 @@ fn insert_file(
     Ok(())
 }
 
+fn insert_agent_index_materialization(
+    conn: &Connection,
+    runs: &[CorpusRun],
+) -> Result<(), HarnessError> {
+    for field in nokv_agent_index_fields() {
+        let operators = field
+            .operators
+            .iter()
+            .map(benchmark_predicate_op_name)
+            .collect::<Vec<_>>();
+        conn.execute(
+            "INSERT OR REPLACE INTO run_agent_index_catalog VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![
+                field.field.id,
+                benchmark_index_value_kind(&field),
+                i64::from(field.sortable),
+                i64::from(field.facetable),
+                serde_json::to_string(&operators).expect("operators serialize"),
+            ],
+        )
+        .map_err(from_sql)?;
+    }
+
+    let lr_batch_groups = train_lr_batch_groups(runs);
+    for run in runs {
+        let row = nokv_agent_index_row_with_groups(run, &lr_batch_groups);
+        insert_agent_index_row(conn, run, &row)?;
+    }
+    Ok(())
+}
+
+fn insert_agent_index_row(
+    conn: &Connection,
+    run: &CorpusRun,
+    row: &NamespaceIndexRow,
+) -> Result<(), HarnessError> {
+    for value in &row.values {
+        match &value.value {
+            NamespacePredicateValue::String(value_text) => {
+                conn.execute(
+                    "INSERT OR IGNORE INTO run_agent_index_values VALUES (?1, ?2, 'string', ?3, NULL)",
+                    params![run.id, value.field.id, value_text],
+                )
+                .map_err(from_sql)?;
+            }
+            NamespacePredicateValue::U64(raw_value) => {
+                let value_i64 = u64_to_i64(*raw_value, "run_agent_index_values.value_u64")?;
+                conn.execute(
+                    "INSERT OR IGNORE INTO run_agent_index_values VALUES (?1, ?2, 'u64', ?3, ?4)",
+                    params![run.id, value.field.id, raw_value.to_string(), value_i64],
+                )
+                .map_err(from_sql)?;
+            }
+        }
+    }
+
+    let values = &row.values;
+    conn.execute(
+        "INSERT OR REPLACE INTO run_agent_index VALUES (
+            ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
+            ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
+            ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+        )",
+        params![
+            run.id,
+            index_string(values, "run.name"),
+            index_string(values, "run.status"),
+            index_string(values, "run.project"),
+            index_string(values, "run.script"),
+            index_u64_i64(values, "artifact.count")?.unwrap_or(0),
+            index_u64_i64(values, "artifact.stdout_available")?.unwrap_or(0),
+            index_u64_i64(values, "artifact.stdout_size_bytes")?.unwrap_or(0),
+            index_u64_i64(values, "artifact.stderr_available")?.unwrap_or(0),
+            index_u64_i64(values, "artifact.stderr_size_bytes")?.unwrap_or(0),
+            index_string(values, "param.origami.training.learning_rate"),
+            index_string(values, "param.origami.training.batch_size"),
+            index_f64(values, "metric.val_loss.min"),
+            index_f64(values, "metric.utility_tstr_roc_auc.latest"),
+            index_f64(values, "metric.utility_trtr_roc_auc.latest"),
+            index_f64(values, "metric.fidelity.latest"),
+            index_f64(values, "metric.detection_roc_auc.latest"),
+            index_f64(values, "metric.privacy_dcr_score.latest"),
+            index_string(values, "group.lr_batch.key"),
+            index_string(values, "group.lr_batch.learning_rate"),
+            index_string(values, "group.lr_batch.batch_size"),
+            index_u64_i64(values, "group.lr_batch.representative")?,
+            index_u64_i64(values, "group.lr_batch.run_count")?,
+            index_f64(values, "group.lr_batch.avg_min_val_loss"),
+            index_string(values, "git.patch_file"),
+            index_u64_i64(values, "git.patch_declared")?.unwrap_or(0),
+            index_u64_i64(values, "git.patch_available")?.unwrap_or(0),
+            index_u64_i64(values, "git.dirty")?.unwrap_or(0),
+            index_u64_i64(values, "git.has_uncommitted_changes")?.unwrap_or(0),
+        ],
+    )
+    .map_err(from_sql)?;
+    Ok(())
+}
+
+fn benchmark_predicate_op_name(op: &NamespacePredicateOp) -> &'static str {
+    match op {
+        NamespacePredicateOp::Eq => "eq",
+        NamespacePredicateOp::Prefix => "prefix",
+        NamespacePredicateOp::Suffix => "suffix",
+        NamespacePredicateOp::Contains => "contains",
+        NamespacePredicateOp::GreaterThan => "gt",
+        NamespacePredicateOp::GreaterThanOrEqual => "gte",
+        NamespacePredicateOp::LessThan => "lt",
+        NamespacePredicateOp::LessThanOrEqual => "lte",
+    }
+}
+
+fn benchmark_index_value_kind(field: &NamespaceIndexField) -> &'static str {
+    if field.operators.iter().any(|op| {
+        matches!(
+            op,
+            NamespacePredicateOp::GreaterThan
+                | NamespacePredicateOp::GreaterThanOrEqual
+                | NamespacePredicateOp::LessThan
+                | NamespacePredicateOp::LessThanOrEqual
+        )
+    }) {
+        "u64"
+    } else {
+        "string"
+    }
+}
+
+fn index_string(values: &[NamespaceIndexValue], field: &str) -> Option<String> {
+    values.iter().find_map(|value| {
+        (value.field.id == field).then_some(match &value.value {
+            NamespacePredicateValue::String(value) => Some(value.clone()),
+            NamespacePredicateValue::U64(_) => None,
+        })?
+    })
+}
+
+fn index_u64_i64(
+    values: &[NamespaceIndexValue],
+    field: &str,
+) -> Result<Option<i64>, HarnessError> {
+    values
+        .iter()
+        .find_map(|value| {
+            (value.field.id == field).then_some(match &value.value {
+                NamespacePredicateValue::String(_) => None,
+                NamespacePredicateValue::U64(value) => Some(*value),
+            })?
+        })
+        .map(|value| u64_to_i64(value, field))
+        .transpose()
+}
+
+fn index_f64(values: &[NamespaceIndexValue], field: &str) -> Option<f64> {
+    index_string(values, field).and_then(|value| value.parse::<f64>().ok())
+}
+
+fn u64_to_i64(value: u64, field: &str) -> Result<i64, HarnessError> {
+    i64::try_from(value).map_err(|_| {
+        HarnessError::Corpus(format!(
+            "agent index field {field} exceeds SQLite integer range: {value}"
+        ))
+    })
+}
+
 fn prepare_nokv(
     meta_path: &Path,
     s3: &S3Options,
@@ -5013,7 +5534,420 @@ fn prepare_nokv(
         repo.put_bytes(&format!("{NOKV_PREFIX}{}", path), bytes.clone())
             .map_err(from_nokv)?;
     }
+    register_nokv_agent_indexes(repo.backend(), runs)?;
     Ok(())
+}
+
+fn register_nokv_agent_indexes(
+    service: &NoKvFs<HoltMetadataStore, S3ObjectStore>,
+    runs: &[CorpusRun],
+) -> Result<(), HarnessError> {
+    let lr_batch_groups = train_lr_batch_groups(runs);
+    service
+        .register_namespace_index(NamespaceIndexRegistration {
+            path: format!("/{NOKV_PREFIX}/runs"),
+            fields: nokv_agent_index_fields(),
+            rows: runs
+                .iter()
+                .map(|run| nokv_agent_index_row_with_groups(run, &lr_batch_groups))
+                .collect(),
+        })
+        .map_err(from_nokv)
+}
+
+fn nokv_agent_index_fields() -> Vec<NamespaceIndexField> {
+    vec![
+        string_index_field("run.id", true, true),
+        string_index_field("run.name", true, true),
+        string_index_field("run.status", true, true),
+        string_index_field("run.project", true, true),
+        string_index_field("run.script", true, true),
+        string_index_field("run.tag", true, false),
+        string_index_field("artifact.path", true, true),
+        string_index_field("artifact.name", true, true),
+        string_index_field("artifact.type", true, true),
+        u64_index_field("artifact.count", true, true),
+        u64_index_field("artifact.size_bytes", false, true),
+        u64_index_field("artifact.stdout_available", true, true),
+        u64_index_field("artifact.stdout_size_bytes", false, true),
+        u64_index_field("artifact.stderr_available", true, true),
+        u64_index_field("artifact.stderr_size_bytes", false, true),
+        string_index_field("param.origami.training.learning_rate", true, true),
+        string_index_field("param.origami.training.batch_size", true, true),
+        string_index_field("metric.val_loss.min", false, true),
+        u64_index_field("metric.val_loss.min_scaled", false, true),
+        string_index_field("metric.utility_tstr_roc_auc.latest", false, true),
+        u64_index_field("metric.utility_tstr_roc_auc.latest_scaled", false, true),
+        string_index_field("metric.utility_trtr_roc_auc.latest", false, true),
+        u64_index_field("metric.utility_trtr_roc_auc.latest_scaled", false, true),
+        string_index_field("metric.fidelity.latest", false, true),
+        u64_index_field("metric.fidelity.latest_scaled", false, true),
+        string_index_field("metric.detection_roc_auc.latest", false, true),
+        u64_index_field("metric.detection_roc_auc.latest_scaled", false, true),
+        string_index_field("metric.privacy_dcr_score.latest", false, true),
+        u64_index_field("metric.privacy_dcr_score.latest_scaled", false, true),
+        string_index_field("group.lr_batch.key", true, true),
+        string_index_field("group.lr_batch.learning_rate", true, true),
+        string_index_field("group.lr_batch.batch_size", true, true),
+        u64_index_field("group.lr_batch.representative", true, true),
+        u64_index_field("group.lr_batch.run_count", true, true),
+        string_index_field("group.lr_batch.avg_min_val_loss", false, true),
+        u64_index_field("group.lr_batch.avg_min_val_loss_scaled", false, true),
+        string_index_field("git.patch_file", true, true),
+        u64_index_field("git.patch_declared", true, true),
+        u64_index_field("git.patch_available", true, true),
+        u64_index_field("git.dirty", true, true),
+        NamespaceIndexField {
+            field: NamespaceFindField::new("git.has_uncommitted_changes"),
+            operators: vec![NamespacePredicateOp::Eq],
+            sortable: true,
+            facetable: true,
+        },
+    ]
+}
+
+#[cfg(test)]
+fn nokv_agent_index_row(run: &CorpusRun) -> NamespaceIndexRow {
+    nokv_agent_index_row_with_groups(run, &BTreeMap::new())
+}
+
+fn nokv_agent_index_row_with_groups(
+    run: &CorpusRun,
+    lr_batch_groups: &BTreeMap<String, LrBatchGroupSummary>,
+) -> NamespaceIndexRow {
+    let summary = run_summary(run);
+    let mut values = Vec::new();
+    push_index_string(&mut values, "run.id", &run.id);
+    push_index_optional_string(&mut values, "run.name", summary.name.as_deref());
+    push_index_optional_string(&mut values, "run.status", summary.status.as_deref());
+    push_index_optional_string(&mut values, "run.project", summary.project.as_deref());
+    push_index_optional_string(&mut values, "run.script", summary.script.as_deref());
+    for tag in summary.tags {
+        push_index_string(&mut values, "run.tag", &tag);
+    }
+
+    let mut stdout_size = None;
+    let mut stderr_size = None;
+    let mut artifact_paths = BTreeSet::new();
+    for artifact in &run.artifacts {
+        artifact_paths.insert(artifact.relative_path.clone());
+        push_index_string(&mut values, "artifact.path", &artifact.relative_path);
+        push_index_string(
+            &mut values,
+            "artifact.name",
+            artifact_name(&artifact.relative_path),
+        );
+        push_index_string(
+            &mut values,
+            "artifact.type",
+            artifact_type(&artifact.relative_path),
+        );
+        push_index_u64(&mut values, "artifact.size_bytes", artifact.bytes.len() as u64);
+        match artifact_name(&artifact.relative_path) {
+            "stdout.txt" => stdout_size = Some(artifact.bytes.len() as u64),
+            "stderr.txt" => stderr_size = Some(artifact.bytes.len() as u64),
+            _ => {}
+        }
+    }
+    push_index_u64(&mut values, "artifact.count", run.artifacts.len() as u64);
+    push_index_u64(
+        &mut values,
+        "artifact.stdout_available",
+        u64::from(stdout_size.is_some()),
+    );
+    push_index_u64(&mut values, "artifact.stdout_size_bytes", stdout_size.unwrap_or(0));
+    push_index_u64(
+        &mut values,
+        "artifact.stderr_available",
+        u64::from(stderr_size.is_some()),
+    );
+    push_index_u64(&mut values, "artifact.stderr_size_bytes", stderr_size.unwrap_or(0));
+
+    push_param_index_values(&mut values, run);
+    push_metric_index_values(&mut values, run);
+    push_lr_batch_group_values(&mut values, run, lr_batch_groups);
+
+    let patch_file = git_patch_file(run);
+    let patch_available = patch_file
+        .as_ref()
+        .map(|path| artifact_paths.contains(path))
+        .unwrap_or(false);
+    push_index_optional_string(&mut values, "git.patch_file", patch_file.as_deref());
+    push_index_u64(
+        &mut values,
+        "git.patch_declared",
+        u64::from(patch_file.is_some()),
+    );
+    push_index_u64(&mut values, "git.patch_available", u64::from(patch_available));
+    let git_dirty = run
+        .metadata
+        .get("git")
+        .and_then(|git| git.get("has_uncommitted_changes"))
+        .and_then(Value::as_bool)
+        .unwrap_or(false);
+    push_index_u64(&mut values, "git.dirty", u64::from(git_dirty));
+    push_index_u64(
+        &mut values,
+        "git.has_uncommitted_changes",
+        u64::from(git_dirty),
+    );
+    push_index_string(
+        &mut values,
+        "git.has_uncommitted_changes",
+        if git_dirty { "true" } else { "false" },
+    );
+
+    NamespaceIndexRow {
+        path: format!("/{NOKV_PREFIX}/runs/{}", run.id),
+        values,
+    }
+}
+
+fn train_lr_batch_groups(runs: &[CorpusRun]) -> BTreeMap<String, LrBatchGroupSummary> {
+    let mut groups = BTreeMap::<LrBatchKey, Vec<(String, f64)>>::new();
+    for run in runs {
+        let summary = run_summary(run);
+        if summary.status.as_deref() != Some("completed")
+            || summary.script.as_deref() != Some("train.py")
+        {
+            continue;
+        }
+        let Some(key) = lr_batch_key(run) else {
+            continue;
+        };
+        let Some(min_val_loss) = metric_min(run, "val_loss") else {
+            continue;
+        };
+        groups
+            .entry(key)
+            .or_default()
+            .push((run.id.clone(), min_val_loss));
+    }
+    groups
+        .into_iter()
+        .map(|(key, mut values)| {
+            values.sort_by(|left, right| left.0.cmp(&right.0));
+            let run_count = values.len();
+            let avg_min_val_loss = values.iter().map(|(_, value)| value).sum::<f64>() / run_count as f64;
+            let representative_run_id = values
+                .first()
+                .map(|(run_id, _)| run_id.clone())
+                .unwrap_or_default();
+            (
+                lr_batch_key_string(&key),
+                LrBatchGroupSummary {
+                    key,
+                    run_count,
+                    avg_min_val_loss,
+                    representative_run_id,
+                },
+            )
+        })
+        .collect()
+}
+
+fn push_lr_batch_group_values(
+    values: &mut Vec<NamespaceIndexValue>,
+    run: &CorpusRun,
+    groups: &BTreeMap<String, LrBatchGroupSummary>,
+) {
+    let Some(key) = lr_batch_key(run) else {
+        return;
+    };
+    let key_string = lr_batch_key_string(&key);
+    let Some(group) = groups.get(&key_string) else {
+        return;
+    };
+    push_index_string(values, "group.lr_batch.key", &key_string);
+    push_index_string(
+        values,
+        "group.lr_batch.learning_rate",
+        &group.key.learning_rate,
+    );
+    push_index_string(values, "group.lr_batch.batch_size", &group.key.batch_size);
+    push_index_u64(
+        values,
+        "group.lr_batch.representative",
+        u64::from(run.id == group.representative_run_id),
+    );
+    push_index_u64(values, "group.lr_batch.run_count", group.run_count as u64);
+    push_metric_value(
+        values,
+        "group.lr_batch.avg_min_val_loss",
+        group.avg_min_val_loss,
+    );
+    push_metric_scaled(
+        values,
+        "group.lr_batch.avg_min_val_loss_scaled",
+        group.avg_min_val_loss,
+    );
+}
+
+fn lr_batch_key(run: &CorpusRun) -> Option<LrBatchKey> {
+    Some(LrBatchKey {
+        learning_rate: param_index_value(run, "origami.training.learning_rate")?,
+        batch_size: param_index_value(run, "origami.training.batch_size")?,
+    })
+}
+
+fn lr_batch_key_string(key: &LrBatchKey) -> String {
+    format!("lr={};batch={}", key.learning_rate, key.batch_size)
+}
+
+fn push_param_index_values(values: &mut Vec<NamespaceIndexValue>, run: &CorpusRun) {
+    for (param_path, field_id) in PARAM_INDEX_FIELDS {
+        let Some(value_json) = param_index_value(run, param_path) else {
+            continue;
+        };
+        push_index_string(values, field_id, &value_json);
+    }
+}
+
+fn param_index_value(run: &CorpusRun, param_path: &str) -> Option<String> {
+    let params = run.params.as_ref()?;
+    let mut flattened = Vec::new();
+    flatten_yaml("", params, &mut flattened);
+    let flattened = flattened.into_iter().collect::<BTreeMap<_, _>>();
+    flattened
+        .get(param_path)
+        .map(|value| serde_json::to_string(&yaml_to_json(value)).expect("yaml json serializes"))
+}
+
+fn push_metric_index_values(values: &mut Vec<NamespaceIndexValue>, run: &CorpusRun) {
+    if let Some(metric) = metric_min(run, "val_loss") {
+        push_metric_value(values, "metric.val_loss.min", metric);
+        push_metric_scaled(values, "metric.val_loss.min_scaled", metric);
+    }
+    for metric_name in LATEST_METRIC_INDEX_FIELDS {
+        if let Some(metric) = metric_latest(run, metric_name) {
+            push_metric_value(values, &format!("metric.{metric_name}.latest"), metric);
+            push_metric_scaled(values, &format!("metric.{metric_name}.latest_scaled"), metric);
+        }
+    }
+}
+
+fn metric_min(run: &CorpusRun, metric_name: &str) -> Option<f64> {
+    metric_records(run)
+        .filter_map(|record| record.get(metric_name).and_then(metric_real))
+        .filter(|value| value.is_finite())
+        .min_by(|left, right| left.total_cmp(right))
+}
+
+fn metric_latest(run: &CorpusRun, metric_name: &str) -> Option<f64> {
+    metric_records(run)
+        .filter_map(|record| {
+            let step = record.get("step").and_then(Value::as_i64).unwrap_or(0);
+            let value = record.get(metric_name).and_then(metric_real)?;
+            value.is_finite().then_some((step, value))
+        })
+        .max_by(|left, right| left.0.cmp(&right.0))
+        .map(|(_, value)| value)
+}
+
+fn metric_records(run: &CorpusRun) -> impl Iterator<Item = &serde_json::Map<String, Value>> {
+    run.metrics
+        .as_ref()
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_object)
+}
+
+fn push_metric_value(values: &mut Vec<NamespaceIndexValue>, field: &str, value: f64) {
+    push_index_string(values, field, &metric_value_string(value));
+}
+
+fn push_metric_scaled(values: &mut Vec<NamespaceIndexValue>, field: &str, value: f64) {
+    if let Some(scaled) = scaled_metric_value(value) {
+        values.push(NamespaceIndexValue {
+            field: NamespaceFindField::new(field),
+            value: NamespacePredicateValue::U64(scaled),
+        });
+    }
+}
+
+fn metric_value_string(value: f64) -> String {
+    serde_json::to_string(&value).expect("finite metric serializes")
+}
+
+fn scaled_metric_value(value: f64) -> Option<u64> {
+    if !value.is_finite() {
+        return None;
+    }
+    let scaled = (value * METRIC_SCALE).round() as i128 + METRIC_SORT_OFFSET;
+    u64::try_from(scaled).ok()
+}
+
+fn string_index_field(id: &'static str, facetable: bool, sortable: bool) -> NamespaceIndexField {
+    NamespaceIndexField {
+        field: NamespaceFindField::new(id),
+        operators: vec![
+            NamespacePredicateOp::Eq,
+            NamespacePredicateOp::Prefix,
+            NamespacePredicateOp::Suffix,
+            NamespacePredicateOp::Contains,
+        ],
+        sortable,
+        facetable,
+    }
+}
+
+fn u64_index_field(id: &'static str, facetable: bool, sortable: bool) -> NamespaceIndexField {
+    NamespaceIndexField {
+        field: NamespaceFindField::new(id),
+        operators: vec![
+            NamespacePredicateOp::Eq,
+            NamespacePredicateOp::GreaterThan,
+            NamespacePredicateOp::GreaterThanOrEqual,
+            NamespacePredicateOp::LessThan,
+            NamespacePredicateOp::LessThanOrEqual,
+        ],
+        sortable,
+        facetable,
+    }
+}
+
+fn push_index_optional_string(
+    values: &mut Vec<NamespaceIndexValue>,
+    field: &str,
+    value: Option<&str>,
+) {
+    if let Some(value) = value {
+        push_index_string(values, field, value);
+    }
+}
+
+fn push_index_string(values: &mut Vec<NamespaceIndexValue>, field: &str, value: &str) {
+    if value.is_empty() {
+        return;
+    }
+    values.push(NamespaceIndexValue {
+        field: NamespaceFindField::new(field),
+        value: NamespacePredicateValue::String(value.to_owned()),
+    });
+}
+
+fn push_index_u64(values: &mut Vec<NamespaceIndexValue>, field: &str, value: u64) {
+    values.push(NamespaceIndexValue {
+        field: NamespaceFindField::new(field),
+        value: NamespacePredicateValue::U64(value),
+    });
+}
+
+fn artifact_name(path: &str) -> &str {
+    path.rsplit('/').next().unwrap_or(path)
+}
+
+fn nokv_register_indexes(options: Options) -> Result<(), HarnessError> {
+    let data_root = required_data_root(&options)?;
+    let runs = load_runs(&data_root.join("corpus"))?;
+    let service = open_existing_nokv(&nokv_meta_path(&data_root), &options.s3)?;
+    register_nokv_agent_indexes(&service, &runs)?;
+    print_json(&json!({
+        "status": "completed",
+        "run_count": runs.len(),
+        "indexed_path": format!("/{NOKV_PREFIX}/runs"),
+    }))
 }
 
 fn open_existing_nokv(
@@ -5279,16 +6213,57 @@ mod tests {
             id: "run-1".to_owned(),
             metadata: serde_json::from_slice(&metadata_bytes).unwrap(),
             metadata_bytes,
-            params_bytes: Some(b"alpha: 1\nnested:\n  beta: true\n".to_vec()),
-            params: Some(serde_yaml::from_slice(b"alpha: 1\nnested:\n  beta: true\n").unwrap()),
-            metrics_bytes: Some(br#"[{"step":0,"accuracy":0.9,"timestamp":"now"}]"#.to_vec()),
-            metrics: Some(serde_json::from_slice(br#"[{"step":0,"accuracy":0.9,"timestamp":"now"}]"#).unwrap()),
+            params_bytes: Some(
+                b"alpha: 1\nnested:\n  beta: true\norigami:\n  training:\n    learning_rate: 0.001\n    batch_size: 32\n"
+                    .to_vec(),
+            ),
+            params: Some(
+                serde_yaml::from_slice(
+                    b"alpha: 1\nnested:\n  beta: true\norigami:\n  training:\n    learning_rate: 0.001\n    batch_size: 32\n",
+                )
+                .unwrap(),
+            ),
+            metrics_bytes: Some(
+                br#"[{"step":0,"accuracy":0.9,"val_loss":0.4,"timestamp":"now"},{"step":1,"val_loss":0.3,"utility_tstr_roc_auc":0.8}]"#
+                    .to_vec(),
+            ),
+            metrics: Some(
+                serde_json::from_slice(
+                    br#"[{"step":0,"accuracy":0.9,"val_loss":0.4,"timestamp":"now"},{"step":1,"val_loss":0.3,"utility_tstr_roc_auc":0.8}]"#,
+                )
+                .unwrap(),
+            ),
             dependencies_bytes: Some(br#"{"dependencies":{"model":"base"},"metadata":{"base":{"status_at_resolution":"completed"}}}"#.to_vec()),
             dependencies: Some(serde_json::from_slice(br#"{"dependencies":{"model":"base"},"metadata":{"base":{"status_at_resolution":"completed"}}}"#).unwrap()),
             artifacts: vec![CorpusFile {
                 relative_path: "stdout.txt".to_owned(),
                 bytes: b"log".to_vec(),
             }],
+        }
+    }
+
+    fn write_sample_corpus(data_root: &Path, run: &CorpusRun) {
+        let run_dir = data_root
+            .join("corpus")
+            .join("experiments_leon")
+            .join(&run.id);
+        fs::create_dir_all(&run_dir).unwrap();
+        fs::write(run_dir.join("metadata.json"), &run.metadata_bytes).unwrap();
+        if let Some(bytes) = &run.params_bytes {
+            fs::write(run_dir.join("params.yaml"), bytes).unwrap();
+        }
+        if let Some(bytes) = &run.metrics_bytes {
+            fs::write(run_dir.join("metrics.json"), bytes).unwrap();
+        }
+        if let Some(bytes) = &run.dependencies_bytes {
+            fs::write(run_dir.join("dependencies.json"), bytes).unwrap();
+        }
+        if !run.artifacts.is_empty() {
+            let artifacts_dir = run_dir.join("artifacts");
+            fs::create_dir_all(&artifacts_dir).unwrap();
+            for artifact in &run.artifacts {
+                fs::write(artifacts_dir.join(&artifact.relative_path), &artifact.bytes).unwrap();
+            }
         }
     }
 
@@ -5299,6 +6274,111 @@ mod tests {
         assert_eq!(summary.status.as_deref(), Some("completed"));
         assert_eq!(summary.script.as_deref(), Some("train.py"));
         assert_eq!(summary.tags, vec!["sweep", "final"]);
+    }
+
+    #[test]
+    fn nokv_agent_index_row_uses_catalog_field_ids() {
+        let mut run = sample_run();
+        run.metadata["git"] = json!({
+            "has_uncommitted_changes": true,
+            "patch_file": "missing.patch"
+        });
+        let row = nokv_agent_index_row(&run);
+        let values = row
+            .values
+            .iter()
+            .map(|value| {
+                (
+                    value.field.id.as_str(),
+                    match &value.value {
+                        NamespacePredicateValue::String(value) => json!(value),
+                        NamespacePredicateValue::U64(value) => json!(value),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert_eq!(row.path, "/yanex/runs/run-1");
+        assert!(values.contains(&("run.status", json!("completed"))));
+        assert!(values.contains(&("run.script", json!("train.py"))));
+        assert!(values.contains(&("run.tag", json!("sweep"))));
+        assert!(values.contains(&("artifact.name", json!("stdout.txt"))));
+        assert!(values.contains(&("artifact.stdout_available", json!(1))));
+        assert!(values.contains(&("param.origami.training.learning_rate", json!("0.001"))));
+        assert!(values.contains(&("param.origami.training.batch_size", json!("32"))));
+        assert!(values.contains(&("metric.val_loss.min", json!("0.3"))));
+        assert!(values.contains(&(
+            "metric.val_loss.min_scaled",
+            json!(10_300_000_000_000_u64)
+        )));
+        assert!(values.contains(&("metric.utility_tstr_roc_auc.latest", json!("0.8"))));
+        assert!(values.contains(&(
+            "metric.utility_tstr_roc_auc.latest_scaled",
+            json!(10_800_000_000_000_u64)
+        )));
+        assert!(values.contains(&("git.has_uncommitted_changes", json!("true"))));
+        assert!(values.contains(&("git.has_uncommitted_changes", json!(1))));
+        assert!(values.contains(&("git.patch_available", json!(0))));
+    }
+
+    #[test]
+    fn nokv_agent_index_fields_expose_params_and_metric_summaries() {
+        let field_ids = nokv_agent_index_fields()
+            .into_iter()
+            .map(|field| field.field.id)
+            .collect::<BTreeSet<_>>();
+
+        assert!(field_ids.contains("param.origami.training.learning_rate"));
+        assert!(field_ids.contains("param.origami.training.batch_size"));
+        assert!(field_ids.contains("metric.val_loss.min"));
+        assert!(field_ids.contains("metric.val_loss.min_scaled"));
+        assert!(field_ids.contains("metric.utility_tstr_roc_auc.latest"));
+        assert!(field_ids.contains("metric.utility_tstr_roc_auc.latest_scaled"));
+        assert!(field_ids.contains("git.has_uncommitted_changes"));
+        assert!(field_ids.contains("group.lr_batch.avg_min_val_loss_scaled"));
+        assert!(field_ids.contains("group.lr_batch.representative"));
+        assert!(field_ids.contains("group.lr_batch.run_count"));
+    }
+
+    #[test]
+    fn scaled_metric_values_preserve_negative_ordering() {
+        let negative = scaled_metric_value(-0.4).unwrap();
+        let positive = scaled_metric_value(0.3).unwrap();
+
+        assert!(negative < positive);
+        assert_eq!(scaled_metric_value(-10.1), None);
+    }
+
+    #[test]
+    fn train_lr_batch_groups_are_projected_into_run_index_rows() {
+        let run = sample_run();
+        let groups = train_lr_batch_groups(std::slice::from_ref(&run));
+        let row = nokv_agent_index_row_with_groups(&run, &groups);
+        let values = row
+            .values
+            .iter()
+            .map(|value| {
+                (
+                    value.field.id.as_str(),
+                    match &value.value {
+                        NamespacePredicateValue::String(value) => json!(value),
+                        NamespacePredicateValue::U64(value) => json!(value),
+                    },
+                )
+            })
+            .collect::<Vec<_>>();
+
+        assert!(values.contains(&(
+            "group.lr_batch.key",
+            json!("lr=0.001;batch=32")
+        )));
+        assert!(values.contains(&("group.lr_batch.run_count", json!(1))));
+        assert!(values.contains(&("group.lr_batch.representative", json!(1))));
+        assert!(values.contains(&("group.lr_batch.avg_min_val_loss", json!("0.3"))));
+        assert!(values.contains(&(
+            "group.lr_batch.avg_min_val_loss_scaled",
+            json!(10_300_000_000_000_u64)
+        )));
     }
 
     #[test]
@@ -5317,6 +6397,7 @@ mod tests {
         let run = sample_run();
         let indexes = derive_indexes(std::slice::from_ref(&run)).unwrap();
         insert_run(&conn, &run).unwrap();
+        insert_agent_index_materialization(&conn, std::slice::from_ref(&run)).unwrap();
         insert_agentfs_run_files(&conn, &run).unwrap();
         for (path, bytes) in indexes.files {
             insert_file(&conn, &path, "file", &bytes).unwrap();
@@ -5346,6 +6427,43 @@ mod tests {
             )
             .unwrap();
         assert_eq!(metric, 0.9);
+        let min_val_loss: f64 = conn
+            .query_row(
+                "SELECT metric_val_loss_min FROM run_agent_index WHERE experiment_id='run-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(min_val_loss, 0.3);
+        assert!(sqlite_schema_text(&conn).unwrap().contains("run_agent_index"));
+    }
+
+    #[test]
+    fn sqlite_agent_index_ensure_upgrades_existing_fixture_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let sqlite_dir = dir.path().join("sqlite");
+        fs::create_dir_all(&sqlite_dir).unwrap();
+        let sqlite = sqlite_dir.join("yanex.db");
+        let conn = Connection::open(&sqlite).unwrap();
+        create_schema(&conn).unwrap();
+        let run = sample_run();
+        insert_run(&conn, &run).unwrap();
+        drop_agent_index_schema(&conn).unwrap();
+        drop(conn);
+        write_sample_corpus(dir.path(), &run);
+
+        ensure_sqlite_agent_index_materialization(dir.path()).unwrap();
+
+        let conn = Connection::open(&sqlite).unwrap();
+        assert!(sqlite_agent_index_materialization_current(&conn).unwrap());
+        let min_val_loss: f64 = conn
+            .query_row(
+                "SELECT metric_val_loss_min FROM run_agent_index WHERE experiment_id = 'run-1'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(min_val_loss, 0.3);
     }
 
     #[test]
@@ -5355,6 +6473,7 @@ mod tests {
         let run = sample_run();
         let indexes = derive_indexes(std::slice::from_ref(&run)).unwrap();
         insert_run(&conn, &run).unwrap();
+        insert_agent_index_materialization(&conn, std::slice::from_ref(&run)).unwrap();
         insert_agentfs_run_files(&conn, &run).unwrap();
         for (path, bytes) in indexes.files {
             insert_file(&conn, &path, "file", &bytes).unwrap();
@@ -5365,12 +6484,18 @@ mod tests {
 
         assert_eq!(report.run_count, 1);
         assert_eq!(report.raw_metadata_checked, 1);
-        assert_eq!(report.raw_params_checked, 2);
-        assert_eq!(report.raw_metrics_checked, 1);
+        assert_eq!(report.raw_params_checked, 4);
+        assert_eq!(report.raw_metrics_checked, 4);
         assert_eq!(report.raw_dependencies_checked, 1);
         assert_eq!(report.raw_existing_artifacts_checked, 1);
         assert_eq!(report.agentfs_files_checked, 5);
         assert_eq!(report.index_files_checked, 5);
+        assert_eq!(report.agent_index_rows_checked, 1);
+        assert!(report.agent_index_values_checked > 0);
+        assert_eq!(
+            report.agent_index_catalog_checked,
+            nokv_agent_index_fields().len()
+        );
         assert!(report.mismatches.is_empty(), "{:?}", report.mismatches);
     }
 
@@ -5570,8 +6695,123 @@ mod tests {
         );
         assert_eq!(
             tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap()),
-            vec!["list", "stat", "read"]
+            vec!["ls", "stat", "read", "find"]
         );
+    }
+
+    #[test]
+    fn sqlite_raw_arm_card_tool_names_match_registry() {
+        let card: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../arms/sqlite_raw.yaml")).unwrap();
+        let tool_contract = card
+            .get("tool_contract")
+            .and_then(serde_yaml::Value::as_sequence)
+            .unwrap();
+        let card_names = tool_contract
+            .iter()
+            .map(|item| item.get("name").and_then(serde_yaml::Value::as_str).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            card_names,
+            tool_names(&tool_registry_for_arm("sqlite_raw_v1").unwrap())
+        );
+    }
+
+    #[test]
+    fn nokv_native_arm_card_tool_names_match_registry() {
+        let card: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../arms/nokv_native.yaml")).unwrap();
+        let tool_contract = card
+            .get("tool_contract")
+            .and_then(serde_yaml::Value::as_sequence)
+            .unwrap();
+        let card_names = tool_contract
+            .iter()
+            .map(|item| item.get("name").and_then(serde_yaml::Value::as_str).unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            card_names,
+            tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap())
+        );
+    }
+
+    #[test]
+    fn sqlite_raw_arm_card_lists_agent_index_materialized_fields() {
+        let card: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../arms/sqlite_raw.yaml")).unwrap();
+        let hinted = card
+            .get("materialized_view_schema_hint")
+            .and_then(|value| value.get("catalog_field_ids"))
+            .and_then(serde_yaml::Value::as_sequence)
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap().to_owned())
+            .collect::<BTreeSet<_>>();
+        let actual = nokv_agent_index_fields()
+            .into_iter()
+            .map(|field| field.field.id)
+            .collect::<BTreeSet<_>>();
+
+        assert_eq!(hinted, actual);
+    }
+
+    #[test]
+    fn nokv_native_arm_card_does_not_embed_phase1_task_recipes() {
+        let card = include_str!("../../arms/nokv_native.yaml");
+        let forbidden_snippets = [
+            "train.py",
+            "eval.py",
+            "lowest val_loss",
+            "best eval",
+            "grouped learning-rate/batch-size",
+            "dirty git missing patch",
+            "completed-only",
+            "metric.val_loss.min_scaled",
+            "metric.utility_tstr_roc_auc.latest_scaled",
+            "group.lr_batch",
+            "git.patch_available=0",
+        ];
+
+        for snippet in forbidden_snippets {
+            assert!(
+                !card.contains(snippet),
+                "nokv_native arm card must not include phase1 task recipe snippet: {snippet}"
+            );
+        }
+    }
+
+    #[test]
+    fn evidence_checker_supports_schema_and_validates_nokv_paths() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let run = sample_run();
+        insert_run(&conn, &run).unwrap();
+        insert_agentfs_run_files(&conn, &run).unwrap();
+
+        assert!(evidence_handle_supported(&conn, "sqlite_raw_v1", "sqlite://schema", None).unwrap());
+        assert!(evidence_handle_supported(
+            &conn,
+            "nokv_native_v1",
+            "nokv-native:///yanex/runs/run-1/metadata.json@generation:7",
+            None,
+        )
+        .unwrap());
+        assert!(!evidence_handle_supported(
+            &conn,
+            "nokv_native_v1",
+            "nokv-native:///yanex/runs/missing/metadata.json@generation:7",
+            None,
+        )
+        .unwrap());
+        assert!(!evidence_handle_supported(
+            &conn,
+            "nokv_native_v1",
+            "nokv-native:///yanex/runs/run-1/metadata.json@generation:not-a-number",
+            None,
+        )
+        .unwrap());
     }
 
     #[test]
@@ -5668,7 +6908,7 @@ mod tests {
             "confidence": "high"
         });
 
-        let result = judge_answer(&conn, &task, "sqlite_raw_v1", &answer).unwrap();
+        let result = judge_answer(&conn, &task, "sqlite_raw_v1", &answer, None).unwrap();
 
         assert!(result.task_success, "{result:?}");
         assert_eq!(result.evidence_precision, Some(1.0));

@@ -1,159 +1,231 @@
 arm_id: nokv_native_v1
 version: 1
-interface_name: NoKV Native Namespace Baseline
+interface_name: NoKV Product Native Agent API
 mode: warm_interface
-purpose: Baseline agent adapter over NoKV metadata service namespace operations for the fixed Yanex corpus stored in NoKV.
+purpose: Product-native read-only agent adapter over NoKV namespace metadata operations.
 
 native_definition:
   meaning: >
-    Native means the agent-facing tools map directly to NoKV meta/client
-    operations whose semantics are implemented in product crates, not in the
-    benchmark harness. The harness may translate OpenAI tool calls into SDK
-    calls and enforce argument limits, but it must not own the search, filter,
-    sort, card, pagination, or evidence semantics being measured.
-  current_v1_status: >
-    This arm currently exposes only the raw NoKV namespace baseline:
-    ReadDirPlus-style list, path stat, and byte-range read over
-    nokvfs-meta::NoKvFs. It is not the final agent-native product surface.
-  target_product_boundary:
-    meta: nokvfs-meta implements namespace cards, typed metadata indexes, constrained find, structured reads, snapshot/generation consistency, and evidence-producing results.
-    protocol: nokvfs-protocol exposes storage-neutral RPC DTOs for those operations.
-    client: nokvfs-client exposes ergonomic Rust SDK calls and may apply argument limits without reimplementing metadata semantics.
-    harness: benchmark harness stays a thin OpenAI tool adapter over nokvfs-client or nokvfs-meta.
+    Native means the benchmark tools call NoKV product APIs. The harness adapts
+    OpenAI tool calls into nokvfs-client agent calls, while namespace cards,
+    list pagination, recursive find, structured reads, registered index
+    catalogs, evidence handles, snapshots, and generation checks are implemented
+    by NoKV product crates.
+  product_boundary:
+    meta: >
+      nokvfs-meta owns stat_card, list_page, find_paths, read_page, namespace
+      cards, path-index catalog loading, index row matching, structured record
+      parsing, evidence construction, snapshot ids, and generation validation.
+    client: >
+      nokvfs-client owns the agent JSON adapter: tool definitions, argument
+      parsing, bounded limits, projected find fields, and serialized tool
+      results.
+    harness: >
+      The benchmark harness owns only process wiring, timeout handling,
+      telemetry, and conversion from OpenAI function calls to nokvfs-client
+      agent calls.
 
 data_scope:
   corpus: yanex_experiment_metadata_origami_data_gen_project
+  entrypoint: /yanex
   visibility: nokv_native_namespace
   mutation: read_only_for_benchmark
 
-tool_contract:
-  - name: list
-    purpose: List children for a NoKV path using ReadDirPlus-style namespace metadata.
-    arguments:
-      path: string
-    returns: Child entries with path, file type, inode, size, generation, and body descriptor when present.
-  - name: stat
-    purpose: Return NoKV metadata for a path without reading the body.
-    arguments:
-      path: string
-    returns: File type, inode, size, mode, timestamps, generation, body descriptor, and stable path evidence.
-  - name: read
-    purpose: Read a NoKV file body or byte range.
-    arguments:
-      path: string
-      offset: integer
-      limit: integer
-      expected_generation: integer
-    returns: Body range plus the generation and body descriptor used for the read.
-    constraints:
-      - expected_generation may be omitted when generation stability is not required.
-      - If expected_generation is supplied and the current path generation differs, the tool must return a generation mismatch instead of reading.
+common_semantics:
+  paths:
+    - Paths are absolute NoKV namespace paths.
+    - Use ls or stat from the entrypoint to discover corpus structure.
+    - Do not assume a path exists until a tool result returns it.
+  limits:
+    - Tool limits are one-based positive integers.
+    - The current agent adapter accepts at most 100 entries or records per ls, read, or find call.
+    - Omitted limits use the adapter default.
+  cursors:
+    - Cursors are opaque strings returned by the previous page.
+    - A null next_cursor means the current page is complete.
+    - truncated=true means more results are available.
+  evidence:
+    - Directory result evidence uses nokv-native://{path}.
+    - Entry and file evidence uses nokv-native://{path}@generation:{generation}.
+    - Structured read item evidence appends #item:{index} to the file evidence.
+    - Evidence is scoped to the returned snapshot_id and, for entries, the returned generation.
+  consistency:
+    - snapshot_id identifies the metadata version observed by a tool result.
+    - generation identifies the file or directory metadata generation.
+    - expected_generation on read fails when the live generation differs from the requested generation.
+  catalogs:
+    - Directory cards expose built-in namespace fields and any registered index fields for that directory.
+    - Built-in directory fields include path, name, kind, size_bytes, body.content_type, body.producer, and body.manifest_id.
+    - Registered index fields are discovered from card.catalog; do not use an index field that the current catalog did not expose.
+    - Indexed values are field/value pairs attached to namespace paths by a registered index.
+    - A path may carry multiple values for the same indexed field.
 
-target_native_tool_contract:
+tool_contract:
   - name: ls
-    purpose: Return a paginated directory card, not a POSIX-only entry list.
+    purpose: Return one page of direct children for a directory path.
+    arguments:
+      path: absolute directory path
+      cursor: optional cursor from a previous ls result
+      limit: optional integer from 1 to 100
     returns:
+      type: object
+      fields:
+        tool: ls
+        bytes_read: always 0 in the adapter result
+        path: normalized directory path
+        evidence: namespace evidence for the listed directory
+        snapshot_id: metadata snapshot id
+        entry_count: total direct child count before pagination
+        entries: compact namespace cards for direct children
+        next_cursor: cursor for the next page or null
+        truncated: whether more direct children remain
+    entry_card_fields:
+      - path
+      - name
+      - kind
+      - evidence
+      - snapshot_id
+      - inode
+      - generation
+      - size_bytes
       - entry_count
-      - entries with record_count, schema, sample, evidence, generation, and body descriptor when available
-      - next_cursor
-      - truncated
+    notes:
+      - ls does not recursively scan descendants.
+      - ls entries are compact; use stat for schema, sample, body descriptor, catalog, record_count, or indexed_values.
+
   - name: stat
-    purpose: Return a typed path card without reading the full body.
+    purpose: Return the full namespace card for one path.
+    arguments:
+      path: absolute namespace path
     returns:
-      - file or directory kind
-      - entry_count or record_count when known
-      - record_count provenance: live_namespace, materialized_index, or approximate
+      type: object
+      fields:
+        tool: stat
+        bytes_read: always 0 in the adapter result
+        card: full namespace card
+    card_fields:
+      - path
+      - name
+      - kind
+      - evidence
+      - snapshot_id
+      - inode
+      - generation
+      - size_bytes
+      - entry_count
+      - record_count
       - schema
       - sample
-      - body descriptor
-      - generation or snapshot id
-      - evidence handle
+      - body
+      - catalog
+      - indexed_values
+    record_count_provenance:
+      - live_namespace
+      - structured_body
+      - materialized_index
+      - approximate
+    notes:
+      - Directory cards expose live entry counts and query catalogs.
+      - Structured file cards may expose schema, sample, and record_count for JSON, YAML, or text bodies.
+      - body is a descriptor with producer, digest_uri, size, content_type, manifest_id, generation, chunk_size, and block_size; it is not file content.
+      - indexed_values are returned only when a registered index row is attached to the exact path.
+
   - name: read
-    purpose: Return structured pages for typed JSON/YAML/index content by default.
-    constraints:
-      - raw byte reads require explicit format=bytes
-      - structured pages must include cursor, next_cursor, truncated, and evidence
-  - name: find
-    purpose: Search typed namespace metadata without traversing or reading every body.
+    purpose: Read a file as structured records by default, or as raw bytes when format=bytes.
     arguments:
-      path: string
-      filter: constrained predicate grammar
-      sort: declared sortable fields only
-      limit: integer
-      cursor: string
-      include: declared projection set
-    constraints:
-      - allowed fields, operators, sortable fields, and facets are declared by stat/catalog cards.
-      - arbitrary JSON expressions, joins, group-by, or task-specific helpers are forbidden.
-      - unsupported predicates must fail clearly instead of degrading to hidden full traversal.
+      path: absolute file path
+      format: optional structured or bytes; defaults to structured
+      cursor: optional structured-record cursor
+      offset: optional byte offset for bytes format
+      limit: optional integer from 1 to 100
+      expected_generation: optional generation guard
+    returns:
+      type: object
+      fields:
+        tool: read
+        bytes_read: adapter estimate of returned item JSON or byte count
+        path: normalized file path
+        evidence: file evidence with generation
+        snapshot_id: metadata snapshot id
+        generation: file generation actually read
+        total_size_bytes: file size
+        format: structured or bytes
+        record_type: structured record type or null
+        record_count: structured record count or null
+        cursor: input cursor
+        next_cursor: cursor for the next page or null
+        truncated: whether more records or bytes remain
+        items: structured read items
+        bytes: raw byte array when format=bytes, otherwise null
+    structured_record_types:
+      - directory_entries
+      - json_array
+      - json_object
+      - yaml_mapping
+      - text_lines
+    notes:
+      - Structured JSON arrays return one item per array element.
+      - Structured JSON objects and YAML mappings return sorted key/value items.
+      - Structured text returns line-numbered records.
+      - The adapter rejects large structured reads when stat reports more than 100 records; use metadata, catalog predicates, or smaller pages instead.
+      - Raw bytes require format=bytes and use offset plus limit; cursor is not used for raw bytes.
 
-namespace_layout:
-  root: /yanex/
-  runs: /yanex/runs/{experiment_id}/
-  metadata: /yanex/runs/{experiment_id}/metadata.json
-  params: /yanex/runs/{experiment_id}/params.yaml
-  metrics: /yanex/runs/{experiment_id}/metrics.json
-  dependencies: /yanex/runs/{experiment_id}/dependencies.json
-  artifacts: /yanex/runs/{experiment_id}/artifacts/
-  indexes:
-    experiments: /yanex/index/experiments.json
-    statuses: /yanex/index/status/{status}.json
-    tags: /yanex/index/tags/{tag}.json
-    scripts: /yanex/index/scripts/{script_name}.json
-
-target_index_layout:
-  description: >
-    Indexes should be addressable as both files and typed namespace facets. A
-    large /index/*.json body is not enough for an agent-native surface.
-  high_value_facets:
-    - status
-    - script
-    - artifact name, existence, and size
-    - metric name plus latest/min/max by run
-    - parameter path and value
-    - git dirty state and patch availability
-
-nokv_metadata:
-  stable_fields:
-    - path
-    - file_type
-    - inode
-    - size_bytes
-    - mode
-    - generation
-    - body_descriptor
-    - digest_uri
-    - manifest_id
-    - content_type
-  consistency:
-    - A path plus generation identifies the inspected live namespace version.
-    - Snapshot id plus path identifies a pinned namespace read.
-    - Body descriptors are metadata summaries, not file content.
-
-evidence_conventions:
-  experiment: nokv-native:///yanex/runs/{experiment_id}/metadata.json@generation:{generation}
-  param: nokv-native:///yanex/runs/{experiment_id}/params.yaml@generation:{generation}#{param_path}
-  metric: nokv-native:///yanex/runs/{experiment_id}/metrics.json@generation:{generation}#{metric_name}
-  dependency: nokv-native:///yanex/runs/{experiment_id}/dependencies.json@generation:{generation}
-  artifact: nokv-native:///yanex/runs/{experiment_id}/artifacts/{artifact_path}@generation:{generation}
-  index: nokv-native:///{index_path}@generation:{generation}
-
-interface_guidance:
-  - Use list/stat metadata to avoid reading unnecessary object bodies.
-  - Include generation in evidence when live path metadata is used.
-  - Use expected_generation on read when generation stability matters.
-  - Keep broad discovery generic: use indexes or namespace traversal, not semantic handle search.
-  - Treat this v1 arm as a raw namespace baseline. Do not claim it has the target find/card/structured-read surface until those operations are implemented in NoKV product crates.
+  - name: find
+    purpose: Recursively find descendant paths under a directory using catalog field ids, predicates, sort keys, and optional value projection.
+    arguments:
+      path: absolute directory path
+      predicates: optional array of field/op/value predicates
+      sort: optional array of field/direction sort keys
+      fields: optional array of indexed field ids to project
+      include: optional array containing body, schema, sample, or catalog
+      cursor: optional cursor from a previous find result
+      limit: optional integer from 1 to 100
+    predicate_values:
+      - Strings use eq, prefix, suffix, or contains.
+      - Non-negative integers use eq, gt, gte, lt, or lte.
+      - Booleans are accepted by the client adapter and converted to integer 1 or 0.
+    returns:
+      type: object
+      fields:
+        tool: find
+        bytes_read: always 0 in the adapter result
+        path: normalized search root
+        evidence: namespace evidence for the search root
+        snapshot_id: metadata snapshot id
+        match_count: total matches before pagination
+        catalog: first-match catalog when include contains catalog, otherwise null
+        matches: paginated match list
+        next_cursor: cursor for the next page or null
+        truncated: whether more matches remain
+        scanned_entries: number of descendant entries scanned
+    match_without_fields:
+      - path
+      - name
+      - kind
+      - evidence
+      - snapshot_id
+      - inode
+      - generation
+      - size_bytes
+      - entry_count
+      - indexed_values
+    match_with_fields:
+      - path
+      - values
+    notes:
+      - find searches descendants of the given directory; the root path itself is not a match.
+      - Predicate and sort fields must be either built-in namespace fields or registered index fields exposed by the current catalog.
+      - Missing values do not satisfy predicates.
+      - Sort values that are present order before missing values.
+      - Multiple sort keys are applied in the supplied order.
+      - With fields omitted, each match returns compact metadata plus all indexed_values attached to that path.
+      - With fields present, each match returns only path and projected values; missing projected fields are omitted, single values are scalars, and repeated values are arrays.
+      - The current JSON adapter only surfaces the catalog include at top level; use stat or read for full body, schema, or sample detail.
 
 forbidden_assumptions:
-  - Do not use semantic handles such as run://, metric://, lineage://, or git:// in this arm.
+  - Do not use semantic handles outside the nokv-native evidence scheme.
   - Do not assume two reads of the same path saw the same object unless generation matches.
-  - Do not treat a body descriptor as human-readable content without calling read.
-  - Do not use task-specific helper operations such as find_best_run.
+  - Do not treat a body descriptor as content.
   - Do not treat file size as record count.
-  - Do not infer that a materialized /index/*.json file is a NoKV automatic index unless its card says so.
-
-example_paths:
-  - /yanex/runs/00023013/metadata.json
-  - /yanex/runs/00023013/metrics.json
-  - /yanex/index/tags/sweep.json
+  - Do not use ad hoc helper operations outside the exposed tool registry.
+  - Do not invent field ids; discover them from the returned catalog.

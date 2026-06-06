@@ -12,7 +12,7 @@ Options:
   --arm ARM                     Run one arm. May be repeated.
   --task-id TASK_ID             Run one task. Omit to run all fixed Phase 1 tasks.
   --repeat N, --repeats N       Repeat count per selected task. This never limits task count.
-  --model MODEL                 OpenAI model. Defaults to OPENAI_MODEL or gpt-5-mini.
+  --model MODEL                 OpenAI model. Defaults to OPENAI_MODEL or gpt-5.5.
   --max-completion-tokens N     Max completion tokens. Defaults to 4096.
   --max-turns N                 Max model/tool turns per run.
   --max-tool-calls N            Max tool calls per run.
@@ -24,7 +24,7 @@ EOF
 repo_root="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 data_root="${YANEX_BENCH_DATA_ROOT:-${repo_root}/benchmark/data/yanex-demo}"
 output_jsonl="${YANEX_BENCH_OUTPUT_JSONL:-${data_root}/results/phase1.jsonl}"
-model="${OPENAI_MODEL:-gpt-5-mini}"
+model="${OPENAI_MODEL:-gpt-5.5}"
 repeats=10
 max_completion_tokens=4096
 task_id=""
@@ -115,7 +115,7 @@ run_one_batch() {
   cargo run --manifest-path "${repo_root}/benchmark/agent-interface-benchmark/harness/Cargo.toml" -- run-batch \
     --data-root "${data_root}" \
     "${arm_arg[@]}" \
-    "${optional_args[@]}" \
+    ${optional_args+"${optional_args[@]}"} \
     --model "${model}" \
     --repeats "${repeats}" \
     --max-completion-tokens "${max_completion_tokens}" \
