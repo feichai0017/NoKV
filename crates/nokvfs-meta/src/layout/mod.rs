@@ -13,10 +13,13 @@ const U32_WIDTH: usize = 4;
 
 pub use codec::{
     decode_allocator_state, decode_body_descriptor, decode_chunk_manifest,
-    decode_dentry_projection, decode_inode_attr, decode_object_gc_record, decode_snapshot_pin,
-    decode_watch_event, encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
-    encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
-    encode_watch_event, CodecError,
+    decode_dentry_projection, decode_inode_attr, decode_object_gc_record,
+    decode_path_index_catalog, decode_path_index_row, decode_snapshot_pin, decode_watch_event,
+    encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
+    encode_dentry_projection, encode_inode_attr, encode_object_gc_record,
+    encode_path_index_catalog, encode_path_index_row, encode_snapshot_pin, encode_watch_event,
+    CodecError, PathIndexCatalogRecord, PathIndexFieldRecord, PathIndexRowRecord,
+    PathIndexValueRecord,
 };
 
 pub fn allocator_key(mount: MountId) -> Vec<u8> {
@@ -48,6 +51,29 @@ pub fn dentry_prefix(mount: MountId, parent: InodeId) -> Vec<u8> {
 pub fn dentry_key(mount: MountId, parent: InodeId, name: &DentryName) -> Vec<u8> {
     let mut out = dentry_prefix(mount, parent);
     out.extend_from_slice(name.as_bytes());
+    out
+}
+
+pub fn path_index_catalog_key(mount: MountId, path: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH + 9 + path.len());
+    push_u64(&mut out, mount.get());
+    out.extend_from_slice(b"catalog\0");
+    out.extend_from_slice(path.as_bytes());
+    out
+}
+
+pub fn path_index_row_prefix(mount: MountId, root_path: &str) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH + 5 + root_path.len() + 1);
+    push_u64(&mut out, mount.get());
+    out.extend_from_slice(b"row\0");
+    out.extend_from_slice(root_path.as_bytes());
+    out.push(0);
+    out
+}
+
+pub fn path_index_row_key(mount: MountId, root_path: &str, row_path: &str) -> Vec<u8> {
+    let mut out = path_index_row_prefix(mount, root_path);
+    out.extend_from_slice(row_path.as_bytes());
     out
 }
 

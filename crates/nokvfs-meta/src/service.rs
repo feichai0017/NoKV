@@ -30,11 +30,13 @@ use crate::command::{
 use crate::layout::{
     allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,
     decode_body_descriptor, decode_chunk_manifest, decode_dentry_projection, decode_inode_attr,
-    decode_object_gc_record, decode_snapshot_pin, decode_watch_event, dentry_key, dentry_prefix,
-    encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
-    encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
-    encode_watch_event, gc_object_key, gc_queue_prefix, inode_key, snapshot_pin_key,
-    snapshot_pin_prefix, watch_log_prefix,
+    decode_object_gc_record, decode_path_index_catalog, decode_path_index_row, decode_snapshot_pin,
+    decode_watch_event, dentry_key, dentry_prefix, encode_allocator_state, encode_body_descriptor,
+    encode_chunk_manifest, encode_dentry_projection, encode_inode_attr, encode_object_gc_record,
+    encode_path_index_catalog, encode_path_index_row, encode_snapshot_pin, encode_watch_event,
+    gc_object_key, gc_queue_prefix, inode_key, path_index_catalog_key, path_index_row_key,
+    path_index_row_prefix, snapshot_pin_key, snapshot_pin_prefix, watch_log_prefix,
+    PathIndexCatalogRecord, PathIndexFieldRecord, PathIndexRowRecord, PathIndexValueRecord,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, put_chunked_ranges,
@@ -54,6 +56,7 @@ use sha2::{Digest, Sha256};
 pub use agent::{
     NamespaceBodyDescriptor, NamespaceCard, NamespaceCardKind, NamespaceFilterCapability,
     NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceInclude,
+    NamespaceIndexField, NamespaceIndexRegistration, NamespaceIndexRow, NamespaceIndexValue,
     NamespaceListOptions, NamespaceListPage, NamespacePredicate, NamespacePredicateOp,
     NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem,
     NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType,
@@ -719,6 +722,7 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
         CommandKind::RetireSnapshot => b"retire-snapshot",
         CommandKind::WatchSubtree => b"watch-subtree",
         CommandKind::CleanupObjects => b"cleanup-objects",
+        CommandKind::RegisterNamespaceIndex => b"register-namespace-index",
     }
 }
 

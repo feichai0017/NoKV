@@ -6,9 +6,9 @@ use std::thread;
 use nokvfs_meta::{
     DentryWithAttr, MetadError, NamespaceCard, NamespaceCardKind, NamespaceFilterCapability,
     NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceInclude,
-    NamespaceListPage, NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue,
-    NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadOptions, NamespaceReadPage,
-    NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
+    NamespaceIndexValue, NamespaceListPage, NamespacePredicate, NamespacePredicateOp,
+    NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadOptions,
+    NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
     NamespaceSortDirection, NamespaceSortField, PreparedArtifact, RecordCountProvenance,
 };
 use nokvfs_object::ObjectReadBlock;
@@ -17,12 +17,12 @@ use nokvfs_protocol::{
     MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataError,
     WireNamespaceCard, WireNamespaceCardKind, WireNamespaceFilterCapability,
     WireNamespaceFindField, WireNamespaceFindRequest, WireNamespaceFindResult,
-    WireNamespaceInclude, WireNamespaceListPage, WireNamespacePredicate, WireNamespacePredicateOp,
-    WireNamespacePredicateValue, WireNamespaceQueryCatalog, WireNamespaceReadFormat,
-    WireNamespaceReadItem, WireNamespaceReadOptions, WireNamespaceReadPage,
-    WireNamespaceRecordCount, WireNamespaceRecordType, WireNamespaceSchema, WireNamespaceSort,
-    WireNamespaceSortDirection, WireNamespaceSortField, WireObjectReadBlock, WirePathMetadata,
-    WirePreparedArtifact, WireRecordCountProvenance,
+    WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage, WireNamespacePredicate,
+    WireNamespacePredicateOp, WireNamespacePredicateValue, WireNamespaceQueryCatalog,
+    WireNamespaceReadFormat, WireNamespaceReadItem, WireNamespaceReadOptions,
+    WireNamespaceReadPage, WireNamespaceRecordCount, WireNamespaceRecordType, WireNamespaceSchema,
+    WireNamespaceSort, WireNamespaceSortDirection, WireNamespaceSortField, WireObjectReadBlock,
+    WirePathMetadata, WirePreparedArtifact, WireRecordCountProvenance,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -896,6 +896,11 @@ fn wire_namespace_card(card: &NamespaceCard) -> WireNamespaceCard {
                 block_size: body.block_size,
             }),
         catalog: wire_namespace_query_catalog(&card.catalog),
+        indexed_values: card
+            .indexed_values
+            .iter()
+            .map(wire_namespace_index_value)
+            .collect(),
     }
 }
 
@@ -923,11 +928,18 @@ fn wire_namespace_record_count(count: &NamespaceRecordCount) -> WireNamespaceRec
 
 fn wire_namespace_schema(schema: &NamespaceSchema) -> WireNamespaceSchema {
     WireNamespaceSchema {
-        record_type: match schema.record_type {
-            NamespaceRecordType::DirectoryEntries => WireNamespaceRecordType::DirectoryEntries,
-            NamespaceRecordType::JsonArray => WireNamespaceRecordType::JsonArray,
-        },
+        record_type: wire_namespace_record_type(&schema.record_type),
         fields: schema.fields.clone(),
+    }
+}
+
+fn wire_namespace_record_type(record_type: &NamespaceRecordType) -> WireNamespaceRecordType {
+    match record_type {
+        NamespaceRecordType::DirectoryEntries => WireNamespaceRecordType::DirectoryEntries,
+        NamespaceRecordType::JsonArray => WireNamespaceRecordType::JsonArray,
+        NamespaceRecordType::JsonObject => WireNamespaceRecordType::JsonObject,
+        NamespaceRecordType::YamlMapping => WireNamespaceRecordType::YamlMapping,
+        NamespaceRecordType::TextLines => WireNamespaceRecordType::TextLines,
     }
 }
 
@@ -979,14 +991,8 @@ fn wire_namespace_include(include: &NamespaceInclude) -> WireNamespaceInclude {
 }
 
 fn wire_namespace_find_field(field: &NamespaceFindField) -> WireNamespaceFindField {
-    match field {
-        NamespaceFindField::Path => WireNamespaceFindField::Path,
-        NamespaceFindField::FileName => WireNamespaceFindField::FileName,
-        NamespaceFindField::FileType => WireNamespaceFindField::FileType,
-        NamespaceFindField::SizeBytes => WireNamespaceFindField::SizeBytes,
-        NamespaceFindField::BodyContentType => WireNamespaceFindField::BodyContentType,
-        NamespaceFindField::BodyProducer => WireNamespaceFindField::BodyProducer,
-        NamespaceFindField::BodyManifestId => WireNamespaceFindField::BodyManifestId,
+    WireNamespaceFindField {
+        id: field.id.clone(),
     }
 }
 
@@ -1004,10 +1010,24 @@ fn wire_namespace_predicate_op(op: &NamespacePredicateOp) -> WireNamespacePredic
 }
 
 fn wire_namespace_sort_field(field: &NamespaceSortField) -> WireNamespaceSortField {
-    match field {
-        NamespaceSortField::Path => WireNamespaceSortField::Path,
-        NamespaceSortField::FileName => WireNamespaceSortField::FileName,
-        NamespaceSortField::SizeBytes => WireNamespaceSortField::SizeBytes,
+    WireNamespaceSortField {
+        id: field.id.clone(),
+    }
+}
+
+fn wire_namespace_index_value(value: &NamespaceIndexValue) -> WireNamespaceIndexValue {
+    WireNamespaceIndexValue {
+        field: wire_namespace_find_field(&value.field),
+        value: wire_namespace_predicate_value(&value.value),
+    }
+}
+
+fn wire_namespace_predicate_value(value: &NamespacePredicateValue) -> WireNamespacePredicateValue {
+    match value {
+        NamespacePredicateValue::String(value) => {
+            WireNamespacePredicateValue::String(value.clone())
+        }
+        NamespacePredicateValue::U64(value) => WireNamespacePredicateValue::U64(*value),
     }
 }
 
@@ -1032,6 +1052,7 @@ fn wire_namespace_find_result(
         path: result.path.clone(),
         evidence: result.evidence.clone(),
         snapshot_id: result.snapshot_id,
+        match_count: result.match_count as u64,
         matches: result.matches.iter().map(wire_namespace_card).collect(),
         next_cursor: result.next_cursor.clone(),
         truncated: result.truncated,
@@ -1052,6 +1073,7 @@ fn wire_namespace_read_page(
             NamespaceReadFormat::Structured => WireNamespaceReadFormat::Structured,
             NamespaceReadFormat::Bytes => WireNamespaceReadFormat::Bytes,
         },
+        record_type: page.record_type.as_ref().map(wire_namespace_record_type),
         record_count: page.record_count.map(|count| count as u64),
         cursor: page.cursor.clone(),
         next_cursor: page.next_cursor.clone(),
@@ -1121,15 +1143,7 @@ fn namespace_predicate(
 }
 
 fn namespace_find_field(field: WireNamespaceFindField) -> NamespaceFindField {
-    match field {
-        WireNamespaceFindField::Path => NamespaceFindField::Path,
-        WireNamespaceFindField::FileName => NamespaceFindField::FileName,
-        WireNamespaceFindField::FileType => NamespaceFindField::FileType,
-        WireNamespaceFindField::SizeBytes => NamespaceFindField::SizeBytes,
-        WireNamespaceFindField::BodyContentType => NamespaceFindField::BodyContentType,
-        WireNamespaceFindField::BodyProducer => NamespaceFindField::BodyProducer,
-        WireNamespaceFindField::BodyManifestId => NamespaceFindField::BodyManifestId,
-    }
+    NamespaceFindField::new(field.id)
 }
 
 fn namespace_predicate_op(op: WireNamespacePredicateOp) -> NamespacePredicateOp {
@@ -1147,11 +1161,7 @@ fn namespace_predicate_op(op: WireNamespacePredicateOp) -> NamespacePredicateOp 
 
 fn namespace_sort(sort: WireNamespaceSort) -> NamespaceSort {
     NamespaceSort {
-        field: match sort.field {
-            WireNamespaceSortField::Path => NamespaceSortField::Path,
-            WireNamespaceSortField::FileName => NamespaceSortField::FileName,
-            WireNamespaceSortField::SizeBytes => NamespaceSortField::SizeBytes,
-        },
+        field: NamespaceSortField::new(sort.field.id),
         direction: match sort.direction {
             WireNamespaceSortDirection::Asc => NamespaceSortDirection::Asc,
             WireNamespaceSortDirection::Desc => NamespaceSortDirection::Desc,
@@ -1326,7 +1336,8 @@ mod tests {
         assert!(card
             .catalog
             .sortable
-            .contains(&nokvfs_protocol::WireNamespaceSortField::SizeBytes));
+            .iter()
+            .any(|field| field.id == "size_bytes"));
         assert!(card
             .catalog
             .projections

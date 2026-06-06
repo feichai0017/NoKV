@@ -6,6 +6,7 @@
 
 use std::fmt;
 
+mod agent;
 mod artifact;
 mod service;
 
@@ -13,6 +14,7 @@ use nokvfs_meta::{MetadError, MetadataError};
 use nokvfs_object::ObjectError;
 use nokvfs_types::{PathError, PathMetadata};
 
+pub use agent::{agent_tool_definitions, execute_agent_tool, AgentNamespace, AgentToolDefinition};
 pub use artifact::{
     normalize_artifact_path, ArtifactBackend, ArtifactInfo, ArtifactRepository,
     ArtifactRepositoryOptions,

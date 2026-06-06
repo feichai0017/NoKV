@@ -283,6 +283,9 @@ pub enum WireNamespaceCardKind {
 pub enum WireNamespaceRecordType {
     DirectoryEntries,
     JsonArray,
+    JsonObject,
+    YamlMapping,
+    TextLines,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -345,6 +348,7 @@ pub struct WireNamespaceCard {
     pub sample: Vec<String>,
     pub body: Option<WireBodyDescriptor>,
     pub catalog: WireNamespaceQueryCatalog,
+    pub indexed_values: Vec<WireNamespaceIndexValue>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -358,16 +362,10 @@ pub struct WireNamespaceListPage {
     pub truncated: bool,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WireNamespaceFindField {
-    Path,
-    FileName,
-    FileType,
-    SizeBytes,
-    BodyContentType,
-    BodyProducer,
-    BodyManifestId,
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(transparent)]
+pub struct WireNamespaceFindField {
+    pub id: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -397,12 +395,16 @@ pub struct WireNamespacePredicate {
     pub value: WireNamespacePredicateValue,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
+#[serde(transparent)]
+pub struct WireNamespaceSortField {
+    pub id: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum WireNamespaceSortField {
-    Path,
-    FileName,
-    SizeBytes,
+pub struct WireNamespaceIndexValue {
+    pub field: WireNamespaceFindField,
+    pub value: WireNamespacePredicateValue,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -433,6 +435,7 @@ pub struct WireNamespaceFindResult {
     pub path: String,
     pub evidence: String,
     pub snapshot_id: Option<u64>,
+    pub match_count: u64,
     pub matches: Vec<WireNamespaceCard>,
     pub next_cursor: Option<String>,
     pub truncated: bool,
@@ -470,6 +473,7 @@ pub struct WireNamespaceReadPage {
     pub generation: u64,
     pub total_size_bytes: u64,
     pub format: WireNamespaceReadFormat,
+    pub record_type: Option<WireNamespaceRecordType>,
     pub record_count: Option<u64>,
     pub cursor: Option<String>,
     pub next_cursor: Option<String>,

@@ -138,17 +138,14 @@ fn namespace_cards_report_directory_and_file_metadata() {
     assert!(runs.evidence.contains("nokv-native:///runs@generation:"));
     assert!(runs.snapshot_id.is_some());
     assert!(runs.catalog.filterable.iter().any(|field| {
-        field.field == NamespaceFindField::FileName
+        field.field == NamespaceFindField::name()
             && field.operators.contains(&NamespacePredicateOp::Suffix)
     }));
     assert!(runs
         .catalog
         .sortable
-        .contains(&NamespaceSortField::SizeBytes));
-    assert!(runs
-        .catalog
-        .facetable
-        .contains(&NamespaceFindField::FileType));
+        .contains(&NamespaceSortField::size_bytes()));
+    assert!(runs.catalog.facetable.contains(&NamespaceFindField::kind()));
     assert!(runs.catalog.projections.contains(&NamespaceInclude::Body));
 
     let file = service.stat_card("/runs/metrics.json").unwrap().unwrap();
@@ -247,12 +244,12 @@ fn namespace_find_uses_declared_predicates_and_sort_fields() {
         .find_paths(NamespaceFindRequest {
             path: "/runs".to_owned(),
             predicates: vec![NamespacePredicate {
-                field: NamespaceFindField::FileName,
+                field: NamespaceFindField::name(),
                 op: NamespacePredicateOp::Suffix,
                 value: NamespacePredicateValue::String("stderr.txt".to_owned()),
             }],
             sort: vec![NamespaceSort {
-                field: NamespaceSortField::SizeBytes,
+                field: NamespaceSortField::size_bytes(),
                 direction: NamespaceSortDirection::Desc,
             }],
             include: Vec::new(),
@@ -273,7 +270,7 @@ fn namespace_find_uses_declared_predicates_and_sort_fields() {
     let unsupported = service.find_paths(NamespaceFindRequest {
         path: "/runs".to_owned(),
         predicates: vec![NamespacePredicate {
-            field: NamespaceFindField::BodyContentType,
+            field: NamespaceFindField::body_content_type(),
             op: NamespacePredicateOp::GreaterThan,
             value: NamespacePredicateValue::String("text/plain".to_owned()),
         }],
@@ -283,6 +280,188 @@ fn namespace_find_uses_declared_predicates_and_sort_fields() {
         cursor: None,
     });
     assert!(matches!(unsupported, Err(MetadError::InvalidQuery(_))));
+}
+
+#[test]
+fn namespace_find_uses_catalog_field_ids_and_registered_index_values() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let run_a = service
+        .create_dir_path("/runs/run-a", 0o755, 1000, 1000)
+        .unwrap();
+    let run_b = service
+        .create_dir_path("/runs/run-b", 0o755, 1000, 1000)
+        .unwrap();
+
+    service
+        .register_namespace_index(NamespaceIndexRegistration {
+            path: "/runs".to_owned(),
+            fields: vec![
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("run.status"),
+                    operators: vec![NamespacePredicateOp::Eq],
+                    sortable: false,
+                    facetable: true,
+                },
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("run.script"),
+                    operators: vec![NamespacePredicateOp::Eq],
+                    sortable: true,
+                    facetable: true,
+                },
+            ],
+            rows: vec![
+                NamespaceIndexRow {
+                    path: "/runs/run-a".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("completed".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.script"),
+                            value: NamespacePredicateValue::String("train.py".to_owned()),
+                        },
+                    ],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/run-b".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("cancelled".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.script"),
+                            value: NamespacePredicateValue::String("eval.py".to_owned()),
+                        },
+                    ],
+                },
+            ],
+        })
+        .unwrap();
+
+    let card = service.stat_card("/runs").unwrap().unwrap();
+    assert_eq!(
+        card.record_count,
+        Some(NamespaceRecordCount {
+            count: 2,
+            provenance: RecordCountProvenance::MaterializedIndex,
+        })
+    );
+    assert!(card.catalog.filterable.iter().any(|capability| {
+        capability.field == NamespaceFindField::new("run.status")
+            && capability.operators == vec![NamespacePredicateOp::Eq]
+    }));
+    assert!(card
+        .catalog
+        .facetable
+        .contains(&NamespaceFindField::new("run.script")));
+
+    let result = service
+        .find_paths(NamespaceFindRequest {
+            path: "/runs".to_owned(),
+            predicates: vec![NamespacePredicate {
+                field: NamespaceFindField::new("run.status"),
+                op: NamespacePredicateOp::Eq,
+                value: NamespacePredicateValue::String("completed".to_owned()),
+            }],
+            sort: vec![NamespaceSort {
+                field: NamespaceSortField::new("run.script"),
+                direction: NamespaceSortDirection::Asc,
+            }],
+            include: Vec::new(),
+            limit: 10,
+            cursor: None,
+        })
+        .unwrap();
+
+    assert_eq!(result.match_count, 1);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(result.matches[0].path, "/runs/run-a");
+    assert_eq!(result.matches[0].inode, run_a.attr.inode);
+    assert_eq!(
+        result.matches[0].indexed_values,
+        vec![
+            NamespaceIndexValue {
+                field: NamespaceFindField::new("run.status"),
+                value: NamespacePredicateValue::String("completed".to_owned()),
+            },
+            NamespaceIndexValue {
+                field: NamespaceFindField::new("run.script"),
+                value: NamespacePredicateValue::String("train.py".to_owned()),
+            },
+        ]
+    );
+    assert_eq!(run_b.attr.file_type, FileType::Directory);
+}
+
+#[test]
+fn namespace_find_sorts_missing_index_values_last() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_path("/runs/with-metric", 0o755, 1000, 1000)
+        .unwrap();
+    service
+        .create_dir_path("/runs/missing-metric", 0o755, 1000, 1000)
+        .unwrap();
+
+    service
+        .register_namespace_index(NamespaceIndexRegistration {
+            path: "/runs".to_owned(),
+            fields: vec![NamespaceIndexField {
+                field: NamespaceFindField::new("metric.val_loss.min_scaled"),
+                operators: vec![NamespacePredicateOp::GreaterThanOrEqual],
+                sortable: true,
+                facetable: false,
+            }],
+            rows: vec![
+                NamespaceIndexRow {
+                    path: "/runs/with-metric".to_owned(),
+                    values: vec![NamespaceIndexValue {
+                        field: NamespaceFindField::new("metric.val_loss.min_scaled"),
+                        value: NamespacePredicateValue::U64(3),
+                    }],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/missing-metric".to_owned(),
+                    values: Vec::new(),
+                },
+            ],
+        })
+        .unwrap();
+
+    let ascending = service
+        .find_paths(NamespaceFindRequest {
+            path: "/runs".to_owned(),
+            predicates: Vec::new(),
+            sort: vec![NamespaceSort {
+                field: NamespaceSortField::new("metric.val_loss.min_scaled"),
+                direction: NamespaceSortDirection::Asc,
+            }],
+            include: Vec::new(),
+            limit: 1,
+            cursor: None,
+        })
+        .unwrap();
+    assert_eq!(ascending.matches[0].path, "/runs/with-metric");
+
+    let descending = service
+        .find_paths(NamespaceFindRequest {
+            path: "/runs".to_owned(),
+            predicates: Vec::new(),
+            sort: vec![NamespaceSort {
+                field: NamespaceSortField::new("metric.val_loss.min_scaled"),
+                direction: NamespaceSortDirection::Desc,
+            }],
+            include: Vec::new(),
+            limit: 2,
+            cursor: None,
+        })
+        .unwrap();
+    assert_eq!(descending.matches[0].path, "/runs/with-metric");
+    assert_eq!(descending.matches[1].path, "/runs/missing-metric");
 }
 
 #[test]
@@ -354,6 +533,96 @@ fn namespace_read_defaults_to_structured_json_pages_and_requires_bytes_format_fo
     assert_eq!(bytes.format, NamespaceReadFormat::Bytes);
     assert_eq!(bytes.bytes.as_deref(), Some(br#"["a""#.as_slice()));
     assert!(bytes.items.is_empty());
+}
+
+#[test]
+fn namespace_read_structures_json_object_yaml_mapping_and_text_lines() {
+    let service = service();
+    for (name, content_type, bytes, expected_type, expected_items) in [
+        (
+            "object.json",
+            "application/json",
+            br#"{"status":"completed","script":"train.py"}"#.as_slice(),
+            NamespaceRecordType::JsonObject,
+            vec![
+                r#"{"key":"script","value":"train.py"}"#,
+                r#"{"key":"status","value":"completed"}"#,
+            ],
+        ),
+        (
+            "params.yaml",
+            "application/x-yaml",
+            b"alpha: 1\nbeta: true\n".as_slice(),
+            NamespaceRecordType::YamlMapping,
+            vec![
+                r#"{"key":"alpha","value":1}"#,
+                r#"{"key":"beta","value":true}"#,
+            ],
+        ),
+        (
+            "log.txt",
+            "text/plain",
+            b"first\nsecond\n".as_slice(),
+            NamespaceRecordType::TextLines,
+            vec![
+                r#"{"line":1,"text":"first"}"#,
+                r#"{"line":2,"text":"second"}"#,
+            ],
+        ),
+    ] {
+        service
+            .publish_artifact(PublishArtifact {
+                parent: InodeId::root(),
+                name: DentryName::new(name.as_bytes().to_vec()).unwrap(),
+                producer: "unit-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                content_type: content_type.to_owned(),
+                manifest_id: name.to_owned(),
+                bytes: bytes.to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+        let page = service
+            .read_page(
+                &format!("/{name}"),
+                NamespaceReadOptions {
+                    limit: 10,
+                    ..NamespaceReadOptions::default()
+                },
+            )
+            .unwrap();
+
+        assert_eq!(page.record_type, Some(expected_type));
+        assert_eq!(
+            page.items
+                .iter()
+                .map(|item| item.value_json.as_str())
+                .collect::<Vec<_>>(),
+            expected_items
+        );
+        assert!(page.bytes.is_none());
+    }
+
+    service
+        .publish_artifact(PublishArtifact {
+            parent: InodeId::root(),
+            name: DentryName::new(b"binary.bin".to_vec()).unwrap(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "binary.bin".to_owned(),
+            bytes: vec![0, 1, 2],
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+    assert!(matches!(
+        service.read_page("/binary.bin", NamespaceReadOptions::default()),
+        Err(MetadError::InvalidQuery(_))
+    ));
 }
 
 #[test]

@@ -9,11 +9,11 @@ use std::{collections::HashMap, io};
 use nokvfs_meta::{
     DentryWithAttr, NamespaceCard, NamespaceCardKind, NamespaceFilterCapability,
     NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceInclude,
-    NamespaceListOptions, NamespaceListPage, NamespacePredicate, NamespacePredicateOp,
-    NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem,
-    NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType,
-    NamespaceSchema, NamespaceSort, NamespaceSortDirection, NamespaceSortField,
-    ObjectTransferStats, RecordCountProvenance, RenameReplaceResult,
+    NamespaceIndexValue, NamespaceListOptions, NamespaceListPage, NamespacePredicate,
+    NamespacePredicateOp, NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat,
+    NamespaceReadItem, NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount,
+    NamespaceRecordType, NamespaceSchema, NamespaceSort, NamespaceSortDirection,
+    NamespaceSortField, ObjectTransferStats, RecordCountProvenance, RenameReplaceResult,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
@@ -25,12 +25,13 @@ use nokvfs_protocol::{
     MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest,
     WireDentryWithAttr, WireMetadataError, WireNamespaceCard, WireNamespaceCardKind,
     WireNamespaceFilterCapability, WireNamespaceFindField, WireNamespaceFindRequest,
-    WireNamespaceFindResult, WireNamespaceInclude, WireNamespaceListPage, WireNamespacePredicate,
-    WireNamespacePredicateOp, WireNamespacePredicateValue, WireNamespaceQueryCatalog,
-    WireNamespaceReadFormat, WireNamespaceReadItem, WireNamespaceReadOptions,
-    WireNamespaceReadPage, WireNamespaceRecordCount, WireNamespaceRecordType, WireNamespaceSchema,
-    WireNamespaceSort, WireNamespaceSortDirection, WireNamespaceSortField, WireObjectReadBlock,
-    WirePathMetadata, WirePreparedArtifact, WireRecordCountProvenance,
+    WireNamespaceFindResult, WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage,
+    WireNamespacePredicate, WireNamespacePredicateOp, WireNamespacePredicateValue,
+    WireNamespaceQueryCatalog, WireNamespaceReadFormat, WireNamespaceReadItem,
+    WireNamespaceReadOptions, WireNamespaceReadPage, WireNamespaceRecordCount,
+    WireNamespaceRecordType, WireNamespaceSchema, WireNamespaceSort, WireNamespaceSortDirection,
+    WireNamespaceSortField, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireRecordCountProvenance,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
@@ -1055,6 +1056,11 @@ fn namespace_card(card: WireNamespaceCard) -> Result<NamespaceCard, ClientError>
             }
         }),
         catalog: namespace_query_catalog(card.catalog),
+        indexed_values: card
+            .indexed_values
+            .into_iter()
+            .map(namespace_index_value)
+            .collect(),
     })
 }
 
@@ -1077,11 +1083,18 @@ fn namespace_record_count(
 
 fn namespace_schema(schema: WireNamespaceSchema) -> NamespaceSchema {
     NamespaceSchema {
-        record_type: match schema.record_type {
-            WireNamespaceRecordType::DirectoryEntries => NamespaceRecordType::DirectoryEntries,
-            WireNamespaceRecordType::JsonArray => NamespaceRecordType::JsonArray,
-        },
+        record_type: namespace_record_type(schema.record_type),
         fields: schema.fields,
+    }
+}
+
+fn namespace_record_type(record_type: WireNamespaceRecordType) -> NamespaceRecordType {
+    match record_type {
+        WireNamespaceRecordType::DirectoryEntries => NamespaceRecordType::DirectoryEntries,
+        WireNamespaceRecordType::JsonArray => NamespaceRecordType::JsonArray,
+        WireNamespaceRecordType::JsonObject => NamespaceRecordType::JsonObject,
+        WireNamespaceRecordType::YamlMapping => NamespaceRecordType::YamlMapping,
+        WireNamespaceRecordType::TextLines => NamespaceRecordType::TextLines,
     }
 }
 
@@ -1133,15 +1146,7 @@ fn namespace_include(include: WireNamespaceInclude) -> NamespaceInclude {
 }
 
 fn namespace_find_field(field: WireNamespaceFindField) -> NamespaceFindField {
-    match field {
-        WireNamespaceFindField::Path => NamespaceFindField::Path,
-        WireNamespaceFindField::FileName => NamespaceFindField::FileName,
-        WireNamespaceFindField::FileType => NamespaceFindField::FileType,
-        WireNamespaceFindField::SizeBytes => NamespaceFindField::SizeBytes,
-        WireNamespaceFindField::BodyContentType => NamespaceFindField::BodyContentType,
-        WireNamespaceFindField::BodyProducer => NamespaceFindField::BodyProducer,
-        WireNamespaceFindField::BodyManifestId => NamespaceFindField::BodyManifestId,
-    }
+    NamespaceFindField::new(field.id)
 }
 
 fn namespace_predicate_op(op: WireNamespacePredicateOp) -> NamespacePredicateOp {
@@ -1158,10 +1163,20 @@ fn namespace_predicate_op(op: WireNamespacePredicateOp) -> NamespacePredicateOp 
 }
 
 fn namespace_sort_field(field: WireNamespaceSortField) -> NamespaceSortField {
-    match field {
-        WireNamespaceSortField::Path => NamespaceSortField::Path,
-        WireNamespaceSortField::FileName => NamespaceSortField::FileName,
-        WireNamespaceSortField::SizeBytes => NamespaceSortField::SizeBytes,
+    NamespaceSortField::new(field.id)
+}
+
+fn namespace_index_value(value: WireNamespaceIndexValue) -> NamespaceIndexValue {
+    NamespaceIndexValue {
+        field: namespace_find_field(value.field),
+        value: namespace_predicate_value(value.value),
+    }
+}
+
+fn namespace_predicate_value(value: WireNamespacePredicateValue) -> NamespacePredicateValue {
+    match value {
+        WireNamespacePredicateValue::String(value) => NamespacePredicateValue::String(value),
+        WireNamespacePredicateValue::U64(value) => NamespacePredicateValue::U64(value),
     }
 }
 
@@ -1189,6 +1204,8 @@ fn namespace_find_result(
         path: result.path,
         evidence: result.evidence,
         snapshot_id: result.snapshot_id,
+        match_count: usize::try_from(result.match_count)
+            .map_err(|_| ClientError::Protocol("match_count exceeds platform limit".to_owned()))?,
         matches: result
             .matches
             .into_iter()
@@ -1213,6 +1230,7 @@ fn namespace_read_page(page: WireNamespaceReadPage) -> Result<NamespaceReadPage,
             WireNamespaceReadFormat::Structured => NamespaceReadFormat::Structured,
             WireNamespaceReadFormat::Bytes => NamespaceReadFormat::Bytes,
         },
+        record_type: page.record_type.map(namespace_record_type),
         record_count: page
             .record_count
             .map(usize::try_from)
@@ -1268,14 +1286,8 @@ fn wire_namespace_include(include: &NamespaceInclude) -> WireNamespaceInclude {
 
 fn wire_namespace_predicate(predicate: &NamespacePredicate) -> WireNamespacePredicate {
     WireNamespacePredicate {
-        field: match predicate.field {
-            NamespaceFindField::Path => WireNamespaceFindField::Path,
-            NamespaceFindField::FileName => WireNamespaceFindField::FileName,
-            NamespaceFindField::FileType => WireNamespaceFindField::FileType,
-            NamespaceFindField::SizeBytes => WireNamespaceFindField::SizeBytes,
-            NamespaceFindField::BodyContentType => WireNamespaceFindField::BodyContentType,
-            NamespaceFindField::BodyProducer => WireNamespaceFindField::BodyProducer,
-            NamespaceFindField::BodyManifestId => WireNamespaceFindField::BodyManifestId,
+        field: WireNamespaceFindField {
+            id: predicate.field.id.clone(),
         },
         op: match predicate.op {
             NamespacePredicateOp::Eq => WireNamespacePredicateOp::Eq,
@@ -1300,10 +1312,8 @@ fn wire_namespace_predicate(predicate: &NamespacePredicate) -> WireNamespacePred
 
 fn wire_namespace_sort(sort: &NamespaceSort) -> WireNamespaceSort {
     WireNamespaceSort {
-        field: match sort.field {
-            NamespaceSortField::Path => WireNamespaceSortField::Path,
-            NamespaceSortField::FileName => WireNamespaceSortField::FileName,
-            NamespaceSortField::SizeBytes => WireNamespaceSortField::SizeBytes,
+        field: WireNamespaceSortField {
+            id: sort.field.id.clone(),
         },
         direction: match sort.direction {
             NamespaceSortDirection::Asc => WireNamespaceSortDirection::Asc,
@@ -1912,7 +1922,7 @@ mod tests {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"namespace_card","card":{"path":"/index.json","name":"index.json","kind":"file","evidence":"nokv-native:///index.json@generation:7","snapshot_id":9,"inode":42,"generation":7,"size_bytes":13,"entry_count":null,"record_count":{"count":3,"provenance":"structured_body"},"schema":{"record_type":"json_array","fields":[]},"sample":["\"a\""],"body":null,"catalog":{"filterable":[],"sortable":[],"facetable":[],"projections":[]}}}}"#,
+                    r#"{"ok":true,"result":{"type":"namespace_card","card":{"path":"/index.json","name":"index.json","kind":"file","evidence":"nokv-native:///index.json@generation:7","snapshot_id":9,"inode":42,"generation":7,"size_bytes":13,"entry_count":null,"record_count":{"count":3,"provenance":"structured_body"},"schema":{"record_type":"json_array","fields":[]},"sample":["\"a\""],"body":null,"catalog":{"filterable":[],"sortable":[],"facetable":[],"projections":[]},"indexed_values":[]}}}"#,
                 ),
             )
             .unwrap();
@@ -1924,7 +1934,7 @@ mod tests {
                 MetadataRpcRequest::FindPaths { request }
                     if request.path == "/runs"
                         && request.limit == 5
-                        && matches!(request.predicates[0].field, WireNamespaceFindField::FileName)
+                        && request.predicates[0].field.id == "name"
                         && matches!(request.predicates[0].op, WireNamespacePredicateOp::Suffix)
                         && request.include == vec![WireNamespaceInclude::Body]
             ));
@@ -1933,7 +1943,7 @@ mod tests {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"namespace_find_result","result":{"path":"/runs","evidence":"nokv-native:///runs","snapshot_id":9,"matches":[{"path":"/runs/a.stderr.txt","name":"a.stderr.txt","kind":"file","evidence":"nokv-native:///runs/a.stderr.txt@generation:7","snapshot_id":9,"inode":43,"generation":7,"size_bytes":10,"entry_count":null,"record_count":null,"schema":null,"sample":[],"body":null,"catalog":{"filterable":[],"sortable":[],"facetable":[],"projections":[]}}],"next_cursor":null,"truncated":false,"scanned_entries":2}}}"#,
+                    r#"{"ok":true,"result":{"type":"namespace_find_result","result":{"path":"/runs","evidence":"nokv-native:///runs","snapshot_id":9,"match_count":1,"matches":[{"path":"/runs/a.stderr.txt","name":"a.stderr.txt","kind":"file","evidence":"nokv-native:///runs/a.stderr.txt@generation:7","snapshot_id":9,"inode":43,"generation":7,"size_bytes":10,"entry_count":null,"record_count":null,"schema":null,"sample":[],"body":null,"catalog":{"filterable":[],"sortable":[],"facetable":[],"projections":[]},"indexed_values":[]}],"next_cursor":null,"truncated":false,"scanned_entries":2}}}"#,
                 ),
             )
             .unwrap();
@@ -1952,7 +1962,7 @@ mod tests {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"namespace_read_page","page":{"path":"/index.json","evidence":"nokv-native:///index.json@generation:7","snapshot_id":9,"generation":7,"total_size_bytes":13,"format":"structured","record_count":3,"cursor":null,"next_cursor":"2","truncated":true,"items":[{"index":0,"value_json":"\"a\"","evidence":"nokv-native:///index.json@generation:7#item:0"}],"bytes":null}}}"#,
+                    r#"{"ok":true,"result":{"type":"namespace_read_page","page":{"path":"/index.json","evidence":"nokv-native:///index.json@generation:7","snapshot_id":9,"generation":7,"total_size_bytes":13,"format":"structured","record_type":"json_array","record_count":3,"cursor":null,"next_cursor":"2","truncated":true,"items":[{"index":0,"value_json":"\"a\"","evidence":"nokv-native:///index.json@generation:7#item:0"}],"bytes":null}}}"#,
                 ),
             )
             .unwrap();
@@ -1970,7 +1980,7 @@ mod tests {
             .find_paths(NamespaceFindRequest {
                 path: "/runs".to_owned(),
                 predicates: vec![NamespacePredicate {
-                    field: NamespaceFindField::FileName,
+                    field: NamespaceFindField::name(),
                     op: NamespacePredicateOp::Suffix,
                     value: NamespacePredicateValue::String("stderr.txt".to_owned()),
                 }],
@@ -1981,6 +1991,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(found.matches[0].path, "/runs/a.stderr.txt");
+        assert_eq!(found.match_count, 1);
         assert_eq!(found.scanned_entries, 2);
 
         let page = client

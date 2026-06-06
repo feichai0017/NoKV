@@ -17,6 +17,33 @@ pub enum CodecError {
     TrailingBytes,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathIndexCatalogRecord {
+    pub path: String,
+    pub fields: Vec<PathIndexFieldRecord>,
+    pub row_count: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathIndexFieldRecord {
+    pub field: String,
+    pub operators: Vec<String>,
+    pub sortable: bool,
+    pub facetable: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PathIndexRowRecord {
+    pub path: String,
+    pub values: Vec<(String, PathIndexValueRecord)>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PathIndexValueRecord {
+    String(String),
+    U64(u64),
+}
+
 pub fn encode_allocator_state(last_commit_version: u64, next_inode: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(16);
     push_u64(&mut out, last_commit_version);
@@ -274,6 +301,91 @@ pub fn decode_watch_event(bytes: &[u8]) -> Result<WatchEvent, CodecError> {
     Ok(event)
 }
 
+pub fn encode_path_index_catalog(record: &PathIndexCatalogRecord) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_string(&mut out, &record.path);
+    push_u64(&mut out, record.row_count);
+    push_u32(&mut out, record.fields.len() as u32);
+    for field in &record.fields {
+        put_string(&mut out, &field.field);
+        push_u32(&mut out, field.operators.len() as u32);
+        for op in &field.operators {
+            put_string(&mut out, op);
+        }
+        out.push(u8::from(field.sortable));
+        out.push(u8::from(field.facetable));
+    }
+    out
+}
+
+pub fn decode_path_index_catalog(bytes: &[u8]) -> Result<PathIndexCatalogRecord, CodecError> {
+    let mut input = Decoder::new(bytes);
+    let path = input.string()?;
+    let row_count = input.u64()?;
+    let field_count = input.u32()? as usize;
+    let mut fields = Vec::with_capacity(field_count);
+    for _ in 0..field_count {
+        let field = input.string()?;
+        let operator_count = input.u32()? as usize;
+        let mut operators = Vec::with_capacity(operator_count);
+        for _ in 0..operator_count {
+            operators.push(input.string()?);
+        }
+        let sortable = input.bool()?;
+        let facetable = input.bool()?;
+        fields.push(PathIndexFieldRecord {
+            field,
+            operators,
+            sortable,
+            facetable,
+        });
+    }
+    input.finish()?;
+    Ok(PathIndexCatalogRecord {
+        path,
+        fields,
+        row_count,
+    })
+}
+
+pub fn encode_path_index_row(record: &PathIndexRowRecord) -> Vec<u8> {
+    let mut out = Vec::new();
+    put_string(&mut out, &record.path);
+    push_u32(&mut out, record.values.len() as u32);
+    for (field, value) in &record.values {
+        put_string(&mut out, field);
+        match value {
+            PathIndexValueRecord::String(value) => {
+                out.push(1);
+                put_string(&mut out, value);
+            }
+            PathIndexValueRecord::U64(value) => {
+                out.push(2);
+                push_u64(&mut out, *value);
+            }
+        }
+    }
+    out
+}
+
+pub fn decode_path_index_row(bytes: &[u8]) -> Result<PathIndexRowRecord, CodecError> {
+    let mut input = Decoder::new(bytes);
+    let path = input.string()?;
+    let value_count = input.u32()? as usize;
+    let mut values = Vec::with_capacity(value_count);
+    for _ in 0..value_count {
+        let field = input.string()?;
+        let value = match input.u8()? {
+            1 => PathIndexValueRecord::String(input.string()?),
+            2 => PathIndexValueRecord::U64(input.u64()?),
+            tag => return Err(CodecError::InvalidOptionTag(tag)),
+        };
+        values.push((field, value));
+    }
+    input.finish()?;
+    Ok(PathIndexRowRecord { path, values })
+}
+
 fn decode_inode_attr_from(input: &mut Decoder<'_>) -> Result<InodeAttr, CodecError> {
     Ok(InodeAttr {
         inode: inode(input.u64()?)?,
@@ -374,6 +486,14 @@ impl<'a> Decoder<'a> {
         let value = self.bytes[self.offset];
         self.offset += 1;
         Ok(value)
+    }
+
+    fn bool(&mut self) -> Result<bool, CodecError> {
+        match self.u8()? {
+            0 => Ok(false),
+            1 => Ok(true),
+            tag => Err(CodecError::InvalidOptionTag(tag)),
+        }
     }
 
     fn u32(&mut self) -> Result<u32, CodecError> {

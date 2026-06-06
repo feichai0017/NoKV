@@ -25,7 +25,8 @@ pub use holtstore::HoltMetadataStore;
 pub use service::{
     BodyReadPlan, DentryWithAttr, MetadError, NamespaceBodyDescriptor, NamespaceCard,
     NamespaceCardKind, NamespaceFilterCapability, NamespaceFindField, NamespaceFindRequest,
-    NamespaceFindResult, NamespaceInclude, NamespaceListOptions, NamespaceListPage,
+    NamespaceFindResult, NamespaceInclude, NamespaceIndexField, NamespaceIndexRegistration,
+    NamespaceIndexRow, NamespaceIndexValue, NamespaceListOptions, NamespaceListPage,
     NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue, NamespaceQueryCatalog,
     NamespaceReadFormat, NamespaceReadItem, NamespaceReadOptions, NamespaceReadPage,
     NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
