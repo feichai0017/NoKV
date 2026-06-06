@@ -1988,6 +1988,10 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .metadata_store
                 .scan_snapshot_total
                 .saturating_sub(before.metadata_store.scan_snapshot_total),
+            scan_cache_hit_total: after
+                .metadata_store
+                .scan_cache_hit_total
+                .saturating_sub(before.metadata_store.scan_cache_hit_total),
             scan_key_visited_total: after
                 .metadata_store
                 .scan_key_visited_total
@@ -2415,6 +2419,7 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             scan_user_strong_total: json_u64(body, "scan_user_strong_total")?,
             scan_write_plan_local_total: json_u64(body, "scan_write_plan_local_total")?,
             scan_snapshot_total: json_u64(body, "scan_snapshot_total")?,
+            scan_cache_hit_total: json_u64(body, "scan_cache_hit_total")?,
             scan_key_visited_total: json_u64(body, "scan_key_visited_total")?,
             scan_key_returned_total: json_u64(body, "scan_key_returned_total")?,
             history_lookup_total: json_u64(body, "history_lookup_total")?,

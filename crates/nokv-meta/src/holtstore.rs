@@ -16,15 +16,16 @@ use crate::command::{
     MutationOp, Predicate, ReadItem, ReadPurpose, ScanItem, ScanRequest, Value, Version,
 };
 use crate::layout::{history_key, history_prefix};
-use holt::{DBAtomicBatch, KeyRangeEntry, RangeEntry, RecordVersion, Tree, TreeConfig, DB};
+use holt::{
+    CheckpointImage, DBAtomicBatch, Durability, Error as HoltError, KeyRangeEntryRef,
+    KeyScanOutcome, RangeEntry, RecordVersion,
+};
+use holt::{Tree, TreeConfig, DB};
 use nokv_types::RecordFamily;
 
 const VALUE_HEADER_LEN: usize = 9;
 const VALUE_KIND_LIVE: u8 = 1;
 const VALUE_KIND_TOMBSTONE: u8 = 2;
-const CHECKPOINT_IMAGE_MAGIC: &[u8; 8] = b"NKFSMI01";
-const CHECKPOINT_IMAGE_VERSION: u8 = 1;
-
 const SYSTEM_CURRENT_TREE: &str = "system_current";
 const MOUNT_CURRENT_TREE: &str = "mount_current";
 const INODE_CURRENT_TREE: &str = "inode_current";
@@ -39,45 +40,28 @@ const SNAPSHOT_CURRENT_TREE: &str = "snapshot_current";
 const GC_CURRENT_TREE: &str = "gc_current";
 const COMMAND_DEDUPE_CURRENT_TREE: &str = "command_dedupe_current";
 const HISTORY_TREE: &str = "history";
-
-const TREE_ID_SYSTEM_CURRENT: u8 = 1;
-const TREE_ID_MOUNT_CURRENT: u8 = 2;
-const TREE_ID_INODE_CURRENT: u8 = 3;
-const TREE_ID_DENTRY_CURRENT: u8 = 4;
-const TREE_ID_PARENT_CURRENT: u8 = 5;
-const TREE_ID_XATTR_CURRENT: u8 = 6;
-const TREE_ID_CHUNK_MANIFEST_CURRENT: u8 = 7;
-const TREE_ID_SESSION_CURRENT: u8 = 8;
-const TREE_ID_PATH_INDEX_CURRENT: u8 = 9;
-const TREE_ID_WATCH_CURRENT: u8 = 10;
-const TREE_ID_SNAPSHOT_CURRENT: u8 = 11;
-const TREE_ID_GC_CURRENT: u8 = 12;
-const TREE_ID_COMMAND_DEDUPE_CURRENT: u8 = 13;
-const TREE_ID_HISTORY: u8 = 14;
+const METADATA_TREE_NAMES: &[&str] = &[
+    SYSTEM_CURRENT_TREE,
+    MOUNT_CURRENT_TREE,
+    INODE_CURRENT_TREE,
+    DENTRY_CURRENT_TREE,
+    PARENT_CURRENT_TREE,
+    XATTR_CURRENT_TREE,
+    CHUNK_MANIFEST_CURRENT_TREE,
+    SESSION_CURRENT_TREE,
+    PATH_INDEX_CURRENT_TREE,
+    WATCH_CURRENT_TREE,
+    SNAPSHOT_CURRENT_TREE,
+    GC_CURRENT_TREE,
+    COMMAND_DEDUPE_CURRENT_TREE,
+    HISTORY_TREE,
+];
 
 #[derive(Clone)]
 pub struct HoltMetadataStore {
     db: DB,
-    trees: Arc<FamilyTrees>,
     stats: Arc<HoltMetadataStoreCounters>,
     active_snapshot_pins: Arc<AtomicU64>,
-}
-
-struct FamilyTrees {
-    system_current: Tree,
-    mount_current: Tree,
-    inode_current: Tree,
-    dentry_current: Tree,
-    parent_current: Tree,
-    xattr_current: Tree,
-    chunk_manifest_current: Tree,
-    session_current: Tree,
-    path_index_current: Tree,
-    watch_current: Tree,
-    snapshot_current: Tree,
-    gc_current: Tree,
-    command_dedupe_current: Tree,
-    history: Tree,
 }
 
 #[derive(Default)]
@@ -90,6 +74,7 @@ struct HoltMetadataStoreCounters {
     scan_user_strong_total: AtomicU64,
     scan_write_plan_local_total: AtomicU64,
     scan_snapshot_total: AtomicU64,
+    scan_cache_hit_total: AtomicU64,
     scan_key_visited_total: AtomicU64,
     scan_key_returned_total: AtomicU64,
     history_lookup_total: AtomicU64,
@@ -175,33 +160,17 @@ struct CurrentRecord {
     value: Option<Vec<u8>>,
 }
 
-#[derive(Debug)]
-struct CheckpointImageRecord {
-    tree_id: u8,
-    key: Vec<u8>,
-    value: Vec<u8>,
-}
-
-#[derive(Clone)]
-struct CheckpointTreeSpec {
-    id: u8,
-    tree: Tree,
-}
-
-#[derive(Clone, Copy)]
-struct CheckpointTreeNameSpec {
-    id: u8,
-    name: &'static str,
-}
-
 impl HoltMetadataStore {
     pub fn open_memory() -> Result<Self, MetadataError> {
         Self::open(TreeConfig::memory())
     }
 
-    pub fn open_raft_state_machine() -> Result<Self, MetadataError> {
-        let mut config = TreeConfig::memory();
-        config.memory_flush_on_write = false;
+    pub fn open_raft_materialized(path: impl AsRef<Path>) -> Result<Self, MetadataError> {
+        // OpenRaft is the quorum durability source. Holt is a persistent
+        // materialized state machine here: no Holt WAL is attached, and
+        // `commit_durable(applied_index)` publishes the restart checkpoint.
+        let mut config = TreeConfig::new(path.as_ref());
+        config.durability = Durability::StateMachine;
         Self::open(config)
     }
 
@@ -211,11 +180,9 @@ impl HoltMetadataStore {
 
     pub fn open(config: TreeConfig) -> Result<Self, MetadataError> {
         let db = DB::open(config).map_err(to_backend_error)?;
-        let trees = Arc::new(open_family_trees(&db)?);
         let active_snapshot_pins = count_active_snapshot_pins(&db)?;
         Ok(Self {
             db,
-            trees,
             stats: Arc::new(HoltMetadataStoreCounters::default()),
             active_snapshot_pins: Arc::new(AtomicU64::new(active_snapshot_pins)),
         })
@@ -225,83 +192,59 @@ impl HoltMetadataStore {
         self.db.checkpoint().map_err(to_backend_error)
     }
 
-    pub fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError> {
-        let specs = checkpoint_tree_specs();
-        let scopes = specs
-            .iter()
-            .map(|spec| (spec.name, b"".as_slice()))
-            .collect::<Vec<_>>();
+    pub fn commit_durable(&self, applied_index: u64) -> Result<(), MetadataError> {
         self.db
-            .view(&scopes, |view| {
-                let mut records = Vec::new();
-                for spec in specs {
-                    let tree = view.tree(spec.name).ok_or(holt::Error::Internal(
-                        "metadata checkpoint view omitted tree",
-                    ))?;
-                    for entry in tree.range() {
-                        let RangeEntry::Key { key, value, .. } = entry? else {
-                            continue;
-                        };
-                        records.push(CheckpointImageRecord {
-                            tree_id: spec.id,
-                            key,
-                            value,
-                        });
-                    }
-                }
-                Ok(records)
-            })
+            .commit_durable(applied_index)
             .map_err(to_backend_error)
-            .and_then(|records| encode_checkpoint_image(&records))
     }
 
-    pub fn install_checkpoint_image(&self, image: &[u8]) -> Result<(), MetadataError> {
-        let records = decode_checkpoint_image(image)?;
-        let existing = self.current_checkpoint_keys()?;
-        let committed = self
+    pub fn durable_applied_index(&self) -> Result<u64, MetadataError> {
+        self.db.durable_applied_index().map_err(to_backend_error)
+    }
+
+    pub fn export_checkpoint_image(&self, applied_index: u64) -> Result<Vec<u8>, MetadataError> {
+        self.db
+            .export_checkpoint(applied_index)
+            .map(CheckpointImage::into_bytes)
+            .map_err(to_backend_error)
+    }
+
+    pub fn install_checkpoint_image(&self, image: &[u8]) -> Result<u64, MetadataError> {
+        let checkpoint = CheckpointImage::from_bytes(image.to_vec());
+        let validated_applied_index = checkpoint.validate().map_err(to_backend_error)?;
+        let applied_index = self
             .db
-            .atomic(|batch| {
-                for (tree_id, key) in &existing {
-                    batch.delete(checkpoint_tree_name(*tree_id), key);
-                }
-                for record in &records {
-                    batch.put(
-                        checkpoint_tree_name(record.tree_id),
-                        &record.key,
-                        &record.value,
-                    );
-                }
-            })
+            .install_checkpoint(&checkpoint)
             .map_err(to_backend_error)?;
-        if !committed {
-            return Err(MetadataError::Backend(
-                "metadata checkpoint image install did not commit".to_owned(),
-            ));
+        if applied_index != validated_applied_index {
+            return Err(MetadataError::Backend(format!(
+                "validated checkpoint applied index {validated_applied_index} does not match installed applied index {applied_index}"
+            )));
         }
         self.active_snapshot_pins
             .store(count_active_snapshot_pins(&self.db)?, Ordering::Relaxed);
-        Ok(())
-    }
-
-    fn current_checkpoint_keys(&self) -> Result<Vec<(u8, Vec<u8>)>, MetadataError> {
-        let mut keys = Vec::new();
-        for spec in self.trees.checkpoint_trees() {
-            for entry in spec.tree.range_keys() {
-                let KeyRangeEntry::Key { key, .. } = entry.map_err(to_backend_error)? else {
-                    continue;
-                };
-                keys.push((spec.id, key));
-            }
-        }
-        Ok(keys)
+        Ok(applied_index)
     }
 
     fn current_tree(&self, family: RecordFamily) -> Result<Tree, MetadataError> {
-        self.trees.current(family)
+        self.db
+            .open_or_create_tree(current_tree_name(family))
+            .map_err(to_backend_error)
     }
 
     fn history_tree(&self) -> Result<Tree, MetadataError> {
-        Ok(self.trees.history.clone())
+        self.db
+            .open_or_create_tree(HISTORY_TREE)
+            .map_err(to_backend_error)
+    }
+
+    fn ensure_metadata_trees(&self) -> Result<(), MetadataError> {
+        for name in METADATA_TREE_NAMES {
+            self.db
+                .open_or_create_tree(name)
+                .map_err(to_backend_error)?;
+        }
+        Ok(())
     }
 
     fn current_live_record(
@@ -343,11 +286,19 @@ impl MetadataCheckpointStore for HoltMetadataStore {
         HoltMetadataStore::checkpoint(self)
     }
 
-    fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError> {
-        HoltMetadataStore::export_checkpoint_image(self)
+    fn commit_durable(&self, applied_index: u64) -> Result<(), MetadataError> {
+        HoltMetadataStore::commit_durable(self, applied_index)
     }
 
-    fn install_checkpoint_image(&self, image: &[u8]) -> Result<(), MetadataError> {
+    fn durable_applied_index(&self) -> Result<u64, MetadataError> {
+        HoltMetadataStore::durable_applied_index(self)
+    }
+
+    fn export_checkpoint_image(&self, applied_index: u64) -> Result<Vec<u8>, MetadataError> {
+        HoltMetadataStore::export_checkpoint_image(self, applied_index)
+    }
+
+    fn install_checkpoint_image(&self, image: &[u8]) -> Result<u64, MetadataError> {
         HoltMetadataStore::install_checkpoint_image(self, image)
     }
 }
@@ -403,10 +354,10 @@ impl MetadataStore for HoltMetadataStore {
             stats: &self.stats,
         };
 
-        let mut range = current.range();
-        if !request.prefix.is_empty() {
-            range = range.prefix(&request.prefix);
-        }
+        let snapshot = current
+            .snapshot(&request.prefix)
+            .map_err(to_backend_error)?;
+        let mut range = snapshot.view().range();
         if let Some(start_after) = start_after {
             range = range.start_after(start_after);
         }
@@ -452,10 +403,10 @@ impl MetadataStore for HoltMetadataStore {
             stats: &self.stats,
         };
 
-        let mut range = current.range().delimiter(request.delimiter);
-        if !request.prefix.is_empty() {
-            range = range.prefix(&request.prefix);
-        }
+        let snapshot = current
+            .snapshot(&request.prefix)
+            .map_err(to_backend_error)?;
+        let mut range = snapshot.view().range().delimiter(request.delimiter);
         if let Some(start_after) = start_after {
             range = range.start_after(start_after);
         }
@@ -486,39 +437,21 @@ impl MetadataStore for HoltMetadataStore {
             request.limit
         };
         let current = self.current_tree(request.family)?;
-        let mut range = current.range_keys();
-        if !request.prefix.is_empty() {
-            range = range.prefix(&request.prefix);
-        }
+        let mut range = current.range_keys().prefix(&request.prefix);
         if let Some(start_after) = request.start_after.as_deref() {
             range = range.start_after(start_after);
         }
         let mut out = Vec::new();
-        let mut visited_total = 0_u64;
-        for entry in range {
-            let KeyRangeEntry::Key { key, .. } = entry.map_err(to_backend_error)? else {
-                continue;
-            };
-            visited_total += 1;
-            out.push(key);
-            if out.len() >= limit {
-                break;
-            }
-        }
-        self.stats
-            .scan_key_visited_total
-            .fetch_add(visited_total, Ordering::Relaxed);
-        self.stats
-            .scan_key_returned_total
-            .fetch_add(out.len() as u64, Ordering::Relaxed);
+        let outcome = range
+            .visit_with_outcome(limit, |entry| {
+                if let KeyRangeEntryRef::Key { key, .. } = entry {
+                    out.push(key.to_vec());
+                }
+                Ok(())
+            })
+            .map_err(to_backend_error)?;
+        self.stats.record_key_scan_outcome(outcome);
         Ok(out)
-    }
-
-    fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
-        match self.prepare_command(&command)? {
-            PreparedCommand::DedupeHit(result) => Ok(result),
-            PreparedCommand::Planned(plan) => self.commit_planned_command(command, plan),
-        }
     }
 
     fn commit_independent_batch(
@@ -561,6 +494,13 @@ impl MetadataStore for HoltMetadataStore {
                 })
             })
             .collect()
+    }
+
+    fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
+        match self.prepare_command(&command)? {
+            PreparedCommand::DedupeHit(result) => Ok(result),
+            PreparedCommand::Planned(plan) => self.commit_planned_command(command, plan),
+        }
     }
 
     fn committed_request_result(
@@ -623,279 +563,9 @@ impl MetadataStore for HoltMetadataStore {
             }
         }
 
-        outcome.removed = keys_to_remove.len();
-        if !keys_to_remove.is_empty() {
-            history
-                .atomic(|batch| {
-                    for key in &keys_to_remove {
-                        batch.delete(key);
-                    }
-                })
-                .map_err(to_backend_error)?;
-        }
+        outcome.removed = self.delete_history_keys(&history, &keys_to_remove)?;
         Ok(outcome)
     }
-}
-
-impl FamilyTrees {
-    fn current(&self, family: RecordFamily) -> Result<Tree, MetadataError> {
-        let tree = match family {
-            RecordFamily::System => &self.system_current,
-            RecordFamily::Mount => &self.mount_current,
-            RecordFamily::Inode => &self.inode_current,
-            RecordFamily::Dentry => &self.dentry_current,
-            RecordFamily::Parent => &self.parent_current,
-            RecordFamily::Xattr => &self.xattr_current,
-            RecordFamily::ChunkManifest => &self.chunk_manifest_current,
-            RecordFamily::Session => &self.session_current,
-            RecordFamily::PathIndex => &self.path_index_current,
-            RecordFamily::Watch => &self.watch_current,
-            RecordFamily::Snapshot => &self.snapshot_current,
-            RecordFamily::Gc => &self.gc_current,
-            RecordFamily::CommandDedupe => &self.command_dedupe_current,
-            RecordFamily::History => &self.history,
-        };
-        Ok(tree.clone())
-    }
-
-    fn checkpoint_trees(&self) -> Vec<CheckpointTreeSpec> {
-        checkpoint_tree_specs()
-            .iter()
-            .map(|spec| CheckpointTreeSpec {
-                id: spec.id,
-                tree: self.checkpoint_tree(spec.id),
-            })
-            .collect()
-    }
-
-    fn checkpoint_tree(&self, tree_id: u8) -> Tree {
-        match tree_id {
-            TREE_ID_SYSTEM_CURRENT => self.system_current.clone(),
-            TREE_ID_MOUNT_CURRENT => self.mount_current.clone(),
-            TREE_ID_INODE_CURRENT => self.inode_current.clone(),
-            TREE_ID_DENTRY_CURRENT => self.dentry_current.clone(),
-            TREE_ID_PARENT_CURRENT => self.parent_current.clone(),
-            TREE_ID_XATTR_CURRENT => self.xattr_current.clone(),
-            TREE_ID_CHUNK_MANIFEST_CURRENT => self.chunk_manifest_current.clone(),
-            TREE_ID_SESSION_CURRENT => self.session_current.clone(),
-            TREE_ID_PATH_INDEX_CURRENT => self.path_index_current.clone(),
-            TREE_ID_WATCH_CURRENT => self.watch_current.clone(),
-            TREE_ID_SNAPSHOT_CURRENT => self.snapshot_current.clone(),
-            TREE_ID_GC_CURRENT => self.gc_current.clone(),
-            TREE_ID_COMMAND_DEDUPE_CURRENT => self.command_dedupe_current.clone(),
-            TREE_ID_HISTORY => self.history.clone(),
-            _ => unreachable!("checkpoint tree registry returned unknown tree id"),
-        }
-    }
-}
-
-fn checkpoint_tree_specs() -> &'static [CheckpointTreeNameSpec] {
-    &[
-        CheckpointTreeNameSpec {
-            id: TREE_ID_SYSTEM_CURRENT,
-            name: SYSTEM_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_MOUNT_CURRENT,
-            name: MOUNT_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_INODE_CURRENT,
-            name: INODE_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_DENTRY_CURRENT,
-            name: DENTRY_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_PARENT_CURRENT,
-            name: PARENT_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_XATTR_CURRENT,
-            name: XATTR_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_CHUNK_MANIFEST_CURRENT,
-            name: CHUNK_MANIFEST_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_SESSION_CURRENT,
-            name: SESSION_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_PATH_INDEX_CURRENT,
-            name: PATH_INDEX_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_WATCH_CURRENT,
-            name: WATCH_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_SNAPSHOT_CURRENT,
-            name: SNAPSHOT_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_GC_CURRENT,
-            name: GC_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_COMMAND_DEDUPE_CURRENT,
-            name: COMMAND_DEDUPE_CURRENT_TREE,
-        },
-        CheckpointTreeNameSpec {
-            id: TREE_ID_HISTORY,
-            name: HISTORY_TREE,
-        },
-    ]
-}
-
-fn checkpoint_tree_name(tree_id: u8) -> &'static str {
-    checkpoint_tree_specs()
-        .iter()
-        .find(|spec| spec.id == tree_id)
-        .map(|spec| spec.name)
-        .expect("validated checkpoint tree id")
-}
-
-fn encode_checkpoint_image(records: &[CheckpointImageRecord]) -> Result<Vec<u8>, MetadataError> {
-    let mut out = Vec::new();
-    out.extend_from_slice(CHECKPOINT_IMAGE_MAGIC);
-    out.push(CHECKPOINT_IMAGE_VERSION);
-    out.extend_from_slice(&(records.len() as u64).to_be_bytes());
-    for record in records {
-        validate_checkpoint_tree_id(record.tree_id)?;
-        let key_len = u32::try_from(record.key.len()).map_err(|_| {
-            MetadataError::Backend("metadata checkpoint key exceeds u32 length".to_owned())
-        })?;
-        let value_len = u32::try_from(record.value.len()).map_err(|_| {
-            MetadataError::Backend("metadata checkpoint value exceeds u32 length".to_owned())
-        })?;
-        out.push(record.tree_id);
-        out.extend_from_slice(&key_len.to_be_bytes());
-        out.extend_from_slice(&value_len.to_be_bytes());
-        out.extend_from_slice(&record.key);
-        out.extend_from_slice(&record.value);
-    }
-    Ok(out)
-}
-
-fn decode_checkpoint_image(image: &[u8]) -> Result<Vec<CheckpointImageRecord>, MetadataError> {
-    let mut cursor = CheckpointImageCursor::new(image);
-    let magic = cursor.take(CHECKPOINT_IMAGE_MAGIC.len())?;
-    if magic != CHECKPOINT_IMAGE_MAGIC {
-        return Err(checkpoint_image_error("bad checkpoint image magic"));
-    }
-    let version = cursor.read_u8()?;
-    if version != CHECKPOINT_IMAGE_VERSION {
-        return Err(checkpoint_image_error(
-            "unsupported checkpoint image version",
-        ));
-    }
-    let count = cursor.read_u64()?;
-    let count = usize::try_from(count)
-        .map_err(|_| checkpoint_image_error("checkpoint image record count overflows usize"))?;
-    let mut records = Vec::with_capacity(count);
-    for _ in 0..count {
-        let tree_id = cursor.read_u8()?;
-        validate_checkpoint_tree_id(tree_id)?;
-        let key_len = cursor.read_u32()? as usize;
-        let value_len = cursor.read_u32()? as usize;
-        let key = cursor.take(key_len)?.to_vec();
-        let value = cursor.take(value_len)?.to_vec();
-        records.push(CheckpointImageRecord {
-            tree_id,
-            key,
-            value,
-        });
-    }
-    if !cursor.is_empty() {
-        return Err(checkpoint_image_error(
-            "checkpoint image has trailing bytes",
-        ));
-    }
-    Ok(records)
-}
-
-fn validate_checkpoint_tree_id(tree_id: u8) -> Result<(), MetadataError> {
-    if checkpoint_tree_specs()
-        .iter()
-        .any(|spec| spec.id == tree_id)
-    {
-        Ok(())
-    } else {
-        Err(checkpoint_image_error(
-            "checkpoint image references unknown tree",
-        ))
-    }
-}
-
-struct CheckpointImageCursor<'a> {
-    remaining: &'a [u8],
-}
-
-impl<'a> CheckpointImageCursor<'a> {
-    fn new(bytes: &'a [u8]) -> Self {
-        Self { remaining: bytes }
-    }
-
-    fn take(&mut self, len: usize) -> Result<&'a [u8], MetadataError> {
-        if self.remaining.len() < len {
-            return Err(checkpoint_image_error("truncated checkpoint image"));
-        }
-        let (head, tail) = self.remaining.split_at(len);
-        self.remaining = tail;
-        Ok(head)
-    }
-
-    fn read_u8(&mut self) -> Result<u8, MetadataError> {
-        Ok(self.take(1)?[0])
-    }
-
-    fn read_u32(&mut self) -> Result<u32, MetadataError> {
-        let bytes = self.take(4)?;
-        Ok(u32::from_be_bytes(
-            bytes.try_into().expect("slice length checked by take"),
-        ))
-    }
-
-    fn read_u64(&mut self) -> Result<u64, MetadataError> {
-        let bytes = self.take(8)?;
-        Ok(u64::from_be_bytes(
-            bytes.try_into().expect("slice length checked by take"),
-        ))
-    }
-
-    fn is_empty(&self) -> bool {
-        self.remaining.is_empty()
-    }
-}
-
-fn checkpoint_image_error(message: &str) -> MetadataError {
-    MetadataError::Backend(format!("metadata checkpoint image: {message}"))
-}
-
-fn open_family_trees(db: &DB) -> Result<FamilyTrees, MetadataError> {
-    Ok(FamilyTrees {
-        system_current: open_or_create_tree(db, SYSTEM_CURRENT_TREE)?,
-        mount_current: open_or_create_tree(db, MOUNT_CURRENT_TREE)?,
-        inode_current: open_or_create_tree(db, INODE_CURRENT_TREE)?,
-        dentry_current: open_or_create_tree(db, DENTRY_CURRENT_TREE)?,
-        parent_current: open_or_create_tree(db, PARENT_CURRENT_TREE)?,
-        xattr_current: open_or_create_tree(db, XATTR_CURRENT_TREE)?,
-        chunk_manifest_current: open_or_create_tree(db, CHUNK_MANIFEST_CURRENT_TREE)?,
-        session_current: open_or_create_tree(db, SESSION_CURRENT_TREE)?,
-        path_index_current: open_or_create_tree(db, PATH_INDEX_CURRENT_TREE)?,
-        watch_current: open_or_create_tree(db, WATCH_CURRENT_TREE)?,
-        snapshot_current: open_or_create_tree(db, SNAPSHOT_CURRENT_TREE)?,
-        gc_current: open_or_create_tree(db, GC_CURRENT_TREE)?,
-        command_dedupe_current: open_or_create_tree(db, COMMAND_DEDUPE_CURRENT_TREE)?,
-        history: open_or_create_tree(db, HISTORY_TREE)?,
-    })
-}
-
-fn open_or_create_tree(db: &DB, name: &str) -> Result<Tree, MetadataError> {
-    db.open_or_create_tree(name).map_err(to_backend_error)
 }
 
 impl HoltMetadataStore {
@@ -956,6 +626,7 @@ impl HoltMetadataStore {
         &self,
         batch_items: &[PendingPlannedCommand],
     ) -> Result<Option<Vec<CommitResult>>, MetadataError> {
+        self.ensure_metadata_trees()?;
         let stats = batch_items
             .iter()
             .map(|item| planned_command_stats(&item.command, &item.plan))
@@ -1028,6 +699,17 @@ impl HoltMetadataStore {
                     }
                 }
                 Predicate::PrefixEmpty => {
+                    let count = self
+                        .current_tree(predicate.family)?
+                        .prefix_count(&predicate.key, 1)
+                        .map_err(to_backend_error)?;
+                    self.stats.record_key_scan_outcome(KeyScanOutcome {
+                        stats: count.stats,
+                        cache_hit: count.cache_hit,
+                    });
+                    if count.count > 0 {
+                        return Err(MetadataError::PredicateFailed);
+                    }
                     prefix_empty_guards.push(PrefixEmptyGuard {
                         family: predicate.family,
                         prefix: predicate.key.clone(),
@@ -1088,6 +770,7 @@ impl HoltMetadataStore {
         command: MetadataCommand,
         plan: CommandPlan,
     ) -> Result<CommitResult, MetadataError> {
+        self.ensure_metadata_trees()?;
         let stats = planned_command_stats(&command, &plan);
         let atomic_start = Instant::now();
         let committed = self
@@ -1172,6 +855,34 @@ impl HoltMetadataStore {
             );
         }
     }
+
+    fn delete_history_keys(
+        &self,
+        history: &Tree,
+        keys: &[Vec<u8>],
+    ) -> Result<usize, MetadataError> {
+        if keys.is_empty() {
+            return Ok(0);
+        }
+        match self.db.scatter_independent(|scatter| {
+            for key in keys {
+                scatter.delete(HISTORY_TREE, key);
+            }
+        }) {
+            Ok(applied) => Ok(applied.into_iter().filter(|applied| *applied).count()),
+            Err(HoltError::ScatterRequiresStateMachine) => {
+                history
+                    .atomic(|batch| {
+                        for key in keys {
+                            batch.delete(key);
+                        }
+                    })
+                    .map_err(to_backend_error)?;
+                Ok(keys.len())
+            }
+            Err(err) => Err(to_backend_error(err)),
+        }
+    }
 }
 
 impl HoltMetadataStoreCounters {
@@ -1191,6 +902,18 @@ impl HoltMetadataStoreCounters {
             ReadPurpose::Snapshot => &self.scan_snapshot_total,
         }
         .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_key_scan_outcome(&self, outcome: KeyScanOutcome) {
+        if outcome.cache_hit {
+            self.scan_cache_hit_total.fetch_add(1, Ordering::Relaxed);
+        }
+        self.scan_key_visited_total
+            .fetch_add(outcome.stats.visited, Ordering::Relaxed);
+        self.scan_key_returned_total.fetch_add(
+            outcome.stats.returned + outcome.stats.rollup,
+            Ordering::Relaxed,
+        );
     }
 
     fn record_atomic_apply(&self, command_count: usize, elapsed: std::time::Duration) {
@@ -1215,6 +938,7 @@ impl HoltMetadataStoreCounters {
             scan_user_strong_total: self.scan_user_strong_total.load(Ordering::Relaxed),
             scan_write_plan_local_total: self.scan_write_plan_local_total.load(Ordering::Relaxed),
             scan_snapshot_total: self.scan_snapshot_total.load(Ordering::Relaxed),
+            scan_cache_hit_total: self.scan_cache_hit_total.load(Ordering::Relaxed),
             scan_key_visited_total: self.scan_key_visited_total.load(Ordering::Relaxed),
             scan_key_returned_total: self.scan_key_returned_total.load(Ordering::Relaxed),
             history_lookup_total: self.history_lookup_total.load(Ordering::Relaxed),
@@ -1257,9 +981,11 @@ fn current_tree_name(family: RecordFamily) -> &'static str {
 }
 
 fn count_active_snapshot_pins(db: &DB) -> Result<u64, MetadataError> {
-    let snapshot = db
-        .open_tree(SNAPSHOT_CURRENT_TREE)
-        .map_err(to_backend_error)?;
+    let snapshot = match db.open_tree(SNAPSHOT_CURRENT_TREE) {
+        Ok(snapshot) => snapshot,
+        Err(HoltError::TreeNotFound { .. }) => return Ok(0),
+        Err(err) => return Err(to_backend_error(err)),
+    };
     let mut total = 0_u64;
     for entry in snapshot.range() {
         let RangeEntry::Key { value, .. } = entry.map_err(to_backend_error)? else {
@@ -1959,14 +1685,45 @@ mod tests {
 
         assert_eq!(keys, vec![b"dir/b".to_vec()]);
         let after = store.metadata_store_stats();
-        assert_eq!(
-            after.scan_key_visited_total - before.scan_key_visited_total,
-            1
+        let visited = after.scan_key_visited_total - before.scan_key_visited_total;
+        assert!(
+            visited <= 2,
+            "bounded key scan should stop at the requested entry or one internal cursor step past it, visited {visited}"
         );
         assert_eq!(
             after.scan_key_returned_total - before.scan_key_returned_total,
             1
         );
+    }
+
+    #[test]
+    fn repeated_key_scan_records_holt_prefix_cache_hit() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+        store
+            .commit_metadata(put_command(b"dir/b", b"req-2", b"value-b", 3))
+            .unwrap();
+
+        let request = KeyScanRequest {
+            family: RecordFamily::Dentry,
+            prefix: b"dir/".to_vec(),
+            start_after: None,
+            limit: 10,
+            purpose: ReadPurpose::UserStrong,
+        };
+        assert_eq!(
+            store.scan_keys(request.clone()).unwrap(),
+            vec![b"dir/a".to_vec(), b"dir/b".to_vec()]
+        );
+        let before = store.metadata_store_stats();
+        assert_eq!(
+            store.scan_keys(request).unwrap(),
+            vec![b"dir/a".to_vec(), b"dir/b".to_vec()]
+        );
+        let after = store.metadata_store_stats();
+        assert_eq!(after.scan_cache_hit_total - before.scan_cache_hit_total, 1);
     }
 
     #[test]
@@ -2123,12 +1880,9 @@ mod tests {
             .commit_metadata(replace_command(b"dir/a", b"req-2", b"value-b", 2, 4))
             .unwrap();
 
-        let image = store.export_checkpoint_image().unwrap();
+        let image = store.export_checkpoint_image(4).unwrap();
         let restored = HoltMetadataStore::open_memory().unwrap();
-        restored
-            .commit_metadata(put_command(b"stale/key", b"stale", b"stale-value", 2))
-            .unwrap();
-        restored.install_checkpoint_image(&image).unwrap();
+        assert_eq!(restored.install_checkpoint_image(&image).unwrap(), 4);
 
         assert_eq!(
             restored
@@ -2153,17 +1907,6 @@ mod tests {
             Some(Value(b"value-a".to_vec()))
         );
         assert_eq!(
-            restored
-                .get(
-                    RecordFamily::Dentry,
-                    b"stale/key",
-                    version(4),
-                    ReadPurpose::UserStrong
-                )
-                .unwrap(),
-            None
-        );
-        assert_eq!(
             restored.committed_request_result(b"req-2").unwrap(),
             Some(replace)
         );
@@ -2175,7 +1918,7 @@ mod tests {
         let store = HoltMetadataStore::open_memory().unwrap();
         assert!(store.install_checkpoint_image(b"not-a-checkpoint").is_err());
 
-        let mut image = store.export_checkpoint_image().unwrap();
+        let mut image = store.export_checkpoint_image(0).unwrap();
         image.push(1);
         assert!(store.install_checkpoint_image(&image).is_err());
     }

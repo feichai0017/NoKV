@@ -605,7 +605,14 @@ where
     }
 
     pub fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError> {
-        self.read_store.export_checkpoint_image()
+        let applied_index = self
+            .raft
+            .metrics()
+            .borrow()
+            .last_applied
+            .map(|log_id| log_id.index)
+            .unwrap_or(0);
+        self.read_store.export_checkpoint_image(applied_index)
     }
 
     pub fn handle_vote_rpc(
@@ -1124,9 +1131,19 @@ where
         snapshot: Box<Cursor<Vec<u8>>>,
     ) -> Result<(), StorageError<u64>> {
         let data = snapshot.into_inner();
-        self.store.install_checkpoint_image(&data).map_err(|err| {
+        let checkpoint_applied = self.store.install_checkpoint_image(&data).map_err(|err| {
             metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Write, err)
         })?;
+        let expected_applied = meta.last_log_id.map(|log_id| log_id.index).unwrap_or(0);
+        if checkpoint_applied != expected_applied {
+            return Err(metadata_storage_error(
+                ErrorSubject::Snapshot(None),
+                ErrorVerb::Read,
+                MetadataError::Backend(format!(
+                    "metadata checkpoint applied index {checkpoint_applied} does not match snapshot meta {expected_applied}"
+                )),
+            ));
+        }
         self.last_applied = meta.last_log_id;
         self.last_membership = meta.last_membership.clone();
         self.current_snapshot = Some(MetadataRaftSnapshotImage {
@@ -1148,12 +1165,16 @@ where
     M: MetadataCheckpointStore + Clone + Send + Sync + 'static,
 {
     async fn build_snapshot(&mut self) -> Result<Snapshot<MetadataRaftConfig>, StorageError<u64>> {
-        self.store.checkpoint().map_err(|err| {
+        let applied_index = self.last_applied.map(|log_id| log_id.index).unwrap_or(0);
+        self.store.commit_durable(applied_index).map_err(|err| {
             metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Write, err)
         })?;
-        let data = self.store.export_checkpoint_image().map_err(|err| {
-            metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Read, err)
-        })?;
+        let data = self
+            .store
+            .export_checkpoint_image(applied_index)
+            .map_err(|err| {
+                metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Read, err)
+            })?;
         Ok(snapshot_from_image(MetadataRaftSnapshotImage {
             meta: SnapshotMeta {
                 last_log_id: self.last_applied,
@@ -1358,6 +1379,7 @@ fn log_position_from_id(log_id: LogId<u64>) -> Result<LogPosition, MetadataError
 #[cfg(test)]
 mod tests {
     use std::collections::{BTreeMap, BTreeSet};
+    use std::path::Path;
     use std::sync::{Arc, Barrier, Mutex};
     use std::thread;
     use std::time::Duration;
@@ -1384,6 +1406,10 @@ mod tests {
     use crate::log::MetadataRaftCommandBatch;
     use crate::network::{MetadataRaftRpcClient, MetadataRaftRpcNetworkFactory};
     use crate::MetadataRaftError;
+
+    fn persistent_holt_store(root: &Path, name: &str) -> HoltMetadataStore {
+        HoltMetadataStore::open_raft_materialized(root.join(name)).unwrap()
+    }
 
     #[test]
     fn in_memory_log_storage_round_trips_entries() {
@@ -1461,7 +1487,8 @@ mod tests {
     #[test]
     fn state_machine_applies_metadata_command_batches() {
         runtime().block_on(async {
-            let store = HoltMetadataStore::open_memory().unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let store = persistent_holt_store(dir.path(), "metadata-state.holt");
             let mut sm = MetadataRaftStateMachine::new(store);
             let command = metadata_command(b"req-apply", b"dentry/apply", 2);
             let entry = metadata_entry(1, 1, command.clone());
@@ -1537,7 +1564,8 @@ mod tests {
     #[test]
     fn state_machine_snapshot_installs_holt_checkpoint_image() {
         runtime().block_on(async {
-            let store = HoltMetadataStore::open_memory().unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let store = persistent_holt_store(dir.path(), "metadata-state.holt");
             let mut sm = MetadataRaftStateMachine::new(store.clone());
             let command = metadata_command(b"req-snapshot", b"dentry/snapshot", 6);
             let entry = metadata_entry(2, 5, command);
@@ -1550,7 +1578,7 @@ mod tests {
                 "OpenRaft snapshot must include the Holt checkpoint image"
             );
 
-            let restored = HoltMetadataStore::open_memory().unwrap();
+            let restored = persistent_holt_store(dir.path(), "restored-state.holt");
             let mut restored_sm = MetadataRaftStateMachine::new(restored.clone());
             restored_sm
                 .install_snapshot(&snapshot.meta, snapshot.snapshot)
@@ -1580,7 +1608,8 @@ mod tests {
     #[test]
     fn single_node_openraft_applies_client_write() {
         runtime().block_on(async {
-            let store = HoltMetadataStore::open_memory().unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let store = persistent_holt_store(dir.path(), "metadata-state.holt");
             let storage = MetadataRaftStorage::in_memory(store);
             let raft = Raft::new(
                 1,
@@ -1630,7 +1659,8 @@ mod tests {
 
     #[test]
     fn openraft_metadata_store_commits_through_client_write() {
-        let store = HoltMetadataStore::open_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = persistent_holt_store(dir.path(), "metadata-state.holt");
         let raft_store = OpenRaftMetadataStore::new_single_voter(store, NodeId::new(1).unwrap())
             .expect("single voter OpenRaft store opens");
 
@@ -1653,7 +1683,8 @@ mod tests {
 
     #[test]
     fn openraft_metadata_store_coalesces_concurrent_single_command_commits() {
-        let store = HoltMetadataStore::open_memory().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let store = persistent_holt_store(dir.path(), "metadata-state.holt");
         let raft_store = Arc::new(
             OpenRaftMetadataStore::new_single_voter(store, NodeId::new(1).unwrap())
                 .expect("single voter OpenRaft store opens"),
@@ -1694,7 +1725,8 @@ mod tests {
     fn openraft_metadata_store_file_log_replays_state_machine_and_commits() {
         let dir = tempfile::tempdir().unwrap();
         let log_path = dir.path().join("metadata-raft.log");
-        let first_store = HoltMetadataStore::open_raft_state_machine().unwrap();
+        let state_path = dir.path().join("metadata-state.holt");
+        let first_store = HoltMetadataStore::open_raft_materialized(&state_path).unwrap();
         let raft_store = OpenRaftMetadataStore::new_single_voter_with_file_log(
             first_store,
             NodeId::new(1).unwrap(),
@@ -1707,7 +1739,7 @@ mod tests {
         raft_store.commit_metadata(command).unwrap();
         raft_store.shutdown().unwrap();
 
-        let reopened_store = HoltMetadataStore::open_raft_state_machine().unwrap();
+        let reopened_store = HoltMetadataStore::open_raft_materialized(&state_path).unwrap();
         let reopened = OpenRaftMetadataStore::new_single_voter_with_file_log(
             reopened_store,
             NodeId::new(1).unwrap(),
@@ -1906,7 +1938,10 @@ mod tests {
             let mut nodes = BTreeMap::new();
             for id in ids {
                 let node = NodeId::new(*id).unwrap();
-                let store = HoltMetadataStore::open_raft_state_machine().unwrap();
+                let store = HoltMetadataStore::open_raft_materialized(
+                    dir.path().join(format!("metadata-state-{id}.holt")),
+                )
+                .unwrap();
                 let raft = Arc::new(
                     OpenRaftMetadataStore::new_uninitialized_with_file_log_and_network(
                         store,
@@ -1943,7 +1978,10 @@ mod tests {
                 old.shutdown().unwrap();
             }
             let node = NodeId::new(id).unwrap();
-            let store = HoltMetadataStore::open_raft_state_machine().unwrap();
+            let store = HoltMetadataStore::open_raft_materialized(
+                self._dir.path().join(format!("metadata-state-{id}.holt")),
+            )
+            .unwrap();
             let raft = Arc::new(
                 OpenRaftMetadataStore::new_uninitialized_with_file_log_and_network(
                     store,

@@ -115,6 +115,7 @@ pub struct MetadataStoreStats {
     pub scan_user_strong_total: u64,
     pub scan_write_plan_local_total: u64,
     pub scan_snapshot_total: u64,
+    pub scan_cache_hit_total: u64,
     pub scan_key_visited_total: u64,
     pub scan_key_returned_total: u64,
     pub history_lookup_total: u64,
@@ -306,8 +307,10 @@ pub trait MetadataStore {
 
 pub trait MetadataCheckpointStore {
     fn checkpoint(&self) -> Result<(), MetadataError>;
-    fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError>;
-    fn install_checkpoint_image(&self, image: &[u8]) -> Result<(), MetadataError>;
+    fn commit_durable(&self, applied_index: u64) -> Result<(), MetadataError>;
+    fn durable_applied_index(&self) -> Result<u64, MetadataError>;
+    fn export_checkpoint_image(&self, applied_index: u64) -> Result<Vec<u8>, MetadataError>;
+    fn install_checkpoint_image(&self, image: &[u8]) -> Result<u64, MetadataError>;
 }
 
 pub trait MetadataStoreStatsProvider {

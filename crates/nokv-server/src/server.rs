@@ -33,6 +33,8 @@ pub struct Server {
     checkpoint_archive_objects: S3ObjectStore,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
+    #[cfg(test)]
+    _test_meta_dir: Option<tempfile::TempDir>,
 }
 
 #[derive(Debug)]
@@ -60,7 +62,9 @@ impl Server {
         options: ServerOptions,
         objects: S3ObjectStore,
     ) -> Result<Self, ServerError> {
-        let metadata = HoltMetadataStore::open_raft_state_machine().map_err(MetadError::from)?;
+        let metadata_state_path = default_metadata_state_path(&options.meta_path);
+        let metadata = HoltMetadataStore::open_raft_materialized(&metadata_state_path)
+            .map_err(MetadError::from)?;
         let voters = metadata_raft_voters_for_options(&options)?;
         let learners = metadata_raft_learners_for_options(&options, &voters)?;
         validate_metadata_raft_local_node(&options, &voters, &learners)?;
@@ -117,6 +121,8 @@ impl Server {
             checkpoint_archive_objects,
             object_gc,
             history_gc,
+            #[cfg(test)]
+            _test_meta_dir: None,
         })
     }
 
@@ -320,6 +326,10 @@ fn default_metadata_raft_log_path(meta_path: &Path) -> PathBuf {
     meta_path.join("metadata-raft.log")
 }
 
+fn default_metadata_state_path(meta_path: &Path) -> PathBuf {
+    meta_path.join("metadata-state.holt")
+}
+
 fn metadata_raft_voters_for_options(
     options: &ServerOptions,
 ) -> Result<std::collections::BTreeMap<NodeId, String>, ServerError> {
@@ -447,7 +457,7 @@ fn optional_u64_json(value: Option<u64>) -> String {
 
 fn metadata_store_json(stats: &nokv_meta::MetadataStoreStats) -> String {
     format!(
-        "{{\"get_total\":{},\"get_user_strong_total\":{},\"get_write_plan_local_total\":{},\"get_snapshot_total\":{},\"scan_total\":{},\"scan_user_strong_total\":{},\"scan_write_plan_local_total\":{},\"scan_snapshot_total\":{},\"scan_key_visited_total\":{},\"scan_key_returned_total\":{},\"history_lookup_total\":{},\"active_snapshot_pin_total\":{},\"commit_total\":{},\"dedupe_hit_total\":{},\"predicate_total\":{},\"prefix_empty_predicate_total\":{},\"current_put_total\":{},\"current_delete_total\":{},\"history_write_total\":{},\"watch_write_total\":{},\"dedupe_write_total\":{},\"commit_prepare_ns_total\":{},\"atomic_apply_total\":{},\"atomic_apply_command_total\":{},\"atomic_apply_max_batch\":{},\"atomic_apply_ns_total\":{}}}",
+        "{{\"get_total\":{},\"get_user_strong_total\":{},\"get_write_plan_local_total\":{},\"get_snapshot_total\":{},\"scan_total\":{},\"scan_user_strong_total\":{},\"scan_write_plan_local_total\":{},\"scan_snapshot_total\":{},\"scan_cache_hit_total\":{},\"scan_key_visited_total\":{},\"scan_key_returned_total\":{},\"history_lookup_total\":{},\"active_snapshot_pin_total\":{},\"commit_total\":{},\"dedupe_hit_total\":{},\"predicate_total\":{},\"prefix_empty_predicate_total\":{},\"current_put_total\":{},\"current_delete_total\":{},\"history_write_total\":{},\"watch_write_total\":{},\"dedupe_write_total\":{},\"commit_prepare_ns_total\":{},\"atomic_apply_total\":{},\"atomic_apply_command_total\":{},\"atomic_apply_max_batch\":{},\"atomic_apply_ns_total\":{}}}",
         stats.get_total,
         stats.get_user_strong_total,
         stats.get_write_plan_local_total,
@@ -456,6 +466,7 @@ fn metadata_store_json(stats: &nokv_meta::MetadataStoreStats) -> String {
         stats.scan_user_strong_total,
         stats.scan_write_plan_local_total,
         stats.scan_snapshot_total,
+        stats.scan_cache_hit_total,
         stats.scan_key_visited_total,
         stats.scan_key_returned_total,
         stats.history_lookup_total,
@@ -627,7 +638,9 @@ pub(crate) mod tests {
 
     pub(crate) fn test_server() -> Server {
         let dir = tempdir().unwrap();
-        Server::open(test_options(dir.path())).unwrap()
+        let mut server = Server::open(test_options(dir.path())).unwrap();
+        server._test_meta_dir = Some(dir);
+        server
     }
 
     fn start_openraft_test_server(
