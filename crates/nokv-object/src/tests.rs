@@ -853,7 +853,7 @@ fn file_read_pipeline_reports_sequential_readahead_hints() {
         )
         .unwrap();
     assert_eq!(first.blocks.bytes, b"abcd");
-    assert_eq!(first.readahead, None);
+    assert_eq!(first.readahead, Some(ReadAheadHint { offset: 4, len: 4 }));
 
     let second = reader
         .read_blocks(
@@ -874,8 +874,9 @@ fn file_read_pipeline_reports_sequential_readahead_hints() {
     assert_eq!(second.readahead, Some(ReadAheadHint { offset: 8, len: 4 }));
     let stats = reader.stats();
     assert_eq!(stats.reads, 2);
-    assert_eq!(stats.sequential_reads, 1);
-    assert_eq!(stats.readahead_hints, 1);
+    assert_eq!(stats.sequential_reads, 2);
+    assert_eq!(stats.readahead_hints, 2);
+    assert_eq!(stats.readahead_hint_bytes, 8);
 }
 
 #[test]
@@ -919,6 +920,38 @@ fn file_read_pipeline_does_not_readahead_after_seek() {
         .unwrap();
     assert_eq!(second.blocks.bytes, b"mnop");
     assert_eq!(second.readahead, None);
+}
+
+#[test]
+fn file_read_pipeline_does_not_readahead_for_initial_random_read() {
+    let store = MemoryObjectStore::new();
+    let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
+    store.put(&key, b"abcdefghijklmnop").unwrap();
+    let mut reader = FileReadPipeline::new(FileReadPipelineOptions {
+        max_readahead_bytes: 4,
+    });
+
+    let read = reader
+        .read_blocks::<_, MemoryBlockCache>(
+            &store,
+            None,
+            16,
+            8,
+            4,
+            &[ObjectReadBlock {
+                object_key: key.as_str().to_owned(),
+                object_offset: 8,
+                len: 4,
+                output_offset: 0,
+            }],
+        )
+        .unwrap();
+    assert_eq!(read.blocks.bytes, b"ijkl");
+    assert_eq!(read.readahead, None);
+    let stats = reader.stats();
+    assert_eq!(stats.reads, 1);
+    assert_eq!(stats.sequential_reads, 0);
+    assert_eq!(stats.readahead_hints, 0);
 }
 
 #[test]

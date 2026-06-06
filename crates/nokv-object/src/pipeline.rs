@@ -302,7 +302,8 @@ impl FileReadPipeline {
         C: BlockCache + ?Sized,
     {
         let read = store.read_blocks(cache, output_len, blocks)?;
-        let sequential = self.last_read_end == Some(offset);
+        let starts_stream = self.last_read_end.is_none() && offset == 0;
+        let sequential = self.last_read_end == Some(offset) || starts_stream;
         let read_end = offset
             .checked_add(u64::try_from(output_len).map_err(|_| ObjectError::InvalidRange)?)
             .ok_or(ObjectError::InvalidRange)?;
@@ -315,6 +316,7 @@ impl FileReadPipeline {
                 let len = self
                     .options
                     .max_readahead_bytes
+                    .min(output_len)
                     .min(usize::try_from(file_size - read_end).unwrap_or(usize::MAX));
                 self.stats.readahead_hints = self.stats.readahead_hints.saturating_add(1);
                 self.stats.readahead_hint_bytes =

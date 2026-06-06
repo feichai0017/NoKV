@@ -1430,12 +1430,12 @@ fn service_file_client_stats_include_background_prefetch_gets() {
         response_body(&format!(
             r#"{{"ok":true,"result":{{"type":"path_read_plan","metadata":{{{attr}}},"plan":{{"output_len":6,"blocks":[{{"object_key":"blocks/demo","object_offset":0,"len":6,"output_offset":0}}]}}}}}}"#,
         )),
+        response_body(
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+        ),
         response_body(&format!(
             r#"{{"ok":true,"result":{{"type":"path_read_plan","metadata":{{{attr}}},"plan":{{"output_len":6,"blocks":[{{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}}]}}}}}}"#,
         )),
-        response_body(
-            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":12,"len":6,"output_offset":0}]}}}"#,
-        ),
     ]);
     let client = NoKvFsClient::connect(addr, store);
 
@@ -1446,6 +1446,10 @@ fn service_file_client_stats_include_background_prefetch_gets() {
             .bytes,
         b"abcdef"
     );
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while client.object_stats().prefetch_completed < 1 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
     assert_eq!(
         client
             .read_path("/artifact.bin", 6, 6, Some(7))
@@ -1454,16 +1458,14 @@ fn service_file_client_stats_include_background_prefetch_gets() {
         b"ghijkl"
     );
 
-    let deadline = Instant::now() + Duration::from_secs(2);
-    while client.object_stats().object_gets < 3 && Instant::now() < deadline {
-        thread::sleep(Duration::from_millis(10));
-    }
     let stats = client.object_stats();
     assert_eq!(
-        stats.object_gets, 3,
-        "two foreground reads plus one background prefetch read must be visible in stats"
+        stats.object_gets, 2,
+        "one foreground object get plus one background prefetch get must be visible in stats"
     );
-    assert_eq!(stats.object_get_bytes, 18);
+    assert_eq!(stats.object_get_bytes, 12);
+    assert_eq!(stats.cache_hits, 1);
+    assert_eq!(stats.cache_hit_bytes, 6);
     assert_eq!(stats.prefetch_enqueued, 1);
     assert_eq!(stats.prefetch_completed, 1);
     assert_eq!(stats.prefetch_dropped, 0);
