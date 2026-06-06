@@ -3,7 +3,7 @@ use std::io::{self, Read};
 use std::sync::Mutex;
 use std::thread;
 
-use crate::cache::BlockCache;
+use crate::cache::{block_range_cache_key, BlockCache};
 use crate::digest::sha256_uri;
 use crate::store::{validate_key, ObjectError, ObjectKey, ObjectRange, ObjectStore};
 use nokv_types::{BlockDescriptor, ChunkManifest, SliceManifest};
@@ -883,7 +883,6 @@ where
     #[derive(Clone)]
     struct PendingRead {
         key: ObjectKey,
-        cache_key: String,
         object_offset: u64,
         len: usize,
         output_offset: usize,
@@ -899,7 +898,6 @@ where
     let mut pending = Vec::new();
     for block in blocks {
         let key = ObjectKey::new(block.object_key.clone())?;
-        let cache_key = format!("{}:{}:{}", key.as_str(), block.object_offset, block.len);
         if block.len == 0 {
             return Err(ObjectError::InvalidRange);
         }
@@ -911,7 +909,9 @@ where
             return Err(ObjectError::InvalidRange);
         }
         if let Some(cache) = cache {
-            if let Some(cached) = cache.get_block(&cache_key)? {
+            if let Some(cached) =
+                cache.get_block_range(key.as_str(), block.object_offset, block.len)?
+            {
                 if cached.len() != block.len {
                     return Err(ObjectError::InvalidRange);
                 }
@@ -923,7 +923,6 @@ where
         }
         pending.push(PendingRead {
             key,
-            cache_key,
             object_offset: block.object_offset,
             len: block.len,
             output_offset: block.output_offset,
@@ -968,6 +967,12 @@ where
             coalesced_gets += 1;
             coalesced_get_bytes = coalesced_get_bytes.saturating_add(fetched.len() as u64);
         }
+        if let Some(cache) = cache {
+            cache.put_block(
+                block_range_cache_key(pending[start].key.as_str(), fetch_offset, fetched.len()),
+                fetched.clone(),
+            )?;
+        }
         for request in &pending[start..end] {
             let relative = usize::try_from(request.object_offset - fetch_offset)
                 .map_err(|_| ObjectError::InvalidRange)?;
@@ -983,9 +988,6 @@ where
                 .checked_add(bytes.len())
                 .ok_or(ObjectError::InvalidRange)?;
             out[request.output_offset..output_end].copy_from_slice(bytes);
-            if let Some(cache) = cache {
-                cache.put_block(request.cache_key.clone(), bytes.to_vec())?;
-            }
         }
         index = end;
     }

@@ -432,6 +432,48 @@ fn block_cache_reuses_object_reads() {
 }
 
 #[test]
+fn block_cache_reuses_covering_ranges() {
+    let store = MemoryObjectStore::new();
+    let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
+    store.put(&key, b"abcdefghijklmnop").unwrap();
+    let cache = MemoryBlockCache::default();
+
+    let first = read_object_blocks_with_cache(
+        &store,
+        Some(&cache),
+        12,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            object_offset: 0,
+            len: 12,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(first.bytes, b"abcdefghijkl");
+    assert_eq!(first.object_gets, 1);
+    assert_eq!(first.cache_hits, 0);
+
+    let second = read_object_blocks_with_cache(
+        &store,
+        Some(&cache),
+        4,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            object_offset: 4,
+            len: 4,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(second.bytes, b"efgh");
+    assert_eq!(second.object_gets, 0);
+    assert_eq!(second.object_get_bytes, 0);
+    assert_eq!(second.cache_hits, 1);
+    assert_eq!(second.cache_hit_bytes, 4);
+}
+
+#[test]
 fn object_prefetcher_populates_block_cache() {
     let store = MemoryObjectStore::new();
     let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
@@ -499,6 +541,53 @@ fn disk_block_cache_reuses_object_reads() {
     let stats = cache.stats().unwrap();
     assert_eq!(stats.items, 1);
     assert_eq!(stats.bytes, 4);
+}
+
+#[test]
+fn disk_block_cache_reuses_covering_ranges() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = MemoryObjectStore::new();
+    let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
+    store.put(&key, b"abcdefghijklmnop").unwrap();
+    let cache = DiskBlockCache::new(DiskBlockCacheOptions {
+        root: dir.path().join("blocks"),
+        max_bytes: 1024,
+        max_items: 8,
+        ttl: None,
+    })
+    .unwrap();
+
+    let first = read_object_blocks_with_cache(
+        &store,
+        Some(&cache),
+        12,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            object_offset: 0,
+            len: 12,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(first.object_gets, 1);
+    assert_eq!(first.cache_hits, 0);
+
+    let second = read_object_blocks_with_cache(
+        &store,
+        Some(&cache),
+        4,
+        &[ObjectReadBlock {
+            object_key: key.as_str().to_owned(),
+            object_offset: 4,
+            len: 4,
+            output_offset: 0,
+        }],
+    )
+    .unwrap();
+    assert_eq!(second.bytes, b"efgh");
+    assert_eq!(second.object_gets, 0);
+    assert_eq!(second.cache_hits, 1);
+    assert_eq!(second.cache_hit_bytes, 4);
 }
 
 #[test]

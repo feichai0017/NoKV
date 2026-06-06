@@ -10,8 +10,20 @@ use crate::store::ObjectError;
 
 pub trait BlockCache {
     fn get_block(&self, key: &str) -> Result<Option<Vec<u8>>, ObjectError>;
+    fn get_block_range(
+        &self,
+        object_key: &str,
+        object_offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>, ObjectError> {
+        self.get_block(&block_range_cache_key(object_key, object_offset, len))
+    }
     fn put_block(&self, key: String, bytes: Vec<u8>) -> Result<(), ObjectError>;
     fn stats(&self) -> Result<BlockCacheStats, ObjectError>;
+}
+
+pub(crate) fn block_range_cache_key(object_key: &str, object_offset: u64, len: usize) -> String {
+    format!("{object_key}:{object_offset}:{len}")
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -390,6 +402,56 @@ impl BlockCache for MemoryBlockCache {
         Ok(Some(bytes))
     }
 
+    fn get_block_range(
+        &self,
+        object_key: &str,
+        object_offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>, ObjectError> {
+        if len == 0 {
+            return Err(ObjectError::InvalidRange);
+        }
+        let mut inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
+        let prefix = format!("{object_key}:");
+        let mut expired = Vec::new();
+        let mut hit = None;
+        for (key, block) in inner.blocks.range(prefix.clone()..) {
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            let Some((cached_offset, cached_len)) = parse_block_range_cache_key(object_key, key)
+            else {
+                continue;
+            };
+            let Some(relative) =
+                covered_range_offset(cached_offset, cached_len, object_offset, len)
+            else {
+                continue;
+            };
+            if inner.is_expired(block.inserted_at) {
+                expired.push(key.clone());
+                continue;
+            }
+            let relative_end = relative.checked_add(len).ok_or(ObjectError::InvalidRange)?;
+            if relative_end <= block.bytes.len() {
+                hit = Some(block.bytes[relative..relative_end].to_vec());
+                break;
+            }
+        }
+        for key in expired {
+            if inner.remove(&key).is_some() {
+                inner.stats.expired = inner.stats.expired.saturating_add(1);
+            }
+        }
+        let Some(bytes) = hit else {
+            inner.stats.misses = inner.stats.misses.saturating_add(1);
+            return Ok(None);
+        };
+        inner.stats.hits = inner.stats.hits.saturating_add(1);
+        inner.stats.hit_bytes = inner.stats.hit_bytes.saturating_add(bytes.len() as u64);
+        Ok(Some(bytes))
+    }
+
     fn put_block(&self, key: String, bytes: Vec<u8>) -> Result<(), ObjectError> {
         let mut inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
         let len = bytes.len() as u64;
@@ -425,6 +487,18 @@ impl BlockCache for ObjectBlockCache {
         match self {
             Self::Memory(cache) => cache.get_block(key),
             Self::Disk(cache) => cache.get_block(key),
+        }
+    }
+
+    fn get_block_range(
+        &self,
+        object_key: &str,
+        object_offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>, ObjectError> {
+        match self {
+            Self::Memory(cache) => cache.get_block_range(object_key, object_offset, len),
+            Self::Disk(cache) => cache.get_block_range(object_key, object_offset, len),
         }
     }
 
@@ -471,6 +545,75 @@ impl BlockCache for DiskBlockCache {
             inner.stats.misses = inner.stats.misses.saturating_add(1);
             return Ok(None);
         };
+        inner.stats.hits = inner.stats.hits.saturating_add(1);
+        inner.stats.hit_bytes = inner.stats.hit_bytes.saturating_add(bytes.len() as u64);
+        Ok(Some(bytes))
+    }
+
+    fn get_block_range(
+        &self,
+        object_key: &str,
+        object_offset: u64,
+        len: usize,
+    ) -> Result<Option<Vec<u8>>, ObjectError> {
+        if len == 0 {
+            return Err(ObjectError::InvalidRange);
+        }
+        let mut inner = self.inner.lock().map_err(ObjectError::from_poisoned_lock)?;
+        let prefix = format!("{object_key}:");
+        let mut expired = Vec::new();
+        let mut hit = None;
+        for (key, block) in inner.blocks.range(prefix.clone()..) {
+            if !key.starts_with(&prefix) {
+                break;
+            }
+            let Some((cached_offset, cached_len)) = parse_block_range_cache_key(object_key, key)
+            else {
+                continue;
+            };
+            let Some(relative) =
+                covered_range_offset(cached_offset, cached_len, object_offset, len)
+            else {
+                continue;
+            };
+            if inner.is_expired(block.inserted_at) {
+                expired.push(key.clone());
+                continue;
+            }
+            hit = Some((key.clone(), block.clone(), relative));
+            break;
+        }
+        for key in expired {
+            if inner.remove(&key)?.is_some() {
+                inner.stats.expired = inner.stats.expired.saturating_add(1);
+            }
+        }
+        let Some((key, block, relative)) = hit else {
+            inner.stats.misses = inner.stats.misses.saturating_add(1);
+            return Ok(None);
+        };
+        let path = inner.file_path(&block.file_name);
+        let encoded = match fs::read(&path) {
+            Ok(bytes) => bytes,
+            Err(err) if err.kind() == io::ErrorKind::NotFound => {
+                inner.remove(&key)?;
+                inner.stats.misses = inner.stats.misses.saturating_add(1);
+                return Ok(None);
+            }
+            Err(err) => return Err(ObjectError::from_backend(err)),
+        };
+        let Some(cached) = decode_cache_file(&key, &encoded) else {
+            inner.remove(&key)?;
+            inner.stats.misses = inner.stats.misses.saturating_add(1);
+            return Ok(None);
+        };
+        let end = relative.checked_add(len).ok_or(ObjectError::InvalidRange)?;
+        if end > cached.len() {
+            inner.remove(&key)?;
+            inner.stats.misses = inner.stats.misses.saturating_add(1);
+            return Ok(None);
+        }
+        let bytes = cached[relative..end].to_vec();
         inner.stats.hits = inner.stats.hits.saturating_add(1);
         inner.stats.hit_bytes = inner.stats.hit_bytes.saturating_add(bytes.len() as u64);
         Ok(Some(bytes))
@@ -593,6 +736,27 @@ impl WritebackCacheState {
 
 fn cache_file_name(key: &str) -> String {
     format!("{}.block", sha256_hex(key.as_bytes()))
+}
+
+fn parse_block_range_cache_key(object_key: &str, key: &str) -> Option<(u64, usize)> {
+    let suffix = key.strip_prefix(object_key)?.strip_prefix(':')?;
+    let (offset, len) = suffix.split_once(':')?;
+    Some((offset.parse().ok()?, len.parse().ok()?))
+}
+
+fn covered_range_offset(
+    cached_offset: u64,
+    cached_len: usize,
+    object_offset: u64,
+    len: usize,
+) -> Option<usize> {
+    let cached_end = cached_offset.checked_add(cached_len as u64)?;
+    let requested_end = object_offset.checked_add(len as u64)?;
+    if cached_offset <= object_offset && requested_end <= cached_end {
+        usize::try_from(object_offset - cached_offset).ok()
+    } else {
+        None
+    }
 }
 
 fn encode_cache_file(key: &str, bytes: &[u8]) -> Result<Vec<u8>, ObjectError> {
