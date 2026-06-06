@@ -1027,10 +1027,7 @@ fn bench_metadata_ha_coalescing_smoke(
 
     let cluster_nodes = [(node_1, addr_1), (node_2, addr_2), (node_3, addr_3)];
     let (leader, leader_addr) = wait_metadata_raft_leader(&cluster_nodes)?;
-    let write_addr = cluster_nodes
-        .iter()
-        .find_map(|(node, address)| (*node != leader).then_some(*address))
-        .unwrap_or(leader_addr);
+    let write_addr = leader_addr;
     let peer_read_addr = cluster_nodes
         .iter()
         .find_map(|(node, address)| (*node != leader && *address != write_addr).then_some(*address))
@@ -1070,19 +1067,26 @@ fn bench_metadata_ha_coalescing_smoke(
         handles.push(thread::spawn(move || -> Result<(), BenchError> {
             let metadata = MetadataClient::new(options);
             barrier.wait();
-            for index in (worker..files).step_by(workers) {
-                let entry = metadata
-                    .create_file(
-                        &format!("/coalesce/file-{index:06}"),
-                        DEFAULT_MODE_FILE,
-                        DEFAULT_UID,
-                        DEFAULT_GID,
-                    )
-                    .map_err(|err| {
-                        BenchError::Client(format!(
-                            "metadata-ha-coalescing-smoke create file {index}: {err}"
-                        ))
-                    })?;
+            let paths = (worker..files)
+                .step_by(workers)
+                .map(|index| format!("/coalesce/file-{index:06}"))
+                .collect::<Vec<_>>();
+            for (offset, result) in metadata
+                .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
+                .map_err(|err| {
+                    BenchError::Client(format!(
+                        "metadata-ha-coalescing-smoke create file batch worker {worker}: {err}"
+                    ))
+                })?
+                .into_iter()
+                .enumerate()
+            {
+                let entry = result.map_err(|err| {
+                    BenchError::Client(format!(
+                        "metadata-ha-coalescing-smoke create file {}: {err}",
+                        paths[offset]
+                    ))
+                })?;
                 checksum.fetch_add(entry.attr.inode.get(), Ordering::Relaxed);
             }
             Ok(())
@@ -1129,7 +1133,7 @@ fn bench_metadata_ha_coalescing_smoke(
             files
         ),
         caveat: format!(
-            "OpenRaft coalescing smoke over concurrent independent create_file RPCs, sync={}",
+            "OpenRaft coalescing smoke over concurrent same-parent create_files RPCs to the current leader, sync={}",
             metadata_raft_log_sync_name(config.metadata_raft_log_sync)
         ),
     }))

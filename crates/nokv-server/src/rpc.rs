@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use std::net::{SocketAddr, TcpStream};
 use std::sync::{
     atomic::{AtomicU64, Ordering},
-    mpsc, Arc, Mutex, OnceLock,
+    mpsc, Arc, Mutex,
 };
 use std::thread;
 use std::time::Duration;
@@ -42,9 +42,7 @@ const OUTBOUND_FRAMED_RPC_TIMEOUT: Duration = Duration::from_secs(5);
 
 type RpcJob = Box<dyn FnOnce() + Send + 'static>;
 
-static FRAMED_RPC_WORKERS: OnceLock<RpcWorkerPool> = OnceLock::new();
-
-struct RpcWorkerPool {
+pub(crate) struct RpcWorkerPool {
     sender: mpsc::SyncSender<RpcJob>,
 }
 
@@ -60,7 +58,7 @@ pub(crate) struct MetadataRaftFramedRpcClient {
 }
 
 impl RpcWorkerPool {
-    fn new(workers: usize, queue_capacity: usize) -> Self {
+    pub(crate) fn new(workers: usize, queue_capacity: usize) -> Self {
         let (sender, receiver) = mpsc::sync_channel::<RpcJob>(queue_capacity.max(workers));
         let receiver = Arc::new(Mutex::new(receiver));
         for worker in 0..workers {
@@ -82,7 +80,7 @@ impl RpcWorkerPool {
         Self { sender }
     }
 
-    fn submit(&self, job: RpcJob) -> Result<(), ServerError> {
+    pub(crate) fn submit(&self, job: RpcJob) -> Result<(), ServerError> {
         self.sender.send(job).map_err(|_| {
             ServerError::Io(io::Error::new(
                 io::ErrorKind::BrokenPipe,
@@ -262,10 +260,10 @@ pub(crate) fn handle_framed_stream_after_magic(
         };
         let mut frames = vec![frame];
         drain_ready_frames(&mut stream, &mut frames)?;
-        let server = Arc::clone(&server);
+        let task_server = Arc::clone(&server);
         let writer = Arc::clone(&writer);
-        framed_rpc_worker_pool().submit(Box::new(move || {
-            let responses = handle_binary_rpc_frames(server.as_ref(), frames);
+        server.framed_rpc_workers().submit(Box::new(move || {
+            let responses = handle_binary_rpc_frames(task_server.as_ref(), frames);
             for (request_id, flags, response) in responses {
                 let response = match response {
                     Ok(response) => response,
@@ -478,18 +476,15 @@ fn encode_server_error(err: &ServerError) -> Result<Vec<u8>, ServerError> {
     })
 }
 
-fn framed_rpc_worker_pool() -> &'static RpcWorkerPool {
-    FRAMED_RPC_WORKERS.get_or_init(|| {
-        let workers = default_framed_rpc_worker_count();
-        RpcWorkerPool::new(workers, workers.saturating_mul(FRAMED_RPC_QUEUE_PER_WORKER))
-    })
-}
-
-fn default_framed_rpc_worker_count() -> usize {
+pub(crate) fn default_framed_rpc_worker_count() -> usize {
     thread::available_parallelism()
         .map(|parallelism| parallelism.get().saturating_mul(4))
         .unwrap_or(MIN_FRAMED_RPC_WORKERS)
         .clamp(MIN_FRAMED_RPC_WORKERS, MAX_FRAMED_RPC_WORKERS)
+}
+
+pub(crate) fn default_framed_rpc_queue_capacity() -> usize {
+    default_framed_rpc_worker_count().saturating_mul(FRAMED_RPC_QUEUE_PER_WORKER)
 }
 
 fn read_frame(stream: &mut TcpStream) -> Result<Option<RpcFrame>, ServerError> {

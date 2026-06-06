@@ -33,6 +33,7 @@ pub struct Server {
     checkpoint_archive_objects: S3ObjectStore,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
+    framed_rpc_workers: rpc::RpcWorkerPool,
     #[cfg(test)]
     _test_meta_dir: Option<tempfile::TempDir>,
 }
@@ -114,6 +115,10 @@ impl Server {
         }
         let object_gc = ObjectGcWorker::spawn(Arc::clone(&service), options.object_gc);
         let history_gc = HistoryGcWorker::spawn(Arc::clone(&service), options.history_gc);
+        let framed_rpc_workers = rpc::RpcWorkerPool::new(
+            rpc::default_framed_rpc_worker_count(),
+            rpc::default_framed_rpc_queue_capacity(),
+        );
         Ok(Self {
             service,
             metadata_raft,
@@ -121,6 +126,7 @@ impl Server {
             checkpoint_archive_objects,
             object_gc,
             history_gc,
+            framed_rpc_workers,
             #[cfg(test)]
             _test_meta_dir: None,
         })
@@ -142,6 +148,10 @@ impl Server {
 
     pub(crate) fn service(&self) -> &NoKvFs<ServerMetadataStore, S3ObjectStore> {
         &self.service
+    }
+
+    pub(crate) fn framed_rpc_workers(&self) -> &rpc::RpcWorkerPool {
+        &self.framed_rpc_workers
     }
 
     pub(crate) fn refresh_metadata_view(&self) -> Result<(), ServerError> {

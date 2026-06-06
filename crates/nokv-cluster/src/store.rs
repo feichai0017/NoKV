@@ -426,7 +426,7 @@ where
         N: RaftNetworkFactory<MetadataRaftConfig> + Send + Sync + 'static,
     {
         let runtime = tokio::runtime::Builder::new_multi_thread()
-            .worker_threads(2)
+            .worker_threads(default_openraft_runtime_workers())
             .enable_all()
             .build()
             .map_err(|err| MetadataError::Backend(format!("openraft runtime: {err}")))?;
@@ -1345,6 +1345,13 @@ fn estimated_command_bytes(command: &MetadataCommand) -> usize {
         .saturating_add(predicates)
         .saturating_add(mutations)
         .saturating_add(watches)
+}
+
+fn default_openraft_runtime_workers() -> usize {
+    std::thread::available_parallelism()
+        .map(|parallelism| parallelism.get())
+        .unwrap_or(4)
+        .clamp(4, 16)
 }
 
 fn single_voter_members(node: NodeId) -> Result<BTreeMap<NodeId, String>, MetadataError> {
