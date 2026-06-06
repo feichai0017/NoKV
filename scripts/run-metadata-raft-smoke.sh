@@ -42,8 +42,8 @@ Usage: scripts/run-metadata-raft-smoke.sh
 Environment:
   NOKV_METADATA_RAFT_SMOKE_WORKDIR        keep/use a specific work directory
   NOKV_METADATA_RAFT_SMOKE_KEEP=1         keep the temporary work directory
-  NOKV_METADATA_RAFT_SMOKE_NOKV_FS_BIN    use an existing nokv-fs binary
-  NOKV_METADATA_RAFT_SMOKE_SKIP_BUILD=1   do not build nokv-fs when a binary is set
+  NOKV_METADATA_RAFT_SMOKE_NOKV_FS_BIN    use an existing nokv binary
+  NOKV_METADATA_RAFT_SMOKE_SKIP_BUILD=1   do not build nokv when a binary is set
   NOKV_METADATA_RAFT_SMOKE_RUSTFS_ADDRESS RustFS listen address (default: 127.0.0.1:9020)
   NOKV_METADATA_RAFT_SMOKE_NODE1          voter address (default: 127.0.0.1:7791)
   NOKV_METADATA_RAFT_SMOKE_NODE2          voter address (default: 127.0.0.1:7792)
@@ -210,16 +210,16 @@ trap cleanup EXIT INT TERM
 
 if [[ -z "$NOKV_FS_BIN" ]]; then
     if [[ "$SKIP_BUILD" == "1" ]]; then
-        NOKV_FS_BIN="$ROOT_DIR/target/release/nokv-fs"
+        NOKV_FS_BIN="$ROOT_DIR/target/release/nokv"
     else
-        echo "Building nokv-fs"
-        (cd "$ROOT_DIR" && cargo build --release -p nokvfs-cli --bin nokv-fs)
-        NOKV_FS_BIN="$ROOT_DIR/target/release/nokv-fs"
+        echo "Building nokv"
+        (cd "$ROOT_DIR" && cargo build --release -p nokv --bin nokv)
+        NOKV_FS_BIN="$ROOT_DIR/target/release/nokv"
     fi
 fi
 
 if [[ ! -x "$NOKV_FS_BIN" ]]; then
-    echo "error: nokv-fs binary is not executable: $NOKV_FS_BIN" >&2
+    echo "error: nokv binary is not executable: $NOKV_FS_BIN" >&2
     exit 127
 fi
 

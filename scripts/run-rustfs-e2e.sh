@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Run a local RustFS-backed NoKV-FS end-to-end benchmark.
+# Run a local RustFS-backed NoKV end-to-end benchmark.
 #
 # The script starts a temporary RustFS process, creates the configured S3
-# bucket, runs the deployable single-node NoKV-FS benchmark harness against
+# bucket, runs the deployable single-node NoKV benchmark harness against
 # that endpoint, and then stops RustFS.
 
 set -euo pipefail
@@ -36,7 +36,7 @@ OWN_DATA_DIR=0
 
 usage() {
     cat <<EOF
-Usage: scripts/run-rustfs-e2e.sh [extra nokv-fs-bench args...]
+Usage: scripts/run-rustfs-e2e.sh [extra nokv-bench args...]
 
 Environment:
   NOKV_E2E_PROFILE                  smoke|standard|long (default: smoke)
@@ -184,8 +184,8 @@ if [[ "$#" -gt 0 ]]; then
     bench_args+=("$@")
 fi
 
-echo "Running NoKV-FS E2E benchmark: workload=$WORKLOAD profile=$PROFILE object_concurrency=$OBJECT_CONCURRENCY"
+echo "Running NoKV E2E benchmark: workload=$WORKLOAD profile=$PROFILE object_concurrency=$OBJECT_CONCURRENCY"
 (
     cd "$ROOT_DIR"
-    cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- "${bench_args[@]}"
+    cargo run --release -p nokv-bench --bin nokv-bench -- "${bench_args[@]}"
 )

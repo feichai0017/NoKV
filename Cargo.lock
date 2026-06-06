@@ -1431,85 +1431,85 @@ dependencies = [
 ]
 
 [[package]]
-name = "nokvfs-bench"
+name = "nokv"
 version = "0.1.0"
 dependencies = [
- "nokvfs-client",
- "nokvfs-cluster",
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-server",
- "nokvfs-types",
-]
-
-[[package]]
-name = "nokvfs-cli"
-version = "0.1.0"
-dependencies = [
- "nokvfs-client",
- "nokvfs-cluster",
- "nokvfs-fuse",
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-server",
- "nokvfs-types",
+ "nokv-client",
+ "nokv-cluster",
+ "nokv-fuse",
+ "nokv-meta",
+ "nokv-object",
+ "nokv-server",
+ "nokv-types",
  "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
-name = "nokvfs-client"
+name = "nokv-bench"
 version = "0.1.0"
 dependencies = [
- "nokvfs-cluster",
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-protocol",
- "nokvfs-server",
- "nokvfs-types",
+ "nokv-client",
+ "nokv-cluster",
+ "nokv-meta",
+ "nokv-object",
+ "nokv-server",
+ "nokv-types",
+]
+
+[[package]]
+name = "nokv-client"
+version = "0.1.0"
+dependencies = [
+ "nokv-cluster",
+ "nokv-meta",
+ "nokv-object",
+ "nokv-protocol",
+ "nokv-server",
+ "nokv-types",
  "serde_json",
  "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
-name = "nokvfs-cluster"
+name = "nokv-cluster"
 version = "0.1.0"
 dependencies = [
- "nokvfs-meta",
- "nokvfs-protocol",
- "nokvfs-types",
+ "nokv-meta",
+ "nokv-protocol",
+ "nokv-types",
  "openraft",
  "tempfile",
  "tokio",
 ]
 
 [[package]]
-name = "nokvfs-fuse"
+name = "nokv-fuse"
 version = "0.1.0"
 dependencies = [
  "fuser",
- "nokvfs-client",
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-types",
+ "nokv-client",
+ "nokv-meta",
+ "nokv-object",
+ "nokv-types",
  "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
-name = "nokvfs-meta"
+name = "nokv-meta"
 version = "0.1.0"
 dependencies = [
  "holt",
- "nokvfs-object",
- "nokvfs-types",
+ "nokv-object",
+ "nokv-types",
  "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
-name = "nokvfs-object"
+name = "nokv-object"
 version = "0.1.0"
 dependencies = [
  "opendal",
@@ -1518,29 +1518,29 @@ dependencies = [
 ]
 
 [[package]]
-name = "nokvfs-protocol"
+name = "nokv-protocol"
 version = "0.1.0"
 dependencies = [
- "nokvfs-types",
+ "nokv-types",
  "rmp-serde",
  "serde",
 ]
 
 [[package]]
-name = "nokvfs-server"
+name = "nokv-server"
 version = "0.1.0"
 dependencies = [
- "nokvfs-cluster",
- "nokvfs-meta",
- "nokvfs-object",
- "nokvfs-protocol",
- "nokvfs-types",
+ "nokv-cluster",
+ "nokv-meta",
+ "nokv-object",
+ "nokv-protocol",
+ "nokv-types",
  "sha2 0.10.9",
  "tempfile",
 ]
 
 [[package]]
-name = "nokvfs-types"
+name = "nokv-types"
 version = "0.1.0"
 
 [[package]]

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run a fair local NoKV-FS vs JuiceFS comparison against one disposable RustFS
+# Run a fair local NoKV vs JuiceFS comparison against one disposable RustFS
 # endpoint. The script starts RustFS, Redis, formats and mounts JuiceFS, then
 # runs scripts/run-training-comparison.sh with isolated buckets.
 #
@@ -38,7 +38,7 @@ usage() {
     cat <<EOF
 Usage: scripts/run-juicefs-rustfs-comparison.sh
 
-Starts disposable RustFS + Redis + JuiceFS and runs the same-shape NoKV-FS and
+Starts disposable RustFS + Redis + JuiceFS and runs the same-shape NoKV and
 JuiceFS comparison workload against the same RustFS endpoint.
 
 Environment:

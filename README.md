@@ -12,8 +12,8 @@ SPDX-License-Identifier: Apache-2.0
 
   <p>
     <a href="https://github.com/feichai0017/NoKV/actions"><img alt="CI" src="https://img.shields.io/github/actions/workflow/status/feichai0017/NoKV/rust.yml?branch=main&label=ci" /></a>
-    <a href="https://crates.io/crates/nokvfs-cli"><img alt="crates.io" src="https://img.shields.io/crates/v/nokvfs-cli?logo=rust" /></a>
-    <a href="https://docs.rs/nokvfs-cli"><img alt="docs.rs" src="https://img.shields.io/docsrs/nokvfs-cli?logo=docs.rs" /></a>
+    <a href="https://crates.io/crates/nokv"><img alt="crates.io" src="https://img.shields.io/crates/v/nokv?logo=rust" /></a>
+    <a href="https://docs.rs/nokv"><img alt="docs.rs" src="https://img.shields.io/docsrs/nokv?logo=docs.rs" /></a>
     <img alt="Rust Version" src="https://img.shields.io/badge/rust-1.88%2B-f74c00?logo=rust&logoColor=white" />
   </p>
 
@@ -92,7 +92,7 @@ ad hoc locks, and polling loops.
 
 ## Current Status
 
-This repository is now the Rust NoKV-FS product line.
+This repository is now the Rust NoKV product line.
 
 Implemented today:
 
@@ -104,9 +104,9 @@ Implemented today:
 - chunked object data path where file bodies are split into immutable object
   blocks and published by metadata manifest;
 - S3-compatible object backend, with RustFS as the local development default;
-- Rust SDK and `nokv-fs` CLI for namespace operations, artifact publish,
+- Rust SDK and `nokv` CLI for namespace operations, artifact publish,
   metadata server access, and object range reads;
-- long-running `nokvfs-server` with health, readiness, stats, manual GC, and
+- long-running `nokv-server` with health, readiness, stats, manual GC, and
   framed binary metadata RPC;
 - OpenRaft metadata group support with explicit voter membership, persistent
   Raft log storage, follower replay, and a local 3-voter smoke harness;
@@ -129,14 +129,14 @@ metadata server path, not yet a JuiceFS/3FS-class distributed filesystem.
 
 ```text
 crates/
-  nokvfs-types     storage-neutral namespace model types
-  nokvfs-protocol  framed metadata RPC DTOs and binary codec
-  nokvfs-meta      schema, MetadataCommand, Holt store, service core
-  nokvfs-object    S3-compatible object body storage helpers
-  nokvfs-client    Rust SDK over metadata service and object backend
-  nokvfs-fuse      low-level FUSE frontend
-  nokvfs-server    long-running metad process and framed RPC service
-  nokvfs-cli       nokv-fs CLI binary
+  nokv-types     storage-neutral namespace model types
+  nokv-protocol  framed metadata RPC DTOs and binary codec
+  nokv-meta      schema, MetadataCommand, Holt store, service core
+  nokv-object    S3-compatible object body storage helpers
+  nokv-client    Rust SDK over metadata service and object backend
+  nokv-fuse      low-level FUSE frontend
+  nokv-server    long-running metad process and framed RPC service
+  nokv           CLI binary
 
 bench/             system workload benchmark harness
 docs/              product, architecture, layout, RustFS, and benchmark docs
@@ -154,19 +154,19 @@ cargo test --workspace
 Build the CLI:
 
 ```bash
-cargo build --release -p nokvfs-cli --bin nokv-fs
+cargo build --release -p nokv --bin nokv
 ```
 
 Initialize local metadata:
 
 ```bash
-cargo run --release -p nokvfs-cli --bin nokv-fs -- init
+cargo run --release -p nokv --bin nokv -- init
 ```
 
 Start a metadata server:
 
 ```bash
-cargo run --release -p nokvfs-cli --bin nokv-fs -- serve
+cargo run --release -p nokv --bin nokv -- serve
 ```
 
 By default NoKV expects a local RustFS-compatible S3 endpoint at
@@ -177,10 +177,10 @@ RustFS setup commands.
 Publish and read an artifact:
 
 ```bash
-cargo run --release -p nokvfs-cli --bin nokv-fs -- \
+cargo run --release -p nokv --bin nokv -- \
   put-artifact /runs/1/checkpoint.bin ./checkpoint.bin
 
-cargo run --release -p nokvfs-cli --bin nokv-fs -- \
+cargo run --release -p nokv --bin nokv -- \
   cat /runs/1/checkpoint.bin > restored.bin
 ```
 
@@ -189,7 +189,7 @@ Mount with FUSE:
 ```bash
 mkdir -p /tmp/nokv-mount
 
-cargo run --release -p nokvfs-cli --bin nokv-fs -- \
+cargo run --release -p nokv --bin nokv -- \
   mount /tmp/nokv-mount
 ```
 
@@ -202,7 +202,7 @@ roundtrip is covered by the FUSE smoke test.
 The root `bench/` crate contains system workload harnesses:
 
 ```bash
-cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
+cargo run --release -p nokv-bench --bin nokv-bench -- \
   --profile smoke \
   --workload all
 ```

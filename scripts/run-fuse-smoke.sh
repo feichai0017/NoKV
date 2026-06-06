@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Run a local RustFS-backed NoKV-FS FUSE smoke test.
+# Run a local RustFS-backed NoKV FUSE smoke test.
 #
 # The script starts a temporary RustFS process, creates the configured S3
-# bucket, mounts NoKV-FS, runs a small POSIX smoke suite through the mounted
+# bucket, mounts NoKV, runs a small POSIX smoke suite through the mounted
 # filesystem, and then unmounts and cleans up.
 
 set -euo pipefail
@@ -46,11 +46,11 @@ Usage: scripts/run-fuse-smoke.sh
 Environment:
   NOKV_FUSE_SMOKE_WORKDIR              keep/use a specific work directory
   NOKV_FUSE_SMOKE_KEEP=1               keep the temporary work directory
-  NOKV_FUSE_SMOKE_NOKV_FS_BIN          use an existing nokv-fs binary
-  NOKV_FUSE_SMOKE_SKIP_BUILD=1         do not build nokv-fs when a binary is set
+  NOKV_FUSE_SMOKE_NOKV_FS_BIN          use an existing nokv binary
+  NOKV_FUSE_SMOKE_SKIP_BUILD=1         do not build nokv when a binary is set
   NOKV_FUSE_SMOKE_RUSTFS_ADDRESS       RustFS listen address (default: 127.0.0.1:9010)
   NOKV_FUSE_SMOKE_RUSTFS_BUCKET        bucket name (default: nokv-fuse-smoke)
-  NOKV_FUSE_SMOKE_SERVER_ADDRESS       NoKV-FS metadata server address (default: 127.0.0.1:7781)
+  NOKV_FUSE_SMOKE_SERVER_ADDRESS       NoKV metadata server address (default: 127.0.0.1:7781)
 
 The smoke covers mkdir, file write/read, file fsync, directory fsync, rename,
 readdir, truncate, symlink/readlink, xattr roundtrip, access(2), rm, and rmdir
@@ -115,12 +115,12 @@ cleanup() {
     fi
     if [[ "$status" -ne 0 ]]; then
         if [[ -n "$MOUNT_LOG" && -f "$MOUNT_LOG" ]]; then
-            echo "---- NoKV-FS mount log tail ----" >&2
+            echo "---- NoKV mount log tail ----" >&2
             tail -80 "$MOUNT_LOG" >&2 || true
             echo "--------------------------------" >&2
         fi
         if [[ -n "$SERVER_LOG" && -f "$SERVER_LOG" ]]; then
-            echo "---- NoKV-FS server log tail ----" >&2
+            echo "---- NoKV server log tail ----" >&2
             tail -80 "$SERVER_LOG" >&2 || true
             echo "---------------------------------" >&2
         fi
@@ -133,7 +133,7 @@ cleanup() {
     if [[ "$OWN_WORK_DIR" -eq 1 && "$KEEP_WORKDIR" != "1" ]]; then
         rm -rf "$WORK_DIR"
     elif [[ -n "$WORK_DIR" ]]; then
-        echo "NoKV-FS FUSE smoke workdir: $WORK_DIR" >&2
+        echo "NoKV FUSE smoke workdir: $WORK_DIR" >&2
     fi
     exit "$status"
 }
@@ -182,7 +182,7 @@ wait_for_metadata_server() {
     local deadline=$((SECONDS + 30))
     while (( SECONDS < deadline )); do
         if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
-            echo "error: nokv-fs serve exited before becoming ready" >&2
+            echo "error: nokv serve exited before becoming ready" >&2
             return 1
         fi
         if curl -fsS --max-time 2 "http://${SERVER_ADDRESS}/healthz" >/dev/null 2>&1; then
@@ -190,7 +190,7 @@ wait_for_metadata_server() {
         fi
         sleep 0.25
     done
-    echo "error: timed out waiting for NoKV-FS metadata server at $SERVER_ADDRESS" >&2
+    echo "error: timed out waiting for NoKV metadata server at $SERVER_ADDRESS" >&2
     return 1
 }
 
@@ -198,7 +198,7 @@ wait_for_mount() {
     local deadline=$((SECONDS + 30))
     while (( SECONDS < deadline )); do
         if ! kill -0 "$MOUNT_PID" >/dev/null 2>&1; then
-            echo "error: nokv-fs mount process exited before mount became ready" >&2
+            echo "error: nokv mount process exited before mount became ready" >&2
             return 1
         fi
         if is_mounted; then
@@ -206,7 +206,7 @@ wait_for_mount() {
         fi
         sleep 0.25
     done
-    echo "error: timed out waiting for NoKV-FS mount at $MOUNT_DIR" >&2
+    echo "error: timed out waiting for NoKV mount at $MOUNT_DIR" >&2
     return 1
 }
 
@@ -224,12 +224,12 @@ os.makedirs(run_dir, exist_ok=True)
 
 checkpoint = os.path.join(run_dir, "checkpoint.bin")
 with open(checkpoint, "wb") as fh:
-    fh.write(b"hello nokv-fs\n")
+    fh.write(b"hello nokv\n")
     fh.flush()
     os.fsync(fh.fileno())
 
 with open(checkpoint, "rb") as fh:
-    assert fh.read() == b"hello nokv-fs\n"
+    assert fh.read() == b"hello nokv\n"
 
 large_checkpoint = os.path.join(run_dir, "large-checkpoint.bin")
 large_payload = bytes((offset % 251 for offset in range(1024 * 1024)))
@@ -277,12 +277,12 @@ if (
     and hasattr(os, "listxattr")
     and hasattr(os, "removexattr")
 ):
-    os.setxattr(checkpoint, "user.nokvfs-smoke", b"value")
-    assert os.getxattr(checkpoint, "user.nokvfs-smoke") == b"value"
-    assert "user.nokvfs-smoke" in os.listxattr(checkpoint)
-    os.removexattr(checkpoint, "user.nokvfs-smoke")
+    os.setxattr(checkpoint, "user.nokv-smoke", b"value")
+    assert os.getxattr(checkpoint, "user.nokv-smoke") == b"value"
+    assert "user.nokv-smoke" in os.listxattr(checkpoint)
+    os.removexattr(checkpoint, "user.nokv-smoke")
     try:
-        os.getxattr(checkpoint, "user.nokvfs-smoke")
+        os.getxattr(checkpoint, "user.nokv-smoke")
     except OSError as err:
         if err.errno not in {getattr(errno, "ENODATA", 61), getattr(errno, "ENOATTR", 93)}:
             raise
@@ -290,15 +290,15 @@ if (
         raise AssertionError("removed xattr was still readable")
 elif shutil.which("xattr"):
     written = subprocess.run(
-        ["xattr", "-w", "user.nokvfs-smoke", "value", checkpoint],
+        ["xattr", "-w", "user.nokv-smoke", "value", checkpoint],
         capture_output=True,
     )
     if written.returncode == 0:
-        value = subprocess.check_output(["xattr", "-p", "user.nokvfs-smoke", checkpoint])
+        value = subprocess.check_output(["xattr", "-p", "user.nokv-smoke", checkpoint])
         assert value.rstrip(b"\n") == b"value"
         listed = subprocess.check_output(["xattr", checkpoint])
-        assert b"user.nokvfs-smoke" in listed.splitlines()
-        subprocess.run(["xattr", "-d", "user.nokvfs-smoke", checkpoint], check=True)
+        assert b"user.nokv-smoke" in listed.splitlines()
+        subprocess.run(["xattr", "-d", "user.nokv-smoke", checkpoint], check=True)
     elif b"Operation not supported" in written.stderr:
         print("warning: xattr unsupported by this mount configuration; skipping xattr smoke", file=sys.stderr)
     else:
@@ -337,10 +337,10 @@ if [[ -z "$NOKV_FS_BIN" ]]; then
         echo "error: NOKV_FUSE_SMOKE_NOKV_FS_BIN is required when NOKV_FUSE_SMOKE_SKIP_BUILD=1" >&2
         exit 2
     fi
-    (cd "$ROOT_DIR" && cargo build -p nokvfs-cli --bin nokv-fs)
-    NOKV_FS_BIN="$ROOT_DIR/target/debug/nokv-fs"
+    (cd "$ROOT_DIR" && cargo build -p nokv --bin nokv)
+    NOKV_FS_BIN="$ROOT_DIR/target/debug/nokv"
 elif [[ "$SKIP_BUILD" != "1" ]]; then
-    (cd "$ROOT_DIR" && cargo build -p nokvfs-cli --bin nokv-fs)
+    (cd "$ROOT_DIR" && cargo build -p nokv --bin nokv)
 fi
 
 if [[ -z "$WORK_DIR" ]]; then
@@ -354,8 +354,8 @@ MOUNT_DIR="$WORK_DIR/mnt"
 META_DIR="$WORK_DIR/meta"
 RUSTFS_DATA_DIR="$WORK_DIR/rustfs-data"
 RUSTFS_LOG="$WORK_DIR/rustfs.log"
-SERVER_LOG="$WORK_DIR/nokv-fs-server.log"
-MOUNT_LOG="$WORK_DIR/nokv-fs-mount.log"
+SERVER_LOG="$WORK_DIR/nokv-server.log"
+MOUNT_LOG="$WORK_DIR/nokv-mount.log"
 mkdir -p "$MOUNT_DIR" "$META_DIR" "$RUSTFS_DATA_DIR"
 
 trap cleanup EXIT INT TERM
@@ -374,7 +374,7 @@ RUSTFS_PID=$!
 wait_for_rustfs
 create_bucket
 
-echo "Starting NoKV-FS metadata server at $SERVER_ADDRESS"
+echo "Starting NoKV metadata server at $SERVER_ADDRESS"
 "$NOKV_FS_BIN" \
     --server-bind "$SERVER_ADDRESS" \
     --meta "$META_DIR" \
@@ -390,7 +390,7 @@ SERVER_PID=$!
 
 wait_for_metadata_server
 
-echo "Mounting NoKV-FS at $MOUNT_DIR"
+echo "Mounting NoKV at $MOUNT_DIR"
 "$NOKV_FS_BIN" \
     --server-bind "$SERVER_ADDRESS" \
     --object-backend rustfs \
@@ -406,4 +406,4 @@ MOUNT_PID=$!
 wait_for_mount
 run_python_smoke
 
-echo "NoKV-FS FUSE smoke passed"
+echo "NoKV FUSE smoke passed"

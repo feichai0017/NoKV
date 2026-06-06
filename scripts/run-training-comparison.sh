@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 #
-# Run a local NoKV-FS AI-training benchmark and, optionally, a same-shape
+# Run a local NoKV AI-training benchmark and, optionally, a same-shape
 # filesystem comparison against an existing JuiceFS mount.
 #
 # This is not an MLCommons submission harness. It is a controlled local
-# same-shape workload for comparing NoKV-FS and a mounted filesystem with the
+# same-shape workload for comparing NoKV and a mounted filesystem with the
 # same generated dataset/checkpoint shape.
 
 set -euo pipefail
@@ -62,7 +62,7 @@ usage() {
     cat <<EOF
 Usage: scripts/run-training-comparison.sh
 
-Runs NoKV-FS through scripts/run-rustfs-e2e.sh. If JUICEFS_MOUNT is set, also
+Runs NoKV through scripts/run-rustfs-e2e.sh. If JUICEFS_MOUNT is set, also
 runs a same-shape generated dataset/checkpoint workload inside that mounted
 filesystem.
 
@@ -73,8 +73,8 @@ Environment:
   NOKV_COMPARE_READ_REPEATS         read repeats for both paths (default: 1)
   NOKV_COMPARE_BLOCK_CACHE          NoKV block cache on|off (default: on)
   NOKV_COMPARE_METADATA_RAFT_SYNC   data|none (default: none)
-  NOKV_COMPARE_RUSTFS_ENDPOINT      existing RustFS/S3 endpoint for NoKV-FS
-  NOKV_COMPARE_RUSTFS_BUCKET        NoKV-FS bucket at that endpoint (default: nokv)
+  NOKV_COMPARE_RUSTFS_ENDPOINT      existing RustFS/S3 endpoint for NoKV
+  NOKV_COMPARE_RUSTFS_BUCKET        NoKV bucket at that endpoint (default: nokv)
   NOKV_COMPARE_RUSTFS_ACCESS_KEY    access key for existing endpoint
   NOKV_COMPARE_RUSTFS_SECRET_KEY    secret key for existing endpoint
   NOKV_COMPARE_JUICEFS_BUCKET       JuiceFS bucket name for reporting
@@ -103,11 +103,11 @@ require_cmd() {
     fi
 }
 
-echo "==> NoKV-FS $WORKLOAD profile=$PROFILE sync=$SYNC_MODE"
+echo "==> NoKV $WORKLOAD profile=$PROFILE sync=$SYNC_MODE"
 if [[ -n "$RUSTFS_ENDPOINT" ]]; then
     (
         cd "$ROOT_DIR"
-        cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
+        cargo run --release -p nokv-bench --bin nokv-bench -- \
             --profile "$PROFILE" \
             --workload "$WORKLOAD" \
             --object-backend rustfs \
@@ -233,7 +233,7 @@ try:
         f"{samples / seconds:.2f},unknown,unknown,{checksum},"
         f"\"dataset_dirs={dataset_dirs} files_per_dir={files_per_dir} sample_bytes={sample_bytes} "
         f"checkpoint_steps={checkpoint_steps} checkpoint_bytes={checkpoint_bytes}\","
-        f"\"existing JuiceFS mount, fsync={'on' if do_fsync else 'off'}, same generated shape as NoKV-FS local bench\""
+        f"\"existing JuiceFS mount, fsync={'on' if do_fsync else 'off'}, same generated shape as NoKV local bench\""
     )
 finally:
     shutil.rmtree(root, ignore_errors=True)

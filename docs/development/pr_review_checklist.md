@@ -21,15 +21,15 @@ boundaries.
 
 - Does the package import direction match the code contract?
 - Did a lower layer import a higher layer for convenience?
-- Does `nokvfs-types` remain storage-neutral?
-- Does `nokvfs-meta` keep schema, command execution, Holt binding, and service
+- Does `nokv-types` remain storage-neutral?
+- Does `nokv-meta` keep schema, command execution, Holt binding, and service
   semantics inside the metadata boundary?
-- Does `nokvfs-object` avoid namespace metadata?
-- Does `nokvfs-client` resolve paths through `nokvfs-meta` instead of importing
+- Does `nokv-object` avoid namespace metadata?
+- Does `nokv-client` resolve paths through `nokv-meta` instead of importing
   layout or storage internals?
-- Does `nokvfs-fuse` stay inode-first and call `nokvfs-meta` rather than the
+- Does `nokv-fuse` stay inode-first and call `nokv-meta` rather than the
   path SDK?
-- Does `nokvfs-cli` keep the `nokv-fs` binary thin over `client`/`fuse` instead
+- Does `nokv` keep the `nokv` binary thin over `client`/`fuse` instead
   of duplicating metadata semantics?
 
 ## Correctness

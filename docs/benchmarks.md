@@ -15,7 +15,7 @@ for metadata smoke, MLPerf Storage/DLIO-style generated training reads, and
 checkpoint publish/read paths:
 
 ```bash
-cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
+cargo run --release -p nokv-bench --bin nokv-bench -- \
   --profile smoke \
   --workload all
 ```
@@ -32,7 +32,7 @@ scripts/run-rustfs-e2e.sh
 ```
 
 The script starts RustFS with the AI training buffer profile, creates the
-default bucket, runs `nokv-fs-bench`, and removes its temporary RustFS data
+default bucket, runs `nokv-bench`, and removes its temporary RustFS data
 directory. Override the workload with environment variables, for example:
 
 ```bash
@@ -59,7 +59,7 @@ iterating:
 scripts/run-ai-training-smoke.sh metadata-ha-fault-smoke
 ```
 
-For a local NoKV-FS versus JuiceFS same-shape comparison, use the managed
+For a local NoKV versus JuiceFS same-shape comparison, use the managed
 RustFS + Redis + JuiceFS script. It starts one RustFS endpoint, creates isolated
 `nokv` and `juicefs` buckets, formats JuiceFS over Redis, mounts it, and then
 runs both systems against the same generated workload shape:
@@ -78,7 +78,7 @@ NOKV_COMPARE_PROFILE=standard \
 scripts/run-fuse-juicefs-rustfs-comparison.sh
 ```
 
-The FUSE script starts NoKV-FS through `nokv-fs serve` plus `nokv-fs mount`,
+The FUSE script starts NoKV through `nokv serve` plus `nokv mount`,
 starts JuiceFS against Redis, and runs the same generated dataset/checkpoint
 shape through both mountpoints. On macOS it disables JuiceFS AppleDouble
 sidecar generation by default so `._` files do not pollute the comparison.
@@ -99,7 +99,7 @@ scripts/run-training-comparison.sh
 
 These scripts produce local engineering evidence only. They are not MLCommons
 official submission results and do not replace running the official MLPerf
-Storage or DLIO harness against a NoKV-FS FUSE mount.
+Storage or DLIO harness against a NoKV FUSE mount.
 
 The gate also accepts the special workload `fuse-smoke` for the mounted POSIX
 semantics check. It is not part of the default list because it requires a
@@ -139,13 +139,13 @@ For a disposable local RustFS-backed FUSE semantics smoke, use:
 scripts/run-fuse-smoke.sh
 ```
 
-The script builds `nokv-fs`, starts RustFS, mounts a temporary NoKV-FS FUSE
+The script builds `nokv`, starts RustFS, mounts a temporary NoKV FUSE
 filesystem, and exercises mkdir, file write/read, file fsync, directory fsync,
 rename, readdir, truncate, symlink/readlink, xattr error handling, access(2),
 rm, and rmdir through the mounted filesystem. This is a correctness smoke, not
 a performance benchmark.
 
-For JuiceFS-style mounted-filesystem compatibility gates, mount NoKV-FS first
+For JuiceFS-style mounted-filesystem compatibility gates, mount NoKV first
 and run the external-suite driver against that mountpoint:
 
 ```bash
@@ -155,7 +155,7 @@ scripts/run-fuse-compat-gate.sh
 
 The default compatibility gate runs a small namespace/data smoke plus xattr
 roundtrip. Heavier suites are opt-in because they require external tools and
-will expose unsupported POSIX semantics until NoKV-FS reaches the full POSIX
+will expose unsupported POSIX semantics until NoKV reaches the full POSIX
 gate:
 
 ```bash
@@ -172,7 +172,7 @@ paths. NoKV keeps the default CI smoke smaller, then uses these external gates
 when claiming POSIX compatibility.
 
 The harness prints CSV. The exact column set is owned by
-`bench/src/bin/nokv-fs-bench.rs`; the important column families are:
+`bench/src/bin/nokv-bench.rs`; the important column families are:
 
 ```text
 workload, profile, throughput, object stats, metadata store stats,
@@ -211,7 +211,7 @@ distinguish Raft-entry coalescing from state-machine apply coalescing.
 Object-backed workloads can be scaled without editing code:
 
 ```bash
-cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
+cargo run --release -p nokv-bench --bin nokv-bench -- \
   --profile standard \
   --workload mlperf-dlio \
   --object-backend rustfs \
@@ -286,7 +286,7 @@ for CI performance claims.
 JuiceFS is a useful reference because its tests are layered rather than a
 single benchmark number:
 
-| Layer | JuiceFS practice | NoKV-FS equivalent |
+| Layer | JuiceFS practice | NoKV equivalent |
 | --- | --- | --- |
 | Quick mounted smoke | `juicefs bench` and targeted mount checks | `scripts/run-fuse-smoke.sh` |
 | POSIX compatibility | `pjdfstest`, LTP fs/fsx/io/fcntl groups, xattr tests | `scripts/run-fuse-compat-gate.sh` with `pjdfstest ltp xattr` |

@@ -18,20 +18,20 @@ node-local cache, is recorded in [Product Design](./product-design.md).
 
 ```text
 Application surface
-  nokvfs-client    Rust SDK
-  nokvfs-cli       nokv-fs CLI
-  nokvfs-fuse      low-level FUSE frontend
-  nokvfs-python    planned Python/fsspec bindings
-  nokvfs-csi       planned Kubernetes CSI integration
+  nokv-client    Rust SDK
+  nokv           CLI
+  nokv-fuse      low-level FUSE frontend
+  nokv-python    planned Python/fsspec bindings
+  nokv-csi       planned Kubernetes CSI integration
 
 Metadata layer
-  nokvfs-types     mount, inode, dentry, body descriptor, watch event types
-  nokvfs-protocol  metadata RPC wire DTOs
-  nokvfs-meta      schema, MetadataCommand, Holt store, service core
-  nokvfs-server    long-running metad process, RPC, health, and control plane
+  nokv-types     mount, inode, dentry, body descriptor, watch event types
+  nokv-protocol  metadata RPC wire DTOs
+  nokv-meta      schema, MetadataCommand, Holt store, service core
+  nokv-server    long-running metad process, RPC, health, and control plane
 
 Body storage layer
-  nokvfs-object    S3-compatible object storage, including RustFS
+  nokv-object    S3-compatible object storage, including RustFS
 ```
 
 ## Write Path
@@ -39,7 +39,7 @@ Body storage layer
 ```mermaid
 flowchart LR
     App["AI training / agent client"] --> API["NoKV metad"]
-    App["FUSE / SDK / CLI"] --> API["nokvfs-meta service"]
+    App["FUSE / SDK / CLI"] --> API["nokv-meta service"]
     API --> Command["MetadataCommand"]
     Command --> Holt["Holt metadata store"]
     API --> Object["S3-compatible object store"]
@@ -49,7 +49,7 @@ For artifact publication, object bytes are uploaded first. The metadata commit
 then publishes the dentry, inode projection, and body descriptor atomically.
 Failed metadata publish leaves staged objects for later garbage collection.
 
-`nokvfs-server` runs the same local `nokvfs-meta` service in a long-lived
+`nokv-server` runs the same local `nokv-meta` service in a long-lived
 process. It owns health, readiness, stats, manual GC endpoints, and the first
 metadata RPC. The SDK hot path uses a length-prefixed framed RPC on the same
 port; HTTP stays limited to health, stats, and manual GC control. The RPC
@@ -62,8 +62,8 @@ file client that uploads object blocks directly, asks `metad` to atomically publ
 the body manifest, fetches body read plans, and reads object ranges directly
 from the configured object store. The server stats endpoint reports
 metadata-store write attribution counters so benchmark runs can distinguish
-current writes, history writes, watch writes, and dedupe writes. A FUSE client
-over the metadata server is still future work.
+current writes, history writes, watch writes, and dedupe writes. The FUSE
+frontend uses the same metadata client/server boundary as the SDK.
 
 ## FUSE Path
 
@@ -116,15 +116,15 @@ Holt is the metadata engine inside each shard. NoKV `metad` owns filesystem
 semantics such as inode/dentry updates, watch/snapshot policy, publish rules,
 and object GC decisions.
 
-`nokv-fs serve` now defaults to a single-voter OpenRaft metadata group. The
+`nokv serve` now defaults to a single-voter OpenRaft metadata group. The
 local OpenRaft log is stored under the configured metadata directory, and each
 application log entry contains a batch of semantic `MetadataCommand`s. It is not
 a raw KV mutation, Percolator transaction, or old raftstore command. The
 OpenRaft state machine applies committed batches through the storage-neutral
-metadata store trait, so filesystem semantics stay in `nokvfs-meta` while log
-ordering and recovery stay in `nokvfs-cluster`.
+metadata store trait, so filesystem semantics stay in `nokv-meta` while log
+ordering and recovery stay in `nokv-cluster`.
 
-There is no separate compatibility log path. `nokv-fs serve` always uses
+There is no separate compatibility log path. `nokv serve` always uses
 the OpenRaft metadata group path, including single-node deployments. The
 `--metadata-raft-log-sync data|none` option controls the OpenRaft file-log sync
 policy: use `data` when the local log is the durability boundary, and `none`

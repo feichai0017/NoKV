@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run a local FUSE-vs-FUSE NoKV-FS and JuiceFS comparison against one
+# Run a local FUSE-vs-FUSE NoKV and JuiceFS comparison against one
 # disposable RustFS endpoint.
 #
 # This is an engineering baseline, not an official MLPerf result. It keeps the
@@ -102,7 +102,7 @@ usage() {
     cat <<EOF
 Usage: scripts/run-fuse-juicefs-rustfs-comparison.sh
 
-Starts disposable RustFS + Redis, mounts NoKV-FS and JuiceFS, and runs the same
+Starts disposable RustFS + Redis, mounts NoKV and JuiceFS, and runs the same
 generated dataset/checkpoint workload through both FUSE mountpoints.
 
 Environment:
@@ -110,7 +110,7 @@ Environment:
   NOKV_AWS_BIN                            AWS CLI path/name (default: aws)
   NOKV_REDIS_BIN                          Redis server binary path/name (default: redis-server)
   NOKV_JUICEFS_BIN                        JuiceFS binary path/name (default: juicefs)
-  NOKV_COMPARE_NOKV_FS_BIN                nokv-fs binary path (default: target/release/nokv-fs)
+  NOKV_COMPARE_NOKV_FS_BIN                nokv binary path (default: target/release/nokv)
   NOKV_COMPARE_BUILD_RELEASE=0            skip cargo release build
   NOKV_COMPARE_PROFILE                    smoke|standard|long (default: smoke)
   NOKV_COMPARE_FSYNC=1                    fsync checkpoint writes in both mounts
@@ -121,7 +121,7 @@ Environment:
   NOKV_COMPARE_RUSTFS_BUCKET              NoKV bucket (default: nokv-fuse)
   NOKV_COMPARE_JUICEFS_BUCKET             JuiceFS bucket (default: juicefs-fuse)
   NOKV_COMPARE_JUICEFS_MOUNT_OPTIONS      JuiceFS FUSE options; macOS default disables AppleDouble
-  NOKV_COMPARE_NOKV_MOUNT_OPTIONS         extra nokv-fs mount args, e.g. "--no-kernel-cache"
+  NOKV_COMPARE_NOKV_MOUNT_OPTIONS         extra nokv mount args, e.g. "--no-kernel-cache"
   NOKV_COMPARE_KEEP_WORKDIR=1             keep temp data and logs
 
 Shape overrides:
@@ -282,7 +282,7 @@ wait_for_metadata_server() {
     local deadline=$((SECONDS + 30))
     while (( SECONDS < deadline )); do
         if ! kill -0 "$SERVER_PID" >/dev/null 2>&1; then
-            echo "error: nokv-fs serve exited before becoming ready" >&2
+            echo "error: nokv serve exited before becoming ready" >&2
             return 1
         fi
         if curl -fsS --max-time 2 "http://${SERVER_ADDRESS}/healthz" >/dev/null 2>&1; then
@@ -290,7 +290,7 @@ wait_for_metadata_server() {
         fi
         sleep 0.25
     done
-    echo "error: timed out waiting for NoKV-FS metadata server at $SERVER_ADDRESS" >&2
+    echo "error: timed out waiting for NoKV metadata server at $SERVER_ADDRESS" >&2
     return 1
 }
 
@@ -512,7 +512,7 @@ print(
     "ops_per_second,MiB_per_second,samples_per_second,seed_seconds,checksum,"
     "sidecar_files,shape,caveat"
 )
-run_one("nokvfs-fuse", nokv_mount, nokv_bucket)
+run_one("nokv-fuse", nokv_mount, nokv_bucket)
 run_one("juicefs-fuse", juicefs_mount, juicefs_bucket)
 PY
 }
@@ -525,14 +525,14 @@ require_cmd "$PYTHON_BIN" "brew install python"
 require_cmd curl "brew install curl"
 
 if [[ -z "$NOKV_FS_BIN" ]]; then
-    NOKV_FS_BIN="$ROOT_DIR/target/release/nokv-fs"
+    NOKV_FS_BIN="$ROOT_DIR/target/release/nokv"
 fi
 if [[ "$BUILD_RELEASE" == "1" || ! -x "$NOKV_FS_BIN" ]]; then
     require_cmd cargo "install Rust from https://rustup.rs/"
-    (cd "$ROOT_DIR" && cargo build --release -p nokvfs-cli --bin nokv-fs)
+    (cd "$ROOT_DIR" && cargo build --release -p nokv --bin nokv)
 fi
 if [[ ! -x "$NOKV_FS_BIN" ]]; then
-    echo "error: nokv-fs binary is not executable: $NOKV_FS_BIN" >&2
+    echo "error: nokv binary is not executable: $NOKV_FS_BIN" >&2
     exit 2
 fi
 
@@ -550,8 +550,8 @@ NOKV_MOUNT="$WORKDIR/nokv-mount"
 JUICEFS_MOUNT="$WORKDIR/juicefs-mount"
 RUSTFS_LOG="$WORKDIR/rustfs.log"
 REDIS_LOG="$WORKDIR/redis.log"
-SERVER_LOG="$WORKDIR/nokv-fs-server.log"
-NOKV_MOUNT_LOG="$WORKDIR/nokv-fs-mount.log"
+SERVER_LOG="$WORKDIR/nokv-server.log"
+NOKV_MOUNT_LOG="$WORKDIR/nokv-mount.log"
 JUICEFS_LOG="$WORKDIR/juicefs.log"
 mkdir -p "$RUSTFS_DATA_DIR" "$REDIS_DIR" "$NOKV_META_DIR" "$NOKV_MOUNT" "$JUICEFS_MOUNT"
 
@@ -582,7 +582,7 @@ wait_for_tcp 127.0.0.1 "$REDIS_PORT" Redis
 create_bucket "$NOKV_BUCKET"
 create_bucket "$JUICEFS_BUCKET"
 
-echo "Starting NoKV-FS metadata server at $SERVER_ADDRESS sync=$SYNC_MODE" >&2
+echo "Starting NoKV metadata server at $SERVER_ADDRESS sync=$SYNC_MODE" >&2
 "$NOKV_FS_BIN" \
     --server-bind "$SERVER_ADDRESS" \
     --meta "$NOKV_META_DIR" \
@@ -598,7 +598,7 @@ echo "Starting NoKV-FS metadata server at $SERVER_ADDRESS sync=$SYNC_MODE" >&2
 SERVER_PID=$!
 wait_for_metadata_server
 
-echo "Mounting NoKV-FS at $NOKV_MOUNT" >&2
+echo "Mounting NoKV at $NOKV_MOUNT" >&2
 NOKV_MOUNT_ARGS=()
 if [[ -n "$NOKV_MOUNT_OPTIONS" ]]; then
     read -r -a NOKV_MOUNT_ARGS <<<"$NOKV_MOUNT_OPTIONS"
@@ -614,7 +614,7 @@ fi
     --gid "$(id -g)" \
     mount "${NOKV_MOUNT_ARGS[@]}" "$NOKV_MOUNT" >"$NOKV_MOUNT_LOG" 2>&1 &
 NOKV_MOUNT_PID=$!
-wait_for_mount "$NOKV_MOUNT" NoKV-FS "$NOKV_MOUNT_PID"
+wait_for_mount "$NOKV_MOUNT" NoKV "$NOKV_MOUNT_PID"
 
 echo "Formatting JuiceFS bucket=$JUICEFS_BUCKET metadata=$META_URL" >&2
 "$JUICEFS_BIN" format \

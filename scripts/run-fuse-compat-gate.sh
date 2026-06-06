@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
 #
-# Run JuiceFS-style compatibility gates against an already mounted NoKV-FS
+# Run JuiceFS-style compatibility gates against an already mounted NoKV
 # FUSE mount.
 #
-# This script intentionally does not start NoKV-FS. It is for external POSIX
+# This script intentionally does not start NoKV. It is for external POSIX
 # suites that must exercise the mounted filesystem boundary, similar to the
 # pjdfstest/LTP/random-test layers used by mature FUSE filesystems.
 
@@ -25,7 +25,7 @@ usage() {
     cat <<EOF
 Usage: NOKV_FUSE_MOUNT=/mnt/nokv scripts/run-fuse-compat-gate.sh
 
-Runs compatibility checks against an already mounted NoKV-FS FUSE mount.
+Runs compatibility checks against an already mounted NoKV FUSE mount.
 
 Environment:
   NOKV_FUSE_MOUNT                 required mountpoint
@@ -38,7 +38,7 @@ Environment:
   NOKV_LTP_RUNLTP                 path to runltp, or command name if in PATH
 
 The external pjdfstest and LTP suites are expected to expose unsupported POSIX
-semantics until NoKV-FS reaches the full POSIX gate. They are not part of the
+semantics until NoKV reaches the full POSIX gate. They are not part of the
 default smoke suite.
 EOF
 }
@@ -81,7 +81,7 @@ cleanup() {
     if [[ "$OWN_WORK_DIR" -eq 1 && "$KEEP_WORKDIR" != "1" ]]; then
         rm -rf "$WORK_DIR"
     elif [[ -n "$WORK_DIR" ]]; then
-        echo "NoKV-FS compatibility workdir: $WORK_DIR" >&2
+        echo "NoKV compatibility workdir: $WORK_DIR" >&2
     fi
     exit "$status"
 }
@@ -109,12 +109,12 @@ os.makedirs(base)
 
 path = os.path.join(base, "file.bin")
 with open(path, "wb") as fh:
-    fh.write(b"nokvfs\n")
+    fh.write(b"nokv\n")
     fh.flush()
     os.fsync(fh.fileno())
 
 with open(path, "rb") as fh:
-    assert fh.read() == b"nokvfs\n"
+    assert fh.read() == b"nokv\n"
 
 renamed = os.path.join(base, "renamed.bin")
 os.rename(path, renamed)
@@ -158,12 +158,12 @@ if not all(hasattr(os, name) for name in ("setxattr", "getxattr", "listxattr", "
     shutil.rmtree(base, ignore_errors=True)
     sys.exit(0)
 
-os.setxattr(path, "user.nokvfs.compat", b"value")
-assert os.getxattr(path, "user.nokvfs.compat") == b"value"
-assert "user.nokvfs.compat" in os.listxattr(path)
-os.removexattr(path, "user.nokvfs.compat")
+os.setxattr(path, "user.nokv.compat", b"value")
+assert os.getxattr(path, "user.nokv.compat") == b"value"
+assert "user.nokv.compat" in os.listxattr(path)
+os.removexattr(path, "user.nokv.compat")
 try:
-    os.getxattr(path, "user.nokvfs.compat")
+    os.getxattr(path, "user.nokv.compat")
 except OSError as err:
     allowed = {
         getattr(errno, "ENODATA", 61),

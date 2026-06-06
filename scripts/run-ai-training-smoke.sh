@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# Run the NoKV-FS AI-training smoke gate against a disposable RustFS endpoint.
+# Run the NoKV AI-training smoke gate against a disposable RustFS endpoint.
 #
 # This is the fast evidence gate for the current product goal: Holt-native
 # metadata reads, object-backed checkpoint publish, DLIO-style generated data,
@@ -73,7 +73,7 @@ if [[ -n "${NOKV_AI_SMOKE_EXTRA_ARGS:-}" ]]; then
 fi
 
 for workload in "${workloads[@]}"; do
-    echo "==> NoKV-FS smoke workload: $workload"
+    echo "==> NoKV smoke workload: $workload"
     if [[ "$workload" == "fuse-smoke" ]]; then
         "$ROOT_DIR/scripts/run-fuse-smoke.sh"
         continue

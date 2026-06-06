@@ -49,7 +49,7 @@ aws --endpoint-url http://127.0.0.1:9000 \
 ```
 
 For local end-to-end testing, the repository script can do these steps for a
-temporary RustFS directory and then run the NoKV-FS benchmark harness:
+temporary RustFS directory and then run the NoKV benchmark harness:
 
 ```bash
 scripts/run-rustfs-e2e.sh
@@ -62,7 +62,7 @@ script.
 ## Use RustFS With NoKV
 
 ```bash
-cargo run --release -p nokvfs-cli --bin nokv-fs -- \
+cargo run --release -p nokv --bin nokv -- \
   init
 ```
 
@@ -73,7 +73,7 @@ Those are the CLI defaults for the RustFS backend: bucket `nokv`, endpoint
 The same object flags work for artifact publish, `cat`, and FUSE mount:
 
 ```bash
-cargo run --release -p nokvfs-cli --bin nokv-fs -- \
+cargo run --release -p nokv --bin nokv -- \
   --object-backend rustfs \
   --s3-bucket nokv \
   --s3-endpoint http://127.0.0.1:9000 \
@@ -85,7 +85,7 @@ cargo run --release -p nokvfs-cli --bin nokv-fs -- \
 ## Benchmark Against RustFS
 
 ```bash
-cargo run --release -p nokvfs-bench --bin nokv-fs-bench -- \
+cargo run --release -p nokv-bench --bin nokv-bench -- \
   --profile smoke \
   --workload checkpoint-publish \
   --object-backend rustfs \

@@ -56,7 +56,7 @@ Holt
 ```
 
 This separation matters because the filesystem semantics must remain above the
-storage engine. The `nokvfs-meta` crate may bind those semantics to Holt. The
+storage engine. The `nokv-meta` crate may bind those semantics to Holt. The
 types, object, client, and FUSE crates must not leak Holt internals.
 
 ## Reference Shape
@@ -111,23 +111,23 @@ local state machine.
 The cloud-native deployment should grow into these components:
 
 ```text
-nokvfs-server
+nokv-server
   long-running metadata service, health/control plane, and future router
 
-nokvfs-csi
+nokv-csi
   Kubernetes volume lifecycle and node mount integration
 
-nokvfs-cache-agent
+nokv-cache-agent
   node-local metadata/object cache for GPU and training nodes
 
-nokvfs-gc-controller
+nokv-gc-controller
   staged object cleanup, checkpoint retention, and orphan body GC
 
-nokvfs-python
+nokv-python
   Python SDK and fsspec binding for training frameworks
 ```
 
-The current repository implements a long-running single-node `nokvfs-server`,
+The current repository implements a long-running single-node `nokv-server`,
 framed metadata RPC for the Rust SDK and CLI, and the FUSE frontend. FUSE over
 the metadata server, CSI, Python, node-local cache, and distributed metadata
 shards remain product direction.
