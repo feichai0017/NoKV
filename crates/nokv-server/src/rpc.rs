@@ -11,20 +11,20 @@ use std::time::Duration;
 use nokv_cluster::{MetadataRaftError, MetadataRaftRpcClient, NodeId};
 use nokv_meta::{
     CreateInDirPathBatch, DentryWithAttr, MetadError, PreparedArtifact,
-    PublishArtifactStagedSession, UpdateAttr,
+    PublishArtifactStagedSession, UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
     ObjectKey, ObjectReadBlock, StagedObject, StagedObjectSet, StoredBlock, StoredChunk,
 };
 use nokv_protocol::{
-    decode_envelope, decode_name_cursor, decode_request, encode_envelope, encode_name_cursor,
-    encode_request, MetadataProtocolError, MetadataRpcEnvelope, MetadataRpcRequest,
-    MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataError,
-    WireMetadataPosition, WireMetadataRaftAppendEntriesRequest,
-    WireMetadataRaftAppendEntriesResponse, WireMetadataRaftInstallSnapshotRequest,
-    WireMetadataRaftInstallSnapshotResponse, WireMetadataRaftVoteRequest,
-    WireMetadataRaftVoteResponse, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
-    WireStagedObjectSet, WireUpdateAttr,
+    decode_envelope, decode_name_cursor, decode_request, decode_xattr_name, encode_envelope,
+    encode_name_cursor, encode_request, encode_xattr_name, MetadataProtocolError,
+    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
+    WireDentryWithAttr, WireMetadataError, WireMetadataPosition,
+    WireMetadataRaftAppendEntriesRequest, WireMetadataRaftAppendEntriesResponse,
+    WireMetadataRaftInstallSnapshotRequest, WireMetadataRaftInstallSnapshotResponse,
+    WireMetadataRaftVoteRequest, WireMetadataRaftVoteResponse, WireObjectReadBlock,
+    WirePathMetadata, WirePreparedArtifact, WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
 };
 use nokv_types::{DentryName, InodeId, MountId};
 
@@ -1330,6 +1330,34 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 attr: Some(nokv_protocol::WireInodeAttr::from_inode_attr(&attr)),
             })
         }
+        MetadataRpcRequest::SetXattr {
+            inode,
+            name_hex,
+            value,
+            mode,
+        } => {
+            let name = decode_xattr_name(&name_hex).map_err(protocol_error)?;
+            server
+                .service()
+                .set_xattr(inode_id(inode)?, &name, value, xattr_set_mode(mode))?;
+            Ok(MetadataRpcResult::Unit)
+        }
+        MetadataRpcRequest::GetXattr { inode, name_hex } => {
+            let name = decode_xattr_name(&name_hex).map_err(protocol_error)?;
+            let value = server.service().get_xattr(inode_id(inode)?, &name)?;
+            Ok(MetadataRpcResult::XattrValue { value })
+        }
+        MetadataRpcRequest::ListXattr { inode } => {
+            let names = server.service().list_xattr(inode_id(inode)?)?;
+            Ok(MetadataRpcResult::XattrNames {
+                names_hex: names.iter().map(|name| encode_xattr_name(name)).collect(),
+            })
+        }
+        MetadataRpcRequest::RemoveXattr { inode, name_hex } => {
+            let name = decode_xattr_name(&name_hex).map_err(protocol_error)?;
+            server.service().remove_xattr(inode_id(inode)?, &name)?;
+            Ok(MetadataRpcResult::Unit)
+        }
         MetadataRpcRequest::CreateFilePath {
             path,
             mode,
@@ -1743,6 +1771,8 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::ReadFilePathAtSnapshot { .. }
         | MetadataRpcRequest::ReadSymlink { .. }
         | MetadataRpcRequest::ReadSymlinkAtSnapshot { .. }
+        | MetadataRpcRequest::GetXattr { .. }
+        | MetadataRpcRequest::ListXattr { .. }
         | MetadataRpcRequest::ReadBodyPlan { .. }
         | MetadataRpcRequest::ReadPathPlan { .. }
         | MetadataRpcRequest::ReadArtifactPathAtSnapshot { .. }
@@ -1754,6 +1784,8 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::CreateSymlink { .. }
         | MetadataRpcRequest::UpdateAttrs { .. }
         | MetadataRpcRequest::UpdateRootAttrs { .. }
+        | MetadataRpcRequest::SetXattr { .. }
+        | MetadataRpcRequest::RemoveXattr { .. }
         | MetadataRpcRequest::CreateFilePath { .. }
         | MetadataRpcRequest::CreateFilesInDirPath { .. }
         | MetadataRpcRequest::RemoveFile { .. }
@@ -1794,6 +1826,14 @@ fn update_attr(wire: WireUpdateAttr) -> UpdateAttr {
         size: wire.size,
         mtime_ms: wire.mtime_ms,
         ctime_ms: wire.ctime_ms,
+    }
+}
+
+fn xattr_set_mode(wire: WireXattrSetMode) -> XattrSetMode {
+    match wire {
+        WireXattrSetMode::Any => XattrSetMode::Any,
+        WireXattrSetMode::Create => XattrSetMode::Create,
+        WireXattrSetMode::Replace => XattrSetMode::Replace,
     }
 }
 

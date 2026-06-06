@@ -3,7 +3,7 @@ use crate::server::tests::test_server;
 use nokv_protocol::{
     decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest,
     WireMetadataError, WireMetadataRaftLeaderId, WireMetadataRaftVote, WireMetadataRaftVoteRequest,
-    WireSliceManifest, WireStagedObjectSet,
+    WireSliceManifest, WireStagedObjectSet, WireXattrSetMode,
 };
 use std::net::TcpListener;
 
@@ -103,6 +103,57 @@ fn rpc_supports_remote_fuse_inode_operations() {
         },
     ));
     assert_eq!(root.mode, 0o700);
+
+    let set_xattr = request_envelope(
+        &server,
+        MetadataRpcRequest::SetXattr {
+            inode: file.attr.inode,
+            name_hex: "757365722e636f6d6d656e74".to_owned(),
+            value: b"training checkpoint".to_vec(),
+            mode: WireXattrSetMode::Create,
+        },
+    );
+    assert!(set_xattr.ok, "unexpected setxattr error: {set_xattr:?}");
+    assert!(matches!(set_xattr.result, Some(MetadataRpcResult::Unit)));
+
+    let get_xattr = request_envelope(
+        &server,
+        MetadataRpcRequest::GetXattr {
+            inode: file.attr.inode,
+            name_hex: "757365722e636f6d6d656e74".to_owned(),
+        },
+    );
+    match get_xattr.result.unwrap() {
+        MetadataRpcResult::XattrValue { value } => {
+            assert_eq!(value, Some(b"training checkpoint".to_vec()));
+        }
+        other => panic!("unexpected getxattr result: {other:?}"),
+    }
+
+    let list_xattr = request_envelope(
+        &server,
+        MetadataRpcRequest::ListXattr {
+            inode: file.attr.inode,
+        },
+    );
+    match list_xattr.result.unwrap() {
+        MetadataRpcResult::XattrNames { names_hex } => {
+            assert_eq!(names_hex, vec!["757365722e636f6d6d656e74"]);
+        }
+        other => panic!("unexpected listxattr result: {other:?}"),
+    }
+
+    let remove_xattr = request_envelope(
+        &server,
+        MetadataRpcRequest::RemoveXattr {
+            inode: file.attr.inode,
+            name_hex: "757365722e636f6d6d656e74".to_owned(),
+        },
+    );
+    assert!(
+        matches!(remove_xattr.result, Some(MetadataRpcResult::Unit)),
+        "unexpected removexattr result: {remove_xattr:?}"
+    );
 
     let snapshot = request_envelope(&server, MetadataRpcRequest::SnapshotSubtree { root: 1 });
     let snapshot_id = match snapshot.result.unwrap() {

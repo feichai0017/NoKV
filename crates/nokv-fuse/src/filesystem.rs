@@ -2454,7 +2454,6 @@ fn errno(err: impl Into<FuseBackendError>) -> Errno {
         | FuseBackendError::Client(nokv_client::ClientError::InvalidName(_))
         | FuseBackendError::Client(nokv_client::ClientError::RootHasNoParent)
         | FuseBackendError::Object(_) => Errno::EIO,
-        FuseBackendError::Unsupported(_) => xattr_unsupported_error(),
     }
 }
 
@@ -3004,6 +3003,8 @@ mod tests {
     }
 
     fn unsupported<T>() -> FuseBackendResult<T> {
-        Err(FuseBackendError::Unsupported("test backend"))
+        Err(FuseBackendError::Metadata(MetadError::Codec(
+            "test backend".to_owned(),
+        )))
     }
 }

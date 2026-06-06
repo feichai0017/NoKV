@@ -24,7 +24,6 @@ pub(crate) enum FuseBackendError {
     Metadata(MetadError),
     Client(ClientError),
     Object(ObjectError),
-    Unsupported(&'static str),
 }
 
 pub(crate) trait FuseBackend: Send + Sync + 'static {
@@ -306,7 +305,6 @@ impl fmt::Display for FuseBackendError {
             Self::Metadata(err) => write!(f, "{err}"),
             Self::Client(err) => write!(f, "{err}"),
             Self::Object(err) => write!(f, "{err}"),
-            Self::Unsupported(feature) => write!(f, "{feature} is not supported"),
         }
     }
 }
@@ -546,24 +544,26 @@ where
 
     fn set_xattr(
         &self,
-        _inode: InodeId,
-        _name: &[u8],
-        _value: Vec<u8>,
-        _mode: XattrSetMode,
+        inode: InodeId,
+        name: &[u8],
+        value: Vec<u8>,
+        mode: XattrSetMode,
     ) -> FuseBackendResult<()> {
-        Err(FuseBackendError::Unsupported("remote FUSE xattr"))
+        self.metadata
+            .set_xattr(inode, name, value, mode)
+            .map_err(Into::into)
     }
 
-    fn get_xattr(&self, _inode: InodeId, _name: &[u8]) -> FuseBackendResult<Option<Vec<u8>>> {
-        Err(FuseBackendError::Unsupported("remote FUSE xattr"))
+    fn get_xattr(&self, inode: InodeId, name: &[u8]) -> FuseBackendResult<Option<Vec<u8>>> {
+        self.metadata.get_xattr(inode, name).map_err(Into::into)
     }
 
-    fn list_xattr(&self, _inode: InodeId) -> FuseBackendResult<Vec<Vec<u8>>> {
-        Err(FuseBackendError::Unsupported("remote FUSE xattr"))
+    fn list_xattr(&self, inode: InodeId) -> FuseBackendResult<Vec<Vec<u8>>> {
+        self.metadata.list_xattr(inode).map_err(Into::into)
     }
 
-    fn remove_xattr(&self, _inode: InodeId, _name: &[u8]) -> FuseBackendResult<()> {
-        Err(FuseBackendError::Unsupported("remote FUSE xattr"))
+    fn remove_xattr(&self, inode: InodeId, name: &[u8]) -> FuseBackendResult<()> {
+        self.metadata.remove_xattr(inode, name).map_err(Into::into)
     }
 
     fn create_dir(

@@ -112,6 +112,23 @@ pub enum MetadataRpcRequest {
     UpdateRootAttrs {
         changes: WireUpdateAttr,
     },
+    SetXattr {
+        inode: u64,
+        name_hex: String,
+        value: Vec<u8>,
+        mode: WireXattrSetMode,
+    },
+    GetXattr {
+        inode: u64,
+        name_hex: String,
+    },
+    ListXattr {
+        inode: u64,
+    },
+    RemoveXattr {
+        inode: u64,
+        name_hex: String,
+    },
     CreateFilePath {
         path: String,
         mode: u32,
@@ -276,6 +293,14 @@ pub struct WireUpdateAttr {
     pub ctime_ms: Option<u64>,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireXattrSetMode {
+    Any,
+    Create,
+    Replace,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct MetadataRpcEnvelope {
     pub ok: bool,
@@ -428,6 +453,7 @@ pub struct WireMetadataRaftInstallSnapshotResponse {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum MetadataRpcResult {
+    Unit,
     Batch {
         results: Vec<MetadataRpcEnvelope>,
     },
@@ -469,6 +495,12 @@ pub enum MetadataRpcResult {
     },
     FileBytes {
         bytes: Vec<u8>,
+    },
+    XattrValue {
+        value: Option<Vec<u8>>,
+    },
+    XattrNames {
+        names_hex: Vec<String>,
     },
     PreparedArtifact {
         prepared: WirePreparedArtifact,
@@ -515,6 +547,14 @@ pub fn encode_name_cursor(name: &DentryName) -> String {
 
 pub fn decode_name_cursor(raw: &str) -> Result<DentryName, MetadataProtocolError> {
     DentryName::new(hex_decode(raw)?).map_err(|err| MetadataProtocolError::new(err.to_string()))
+}
+
+pub fn encode_xattr_name(name: &[u8]) -> String {
+    hex_encode(name)
+}
+
+pub fn decode_xattr_name(raw: &str) -> Result<Vec<u8>, MetadataProtocolError> {
+    hex_decode(raw)
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

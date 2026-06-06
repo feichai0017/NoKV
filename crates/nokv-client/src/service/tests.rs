@@ -718,6 +718,133 @@ fn service_framed_rpc_accepts_out_of_order_responses() {
 }
 
 #[test]
+fn service_xattr_rpc_round_trips_bytes_names() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
+        stream.read_exact(&mut magic).unwrap();
+        assert_eq!(&magic, FRAMED_RPC_MAGIC);
+
+        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+        assert_eq!(
+            decode_request(&request).unwrap(),
+            MetadataRpcRequest::SetXattr {
+                inode: 42,
+                name_hex: "757365722e636f6d6d656e74".to_owned(),
+                value: b"training checkpoint".to_vec(),
+                mode: WireXattrSetMode::Create,
+            }
+        );
+        write_frame(
+            &mut stream,
+            request_id,
+            flags,
+            &encode_envelope(&MetadataRpcEnvelope {
+                ok: true,
+                result: Some(MetadataRpcResult::Unit),
+                error: None,
+                error_kind: None,
+                metadata_position: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+        assert_eq!(
+            decode_request(&request).unwrap(),
+            MetadataRpcRequest::GetXattr {
+                inode: 42,
+                name_hex: "757365722e636f6d6d656e74".to_owned(),
+            }
+        );
+        write_frame(
+            &mut stream,
+            request_id,
+            flags,
+            &encode_envelope(&MetadataRpcEnvelope {
+                ok: true,
+                result: Some(MetadataRpcResult::XattrValue {
+                    value: Some(b"training checkpoint".to_vec()),
+                }),
+                error: None,
+                error_kind: None,
+                metadata_position: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+        assert_eq!(
+            decode_request(&request).unwrap(),
+            MetadataRpcRequest::ListXattr { inode: 42 }
+        );
+        write_frame(
+            &mut stream,
+            request_id,
+            flags,
+            &encode_envelope(&MetadataRpcEnvelope {
+                ok: true,
+                result: Some(MetadataRpcResult::XattrNames {
+                    names_hex: vec!["757365722e636f6d6d656e74".to_owned()],
+                }),
+                error: None,
+                error_kind: None,
+                metadata_position: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+
+        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
+        assert_eq!(
+            decode_request(&request).unwrap(),
+            MetadataRpcRequest::RemoveXattr {
+                inode: 42,
+                name_hex: "757365722e636f6d6d656e74".to_owned(),
+            }
+        );
+        write_frame(
+            &mut stream,
+            request_id,
+            flags,
+            &encode_envelope(&MetadataRpcEnvelope {
+                ok: true,
+                result: Some(MetadataRpcResult::Unit),
+                error: None,
+                error_kind: None,
+                metadata_position: None,
+            })
+            .unwrap(),
+        )
+        .unwrap();
+    });
+
+    let client = MetadataClient::connect(addr);
+    let inode = InodeId::new(42).unwrap();
+    client
+        .set_xattr(
+            inode,
+            b"user.comment",
+            b"training checkpoint".to_vec(),
+            XattrSetMode::Create,
+        )
+        .unwrap();
+    assert_eq!(
+        client.get_xattr(inode, b"user.comment").unwrap(),
+        Some(b"training checkpoint".to_vec())
+    );
+    assert_eq!(
+        client.list_xattr(inode).unwrap(),
+        vec![b"user.comment".to_vec()]
+    );
+    client.remove_xattr(inode, b"user.comment").unwrap();
+}
+
+#[test]
 fn service_error_without_error_kind_is_protocol_error() {
     let addr = serve_one(r#"{"ok":false,"error":"metadata command predicate failed"}"#);
     let client = MetadataClient::connect(addr);

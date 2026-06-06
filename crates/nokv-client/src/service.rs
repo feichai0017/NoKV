@@ -8,7 +8,7 @@ use std::{collections::HashMap, io};
 
 use nokv_meta::{
     DentryWithAttr, ObjectTransferStats, PublishArtifactStagedSession, RenameReplaceResult,
-    UpdateAttr,
+    UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
     ChunkStore, ChunkWriteOptions, ChunkedWrite, FileReadPipeline, ObjectBlockCache, ObjectError,
@@ -16,11 +16,12 @@ use nokv_object::{
     StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_protocol::{
-    decode_envelope, decode_name_cursor, encode_name_cursor, encode_request, MetadataProtocolError,
-    MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor,
-    WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr, WireMetadataError,
-    WireMetadataPosition, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
-    WireSliceManifest, WireStagedObject, WireStagedObjectSet, WireUpdateAttr,
+    decode_envelope, decode_name_cursor, decode_xattr_name, encode_name_cursor, encode_request,
+    encode_xattr_name, MetadataProtocolError, MetadataRpcEnvelope, MetadataRpcRequest,
+    MetadataRpcResult, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr,
+    WireMetadataError, WireMetadataPosition, WireObjectReadBlock, WirePathMetadata,
+    WirePreparedArtifact, WireSliceManifest, WireStagedObject, WireStagedObjectSet, WireUpdateAttr,
+    WireXattrSetMode,
 };
 use nokv_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
@@ -823,6 +824,54 @@ impl MetadataClient {
             MetadataRpcResult::InodeAttr { attr: Some(attr) } => {
                 attr.into_inode_attr().map_err(protocol_error)
             }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn set_xattr(
+        &self,
+        inode: InodeId,
+        name: &[u8],
+        value: Vec<u8>,
+        mode: XattrSetMode,
+    ) -> Result<(), ClientError> {
+        match self.call(MetadataRpcRequest::SetXattr {
+            inode: inode.get(),
+            name_hex: encode_xattr_name(name),
+            value,
+            mode: xattr_set_mode_to_wire(mode),
+        })? {
+            MetadataRpcResult::Unit => Ok(()),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn get_xattr(&self, inode: InodeId, name: &[u8]) -> Result<Option<Vec<u8>>, ClientError> {
+        match self.call(MetadataRpcRequest::GetXattr {
+            inode: inode.get(),
+            name_hex: encode_xattr_name(name),
+        })? {
+            MetadataRpcResult::XattrValue { value } => Ok(value),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn list_xattr(&self, inode: InodeId) -> Result<Vec<Vec<u8>>, ClientError> {
+        match self.call(MetadataRpcRequest::ListXattr { inode: inode.get() })? {
+            MetadataRpcResult::XattrNames { names_hex } => names_hex
+                .iter()
+                .map(|name| decode_xattr_name(name).map_err(protocol_error))
+                .collect(),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn remove_xattr(&self, inode: InodeId, name: &[u8]) -> Result<(), ClientError> {
+        match self.call(MetadataRpcRequest::RemoveXattr {
+            inode: inode.get(),
+            name_hex: encode_xattr_name(name),
+        })? {
+            MetadataRpcResult::Unit => Ok(()),
             other => Err(unexpected_result(other)),
         }
     }
@@ -1847,6 +1896,14 @@ fn update_attr_to_wire(changes: UpdateAttr) -> WireUpdateAttr {
         size: changes.size,
         mtime_ms: changes.mtime_ms,
         ctime_ms: changes.ctime_ms,
+    }
+}
+
+fn xattr_set_mode_to_wire(mode: XattrSetMode) -> WireXattrSetMode {
+    match mode {
+        XattrSetMode::Any => WireXattrSetMode::Any,
+        XattrSetMode::Create => WireXattrSetMode::Create,
+        XattrSetMode::Replace => WireXattrSetMode::Replace,
     }
 }
 
