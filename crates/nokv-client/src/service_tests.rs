@@ -678,6 +678,45 @@ fn service_create_files_uses_single_coalesced_frame() {
 }
 
 #[test]
+fn service_create_file_prepared_uses_single_frame() {
+    let addr = serve_one_request(|request| {
+        match request {
+            MetadataRpcRequest::CreateFilePrepared {
+                parent,
+                name,
+                mode,
+                uid,
+                gid,
+            } => {
+                assert_eq!(parent, 2);
+                assert_eq!(name, "checkpoint.bin");
+                assert_eq!(mode, 0o644);
+                assert_eq!(uid, 1000);
+                assert_eq!(gid, 1000);
+            }
+            other => panic!("unexpected request: {other:?}"),
+        }
+        response_body(
+            r#"{"ok":true,"result":{"type":"created_prepared_artifact","entry":{"dentry":{"parent":2,"name_hex":"636865636b706f696e742e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null},"prepared":{"mount":1,"parent":2,"name":"checkpoint.bin","inode":40,"generation":8,"mtime_ms":8,"ctime_ms":8,"replace":true,"dentry_version":7,"old_generation":null}}}"#,
+        )
+    });
+    let client = MetadataClient::connect(addr);
+    let created = client
+        .create_file_prepared_in_dir(
+            InodeId::new(2).unwrap(),
+            DentryName::new(b"checkpoint.bin".to_vec()).unwrap(),
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap();
+    assert_eq!(created.entry.attr.inode.get(), 40);
+    assert_eq!(created.prepared.inode.get(), 40);
+    assert_eq!(created.prepared.generation, 8);
+    assert!(created.prepared.replace);
+}
+
+#[test]
 fn service_create_files_splits_large_coalesced_batches() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();

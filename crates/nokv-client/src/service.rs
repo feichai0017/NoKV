@@ -60,6 +60,12 @@ pub struct ClientPreparedArtifact {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ClientCreatedPreparedArtifact {
+    pub entry: DentryWithAttr,
+    pub prepared: ClientPreparedArtifact,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ClientReadDirPlusPage {
     pub entries: Vec<DentryWithAttr>,
     pub next_cursor: Option<DentryName>,
@@ -278,6 +284,31 @@ impl MetadataClient {
             gid,
         })? {
             MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn create_file_prepared_in_dir(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<ClientCreatedPreparedArtifact, ClientError> {
+        match self.call(MetadataRpcRequest::CreateFilePrepared {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            mode,
+            uid,
+            gid,
+        })? {
+            MetadataRpcResult::CreatedPreparedArtifact { entry, prepared } => {
+                Ok(ClientCreatedPreparedArtifact {
+                    entry: wire_dentry(*entry)?,
+                    prepared: wire_prepared_artifact(prepared)?,
+                })
+            }
             other => Err(unexpected_result(other)),
         }
     }

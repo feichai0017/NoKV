@@ -96,6 +96,13 @@ pub enum MetadataRpcRequest {
         uid: u32,
         gid: u32,
     },
+    CreateFilePrepared {
+        parent: u64,
+        name: String,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    },
     CreateSymlink {
         parent: u64,
         name: String,
@@ -540,6 +547,10 @@ pub enum MetadataRpcResult {
         lock: Option<WireAdvisoryLock>,
     },
     PreparedArtifact {
+        prepared: WirePreparedArtifact,
+    },
+    CreatedPreparedArtifact {
+        entry: Box<WireDentryWithAttr>,
         prepared: WirePreparedArtifact,
     },
     MetadataPosition {

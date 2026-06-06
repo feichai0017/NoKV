@@ -23,6 +23,8 @@ READ_REPEATS="${NOKV_COMPARE_READ_REPEATS:-1}"
 FSYNC="${NOKV_COMPARE_FSYNC:-0}"
 SYNC_MODE="${NOKV_COMPARE_METADATA_RAFT_SYNC:-none}"
 BUILD_RELEASE="${NOKV_COMPARE_BUILD_RELEASE:-1}"
+RESULT_CSV="${NOKV_COMPARE_RESULT_CSV:-}"
+SEQUENTIAL_MOUNTS="${NOKV_COMPARE_SEQUENTIAL_MOUNTS:-1}"
 
 RUSTFS_ADDRESS="${NOKV_COMPARE_RUSTFS_ADDRESS:-127.0.0.1:9030}"
 RUSTFS_CONSOLE_ADDRESS="${NOKV_COMPARE_RUSTFS_CONSOLE_ADDRESS:-127.0.0.1:9031}"
@@ -122,6 +124,8 @@ Environment:
   NOKV_COMPARE_JUICEFS_BUCKET             JuiceFS bucket (default: juicefs-fuse)
   NOKV_COMPARE_JUICEFS_MOUNT_OPTIONS      JuiceFS FUSE options; macOS default disables AppleDouble
   NOKV_COMPARE_NOKV_MOUNT_OPTIONS         extra nokv mount args, e.g. "--no-kernel-cache"
+  NOKV_COMPARE_RESULT_CSV                 optional path to write the comparison CSV
+  NOKV_COMPARE_SEQUENTIAL_MOUNTS=0        keep NoKV and JuiceFS mounted together
   NOKV_COMPARE_KEEP_WORKDIR=1             keep temp data and logs
 
 Shape overrides:
@@ -314,6 +318,8 @@ wait_for_mount() {
 }
 
 run_mount_workload() {
+    local system_filter="${1:-both}"
+    local emit_header="${2:-1}"
     "$PYTHON_BIN" - \
         "$NOKV_MOUNT" \
         "$JUICEFS_MOUNT" \
@@ -327,7 +333,9 @@ run_mount_workload() {
         "$SAMPLE_BYTES" \
         "$CHECKPOINT_BYTES" \
         "$CHECKPOINT_STEPS" \
-        "$READ_REPEATS" <<'PY'
+        "$READ_REPEATS" \
+        "$system_filter" \
+        "$emit_header" <<'PY'
 import os
 import shutil
 import sys
@@ -348,6 +356,8 @@ sample_bytes = int(sys.argv[10])
 checkpoint_bytes = int(sys.argv[11])
 checkpoint_steps = int(sys.argv[12])
 read_repeats = int(sys.argv[13])
+system_filter = sys.argv[14]
+emit_header = sys.argv[15] == "1"
 
 def payload(seed: int, length: int) -> bytes:
     return bytes(((seed + offset) % 251 for offset in range(length)))
@@ -507,13 +517,16 @@ def run_one(system: str, mount: Path, bucket: str) -> None:
     finally:
         shutil.rmtree(root, ignore_errors=True)
 
-print(
-    "system,profile,workload,endpoint,bucket,fsync,operations,seconds,"
-    "ops_per_second,MiB_per_second,samples_per_second,seed_seconds,checksum,"
-    "sidecar_files,shape,caveat"
-)
-run_one("nokv-fuse", nokv_mount, nokv_bucket)
-run_one("juicefs-fuse", juicefs_mount, juicefs_bucket)
+if emit_header:
+    print(
+        "system,profile,workload,endpoint,bucket,fsync,operations,seconds,"
+        "ops_per_second,MiB_per_second,samples_per_second,seed_seconds,checksum,"
+        "sidecar_files,shape,caveat"
+    )
+if system_filter in ("both", "nokv-fuse"):
+    run_one("nokv-fuse", nokv_mount, nokv_bucket)
+if system_filter in ("both", "juicefs-fuse"):
+    run_one("juicefs-fuse", juicefs_mount, juicefs_bucket)
 PY
 }
 
@@ -616,23 +629,92 @@ fi
 NOKV_MOUNT_PID=$!
 wait_for_mount "$NOKV_MOUNT" NoKV "$NOKV_MOUNT_PID"
 
-echo "Formatting JuiceFS bucket=$JUICEFS_BUCKET metadata=$META_URL" >&2
-"$JUICEFS_BIN" format \
-    --storage s3 \
-    --bucket "$RUSTFS_ENDPOINT/$JUICEFS_BUCKET" \
-    --access-key "$RUSTFS_ACCESS_KEY" \
-    --secret-key "$RUSTFS_SECRET_KEY" \
-    --trash-days 0 \
-    "$META_URL" nokv-fuse-juicefs-compare >"$JUICEFS_LOG" 2>&1
+emit_summary() {
+    local csv="$1"
+    "$PYTHON_BIN" - "$csv" >&2 <<'PY'
+import csv
+import sys
 
-echo "Mounting JuiceFS at $JUICEFS_MOUNT" >&2
-if [[ -n "$JUICEFS_MOUNT_OPTIONS" ]]; then
-    "$JUICEFS_BIN" mount -d -o "$JUICEFS_MOUNT_OPTIONS" \
-        "$META_URL" "$JUICEFS_MOUNT" >>"$JUICEFS_LOG" 2>&1
-else
-    "$JUICEFS_BIN" mount -d "$META_URL" "$JUICEFS_MOUNT" >>"$JUICEFS_LOG" 2>&1
-fi
-wait_for_mount "$JUICEFS_MOUNT" JuiceFS
+path = sys.argv[1]
+with open(path, newline="") as handle:
+    rows = list(csv.DictReader(handle))
+
+if rows:
+    print("FUSE comparison summary:")
+    for row in rows:
+        print(
+            f"  {row['workload']} {row['system']}: "
+            f"{row['ops_per_second']} ops/s, "
+            f"{row['MiB_per_second']} MiB/s, "
+            f"{row['samples_per_second']} samples/s"
+        )
+PY
+}
+
+run_and_record() {
+    local system_filter="$1"
+    local emit_header="$2"
+    if [[ -n "$RESULT_CSV" ]]; then
+        mkdir -p "$(dirname "$RESULT_CSV")"
+        if [[ "$emit_header" == "1" ]]; then
+            run_mount_workload "$system_filter" "$emit_header" | tee "$RESULT_CSV"
+        else
+            run_mount_workload "$system_filter" "$emit_header" | tee -a "$RESULT_CSV"
+        fi
+    else
+        run_mount_workload "$system_filter" "$emit_header"
+    fi
+}
 
 echo "Running FUSE comparison profile=$PROFILE fsync=$FSYNC" >&2
-run_mount_workload
+if [[ "$SEQUENTIAL_MOUNTS" == "1" ]]; then
+    run_and_record "nokv-fuse" "1"
+    unmount_path "$NOKV_MOUNT" || true
+    if [[ -n "$NOKV_MOUNT_PID" ]] && kill -0 "$NOKV_MOUNT_PID" >/dev/null 2>&1; then
+        kill "$NOKV_MOUNT_PID" >/dev/null 2>&1 || true
+        wait "$NOKV_MOUNT_PID" >/dev/null 2>&1 || true
+    fi
+    NOKV_MOUNT_PID=""
+
+    echo "Formatting JuiceFS bucket=$JUICEFS_BUCKET metadata=$META_URL" >&2
+    "$JUICEFS_BIN" format \
+        --storage s3 \
+        --bucket "$RUSTFS_ENDPOINT/$JUICEFS_BUCKET" \
+        --access-key "$RUSTFS_ACCESS_KEY" \
+        --secret-key "$RUSTFS_SECRET_KEY" \
+        --trash-days 0 \
+        "$META_URL" nokv-fuse-juicefs-compare >"$JUICEFS_LOG" 2>&1
+
+    echo "Mounting JuiceFS at $JUICEFS_MOUNT" >&2
+    if [[ -n "$JUICEFS_MOUNT_OPTIONS" ]]; then
+        "$JUICEFS_BIN" mount -d -o "$JUICEFS_MOUNT_OPTIONS" \
+            "$META_URL" "$JUICEFS_MOUNT" >>"$JUICEFS_LOG" 2>&1
+    else
+        "$JUICEFS_BIN" mount -d "$META_URL" "$JUICEFS_MOUNT" >>"$JUICEFS_LOG" 2>&1
+    fi
+    wait_for_mount "$JUICEFS_MOUNT" JuiceFS
+    run_and_record "juicefs-fuse" "0"
+else
+    echo "Formatting JuiceFS bucket=$JUICEFS_BUCKET metadata=$META_URL" >&2
+    "$JUICEFS_BIN" format \
+        --storage s3 \
+        --bucket "$RUSTFS_ENDPOINT/$JUICEFS_BUCKET" \
+        --access-key "$RUSTFS_ACCESS_KEY" \
+        --secret-key "$RUSTFS_SECRET_KEY" \
+        --trash-days 0 \
+        "$META_URL" nokv-fuse-juicefs-compare >"$JUICEFS_LOG" 2>&1
+
+    echo "Mounting JuiceFS at $JUICEFS_MOUNT" >&2
+    if [[ -n "$JUICEFS_MOUNT_OPTIONS" ]]; then
+        "$JUICEFS_BIN" mount -d -o "$JUICEFS_MOUNT_OPTIONS" \
+            "$META_URL" "$JUICEFS_MOUNT" >>"$JUICEFS_LOG" 2>&1
+    else
+        "$JUICEFS_BIN" mount -d "$META_URL" "$JUICEFS_MOUNT" >>"$JUICEFS_LOG" 2>&1
+    fi
+    wait_for_mount "$JUICEFS_MOUNT" JuiceFS
+    run_and_record "both" "1"
+fi
+
+if [[ -n "$RESULT_CSV" ]]; then
+    emit_summary "$RESULT_CSV"
+fi

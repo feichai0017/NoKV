@@ -649,17 +649,35 @@ where
         parent: InodeId,
         name: DentryName,
     ) -> Result<FileHandle, Errno> {
+        self.allocate_write_handle_with_session(attr, parent, name, None)
+    }
+
+    fn allocate_write_handle_with_session(
+        &self,
+        attr: &InodeAttr,
+        parent: InodeId,
+        name: DentryName,
+        prepared: Option<B::Prepared>,
+    ) -> Result<FileHandle, Errno> {
+        let writer = prepared
+            .as_ref()
+            .map(|prepared| {
+                self.backend
+                    .new_write_pipeline(prepared, &fuse_manifest_id(parent, attr.inode))
+                    .map_err(errno)
+            })
+            .transpose()?;
         self.allocate_handle(WriteHandle {
             inode: attr.inode,
             parent,
             name,
-            prepared: None,
+            prepared,
             mode: attr.mode,
             uid: attr.uid,
             gid: attr.gid,
             base_size: attr.size,
             size: attr.size,
-            writer: None,
+            writer,
             buffered: Vec::new(),
             pending_uploads: Vec::new(),
             sequential_digest: Some(SequentialDigest::new()),
@@ -1912,10 +1930,15 @@ where
         };
         match self
             .backend
-            .create_file(parent, name, mode & !umask, req.uid(), req.gid())
+            .create_file_prepared(parent, name, mode & !umask, req.uid(), req.gid())
         {
-            Ok(entry) => {
-                match self.allocate_write_handle(&entry.attr, parent, entry.dentry.name.clone()) {
+            Ok((entry, prepared)) => {
+                match self.allocate_write_handle_with_session(
+                    &entry.attr,
+                    parent,
+                    entry.dentry.name.clone(),
+                    Some(prepared),
+                ) {
                     Ok(handle) => {
                         self.remember_entry(&entry);
                         reply.created(
@@ -3008,6 +3031,17 @@ mod tests {
             _uid: u32,
             _gid: u32,
         ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn create_file_prepared(
+            &self,
+            _parent: InodeId,
+            _name: DentryName,
+            _mode: u32,
+            _uid: u32,
+            _gid: u32,
+        ) -> FuseBackendResult<(DentryWithAttr, Self::Prepared)> {
             unsupported()
         }
 

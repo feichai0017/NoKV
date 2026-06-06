@@ -192,6 +192,33 @@ fn rpc_supports_remote_fuse_inode_operations() {
 }
 
 #[test]
+fn rpc_create_file_prepared_returns_entry_and_write_token() {
+    let server = test_server();
+    let envelope = request_envelope(
+        &server,
+        MetadataRpcRequest::CreateFilePrepared {
+            parent: 1,
+            name: "checkpoint.bin".to_owned(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        },
+    );
+    let (entry, prepared) = match envelope.result.unwrap() {
+        MetadataRpcResult::CreatedPreparedArtifact { entry, prepared } => (*entry, prepared),
+        other => panic!("unexpected create prepared result: {other:?}"),
+    };
+    assert_eq!(entry.dentry.name_hex, "636865636b706f696e742e62696e");
+    assert_eq!(entry.attr.file_type, "file");
+    assert_eq!(prepared.parent, 1);
+    assert_eq!(prepared.name, "checkpoint.bin");
+    assert_eq!(prepared.inode, entry.attr.inode);
+    assert!(prepared.replace);
+    assert_eq!(prepared.old_generation, None);
+    assert!(prepared.generation > entry.attr.generation);
+}
+
+#[test]
 fn rpc_supports_remote_fuse_advisory_locks() {
     let server = test_server();
     let file = expect_dentry(request_envelope(

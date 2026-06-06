@@ -261,6 +261,25 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
+        MetadataRpcRequest::CreateFilePrepared {
+            parent,
+            name,
+            mode,
+            uid,
+            gid,
+        } => {
+            let created = server.service().create_file_prepared(
+                inode_id(parent)?,
+                dentry_name(name)?,
+                mode,
+                uid,
+                gid,
+            )?;
+            Ok(MetadataRpcResult::CreatedPreparedArtifact {
+                entry: Box::new(wire_dentry(&created.entry)),
+                prepared: wire_prepared_artifact(server.service().mount_id(), &created.prepared),
+            })
+        }
         MetadataRpcRequest::CreateSymlink {
             parent,
             name,
@@ -832,6 +851,7 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::CreateDir { .. }
         | MetadataRpcRequest::CreateDirPath { .. }
         | MetadataRpcRequest::CreateFile { .. }
+        | MetadataRpcRequest::CreateFilePrepared { .. }
         | MetadataRpcRequest::CreateSymlink { .. }
         | MetadataRpcRequest::CreateSpecialNode { .. }
         | MetadataRpcRequest::UpdateAttrs { .. }

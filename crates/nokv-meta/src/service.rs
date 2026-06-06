@@ -245,6 +245,12 @@ pub struct PreparedArtifact {
     pub old_generation: Option<u64>,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CreatedPreparedArtifact {
+    pub entry: DentryWithAttr,
+    pub prepared: PreparedArtifact,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectTransferStats {
     pub object_puts: u64,

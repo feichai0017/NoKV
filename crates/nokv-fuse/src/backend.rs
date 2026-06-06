@@ -156,6 +156,15 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         uid: u32,
         gid: u32,
     ) -> FuseBackendResult<DentryWithAttr>;
+
+    fn create_file_prepared(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> FuseBackendResult<(DentryWithAttr, Self::Prepared)>;
     fn create_symlink(
         &self,
         parent: InodeId,
@@ -704,6 +713,20 @@ where
     ) -> FuseBackendResult<DentryWithAttr> {
         self.metadata
             .create_file_in_dir(parent, name, mode, uid, gid)
+            .map_err(Into::into)
+    }
+
+    fn create_file_prepared(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> FuseBackendResult<(DentryWithAttr, Self::Prepared)> {
+        self.metadata
+            .create_file_prepared_in_dir(parent, name, mode, uid, gid)
+            .map(|created| (created.entry, created.prepared))
             .map_err(Into::into)
     }
 

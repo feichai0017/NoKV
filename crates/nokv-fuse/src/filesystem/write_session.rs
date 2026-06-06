@@ -10,7 +10,7 @@ use crate::backend::FuseBackend;
 
 use super::errno;
 
-pub(super) const FUSE_WRITEBACK_UPLOAD_THRESHOLD: usize = 1024 * 1024;
+pub(super) const FUSE_WRITEBACK_UPLOAD_THRESHOLD: usize = DEFAULT_BLOCK_SIZE;
 
 #[derive(Clone, Debug)]
 pub(super) struct WriteHandle<P> {

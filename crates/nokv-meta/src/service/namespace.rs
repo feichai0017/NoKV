@@ -101,6 +101,19 @@ where
         Ok(projection.into())
     }
 
+    pub fn create_file_prepared(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        mode: u32,
+        uid: u32,
+        gid: u32,
+    ) -> Result<CreatedPreparedArtifact, MetadError> {
+        let entry = self.create_file(parent, name.clone(), mode, uid, gid)?;
+        let prepared = self.prepare_artifact_replace(parent, name)?;
+        Ok(CreatedPreparedArtifact { entry, prepared })
+    }
+
     pub fn create_symlink(
         &self,
         parent: InodeId,
