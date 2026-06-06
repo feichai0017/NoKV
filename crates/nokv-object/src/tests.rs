@@ -1188,6 +1188,35 @@ fn object_read_plan_cache_evicts_oldest_unused_plan() {
 }
 
 #[test]
+fn object_read_plan_cache_reuses_covering_plan() {
+    let mut cache = ObjectReadPlanCache::new(2);
+    cache.insert(
+        ObjectReadPlanKey::new(42, 7, 0, 12),
+        ObjectReadPlan::new(
+            12,
+            vec![ObjectReadBlock {
+                object_key: "blocks/demo".to_owned(),
+                object_offset: 0,
+                len: 12,
+                output_offset: 0,
+            }],
+        ),
+    );
+
+    let plan = cache.get(&ObjectReadPlanKey::new(42, 7, 4, 4)).unwrap();
+    assert_eq!(plan.output_len, 4);
+    assert_eq!(
+        plan.blocks,
+        vec![ObjectReadBlock {
+            object_key: "blocks/demo".to_owned(),
+            object_offset: 4,
+            len: 4,
+            output_offset: 0,
+        }]
+    );
+}
+
+#[test]
 fn memory_block_cache_enforces_item_and_byte_limits() {
     let cache = MemoryBlockCache::new(MemoryBlockCacheOptions {
         max_bytes: 4,

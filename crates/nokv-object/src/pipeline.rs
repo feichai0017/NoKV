@@ -391,9 +391,22 @@ impl ObjectReadPlanCache {
     }
 
     pub fn get(&mut self, key: &ObjectReadPlanKey) -> Option<ObjectReadPlan> {
-        let plan = self.plans.get(key)?.clone();
-        self.order.retain(|existing| existing != key);
-        self.order.push_back(*key);
+        if let Some(plan) = self.plans.get(key).cloned() {
+            self.touch(*key);
+            return Some(plan);
+        }
+        let mut selected = None;
+        for cached_key in self.order.iter().rev().copied() {
+            let Some(cached_plan) = self.plans.get(&cached_key) else {
+                continue;
+            };
+            if let Some(plan) = slice_cached_read_plan(cached_key, cached_plan, *key) {
+                selected = Some((cached_key, plan));
+                break;
+            }
+        }
+        let (cached_key, plan) = selected?;
+        self.touch(cached_key);
         Some(plan)
     }
 
@@ -416,6 +429,47 @@ impl ObjectReadPlanCache {
     pub fn is_empty(&self) -> bool {
         self.plans.is_empty()
     }
+
+    fn touch(&mut self, key: ObjectReadPlanKey) {
+        self.order.retain(|existing| existing != &key);
+        self.order.push_back(key);
+    }
+}
+
+fn slice_cached_read_plan(
+    cached_key: ObjectReadPlanKey,
+    cached_plan: &ObjectReadPlan,
+    request_key: ObjectReadPlanKey,
+) -> Option<ObjectReadPlan> {
+    if cached_key.object_id != request_key.object_id
+        || cached_key.generation != request_key.generation
+        || request_key.offset < cached_key.offset
+    {
+        return None;
+    }
+    let cached_end = cached_key.offset.checked_add(cached_key.len as u64)?;
+    let requested_end = request_key.offset.checked_add(request_key.len as u64)?;
+    if requested_end > cached_end {
+        return None;
+    }
+    let mut blocks = Vec::new();
+    for block in &cached_plan.blocks {
+        let block_start = cached_key.offset.checked_add(block.output_offset as u64)?;
+        let block_end = block_start.checked_add(block.len as u64)?;
+        let overlap_start = block_start.max(request_key.offset);
+        let overlap_end = block_end.min(requested_end);
+        if overlap_start >= overlap_end {
+            continue;
+        }
+        let object_delta = overlap_start.checked_sub(block_start)?;
+        blocks.push(ObjectReadBlock {
+            object_key: block.object_key.clone(),
+            object_offset: block.object_offset.checked_add(object_delta)?,
+            len: usize::try_from(overlap_end - overlap_start).ok()?,
+            output_offset: usize::try_from(overlap_start - request_key.offset).ok()?,
+        });
+    }
+    Some(ObjectReadPlan::new(request_key.len, blocks))
 }
 
 impl ObjectPrefetchRequest {
