@@ -12,7 +12,8 @@ use fuser::{
     AccessFlags, BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType as FuseFileType,
     Filesystem, FopenFlags, Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags,
     ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry,
-    ReplyLock, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
+    ReplyLock, ReplyLseek, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow,
+    WriteFlags,
 };
 use nokv_client::MetadataClient;
 use nokv_meta::{
@@ -757,6 +758,33 @@ where
             .map_err(|_| Errno::EIO)?
             .remove(&fh.0)
             .is_some())
+    }
+
+    fn lseek_file_size(&self, ino: INodeNo, fh: FileHandle) -> Result<u64, Errno> {
+        if let Some(size) = self
+            .write_handles
+            .read()
+            .map_err(|_| Errno::EIO)?
+            .get(&fh.0)
+            .map(|handle| handle.size)
+        {
+            return Ok(size);
+        }
+        if let Some(size) = self
+            .read_handles
+            .read()
+            .map_err(|_| Errno::EIO)?
+            .get(&fh.0)
+            .map(|handle| handle.attr.size)
+        {
+            return Ok(size);
+        }
+        let inode = self.metadata_inode(ino)?;
+        match self.service_get_attr(inode).map_err(errno)? {
+            Some(attr) if attr.file_type == FileType::File => Ok(attr.size),
+            Some(_) => Err(Errno::EINVAL),
+            None => Err(Errno::ENOENT),
+        }
     }
 
     fn allocate_handle(&self, handle: WriteHandle<B::Prepared>) -> Result<FileHandle, Errno> {
@@ -2450,6 +2478,28 @@ where
             Err(err) => reply.error(err),
         }
     }
+
+    fn lseek(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: i64,
+        whence: i32,
+        reply: ReplyLseek,
+    ) {
+        let size = match self.lseek_file_size(ino, fh) {
+            Ok(size) => size,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match resolve_lseek(size, offset, whence) {
+            Ok(offset) => reply.offset(offset),
+            Err(err) => reply.error(err),
+        }
+    }
 }
 
 fn inode_id(ino: INodeNo) -> Result<InodeId, Errno> {
@@ -2630,6 +2680,41 @@ fn xattr_unsupported_error() -> Errno {
 
 fn xattr_missing_error() -> Errno {
     Errno::NO_XATTR
+}
+
+fn resolve_lseek(size: u64, offset: i64, whence: i32) -> Result<i64, Errno> {
+    match whence {
+        libc::SEEK_SET => {
+            u64::try_from(offset).map_err(|_| Errno::EINVAL)?;
+            Ok(offset)
+        }
+        libc::SEEK_END => {
+            let size = i128::from(size);
+            let next = size + i128::from(offset);
+            if !(0..=i128::from(i64::MAX)).contains(&next) {
+                return Err(Errno::EINVAL);
+            }
+            Ok(next as i64)
+        }
+        libc::SEEK_DATA => {
+            let offset = u64::try_from(offset).map_err(|_| Errno::EINVAL)?;
+            if offset >= size {
+                return Err(Errno::ENXIO);
+            }
+            i64::try_from(offset).map_err(|_| Errno::EINVAL)
+        }
+        libc::SEEK_HOLE => {
+            let offset = u64::try_from(offset).map_err(|_| Errno::EINVAL)?;
+            if offset > size {
+                return Err(Errno::ENXIO);
+            }
+            i64::try_from(size).map_err(|_| Errno::EINVAL)
+        }
+        // FUSE does not pass the kernel's current file offset, so SEEK_CUR
+        // cannot be answered accurately at the filesystem boundary.
+        libc::SEEK_CUR => Err(Errno::EINVAL),
+        _ => Err(Errno::EINVAL),
+    }
 }
 
 fn fuse_rename_mode(flags: RenameFlags) -> Result<FuseRenameMode, Errno> {
@@ -3089,6 +3174,35 @@ mod tests {
             xattr_set_mode(XATTR_CREATE | XATTR_REPLACE)
                 .unwrap_err()
                 .code(),
+            Errno::EINVAL.code()
+        );
+    }
+
+    #[test]
+    fn lseek_resolves_end_data_and_hole_offsets() {
+        assert_eq!(resolve_lseek(100, 5, libc::SEEK_SET).unwrap(), 5);
+        assert_eq!(resolve_lseek(100, -10, libc::SEEK_END).unwrap(), 90);
+        assert_eq!(resolve_lseek(100, 10, libc::SEEK_DATA).unwrap(), 10);
+        assert_eq!(resolve_lseek(100, 10, libc::SEEK_HOLE).unwrap(), 100);
+        assert_eq!(resolve_lseek(100, 100, libc::SEEK_HOLE).unwrap(), 100);
+    }
+
+    #[test]
+    fn lseek_rejects_invalid_or_unanswerable_offsets() {
+        assert_eq!(
+            resolve_lseek(100, -1, libc::SEEK_SET).unwrap_err().code(),
+            Errno::EINVAL.code()
+        );
+        assert_eq!(
+            resolve_lseek(100, 100, libc::SEEK_DATA).unwrap_err().code(),
+            Errno::ENXIO.code()
+        );
+        assert_eq!(
+            resolve_lseek(100, 101, libc::SEEK_HOLE).unwrap_err().code(),
+            Errno::ENXIO.code()
+        );
+        assert_eq!(
+            resolve_lseek(100, 0, libc::SEEK_CUR).unwrap_err().code(),
             Errno::EINVAL.code()
         );
     }
