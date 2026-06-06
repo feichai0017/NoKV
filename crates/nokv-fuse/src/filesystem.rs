@@ -20,10 +20,11 @@ use nokv_meta::{
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
-    BlockCachePolicy, BlockCacheStats, ChunkedWrite, DirtyChunkExtent, FileReadPipeline,
-    FileReadPipelineOptions, FileWritePipeline, ObjectError, ObjectPrefetchOptions,
-    ObjectPrefetchStats, ObjectReadBlock, ObjectStore, ObjectWritebackStats, PendingChunkedWrite,
-    WritebackCacheStats, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE, DEFAULT_S3_MULTIPART_CONCURRENCY,
+    manifest_digest_uri, BlockCachePolicy, BlockCacheStats, ChunkedWrite, DirtyChunkExtent,
+    FileReadPipeline, FileReadPipelineOptions, FileWritePipeline, ObjectError,
+    ObjectPrefetchOptions, ObjectPrefetchStats, ObjectReadBlock, ObjectStore, ObjectWritebackStats,
+    PendingChunkedWrite, WritebackCacheStats, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
 use nokv_types::{
     AdvisoryLockKind, AdvisoryLockRequest, DentryName, FileType, InodeAttr, InodeId,
@@ -2508,28 +2509,6 @@ fn system_time_ms(time: SystemTime) -> u64 {
 
 fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
     format!("fuse/{}/{}", parent.get(), inode.get())
-}
-
-fn manifest_digest_uri(size: u64, generation: u64, chunks: &[nokv_object::StoredChunk]) -> String {
-    let mut hasher = Sha256::new();
-    hasher.update(size.to_be_bytes());
-    hasher.update(generation.to_be_bytes());
-    for chunk in chunks {
-        hasher.update(chunk.chunk_index.to_be_bytes());
-        hasher.update(chunk.logical_offset.to_be_bytes());
-        hasher.update(chunk.len.to_be_bytes());
-        for block in &chunk.blocks {
-            hasher.update(block.object_key.as_bytes());
-            hasher.update([0]);
-            hasher.update(block.logical_offset.to_be_bytes());
-            hasher.update(block.object_offset.to_be_bytes());
-            hasher.update(block.len.to_be_bytes());
-            hasher.update(block.digest_uri.as_bytes());
-            hasher.update([0]);
-        }
-    }
-    let digest = hasher.finalize();
-    format!("manifest-sha256:{digest:x}")
 }
 
 fn staged_range_block_count(offset: u64, len: usize) -> Result<u64, Errno> {

@@ -105,6 +105,48 @@ fn chunked_put_and_read_cross_block_range() {
 }
 
 #[test]
+fn stored_chunks_promote_to_canonical_manifest_schema() {
+    let store = MemoryObjectStore::new();
+    let written = put_chunked_object(
+        &store,
+        b"abcdefghijklmnop",
+        ChunkWriteOptions {
+            manifest_id: "artifacts/checkpoint".to_owned(),
+            mount: 1,
+            inode: 2,
+            generation: 3,
+            chunk_size: 8,
+            block_size: 4,
+        },
+    )
+    .unwrap();
+
+    let manifests = written.chunk_manifests();
+    assert_eq!(manifests.len(), 2);
+    assert_eq!(manifests[0].chunk_index, 0);
+    assert_eq!(manifests[0].logical_offset, 0);
+    assert_eq!(manifests[0].len, 8);
+    assert_eq!(manifests[0].slices.len(), 1);
+    assert_eq!(manifests[0].slices[0].slice_id, 1);
+    assert_eq!(manifests[0].slices[0].blocks.len(), 2);
+    assert_eq!(
+        manifests[0].slices[0].blocks[0].object_key,
+        "blocks/1/2/3/0/0"
+    );
+
+    let digest = manifest_digest_uri(written.size, 3, &written.chunks);
+    assert!(digest.starts_with("manifest-sha256:"));
+    assert_eq!(
+        digest,
+        manifest_digest_uri(written.size, 3, &written.chunks)
+    );
+    assert_ne!(
+        digest,
+        manifest_digest_uri(written.size, 4, &written.chunks)
+    );
+}
+
+#[test]
 fn chunked_reader_matches_chunked_object_layout() {
     let store = MemoryObjectStore::new();
     let bytes = b"abcdefghijklmnop".to_vec();

@@ -1513,6 +1513,7 @@ dependencies = [
 name = "nokv-object"
 version = "0.1.0"
 dependencies = [
+ "nokv-types",
  "opendal",
  "sha2 0.10.9",
  "tempfile",

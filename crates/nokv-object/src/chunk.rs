@@ -6,6 +6,8 @@ use std::thread;
 use crate::cache::BlockCache;
 use crate::digest::sha256_uri;
 use crate::store::{validate_key, ObjectError, ObjectKey, ObjectRange, ObjectStore};
+use nokv_types::{BlockDescriptor, ChunkManifest, SliceManifest};
+use sha2::{Digest, Sha256};
 
 pub const DEFAULT_CHUNK_SIZE: u64 = 64 * 1024 * 1024;
 pub const DEFAULT_BLOCK_SIZE: usize = 4 * 1024 * 1024;
@@ -196,6 +198,63 @@ impl ChunkedWrite {
         }
         Ok(StagedObjectSet::new(objects))
     }
+
+    pub fn chunk_manifests(&self) -> Vec<ChunkManifest> {
+        chunk_manifests_from_stored_chunks(&self.chunks)
+    }
+}
+
+pub fn chunk_manifest_from_stored_chunk(chunk: &StoredChunk) -> ChunkManifest {
+    ChunkManifest {
+        chunk_index: chunk.chunk_index,
+        logical_offset: chunk.logical_offset,
+        len: chunk.len,
+        slices: vec![SliceManifest {
+            slice_id: 1,
+            logical_offset: chunk.logical_offset,
+            len: chunk.len,
+            blocks: chunk
+                .blocks
+                .iter()
+                .map(|block| BlockDescriptor {
+                    object_key: block.object_key.clone(),
+                    logical_offset: block.logical_offset,
+                    object_offset: block.object_offset,
+                    len: block.len,
+                    digest_uri: block.digest_uri.clone(),
+                })
+                .collect(),
+        }],
+    }
+}
+
+pub fn chunk_manifests_from_stored_chunks(chunks: &[StoredChunk]) -> Vec<ChunkManifest> {
+    chunks
+        .iter()
+        .map(chunk_manifest_from_stored_chunk)
+        .collect()
+}
+
+pub fn manifest_digest_uri(size: u64, generation: u64, chunks: &[StoredChunk]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(size.to_be_bytes());
+    hasher.update(generation.to_be_bytes());
+    for chunk in chunks {
+        hasher.update(chunk.chunk_index.to_be_bytes());
+        hasher.update(chunk.logical_offset.to_be_bytes());
+        hasher.update(chunk.len.to_be_bytes());
+        for block in &chunk.blocks {
+            hasher.update(block.object_key.as_bytes());
+            hasher.update([0]);
+            hasher.update(block.logical_offset.to_be_bytes());
+            hasher.update(block.object_offset.to_be_bytes());
+            hasher.update(block.len.to_be_bytes());
+            hasher.update(block.digest_uri.as_bytes());
+            hasher.update([0]);
+        }
+    }
+    let digest = hasher.finalize();
+    format!("manifest-sha256:{digest:x}")
 }
 
 pub fn plan_slice_reads(

@@ -14,9 +14,10 @@ use nokv_meta::{
     UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
-    ChunkStore, ChunkWriteOptions, ChunkedWrite, FileReadPipeline, ObjectBlockCache, ObjectError,
-    ObjectPrefetchOptions, ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectStore,
-    StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    chunk_manifest_from_stored_chunk, ChunkStore, ChunkWriteOptions, ChunkedWrite,
+    FileReadPipeline, ObjectBlockCache, ObjectError, ObjectPrefetchOptions, ObjectPrefetchRequest,
+    ObjectPrefetcher, ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk,
+    DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_protocol::{
     decode_envelope, decode_name_cursor, decode_xattr_name, encode_advisory_lock_kind,
@@ -24,12 +25,11 @@ use nokv_protocol::{
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireAdvisoryLock,
     WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr, WireMetadataError,
     WireMetadataPosition, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
-    WireSliceManifest, WireStagedObject, WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
+    WireStagedObject, WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
 };
 use nokv_types::{
-    parse_absolute_path, AdvisoryLock, AdvisoryLockRequest, BlockDescriptor, BodyDescriptor,
-    ChunkManifest, DentryName, FileType, InodeAttr, InodeId, PathMetadata, SliceManifest,
-    SnapshotPin, SpecialNodeSpec,
+    parse_absolute_path, AdvisoryLock, AdvisoryLockRequest, BodyDescriptor, ChunkManifest,
+    DentryName, FileType, InodeAttr, InodeId, PathMetadata, SnapshotPin, SpecialNodeSpec,
 };
 
 use crate::{ArtifactMetadata, ClientError, NamespaceRead};
@@ -563,31 +563,7 @@ where
             Ordering::Relaxed,
         );
         let staged = written.staged_objects()?;
-        let chunks = written
-            .chunks
-            .iter()
-            .map(|chunk| ChunkManifest {
-                chunk_index: chunk.chunk_index,
-                logical_offset: chunk.logical_offset,
-                len: chunk.len,
-                slices: vec![SliceManifest {
-                    slice_id: 1,
-                    logical_offset: chunk.logical_offset,
-                    len: chunk.len,
-                    blocks: chunk
-                        .blocks
-                        .iter()
-                        .map(|block| BlockDescriptor {
-                            object_key: block.object_key.clone(),
-                            logical_offset: block.logical_offset,
-                            object_offset: block.object_offset,
-                            len: block.len,
-                            digest_uri: block.digest_uri.clone(),
-                        })
-                        .collect(),
-                }],
-            })
-            .collect();
+        let chunks = written.chunk_manifests();
         Ok((
             BodyDescriptor {
                 producer: metadata.producer,
@@ -2100,27 +2076,7 @@ fn chunk_to_wire(chunk: &ChunkManifest) -> WireChunkManifest {
 }
 
 fn stored_chunk_to_wire(chunk: &StoredChunk) -> WireChunkManifest {
-    WireChunkManifest {
-        chunk_index: chunk.chunk_index,
-        logical_offset: chunk.logical_offset,
-        len: chunk.len,
-        slices: vec![WireSliceManifest {
-            slice_id: 1,
-            logical_offset: chunk.logical_offset,
-            len: chunk.len,
-            blocks: chunk
-                .blocks
-                .iter()
-                .map(|block| nokv_protocol::WireBlockDescriptor {
-                    object_key: block.object_key.clone(),
-                    logical_offset: block.logical_offset,
-                    object_offset: block.object_offset,
-                    len: block.len,
-                    digest_uri: block.digest_uri.clone(),
-                })
-                .collect(),
-        }],
-    }
+    WireChunkManifest::from_chunk_manifest(&chunk_manifest_from_stored_chunk(chunk))
 }
 
 fn staged_object_set_to_wire(staged: &StagedObjectSet) -> WireStagedObjectSet {
