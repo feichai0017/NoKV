@@ -48,8 +48,8 @@ use nokv_object::{
 use nokv_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
     DentryProjection, DentryRecord, FileType, InodeAttr, InodeId, ModelError, MountId,
-    ObjectGcRecord, PathError, PathMetadata, RecordFamily, SliceManifest, SnapshotPin, WatchCursor,
-    WatchEvent, WatchEventKind, WatchRecord,
+    ObjectGcRecord, PathError, PathMetadata, RecordFamily, SliceManifest, SnapshotPin,
+    SpecialNodeSpec, WatchCursor, WatchEvent, WatchEventKind, WatchRecord,
 };
 use sha2::{Digest, Sha256};
 
@@ -556,6 +556,7 @@ fn directory_attr(inode: InodeId, mode: u32, uid: u32, gid: u32, version: u64) -
         mode,
         uid,
         gid,
+        rdev: 0,
         size: 0,
         generation: version,
         mtime_ms: now_ms,
@@ -633,7 +634,8 @@ fn create_watch_kind(kind: CommandKind) -> WatchEventKind {
         CommandKind::CreateFile
         | CommandKind::CreateFiles
         | CommandKind::CreateDir
-        | CommandKind::CreateSymlink => WatchEventKind::Create,
+        | CommandKind::CreateSymlink
+        | CommandKind::CreateSpecialNode => WatchEventKind::Create,
         _ => WatchEventKind::UpdateAttr,
     }
 }
@@ -1044,6 +1046,7 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
         CommandKind::CreateFiles => b"create-files",
         CommandKind::CreateDir => b"create-dir",
         CommandKind::CreateSymlink => b"create-symlink",
+        CommandKind::CreateSpecialNode => b"create-special-node",
         CommandKind::UpdateAttr => b"update-attr",
         CommandKind::SetXattr => b"set-xattr",
         CommandKind::RemoveXattr => b"remove-xattr",

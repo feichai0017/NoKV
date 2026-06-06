@@ -17,8 +17,8 @@ use nokv_object::{
     ObjectKey, ObjectReadBlock, StagedObject, StagedObjectSet, StoredBlock, StoredChunk,
 };
 use nokv_protocol::{
-    decode_envelope, decode_name_cursor, decode_request, decode_xattr_name, encode_envelope,
-    encode_name_cursor, encode_request, encode_xattr_name, MetadataProtocolError,
+    decode_envelope, decode_file_type, decode_name_cursor, decode_request, decode_xattr_name,
+    encode_envelope, encode_name_cursor, encode_request, encode_xattr_name, MetadataProtocolError,
     MetadataRpcEnvelope, MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan,
     WireDentryWithAttr, WireMetadataError, WireMetadataPosition,
     WireMetadataRaftAppendEntriesRequest, WireMetadataRaftAppendEntriesResponse,
@@ -26,7 +26,7 @@ use nokv_protocol::{
     WireMetadataRaftVoteRequest, WireMetadataRaftVoteResponse, WireObjectReadBlock,
     WirePathMetadata, WirePreparedArtifact, WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
 };
-use nokv_types::{DentryName, InodeId, MountId};
+use nokv_types::{DentryName, InodeId, MountId, SpecialNodeSpec};
 
 use crate::server::{Server, ServerError};
 
@@ -1310,6 +1310,31 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
+        MetadataRpcRequest::CreateSpecialNode {
+            parent,
+            name,
+            file_type,
+            mode,
+            rdev,
+            uid,
+            gid,
+        } => {
+            let file_type = decode_file_type(&file_type).map_err(protocol_error)?;
+            let entry = server.service().create_special_node(
+                inode_id(parent)?,
+                dentry_name(name)?,
+                SpecialNodeSpec {
+                    file_type,
+                    mode,
+                    rdev,
+                    uid,
+                    gid,
+                },
+            )?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
         MetadataRpcRequest::UpdateAttrs {
             parent,
             name,
@@ -1782,6 +1807,7 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::CreateDirPath { .. }
         | MetadataRpcRequest::CreateFile { .. }
         | MetadataRpcRequest::CreateSymlink { .. }
+        | MetadataRpcRequest::CreateSpecialNode { .. }
         | MetadataRpcRequest::UpdateAttrs { .. }
         | MetadataRpcRequest::UpdateRootAttrs { .. }
         | MetadataRpcRequest::SetXattr { .. }

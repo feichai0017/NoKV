@@ -1204,6 +1204,10 @@ fn file_type_label(file_type: FileType) -> &'static str {
         FileType::File => "file",
         FileType::Directory => "dir",
         FileType::Symlink => "symlink",
+        FileType::NamedPipe => "fifo",
+        FileType::CharDevice => "char",
+        FileType::BlockDevice => "block",
+        FileType::Socket => "socket",
     }
 }
 

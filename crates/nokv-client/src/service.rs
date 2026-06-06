@@ -16,16 +16,16 @@ use nokv_object::{
     StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_protocol::{
-    decode_envelope, decode_name_cursor, decode_xattr_name, encode_name_cursor, encode_request,
-    encode_xattr_name, MetadataProtocolError, MetadataRpcEnvelope, MetadataRpcRequest,
-    MetadataRpcResult, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr,
-    WireMetadataError, WireMetadataPosition, WireObjectReadBlock, WirePathMetadata,
-    WirePreparedArtifact, WireSliceManifest, WireStagedObject, WireStagedObjectSet, WireUpdateAttr,
-    WireXattrSetMode,
+    decode_envelope, decode_name_cursor, decode_xattr_name, encode_file_type, encode_name_cursor,
+    encode_request, encode_xattr_name, MetadataProtocolError, MetadataRpcEnvelope,
+    MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest,
+    WireDentryWithAttr, WireMetadataError, WireMetadataPosition, WireObjectReadBlock,
+    WirePathMetadata, WirePreparedArtifact, WireSliceManifest, WireStagedObject,
+    WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
 };
 use nokv_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
-    InodeAttr, InodeId, PathMetadata, SliceManifest, SnapshotPin,
+    InodeAttr, InodeId, PathMetadata, SliceManifest, SnapshotPin, SpecialNodeSpec,
 };
 
 use crate::{ArtifactMetadata, ClientError, NamespaceRead};
@@ -795,6 +795,26 @@ impl MetadataClient {
             mode,
             uid,
             gid,
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn create_special_node(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        spec: SpecialNodeSpec,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::CreateSpecialNode {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+            file_type: encode_file_type(spec.file_type).to_owned(),
+            mode: spec.mode,
+            rdev: spec.rdev,
+            uid: spec.uid,
+            gid: spec.gid,
         })? {
             MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
             other => Err(unexpected_result(other)),

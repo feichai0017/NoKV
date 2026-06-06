@@ -104,6 +104,15 @@ pub enum MetadataRpcRequest {
         uid: u32,
         gid: u32,
     },
+    CreateSpecialNode {
+        parent: u64,
+        name: String,
+        file_type: String,
+        mode: u32,
+        rdev: u32,
+        uid: u32,
+        gid: u32,
+    },
     UpdateAttrs {
         parent: u64,
         name: String,
@@ -557,6 +566,14 @@ pub fn decode_xattr_name(raw: &str) -> Result<Vec<u8>, MetadataProtocolError> {
     hex_decode(raw)
 }
 
+pub fn encode_file_type(file_type: FileType) -> &'static str {
+    file_type_label(file_type)
+}
+
+pub fn decode_file_type(raw: &str) -> Result<FileType, MetadataProtocolError> {
+    parse_file_type(raw)
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WireInodeAttr {
     pub inode: u64,
@@ -564,6 +581,7 @@ pub struct WireInodeAttr {
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
+    pub rdev: u32,
     pub size: u64,
     pub generation: u64,
     pub mtime_ms: u64,
@@ -715,6 +733,7 @@ impl WireInodeAttr {
             mode: attr.mode,
             uid: attr.uid,
             gid: attr.gid,
+            rdev: attr.rdev,
             size: attr.size,
             generation: attr.generation,
             mtime_ms: attr.mtime_ms,
@@ -729,6 +748,7 @@ impl WireInodeAttr {
             mode: self.mode,
             uid: self.uid,
             gid: self.gid,
+            rdev: self.rdev,
             size: self.size,
             generation: self.generation,
             mtime_ms: self.mtime_ms,
@@ -910,6 +930,10 @@ fn file_type_label(file_type: FileType) -> &'static str {
         FileType::File => "file",
         FileType::Directory => "directory",
         FileType::Symlink => "symlink",
+        FileType::NamedPipe => "named_pipe",
+        FileType::CharDevice => "char_device",
+        FileType::BlockDevice => "block_device",
+        FileType::Socket => "socket",
     }
 }
 
@@ -918,6 +942,10 @@ fn parse_file_type(raw: &str) -> Result<FileType, MetadataProtocolError> {
         "file" => Ok(FileType::File),
         "directory" => Ok(FileType::Directory),
         "symlink" => Ok(FileType::Symlink),
+        "named_pipe" | "fifo" => Ok(FileType::NamedPipe),
+        "char_device" => Ok(FileType::CharDevice),
+        "block_device" => Ok(FileType::BlockDevice),
+        "socket" => Ok(FileType::Socket),
         other => Err(MetadataProtocolError::new(format!(
             "unknown file type {other}"
         ))),
@@ -982,6 +1010,26 @@ mod tests {
     }
 
     #[test]
+    fn wire_inode_attr_round_trips_special_file_type_and_rdev() {
+        let attr = InodeAttr {
+            inode: InodeId::new(42).unwrap(),
+            file_type: FileType::CharDevice,
+            mode: 0o660,
+            uid: 0,
+            gid: 44,
+            rdev: 0x1234,
+            size: 0,
+            generation: 9,
+            mtime_ms: 10,
+            ctime_ms: 11,
+        };
+        let wire = WireInodeAttr::from_inode_attr(&attr);
+        assert_eq!(wire.file_type, "char_device");
+        assert_eq!(wire.rdev, 0x1234);
+        assert_eq!(wire.into_inode_attr().unwrap(), attr);
+    }
+
+    #[test]
     fn binary_codec_round_trips_metadata_envelope() {
         let envelope = MetadataRpcEnvelope {
             ok: true,
@@ -992,6 +1040,7 @@ mod tests {
                     mode: 0o644,
                     uid: 1000,
                     gid: 1000,
+                    rdev: 0,
                     size: 16,
                     generation: 2,
                     mtime_ms: 2,

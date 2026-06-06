@@ -34,6 +34,7 @@ pub enum CommandKind {
     CreateFiles,
     CreateDir,
     CreateSymlink,
+    CreateSpecialNode,
     UpdateAttr,
     SetXattr,
     RemoveXattr,

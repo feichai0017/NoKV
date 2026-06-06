@@ -263,6 +263,7 @@ fn command_kind_tag(kind: CommandKind) -> u8 {
         CommandKind::RetireSnapshot => 16,
         CommandKind::WatchSubtree => 17,
         CommandKind::CleanupObjects => 18,
+        CommandKind::CreateSpecialNode => 19,
     }
 }
 
@@ -286,6 +287,7 @@ fn command_kind_from_tag(tag: u8) -> Result<CommandKind, MetadataRaftError> {
         16 => Ok(CommandKind::RetireSnapshot),
         17 => Ok(CommandKind::WatchSubtree),
         18 => Ok(CommandKind::CleanupObjects),
+        19 => Ok(CommandKind::CreateSpecialNode),
         tag => Err(MetadataRaftError::Backend(format!(
             "unknown command kind tag {tag}"
         ))),

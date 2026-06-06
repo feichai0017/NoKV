@@ -24,7 +24,7 @@ use nokv_object::{
     FileWritePipeline, ObjectError, ObjectPrefetchOptions, ObjectReadBlock, ObjectStore,
     PendingChunkedWrite, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE, DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
-use nokv_types::{DentryName, FileType, InodeAttr, InodeId};
+use nokv_types::{DentryName, FileType, InodeAttr, InodeId, SpecialNodeSpec};
 use sha2::{Digest, Sha256};
 
 use crate::attr::{file_attr, fuse_file_type};
@@ -191,6 +191,14 @@ const STATFS_BLOCK_SIZE: u32 = 4096;
 const STATFS_TOTAL_BYTES: u64 = 1 << 40;
 const STATFS_TOTAL_FILES: u64 = 1 << 32;
 const STATFS_NAME_MAX: u32 = 255;
+const MODE_TYPE_MASK: u32 = 0o170000;
+const MODE_NAMED_PIPE: u32 = 0o010000;
+const MODE_CHAR_DEVICE: u32 = 0o020000;
+const MODE_DIRECTORY: u32 = 0o040000;
+const MODE_BLOCK_DEVICE: u32 = 0o060000;
+const MODE_REGULAR_FILE: u32 = 0o100000;
+const MODE_SYMLINK: u32 = 0o120000;
+const MODE_SOCKET: u32 = 0o140000;
 const FUSE_WRITEBACK_UPLOAD_THRESHOLD: usize = 1024 * 1024;
 const DEFAULT_WRITEBACK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const DEFAULT_WRITEBACK_CACHE_ITEMS: usize = 16 * 1024;
@@ -1873,15 +1881,67 @@ where
 
     fn mknod(
         &self,
-        _req: &Request,
-        _parent: INodeNo,
-        _name: &OsStr,
-        _mode: u32,
-        _umask: u32,
-        _rdev: u32,
+        req: &Request,
+        parent: INodeNo,
+        name: &OsStr,
+        mode: u32,
+        umask: u32,
+        rdev: u32,
         reply: ReplyEntry,
     ) {
-        reply.error(Errno::EROFS);
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let parent = match self.metadata_inode(parent) {
+            Ok(parent) => parent,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let name = match dentry_name(name) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let file_type = match file_type_from_mknod_mode(mode) {
+            Ok(file_type) => file_type,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let mode = mode & !umask & 0o7777;
+        let result = if file_type == FileType::File {
+            self.backend
+                .create_file(parent, name, mode, req.uid(), req.gid())
+        } else {
+            self.backend.create_special_node(
+                parent,
+                name,
+                SpecialNodeSpec {
+                    file_type,
+                    mode,
+                    rdev,
+                    uid: req.uid(),
+                    gid: req.gid(),
+                },
+            )
+        };
+        match result {
+            Ok(entry) => {
+                self.remember_entry(&entry);
+                reply.entry(
+                    &self.options.entry_ttl,
+                    &self.view_file_attr(&entry.attr),
+                    Generation(entry.attr.generation),
+                );
+            }
+            Err(err) => reply.error(errno(err)),
+        }
     }
 
     fn symlink(
@@ -2202,6 +2262,18 @@ where
 
 fn inode_id(ino: INodeNo) -> Result<InodeId, Errno> {
     InodeId::new(ino.0).map_err(|_| Errno::EINVAL)
+}
+
+fn file_type_from_mknod_mode(mode: u32) -> Result<FileType, Errno> {
+    match mode & MODE_TYPE_MASK {
+        0 | MODE_REGULAR_FILE => Ok(FileType::File),
+        MODE_NAMED_PIPE => Ok(FileType::NamedPipe),
+        MODE_CHAR_DEVICE => Ok(FileType::CharDevice),
+        MODE_BLOCK_DEVICE => Ok(FileType::BlockDevice),
+        MODE_SOCKET => Ok(FileType::Socket),
+        MODE_DIRECTORY | MODE_SYMLINK => Err(Errno::EINVAL),
+        _ => Err(Errno::EINVAL),
+    }
 }
 
 fn dentry_name(name: &OsStr) -> Result<DentryName, Errno> {
@@ -2637,6 +2709,7 @@ mod tests {
                 mode: 0o644,
                 uid: 1000,
                 gid: 1000,
+                rdev: 0,
                 size: 16,
                 generation: 1,
                 mtime_ms: 1,
@@ -2690,6 +2763,7 @@ mod tests {
             mode: 0o640,
             uid: 1000,
             gid: 2000,
+            rdev: 0,
             size: 0,
             generation: 1,
             mtime_ms: 1,
@@ -2932,6 +3006,15 @@ mod tests {
             _mode: u32,
             _uid: u32,
             _gid: u32,
+        ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn create_special_node(
+            &self,
+            _parent: InodeId,
+            _name: DentryName,
+            _spec: SpecialNodeSpec,
         ) -> FuseBackendResult<DentryWithAttr> {
             unsupported()
         }

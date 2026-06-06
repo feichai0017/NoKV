@@ -11,6 +11,10 @@ pub fn fuse_file_type(file_type: FileType) -> FuseFileType {
         FileType::File => FuseFileType::RegularFile,
         FileType::Directory => FuseFileType::Directory,
         FileType::Symlink => FuseFileType::Symlink,
+        FileType::NamedPipe => FuseFileType::NamedPipe,
+        FileType::CharDevice => FuseFileType::CharDevice,
+        FileType::BlockDevice => FuseFileType::BlockDevice,
+        FileType::Socket => FuseFileType::Socket,
     }
 }
 
@@ -29,11 +33,16 @@ pub fn file_attr(attr: &InodeAttr) -> FileAttr {
         perm: (attr.mode & 0o7777) as u16,
         nlink: match attr.file_type {
             FileType::Directory => 2,
-            FileType::File | FileType::Symlink => 1,
+            FileType::File
+            | FileType::Symlink
+            | FileType::NamedPipe
+            | FileType::CharDevice
+            | FileType::BlockDevice
+            | FileType::Socket => 1,
         },
         uid: attr.uid,
         gid: attr.gid,
-        rdev: 0,
+        rdev: attr.rdev,
         blksize: BLOCK_SIZE,
         flags: 0,
     }
@@ -58,6 +67,7 @@ mod tests {
             mode: 0o640,
             uid: 501,
             gid: 20,
+            rdev: 0,
             size: 513,
             generation: 9,
             mtime_ms: 10,
@@ -80,6 +90,7 @@ mod tests {
             mode: 0o755,
             uid: 1000,
             gid: 1000,
+            rdev: 0,
             size: 0,
             generation: 1,
             mtime_ms: 1,
@@ -88,5 +99,25 @@ mod tests {
         let fuse = file_attr(&attr);
         assert_eq!(fuse.kind, FuseFileType::Directory);
         assert_eq!(fuse.nlink, 2);
+    }
+
+    #[test]
+    fn special_nodes_report_kind_and_device_number() {
+        let attr = InodeAttr {
+            inode: InodeId::new(9).unwrap(),
+            file_type: FileType::CharDevice,
+            mode: 0o666,
+            uid: 0,
+            gid: 0,
+            rdev: 0x1234,
+            size: 0,
+            generation: 3,
+            mtime_ms: 1,
+            ctime_ms: 1,
+        };
+        let fuse = file_attr(&attr);
+        assert_eq!(fuse.kind, FuseFileType::CharDevice);
+        assert_eq!(fuse.rdev, 0x1234);
+        assert_eq!(fuse.nlink, 1);
     }
 }

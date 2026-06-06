@@ -33,12 +33,13 @@ pub fn decode_allocator_state(bytes: &[u8]) -> Result<(u64, u64), CodecError> {
 }
 
 pub fn encode_inode_attr(attr: &InodeAttr) -> Vec<u8> {
-    let mut out = Vec::with_capacity(61);
+    let mut out = Vec::with_capacity(65);
     push_u64(&mut out, attr.inode.get());
     out.push(file_type_tag(attr.file_type));
     push_u32(&mut out, attr.mode);
     push_u32(&mut out, attr.uid);
     push_u32(&mut out, attr.gid);
+    push_u32(&mut out, attr.rdev);
     push_u64(&mut out, attr.size);
     push_u64(&mut out, attr.generation);
     push_u64(&mut out, attr.mtime_ms);
@@ -301,6 +302,7 @@ fn decode_inode_attr_from(input: &mut Decoder<'_>) -> Result<InodeAttr, CodecErr
         mode: input.u32()?,
         uid: input.u32()?,
         gid: input.u32()?,
+        rdev: input.u32()?,
         size: input.u64()?,
         generation: input.u64()?,
         mtime_ms: input.u64()?,
@@ -313,6 +315,10 @@ fn file_type_tag(file_type: FileType) -> u8 {
         FileType::File => 1,
         FileType::Directory => 2,
         FileType::Symlink => 3,
+        FileType::NamedPipe => 4,
+        FileType::CharDevice => 5,
+        FileType::BlockDevice => 6,
+        FileType::Socket => 7,
     }
 }
 
@@ -321,6 +327,10 @@ fn file_type(tag: u8) -> Result<FileType, CodecError> {
         1 => Ok(FileType::File),
         2 => Ok(FileType::Directory),
         3 => Ok(FileType::Symlink),
+        4 => Ok(FileType::NamedPipe),
+        5 => Ok(FileType::CharDevice),
+        6 => Ok(FileType::BlockDevice),
+        7 => Ok(FileType::Socket),
         _ => Err(CodecError::InvalidFileType(tag)),
     }
 }

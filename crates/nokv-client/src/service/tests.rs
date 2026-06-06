@@ -94,6 +94,7 @@ fn dentry_batch_response(names: &[String], first_inode: u64) -> Vec<u8> {
                             mode: 0o644,
                             uid: 1000,
                             gid: 1000,
+                            rdev: 0,
                             size: 0,
                             generation: inode,
                             mtime_ms: inode,
@@ -146,6 +147,7 @@ fn dentry_response_with_position(
                     mode: 0o644,
                     uid: 1000,
                     gid: 1000,
+                    rdev: 0,
                     size: 0,
                     generation,
                     mtime_ms: generation,
@@ -189,7 +191,7 @@ fn artifact_metadata(manifest_id: &str) -> ArtifactMetadata {
 #[test]
 fn service_mkdir_sends_metadata_rpc() {
     let addr = serve_one(
-        r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"72756e73","child":2,"child_type":"directory","attr_generation":1},"attr":{"inode":2,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":1,"mtime_ms":1,"ctime_ms":1},"body":null}}}"#,
+        r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"72756e73","child":2,"child_type":"directory","attr_generation":1},"attr":{"inode":2,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":1,"mtime_ms":1,"ctime_ms":1},"body":null}}}"#,
     );
     let client = MetadataClient::connect(addr);
     let entry = client.mkdir("/runs", 0o755, 1000, 1000).unwrap();
@@ -233,7 +235,7 @@ fn service_mkdirs_uses_single_batch_frame() {
             other => panic!("unexpected request: {other:?}"),
         }
         let response = response_body(
-            r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"61","child":40,"child_type":"directory","attr_generation":7},"attr":{"inode":40,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"62","child":41,"child_type":"directory","attr_generation":8},"attr":{"inode":41,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
+            r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"61","child":40,"child_type":"directory","attr_generation":7},"attr":{"inode":40,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"62","child":41,"child_type":"directory","attr_generation":8},"attr":{"inode":41,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
         );
         write_frame(&mut stream, request_id, flags, &response).unwrap();
     });
@@ -248,7 +250,7 @@ fn service_mkdirs_uses_single_batch_frame() {
 #[test]
 fn service_create_file_uses_single_path_rpc_for_nested_parent() {
     let addr = serve_one(
-        r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"636865636b706f696e742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+        r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"636865636b706f696e742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
     );
     let client = MetadataClient::connect(addr);
     let entry = client
@@ -256,6 +258,43 @@ fn service_create_file_uses_single_path_rpc_for_nested_parent() {
         .unwrap();
     assert_eq!(entry.attr.inode.get(), 42);
     assert_eq!(entry.dentry.name.as_bytes(), b"checkpoint.bin");
+}
+
+#[test]
+fn service_create_special_node_sends_typed_rpc() {
+    let addr = serve_one_request(|request| {
+        assert_eq!(
+            request,
+            MetadataRpcRequest::CreateSpecialNode {
+                parent: 1,
+                name: "accelerator0".to_owned(),
+                file_type: "char_device".to_owned(),
+                mode: 0o660,
+                rdev: 0x1234,
+                uid: 0,
+                gid: 44,
+            }
+        );
+        response_body(
+            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"616363656c657261746f7230","child":42,"child_type":"char_device","attr_generation":7},"attr":{"inode":42,"file_type":"char_device","mode":432,"uid":0,"gid":44,"rdev":4660,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+        )
+    });
+    let client = MetadataClient::connect(addr);
+    let entry = client
+        .create_special_node(
+            InodeId::root(),
+            DentryName::new(b"accelerator0".to_vec()).unwrap(),
+            SpecialNodeSpec {
+                file_type: FileType::CharDevice,
+                mode: 0o660,
+                rdev: 0x1234,
+                uid: 0,
+                gid: 44,
+            },
+        )
+        .unwrap();
+    assert_eq!(entry.attr.file_type, FileType::CharDevice);
+    assert_eq!(entry.attr.rdev, 0x1234);
 }
 
 #[test]
@@ -289,7 +328,7 @@ fn service_client_carries_observed_metadata_position_to_live_reads() {
                 && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
         ));
         let response = response_body(
-            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
         );
         write_frame(&mut stream, request_id, flags, &response).unwrap();
     });
@@ -346,7 +385,7 @@ fn service_client_retries_stale_single_endpoint_until_fresh() {
                 }),
             ),
             response_body(
-                r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+                r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
             ),
         ] {
             let (request_id, flags, request) = read_frame(&mut stream).unwrap();
@@ -395,7 +434,7 @@ fn service_client_imports_observed_position_for_learner_reads() {
                 && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
         ));
         let response = response_body(
-            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
         );
         write_frame(&mut stream, request_id, flags, &response).unwrap();
     });
@@ -469,7 +508,7 @@ fn service_client_routes_live_reads_to_learner_and_falls_back_on_stale() {
                 && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
         ));
         let response = response_body(
-            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
+            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
         );
         write_frame(&mut stream, request_id, flags, &response).unwrap();
     });
@@ -535,7 +574,7 @@ fn service_create_files_uses_single_coalesced_frame() {
             other => panic!("unexpected request: {other:?}"),
         }
         let response = response_body(
-            r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
+            r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
         );
         write_frame(&mut stream, request_id, flags, &response).unwrap();
     });
@@ -630,7 +669,7 @@ fn service_remove_many_uses_single_batch_frame() {
             other => panic!("unexpected request: {other:?}"),
         }
         let response = response_body(
-            r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
+            r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"612e62696e","child":40,"child_type":"file","attr_generation":7},"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"622e62696e","child":41,"child_type":"file","attr_generation":8},"attr":{"inode":41,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
         );
         write_frame(&mut stream, request_id, flags, &response).unwrap();
     });
@@ -668,7 +707,7 @@ fn service_rmdir_many_uses_single_batch_frame() {
             other => panic!("unexpected request: {other:?}"),
         }
         let response = response_body(
-            r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"61","child":40,"child_type":"directory","attr_generation":7},"attr":{"inode":40,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"62","child":41,"child_type":"directory","attr_generation":8},"attr":{"inode":41,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
+            r#"{"ok":true,"result":{"type":"batch","results":[{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"61","child":40,"child_type":"directory","attr_generation":7},"attr":{"inode":40,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}},{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":2,"name_hex":"62","child":41,"child_type":"directory","attr_generation":8},"attr":{"inode":41,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":8,"mtime_ms":8,"ctime_ms":8},"body":null}}}]}}"#,
         );
         write_frame(&mut stream, request_id, flags, &response).unwrap();
     });
@@ -1038,7 +1077,7 @@ fn service_snapshot_namespace_methods_use_snapshot_rooted_rpcs() {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":2,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":2,"mtime_ms":2,"ctime_ms":2},"body":null}}}"#,
+                    r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":2,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":2,"mtime_ms":2,"ctime_ms":2},"body":null}}}"#,
                 ),
             )
             .unwrap();
@@ -1055,7 +1094,7 @@ fn service_snapshot_namespace_methods_use_snapshot_rooted_rpcs() {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"dentries","entries":[{"dentry":{"parent":2,"name_hex":"6e6573746564","child":3,"child_type":"directory","attr_generation":3},"attr":{"inode":3,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}]}}"#,
+                    r#"{"ok":true,"result":{"type":"dentries","entries":[{"dentry":{"parent":2,"name_hex":"6e6573746564","child":3,"child_type":"directory","attr_generation":3},"attr":{"inode":3,"file_type":"directory","mode":493,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}]}}"#,
                 ),
             )
             .unwrap();
@@ -1120,7 +1159,7 @@ fn service_list_page_uses_cursor_rpc() {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"622e62696e","child":3,"child_type":"file","attr_generation":3},"attr":{"inode":3,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}],"next_name_hex":"622e62696e"}}"#,
+                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"622e62696e","child":3,"child_type":"file","attr_generation":3},"attr":{"inode":3,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}],"next_name_hex":"622e62696e"}}"#,
                 ),
             )
             .unwrap();
@@ -1163,7 +1202,7 @@ fn service_indexed_list_page_uses_indexed_cursor_rpc() {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"622e62696e","child":3,"child_type":"file","attr_generation":3},"attr":{"inode":3,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}],"next_name_hex":"622e62696e"}}"#,
+                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"622e62696e","child":3,"child_type":"file","attr_generation":3},"attr":{"inode":3,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}],"next_name_hex":"622e62696e"}}"#,
                 ),
             )
             .unwrap();
@@ -1207,7 +1246,7 @@ fn service_list_uses_paged_rpc_until_cursor_is_exhausted() {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"612e62696e","child":3,"child_type":"file","attr_generation":3},"attr":{"inode":3,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}],"next_name_hex":"612e62696e"}}"#,
+                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"612e62696e","child":3,"child_type":"file","attr_generation":3},"attr":{"inode":3,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":3,"mtime_ms":3,"ctime_ms":3},"body":null}],"next_name_hex":"612e62696e"}}"#,
                 ),
             )
             .unwrap();
@@ -1229,7 +1268,7 @@ fn service_list_uses_paged_rpc_until_cursor_is_exhausted() {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"622e62696e","child":4,"child_type":"file","attr_generation":4},"attr":{"inode":4,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":0,"generation":4,"mtime_ms":4,"ctime_ms":4},"body":null}],"next_name_hex":null}}"#,
+                    r#"{"ok":true,"result":{"type":"dentries_page","entries":[{"dentry":{"parent":2,"name_hex":"622e62696e","child":4,"child_type":"file","attr_generation":4},"attr":{"inode":4,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":0,"generation":4,"mtime_ms":4,"ctime_ms":4},"body":null}],"next_name_hex":null}}"#,
                 ),
             )
             .unwrap();
@@ -1265,7 +1304,7 @@ fn service_metadata_stat_path_uses_path_metadata_rpc() {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
+                    r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
                 ),
             )
             .unwrap();
@@ -1284,7 +1323,7 @@ fn service_file_client_read_path_returns_metadata_and_checks_expected_generation
         .put(&ObjectKey::new("blocks/demo").unwrap(), b"hello server")
         .unwrap();
     let addr = serve_one(
-        r#"{"ok":true,"result":{"type":"path_read_plan","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+        r#"{"ok":true,"result":{"type":"path_read_plan","metadata":{"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
     );
     let client = NoKvFsClient::connect(addr, store);
     let read = client.read_path("/artifact.bin", 6, 6, Some(7)).unwrap();
@@ -1316,7 +1355,7 @@ fn service_file_client_reads_body_from_object_store() {
         .unwrap();
     let addr = serve_many(vec![
         response_body(
-            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
+            r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#,
         ),
         response_body(
             r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
@@ -1335,7 +1374,7 @@ fn service_file_client_uploads_blocks_then_publishes_metadata() {
             r#"{"ok":true,"result":{"type":"prepared_artifact","prepared":{"mount":1,"parent":1,"name":"artifact.bin","inode":42,"generation":7,"mtime_ms":1700000000000,"ctime_ms":1700000000000,"replace":false,"dentry_version":null,"old_generation":null}}}"#,
         ),
         response_body(
-            r#"{"ok":true,"result":{"type":"rename_replace","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"size":11,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":11,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"replaced":null}}"#,
+            r#"{"ok":true,"result":{"type":"rename_replace","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"size":11,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":11,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}},"replaced":null}}"#,
         ),
     ]);
     let client = NoKvFsClient::connect(addr, store.clone());

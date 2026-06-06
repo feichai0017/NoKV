@@ -13,7 +13,7 @@ use nokv_object::{
     ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
     WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
-use nokv_types::{DentryName, InodeAttr, InodeId, WatchCursor, WatchRecord};
+use nokv_types::{DentryName, InodeAttr, InodeId, SpecialNodeSpec, WatchCursor, WatchRecord};
 
 use crate::filesystem::FuseOptions;
 
@@ -153,6 +153,12 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         mode: u32,
         uid: u32,
         gid: u32,
+    ) -> FuseBackendResult<DentryWithAttr>;
+    fn create_special_node(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        spec: SpecialNodeSpec,
     ) -> FuseBackendResult<DentryWithAttr>;
     fn remove_file(&self, parent: InodeId, name: &DentryName) -> FuseBackendResult<DentryWithAttr>;
     fn remove_empty_dir(
@@ -603,6 +609,17 @@ where
     ) -> FuseBackendResult<DentryWithAttr> {
         self.metadata
             .create_symlink(parent, name, target, mode, uid, gid)
+            .map_err(Into::into)
+    }
+
+    fn create_special_node(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        spec: SpecialNodeSpec,
+    ) -> FuseBackendResult<DentryWithAttr> {
+        self.metadata
+            .create_special_node(parent, name, spec)
             .map_err(Into::into)
     }
 

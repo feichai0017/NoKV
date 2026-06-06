@@ -1077,6 +1077,63 @@ fn create_symlink_round_trips_target_and_unlinks_like_file() {
 }
 
 #[test]
+fn create_special_node_persists_type_and_rdev_without_body() {
+    let service = service();
+    let fifo_name = DentryName::new(b"events.fifo".to_vec()).unwrap();
+    let fifo = service
+        .create_special_node(
+            InodeId::root(),
+            fifo_name.clone(),
+            SpecialNodeSpec {
+                file_type: FileType::NamedPipe,
+                mode: 0o644,
+                rdev: 0,
+                uid: 1000,
+                gid: 1000,
+            },
+        )
+        .unwrap();
+    assert_eq!(fifo.attr.file_type, FileType::NamedPipe);
+    assert_eq!(fifo.attr.rdev, 0);
+    assert_eq!(fifo.attr.size, 0);
+    assert!(fifo.body.is_none());
+    assert_eq!(
+        service.lookup_plus(InodeId::root(), &fifo_name).unwrap(),
+        Some(fifo.clone())
+    );
+
+    let char_name = DentryName::new(b"accelerator0".to_vec()).unwrap();
+    let char_device = service
+        .create_special_node(
+            InodeId::root(),
+            char_name.clone(),
+            SpecialNodeSpec {
+                file_type: FileType::CharDevice,
+                mode: 0o660,
+                rdev: 0x1234,
+                uid: 0,
+                gid: 44,
+            },
+        )
+        .unwrap();
+    assert_eq!(char_device.attr.file_type, FileType::CharDevice);
+    assert_eq!(char_device.attr.rdev, 0x1234);
+    assert!(char_device.body.is_none());
+    assert!(service
+        .read_dir_plus(InodeId::root())
+        .unwrap()
+        .iter()
+        .any(|entry| entry.attr == char_device.attr));
+
+    let removed = service.remove_file(InodeId::root(), &char_name).unwrap();
+    assert_eq!(removed.attr.file_type, FileType::CharDevice);
+    assert_eq!(
+        service.lookup_plus(InodeId::root(), &char_name).unwrap(),
+        None
+    );
+}
+
+#[test]
 fn snapshot_preserves_symlink_target() {
     let service = service();
     let name = DentryName::new(b"latest".to_vec()).unwrap();

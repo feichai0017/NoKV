@@ -20,6 +20,10 @@ pub enum FileType {
     File,
     Directory,
     Symlink,
+    NamedPipe,
+    CharDevice,
+    BlockDevice,
+    Socket,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -47,10 +51,20 @@ pub struct InodeAttr {
     pub mode: u32,
     pub uid: u32,
     pub gid: u32,
+    pub rdev: u32,
     pub size: u64,
     pub generation: u64,
     pub mtime_ms: u64,
     pub ctime_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SpecialNodeSpec {
+    pub file_type: FileType,
+    pub mode: u32,
+    pub rdev: u32,
+    pub uid: u32,
+    pub gid: u32,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -158,6 +172,15 @@ pub struct WatchEvent {
     pub name: Option<DentryName>,
     pub inode: InodeId,
     pub version: u64,
+}
+
+impl FileType {
+    pub fn is_special_node(self) -> bool {
+        matches!(
+            self,
+            Self::NamedPipe | Self::CharDevice | Self::BlockDevice | Self::Socket
+        )
+    }
 }
 
 impl MountId {

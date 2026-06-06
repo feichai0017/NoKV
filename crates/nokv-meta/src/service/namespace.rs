@@ -82,6 +82,7 @@ where
             mode,
             uid,
             gid,
+            rdev: 0,
             size: 0,
             generation: version.get(),
             mtime_ms: now_ms,
@@ -133,6 +134,7 @@ where
             mode,
             uid,
             gid,
+            rdev: 0,
             size: body.size,
             generation: version.get(),
             mtime_ms: now_ms,
@@ -150,6 +152,38 @@ where
                 staged,
             });
         }
+        Ok(projection.into())
+    }
+
+    pub fn create_special_node(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+        spec: SpecialNodeSpec,
+    ) -> Result<DentryWithAttr, MetadError> {
+        if !spec.file_type.is_special_node() {
+            return Err(MetadError::InvalidPath(format!(
+                "file type {:?} is not a special node",
+                spec.file_type
+            )));
+        }
+        let version = self.next_version()?;
+        let inode = self.next_inode()?;
+        let now_ms = current_time_ms();
+        let attr = InodeAttr {
+            inode,
+            file_type: spec.file_type,
+            mode: spec.mode,
+            uid: spec.uid,
+            gid: spec.gid,
+            rdev: spec.rdev,
+            size: 0,
+            generation: version.get(),
+            mtime_ms: now_ms,
+            ctime_ms: now_ms,
+        };
+        let projection = projection(parent, name, attr, None);
+        self.commit_create_projection(CommandKind::CreateSpecialNode, &projection, version)?;
         Ok(projection.into())
     }
 
@@ -337,6 +371,7 @@ where
             mode,
             uid,
             gid,
+            rdev: 0,
             size: 0,
             generation: version.get(),
             mtime_ms: now_ms,
@@ -485,6 +520,7 @@ where
                         mode: batch.mode,
                         uid: batch.uid,
                         gid: batch.gid,
+                        rdev: 0,
                         size: 0,
                         generation: version.get(),
                         mtime_ms: now_ms,
@@ -549,6 +585,7 @@ where
                     mode,
                     uid,
                     gid,
+                    rdev: 0,
                     size: 0,
                     generation: version.get(),
                     mtime_ms: now_ms,

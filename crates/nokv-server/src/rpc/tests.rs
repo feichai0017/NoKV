@@ -155,6 +155,22 @@ fn rpc_supports_remote_fuse_inode_operations() {
         "unexpected removexattr result: {remove_xattr:?}"
     );
 
+    let special = expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::CreateSpecialNode {
+            parent: 1,
+            name: "accelerator0".to_owned(),
+            file_type: "char_device".to_owned(),
+            mode: 0o660,
+            rdev: 0x1234,
+            uid: 0,
+            gid: 44,
+        },
+    ));
+    assert_eq!(special.dentry.child_type, "char_device");
+    assert_eq!(special.attr.file_type, "char_device");
+    assert_eq!(special.attr.rdev, 0x1234);
+
     let snapshot = request_envelope(&server, MetadataRpcRequest::SnapshotSubtree { root: 1 });
     let snapshot_id = match snapshot.result.unwrap() {
         MetadataRpcResult::Snapshot { snapshot } => snapshot.snapshot_id,
