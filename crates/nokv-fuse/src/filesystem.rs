@@ -1028,28 +1028,6 @@ where
         Ok(())
     }
 
-    fn digest_handle_body(&self, fh: FileHandle, size: u64) -> Result<String, Errno> {
-        const DIGEST_CHUNK_SIZE: u32 = 8 * 1024 * 1024;
-
-        let mut hasher = Sha256::new();
-        let mut offset = 0_u64;
-        while offset < size {
-            let requested = (size - offset).min(u64::from(DIGEST_CHUNK_SIZE)) as u32;
-            let bytes = self
-                .read_from_handle(fh, offset, requested)?
-                .ok_or(Errno::EIO)?;
-            if bytes.is_empty() {
-                return Err(Errno::EIO);
-            }
-            hasher.update(&bytes);
-            offset = offset
-                .checked_add(u64::try_from(bytes.len()).map_err(|_| Errno::EINVAL)?)
-                .ok_or(Errno::EINVAL)?;
-        }
-        let digest = hasher.finalize();
-        Ok(format!("sha256:{digest:x}"))
-    }
-
     fn publish_handle(&self, fh: FileHandle) -> Result<(), Errno> {
         let has_write_handle = self
             .write_handles
@@ -1073,14 +1051,22 @@ where
         if !snapshot.dirty {
             return Ok(());
         }
+        let writer = snapshot.writer.as_ref().ok_or(Errno::EIO)?;
+        let prepared = snapshot.prepared.as_ref().ok_or(Errno::EIO)?;
         let digest_uri = snapshot
             .sequential_digest
             .as_ref()
             .and_then(|digest| digest.digest_uri_for_size(snapshot.size))
-            .map_or_else(|| self.digest_handle_body(fh, snapshot.size), Ok)?;
+            .unwrap_or_else(|| {
+                manifest_digest_uri(
+                    snapshot.size,
+                    self.backend.prepared_generation(prepared),
+                    writer.staged_chunks(),
+                )
+            });
         self.backend
             .publish_prepared_artifact_staged_session(
-                snapshot.prepared.ok_or(Errno::EIO)?,
+                prepared.clone(),
                 PublishArtifactStagedSession {
                     parent: snapshot.parent,
                     name: snapshot.name,
@@ -1089,18 +1075,8 @@ where
                     content_type: "application/octet-stream".to_owned(),
                     manifest_id: fuse_manifest_id(snapshot.parent, snapshot.inode),
                     size: snapshot.size,
-                    chunks: snapshot
-                        .writer
-                        .as_ref()
-                        .ok_or(Errno::EIO)?
-                        .staged_chunks()
-                        .to_vec(),
-                    staged: snapshot
-                        .writer
-                        .as_ref()
-                        .ok_or(Errno::EIO)?
-                        .staged_objects()
-                        .clone(),
+                    chunks: writer.staged_chunks().to_vec(),
+                    staged: writer.staged_objects().clone(),
                     mode: snapshot.mode,
                     uid: snapshot.uid,
                     gid: snapshot.gid,
@@ -2188,6 +2164,28 @@ fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
     format!("fuse/{}/{}", parent.get(), inode.get())
 }
 
+fn manifest_digest_uri(size: u64, generation: u64, chunks: &[nokv_object::StoredChunk]) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update(size.to_be_bytes());
+    hasher.update(generation.to_be_bytes());
+    for chunk in chunks {
+        hasher.update(chunk.chunk_index.to_be_bytes());
+        hasher.update(chunk.logical_offset.to_be_bytes());
+        hasher.update(chunk.len.to_be_bytes());
+        for block in &chunk.blocks {
+            hasher.update(block.object_key.as_bytes());
+            hasher.update([0]);
+            hasher.update(block.logical_offset.to_be_bytes());
+            hasher.update(block.object_offset.to_be_bytes());
+            hasher.update(block.len.to_be_bytes());
+            hasher.update(block.digest_uri.as_bytes());
+            hasher.update([0]);
+        }
+    }
+    let digest = hasher.finalize();
+    format!("manifest-sha256:{digest:x}")
+}
+
 fn staged_range_block_count(offset: u64, len: usize) -> Result<u64, Errno> {
     let mut range_offset = 0_usize;
     let mut count = 0_u64;
@@ -2488,6 +2486,32 @@ mod tests {
             staged_range_block_count(DEFAULT_CHUNK_SIZE - 1, 2).unwrap(),
             2
         );
+    }
+
+    #[test]
+    fn manifest_digest_is_stable_and_manifest_scoped() {
+        let chunks = vec![nokv_object::StoredChunk {
+            chunk_index: 0,
+            logical_offset: 0,
+            len: 4,
+            blocks: vec![nokv_object::StoredBlock {
+                object_key: "blocks/1/2/3/0/0".to_owned(),
+                logical_offset: 0,
+                object_offset: 0,
+                len: 4,
+                digest_uri: "sha256:block".to_owned(),
+            }],
+        }];
+
+        let first = manifest_digest_uri(4, 3, &chunks);
+        let second = manifest_digest_uri(4, 3, &chunks);
+        assert_eq!(first, second);
+        assert!(first.starts_with("manifest-sha256:"));
+        assert_ne!(first, manifest_digest_uri(4, 4, &chunks));
+
+        let mut changed = chunks.clone();
+        changed[0].blocks[0].digest_uri = "sha256:changed".to_owned();
+        assert_ne!(first, manifest_digest_uri(4, 3, &changed));
     }
 
     #[test]

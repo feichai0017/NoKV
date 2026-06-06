@@ -53,6 +53,12 @@ block_size
 It is not the physical object key. Physical object keys are derived from mount,
 inode, generation, chunk, and block.
 
+`digest_uri` is a compact integrity summary. SDK artifact uploads normally use
+`sha256:<content-digest>`. FUSE sequential full-file writes keep the same
+content digest without rereading the file. Non-sequential FUSE write sessions
+use `manifest-sha256:<manifest-digest>` so publish remains proportional to the
+changed chunk/slice metadata instead of rereading the whole file body.
+
 The same object boundary works for AWS S3, RustFS, MinIO, and Ceph RGW.
 
 Use `--object-backend rustfs` for a local RustFS deployment or
@@ -90,18 +96,24 @@ Live FUSE mounts start the history GC worker alongside object GC.
 
 ## Chunk Manifest
 
-Each `chunk_manifest` record stores the blocks that cover one logical chunk:
+Each `chunk_manifest` record stores the slice stack for one logical chunk.
+Newer slices overlay older slices, which lets partial writes publish only dirty
+blocks while reusing the previous generation's unchanged blocks:
 
 ```text
 chunk_index
 logical_offset
 len
-blocks:
-  object_key
+slices:
+  slice_id
   logical_offset
-  object_offset
   len
-  digest_uri
+  blocks:
+    object_key
+    logical_offset
+    object_offset
+    len
+    digest_uri
 ```
 
 Readers construct a range read plan from the manifests, fetch object ranges, and
