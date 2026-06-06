@@ -3,6 +3,7 @@ use std::marker::PhantomData;
 use std::sync::mpsc::{self, TrySendError};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
+use std::time::{Duration, Instant};
 
 use crate::cache::{BlockCache, ObjectBlockCache, WritebackCache, WritebackTicket};
 use crate::chunk::{
@@ -151,11 +152,16 @@ pub struct ObjectWritebackStats {
     pub failed: u64,
     pub staged_bytes: u64,
     pub uploaded_bytes: u64,
+    pub queue_wait_ns: u64,
+    pub queue_max_wait_ns: u64,
+    pub upload_ns: u64,
+    pub upload_max_ns: u64,
 }
 
 struct ObjectWritebackJob {
     request: ObjectWritebackRequest,
     pending: PendingChunkedWrite,
+    enqueued_at: Instant,
 }
 
 #[derive(Debug)]
@@ -604,7 +610,10 @@ where
                         Err(_) => break,
                     }
                 };
+                let queue_wait = job.enqueued_at.elapsed();
+                let upload_start = Instant::now();
                 let result = upload_writeback_request(&store, &cache, job.request, upload_workers);
+                let upload_elapsed = upload_start.elapsed();
                 if let Ok(mut stats) = stats.lock() {
                     match &result {
                         Ok(written) => {
@@ -617,6 +626,7 @@ where
                             stats.failed = stats.failed.saturating_add(1);
                         }
                     }
+                    record_writeback_timing(&mut stats, queue_wait, upload_elapsed);
                 }
                 job.pending.complete(result);
             });
@@ -658,6 +668,7 @@ where
         let job = ObjectWritebackJob {
             request,
             pending: pending.clone(),
+            enqueued_at: Instant::now(),
         };
         self.with_stats(|stats| {
             stats.enqueued = stats.enqueued.saturating_add(1);
@@ -669,13 +680,16 @@ where
                 self.with_stats(|stats| {
                     stats.inline = stats.inline.saturating_add(1);
                 })?;
+                let queue_wait = job.enqueued_at.elapsed();
+                let upload_start = Instant::now();
                 let result = upload_writeback_request(
                     &self.store,
                     &self.cache,
                     job.request,
                     self.upload_workers_per_request,
                 );
-                let stats_result = self.record_upload_result(&result);
+                let upload_elapsed = upload_start.elapsed();
+                let stats_result = self.record_upload_result(&result, queue_wait, upload_elapsed);
                 job.pending.complete(result);
                 stats_result?;
             }
@@ -713,19 +727,41 @@ where
     fn record_upload_result(
         &self,
         result: &Result<ChunkedWrite, ObjectError>,
+        queue_wait: Duration,
+        upload_elapsed: Duration,
     ) -> Result<(), ObjectError> {
-        self.with_stats(|stats| match result {
-            Ok(written) => {
-                stats.completed = stats.completed.saturating_add(1);
-                stats.uploaded_bytes = stats
-                    .uploaded_bytes
-                    .saturating_add(written.object_put_bytes);
+        self.with_stats(|stats| {
+            match result {
+                Ok(written) => {
+                    stats.completed = stats.completed.saturating_add(1);
+                    stats.uploaded_bytes = stats
+                        .uploaded_bytes
+                        .saturating_add(written.object_put_bytes);
+                }
+                Err(_) => {
+                    stats.failed = stats.failed.saturating_add(1);
+                }
             }
-            Err(_) => {
-                stats.failed = stats.failed.saturating_add(1);
-            }
+            record_writeback_timing(stats, queue_wait, upload_elapsed);
         })
     }
+}
+
+fn record_writeback_timing(
+    stats: &mut ObjectWritebackStats,
+    queue_wait: Duration,
+    upload_elapsed: Duration,
+) {
+    let queue_wait_ns = duration_ns(queue_wait);
+    let upload_ns = duration_ns(upload_elapsed);
+    stats.queue_wait_ns = stats.queue_wait_ns.saturating_add(queue_wait_ns);
+    stats.queue_max_wait_ns = stats.queue_max_wait_ns.max(queue_wait_ns);
+    stats.upload_ns = stats.upload_ns.saturating_add(upload_ns);
+    stats.upload_max_ns = stats.upload_max_ns.max(upload_ns);
+}
+
+fn duration_ns(duration: Duration) -> u64 {
+    u64::try_from(duration.as_nanos()).unwrap_or(u64::MAX)
 }
 
 fn upload_writeback_request<O>(

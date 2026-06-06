@@ -748,6 +748,7 @@ fn object_writeback_uploader_uploads_cached_ranges_and_clears_tickets() {
     assert_eq!(stats.inline, 0);
     assert_eq!(stats.completed, 1);
     assert_eq!(stats.uploaded_bytes, 10);
+    assert!(stats.upload_ns >= stats.upload_max_ns);
     assert!(cache.read(&ticket).is_err());
     let read = read_object_blocks_with_cache(
         &store,
@@ -867,6 +868,9 @@ fn object_writeback_uploader_falls_back_inline_when_queue_is_full() {
     assert_eq!(stats.inline, 1);
     assert_eq!(stats.completed, 3);
     assert_eq!(stats.failed, 0);
+    assert!(stats.queue_max_wait_ns > 0);
+    assert!(stats.queue_wait_ns >= stats.queue_max_wait_ns);
+    assert!(stats.upload_ns >= stats.upload_max_ns);
 }
 
 #[test]
