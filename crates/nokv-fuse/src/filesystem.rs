@@ -101,6 +101,13 @@ struct FuseLockRequest {
     wait: bool,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum FuseRenameMode {
+    ReplaceIfTargetExists,
+    #[cfg(target_os = "linux")]
+    NoReplace,
+}
+
 pub(crate) struct NoKvFuse<B: FuseBackend> {
     backend: Arc<B>,
     options: FuseOptions,
@@ -2220,10 +2227,13 @@ where
         flags: RenameFlags,
         reply: ReplyEmpty,
     ) {
-        if !flags.is_empty() {
-            reply.error(Errno::EINVAL);
-            return;
-        }
+        let mode = match fuse_rename_mode(flags) {
+            Ok(mode) => mode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
         if self.read_only() {
             reply.error(Errno::EROFS);
             return;
@@ -2256,7 +2266,20 @@ where
                 return;
             }
         };
-        match self.rename_entry(parent, &name, newparent, newname) {
+        let result = match mode {
+            FuseRenameMode::ReplaceIfTargetExists => {
+                self.rename_entry(parent, &name, newparent, newname)
+            }
+            #[cfg(target_os = "linux")]
+            FuseRenameMode::NoReplace => self
+                .backend
+                .rename(parent, &name, newparent, newname)
+                .map(|entry| RenameReplaceResult {
+                    entry,
+                    replaced: None,
+                }),
+        };
+        match result {
             Ok(result) => {
                 self.remember_entry(&result.entry);
                 if let Some(replaced) = result.replaced {
@@ -2637,6 +2660,19 @@ fn xattr_unsupported_error() -> Errno {
 
 fn xattr_missing_error() -> Errno {
     Errno::NO_XATTR
+}
+
+fn fuse_rename_mode(flags: RenameFlags) -> Result<FuseRenameMode, Errno> {
+    if flags.is_empty() {
+        return Ok(FuseRenameMode::ReplaceIfTargetExists);
+    }
+    #[cfg(target_os = "linux")]
+    {
+        if flags == RenameFlags::RENAME_NOREPLACE {
+            return Ok(FuseRenameMode::NoReplace);
+        }
+    }
+    Err(Errno::EINVAL)
 }
 
 fn xattr_name(name: &OsStr) -> Result<&[u8], Errno> {
@@ -3037,6 +3073,44 @@ mod tests {
                 .code(),
             Errno::EINVAL.code()
         );
+    }
+
+    #[test]
+    fn rename_flags_select_supported_modes() {
+        assert_eq!(
+            fuse_rename_mode(RenameFlags::empty()).unwrap(),
+            FuseRenameMode::ReplaceIfTargetExists
+        );
+
+        #[cfg(target_os = "linux")]
+        {
+            assert_eq!(
+                fuse_rename_mode(RenameFlags::RENAME_NOREPLACE).unwrap(),
+                FuseRenameMode::NoReplace
+            );
+            assert_eq!(
+                fuse_rename_mode(RenameFlags::RENAME_EXCHANGE)
+                    .unwrap_err()
+                    .code(),
+                Errno::EINVAL.code()
+            );
+            assert_eq!(
+                fuse_rename_mode(RenameFlags::RENAME_NOREPLACE | RenameFlags::RENAME_EXCHANGE)
+                    .unwrap_err()
+                    .code(),
+                Errno::EINVAL.code()
+            );
+        }
+
+        #[cfg(not(target_os = "linux"))]
+        {
+            assert_eq!(
+                fuse_rename_mode(RenameFlags::from_bits_retain(1))
+                    .unwrap_err()
+                    .code(),
+                Errno::EINVAL.code()
+            );
+        }
     }
 
     #[test]
