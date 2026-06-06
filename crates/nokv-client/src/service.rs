@@ -209,6 +209,14 @@ where
                 .cache_hit_bytes
                 .load(Ordering::Relaxed)
                 .saturating_add(prefetch.cache_hit_bytes),
+            prefetch_enqueued: prefetch.enqueued,
+            prefetch_dropped: prefetch.dropped,
+            prefetch_completed: prefetch.completed,
+            prefetch_failed: prefetch.failed,
+            prefetch_object_gets: prefetch.object_gets,
+            prefetch_object_get_bytes: prefetch.object_get_bytes,
+            prefetch_cache_hits: prefetch.cache_hits,
+            prefetch_cache_hit_bytes: prefetch.cache_hit_bytes,
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
             manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
         }

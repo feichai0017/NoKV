@@ -202,7 +202,7 @@ impl Server {
         let object_gc = self.object_gc.state();
         let history_gc = self.history_gc.state();
         format!(
-            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_raft\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
+            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_raft\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
             self.service.block_cache_enabled(),
             objects.object_puts,
             objects.object_put_bytes,
@@ -212,6 +212,14 @@ impl Server {
             objects.coalesced_get_bytes,
             objects.cache_hits,
             objects.cache_hit_bytes,
+            objects.prefetch_enqueued,
+            objects.prefetch_dropped,
+            objects.prefetch_completed,
+            objects.prefetch_failed,
+            objects.prefetch_object_gets,
+            objects.prefetch_object_get_bytes,
+            objects.prefetch_cache_hits,
+            objects.prefetch_cache_hit_bytes,
             objects.manifest_chunks,
             objects.manifest_blocks,
             metadata_store_json(&metadata),

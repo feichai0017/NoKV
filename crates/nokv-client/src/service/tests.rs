@@ -1464,6 +1464,12 @@ fn service_file_client_stats_include_background_prefetch_gets() {
         "two foreground reads plus one background prefetch read must be visible in stats"
     );
     assert_eq!(stats.object_get_bytes, 18);
+    assert_eq!(stats.prefetch_enqueued, 1);
+    assert_eq!(stats.prefetch_completed, 1);
+    assert_eq!(stats.prefetch_dropped, 0);
+    assert_eq!(stats.prefetch_failed, 0);
+    assert_eq!(stats.prefetch_object_gets, 1);
+    assert_eq!(stats.prefetch_object_get_bytes, 6);
 }
 
 #[test]
