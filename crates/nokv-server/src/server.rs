@@ -202,12 +202,14 @@ impl Server {
         let object_gc = self.object_gc.state();
         let history_gc = self.history_gc.state();
         format!(
-            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_raft\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
+            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_raft\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
             self.service.block_cache_enabled(),
             objects.object_puts,
             objects.object_put_bytes,
             objects.object_gets,
             objects.object_get_bytes,
+            objects.coalesced_gets,
+            objects.coalesced_get_bytes,
             objects.cache_hits,
             objects.cache_hit_bytes,
             objects.manifest_chunks,

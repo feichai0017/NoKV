@@ -106,6 +106,8 @@ pub struct NoKvFsClient<O> {
     object_put_bytes: AtomicU64,
     object_gets: AtomicU64,
     object_get_bytes: AtomicU64,
+    coalesced_gets: AtomicU64,
+    coalesced_get_bytes: AtomicU64,
     cache_hits: AtomicU64,
     cache_hit_bytes: AtomicU64,
     manifest_chunks: AtomicU64,
@@ -157,6 +159,8 @@ where
             object_put_bytes: AtomicU64::new(0),
             object_gets: AtomicU64::new(0),
             object_get_bytes: AtomicU64::new(0),
+            coalesced_gets: AtomicU64::new(0),
+            coalesced_get_bytes: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
             cache_hit_bytes: AtomicU64::new(0),
             manifest_chunks: AtomicU64::new(0),
@@ -186,6 +190,8 @@ where
             object_put_bytes: self.object_put_bytes.load(Ordering::Relaxed),
             object_gets: self.object_gets.load(Ordering::Relaxed),
             object_get_bytes: self.object_get_bytes.load(Ordering::Relaxed),
+            coalesced_gets: self.coalesced_gets.load(Ordering::Relaxed),
+            coalesced_get_bytes: self.coalesced_get_bytes.load(Ordering::Relaxed),
             cache_hits: self.cache_hits.load(Ordering::Relaxed),
             cache_hit_bytes: self.cache_hit_bytes.load(Ordering::Relaxed),
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
@@ -330,6 +336,10 @@ where
             .fetch_add(blocks.object_gets as u64, Ordering::Relaxed);
         self.object_get_bytes
             .fetch_add(blocks.object_get_bytes, Ordering::Relaxed);
+        self.coalesced_gets
+            .fetch_add(blocks.coalesced_gets as u64, Ordering::Relaxed);
+        self.coalesced_get_bytes
+            .fetch_add(blocks.coalesced_get_bytes, Ordering::Relaxed);
         self.cache_hits
             .fetch_add(blocks.cache_hits as u64, Ordering::Relaxed);
         self.cache_hit_bytes

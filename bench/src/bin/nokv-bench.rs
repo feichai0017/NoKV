@@ -106,6 +106,8 @@ struct ResultRow {
     object_put_bytes: u64,
     object_gets: u64,
     object_get_bytes: u64,
+    coalesced_gets: u64,
+    coalesced_get_bytes: u64,
     cache_hits: u64,
     cache_hit_bytes: u64,
     cache_hit_rate: f64,
@@ -1734,6 +1736,8 @@ fn row(input: RowInput) -> ResultRow {
         object_put_bytes: input.stats.object.object_put_bytes,
         object_gets: input.stats.object.object_gets,
         object_get_bytes: input.stats.object.object_get_bytes,
+        coalesced_gets: input.stats.object.coalesced_gets,
+        coalesced_get_bytes: input.stats.object.coalesced_get_bytes,
         cache_hits: input.stats.object.cache_hits,
         cache_hit_bytes: input.stats.object.cache_hit_bytes,
         cache_hit_rate: if cache_total == 0 {
@@ -1825,7 +1829,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_raft_proposal_batches,metadata_raft_proposal_commands,metadata_raft_proposal_max_batch,metadata_raft_proposal_ns,metadata_raft_proposal_queue_wait_ns,metadata_raft_proposal_queue_max_wait_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,coalesced_gets,coalesced_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_raft_proposal_batches,metadata_raft_proposal_commands,metadata_raft_proposal_max_batch,metadata_raft_proposal_ns,metadata_raft_proposal_queue_wait_ns,metadata_raft_proposal_queue_max_wait_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow) -> String {
@@ -1841,6 +1845,8 @@ fn csv_row(row: &ResultRow) -> String {
         row.object_put_bytes.to_string(),
         row.object_gets.to_string(),
         row.object_get_bytes.to_string(),
+        row.coalesced_gets.to_string(),
+        row.coalesced_get_bytes.to_string(),
         row.cache_hits.to_string(),
         row.cache_hit_bytes.to_string(),
         format!("{:.4}", row.cache_hit_rate),
@@ -1938,6 +1944,14 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .object
                 .object_get_bytes
                 .saturating_sub(before.object.object_get_bytes),
+            coalesced_gets: after
+                .object
+                .coalesced_gets
+                .saturating_sub(before.object.coalesced_gets),
+            coalesced_get_bytes: after
+                .object
+                .coalesced_get_bytes
+                .saturating_sub(before.object.coalesced_get_bytes),
             cache_hits: after
                 .object
                 .cache_hits
@@ -2405,6 +2419,8 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             object_put_bytes: json_u64(body, "object_put_bytes")?,
             object_gets: json_u64(body, "object_gets")?,
             object_get_bytes: json_u64(body, "object_get_bytes")?,
+            coalesced_gets: json_u64(body, "coalesced_gets")?,
+            coalesced_get_bytes: json_u64(body, "coalesced_get_bytes")?,
             cache_hits: json_u64(body, "cache_hits")?,
             cache_hit_bytes: json_u64(body, "cache_hit_bytes")?,
             manifest_chunks: json_u64(body, "manifest_chunks")?,
@@ -3120,11 +3136,13 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"cache_hits":45,"cache_hit_bytes":46,"manifest_chunks":47,"manifest_blocks":48,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1,"proposal_batch_total":26,"proposal_command_total":27,"proposal_max_batch":28,"proposal_ns_total":29,"proposal_queue_wait_ns_total":30,"proposal_queue_max_wait_ns":31},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"coalesced_gets":45,"coalesced_get_bytes":46,"cache_hits":47,"cache_hit_bytes":48,"manifest_chunks":49,"manifest_blocks":50,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1,"proposal_batch_total":26,"proposal_command_total":27,"proposal_max_batch":28,"proposal_ns_total":29,"proposal_queue_wait_ns_total":30,"proposal_queue_max_wait_ns":31},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
 
         assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
         assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
-        assert_eq!(json_u64(body, "cache_hit_bytes").unwrap(), 46);
+        assert_eq!(json_u64(body, "coalesced_gets").unwrap(), 45);
+        assert_eq!(json_u64(body, "coalesced_get_bytes").unwrap(), 46);
+        assert_eq!(json_u64(body, "cache_hit_bytes").unwrap(), 48);
         assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
         assert_eq!(json_u64(body, "get_write_plan_local_total").unwrap(), 33);
         assert_eq!(json_u64(body, "scan_write_plan_local_total").unwrap(), 36);

@@ -1010,6 +1010,10 @@ where
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
         self.object_get_bytes
             .fetch_add(outcome.object_get_bytes, Ordering::Relaxed);
+        self.coalesced_gets
+            .fetch_add(outcome.coalesced_gets as u64, Ordering::Relaxed);
+        self.coalesced_get_bytes
+            .fetch_add(outcome.coalesced_get_bytes, Ordering::Relaxed);
         self.cache_hits
             .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
         self.cache_hit_bytes
@@ -1028,6 +1032,10 @@ where
             .fetch_add(outcome.object_gets as u64, Ordering::Relaxed);
         self.object_get_bytes
             .fetch_add(outcome.object_get_bytes, Ordering::Relaxed);
+        self.coalesced_gets
+            .fetch_add(outcome.coalesced_gets as u64, Ordering::Relaxed);
+        self.coalesced_get_bytes
+            .fetch_add(outcome.coalesced_get_bytes, Ordering::Relaxed);
         self.cache_hits
             .fetch_add(outcome.cache_hits as u64, Ordering::Relaxed);
         self.cache_hit_bytes
