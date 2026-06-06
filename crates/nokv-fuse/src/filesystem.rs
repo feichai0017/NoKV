@@ -239,6 +239,7 @@ const MODE_REGULAR_FILE: u32 = 0o100000;
 const MODE_SYMLINK: u32 = 0o120000;
 const MODE_SOCKET: u32 = 0o140000;
 const FUSE_WRITEBACK_UPLOAD_THRESHOLD: usize = 1024 * 1024;
+const FALLOC_FL_KEEP_SIZE: i32 = 0x01;
 const DEFAULT_WRITEBACK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const DEFAULT_WRITEBACK_CACHE_ITEMS: usize = 16 * 1024;
 const DEFAULT_WRITEBACK_QUEUE_CAPACITY: usize = 256;
@@ -785,6 +786,34 @@ where
             Some(_) => Err(Errno::EINVAL),
             None => Err(Errno::ENOENT),
         }
+    }
+
+    fn ensure_fallocated_range(
+        &self,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
+        length: u64,
+        mode: i32,
+    ) -> Result<(), Errno> {
+        let current_size = self.lseek_file_size(ino, fh)?;
+        let size = resolve_fallocate_size(current_size, offset, length, mode)?;
+        let has_write_handle = self
+            .write_handles
+            .read()
+            .map_err(|_| Errno::EIO)?
+            .contains_key(&fh.0);
+        if !has_write_handle {
+            return Err(Errno::EBADF);
+        }
+        let Some(size) = size else {
+            return Ok(());
+        };
+        if size <= current_size {
+            return Ok(());
+        }
+        self.truncate_handle(fh, size)?;
+        self.publish_handle(fh)
     }
 
     fn allocate_handle(&self, handle: WriteHandle<B::Prepared>) -> Result<FileHandle, Errno> {
@@ -2479,6 +2508,26 @@ where
         }
     }
 
+    fn fallocate(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
+        length: u64,
+        mode: i32,
+        reply: ReplyEmpty,
+    ) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        match self.ensure_fallocated_range(ino, fh, offset, length, mode) {
+            Ok(()) => reply.ok(),
+            Err(err) => reply.error(err),
+        }
+    }
+
     fn lseek(
         &self,
         _req: &Request,
@@ -2680,6 +2729,23 @@ fn xattr_unsupported_error() -> Errno {
 
 fn xattr_missing_error() -> Errno {
     Errno::NO_XATTR
+}
+
+fn resolve_fallocate_size(
+    current_size: u64,
+    offset: u64,
+    length: u64,
+    mode: i32,
+) -> Result<Option<u64>, Errno> {
+    if length == 0 {
+        return Err(Errno::EINVAL);
+    }
+    let end = offset.checked_add(length).ok_or(Errno::EINVAL)?;
+    match mode {
+        0 => Ok(Some(current_size.max(end))),
+        FALLOC_FL_KEEP_SIZE => Ok(None),
+        _ => Err(Errno::EOPNOTSUPP),
+    }
 }
 
 fn resolve_lseek(size: u64, offset: i64, whence: i32) -> Result<i64, Errno> {
@@ -3185,6 +3251,34 @@ mod tests {
         assert_eq!(resolve_lseek(100, 10, libc::SEEK_DATA).unwrap(), 10);
         assert_eq!(resolve_lseek(100, 10, libc::SEEK_HOLE).unwrap(), 100);
         assert_eq!(resolve_lseek(100, 100, libc::SEEK_HOLE).unwrap(), 100);
+    }
+
+    #[test]
+    fn fallocate_size_resolves_sparse_extension() {
+        assert_eq!(resolve_fallocate_size(10, 3, 4, 0).unwrap(), Some(10));
+        assert_eq!(resolve_fallocate_size(10, 8, 5, 0).unwrap(), Some(13));
+        assert_eq!(
+            resolve_fallocate_size(10, 8, 5, FALLOC_FL_KEEP_SIZE).unwrap(),
+            None
+        );
+    }
+
+    #[test]
+    fn fallocate_rejects_empty_overflow_or_unsupported_mode() {
+        assert_eq!(
+            resolve_fallocate_size(10, 0, 0, 0).unwrap_err().code(),
+            Errno::EINVAL.code()
+        );
+        assert_eq!(
+            resolve_fallocate_size(10, u64::MAX, 1, 0)
+                .unwrap_err()
+                .code(),
+            Errno::EINVAL.code()
+        );
+        assert_eq!(
+            resolve_fallocate_size(10, 0, 1, 0x02).unwrap_err().code(),
+            Errno::EOPNOTSUPP.code()
+        );
     }
 
     #[test]
