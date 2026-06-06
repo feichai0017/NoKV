@@ -1182,4 +1182,5 @@ impl fmt::Display for MetadError {
 impl std::error::Error for MetadError {}
 
 #[cfg(test)]
+#[path = "service_tests.rs"]
 mod tests;

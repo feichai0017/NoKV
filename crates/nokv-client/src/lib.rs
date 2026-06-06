@@ -7,6 +7,8 @@
 use std::fmt;
 
 mod artifact;
+#[cfg(test)]
+mod artifact_tests;
 mod service;
 
 use nokv_meta::{MetadError, MetadataError};
@@ -51,7 +53,6 @@ pub enum ClientError {
     InvalidName(String),
     RootHasNoParent,
     NotFound(String),
-    NotDirectory(String),
     ReadNotFresh {
         required_term: u64,
         required_index: u64,
@@ -104,7 +105,6 @@ impl fmt::Display for ClientError {
             Self::InvalidName(err) => write!(f, "invalid path component: {err}"),
             Self::RootHasNoParent => write!(f, "root path has no parent"),
             Self::NotFound(path) => write!(f, "path component not found: {path}"),
-            Self::NotDirectory(path) => write!(f, "path component is not a directory: {path}"),
             Self::ReadNotFresh {
                 required_term,
                 required_index,

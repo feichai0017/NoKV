@@ -2299,4 +2299,5 @@ fn unexpected_result(result: MetadataRpcResult) -> ClientError {
 }
 
 #[cfg(test)]
+#[path = "service_tests.rs"]
 mod tests;

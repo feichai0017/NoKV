@@ -2,12 +2,13 @@ use std::net::{SocketAddr, TcpListener};
 use std::thread;
 use std::time::Duration;
 
-use nokv_client::{ArtifactRepository, ClientError, NoKvFsClient};
 use nokv_cluster::{FileMetadataRaftLogSync, NodeId};
 use nokv_meta::{HistoryGcOptions, ObjectGcOptions};
 use nokv_object::{MemoryObjectStore, ObjectStoreConfig, S3ObjectStoreOptions};
 use nokv_server::ServerOptions;
 use nokv_types::MountId;
+
+use crate::{ArtifactRepository, ClientError, NoKvFsClient};
 
 type TestRepository = ArtifactRepository<NoKvFsClient<MemoryObjectStore>>;
 

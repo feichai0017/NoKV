@@ -2035,4 +2035,5 @@ fn log_position(position: WireMetadataPosition) -> Result<nokv_cluster::LogPosit
 }
 
 #[cfg(test)]
+#[path = "rpc_tests.rs"]
 mod tests;
