@@ -648,19 +648,62 @@ fn validate_prepared_artifact(
     if body.chunk_size == 0 || body.block_size == 0 {
         return Err(ObjectError::InvalidChunkLayout.into());
     }
-    let mut covered = 0_u64;
-    for chunk in chunks {
+    if body.size == 0 {
+        if !chunks.is_empty() {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "empty body must not contain chunk manifests".to_owned(),
+            ));
+        }
+        return Ok(());
+    }
+    let expected_chunks = ((body.size - 1) / body.chunk_size) + 1;
+    if chunks.len() as u64 != expected_chunks {
+        return Err(MetadError::InvalidPreparedArtifact(format!(
+            "chunk manifest count {} does not match expected {expected_chunks}",
+            chunks.len()
+        )));
+    }
+    for (position, chunk) in chunks.iter().enumerate() {
+        let expected_index = position as u64;
+        if chunk.chunk_index != expected_index {
+            return Err(MetadError::InvalidPreparedArtifact(format!(
+                "chunk manifest index {} is not the expected contiguous index {expected_index}",
+                chunk.chunk_index
+            )));
+        }
+        let expected_offset = expected_index
+            .checked_mul(body.chunk_size)
+            .ok_or(ObjectError::InvalidRange)?;
+        if chunk.logical_offset != expected_offset {
+            return Err(MetadError::InvalidPreparedArtifact(format!(
+                "chunk {} starts at {} but expected {expected_offset}",
+                chunk.chunk_index, chunk.logical_offset
+            )));
+        }
+        let expected_len = body.chunk_size.min(body.size - expected_offset);
+        if chunk.len != expected_len {
+            return Err(MetadError::InvalidPreparedArtifact(format!(
+                "chunk {} length {} does not match expected {expected_len}",
+                chunk.chunk_index, chunk.len
+            )));
+        }
         let chunk_end = chunk
             .logical_offset
             .checked_add(chunk.len)
             .ok_or(ObjectError::InvalidRange)?;
-        if chunk_end > body.size {
-            return Err(MetadError::InvalidPreparedArtifact(
-                "chunk manifest exceeds body size".to_owned(),
-            ));
-        }
-        covered = covered.saturating_add(chunk.len);
+        let mut seen_slices = HashSet::new();
         for slice in &chunk.slices {
+            if slice.len == 0 {
+                return Err(MetadError::InvalidPreparedArtifact(
+                    "slice descriptor must not be empty".to_owned(),
+                ));
+            }
+            if !seen_slices.insert(slice.slice_id) {
+                return Err(MetadError::InvalidPreparedArtifact(format!(
+                    "duplicate slice id {} in chunk {}",
+                    slice.slice_id, chunk.chunk_index
+                )));
+            }
             let slice_end = slice
                 .logical_offset
                 .checked_add(slice.len)
@@ -670,23 +713,72 @@ fn validate_prepared_artifact(
                     "slice descriptor is outside chunk range".to_owned(),
                 ));
             }
-            for block in &slice.blocks {
-                let block_end = block
-                    .logical_offset
-                    .checked_add(block.len)
-                    .ok_or(ObjectError::InvalidRange)?;
-                if block_end > slice_end || block.logical_offset < slice.logical_offset {
-                    return Err(MetadError::InvalidPreparedArtifact(
-                        "block descriptor is outside slice range".to_owned(),
-                    ));
-                }
-            }
+            validate_slice_block_coverage(chunk.chunk_index, body.block_size, slice, slice_end)?;
         }
     }
-    if covered != body.size {
+    Ok(())
+}
+
+fn validate_slice_block_coverage(
+    chunk_index: u64,
+    block_size: u64,
+    slice: &SliceManifest,
+    slice_end: u64,
+) -> Result<(), MetadError> {
+    if slice.blocks.is_empty() {
         return Err(MetadError::InvalidPreparedArtifact(format!(
-            "chunk manifests cover {covered} bytes but body size is {}",
-            body.size
+            "slice {} in chunk {chunk_index} has no blocks",
+            slice.slice_id
+        )));
+    }
+    let mut intervals = Vec::with_capacity(slice.blocks.len());
+    for block in &slice.blocks {
+        if block.object_key.is_empty() || block.digest_uri.is_empty() {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "block descriptor is missing object identity".to_owned(),
+            ));
+        }
+        if block.len == 0 {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "block descriptor must not be empty".to_owned(),
+            ));
+        }
+        if block.len > block_size {
+            return Err(MetadError::InvalidPreparedArtifact(format!(
+                "block descriptor length {} exceeds configured block size {block_size}",
+                block.len
+            )));
+        }
+        block
+            .object_offset
+            .checked_add(block.len)
+            .ok_or(ObjectError::InvalidRange)?;
+        let block_end = block
+            .logical_offset
+            .checked_add(block.len)
+            .ok_or(ObjectError::InvalidRange)?;
+        if block_end > slice_end || block.logical_offset < slice.logical_offset {
+            return Err(MetadError::InvalidPreparedArtifact(
+                "block descriptor is outside slice range".to_owned(),
+            ));
+        }
+        intervals.push((block.logical_offset, block_end));
+    }
+    intervals.sort_unstable();
+    let mut expected = slice.logical_offset;
+    for (start, end) in intervals {
+        if start != expected {
+            return Err(MetadError::InvalidPreparedArtifact(format!(
+                "slice {} in chunk {chunk_index} has a block coverage gap",
+                slice.slice_id
+            )));
+        }
+        expected = end;
+    }
+    if expected != slice_end {
+        return Err(MetadError::InvalidPreparedArtifact(format!(
+            "slice {} in chunk {chunk_index} is not fully covered by blocks",
+            slice.slice_id
         )));
     }
     Ok(())

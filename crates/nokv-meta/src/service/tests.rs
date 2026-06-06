@@ -1763,6 +1763,68 @@ fn prepared_artifact_publish_commits_manifest_without_object_fetch() {
 }
 
 #[test]
+fn prepared_artifact_publish_rejects_duplicate_chunk_range() {
+    let service = service();
+    let name = DentryName::new(b"duplicate-chunk.bin".to_vec()).unwrap();
+    let prepared = service
+        .prepare_artifact_create(InodeId::root(), name)
+        .unwrap();
+    let body = body_descriptor(prepared.generation, 12);
+    let chunks = vec![
+        one_chunk_manifest(prepared.inode, prepared.generation, 6),
+        one_chunk_manifest(prepared.inode, prepared.generation, 6),
+    ];
+
+    let err = service
+        .publish_prepared_artifact(prepared, body, chunks, 0o644, 1000, 1000)
+        .unwrap_err();
+    assert!(
+        matches!(err, MetadError::InvalidPreparedArtifact(_)),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn prepared_artifact_publish_rejects_slice_block_gap() {
+    let service = service();
+    let name = DentryName::new(b"slice-gap.bin".to_vec()).unwrap();
+    let prepared = service
+        .prepare_artifact_create(InodeId::root(), name)
+        .unwrap();
+    let body = body_descriptor(prepared.generation, 6);
+    let mut chunk = one_chunk_manifest(prepared.inode, prepared.generation, 6);
+    chunk.slices[0].blocks[0].len = 3;
+
+    let err = service
+        .publish_prepared_artifact(prepared, body, vec![chunk], 0o644, 1000, 1000)
+        .unwrap_err();
+    assert!(
+        matches!(err, MetadError::InvalidPreparedArtifact(_)),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
+fn prepared_artifact_publish_rejects_block_larger_than_manifest_block_size() {
+    let service = service();
+    let name = DentryName::new(b"oversized-block.bin".to_vec()).unwrap();
+    let prepared = service
+        .prepare_artifact_create(InodeId::root(), name)
+        .unwrap();
+    let mut body = body_descriptor(prepared.generation, 6);
+    body.block_size = 3;
+    let chunk = one_chunk_manifest(prepared.inode, prepared.generation, 6);
+
+    let err = service
+        .publish_prepared_artifact(prepared, body, vec![chunk], 0o644, 1000, 1000)
+        .unwrap_err();
+    assert!(
+        matches!(err, MetadError::InvalidPreparedArtifact(_)),
+        "unexpected error: {err:?}"
+    );
+}
+
+#[test]
 fn prepared_artifact_replace_rejects_stale_dentry_version() {
     let service = service();
     let name = DentryName::new(b"replace-metadata.bin".to_vec()).unwrap();
