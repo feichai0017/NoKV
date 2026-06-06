@@ -9,11 +9,11 @@ use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use fuser::{
-    AccessFlags, BsdFileFlags, Config, Errno, FileAttr, FileHandle, FileType as FuseFileType,
-    Filesystem, FopenFlags, Generation, INodeNo, MountOption, OpenAccMode, OpenFlags, RenameFlags,
-    ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory, ReplyDirectoryPlus, ReplyEmpty, ReplyEntry,
-    ReplyLock, ReplyLseek, ReplyOpen, ReplyStatfs, ReplyWrite, ReplyXattr, Request, TimeOrNow,
-    WriteFlags,
+    AccessFlags, BsdFileFlags, Config, CopyFileRangeFlags, Errno, FileAttr, FileHandle,
+    FileType as FuseFileType, Filesystem, FopenFlags, Generation, INodeNo, MountOption,
+    OpenAccMode, OpenFlags, RenameFlags, ReplyAttr, ReplyCreate, ReplyData, ReplyDirectory,
+    ReplyDirectoryPlus, ReplyEmpty, ReplyEntry, ReplyLock, ReplyLseek, ReplyOpen, ReplyStatfs,
+    ReplyWrite, ReplyXattr, Request, TimeOrNow, WriteFlags,
 };
 use nokv_client::MetadataClient;
 use nokv_meta::{
@@ -239,6 +239,7 @@ const MODE_REGULAR_FILE: u32 = 0o100000;
 const MODE_SYMLINK: u32 = 0o120000;
 const MODE_SOCKET: u32 = 0o140000;
 const FUSE_WRITEBACK_UPLOAD_THRESHOLD: usize = 1024 * 1024;
+const FUSE_COPY_FILE_RANGE_MAX_BYTES: u64 = 1024 * 1024;
 const FALLOC_FL_KEEP_SIZE: i32 = 0x01;
 const DEFAULT_WRITEBACK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
 const DEFAULT_WRITEBACK_CACHE_ITEMS: usize = 16 * 1024;
@@ -750,6 +751,24 @@ where
             handle.reader = reader;
         }
         Ok(Some(bytes))
+    }
+
+    fn read_for_copy(
+        &self,
+        ino: INodeNo,
+        fh: FileHandle,
+        offset: u64,
+        size: u32,
+    ) -> Result<Vec<u8>, Errno> {
+        if let Some(bytes) = self.read_from_handle(fh, offset, size)? {
+            return Ok(bytes);
+        }
+        if let Some(bytes) = self.read_from_read_handle(fh, offset, size)? {
+            return Ok(bytes);
+        }
+        let inode = self.metadata_inode(ino)?;
+        self.service_read_file(inode, offset, size as usize)
+            .map_err(errno)
     }
 
     fn release_read_handle(&self, fh: FileHandle) -> Result<bool, Errno> {
@@ -2528,6 +2547,49 @@ where
         }
     }
 
+    fn copy_file_range(
+        &self,
+        _req: &Request,
+        ino_in: INodeNo,
+        fh_in: FileHandle,
+        offset_in: u64,
+        _ino_out: INodeNo,
+        fh_out: FileHandle,
+        offset_out: u64,
+        len: u64,
+        flags: CopyFileRangeFlags,
+        reply: ReplyWrite,
+    ) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        if !flags.is_empty() {
+            reply.error(Errno::EOPNOTSUPP);
+            return;
+        }
+        let size = copy_file_range_size(len);
+        if size == 0 {
+            reply.written(0);
+            return;
+        }
+        let bytes = match self.read_for_copy(ino_in, fh_in, offset_in, size) {
+            Ok(bytes) => bytes,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        if bytes.is_empty() {
+            reply.written(0);
+            return;
+        }
+        match self.write_to_handle(fh_out, offset_out, &bytes) {
+            Ok(written) => reply.written(written as u32),
+            Err(err) => reply.error(err),
+        }
+    }
+
     fn lseek(
         &self,
         _req: &Request,
@@ -2746,6 +2808,11 @@ fn resolve_fallocate_size(
         FALLOC_FL_KEEP_SIZE => Ok(None),
         _ => Err(Errno::EOPNOTSUPP),
     }
+}
+
+fn copy_file_range_size(len: u64) -> u32 {
+    len.min(FUSE_COPY_FILE_RANGE_MAX_BYTES)
+        .min(u64::from(u32::MAX)) as u32
 }
 
 fn resolve_lseek(size: u64, offset: i64, whence: i32) -> Result<i64, Errno> {
@@ -3278,6 +3345,16 @@ mod tests {
         assert_eq!(
             resolve_fallocate_size(10, 0, 1, 0x02).unwrap_err().code(),
             Errno::EOPNOTSUPP.code()
+        );
+    }
+
+    #[test]
+    fn copy_file_range_size_is_bounded_for_fuse_thread_memory() {
+        assert_eq!(copy_file_range_size(0), 0);
+        assert_eq!(copy_file_range_size(7), 7);
+        assert_eq!(
+            copy_file_range_size(FUSE_COPY_FILE_RANGE_MAX_BYTES + 1),
+            FUSE_COPY_FILE_RANGE_MAX_BYTES as u32
         );
     }
 
