@@ -5,7 +5,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::SystemTime;
 
 use fuser::{
     AccessFlags, BsdFileFlags, Config, CopyFileRangeFlags, Errno, FileAttr, FileHandle,
@@ -30,9 +30,12 @@ use crate::backend::{ClientFuseBackend, FuseBackend, FuseBackendError};
 use crate::invalidation::{FuseInvalidationWorker, InvalidationRegistry};
 
 mod directory;
+mod errors;
 mod locks;
 mod options;
+mod posix;
 mod write_session;
+mod xattr;
 
 pub use options::{
     FuseAccessMode, FuseObjectPipelineStats, FuseOptions, FusePrefetchOptions, FuseView,
@@ -43,6 +46,7 @@ use directory::{
     child_index_from_offset, child_offset, DirectoryHandle, FUSE_DOT_DOT_OFFSET, FUSE_DOT_OFFSET,
     FUSE_READDIR_PAGE_SIZE,
 };
+use errors::errno;
 use locks::{
     advisory_lock_kind_from_fuse, advisory_lock_kind_to_fuse, fuse_rename_mode, FuseLockRequest,
     FuseRenameMode,
@@ -51,6 +55,10 @@ use options::{
     mount_options, FuseStatfs, STATFS_BLOCK_SIZE, STATFS_NAME_MAX, STATFS_TOTAL_BYTES,
     STATFS_TOTAL_FILES,
 };
+use posix::{
+    access_allowed, copy_file_range_size, dentry_name, file_type_from_mknod_mode, inode_id,
+    resolve_fallocate_size, resolve_lseek, system_time_ms, time_or_now_ms, validate_access_mask,
+};
 use write_session::{
     buffered_publish_ranges, buffered_ranges_block_count, cleanup_written_objects,
     fuse_manifest_id, push_buffered_write, take_buffered_upload_ranges, BufferedWriteRange,
@@ -58,6 +66,9 @@ use write_session::{
 };
 #[cfg(test)]
 use write_session::{staged_range_block_count, FUSE_WRITEBACK_UPLOAD_THRESHOLD};
+use xattr::{
+    reply_xattr_data, xattr_missing_error, xattr_name, xattr_set_mode, xattr_unsupported_error,
+};
 
 pub(crate) struct NoKvFuse<B: FuseBackend> {
     backend: Arc<B>,
@@ -93,18 +104,6 @@ struct ReadHandle {
     reader: FileReadPipeline,
 }
 
-const XATTR_CREATE: i32 = 0x1;
-const XATTR_REPLACE: i32 = 0x2;
-const MODE_TYPE_MASK: u32 = 0o170000;
-const MODE_NAMED_PIPE: u32 = 0o010000;
-const MODE_CHAR_DEVICE: u32 = 0o020000;
-const MODE_DIRECTORY: u32 = 0o040000;
-const MODE_BLOCK_DEVICE: u32 = 0o060000;
-const MODE_REGULAR_FILE: u32 = 0o100000;
-const MODE_SYMLINK: u32 = 0o120000;
-const MODE_SOCKET: u32 = 0o140000;
-const FUSE_COPY_FILE_RANGE_MAX_BYTES: u64 = 1024 * 1024;
-const FALLOC_FL_KEEP_SIZE: i32 = 0x01;
 impl<B> NoKvFuse<B>
 where
     B: FuseBackend,
@@ -2374,215 +2373,6 @@ where
     }
 }
 
-fn inode_id(ino: INodeNo) -> Result<InodeId, Errno> {
-    InodeId::new(ino.0).map_err(|_| Errno::EINVAL)
-}
-
-fn file_type_from_mknod_mode(mode: u32) -> Result<FileType, Errno> {
-    match mode & MODE_TYPE_MASK {
-        0 | MODE_REGULAR_FILE => Ok(FileType::File),
-        MODE_NAMED_PIPE => Ok(FileType::NamedPipe),
-        MODE_CHAR_DEVICE => Ok(FileType::CharDevice),
-        MODE_BLOCK_DEVICE => Ok(FileType::BlockDevice),
-        MODE_SOCKET => Ok(FileType::Socket),
-        MODE_DIRECTORY | MODE_SYMLINK => Err(Errno::EINVAL),
-        _ => Err(Errno::EINVAL),
-    }
-}
-
-fn dentry_name(name: &OsStr) -> Result<DentryName, Errno> {
-    DentryName::new(name.as_bytes().to_vec()).map_err(|_| Errno::EINVAL)
-}
-
-fn time_or_now_ms(value: TimeOrNow) -> u64 {
-    match value {
-        TimeOrNow::SpecificTime(time) => system_time_ms(time),
-        TimeOrNow::Now => system_time_ms(SystemTime::now()),
-    }
-}
-
-fn system_time_ms(time: SystemTime) -> u64 {
-    let millis = time
-        .duration_since(UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_millis();
-    millis.min(u128::from(u64::MAX)) as u64
-}
-
-fn xattr_unsupported_error() -> Errno {
-    Errno::EOPNOTSUPP
-}
-
-fn xattr_missing_error() -> Errno {
-    Errno::NO_XATTR
-}
-
-fn resolve_fallocate_size(
-    current_size: u64,
-    offset: u64,
-    length: u64,
-    mode: i32,
-) -> Result<Option<u64>, Errno> {
-    if length == 0 {
-        return Err(Errno::EINVAL);
-    }
-    let end = offset.checked_add(length).ok_or(Errno::EINVAL)?;
-    match mode {
-        0 => Ok(Some(current_size.max(end))),
-        FALLOC_FL_KEEP_SIZE => Ok(None),
-        _ => Err(Errno::EOPNOTSUPP),
-    }
-}
-
-fn copy_file_range_size(len: u64) -> u32 {
-    len.min(FUSE_COPY_FILE_RANGE_MAX_BYTES)
-        .min(u64::from(u32::MAX)) as u32
-}
-
-fn resolve_lseek(size: u64, offset: i64, whence: i32) -> Result<i64, Errno> {
-    match whence {
-        libc::SEEK_SET => {
-            u64::try_from(offset).map_err(|_| Errno::EINVAL)?;
-            Ok(offset)
-        }
-        libc::SEEK_END => {
-            let size = i128::from(size);
-            let next = size + i128::from(offset);
-            if !(0..=i128::from(i64::MAX)).contains(&next) {
-                return Err(Errno::EINVAL);
-            }
-            Ok(next as i64)
-        }
-        libc::SEEK_DATA => {
-            let offset = u64::try_from(offset).map_err(|_| Errno::EINVAL)?;
-            if offset >= size {
-                return Err(Errno::ENXIO);
-            }
-            i64::try_from(offset).map_err(|_| Errno::EINVAL)
-        }
-        libc::SEEK_HOLE => {
-            let offset = u64::try_from(offset).map_err(|_| Errno::EINVAL)?;
-            if offset > size {
-                return Err(Errno::ENXIO);
-            }
-            i64::try_from(size).map_err(|_| Errno::EINVAL)
-        }
-        // FUSE does not pass the kernel's current file offset, so SEEK_CUR
-        // cannot be answered accurately at the filesystem boundary.
-        libc::SEEK_CUR => Err(Errno::EINVAL),
-        _ => Err(Errno::EINVAL),
-    }
-}
-
-fn xattr_name(name: &OsStr) -> Result<&[u8], Errno> {
-    let name = name.as_bytes();
-    if name.is_empty() || name.contains(&0) {
-        return Err(Errno::EINVAL);
-    }
-    Ok(name)
-}
-
-fn xattr_set_mode(flags: i32) -> Result<XattrSetMode, Errno> {
-    if flags & !(XATTR_CREATE | XATTR_REPLACE) != 0 {
-        return Err(Errno::EINVAL);
-    }
-    match (flags & XATTR_CREATE != 0, flags & XATTR_REPLACE != 0) {
-        (false, false) => Ok(XattrSetMode::Any),
-        (true, false) => Ok(XattrSetMode::Create),
-        (false, true) => Ok(XattrSetMode::Replace),
-        (true, true) => Err(Errno::EINVAL),
-    }
-}
-
-fn reply_xattr_data(data: &[u8], size: u32, reply: ReplyXattr) {
-    if size == 0 {
-        reply.size(u32::try_from(data.len()).unwrap_or(u32::MAX));
-        return;
-    }
-    let requested = usize::try_from(size).unwrap_or(usize::MAX);
-    if requested < data.len() {
-        reply.error(Errno::ERANGE);
-    } else {
-        reply.data(data);
-    }
-}
-
-fn validate_access_mask(mask: AccessFlags) -> Result<(), Errno> {
-    let supported = AccessFlags::R_OK | AccessFlags::W_OK | AccessFlags::X_OK;
-    if mask.bits() & !supported.bits() == 0 {
-        Ok(())
-    } else {
-        Err(Errno::EINVAL)
-    }
-}
-
-fn access_allowed(attr: &InodeAttr, uid: u32, gid: u32, mask: AccessFlags) -> bool {
-    if mask.is_empty() {
-        return true;
-    }
-    if uid == 0 {
-        return !mask.contains(AccessFlags::X_OK)
-            || attr.file_type == FileType::Directory
-            || attr.mode & 0o111 != 0;
-    }
-    let shift = if uid == attr.uid {
-        6
-    } else if gid == attr.gid {
-        3
-    } else {
-        0
-    };
-    let perms = (attr.mode >> shift) & 0o7;
-    (!mask.contains(AccessFlags::R_OK) || perms & 0o4 != 0)
-        && (!mask.contains(AccessFlags::W_OK) || perms & 0o2 != 0)
-        && (!mask.contains(AccessFlags::X_OK) || perms & 0o1 != 0)
-}
-
-fn errno(err: impl Into<FuseBackendError>) -> Errno {
-    match err.into() {
-        FuseBackendError::Metadata(err) => metadata_errno(err),
-        FuseBackendError::Client(nokv_client::ClientError::Metadata(err)) => metadata_errno(err),
-        FuseBackendError::Client(nokv_client::ClientError::NotFound(_)) => Errno::ENOENT,
-        FuseBackendError::Client(nokv_client::ClientError::ForwardToLeader { .. }) => Errno::EAGAIN,
-        FuseBackendError::Client(nokv_client::ClientError::LockConflict(_)) => Errno::EAGAIN,
-        FuseBackendError::Client(nokv_client::ClientError::Object(_))
-        | FuseBackendError::Client(nokv_client::ClientError::Io(_))
-        | FuseBackendError::Client(nokv_client::ClientError::Protocol(_))
-        | FuseBackendError::Client(nokv_client::ClientError::ReadNotFresh { .. })
-        | FuseBackendError::Client(nokv_client::ClientError::EmptyPath)
-        | FuseBackendError::Client(nokv_client::ClientError::RelativePath)
-        | FuseBackendError::Client(nokv_client::ClientError::ParentTraversal)
-        | FuseBackendError::Client(nokv_client::ClientError::InvalidArtifactPath(_))
-        | FuseBackendError::Client(nokv_client::ClientError::ArtifactIsDirectory(_))
-        | FuseBackendError::Client(nokv_client::ClientError::ArtifactIsFile(_))
-        | FuseBackendError::Client(nokv_client::ClientError::InvalidName(_))
-        | FuseBackendError::Client(nokv_client::ClientError::RootHasNoParent)
-        | FuseBackendError::Object(_) => Errno::EIO,
-    }
-}
-
-fn metadata_errno(err: MetadError) -> Errno {
-    match err {
-        MetadError::Model(_) => Errno::EINVAL,
-        MetadError::InvalidPath(_) => Errno::EINVAL,
-        MetadError::NotFound => Errno::ENOENT,
-        MetadError::NotFile => Errno::EISDIR,
-        MetadError::NotDirectory => Errno::ENOTDIR,
-        MetadError::DirectoryNotEmpty => Errno::ENOTEMPTY,
-        MetadError::CannotRemoveRoot => Errno::EBUSY,
-        MetadError::StaleBodyGeneration { .. } => Errno::ESTALE,
-        MetadError::LockConflict(_) => Errno::EAGAIN,
-        MetadError::MissingBodyDescriptor
-        | MetadError::Metadata(_)
-        | MetadError::Object(_)
-        | MetadError::PublishArtifactFailed { .. }
-        | MetadError::Codec(_)
-        | MetadError::BodySizeMismatch { .. }
-        | MetadError::InvalidPreparedArtifact(_)
-        | MetadError::AllocatorExhausted => Errno::EIO,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2960,101 +2750,6 @@ mod tests {
     }
 
     #[test]
-    fn xattr_errors_are_explicit_not_unimplemented() {
-        assert_eq!(xattr_unsupported_error().code(), Errno::EOPNOTSUPP.code());
-        assert_ne!(xattr_unsupported_error().code(), Errno::ENOSYS.code());
-        assert_eq!(xattr_missing_error().code(), Errno::NO_XATTR.code());
-        assert_ne!(xattr_missing_error().code(), Errno::ENOSYS.code());
-        assert_eq!(
-            xattr_name(OsStr::new("user.comment")).unwrap(),
-            b"user.comment"
-        );
-        assert_eq!(
-            xattr_name(OsStr::new("")).unwrap_err().code(),
-            Errno::EINVAL.code()
-        );
-        assert_eq!(xattr_set_mode(0).unwrap(), XattrSetMode::Any);
-        assert_eq!(xattr_set_mode(XATTR_CREATE).unwrap(), XattrSetMode::Create);
-        assert_eq!(
-            xattr_set_mode(XATTR_REPLACE).unwrap(),
-            XattrSetMode::Replace
-        );
-        assert_eq!(
-            xattr_set_mode(XATTR_CREATE | XATTR_REPLACE)
-                .unwrap_err()
-                .code(),
-            Errno::EINVAL.code()
-        );
-    }
-
-    #[test]
-    fn lseek_resolves_end_data_and_hole_offsets() {
-        assert_eq!(resolve_lseek(100, 5, libc::SEEK_SET).unwrap(), 5);
-        assert_eq!(resolve_lseek(100, -10, libc::SEEK_END).unwrap(), 90);
-        assert_eq!(resolve_lseek(100, 10, libc::SEEK_DATA).unwrap(), 10);
-        assert_eq!(resolve_lseek(100, 10, libc::SEEK_HOLE).unwrap(), 100);
-        assert_eq!(resolve_lseek(100, 100, libc::SEEK_HOLE).unwrap(), 100);
-    }
-
-    #[test]
-    fn fallocate_size_resolves_sparse_extension() {
-        assert_eq!(resolve_fallocate_size(10, 3, 4, 0).unwrap(), Some(10));
-        assert_eq!(resolve_fallocate_size(10, 8, 5, 0).unwrap(), Some(13));
-        assert_eq!(
-            resolve_fallocate_size(10, 8, 5, FALLOC_FL_KEEP_SIZE).unwrap(),
-            None
-        );
-    }
-
-    #[test]
-    fn fallocate_rejects_empty_overflow_or_unsupported_mode() {
-        assert_eq!(
-            resolve_fallocate_size(10, 0, 0, 0).unwrap_err().code(),
-            Errno::EINVAL.code()
-        );
-        assert_eq!(
-            resolve_fallocate_size(10, u64::MAX, 1, 0)
-                .unwrap_err()
-                .code(),
-            Errno::EINVAL.code()
-        );
-        assert_eq!(
-            resolve_fallocate_size(10, 0, 1, 0x02).unwrap_err().code(),
-            Errno::EOPNOTSUPP.code()
-        );
-    }
-
-    #[test]
-    fn copy_file_range_size_is_bounded_for_fuse_thread_memory() {
-        assert_eq!(copy_file_range_size(0), 0);
-        assert_eq!(copy_file_range_size(7), 7);
-        assert_eq!(
-            copy_file_range_size(FUSE_COPY_FILE_RANGE_MAX_BYTES + 1),
-            FUSE_COPY_FILE_RANGE_MAX_BYTES as u32
-        );
-    }
-
-    #[test]
-    fn lseek_rejects_invalid_or_unanswerable_offsets() {
-        assert_eq!(
-            resolve_lseek(100, -1, libc::SEEK_SET).unwrap_err().code(),
-            Errno::EINVAL.code()
-        );
-        assert_eq!(
-            resolve_lseek(100, 100, libc::SEEK_DATA).unwrap_err().code(),
-            Errno::ENXIO.code()
-        );
-        assert_eq!(
-            resolve_lseek(100, 101, libc::SEEK_HOLE).unwrap_err().code(),
-            Errno::ENXIO.code()
-        );
-        assert_eq!(
-            resolve_lseek(100, 0, libc::SEEK_CUR).unwrap_err().code(),
-            Errno::EINVAL.code()
-        );
-    }
-
-    #[test]
     fn rename_flags_select_supported_modes() {
         assert_eq!(
             fuse_rename_mode(RenameFlags::empty()).unwrap(),
@@ -3090,37 +2785,6 @@ mod tests {
                 Errno::EINVAL.code()
             );
         }
-    }
-
-    #[test]
-    fn access_helper_honors_owner_group_other_and_root_execute() {
-        let attr = InodeAttr {
-            inode: InodeId::new(42).unwrap(),
-            file_type: FileType::File,
-            mode: 0o640,
-            uid: 1000,
-            gid: 2000,
-            rdev: 0,
-            nlink: 1,
-            size: 0,
-            generation: 1,
-            mtime_ms: 1,
-            ctime_ms: 1,
-        };
-        assert!(access_allowed(&attr, 1000, 9, AccessFlags::R_OK));
-        assert!(access_allowed(&attr, 1000, 9, AccessFlags::W_OK));
-        assert!(access_allowed(&attr, 9, 2000, AccessFlags::R_OK));
-        assert!(!access_allowed(&attr, 9, 2000, AccessFlags::W_OK));
-        assert!(!access_allowed(&attr, 9, 9, AccessFlags::R_OK));
-        assert!(!access_allowed(&attr, 0, 0, AccessFlags::X_OK));
-
-        let executable_dir = InodeAttr {
-            file_type: FileType::Directory,
-            mode: 0o000,
-            ..attr.clone()
-        };
-        assert!(access_allowed(&executable_dir, 0, 0, AccessFlags::X_OK));
-        assert!(validate_access_mask(AccessFlags::from_bits_retain(0x4000)).is_err());
     }
 
     #[cfg(target_os = "macos")]

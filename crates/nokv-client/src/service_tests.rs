@@ -1,8 +1,13 @@
 use super::*;
+use crate::read_cache::ReadPipelineCache;
+use crate::wire::client_error_from_wire_error;
+use crate::{ArtifactMetadata, NoKvFsClient};
 use nokv_object::FileReadPipeline;
-use nokv_object::{MemoryObjectStore, ObjectKey};
+use nokv_object::{MemoryObjectStore, ObjectKey, ObjectStore};
 use nokv_protocol::{decode_request, encode_envelope, WireDentryRecord, WireInodeAttr};
-use nokv_types::AdvisoryLockKind;
+use nokv_protocol::{MetadataRpcEnvelope, WireDentryWithAttr, WireMetadataError, WireXattrSetMode};
+use nokv_types::{AdvisoryLockKind, FileType};
+use std::io::Read;
 use std::net::TcpListener;
 use std::thread;
 use std::time::{Duration, Instant};

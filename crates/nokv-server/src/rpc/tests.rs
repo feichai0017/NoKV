@@ -3,8 +3,9 @@ use crate::server::tests::test_server;
 use nokv_cluster::MetadataRaftRpcClient;
 use nokv_protocol::{
     decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest,
-    WireMetadataError, WireMetadataRaftLeaderId, WireMetadataRaftVote, WireMetadataRaftVoteRequest,
-    WireSliceManifest, WireStagedObjectSet, WireXattrSetMode,
+    WireDentryWithAttr, WireMetadataError, WireMetadataRaftLeaderId, WireMetadataRaftVote,
+    WireMetadataRaftVoteRequest, WireSliceManifest, WireStagedObjectSet, WireUpdateAttr,
+    WireXattrSetMode,
 };
 use std::io::{Read, Write};
 use std::net::TcpListener;

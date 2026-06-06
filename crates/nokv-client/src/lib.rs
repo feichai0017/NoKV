@@ -9,9 +9,11 @@ use std::fmt;
 mod artifact;
 #[cfg(test)]
 mod artifact_tests;
+mod file_client;
 mod framed;
 mod read_cache;
 mod service;
+mod wire;
 
 use nokv_meta::{MetadError, MetadataError};
 use nokv_object::ObjectError;
@@ -21,10 +23,10 @@ pub use artifact::{
     normalize_artifact_path, ArtifactBackend, ArtifactInfo, ArtifactRepository,
     ArtifactRepositoryOptions,
 };
+pub use file_client::NoKvFsClient;
 pub use nokv_object::ObjectReadPlan;
 pub use service::{
     ClientMetadataPosition, ClientPreparedArtifact, MetadataClient, MetadataClientOptions,
-    NoKvFsClient,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

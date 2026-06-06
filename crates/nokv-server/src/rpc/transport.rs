@@ -9,6 +9,7 @@ use nokv_protocol::{
     MetadataRpcRequest, MetadataRpcResult,
 };
 
+use super::wire::wire_server_error;
 use crate::server::{Server, ServerError};
 
 pub(crate) const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
@@ -285,7 +286,7 @@ pub(crate) fn encode_server_error(err: &ServerError) -> Result<Vec<u8>, ServerEr
         ok: false,
         result: None,
         error: Some(err.to_string()),
-        error_kind: Some(super::wire_server_error(err)),
+        error_kind: Some(wire_server_error(err)),
         metadata_position: None,
     };
     encode_envelope(&envelope).map_err(|err| {
