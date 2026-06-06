@@ -207,8 +207,8 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
 pub(crate) struct ClientFuseBackend<O> {
     metadata: MetadataClient,
     objects: Arc<O>,
-    block_cache: ObjectBlockCache,
-    prefetcher: ObjectPrefetcher<Arc<O>>,
+    block_cache: Option<ObjectBlockCache>,
+    prefetcher: Option<ObjectPrefetcher<Arc<O>>>,
     writeback_cache: Option<WritebackCache>,
     writeback_uploader: Option<ObjectWritebackUploader<Arc<O>>>,
     upload_workers: usize,
@@ -218,22 +218,31 @@ impl<O> ClientFuseBackend<O>
 where
     O: ObjectStore + Send + Sync + 'static,
 {
-    pub(crate) fn new(metadata: MetadataClient, objects: O, options: &FuseOptions) -> Self {
+    pub(crate) fn new(
+        metadata: MetadataClient,
+        objects: O,
+        options: &FuseOptions,
+    ) -> FuseBackendResult<Self> {
         let objects = Arc::new(objects);
-        let block_cache = ObjectBlockCache::default();
-        let prefetcher = ObjectPrefetcher::new(
-            Arc::clone(&objects),
-            block_cache.clone(),
-            ObjectPrefetchOptions::default(),
-        );
+        let block_cache = options.block_cache.clone().open()?;
+        let prefetcher = if options.prefetch.enabled {
+            block_cache.as_ref().map(|cache| {
+                ObjectPrefetcher::new(
+                    Arc::clone(&objects),
+                    cache.clone(),
+                    ObjectPrefetchOptions::from(options.prefetch.clone()),
+                )
+            })
+        } else {
+            None
+        };
         let writeback = &options.writeback;
         let writeback_cache = if writeback.enabled {
-            WritebackCache::new(WritebackCacheOptions {
+            Some(WritebackCache::new(WritebackCacheOptions {
                 root: writeback.root.clone(),
                 max_bytes: writeback.max_bytes,
                 max_items: writeback.max_items,
-            })
-            .ok()
+            })?)
         } else {
             None
         };
@@ -248,7 +257,7 @@ where
                 },
             )
         });
-        Self {
+        Ok(Self {
             metadata,
             objects,
             block_cache,
@@ -256,19 +265,20 @@ where
             writeback_cache,
             writeback_uploader,
             upload_workers: writeback.upload_workers_per_request.max(1),
-        }
+        })
     }
 
     fn prefetch_read_blocks(&self, inode: InodeId, generation: u64, offset: u64, len: usize) {
         if len == 0 {
             return;
         }
+        let Some(prefetcher) = &self.prefetcher else {
+            return;
+        };
         let Ok(plan) = self.metadata.read_body_plan(inode, generation, offset, len) else {
             return;
         };
-        let _ = self
-            .prefetcher
-            .submit(ObjectPrefetchRequest::new(plan.output_len, plan.blocks));
+        let _ = prefetcher.submit(ObjectPrefetchRequest::new(plan.output_len, plan.blocks));
     }
 }
 
@@ -425,7 +435,7 @@ where
             .map_err(FuseBackendError::from)?;
         let read =
             self.objects
-                .read_blocks(Some(&self.block_cache), plan.output_len, &plan.blocks)?;
+                .read_blocks(self.block_cache.as_ref(), plan.output_len, &plan.blocks)?;
         Ok(read.bytes)
     }
 
@@ -452,7 +462,7 @@ where
             .map_err(FuseBackendError::from)?;
         let read = pipeline.read_blocks(
             &self.objects,
-            Some(&self.block_cache),
+            self.block_cache.as_ref(),
             attr.size,
             offset,
             plan.output_len,
@@ -481,7 +491,7 @@ where
             .map_err(FuseBackendError::from)?;
         let read = pipeline.read_blocks(
             &self.objects,
-            Some(&self.block_cache),
+            self.block_cache.as_ref(),
             attr.size,
             offset,
             plan.output_len,
@@ -749,7 +759,7 @@ where
     ) -> FuseBackendResult<Vec<u8>> {
         let read = self
             .objects
-            .read_blocks(Some(&self.block_cache), output_len, blocks)?;
+            .read_blocks(self.block_cache.as_ref(), output_len, blocks)?;
         Ok(read.bytes)
     }
 

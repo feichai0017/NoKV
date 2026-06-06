@@ -12,7 +12,10 @@ use std::time::Duration;
 use nokv_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
 use nokv_cluster::{FileMetadataRaftLogSync, NodeId};
 use nokv_meta::{HistoryGcOptions, ObjectGcOptions};
-use nokv_object::{ObjectKey, ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
+use nokv_object::{
+    BlockCachePolicy, DiskBlockCacheOptions, FileReadPipelineOptions, MemoryBlockCacheOptions,
+    ObjectKey, ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions,
+};
 use nokv_server::{
     MetadataRaftPeerOptions, ServerOptions, DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX,
     DEFAULT_SERVER_BIND,
@@ -116,6 +119,9 @@ struct MountCliOptions {
     direct_io: bool,
     entry_ttl: Duration,
     attr_ttl: Duration,
+    block_cache: BlockCachePolicy,
+    prefetch: nokv_fuse::FusePrefetchOptions,
+    read_pipeline: FileReadPipelineOptions,
     writeback: nokv_fuse::FuseWritebackOptions,
 }
 
@@ -142,6 +148,9 @@ impl Default for MountCliOptions {
             direct_io: defaults.direct_io,
             entry_ttl: defaults.entry_ttl,
             attr_ttl: defaults.attr_ttl,
+            block_cache: defaults.block_cache,
+            prefetch: defaults.prefetch,
+            read_pipeline: defaults.read_pipeline,
             writeback: defaults.writeback,
         }
     }
@@ -155,6 +164,9 @@ impl MountCliOptions {
             attr_ttl: self.attr_ttl,
             kernel_cache: self.kernel_cache,
             direct_io: self.direct_io,
+            block_cache: self.block_cache.clone(),
+            prefetch: self.prefetch.clone(),
+            read_pipeline: self.read_pipeline,
             writeback: self.writeback.clone(),
             ..nokv_fuse::FuseOptions::default()
         }
@@ -860,6 +872,78 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
     }
 }
 
+fn default_disk_block_cache_options() -> DiskBlockCacheOptions {
+    DiskBlockCacheOptions {
+        root: std::env::temp_dir().join(format!("nokv-block-cache-{}", std::process::id())),
+        max_bytes: 8 * 1024 * 1024 * 1024,
+        max_items: 16 * 1024,
+        ttl: None,
+    }
+}
+
+fn set_block_cache_kind(options: &mut MountCliOptions, raw: &str) -> Result<(), CliError> {
+    options.block_cache = match raw {
+        "off" => BlockCachePolicy::Off,
+        "memory" => BlockCachePolicy::Memory(MemoryBlockCacheOptions::default()),
+        "disk" => BlockCachePolicy::Disk(default_disk_block_cache_options()),
+        other => {
+            return Err(CliError::InvalidNumber {
+                field: "block_cache",
+                value: other.to_owned(),
+            })
+        }
+    };
+    Ok(())
+}
+
+fn set_disk_block_cache_root(options: &mut MountCliOptions, root: PathBuf) {
+    if !matches!(options.block_cache, BlockCachePolicy::Disk(_)) {
+        options.block_cache = BlockCachePolicy::Disk(default_disk_block_cache_options());
+    }
+    if let BlockCachePolicy::Disk(cache) = &mut options.block_cache {
+        cache.root = root;
+    }
+}
+
+fn set_block_cache_bytes(options: &mut MountCliOptions, max_bytes: u64) {
+    match &mut options.block_cache {
+        BlockCachePolicy::Memory(cache) => cache.max_bytes = max_bytes,
+        BlockCachePolicy::Disk(cache) => cache.max_bytes = max_bytes,
+        BlockCachePolicy::Off => {
+            options.block_cache = BlockCachePolicy::Memory(MemoryBlockCacheOptions {
+                max_bytes,
+                ..MemoryBlockCacheOptions::default()
+            });
+        }
+    }
+}
+
+fn set_block_cache_items(options: &mut MountCliOptions, max_items: usize) {
+    match &mut options.block_cache {
+        BlockCachePolicy::Memory(cache) => cache.max_items = max_items,
+        BlockCachePolicy::Disk(cache) => cache.max_items = max_items,
+        BlockCachePolicy::Off => {
+            options.block_cache = BlockCachePolicy::Memory(MemoryBlockCacheOptions {
+                max_items,
+                ..MemoryBlockCacheOptions::default()
+            });
+        }
+    }
+}
+
+fn set_block_cache_ttl(options: &mut MountCliOptions, ttl: Option<Duration>) {
+    match &mut options.block_cache {
+        BlockCachePolicy::Memory(cache) => cache.ttl = ttl,
+        BlockCachePolicy::Disk(cache) => cache.ttl = ttl,
+        BlockCachePolicy::Off => {
+            options.block_cache = BlockCachePolicy::Memory(MemoryBlockCacheOptions {
+                ttl,
+                ..MemoryBlockCacheOptions::default()
+            });
+        }
+    }
+}
+
 fn parse_mount_args(
     args: &[String],
     start_index: usize,
@@ -897,6 +981,79 @@ fn parse_mount_args(
                     value(args, index, "--attr-ttl-ms")?,
                     "attr_ttl_ms",
                 )?);
+                index += 1;
+            }
+            "--no-block-cache" => {
+                options.block_cache = BlockCachePolicy::Off;
+                index += 1;
+            }
+            "--block-cache" => {
+                index += 1;
+                set_block_cache_kind(&mut options, value(args, index, "--block-cache")?)?;
+                index += 1;
+            }
+            "--block-cache-dir" => {
+                index += 1;
+                set_disk_block_cache_root(
+                    &mut options,
+                    PathBuf::from(value(args, index, "--block-cache-dir")?),
+                );
+                index += 1;
+            }
+            "--block-cache-bytes" => {
+                index += 1;
+                let max_bytes = parse_u64(
+                    value(args, index, "--block-cache-bytes")?,
+                    "block_cache_bytes",
+                )?;
+                set_block_cache_bytes(&mut options, max_bytes);
+                index += 1;
+            }
+            "--block-cache-items" => {
+                index += 1;
+                let max_items = parse_usize(
+                    value(args, index, "--block-cache-items")?,
+                    "block_cache_items",
+                )?;
+                set_block_cache_items(&mut options, max_items);
+                index += 1;
+            }
+            "--block-cache-ttl-ms" => {
+                index += 1;
+                let ttl_ms = parse_u64(
+                    value(args, index, "--block-cache-ttl-ms")?,
+                    "block_cache_ttl_ms",
+                )?;
+                let ttl = (ttl_ms > 0).then(|| Duration::from_millis(ttl_ms));
+                set_block_cache_ttl(&mut options, ttl);
+                index += 1;
+            }
+            "--no-prefetch" => {
+                options.prefetch.enabled = false;
+                index += 1;
+            }
+            "--prefetch-workers" => {
+                index += 1;
+                options.prefetch.workers = parse_usize(
+                    value(args, index, "--prefetch-workers")?,
+                    "prefetch_workers",
+                )?;
+                index += 1;
+            }
+            "--prefetch-queue-capacity" => {
+                index += 1;
+                options.prefetch.queue_capacity = parse_usize(
+                    value(args, index, "--prefetch-queue-capacity")?,
+                    "prefetch_queue_capacity",
+                )?;
+                index += 1;
+            }
+            "--max-readahead-bytes" => {
+                index += 1;
+                options.read_pipeline.max_readahead_bytes = parse_usize(
+                    value(args, index, "--max-readahead-bytes")?,
+                    "max_readahead_bytes",
+                )?;
                 index += 1;
             }
             "--no-writeback-cache" => {
@@ -1111,6 +1268,16 @@ Mount cache options:\n\
   --direct-io                    Ask FUSE to bypass kernel page cache for file handles\n\
   --entry-ttl-ms MS              Kernel dentry cache TTL\n\
   --attr-ttl-ms MS               Kernel attribute cache TTL\n\
+  --no-block-cache               Disable NoKV object block cache\n\
+  --block-cache off|memory|disk  Select NoKV object block cache policy\n\
+  --block-cache-dir PATH         Directory for disk object block cache\n\
+  --block-cache-bytes N          Max object block cache bytes\n\
+  --block-cache-items N          Max object block cache entries\n\
+  --block-cache-ttl-ms MS        Object block cache TTL; 0 means no TTL\n\
+  --no-prefetch                  Disable sequential object prefetch\n\
+  --prefetch-workers N           Sequential object prefetch worker count\n\
+  --prefetch-queue-capacity N    Sequential object prefetch queue capacity\n\
+  --max-readahead-bytes N        Max sequential read-ahead bytes per hint\n\
   --no-writeback-cache           Disable disk-backed staged object upload cache\n\
   --writeback-cache-dir PATH     Directory for staged object upload cache\n\
   --writeback-cache-bytes N      Max staged object upload cache bytes\n\
@@ -1502,14 +1669,64 @@ mod tests {
                 },
             }
         );
-        let mut writeback_options = MountCliOptions::default();
-        writeback_options.writeback.enabled = false;
-        writeback_options.writeback.root = PathBuf::from("/tmp/nokv-writeback");
-        writeback_options.writeback.max_bytes = 4096;
-        writeback_options.writeback.max_items = 32;
-        writeback_options.writeback.workers = 4;
-        writeback_options.writeback.queue_capacity = 128;
-        writeback_options.writeback.upload_workers_per_request = 2;
+        let read_cache_options = MountCliOptions {
+            block_cache: BlockCachePolicy::Disk(DiskBlockCacheOptions {
+                root: PathBuf::from("/tmp/nokv-block-cache"),
+                max_bytes: 8192,
+                max_items: 64,
+                ttl: Some(Duration::from_millis(5000)),
+            }),
+            prefetch: nokv_fuse::FusePrefetchOptions {
+                enabled: false,
+                workers: 3,
+                queue_capacity: 16,
+            },
+            read_pipeline: FileReadPipelineOptions {
+                max_readahead_bytes: 2 * 1024 * 1024,
+            },
+            ..MountCliOptions::default()
+        };
+        let (_config, command) = parse(vec![
+            s("mount"),
+            s("--block-cache"),
+            s("disk"),
+            s("--block-cache-dir"),
+            s("/tmp/nokv-block-cache"),
+            s("--block-cache-bytes"),
+            s("8192"),
+            s("--block-cache-items"),
+            s("64"),
+            s("--block-cache-ttl-ms"),
+            s("5000"),
+            s("--no-prefetch"),
+            s("--prefetch-workers"),
+            s("3"),
+            s("--prefetch-queue-capacity"),
+            s("16"),
+            s("--max-readahead-bytes"),
+            s("2097152"),
+            s("/tmp/nokv-read-cache-mount"),
+        ])
+        .unwrap();
+        assert_eq!(
+            command,
+            Command::Mount {
+                mountpoint: PathBuf::from("/tmp/nokv-read-cache-mount"),
+                options: read_cache_options,
+            }
+        );
+        let writeback_options = MountCliOptions {
+            writeback: nokv_fuse::FuseWritebackOptions {
+                enabled: false,
+                root: PathBuf::from("/tmp/nokv-writeback"),
+                max_bytes: 4096,
+                max_items: 32,
+                queue_capacity: 128,
+                workers: 4,
+                upload_workers_per_request: 2,
+            },
+            ..MountCliOptions::default()
+        };
         let (_config, command) = parse(vec![
             s("mount"),
             s("--no-writeback-cache"),

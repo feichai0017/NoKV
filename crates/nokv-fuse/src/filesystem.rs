@@ -20,9 +20,9 @@ use nokv_meta::{
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
-    ChunkedWrite, DirtyChunkExtent, FileReadPipeline, FileWritePipeline, ObjectError,
-    ObjectReadBlock, ObjectStore, PendingChunkedWrite, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
-    DEFAULT_S3_MULTIPART_CONCURRENCY,
+    BlockCachePolicy, ChunkedWrite, DirtyChunkExtent, FileReadPipeline, FileReadPipelineOptions,
+    FileWritePipeline, ObjectError, ObjectPrefetchOptions, ObjectReadBlock, ObjectStore,
+    PendingChunkedWrite, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE, DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
 use nokv_types::{DentryName, FileType, InodeAttr, InodeId};
 use sha2::{Digest, Sha256};
@@ -39,10 +39,20 @@ pub struct FuseOptions {
     pub threads: usize,
     pub kernel_cache: bool,
     pub direct_io: bool,
+    pub block_cache: BlockCachePolicy,
+    pub prefetch: FusePrefetchOptions,
+    pub read_pipeline: FileReadPipelineOptions,
     pub writeback: FuseWritebackOptions,
     pub view: FuseView,
     pub access: FuseAccessMode,
     pub invalidation: FuseInvalidationOptions,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FusePrefetchOptions {
+    pub enabled: bool,
+    pub queue_capacity: usize,
+    pub workers: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -196,10 +206,33 @@ impl Default for FuseOptions {
             threads: default_threads(),
             kernel_cache: true,
             direct_io: false,
+            block_cache: BlockCachePolicy::default(),
+            prefetch: FusePrefetchOptions::default(),
+            read_pipeline: FileReadPipelineOptions::default(),
             writeback: FuseWritebackOptions::default(),
             view: FuseView::Live,
             access: FuseAccessMode::ReadWrite,
             invalidation: FuseInvalidationOptions::default(),
+        }
+    }
+}
+
+impl Default for FusePrefetchOptions {
+    fn default() -> Self {
+        let defaults = ObjectPrefetchOptions::default();
+        Self {
+            enabled: true,
+            queue_capacity: defaults.queue_capacity,
+            workers: defaults.workers,
+        }
+    }
+}
+
+impl From<FusePrefetchOptions> for ObjectPrefetchOptions {
+    fn from(options: FusePrefetchOptions) -> Self {
+        Self {
+            queue_capacity: options.queue_capacity,
+            workers: options.workers,
         }
     }
 }
@@ -616,7 +649,7 @@ where
             raw,
             ReadHandle {
                 attr,
-                reader: FileReadPipeline::default(),
+                reader: FileReadPipeline::new(self.options.read_pipeline),
             },
         );
         Ok(FileHandle(raw))
@@ -1150,11 +1183,9 @@ pub fn mount_client<O>(
 where
     O: ObjectStore + Send + Sync + 'static,
 {
-    mount_backend(
-        ClientFuseBackend::new(metadata, objects, &options),
-        mountpoint,
-        options,
-    )
+    let backend = ClientFuseBackend::new(metadata, objects, &options)
+        .map_err(|err| io::Error::other(err.to_string()))?;
+    mount_backend(backend, mountpoint, options)
 }
 
 fn mount_backend<B>(
