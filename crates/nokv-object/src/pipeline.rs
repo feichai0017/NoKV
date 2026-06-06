@@ -342,7 +342,6 @@ impl FileReadPipeline {
                 let len = self
                     .options
                     .max_readahead_bytes
-                    .min(output_len)
                     .min(usize::try_from(file_size - read_end).unwrap_or(usize::MAX));
                 self.stats.readahead_hints = self.stats.readahead_hints.saturating_add(1);
                 self.stats.readahead_hint_bytes =

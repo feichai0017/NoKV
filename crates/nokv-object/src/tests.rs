@@ -966,6 +966,37 @@ fn file_read_pipeline_reports_sequential_readahead_hints() {
 }
 
 #[test]
+fn file_read_pipeline_uses_configured_readahead_window() {
+    let store = MemoryObjectStore::new();
+    let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
+    store.put(&key, b"abcdefghijklmnop").unwrap();
+    let mut reader = FileReadPipeline::new(FileReadPipelineOptions {
+        max_readahead_bytes: 12,
+    });
+
+    let read = reader
+        .read_blocks(
+            &store,
+            Option::<&MemoryBlockCache>::None,
+            16,
+            0,
+            4,
+            &[ObjectReadBlock {
+                object_key: key.as_str().to_owned(),
+                object_offset: 0,
+                len: 4,
+                output_offset: 0,
+            }],
+        )
+        .unwrap();
+    assert_eq!(read.blocks.bytes, b"abcd");
+    assert_eq!(read.readahead, Some(ReadAheadHint { offset: 4, len: 12 }));
+    let stats = reader.stats();
+    assert_eq!(stats.readahead_hints, 1);
+    assert_eq!(stats.readahead_hint_bytes, 12);
+}
+
+#[test]
 fn file_read_pipeline_does_not_readahead_after_seek() {
     let store = MemoryObjectStore::new();
     let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();
