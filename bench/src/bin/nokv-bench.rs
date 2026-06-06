@@ -121,6 +121,17 @@ struct ResultRow {
     prefetch_cache_hit_bytes: u64,
     read_plan_cache_hits: u64,
     read_plan_cache_misses: u64,
+    object_writeback_enqueued: u64,
+    object_writeback_inline: u64,
+    object_writeback_fallback: u64,
+    object_writeback_completed: u64,
+    object_writeback_failed: u64,
+    object_writeback_staged_bytes: u64,
+    object_writeback_uploaded_bytes: u64,
+    object_writeback_queue_wait_ns: u64,
+    object_writeback_queue_max_wait_ns: u64,
+    object_writeback_upload_ns: u64,
+    object_writeback_upload_max_ns: u64,
     manifest_chunks: u64,
     manifest_blocks: u64,
     metadata_commits: u64,
@@ -1765,6 +1776,17 @@ fn row(input: RowInput) -> ResultRow {
         prefetch_cache_hit_bytes: input.stats.object.prefetch_cache_hit_bytes,
         read_plan_cache_hits: input.stats.object.read_plan_cache_hits,
         read_plan_cache_misses: input.stats.object.read_plan_cache_misses,
+        object_writeback_enqueued: input.stats.object.object_writeback_enqueued,
+        object_writeback_inline: input.stats.object.object_writeback_inline,
+        object_writeback_fallback: input.stats.object.object_writeback_fallback,
+        object_writeback_completed: input.stats.object.object_writeback_completed,
+        object_writeback_failed: input.stats.object.object_writeback_failed,
+        object_writeback_staged_bytes: input.stats.object.object_writeback_staged_bytes,
+        object_writeback_uploaded_bytes: input.stats.object.object_writeback_uploaded_bytes,
+        object_writeback_queue_wait_ns: input.stats.object.object_writeback_queue_wait_ns,
+        object_writeback_queue_max_wait_ns: input.stats.object.object_writeback_queue_max_wait_ns,
+        object_writeback_upload_ns: input.stats.object.object_writeback_upload_ns,
+        object_writeback_upload_max_ns: input.stats.object.object_writeback_upload_max_ns,
         manifest_chunks: input.stats.object.manifest_chunks,
         manifest_blocks: input.stats.object.manifest_blocks,
         metadata_commits: input.stats.metadata_store.commit_total,
@@ -1849,7 +1871,7 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
 }
 
 fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,coalesced_gets,coalesced_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,prefetch_enqueued,prefetch_dropped,prefetch_completed,prefetch_failed,prefetch_object_gets,prefetch_object_get_bytes,prefetch_cache_hits,prefetch_cache_hit_bytes,read_plan_cache_hits,read_plan_cache_misses,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_raft_proposal_batches,metadata_raft_proposal_commands,metadata_raft_proposal_max_batch,metadata_raft_proposal_ns,metadata_raft_proposal_queue_wait_ns,metadata_raft_proposal_queue_max_wait_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,coalesced_gets,coalesced_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,prefetch_enqueued,prefetch_dropped,prefetch_completed,prefetch_failed,prefetch_object_gets,prefetch_object_get_bytes,prefetch_cache_hits,prefetch_cache_hit_bytes,read_plan_cache_hits,read_plan_cache_misses,object_writeback_enqueued,object_writeback_inline,object_writeback_fallback,object_writeback_completed,object_writeback_failed,object_writeback_staged_bytes,object_writeback_uploaded_bytes,object_writeback_queue_wait_ns,object_writeback_queue_max_wait_ns,object_writeback_upload_ns,object_writeback_upload_max_ns,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_raft_proposal_batches,metadata_raft_proposal_commands,metadata_raft_proposal_max_batch,metadata_raft_proposal_ns,metadata_raft_proposal_queue_wait_ns,metadata_raft_proposal_queue_max_wait_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
 }
 
 fn csv_row(row: &ResultRow) -> String {
@@ -1880,6 +1902,17 @@ fn csv_row(row: &ResultRow) -> String {
         row.prefetch_cache_hit_bytes.to_string(),
         row.read_plan_cache_hits.to_string(),
         row.read_plan_cache_misses.to_string(),
+        row.object_writeback_enqueued.to_string(),
+        row.object_writeback_inline.to_string(),
+        row.object_writeback_fallback.to_string(),
+        row.object_writeback_completed.to_string(),
+        row.object_writeback_failed.to_string(),
+        row.object_writeback_staged_bytes.to_string(),
+        row.object_writeback_uploaded_bytes.to_string(),
+        row.object_writeback_queue_wait_ns.to_string(),
+        row.object_writeback_queue_max_wait_ns.to_string(),
+        row.object_writeback_upload_ns.to_string(),
+        row.object_writeback_upload_max_ns.to_string(),
         row.manifest_chunks.to_string(),
         row.manifest_blocks.to_string(),
         row.metadata_commits.to_string(),
@@ -1956,6 +1989,22 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
         .metadata_raft
         .proposal_batch_total
         .saturating_sub(before.metadata_raft.proposal_batch_total);
+    let object_writeback_delta = after
+        .object
+        .object_writeback_enqueued
+        .saturating_sub(before.object.object_writeback_enqueued)
+        .saturating_add(
+            after
+                .object
+                .object_writeback_inline
+                .saturating_sub(before.object.object_writeback_inline),
+        )
+        .saturating_add(
+            after
+                .object
+                .object_writeback_fallback
+                .saturating_sub(before.object.object_writeback_fallback),
+        );
     BenchStats {
         object: ObjectTransferStats {
             object_puts: after
@@ -2030,6 +2079,52 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .object
                 .read_plan_cache_misses
                 .saturating_sub(before.object.read_plan_cache_misses),
+            object_writeback_enqueued: after
+                .object
+                .object_writeback_enqueued
+                .saturating_sub(before.object.object_writeback_enqueued),
+            object_writeback_inline: after
+                .object
+                .object_writeback_inline
+                .saturating_sub(before.object.object_writeback_inline),
+            object_writeback_fallback: after
+                .object
+                .object_writeback_fallback
+                .saturating_sub(before.object.object_writeback_fallback),
+            object_writeback_completed: after
+                .object
+                .object_writeback_completed
+                .saturating_sub(before.object.object_writeback_completed),
+            object_writeback_failed: after
+                .object
+                .object_writeback_failed
+                .saturating_sub(before.object.object_writeback_failed),
+            object_writeback_staged_bytes: after
+                .object
+                .object_writeback_staged_bytes
+                .saturating_sub(before.object.object_writeback_staged_bytes),
+            object_writeback_uploaded_bytes: after
+                .object
+                .object_writeback_uploaded_bytes
+                .saturating_sub(before.object.object_writeback_uploaded_bytes),
+            object_writeback_queue_wait_ns: after
+                .object
+                .object_writeback_queue_wait_ns
+                .saturating_sub(before.object.object_writeback_queue_wait_ns),
+            object_writeback_queue_max_wait_ns: if object_writeback_delta == 0 {
+                0
+            } else {
+                after.object.object_writeback_queue_max_wait_ns
+            },
+            object_writeback_upload_ns: after
+                .object
+                .object_writeback_upload_ns
+                .saturating_sub(before.object.object_writeback_upload_ns),
+            object_writeback_upload_max_ns: if object_writeback_delta == 0 {
+                0
+            } else {
+                after.object.object_writeback_upload_max_ns
+            },
             manifest_chunks: after
                 .object
                 .manifest_chunks
@@ -2503,6 +2598,29 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             prefetch_cache_hit_bytes: json_u64(body, "prefetch_cache_hit_bytes")?,
             read_plan_cache_hits: json_u64(body, "read_plan_cache_hits")?,
             read_plan_cache_misses: json_u64(body, "read_plan_cache_misses")?,
+            object_writeback_enqueued: json_u64_or_zero(body, "object_writeback_enqueued"),
+            object_writeback_inline: json_u64_or_zero(body, "object_writeback_inline"),
+            object_writeback_fallback: json_u64_or_zero(body, "object_writeback_fallback"),
+            object_writeback_completed: json_u64_or_zero(body, "object_writeback_completed"),
+            object_writeback_failed: json_u64_or_zero(body, "object_writeback_failed"),
+            object_writeback_staged_bytes: json_u64_or_zero(body, "object_writeback_staged_bytes"),
+            object_writeback_uploaded_bytes: json_u64_or_zero(
+                body,
+                "object_writeback_uploaded_bytes",
+            ),
+            object_writeback_queue_wait_ns: json_u64_or_zero(
+                body,
+                "object_writeback_queue_wait_ns",
+            ),
+            object_writeback_queue_max_wait_ns: json_u64_or_zero(
+                body,
+                "object_writeback_queue_max_wait_ns",
+            ),
+            object_writeback_upload_ns: json_u64_or_zero(body, "object_writeback_upload_ns"),
+            object_writeback_upload_max_ns: json_u64_or_zero(
+                body,
+                "object_writeback_upload_max_ns",
+            ),
             manifest_chunks: json_u64(body, "manifest_chunks")?,
             manifest_blocks: json_u64(body, "manifest_blocks")?,
         },
@@ -3216,7 +3334,7 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"coalesced_gets":45,"coalesced_get_bytes":46,"cache_hits":47,"cache_hit_bytes":48,"prefetch_enqueued":49,"prefetch_dropped":50,"prefetch_completed":51,"prefetch_failed":52,"prefetch_object_gets":53,"prefetch_object_get_bytes":54,"prefetch_cache_hits":55,"prefetch_cache_hit_bytes":56,"read_plan_cache_hits":57,"read_plan_cache_misses":58,"manifest_chunks":59,"manifest_blocks":60,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1,"proposal_batch_total":26,"proposal_command_total":27,"proposal_max_batch":28,"proposal_ns_total":29,"proposal_queue_wait_ns_total":30,"proposal_queue_max_wait_ns":31},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"coalesced_gets":45,"coalesced_get_bytes":46,"cache_hits":47,"cache_hit_bytes":48,"prefetch_enqueued":49,"prefetch_dropped":50,"prefetch_completed":51,"prefetch_failed":52,"prefetch_object_gets":53,"prefetch_object_get_bytes":54,"prefetch_cache_hits":55,"prefetch_cache_hit_bytes":56,"read_plan_cache_hits":57,"read_plan_cache_misses":58,"object_writeback_enqueued":59,"object_writeback_inline":60,"object_writeback_fallback":61,"object_writeback_completed":62,"object_writeback_failed":63,"object_writeback_staged_bytes":64,"object_writeback_uploaded_bytes":65,"object_writeback_queue_wait_ns":66,"object_writeback_queue_max_wait_ns":67,"object_writeback_upload_ns":68,"object_writeback_upload_max_ns":69,"manifest_chunks":70,"manifest_blocks":71,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1,"proposal_batch_total":26,"proposal_command_total":27,"proposal_max_batch":28,"proposal_ns_total":29,"proposal_queue_wait_ns_total":30,"proposal_queue_max_wait_ns":31},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
 
         assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
         assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
@@ -3228,6 +3346,24 @@ mod tests {
         assert_eq!(json_u64(body, "prefetch_cache_hit_bytes").unwrap(), 56);
         assert_eq!(json_u64(body, "read_plan_cache_hits").unwrap(), 57);
         assert_eq!(json_u64(body, "read_plan_cache_misses").unwrap(), 58);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_enqueued"), 59);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_inline"), 60);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_fallback"), 61);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_completed"), 62);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_failed"), 63);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_staged_bytes"), 64);
+        assert_eq!(
+            json_u64_or_zero(body, "object_writeback_uploaded_bytes"),
+            65
+        );
+        assert_eq!(json_u64_or_zero(body, "object_writeback_queue_wait_ns"), 66);
+        assert_eq!(
+            json_u64_or_zero(body, "object_writeback_queue_max_wait_ns"),
+            67
+        );
+        assert_eq!(json_u64_or_zero(body, "object_writeback_upload_ns"), 68);
+        assert_eq!(json_u64_or_zero(body, "object_writeback_upload_max_ns"), 69);
+        assert_eq!(json_u64_or_zero(body, "missing_writeback_total"), 0);
         assert_eq!(json_u64(body, "commit_total").unwrap(), 6);
         assert_eq!(json_u64(body, "get_write_plan_local_total").unwrap(), 33);
         assert_eq!(json_u64(body, "scan_write_plan_local_total").unwrap(), 36);
@@ -3270,7 +3406,20 @@ mod tests {
             bytes: 0,
             samples: 0,
             stats: BenchStats {
-                object: ObjectTransferStats::default(),
+                object: ObjectTransferStats {
+                    object_writeback_enqueued: 3,
+                    object_writeback_inline: 1,
+                    object_writeback_fallback: 1,
+                    object_writeback_completed: 2,
+                    object_writeback_failed: 1,
+                    object_writeback_staged_bytes: 4096,
+                    object_writeback_uploaded_bytes: 2048,
+                    object_writeback_queue_wait_ns: 10,
+                    object_writeback_queue_max_wait_ns: 7,
+                    object_writeback_upload_ns: 20,
+                    object_writeback_upload_max_ns: 12,
+                    ..ObjectTransferStats::default()
+                },
                 metadata_store: MetadataStoreStats {
                     commit_total: 4,
                     dedupe_hit_total: 1,
@@ -3315,6 +3464,9 @@ mod tests {
         assert_eq!(row.path_index_hit_rate, 0.75);
         assert_eq!(row.read_dir_plus_calls, 2);
         assert_eq!(row.read_dir_plus_projection_hit_rate, 0.75);
+        assert_eq!(row.object_writeback_enqueued, 3);
+        assert_eq!(row.object_writeback_staged_bytes, 4096);
+        assert_eq!(row.object_writeback_upload_max_ns, 12);
 
         let header = csv_header();
         let record = csv_row(&row);
@@ -3326,6 +3478,7 @@ mod tests {
         assert!(header.contains("path_index_hit_rate"));
         assert!(header.contains("path_index_scan_stale"));
         assert!(header.contains("read_dir_plus_projection_hit_rate"));
+        assert!(header.contains("object_writeback_queue_max_wait_ns"));
         assert_eq!(header.split(',').count(), record.split(',').count());
     }
 
@@ -3347,6 +3500,53 @@ mod tests {
         assert_eq!(delta.metadata_store.atomic_apply_total, 0);
         assert_eq!(delta.metadata_store.atomic_apply_command_total, 0);
         assert_eq!(delta.metadata_store.atomic_apply_max_batch, 0);
+    }
+
+    #[test]
+    fn stats_delta_reports_object_writeback_window() {
+        let before = BenchStats {
+            object: ObjectTransferStats {
+                object_writeback_enqueued: 3,
+                object_writeback_completed: 2,
+                object_writeback_staged_bytes: 1024,
+                object_writeback_uploaded_bytes: 512,
+                object_writeback_queue_wait_ns: 30,
+                object_writeback_queue_max_wait_ns: 25,
+                object_writeback_upload_ns: 80,
+                object_writeback_upload_max_ns: 50,
+                ..ObjectTransferStats::default()
+            },
+            ..BenchStats::default()
+        };
+        let after = BenchStats {
+            object: ObjectTransferStats {
+                object_writeback_enqueued: 5,
+                object_writeback_completed: 4,
+                object_writeback_staged_bytes: 4096,
+                object_writeback_uploaded_bytes: 2048,
+                object_writeback_queue_wait_ns: 100,
+                object_writeback_queue_max_wait_ns: 60,
+                object_writeback_upload_ns: 240,
+                object_writeback_upload_max_ns: 90,
+                ..ObjectTransferStats::default()
+            },
+            ..BenchStats::default()
+        };
+
+        let delta = stats_delta(before, after);
+
+        assert_eq!(delta.object.object_writeback_enqueued, 2);
+        assert_eq!(delta.object.object_writeback_completed, 2);
+        assert_eq!(delta.object.object_writeback_staged_bytes, 3072);
+        assert_eq!(delta.object.object_writeback_uploaded_bytes, 1536);
+        assert_eq!(delta.object.object_writeback_queue_wait_ns, 70);
+        assert_eq!(delta.object.object_writeback_queue_max_wait_ns, 60);
+        assert_eq!(delta.object.object_writeback_upload_ns, 160);
+        assert_eq!(delta.object.object_writeback_upload_max_ns, 90);
+
+        let idle_delta = stats_delta(after, after);
+        assert_eq!(idle_delta.object.object_writeback_queue_max_wait_ns, 0);
+        assert_eq!(idle_delta.object.object_writeback_upload_max_ns, 0);
     }
 
     #[test]
