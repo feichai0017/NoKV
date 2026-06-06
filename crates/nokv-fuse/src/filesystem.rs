@@ -907,18 +907,6 @@ where
         if offset >= handle.size {
             return Ok(Some(Vec::new()));
         }
-        if !handle.pending_uploads.is_empty() {
-            self.drain_handle_uploads(fh)?;
-        }
-        let Some(handle) = self
-            .write_handles
-            .read()
-            .map_err(|_| Errno::EIO)?
-            .get(&fh.0)
-            .cloned()
-        else {
-            return Ok(None);
-        };
         let output_len = u64::from(size)
             .min(handle.size.saturating_sub(offset))
             .try_into()
@@ -935,6 +923,9 @@ where
         }
         if let Some(writer) = &handle.writer {
             self.overlay_dirty_extents(&mut bytes, offset, writer.dirty_extents())?;
+        }
+        for upload in &handle.pending_uploads {
+            self.overlay_buffered_ranges(&mut bytes, offset, &upload.ranges)?;
         }
         self.overlay_buffered_ranges(&mut bytes, offset, &handle.buffered)?;
         Ok(Some(bytes))
@@ -3015,6 +3006,54 @@ mod tests {
         assert!(handle.writer.is_none());
         assert!(!handle.dirty);
         assert_eq!(handle.base_size, 10);
+    }
+
+    #[test]
+    fn read_from_write_handle_overlays_pending_upload_without_waiting() {
+        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let inode = InodeId::new(7).unwrap();
+        let fh = fuse
+            .allocate_write_handle(
+                &InodeAttr {
+                    inode,
+                    file_type: FileType::File,
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                    rdev: 0,
+                    nlink: 1,
+                    size: 0,
+                    generation: 1,
+                    mtime_ms: 1,
+                    ctime_ms: 1,
+                },
+                InodeId::root(),
+                DentryName::new("checkpoint.bin").unwrap(),
+            )
+            .unwrap();
+
+        {
+            let mut handles = fuse.write_handles.write().unwrap();
+            let handle = handles.get_mut(&fh.0).unwrap();
+            handle.size = 10;
+            handle.dirty = true;
+            handle.pending_uploads.push(PendingBufferedUpload {
+                pending: PendingChunkedWrite::ready(Err(ObjectError::Backend(
+                    "upload should not be awaited by read".to_owned(),
+                ))),
+                ranges: vec![BufferedWriteRange {
+                    offset: 0,
+                    bytes: b"checkpoint".to_vec(),
+                }],
+            });
+        }
+
+        assert_eq!(
+            fuse.read_from_handle(fh, 0, 10).unwrap().unwrap(),
+            b"checkpoint"
+        );
+        let handles = fuse.write_handles.read().unwrap();
+        assert_eq!(handles.get(&fh.0).unwrap().pending_uploads.len(), 1);
     }
 
     #[test]
