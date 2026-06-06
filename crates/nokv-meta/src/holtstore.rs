@@ -189,7 +189,9 @@ impl HoltMetadataStore {
     }
 
     pub fn checkpoint(&self) -> Result<(), MetadataError> {
-        self.db.checkpoint().map_err(to_backend_error)
+        self.db.checkpoint().map_err(to_backend_error)?;
+        self.reclaim_unreachable_storage()?;
+        Ok(())
     }
 
     pub fn commit_durable(&self, applied_index: u64) -> Result<(), MetadataError> {
@@ -224,6 +226,10 @@ impl HoltMetadataStore {
         self.active_snapshot_pins
             .store(count_active_snapshot_pins(&self.db)?, Ordering::Relaxed);
         Ok(applied_index)
+    }
+
+    pub fn reclaim_unreachable_storage(&self) -> Result<usize, MetadataError> {
+        self.db.gc().map_err(to_backend_error)
     }
 
     fn current_tree(&self, family: RecordFamily) -> Result<Tree, MetadataError> {
@@ -300,6 +306,10 @@ impl MetadataCheckpointStore for HoltMetadataStore {
 
     fn install_checkpoint_image(&self, image: &[u8]) -> Result<u64, MetadataError> {
         HoltMetadataStore::install_checkpoint_image(self, image)
+    }
+
+    fn reclaim_unreachable_storage(&self) -> Result<usize, MetadataError> {
+        HoltMetadataStore::reclaim_unreachable_storage(self)
     }
 }
 
@@ -1911,6 +1921,30 @@ mod tests {
             Some(replace)
         );
         assert_eq!(restored.metadata_store_stats().active_snapshot_pin_total, 1);
+    }
+
+    #[test]
+    fn storage_reclaim_is_idempotent_after_checkpoint() {
+        let store = HoltMetadataStore::open_memory().unwrap();
+        store
+            .commit_metadata(put_command(b"dir/a", b"req-1", b"value-a", 2))
+            .unwrap();
+
+        store.checkpoint().unwrap();
+        store.reclaim_unreachable_storage().unwrap();
+        store.reclaim_unreachable_storage().unwrap();
+
+        assert_eq!(
+            store
+                .get(
+                    RecordFamily::Dentry,
+                    b"dir/a",
+                    version(2),
+                    ReadPurpose::UserStrong
+                )
+                .unwrap(),
+            Some(Value(b"value-a".to_vec()))
+        );
     }
 
     #[test]

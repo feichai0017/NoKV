@@ -313,6 +313,7 @@ pub trait MetadataCheckpointStore {
     fn durable_applied_index(&self) -> Result<u64, MetadataError>;
     fn export_checkpoint_image(&self, applied_index: u64) -> Result<Vec<u8>, MetadataError>;
     fn install_checkpoint_image(&self, image: &[u8]) -> Result<u64, MetadataError>;
+    fn reclaim_unreachable_storage(&self) -> Result<usize, MetadataError>;
 }
 
 pub trait MetadataStoreStatsProvider {

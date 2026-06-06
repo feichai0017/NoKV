@@ -1150,6 +1150,9 @@ where
             meta: meta.clone(),
             data,
         });
+        self.store.reclaim_unreachable_storage().map_err(|err| {
+            metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Delete, err)
+        })?;
         Ok(())
     }
 
@@ -1175,6 +1178,9 @@ where
             .map_err(|err| {
                 metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Read, err)
             })?;
+        self.store.reclaim_unreachable_storage().map_err(|err| {
+            metadata_storage_error(ErrorSubject::Snapshot(None), ErrorVerb::Delete, err)
+        })?;
         Ok(snapshot_from_image(MetadataRaftSnapshotImage {
             meta: SnapshotMeta {
                 last_log_id: self.last_applied,
