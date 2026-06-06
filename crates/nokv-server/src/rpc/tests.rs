@@ -1,11 +1,16 @@
 use super::*;
 use crate::server::tests::test_server;
+use nokv_cluster::MetadataRaftRpcClient;
 use nokv_protocol::{
     decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest,
     WireMetadataError, WireMetadataRaftLeaderId, WireMetadataRaftVote, WireMetadataRaftVoteRequest,
     WireSliceManifest, WireStagedObjectSet, WireXattrSetMode,
 };
+use std::io::{Read, Write};
 use std::net::TcpListener;
+use std::net::TcpStream;
+use std::sync::Arc;
+use std::thread;
 
 fn request_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
     let body = encode_request(&request).unwrap();

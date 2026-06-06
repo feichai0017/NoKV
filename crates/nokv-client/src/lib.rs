@@ -9,6 +9,8 @@ use std::fmt;
 mod artifact;
 #[cfg(test)]
 mod artifact_tests;
+mod framed;
+mod read_cache;
 mod service;
 
 use nokv_meta::{MetadError, MetadataError};

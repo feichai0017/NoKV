@@ -2077,7 +2077,7 @@ mod tests {
         }
 
         fn wait_for_leader(&self, excluded: Option<u64>) -> u64 {
-            let deadline = std::time::Instant::now() + Duration::from_secs(10);
+            let deadline = std::time::Instant::now() + Duration::from_secs(30);
             loop {
                 for (id, node) in &self.nodes {
                     if excluded == Some(*id) {

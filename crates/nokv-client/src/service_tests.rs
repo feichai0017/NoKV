@@ -1,4 +1,5 @@
 use super::*;
+use nokv_object::FileReadPipeline;
 use nokv_object::{MemoryObjectStore, ObjectKey};
 use nokv_protocol::{decode_request, encode_envelope, WireDentryRecord, WireInodeAttr};
 use nokv_types::AdvisoryLockKind;
