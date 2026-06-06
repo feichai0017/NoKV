@@ -2930,6 +2930,8 @@ mod tests {
             let mut handles = fuse.write_handles.write().unwrap();
             let handle = handles.get_mut(&fh.0).unwrap();
             handle.prepared = Some(());
+            handle.size = 10;
+            handle.dirty = true;
             handle.writer = Some(
                 FileWritePipeline::new(nokv_object::ChunkWriteOptions {
                     manifest_id: "fuse/1/7".to_owned(),
@@ -2963,6 +2965,16 @@ mod tests {
         assert_eq!(handle.buffered[0].offset, 0);
         assert_eq!(handle.buffered[0].bytes, b"checkpoint");
         assert!(handle.writer.as_ref().unwrap().staged_chunks().is_empty());
+        drop(handles);
+
+        fuse.publish_handle(fh).unwrap();
+        let handles = fuse.write_handles.read().unwrap();
+        let handle = handles.get(&fh.0).unwrap();
+        assert!(handle.buffered.is_empty());
+        assert!(handle.pending_uploads.is_empty());
+        assert!(handle.writer.is_none());
+        assert!(!handle.dirty);
+        assert_eq!(handle.base_size, 10);
     }
 
     #[test]
@@ -3069,7 +3081,7 @@ mod tests {
         type Prepared = ();
 
         fn prepared_generation(&self, _prepared: &Self::Prepared) -> u64 {
-            0
+            1
         }
 
         fn watch_subtree(&self, _scope: InodeId) -> FuseBackendResult<Option<WatchCursor>> {
@@ -3335,26 +3347,66 @@ mod tests {
         fn new_write_pipeline(
             &self,
             _prepared: &Self::Prepared,
-            _manifest_id: &str,
+            manifest_id: &str,
         ) -> FuseBackendResult<FileWritePipeline> {
-            unsupported()
+            FileWritePipeline::new(nokv_object::ChunkWriteOptions {
+                manifest_id: manifest_id.to_owned(),
+                mount: 1,
+                inode: 7,
+                generation: 1,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE,
+            })
+            .map_err(FuseBackendError::Object)
         }
 
         fn stage_prepared_artifact_ranges(
             &self,
             _prepared: &Self::Prepared,
-            _manifest_id: &str,
-            _ranges: &[PublishArtifactRange],
-            _block_index_base: u64,
+            manifest_id: &str,
+            ranges: &[PublishArtifactRange],
+            block_index_base: u64,
         ) -> FuseBackendResult<nokv_object::ChunkedWrite> {
-            unsupported()
+            let mut blocks = Vec::new();
+            let mut size = 0_u64;
+            for (index, range) in ranges.iter().enumerate() {
+                if range.bytes.is_empty() {
+                    continue;
+                }
+                let len = range.bytes.len() as u64;
+                size = size.max(range.offset.saturating_add(len));
+                blocks.push(nokv_object::StoredBlock {
+                    object_key: format!(
+                        "blocks/test/{}",
+                        block_index_base.saturating_add(index as u64)
+                    ),
+                    logical_offset: range.offset,
+                    object_offset: 0,
+                    len,
+                    digest_uri: format!("sha256:test-{index}"),
+                });
+            }
+            Ok(nokv_object::ChunkedWrite {
+                manifest_id: manifest_id.to_owned(),
+                size,
+                chunk_size: DEFAULT_CHUNK_SIZE,
+                block_size: DEFAULT_BLOCK_SIZE as u64,
+                chunks: vec![nokv_object::StoredChunk {
+                    chunk_index: 0,
+                    logical_offset: 0,
+                    len: size,
+                    blocks,
+                }],
+                object_puts: ranges.len(),
+                object_put_bytes: ranges.iter().map(|range| range.bytes.len() as u64).sum(),
+            })
         }
 
         fn cleanup_staged_objects(
             &self,
             _staged: &nokv_object::StagedObjectSet,
         ) -> FuseBackendResult<()> {
-            unsupported()
+            Ok(())
         }
 
         fn read_session_object_blocks(
@@ -3368,9 +3420,36 @@ mod tests {
         fn publish_prepared_artifact_staged_session(
             &self,
             _prepared: Self::Prepared,
-            _request: PublishArtifactStagedSession,
+            request: PublishArtifactStagedSession,
         ) -> FuseBackendResult<RenameReplaceResult> {
-            unsupported()
+            let inode = InodeId::new(7).unwrap();
+            let attr = InodeAttr {
+                inode,
+                file_type: FileType::File,
+                mode: request.mode,
+                uid: request.uid,
+                gid: request.gid,
+                rdev: 0,
+                nlink: 1,
+                size: request.size,
+                generation: 1,
+                mtime_ms: 1,
+                ctime_ms: 1,
+            };
+            Ok(RenameReplaceResult {
+                entry: DentryWithAttr {
+                    dentry: nokv_types::DentryRecord {
+                        parent: request.parent,
+                        name: request.name,
+                        child: inode,
+                        child_type: FileType::File,
+                        attr_generation: attr.generation,
+                    },
+                    attr,
+                    body: None,
+                },
+                replaced: None,
+            })
         }
     }
 
