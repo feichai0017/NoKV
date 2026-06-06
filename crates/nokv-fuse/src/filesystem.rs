@@ -17,8 +17,8 @@ use fuser::{
 };
 use nokv_client::MetadataClient;
 use nokv_meta::{
-    DentryWithAttr, MetadError, PublishArtifactRange, PublishArtifactStagedSession,
-    ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
+    DentryWithAttr, MetadError, ObjectTransferStats, PublishArtifactRange,
+    PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
     manifest_digest_uri, BlockCachePolicy, BlockCacheStats, ChunkedWrite, DirtyChunkExtent,
@@ -82,6 +82,49 @@ pub struct FuseObjectPipelineStats {
     pub read_plan_cache_misses: u64,
 }
 
+impl FuseObjectPipelineStats {
+    pub fn object_transfer_stats(&self) -> ObjectTransferStats {
+        let block_cache = self.block_cache.unwrap_or_default();
+        let prefetch = self.prefetch.unwrap_or_default();
+        let writeback = self.writeback.unwrap_or_default();
+        ObjectTransferStats {
+            object_puts: 0,
+            object_put_bytes: 0,
+            object_gets: 0,
+            object_get_bytes: 0,
+            coalesced_gets: 0,
+            coalesced_get_bytes: 0,
+            cache_hits: block_cache.hits.saturating_add(prefetch.cache_hits),
+            cache_hit_bytes: block_cache
+                .hit_bytes
+                .saturating_add(prefetch.cache_hit_bytes),
+            prefetch_enqueued: prefetch.enqueued,
+            prefetch_dropped: prefetch.dropped,
+            prefetch_completed: prefetch.completed,
+            prefetch_failed: prefetch.failed,
+            prefetch_object_gets: prefetch.object_gets,
+            prefetch_object_get_bytes: prefetch.object_get_bytes,
+            prefetch_cache_hits: prefetch.cache_hits,
+            prefetch_cache_hit_bytes: prefetch.cache_hit_bytes,
+            read_plan_cache_hits: self.read_plan_cache_hits,
+            read_plan_cache_misses: self.read_plan_cache_misses,
+            object_writeback_enqueued: writeback.enqueued,
+            object_writeback_inline: writeback.inline,
+            object_writeback_fallback: writeback.fallback,
+            object_writeback_completed: writeback.completed,
+            object_writeback_failed: writeback.failed,
+            object_writeback_staged_bytes: writeback.staged_bytes,
+            object_writeback_uploaded_bytes: writeback.uploaded_bytes,
+            object_writeback_queue_wait_ns: writeback.queue_wait_ns,
+            object_writeback_queue_max_wait_ns: writeback.queue_max_wait_ns,
+            object_writeback_upload_ns: writeback.upload_ns,
+            object_writeback_upload_max_ns: writeback.upload_max_ns,
+            manifest_chunks: 0,
+            manifest_blocks: 0,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum FuseView {
     Live,
@@ -122,6 +165,22 @@ pub(crate) struct NoKvFuse<B: FuseBackend> {
     write_handles: RwLock<HashMap<u64, WriteHandle<B::Prepared>>>,
     directory_handles: RwLock<HashMap<u64, DirectoryHandle>>,
     invalidation: Arc<InvalidationRegistry>,
+}
+
+pub struct FuseMount {
+    session: fuser::BackgroundSession,
+    stats: Arc<dyn Fn() -> io::Result<FuseObjectPipelineStats> + Send + Sync>,
+    _invalidation_worker: Option<FuseInvalidationWorker>,
+}
+
+impl FuseMount {
+    pub fn object_pipeline_stats(&self) -> io::Result<FuseObjectPipelineStats> {
+        (self.stats)()
+    }
+
+    pub fn join(self) -> io::Result<()> {
+        self.session.join()
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -1328,16 +1387,28 @@ pub fn mount_client<O>(
 where
     O: ObjectStore + Send + Sync + 'static,
 {
-    let backend = ClientFuseBackend::new(metadata, objects, &options)
-        .map_err(|err| io::Error::other(err.to_string()))?;
-    mount_backend(backend, mountpoint, options)
+    spawn_mount_client(metadata, objects, mountpoint, options).and_then(FuseMount::join)
 }
 
-fn mount_backend<B>(
+pub fn spawn_mount_client<O>(
+    metadata: MetadataClient,
+    objects: O,
+    mountpoint: impl AsRef<Path>,
+    options: FuseOptions,
+) -> io::Result<FuseMount>
+where
+    O: ObjectStore + Send + Sync + 'static,
+{
+    let backend = ClientFuseBackend::new(metadata, objects, &options)
+        .map_err(|err| io::Error::other(err.to_string()))?;
+    spawn_mount_backend(backend, mountpoint, options)
+}
+
+fn spawn_mount_backend<B>(
     backend: B,
     mountpoint: impl AsRef<Path>,
     options: FuseOptions,
-) -> io::Result<()>
+) -> io::Result<FuseMount>
 where
     B: FuseBackend,
 {
@@ -1346,10 +1417,11 @@ where
     config.mount_options = mount_options;
     config.n_threads = Some(options.threads);
     let backend = Arc::new(backend);
+    let stats_backend = Arc::clone(&backend);
     let fuse = NoKvFuse::from_shared_backend(Arc::clone(&backend), options.clone());
     let registry = fuse.invalidation_registry();
     let session = fuser::spawn_mount2(fuse, mountpoint, &config)?;
-    let _invalidation_worker = if options.view == FuseView::Live {
+    let invalidation_worker = if options.view == FuseView::Live {
         Some(FuseInvalidationWorker::spawn(
             backend,
             session.notifier(),
@@ -1359,7 +1431,15 @@ where
     } else {
         None
     };
-    session.join()
+    Ok(FuseMount {
+        session,
+        stats: Arc::new(move || {
+            stats_backend
+                .object_pipeline_stats()
+                .map_err(|err| io::Error::other(err.to_string()))
+        }),
+        _invalidation_worker: invalidation_worker,
+    })
 }
 
 fn mount_options(options: &FuseOptions) -> Vec<MountOption> {
@@ -3040,6 +3120,67 @@ mod tests {
             fuse.object_pipeline_stats().unwrap(),
             FuseObjectPipelineStats::default()
         );
+    }
+
+    #[test]
+    fn object_pipeline_stats_convert_to_object_transfer_stats() {
+        let stats = FuseObjectPipelineStats {
+            block_cache: Some(BlockCacheStats {
+                hits: 2,
+                hit_bytes: 20,
+                ..BlockCacheStats::default()
+            }),
+            prefetch: Some(ObjectPrefetchStats {
+                enqueued: 3,
+                dropped: 1,
+                completed: 2,
+                failed: 1,
+                object_gets: 4,
+                object_get_bytes: 40,
+                cache_hits: 5,
+                cache_hit_bytes: 50,
+            }),
+            writeback_cache: Some(WritebackCacheStats {
+                staged: 6,
+                staged_bytes: 60,
+                ..WritebackCacheStats::default()
+            }),
+            writeback: Some(ObjectWritebackStats {
+                enqueued: 7,
+                inline: 1,
+                fallback: 2,
+                completed: 3,
+                failed: 4,
+                staged_bytes: 70,
+                uploaded_bytes: 80,
+                queue_wait_ns: 90,
+                queue_max_wait_ns: 91,
+                upload_ns: 100,
+                upload_max_ns: 101,
+            }),
+            read_plan_cache_hits: 8,
+            read_plan_cache_misses: 9,
+        };
+
+        let object = stats.object_transfer_stats();
+
+        assert_eq!(object.cache_hits, 7);
+        assert_eq!(object.cache_hit_bytes, 70);
+        assert_eq!(object.prefetch_enqueued, 3);
+        assert_eq!(object.prefetch_object_gets, 4);
+        assert_eq!(object.read_plan_cache_hits, 8);
+        assert_eq!(object.read_plan_cache_misses, 9);
+        assert_eq!(object.object_writeback_enqueued, 7);
+        assert_eq!(object.object_writeback_inline, 1);
+        assert_eq!(object.object_writeback_fallback, 2);
+        assert_eq!(object.object_writeback_completed, 3);
+        assert_eq!(object.object_writeback_failed, 4);
+        assert_eq!(object.object_writeback_staged_bytes, 70);
+        assert_eq!(object.object_writeback_uploaded_bytes, 80);
+        assert_eq!(object.object_writeback_queue_wait_ns, 90);
+        assert_eq!(object.object_writeback_queue_max_wait_ns, 91);
+        assert_eq!(object.object_writeback_upload_ns, 100);
+        assert_eq!(object.object_writeback_upload_max_ns, 101);
     }
 
     #[test]

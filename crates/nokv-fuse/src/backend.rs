@@ -7,22 +7,19 @@ use nokv_meta::{
     DentryWithAttr, MetadError, PublishArtifactRange, PublishArtifactStagedSession,
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
-#[cfg(test)]
-use nokv_object::BlockCache;
 use nokv_object::{
-    put_chunked_ranges_parallel, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
-    FileReadPipeline, FileWritePipeline, ObjectBlockCache, ObjectError, ObjectPrefetchOptions,
-    ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectReadPlan, ObjectReadPlanCache,
-    ObjectReadPlanKey, ObjectStore, ObjectWritebackOptions, ObjectWritebackRequest,
-    ObjectWritebackUploader, PendingChunkedWrite, WritebackCache, WritebackCacheOptions,
-    WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    put_chunked_ranges_parallel, BlockCache, ChunkStore, ChunkWriteOptions, ChunkWriteRange,
+    ChunkedWrite, FileReadPipeline, FileWritePipeline, ObjectBlockCache, ObjectError,
+    ObjectPrefetchOptions, ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock,
+    ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey, ObjectStore, ObjectWritebackOptions,
+    ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
+    WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{
     AdvisoryLock, AdvisoryLockRequest, DentryName, InodeAttr, InodeId, SpecialNodeSpec,
     WatchCursor, WatchRecord,
 };
 
-#[cfg(test)]
 use crate::filesystem::FuseObjectPipelineStats;
 use crate::filesystem::FuseOptions;
 
@@ -227,7 +224,6 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         prepared: Self::Prepared,
         request: PublishArtifactStagedSession,
     ) -> FuseBackendResult<RenameReplaceResult>;
-    #[cfg(test)]
     fn object_pipeline_stats(&self) -> FuseBackendResult<FuseObjectPipelineStats> {
         Ok(FuseObjectPipelineStats::default())
     }
@@ -318,7 +314,6 @@ where
         let _ = prefetcher.submit(ObjectPrefetchRequest::new(plan.output_len, plan.blocks));
     }
 
-    #[cfg(test)]
     fn collect_object_pipeline_stats(&self) -> FuseBackendResult<FuseObjectPipelineStats> {
         Ok(FuseObjectPipelineStats {
             block_cache: self
@@ -950,7 +945,6 @@ where
             })
     }
 
-    #[cfg(test)]
     fn object_pipeline_stats(&self) -> FuseBackendResult<FuseObjectPipelineStats> {
         self.collect_object_pipeline_stats()
     }
