@@ -4,6 +4,7 @@ use nokv_protocol::{decode_request, encode_envelope, WireDentryRecord, WireInode
 use nokv_types::AdvisoryLockKind;
 use std::net::TcpListener;
 use std::thread;
+use std::time::{Duration, Instant};
 
 fn serve_one(body: &'static str) -> SocketAddr {
     serve_many(vec![response_body(body)])
@@ -1413,6 +1414,56 @@ fn service_file_client_read_path_returns_metadata_and_checks_expected_generation
             current: 8
         })
     ));
+}
+
+#[test]
+fn service_file_client_stats_include_background_prefetch_gets() {
+    let store = MemoryObjectStore::new();
+    store
+        .put(
+            &ObjectKey::new("blocks/demo").unwrap(),
+            b"abcdefghijklmnopqr",
+        )
+        .unwrap();
+    let attr = r#""attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":18,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":18,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}"#;
+    let addr = serve_many(vec![
+        response_body(&format!(
+            r#"{{"ok":true,"result":{{"type":"path_read_plan","metadata":{{{attr}}},"plan":{{"output_len":6,"blocks":[{{"object_key":"blocks/demo","object_offset":0,"len":6,"output_offset":0}}]}}}}}}"#,
+        )),
+        response_body(&format!(
+            r#"{{"ok":true,"result":{{"type":"path_read_plan","metadata":{{{attr}}},"plan":{{"output_len":6,"blocks":[{{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}}]}}}}}}"#,
+        )),
+        response_body(
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":12,"len":6,"output_offset":0}]}}}"#,
+        ),
+    ]);
+    let client = NoKvFsClient::connect(addr, store);
+
+    assert_eq!(
+        client
+            .read_path("/artifact.bin", 0, 6, Some(7))
+            .unwrap()
+            .bytes,
+        b"abcdef"
+    );
+    assert_eq!(
+        client
+            .read_path("/artifact.bin", 6, 6, Some(7))
+            .unwrap()
+            .bytes,
+        b"ghijkl"
+    );
+
+    let deadline = Instant::now() + Duration::from_secs(2);
+    while client.object_stats().object_gets < 3 && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(10));
+    }
+    let stats = client.object_stats();
+    assert_eq!(
+        stats.object_gets, 3,
+        "two foreground reads plus one background prefetch read must be visible in stats"
+    );
+    assert_eq!(stats.object_get_bytes, 18);
 }
 
 #[test]

@@ -187,15 +187,28 @@ where
     }
 
     pub fn object_stats(&self) -> ObjectTransferStats {
+        let prefetch = self.prefetcher.stats().unwrap_or_default();
         ObjectTransferStats {
             object_puts: self.object_puts.load(Ordering::Relaxed),
             object_put_bytes: self.object_put_bytes.load(Ordering::Relaxed),
-            object_gets: self.object_gets.load(Ordering::Relaxed),
-            object_get_bytes: self.object_get_bytes.load(Ordering::Relaxed),
+            object_gets: self
+                .object_gets
+                .load(Ordering::Relaxed)
+                .saturating_add(prefetch.object_gets),
+            object_get_bytes: self
+                .object_get_bytes
+                .load(Ordering::Relaxed)
+                .saturating_add(prefetch.object_get_bytes),
             coalesced_gets: self.coalesced_gets.load(Ordering::Relaxed),
             coalesced_get_bytes: self.coalesced_get_bytes.load(Ordering::Relaxed),
-            cache_hits: self.cache_hits.load(Ordering::Relaxed),
-            cache_hit_bytes: self.cache_hit_bytes.load(Ordering::Relaxed),
+            cache_hits: self
+                .cache_hits
+                .load(Ordering::Relaxed)
+                .saturating_add(prefetch.cache_hits),
+            cache_hit_bytes: self
+                .cache_hit_bytes
+                .load(Ordering::Relaxed)
+                .saturating_add(prefetch.cache_hit_bytes),
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
             manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
         }
