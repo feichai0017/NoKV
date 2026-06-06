@@ -53,8 +53,9 @@ Environment:
   NOKV_FUSE_SMOKE_SERVER_ADDRESS       NoKV metadata server address (default: 127.0.0.1:7781)
 
 The smoke covers mkdir, file write/read, file fsync, directory fsync, rename,
-readdir, truncate, symlink/readlink, xattr roundtrip, access(2), rm, and rmdir
-through the mounted FUSE filesystem.
+readdir, truncate, symlink/readlink, xattr roundtrip, access(2), hardlink,
+statfs, lseek, fallocate, copy_file_range, rm, and rmdir through the mounted
+FUSE filesystem.
 EOF
 }
 

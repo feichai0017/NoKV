@@ -141,9 +141,9 @@ scripts/run-fuse-smoke.sh
 
 The script builds `nokv`, starts RustFS, mounts a temporary NoKV FUSE
 filesystem, and exercises mkdir, file write/read, file fsync, directory fsync,
-rename, readdir, truncate, symlink/readlink, xattr error handling, access(2),
-rm, and rmdir through the mounted filesystem. This is a correctness smoke, not
-a performance benchmark.
+rename, readdir, truncate, symlink/readlink, xattr roundtrip, access(2),
+hardlink, statfs, lseek, fallocate, copy_file_range, rm, and rmdir through the
+mounted filesystem. This is a correctness smoke, not a performance benchmark.
 
 For JuiceFS-style mounted-filesystem compatibility gates, mount NoKV first
 and run the external-suite driver against that mountpoint:
@@ -155,8 +155,8 @@ scripts/run-fuse-compat-gate.sh
 
 The default compatibility gate runs a small namespace/data smoke plus xattr
 roundtrip. Heavier suites are opt-in because they require external tools and
-will expose unsupported POSIX semantics until NoKV reaches the full POSIX
-gate:
+will expose the remaining POSIX hardening gaps until NoKV reaches the full
+external-suite gate:
 
 ```bash
 NOKV_FUSE_MOUNT=/mnt/nokv \

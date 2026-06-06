@@ -98,7 +98,8 @@ Implemented today:
 
 - low-level FUSE frontend for lookup, getattr, readdir, readdirplus, create,
   mkdir, symlink/readlink, rename, unlink, rmdir, read, write, flush, release,
-  fsync, and basic setattr/truncate;
+  fsync, setattr/truncate, hardlink, xattr, advisory locks, special files,
+  `statfs`, `lseek`, `fallocate`, and `copy_file_range`;
 - Holt-backed local metadata service with inode/dentry canonical metadata,
   dentry projection, command predicates, command dedupe, and history records;
 - chunked object data path where file bodies are split into immutable object
@@ -119,8 +120,8 @@ Not implemented yet:
 - production-grade distributed metadata operations such as managed membership,
   checkpoint archive, learner read scaling, and multi-machine deployment;
 - Python/fsspec and Kubernetes CSI packages;
-- full POSIX coverage such as hardlinks, xattrs, locks, special files,
-  `statfs`, ACLs, and mature multi-client cache coherence.
+- full POSIX hardening such as ACL enforcement, broad external compatibility
+  gate coverage, and mature multi-client cache coherence.
 
 So NoKV is currently a usable object-backed filesystem with an OpenRaft-backed
 metadata server path, not yet a JuiceFS/3FS-class distributed filesystem.
@@ -251,11 +252,12 @@ still narrower:
 - like JuiceFS, NoKV uses inode/dentry semantics and stores file bodies outside
   metadata;
 - like 3FS, NoKV is aimed at AI training workloads and a metadata/data split;
-- unlike those mature systems, NoKV does not yet provide distributed metadata
-  HA, production cache coherence, or full POSIX coverage.
+- unlike those mature systems, NoKV does not yet provide production-grade
+  multi-node metadata HA, production cache coherence, or full POSIX hardening.
 
-The next major engineering steps are POSIX completion, client/cache work, and a
-distributed metadata layer with Holt as the shard-local state machine.
+The next major engineering steps are JuiceFS-style data-plane/cache
+optimization, POSIX compatibility gates, and production OpenRaft metadata HA
+with Holt as the shard-local state machine.
 
 ## Documentation
 

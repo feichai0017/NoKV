@@ -102,9 +102,11 @@ flowchart TB
     Metad --> Object
 ```
 
-The first implementation is a single-node `metad` server backed by Holt. The
-distributed target is metadata-shard replication with Holt as each shard's
-local state machine.
+The current implementation is a client/server `metad` path backed by Holt and
+OpenRaft. A single-node deployment is represented as a one-voter metadata
+group; local 3-voter smoke coverage exists, while production membership,
+learner read scaling, checkpoint archive, and multi-machine operations remain
+the distributed hardening work.
 
 ## Kubernetes Deployment Target
 
@@ -127,10 +129,10 @@ nokv-python
   Python SDK and fsspec binding for training frameworks
 ```
 
-The current repository implements a long-running single-node `nokv-server`,
-framed metadata RPC for the Rust SDK and CLI, and the FUSE frontend. FUSE over
-the metadata server, CSI, Python, node-local cache, and distributed metadata
-shards remain product direction.
+The current repository implements a long-running `nokv-server`, framed
+metadata RPC for the Rust SDK and CLI, and a FUSE frontend that uses the same
+metadata client/server boundary. CSI, Python/fsspec, node-local cache, and
+production multi-node metadata operations remain product direction.
 
 ## Metadata Distribution
 

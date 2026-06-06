@@ -10,8 +10,10 @@ repository is intentionally product-shaped: metadata semantics, object body
 storage, clients, FUSE, docs, and examples live at the repository root instead
 of behind a nested workspace.
 
-The implemented tree is the single-node metadata service slice. The product
-target, including distributed metadata shards, CSI, Python/fsspec, and
+The implemented tree is the Rust client/server filesystem slice: FUSE and the
+SDK talk to `nokv-server`, `nokv-server` commits semantic metadata commands
+through an OpenRaft metadata group, and Holt stores the applied state machine.
+The product target, including production metadata HA, CSI, Python/fsspec, and
 node-local cache, is recorded in [Product Design](./product-design.md).
 
 ## Layers
