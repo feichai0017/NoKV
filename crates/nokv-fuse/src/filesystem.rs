@@ -132,6 +132,7 @@ struct WriteHandle<P> {
     size: u64,
     writer: Option<FileWritePipeline>,
     buffered: Vec<BufferedWriteRange>,
+    pending_uploads: Vec<PendingBufferedUpload>,
     sequential_digest: Option<SequentialDigest>,
     dirty: bool,
 }
@@ -140,6 +141,12 @@ struct WriteHandle<P> {
 struct BufferedWriteRange {
     offset: u64,
     bytes: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+struct PendingBufferedUpload {
+    pending: PendingChunkedWrite,
+    ranges: Vec<BufferedWriteRange>,
 }
 
 #[derive(Clone)]
@@ -776,6 +783,7 @@ where
             size: attr.size,
             writer: None,
             buffered: Vec::new(),
+            pending_uploads: Vec::new(),
             sequential_digest: Some(SequentialDigest::new()),
             dirty: false,
         })
@@ -892,12 +900,7 @@ where
         if offset >= handle.size {
             return Ok(Some(Vec::new()));
         }
-        if handle
-            .writer
-            .as_ref()
-            .map(|writer| writer.has_pending_uploads())
-            .unwrap_or(false)
-        {
+        if !handle.pending_uploads.is_empty() {
             self.drain_handle_uploads(fh)?;
         }
         let Some(handle) = self
@@ -946,26 +949,30 @@ where
 
     fn drain_handle_uploads(&self, fh: FileHandle) -> Result<(), Errno> {
         loop {
-            let pending = {
+            let uploads = {
                 let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
                 let Some(handle) = handles.get_mut(&fh.0) else {
                     return Err(Errno::EBADF);
                 };
-                let Some(writer) = handle.writer.as_mut() else {
-                    return Ok(());
-                };
-                writer.take_pending_uploads()
+                std::mem::take(&mut handle.pending_uploads)
             };
-            if pending.is_empty() {
+            if uploads.is_empty() {
                 return Ok(());
             }
-            let mut completed = Vec::with_capacity(pending.len());
-            for upload in pending {
-                completed.push(
-                    upload
-                        .wait()
-                        .map_err(|err| self.cleanup_object_error(err))?,
-                );
+            let mut completed = Vec::with_capacity(uploads.len());
+            let mut failed_ranges = Vec::new();
+            let mut first_error = None;
+            for upload in uploads {
+                match upload.pending.wait() {
+                    Ok(written) => completed.push(written),
+                    Err(err) => {
+                        let errno = self.cleanup_object_error(err);
+                        if first_error.is_none() {
+                            first_error = Some(errno);
+                        }
+                        failed_ranges.extend(upload.ranges);
+                    }
+                }
             }
             let mut handles = self.write_handles.write().map_err(|_| Errno::EIO)?;
             let Some(handle) = handles.get_mut(&fh.0) else {
@@ -984,6 +991,13 @@ where
             };
             for written in completed {
                 writer.record_write(written).map_err(errno)?;
+            }
+            if !failed_ranges.is_empty() {
+                let current = std::mem::take(&mut handle.buffered);
+                handle.buffered = failed_ranges.into_iter().chain(current).collect();
+            }
+            if let Some(err) = first_error {
+                return Err(err);
             }
         }
     }
@@ -1039,11 +1053,10 @@ where
                 self.cleanup_completed_pending(pending)?;
                 return Err(Errno::ESTALE);
             }
-            handle
-                .writer
-                .as_mut()
-                .ok_or(Errno::EIO)?
-                .record_pending_write(pending);
+            handle.pending_uploads.push(PendingBufferedUpload {
+                pending,
+                ranges: reservation.ranges,
+            });
             if !force {
                 return Ok(());
             }
@@ -2887,6 +2900,69 @@ mod tests {
         assert_eq!(tail[0].offset, FUSE_WRITEBACK_UPLOAD_THRESHOLD as u64);
         assert_eq!(tail[0].bytes.len(), 17);
         assert!(buffered.is_empty());
+    }
+
+    #[test]
+    fn failed_pending_writeback_restores_dirty_range_for_retry() {
+        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        let inode = InodeId::new(7).unwrap();
+        let fh = fuse
+            .allocate_write_handle(
+                &InodeAttr {
+                    inode,
+                    file_type: FileType::File,
+                    mode: 0o644,
+                    uid: 1000,
+                    gid: 1000,
+                    rdev: 0,
+                    nlink: 1,
+                    size: 0,
+                    generation: 1,
+                    mtime_ms: 1,
+                    ctime_ms: 1,
+                },
+                InodeId::root(),
+                DentryName::new("checkpoint.bin").unwrap(),
+            )
+            .unwrap();
+
+        {
+            let mut handles = fuse.write_handles.write().unwrap();
+            let handle = handles.get_mut(&fh.0).unwrap();
+            handle.prepared = Some(());
+            handle.writer = Some(
+                FileWritePipeline::new(nokv_object::ChunkWriteOptions {
+                    manifest_id: "fuse/1/7".to_owned(),
+                    mount: 1,
+                    inode: inode.get(),
+                    generation: 1,
+                    chunk_size: DEFAULT_CHUNK_SIZE,
+                    block_size: DEFAULT_BLOCK_SIZE,
+                })
+                .unwrap(),
+            );
+            handle.pending_uploads.push(PendingBufferedUpload {
+                pending: PendingChunkedWrite::ready(Err(ObjectError::Backend(
+                    "temporary object outage".to_owned(),
+                ))),
+                ranges: vec![BufferedWriteRange {
+                    offset: 0,
+                    bytes: b"checkpoint".to_vec(),
+                }],
+            });
+        }
+
+        assert_eq!(
+            fuse.drain_handle_uploads(fh).unwrap_err().code(),
+            Errno::EIO.code()
+        );
+        let handles = fuse.write_handles.read().unwrap();
+        let handle = handles.get(&fh.0).unwrap();
+        assert!(handle.pending_uploads.is_empty());
+        assert_eq!(handle.buffered.len(), 1);
+        assert_eq!(handle.buffered[0].offset, 0);
+        assert_eq!(handle.buffered[0].bytes, b"checkpoint");
+        assert!(handle.writer.as_ref().unwrap().staged_chunks().is_empty());
     }
 
     #[test]

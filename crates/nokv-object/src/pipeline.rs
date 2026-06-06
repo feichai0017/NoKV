@@ -17,7 +17,6 @@ pub struct FileWritePipeline {
     staged_chunks: Vec<StoredChunk>,
     staged: StagedObjectSet,
     dirty_extents: Vec<DirtyChunkExtent>,
-    pending_uploads: Vec<PendingChunkedWrite>,
     next_block_index: u64,
 }
 
@@ -145,7 +144,6 @@ impl FileWritePipeline {
             staged_chunks: Vec::new(),
             staged: StagedObjectSet::default(),
             dirty_extents: Vec::new(),
-            pending_uploads: Vec::new(),
             next_block_index: 0,
         })
     }
@@ -177,20 +175,8 @@ impl FileWritePipeline {
         Ok(())
     }
 
-    pub fn record_pending_write(&mut self, pending: PendingChunkedWrite) {
-        self.pending_uploads.push(pending);
-    }
-
-    pub fn take_pending_uploads(&mut self) -> Vec<PendingChunkedWrite> {
-        std::mem::take(&mut self.pending_uploads)
-    }
-
-    pub fn has_pending_uploads(&self) -> bool {
-        !self.pending_uploads.is_empty()
-    }
-
     pub fn is_empty(&self) -> bool {
-        self.staged.is_empty() && self.pending_uploads.is_empty()
+        self.staged.is_empty()
     }
 
     pub fn staged_chunks(&self) -> &[StoredChunk] {
