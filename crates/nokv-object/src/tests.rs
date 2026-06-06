@@ -629,6 +629,64 @@ fn object_writeback_uploader_uploads_cached_ranges_and_clears_tickets() {
 }
 
 #[test]
+fn object_writeback_uploader_keeps_cached_ranges_after_upload_failure() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = FailAfterFirstPut::new();
+    let cache = WritebackCache::new(WritebackCacheOptions {
+        root: dir.path().join("writeback"),
+        max_bytes: 1024,
+        max_items: 8,
+    })
+    .unwrap();
+    let ticket = cache
+        .stage("blocks/1/2/3/0/0".to_owned(), b"checkpoint-data")
+        .unwrap();
+    let uploader = ObjectWritebackUploader::new(
+        store.clone(),
+        cache.clone(),
+        ObjectWritebackOptions {
+            queue_capacity: 4,
+            workers: 1,
+            upload_workers_per_request: 1,
+        },
+    );
+
+    let pending = uploader
+        .submit(ObjectWritebackRequest {
+            ranges: vec![WritebackUploadRange {
+                logical_offset: 0,
+                ticket: ticket.clone(),
+            }],
+            options: ChunkWriteOptions {
+                manifest_id: "artifacts/checkpoint".to_owned(),
+                mount: 1,
+                inode: 2,
+                generation: 3,
+                chunk_size: 64,
+                block_size: 8,
+            },
+            block_index_base: 0,
+        })
+        .unwrap();
+
+    let err = pending.wait().unwrap_err();
+    assert!(matches!(
+        err,
+        ObjectError::StagedWriteFailed { ref source, .. }
+            if source.contains("injected put failure")
+    ));
+    assert_eq!(cache.read(&ticket).unwrap(), b"checkpoint-data");
+    let cache_stats = cache.stats().unwrap();
+    assert_eq!(cache_stats.active_items, 1);
+    assert_eq!(cache_stats.active_bytes, 15);
+    assert_eq!(cache_stats.removed, 0);
+    let upload_stats = uploader.stats().unwrap();
+    assert_eq!(upload_stats.enqueued, 1);
+    assert_eq!(upload_stats.completed, 0);
+    assert_eq!(upload_stats.failed, 1);
+}
+
+#[test]
 fn object_prefetcher_accepts_disk_backed_block_cache() {
     let dir = tempfile::tempdir().unwrap();
     let store = MemoryObjectStore::new();

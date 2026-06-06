@@ -539,8 +539,10 @@ where
         request.block_index_base,
         workers,
     );
-    for range in &request.ranges {
-        let _ = cache.remove(&range.ticket);
+    if result.is_ok() {
+        for range in &request.ranges {
+            let _ = cache.remove(&range.ticket);
+        }
     }
     result
 }
