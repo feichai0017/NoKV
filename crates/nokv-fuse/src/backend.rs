@@ -371,6 +371,23 @@ where
             .insert(key, plan);
         Ok(())
     }
+
+    fn stage_prepared_artifact_ranges_direct_pending(
+        &self,
+        prepared: &ClientPreparedArtifact,
+        manifest_id: &str,
+        ranges: &[PublishArtifactRange],
+        block_index_base: u64,
+    ) -> FuseBackendResult<PendingChunkedWrite> {
+        <Self as FuseBackend>::stage_prepared_artifact_ranges(
+            self,
+            prepared,
+            manifest_id,
+            ranges,
+            block_index_base,
+        )
+        .map(|written| PendingChunkedWrite::ready(Ok(written)))
+    }
 }
 
 impl From<MetadError> for FuseBackendError {
@@ -806,11 +823,14 @@ where
         let (Some(writeback_cache), Some(writeback_uploader)) =
             (&self.writeback_cache, &self.writeback_uploader)
         else {
-            return self
-                .stage_prepared_artifact_ranges(prepared, manifest_id, ranges, block_index_base)
-                .map(|written| PendingChunkedWrite::ready(Ok(written)));
+            return self.stage_prepared_artifact_ranges_direct_pending(
+                prepared,
+                manifest_id,
+                ranges,
+                block_index_base,
+            );
         };
-        let mut upload_ranges = Vec::new();
+        let mut upload_ranges: Vec<WritebackUploadRange> = Vec::new();
         for range in ranges.iter().filter(|range| !range.bytes.is_empty()) {
             let key = format!(
                 "{manifest_id}:{}:{}:{}",
@@ -818,7 +838,21 @@ where
                 range.offset,
                 range.bytes.len()
             );
-            let ticket = writeback_cache.stage(key, &range.bytes)?;
+            let ticket = match writeback_cache.stage(key, &range.bytes) {
+                Ok(ticket) => ticket,
+                Err(_) => {
+                    for range in upload_ranges {
+                        let _ = writeback_cache.remove(&range.ticket);
+                    }
+                    let _ = writeback_uploader.record_fallback();
+                    return self.stage_prepared_artifact_ranges_direct_pending(
+                        prepared,
+                        manifest_id,
+                        ranges,
+                        block_index_base,
+                    );
+                }
+            };
             upload_ranges.push(WritebackUploadRange {
                 logical_offset: range.offset,
                 ticket,
@@ -849,11 +883,17 @@ where
         };
         match writeback_uploader.submit(request) {
             Ok(pending) => Ok(pending),
-            Err(err) => {
+            Err(_) => {
                 for range in upload_ranges {
                     let _ = writeback_cache.remove(&range.ticket);
                 }
-                Err(err.into())
+                let _ = writeback_uploader.record_fallback();
+                self.stage_prepared_artifact_ranges_direct_pending(
+                    prepared,
+                    manifest_id,
+                    ranges,
+                    block_index_base,
+                )
             }
         }
     }
@@ -975,6 +1015,7 @@ mod tests {
         let stats = backend.object_pipeline_stats().unwrap();
         let writeback = stats.writeback.unwrap();
         assert_eq!(writeback.enqueued, 1);
+        assert_eq!(writeback.fallback, 0);
         assert_eq!(writeback.completed, 1);
         assert_eq!(writeback.failed, 0);
         assert_eq!(writeback.staged_bytes, 10);
@@ -984,6 +1025,73 @@ mod tests {
         assert_eq!(cache.staged_bytes, 10);
         assert_eq!(cache.removed, 1);
         assert_eq!(cache.removed_bytes, 10);
+        assert_eq!(cache.active_items, 0);
+        assert_eq!(cache.active_bytes, 0);
+    }
+
+    #[test]
+    fn writeback_cache_capacity_falls_back_to_direct_upload() {
+        let temp = tempfile::tempdir().unwrap();
+        let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))));
+        let objects = MemoryObjectStore::new();
+        let backend = ClientFuseBackend::new(
+            metadata,
+            objects.clone(),
+            &FuseOptions {
+                writeback: crate::filesystem::FuseWritebackOptions {
+                    root: temp.path().join("writeback"),
+                    max_bytes: 4,
+                    workers: 1,
+                    upload_workers_per_request: 1,
+                    ..crate::filesystem::FuseWritebackOptions::default()
+                },
+                ..FuseOptions::default()
+            },
+        )
+        .unwrap();
+        let prepared = ClientPreparedArtifact {
+            mount: 1,
+            parent: InodeId::new(1).unwrap(),
+            name: DentryName::new("checkpoint.bin").unwrap(),
+            path: Some("/checkpoint.bin".to_owned()),
+            inode: InodeId::new(42).unwrap(),
+            generation: 7,
+            mtime_ms: 1,
+            ctime_ms: 1,
+            replace: true,
+            dentry_version: Some(1),
+            old_generation: None,
+        };
+
+        let pending = backend
+            .stage_prepared_artifact_ranges_async(
+                &prepared,
+                "checkpoint.bin",
+                &[PublishArtifactRange {
+                    offset: 0,
+                    bytes: b"checkpoint".to_vec(),
+                }],
+                0,
+            )
+            .unwrap();
+        let written = pending.wait().unwrap();
+        assert_eq!(written.object_puts, 1);
+        assert!(objects
+            .head(&nokv_object::ObjectKey::new("blocks/1/42/7/0/0").unwrap())
+            .unwrap()
+            .is_some());
+
+        let stats = backend.object_pipeline_stats().unwrap();
+        let writeback = stats.writeback.unwrap();
+        assert_eq!(writeback.enqueued, 0);
+        assert_eq!(writeback.fallback, 1);
+        assert_eq!(writeback.completed, 0);
+        assert_eq!(writeback.failed, 0);
+        let cache = stats.writeback_cache.unwrap();
+        assert_eq!(cache.staged, 0);
         assert_eq!(cache.active_items, 0);
         assert_eq!(cache.active_bytes, 0);
     }

@@ -146,6 +146,7 @@ pub struct ObjectPrefetchStats {
 pub struct ObjectWritebackStats {
     pub enqueued: u64,
     pub inline: u64,
+    pub fallback: u64,
     pub completed: u64,
     pub failed: u64,
     pub staged_bytes: u64,
@@ -639,6 +640,12 @@ where
             .lock()
             .map_err(ObjectError::from_poisoned_lock)
             .map(|stats| *stats)
+    }
+
+    pub fn record_fallback(&self) -> Result<(), ObjectError> {
+        self.with_stats(|stats| {
+            stats.fallback = stats.fallback.saturating_add(1);
+        })
     }
 
     fn with_stats(
