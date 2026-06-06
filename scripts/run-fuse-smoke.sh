@@ -267,6 +267,28 @@ with open(checkpoint, "r+b") as fh:
 with open(checkpoint, "rb") as fh:
     assert fh.read() == b"hello"
 
+with open(checkpoint, "r+b") as fh:
+    if hasattr(os, "SEEK_DATA") and hasattr(os, "SEEK_HOLE"):
+        assert os.lseek(fh.fileno(), 0, os.SEEK_DATA) == 0
+        assert os.lseek(fh.fileno(), 0, os.SEEK_HOLE) == 5
+    if hasattr(os, "posix_fallocate"):
+        os.posix_fallocate(fh.fileno(), 0, 8192)
+        assert os.fstat(fh.fileno()).st_size == 8192
+        fh.seek(5)
+        assert fh.read(4) == b"\0\0\0\0"
+
+if hasattr(os, "copy_file_range"):
+    copied_checkpoint = os.path.join(renamed_dir, "copied-checkpoint.bin")
+    with open(checkpoint, "rb") as src, open(copied_checkpoint, "wb") as dst:
+        copied = os.copy_file_range(src.fileno(), dst.fileno(), 5)
+        assert copied == 5
+        dst.flush()
+        os.fsync(dst.fileno())
+    with open(copied_checkpoint, "rb") as fh:
+        assert fh.read() == b"hello"
+else:
+    copied_checkpoint = None
+
 link_path = os.path.join(renamed_dir, "latest")
 os.symlink("checkpoint.bin", link_path)
 assert os.readlink(link_path) == "checkpoint.bin"
@@ -319,6 +341,8 @@ if os.geteuid() != 0:
 
 os.unlink(link_path)
 os.unlink(checkpoint)
+if copied_checkpoint is not None:
+    os.unlink(copied_checkpoint)
 os.unlink(large_checkpoint)
 for index in range(24):
     os.unlink(os.path.join(renamed_dir, f"sample-{index:04}.txt"))

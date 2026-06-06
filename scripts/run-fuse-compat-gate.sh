@@ -127,6 +127,27 @@ with open(renamed, "r+b") as fh:
 with open(renamed, "rb") as fh:
     assert fh.read() == b"nokv"
 
+with open(renamed, "r+b") as fh:
+    if hasattr(os, "SEEK_DATA") and hasattr(os, "SEEK_HOLE"):
+        assert os.lseek(fh.fileno(), 0, os.SEEK_DATA) == 0
+        assert os.lseek(fh.fileno(), 0, os.SEEK_HOLE) == 4
+    if hasattr(os, "posix_fallocate"):
+        os.posix_fallocate(fh.fileno(), 0, 4096)
+        assert os.fstat(fh.fileno()).st_size == 4096
+        fh.seek(4)
+        assert fh.read(4) == b"\0\0\0\0"
+
+if hasattr(os, "copy_file_range"):
+    copied_path = os.path.join(base, "copied.bin")
+    with open(renamed, "rb") as src, open(copied_path, "wb") as dst:
+        copied = os.copy_file_range(src.fileno(), dst.fileno(), 4)
+        assert copied == 4
+        dst.flush()
+        os.fsync(dst.fileno())
+    with open(copied_path, "rb") as fh:
+        assert fh.read() == b"nokv"
+    os.unlink(copied_path)
+
 link = os.path.join(base, "latest")
 os.symlink("renamed.bin", link)
 assert os.readlink(link) == "renamed.bin"
