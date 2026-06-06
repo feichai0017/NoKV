@@ -11,6 +11,7 @@ mod invalidation;
 
 pub use attr::{file_attr, fuse_file_type};
 pub use filesystem::{
-    mount_client, FuseAccessMode, FuseOptions, FusePrefetchOptions, FuseView, FuseWritebackOptions,
+    mount_client, FuseAccessMode, FuseObjectPipelineStats, FuseOptions, FusePrefetchOptions,
+    FuseView, FuseWritebackOptions,
 };
 pub use invalidation::FuseInvalidationOptions;

@@ -20,9 +20,10 @@ use nokv_meta::{
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
-    BlockCachePolicy, ChunkedWrite, DirtyChunkExtent, FileReadPipeline, FileReadPipelineOptions,
-    FileWritePipeline, ObjectError, ObjectPrefetchOptions, ObjectReadBlock, ObjectStore,
-    PendingChunkedWrite, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE, DEFAULT_S3_MULTIPART_CONCURRENCY,
+    BlockCachePolicy, BlockCacheStats, ChunkedWrite, DirtyChunkExtent, FileReadPipeline,
+    FileReadPipelineOptions, FileWritePipeline, ObjectError, ObjectPrefetchOptions,
+    ObjectPrefetchStats, ObjectReadBlock, ObjectStore, ObjectWritebackStats, PendingChunkedWrite,
+    WritebackCacheStats, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE, DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
 use nokv_types::{
     AdvisoryLockKind, AdvisoryLockRequest, DentryName, FileType, InodeAttr, InodeId,
@@ -67,6 +68,14 @@ pub struct FuseWritebackOptions {
     pub queue_capacity: usize,
     pub workers: usize,
     pub upload_workers_per_request: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FuseObjectPipelineStats {
+    pub block_cache: Option<BlockCacheStats>,
+    pub prefetch: Option<ObjectPrefetchStats>,
+    pub writeback_cache: Option<WritebackCacheStats>,
+    pub writeback: Option<ObjectWritebackStats>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -364,6 +373,11 @@ where
         if let Ok(Some(cursor)) = self.backend.watch_subtree(scope) {
             self.invalidation.register_scope(scope, cursor);
         }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn object_pipeline_stats(&self) -> Result<FuseObjectPipelineStats, Errno> {
+        self.backend.object_pipeline_stats().map_err(errno)
     }
 
     fn invalidation_registry(&self) -> Arc<InvalidationRegistry> {
@@ -2774,6 +2788,15 @@ mod tests {
         );
         assert_eq!(fuse.read_open_flags(), FopenFlags::FOPEN_DIRECT_IO);
         assert_eq!(fuse.write_open_flags(), FopenFlags::FOPEN_DIRECT_IO);
+    }
+
+    #[test]
+    fn object_pipeline_stats_default_for_backend_without_object_pipeline() {
+        let fuse = NoKvFuse::from_backend(UnsupportedTestBackend, FuseOptions::default());
+        assert_eq!(
+            fuse.object_pipeline_stats().unwrap(),
+            FuseObjectPipelineStats::default()
+        );
     }
 
     #[test]

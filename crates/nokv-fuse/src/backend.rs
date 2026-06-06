@@ -6,6 +6,8 @@ use nokv_meta::{
     DentryWithAttr, MetadError, PublishArtifactRange, PublishArtifactStagedSession,
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
+#[cfg(test)]
+use nokv_object::BlockCache;
 use nokv_object::{
     put_chunked_ranges_parallel, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
     FileReadPipeline, FileWritePipeline, ObjectBlockCache, ObjectError, ObjectPrefetchOptions,
@@ -18,6 +20,8 @@ use nokv_types::{
     WatchCursor, WatchRecord,
 };
 
+#[cfg(test)]
+use crate::filesystem::FuseObjectPipelineStats;
 use crate::filesystem::FuseOptions;
 
 pub(crate) type FuseBackendResult<T> = Result<T, FuseBackendError>;
@@ -221,6 +225,10 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         prepared: Self::Prepared,
         request: PublishArtifactStagedSession,
     ) -> FuseBackendResult<RenameReplaceResult>;
+    #[cfg(test)]
+    fn object_pipeline_stats(&self) -> FuseBackendResult<FuseObjectPipelineStats> {
+        Ok(FuseObjectPipelineStats::default())
+    }
 }
 
 pub(crate) struct ClientFuseBackend<O> {
@@ -298,6 +306,32 @@ where
             return;
         };
         let _ = prefetcher.submit(ObjectPrefetchRequest::new(plan.output_len, plan.blocks));
+    }
+
+    #[cfg(test)]
+    fn collect_object_pipeline_stats(&self) -> FuseBackendResult<FuseObjectPipelineStats> {
+        Ok(FuseObjectPipelineStats {
+            block_cache: self
+                .block_cache
+                .as_ref()
+                .map(|cache| cache.stats())
+                .transpose()?,
+            prefetch: self
+                .prefetcher
+                .as_ref()
+                .map(|prefetcher| prefetcher.stats())
+                .transpose()?,
+            writeback_cache: self
+                .writeback_cache
+                .as_ref()
+                .map(|cache| cache.stats())
+                .transpose()?,
+            writeback: self
+                .writeback_uploader
+                .as_ref()
+                .map(|uploader| uploader.stats())
+                .transpose()?,
+        })
     }
 }
 
@@ -836,5 +870,92 @@ where
                 let _ = self.objects.delete_staged(&staged);
                 FuseBackendError::from(err)
             })
+    }
+
+    #[cfg(test)]
+    fn object_pipeline_stats(&self) -> FuseBackendResult<FuseObjectPipelineStats> {
+        self.collect_object_pipeline_stats()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::net::SocketAddr;
+
+    use nokv_client::MetadataClientOptions;
+    use nokv_meta::PublishArtifactRange;
+    use nokv_object::{MemoryObjectStore, ObjectStore};
+    use nokv_types::DentryName;
+
+    use super::*;
+
+    #[test]
+    fn client_backend_reports_writeback_pipeline_stats() {
+        let temp = tempfile::tempdir().unwrap();
+        let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))));
+        let objects = MemoryObjectStore::new();
+        let backend = ClientFuseBackend::new(
+            metadata,
+            objects.clone(),
+            &FuseOptions {
+                writeback: crate::filesystem::FuseWritebackOptions {
+                    root: temp.path().join("writeback"),
+                    workers: 1,
+                    upload_workers_per_request: 1,
+                    ..crate::filesystem::FuseWritebackOptions::default()
+                },
+                ..FuseOptions::default()
+            },
+        )
+        .unwrap();
+        let prepared = ClientPreparedArtifact {
+            mount: 1,
+            parent: InodeId::new(1).unwrap(),
+            name: DentryName::new("checkpoint.bin").unwrap(),
+            path: Some("/checkpoint.bin".to_owned()),
+            inode: InodeId::new(42).unwrap(),
+            generation: 7,
+            mtime_ms: 1,
+            ctime_ms: 1,
+            replace: true,
+            dentry_version: Some(1),
+            old_generation: None,
+        };
+
+        let pending = backend
+            .stage_prepared_artifact_ranges_async(
+                &prepared,
+                "checkpoint.bin",
+                &[PublishArtifactRange {
+                    offset: 0,
+                    bytes: b"checkpoint".to_vec(),
+                }],
+                0,
+            )
+            .unwrap();
+        let written = pending.wait().unwrap();
+        assert_eq!(written.object_puts, 1);
+        assert!(objects
+            .head(&nokv_object::ObjectKey::new("blocks/1/42/7/0/0").unwrap())
+            .unwrap()
+            .is_some());
+
+        let stats = backend.object_pipeline_stats().unwrap();
+        let writeback = stats.writeback.unwrap();
+        assert_eq!(writeback.enqueued, 1);
+        assert_eq!(writeback.completed, 1);
+        assert_eq!(writeback.failed, 0);
+        assert_eq!(writeback.staged_bytes, 10);
+        assert_eq!(writeback.uploaded_bytes, 10);
+        let cache = stats.writeback_cache.unwrap();
+        assert_eq!(cache.staged, 1);
+        assert_eq!(cache.staged_bytes, 10);
+        assert_eq!(cache.removed, 1);
+        assert_eq!(cache.removed_bytes, 10);
+        assert_eq!(cache.active_items, 0);
+        assert_eq!(cache.active_bytes, 0);
     }
 }
