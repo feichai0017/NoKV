@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use std::thread;
 
 use crate::cache::BlockCache;
+use crate::digest::sha256_uri;
 use crate::store::{validate_key, ObjectError, ObjectKey, ObjectRange, ObjectStore};
 
 pub const DEFAULT_CHUNK_SIZE: u64 = 64 * 1024 * 1024;
@@ -985,16 +986,7 @@ fn block_object_key(options: &ChunkWriteOptions, chunk_index: u64, block_index: 
 }
 
 fn block_digest_uri(bytes: &[u8]) -> String {
-    format!("fnv64:{:016x}", fnv64(bytes))
-}
-
-fn fnv64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x1000_0000_01b3);
-    }
-    hash
+    sha256_uri(bytes)
 }
 
 fn read_chunk_block<R: Read>(reader: &mut R, buffer: &mut [u8]) -> io::Result<usize> {

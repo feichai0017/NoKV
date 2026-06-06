@@ -6,6 +6,7 @@
 
 mod cache;
 mod chunk;
+mod digest;
 mod pipeline;
 mod store;
 

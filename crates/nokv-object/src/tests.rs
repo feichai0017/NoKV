@@ -65,6 +65,10 @@ fn chunked_put_and_read_cross_block_range() {
     assert_eq!(written.chunks.len(), 2);
     assert_eq!(written.chunks[0].blocks.len(), 2);
     assert_eq!(written.chunks[0].blocks[0].object_key, "blocks/1/2/3/0/0");
+    assert_eq!(
+        written.chunks[0].blocks[0].digest_uri,
+        "sha256:88d4266fd4e6338d13b845fcf289579d209c897823b9217da3e161936f031589"
+    );
     let staged = written.staged_objects().unwrap();
     assert_eq!(staged.len(), 4);
 

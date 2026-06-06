@@ -5,6 +5,7 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
+use crate::digest::sha256_hex;
 use crate::store::ObjectError;
 
 pub trait BlockCache {
@@ -263,7 +264,7 @@ impl WritebackCache {
         }
         let id = inner.next_id;
         inner.next_id = inner.next_id.saturating_add(1);
-        let file_name = format!("{:016x}-{id:016x}.writeback", fnv64(key.as_bytes()));
+        let file_name = format!("{}-{id:016x}.writeback", sha256_hex(key.as_bytes()));
         let tmp_path = inner.file_path(&format!("{file_name}.tmp"));
         let path = inner.file_path(&file_name);
         let encoded = encode_cache_file(&key, bytes)?;
@@ -591,7 +592,7 @@ impl WritebackCacheState {
 }
 
 fn cache_file_name(key: &str) -> String {
-    format!("{:016x}.block", fnv64(key.as_bytes()))
+    format!("{}.block", sha256_hex(key.as_bytes()))
 }
 
 fn encode_cache_file(key: &str, bytes: &[u8]) -> Result<Vec<u8>, ObjectError> {
@@ -613,13 +614,4 @@ fn decode_cache_file(expected_key: &str, encoded: &[u8]) -> Option<Vec<u8>> {
         return None;
     }
     Some(encoded.get(key_end..)?.to_vec())
-}
-
-fn fnv64(bytes: &[u8]) -> u64 {
-    let mut hash = 0xcbf2_9ce4_8422_2325_u64;
-    for byte in bytes {
-        hash ^= *byte as u64;
-        hash = hash.wrapping_mul(0x1000_0000_01b3);
-    }
-    hash
 }
