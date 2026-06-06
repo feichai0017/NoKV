@@ -78,6 +78,8 @@ pub struct FuseObjectPipelineStats {
     pub prefetch: Option<ObjectPrefetchStats>,
     pub writeback_cache: Option<WritebackCacheStats>,
     pub writeback: Option<ObjectWritebackStats>,
+    pub read_plan_cache_hits: u64,
+    pub read_plan_cache_misses: u64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

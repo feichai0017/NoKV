@@ -1,4 +1,5 @@
 use std::fmt;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use nokv_client::{ClientError, ClientPreparedArtifact, MetadataClient};
@@ -237,6 +238,8 @@ pub(crate) struct ClientFuseBackend<O> {
     objects: Arc<O>,
     block_cache: Option<ObjectBlockCache>,
     read_plan_cache: Mutex<ObjectReadPlanCache>,
+    read_plan_cache_hits: AtomicU64,
+    read_plan_cache_misses: AtomicU64,
     prefetcher: Option<ObjectPrefetcher<Arc<O>>>,
     writeback_cache: Option<WritebackCache>,
     writeback_uploader: Option<ObjectWritebackUploader<Arc<O>>>,
@@ -291,6 +294,8 @@ where
             objects,
             block_cache,
             read_plan_cache: Mutex::new(ObjectReadPlanCache::new(4096)),
+            read_plan_cache_hits: AtomicU64::new(0),
+            read_plan_cache_misses: AtomicU64::new(0),
             prefetcher,
             writeback_cache,
             writeback_uploader,
@@ -336,6 +341,8 @@ where
                 .as_ref()
                 .map(|uploader| uploader.stats())
                 .transpose()?,
+            read_plan_cache_hits: self.read_plan_cache_hits.load(Ordering::Relaxed),
+            read_plan_cache_misses: self.read_plan_cache_misses.load(Ordering::Relaxed),
         })
     }
 
@@ -353,8 +360,10 @@ where
             .map_err(|err| ObjectError::Backend(format!("read plan cache lock poisoned: {err}")))?
             .get(&key);
         if let Some(plan) = cached {
+            self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
             return Ok(plan);
         }
+        self.read_plan_cache_misses.fetch_add(1, Ordering::Relaxed);
         self.metadata
             .read_body_plan(inode, generation, offset, len)
             .map_err(Into::into)
@@ -1094,5 +1103,45 @@ mod tests {
         assert_eq!(cache.staged, 0);
         assert_eq!(cache.active_items, 0);
         assert_eq!(cache.active_bytes, 0);
+    }
+
+    #[test]
+    fn client_backend_reports_read_plan_cache_hits() {
+        let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))));
+        let backend =
+            ClientFuseBackend::new(metadata, MemoryObjectStore::new(), &FuseOptions::default())
+                .unwrap();
+        let inode = InodeId::new(42).unwrap();
+        backend
+            .cache_read_body_plan(
+                ObjectReadPlanKey::new(inode.get(), 7, 0, 12),
+                ObjectReadPlan::new(
+                    12,
+                    vec![ObjectReadBlock {
+                        object_key: "blocks/demo".to_owned(),
+                        object_offset: 0,
+                        len: 12,
+                        output_offset: 0,
+                    }],
+                ),
+            )
+            .unwrap();
+
+        let plan = backend.cached_read_body_plan(inode, 7, 4, 4).unwrap();
+        assert_eq!(
+            plan.blocks,
+            vec![ObjectReadBlock {
+                object_key: "blocks/demo".to_owned(),
+                object_offset: 4,
+                len: 4,
+                output_offset: 0,
+            }]
+        );
+        let stats = backend.object_pipeline_stats().unwrap();
+        assert_eq!(stats.read_plan_cache_hits, 1);
+        assert_eq!(stats.read_plan_cache_misses, 0);
     }
 }
