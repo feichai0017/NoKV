@@ -161,8 +161,10 @@ struct QueuedProposal {
     command: MetadataCommand,
     estimated_bytes: usize,
     enqueued_at: Instant,
-    result: Arc<Mutex<Option<Result<CommitResult, MetadataError>>>>,
+    result: ProposalResultSlot,
 }
+
+type ProposalResultSlot = Arc<Mutex<Option<Result<CommitResult, MetadataError>>>>;
 
 impl Default for ProposalCoalescerOptions {
     fn default() -> Self {
@@ -707,55 +709,73 @@ where
         &self,
         command: MetadataCommand,
     ) -> Result<CommitResult, MetadataError> {
-        if self.coalescer.options.max_commands <= 1 {
-            return self
-                .commit_batch_direct(std::slice::from_ref(&command))
-                .into_iter()
-                .next()
-                .unwrap_or_else(|| {
-                    Err(MetadataError::Backend(
-                        "openraft commit returned no result".to_owned(),
-                    ))
-                });
+        self.commit_batch_via_coalescer(std::slice::from_ref(&command))
+            .into_iter()
+            .next()
+            .unwrap_or_else(|| {
+                Err(MetadataError::Backend(
+                    "openraft commit returned no result".to_owned(),
+                ))
+            })
+    }
+
+    fn commit_batch_via_coalescer(
+        &self,
+        commands: &[MetadataCommand],
+    ) -> Vec<Result<CommitResult, MetadataError>> {
+        if commands.is_empty() {
+            return Vec::new();
         }
-        let result = Arc::new(Mutex::new(None));
-        let queued = QueuedProposal {
-            estimated_bytes: estimated_command_bytes(&command),
-            command,
-            enqueued_at: Instant::now(),
-            result: Arc::clone(&result),
-        };
+        if self.coalescer.options.max_commands <= 1 {
+            return self.commit_batch_direct(commands);
+        }
+        let results = commands
+            .iter()
+            .map(|_| Arc::new(Mutex::new(None)))
+            .collect::<Vec<_>>();
         {
-            let mut state = self.coalescer.inner.lock().map_err(|_| {
-                MetadataError::Backend("metadata raft coalescer lock poisoned".to_owned())
-            })?;
-            state.queue.push_back(queued);
+            let mut state = match self.coalescer.inner.lock() {
+                Ok(state) => state,
+                Err(_) => {
+                    let err =
+                        MetadataError::Backend("metadata raft coalescer lock poisoned".to_owned());
+                    return commands.iter().map(|_| Err(err.clone())).collect();
+                }
+            };
+            for (command, result) in commands.iter().cloned().zip(&results) {
+                state.queue.push_back(QueuedProposal {
+                    estimated_bytes: estimated_command_bytes(&command),
+                    command,
+                    enqueued_at: Instant::now(),
+                    result: Arc::clone(result),
+                });
+            }
             self.coalescer.cvar.notify_all();
         }
         loop {
-            if let Some(result) = result
-                .lock()
-                .map_err(|_| {
-                    MetadataError::Backend("metadata raft proposal result lock poisoned".to_owned())
-                })?
-                .take()
-            {
-                return result;
+            match take_ready_proposal_results(&results) {
+                Ok(Some(results)) => return results,
+                Ok(None) => {}
+                Err(err) => return commands.iter().map(|_| Err(err.clone())).collect(),
             }
             let mut should_drain = false;
             {
-                let mut state = self.coalescer.inner.lock().map_err(|_| {
-                    MetadataError::Backend("metadata raft coalescer lock poisoned".to_owned())
-                })?;
+                let Ok(mut state) = self.coalescer.inner.lock() else {
+                    let err =
+                        MetadataError::Backend("metadata raft coalescer lock poisoned".to_owned());
+                    return commands.iter().map(|_| Err(err.clone())).collect();
+                };
                 if !state.draining {
                     state.draining = true;
                     should_drain = true;
                 } else {
-                    drop(self.coalescer.cvar.wait(state).map_err(|_| {
-                        MetadataError::Backend(
+                    let Ok(next_state) = self.coalescer.cvar.wait(state) else {
+                        let err = MetadataError::Backend(
                             "metadata raft coalescer wait lock poisoned".to_owned(),
-                        )
-                    })?);
+                        );
+                        return commands.iter().map(|_| Err(err.clone())).collect();
+                    };
+                    drop(next_state);
                 }
             }
             if should_drain {
@@ -880,7 +900,7 @@ where
         &self,
         commands: &[MetadataCommand],
     ) -> Vec<Result<CommitResult, MetadataError>> {
-        self.commit_batch_direct(commands)
+        self.commit_batch_via_coalescer(commands)
     }
 
     fn committed_request_result(
@@ -1295,6 +1315,36 @@ fn normalize_apply_results(
     results.resize_with(expected, || Err(error.clone()));
     results.truncate(expected);
     results
+}
+
+fn take_ready_proposal_results(
+    slots: &[ProposalResultSlot],
+) -> Result<Option<Vec<Result<CommitResult, MetadataError>>>, MetadataError> {
+    for slot in slots {
+        if slot
+            .lock()
+            .map_err(|_| {
+                MetadataError::Backend("metadata raft proposal result lock poisoned".to_owned())
+            })?
+            .is_none()
+        {
+            return Ok(None);
+        }
+    }
+    slots
+        .iter()
+        .map(|slot| {
+            slot.lock()
+                .map_err(|_| {
+                    MetadataError::Backend("metadata raft proposal result lock poisoned".to_owned())
+                })?
+                .take()
+                .ok_or_else(|| {
+                    MetadataError::Backend("metadata raft proposal result disappeared".to_owned())
+                })
+        })
+        .collect::<Result<Vec<_>, _>>()
+        .map(Some)
 }
 
 fn coalescer_should_flush(

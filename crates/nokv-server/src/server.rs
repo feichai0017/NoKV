@@ -23,7 +23,7 @@ use crate::options::ServerOptions;
 use crate::rpc;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
-const SERVER_CONNECTION_WORKERS: usize = 64;
+const SERVER_CONNECTION_WORKERS: usize = 256;
 const SERVER_CONNECTION_QUEUE: usize = 1024;
 
 pub struct Server {

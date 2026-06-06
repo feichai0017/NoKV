@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use std::ffi::OsStr;
-use std::fmt;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
@@ -17,25 +16,33 @@ use fuser::{
 };
 use nokv_client::MetadataClient;
 use nokv_meta::{
-    DentryWithAttr, MetadError, ObjectTransferStats, PublishArtifactRange,
-    PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
+    DentryWithAttr, MetadError, ObjectTransferStats, PublishArtifactStagedSession, ReadDirPlusPage,
+    RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
-    manifest_digest_uri, BlockCachePolicy, BlockCacheStats, ChunkedWrite, DirtyChunkExtent,
-    FileReadPipeline, FileReadPipelineOptions, FileWritePipeline, ObjectError,
-    ObjectPrefetchOptions, ObjectPrefetchStats, ObjectReadBlock, ObjectStore, ObjectWritebackStats,
-    PendingChunkedWrite, WritebackCacheStats, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    manifest_digest_uri, BlockCachePolicy, BlockCacheStats, DirtyChunkExtent, FileReadPipeline,
+    FileReadPipelineOptions, ObjectError, ObjectPrefetchOptions, ObjectPrefetchStats,
+    ObjectReadBlock, ObjectStore, ObjectWritebackStats, PendingChunkedWrite, WritebackCacheStats,
     DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
 use nokv_types::{
     AdvisoryLockKind, AdvisoryLockRequest, DentryName, FileType, InodeAttr, InodeId,
     SpecialNodeSpec,
 };
-use sha2::{Digest, Sha256};
 
 use crate::attr::{file_attr, fuse_file_type};
 use crate::backend::{ClientFuseBackend, FuseBackend, FuseBackendError};
 use crate::invalidation::{FuseInvalidationOptions, FuseInvalidationWorker, InvalidationRegistry};
+
+mod write_session;
+
+use write_session::{
+    buffered_publish_ranges, buffered_ranges_block_count, cleanup_written_objects,
+    fuse_manifest_id, push_buffered_write, take_buffered_upload_ranges, BufferedWriteRange,
+    PendingBufferedUpload, SequentialDigest, WriteHandle, WriteStageReservation,
+};
+#[cfg(test)]
+use write_session::{staged_range_block_count, FUSE_WRITEBACK_UPLOAD_THRESHOLD};
 
 #[derive(Clone, Debug)]
 pub struct FuseOptions {
@@ -190,86 +197,6 @@ struct ReadHandle {
 }
 
 #[derive(Clone, Debug)]
-struct WriteHandle<P> {
-    inode: InodeId,
-    parent: InodeId,
-    name: DentryName,
-    prepared: Option<P>,
-    mode: u32,
-    uid: u32,
-    gid: u32,
-    base_size: u64,
-    size: u64,
-    writer: Option<FileWritePipeline>,
-    buffered: Vec<BufferedWriteRange>,
-    pending_uploads: Vec<PendingBufferedUpload>,
-    sequential_digest: Option<SequentialDigest>,
-    dirty: bool,
-}
-
-#[derive(Clone, Debug)]
-struct BufferedWriteRange {
-    offset: u64,
-    bytes: Vec<u8>,
-}
-
-#[derive(Clone, Debug)]
-struct PendingBufferedUpload {
-    pending: PendingChunkedWrite,
-    ranges: Vec<BufferedWriteRange>,
-}
-
-#[derive(Clone)]
-struct SequentialDigest {
-    hasher: Sha256,
-    len: u64,
-}
-
-impl SequentialDigest {
-    fn new() -> Self {
-        Self {
-            hasher: Sha256::new(),
-            len: 0,
-        }
-    }
-
-    fn append(&mut self, offset: u64, data: &[u8]) -> bool {
-        if offset != self.len {
-            return false;
-        }
-        self.hasher.update(data);
-        self.len = self
-            .len
-            .saturating_add(u64::try_from(data.len()).unwrap_or(u64::MAX));
-        true
-    }
-
-    fn digest_uri_for_size(&self, size: u64) -> Option<String> {
-        if self.len != size {
-            return None;
-        }
-        let digest = self.hasher.clone().finalize();
-        Some(format!("sha256:{digest:x}"))
-    }
-}
-
-impl fmt::Debug for SequentialDigest {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("SequentialDigest")
-            .field("len", &self.len)
-            .finish_non_exhaustive()
-    }
-}
-
-#[derive(Clone, Debug)]
-struct WriteStageReservation<P> {
-    prepared: P,
-    manifest_id: String,
-    block_index_base: u64,
-    ranges: Vec<BufferedWriteRange>,
-}
-
-#[derive(Clone, Debug)]
 struct DirectoryHandle {
     inode: InodeId,
     attr: InodeAttr,
@@ -299,7 +226,6 @@ const MODE_BLOCK_DEVICE: u32 = 0o060000;
 const MODE_REGULAR_FILE: u32 = 0o100000;
 const MODE_SYMLINK: u32 = 0o120000;
 const MODE_SOCKET: u32 = 0o140000;
-const FUSE_WRITEBACK_UPLOAD_THRESHOLD: usize = 1024 * 1024;
 const FUSE_COPY_FILE_RANGE_MAX_BYTES: u64 = 1024 * 1024;
 const FALLOC_FL_KEEP_SIZE: i32 = 0x01;
 const DEFAULT_WRITEBACK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
@@ -2750,112 +2676,6 @@ fn system_time_ms(time: SystemTime) -> u64 {
     millis.min(u128::from(u64::MAX)) as u64
 }
 
-fn fuse_manifest_id(parent: InodeId, inode: InodeId) -> String {
-    format!("fuse/{}/{}", parent.get(), inode.get())
-}
-
-fn staged_range_block_count(offset: u64, len: usize) -> Result<u64, Errno> {
-    let mut range_offset = 0_usize;
-    let mut count = 0_u64;
-    while range_offset < len {
-        let logical_offset = offset
-            .checked_add(u64::try_from(range_offset).map_err(|_| Errno::EINVAL)?)
-            .ok_or(Errno::EINVAL)?;
-        let chunk_start = (logical_offset / DEFAULT_CHUNK_SIZE).saturating_mul(DEFAULT_CHUNK_SIZE);
-        let next_chunk = chunk_start
-            .checked_add(DEFAULT_CHUNK_SIZE)
-            .ok_or(Errno::EINVAL)?;
-        let remaining_in_chunk =
-            usize::try_from(next_chunk - logical_offset).map_err(|_| Errno::EINVAL)?;
-        let write_len = DEFAULT_BLOCK_SIZE
-            .min(remaining_in_chunk)
-            .min(len - range_offset);
-        if write_len == 0 {
-            return Err(Errno::EINVAL);
-        }
-        count = count.saturating_add(1);
-        range_offset += write_len;
-    }
-    Ok(count)
-}
-
-fn push_buffered_write(ranges: &mut Vec<BufferedWriteRange>, offset: u64, data: &[u8]) {
-    if let Some(last) = ranges.last_mut() {
-        let last_end = last.offset.saturating_add(last.bytes.len() as u64);
-        if last_end == offset {
-            last.bytes.extend_from_slice(data);
-            return;
-        }
-    }
-    ranges.push(BufferedWriteRange {
-        offset,
-        bytes: data.to_vec(),
-    });
-}
-
-fn take_buffered_upload_ranges(
-    ranges: &mut Vec<BufferedWriteRange>,
-    force: bool,
-) -> Result<Vec<BufferedWriteRange>, Errno> {
-    let mut upload = Vec::new();
-    let mut retained = Vec::new();
-    for mut range in ranges.drain(..) {
-        if range.bytes.is_empty() {
-            continue;
-        }
-        let upload_len = if force {
-            range.bytes.len()
-        } else {
-            (range.bytes.len() / FUSE_WRITEBACK_UPLOAD_THRESHOLD) * FUSE_WRITEBACK_UPLOAD_THRESHOLD
-        };
-        if upload_len == 0 {
-            retained.push(range);
-            continue;
-        }
-        if upload_len == range.bytes.len() {
-            upload.push(range);
-            continue;
-        }
-        let tail = range.bytes.split_off(upload_len);
-        let tail_offset = range
-            .offset
-            .checked_add(u64::try_from(upload_len).map_err(|_| Errno::EINVAL)?)
-            .ok_or(Errno::EINVAL)?;
-        upload.push(range);
-        retained.push(BufferedWriteRange {
-            offset: tail_offset,
-            bytes: tail,
-        });
-    }
-    *ranges = retained;
-    Ok(upload)
-}
-
-fn buffered_ranges_block_count(ranges: &[BufferedWriteRange]) -> Result<u64, Errno> {
-    ranges.iter().try_fold(0_u64, |count, range| {
-        staged_range_block_count(range.offset, range.bytes.len())
-            .map(|next| count.saturating_add(next))
-    })
-}
-
-fn buffered_publish_ranges(ranges: &[BufferedWriteRange]) -> Vec<PublishArtifactRange> {
-    ranges
-        .iter()
-        .map(|range| PublishArtifactRange {
-            offset: range.offset,
-            bytes: range.bytes.clone(),
-        })
-        .collect()
-}
-
-fn cleanup_written_objects<B: FuseBackend>(
-    backend: &B,
-    written: &ChunkedWrite,
-) -> Result<(), Errno> {
-    let staged = written.staged_objects().map_err(errno)?;
-    backend.cleanup_staged_objects(&staged).map_err(errno)
-}
-
 fn child_index_from_offset(offset: u64) -> Option<usize> {
     let raw = offset.saturating_sub(FUSE_FIRST_CHILD_OFFSET);
     usize::try_from(raw).ok()
@@ -3059,6 +2879,8 @@ fn metadata_errno(err: MetadError) -> Errno {
 mod tests {
     use super::*;
     use crate::backend::FuseBackendResult;
+    use nokv_meta::PublishArtifactRange;
+    use nokv_object::{FileWritePipeline, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE};
     use nokv_types::{WatchCursor, WatchRecord};
 
     #[test]
