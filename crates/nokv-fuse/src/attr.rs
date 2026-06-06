@@ -31,15 +31,7 @@ pub fn file_attr(attr: &InodeAttr) -> FileAttr {
         crtime: ctime,
         kind: fuse_file_type(attr.file_type),
         perm: (attr.mode & 0o7777) as u16,
-        nlink: match attr.file_type {
-            FileType::Directory => 2,
-            FileType::File
-            | FileType::Symlink
-            | FileType::NamedPipe
-            | FileType::CharDevice
-            | FileType::BlockDevice
-            | FileType::Socket => 1,
-        },
+        nlink: attr.nlink,
         uid: attr.uid,
         gid: attr.gid,
         rdev: attr.rdev,
@@ -68,6 +60,7 @@ mod tests {
             uid: 501,
             gid: 20,
             rdev: 0,
+            nlink: 3,
             size: 513,
             generation: 9,
             mtime_ms: 10,
@@ -80,6 +73,7 @@ mod tests {
         assert_eq!(fuse.blocks, 2);
         assert_eq!(fuse.uid, 501);
         assert_eq!(fuse.gid, 20);
+        assert_eq!(fuse.nlink, 3);
     }
 
     #[test]
@@ -91,6 +85,7 @@ mod tests {
             uid: 1000,
             gid: 1000,
             rdev: 0,
+            nlink: 2,
             size: 0,
             generation: 1,
             mtime_ms: 1,
@@ -110,6 +105,7 @@ mod tests {
             uid: 0,
             gid: 0,
             rdev: 0x1234,
+            nlink: 1,
             size: 0,
             generation: 3,
             mtime_ms: 1,

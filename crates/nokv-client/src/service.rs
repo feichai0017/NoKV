@@ -1242,6 +1242,22 @@ impl MetadataClient {
         }
     }
 
+    pub fn link(
+        &self,
+        inode: InodeId,
+        new_parent: InodeId,
+        new_name: DentryName,
+    ) -> Result<DentryWithAttr, ClientError> {
+        match self.call(MetadataRpcRequest::Link {
+            inode: inode.get(),
+            new_parent: new_parent.get(),
+            new_name: rpc_name(&new_name)?,
+        })? {
+            MetadataRpcResult::Dentry { entry: Some(entry) } => wire_dentry(*entry),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     pub fn rmdir_many(
         &self,
         paths: &[String],

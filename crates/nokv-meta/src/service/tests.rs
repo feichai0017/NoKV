@@ -2146,6 +2146,100 @@ fn remove_file_deletes_namespace_and_returns_old_body() {
 }
 
 #[test]
+fn hardlink_updates_link_count_and_defers_body_gc_until_last_unlink() {
+    let (service, objects) = service_with_objects();
+    let name = DentryName::new(b"artifact.bin".to_vec()).unwrap();
+    let link_name = DentryName::new(b"artifact.link".to_vec()).unwrap();
+    let published = service
+        .publish_artifact(artifact_request(name.clone(), "artifact.bin", b"old"))
+        .unwrap();
+    let body = published.body.clone().unwrap();
+    let object = block_key(published.attr.inode, body.generation, 0, 0);
+
+    let linked = service
+        .link(published.attr.inode, InodeId::root(), link_name.clone())
+        .unwrap();
+    assert_eq!(linked.attr.inode, published.attr.inode);
+    assert_eq!(linked.attr.nlink, 2);
+    assert_eq!(
+        service
+            .lookup_plus(InodeId::root(), &name)
+            .unwrap()
+            .unwrap()
+            .attr
+            .nlink,
+        2
+    );
+    assert_eq!(
+        service
+            .lookup_plus(InodeId::root(), &link_name)
+            .unwrap()
+            .unwrap()
+            .attr
+            .nlink,
+        2
+    );
+
+    let removed = service.remove_file(InodeId::root(), &name).unwrap();
+    assert_eq!(removed.attr.inode, published.attr.inode);
+    assert!(service
+        .lookup_plus(InodeId::root(), &name)
+        .unwrap()
+        .is_none());
+    let remaining = service
+        .lookup_plus(InodeId::root(), &link_name)
+        .unwrap()
+        .unwrap();
+    assert_eq!(remaining.attr.nlink, 1);
+    assert_eq!(
+        service
+            .get_attr(published.attr.inode)
+            .unwrap()
+            .unwrap()
+            .nlink,
+        1
+    );
+    assert_eq!(
+        service.read_artifact(InodeId::root(), &link_name).unwrap(),
+        b"old"
+    );
+    assert!(objects.head(&object).unwrap().is_some());
+    assert_eq!(
+        service.cleanup_pending_objects(100).unwrap(),
+        PendingObjectCleanupOutcome::default()
+    );
+
+    let removed_last = service.remove_file(InodeId::root(), &link_name).unwrap();
+    assert_eq!(removed_last.attr.inode, published.attr.inode);
+    assert!(service.get_attr(published.attr.inode).unwrap().is_none());
+    let cleanup = service.cleanup_pending_objects(100).unwrap();
+    assert_eq!(cleanup.deleted, 1);
+    assert!(objects.head(&object).unwrap().is_none());
+}
+
+#[test]
+fn hardlink_rejects_directories() {
+    let service = service();
+    let dir = service
+        .create_dir(
+            InodeId::root(),
+            DentryName::new(b"dir".to_vec()).unwrap(),
+            0o755,
+            1000,
+            1000,
+        )
+        .unwrap();
+    let err = service
+        .link(
+            dir.attr.inode,
+            InodeId::root(),
+            DentryName::new(b"dir-link".to_vec()).unwrap(),
+        )
+        .unwrap_err();
+    assert!(matches!(err, MetadError::NotFile));
+}
+
+#[test]
 fn remove_file_queues_old_body_for_object_cleanup() {
     let (service, objects) = service_with_objects();
     let name = DentryName::new(b"artifact.bin".to_vec()).unwrap();

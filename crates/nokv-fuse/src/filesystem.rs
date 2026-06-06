@@ -2133,6 +2133,52 @@ where
         }
     }
 
+    fn link(
+        &self,
+        _req: &Request,
+        ino: INodeNo,
+        newparent: INodeNo,
+        newname: &OsStr,
+        reply: ReplyEntry,
+    ) {
+        if self.read_only() {
+            reply.error(Errno::EROFS);
+            return;
+        }
+        let inode = match self.metadata_inode(ino) {
+            Ok(inode) => inode,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let new_parent = match self.metadata_inode(newparent) {
+            Ok(parent) => parent,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        let new_name = match dentry_name(newname) {
+            Ok(name) => name,
+            Err(err) => {
+                reply.error(err);
+                return;
+            }
+        };
+        match self.backend.link(inode, new_parent, new_name) {
+            Ok(entry) => {
+                self.remember_entry(&entry);
+                reply.entry(
+                    &self.options.entry_ttl,
+                    &self.view_file_attr(&entry.attr),
+                    Generation(entry.attr.generation),
+                );
+            }
+            Err(err) => reply.error(errno(err)),
+        }
+    }
+
     fn rename(
         &self,
         _req: &Request,
@@ -2832,6 +2878,7 @@ mod tests {
                 uid: 1000,
                 gid: 1000,
                 rdev: 0,
+                nlink: 1,
                 size: 16,
                 generation: 1,
                 mtime_ms: 1,
@@ -2886,6 +2933,7 @@ mod tests {
             uid: 1000,
             gid: 2000,
             rdev: 0,
+            nlink: 1,
             size: 0,
             generation: 1,
             mtime_ms: 1,
@@ -3148,6 +3196,15 @@ mod tests {
             _parent: InodeId,
             _name: DentryName,
             _spec: SpecialNodeSpec,
+        ) -> FuseBackendResult<DentryWithAttr> {
+            unsupported()
+        }
+
+        fn link(
+            &self,
+            _inode: InodeId,
+            _new_parent: InodeId,
+            _new_name: DentryName,
         ) -> FuseBackendResult<DentryWithAttr> {
             unsupported()
         }

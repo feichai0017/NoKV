@@ -35,12 +35,12 @@ use crate::command::{
 use crate::layout::{
     allocator_key, chunk_manifest_key, chunk_manifest_prefix, decode_allocator_state,
     decode_body_descriptor, decode_chunk_manifest, decode_dentry_projection, decode_inode_attr,
-    decode_object_gc_record, decode_snapshot_pin, decode_watch_event, dentry_key, dentry_prefix,
-    encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
-    encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
-    encode_watch_event, gc_object_key, gc_queue_prefix, inode_key, path_index_key,
-    path_index_prefix, snapshot_pin_key, snapshot_pin_prefix, watch_log_key, watch_log_prefix,
-    xattr_key, xattr_prefix, PATH_INDEX_DELIMITER,
+    decode_object_gc_record, decode_snapshot_pin, decode_watch_event, dentry_key,
+    dentry_mount_prefix, dentry_prefix, encode_allocator_state, encode_body_descriptor,
+    encode_chunk_manifest, encode_dentry_projection, encode_inode_attr, encode_object_gc_record,
+    encode_snapshot_pin, encode_watch_event, gc_object_key, gc_queue_prefix, inode_key,
+    path_index_key, path_index_prefix, snapshot_pin_key, snapshot_pin_prefix, watch_log_key,
+    watch_log_prefix, xattr_key, xattr_prefix, PATH_INDEX_DELIMITER,
 };
 use nokv_object::{
     plan_slice_reads, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
@@ -561,6 +561,7 @@ fn directory_attr(inode: InodeId, mode: u32, uid: u32, gid: u32, version: u64) -
         uid,
         gid,
         rdev: 0,
+        nlink: FileType::Directory.initial_link_count(),
         size: 0,
         generation: version,
         mtime_ms: now_ms,
@@ -639,7 +640,8 @@ fn create_watch_kind(kind: CommandKind) -> WatchEventKind {
         | CommandKind::CreateFiles
         | CommandKind::CreateDir
         | CommandKind::CreateSymlink
-        | CommandKind::CreateSpecialNode => WatchEventKind::Create,
+        | CommandKind::CreateSpecialNode
+        | CommandKind::Link => WatchEventKind::Create,
         _ => WatchEventKind::UpdateAttr,
     }
 }
@@ -1056,6 +1058,7 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
         CommandKind::RemoveXattr => b"remove-xattr",
         CommandKind::Rename => b"rename",
         CommandKind::RenameReplace => b"rename-replace",
+        CommandKind::Link => b"link",
         CommandKind::RemoveFile => b"remove-file",
         CommandKind::RemoveEmptyDir => b"remove-empty-dir",
         CommandKind::PublishArtifact => b"publish-artifact",

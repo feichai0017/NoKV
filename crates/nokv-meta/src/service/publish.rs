@@ -21,6 +21,7 @@ where
             uid: request.uid,
             gid: request.gid,
             rdev: 0,
+            nlink: FileType::File.initial_link_count(),
             size: body.size,
             generation: version.get(),
             mtime_ms: now_ms,
@@ -65,6 +66,7 @@ where
             uid: request.uid,
             gid: request.gid,
             rdev: 0,
+            nlink: existing.attr.nlink,
             size: body.size,
             generation: version.get(),
             mtime_ms: now_ms,
@@ -185,18 +187,26 @@ where
     ) -> Result<RenameReplaceResult, MetadError> {
         validate_prepared_artifact(&prepared, &body, &chunks)?;
         let version = Version::new(prepared.generation)?;
-        let attr = InodeAttr {
+        let mut attr = InodeAttr {
             inode: prepared.inode,
             file_type: FileType::File,
             mode,
             uid,
             gid,
             rdev: 0,
+            nlink: FileType::File.initial_link_count(),
             size: body.size,
             generation: prepared.generation,
             mtime_ms: prepared.mtime_ms,
             ctime_ms: prepared.ctime_ms,
         };
+        if prepared.replace {
+            if let Some((existing, _)) =
+                self.lookup_plus_for_write_plan(prepared.parent, &prepared.name)?
+            {
+                attr.nlink = existing.attr.nlink;
+            }
+        }
         let projection = projection(prepared.parent, prepared.name.clone(), attr, Some(body));
         if prepared.replace {
             let expected_dentry_version =

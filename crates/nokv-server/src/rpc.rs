@@ -1484,6 +1484,20 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 entry: Some(Box::new(wire_dentry(&entry))),
             })
         }
+        MetadataRpcRequest::Link {
+            inode,
+            new_parent,
+            new_name,
+        } => {
+            let entry = server.service().link(
+                inode_id(inode)?,
+                inode_id(new_parent)?,
+                dentry_name(new_name)?,
+            )?;
+            Ok(MetadataRpcResult::Dentry {
+                entry: Some(Box::new(wire_dentry(&entry))),
+            })
+        }
         MetadataRpcRequest::Rename {
             parent,
             name,
@@ -1865,6 +1879,7 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::RemoveFilePath { .. }
         | MetadataRpcRequest::RemoveEmptyDir { .. }
         | MetadataRpcRequest::RemoveEmptyDirPath { .. }
+        | MetadataRpcRequest::Link { .. }
         | MetadataRpcRequest::Rename { .. }
         | MetadataRpcRequest::RenamePath { .. }
         | MetadataRpcRequest::RenameReplace { .. }

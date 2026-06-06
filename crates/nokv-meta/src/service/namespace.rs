@@ -15,6 +15,13 @@ struct PreparedRemoveEmptyDir {
     command: MetadataCommand,
 }
 
+#[derive(Clone, Debug)]
+struct LinkedDentryProjection {
+    key: Vec<u8>,
+    projection: DentryProjection,
+    version: Version,
+}
+
 impl<M, O> NoKvFs<M, O>
 where
     M: MetadataStore,
@@ -83,6 +90,7 @@ where
             uid,
             gid,
             rdev: 0,
+            nlink: FileType::File.initial_link_count(),
             size: 0,
             generation: version.get(),
             mtime_ms: now_ms,
@@ -135,6 +143,7 @@ where
             uid,
             gid,
             rdev: 0,
+            nlink: FileType::Symlink.initial_link_count(),
             size: body.size,
             generation: version.get(),
             mtime_ms: now_ms,
@@ -177,6 +186,7 @@ where
             uid: spec.uid,
             gid: spec.gid,
             rdev: spec.rdev,
+            nlink: spec.file_type.initial_link_count(),
             size: 0,
             generation: version.get(),
             mtime_ms: now_ms,
@@ -185,6 +195,127 @@ where
         let projection = projection(parent, name, attr, None);
         self.commit_create_projection(CommandKind::CreateSpecialNode, &projection, version)?;
         Ok(projection.into())
+    }
+
+    pub fn link(
+        &self,
+        inode: InodeId,
+        new_parent: InodeId,
+        new_name: DentryName,
+    ) -> Result<DentryWithAttr, MetadError> {
+        let version = self.next_version()?;
+        let read_version = predecessor(version)?;
+        let source_inode_key = inode_key(self.mount, inode);
+        let Some(inode_item) = self.metadata.get_versioned(
+            RecordFamily::Inode,
+            &source_inode_key,
+            read_version,
+            ReadPurpose::WritePlanLocal,
+        )?
+        else {
+            return Err(MetadError::NotFound);
+        };
+        let mut attr = decode_inode_attr(&inode_item.value.0)
+            .map_err(|err| MetadError::Codec(err.to_string()))?;
+        if attr.file_type == FileType::Directory {
+            return Err(MetadError::NotFile);
+        }
+        let Some(parent_attr) = self.get_attr_at_version_for_purpose(
+            new_parent,
+            read_version,
+            ReadPurpose::WritePlanLocal,
+        )?
+        else {
+            return Err(MetadError::NotFound);
+        };
+        if parent_attr.file_type != FileType::Directory {
+            return Err(MetadError::NotDirectory);
+        }
+        let linked = self.linked_dentry_projections_for_inode(inode, read_version)?;
+        let Some(first_link) = linked.first() else {
+            return Err(MetadError::NotFound);
+        };
+        attr.nlink = attr
+            .nlink
+            .checked_add(1)
+            .ok_or_else(|| MetadError::InvalidPath("inode link count overflow".to_owned()))?;
+        attr.generation = version.get();
+        attr.ctime_ms = current_time_ms();
+        let new_projection = projection(
+            new_parent,
+            new_name,
+            attr.clone(),
+            first_link.projection.body.clone(),
+        );
+        let destination_key = dentry_key(self.mount, new_parent, &new_projection.dentry.name);
+
+        let mut predicates = vec![
+            PredicateRef {
+                family: RecordFamily::Inode,
+                key: source_inode_key.clone(),
+                predicate: Predicate::VersionEquals(inode_item.version),
+            },
+            PredicateRef {
+                family: RecordFamily::Inode,
+                key: inode_key(self.mount, new_parent),
+                predicate: Predicate::Exists,
+            },
+            PredicateRef {
+                family: RecordFamily::Dentry,
+                key: destination_key.clone(),
+                predicate: Predicate::NotExists,
+            },
+        ];
+        let mut mutations = vec![Mutation {
+            family: RecordFamily::Inode,
+            key: source_inode_key,
+            op: MutationOp::Put,
+            value: Some(Value(encode_inode_attr(&attr))),
+        }];
+        for linked in &linked {
+            predicates.push(PredicateRef {
+                family: RecordFamily::Dentry,
+                key: linked.key.clone(),
+                predicate: Predicate::VersionEquals(linked.version),
+            });
+            let mut projection = linked.projection.clone();
+            projection.attr = attr.clone();
+            projection.dentry.attr_generation = attr.generation;
+            mutations.push(put_projection_mutation(
+                RecordFamily::Dentry,
+                linked.key.clone(),
+                &projection,
+            ));
+        }
+        mutations.push(put_projection_mutation(
+            RecordFamily::Dentry,
+            destination_key.clone(),
+            &new_projection,
+        ));
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(b"link", self.mount, inode, version),
+            kind: CommandKind::Link,
+            read_version,
+            commit_version: version,
+            primary_family: RecordFamily::Dentry,
+            primary_key: destination_key,
+            predicates,
+            mutations,
+            watch: self
+                .watch_projection(
+                    new_parent,
+                    WatchEvent {
+                        kind: WatchEventKind::Create,
+                        parent: Some(new_parent),
+                        name: Some(new_projection.dentry.name.clone()),
+                        inode,
+                        version: version.get(),
+                    },
+                )
+                .into_iter()
+                .collect(),
+        })?;
+        Ok(new_projection.into())
     }
 
     pub fn update_attrs(
@@ -372,6 +503,7 @@ where
             uid,
             gid,
             rdev: 0,
+            nlink: FileType::File.initial_link_count(),
             size: 0,
             generation: version.get(),
             mtime_ms: now_ms,
@@ -521,6 +653,7 @@ where
                         uid: batch.uid,
                         gid: batch.gid,
                         rdev: 0,
+                        nlink: FileType::File.initial_link_count(),
                         size: 0,
                         generation: version.get(),
                         mtime_ms: now_ms,
@@ -586,6 +719,7 @@ where
                     uid,
                     gid,
                     rdev: 0,
+                    nlink: FileType::File.initial_link_count(),
                     size: 0,
                     generation: version.get(),
                     mtime_ms: now_ms,
@@ -656,23 +790,92 @@ where
         if entry.attr.file_type == FileType::Directory {
             return Err(MetadError::NotFile);
         }
+        let inode_key = inode_key(self.mount, entry.attr.inode);
+        let Some(inode_item) = self.metadata.get_versioned(
+            RecordFamily::Inode,
+            &inode_key,
+            predecessor(version)?,
+            ReadPurpose::WritePlanLocal,
+        )?
+        else {
+            return Err(MetadError::NotFound);
+        };
+        let mut canonical_attr = decode_inode_attr(&inode_item.value.0)
+            .map_err(|err| MetadError::Codec(err.to_string()))?;
         let key = dentry_key(self.mount, parent, name);
-        let mut mutations = vec![
-            delete_mutation(RecordFamily::Dentry, key.clone()),
-            delete_mutation(RecordFamily::Inode, inode_key(self.mount, entry.attr.inode)),
-        ];
+        let mut mutations = vec![delete_mutation(RecordFamily::Dentry, key.clone())];
         if let Some(path_index) =
             self.live_path_index_key_for_entry(path_components, parent, name, &entry, version)?
         {
             mutations.push(delete_mutation(RecordFamily::PathIndex, path_index));
         }
-        if let Some(body) = &entry.body {
-            mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
-                entry.attr.inode,
-                body.generation,
-                version,
-                &HashSet::new(),
-            )?);
+        if canonical_attr.nlink == 0 {
+            return Err(MetadError::InvalidPath(
+                "inode link count is already zero".to_owned(),
+            ));
+        }
+        let final_link = canonical_attr.nlink == 1;
+        let linked = if final_link {
+            mutations.push(delete_mutation(RecordFamily::Inode, inode_key.clone()));
+            Vec::new()
+        } else {
+            let linked =
+                self.linked_dentry_projections_for_inode(entry.attr.inode, predecessor(version)?)?;
+            canonical_attr.nlink -= 1;
+            canonical_attr.generation = version.get();
+            canonical_attr.ctime_ms = current_time_ms();
+            mutations.push(Mutation {
+                family: RecordFamily::Inode,
+                key: inode_key.clone(),
+                op: MutationOp::Put,
+                value: Some(Value(encode_inode_attr(&canonical_attr))),
+            });
+            for linked in &linked {
+                if linked.key == key {
+                    continue;
+                }
+                let mut projection = linked.projection.clone();
+                projection.attr = canonical_attr.clone();
+                projection.dentry.attr_generation = canonical_attr.generation;
+                mutations.push(put_projection_mutation(
+                    RecordFamily::Dentry,
+                    linked.key.clone(),
+                    &projection,
+                ));
+            }
+            linked
+        };
+        if final_link {
+            if let Some(body) = &entry.body {
+                mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
+                    entry.attr.inode,
+                    body.generation,
+                    version,
+                    &HashSet::new(),
+                )?);
+            }
+        }
+        let mut predicates = vec![
+            PredicateRef {
+                family: RecordFamily::Dentry,
+                key: key.clone(),
+                predicate: Predicate::VersionEquals(dentry_version),
+            },
+            PredicateRef {
+                family: RecordFamily::Inode,
+                key: inode_key,
+                predicate: Predicate::VersionEquals(inode_item.version),
+            },
+        ];
+        for linked in linked {
+            if linked.key == dentry_key(self.mount, parent, name) {
+                continue;
+            }
+            predicates.push(PredicateRef {
+                family: RecordFamily::Dentry,
+                key: linked.key,
+                predicate: Predicate::VersionEquals(linked.version),
+            });
         }
         let command = MetadataCommand {
             request_id: request_id(b"remove-file", self.mount, entry.attr.inode, version),
@@ -681,18 +884,7 @@ where
             commit_version: version,
             primary_family: RecordFamily::Dentry,
             primary_key: key.clone(),
-            predicates: vec![
-                PredicateRef {
-                    family: RecordFamily::Dentry,
-                    key,
-                    predicate: Predicate::VersionEquals(dentry_version),
-                },
-                PredicateRef {
-                    family: RecordFamily::Inode,
-                    key: inode_key(self.mount, entry.attr.inode),
-                    predicate: Predicate::Exists,
-                },
-            ],
+            predicates,
             mutations,
             watch: self
                 .watch_projection(
@@ -1078,17 +1270,69 @@ where
             ));
         }
         if let Some(replaced) = &replaced {
-            mutations.push(delete_mutation(
+            let replaced_inode_key = inode_key(self.mount, replaced.attr.inode);
+            let Some(replaced_inode_item) = self.metadata.get_versioned(
                 RecordFamily::Inode,
-                inode_key(self.mount, replaced.attr.inode),
-            ));
-            if let Some(body) = &replaced.body {
-                mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
+                &replaced_inode_key,
+                predecessor(version)?,
+                ReadPurpose::WritePlanLocal,
+            )?
+            else {
+                return Err(MetadError::NotFound);
+            };
+            let mut replaced_attr = decode_inode_attr(&replaced_inode_item.value.0)
+                .map_err(|err| MetadError::Codec(err.to_string()))?;
+            if replaced_attr.nlink == 0 {
+                return Err(MetadError::InvalidPath(
+                    "replaced inode link count is already zero".to_owned(),
+                ));
+            }
+            predicates.push(PredicateRef {
+                family: RecordFamily::Inode,
+                key: replaced_inode_key.clone(),
+                predicate: Predicate::VersionEquals(replaced_inode_item.version),
+            });
+            if replaced_attr.nlink == 1 {
+                mutations.push(delete_mutation(RecordFamily::Inode, replaced_inode_key));
+                if let Some(body) = &replaced.body {
+                    mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
+                        replaced.attr.inode,
+                        body.generation,
+                        version,
+                        &HashSet::new(),
+                    )?);
+                }
+            } else {
+                replaced_attr.nlink -= 1;
+                replaced_attr.generation = version.get();
+                replaced_attr.ctime_ms = current_time_ms();
+                mutations.push(Mutation {
+                    family: RecordFamily::Inode,
+                    key: replaced_inode_key,
+                    op: MutationOp::Put,
+                    value: Some(Value(encode_inode_attr(&replaced_attr))),
+                });
+                for linked in self.linked_dentry_projections_for_inode(
                     replaced.attr.inode,
-                    body.generation,
-                    version,
-                    &HashSet::new(),
-                )?);
+                    predecessor(version)?,
+                )? {
+                    if linked.key == destination_key {
+                        continue;
+                    }
+                    predicates.push(PredicateRef {
+                        family: RecordFamily::Dentry,
+                        key: linked.key.clone(),
+                        predicate: Predicate::VersionEquals(linked.version),
+                    });
+                    let mut projection = linked.projection;
+                    projection.attr = replaced_attr.clone();
+                    projection.dentry.attr_generation = replaced_attr.generation;
+                    mutations.push(put_projection_mutation(
+                        RecordFamily::Dentry,
+                        linked.key,
+                        &projection,
+                    ));
+                }
             }
         }
         let mut watch = Vec::new();
@@ -1191,6 +1435,34 @@ where
             && indexed.dentry.parent == parent
             && indexed.dentry.name == *name;
         Ok(matches_canonical.then_some(key))
+    }
+
+    fn linked_dentry_projections_for_inode(
+        &self,
+        inode: InodeId,
+        version: Version,
+    ) -> Result<Vec<LinkedDentryProjection>, MetadError> {
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::Dentry,
+            prefix: dentry_mount_prefix(self.mount),
+            start_after: None,
+            version,
+            limit: 0,
+            purpose: ReadPurpose::WritePlanLocal,
+        })?;
+        let mut linked = Vec::new();
+        for row in rows {
+            let projection = decode_dentry_projection(&row.value.0)
+                .map_err(|err| MetadError::Codec(err.to_string()))?;
+            if projection.attr.inode == inode {
+                linked.push(LinkedDentryProjection {
+                    key: row.key,
+                    projection,
+                    version: row.version,
+                });
+            }
+        }
+        Ok(linked)
     }
 
     pub(super) fn commit_create_projection(
@@ -1422,15 +1694,54 @@ where
             projection.dentry.parent,
             &projection.dentry.name,
         );
-        let mut mutations = vec![
-            Mutation {
+        let read_version = predecessor(version)?;
+        let linked = self.linked_dentry_projections_for_inode(inode, read_version)?;
+        let mut predicates = vec![
+            PredicateRef {
+                family: RecordFamily::Dentry,
+                key: dentry.clone(),
+                predicate: Predicate::VersionEquals(dentry_version),
+            },
+            PredicateRef {
                 family: RecordFamily::Inode,
                 key: inode_key(self.mount, inode),
-                op: MutationOp::Put,
-                value: Some(Value(encode_inode_attr(&projection.attr))),
+                predicate: Predicate::Exists,
             },
-            put_projection_mutation(RecordFamily::Dentry, dentry.clone(), projection),
         ];
+        let mut mutations = vec![Mutation {
+            family: RecordFamily::Inode,
+            key: inode_key(self.mount, inode),
+            op: MutationOp::Put,
+            value: Some(Value(encode_inode_attr(&projection.attr))),
+        }];
+        let mut primary_projection_updated = false;
+        for linked in linked {
+            if linked.key != dentry {
+                predicates.push(PredicateRef {
+                    family: RecordFamily::Dentry,
+                    key: linked.key.clone(),
+                    predicate: Predicate::VersionEquals(linked.version),
+                });
+            } else {
+                primary_projection_updated = true;
+            }
+            let mut updated = linked.projection;
+            updated.attr = projection.attr.clone();
+            updated.dentry.attr_generation = projection.attr.generation;
+            updated.body = projection.body.clone();
+            mutations.push(put_projection_mutation(
+                RecordFamily::Dentry,
+                linked.key,
+                &updated,
+            ));
+        }
+        if !primary_projection_updated {
+            mutations.push(put_projection_mutation(
+                RecordFamily::Dentry,
+                dentry.clone(),
+                projection,
+            ));
+        }
         if let Some(path_index) = path_index {
             mutations.push(put_projection_mutation(
                 RecordFamily::PathIndex,
@@ -1471,22 +1782,11 @@ where
         self.commit_metadata(MetadataCommand {
             request_id: request_id(kind_name(kind), self.mount, inode, version),
             kind,
-            read_version: predecessor(version)?,
+            read_version,
             commit_version: version,
             primary_family: RecordFamily::Dentry,
             primary_key: dentry.clone(),
-            predicates: vec![
-                PredicateRef {
-                    family: RecordFamily::Dentry,
-                    key: dentry,
-                    predicate: Predicate::VersionEquals(dentry_version),
-                },
-                PredicateRef {
-                    family: RecordFamily::Inode,
-                    key: inode_key(self.mount, inode),
-                    predicate: Predicate::Exists,
-                },
-            ],
+            predicates,
             mutations,
             watch: self
                 .watch_projection(

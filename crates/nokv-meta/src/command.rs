@@ -40,6 +40,7 @@ pub enum CommandKind {
     RemoveXattr,
     Rename,
     RenameReplace,
+    Link,
     RemoveFile,
     RemoveEmptyDir,
     PublishArtifact,

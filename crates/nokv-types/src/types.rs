@@ -52,6 +52,7 @@ pub struct InodeAttr {
     pub uid: u32,
     pub gid: u32,
     pub rdev: u32,
+    pub nlink: u32,
     pub size: u64,
     pub generation: u64,
     pub mtime_ms: u64,
@@ -208,6 +209,18 @@ impl FileType {
             self,
             Self::NamedPipe | Self::CharDevice | Self::BlockDevice | Self::Socket
         )
+    }
+
+    pub fn initial_link_count(self) -> u32 {
+        match self {
+            Self::Directory => 2,
+            Self::File
+            | Self::Symlink
+            | Self::NamedPipe
+            | Self::CharDevice
+            | Self::BlockDevice
+            | Self::Socket => 1,
+        }
     }
 }
 

@@ -46,6 +46,12 @@ pub fn dentry_prefix(mount: MountId, parent: InodeId) -> Vec<u8> {
     out
 }
 
+pub fn dentry_mount_prefix(mount: MountId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH);
+    push_u64(&mut out, mount.get());
+    out
+}
+
 pub fn dentry_key(mount: MountId, parent: InodeId, name: &DentryName) -> Vec<u8> {
     let mut out = dentry_prefix(mount, parent);
     out.extend_from_slice(name.as_bytes());

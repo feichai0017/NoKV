@@ -33,13 +33,14 @@ pub fn decode_allocator_state(bytes: &[u8]) -> Result<(u64, u64), CodecError> {
 }
 
 pub fn encode_inode_attr(attr: &InodeAttr) -> Vec<u8> {
-    let mut out = Vec::with_capacity(65);
+    let mut out = Vec::with_capacity(69);
     push_u64(&mut out, attr.inode.get());
     out.push(file_type_tag(attr.file_type));
     push_u32(&mut out, attr.mode);
     push_u32(&mut out, attr.uid);
     push_u32(&mut out, attr.gid);
     push_u32(&mut out, attr.rdev);
+    push_u32(&mut out, attr.nlink);
     push_u64(&mut out, attr.size);
     push_u64(&mut out, attr.generation);
     push_u64(&mut out, attr.mtime_ms);
@@ -303,6 +304,7 @@ fn decode_inode_attr_from(input: &mut Decoder<'_>) -> Result<InodeAttr, CodecErr
         uid: input.u32()?,
         gid: input.u32()?,
         rdev: input.u32()?,
+        nlink: input.u32()?,
         size: input.u64()?,
         generation: input.u64()?,
         mtime_ms: input.u64()?,

@@ -168,6 +168,12 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         name: DentryName,
         spec: SpecialNodeSpec,
     ) -> FuseBackendResult<DentryWithAttr>;
+    fn link(
+        &self,
+        inode: InodeId,
+        new_parent: InodeId,
+        new_name: DentryName,
+    ) -> FuseBackendResult<DentryWithAttr>;
     fn remove_file(&self, parent: InodeId, name: &DentryName) -> FuseBackendResult<DentryWithAttr>;
     fn remove_empty_dir(
         &self,
@@ -639,6 +645,17 @@ where
     ) -> FuseBackendResult<DentryWithAttr> {
         self.metadata
             .create_special_node(parent, name, spec)
+            .map_err(Into::into)
+    }
+
+    fn link(
+        &self,
+        inode: InodeId,
+        new_parent: InodeId,
+        new_name: DentryName,
+    ) -> FuseBackendResult<DentryWithAttr> {
+        self.metadata
+            .link(inode, new_parent, new_name)
             .map_err(Into::into)
     }
 

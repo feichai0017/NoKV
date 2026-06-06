@@ -727,6 +727,7 @@ pub(crate) mod tests {
 
     #[test]
     fn three_openraft_metadata_servers_replicate_client_write() {
+        let _guard = openraft_integration_test_lock();
         let (_dirs, mut servers) = start_three_openraft_test_servers();
         wait_openraft_server_leader(&servers, None);
         bootstrap_root_on_openraft_servers(&servers, None);
@@ -741,6 +742,7 @@ pub(crate) mod tests {
 
     #[test]
     fn three_openraft_metadata_servers_elect_new_leader_after_leader_crash() {
+        let _guard = openraft_integration_test_lock();
         let (_dirs, mut servers) = start_three_openraft_test_servers();
         let leader = wait_openraft_server_leader(&servers, None);
         bootstrap_root_on_openraft_servers(&servers, None);
@@ -761,6 +763,11 @@ pub(crate) mod tests {
                 server.stop();
             }
         }
+    }
+
+    fn openraft_integration_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     fn start_three_openraft_test_servers(
