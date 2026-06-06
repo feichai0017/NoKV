@@ -10,5 +10,5 @@ mod filesystem;
 mod invalidation;
 
 pub use attr::{file_attr, fuse_file_type};
-pub use filesystem::{mount_client, FuseAccessMode, FuseOptions, FuseView};
+pub use filesystem::{mount_client, FuseAccessMode, FuseOptions, FuseView, FuseWritebackOptions};
 pub use invalidation::FuseInvalidationOptions;

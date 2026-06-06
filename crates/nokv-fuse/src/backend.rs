@@ -12,9 +12,10 @@ use nokv_object::{
     ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectStore, ObjectWritebackOptions,
     ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
     WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
-    DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
 use nokv_types::{DentryName, InodeAttr, InodeId, WatchCursor, WatchRecord};
+
+use crate::filesystem::FuseOptions;
 
 pub(crate) type FuseBackendResult<T> = Result<T, FuseBackendError>;
 
@@ -217,41 +218,33 @@ impl<O> ClientFuseBackend<O>
 where
     O: ObjectStore + Send + Sync + 'static,
 {
-    pub(crate) fn new(metadata: MetadataClient, objects: O) -> Self {
-        Self::with_block_cache_and_upload_workers(
-            metadata,
-            objects,
-            ObjectBlockCache::default(),
-            DEFAULT_S3_MULTIPART_CONCURRENCY,
-        )
-    }
-
-    pub(crate) fn with_block_cache_and_upload_workers(
-        metadata: MetadataClient,
-        objects: O,
-        block_cache: ObjectBlockCache,
-        upload_workers: usize,
-    ) -> Self {
+    pub(crate) fn new(metadata: MetadataClient, objects: O, options: &FuseOptions) -> Self {
         let objects = Arc::new(objects);
+        let block_cache = ObjectBlockCache::default();
         let prefetcher = ObjectPrefetcher::new(
             Arc::clone(&objects),
             block_cache.clone(),
             ObjectPrefetchOptions::default(),
         );
-        let writeback_cache = WritebackCache::new(WritebackCacheOptions {
-            root: std::env::temp_dir().join(format!("nokv-writeback-{}", std::process::id())),
-            max_bytes: 8 * 1024 * 1024 * 1024,
-            max_items: 16 * 1024,
-        })
-        .ok();
+        let writeback = &options.writeback;
+        let writeback_cache = if writeback.enabled {
+            WritebackCache::new(WritebackCacheOptions {
+                root: writeback.root.clone(),
+                max_bytes: writeback.max_bytes,
+                max_items: writeback.max_items,
+            })
+            .ok()
+        } else {
+            None
+        };
         let writeback_uploader = writeback_cache.as_ref().map(|cache| {
             ObjectWritebackUploader::new(
                 Arc::clone(&objects),
                 cache.clone(),
                 ObjectWritebackOptions {
-                    queue_capacity: 256,
-                    workers: upload_workers.max(1),
-                    upload_workers_per_request: upload_workers.max(1),
+                    queue_capacity: writeback.queue_capacity.max(1),
+                    workers: writeback.workers.max(1),
+                    upload_workers_per_request: writeback.upload_workers_per_request.max(1),
                 },
             )
         });
@@ -262,7 +255,7 @@ where
             prefetcher,
             writeback_cache,
             writeback_uploader,
-            upload_workers: upload_workers.max(1),
+            upload_workers: writeback.upload_workers_per_request.max(1),
         }
     }
 

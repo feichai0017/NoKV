@@ -3,7 +3,7 @@ use std::ffi::OsStr;
 use std::fmt;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, RwLock};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -22,6 +22,7 @@ use nokv_meta::{
 use nokv_object::{
     ChunkedWrite, DirtyChunkExtent, FileReadPipeline, FileWritePipeline, ObjectError,
     ObjectReadBlock, ObjectStore, PendingChunkedWrite, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    DEFAULT_S3_MULTIPART_CONCURRENCY,
 };
 use nokv_types::{DentryName, FileType, InodeAttr, InodeId};
 use sha2::{Digest, Sha256};
@@ -38,9 +39,21 @@ pub struct FuseOptions {
     pub threads: usize,
     pub kernel_cache: bool,
     pub direct_io: bool,
+    pub writeback: FuseWritebackOptions,
     pub view: FuseView,
     pub access: FuseAccessMode,
     pub invalidation: FuseInvalidationOptions,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FuseWritebackOptions {
+    pub enabled: bool,
+    pub root: PathBuf,
+    pub max_bytes: u64,
+    pub max_items: usize,
+    pub queue_capacity: usize,
+    pub workers: usize,
+    pub upload_workers_per_request: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +182,10 @@ const STATFS_TOTAL_BYTES: u64 = 1 << 40;
 const STATFS_TOTAL_FILES: u64 = 1 << 32;
 const STATFS_NAME_MAX: u32 = 255;
 const FUSE_WRITEBACK_UPLOAD_THRESHOLD: usize = 1024 * 1024;
+const DEFAULT_WRITEBACK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const DEFAULT_WRITEBACK_CACHE_ITEMS: usize = 16 * 1024;
+const DEFAULT_WRITEBACK_QUEUE_CAPACITY: usize = 256;
+const DEFAULT_WRITEBACK_WORKERS: usize = DEFAULT_S3_MULTIPART_CONCURRENCY;
 
 impl Default for FuseOptions {
     fn default() -> Self {
@@ -179,9 +196,24 @@ impl Default for FuseOptions {
             threads: default_threads(),
             kernel_cache: true,
             direct_io: false,
+            writeback: FuseWritebackOptions::default(),
             view: FuseView::Live,
             access: FuseAccessMode::ReadWrite,
             invalidation: FuseInvalidationOptions::default(),
+        }
+    }
+}
+
+impl Default for FuseWritebackOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            root: std::env::temp_dir().join(format!("nokv-writeback-{}", std::process::id())),
+            max_bytes: DEFAULT_WRITEBACK_CACHE_BYTES,
+            max_items: DEFAULT_WRITEBACK_CACHE_ITEMS,
+            queue_capacity: DEFAULT_WRITEBACK_QUEUE_CAPACITY,
+            workers: DEFAULT_WRITEBACK_WORKERS,
+            upload_workers_per_request: DEFAULT_WRITEBACK_WORKERS,
         }
     }
 }
@@ -1119,7 +1151,7 @@ where
     O: ObjectStore + Send + Sync + 'static,
 {
     mount_backend(
-        ClientFuseBackend::new(metadata, objects),
+        ClientFuseBackend::new(metadata, objects, &options),
         mountpoint,
         options,
     )

@@ -109,13 +109,14 @@ enum Command {
     Help,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 struct MountCliOptions {
     read_only: bool,
     kernel_cache: bool,
     direct_io: bool,
     entry_ttl: Duration,
     attr_ttl: Duration,
+    writeback: nokv_fuse::FuseWritebackOptions,
 }
 
 #[derive(Debug)]
@@ -141,18 +142,20 @@ impl Default for MountCliOptions {
             direct_io: defaults.direct_io,
             entry_ttl: defaults.entry_ttl,
             attr_ttl: defaults.attr_ttl,
+            writeback: defaults.writeback,
         }
     }
 }
 
 impl MountCliOptions {
-    fn fuse_options(self, access: nokv_fuse::FuseAccessMode) -> nokv_fuse::FuseOptions {
+    fn fuse_options(&self, access: nokv_fuse::FuseAccessMode) -> nokv_fuse::FuseOptions {
         nokv_fuse::FuseOptions {
             access,
             entry_ttl: self.entry_ttl,
             attr_ttl: self.attr_ttl,
             kernel_cache: self.kernel_cache,
             direct_io: self.direct_io,
+            writeback: self.writeback.clone(),
             ..nokv_fuse::FuseOptions::default()
         }
     }
@@ -896,6 +899,56 @@ fn parse_mount_args(
                 )?);
                 index += 1;
             }
+            "--no-writeback-cache" => {
+                options.writeback.enabled = false;
+                index += 1;
+            }
+            "--writeback-cache-dir" => {
+                index += 1;
+                options.writeback.root =
+                    PathBuf::from(value(args, index, "--writeback-cache-dir")?);
+                index += 1;
+            }
+            "--writeback-cache-bytes" => {
+                index += 1;
+                options.writeback.max_bytes = parse_u64(
+                    value(args, index, "--writeback-cache-bytes")?,
+                    "writeback_cache_bytes",
+                )?;
+                index += 1;
+            }
+            "--writeback-cache-items" => {
+                index += 1;
+                options.writeback.max_items = parse_usize(
+                    value(args, index, "--writeback-cache-items")?,
+                    "writeback_cache_items",
+                )?;
+                index += 1;
+            }
+            "--writeback-workers" => {
+                index += 1;
+                options.writeback.workers = parse_usize(
+                    value(args, index, "--writeback-workers")?,
+                    "writeback_workers",
+                )?;
+                index += 1;
+            }
+            "--writeback-queue-capacity" => {
+                index += 1;
+                options.writeback.queue_capacity = parse_usize(
+                    value(args, index, "--writeback-queue-capacity")?,
+                    "writeback_queue_capacity",
+                )?;
+                index += 1;
+            }
+            "--writeback-upload-workers-per-request" => {
+                index += 1;
+                options.writeback.upload_workers_per_request = parse_usize(
+                    value(args, index, "--writeback-upload-workers-per-request")?,
+                    "writeback_upload_workers_per_request",
+                )?;
+                index += 1;
+            }
             option if option.starts_with('-') => {
                 return Err(CliError::UnknownOption(option.to_owned()))
             }
@@ -1024,8 +1077,8 @@ Usage:\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rmdir PATH\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
-  nokv [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] MOUNTPOINT\n\
-  nokv [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] MOUNTPOINT\n\
+  nokv [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
+  nokv [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
   nokv [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\
@@ -1058,6 +1111,14 @@ Mount cache options:\n\
   --direct-io                    Ask FUSE to bypass kernel page cache for file handles\n\
   --entry-ttl-ms MS              Kernel dentry cache TTL\n\
   --attr-ttl-ms MS               Kernel attribute cache TTL\n\
+  --no-writeback-cache           Disable disk-backed staged object upload cache\n\
+  --writeback-cache-dir PATH     Directory for staged object upload cache\n\
+  --writeback-cache-bytes N      Max staged object upload cache bytes\n\
+  --writeback-cache-items N      Max staged object upload cache entries\n\
+  --writeback-workers N          Background staged upload worker count\n\
+  --writeback-queue-capacity N   Background staged upload queue capacity\n\
+  --writeback-upload-workers-per-request N\n\
+                                  Parallel object PUT workers per staged upload request\n\
 \n\
 Defaults:\n\
   --meta .nokv/meta\n\
@@ -1439,6 +1500,39 @@ mod tests {
                     attr_ttl: Duration::from_millis(250),
                     ..MountCliOptions::default()
                 },
+            }
+        );
+        let mut writeback_options = MountCliOptions::default();
+        writeback_options.writeback.enabled = false;
+        writeback_options.writeback.root = PathBuf::from("/tmp/nokv-writeback");
+        writeback_options.writeback.max_bytes = 4096;
+        writeback_options.writeback.max_items = 32;
+        writeback_options.writeback.workers = 4;
+        writeback_options.writeback.queue_capacity = 128;
+        writeback_options.writeback.upload_workers_per_request = 2;
+        let (_config, command) = parse(vec![
+            s("mount"),
+            s("--no-writeback-cache"),
+            s("--writeback-cache-dir"),
+            s("/tmp/nokv-writeback"),
+            s("--writeback-cache-bytes"),
+            s("4096"),
+            s("--writeback-cache-items"),
+            s("32"),
+            s("--writeback-workers"),
+            s("4"),
+            s("--writeback-queue-capacity"),
+            s("128"),
+            s("--writeback-upload-workers-per-request"),
+            s("2"),
+            s("/tmp/nokv-writeback-mount"),
+        ])
+        .unwrap();
+        assert_eq!(
+            command,
+            Command::Mount {
+                mountpoint: PathBuf::from("/tmp/nokv-writeback-mount"),
+                options: writeback_options,
             }
         );
         let (_config, command) = parse(vec![
