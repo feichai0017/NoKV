@@ -1,3 +1,4 @@
+use std::collections::{HashMap, VecDeque};
 use std::marker::PhantomData;
 use std::sync::mpsc::{self, TrySendError};
 use std::sync::{Arc, Condvar, Mutex};
@@ -25,6 +26,27 @@ pub struct FileReadPipeline {
     options: FileReadPipelineOptions,
     last_read_end: Option<u64>,
     stats: FileReadPipelineStats,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ObjectReadPlan {
+    pub output_len: usize,
+    pub blocks: Vec<ObjectReadBlock>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct ObjectReadPlanKey {
+    pub object_id: u64,
+    pub generation: u64,
+    pub offset: u64,
+    pub len: usize,
+}
+
+#[derive(Clone, Debug)]
+pub struct ObjectReadPlanCache {
+    capacity: usize,
+    plans: HashMap<ObjectReadPlanKey, ObjectReadPlan>,
+    order: VecDeque<ObjectReadPlanKey>,
 }
 
 #[derive(Clone)]
@@ -339,6 +361,60 @@ impl FileReadPipeline {
 
     pub fn stats(&self) -> FileReadPipelineStats {
         self.stats
+    }
+}
+
+impl ObjectReadPlan {
+    pub fn new(output_len: usize, blocks: Vec<ObjectReadBlock>) -> Self {
+        Self { output_len, blocks }
+    }
+}
+
+impl ObjectReadPlanKey {
+    pub fn new(object_id: u64, generation: u64, offset: u64, len: usize) -> Self {
+        Self {
+            object_id,
+            generation,
+            offset,
+            len,
+        }
+    }
+}
+
+impl ObjectReadPlanCache {
+    pub fn new(capacity: usize) -> Self {
+        Self {
+            capacity: capacity.max(1),
+            plans: HashMap::new(),
+            order: VecDeque::new(),
+        }
+    }
+
+    pub fn get(&mut self, key: &ObjectReadPlanKey) -> Option<ObjectReadPlan> {
+        let plan = self.plans.get(key)?.clone();
+        self.order.retain(|existing| existing != key);
+        self.order.push_back(*key);
+        Some(plan)
+    }
+
+    pub fn insert(&mut self, key: ObjectReadPlanKey, plan: ObjectReadPlan) {
+        self.order.retain(|existing| existing != &key);
+        self.order.push_back(key);
+        self.plans.insert(key, plan);
+        while self.plans.len() > self.capacity {
+            let Some(oldest) = self.order.pop_front() else {
+                break;
+            };
+            self.plans.remove(&oldest);
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        self.plans.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.plans.is_empty()
     }
 }
 

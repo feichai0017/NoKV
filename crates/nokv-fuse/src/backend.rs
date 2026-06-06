@@ -1,5 +1,5 @@
 use std::fmt;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use nokv_client::{ClientError, ClientPreparedArtifact, MetadataClient};
 use nokv_meta::{
@@ -11,9 +11,10 @@ use nokv_object::BlockCache;
 use nokv_object::{
     put_chunked_ranges_parallel, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
     FileReadPipeline, FileWritePipeline, ObjectBlockCache, ObjectError, ObjectPrefetchOptions,
-    ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectStore, ObjectWritebackOptions,
-    ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
-    WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock, ObjectReadPlan, ObjectReadPlanCache,
+    ObjectReadPlanKey, ObjectStore, ObjectWritebackOptions, ObjectWritebackRequest,
+    ObjectWritebackUploader, PendingChunkedWrite, WritebackCache, WritebackCacheOptions,
+    WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{
     AdvisoryLock, AdvisoryLockRequest, DentryName, InodeAttr, InodeId, SpecialNodeSpec,
@@ -235,6 +236,7 @@ pub(crate) struct ClientFuseBackend<O> {
     metadata: MetadataClient,
     objects: Arc<O>,
     block_cache: Option<ObjectBlockCache>,
+    read_plan_cache: Mutex<ObjectReadPlanCache>,
     prefetcher: Option<ObjectPrefetcher<Arc<O>>>,
     writeback_cache: Option<WritebackCache>,
     writeback_uploader: Option<ObjectWritebackUploader<Arc<O>>>,
@@ -288,6 +290,7 @@ where
             metadata,
             objects,
             block_cache,
+            read_plan_cache: Mutex::new(ObjectReadPlanCache::new(4096)),
             prefetcher,
             writeback_cache,
             writeback_uploader,
@@ -305,6 +308,8 @@ where
         let Ok(plan) = self.metadata.read_body_plan(inode, generation, offset, len) else {
             return;
         };
+        let key = ObjectReadPlanKey::new(inode.get(), generation, offset, len);
+        let _ = self.cache_read_body_plan(key, plan.clone());
         let _ = prefetcher.submit(ObjectPrefetchRequest::new(plan.output_len, plan.blocks));
     }
 
@@ -332,6 +337,39 @@ where
                 .map(|uploader| uploader.stats())
                 .transpose()?,
         })
+    }
+
+    fn cached_read_body_plan(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        offset: u64,
+        len: usize,
+    ) -> FuseBackendResult<ObjectReadPlan> {
+        let key = ObjectReadPlanKey::new(inode.get(), generation, offset, len);
+        let cached = self
+            .read_plan_cache
+            .lock()
+            .map_err(|err| ObjectError::Backend(format!("read plan cache lock poisoned: {err}")))?
+            .get(&key);
+        if let Some(plan) = cached {
+            return Ok(plan);
+        }
+        self.metadata
+            .read_body_plan(inode, generation, offset, len)
+            .map_err(Into::into)
+    }
+
+    fn cache_read_body_plan(
+        &self,
+        key: ObjectReadPlanKey,
+        plan: ObjectReadPlan,
+    ) -> FuseBackendResult<()> {
+        self.read_plan_cache
+            .lock()
+            .map_err(|err| ObjectError::Backend(format!("read plan cache lock poisoned: {err}")))?
+            .insert(key, plan);
+        Ok(())
     }
 }
 
@@ -481,10 +519,7 @@ where
         else {
             return Err(FuseBackendError::Metadata(MetadError::NotFound));
         };
-        let plan = self
-            .metadata
-            .read_body_plan(inode, attr.generation, offset, len)
-            .map_err(FuseBackendError::from)?;
+        let plan = self.cached_read_body_plan(inode, attr.generation, offset, len)?;
         let read =
             self.objects
                 .read_blocks(self.block_cache.as_ref(), plan.output_len, &plan.blocks)?;
@@ -508,10 +543,7 @@ where
         if len == 0 || offset >= attr.size {
             return Ok(Vec::new());
         }
-        let plan = self
-            .metadata
-            .read_body_plan(inode, attr.generation, offset, len)
-            .map_err(FuseBackendError::from)?;
+        let plan = self.cached_read_body_plan(inode, attr.generation, offset, len)?;
         let read = pipeline.read_blocks(
             &self.objects,
             self.block_cache.as_ref(),
@@ -537,10 +569,7 @@ where
         if len == 0 || offset >= attr.size {
             return Ok(Vec::new());
         }
-        let plan = self
-            .metadata
-            .read_body_plan(attr.inode, attr.generation, offset, len)
-            .map_err(FuseBackendError::from)?;
+        let plan = self.cached_read_body_plan(attr.inode, attr.generation, offset, len)?;
         let read = pipeline.read_blocks(
             &self.objects,
             self.block_cache.as_ref(),

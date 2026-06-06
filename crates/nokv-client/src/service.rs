@@ -16,8 +16,8 @@ use nokv_meta::{
 use nokv_object::{
     chunk_manifest_from_stored_chunk, ChunkStore, ChunkWriteOptions, ChunkedWrite,
     FileReadPipeline, ObjectBlockCache, ObjectError, ObjectPrefetchOptions, ObjectPrefetchRequest,
-    ObjectPrefetcher, ObjectReadBlock, ObjectStore, StagedObjectSet, StoredChunk,
-    DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    ObjectPrefetcher, ObjectReadBlock, ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey,
+    ObjectStore, StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_protocol::{
     decode_envelope, decode_name_cursor, decode_xattr_name, encode_advisory_lock_kind,
@@ -41,6 +41,7 @@ const MAX_BATCH_RPC_REQUESTS: usize = 128;
 const FRAMED_RPC_MAGIC: &[u8; 8] = b"NKVRPC3\n";
 const FRAME_HEADER_BYTES: usize = 16;
 const MAX_READ_PIPELINES: usize = 1024;
+const MAX_READ_PLAN_CACHE_ENTRIES: usize = 4096;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MetadataClientOptions {
@@ -64,12 +65,6 @@ struct PipelinedConnection {
 enum PendingFrame {
     Payload(Vec<u8>),
     Failed(String),
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct ClientBodyReadPlan {
-    pub output_len: usize,
-    pub blocks: Vec<ObjectReadBlock>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -107,6 +102,7 @@ pub struct NoKvFsClient<O> {
     block_cache: ObjectBlockCache,
     prefetcher: ObjectPrefetcher<Arc<O>>,
     read_pipelines: Mutex<ReadPipelineCache>,
+    read_plans: Mutex<ObjectReadPlanCache>,
     block_cache_enabled: bool,
     object_puts: AtomicU64,
     object_put_bytes: AtomicU64,
@@ -116,6 +112,8 @@ pub struct NoKvFsClient<O> {
     coalesced_get_bytes: AtomicU64,
     cache_hits: AtomicU64,
     cache_hit_bytes: AtomicU64,
+    read_plan_cache_hits: AtomicU64,
+    read_plan_cache_misses: AtomicU64,
     manifest_chunks: AtomicU64,
     manifest_blocks: AtomicU64,
 }
@@ -167,6 +165,7 @@ where
             block_cache,
             prefetcher,
             read_pipelines: Mutex::new(ReadPipelineCache::new(MAX_READ_PIPELINES)),
+            read_plans: Mutex::new(ObjectReadPlanCache::new(MAX_READ_PLAN_CACHE_ENTRIES)),
             block_cache_enabled: true,
             object_puts: AtomicU64::new(0),
             object_put_bytes: AtomicU64::new(0),
@@ -176,6 +175,8 @@ where
             coalesced_get_bytes: AtomicU64::new(0),
             cache_hits: AtomicU64::new(0),
             cache_hit_bytes: AtomicU64::new(0),
+            read_plan_cache_hits: AtomicU64::new(0),
+            read_plan_cache_misses: AtomicU64::new(0),
             manifest_chunks: AtomicU64::new(0),
             manifest_blocks: AtomicU64::new(0),
         }
@@ -228,6 +229,8 @@ where
             prefetch_object_get_bytes: prefetch.object_get_bytes,
             prefetch_cache_hits: prefetch.cache_hits,
             prefetch_cache_hit_bytes: prefetch.cache_hit_bytes,
+            read_plan_cache_hits: self.read_plan_cache_hits.load(Ordering::Relaxed),
+            read_plan_cache_misses: self.read_plan_cache_misses.load(Ordering::Relaxed),
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
             manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
         }
@@ -307,9 +310,7 @@ where
             ClientError::Protocol(format!("file {path} is missing body descriptor"))
         })?;
         let len = bounded_read_len(entry.attr.size - offset, len)?;
-        let plan = self
-            .metadata
-            .read_body_plan(entry.attr.inode, body.generation, offset, len)?;
+        let plan = self.cached_read_body_plan(entry.attr.inode, body.generation, offset, len)?;
         self.read_planned_object_blocks(
             &read_pipeline_key(path, body.generation),
             entry.attr.inode,
@@ -327,7 +328,7 @@ where
         generation: u64,
         file_size: u64,
         offset: u64,
-        plan: &ClientBodyReadPlan,
+        plan: &ObjectReadPlan,
     ) -> Result<Vec<u8>, ClientError> {
         if plan.output_len == 0 {
             return Ok(Vec::new());
@@ -385,9 +386,49 @@ where
         let Ok(plan) = self.metadata.read_body_plan(inode, generation, offset, len) else {
             return;
         };
+        let key = ObjectReadPlanKey::new(inode.get(), generation, offset, len);
+        let _ = self.cache_read_body_plan(key, plan.clone());
         let _ = self
             .prefetcher
             .submit(ObjectPrefetchRequest::new(plan.output_len, plan.blocks));
+    }
+
+    fn cached_read_body_plan(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        offset: u64,
+        len: usize,
+    ) -> Result<ObjectReadPlan, ClientError> {
+        let key = ObjectReadPlanKey::new(inode.get(), generation, offset, len);
+        if let Some(plan) = self.cached_read_body_plan_for_key(&key)? {
+            self.read_plan_cache_hits.fetch_add(1, Ordering::Relaxed);
+            return Ok(plan);
+        }
+        self.read_plan_cache_misses.fetch_add(1, Ordering::Relaxed);
+        self.metadata.read_body_plan(inode, generation, offset, len)
+    }
+
+    fn cached_read_body_plan_for_key(
+        &self,
+        key: &ObjectReadPlanKey,
+    ) -> Result<Option<ObjectReadPlan>, ClientError> {
+        self.read_plans
+            .lock()
+            .map_err(|err| ClientError::Protocol(format!("read plan cache lock poisoned: {err}")))
+            .map(|mut plans| plans.get(key))
+    }
+
+    fn cache_read_body_plan(
+        &self,
+        key: ObjectReadPlanKey,
+        plan: ObjectReadPlan,
+    ) -> Result<(), ClientError> {
+        self.read_plans
+            .lock()
+            .map_err(|err| ClientError::Protocol(format!("read plan cache lock poisoned: {err}")))?
+            .insert(key, plan);
+        Ok(())
     }
 
     pub fn put_artifact(
@@ -1426,7 +1467,7 @@ impl MetadataClient {
         generation: u64,
         offset: u64,
         len: usize,
-    ) -> Result<ClientBodyReadPlan, ClientError> {
+    ) -> Result<ObjectReadPlan, ClientError> {
         let len = u64::try_from(len)
             .map_err(|_| ClientError::Protocol("body read length exceeds u64".to_owned()))?;
         match self.call(MetadataRpcRequest::ReadBodyPlan {
@@ -1446,7 +1487,7 @@ impl MetadataClient {
         offset: u64,
         len: usize,
         expected_generation: Option<u64>,
-    ) -> Result<(PathMetadata, ClientBodyReadPlan), ClientError> {
+    ) -> Result<(PathMetadata, ObjectReadPlan), ClientError> {
         let len = u64::try_from(len)
             .map_err(|_| ClientError::Protocol("path read length exceeds u64".to_owned()))?;
         match self.call(MetadataRpcRequest::ReadPathPlan {
@@ -2092,17 +2133,16 @@ fn staged_object_set_to_wire(staged: &StagedObjectSet) -> WireStagedObjectSet {
     }
 }
 
-fn wire_body_read_plan(plan: WireBodyReadPlan) -> Result<ClientBodyReadPlan, ClientError> {
-    Ok(ClientBodyReadPlan {
-        output_len: usize::try_from(plan.output_len).map_err(|_| {
+fn wire_body_read_plan(plan: WireBodyReadPlan) -> Result<ObjectReadPlan, ClientError> {
+    Ok(ObjectReadPlan::new(
+        usize::try_from(plan.output_len).map_err(|_| {
             ClientError::Protocol("body read plan output length exceeds platform limit".to_owned())
         })?,
-        blocks: plan
-            .blocks
+        plan.blocks
             .into_iter()
             .map(wire_object_read_block)
             .collect::<Result<Vec<_>, _>>()?,
-    })
+    ))
 }
 
 fn wire_object_read_block(block: WireObjectReadBlock) -> Result<ObjectReadBlock, ClientError> {

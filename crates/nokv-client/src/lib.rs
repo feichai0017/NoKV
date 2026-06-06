@@ -17,9 +17,10 @@ pub use artifact::{
     normalize_artifact_path, ArtifactBackend, ArtifactInfo, ArtifactRepository,
     ArtifactRepositoryOptions,
 };
+pub use nokv_object::ObjectReadPlan;
 pub use service::{
-    ClientBodyReadPlan, ClientMetadataPosition, ClientPreparedArtifact, MetadataClient,
-    MetadataClientOptions, NoKvFsClient,
+    ClientMetadataPosition, ClientPreparedArtifact, MetadataClient, MetadataClientOptions,
+    NoKvFsClient,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]

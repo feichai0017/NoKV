@@ -263,6 +263,8 @@ pub struct ObjectTransferStats {
     pub prefetch_object_get_bytes: u64,
     pub prefetch_cache_hits: u64,
     pub prefetch_cache_hit_bytes: u64,
+    pub read_plan_cache_hits: u64,
+    pub read_plan_cache_misses: u64,
     pub manifest_chunks: u64,
     pub manifest_blocks: u64,
 }

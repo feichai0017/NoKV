@@ -27,8 +27,9 @@ pub use chunk::{
 pub use pipeline::{
     FileReadOutcome, FileReadPipeline, FileReadPipelineOptions, FileReadPipelineStats,
     FileWritePipeline, ObjectPrefetchOptions, ObjectPrefetchRequest, ObjectPrefetchStats,
-    ObjectPrefetcher, ObjectWritebackOptions, ObjectWritebackRequest, ObjectWritebackStats,
-    ObjectWritebackUploader, PendingChunkedWrite, ReadAheadHint, WritebackUploadRange,
+    ObjectPrefetcher, ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey,
+    ObjectWritebackOptions, ObjectWritebackRequest, ObjectWritebackStats, ObjectWritebackUploader,
+    PendingChunkedWrite, ReadAheadHint, WritebackUploadRange,
 };
 pub use store::{
     MemoryObjectStore, ObjectCapabilities, ObjectError, ObjectInfo, ObjectKey, ObjectRange,

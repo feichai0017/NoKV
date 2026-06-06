@@ -110,6 +110,8 @@ where
             prefetch_object_get_bytes: 0,
             prefetch_cache_hits: 0,
             prefetch_cache_hit_bytes: 0,
+            read_plan_cache_hits: 0,
+            read_plan_cache_misses: 0,
             manifest_chunks: self.manifest_chunks.load(Ordering::Relaxed),
             manifest_blocks: self.manifest_blocks.load(Ordering::Relaxed),
         }

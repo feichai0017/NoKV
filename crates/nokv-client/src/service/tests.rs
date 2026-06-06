@@ -1491,6 +1491,33 @@ fn service_file_client_stats_include_background_prefetch_gets() {
 }
 
 #[test]
+fn service_file_client_reuses_prefetched_body_read_plan() {
+    let store = MemoryObjectStore::new();
+    store
+        .put(&ObjectKey::new("blocks/demo").unwrap(), b"abcdefghijkl")
+        .unwrap();
+    let dentry = r#"{"ok":true,"result":{"type":"dentry","entry":{"dentry":{"parent":1,"name_hex":"61727469666163742e62696e","child":42,"child_type":"file","attr_generation":7},"attr":{"inode":42,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":12,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":{"producer":"unit-test","digest_uri":"sha256:demo","size":12,"content_type":"application/octet-stream","manifest_id":"artifact.bin","generation":7,"chunk_size":67108864,"block_size":4194304}}}}"#;
+    let addr = serve_many(vec![
+        response_body(dentry),
+        response_body(
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":0,"len":6,"output_offset":0}]}}}"#,
+        ),
+        response_body(
+            r#"{"ok":true,"result":{"type":"body_read_plan","plan":{"output_len":6,"blocks":[{"object_key":"blocks/demo","object_offset":6,"len":6,"output_offset":0}]}}}"#,
+        ),
+        response_body(dentry),
+    ]);
+    let client = NoKvFsClient::connect(addr, store);
+
+    assert_eq!(client.read("/artifact.bin", 0, 6).unwrap(), b"abcdef");
+    assert_eq!(client.read("/artifact.bin", 6, 6).unwrap(), b"ghijkl");
+
+    let stats = client.object_stats();
+    assert_eq!(stats.read_plan_cache_misses, 1);
+    assert_eq!(stats.read_plan_cache_hits, 1);
+}
+
+#[test]
 fn service_file_client_reads_body_from_object_store() {
     let store = MemoryObjectStore::new();
     store

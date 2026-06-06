@@ -1041,6 +1041,33 @@ fn file_read_pipeline_does_not_readahead_for_initial_random_read() {
 }
 
 #[test]
+fn object_read_plan_cache_evicts_oldest_unused_plan() {
+    let mut cache = ObjectReadPlanCache::new(2);
+    let a = ObjectReadPlanKey::new(1, 7, 0, 4);
+    let b = ObjectReadPlanKey::new(1, 7, 4, 4);
+    let c = ObjectReadPlanKey::new(1, 7, 8, 4);
+    let plan = ObjectReadPlan::new(
+        4,
+        vec![ObjectReadBlock {
+            object_key: "blocks/demo".to_owned(),
+            object_offset: 0,
+            len: 4,
+            output_offset: 0,
+        }],
+    );
+
+    cache.insert(a, plan.clone());
+    cache.insert(b, plan.clone());
+    assert!(cache.get(&a).is_some());
+    cache.insert(c, plan);
+
+    assert!(cache.get(&a).is_some());
+    assert!(cache.get(&b).is_none());
+    assert!(cache.get(&c).is_some());
+    assert_eq!(cache.len(), 2);
+}
+
+#[test]
 fn memory_block_cache_enforces_item_and_byte_limits() {
     let cache = MemoryBlockCache::new(MemoryBlockCacheOptions {
         max_bytes: 4,
