@@ -1,6 +1,6 @@
 use super::*;
 use std::io::{self, Read};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex};
 use std::thread;
 use std::time::Duration;
 
@@ -656,6 +656,7 @@ fn object_writeback_uploader_uploads_cached_ranges_and_clears_tickets() {
     assert_eq!(written.chunks[0].blocks[0].object_key, "blocks/1/2/3/0/0");
     let stats = uploader.stats().unwrap();
     assert_eq!(stats.enqueued, 1);
+    assert_eq!(stats.inline, 0);
     assert_eq!(stats.completed, 1);
     assert_eq!(stats.uploaded_bytes, 10);
     assert!(cache.read(&ticket).is_err());
@@ -728,6 +729,7 @@ fn object_writeback_uploader_keeps_cached_ranges_after_upload_failure() {
     assert_eq!(cache_stats.removed, 0);
     let upload_stats = uploader.stats().unwrap();
     assert_eq!(upload_stats.enqueued, 1);
+    assert_eq!(upload_stats.inline, 0);
     assert_eq!(upload_stats.completed, 0);
     assert_eq!(upload_stats.failed, 1);
 
@@ -738,6 +740,44 @@ fn object_writeback_uploader_keeps_cached_ranges_after_upload_failure() {
     assert_eq!(cache_stats.active_bytes, 0);
     assert_eq!(cache_stats.removed, 1);
     assert_eq!(pending.discard_writeback_cache().unwrap(), 0);
+}
+
+#[test]
+fn object_writeback_uploader_falls_back_inline_when_queue_is_full() {
+    let dir = tempfile::tempdir().unwrap();
+    let store = BlockFirstPutStore::new();
+    let cache = WritebackCache::new(WritebackCacheOptions {
+        root: dir.path().join("writeback"),
+        max_bytes: 4096,
+        max_items: 8,
+    })
+    .unwrap();
+    let uploader = ObjectWritebackUploader::new(
+        store.clone(),
+        cache.clone(),
+        ObjectWritebackOptions {
+            queue_capacity: 1,
+            workers: 1,
+            upload_workers_per_request: 1,
+        },
+    );
+
+    let first = submit_writeback_range(&uploader, &cache, 0, b"first");
+    store.wait_for_first_put();
+    let second = submit_writeback_range(&uploader, &cache, 16, b"second");
+    let third = submit_writeback_range(&uploader, &cache, 32, b"third");
+
+    let third_written = third.wait().unwrap();
+    assert_eq!(third_written.chunks[0].blocks[0].logical_offset, 32);
+    store.release_first_put();
+    first.wait().unwrap();
+    second.wait().unwrap();
+
+    let stats = uploader.stats().unwrap();
+    assert_eq!(stats.enqueued, 3);
+    assert_eq!(stats.inline, 1);
+    assert_eq!(stats.completed, 3);
+    assert_eq!(stats.failed, 0);
 }
 
 #[test]
@@ -1143,6 +1183,103 @@ impl ObjectStore for FailAfterFirstPut {
     fn delete(&self, key: &ObjectKey) -> Result<bool, ObjectError> {
         self.inner.delete(key)
     }
+}
+
+#[derive(Clone)]
+struct BlockFirstPutStore {
+    inner: MemoryObjectStore,
+    state: Arc<(Mutex<BlockFirstPutState>, Condvar)>,
+}
+
+#[derive(Debug, Default)]
+struct BlockFirstPutState {
+    started: bool,
+    released: bool,
+    puts: usize,
+}
+
+impl BlockFirstPutStore {
+    fn new() -> Self {
+        Self {
+            inner: MemoryObjectStore::new(),
+            state: Arc::new((Mutex::new(BlockFirstPutState::default()), Condvar::new())),
+        }
+    }
+
+    fn wait_for_first_put(&self) {
+        let (lock, ready) = &*self.state;
+        let mut state = lock.lock().unwrap();
+        while !state.started {
+            state = ready.wait(state).unwrap();
+        }
+    }
+
+    fn release_first_put(&self) {
+        let (lock, ready) = &*self.state;
+        let mut state = lock.lock().unwrap();
+        state.released = true;
+        ready.notify_all();
+    }
+}
+
+impl ObjectStore for BlockFirstPutStore {
+    fn put(&self, key: &ObjectKey, bytes: &[u8]) -> Result<ObjectInfo, ObjectError> {
+        let (lock, ready) = &*self.state;
+        let mut state = lock.lock().unwrap();
+        state.puts += 1;
+        if state.puts == 1 {
+            state.started = true;
+            ready.notify_all();
+            while !state.released {
+                state = ready.wait(state).map_err(ObjectError::from_poisoned_lock)?;
+            }
+        }
+        drop(state);
+        self.inner.put(key, bytes)
+    }
+
+    fn get(&self, key: &ObjectKey, range: Option<ObjectRange>) -> Result<Vec<u8>, ObjectError> {
+        self.inner.get(key, range)
+    }
+
+    fn head(&self, key: &ObjectKey) -> Result<Option<ObjectInfo>, ObjectError> {
+        self.inner.head(key)
+    }
+
+    fn delete(&self, key: &ObjectKey) -> Result<bool, ObjectError> {
+        self.inner.delete(key)
+    }
+}
+
+fn submit_writeback_range<O>(
+    uploader: &ObjectWritebackUploader<O>,
+    cache: &WritebackCache,
+    offset: u64,
+    bytes: &[u8],
+) -> PendingChunkedWrite
+where
+    O: ObjectStore + Clone + Send + Sync + 'static,
+{
+    let ticket = cache
+        .stage(format!("blocks/1/2/3/0/{offset}"), bytes)
+        .unwrap();
+    uploader
+        .submit(ObjectWritebackRequest {
+            ranges: vec![WritebackUploadRange {
+                logical_offset: offset,
+                ticket,
+            }],
+            options: ChunkWriteOptions {
+                manifest_id: "artifacts/checkpoint".to_owned(),
+                mount: 1,
+                inode: 2,
+                generation: 3,
+                chunk_size: 64,
+                block_size: 16,
+            },
+            block_index_base: offset / 16,
+        })
+        .unwrap()
 }
 
 #[test]

@@ -39,6 +39,8 @@ pub struct ObjectWritebackUploader<O> {
     sender: mpsc::SyncSender<ObjectWritebackJob>,
     stats: Arc<Mutex<ObjectWritebackStats>>,
     cache: WritebackCache,
+    store: O,
+    upload_workers_per_request: usize,
     _state: PhantomData<O>,
 }
 
@@ -121,6 +123,7 @@ pub struct ObjectPrefetchStats {
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct ObjectWritebackStats {
     pub enqueued: u64,
+    pub inline: u64,
     pub completed: u64,
     pub failed: u64,
     pub staged_bytes: u64,
@@ -492,6 +495,8 @@ where
             sender,
             stats,
             cache,
+            store,
+            upload_workers_per_request: options.upload_workers_per_request.max(1),
             _state: PhantomData,
         }
     }
@@ -520,16 +525,36 @@ where
                 tickets,
             }),
         };
-        self.sender
-            .send(ObjectWritebackJob {
-                request,
-                pending: pending.clone(),
-            })
-            .map_err(|_| ObjectError::Backend("object writeback worker stopped".to_owned()))?;
+        let job = ObjectWritebackJob {
+            request,
+            pending: pending.clone(),
+        };
         self.with_stats(|stats| {
             stats.enqueued = stats.enqueued.saturating_add(1);
             stats.staged_bytes = stats.staged_bytes.saturating_add(staged_bytes);
         })?;
+        match self.sender.try_send(job) {
+            Ok(()) => {}
+            Err(TrySendError::Full(job)) => {
+                self.with_stats(|stats| {
+                    stats.inline = stats.inline.saturating_add(1);
+                })?;
+                let result = upload_writeback_request(
+                    &self.store,
+                    &self.cache,
+                    job.request,
+                    self.upload_workers_per_request,
+                );
+                let stats_result = self.record_upload_result(&result);
+                job.pending.complete(result);
+                stats_result?;
+            }
+            Err(TrySendError::Disconnected(_)) => {
+                return Err(ObjectError::Backend(
+                    "object writeback worker stopped".to_owned(),
+                ));
+            }
+        }
         Ok(pending)
     }
 
@@ -547,6 +572,23 @@ where
         let mut stats = self.stats.lock().map_err(ObjectError::from_poisoned_lock)?;
         update(&mut stats);
         Ok(())
+    }
+
+    fn record_upload_result(
+        &self,
+        result: &Result<ChunkedWrite, ObjectError>,
+    ) -> Result<(), ObjectError> {
+        self.with_stats(|stats| match result {
+            Ok(written) => {
+                stats.completed = stats.completed.saturating_add(1);
+                stats.uploaded_bytes = stats
+                    .uploaded_bytes
+                    .saturating_add(written.object_put_bytes);
+            }
+            Err(_) => {
+                stats.failed = stats.failed.saturating_add(1);
+            }
+        })
     }
 }
 
