@@ -283,6 +283,134 @@ fn namespace_find_uses_declared_predicates_and_sort_fields() {
 }
 
 #[test]
+fn namespace_grep_scans_file_content_with_generation_evidence_and_cursor() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_path("/runs/run-a", 0o755, 1000, 1000)
+        .unwrap();
+    let runs = service.resolve_directory_path("/runs").unwrap();
+    let run_a = service.resolve_directory_path("/runs/run-a").unwrap();
+    let nested = service
+        .publish_artifact(PublishArtifact {
+            parent: run_a,
+            name: DentryName::new(b"stdout.txt".to_vec()).unwrap(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "text/plain".to_owned(),
+            manifest_id: "runs/run-a/stdout.txt".to_owned(),
+            bytes: b"alpha\nneedle one\nneedle two\n".to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+    service
+        .publish_artifact(PublishArtifact {
+            parent: runs,
+            name: DentryName::new(b"top.txt".to_vec()).unwrap(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "text/plain".to_owned(),
+            manifest_id: "runs/top.txt".to_owned(),
+            bytes: b"needle top\n".to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+    service
+        .publish_artifact(PublishArtifact {
+            parent: run_a,
+            name: DentryName::new(b"binary.bin".to_vec()).unwrap(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "runs/run-a/binary.bin".to_owned(),
+            bytes: b"\0needle hidden\n".to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+
+    let non_recursive = service
+        .grep_paths(NamespaceGrepRequest {
+            path: "/runs".to_owned(),
+            pattern: "needle".to_owned(),
+            recursive: false,
+            limit: 10,
+            cursor: None,
+            max_files: None,
+            max_bytes: None,
+        })
+        .unwrap();
+    assert_eq!(
+        non_recursive
+            .matches
+            .iter()
+            .map(|m| m.path.as_str())
+            .collect::<Vec<_>>(),
+        vec!["/runs/top.txt"]
+    );
+    assert!(!non_recursive.truncated);
+
+    let first = service
+        .grep_paths(NamespaceGrepRequest {
+            path: "/runs".to_owned(),
+            pattern: "needle".to_owned(),
+            recursive: true,
+            limit: 1,
+            cursor: None,
+            max_files: None,
+            max_bytes: None,
+        })
+        .unwrap();
+    assert_eq!(first.path, "/runs");
+    assert_eq!(first.pattern, "needle");
+    assert_eq!(first.matches.len(), 1);
+    assert_eq!(first.matches[0].path, "/runs/run-a/stdout.txt");
+    assert_eq!(first.matches[0].line_number, 2);
+    assert_eq!(first.matches[0].snippet, "needle one");
+    assert_eq!(first.matches[0].generation, nested.attr.generation);
+    assert_eq!(
+        first.matches[0].evidence,
+        format!(
+            "nokv-native:///runs/run-a/stdout.txt@generation:{}#L2",
+            nested.attr.generation
+        )
+    );
+    assert!(first.snapshot_id.is_some());
+    assert!(first.bytes_read > 0);
+    assert!(first.truncated);
+
+    let second = service
+        .grep_paths(NamespaceGrepRequest {
+            path: "/runs".to_owned(),
+            pattern: "needle".to_owned(),
+            recursive: true,
+            limit: 10,
+            cursor: first.next_cursor,
+            max_files: None,
+            max_bytes: None,
+        })
+        .unwrap();
+    assert_eq!(
+        second
+            .matches
+            .iter()
+            .map(|m| (m.path.as_str(), m.line_number))
+            .collect::<Vec<_>>(),
+        vec![("/runs/run-a/stdout.txt", 3), ("/runs/top.txt", 1)]
+    );
+    assert!(second
+        .matches
+        .iter()
+        .all(|m| !m.evidence.contains("binary.bin")));
+    assert!(!second.truncated);
+}
+
+#[test]
 fn namespace_find_uses_catalog_field_ids_and_registered_index_values() {
     let service = service();
     service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();

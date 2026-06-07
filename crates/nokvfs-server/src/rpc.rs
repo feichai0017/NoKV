@@ -5,10 +5,11 @@ use std::thread;
 
 use nokvfs_meta::{
     DentryWithAttr, MetadError, NamespaceCard, NamespaceCardKind, NamespaceFilterCapability,
-    NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceInclude,
-    NamespaceIndexValue, NamespaceListPage, NamespacePredicate, NamespacePredicateOp,
-    NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadOptions,
-    NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
+    NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceGrepMatch,
+    NamespaceGrepRequest, NamespaceGrepResult, NamespaceInclude, NamespaceIndexValue,
+    NamespaceListPage, NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue,
+    NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadOptions, NamespaceReadPage,
+    NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
     NamespaceSortDirection, NamespaceSortField, PreparedArtifact, RecordCountProvenance,
 };
 use nokvfs_object::ObjectReadBlock;
@@ -17,6 +18,7 @@ use nokvfs_protocol::{
     MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataError,
     WireNamespaceCard, WireNamespaceCardKind, WireNamespaceFilterCapability,
     WireNamespaceFindField, WireNamespaceFindRequest, WireNamespaceFindResult,
+    WireNamespaceGrepMatch, WireNamespaceGrepRequest, WireNamespaceGrepResult,
     WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage, WireNamespacePredicate,
     WireNamespacePredicateOp, WireNamespacePredicateValue, WireNamespaceQueryCatalog,
     WireNamespaceReadFormat, WireNamespaceReadItem, WireNamespaceReadOptions,
@@ -503,6 +505,14 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 .find_paths(namespace_find_request(*request)?)?;
             Ok(MetadataRpcResult::NamespaceFindResult {
                 result: Box::new(wire_namespace_find_result(&result)?),
+            })
+        }
+        MetadataRpcRequest::GrepPaths { request } => {
+            let result = server
+                .service()
+                .grep_paths(namespace_grep_request(*request)?)?;
+            Ok(MetadataRpcResult::NamespaceGrepResult {
+                result: Box::new(wire_namespace_grep_result(&result)?),
             })
         }
         MetadataRpcRequest::ReadPage { path, options } => {
@@ -1060,6 +1070,37 @@ fn wire_namespace_find_result(
     })
 }
 
+fn wire_namespace_grep_result(
+    result: &NamespaceGrepResult,
+) -> Result<WireNamespaceGrepResult, ServerError> {
+    Ok(WireNamespaceGrepResult {
+        path: result.path.clone(),
+        pattern: result.pattern.clone(),
+        recursive: result.recursive,
+        evidence: result.evidence.clone(),
+        snapshot_id: result.snapshot_id,
+        matches: result
+            .matches
+            .iter()
+            .map(wire_namespace_grep_match)
+            .collect(),
+        files_scanned: result.files_scanned as u64,
+        bytes_read: result.bytes_read as u64,
+        next_cursor: result.next_cursor.clone(),
+        truncated: result.truncated,
+    })
+}
+
+fn wire_namespace_grep_match(match_: &NamespaceGrepMatch) -> WireNamespaceGrepMatch {
+    WireNamespaceGrepMatch {
+        path: match_.path.clone(),
+        line_number: match_.line_number as u64,
+        snippet: match_.snippet.clone(),
+        evidence: match_.evidence.clone(),
+        generation: match_.generation,
+    }
+}
+
 fn wire_namespace_read_page(
     page: &NamespaceReadPage,
 ) -> Result<WireNamespaceReadPage, ServerError> {
@@ -1117,6 +1158,42 @@ fn namespace_find_request(
                 "namespace find limit exceeds platform limit".to_owned(),
             ))
         })?,
+    })
+}
+
+fn namespace_grep_request(
+    request: WireNamespaceGrepRequest,
+) -> Result<NamespaceGrepRequest, ServerError> {
+    Ok(NamespaceGrepRequest {
+        path: request.path,
+        pattern: request.pattern,
+        recursive: request.recursive,
+        cursor: request.cursor,
+        limit: usize::try_from(request.limit).map_err(|_| {
+            ServerError::Metadata(MetadError::InvalidQuery(
+                "namespace grep limit exceeds platform limit".to_owned(),
+            ))
+        })?,
+        max_files: request
+            .max_files
+            .map(|value| {
+                usize::try_from(value).map_err(|_| {
+                    ServerError::Metadata(MetadError::InvalidQuery(
+                        "namespace grep max_files exceeds platform limit".to_owned(),
+                    ))
+                })
+            })
+            .transpose()?,
+        max_bytes: request
+            .max_bytes
+            .map(|value| {
+                usize::try_from(value).map_err(|_| {
+                    ServerError::Metadata(MetadError::InvalidQuery(
+                        "namespace grep max_bytes exceeds platform limit".to_owned(),
+                    ))
+                })
+            })
+            .transpose()?,
     })
 }
 
@@ -1359,6 +1436,43 @@ mod tests {
         assert_eq!(page.entries.len(), 1);
         assert_eq!(page.next_cursor, Some("1".to_owned()));
         assert!(page.truncated);
+    }
+
+    #[test]
+    fn rpc_namespace_grep_routes_to_service_surface() {
+        let server = test_server();
+        request_envelope(
+            &server,
+            MetadataRpcRequest::CreateFilePath {
+                path: "/empty.txt".to_owned(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            },
+        );
+
+        let envelope = request_envelope(
+            &server,
+            MetadataRpcRequest::GrepPaths {
+                request: Box::new(nokvfs_protocol::WireNamespaceGrepRequest {
+                    path: "/".to_owned(),
+                    pattern: "needle".to_owned(),
+                    recursive: true,
+                    cursor: None,
+                    limit: 10,
+                    max_files: None,
+                    max_bytes: None,
+                }),
+            },
+        );
+        let result = match envelope.result.unwrap() {
+            MetadataRpcResult::NamespaceGrepResult { result } => result,
+            other => panic!("unexpected namespace grep result: {other:?}"),
+        };
+        assert_eq!(result.path, "/");
+        assert_eq!(result.pattern, "needle");
+        assert!(result.matches.is_empty());
+        assert!(!result.truncated);
     }
 
     #[test]

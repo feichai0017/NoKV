@@ -19,10 +19,11 @@ use nokvfs_client::{
     agent_tool_definitions, execute_agent_tool, ArtifactRepository, ArtifactRepositoryOptions,
 };
 use nokvfs_meta::{
-    HoltMetadataStore, NamespaceFindField, NamespaceIndexField, NamespaceIndexRegistration,
-    NamespaceIndexRow, NamespaceIndexValue, NamespacePredicateOp, NamespacePredicateValue, NoKvFs,
+    HoltMetadataStore, MetadataStore, NamespaceFindField, NamespaceGrepMatch, NamespaceGrepRequest,
+    NamespaceGrepResult, NamespaceIndexField, NamespaceIndexRegistration, NamespaceIndexRow,
+    NamespaceIndexValue, NamespacePredicateOp, NamespacePredicateValue, NoKvFs,
 };
-use nokvfs_object::{S3ObjectStore, S3ObjectStoreOptions};
+use nokvfs_object::{ObjectStore, S3ObjectStore, S3ObjectStoreOptions};
 use nokvfs_types::{BodyDescriptor, FileType, InodeAttr, MountId};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
@@ -1752,14 +1753,33 @@ fn print_tool_registry(options: Options) -> Result<(), HarnessError> {
 
 fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError> {
     if arm == "nokv_native_v1" {
-        return Ok(agent_tool_definitions()
+        let mut tools = agent_tool_definitions()
             .into_iter()
             .map(|tool| ToolDefinition {
                 name: tool.name.to_owned(),
                 description: tool.description.to_owned(),
                 parameters: tool.parameters,
             })
-            .collect());
+            .collect::<Vec<_>>();
+        tools.push(ToolDefinition {
+            name: "grep".to_owned(),
+            description: "Search regular file contents by literal substring pattern.".to_owned(),
+            parameters: json!({
+                "type": "object",
+                "required": ["path", "pattern", "recursive"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "pattern": {"type": "string"},
+                    "recursive": {"type": "boolean"},
+                    "cursor": {"type": ["string", "null"]},
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                    "max_files": {"type": ["integer", "null"], "minimum": 1},
+                    "max_bytes": {"type": ["integer", "null"], "minimum": 1}
+                },
+                "additionalProperties": false
+            }),
+        });
+        return Ok(tools);
     }
     let names = match arm {
         "sqlite_raw_v1" => vec![
@@ -2470,13 +2490,17 @@ fn send_chat_completion(
         {
             Ok(response) => response,
             Err(err) if attempt < CHAT_COMPLETION_MAX_ATTEMPTS => {
+                log_chat_completion_send_error(attempt, &err);
                 thread::sleep(Duration::from_millis(500 * attempt as u64));
                 if err.is_timeout() || err.is_connect() || err.is_request() {
                     continue;
                 }
                 return Err(HarnessError::Http(err.to_string()));
             }
-            Err(err) => return Err(HarnessError::Http(err.to_string())),
+            Err(err) => {
+                log_chat_completion_send_error(attempt, &err);
+                return Err(HarnessError::Http(err.to_string()));
+            }
         };
         let status = response.status();
         let text = response
@@ -2500,6 +2524,38 @@ fn send_chat_completion(
         });
     }
     unreachable!("chat completion attempts loop always returns")
+}
+
+fn log_chat_completion_send_error(attempt: usize, err: &reqwest::Error) {
+    eprintln!(
+        "{}",
+        chat_completion_send_error_diagnostic(attempt, CHAT_COMPLETION_MAX_ATTEMPTS, err)
+    );
+}
+
+fn chat_completion_send_error_diagnostic(
+    attempt: usize,
+    max_attempts: usize,
+    err: &reqwest::Error,
+) -> String {
+    let mut diagnostic = format!(
+        "OpenAI chat completion send error: attempt={attempt}/{max_attempts} \
+         is_timeout={} is_connect={} is_request={} error={err}",
+        err.is_timeout(),
+        err.is_connect(),
+        err.is_request()
+    );
+    let mut source = err.source();
+    let mut index = 0;
+    while let Some(err) = source {
+        diagnostic.push_str(&format!("\n  source[{index}]={err}"));
+        source = err.source();
+        index += 1;
+    }
+    if index == 0 {
+        diagnostic.push_str("\n  source=<none>");
+    }
+    diagnostic
 }
 
 fn is_recoverable_run_api_error(err: &HarnessError) -> bool {
@@ -2782,10 +2838,56 @@ fn execute_nokv_tool(
         "ls" | "stat" | "read" | "find" => {
             execute_agent_tool(service, name, args).map_err(from_nokv)
         }
+        "grep" => execute_nokv_grep_tool(service, args),
         other => Err(HarnessError::Corpus(format!(
             "unknown NoKV native tool {other}"
         ))),
     }
+}
+
+fn execute_nokv_grep_tool<M, O>(service: &NoKvFs<M, O>, args: &Value) -> Result<Value, HarnessError>
+where
+    M: MetadataStore,
+    O: ObjectStore,
+{
+    let result = service
+        .grep_paths(NamespaceGrepRequest {
+            path: required_string_arg(args, "path")?,
+            pattern: required_string_arg(args, "pattern")?,
+            recursive: required_bool_arg(args, "recursive")?,
+            cursor: optional_string_arg(args, "cursor"),
+            limit: optional_usize_arg(args, "limit")?.unwrap_or(100),
+            max_files: optional_usize_arg(args, "max_files")?,
+            max_bytes: optional_usize_arg(args, "max_bytes")?,
+        })
+        .map_err(from_nokv)?;
+    Ok(nokv_grep_result_json(&result))
+}
+
+fn nokv_grep_result_json(result: &NamespaceGrepResult) -> Value {
+    json!({
+        "tool": "grep",
+        "path": result.path,
+        "pattern": result.pattern,
+        "recursive": result.recursive,
+        "evidence": result.evidence,
+        "snapshot_id": result.snapshot_id,
+        "matches": result.matches.iter().map(nokv_grep_match_json).collect::<Vec<_>>(),
+        "files_scanned": result.files_scanned,
+        "bytes_read": result.bytes_read,
+        "next_cursor": result.next_cursor,
+        "truncated": result.truncated,
+    })
+}
+
+fn nokv_grep_match_json(match_: &NamespaceGrepMatch) -> Value {
+    json!({
+        "path": match_.path,
+        "line_number": match_.line_number,
+        "snippet": match_.snippet,
+        "evidence": match_.evidence,
+        "generation": match_.generation,
+    })
 }
 
 fn to_json_value(value: impl Serialize) -> Result<Value, HarnessError> {
@@ -2816,11 +2918,32 @@ fn required_string_arg(args: &Value, name: &'static str) -> Result<String, Harne
         .ok_or(HarnessError::MissingOption(name))
 }
 
+fn optional_string_arg(args: &Value, name: &'static str) -> Option<String> {
+    args.get(name).and_then(Value::as_str).map(str::to_owned)
+}
+
 fn required_usize_arg(args: &Value, name: &'static str) -> Result<usize, HarnessError> {
     args.get(name)
         .and_then(Value::as_u64)
         .and_then(|value| usize::try_from(value).ok())
         .ok_or(HarnessError::MissingOption(name))
+}
+
+fn optional_usize_arg(args: &Value, name: &'static str) -> Result<Option<usize>, HarnessError> {
+    let Some(value) = args.get(name) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_u64()
+        .and_then(|value| usize::try_from(value).ok())
+        .map(Some)
+        .ok_or(HarnessError::InvalidNumber {
+            option: name,
+            value: value.to_string(),
+        })
 }
 
 fn optional_u64_arg(args: &Value, name: &'static str) -> Option<u64> {
@@ -6308,9 +6431,58 @@ mod tests {
         );
         assert_eq!(
             tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap()),
-            vec!["ls", "stat", "read", "find"]
+            vec!["ls", "stat", "read", "find", "grep"]
         );
         assert!(tool_registry_for_arm("unknown_arm_v1").is_err());
+    }
+
+    #[test]
+    fn nokv_native_grep_tool_maps_to_product_service_surface() {
+        let objects = nokvfs_object::MemoryObjectStore::new();
+        let service = NoKvFs::new(
+            MountId::new(1).unwrap(),
+            HoltMetadataStore::open_memory().unwrap(),
+            objects,
+        );
+        service.bootstrap_root(0o755, 1000, 1000).unwrap();
+        let runs = service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+        let published = service
+            .publish_artifact(nokvfs_meta::PublishArtifact {
+                parent: runs.attr.inode,
+                name: nokvfs_types::DentryName::new(b"stdout.txt".to_vec()).unwrap(),
+                producer: "unit-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                content_type: "text/plain".to_owned(),
+                manifest_id: "runs/stdout.txt".to_owned(),
+                bytes: b"first\nneedle hit\n".to_vec(),
+                mode: 0o644,
+                uid: 1000,
+                gid: 1000,
+            })
+            .unwrap();
+
+        let result = execute_nokv_grep_tool(
+            &service,
+            &json!({
+                "path": "/runs",
+                "pattern": "needle",
+                "recursive": true,
+                "limit": 10
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(result["tool"], "grep");
+        assert_eq!(result["path"], "/runs");
+        assert_eq!(result["matches"][0]["path"], "/runs/stdout.txt");
+        assert_eq!(result["matches"][0]["line_number"], 2);
+        assert_eq!(
+            result["matches"][0]["evidence"],
+            format!(
+                "nokv-native:///runs/stdout.txt@generation:{}#L2",
+                published.attr.generation
+            )
+        );
     }
 
     #[test]
@@ -6380,6 +6552,24 @@ mod tests {
     }
 
     #[test]
+    fn sqlite_raw_arm_card_marks_group_fields_as_discovery_only() {
+        let card = include_str!("../../arms/sqlite_raw.yaml");
+
+        assert!(card.contains("group fields are discovery fields only"));
+        assert!(card.contains("do not infer unlisted derived fields"));
+    }
+
+    #[test]
+    fn train_lr_batch_prompt_documents_finite_metric_policy() {
+        let task = find_task("train_lr_batch_loss_top5").unwrap();
+
+        assert!(task.prompt.contains("Ignore non-finite val_loss values"));
+        assert!(task
+            .prompt
+            .contains("runs with no finite val_loss are excluded"));
+    }
+
+    #[test]
     fn nokv_native_arm_card_does_not_embed_phase1_task_recipes() {
         let card = include_str!("../../arms/nokv_native.yaml");
         let forbidden_snippets = [
@@ -6439,10 +6629,32 @@ mod tests {
     }
 
     #[test]
-    fn phase1_tasks_are_fixed_to_ten_read_only_prompts() {
+    fn phase1_tasks_are_fixed_to_deduplicated_read_only_prompts() {
         let task_set = phase1_task_set().unwrap();
+        let task_ids: Vec<&str> = task_set
+            .tasks
+            .iter()
+            .map(|task| task.task_id.as_str())
+            .collect();
 
-        assert_eq!(task_set.tasks.len(), 10);
+        assert_eq!(
+            task_ids,
+            vec![
+                "status_counts",
+                "train_lr_batch_loss_top5",
+                "eval_best_utility_tstr",
+                "cancelled_runs_stderr",
+                "dirty_git_missing_patches",
+                "index_completed_consistency",
+                "stdout_availability_by_script",
+                "stderr_dataframe_fragmentation_top10",
+                "sample_tabdiff_checkpoint_top5",
+                "eval_privacy_default_warning_counts",
+            ]
+        );
+        assert!(!task_ids.contains(&"completed_scripts_top5"));
+        assert!(!task_ids.contains(&"train_best_min_val_loss"));
+        assert!(!task_ids.contains(&"largest_stderr_files"));
         for task in &task_set.tasks {
             assert!(!task.prompt.trim().is_empty());
             assert!(!task.gold_sql.trim().is_empty());
@@ -6464,6 +6676,99 @@ mod tests {
     }
 
     #[test]
+    fn handoff_documents_native_grep_fairness_boundary() {
+        let handoff = include_str!("../../HANDOFF.md");
+
+        assert!(handoff.contains("Native Grep Fairness Handoff"));
+        assert!(handoff.contains("not a benchmark-only shortcut"));
+        assert!(handoff.contains("basic filesystem grep"));
+        assert!(handoff.contains("scan file bytes"));
+        assert!(handoff.contains("nokvfs-protocol"));
+        assert!(handoff.contains("nokvfs-meta"));
+        assert!(handoff.contains("nokvfs-client"));
+        assert!(handoff.contains("sqlite_agentfs_v1"));
+    }
+
+    #[test]
+    fn body_inspect_gold_queries_parse_file_content_without_precomputed_indexes() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        insert_minimal_experiment(&conn, "frag-a", "completed", "sample_tabdiff.py");
+        insert_minimal_experiment(&conn, "frag-b", "completed", "sample_tabdiff.py");
+        insert_minimal_experiment(&conn, "ckpt-a", "completed", "sample_tabdiff.py");
+        insert_minimal_experiment(&conn, "ckpt-b", "completed", "sample_tabdiff.py");
+        insert_minimal_experiment(&conn, "eval-a", "completed", "eval.py");
+        insert_minimal_experiment(&conn, "eval-b", "completed", "eval.py");
+        insert_minimal_file(
+            &conn,
+            "/runs/frag-a/artifacts/stderr.txt",
+            b"intro\nPerformanceWarning: DataFrame is highly fragmented\nmiddle\nPerformanceWarning: DataFrame is highly fragmented\n",
+        );
+        insert_minimal_file(
+            &conn,
+            "/runs/frag-b/artifacts/stderr.txt",
+            b"PerformanceWarning: DataFrame is highly fragmented\n",
+        );
+        insert_minimal_file(
+            &conn,
+            "/runs/ckpt-a/artifacts/stdout.txt",
+            b"one\ntwo\nCheckpoint: best_ema_model_1.2345_42.pt (loss=1.2345, epoch=42)\n",
+        );
+        insert_minimal_file(
+            &conn,
+            "/runs/ckpt-b/artifacts/stdout.txt",
+            b"Checkpoint: best_ema_model_1.2345_42.pt (loss=1.2345, epoch=42)\n",
+        );
+        insert_minimal_file(
+            &conn,
+            "/runs/eval-a/artifacts/stdout.txt",
+            b"alpha\nWarning: Parameter 'privacy' not found in config. Using default value: True\n",
+        );
+        insert_minimal_file(
+            &conn,
+            "/runs/eval-b/artifacts/stdout.txt",
+            b"Warning: Parameter 'privacy' not found in config. Using default value: {'enabled': False}\n",
+        );
+        assert_eq!(
+            sqlite_count(&conn, "SELECT COUNT(*) FROM run_agent_index").unwrap(),
+            0
+        );
+
+        let tasks = phase1_task_set().unwrap().tasks;
+        let fragmentation = find_task_in(&tasks, "stderr_dataframe_fragmentation_top10");
+        let checkpoints = find_task_in(&tasks, "sample_tabdiff_checkpoint_top5");
+        let privacy = find_task_in(&tasks, "eval_privacy_default_warning_counts");
+
+        let rows = query_gold_rows(&conn, fragmentation).unwrap();
+        assert_eq!(rows[0]["experiment_id"], json!("frag-a"));
+        assert_eq!(rows[0]["warning_count"], json!(2));
+        assert_eq!(rows[0]["first_line_number"], json!(2));
+        assert_eq!(rows[1]["experiment_id"], json!("frag-b"));
+        assert_eq!(rows[1]["warning_count"], json!(1));
+        assert_eq!(rows[1]["first_line_number"], json!(1));
+
+        let rows = query_gold_rows(&conn, checkpoints).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(
+            rows[0]["checkpoint_filename"],
+            json!("best_ema_model_1.2345_42.pt")
+        );
+        assert_eq!(rows[0]["loss"], json!(1.2345));
+        assert_eq!(rows[0]["epoch"], json!(42));
+        assert_eq!(rows[0]["run_count"], json!(2));
+        assert_eq!(rows[0]["example_experiment_id"], json!("ckpt-a"));
+        assert_eq!(rows[0]["example_line_number"], json!(3));
+
+        let rows = query_gold_rows(&conn, privacy).unwrap();
+        assert_eq!(rows[0]["default_value"], json!("True"));
+        assert_eq!(rows[0]["run_count"], json!(1));
+        assert_eq!(rows[0]["example_line_number"], json!(2));
+        assert_eq!(rows[1]["default_value"], json!("{'enabled': False}"));
+        assert_eq!(rows[1]["run_count"], json!(1));
+        assert_eq!(rows[1]["example_line_number"], json!(1));
+    }
+
+    #[test]
     fn batch_plan_defaults_to_three_arms_ten_tasks_ten_repeats() {
         let tasks = phase1_task_set().unwrap();
         let plan = batch_plan(None, None, None, &tasks);
@@ -6478,7 +6783,7 @@ mod tests {
         assert_eq!(plan[0].task_id, "status_counts");
         assert_eq!(plan[0].repeat_index, 0);
         assert_eq!(plan[9].repeat_index, 9);
-        assert_eq!(plan[10].task_id, "completed_scripts_top5");
+        assert_eq!(plan[10].task_id, "train_lr_batch_loss_top5");
     }
 
     #[test]
@@ -6491,9 +6796,9 @@ mod tests {
         assert_eq!(plan[0].repeat_index, 0);
         assert_eq!(plan[4].task_id, "status_counts");
         assert_eq!(plan[4].repeat_index, 4);
-        assert_eq!(plan[5].task_id, "completed_scripts_top5");
+        assert_eq!(plan[5].task_id, "train_lr_batch_loss_top5");
         assert_eq!(plan[5].repeat_index, 0);
-        assert_eq!(plan[49].task_id, "stdout_availability_by_script");
+        assert_eq!(plan[49].task_id, "eval_privacy_default_warning_counts");
         assert_eq!(plan[49].repeat_index, 4);
     }
 
@@ -6609,6 +6914,23 @@ mod tests {
     }
 
     #[test]
+    fn reqwest_send_error_diagnostic_includes_classification_and_sources() {
+        let err = reqwest::blocking::Client::new()
+            .post("not a url")
+            .send()
+            .unwrap_err();
+
+        let diagnostic = chat_completion_send_error_diagnostic(2, 3, &err);
+
+        assert!(diagnostic.contains("attempt=2/3"));
+        assert!(diagnostic.contains("is_timeout="));
+        assert!(diagnostic.contains("is_connect="));
+        assert!(diagnostic.contains("is_request="));
+        assert!(diagnostic.contains("error=builder error"));
+        assert!(diagnostic.contains("source[0]="));
+    }
+
+    #[test]
     fn judge_shape_errors_are_recoverable_run_errors() {
         assert!(is_recoverable_run_judge_error(&HarnessError::Judge(
             "answer.groups must be an array".to_owned()
@@ -6620,5 +6942,30 @@ mod tests {
 
     fn tool_names(tools: &[ToolDefinition]) -> Vec<&str> {
         tools.iter().map(|tool| tool.name.as_str()).collect()
+    }
+
+    fn find_task_in<'a>(tasks: &'a [BenchmarkTask], task_id: &str) -> &'a BenchmarkTask {
+        tasks
+            .iter()
+            .find(|task| task.task_id == task_id)
+            .unwrap_or_else(|| panic!("missing task {task_id}"))
+    }
+
+    fn insert_minimal_experiment(conn: &Connection, id: &str, status: &str, script_path: &str) {
+        conn.execute(
+            "INSERT INTO experiments (experiment_id, status, script_path, tags_json, metadata_json)
+             VALUES (?1, ?2, ?3, '[]', '{}')",
+            params![id, status, script_path],
+        )
+        .unwrap();
+    }
+
+    fn insert_minimal_file(conn: &Connection, path: &str, content: &[u8]) {
+        conn.execute(
+            "INSERT INTO files (path, file_type, size_bytes, digest, content, source)
+             VALUES (?1, 'file', ?2, '', ?3, 'unit')",
+            params![path, content.len() as i64, content],
+        )
+        .unwrap();
     }
 }

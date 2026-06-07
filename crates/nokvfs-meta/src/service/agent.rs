@@ -255,6 +255,40 @@ pub struct NamespaceFindResult {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceGrepRequest {
+    pub path: String,
+    pub pattern: String,
+    pub recursive: bool,
+    pub cursor: Option<String>,
+    pub limit: usize,
+    pub max_files: Option<usize>,
+    pub max_bytes: Option<usize>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceGrepMatch {
+    pub path: String,
+    pub line_number: usize,
+    pub snippet: String,
+    pub evidence: String,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceGrepResult {
+    pub path: String,
+    pub pattern: String,
+    pub recursive: bool,
+    pub evidence: String,
+    pub snapshot_id: Option<u64>,
+    pub matches: Vec<NamespaceGrepMatch>,
+    pub files_scanned: usize,
+    pub bytes_read: usize,
+    pub next_cursor: Option<String>,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NamespaceReadFormat {
     Structured,
     Bytes,
@@ -337,6 +371,18 @@ struct TraversalEntry {
     path: String,
     name: String,
     entry: DentryWithAttr,
+}
+
+#[derive(Clone, Debug)]
+struct GrepCandidate {
+    path: String,
+    metadata: PathMetadata,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct GrepCursor {
+    candidate_index: usize,
+    line_index: usize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -521,6 +567,111 @@ where
             next_cursor: truncated.then(|| next_offset.to_string()),
             truncated,
             scanned_entries,
+        })
+    }
+
+    pub fn grep_paths(
+        &self,
+        request: NamespaceGrepRequest,
+    ) -> Result<NamespaceGrepResult, MetadError> {
+        validate_grep_request(&request)?;
+        let root = normalize_card_path(&request.path)?;
+        let limit = bounded_limit(request.limit)?;
+        let cursor = parse_grep_cursor(request.cursor.as_deref())?;
+        let version = self.read_version()?;
+        let metadata = self
+            .stat_path_from_at_version(InodeId::root(), &root, version)?
+            .ok_or(MetadError::NotFound)?;
+        let candidates = self.grep_candidates(&root, metadata, request.recursive, version)?;
+        let mut matches = Vec::new();
+        let mut files_scanned = 0_usize;
+        let mut files_scanned_this_call = 0_usize;
+        let mut bytes_read = 0_usize;
+        let mut next_cursor = None;
+
+        'candidates: for (candidate_index, candidate) in candidates.iter().enumerate() {
+            if candidate_index < cursor.candidate_index {
+                continue;
+            }
+            if let Some(max_files) = request.max_files {
+                if files_scanned_this_call >= max_files {
+                    next_cursor = Some(grep_cursor(candidate_index, 0));
+                    break;
+                }
+            }
+            let file_len = file_len(candidate.metadata.attr.size)?;
+            if let Some(max_bytes) = request.max_bytes {
+                if bytes_read.saturating_add(file_len) > max_bytes {
+                    if bytes_read == 0 {
+                        return Err(MetadError::InvalidQuery(format!(
+                            "max_bytes {max_bytes} is smaller than candidate file {}",
+                            candidate.path
+                        )));
+                    }
+                    next_cursor = Some(grep_cursor(candidate_index, 0));
+                    break;
+                }
+            }
+            let bytes = match candidate.metadata.body.as_ref() {
+                Some(body) => self.read_file_at_version(
+                    candidate.metadata.attr.inode,
+                    body,
+                    0,
+                    file_len,
+                    version,
+                )?,
+                None if file_len == 0 => Vec::new(),
+                None => return Err(MetadError::MissingBodyDescriptor),
+            };
+            bytes_read = bytes_read.saturating_add(bytes.len());
+            files_scanned += 1;
+            files_scanned_this_call += 1;
+            if bytes.contains(&0) {
+                continue;
+            }
+
+            let start_line = if candidate_index == cursor.candidate_index {
+                cursor.line_index
+            } else {
+                0
+            };
+            let text = String::from_utf8_lossy(&bytes);
+            for (line_index, line) in text.lines().enumerate().skip(start_line) {
+                if !line.contains(&request.pattern) {
+                    continue;
+                }
+                if matches.len() == limit {
+                    next_cursor = Some(grep_cursor(candidate_index, line_index));
+                    break 'candidates;
+                }
+                matches.push(NamespaceGrepMatch {
+                    path: candidate.path.clone(),
+                    line_number: line_index + 1,
+                    snippet: line.chars().take(240).collect(),
+                    evidence: format!(
+                        "{}#L{}",
+                        namespace_evidence(
+                            &candidate.path,
+                            Some(candidate.metadata.attr.generation)
+                        ),
+                        line_index + 1
+                    ),
+                    generation: candidate.metadata.attr.generation,
+                });
+            }
+        }
+
+        Ok(NamespaceGrepResult {
+            evidence: namespace_evidence(&root, None),
+            path: root,
+            pattern: request.pattern,
+            recursive: request.recursive,
+            snapshot_id: Some(version.get()),
+            matches,
+            files_scanned,
+            bytes_read,
+            truncated: next_cursor.is_some(),
+            next_cursor,
         })
     }
 
@@ -755,6 +906,68 @@ where
         Ok(())
     }
 
+    fn grep_candidates(
+        &self,
+        root_path: &str,
+        metadata: PathMetadata,
+        recursive: bool,
+        version: Version,
+    ) -> Result<Vec<GrepCandidate>, MetadError> {
+        match metadata.attr.file_type {
+            FileType::File => Ok(vec![GrepCandidate {
+                path: root_path.to_owned(),
+                metadata,
+            }]),
+            FileType::Directory => {
+                if recursive {
+                    let mut entries = Vec::new();
+                    self.collect_entries(root_path, metadata.attr.inode, version, &mut entries)?;
+                    Ok(entries
+                        .into_iter()
+                        .filter_map(|entry| {
+                            (entry.entry.attr.file_type == FileType::File).then_some(
+                                GrepCandidate {
+                                    path: entry.path,
+                                    metadata: PathMetadata {
+                                        attr: entry.entry.attr,
+                                        body: entry.entry.body,
+                                    },
+                                },
+                            )
+                        })
+                        .collect())
+                } else {
+                    let mut entries =
+                        self.read_dir_plus_at_version(metadata.attr.inode, version)?;
+                    entries.sort_by(|left, right| {
+                        left.dentry
+                            .name
+                            .as_bytes()
+                            .cmp(right.dentry.name.as_bytes())
+                    });
+                    Ok(entries
+                        .into_iter()
+                        .filter_map(|entry| {
+                            if entry.attr.file_type != FileType::File {
+                                return None;
+                            }
+                            let name =
+                                String::from_utf8_lossy(entry.dentry.name.as_bytes()).to_string();
+                            Some(GrepCandidate {
+                                path: join_card_path(root_path, &name),
+                                metadata: PathMetadata {
+                                    attr: entry.attr,
+                                    body: entry.body,
+                                },
+                            })
+                        })
+                        .collect())
+                }
+            }
+            FileType::Symlink => Err(MetadError::NotFile),
+        }
+    }
+
     fn resolve_directory_path_at_version(
         &self,
         path: &str,
@@ -944,6 +1157,25 @@ fn validate_find_request(request: &NamespaceFindRequest) -> Result<(), MetadErro
     bounded_limit(request.limit)?;
     for predicate in &request.predicates {
         validate_predicate(predicate)?;
+    }
+    Ok(())
+}
+
+fn validate_grep_request(request: &NamespaceGrepRequest) -> Result<(), MetadError> {
+    bounded_limit(request.limit)?;
+    if let Some(max_files) = request.max_files {
+        if max_files == 0 {
+            return Err(MetadError::InvalidQuery(
+                "max_files must be greater than zero".to_owned(),
+            ));
+        }
+    }
+    if let Some(max_bytes) = request.max_bytes {
+        if max_bytes == 0 {
+            return Err(MetadError::InvalidQuery(
+                "max_bytes must be greater than zero".to_owned(),
+            ));
+        }
     }
     Ok(())
 }
@@ -1439,6 +1671,30 @@ fn parse_cursor(cursor: Option<&str>) -> Result<usize, MetadError> {
         .unwrap_or("0")
         .parse::<usize>()
         .map_err(|err| MetadError::InvalidQuery(format!("invalid cursor: {err}")))
+}
+
+fn parse_grep_cursor(cursor: Option<&str>) -> Result<GrepCursor, MetadError> {
+    let Some(cursor) = cursor else {
+        return Ok(GrepCursor {
+            candidate_index: 0,
+            line_index: 0,
+        });
+    };
+    let Some((candidate, line)) = cursor.split_once(':') else {
+        return Err(MetadError::InvalidQuery("invalid grep cursor".to_owned()));
+    };
+    Ok(GrepCursor {
+        candidate_index: candidate
+            .parse::<usize>()
+            .map_err(|err| MetadError::InvalidQuery(format!("invalid grep cursor: {err}")))?,
+        line_index: line
+            .parse::<usize>()
+            .map_err(|err| MetadError::InvalidQuery(format!("invalid grep cursor: {err}")))?,
+    })
+}
+
+fn grep_cursor(candidate_index: usize, line_index: usize) -> String {
+    format!("{candidate_index}:{line_index}")
 }
 
 fn normalize_card_path(path: &str) -> Result<String, MetadError> {

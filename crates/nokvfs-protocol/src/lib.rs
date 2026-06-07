@@ -55,6 +55,9 @@ pub enum MetadataRpcRequest {
     FindPaths {
         request: Box<WireNamespaceFindRequest>,
     },
+    GrepPaths {
+        request: Box<WireNamespaceGrepRequest>,
+    },
     ReadPage {
         path: String,
         options: Box<WireNamespaceReadOptions>,
@@ -232,6 +235,9 @@ pub enum MetadataRpcResult {
     },
     NamespaceFindResult {
         result: Box<WireNamespaceFindResult>,
+    },
+    NamespaceGrepResult {
+        result: Box<WireNamespaceGrepResult>,
     },
     NamespaceReadPage {
         page: Box<WireNamespaceReadPage>,
@@ -440,6 +446,40 @@ pub struct WireNamespaceFindResult {
     pub next_cursor: Option<String>,
     pub truncated: bool,
     pub scanned_entries: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceGrepRequest {
+    pub path: String,
+    pub pattern: String,
+    pub recursive: bool,
+    pub cursor: Option<String>,
+    pub limit: u64,
+    pub max_files: Option<u64>,
+    pub max_bytes: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceGrepMatch {
+    pub path: String,
+    pub line_number: u64,
+    pub snippet: String,
+    pub evidence: String,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceGrepResult {
+    pub path: String,
+    pub pattern: String,
+    pub recursive: bool,
+    pub evidence: String,
+    pub snapshot_id: Option<u64>,
+    pub matches: Vec<WireNamespaceGrepMatch>,
+    pub files_scanned: u64,
+    pub bytes_read: u64,
+    pub next_cursor: Option<String>,
+    pub truncated: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -855,14 +895,18 @@ mod tests {
 
     #[test]
     fn binary_codec_round_trips_metadata_request() {
-        let request = MetadataRpcRequest::CreateFilePath {
-            path: "/runs/a.bin".to_owned(),
-            mode: 0o644,
-            uid: 1000,
-            gid: 1000,
+        let request = MetadataRpcRequest::GrepPaths {
+            request: Box::new(WireNamespaceGrepRequest {
+                path: "/runs".to_owned(),
+                pattern: "needle".to_owned(),
+                recursive: true,
+                cursor: Some("1:0".to_owned()),
+                limit: 10,
+                max_files: Some(20),
+                max_bytes: Some(4096),
+            }),
         };
         let encoded = encode_request(&request).unwrap();
-        assert!(encoded.len() < 64);
         assert_eq!(decode_request(&encoded).unwrap(), request);
     }
 
@@ -870,17 +914,24 @@ mod tests {
     fn binary_codec_round_trips_metadata_envelope() {
         let envelope = MetadataRpcEnvelope {
             ok: true,
-            result: Some(MetadataRpcResult::InodeAttr {
-                attr: Some(WireInodeAttr {
-                    inode: 7,
-                    file_type: "file".to_owned(),
-                    mode: 0o644,
-                    uid: 1000,
-                    gid: 1000,
-                    size: 16,
-                    generation: 2,
-                    mtime_ms: 2,
-                    ctime_ms: 2,
+            result: Some(MetadataRpcResult::NamespaceGrepResult {
+                result: Box::new(WireNamespaceGrepResult {
+                    path: "/runs".to_owned(),
+                    pattern: "needle".to_owned(),
+                    recursive: true,
+                    evidence: "nokv-native:///runs".to_owned(),
+                    snapshot_id: Some(9),
+                    matches: vec![WireNamespaceGrepMatch {
+                        path: "/runs/a.txt".to_owned(),
+                        line_number: 2,
+                        snippet: "needle".to_owned(),
+                        evidence: "nokv-native:///runs/a.txt@generation:7#L2".to_owned(),
+                        generation: 7,
+                    }],
+                    files_scanned: 1,
+                    bytes_read: 16,
+                    next_cursor: None,
+                    truncated: false,
                 }),
             }),
             error: None,

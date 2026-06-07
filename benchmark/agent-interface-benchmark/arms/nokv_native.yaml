@@ -7,23 +7,25 @@ purpose: Product-native read-only agent adapter over NoKV namespace metadata ope
 native_definition:
   meaning: >
     Native means the benchmark tools call NoKV product APIs. The harness adapts
-    OpenAI tool calls into nokvfs-client agent calls, while namespace cards,
-    list pagination, recursive find, structured reads, registered index
-    catalogs, evidence handles, snapshots, and generation checks are implemented
-    by NoKV product crates.
+    OpenAI tool calls into product calls, while namespace cards, list
+    pagination, recursive find, native grep, structured reads, registered
+    index catalogs, evidence handles, snapshots, and generation checks are
+    implemented by NoKV product crates.
   product_boundary:
     meta: >
-      nokvfs-meta owns stat_card, list_page, find_paths, read_page, namespace
-      cards, path-index catalog loading, index row matching, structured record
-      parsing, evidence construction, snapshot ids, and generation validation.
+      nokvfs-meta owns stat_card, list_page, find_paths, grep_paths, read_page,
+      namespace cards, path-index catalog loading, index row matching, file
+      content scanning, structured record parsing, evidence construction,
+      snapshot ids, and generation validation.
     client: >
-      nokvfs-client owns the agent JSON adapter: tool definitions, argument
-      parsing, bounded limits, projected find fields, and serialized tool
-      results.
+      nokvfs-client owns the agent JSON adapter for ls, stat, read, and find:
+      tool definitions, argument parsing, bounded limits, projected find
+      fields, and serialized tool results. grep is intentionally not routed
+      through nokvfs-client in this benchmark TDD increment.
     harness: >
       The benchmark harness owns only process wiring, timeout handling,
-      telemetry, and conversion from OpenAI function calls to nokvfs-client
-      agent calls.
+      telemetry, conversion from OpenAI function calls to nokvfs-client agent
+      calls, and the temporary grep mapping to the product-native meta service.
 
 data_scope:
   corpus: yanex_experiment_metadata_origami_data_gen_project
@@ -221,6 +223,42 @@ tool_contract:
       - With fields omitted, each match returns compact metadata plus all indexed_values attached to that path.
       - With fields present, each match returns only path and projected values; missing projected fields are omitted, single values are scalars, and repeated values are arrays.
       - The current JSON adapter only surfaces the catalog include at top level; use stat or read for full body, schema, or sample detail.
+
+  - name: grep
+    purpose: Search regular file contents by literal substring pattern.
+    arguments:
+      path: absolute file or directory path
+      pattern: literal case-sensitive substring
+      recursive: whether directory search scans descendant files or only immediate file children
+      cursor: optional opaque cursor from a previous grep result
+      limit: optional integer from 1 to 100
+      max_files: optional positive file scan bound
+      max_bytes: optional positive byte scan bound
+    returns:
+      type: object
+      fields:
+        tool: grep
+        path: normalized search root
+        pattern: searched literal substring
+        recursive: requested traversal mode
+        evidence: namespace evidence for the search root
+        snapshot_id: metadata snapshot id
+        matches: paginated line matches
+        files_scanned: regular files whose bytes were inspected
+        bytes_read: object bytes inspected by this call
+        next_cursor: cursor for the next page or null
+        truncated: whether more scanning remains
+    match_fields:
+      - path
+      - line_number
+      - snippet
+      - evidence
+      - generation
+    notes:
+      - grep scans file bytes; find does not.
+      - grep is literal and case-sensitive.
+      - binary files are skipped using a NUL-byte check.
+      - match evidence includes the file generation and line number.
 
 forbidden_assumptions:
   - Do not use semantic handles outside the nokv-native evidence scheme.

@@ -17,17 +17,24 @@ The harness is a local experimental benchmark tree. It is not part of
 The current NoKV product crates now expose the intended low-level native
 namespace surface:
 
-- `nokvfs-meta`: `stat_card`, `list_page`, `find_paths`, and `read_page`;
-- `nokvfs-protocol`: `StatCard`, `ListPage`, `FindPaths`, and `ReadPage` RPC
-  DTOs;
+- `nokvfs-meta`: `stat_card`, `list_page`, `find_paths`, `grep_paths`, and
+  `read_page`;
+- `nokvfs-protocol`: `StatCard`, `ListPage`, `FindPaths`, `GrepPaths`, and
+  `ReadPage` RPC DTOs;
 - `nokvfs-client`: SDK methods plus the product-native agent adapter exposing
   `ls`, `stat`, `read`, and `find`;
 - `nokvfs-server`: framed metadata RPC handlers for the same operations.
 
-The benchmark arm named `nokv_native_v1` now uses the `nokvfs-client` agent
-adapter. The harness translates OpenAI tool calls into product API calls, but
-does not own the measured card, find, structured read, index catalog,
-pagination, consistency, or evidence semantics.
+Native grep is now implemented through `nokvfs-meta`, `nokvfs-protocol`, and
+`nokvfs-server` as a product-native file-content scan. The benchmark harness
+temporarily exposes `grep` for `nokv_native_v1` by calling the product service
+directly; the follow-up cleanup is to converge that mapping into
+`nokvfs-client` beside `ls`, `stat`, `read`, and `find`.
+
+The benchmark arm named `nokv_native_v1` uses the `nokvfs-client` agent adapter
+for `ls`, `stat`, `read`, and `find`. The harness translates OpenAI tool calls
+into product API calls, but does not own the measured card, find, grep,
+structured read, index catalog, pagination, consistency, or evidence semantics.
 
 ## Corpus
 
@@ -73,8 +80,33 @@ The Phase 1 harness compares three read-only arms:
 | `sqlite_agentfs_v1` | Filesystem-shaped projection backed by SQLite. |
 | `nokv_native_v1` | NoKV product-native agent adapter. |
 
-The fixed Phase 1 tasks live in `tasks/phase1_readonly.yaml`. The rubric lives
-in `rubric/phase1_readonly.yaml`.
+The deduplicated fixed Phase 1 tasks live in `tasks/phase1_readonly.yaml`. The
+rubric lives in `rubric/phase1_readonly.yaml`.
+
+## Phase 1 Task Shape
+
+The active read-only workload is a deduplicated 10-task set:
+
+| Task | Shape |
+| --- | --- |
+| `status_counts` | Count runs by status and return the total run count. |
+| `train_lr_batch_loss_top5` | Group completed `train.py` runs by learning rate and batch size, then rank groups by average per-run minimum `val_loss`. |
+| `eval_best_utility_tstr` | Select the completed `eval.py` run with the highest latest `utility_tstr_roc_auc` and return related metrics. |
+| `cancelled_runs_stderr` | List non-completed runs with `stderr.txt` availability and byte size. |
+| `dirty_git_missing_patches` | Find dirty-git runs whose declared patch artifact is unavailable. |
+| `index_completed_consistency` | Check whether the completed-run namespace index agrees with run metadata. |
+| `stdout_availability_by_script` | Count completed runs and available `stdout.txt` artifacts by script. |
+| `stderr_dataframe_fragmentation_top10` | Inspect completed `sample_tabdiff.py` `stderr.txt` bodies for `PerformanceWarning: DataFrame is highly fragmented` and rank runs by warning count. |
+| `sample_tabdiff_checkpoint_top5` | Inspect completed `sample_tabdiff.py` `stdout.txt` bodies for `Checkpoint: best_ema_model...` lines and group parsed checkpoint filenames by run count. |
+| `eval_privacy_default_warning_counts` | Inspect completed `eval.py` `stdout.txt` bodies for `Parameter 'privacy' not found in config` warning lines and group the printed default values. |
+
+The three `body_inspection` tasks intentionally have no precomputed content
+indexes. They may use ordinary namespace metadata to locate candidate runs and
+artifacts, but the decisive facts come from runtime inspection of `stdout.txt`
+or `stderr.txt` bodies. Do not add task-specific fields to `run_agent_index`,
+generated `/index/*.json` files, or NoKV catalog cards for these facts. The raw
+SQLite arm scans `files.content`; the NoKV native arm should use
+product-native namespace body scanning such as `grep` plus targeted `read`.
 
 ## Valid Comparisons
 
@@ -163,7 +195,7 @@ Run one task for one arm:
 ```bash
 ./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
   --arm nokv_native_v1 \
-  --task-id largest_stderr_files \
+  --task-id cancelled_runs_stderr \
   --repeats 1 \
   --output-jsonl benchmark/data/yanex-demo/results/phase1.jsonl
 ```

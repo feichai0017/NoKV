@@ -95,6 +95,7 @@ interface_guidance:
   - Inspect the schema before writing non-trivial SQL.
   - Prefer aggregate SQL for structured analytics.
   - Use run_agent_index or run_agent_index_values when the materialized schema directly covers the needed read-only fact.
+  - run_agent_index group fields are discovery fields only; do not infer unlisted derived fields.
   - Use read_blob only when task evidence requires artifact body bytes.
   - Cite row and blob evidence handles returned by query_sql/read_blob.
 
