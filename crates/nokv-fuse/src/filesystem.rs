@@ -48,8 +48,8 @@ use directory::{
 };
 use errors::errno;
 use locks::{
-    advisory_lock_kind_from_fuse, advisory_lock_kind_to_fuse, fuse_rename_mode, FuseLockRequest,
-    FuseRenameMode,
+    advisory_lock_kind_from_fuse, advisory_lock_kind_to_fuse, fuse_lock_type, fuse_rename_mode,
+    FuseLockRequest, FuseRenameMode,
 };
 use options::{
     mount_options, FuseStatfs, STATFS_BLOCK_SIZE, STATFS_NAME_MAX, STATFS_TOTAL_BYTES,
@@ -2253,7 +2253,7 @@ where
                 Ok(typ) => reply.locked(lock.start, lock.end, typ, lock.pid),
                 Err(err) => reply.error(err),
             },
-            Ok(None) => reply.locked(start, end, i32::from(libc::F_UNLCK), 0),
+            Ok(None) => reply.locked(start, end, fuse_lock_type(libc::F_UNLCK), 0),
             Err(err) => reply.error(errno(err)),
         }
     }

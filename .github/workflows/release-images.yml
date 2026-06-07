@@ -95,8 +95,8 @@ jobs:
           build-args: |
             RUST_VERSION=${{ inputs.rust_version }}
             DEBIAN_VERSION=${{ inputs.debian_version }}
-            NOKV_PACKAGE=nokvfs-cli
-            NOKV_BINARY=nokv-fs
+            NOKV_PACKAGE=nokv
+            NOKV_BINARY=nokv
           push: true
           tags: ${{ steps.tags.outputs.ghcr }}
 
@@ -118,7 +118,7 @@ jobs:
           build-args: |
             RUST_VERSION=${{ inputs.rust_version }}
             DEBIAN_VERSION=${{ inputs.debian_version }}
-            NOKV_PACKAGE=nokvfs-cli
-            NOKV_BINARY=nokv-fs
+            NOKV_PACKAGE=nokv
+            NOKV_BINARY=nokv
           push: true
           tags: ${{ steps.tags.outputs.dockerhub }}

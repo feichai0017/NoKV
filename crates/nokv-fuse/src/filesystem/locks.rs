@@ -19,12 +19,16 @@ pub(super) enum FuseRenameMode {
     NoReplace,
 }
 
+pub(super) fn fuse_lock_type(lock_type: impl Into<i32>) -> i32 {
+    lock_type.into()
+}
+
 pub(super) fn advisory_lock_kind_from_fuse(typ: i32) -> Result<AdvisoryLockKind, Errno> {
-    if typ == i32::from(libc::F_RDLCK) {
+    if typ == fuse_lock_type(libc::F_RDLCK) {
         Ok(AdvisoryLockKind::Read)
-    } else if typ == i32::from(libc::F_WRLCK) {
+    } else if typ == fuse_lock_type(libc::F_WRLCK) {
         Ok(AdvisoryLockKind::Write)
-    } else if typ == i32::from(libc::F_UNLCK) {
+    } else if typ == fuse_lock_type(libc::F_UNLCK) {
         Ok(AdvisoryLockKind::Unlock)
     } else {
         Err(Errno::EINVAL)
@@ -33,9 +37,9 @@ pub(super) fn advisory_lock_kind_from_fuse(typ: i32) -> Result<AdvisoryLockKind,
 
 pub(super) fn advisory_lock_kind_to_fuse(kind: AdvisoryLockKind) -> Result<i32, Errno> {
     match kind {
-        AdvisoryLockKind::Read => Ok(i32::from(libc::F_RDLCK)),
-        AdvisoryLockKind::Write => Ok(i32::from(libc::F_WRLCK)),
-        AdvisoryLockKind::Unlock => Ok(i32::from(libc::F_UNLCK)),
+        AdvisoryLockKind::Read => Ok(fuse_lock_type(libc::F_RDLCK)),
+        AdvisoryLockKind::Write => Ok(fuse_lock_type(libc::F_WRLCK)),
+        AdvisoryLockKind::Unlock => Ok(fuse_lock_type(libc::F_UNLCK)),
     }
 }
 

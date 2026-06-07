@@ -978,13 +978,7 @@ pub(crate) mod tests {
                     .iter()
                     .filter(|(id, _)| excluded != Some(**id))
                     .all(|(_, running)| {
-                        running.server.refresh_metadata_view().unwrap();
-                        running
-                            .server
-                            .service()
-                            .lookup_path(path)
-                            .unwrap()
-                            .is_some()
+                        path_visible_on_openraft_server(running, path).unwrap_or(false)
                     });
             if all_visible {
                 return;
@@ -996,6 +990,22 @@ pub(crate) mod tests {
             );
             thread::sleep(Duration::from_millis(20));
         }
+    }
+
+    fn path_visible_on_openraft_server(
+        running: &RunningTestServer,
+        path: &str,
+    ) -> Result<bool, String> {
+        running
+            .server
+            .refresh_metadata_view()
+            .map_err(|err| format!("refresh failed: {err}"))?;
+        running
+            .server
+            .service()
+            .lookup_path(path)
+            .map(|entry| entry.is_some())
+            .map_err(|err| format!("lookup failed: {err}"))
     }
 
     fn openraft_server_path_states(
@@ -1013,13 +1023,10 @@ pub(crate) mod tests {
                     .as_ref()
                     .expect("OpenRaft test server has metadata raft")
                     .stats();
-                running.server.refresh_metadata_view().unwrap();
-                let visible = running
-                    .server
-                    .service()
-                    .lookup_path(path)
-                    .unwrap()
-                    .is_some();
+                let visible = match path_visible_on_openraft_server(running, path) {
+                    Ok(visible) => visible.to_string(),
+                    Err(err) => format!("error={err}"),
+                };
                 format!(
                     "node={id} leader={:?} state={} applied={:?} visible={visible}",
                     stats.current_leader, stats.state, stats.last_applied_index
