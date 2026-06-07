@@ -63,6 +63,7 @@ pub struct ObjectWritebackUploader<O> {
     stats: Arc<Mutex<ObjectWritebackStats>>,
     cache: WritebackCache,
     store: O,
+    block_cache: Option<ObjectBlockCache>,
     upload_workers_per_request: usize,
     _state: PhantomData<O>,
 }
@@ -587,7 +588,12 @@ impl<O> ObjectWritebackUploader<O>
 where
     O: ObjectStore + Clone + Send + Sync + 'static,
 {
-    pub fn new(store: O, cache: WritebackCache, options: ObjectWritebackOptions) -> Self {
+    pub fn new(
+        store: O,
+        cache: WritebackCache,
+        block_cache: Option<ObjectBlockCache>,
+        options: ObjectWritebackOptions,
+    ) -> Self {
         let capacity = options.queue_capacity.max(1);
         let workers = options.workers.max(1);
         let (sender, receiver) = mpsc::sync_channel::<ObjectWritebackJob>(capacity);
@@ -596,6 +602,7 @@ where
         for worker in 0..workers {
             let store = store.clone();
             let cache = cache.clone();
+            let block_cache = block_cache.clone();
             let receiver = Arc::clone(&receiver);
             let stats = Arc::clone(&stats);
             let upload_workers = options.upload_workers_per_request.max(1);
@@ -612,7 +619,13 @@ where
                 };
                 let queue_wait = job.enqueued_at.elapsed();
                 let upload_start = Instant::now();
-                let result = upload_writeback_request(&store, &cache, job.request, upload_workers);
+                let result = upload_writeback_request(
+                    &store,
+                    &cache,
+                    block_cache.as_ref().map(|c| c as &(dyn BlockCache + Sync)),
+                    job.request,
+                    upload_workers,
+                );
                 let upload_elapsed = upload_start.elapsed();
                 if let Ok(mut stats) = stats.lock() {
                     match &result {
@@ -636,6 +649,7 @@ where
             stats,
             cache,
             store,
+            block_cache,
             upload_workers_per_request: options.upload_workers_per_request.max(1),
             _state: PhantomData,
         }
@@ -685,6 +699,9 @@ where
                 let result = upload_writeback_request(
                     &self.store,
                     &self.cache,
+                    self.block_cache
+                        .as_ref()
+                        .map(|c| c as &(dyn BlockCache + Sync)),
                     job.request,
                     self.upload_workers_per_request,
                 );
@@ -767,6 +784,7 @@ fn duration_ns(duration: Duration) -> u64 {
 fn upload_writeback_request<O>(
     store: &O,
     cache: &WritebackCache,
+    block_cache: Option<&(dyn BlockCache + Sync)>,
     request: ObjectWritebackRequest,
     workers: usize,
 ) -> Result<ChunkedWrite, ObjectError>
@@ -786,6 +804,7 @@ where
         request.options,
         request.block_index_base,
         workers,
+        block_cache,
     );
     if result.is_ok() {
         for range in &request.ranges {

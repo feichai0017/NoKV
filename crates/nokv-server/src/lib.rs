@@ -12,7 +12,6 @@ mod rpc;
 mod server;
 
 pub use options::{
-    MetadataMode, MetadataRaftPeerOptions, ServerOptions,
-    DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX, DEFAULT_SERVER_BIND,
+    MetadataMode, ServerOptions, DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX, DEFAULT_SERVER_BIND,
 };
 pub use server::{run, Server, ServerError};

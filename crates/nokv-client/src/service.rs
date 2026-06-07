@@ -2,17 +2,17 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use nokv_meta::{
-    DentryWithAttr, PublishArtifactStagedSession, RenameReplaceResult, UpdateAttr, XattrSetMode,
+    DentryWithAttr, PublishArtifactStagedSession, RenameReplaceResult, SubtreeDelta, UpdateAttr,
+    XattrSetMode,
 };
 use nokv_object::ObjectReadPlan;
 use nokv_protocol::{
     decode_envelope, decode_name_cursor, decode_xattr_name, encode_advisory_lock_kind,
     encode_file_type, encode_name_cursor, encode_request, encode_xattr_name, MetadataRpcRequest,
-    MetadataRpcResult, WireMetadataPosition,
+    MetadataRpcResult,
 };
 use nokv_types::{
     AdvisoryLock, AdvisoryLockRequest, BodyDescriptor, ChunkManifest, DentryName, InodeAttr,
@@ -27,13 +27,11 @@ use crate::framed::{read_frame, write_frame, FRAMED_RPC_MAGIC};
 use crate::wire::*;
 
 const DEFAULT_RPC_TIMEOUT: Duration = Duration::from_secs(10);
-const READ_NOT_FRESH_RETRY_INTERVAL: Duration = Duration::from_millis(25);
 const MAX_BATCH_RPC_REQUESTS: usize = 128;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MetadataClientOptions {
     pub address: SocketAddr,
-    pub read_endpoints: Vec<SocketAddr>,
     pub timeout: Duration,
 }
 
@@ -41,7 +39,6 @@ pub struct MetadataClient {
     options: MetadataClientOptions,
     next_request_id: AtomicU64,
     connections: Mutex<HashMap<SocketAddr, Arc<PipelinedConnection>>>,
-    observed_position: Mutex<Option<WireMetadataPosition>>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -71,10 +68,20 @@ pub struct ClientReadDirPlusPage {
     pub next_cursor: Option<DentryName>,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ClientMetadataPosition {
-    pub term: u64,
-    pub index: u64,
+/// Result of a copy-on-write subtree clone: the fork's namespace root inode and the
+/// retained snapshot pin that protects the shared base blocks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CloneOutcome {
+    pub root: InodeId,
+    pub snapshot_id: u64,
+}
+
+/// Result of pinning a subtree snapshot: the durable `snapshot_id` to pass to a
+/// later rollback and the read version the snapshot captured.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct SnapshotOutcome {
+    pub snapshot_id: u64,
+    pub read_version: u64,
 }
 
 const DEFAULT_LIST_PAGE_SIZE: usize = 1024;
@@ -83,14 +90,8 @@ impl MetadataClientOptions {
     pub fn new(address: SocketAddr) -> Self {
         Self {
             address,
-            read_endpoints: Vec::new(),
             timeout: DEFAULT_RPC_TIMEOUT,
         }
-    }
-
-    pub fn with_read_endpoints(mut self, endpoints: Vec<SocketAddr>) -> Self {
-        self.read_endpoints = endpoints;
-        self
     }
 }
 
@@ -100,7 +101,6 @@ impl MetadataClient {
             options,
             next_request_id: AtomicU64::new(1),
             connections: Mutex::new(HashMap::new()),
-            observed_position: Mutex::new(None),
         }
     }
 
@@ -108,38 +108,9 @@ impl MetadataClient {
         Self::new(MetadataClientOptions::new(address))
     }
 
-    pub fn observed_metadata_position(&self) -> Option<ClientMetadataPosition> {
-        self.observed_position
-            .lock()
-            .expect("metadata observed position")
-            .map(wire_metadata_position)
-    }
-
-    pub fn observe_metadata_position(&self, position: ClientMetadataPosition) {
-        self.record_observed_position(metadata_position_to_wire(position));
-    }
-
     pub fn bootstrap_root(&self, mode: u32, uid: u32, gid: u32) -> Result<(), ClientError> {
         match self.call(MetadataRpcRequest::BootstrapRoot { mode, uid, gid })? {
             MetadataRpcResult::InodeAttr { .. } => Ok(()),
-            other => Err(unexpected_result(other)),
-        }
-    }
-
-    pub fn add_metadata_raft_learner(
-        &self,
-        node: u64,
-        address: SocketAddr,
-        blocking: bool,
-    ) -> Result<ClientMetadataPosition, ClientError> {
-        match self.call(MetadataRpcRequest::MetadataRaftAddLearner {
-            node,
-            address: address.to_string(),
-            blocking,
-        })? {
-            MetadataRpcResult::MetadataPosition { position } => {
-                Ok(wire_metadata_position(position))
-            }
             other => Err(unexpected_result(other)),
         }
     }
@@ -181,6 +152,20 @@ impl MetadataClient {
             MetadataRpcResult::Dentry { entry } => {
                 entry.map(|entry| wire_dentry(*entry)).transpose()
             }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn current_dentry_version(
+        &self,
+        parent: InodeId,
+        name: DentryName,
+    ) -> Result<Option<u64>, ClientError> {
+        match self.call(MetadataRpcRequest::CurrentDentryVersion {
+            parent: parent.get(),
+            name: rpc_name(&name)?,
+        })? {
+            MetadataRpcResult::DentryVersion { version } => Ok(version),
             other => Err(unexpected_result(other)),
         }
     }
@@ -890,6 +875,53 @@ impl MetadataClient {
         }
     }
 
+    pub fn clone_subtree_path(&self, src: &str, dst: &str) -> Result<CloneOutcome, ClientError> {
+        match self.call(MetadataRpcRequest::CloneSubtreePath {
+            src_path: src.to_owned(),
+            dst_path: dst.to_owned(),
+        })? {
+            MetadataRpcResult::CloneSubtree { root, snapshot_id } => Ok(CloneOutcome {
+                root: inode_id(root)?,
+                snapshot_id,
+            }),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn diff_subtrees(&self, a: &str, b: &str) -> Result<Vec<SubtreeDelta>, ClientError> {
+        match self.call(MetadataRpcRequest::DiffSubtrees {
+            a_path: a.to_owned(),
+            b_path: b.to_owned(),
+        })? {
+            MetadataRpcResult::SubtreeDeltas { deltas } => {
+                Ok(deltas.into_iter().map(subtree_delta).collect())
+            }
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn snapshot_subtree_path(&self, path: &str) -> Result<SnapshotOutcome, ClientError> {
+        match self.call(MetadataRpcRequest::SnapshotSubtreePath {
+            path: path.to_owned(),
+        })? {
+            MetadataRpcResult::Snapshot { snapshot } => Ok(SnapshotOutcome {
+                snapshot_id: snapshot.snapshot_id,
+                read_version: snapshot.read_version,
+            }),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn rollback_subtree_path(&self, target: &str, snapshot_id: u64) -> Result<(), ClientError> {
+        match self.call(MetadataRpcRequest::RollbackSubtreePath {
+            target_path: target.to_owned(),
+            snapshot_id,
+        })? {
+            MetadataRpcResult::Unit => Ok(()),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     pub fn snapshot_subtree(&self, root: InodeId) -> Result<SnapshotPin, ClientError> {
         match self.call(MetadataRpcRequest::SnapshotSubtree { root: root.get() })? {
             MetadataRpcResult::Snapshot { snapshot } => wire_snapshot(snapshot),
@@ -1110,127 +1142,22 @@ impl MetadataClient {
     }
 
     fn call(&self, request: MetadataRpcRequest) -> Result<MetadataRpcResult, ClientError> {
-        let mut endpoints = self.request_endpoints(&request);
-        if endpoints.is_empty() {
-            return Err(ClientError::Protocol(
-                "metadata request had no target endpoint".to_owned(),
-            ));
-        }
-        let started = Instant::now();
-        let mut fallback_error = None;
-
-        loop {
-            let mut saw_stale_read = false;
-            let mut saw_forward_to_leader = false;
-            let mut index = 0;
-            while index < endpoints.len() {
-                let address = endpoints[index];
-                index += 1;
-                let request = self.request_with_observed_position(request.clone());
-                match self.call_at(address, &request) {
-                    Ok(result) => return Ok(result),
-                    Err(err @ ClientError::ReadNotFresh { .. }) => {
-                        saw_stale_read = true;
-                        fallback_error = Some(err);
-                    }
-                    Err(
-                        err @ ClientError::ForwardToLeader {
-                            address: Some(leader),
-                            ..
-                        },
-                    ) => {
-                        saw_forward_to_leader = true;
-                        fallback_error = Some(err);
-                        if !endpoints.contains(&leader) {
-                            endpoints.insert(index, leader);
-                        }
-                    }
-                    Err(err @ ClientError::ForwardToLeader { address: None, .. }) => {
-                        saw_forward_to_leader = true;
-                        fallback_error = Some(err);
-                    }
-                    Err(err @ ClientError::Io(_)) => {
-                        self.drop_connection(address);
-                        fallback_error = Some(err);
-                    }
-                    Err(err) => return Err(err),
-                }
-            }
-
-            if !saw_stale_read && !saw_forward_to_leader {
-                break;
-            }
-            let Some(delay) = read_not_fresh_retry_delay(started, self.options.timeout) else {
-                break;
-            };
-            thread::sleep(delay);
-        }
-
-        Err(fallback_error.unwrap_or_else(|| {
-            ClientError::Protocol("metadata request had no target endpoint".to_owned())
-        }))
-    }
-
-    fn call_at(
-        &self,
-        address: SocketAddr,
-        request: &MetadataRpcRequest,
-    ) -> Result<MetadataRpcResult, ClientError> {
-        let body = encode_request(request).map_err(|err| ClientError::Protocol(err.to_string()))?;
+        let address = self.options.address;
+        let body =
+            encode_request(&request).map_err(|err| ClientError::Protocol(err.to_string()))?;
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let connection = self.connection(address)?;
-        let body = connection.call(request_id, &body, self.options.timeout)?;
+        let body = match connection.call(request_id, &body, self.options.timeout) {
+            Ok(body) => body,
+            Err(err @ ClientError::Io(_)) => {
+                self.drop_connection(address);
+                return Err(err);
+            }
+            Err(err) => return Err(err),
+        };
         let envelope =
             decode_envelope(&body).map_err(|err| ClientError::Protocol(err.to_string()))?;
-        if envelope.ok {
-            if let Some(position) = envelope.metadata_position {
-                self.record_observed_position(position);
-            }
-        }
         envelope_result(envelope)
-    }
-
-    fn request_endpoints(&self, request: &MetadataRpcRequest) -> Vec<SocketAddr> {
-        if !request_uses_read_endpoints(request) {
-            return vec![self.options.address];
-        }
-        let mut endpoints = Vec::with_capacity(self.options.read_endpoints.len() + 1);
-        for endpoint in &self.options.read_endpoints {
-            if !endpoints.contains(endpoint) {
-                endpoints.push(*endpoint);
-            }
-        }
-        if !endpoints.contains(&self.options.address) {
-            endpoints.push(self.options.address);
-        }
-        endpoints
-    }
-
-    fn request_with_observed_position(&self, request: MetadataRpcRequest) -> MetadataRpcRequest {
-        if !request_requires_observed_position(&request) {
-            return request;
-        }
-        let Some(position) = *self
-            .observed_position
-            .lock()
-            .expect("metadata observed position")
-        else {
-            return request;
-        };
-        MetadataRpcRequest::RequireApplied {
-            position,
-            request: Box::new(request),
-        }
-    }
-
-    fn record_observed_position(&self, position: WireMetadataPosition) {
-        let mut observed = self
-            .observed_position
-            .lock()
-            .expect("metadata observed position");
-        if observed.map(|existing| position > existing).unwrap_or(true) {
-            *observed = Some(position);
-        }
     }
 
     fn connection(&self, address: SocketAddr) -> Result<Arc<PipelinedConnection>, ClientError> {
@@ -1248,35 +1175,6 @@ impl MetadataClient {
             .lock()
             .expect("metadata rpc connections")
             .remove(&address);
-    }
-}
-
-fn request_uses_read_endpoints(request: &MetadataRpcRequest) -> bool {
-    match request {
-        MetadataRpcRequest::Batch { requests } => {
-            !requests.is_empty() && requests.iter().all(request_uses_read_endpoints)
-        }
-        MetadataRpcRequest::RequireApplied { request, .. } => request_uses_read_endpoints(request),
-        MetadataRpcRequest::GetAttr { .. }
-        | MetadataRpcRequest::GetAttrAtSnapshot { .. }
-        | MetadataRpcRequest::LookupPlus { .. }
-        | MetadataRpcRequest::LookupPlusAtSnapshot { .. }
-        | MetadataRpcRequest::LookupPath { .. }
-        | MetadataRpcRequest::StatPath { .. }
-        | MetadataRpcRequest::ReadDirPlus { .. }
-        | MetadataRpcRequest::ReadDirPlusPage { .. }
-        | MetadataRpcRequest::ReadDirPlusAtSnapshot { .. }
-        | MetadataRpcRequest::ReadDirPlusPath { .. }
-        | MetadataRpcRequest::ReadDirPlusPathPage { .. }
-        | MetadataRpcRequest::ReadIndexedPathPage { .. }
-        | MetadataRpcRequest::ReadFileAtSnapshot { .. }
-        | MetadataRpcRequest::ReadFilePathAtSnapshot { .. }
-        | MetadataRpcRequest::ReadSymlink { .. }
-        | MetadataRpcRequest::ReadSymlinkAtSnapshot { .. }
-        | MetadataRpcRequest::ReadBodyPlan { .. }
-        | MetadataRpcRequest::ReadPathPlan { .. }
-        | MetadataRpcRequest::SnapshotPin { .. } => true,
-        _ => false,
     }
 }
 
@@ -1315,29 +1213,6 @@ fn create_files_request(
         uid,
         gid,
     })
-}
-
-fn request_requires_observed_position(request: &MetadataRpcRequest) -> bool {
-    match request {
-        MetadataRpcRequest::Batch { requests } => {
-            requests.iter().any(request_requires_observed_position)
-        }
-        MetadataRpcRequest::RequireApplied { .. }
-        | MetadataRpcRequest::BootstrapRoot { .. }
-        | MetadataRpcRequest::MetadataRaftAddLearner { .. }
-        | MetadataRpcRequest::MetadataRaftVote { .. }
-        | MetadataRpcRequest::MetadataRaftAppendEntries { .. }
-        | MetadataRpcRequest::MetadataRaftInstallSnapshot { .. } => false,
-        _ => true,
-    }
-}
-
-fn read_not_fresh_retry_delay(started: Instant, timeout: Duration) -> Option<Duration> {
-    let elapsed = started.elapsed();
-    if elapsed >= timeout {
-        return None;
-    }
-    Some((timeout - elapsed).min(READ_NOT_FRESH_RETRY_INTERVAL))
 }
 
 #[cfg(test)]

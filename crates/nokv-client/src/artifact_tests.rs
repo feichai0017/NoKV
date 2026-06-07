@@ -2,7 +2,6 @@ use std::net::{SocketAddr, TcpListener};
 use std::thread;
 use std::time::Duration;
 
-use nokv_cluster::{FileMetadataRaftLogSync, NodeId};
 use nokv_meta::{HistoryGcOptions, ObjectGcOptions};
 use nokv_object::{MemoryObjectStore, ObjectStoreConfig, S3ObjectStoreOptions};
 use nokv_server::{MetadataMode, ServerOptions};
@@ -28,11 +27,6 @@ fn spawn_test_server() -> SocketAddr {
         mount: MountId::new(1).unwrap(),
         meta_path: dir.path().join("meta"),
         metadata_mode: MetadataMode::Local,
-        metadata_raft_node: NodeId::new(1).unwrap(),
-        metadata_raft_voters: Vec::new(),
-        metadata_raft_learners: Vec::new(),
-        metadata_raft_peers: Vec::new(),
-        metadata_raft_log_sync: FileMetadataRaftLogSync::Data,
         metadata_checkpoint_archive_prefix: None,
         object: fake_object_config(),
         uid: 1000,

@@ -362,7 +362,16 @@ where
             attr.mtime_ms = current_time_ms();
         }
         attr.ctime_ms = changes.ctime_ms.unwrap_or_else(current_time_ms);
-        attr.generation = version.get();
+        // `attr.generation` is the file's content generation and the key under
+        // which the body summary / chunk manifests are stored (reads resolve the
+        // body via `attr.generation`). Only advance it when the body actually
+        // changes (a size change re-stages the body below). An attribute-only
+        // update (chmod/chown/utimes) must leave it equal to the existing
+        // `body.generation`; bumping it would point the dentry at a generation
+        // that has no body summary, surfacing as MissingBodyDescriptor on read.
+        if changes.size.is_some() {
+            attr.generation = version.get();
+        }
 
         let mut body = entry.body.clone();
         let mut chunks = Vec::new();

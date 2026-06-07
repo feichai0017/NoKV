@@ -1,20 +1,19 @@
-use std::net::SocketAddr;
-
-use nokv_meta::{UpdateAttr, XattrSetMode};
+use nokv_meta::{SubtreeDelta, SubtreeDeltaKind, UpdateAttr, XattrSetMode};
 use nokv_object::{
     chunk_manifest_from_stored_chunk, ObjectReadBlock, ObjectReadPlan, StagedObjectSet, StoredChunk,
 };
 use nokv_protocol::{
     WireAdvisoryLock, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest, WireDentryWithAttr,
-    WireMetadataError, WireMetadataPosition, WireObjectReadBlock, WirePathMetadata,
-    WirePreparedArtifact, WireStagedObject, WireStagedObjectSet, WireUpdateAttr, WireXattrSetMode,
+    WireMetadataError, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireStagedObject, WireStagedObjectSet, WireSubtreeDelta, WireSubtreeDeltaKind, WireUpdateAttr,
+    WireXattrSetMode,
 };
 use nokv_types::{
     parse_absolute_path, AdvisoryLock, BodyDescriptor, ChunkManifest, DentryName, InodeId,
     PathMetadata, SnapshotPin,
 };
 
-use crate::service::{ClientMetadataPosition, ClientPreparedArtifact};
+use crate::service::ClientPreparedArtifact;
 use crate::ClientError;
 
 pub(crate) fn rpc_parent_and_name(path: &str) -> Result<(String, String), ClientError> {
@@ -162,22 +161,19 @@ pub(crate) fn wire_snapshot(
     snapshot.into_snapshot_pin().map_err(protocol_error)
 }
 
-pub(crate) fn wire_metadata_position(position: WireMetadataPosition) -> ClientMetadataPosition {
-    ClientMetadataPosition {
-        term: position.term,
-        index: position.index,
+pub(crate) fn subtree_delta(delta: WireSubtreeDelta) -> SubtreeDelta {
+    SubtreeDelta {
+        path: delta.path,
+        kind: match delta.kind {
+            WireSubtreeDeltaKind::Added => SubtreeDeltaKind::Added,
+            WireSubtreeDeltaKind::Removed => SubtreeDeltaKind::Removed,
+            WireSubtreeDeltaKind::Modified => SubtreeDeltaKind::Modified,
+        },
     }
 }
 
 pub(crate) fn wire_advisory_lock(lock: WireAdvisoryLock) -> Result<AdvisoryLock, ClientError> {
     lock.into_advisory_lock().map_err(protocol_error)
-}
-
-pub(crate) fn metadata_position_to_wire(position: ClientMetadataPosition) -> WireMetadataPosition {
-    WireMetadataPosition {
-        term: position.term,
-        index: position.index,
-    }
 }
 
 pub(crate) fn inode_id(raw: u64) -> Result<InodeId, ClientError> {
@@ -229,26 +225,6 @@ pub(crate) fn client_error_from_wire_error(error: WireMetadataError) -> ClientEr
         WireMetadataError::PredicateFailed => ClientError::Metadata(
             nokv_meta::MetadError::Metadata(nokv_meta::MetadataError::PredicateFailed),
         ),
-        WireMetadataError::ReadNotFresh { required, applied } => ClientError::ReadNotFresh {
-            required_term: required.term,
-            required_index: required.index,
-            applied_term: applied.map(|position| position.term),
-            applied_index: applied.map(|position| position.index),
-        },
-        WireMetadataError::ForwardToLeader { leader_id, address } => {
-            let address = match address {
-                Some(address) => match address.parse::<SocketAddr>() {
-                    Ok(address) => Some(address),
-                    Err(err) => {
-                        return ClientError::Protocol(format!(
-                            "metadata leader address {address:?} is invalid: {err}"
-                        ));
-                    }
-                },
-                None => None,
-            };
-            ClientError::ForwardToLeader { leader_id, address }
-        }
         WireMetadataError::StaleBodyGeneration { expected, current } => {
             ClientError::Metadata(nokv_meta::MetadError::StaleBodyGeneration { expected, current })
         }

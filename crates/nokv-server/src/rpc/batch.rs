@@ -75,7 +75,7 @@ pub(super) fn execute_batch(
 
 fn execute_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
     match super::execute(server, request) {
-        Ok(result) => ok_envelope(server, result),
+        Ok(result) => ok_envelope(result),
         Err(err) => err_envelope(err),
     }
 }
@@ -189,15 +189,11 @@ pub(super) fn create_path_batch_envelopes(
         Ok(entries) => Ok(entries
             .iter()
             .map(|entry| {
-                ok_envelope(
-                    server,
-                    MetadataRpcResult::Dentry {
-                        entry: Some(Box::new(wire_dentry(entry))),
-                    },
-                )
+                ok_envelope(MetadataRpcResult::Dentry {
+                    entry: Some(Box::new(wire_dentry(entry))),
+                })
             })
             .collect()),
-        Err(err) if server_error_is_forward_to_leader(&err) => Err(err),
         Err(_) => Ok(names
             .into_iter()
             .map(|name| {
@@ -208,15 +204,6 @@ pub(super) fn create_path_batch_envelopes(
             })
             .collect()),
     }
-}
-
-fn server_error_is_forward_to_leader(err: &ServerError) -> bool {
-    matches!(
-        err,
-        ServerError::Metadata(MetadError::Metadata(
-            nokv_meta::MetadataError::ForwardToLeader { .. }
-        ))
-    )
 }
 
 fn remove_path_batch_envelopes(
@@ -245,12 +232,9 @@ fn remove_path_batch_envelopes(
         Ok(results) => results
             .into_iter()
             .map(|result| match result {
-                Ok(entry) => ok_envelope(
-                    server,
-                    MetadataRpcResult::Dentry {
-                        entry: Some(Box::new(wire_dentry(&entry))),
-                    },
-                ),
+                Ok(entry) => ok_envelope(MetadataRpcResult::Dentry {
+                    entry: Some(Box::new(wire_dentry(&entry))),
+                }),
                 Err(err) => err_envelope(ServerError::Metadata(err)),
             })
             .collect(),
@@ -299,18 +283,11 @@ fn create_path_group_envelopes(
             for (group, result) in groups.into_iter().zip(group_results) {
                 match result {
                     Ok(entries) => out.extend(entries.iter().map(|entry| {
-                        ok_envelope(
-                            server,
-                            MetadataRpcResult::Dentry {
-                                entry: Some(Box::new(wire_dentry(entry))),
-                            },
-                        )
+                        ok_envelope(MetadataRpcResult::Dentry {
+                            entry: Some(Box::new(wire_dentry(entry))),
+                        })
                     })),
-                    Err(err) => {
-                        let err = ServerError::Metadata(err);
-                        if server_error_is_forward_to_leader(&err) {
-                            return Err(err);
-                        }
+                    Err(_err) => {
                         out.extend(create_path_batch_envelopes(
                             server,
                             kind,

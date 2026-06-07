@@ -7,7 +7,6 @@ members = [
     "crates/nokv-client",
     "crates/nokv-fuse",
     "crates/nokv-server",
-    "crates/nokv-cluster",
     "crates/nokv",
     "bench",
 ]
@@ -29,14 +28,12 @@ nokv-object = { path = "crates/nokv-object", version = "0.1.0" }
 nokv-client = { path = "crates/nokv-client", version = "0.1.0" }
 nokv-fuse = { path = "crates/nokv-fuse", version = "0.1.0" }
 nokv-server = { path = "crates/nokv-server", version = "0.1.0" }
-nokv-cluster = { path = "crates/nokv-cluster", version = "0.1.0" }
 nokv = { path = "crates/nokv", version = "0.1.0" }
 nokv-bench = { path = "bench", version = "0.1.0" }
 fuser = { version = "0.17.0", default-features = false }
-holt = { version = "0.5.3", default-features = false }
+holt = { version = "0.5.4", default-features = false }
 libc = "0.2"
 opendal = { version = "0.57.0", default-features = false, features = ["blocking", "executors-tokio", "reqwest-rustls-tls", "services-s3"] }
-openraft = { version = "0.9.24", default-features = false, features = ["storage-v2"] }
 rmp-serde = "1.3"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

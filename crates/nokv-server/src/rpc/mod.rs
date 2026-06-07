@@ -1,13 +1,13 @@
 use std::io;
 
 mod batch;
+#[cfg(test)]
 mod peer;
 mod transport;
 mod wire;
 
 #[cfg(test)]
 pub(crate) use peer::FramedRpcClient;
-pub(crate) use peer::MetadataRaftFramedRpcClient;
 pub(crate) use transport::{
     default_framed_rpc_queue_capacity, default_framed_rpc_worker_count,
     handle_framed_stream_after_magic, RpcWorkerPool, FRAMED_RPC_MAGIC,
@@ -17,7 +17,6 @@ pub(crate) use transport::{
     read_frame, write_frame, MAX_FRAMED_RPC_WORKERS, MIN_FRAMED_RPC_WORKERS,
 };
 
-use nokv_cluster::NodeId;
 use nokv_meta::{MetadError, PublishArtifactStagedSession};
 use nokv_protocol::{
     decode_advisory_lock_kind, decode_file_type, decode_name_cursor, decode_request,
@@ -30,9 +29,9 @@ use crate::server::{Server, ServerError};
 
 use batch::{create_path_batch_envelopes, execute_batch, CreatePathKind};
 use wire::{
-    dentry_name, err_envelope, inode_id, log_position, prepared_artifact, protocol_error,
-    staged_object_set, stored_chunk, update_attr, wire_body_read_plan, wire_dentry,
-    wire_log_position, wire_prepared_artifact, xattr_set_mode,
+    dentry_name, err_envelope, inode_id, prepared_artifact, protocol_error, staged_object_set,
+    stored_chunk, update_attr, wire_body_read_plan, wire_dentry, wire_prepared_artifact,
+    wire_subtree_delta, xattr_set_mode,
 };
 
 fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerError> {
@@ -43,9 +42,6 @@ fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerErro
                 result: Some(result),
                 error: None,
                 error_kind: None,
-                metadata_position: server
-                    .metadata_raft_applied_position()
-                    .map(wire_log_position),
             },
             Err(err) => err_envelope(err),
         },
@@ -56,7 +52,6 @@ fn handle_binary_rpc(server: &Server, body: &[u8]) -> Result<Vec<u8>, ServerErro
             error_kind: Some(WireMetadataError::Protocol {
                 message: err.to_string(),
             }),
-            metadata_position: None,
         },
     };
     encode_envelope(&envelope).map_err(|err| {
@@ -73,11 +68,6 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
     }
     match request {
         MetadataRpcRequest::Batch { requests } => execute_batch(server, requests),
-        MetadataRpcRequest::RequireApplied { position, request } => {
-            server.ensure_metadata_raft_applied(log_position(position)?)?;
-            server.refresh_metadata_view()?;
-            execute(server, *request)
-        }
         MetadataRpcRequest::BootstrapRoot { mode, uid, gid } => {
             let attr = server.service().bootstrap_root(mode, uid, gid)?;
             Ok(MetadataRpcResult::InodeAttr {
@@ -109,6 +99,12 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             Ok(MetadataRpcResult::Dentry {
                 entry: entry.as_ref().map(|entry| Box::new(wire_dentry(entry))),
             })
+        }
+        MetadataRpcRequest::CurrentDentryVersion { parent, name } => {
+            let version = server
+                .service()
+                .current_dentry_version(inode_id(parent)?, &dentry_name(name)?)?;
+            Ok(MetadataRpcResult::DentryVersion { version })
         }
         MetadataRpcRequest::LookupPlusAtSnapshot {
             snapshot_id,
@@ -564,6 +560,30 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                 snapshot: nokv_protocol::WireSnapshotPin::from_snapshot_pin(&snapshot),
             })
         }
+        MetadataRpcRequest::CloneSubtreePath { src_path, dst_path } => {
+            let handle = server
+                .service()
+                .clone_subtree_path_into(&src_path, &dst_path)?;
+            Ok(MetadataRpcResult::CloneSubtree {
+                root: handle.root.get(),
+                snapshot_id: handle.snapshot_id,
+            })
+        }
+        MetadataRpcRequest::DiffSubtrees { a_path, b_path } => {
+            let deltas = server.service().diff_subtrees_path(&a_path, &b_path)?;
+            Ok(MetadataRpcResult::SubtreeDeltas {
+                deltas: deltas.iter().map(wire_subtree_delta).collect(),
+            })
+        }
+        MetadataRpcRequest::RollbackSubtreePath {
+            target_path,
+            snapshot_id,
+        } => {
+            server
+                .service()
+                .rollback_subtree_path(&target_path, snapshot_id)?;
+            Ok(MetadataRpcResult::Unit)
+        }
         MetadataRpcRequest::StatPathAtSnapshot { snapshot_id, path } => {
             let metadata = server.service().stat_path_at_snapshot(snapshot_id, &path)?;
             Ok(MetadataRpcResult::PathMetadata {
@@ -781,51 +801,16 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
                     .map(|entry| Box::new(wire_dentry(entry))),
             })
         }
-        MetadataRpcRequest::MetadataRaftAddLearner {
-            node,
-            address,
-            blocking,
-        } => {
-            let node = NodeId::new(node).map_err(ServerError::MetadataRaft)?;
-            let position = server.add_metadata_raft_learner(node, address, blocking)?;
-            Ok(MetadataRpcResult::MetadataPosition {
-                position: wire_log_position(position),
-            })
-        }
-        MetadataRpcRequest::MetadataRaftVote { request } => {
-            let response = server
-                .service()
-                .metadata_store()
-                .handle_metadata_raft_vote(request)
-                .map_err(MetadError::from)?;
-            Ok(MetadataRpcResult::MetadataRaftVote { response })
-        }
-        MetadataRpcRequest::MetadataRaftAppendEntries { request } => {
-            let response = server
-                .service()
-                .metadata_store()
-                .handle_metadata_raft_append_entries(request)
-                .map_err(MetadError::from)?;
-            Ok(MetadataRpcResult::MetadataRaftAppendEntries { response })
-        }
-        MetadataRpcRequest::MetadataRaftInstallSnapshot { request } => {
-            let response = server
-                .service()
-                .metadata_store()
-                .handle_metadata_raft_install_snapshot(request)
-                .map_err(MetadError::from)?;
-            Ok(MetadataRpcResult::MetadataRaftInstallSnapshot { response })
-        }
     }
 }
 
 fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
     match request {
         MetadataRpcRequest::Batch { requests } => requests.iter().any(refreshes_metadata_view),
-        MetadataRpcRequest::RequireApplied { request, .. } => refreshes_metadata_view(request),
         MetadataRpcRequest::GetAttr { .. }
         | MetadataRpcRequest::GetAttrAtSnapshot { .. }
         | MetadataRpcRequest::LookupPlus { .. }
+        | MetadataRpcRequest::CurrentDentryVersion { .. }
         | MetadataRpcRequest::LookupPlusAtSnapshot { .. }
         | MetadataRpcRequest::LookupPath { .. }
         | MetadataRpcRequest::StatPath { .. }
@@ -846,6 +831,7 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::ReadBodyPlan { .. }
         | MetadataRpcRequest::ReadPathPlan { .. }
         | MetadataRpcRequest::ReadArtifactPathAtSnapshot { .. }
+        | MetadataRpcRequest::DiffSubtrees { .. }
         | MetadataRpcRequest::SnapshotPin { .. } => true,
         MetadataRpcRequest::BootstrapRoot { .. }
         | MetadataRpcRequest::CreateDir { .. }
@@ -873,15 +859,13 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::RenameReplacePath { .. }
         | MetadataRpcRequest::SnapshotSubtree { .. }
         | MetadataRpcRequest::SnapshotSubtreePath { .. }
+        | MetadataRpcRequest::CloneSubtreePath { .. }
+        | MetadataRpcRequest::RollbackSubtreePath { .. }
         | MetadataRpcRequest::RetireSnapshot { .. }
         | MetadataRpcRequest::PrepareArtifact { .. }
         | MetadataRpcRequest::PrepareArtifactPath { .. }
         | MetadataRpcRequest::PublishPreparedArtifact { .. }
-        | MetadataRpcRequest::PublishPreparedArtifactStagedSession { .. }
-        | MetadataRpcRequest::MetadataRaftAddLearner { .. }
-        | MetadataRpcRequest::MetadataRaftVote { .. }
-        | MetadataRpcRequest::MetadataRaftAppendEntries { .. }
-        | MetadataRpcRequest::MetadataRaftInstallSnapshot { .. } => false,
+        | MetadataRpcRequest::PublishPreparedArtifactStagedSession { .. } => false,
     }
 }
 

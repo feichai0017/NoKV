@@ -6,6 +6,7 @@
 //! boundary. It does not own Holt trees, Raft replication, FUSE, or protobuf.
 
 mod allocator;
+mod clone;
 mod command;
 mod gc;
 mod lifecycle;
@@ -13,6 +14,7 @@ mod lock;
 mod namespace;
 mod publish;
 mod read;
+mod rollback;
 mod snapshot;
 mod watch;
 mod xattr;
@@ -331,6 +333,41 @@ pub struct PathReadPlan {
 pub struct RenameReplaceResult {
     pub entry: DentryWithAttr,
     pub replaced: Option<DentryWithAttr>,
+}
+
+/// Handle to a writable copy-on-write fork produced by [`NoKvFs::clone_subtree`].
+///
+/// `root` is the new namespace root: it sees every file and directory the source
+/// subtree had at clone time and shares the source's object blocks (no data copy)
+/// until the fork diverges on write. `snapshot_id` is a retained snapshot pin on
+/// the source that holds the GC retention floor down so the shared base blocks are
+/// protected while the fork references them. Retire it with
+/// [`NoKvFs::retire_snapshot`] once the fork's own divergent state no longer needs
+/// the source's base objects (typically when the fork is deleted).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CloneHandle {
+    pub root: InodeId,
+    pub snapshot_id: u64,
+}
+
+/// How a path differs between two subtrees, as reported by
+/// [`NoKvFs::diff_subtrees`]. Directions are relative to the diff arguments
+/// `diff_subtrees(a_root, b_root)`: `Added` exists only under `b_root`, `Removed`
+/// exists only under `a_root`, and `Modified` exists under both but the content or
+/// type differs.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubtreeDeltaKind {
+    Added,
+    Removed,
+    Modified,
+}
+
+/// A single path-level difference between two subtrees. `path` is relative to the
+/// subtree roots (e.g. `/a`, `/dir/b`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SubtreeDelta {
+    pub path: String,
+    pub kind: SubtreeDeltaKind,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

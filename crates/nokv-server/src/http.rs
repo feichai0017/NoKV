@@ -255,7 +255,6 @@ mod tests {
         assert!(response.body.contains("\"object_puts\":0"));
         assert!(response.body.contains("\"prefetch_enqueued\":0"));
         assert!(response.body.contains("\"metadata_store\""));
-        assert!(response.body.contains("\"metadata_raft\""));
         assert!(response.body.contains("\"commit_total\""));
         assert!(response.body.contains("\"metadata_service\""));
         assert!(response.body.contains("\"path_index_hit_total\""));
@@ -281,12 +280,9 @@ mod tests {
     #[test]
     fn checkpoint_endpoint_triggers_metadata_snapshot() {
         let server = test_server();
-        server.service().bootstrap_root(0o755, 1000, 1000).unwrap();
         let response = handle_parts(&server, "POST /checkpoint HTTP/1.1", &[]);
         assert_eq!(response.status, "200 OK");
-        assert!(response.body.contains("\"metadata_raft\""));
-        assert!(response.body.contains("\"snapshot_index\""));
-        assert!(response.body.contains("\"archive\":{\"enabled\":false"));
+        assert!(response.body.contains("\"metadata_mode\":\"local\""));
     }
 
     #[test]

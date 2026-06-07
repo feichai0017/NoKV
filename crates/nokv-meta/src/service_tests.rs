@@ -190,6 +190,37 @@ fn publish_path_artifact(
         .entry
 }
 
+#[test]
+fn publish_multichunk_artifact_succeeds() {
+    let service = service();
+    // 128 MiB spans two 64 MiB chunks: the multi-chunk publish path the FUSE
+    // bigfile workload hits (and currently EIOs on via InvalidPreparedArtifact).
+    let size = 128 * 1024 * 1024_usize;
+    let bytes = vec![0u8; size];
+    let prepared = service.prepare_artifact_create_path("/big.bin").unwrap();
+    let result = service.publish_prepared_artifact_session(
+        prepared.clone(),
+        PublishArtifactSession {
+            parent: prepared.parent,
+            name: prepared.name,
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "fuse/big".to_owned(),
+            size: size as u64,
+            ranges: vec![PublishArtifactRange { offset: 0, bytes }],
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        },
+    );
+    assert!(
+        result.is_ok(),
+        "multi-chunk publish failed: {:?}",
+        result.err()
+    );
+}
+
 fn block_key(inode: InodeId, generation: u64, chunk: u64, block: u64) -> ObjectKey {
     ObjectKey::new(format!(
         "blocks/1/{}/{}/{}/{}",
@@ -1312,6 +1343,142 @@ fn update_attrs_truncates_and_extends_sparse_file() {
         grown.body.as_ref().unwrap().digest_uri,
         "sha256:dd0b251b2bf91037a1e4fc8416a24ae00bcb9a8c252dc7e2361f2fc015f51c16"
     );
+}
+
+#[test]
+fn attr_only_update_preserves_body_generation_and_readability() {
+    // `cp` preserves metadata, so it chmods a file it just wrote. An attribute-
+    // only `update_attrs` (no size change) must not advance `attr.generation`:
+    // the body summary / chunk manifests are keyed by generation and reads
+    // resolve the body via `attr.generation`, so bumping it would point the
+    // dentry at a generation that has no body, surfacing as MissingBodyDescriptor
+    // on the next read (the cp corruption this regression guards).
+    let service = service();
+    let name = DentryName::new(b"checkpoint.bin".to_vec()).unwrap();
+    let published = service
+        .publish_artifact(artifact_request(name.clone(), "checkpoint-v1", b"abcdef"))
+        .unwrap();
+    let body_generation = published.body.as_ref().unwrap().generation;
+    assert_eq!(published.attr.generation, body_generation);
+
+    let chmodded = service
+        .update_attrs(
+            InodeId::root(),
+            &name,
+            UpdateAttr {
+                mode: Some(0o600),
+                ..UpdateAttr::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(chmodded.attr.mode, 0o600);
+    assert_eq!(chmodded.attr.size, published.attr.size);
+    // Generation is the content version; an attribute-only change keeps it.
+    assert_eq!(chmodded.attr.generation, body_generation);
+    assert_eq!(chmodded.body.as_ref().unwrap().generation, body_generation);
+    // The body is still resolvable and intact after the metadata-only update.
+    assert_eq!(
+        service.read_file(chmodded.attr.inode, 0, 6).unwrap(),
+        b"abcdef"
+    );
+
+    // A size change still advances the generation (new body content).
+    let resized = service
+        .update_attrs(
+            InodeId::root(),
+            &name,
+            UpdateAttr {
+                size: Some(3),
+                ..UpdateAttr::default()
+            },
+        )
+        .unwrap();
+    assert!(resized.attr.generation > body_generation);
+    assert_eq!(
+        resized.attr.generation,
+        resized.body.as_ref().unwrap().generation
+    );
+    assert_eq!(service.read_file(resized.attr.inode, 0, 8).unwrap(), b"abc");
+}
+
+#[test]
+fn replace_publish_refreshes_stale_dentry_version_after_attr_update() {
+    // Reproduces the cp setattr-mid-write -> release publish CAS: a write handle
+    // prepares an artifact-replace (pinning the dentry version), then a `setattr`
+    // (here a chmod via update_attrs) advances the dentry version out-of-band.
+    // Publishing with the stale pinned version must fail the CAS (PredicateFailed
+    // -> EIO), and re-reading the live version via `current_dentry_version` (what
+    // publish_handle now does) before publishing must make it succeed without
+    // losing the body.
+    let service = service();
+    let name = DentryName::new(b"y.bin".to_vec()).unwrap();
+    service
+        .publish_artifact(artifact_request(name.clone(), "y-v1", b"abcdef"))
+        .unwrap();
+
+    // The write handle's prepared-replace, capturing the current dentry version.
+    let mut prepared = service
+        .prepare_artifact_replace(InodeId::root(), name.clone())
+        .unwrap();
+    let pinned_version = prepared.dentry_version.unwrap();
+
+    // An intervening chmod advances the dentry version, stranding `prepared`.
+    service
+        .update_attrs(
+            InodeId::root(),
+            &name,
+            UpdateAttr {
+                mode: Some(0o600),
+                ..UpdateAttr::default()
+            },
+        )
+        .unwrap();
+    let current_version = service
+        .current_dentry_version(InodeId::root(), &name)
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        current_version, pinned_version,
+        "chmod must advance the dentry version"
+    );
+
+    let new_body = body_descriptor(prepared.generation, 3);
+    let new_chunks = vec![one_chunk_manifest(prepared.inode, prepared.generation, 3)];
+
+    // Publishing with the stale pinned version fails the CAS, exactly the cp EIO.
+    let stale = service.publish_prepared_artifact(
+        prepared.clone(),
+        new_body.clone(),
+        new_chunks.clone(),
+        0o600,
+        1000,
+        1000,
+    );
+    assert!(
+        matches!(
+            stale,
+            Err(MetadError::Metadata(MetadataError::PredicateFailed))
+        ),
+        "stale dentry version must fail the replace CAS, got {stale:?}"
+    );
+
+    // Rebinding the guard to the live version (the publish_handle refresh) lets the
+    // replace CAS pass and commit the new body.
+    prepared.dentry_version = Some(current_version);
+    let published = service
+        .publish_prepared_artifact(prepared, new_body, new_chunks, 0o600, 1000, 1000)
+        .unwrap()
+        .entry;
+    assert_eq!(published.attr.size, 3);
+    assert_eq!(published.attr.mode, 0o600);
+    let committed = service
+        .stat_path("/y.bin")
+        .unwrap()
+        .expect("artifact still resolvable after refreshed publish");
+    assert_eq!(committed.attr.inode, published.attr.inode);
+    assert_eq!(committed.attr.size, 3);
+    assert_eq!(committed.body.as_ref().unwrap().size, 3);
 }
 
 #[test]
@@ -3042,4 +3209,453 @@ fn failed_publish_returns_staged_objects_for_cleanup_and_does_not_reuse_identity
 
     assert!(next.attr.inode.get() > first.attr.inode.get() + 1);
     assert!(next.attr.generation > first.attr.generation + 1);
+}
+
+fn dname(raw: &[u8]) -> DentryName {
+    DentryName::new(raw.to_vec()).unwrap()
+}
+
+fn block_count_for(objects: &MemoryObjectStore, inode: InodeId, generation: u64) -> usize {
+    // Count the published blocks the base file owns under its (inode, generation).
+    let mut count = 0;
+    let mut block = 0;
+    while objects
+        .head(&block_key(inode, generation, 0, block))
+        .unwrap()
+        .is_some()
+    {
+        count += 1;
+        block += 1;
+    }
+    count
+}
+
+#[test]
+fn clone_subtree_shares_base_blocks_diverges_on_write_and_keeps_gc_safe() {
+    let (service, objects) = service_with_objects();
+    // 1. Base namespace: /base with files a ("AAA..") and b ("BBB..").
+    let base = service.create_dir_path("/base", 0o755, 1000, 1000).unwrap();
+    let a = publish_path_artifact(&service, "/base/a", "base/a", &vec![b'A'; 4096]);
+    let b = publish_path_artifact(&service, "/base/b", "base/b", &vec![b'B'; 4096]);
+    let a_gen = a.body.as_ref().unwrap().generation;
+    let b_gen = b.body.as_ref().unwrap().generation;
+    let a_block = block_key(a.attr.inode, a_gen, 0, 0);
+    let b_block = block_key(b.attr.inode, b_gen, 0, 0);
+    assert!(objects.head(&a_block).unwrap().is_some());
+    assert!(objects.head(&b_block).unwrap().is_some());
+    let objects_after_base = objects.object_count();
+
+    // 2. Writable O(1)-ish fork of /base.
+    let fork = service.clone_subtree_path("/base").unwrap();
+    assert_ne!(fork.root, base.attr.inode);
+
+    // 3. Sharing: the fork sees the base content, with NO duplicate blocks.
+    let fork_a = service
+        .lookup_plus(fork.root, &dname(b"a"))
+        .unwrap()
+        .unwrap();
+    let fork_b = service
+        .lookup_plus(fork.root, &dname(b"b"))
+        .unwrap()
+        .unwrap();
+    assert_ne!(
+        fork_a.attr.inode, a.attr.inode,
+        "fork must use a fresh inode"
+    );
+    // Shared files keep the source's content generation (the CoW sharing signal).
+    assert_eq!(fork_a.attr.generation, a_gen);
+    assert_eq!(fork_b.attr.generation, b_gen);
+    assert_eq!(fork_b.body.as_ref().unwrap().generation, b_gen);
+    assert_eq!(
+        service.read_artifact(fork.root, &dname(b"a")).unwrap(),
+        vec![b'A'; 4096]
+    );
+    assert_eq!(
+        service.read_artifact(fork.root, &dname(b"b")).unwrap(),
+        vec![b'B'; 4096]
+    );
+    // Zero-copy: clone added metadata only, not object blocks.
+    assert_eq!(
+        objects.object_count(),
+        objects_after_base,
+        "clone must share base blocks, not copy them"
+    );
+    // The fork's a/b manifests reference the SAME object keys as the base.
+    assert_eq!(
+        service
+            .read_file_plan(fork_a.attr.inode, fork_a.attr.generation, 0, 4096)
+            .unwrap()
+            .blocks[0]
+            .object_key,
+        a_block.as_str()
+    );
+
+    // 4. Divergence: rewrite a in the fork and add a new file c.
+    service
+        .replace_artifact(PublishArtifact {
+            parent: fork.root,
+            name: dname(b"a"),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:zzz".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "fork/a".to_owned(),
+            bytes: vec![b'Z'; 4096],
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+    service
+        .publish_artifact(PublishArtifact {
+            parent: fork.root,
+            name: dname(b"c"),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:ccc".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "fork/c".to_owned(),
+            bytes: vec![b'C'; 4096],
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+
+    // 4a. Fork now sees a="ZZZ..", b="BBB..", c present.
+    assert_eq!(
+        service.read_artifact(fork.root, &dname(b"a")).unwrap(),
+        vec![b'Z'; 4096]
+    );
+    assert_eq!(
+        service.read_artifact(fork.root, &dname(b"b")).unwrap(),
+        vec![b'B'; 4096]
+    );
+    assert_eq!(
+        service.read_artifact(fork.root, &dname(b"c")).unwrap(),
+        vec![b'C'; 4096]
+    );
+    // 4b. Base is unchanged: a="AAA..", no c.
+    assert_eq!(
+        service
+            .read_artifact(base.attr.inode, &dname(b"a"))
+            .unwrap(),
+        vec![b'A'; 4096]
+    );
+    assert!(service
+        .lookup_plus(base.attr.inode, &dname(b"c"))
+        .unwrap()
+        .is_none());
+
+    // 6. Diff reports exactly { modified: a, added: c }; b (shared) is not reported.
+    let mut diff = service.diff_subtrees(base.attr.inode, fork.root).unwrap();
+    diff.sort_by(|left, right| left.path.cmp(&right.path));
+    assert_eq!(
+        diff,
+        vec![
+            SubtreeDelta {
+                path: "/a".to_owned(),
+                kind: SubtreeDeltaKind::Modified,
+            },
+            SubtreeDelta {
+                path: "/c".to_owned(),
+                kind: SubtreeDeltaKind::Added,
+            },
+        ]
+    );
+
+    // 5. GC safety: reclaim must NOT touch base blocks the fork's divergent write
+    // abandoned but the base still references; they are owned by the base inode and
+    // protected by the fork's retained snapshot pin.
+    let reclaim = service.cleanup_pending_objects(100).unwrap();
+    assert_eq!(reclaim.deleted, 0, "no base block may be reclaimed yet");
+    assert!(objects.head(&a_block).unwrap().is_some());
+    assert!(objects.head(&b_block).unwrap().is_some());
+    assert_eq!(
+        service
+            .read_artifact(base.attr.inode, &dname(b"a"))
+            .unwrap(),
+        vec![b'A'; 4096]
+    );
+
+    // Drop the fork: remove its files and retire its snapshot pin. The fork-only
+    // blocks (the divergent a' and the new c) then become reclaimable, while the
+    // base's blocks remain because the base still references them.
+    let fork_a_diverged = service
+        .lookup_plus(fork.root, &dname(b"a"))
+        .unwrap()
+        .unwrap();
+    let fork_c = service
+        .lookup_plus(fork.root, &dname(b"c"))
+        .unwrap()
+        .unwrap();
+    let fork_a_block = block_key(
+        fork_a_diverged.attr.inode,
+        fork_a_diverged.body.as_ref().unwrap().generation,
+        0,
+        0,
+    );
+    let fork_c_block = block_key(
+        fork_c.attr.inode,
+        fork_c.body.as_ref().unwrap().generation,
+        0,
+        0,
+    );
+    service.remove_file(fork.root, &dname(b"a")).unwrap();
+    service.remove_file(fork.root, &dname(b"b")).unwrap();
+    service.remove_file(fork.root, &dname(b"c")).unwrap();
+    assert!(service.retire_snapshot(fork.snapshot_id).unwrap());
+    let reclaim = service.cleanup_pending_objects(100).unwrap();
+    assert!(reclaim.deleted >= 2, "fork-only blocks must be reclaimable");
+    assert!(objects.head(&fork_a_block).unwrap().is_none());
+    assert!(objects.head(&fork_c_block).unwrap().is_none());
+    // Base remains fully intact and readable.
+    assert!(objects.head(&a_block).unwrap().is_some());
+    assert!(objects.head(&b_block).unwrap().is_some());
+    assert_eq!(
+        service
+            .read_artifact(base.attr.inode, &dname(b"a"))
+            .unwrap(),
+        vec![b'A'; 4096]
+    );
+    assert_eq!(
+        service
+            .read_artifact(base.attr.inode, &dname(b"b"))
+            .unwrap(),
+        vec![b'B'; 4096]
+    );
+    assert_eq!(block_count_for(&objects, a.attr.inode, a_gen), 1);
+}
+
+#[test]
+fn clone_subtree_copies_nested_dirs_and_diff_reports_removed() {
+    let service = service();
+    service.create_dir_path("/base", 0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_path("/base/sub", 0o755, 1000, 1000)
+        .unwrap();
+    publish_path_artifact(&service, "/base/sub/deep", "base/deep", b"deep-bytes");
+    publish_path_artifact(&service, "/base/top", "base/top", b"top-bytes");
+
+    let fork = service.clone_subtree_path("/base").unwrap();
+    // Nested structure is reproduced under fresh inodes.
+    let sub = service
+        .lookup_plus(fork.root, &dname(b"sub"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(sub.attr.file_type, FileType::Directory);
+    assert_eq!(
+        service
+            .read_artifact(sub.attr.inode, &dname(b"deep"))
+            .unwrap(),
+        b"deep-bytes"
+    );
+
+    // Identical subtree => no deltas.
+    let base = service.resolve_directory_path("/base").unwrap();
+    assert!(service.diff_subtrees(base, fork.root).unwrap().is_empty());
+
+    // Remove a nested file in the fork => Removed delta at the nested path,
+    // direction base -> fork.
+    service
+        .remove_file(sub.attr.inode, &dname(b"deep"))
+        .unwrap();
+    assert_eq!(
+        service.diff_subtrees(base, fork.root).unwrap(),
+        vec![SubtreeDelta {
+            path: "/sub/deep".to_owned(),
+            kind: SubtreeDeltaKind::Removed,
+        }]
+    );
+    // Reversed direction reports it as Added.
+    assert_eq!(
+        service.diff_subtrees(fork.root, base).unwrap(),
+        vec![SubtreeDelta {
+            path: "/sub/deep".to_owned(),
+            kind: SubtreeDeltaKind::Added,
+        }]
+    );
+}
+
+#[test]
+fn clone_subtree_path_rejects_non_directory() {
+    let service = service();
+    publish_path_artifact(&service, "/file.bin", "file", b"bytes");
+    assert!(matches!(
+        service.clone_subtree_path("/file.bin"),
+        Err(MetadError::NotDirectory)
+    ));
+}
+
+fn read_artifact_at_path(
+    service: &NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+    path: &str,
+) -> Vec<u8> {
+    let (parent, name) = service.resolve_parent_path(path).unwrap();
+    service.read_artifact(parent, &name).unwrap()
+}
+
+#[test]
+fn rollback_subtree_restores_snapshot_shares_blocks_and_reclaims_delta() {
+    let (service, objects) = service_with_objects();
+    // 1. Build /ws with files a="A1", b="B1", sub/c="C1" (real object data).
+    let ws = service.create_dir_path("/ws", 0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_path("/ws/sub", 0o755, 1000, 1000)
+        .unwrap();
+    let a = publish_path_artifact(&service, "/ws/a", "ws/a", &vec![b'1'; 4096]);
+    let b = publish_path_artifact(&service, "/ws/b", "ws/b", &vec![b'2'; 4096]);
+    let c = publish_path_artifact(&service, "/ws/sub/c", "ws/sub/c", &vec![b'3'; 4096]);
+    let a_gen = a.body.as_ref().unwrap().generation;
+    let b_gen = b.body.as_ref().unwrap().generation;
+    let c_gen = c.body.as_ref().unwrap().generation;
+    let a1_block = block_key(a.attr.inode, a_gen, 0, 0);
+    let b1_block = block_key(b.attr.inode, b_gen, 0, 0);
+    let c1_block = block_key(c.attr.inode, c_gen, 0, 0);
+    assert!(objects.head(&a1_block).unwrap().is_some());
+    assert!(objects.head(&b1_block).unwrap().is_some());
+    assert!(objects.head(&c1_block).unwrap().is_some());
+
+    // 2. Snapshot /ws.
+    let snap = service.snapshot_subtree_path("/ws").unwrap();
+
+    // 3. Diverge /ws: rewrite a->"A2", add d="D1", delete b.
+    service
+        .replace_artifact(PublishArtifact {
+            parent: ws.attr.inode,
+            name: dname(b"a"),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:a2".to_owned(),
+            content_type: "application/octet-stream".to_owned(),
+            manifest_id: "ws/a2".to_owned(),
+            bytes: vec![b'4'; 4096],
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+    let d = publish_path_artifact(&service, "/ws/d", "ws/d", &vec![b'5'; 4096]);
+    service.remove_file(ws.attr.inode, &dname(b"b")).unwrap();
+    // Capture the delta's private blocks so we can assert their fate.
+    let a_diverged = service
+        .lookup_plus(ws.attr.inode, &dname(b"a"))
+        .unwrap()
+        .unwrap();
+    let a2_block = block_key(
+        a_diverged.attr.inode,
+        a_diverged.body.as_ref().unwrap().generation,
+        0,
+        0,
+    );
+    let d1_block = block_key(d.attr.inode, d.body.as_ref().unwrap().generation, 0, 0);
+    assert!(objects.head(&a2_block).unwrap().is_some());
+    assert!(objects.head(&d1_block).unwrap().is_some());
+    // Pre-rollback /ws is the diverged state.
+    assert_eq!(read_artifact_at_path(&service, "/ws/a"), vec![b'4'; 4096]);
+    assert!(service
+        .lookup_plus(ws.attr.inode, &dname(b"b"))
+        .unwrap()
+        .is_none());
+
+    // 4. Roll /ws back to the snapshot.
+    service
+        .rollback_subtree_path("/ws", snap.snapshot_id)
+        .unwrap();
+
+    // 5. /ws now exactly matches the snapshot: a="A1", b="B1" (restored), sub/c="C1",
+    //    and d is gone. The target keeps its inode identity.
+    assert_eq!(
+        service.resolve_directory_path("/ws").unwrap(),
+        ws.attr.inode,
+        "rollback keeps the target root's identity"
+    );
+    assert_eq!(read_artifact_at_path(&service, "/ws/a"), vec![b'1'; 4096]);
+    assert_eq!(read_artifact_at_path(&service, "/ws/b"), vec![b'2'; 4096]);
+    assert_eq!(
+        read_artifact_at_path(&service, "/ws/sub/c"),
+        vec![b'3'; 4096]
+    );
+    assert!(
+        service
+            .lookup_plus(ws.attr.inode, &dname(b"d"))
+            .unwrap()
+            .is_none(),
+        "the delta-only file d must be gone after rollback"
+    );
+
+    // 6. The rolled-back /ws is identical to a fresh clone of the snapshot: an empty
+    //    diff in both directions.
+    let reference = service
+        .clone_subtree_path_into("/ws", "/reference")
+        .unwrap();
+    assert!(service
+        .diff_subtrees(ws.attr.inode, reference.root)
+        .unwrap()
+        .is_empty());
+    assert!(service
+        .diff_subtrees(reference.root, ws.attr.inode)
+        .unwrap()
+        .is_empty());
+
+    // 7. GC: the discarded delta's private blocks (A2, D1) are reclaimable, while the
+    //    restored shared blocks (A1, B1, C1) survive and stay readable. The reference
+    //    clone shares the snapshot's blocks, so retire its pin too before reclaiming.
+    assert!(service.retire_snapshot(snap.snapshot_id).unwrap());
+    assert!(service.retire_snapshot(reference.snapshot_id).unwrap());
+    let reclaim = service.cleanup_pending_objects(100).unwrap();
+    assert!(
+        reclaim.deleted >= 2,
+        "delta-only blocks must be reclaimable"
+    );
+    assert!(
+        objects.head(&a2_block).unwrap().is_none(),
+        "A2 must be reclaimed"
+    );
+    assert!(
+        objects.head(&d1_block).unwrap().is_none(),
+        "D1 must be reclaimed"
+    );
+    assert!(
+        objects.head(&a1_block).unwrap().is_some(),
+        "A1 must survive"
+    );
+    assert!(
+        objects.head(&b1_block).unwrap().is_some(),
+        "B1 must survive"
+    );
+    assert!(
+        objects.head(&c1_block).unwrap().is_some(),
+        "C1 must survive"
+    );
+    // Restored content is still readable from the shared blocks after reclaim.
+    assert_eq!(read_artifact_at_path(&service, "/ws/a"), vec![b'1'; 4096]);
+    assert_eq!(read_artifact_at_path(&service, "/ws/b"), vec![b'2'; 4096]);
+    assert_eq!(
+        read_artifact_at_path(&service, "/ws/sub/c"),
+        vec![b'3'; 4096]
+    );
+}
+
+#[test]
+fn rollback_subtree_rejects_foreign_or_missing_snapshot() {
+    let service = service();
+    service.create_dir_path("/ws", 0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_path("/other", 0o755, 1000, 1000)
+        .unwrap();
+    let other_root = service.resolve_directory_path("/other").unwrap();
+    let snap = service.snapshot_subtree_path("/other").unwrap();
+
+    // A snapshot of /other cannot roll back /ws.
+    assert!(matches!(
+        service.rollback_subtree_path("/ws", snap.snapshot_id),
+        Err(MetadError::InvalidPath(_))
+    ));
+    // An unknown snapshot id is not found.
+    assert!(matches!(
+        service.rollback_subtree_path("/ws", snap.snapshot_id + 9_999),
+        Err(MetadError::NotFound)
+    ));
+    // The rejected target is untouched and the legitimate one still works.
+    assert!(service
+        .rollback_subtree(other_root, snap.snapshot_id)
+        .is_ok());
 }

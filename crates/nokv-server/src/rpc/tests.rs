@@ -1,11 +1,8 @@
 use super::*;
-use crate::server::tests::{test_options, test_server};
-use crate::MetadataMode;
-use nokv_cluster::MetadataRaftRpcClient;
+use crate::server::tests::test_server;
 use nokv_protocol::{
     decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest,
-    WireDentryWithAttr, WireMetadataError, WireMetadataRaftLeaderId, WireMetadataRaftVote,
-    WireMetadataRaftVoteRequest, WireSliceManifest, WireStagedObjectSet, WireUpdateAttr,
+    WireDentryWithAttr, WireMetadataError, WireSliceManifest, WireStagedObjectSet, WireUpdateAttr,
     WireXattrSetMode,
 };
 use std::io::{Read, Write};
@@ -13,14 +10,6 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::sync::Arc;
 use std::thread;
-use tempfile::TempDir;
-
-fn raft_test_server() -> (TempDir, Server) {
-    let dir = tempfile::tempdir().unwrap();
-    let mut options = test_options(dir.path());
-    options.metadata_mode = MetadataMode::Raft;
-    (dir, Server::open(options).unwrap())
-}
 
 fn request_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
     let body = encode_request(&request).unwrap();
@@ -41,19 +30,6 @@ fn expect_attr(envelope: MetadataRpcEnvelope) -> nokv_protocol::WireInodeAttr {
     match envelope.result.unwrap() {
         MetadataRpcResult::InodeAttr { attr: Some(attr) } => attr,
         other => panic!("unexpected attr result: {other:?}"),
-    }
-}
-
-fn metadata_raft_vote_request(term: u64, voted_for: u64) -> WireMetadataRaftVoteRequest {
-    WireMetadataRaftVoteRequest {
-        vote: WireMetadataRaftVote {
-            leader_id: WireMetadataRaftLeaderId {
-                term,
-                voted_for: Some(voted_for),
-            },
-            committed: false,
-        },
-        last_log_id: None,
     }
 }
 
@@ -290,24 +266,6 @@ fn rpc_supports_remote_fuse_advisory_locks() {
         conflict.error_kind,
         Some(WireMetadataError::LockConflict { .. })
     ));
-}
-
-#[test]
-fn rpc_accepts_metadata_raft_vote_on_store() {
-    let (_dir, server) = raft_test_server();
-    let envelope = request_envelope(
-        &server,
-        MetadataRpcRequest::MetadataRaftVote {
-            request: metadata_raft_vote_request(2, 2),
-        },
-    );
-
-    assert!(envelope.ok, "unexpected metadata raft error: {envelope:?}");
-    let response = match envelope.result.unwrap() {
-        MetadataRpcResult::MetadataRaftVote { response } => response,
-        other => panic!("unexpected metadata raft vote result: {other:?}"),
-    };
-    assert!(response.vote.leader_id.term >= 1);
 }
 
 #[test]
@@ -1075,30 +1033,6 @@ fn framed_rpc_coalesces_pipelined_create_frames_into_metadata_batch() {
 }
 
 #[test]
-fn metadata_raft_framed_rpc_client_sends_vote() {
-    let (_dir, server) = raft_test_server();
-    let server = Arc::new(server);
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    let server_thread = {
-        let server = Arc::clone(&server);
-        thread::spawn(move || {
-            let (stream, _) = listener.accept().unwrap();
-            crate::http::handle_stream(server, stream).unwrap();
-        })
-    };
-
-    let client = MetadataRaftFramedRpcClient::default();
-    let response = client
-        .vote_metadata_raft(1, &addr.to_string(), metadata_raft_vote_request(2, 2))
-        .unwrap();
-
-    assert!(response.vote.leader_id.term >= 1);
-    drop(client);
-    server_thread.join().unwrap();
-}
-
-#[test]
 fn rpc_reports_predicate_errors_without_panicking() {
     let server = test_server();
     let envelope = request_envelope(
@@ -1150,7 +1084,6 @@ fn framed_rpc_client_reuses_peer_connection() {
                 result: Some(MetadataRpcResult::RetiredSnapshot { retired: false }),
                 error: None,
                 error_kind: None,
-                metadata_position: None,
             })
             .unwrap();
             write_frame(&mut stream, frame.request_id, frame.flags, &response).unwrap();
@@ -1339,4 +1272,390 @@ fn rpc_staged_session_publish_preserves_old_prefix_on_shrink() {
     assert_eq!(plan.blocks[0].object_offset, 0);
     assert_eq!(plan.blocks[0].len, 5);
     assert_eq!(plan.blocks[0].output_offset, 0);
+}
+
+/// Publish a metadata-only file body at `path` with a synthetic single-block
+/// manifest (no object bytes are written, so this works against the test server's
+/// fake object endpoint). The body carries a real generation, which is the
+/// copy-on-write sharing signal a clone and diff key on.
+fn publish_synthetic_file(server: &Server, path: &str, manifest_id: &str, replace: bool) {
+    let prepared = if replace {
+        server
+            .service()
+            .prepare_artifact_replace_path(path)
+            .unwrap()
+    } else {
+        server.service().prepare_artifact_create_path(path).unwrap()
+    };
+    server
+        .service()
+        .publish_prepared_artifact(
+            prepared.clone(),
+            nokv_types::BodyDescriptor {
+                producer: "rpc-test".to_owned(),
+                digest_uri: format!("sha256:{manifest_id}"),
+                size: 4,
+                content_type: "application/octet-stream".to_owned(),
+                manifest_id: manifest_id.to_owned(),
+                generation: prepared.generation,
+                chunk_size: nokv_object::DEFAULT_CHUNK_SIZE,
+                block_size: nokv_object::DEFAULT_BLOCK_SIZE as u64,
+            },
+            vec![nokv_types::ChunkManifest {
+                chunk_index: 0,
+                logical_offset: 0,
+                len: 4,
+                slices: vec![nokv_types::SliceManifest {
+                    slice_id: 1,
+                    logical_offset: 0,
+                    len: 4,
+                    blocks: vec![nokv_types::BlockDescriptor {
+                        object_key: format!("blocks/{manifest_id}"),
+                        logical_offset: 0,
+                        object_offset: 0,
+                        len: 4,
+                        digest_uri: format!("sha256:{manifest_id}"),
+                    }],
+                }],
+            }],
+            0o644,
+            1000,
+            1000,
+        )
+        .unwrap();
+}
+
+fn fork_entry_generation(server: &Server, path: &str) -> u64 {
+    match request_envelope(
+        server,
+        MetadataRpcRequest::LookupPath {
+            path: path.to_owned(),
+        },
+    )
+    .result
+    .unwrap()
+    {
+        MetadataRpcResult::Dentry { entry: Some(entry) } => entry.body.unwrap().generation,
+        other => panic!("unexpected lookup result for {path}: {other:?}"),
+    }
+}
+
+#[test]
+fn rpc_clone_subtree_links_navigable_fork_and_diff_tracks_divergence() {
+    let server = test_server();
+    // Base namespace: /base with a file body and a nested directory + file.
+    let base = expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::CreateDirPath {
+            path: "/base".to_owned(),
+            mode: 0o755,
+            uid: 1000,
+            gid: 1000,
+        },
+    ));
+    publish_synthetic_file(&server, "/base/a", "base-a", false);
+    expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::CreateDirPath {
+            path: "/base/sub".to_owned(),
+            mode: 0o755,
+            uid: 1000,
+            gid: 1000,
+        },
+    ));
+    publish_synthetic_file(&server, "/base/sub/deep", "base-deep", false);
+
+    // Clone /base -> /fork through the RPC surface.
+    let cloned = request_envelope(
+        &server,
+        MetadataRpcRequest::CloneSubtreePath {
+            src_path: "/base".to_owned(),
+            dst_path: "/fork".to_owned(),
+        },
+    );
+    assert!(cloned.ok, "unexpected clone error: {cloned:?}");
+    let (fork_root, snapshot_id) = match cloned.result.unwrap() {
+        MetadataRpcResult::CloneSubtree { root, snapshot_id } => (root, snapshot_id),
+        other => panic!("unexpected clone result: {other:?}"),
+    };
+    assert!(fork_root > base.attr.inode, "fork gets a fresh root inode");
+    assert!(snapshot_id > 0, "clone retains a snapshot pin");
+
+    // The fork is a real, navigable directory at /fork: listing it through the
+    // path RPC surfaces the base's entries under fresh inodes.
+    let listed = request_envelope(
+        &server,
+        MetadataRpcRequest::ReadDirPlusPath {
+            path: "/fork".to_owned(),
+        },
+    );
+    let mut names: Vec<String> = match listed.result.unwrap() {
+        MetadataRpcResult::Dentries { entries } => entries
+            .iter()
+            .map(|entry| entry.dentry.name_hex.clone())
+            .collect(),
+        other => panic!("unexpected readdir result: {other:?}"),
+    };
+    names.sort();
+    assert_eq!(names, vec!["61".to_owned(), "737562".to_owned()]); // "a", "sub"
+
+    // Copy-on-write sharing: the fork's file body shares the base body generation
+    // (the byte-level sharing signal) before any divergent write.
+    let base_a_generation = fork_entry_generation(&server, "/base/a");
+    assert_eq!(
+        fork_entry_generation(&server, "/fork/a"),
+        base_a_generation,
+        "fork shares the base body generation"
+    );
+
+    // Identical subtree => no deltas.
+    let diff = request_envelope(
+        &server,
+        MetadataRpcRequest::DiffSubtrees {
+            a_path: "/base".to_owned(),
+            b_path: "/fork".to_owned(),
+        },
+    );
+    match diff.result.unwrap() {
+        MetadataRpcResult::SubtreeDeltas { deltas } => {
+            assert!(deltas.is_empty(), "fresh clone has no deltas: {deltas:?}");
+        }
+        other => panic!("unexpected diff result: {other:?}"),
+    }
+
+    // Diverge the fork independently: rewrite a (bumping its generation) and add a
+    // new file b. The base must stay untouched.
+    publish_synthetic_file(&server, "/fork/a", "fork-a", true);
+    publish_synthetic_file(&server, "/fork/b", "fork-b", false);
+    assert_ne!(
+        fork_entry_generation(&server, "/fork/a"),
+        base_a_generation,
+        "the fork write mints a fresh generation"
+    );
+    assert_eq!(
+        fork_entry_generation(&server, "/base/a"),
+        base_a_generation,
+        "the base body is unaffected by the fork write"
+    );
+
+    // Diff now reports exactly { a: Modified, b: Added }; the shared sub/deep is not
+    // reported.
+    let diff = request_envelope(
+        &server,
+        MetadataRpcRequest::DiffSubtrees {
+            a_path: "/base".to_owned(),
+            b_path: "/fork".to_owned(),
+        },
+    );
+    let mut deltas = match diff.result.unwrap() {
+        MetadataRpcResult::SubtreeDeltas { deltas } => deltas,
+        other => panic!("unexpected diff result: {other:?}"),
+    };
+    deltas.sort_by(|left, right| left.path.cmp(&right.path));
+    assert_eq!(
+        deltas,
+        vec![
+            nokv_protocol::WireSubtreeDelta {
+                path: "/a".to_owned(),
+                kind: nokv_protocol::WireSubtreeDeltaKind::Modified,
+            },
+            nokv_protocol::WireSubtreeDelta {
+                path: "/b".to_owned(),
+                kind: nokv_protocol::WireSubtreeDeltaKind::Added,
+            },
+        ]
+    );
+}
+
+fn dir_names_sorted(server: &Server, path: &str) -> Vec<String> {
+    let listed = request_envelope(
+        server,
+        MetadataRpcRequest::ReadDirPlusPath {
+            path: path.to_owned(),
+        },
+    );
+    let mut names: Vec<String> = match listed.result.unwrap() {
+        MetadataRpcResult::Dentries { entries } => entries
+            .iter()
+            .map(|entry| entry.dentry.name_hex.clone())
+            .collect(),
+        other => panic!("unexpected readdir result for {path}: {other:?}"),
+    };
+    names.sort();
+    names
+}
+
+#[test]
+fn rpc_snapshot_then_rollback_restores_namespace_to_snapshot() {
+    let server = test_server();
+    // Base namespace: /base with a file body (a) and a nested directory + file
+    // (sub/deep). The snapshot captures this exact state.
+    expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::CreateDirPath {
+            path: "/base".to_owned(),
+            mode: 0o755,
+            uid: 1000,
+            gid: 1000,
+        },
+    ));
+    publish_synthetic_file(&server, "/base/a", "base-a", false);
+    expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::CreateDirPath {
+            path: "/base/sub".to_owned(),
+            mode: 0o755,
+            uid: 1000,
+            gid: 1000,
+        },
+    ));
+    publish_synthetic_file(&server, "/base/sub/deep", "base-deep", false);
+    let base_a_generation = fork_entry_generation(&server, "/base/a");
+
+    // Pin a snapshot of /base through the RPC surface and capture its id.
+    let snapshot = request_envelope(
+        &server,
+        MetadataRpcRequest::SnapshotSubtreePath {
+            path: "/base".to_owned(),
+        },
+    );
+    assert!(snapshot.ok, "unexpected snapshot error: {snapshot:?}");
+    let (snapshot_id, read_version) = match snapshot.result.unwrap() {
+        MetadataRpcResult::Snapshot { snapshot } => (snapshot.snapshot_id, snapshot.read_version),
+        other => panic!("unexpected snapshot result: {other:?}"),
+    };
+    assert!(snapshot_id > 0, "snapshot retains a durable id");
+    assert!(read_version > 0, "snapshot captures a read version");
+
+    // Diverge /base after the snapshot: modify a (bumping its generation), add a new
+    // file c, and delete sub/deep.
+    publish_synthetic_file(&server, "/base/a", "base-a-2", true);
+    publish_synthetic_file(&server, "/base/c", "base-c", false);
+    let removed = request_envelope(
+        &server,
+        MetadataRpcRequest::RemoveFilePath {
+            path: "/base/sub/deep".to_owned(),
+        },
+    );
+    assert!(removed.ok, "unexpected remove error: {removed:?}");
+    assert_ne!(
+        fork_entry_generation(&server, "/base/a"),
+        base_a_generation,
+        "the post-snapshot write mints a fresh generation"
+    );
+    assert_eq!(
+        dir_names_sorted(&server, "/base"),
+        vec!["61".to_owned(), "63".to_owned(), "737562".to_owned()]
+    ); // a, c, sub
+    assert!(
+        dir_names_sorted(&server, "/base/sub").is_empty(),
+        "deep is deleted before rollback"
+    );
+
+    // Roll /base back to the snapshot through the RPC surface.
+    let rolled = request_envelope(
+        &server,
+        MetadataRpcRequest::RollbackSubtreePath {
+            target_path: "/base".to_owned(),
+            snapshot_id,
+        },
+    );
+    assert!(rolled.ok, "unexpected rollback error: {rolled:?}");
+    assert!(matches!(rolled.result.unwrap(), MetadataRpcResult::Unit));
+
+    // The namespace is restored to the snapshot: the modification to a is undone
+    // (generation back to the snapshot's), the added c is gone, and the deleted
+    // sub/deep is back.
+    assert_eq!(
+        fork_entry_generation(&server, "/base/a"),
+        base_a_generation,
+        "rollback restores a to the snapshot generation"
+    );
+    assert_eq!(
+        dir_names_sorted(&server, "/base"),
+        vec!["61".to_owned(), "737562".to_owned()],
+        "rollback drops the post-snapshot c and keeps a, sub"
+    );
+    assert_eq!(
+        dir_names_sorted(&server, "/base/sub"),
+        vec!["64656570".to_owned()],
+        "rollback restores the deleted sub/deep"
+    );
+
+    // The restored subtree is identical to the snapshot: diffing the live /base
+    // against the snapshot view reports no deltas.
+    let diff = request_envelope(
+        &server,
+        MetadataRpcRequest::DiffSubtrees {
+            a_path: "/base".to_owned(),
+            b_path: "/base".to_owned(),
+        },
+    );
+    match diff.result.unwrap() {
+        MetadataRpcResult::SubtreeDeltas { deltas } => {
+            assert!(deltas.is_empty(), "restored tree diffs clean: {deltas:?}");
+        }
+        other => panic!("unexpected diff result: {other:?}"),
+    }
+}
+
+#[test]
+fn rpc_rollback_rejects_unknown_snapshot() {
+    let server = test_server();
+    expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::CreateDirPath {
+            path: "/base".to_owned(),
+            mode: 0o755,
+            uid: 1000,
+            gid: 1000,
+        },
+    ));
+    let rolled = request_envelope(
+        &server,
+        MetadataRpcRequest::RollbackSubtreePath {
+            target_path: "/base".to_owned(),
+            snapshot_id: 9999,
+        },
+    );
+    assert!(!rolled.ok, "rollback to an unknown snapshot must fail");
+    assert!(matches!(
+        rolled.error_kind,
+        Some(WireMetadataError::NotFound)
+    ));
+}
+
+#[test]
+fn rpc_clone_subtree_rejects_existing_destination() {
+    let server = test_server();
+    expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::CreateDirPath {
+            path: "/base".to_owned(),
+            mode: 0o755,
+            uid: 1000,
+            gid: 1000,
+        },
+    ));
+    expect_dentry(request_envelope(
+        &server,
+        MetadataRpcRequest::CreateDirPath {
+            path: "/fork".to_owned(),
+            mode: 0o755,
+            uid: 1000,
+            gid: 1000,
+        },
+    ));
+    let cloned = request_envelope(
+        &server,
+        MetadataRpcRequest::CloneSubtreePath {
+            src_path: "/base".to_owned(),
+            dst_path: "/fork".to_owned(),
+        },
+    );
+    assert!(!cloned.ok, "clone onto an occupied path must fail");
+    assert!(matches!(
+        cloned.error_kind,
+        Some(WireMetadataError::PredicateFailed)
+    ));
 }

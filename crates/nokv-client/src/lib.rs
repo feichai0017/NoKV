@@ -26,7 +26,7 @@ pub use artifact::{
 pub use file_client::NoKvFsClient;
 pub use nokv_object::ObjectReadPlan;
 pub use service::{
-    ClientMetadataPosition, ClientPreparedArtifact, MetadataClient, MetadataClientOptions,
+    ClientPreparedArtifact, CloneOutcome, MetadataClient, MetadataClientOptions, SnapshotOutcome,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -57,16 +57,6 @@ pub enum ClientError {
     InvalidName(String),
     RootHasNoParent,
     NotFound(String),
-    ReadNotFresh {
-        required_term: u64,
-        required_index: u64,
-        applied_term: Option<u64>,
-        applied_index: Option<u64>,
-    },
-    ForwardToLeader {
-        leader_id: Option<u64>,
-        address: Option<std::net::SocketAddr>,
-    },
     LockConflict(AdvisoryLock),
     Metadata(MetadError),
     Object(ObjectError),
@@ -109,29 +99,6 @@ impl fmt::Display for ClientError {
             Self::InvalidName(err) => write!(f, "invalid path component: {err}"),
             Self::RootHasNoParent => write!(f, "root path has no parent"),
             Self::NotFound(path) => write!(f, "path component not found: {path}"),
-            Self::ReadNotFresh {
-                required_term,
-                required_index,
-                applied_term,
-                applied_index,
-            } => write!(
-                f,
-                "metadata read requires applied frontier {required_term}:{required_index}, current applied frontier is {}",
-                match (applied_term, applied_index) {
-                    (Some(term), Some(index)) => format!("{term}:{index}"),
-                    _ => "none".to_owned(),
-                }
-            ),
-            Self::ForwardToLeader { leader_id, address } => {
-                write!(f, "metadata write must be forwarded to leader")?;
-                if let Some(leader_id) = leader_id {
-                    write!(f, " {leader_id}")?;
-                }
-                if let Some(address) = address {
-                    write!(f, " at {address}")?;
-                }
-                Ok(())
-            }
             Self::LockConflict(lock) => write!(
                 f,
                 "advisory lock conflicts with {:?} lock on inode {} range {}..={} owned by {}",

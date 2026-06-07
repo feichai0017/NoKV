@@ -12,7 +12,6 @@ homepage.workspace = true
 
 [dependencies]
 nokv-client.workspace = true
-nokv-cluster.workspace = true
 nokv-meta.workspace = true
 nokv-object.workspace = true
 nokv-server.workspace = true

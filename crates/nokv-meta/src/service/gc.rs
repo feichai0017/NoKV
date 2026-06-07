@@ -92,6 +92,28 @@ where
             .map_err(Into::into)
     }
 
+    /// Whether `object_key` was minted by this `(inode, generation)` and is thus
+    /// safe for this namespace to reclaim. Block keys are
+    /// `blocks/{mount}/{inode}/{generation}/{chunk}/{block}`, so an owned key
+    /// starts with `blocks/{mount}/{inode}/{generation}/`. A clone shares the
+    /// source's blocks by copying chunk manifests that still reference the
+    /// source's keys; those borrowed keys fail this check, so a divergent write
+    /// in the fork never enqueues the source's live blocks for deletion.
+    pub(super) fn owns_block_object_key(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        object_key: &str,
+    ) -> bool {
+        let owner_prefix = format!(
+            "blocks/{}/{}/{}/",
+            self.mount.get(),
+            inode.get(),
+            generation
+        );
+        object_key.starts_with(&owner_prefix)
+    }
+
     pub(super) fn history_retention_floor(&self) -> Result<Option<Version>, MetadError> {
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Snapshot,
@@ -142,6 +164,12 @@ where
                     if retained_object_keys.contains(&block.object_key) {
                         continue;
                     }
+                    if !self.owns_block_object_key(inode, generation, &block.object_key) {
+                        // Borrowed (clone-shared) block: its key is owned by the
+                        // inode/generation that minted it, not this one. A borrower
+                        // must never enqueue another namespace's blocks for GC.
+                        continue;
+                    }
                     let record = ObjectGcRecord {
                         inode,
                         generation,
@@ -190,6 +218,11 @@ where
                 .enumerate()
             {
                 if retained_object_keys.contains(&block.object_key) {
+                    continue;
+                }
+                if !self.owns_block_object_key(inode, generation, &block.object_key) {
+                    // Borrowed (clone-shared) block: owned by the inode/generation
+                    // that minted it, so this borrower must not enqueue it for GC.
                     continue;
                 }
                 let record = ObjectGcRecord {
