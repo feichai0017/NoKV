@@ -206,16 +206,6 @@ pub enum MetadataError {
     PutWithoutValue,
     DeleteWithValue,
     PredicateFailed,
-    ReadNotFresh {
-        required_term: u64,
-        required_index: u64,
-        applied_term: Option<u64>,
-        applied_index: Option<u64>,
-    },
-    ForwardToLeader {
-        leader_id: Option<u64>,
-        address: Option<String>,
-    },
     Backend(String),
 }
 
@@ -309,10 +299,8 @@ pub trait MetadataStore {
 
 pub trait MetadataCheckpointStore {
     fn checkpoint(&self) -> Result<(), MetadataError>;
-    fn commit_durable(&self, applied_index: u64) -> Result<(), MetadataError>;
-    fn durable_applied_index(&self) -> Result<u64, MetadataError>;
-    fn export_checkpoint_image(&self, applied_index: u64) -> Result<Vec<u8>, MetadataError>;
-    fn install_checkpoint_image(&self, image: &[u8]) -> Result<u64, MetadataError>;
+    fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError>;
+    fn install_checkpoint_image(&self, image: &[u8]) -> Result<(), MetadataError>;
     fn reclaim_unreachable_storage(&self) -> Result<usize, MetadataError>;
 }
 
@@ -442,34 +430,6 @@ impl fmt::Display for MetadataError {
             Self::PutWithoutValue => write!(f, "put mutation is missing value"),
             Self::DeleteWithValue => write!(f, "delete mutation has a value"),
             Self::PredicateFailed => write!(f, "metadata command predicate failed"),
-            Self::ReadNotFresh {
-                required_term,
-                required_index,
-                applied_term,
-                applied_index,
-            } => {
-                write!(
-                    f,
-                    "metadata read requires applied frontier {required_term}:{required_index}"
-                )?;
-                if let (Some(applied_term), Some(applied_index)) = (applied_term, applied_index) {
-                    write!(
-                        f,
-                        ", current applied frontier is {applied_term}:{applied_index}"
-                    )?;
-                }
-                Ok(())
-            }
-            Self::ForwardToLeader { leader_id, address } => {
-                write!(f, "metadata write must be forwarded to leader")?;
-                if let Some(leader_id) = leader_id {
-                    write!(f, " {leader_id}")?;
-                }
-                if let Some(address) = address {
-                    write!(f, " at {address}")?;
-                }
-                Ok(())
-            }
             Self::Backend(err) => write!(f, "metadata backend error: {err}"),
         }
     }

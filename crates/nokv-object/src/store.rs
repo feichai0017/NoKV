@@ -200,6 +200,16 @@ impl MemoryObjectStore {
             objects: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
+
+    /// Number of objects currently held. Useful for asserting that a
+    /// copy-on-write clone shared blocks (count unchanged) instead of copying
+    /// them.
+    pub fn object_count(&self) -> usize {
+        self.objects
+            .lock()
+            .map(|objects| objects.len())
+            .unwrap_or(0)
+    }
 }
 
 impl Default for MemoryObjectStore {

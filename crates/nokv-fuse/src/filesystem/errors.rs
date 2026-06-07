@@ -4,16 +4,22 @@ use nokv_meta::MetadError;
 use crate::backend::FuseBackendError;
 
 pub(super) fn errno(err: impl Into<FuseBackendError>) -> Errno {
-    match err.into() {
-        FuseBackendError::Metadata(err) => metadata_errno(err),
-        FuseBackendError::Client(nokv_client::ClientError::Metadata(err)) => metadata_errno(err),
+    classify(&err.into())
+}
+
+fn classify(err: &FuseBackendError) -> Errno {
+    match err {
+        FuseBackendError::Metadata(e) => metadata_errno(e),
+        FuseBackendError::Client(nokv_client::ClientError::Metadata(e)) => metadata_errno(e),
         FuseBackendError::Client(nokv_client::ClientError::NotFound(_)) => Errno::ENOENT,
-        FuseBackendError::Client(nokv_client::ClientError::ForwardToLeader { .. }) => Errno::EAGAIN,
         FuseBackendError::Client(nokv_client::ClientError::LockConflict(_)) => Errno::EAGAIN,
+        // `EIO` is the lossy bucket: object-upload failures and raw IO collapse
+        // into it and otherwise reach userspace as an opaque `Input/output
+        // error`. Surface the real cause on the mount's stderr (captured in the
+        // mount log) so write-path failures are diagnosable instead of silent.
         FuseBackendError::Client(nokv_client::ClientError::Object(_))
         | FuseBackendError::Client(nokv_client::ClientError::Io(_))
         | FuseBackendError::Client(nokv_client::ClientError::Protocol(_))
-        | FuseBackendError::Client(nokv_client::ClientError::ReadNotFresh { .. })
         | FuseBackendError::Client(nokv_client::ClientError::EmptyPath)
         | FuseBackendError::Client(nokv_client::ClientError::RelativePath)
         | FuseBackendError::Client(nokv_client::ClientError::ParentTraversal)
@@ -22,11 +28,14 @@ pub(super) fn errno(err: impl Into<FuseBackendError>) -> Errno {
         | FuseBackendError::Client(nokv_client::ClientError::ArtifactIsFile(_))
         | FuseBackendError::Client(nokv_client::ClientError::InvalidName(_))
         | FuseBackendError::Client(nokv_client::ClientError::RootHasNoParent)
-        | FuseBackendError::Object(_) => Errno::EIO,
+        | FuseBackendError::Object(_) => {
+            eprintln!("nokv-fuse: operation failed -> EIO: {err:?}");
+            Errno::EIO
+        }
     }
 }
 
-fn metadata_errno(err: MetadError) -> Errno {
+fn metadata_errno(err: &MetadError) -> Errno {
     match err {
         MetadError::Model(_) => Errno::EINVAL,
         MetadError::InvalidPath(_) => Errno::EINVAL,
@@ -37,6 +46,8 @@ fn metadata_errno(err: MetadError) -> Errno {
         MetadError::CannotRemoveRoot => Errno::EBUSY,
         MetadError::StaleBodyGeneration { .. } => Errno::ESTALE,
         MetadError::LockConflict(_) => Errno::EAGAIN,
+        // See the note above: surface the underlying metadata/object/allocator
+        // failure before it collapses into an opaque `EIO`.
         MetadError::MissingBodyDescriptor
         | MetadError::Metadata(_)
         | MetadError::Object(_)
@@ -44,6 +55,9 @@ fn metadata_errno(err: MetadError) -> Errno {
         | MetadError::Codec(_)
         | MetadError::BodySizeMismatch { .. }
         | MetadError::InvalidPreparedArtifact(_)
-        | MetadError::AllocatorExhausted => Errno::EIO,
+        | MetadError::AllocatorExhausted => {
+            eprintln!("nokv-fuse: metadata operation failed -> EIO: {err:?}");
+            Errno::EIO
+        }
     }
 }

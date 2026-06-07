@@ -1,7 +1,6 @@
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::path::PathBuf;
 
-use nokv_cluster::{FileMetadataRaftLogSync, NodeId};
 use nokv_meta::{HistoryGcOptions, ObjectGcOptions};
 use nokv_object::ObjectStoreConfig;
 use nokv_types::MountId;
@@ -15,11 +14,6 @@ pub struct ServerOptions {
     pub mount: MountId,
     pub meta_path: PathBuf,
     pub metadata_mode: MetadataMode,
-    pub metadata_raft_node: NodeId,
-    pub metadata_raft_voters: Vec<NodeId>,
-    pub metadata_raft_learners: Vec<NodeId>,
-    pub metadata_raft_peers: Vec<MetadataRaftPeerOptions>,
-    pub metadata_raft_log_sync: FileMetadataRaftLogSync,
     pub metadata_checkpoint_archive_prefix: Option<String>,
     pub object: ObjectStoreConfig,
     pub uid: u32,
@@ -29,22 +23,14 @@ pub struct ServerOptions {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct MetadataRaftPeerOptions {
-    pub node: NodeId,
-    pub address: SocketAddr,
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MetadataMode {
     Local,
-    Raft,
 }
 
 impl MetadataMode {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Local => "local",
-            Self::Raft => "raft",
         }
     }
 }

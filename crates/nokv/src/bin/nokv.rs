@@ -10,15 +10,13 @@ use std::path::PathBuf;
 use std::time::Duration;
 
 use nokv_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
-use nokv_cluster::{FileMetadataRaftLogSync, NodeId};
-use nokv_meta::{HistoryGcOptions, ObjectGcOptions};
+use nokv_meta::{HistoryGcOptions, ObjectGcOptions, SubtreeDeltaKind};
 use nokv_object::{
     BlockCachePolicy, DiskBlockCacheOptions, FileReadPipelineOptions, MemoryBlockCacheOptions,
     ObjectKey, ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions,
 };
 use nokv_server::{
-    MetadataMode, MetadataRaftPeerOptions, ServerOptions,
-    DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX, DEFAULT_SERVER_BIND,
+    MetadataMode, ServerOptions, DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX, DEFAULT_SERVER_BIND,
 };
 use nokv_types::{FileType, MountId};
 use sha2::{Digest, Sha256};
@@ -33,11 +31,6 @@ const DEFAULT_GC_LIMIT: usize = 1024;
 struct Config {
     meta: PathBuf,
     metadata_mode: MetadataMode,
-    metadata_raft_node: NodeId,
-    metadata_raft_voters: Vec<NodeId>,
-    metadata_raft_learners: Vec<NodeId>,
-    metadata_raft_peers: Vec<MetadataRaftPeerOptions>,
-    metadata_raft_log_sync: FileMetadataRaftLogSync,
     metadata_checkpoint_archive_prefix: Option<String>,
     object: ObjectStoreConfig,
     mount: MountId,
@@ -48,7 +41,6 @@ struct Config {
     history_gc_interval: Duration,
     history_gc_limit: usize,
     server_bind: SocketAddr,
-    metadata_read_endpoints: Vec<SocketAddr>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -103,6 +95,18 @@ enum Command {
     Snapshot {
         path: String,
     },
+    Clone {
+        src: String,
+        dst: String,
+    },
+    Diff {
+        a: String,
+        b: String,
+    },
+    Rollback {
+        path: String,
+        snapshot_id: u64,
+    },
     CatSnapshot {
         snapshot_id: u64,
         path: String,
@@ -136,7 +140,6 @@ enum CliError {
     InvalidMount(String),
     InvalidAddress { field: &'static str, value: String },
     InvalidNumber { field: &'static str, value: String },
-    InvalidValue { field: &'static str, value: String },
     Io(String),
     Client(String),
 }
@@ -323,10 +326,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             mountpoint,
             options,
         } => {
-            let metadata = MetadataClient::new(
-                MetadataClientOptions::new(config.server_bind)
-                    .with_read_endpoints(config.metadata_read_endpoints.clone()),
-            );
+            let metadata = MetadataClient::new(MetadataClientOptions::new(config.server_bind));
             let objects = config.object.open().map_err(from_object)?;
             metadata
                 .bootstrap_root(DEFAULT_MODE_DIR, config.uid, config.gid)
@@ -348,10 +348,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             mountpoint,
             options,
         } => {
-            let metadata = MetadataClient::new(
-                MetadataClientOptions::new(config.server_bind)
-                    .with_read_endpoints(config.metadata_read_endpoints.clone()),
-            );
+            let metadata = MetadataClient::new(MetadataClientOptions::new(config.server_bind));
             let objects = config.object.open().map_err(from_object)?;
             let snapshot = metadata
                 .snapshot_pin(snapshot_id)
@@ -378,11 +375,6 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 mount: config.mount,
                 meta_path: config.meta,
                 metadata_mode: config.metadata_mode,
-                metadata_raft_node: config.metadata_raft_node,
-                metadata_raft_voters: config.metadata_raft_voters,
-                metadata_raft_learners: config.metadata_raft_learners,
-                metadata_raft_peers: config.metadata_raft_peers,
-                metadata_raft_log_sync: config.metadata_raft_log_sync,
                 metadata_checkpoint_archive_prefix: config.metadata_checkpoint_archive_prefix,
                 object: config.object,
                 uid: config.uid,
@@ -406,15 +398,46 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
         }
         Command::Snapshot { path } => {
             let client = open_client(&config)?;
-            let snapshot = client.metadata().snapshot(&path).map_err(from_client)?;
+            let snapshot = client
+                .metadata()
+                .snapshot_subtree_path(&path)
+                .map_err(from_client)?;
             println!(
-                "snapshot path={} id={} root={} read_version={} created_version={}",
-                path,
-                snapshot.snapshot_id,
-                snapshot.root.get(),
-                snapshot.read_version,
-                snapshot.created_version
+                "snapshot {} id={} version={}",
+                path, snapshot.snapshot_id, snapshot.read_version
             );
+        }
+        Command::Clone { src, dst } => {
+            let client = open_client(&config)?;
+            let outcome = client
+                .metadata()
+                .clone_subtree_path(&src, &dst)
+                .map_err(from_client)?;
+            println!(
+                "cloned {} -> {} root={} snapshot={}",
+                src,
+                dst,
+                outcome.root.get(),
+                outcome.snapshot_id
+            );
+        }
+        Command::Diff { a, b } => {
+            let client = open_client(&config)?;
+            let deltas = client
+                .metadata()
+                .diff_subtrees(&a, &b)
+                .map_err(from_client)?;
+            for delta in deltas {
+                println!("{}\t{}", subtree_delta_label(delta.kind), delta.path);
+            }
+        }
+        Command::Rollback { path, snapshot_id } => {
+            let client = open_client(&config)?;
+            client
+                .metadata()
+                .rollback_subtree_path(&path, snapshot_id)
+                .map_err(from_client)?;
+            println!("rolled back {} to snapshot {}", path, snapshot_id);
         }
         Command::CatSnapshot { snapshot_id, path } => {
             let client = open_client(&config)?;
@@ -440,10 +463,7 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
 
 fn open_client(config: &Config) -> Result<Client, CliError> {
     let objects = config.object.open().map_err(from_object)?;
-    let metadata = MetadataClient::new(
-        MetadataClientOptions::new(config.server_bind)
-            .with_read_endpoints(config.metadata_read_endpoints.clone()),
-    );
+    let metadata = MetadataClient::new(MetadataClientOptions::new(config.server_bind));
     Ok(NoKvFsClient::new(metadata, objects))
 }
 
@@ -468,13 +488,6 @@ fn control_get(config: &Config, path: &str) -> Result<String, CliError> {
 
 fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut meta = PathBuf::from(".nokv/meta");
-    let mut metadata_mode = MetadataMode::Local;
-    let mut metadata_raft_options_seen = false;
-    let mut metadata_raft_node = NodeId::new(1).expect("default metadata raft node is non-zero");
-    let mut metadata_raft_voters = Vec::new();
-    let mut metadata_raft_learners = Vec::new();
-    let mut metadata_raft_peers = Vec::new();
-    let mut metadata_raft_log_sync = FileMetadataRaftLogSync::Data;
     let mut metadata_checkpoint_archive_prefix =
         Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX.to_owned());
     let mut object_backend = ObjectBackendKind::RustFs;
@@ -487,49 +500,12 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     let mut history_gc_interval = HistoryGcOptions::default().interval;
     let mut history_gc_limit = HistoryGcOptions::default().limit;
     let mut server_bind = DEFAULT_SERVER_BIND;
-    let mut metadata_read_endpoints = Vec::new();
     let mut index = 0;
     while index < args.len() {
         match args[index].as_str() {
             "--meta" => {
                 index += 1;
                 meta = PathBuf::from(value(&args, index, "--meta")?);
-            }
-            "--metadata-raft-node" => {
-                metadata_raft_options_seen = true;
-                index += 1;
-                metadata_raft_node = parse_node_id(value(&args, index, "--metadata-raft-node")?)?;
-            }
-            "--metadata-raft-voters" => {
-                metadata_raft_options_seen = true;
-                index += 1;
-                metadata_raft_voters =
-                    parse_node_id_list(value(&args, index, "--metadata-raft-voters")?)?;
-            }
-            "--metadata-raft-learners" => {
-                metadata_raft_options_seen = true;
-                index += 1;
-                metadata_raft_learners =
-                    parse_node_id_list(value(&args, index, "--metadata-raft-learners")?)?;
-            }
-            "--metadata-raft-peer" => {
-                metadata_raft_options_seen = true;
-                index += 1;
-                metadata_raft_peers.push(parse_metadata_raft_peer(value(
-                    &args,
-                    index,
-                    "--metadata-raft-peer",
-                )?)?);
-            }
-            "--metadata-raft-log-sync" => {
-                metadata_raft_options_seen = true;
-                index += 1;
-                metadata_raft_log_sync =
-                    parse_metadata_raft_log_sync(value(&args, index, "--metadata-raft-log-sync")?)?;
-            }
-            "--metadata-mode" => {
-                index += 1;
-                metadata_mode = parse_metadata_mode(value(&args, index, "--metadata-mode")?)?;
             }
             "--metadata-checkpoint-archive-prefix" => {
                 index += 1;
@@ -641,23 +617,11 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                 server_bind =
                     parse_socket_addr(value(&args, index, "--server-bind")?, "server_bind")?;
             }
-            "--metadata-read-endpoint" => {
-                index += 1;
-                metadata_read_endpoints.push(parse_socket_addr(
-                    value(&args, index, "--metadata-read-endpoint")?,
-                    "metadata_read_endpoint",
-                )?);
-            }
             "--help" | "-h" => {
                 return Ok((
                     Config {
                         meta,
-                        metadata_mode,
-                        metadata_raft_node,
-                        metadata_raft_voters,
-                        metadata_raft_learners,
-                        metadata_raft_peers,
-                        metadata_raft_log_sync,
+                        metadata_mode: MetadataMode::Local,
                         metadata_checkpoint_archive_prefix,
                         object: object_config(object_backend, s3),
                         mount,
@@ -668,7 +632,6 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
                         history_gc_interval,
                         history_gc_limit,
                         server_bind,
-                        metadata_read_endpoints,
                     },
                     Command::Help,
                 ));
@@ -682,22 +645,10 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
     }
 
     let command = parse_command(&args[index..])?;
-    if metadata_mode == MetadataMode::Local && metadata_raft_options_seen {
-        return Err(CliError::InvalidValue {
-            field: "metadata_mode",
-            value: "local cannot be combined with metadata raft options; pass --metadata-mode raft"
-                .to_owned(),
-        });
-    }
     Ok((
         Config {
             meta,
-            metadata_mode,
-            metadata_raft_node,
-            metadata_raft_voters,
-            metadata_raft_learners,
-            metadata_raft_peers,
-            metadata_raft_log_sync,
+            metadata_mode: MetadataMode::Local,
             metadata_checkpoint_archive_prefix,
             object: object_config(object_backend, s3),
             mount,
@@ -708,7 +659,6 @@ fn parse(args: Vec<String>) -> Result<(Config, Command), CliError> {
             history_gc_interval,
             history_gc_limit,
             server_bind,
-            metadata_read_endpoints,
         },
         command,
     ))
@@ -722,78 +672,10 @@ fn parse_object_backend(raw: &str) -> Result<ObjectBackendKind, CliError> {
     }
 }
 
-fn parse_metadata_raft_log_sync(raw: &str) -> Result<FileMetadataRaftLogSync, CliError> {
-    match raw {
-        "data" => Ok(FileMetadataRaftLogSync::Data),
-        "none" => Ok(FileMetadataRaftLogSync::None),
-        _ => Err(CliError::UnknownOption(format!(
-            "--metadata-raft-log-sync {raw}"
-        ))),
-    }
-}
-
-fn parse_metadata_mode(raw: &str) -> Result<MetadataMode, CliError> {
-    match raw {
-        "local" => Ok(MetadataMode::Local),
-        "raft" => Ok(MetadataMode::Raft),
-        _ => Err(CliError::InvalidValue {
-            field: "metadata_mode",
-            value: raw.to_owned(),
-        }),
-    }
-}
-
 fn parse_archive_prefix(raw: &str, option: &str) -> Result<String, CliError> {
     let prefix = raw.trim_matches('/');
     ObjectKey::new(prefix).map_err(|_| CliError::UnknownOption(format!("{option} {raw}")))?;
     Ok(prefix.to_owned())
-}
-
-fn parse_node_id(raw: &str) -> Result<NodeId, CliError> {
-    let parsed = parse_u64(raw, "metadata_raft_node")?;
-    NodeId::new(parsed).map_err(|_| CliError::InvalidNumber {
-        field: "metadata_raft_node",
-        value: raw.to_owned(),
-    })
-}
-
-fn parse_node_id_list(raw: &str) -> Result<Vec<NodeId>, CliError> {
-    if raw.is_empty() {
-        return Err(CliError::InvalidNumber {
-            field: "metadata_raft_nodes",
-            value: raw.to_owned(),
-        });
-    }
-    raw.split(',')
-        .map(|part| {
-            if part.is_empty() {
-                return Err(CliError::InvalidNumber {
-                    field: "metadata_raft_nodes",
-                    value: raw.to_owned(),
-                });
-            }
-            let parsed = parse_u64(part, "metadata_raft_nodes")?;
-            NodeId::new(parsed).map_err(|_| CliError::InvalidNumber {
-                field: "metadata_raft_nodes",
-                value: raw.to_owned(),
-            })
-        })
-        .collect()
-}
-
-fn parse_metadata_raft_peer(raw: &str) -> Result<MetadataRaftPeerOptions, CliError> {
-    let Some((node, address)) = raw.split_once('=') else {
-        return Err(CliError::UnknownOption(format!(
-            "--metadata-raft-peer {raw}"
-        )));
-    };
-    Ok(MetadataRaftPeerOptions {
-        node: parse_node_id(node).map_err(|_| CliError::InvalidNumber {
-            field: "metadata_raft_peer_node",
-            value: node.to_owned(),
-        })?,
-        address: parse_socket_addr(address, "metadata_raft_peer")?,
-    })
 }
 
 fn object_config(backend: ObjectBackendKind, mut s3: S3ObjectStoreOptions) -> ObjectStoreConfig {
@@ -888,6 +770,21 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
         "snapshot" => exact_args(args, 2).map(|()| Command::Snapshot {
             path: args[1].clone(),
         }),
+        "clone" => exact_args(args, 3).map(|()| Command::Clone {
+            src: args[1].clone(),
+            dst: args[2].clone(),
+        }),
+        "diff" => exact_args(args, 3).map(|()| Command::Diff {
+            a: args[1].clone(),
+            b: args[2].clone(),
+        }),
+        "rollback" => {
+            exact_args(args, 3)?;
+            Ok(Command::Rollback {
+                path: args[1].clone(),
+                snapshot_id: parse_u64(&args[2], "snapshot_id")?,
+            })
+        }
         "cat-snapshot" => {
             exact_args(args, 3)?;
             Ok(Command::CatSnapshot {
@@ -1166,6 +1063,9 @@ fn exact_args(args: &[String], expected: usize) -> Result<(), CliError> {
                 Some("retire-snapshot") => "snapshot id",
                 Some("mount-snapshot") => "snapshot id and mountpoint",
                 Some("rename") | Some("rename-replace") => "source and destination",
+                Some("clone") => "source and destination paths",
+                Some("diff") => "two paths",
+                Some("rollback") => "path and snapshot id",
                 Some("mount") => "mountpoint",
                 _ => "argument",
             },
@@ -1233,6 +1133,14 @@ fn artifact_digest_reader(reader: &mut impl Read) -> Result<String, CliError> {
     Ok(format!("sha256:{:x}", digest.finalize()))
 }
 
+fn subtree_delta_label(kind: SubtreeDeltaKind) -> &'static str {
+    match kind {
+        SubtreeDeltaKind::Added => "A",
+        SubtreeDeltaKind::Modified => "M",
+        SubtreeDeltaKind::Removed => "D",
+    }
+}
+
 fn file_type_label(file_type: FileType) -> &'static str {
     match file_type {
         FileType::File => "file",
@@ -1272,11 +1180,14 @@ Usage:\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rmdir PATH\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename SOURCE DESTINATION\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rename-replace SOURCE DESTINATION\n\
-  nokv [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
-  nokv [--server-bind ADDR] [--metadata-read-endpoint ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
   nokv [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] clone SRC_PATH DST_PATH\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] diff PATH_A PATH_B\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rollback PATH SNAPSHOT_ID\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] cat-snapshot SNAPSHOT_ID PATH\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] retire-snapshot SNAPSHOT_ID\n\
 \n\
@@ -1293,14 +1204,6 @@ Object backends:\n\
   --history-gc-interval-ms MS      Background metadata history GC interval for live mount\n\
   --history-gc-limit LIMIT         Max history records removed per GC iteration\n\
   --server-bind ADDR              Metadata service address for client commands and serve bind\n\
-  --metadata-read-endpoint ADDR   Preferred metadata read endpoint; repeat for learners\n\
-  --metadata-mode local|raft      local uses direct Holt; raft uses OpenRaft metadata HA\n\
-  --metadata-raft-node NODE       Local OpenRaft metadata node id\n\
-  --metadata-raft-voters CSV      OpenRaft voter node ids, e.g. 1,2,3\n\
-  --metadata-raft-learners CSV    OpenRaft learner node ids, e.g. 4,5\n\
-  --metadata-raft-peer NODE=ADDR  OpenRaft peer endpoint; repeat for remote voters\n\
-  --metadata-raft-log-sync data|none\n\
-                                  data fsyncs metadata Raft log records; none only flushes to the OS\n\
 \n\
 Mount cache options:\n\
   --no-kernel-cache              Do not ask FUSE to keep file/directory cache on open\n\
@@ -1336,12 +1239,6 @@ Defaults:\n\
   --history-gc-interval-ms 30000\n\
   --history-gc-limit 1024\n\
   --server-bind 127.0.0.1:7777\n\
-  --metadata-mode local\n\
-  --metadata-raft-node 1\n\
-  --metadata-raft-voters <local node only>\n\
-  --metadata-raft-learners <empty>\n\
-  --metadata-raft-peer <empty>\n\
-  --metadata-raft-log-sync data\n\
   --metadata-checkpoint-archive-prefix metadata/checkpoints\n\
   --no-metadata-checkpoint-archive\n\
   --mount 1"
@@ -1359,7 +1256,6 @@ impl fmt::Display for CliError {
             Self::InvalidMount(value) => write!(f, "invalid mount id {value}"),
             Self::InvalidAddress { field, value } => write!(f, "invalid {field} address {value}"),
             Self::InvalidNumber { field, value } => write!(f, "invalid {field} value {value}"),
-            Self::InvalidValue { field, value } => write!(f, "invalid {field} value {value}"),
             Self::Io(err) => write!(f, "io error: {err}"),
             Self::Client(err) => write!(f, "{err}"),
         }
@@ -1405,11 +1301,6 @@ mod tests {
             mount: MountId::new(1).unwrap(),
             meta_path: dir.path().join("meta"),
             metadata_mode: MetadataMode::Local,
-            metadata_raft_node: NodeId::new(1).unwrap(),
-            metadata_raft_voters: Vec::new(),
-            metadata_raft_learners: Vec::new(),
-            metadata_raft_peers: Vec::new(),
-            metadata_raft_log_sync: FileMetadataRaftLogSync::Data,
             metadata_checkpoint_archive_prefix: None,
             object: fake_server_object_config(),
             uid: 1000,
@@ -1442,7 +1333,6 @@ mod tests {
         assert_eq!(options.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
         assert_eq!(config.mount.get(), 1);
         assert_eq!(config.metadata_mode, MetadataMode::Local);
-        assert_eq!(config.metadata_raft_node.get(), 1);
         assert_eq!(
             config.metadata_checkpoint_archive_prefix.as_deref(),
             Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX)
@@ -1518,44 +1408,11 @@ mod tests {
         assert_eq!(config.object_gc_limit, 9);
         assert_eq!(config.history_gc_interval, Duration::from_millis(60));
         assert_eq!(config.history_gc_limit, 11);
-        assert_eq!(config.metadata_raft_node.get(), 1);
-        assert!(config.metadata_raft_voters.is_empty());
-        assert!(config.metadata_raft_learners.is_empty());
-        assert!(config.metadata_raft_peers.is_empty());
         assert_eq!(
             config.server_bind,
             "127.0.0.1:17777".parse::<SocketAddr>().unwrap()
         );
-        assert!(config.metadata_read_endpoints.is_empty());
         assert_eq!(command, Command::Mkdir { path: s("/runs") });
-    }
-
-    #[test]
-    fn parse_metadata_read_endpoints() {
-        let (config, command) = parse(vec![
-            s("--server-bind"),
-            s("127.0.0.1:17777"),
-            s("--metadata-read-endpoint"),
-            s("127.0.0.1:17778"),
-            s("--metadata-read-endpoint"),
-            s("127.0.0.1:17779"),
-            s("ls"),
-            s("/runs"),
-        ])
-        .unwrap();
-
-        assert_eq!(command, Command::Ls { path: s("/runs") });
-        assert_eq!(
-            config.server_bind,
-            "127.0.0.1:17777".parse::<SocketAddr>().unwrap()
-        );
-        assert_eq!(
-            config.metadata_read_endpoints,
-            vec![
-                "127.0.0.1:17778".parse::<SocketAddr>().unwrap(),
-                "127.0.0.1:17779".parse::<SocketAddr>().unwrap()
-            ]
-        );
     }
 
     #[test]
@@ -1826,7 +1683,7 @@ mod tests {
     fn parse_serve_command() {
         let (config, command) = parse(vec![s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
-        assert_eq!(config.metadata_raft_node.get(), 1);
+        assert_eq!(config.metadata_mode, MetadataMode::Local);
         assert!(matches!(
             parse(vec![s("serve"), s("extra")]),
             Err(CliError::TooManyArguments)
@@ -1848,6 +1705,62 @@ mod tests {
         assert!(matches!(
             parse(vec![s("gc"), s("bad")]),
             Err(CliError::InvalidNumber { field: "limit", .. })
+        ));
+    }
+
+    #[test]
+    fn parse_clone_and_diff_commands() {
+        assert_eq!(
+            parse(vec![s("clone"), s("/base"), s("/forks/agent-1")])
+                .unwrap()
+                .1,
+            Command::Clone {
+                src: s("/base"),
+                dst: s("/forks/agent-1"),
+            }
+        );
+        assert_eq!(
+            parse(vec![s("diff"), s("/base"), s("/forks/agent-1")])
+                .unwrap()
+                .1,
+            Command::Diff {
+                a: s("/base"),
+                b: s("/forks/agent-1"),
+            }
+        );
+        assert!(matches!(
+            parse(vec![s("clone"), s("/base")]),
+            Err(CliError::MissingArgument("source and destination paths"))
+        ));
+        assert!(matches!(
+            parse(vec![s("diff"), s("/base"), s("/b"), s("/c")]),
+            Err(CliError::TooManyArguments)
+        ));
+    }
+
+    #[test]
+    fn parse_rollback_command() {
+        assert_eq!(
+            parse(vec![s("rollback"), s("/base"), s("42")]).unwrap().1,
+            Command::Rollback {
+                path: s("/base"),
+                snapshot_id: 42,
+            }
+        );
+        assert!(matches!(
+            parse(vec![s("rollback"), s("/base")]),
+            Err(CliError::MissingArgument("path and snapshot id"))
+        ));
+        assert!(matches!(
+            parse(vec![s("rollback"), s("/base"), s("bad")]),
+            Err(CliError::InvalidNumber {
+                field: "snapshot_id",
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse(vec![s("rollback"), s("/base"), s("1"), s("2")]),
+            Err(CliError::TooManyArguments)
         ));
     }
 
@@ -1920,70 +1833,14 @@ mod tests {
     }
 
     #[test]
-    fn parse_metadata_raft_options_for_serve() {
-        let (config, command) = parse(vec![
-            s("--metadata-mode"),
-            s("raft"),
-            s("--metadata-raft-node"),
-            s("4"),
-            s("--metadata-raft-voters"),
-            s("1,2,3"),
-            s("--metadata-raft-learners"),
-            s("4"),
-            s("--metadata-raft-peer"),
-            s("2=127.0.0.1:7778"),
-            s("--metadata-raft-peer"),
-            s("3=127.0.0.1:7779"),
-            s("--metadata-raft-log-sync"),
-            s("none"),
-            s("serve"),
-        ])
-        .unwrap();
+    fn parse_metadata_checkpoint_archive_options_for_serve() {
+        let (config, command) = parse(vec![s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
-        assert_eq!(config.metadata_mode, MetadataMode::Raft);
-        assert_eq!(config.metadata_raft_node.get(), 4);
-        assert_eq!(
-            config
-                .metadata_raft_voters
-                .iter()
-                .map(|node| node.get())
-                .collect::<Vec<_>>(),
-            vec![1, 2, 3]
-        );
-        assert_eq!(
-            config
-                .metadata_raft_learners
-                .iter()
-                .map(|node| node.get())
-                .collect::<Vec<_>>(),
-            vec![4]
-        );
-        assert_eq!(
-            config
-                .metadata_raft_peers
-                .iter()
-                .map(|peer| (peer.node.get(), peer.address.to_string()))
-                .collect::<Vec<_>>(),
-            vec![
-                (2, "127.0.0.1:7778".to_owned()),
-                (3, "127.0.0.1:7779".to_owned())
-            ]
-        );
-        assert_eq!(config.metadata_raft_log_sync, FileMetadataRaftLogSync::None);
+        assert_eq!(config.metadata_mode, MetadataMode::Local);
         assert_eq!(
             config.metadata_checkpoint_archive_prefix.as_deref(),
             Some(DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX)
         );
-        let (node_only, command) = parse(vec![
-            s("--metadata-mode"),
-            s("raft"),
-            s("--metadata-raft-node"),
-            s("4"),
-            s("serve"),
-        ])
-        .unwrap();
-        assert_eq!(command, Command::Serve);
-        assert_eq!(node_only.metadata_raft_node.get(), 4);
         let (archive, command) = parse(vec![
             s("--metadata-checkpoint-archive-prefix"),
             s("/custom/checkpoints/"),
@@ -1999,45 +1856,5 @@ mod tests {
             parse(vec![s("--no-metadata-checkpoint-archive"), s("serve")]).unwrap();
         assert_eq!(command, Command::Serve);
         assert_eq!(disabled.metadata_checkpoint_archive_prefix, None);
-        assert!(matches!(
-            parse(vec![s("--metadata-raft-log-sync"), s("invalid"), s("serve")]),
-            Err(CliError::UnknownOption(option)) if option == "--metadata-raft-log-sync invalid"
-        ));
-        assert!(matches!(
-            parse(vec![s("--metadata-raft-node"), s("0"), s("serve")]),
-            Err(CliError::InvalidNumber {
-                field: "metadata_raft_node",
-                ..
-            })
-        ));
-        assert!(matches!(
-            parse(vec![s("--metadata-raft-voters"), s("1,,3"), s("serve")]),
-            Err(CliError::InvalidNumber {
-                field: "metadata_raft_nodes",
-                ..
-            })
-        ));
-        assert!(matches!(
-            parse(vec![s("--metadata-raft-peer"), s("2"), s("serve")]),
-            Err(CliError::UnknownOption(option)) if option == "--metadata-raft-peer 2"
-        ));
-        assert!(matches!(
-            parse(vec![s("--metadata-raft-peer"), s("2=bad"), s("serve")]),
-            Err(CliError::InvalidAddress {
-                field: "metadata_raft_peer",
-                ..
-            })
-        ));
-    }
-
-    #[test]
-    fn parse_rejects_raft_options_in_local_metadata_mode() {
-        assert!(matches!(
-            parse(vec![s("--metadata-raft-node"), s("4"), s("serve")]),
-            Err(CliError::InvalidValue {
-                field: "metadata_mode",
-                ..
-            })
-        ));
     }
 }

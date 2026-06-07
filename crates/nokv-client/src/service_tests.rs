@@ -1,11 +1,10 @@
 use super::*;
 use crate::read_cache::ReadPipelineCache;
-use crate::wire::client_error_from_wire_error;
 use crate::{ArtifactMetadata, NoKvFsClient};
 use nokv_object::FileReadPipeline;
 use nokv_object::{MemoryObjectStore, ObjectKey, ObjectStore};
 use nokv_protocol::{decode_request, encode_envelope, WireDentryRecord, WireInodeAttr};
-use nokv_protocol::{MetadataRpcEnvelope, WireDentryWithAttr, WireMetadataError, WireXattrSetMode};
+use nokv_protocol::{MetadataRpcEnvelope, WireDentryWithAttr, WireXattrSetMode};
 use nokv_types::{AdvisoryLockKind, FileType};
 use std::io::Read;
 use std::net::TcpListener;
@@ -73,24 +72,6 @@ fn read_pipeline_cache_evicts_oldest_unused_pipeline() {
     assert!(!cache.contains("b#1"));
 }
 
-fn read_not_fresh_response(
-    required: WireMetadataPosition,
-    applied: Option<WireMetadataPosition>,
-) -> Vec<u8> {
-    encode_envelope(&MetadataRpcEnvelope {
-        ok: false,
-        result: None,
-        error: Some("metadata read is not fresh".to_owned()),
-        error_kind: Some(WireMetadataError::ReadNotFresh { required, applied }),
-        metadata_position: None,
-    })
-    .unwrap()
-}
-
-fn dentry_response(parent: u64, name: &str, inode: u64, generation: u64) -> Vec<u8> {
-    dentry_response_with_position(parent, name, inode, generation, None)
-}
-
 fn dentry_batch_response(names: &[String], first_inode: u64) -> Vec<u8> {
     let results = names
         .iter()
@@ -130,7 +111,6 @@ fn dentry_batch_response(names: &[String], first_inode: u64) -> Vec<u8> {
                 }),
                 error: None,
                 error_kind: None,
-                metadata_position: None,
             }
         })
         .collect();
@@ -139,18 +119,11 @@ fn dentry_batch_response(names: &[String], first_inode: u64) -> Vec<u8> {
         result: Some(MetadataRpcResult::Batch { results }),
         error: None,
         error_kind: None,
-        metadata_position: None,
     })
     .unwrap()
 }
 
-fn dentry_response_with_position(
-    parent: u64,
-    name: &str,
-    inode: u64,
-    generation: u64,
-    metadata_position: Option<WireMetadataPosition>,
-) -> Vec<u8> {
+fn dentry_response(parent: u64, name: &str, inode: u64, generation: u64) -> Vec<u8> {
     let envelope = MetadataRpcEnvelope {
         ok: true,
         result: Some(MetadataRpcResult::Dentry {
@@ -184,7 +157,6 @@ fn dentry_response_with_position(
         }),
         error: None,
         error_kind: None,
-        metadata_position,
     };
     encode_envelope(&envelope).unwrap()
 }
@@ -386,262 +358,6 @@ fn service_advisory_lock_sends_typed_rpc_and_maps_conflict() {
         }
         other => panic!("unexpected error: {other:?}"),
     }
-}
-
-#[test]
-fn service_client_carries_observed_metadata_position_to_live_reads() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
-        stream.read_exact(&mut magic).unwrap();
-        assert_eq!(&magic, FRAMED_RPC_MAGIC);
-
-        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
-        let request = decode_request(&request).unwrap();
-        assert!(matches!(
-            request,
-            MetadataRpcRequest::CreateFilePath { path, .. } if path == "/runs/a.bin"
-        ));
-        let position = WireMetadataPosition { term: 2, index: 5 };
-        let response = dentry_response_with_position(2, "a.bin", 40, 7, Some(position));
-        write_frame(&mut stream, request_id, flags, &response).unwrap();
-
-        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
-        let request = decode_request(&request).unwrap();
-        assert!(matches!(
-            request,
-            MetadataRpcRequest::RequireApplied {
-                position: observed,
-                request,
-            } if observed == position
-                && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
-        ));
-        let response = response_body(
-            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
-        );
-        write_frame(&mut stream, request_id, flags, &response).unwrap();
-    });
-    let client = MetadataClient::connect(addr);
-    client
-        .create_file("/runs/a.bin", 0o644, 1000, 1000)
-        .unwrap();
-    let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
-    assert_eq!(metadata.attr.inode.get(), 40);
-}
-
-#[test]
-fn service_client_exports_observed_metadata_position_from_write() {
-    let position = WireMetadataPosition { term: 7, index: 11 };
-    let addr = serve_one_request(move |request| {
-        assert!(matches!(
-            request,
-            MetadataRpcRequest::CreateFilePath { path, .. } if path == "/runs/a.bin"
-        ));
-        dentry_response_with_position(2, "a.bin", 40, 7, Some(position))
-    });
-    let client = MetadataClient::connect(addr);
-
-    client
-        .create_file("/runs/a.bin", 0o644, 1000, 1000)
-        .unwrap();
-
-    assert_eq!(
-        client.observed_metadata_position(),
-        Some(ClientMetadataPosition {
-            term: position.term,
-            index: position.index,
-        })
-    );
-}
-
-#[test]
-fn service_client_retries_stale_single_endpoint_until_fresh() {
-    let position = WireMetadataPosition { term: 7, index: 11 };
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
-        stream.read_exact(&mut magic).unwrap();
-        assert_eq!(&magic, FRAMED_RPC_MAGIC);
-
-        for response in [
-            read_not_fresh_response(
-                position,
-                Some(WireMetadataPosition {
-                    term: position.term,
-                    index: position.index - 1,
-                }),
-            ),
-            response_body(
-                r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
-            ),
-        ] {
-            let (request_id, flags, request) = read_frame(&mut stream).unwrap();
-            let request = decode_request(&request).unwrap();
-            assert!(matches!(
-                request,
-                MetadataRpcRequest::RequireApplied {
-                    position: observed,
-                    request,
-                } if observed == position
-                    && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
-            ));
-            write_frame(&mut stream, request_id, flags, &response).unwrap();
-        }
-    });
-
-    let client = MetadataClient::connect(addr);
-    client.observe_metadata_position(ClientMetadataPosition {
-        term: position.term,
-        index: position.index,
-    });
-
-    let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
-
-    assert_eq!(metadata.attr.inode.get(), 40);
-}
-
-#[test]
-fn service_client_imports_observed_position_for_learner_reads() {
-    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let addr = listener.local_addr().unwrap();
-    thread::spawn(move || {
-        let (mut stream, _) = listener.accept().unwrap();
-        let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
-        stream.read_exact(&mut magic).unwrap();
-        assert_eq!(&magic, FRAMED_RPC_MAGIC);
-
-        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
-        let request = decode_request(&request).unwrap();
-        assert!(matches!(
-            request,
-            MetadataRpcRequest::RequireApplied {
-                position,
-                request,
-            } if position == WireMetadataPosition { term: 7, index: 11 }
-                && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
-        ));
-        let response = response_body(
-            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
-        );
-        write_frame(&mut stream, request_id, flags, &response).unwrap();
-    });
-    let client = MetadataClient::connect(addr);
-    client.observe_metadata_position(ClientMetadataPosition { term: 7, index: 11 });
-
-    let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
-
-    assert_eq!(metadata.attr.inode.get(), 40);
-}
-
-#[test]
-fn service_client_imports_observed_position_for_write_planning() {
-    let position = WireMetadataPosition { term: 7, index: 11 };
-    let addr = serve_one_request(move |request| {
-        assert!(matches!(
-            request,
-            MetadataRpcRequest::RequireApplied {
-                position: observed,
-                request,
-            } if observed == position
-                && matches!(*request, MetadataRpcRequest::CreateFilePath { ref path, .. } if path == "/runs/a.bin")
-        ));
-        dentry_response_with_position(2, "a.bin", 40, 7, Some(position))
-    });
-    let client = MetadataClient::connect(addr);
-    client.observe_metadata_position(ClientMetadataPosition {
-        term: position.term,
-        index: position.index,
-    });
-
-    let entry = client
-        .create_file("/runs/a.bin", 0o644, 1000, 1000)
-        .unwrap();
-
-    assert_eq!(entry.attr.inode.get(), 40);
-}
-
-#[test]
-fn service_client_routes_live_reads_to_learner_and_falls_back_on_stale() {
-    let position = WireMetadataPosition { term: 7, index: 11 };
-
-    let leader_listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let leader_addr = leader_listener.local_addr().unwrap();
-    let learner_listener = TcpListener::bind("127.0.0.1:0").unwrap();
-    let learner_addr = learner_listener.local_addr().unwrap();
-
-    let leader = thread::spawn(move || {
-        let (mut stream, _) = leader_listener.accept().unwrap();
-        let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
-        stream.read_exact(&mut magic).unwrap();
-        assert_eq!(&magic, FRAMED_RPC_MAGIC);
-
-        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
-        let request = decode_request(&request).unwrap();
-        assert!(matches!(
-            request,
-            MetadataRpcRequest::CreateFilePath { path, .. } if path == "/runs/a.bin"
-        ));
-        let response = dentry_response_with_position(2, "a.bin", 40, 7, Some(position));
-        write_frame(&mut stream, request_id, flags, &response).unwrap();
-
-        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
-        let request = decode_request(&request).unwrap();
-        assert!(matches!(
-            request,
-            MetadataRpcRequest::RequireApplied {
-                position: observed,
-                request,
-            } if observed == position
-                && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
-        ));
-        let response = response_body(
-            r#"{"ok":true,"result":{"type":"path_metadata","metadata":{"attr":{"inode":40,"file_type":"file","mode":420,"uid":1000,"gid":1000,"rdev":0,"nlink":1,"size":0,"generation":7,"mtime_ms":7,"ctime_ms":7},"body":null}}}"#,
-        );
-        write_frame(&mut stream, request_id, flags, &response).unwrap();
-    });
-
-    let learner = thread::spawn(move || {
-        let (mut stream, _) = learner_listener.accept().unwrap();
-        let mut magic = [0_u8; FRAMED_RPC_MAGIC.len()];
-        stream.read_exact(&mut magic).unwrap();
-        assert_eq!(&magic, FRAMED_RPC_MAGIC);
-
-        let (request_id, flags, request) = read_frame(&mut stream).unwrap();
-        let request = decode_request(&request).unwrap();
-        assert!(matches!(
-            request,
-            MetadataRpcRequest::RequireApplied {
-                position: observed,
-                request,
-            } if observed == position
-                && matches!(*request, MetadataRpcRequest::StatPath { ref path } if path == "/runs/a.bin")
-        ));
-        let response = read_not_fresh_response(
-            position,
-            Some(WireMetadataPosition {
-                term: position.term,
-                index: position.index - 1,
-            }),
-        );
-        write_frame(&mut stream, request_id, flags, &response).unwrap();
-    });
-
-    let client = MetadataClient::new(
-        MetadataClientOptions::new(leader_addr).with_read_endpoints(vec![learner_addr]),
-    );
-
-    client
-        .create_file("/runs/a.bin", 0o644, 1000, 1000)
-        .unwrap();
-    let metadata = client.stat_path("/runs/a.bin").unwrap().unwrap();
-
-    assert_eq!(metadata.attr.inode.get(), 40);
-    leader.join().unwrap();
-    learner.join().unwrap();
 }
 
 #[test]
@@ -915,7 +631,6 @@ fn service_xattr_rpc_round_trips_bytes_names() {
                 result: Some(MetadataRpcResult::Unit),
                 error: None,
                 error_kind: None,
-                metadata_position: None,
             })
             .unwrap(),
         )
@@ -940,7 +655,6 @@ fn service_xattr_rpc_round_trips_bytes_names() {
                 }),
                 error: None,
                 error_kind: None,
-                metadata_position: None,
             })
             .unwrap(),
         )
@@ -962,7 +676,6 @@ fn service_xattr_rpc_round_trips_bytes_names() {
                 }),
                 error: None,
                 error_kind: None,
-                metadata_position: None,
             })
             .unwrap(),
         )
@@ -985,7 +698,6 @@ fn service_xattr_rpc_round_trips_bytes_names() {
                 result: Some(MetadataRpcResult::Unit),
                 error: None,
                 error_kind: None,
-                metadata_position: None,
             })
             .unwrap(),
         )
@@ -1058,77 +770,6 @@ fn service_typed_error_maps_stale_generation_to_metadata_error() {
             expected: 7,
             current: 8
         })
-    ));
-}
-
-#[test]
-fn service_client_retries_forward_to_leader_endpoint() {
-    let leader_addr = serve_one_request(|request| {
-        assert!(matches!(
-            request,
-            MetadataRpcRequest::BootstrapRoot {
-                mode: 0o755,
-                uid: 1000,
-                gid: 1000
-            }
-        ));
-        response_body(
-            r#"{"ok":true,"result":{"type":"inode_attr","attr":null},"metadata_position":{"term":3,"index":9}}"#,
-        )
-    });
-    let follower_addr = serve_one_request(move |request| {
-        assert!(matches!(request, MetadataRpcRequest::BootstrapRoot { .. }));
-        encode_envelope(&MetadataRpcEnvelope {
-            ok: false,
-            result: None,
-            error: Some("forward to metadata leader".to_owned()),
-            error_kind: Some(WireMetadataError::ForwardToLeader {
-                leader_id: Some(2),
-                address: Some(leader_addr.to_string()),
-            }),
-            metadata_position: None,
-        })
-        .unwrap()
-    });
-    let client = MetadataClient::connect(follower_addr);
-
-    client.bootstrap_root(0o755, 1000, 1000).unwrap();
-
-    assert_eq!(
-        client.observed_metadata_position(),
-        Some(ClientMetadataPosition { term: 3, index: 9 })
-    );
-}
-
-#[test]
-fn service_typed_error_maps_read_not_fresh() {
-    let err = client_error_from_wire_error(WireMetadataError::ReadNotFresh {
-        required: WireMetadataPosition { term: 2, index: 8 },
-        applied: Some(WireMetadataPosition { term: 2, index: 5 }),
-    });
-    assert!(matches!(
-        err,
-        ClientError::ReadNotFresh {
-            required_term: 2,
-            required_index: 8,
-            applied_term: Some(2),
-            applied_index: Some(5),
-        }
-    ));
-}
-
-#[test]
-fn service_typed_error_maps_forward_to_leader() {
-    let err = client_error_from_wire_error(WireMetadataError::ForwardToLeader {
-        leader_id: Some(2),
-        address: Some("127.0.0.1:9922".to_owned()),
-    });
-    assert!(matches!(
-        err,
-        ClientError::ForwardToLeader {
-            leader_id: Some(2),
-            address: Some(address),
-        } if address.to_string() == "127.0.0.1:9922"
     ));
 }
 
@@ -1669,4 +1310,90 @@ fn service_file_client_cleans_staged_blocks_after_publish_failure() {
             .is_none(),
         "failed metadata publish should clean staged object block"
     );
+}
+
+#[test]
+fn service_clone_subtree_path_sends_typed_rpc_and_maps_outcome() {
+    let addr = serve_one_request(|request| {
+        assert_eq!(
+            request,
+            MetadataRpcRequest::CloneSubtreePath {
+                src_path: "/base".to_owned(),
+                dst_path: "/forks/agent-1".to_owned(),
+            }
+        );
+        response_body(r#"{"ok":true,"result":{"type":"clone_subtree","root":99,"snapshot_id":7}}"#)
+    });
+    let client = MetadataClient::connect(addr);
+    let outcome = client
+        .clone_subtree_path("/base", "/forks/agent-1")
+        .unwrap();
+    assert_eq!(outcome.root.get(), 99);
+    assert_eq!(outcome.snapshot_id, 7);
+}
+
+#[test]
+fn service_diff_subtrees_sends_typed_rpc_and_maps_deltas() {
+    let addr = serve_one_request(|request| {
+        assert_eq!(
+            request,
+            MetadataRpcRequest::DiffSubtrees {
+                a_path: "/base".to_owned(),
+                b_path: "/forks/agent-1".to_owned(),
+            }
+        );
+        response_body(
+            r#"{"ok":true,"result":{"type":"subtree_deltas","deltas":[{"path":"/a","kind":"modified"},{"path":"/c","kind":"added"}]}}"#,
+        )
+    });
+    let client = MetadataClient::connect(addr);
+    let deltas = client.diff_subtrees("/base", "/forks/agent-1").unwrap();
+    assert_eq!(
+        deltas,
+        vec![
+            nokv_meta::SubtreeDelta {
+                path: "/a".to_owned(),
+                kind: nokv_meta::SubtreeDeltaKind::Modified,
+            },
+            nokv_meta::SubtreeDelta {
+                path: "/c".to_owned(),
+                kind: nokv_meta::SubtreeDeltaKind::Added,
+            },
+        ]
+    );
+}
+
+#[test]
+fn service_snapshot_subtree_path_sends_typed_rpc_and_maps_outcome() {
+    let addr = serve_one_request(|request| {
+        assert_eq!(
+            request,
+            MetadataRpcRequest::SnapshotSubtreePath {
+                path: "/base".to_owned(),
+            }
+        );
+        response_body(
+            r#"{"ok":true,"result":{"type":"snapshot","snapshot":{"snapshot_id":7,"root":2,"read_version":6,"created_version":7}}}"#,
+        )
+    });
+    let client = MetadataClient::connect(addr);
+    let outcome = client.snapshot_subtree_path("/base").unwrap();
+    assert_eq!(outcome.snapshot_id, 7);
+    assert_eq!(outcome.read_version, 6);
+}
+
+#[test]
+fn service_rollback_subtree_path_sends_typed_rpc_and_maps_unit() {
+    let addr = serve_one_request(|request| {
+        assert_eq!(
+            request,
+            MetadataRpcRequest::RollbackSubtreePath {
+                target_path: "/base".to_owned(),
+                snapshot_id: 7,
+            }
+        );
+        response_body(r#"{"ok":true,"result":{"type":"unit"}}"#)
+    });
+    let client = MetadataClient::connect(addr);
+    client.rollback_subtree_path("/base", 7).unwrap();
 }

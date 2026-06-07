@@ -201,10 +201,13 @@ pub(super) fn mount_options(options: &FuseOptions) -> Vec<MountOption> {
     {
         mount_options.push(MountOption::CUSTOM("fstypename=nokv".to_owned()));
         mount_options.push(MountOption::CUSTOM(format!("volname={}", options.fs_name)));
-        // NoKV does not persist Finder/resource-fork metadata yet. Ask macFUSE
-        // to reject Apple sidecars instead of creating visible ._ files.
+        // NoKV does not persist Finder/resource-fork metadata yet, so suppress the
+        // AppleDouble sidecars macFUSE would otherwise materialise as visible `._`
+        // files. We do NOT pass `noapplexattr`: that makes macFUSE reject every
+        // `com.apple.*` xattr with EPERM, which breaks `cp` (macOS tags files with
+        // `com.apple.provenance`, and `cp` copies it). Our xattr store accepts
+        // arbitrary names, so those flow through the normal setxattr path instead.
         mount_options.push(MountOption::CUSTOM("noappledouble".to_owned()));
-        mount_options.push(MountOption::CUSTOM("noapplexattr".to_owned()));
     }
     #[cfg(not(target_os = "macos"))]
     {

@@ -2,8 +2,6 @@
 //!
 //! This binary intentionally reports workload shape and durability caveats with
 //! every result. It runs a real `metad` process boundary with the service client.
-//! The metadata HA smoke workload also starts real multi-server OpenRaft
-//! metadata groups and verifies read-your-writes from a replicated peer.
 
 use std::env;
 use std::error::Error;
@@ -14,18 +12,17 @@ use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Barrier, Mutex};
+use std::sync::Mutex;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use nokv_client::{ArtifactMetadata, MetadataClient, MetadataClientOptions, NoKvFsClient};
-use nokv_cluster::{FileMetadataRaftLogSync, NodeId};
+use nokv_client::{ArtifactMetadata, NoKvFsClient};
 use nokv_meta::{
     DentryWithAttr, HistoryGcOptions, MetadataServiceStats, MetadataStoreStats, ObjectGcOptions,
     ObjectTransferStats, RenameReplaceResult,
 };
 use nokv_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
-use nokv_server::{MetadataMode, MetadataRaftPeerOptions, Server, ServerOptions};
+use nokv_server::{MetadataMode, Server, ServerOptions};
 use nokv_types::{MountId, PathMetadata};
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
@@ -44,10 +41,6 @@ enum Profile {
 enum Workload {
     All,
     MetadataSmoke,
-    MetadataHaSmoke,
-    MetadataHaFaultSmoke,
-    MetadataHaLearnerRead,
-    MetadataHaCoalescingSmoke,
     MdtestEasy,
     MdtestHard,
     MetadataNegativeLookup,
@@ -69,7 +62,6 @@ struct Config {
     object_concurrency: usize,
     read_repeats: usize,
     block_cache: bool,
-    metadata_raft_log_sync: FileMetadataRaftLogSync,
     checkpoint_bytes: Option<usize>,
     sample_bytes: Option<usize>,
     keep: bool,
@@ -138,21 +130,6 @@ struct ResultRow {
     metadata_dedupe_hits: u64,
     metadata_predicates: u64,
     metadata_prefix_empty_predicates: u64,
-    metadata_raft_current_term: u64,
-    metadata_raft_current_leader: u64,
-    metadata_raft_last_log_index: u64,
-    metadata_raft_last_applied_index: u64,
-    metadata_raft_snapshot_index: u64,
-    metadata_raft_purged_index: u64,
-    metadata_raft_millis_since_quorum_ack: u64,
-    metadata_raft_voters: u64,
-    metadata_raft_learners: u64,
-    metadata_raft_proposal_batches: u64,
-    metadata_raft_proposal_commands: u64,
-    metadata_raft_proposal_max_batch: u64,
-    metadata_raft_proposal_ns: u64,
-    metadata_raft_proposal_queue_wait_ns: u64,
-    metadata_raft_proposal_queue_max_wait_ns: u64,
     metadata_gets: u64,
     metadata_get_user_strong: u64,
     metadata_get_write_plan_local: u64,
@@ -218,37 +195,7 @@ struct RowInput {
 struct BenchStats {
     object: ObjectTransferStats,
     metadata_store: MetadataStoreStats,
-    metadata_raft: MetadataRaftBenchStats,
     metadata_service: MetadataServiceStats,
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-struct MetadataRaftBenchStats {
-    current_term: u64,
-    current_leader: u64,
-    last_log_index: u64,
-    last_applied_index: u64,
-    snapshot_index: u64,
-    purged_index: u64,
-    millis_since_quorum_ack: u64,
-    voter_count: u64,
-    learner_count: u64,
-    proposal_batch_total: u64,
-    proposal_command_total: u64,
-    proposal_max_batch: u64,
-    proposal_ns_total: u64,
-    proposal_queue_wait_ns_total: u64,
-    proposal_queue_max_wait_ns: u64,
-}
-
-#[derive(Clone, Debug)]
-struct MetadataHaClusterConfig {
-    root: PathBuf,
-    object: ObjectStoreConfig,
-    voters: Vec<NodeId>,
-    learners: Vec<NodeId>,
-    peers: Vec<MetadataRaftPeerOptions>,
-    sync: FileMetadataRaftLogSync,
 }
 
 #[derive(Debug)]
@@ -446,11 +393,10 @@ fn main() {
         eprintln!("error: {err}");
         eprintln!(
             "\nUsage: nokv-bench [--profile smoke|standard|long] \
-             [--workload all|metadata-smoke|metadata-ha-smoke|metadata-ha-fault-smoke|metadata-ha-learner-read|metadata-ha-coalescing-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
+             [--workload all|metadata-smoke|mdtest-easy|mdtest-hard|metadata-negative-lookup|artifact-index-lookup|metadata-concurrent-read|checkpoint-publish|training-read|mlperf-dlio|demo-dataset] \
              [--root PATH] [--object-backend s3|rustfs] \
              [--object-concurrency N] [--checkpoint-bytes N] [--sample-bytes N] \
-             [--read-repeats N] [--block-cache on|off] \
-             [--metadata-raft-log-sync data|none] [--keep]"
+             [--read-repeats N] [--block-cache on|off] [--keep]"
         );
         std::process::exit(2);
     }
@@ -462,9 +408,10 @@ fn run(args: Vec<String>) -> Result<(), BenchError> {
     fs::create_dir_all(&config.root).map_err(from_io)?;
 
     println!("{}", csv_header());
+    let labels = boundary_labels(&config);
     for workload in expand_workloads(config.workload) {
         let row = run_one(&config, &shape, workload)?;
-        println!("{}", csv_row(&row));
+        println!("{}", csv_row(&row, &labels));
     }
 
     if !config.keep {
@@ -478,18 +425,6 @@ fn run_one(
     shape: &WorkloadShape,
     workload: Workload,
 ) -> Result<ResultRow, BenchError> {
-    if workload == Workload::MetadataHaSmoke {
-        return bench_metadata_ha_smoke(config, shape);
-    }
-    if workload == Workload::MetadataHaFaultSmoke {
-        return bench_metadata_ha_fault_smoke(config, shape);
-    }
-    if workload == Workload::MetadataHaLearnerRead {
-        return bench_metadata_ha_learner_read(config, shape);
-    }
-    if workload == Workload::MetadataHaCoalescingSmoke {
-        return bench_metadata_ha_coalescing_smoke(config, shape);
-    }
     let label = workload_name(workload);
     let client = client_for(config, label)?;
     client.bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)?;
@@ -509,13 +444,6 @@ fn run_one(
         Workload::TrainingRead => bench_training_read(client.as_ref(), config, shape),
         Workload::MlperfDlio => bench_mlperf_dlio(client.as_ref(), config, shape),
         Workload::DemoDataset => bench_demo_dataset(client.as_ref(), config, shape),
-        Workload::MetadataHaSmoke => unreachable!("metadata-ha-smoke executes before client setup"),
-        Workload::MetadataHaFaultSmoke => {
-            unreachable!("metadata-ha-fault-smoke executes before client setup")
-        }
-        Workload::MetadataHaLearnerRead | Workload::MetadataHaCoalescingSmoke => {
-            unreachable!("metadata HA special workloads execute before client setup")
-        }
         Workload::MetadataSmoke => unreachable!("metadata-smoke expands before execution"),
         Workload::All => unreachable!("all expands before execution"),
     }
@@ -837,624 +765,6 @@ fn bench_metadata_concurrent_read(
             shape.dirs, shape.files_per_dir, config.read_repeats, config.object_concurrency
         ),
         caveat: metadata_only_caveat(config),
-    }))
-}
-
-fn bench_metadata_ha_smoke(
-    config: &Config,
-    shape: &WorkloadShape,
-) -> Result<ResultRow, BenchError> {
-    let workload = "metadata-ha-smoke";
-    let root = config.root.join(workload);
-    fs::create_dir_all(&root).map_err(from_io)?;
-    let object = object_config_for(config, workload);
-    let objects = object.clone().open().map_err(from_client)?;
-    let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
-    let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
-    let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
-    let voters = vec![node_1, node_2, node_3];
-
-    let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_2 = listener_2.local_addr().map_err(from_io)?;
-    let listener_3 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_3 = listener_3.local_addr().map_err(from_io)?;
-    let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_1 = listener_1.local_addr().map_err(from_io)?;
-    let peers = vec![
-        MetadataRaftPeerOptions {
-            node: node_1,
-            address: addr_1,
-        },
-        MetadataRaftPeerOptions {
-            node: node_2,
-            address: addr_2,
-        },
-        MetadataRaftPeerOptions {
-            node: node_3,
-            address: addr_3,
-        },
-    ];
-    let cluster = MetadataHaClusterConfig {
-        root: root.clone(),
-        object,
-        voters,
-        learners: Vec::new(),
-        peers,
-        sync: config.metadata_raft_log_sync,
-    };
-
-    start_metadata_raft_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
-    wait_for_health(addr_2)?;
-    start_metadata_raft_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
-    wait_for_health(addr_3)?;
-    start_metadata_raft_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
-    wait_for_health(addr_1)?;
-
-    let cluster_nodes = [(node_1, addr_1), (node_2, addr_2), (node_3, addr_3)];
-    let (leader, leader_addr) = wait_metadata_raft_leader(&cluster_nodes)?;
-    let write_addr = cluster_nodes
-        .iter()
-        .find_map(|(node, address)| (*node != leader).then_some(*address))
-        .unwrap_or(leader_addr);
-    let peer_read_addr = cluster_nodes
-        .iter()
-        .find_map(|(node, address)| (*node != leader && *address != write_addr).then_some(*address))
-        .unwrap_or(write_addr);
-    let metadata = MetadataClient::new(
-        MetadataClientOptions::new(write_addr).with_read_endpoints(vec![peer_read_addr]),
-    );
-    let client = NoKvFsClient::new(metadata, objects);
-    client
-        .metadata()
-        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| BenchError::Client(format!("metadata-ha-smoke bootstrap root: {err}")))?;
-    let before = fetch_server_stats(leader_addr)?;
-    let start = Instant::now();
-    let mut checksum = 0_u64;
-    let files = shape.shared_files.clamp(16, 512);
-    client
-        .metadata()
-        .mkdir("/ha", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| BenchError::Client(format!("metadata-ha-smoke mkdir /ha: {err}")))?;
-    let paths = (0..files)
-        .map(|index| format!("/ha/file-{index:06}"))
-        .collect::<Vec<_>>();
-    for entry in client
-        .metadata()
-        .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| BenchError::Client(format!("metadata-ha-smoke create files RPC: {err}")))?
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| {
-            BenchError::Client(format!("metadata-ha-smoke create files result: {err}"))
-        })?
-    {
-        checksum = checksum.wrapping_add(entry.attr.inode.get());
-    }
-    let observed = client
-        .metadata()
-        .observed_metadata_position()
-        .ok_or_else(|| {
-            BenchError::Client("metadata HA write returned no log position".to_owned())
-        })?;
-    let peer_reader = MetadataClient::connect(peer_read_addr);
-    peer_reader.observe_metadata_position(observed);
-    let peer_entries = peer_reader
-        .list("/ha")
-        .map_err(|err| BenchError::Client(format!("metadata-ha-smoke peer list /ha: {err}")))?;
-    if peer_entries.len() != files {
-        return Err(BenchError::Client(format!(
-            "metadata HA peer read returned {} entries, expected {files}",
-            peer_entries.len()
-        )));
-    }
-    checksum = checksum.wrapping_add(peer_entries.len() as u64);
-    let stats = stats_delta(before, fetch_server_stats(leader_addr)?);
-    Ok(row(RowInput {
-        workload,
-        profile: config.profile,
-        operations: files + 2,
-        seconds: start.elapsed().as_secs_f64(),
-        bytes: 0,
-        samples: 0,
-        stats,
-        object_concurrency: config.object_concurrency,
-        read_repeats: config.read_repeats,
-        block_cache: config.block_cache,
-        checksum,
-        shape: format!(
-            "voters=3 leader={} write_endpoint={} peer_read={} files={files}",
-            leader.get(),
-            write_addr,
-            peer_read_addr
-        ),
-        caveat: format!(
-            "OpenRaft metadata HA smoke over three metadata server processes, sync={}, peer read requires observed log position",
-            metadata_raft_log_sync_name(config.metadata_raft_log_sync)
-        ),
-    }))
-}
-
-fn bench_metadata_ha_coalescing_smoke(
-    config: &Config,
-    shape: &WorkloadShape,
-) -> Result<ResultRow, BenchError> {
-    let workload = "metadata-ha-coalescing-smoke";
-    let root = config.root.join(workload);
-    fs::create_dir_all(&root).map_err(from_io)?;
-    let object = object_config_for(config, workload);
-    let objects = object.clone().open().map_err(from_client)?;
-    let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
-    let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
-    let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
-    let voters = vec![node_1, node_2, node_3];
-
-    let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_2 = listener_2.local_addr().map_err(from_io)?;
-    let listener_3 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_3 = listener_3.local_addr().map_err(from_io)?;
-    let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_1 = listener_1.local_addr().map_err(from_io)?;
-    let peers = vec![
-        MetadataRaftPeerOptions {
-            node: node_1,
-            address: addr_1,
-        },
-        MetadataRaftPeerOptions {
-            node: node_2,
-            address: addr_2,
-        },
-        MetadataRaftPeerOptions {
-            node: node_3,
-            address: addr_3,
-        },
-    ];
-    let cluster = MetadataHaClusterConfig {
-        root: root.clone(),
-        object,
-        voters,
-        learners: Vec::new(),
-        peers,
-        sync: config.metadata_raft_log_sync,
-    };
-
-    start_metadata_raft_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
-    wait_for_health(addr_2)?;
-    start_metadata_raft_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
-    wait_for_health(addr_3)?;
-    start_metadata_raft_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
-    wait_for_health(addr_1)?;
-
-    let cluster_nodes = [(node_1, addr_1), (node_2, addr_2), (node_3, addr_3)];
-    let (leader, leader_addr) = wait_metadata_raft_leader(&cluster_nodes)?;
-    let write_addr = leader_addr;
-    let peer_read_addr = cluster_nodes
-        .iter()
-        .find_map(|(node, address)| (*node != leader && *address != write_addr).then_some(*address))
-        .unwrap_or(write_addr);
-    let metadata = MetadataClient::new(
-        MetadataClientOptions::new(write_addr).with_read_endpoints(vec![peer_read_addr]),
-    );
-    let client = NoKvFsClient::new(metadata, objects);
-    client
-        .metadata()
-        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| {
-            BenchError::Client(format!(
-                "metadata-ha-coalescing-smoke bootstrap root: {err}"
-            ))
-        })?;
-    client
-        .metadata()
-        .mkdir("/coalesce", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| {
-            BenchError::Client(format!(
-                "metadata-ha-coalescing-smoke mkdir /coalesce: {err}"
-            ))
-        })?;
-    let before = fetch_server_stats(leader_addr)?;
-    let start = Instant::now();
-    let files = shape.shared_files.clamp(16, 512);
-    let workers = config.object_concurrency.clamp(2, 64).min(files);
-    let barrier = Arc::new(Barrier::new(workers));
-    let checksum = Arc::new(AtomicU64::new(0));
-    let mut handles = Vec::new();
-    for worker in 0..workers {
-        let barrier = Arc::clone(&barrier);
-        let checksum = Arc::clone(&checksum);
-        let options =
-            MetadataClientOptions::new(write_addr).with_read_endpoints(vec![peer_read_addr]);
-        handles.push(thread::spawn(move || -> Result<(), BenchError> {
-            let metadata = MetadataClient::new(options);
-            barrier.wait();
-            let paths = (worker..files)
-                .step_by(workers)
-                .map(|index| format!("/coalesce/file-{index:06}"))
-                .collect::<Vec<_>>();
-            for (offset, result) in metadata
-                .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
-                .map_err(|err| {
-                    BenchError::Client(format!(
-                        "metadata-ha-coalescing-smoke create file batch worker {worker}: {err}"
-                    ))
-                })?
-                .into_iter()
-                .enumerate()
-            {
-                let entry = result.map_err(|err| {
-                    BenchError::Client(format!(
-                        "metadata-ha-coalescing-smoke create file {}: {err}",
-                        paths[offset]
-                    ))
-                })?;
-                checksum.fetch_add(entry.attr.inode.get(), Ordering::Relaxed);
-            }
-            Ok(())
-        }));
-    }
-    for handle in handles {
-        handle.join().map_err(|_| {
-            BenchError::Client("metadata HA coalescing worker panicked".to_owned())
-        })??;
-    }
-
-    let leader_reader = MetadataClient::connect(leader_addr);
-    let entries = leader_reader.list("/coalesce").map_err(|err| {
-        BenchError::Client(format!(
-            "metadata-ha-coalescing-smoke leader list /coalesce: {err}"
-        ))
-    })?;
-    if entries.len() != files {
-        return Err(BenchError::Client(format!(
-            "metadata HA coalescing leader read returned {} entries, expected {files}",
-            entries.len()
-        )));
-    }
-    let stats = stats_delta(before, fetch_server_stats(leader_addr)?);
-    Ok(row(RowInput {
-        workload,
-        profile: config.profile,
-        operations: files + 1,
-        seconds: start.elapsed().as_secs_f64(),
-        bytes: 0,
-        samples: 0,
-        stats,
-        object_concurrency: config.object_concurrency,
-        read_repeats: config.read_repeats,
-        block_cache: config.block_cache,
-        checksum: checksum
-            .load(Ordering::Relaxed)
-            .wrapping_add(entries.len() as u64),
-        shape: format!(
-            "voters=3 leader={} write_endpoint={} peer_read={} files={} workers={workers}",
-            leader.get(),
-            write_addr,
-            peer_read_addr,
-            files
-        ),
-        caveat: format!(
-            "OpenRaft coalescing smoke over concurrent same-parent create_files RPCs to the current leader, sync={}",
-            metadata_raft_log_sync_name(config.metadata_raft_log_sync)
-        ),
-    }))
-}
-
-fn bench_metadata_ha_fault_smoke(
-    config: &Config,
-    shape: &WorkloadShape,
-) -> Result<ResultRow, BenchError> {
-    let workload = "metadata-ha-fault-smoke";
-    let root = config.root.join(workload);
-    fs::create_dir_all(&root).map_err(from_io)?;
-    let object = object_config_for(config, workload);
-    let objects = object.clone().open().map_err(from_client)?;
-    let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
-    let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
-    let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
-    let voters = vec![node_1, node_2, node_3];
-
-    let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_2 = listener_2.local_addr().map_err(from_io)?;
-    let addr_3 = reserve_local_addr()?;
-    let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_1 = listener_1.local_addr().map_err(from_io)?;
-    let peers = vec![
-        MetadataRaftPeerOptions {
-            node: node_1,
-            address: addr_1,
-        },
-        MetadataRaftPeerOptions {
-            node: node_2,
-            address: addr_2,
-        },
-        MetadataRaftPeerOptions {
-            node: node_3,
-            address: addr_3,
-        },
-    ];
-    let cluster = MetadataHaClusterConfig {
-        root: root.clone(),
-        object,
-        voters,
-        learners: Vec::new(),
-        peers,
-        sync: config.metadata_raft_log_sync,
-    };
-
-    start_metadata_raft_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
-    wait_for_health(addr_2)?;
-    start_metadata_raft_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
-    wait_for_health(addr_1)?;
-
-    let metadata =
-        MetadataClient::new(MetadataClientOptions::new(addr_1).with_read_endpoints(vec![addr_2]));
-    let client = NoKvFsClient::new(metadata, objects);
-    client
-        .metadata()
-        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| BenchError::Client(format!("metadata-ha-fault bootstrap root: {err}")))?;
-    let before = fetch_server_stats(addr_1)?;
-    let start = Instant::now();
-    let mut checksum = 0_u64;
-    let files = shape.shared_files.clamp(16, 512);
-    client
-        .metadata()
-        .mkdir("/ha-fault", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| BenchError::Client(format!("metadata-ha-fault mkdir /ha-fault: {err}")))?;
-    let paths = (0..files)
-        .map(|index| format!("/ha-fault/file-{index:06}"))
-        .collect::<Vec<_>>();
-    for entry in client
-        .metadata()
-        .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| BenchError::Client(format!("metadata-ha-fault create files RPC: {err}")))?
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| {
-            BenchError::Client(format!("metadata-ha-fault create files result: {err}"))
-        })?
-    {
-        checksum = checksum.wrapping_add(entry.attr.inode.get());
-    }
-    let first_observed = client
-        .metadata()
-        .observed_metadata_position()
-        .ok_or_else(|| {
-            BenchError::Client("metadata HA degraded write returned no log position".to_owned())
-        })?;
-    let peer_2 = MetadataClient::connect(addr_2);
-    peer_2.observe_metadata_position(first_observed);
-    let peer_2_entries = peer_2
-        .list("/ha-fault")
-        .map_err(|err| BenchError::Client(format!("metadata-ha-fault peer2 list: {err}")))?;
-    if peer_2_entries.len() != files {
-        return Err(BenchError::Client(format!(
-            "metadata HA surviving peer read returned {} entries, expected {files}",
-            peer_2_entries.len()
-        )));
-    }
-
-    let listener_3 = TcpListener::bind(addr_3).map_err(from_io)?;
-    start_metadata_raft_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
-    wait_for_health(addr_3)?;
-    let recovered = client
-        .metadata()
-        .create_file(
-            "/ha-fault/recovered-after-outage",
-            DEFAULT_MODE_FILE,
-            DEFAULT_UID,
-            DEFAULT_GID,
-        )
-        .map_err(|err| BenchError::Client(format!("metadata-ha-fault recovery create: {err}")))?;
-    checksum = checksum.wrapping_add(recovered.attr.inode.get());
-    let recovered_observed = client
-        .metadata()
-        .observed_metadata_position()
-        .ok_or_else(|| {
-            BenchError::Client("metadata HA recovery write returned no log position".to_owned())
-        })?;
-    let peer_3 = MetadataClient::connect(addr_3);
-    peer_3.observe_metadata_position(recovered_observed);
-    let peer_3_entries = peer_3
-        .list("/ha-fault")
-        .map_err(|err| BenchError::Client(format!("metadata-ha-fault peer3 list: {err}")))?;
-    let expected_after_recovery = files + 1;
-    if peer_3_entries.len() != expected_after_recovery {
-        return Err(BenchError::Client(format!(
-            "metadata HA recovered peer read returned {} entries, expected {expected_after_recovery}",
-            peer_3_entries.len()
-        )));
-    }
-    checksum = checksum
-        .wrapping_add(peer_2_entries.len() as u64)
-        .wrapping_add(peer_3_entries.len() as u64);
-    let stats = stats_delta(before, fetch_server_stats(addr_1)?);
-    Ok(row(RowInput {
-        workload,
-        profile: config.profile,
-        operations: files + 4,
-        seconds: start.elapsed().as_secs_f64(),
-        bytes: 0,
-        samples: 0,
-        stats,
-        object_concurrency: config.object_concurrency,
-        read_repeats: config.read_repeats,
-        block_cache: config.block_cache,
-        checksum,
-        shape: format!(
-            "voters=3 leader=1 surviving_peer=2 recovered_peer=3 files={files}"
-        ),
-        caveat: format!(
-            "OpenRaft metadata HA fault smoke: node3 unavailable for initial quorum commit, then restarted and caught up, sync={}",
-            metadata_raft_log_sync_name(config.metadata_raft_log_sync)
-        ),
-    }))
-}
-
-fn bench_metadata_ha_learner_read(
-    config: &Config,
-    shape: &WorkloadShape,
-) -> Result<ResultRow, BenchError> {
-    let workload = "metadata-ha-learner-read";
-    let root = config.root.join(workload);
-    fs::create_dir_all(&root).map_err(from_io)?;
-    let object = object_config_for(config, workload);
-    let objects = object.clone().open().map_err(from_client)?;
-    let node_1 = NodeId::new(1).expect("benchmark node id is non-zero");
-    let node_2 = NodeId::new(2).expect("benchmark node id is non-zero");
-    let node_3 = NodeId::new(3).expect("benchmark node id is non-zero");
-    let learner = NodeId::new(4).expect("benchmark node id is non-zero");
-    let voters = vec![node_1, node_2, node_3];
-    let learners = vec![learner];
-
-    let listener_2 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_2 = listener_2.local_addr().map_err(from_io)?;
-    let listener_3 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_3 = listener_3.local_addr().map_err(from_io)?;
-    let learner_listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let learner_addr = learner_listener.local_addr().map_err(from_io)?;
-    let listener_1 = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    let addr_1 = listener_1.local_addr().map_err(from_io)?;
-    let peers = vec![
-        MetadataRaftPeerOptions {
-            node: node_1,
-            address: addr_1,
-        },
-        MetadataRaftPeerOptions {
-            node: node_2,
-            address: addr_2,
-        },
-        MetadataRaftPeerOptions {
-            node: node_3,
-            address: addr_3,
-        },
-        MetadataRaftPeerOptions {
-            node: learner,
-            address: learner_addr,
-        },
-    ];
-    let cluster = MetadataHaClusterConfig {
-        root: root.clone(),
-        object,
-        voters,
-        learners,
-        peers,
-        sync: config.metadata_raft_log_sync,
-    };
-
-    start_metadata_raft_server(listener_2, server_options_for_node(&cluster, node_2)?)?;
-    wait_for_health(addr_2)?;
-    start_metadata_raft_server(listener_3, server_options_for_node(&cluster, node_3)?)?;
-    wait_for_health(addr_3)?;
-    start_metadata_raft_server(
-        learner_listener,
-        server_options_for_node(&cluster, learner)?,
-    )?;
-    wait_for_health(learner_addr)?;
-    start_metadata_raft_server(listener_1, server_options_for_node(&cluster, node_1)?)?;
-    wait_for_health(addr_1)?;
-
-    let cluster_nodes = [
-        (node_1, addr_1),
-        (node_2, addr_2),
-        (node_3, addr_3),
-        (learner, learner_addr),
-    ];
-    let (leader, leader_addr) = wait_metadata_raft_leader(&cluster_nodes)?;
-    MetadataClient::connect(leader_addr)
-        .add_metadata_raft_learner(learner.get(), learner_addr, true)
-        .map_err(|err| BenchError::Client(format!("{workload} add learner: {err}")))?;
-    wait_metadata_raft_membership_counts(&cluster_nodes, 3, 1)?;
-    let write_addr = cluster_nodes
-        .iter()
-        .find_map(|(node, address)| (*node != leader && *node != learner).then_some(*address))
-        .unwrap_or(leader_addr);
-    let metadata = MetadataClient::new(
-        MetadataClientOptions::new(write_addr).with_read_endpoints(vec![learner_addr]),
-    );
-    let client = NoKvFsClient::new(metadata, objects);
-    client
-        .metadata()
-        .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| BenchError::Client(format!("{workload} bootstrap root: {err}")))?;
-    client
-        .metadata()
-        .mkdir("/ha-learner", DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| BenchError::Client(format!("{workload} mkdir /ha-learner: {err}")))?;
-    let files = shape.shared_files.clamp(16, 512);
-    let paths = (0..files)
-        .map(|index| format!("/ha-learner/file-{index:06}"))
-        .collect::<Vec<_>>();
-    for entry in client
-        .metadata()
-        .create_files(&paths, DEFAULT_MODE_FILE, DEFAULT_UID, DEFAULT_GID)
-        .map_err(|err| BenchError::Client(format!("{workload} create files RPC: {err}")))?
-        .into_iter()
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|err| BenchError::Client(format!("{workload} create files result: {err}")))?
-    {
-        black_box(entry.attr.inode.get());
-    }
-    let observed = client
-        .metadata()
-        .observed_metadata_position()
-        .ok_or_else(|| {
-            BenchError::Client("learner read setup returned no log position".to_owned())
-        })?;
-    let reader = Arc::new(MetadataClient::connect(learner_addr));
-    reader.observe_metadata_position(observed);
-    let warm = reader
-        .list("/ha-learner")
-        .map_err(|err| BenchError::Client(format!("{workload} warm learner list: {err}")))?;
-    if warm.len() != files {
-        return Err(BenchError::Client(format!(
-            "learner warm read returned {} entries, expected {files}",
-            warm.len()
-        )));
-    }
-
-    let read_ops = shape.shared_files.clamp(16, 512) * config.read_repeats;
-    let before = fetch_server_stats(learner_addr)?;
-    let start = Instant::now();
-    let checksum = run_parallel(read_ops, config.object_concurrency, |_| {
-        let entries = reader
-            .list("/ha-learner")
-            .map_err(|err| BenchError::Client(format!("{workload} learner list: {err}")))?;
-        if entries.len() != files {
-            return Err(BenchError::Client(format!(
-                "learner read returned {} entries, expected {files}",
-                entries.len()
-            )));
-        }
-        Ok(entries
-            .first()
-            .map(|entry| entry.attr.inode.get())
-            .unwrap_or(0)
-            .wrapping_add(entries.len() as u64))
-    })?;
-    let stats = stats_delta(before, fetch_server_stats(learner_addr)?);
-    Ok(row(RowInput {
-        workload,
-        profile: config.profile,
-        operations: read_ops,
-        seconds: start.elapsed().as_secs_f64(),
-        bytes: 0,
-        samples: 0,
-        stats,
-        object_concurrency: config.object_concurrency,
-        read_repeats: config.read_repeats,
-        block_cache: config.block_cache,
-        checksum,
-        shape: format!(
-            "voters=3 learners=1 leader={} write_endpoint={} learner_read={} files={files} read_ops={read_ops}",
-            leader.get(),
-            write_addr,
-            learner_addr
-        ),
-        caveat: format!(
-            "OpenRaft learner read smoke over three voters plus one learner, sync={}, learner reads require observed log position",
-            metadata_raft_log_sync_name(config.metadata_raft_log_sync)
-        ),
     }))
 }
 
@@ -1797,27 +1107,6 @@ fn row(input: RowInput) -> ResultRow {
         metadata_dedupe_hits: input.stats.metadata_store.dedupe_hit_total,
         metadata_predicates: input.stats.metadata_store.predicate_total,
         metadata_prefix_empty_predicates: input.stats.metadata_store.prefix_empty_predicate_total,
-        metadata_raft_current_term: input.stats.metadata_raft.current_term,
-        metadata_raft_current_leader: input.stats.metadata_raft.current_leader,
-        metadata_raft_last_log_index: input.stats.metadata_raft.last_log_index,
-        metadata_raft_last_applied_index: input.stats.metadata_raft.last_applied_index,
-        metadata_raft_snapshot_index: input.stats.metadata_raft.snapshot_index,
-        metadata_raft_purged_index: input.stats.metadata_raft.purged_index,
-        metadata_raft_millis_since_quorum_ack: input.stats.metadata_raft.millis_since_quorum_ack,
-        metadata_raft_voters: input.stats.metadata_raft.voter_count,
-        metadata_raft_learners: input.stats.metadata_raft.learner_count,
-        metadata_raft_proposal_batches: input.stats.metadata_raft.proposal_batch_total,
-        metadata_raft_proposal_commands: input.stats.metadata_raft.proposal_command_total,
-        metadata_raft_proposal_max_batch: input.stats.metadata_raft.proposal_max_batch,
-        metadata_raft_proposal_ns: input.stats.metadata_raft.proposal_ns_total,
-        metadata_raft_proposal_queue_wait_ns: input
-            .stats
-            .metadata_raft
-            .proposal_queue_wait_ns_total,
-        metadata_raft_proposal_queue_max_wait_ns: input
-            .stats
-            .metadata_raft
-            .proposal_queue_max_wait_ns,
         metadata_gets: input.stats.metadata_store.get_total,
         metadata_get_user_strong: input.stats.metadata_store.get_user_strong_total,
         metadata_get_write_plan_local: input.stats.metadata_store.get_write_plan_local_total,
@@ -1874,18 +1163,55 @@ fn ratio(numerator: u64, denominator: u64) -> f64 {
     }
 }
 
-fn csv_header() -> &'static str {
-    "workload,profile,operations,seconds,ops_per_second,mb_per_second,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,coalesced_gets,coalesced_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,prefetch_enqueued,prefetch_dropped,prefetch_completed,prefetch_failed,prefetch_object_gets,prefetch_object_get_bytes,prefetch_cache_hits,prefetch_cache_hit_bytes,read_plan_cache_hits,read_plan_cache_misses,object_writeback_enqueued,object_writeback_inline,object_writeback_fallback,object_writeback_completed,object_writeback_failed,object_writeback_staged_bytes,object_writeback_uploaded_bytes,object_writeback_queue_wait_ns,object_writeback_queue_max_wait_ns,object_writeback_upload_ns,object_writeback_upload_max_ns,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_raft_current_term,metadata_raft_current_leader,metadata_raft_last_log_index,metadata_raft_last_applied_index,metadata_raft_snapshot_index,metadata_raft_purged_index,metadata_raft_millis_since_quorum_ack,metadata_raft_voters,metadata_raft_learners,metadata_raft_proposal_batches,metadata_raft_proposal_commands,metadata_raft_proposal_max_batch,metadata_raft_proposal_ns,metadata_raft_proposal_queue_wait_ns,metadata_raft_proposal_queue_max_wait_ns,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+/// Canonical boundary/tier labels prepended to every L1 service-path row so its
+/// output is never silently compared against an L2 mount measurement.
+struct BoundaryLabels {
+    boundary: &'static str,
+    system: &'static str,
+    metadata_tier: String,
+    object_backend: String,
+    cache_state: &'static str,
+    concurrency: usize,
+    tool: &'static str,
 }
 
-fn csv_row(row: &ResultRow) -> String {
+fn boundary_labels(config: &Config) -> BoundaryLabels {
+    BoundaryLabels {
+        boundary: "L1",
+        system: "nokv",
+        metadata_tier: "nokv-l1-service".to_owned(),
+        object_backend: object_backend_name(config.object_backend).to_owned(),
+        cache_state: "n/a",
+        concurrency: config.object_concurrency,
+        tool: "native",
+    }
+}
+
+fn csv_header() -> &'static str {
+    "boundary,system,metadata_tier,object_backend,cache_state,concurrency,tool,profile,workload,phase,operations,seconds,ops_per_second,throughput_MiB_s,p50_us,p99_us,cost_breakdown,samples_per_second,object_puts,object_put_bytes,object_gets,object_get_bytes,coalesced_gets,coalesced_get_bytes,cache_hits,cache_hit_bytes,cache_hit_rate,prefetch_enqueued,prefetch_dropped,prefetch_completed,prefetch_failed,prefetch_object_gets,prefetch_object_get_bytes,prefetch_cache_hits,prefetch_cache_hit_bytes,read_plan_cache_hits,read_plan_cache_misses,object_writeback_enqueued,object_writeback_inline,object_writeback_fallback,object_writeback_completed,object_writeback_failed,object_writeback_staged_bytes,object_writeback_uploaded_bytes,object_writeback_queue_wait_ns,object_writeback_queue_max_wait_ns,object_writeback_upload_ns,object_writeback_upload_max_ns,manifest_chunks,manifest_blocks,metadata_commits,metadata_dedupe_hits,metadata_predicates,metadata_prefix_empty_predicates,metadata_gets,metadata_get_user_strong,metadata_get_write_plan_local,metadata_get_snapshot,metadata_scans,metadata_scan_user_strong,metadata_scan_write_plan_local,metadata_scan_snapshot,metadata_scan_visited,metadata_scan_returned,metadata_history_lookups,metadata_current_puts,metadata_current_deletes,metadata_history_writes,metadata_watch_writes,metadata_dedupe_writes,metadata_commit_prepare_ns,metadata_atomic_applies,metadata_atomic_apply_commands,metadata_atomic_apply_max_batch,metadata_atomic_apply_ns,path_index_lookups,path_index_hits,path_index_misses,path_index_stale,path_index_scan_stale,path_index_fallback,path_index_hit_rate,create_files_batches,create_files_entries,create_dirs_batches,create_dirs_entries,read_dir_plus_calls,read_dir_plus_entries,read_dir_plus_projection_hits,read_dir_plus_projection_hit_rate,object_concurrency,read_repeats,block_cache,checksum,shape,caveat"
+}
+
+fn csv_row(row: &ResultRow, labels: &BoundaryLabels) -> String {
     [
-        row.workload.to_owned(),
+        labels.boundary.to_owned(),
+        labels.system.to_owned(),
+        labels.metadata_tier.clone(),
+        labels.object_backend.clone(),
+        labels.cache_state.to_owned(),
+        labels.concurrency.to_string(),
+        labels.tool.to_owned(),
         profile_name(row.profile).to_owned(),
+        row.workload.to_owned(),
+        // L1 service-path rows have no per-op phase or per-op latency; emit the
+        // canonical columns so cross-boundary consumers read them by name.
+        "n/a".to_owned(),
         row.operations.to_string(),
         format!("{:.6}", row.seconds),
         format!("{:.2}", row.ops_per_second),
-        format!("{:.2}", row.mb_per_second),
+        format!("{:.4}", row.mb_per_second),
+        "0.00".to_owned(),
+        "0.00".to_owned(),
+        String::new(),
         format!("{:.2}", row.samples_per_second),
         row.object_puts.to_string(),
         row.object_put_bytes.to_string(),
@@ -1923,21 +1249,6 @@ fn csv_row(row: &ResultRow) -> String {
         row.metadata_dedupe_hits.to_string(),
         row.metadata_predicates.to_string(),
         row.metadata_prefix_empty_predicates.to_string(),
-        row.metadata_raft_current_term.to_string(),
-        row.metadata_raft_current_leader.to_string(),
-        row.metadata_raft_last_log_index.to_string(),
-        row.metadata_raft_last_applied_index.to_string(),
-        row.metadata_raft_snapshot_index.to_string(),
-        row.metadata_raft_purged_index.to_string(),
-        row.metadata_raft_millis_since_quorum_ack.to_string(),
-        row.metadata_raft_voters.to_string(),
-        row.metadata_raft_learners.to_string(),
-        row.metadata_raft_proposal_batches.to_string(),
-        row.metadata_raft_proposal_commands.to_string(),
-        row.metadata_raft_proposal_max_batch.to_string(),
-        row.metadata_raft_proposal_ns.to_string(),
-        row.metadata_raft_proposal_queue_wait_ns.to_string(),
-        row.metadata_raft_proposal_queue_max_wait_ns.to_string(),
         row.metadata_gets.to_string(),
         row.metadata_get_user_strong.to_string(),
         row.metadata_get_write_plan_local.to_string(),
@@ -1989,10 +1300,6 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
         .metadata_store
         .atomic_apply_total
         .saturating_sub(before.metadata_store.atomic_apply_total);
-    let proposal_delta = after
-        .metadata_raft
-        .proposal_batch_total
-        .saturating_sub(before.metadata_raft.proposal_batch_total);
     let object_writeback_delta = after
         .object
         .object_writeback_enqueued
@@ -2243,40 +1550,6 @@ fn stats_delta(before: BenchStats, after: BenchStats) -> BenchStats {
                 .atomic_apply_ns_total
                 .saturating_sub(before.metadata_store.atomic_apply_ns_total),
         },
-        metadata_raft: MetadataRaftBenchStats {
-            current_term: after.metadata_raft.current_term,
-            current_leader: after.metadata_raft.current_leader,
-            last_log_index: after.metadata_raft.last_log_index,
-            last_applied_index: after.metadata_raft.last_applied_index,
-            snapshot_index: after.metadata_raft.snapshot_index,
-            purged_index: after.metadata_raft.purged_index,
-            millis_since_quorum_ack: after.metadata_raft.millis_since_quorum_ack,
-            voter_count: after.metadata_raft.voter_count,
-            learner_count: after.metadata_raft.learner_count,
-            proposal_batch_total: proposal_delta,
-            proposal_command_total: after
-                .metadata_raft
-                .proposal_command_total
-                .saturating_sub(before.metadata_raft.proposal_command_total),
-            proposal_max_batch: if proposal_delta == 0 {
-                0
-            } else {
-                after.metadata_raft.proposal_max_batch
-            },
-            proposal_ns_total: after
-                .metadata_raft
-                .proposal_ns_total
-                .saturating_sub(before.metadata_raft.proposal_ns_total),
-            proposal_queue_wait_ns_total: after
-                .metadata_raft
-                .proposal_queue_wait_ns_total
-                .saturating_sub(before.metadata_raft.proposal_queue_wait_ns_total),
-            proposal_queue_max_wait_ns: if proposal_delta == 0 {
-                0
-            } else {
-                after.metadata_raft.proposal_queue_max_wait_ns
-            },
-        },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: after
                 .metadata_service
@@ -2387,12 +1660,6 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: meta,
         metadata_mode: MetadataMode::Local,
-        metadata_raft_node: nokv_cluster::NodeId::new(1)
-            .expect("benchmark metadata raft node is non-zero"),
-        metadata_raft_voters: Vec::new(),
-        metadata_raft_learners: Vec::new(),
-        metadata_raft_peers: Vec::new(),
-        metadata_raft_log_sync: config.metadata_raft_log_sync,
         metadata_checkpoint_archive_prefix: None,
         object,
         uid: DEFAULT_UID,
@@ -2418,156 +1685,6 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         client,
         stats_addr: bind,
     }))
-}
-
-fn server_options_for_node(
-    cluster: &MetadataHaClusterConfig,
-    node: NodeId,
-) -> Result<ServerOptions, BenchError> {
-    let node_root = cluster.root.join(format!("node-{}", node.get()));
-    fs::create_dir_all(&node_root).map_err(from_io)?;
-    Ok(ServerOptions {
-        bind: cluster
-            .peers
-            .iter()
-            .find(|peer| peer.node == node)
-            .map(|peer| peer.address)
-            .ok_or_else(|| {
-                BenchError::Client(format!("missing metadata peer for node {}", node.get()))
-            })?,
-        mount: MountId::new(1).expect("mount id is non-zero"),
-        meta_path: node_root.join("meta"),
-        metadata_mode: MetadataMode::Raft,
-        metadata_raft_node: node,
-        metadata_raft_voters: cluster.voters.clone(),
-        metadata_raft_learners: cluster.learners.clone(),
-        metadata_raft_peers: cluster
-            .peers
-            .iter()
-            .copied()
-            .filter(|peer| peer.node != node)
-            .collect(),
-        metadata_raft_log_sync: cluster.sync,
-        metadata_checkpoint_archive_prefix: None,
-        object: cluster.object.clone(),
-        uid: DEFAULT_UID,
-        gid: DEFAULT_GID,
-        object_gc: ObjectGcOptions {
-            interval: Duration::from_secs(3600),
-            limit: 1024,
-            run_immediately: false,
-        },
-        history_gc: HistoryGcOptions {
-            interval: Duration::from_secs(3600),
-            limit: 1024,
-            run_immediately: false,
-        },
-    })
-}
-
-fn start_metadata_raft_server(
-    listener: TcpListener,
-    options: ServerOptions,
-) -> Result<(), BenchError> {
-    let server = Server::open(options).map_err(from_client)?;
-    thread::spawn(move || {
-        let _ = server.serve(listener);
-    });
-    Ok(())
-}
-
-fn wait_for_health(address: SocketAddr) -> Result<(), BenchError> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        match TcpStream::connect(address) {
-            Ok(mut stream) => {
-                stream
-                    .write_all(
-                        b"GET /healthz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-                    )
-                    .map_err(from_io)?;
-                let mut response = String::new();
-                stream.read_to_string(&mut response).map_err(from_io)?;
-                if response.contains("200 OK") && response.contains("ok") {
-                    return Ok(());
-                }
-            }
-            Err(err) if Instant::now() < deadline => {
-                let _ = err;
-            }
-            Err(err) => return Err(from_io(err)),
-        }
-        if Instant::now() >= deadline {
-            return Err(BenchError::Client(format!(
-                "metadata server {address} did not become healthy"
-            )));
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn wait_metadata_raft_leader(
-    nodes: &[(NodeId, SocketAddr)],
-) -> Result<(NodeId, SocketAddr), BenchError> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        for (_, address) in nodes {
-            let Ok(stats) = fetch_server_stats(*address) else {
-                continue;
-            };
-            if stats.metadata_raft.current_leader == 0 {
-                continue;
-            }
-            let leader = NodeId::new(stats.metadata_raft.current_leader).map_err(from_client)?;
-            let leader_addr = nodes
-                .iter()
-                .find_map(|(candidate, address)| (*candidate == leader).then_some(*address))
-                .ok_or_else(|| {
-                    BenchError::Client(format!(
-                        "metadata raft leader {} is not in benchmark node set",
-                        leader.get()
-                    ))
-                })?;
-            return Ok((leader, leader_addr));
-        }
-        if Instant::now() >= deadline {
-            return Err(BenchError::Client(
-                "metadata raft cluster did not elect a leader".to_owned(),
-            ));
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn wait_metadata_raft_membership_counts(
-    nodes: &[(NodeId, SocketAddr)],
-    voters: u64,
-    learners: u64,
-) -> Result<(), BenchError> {
-    let deadline = Instant::now() + Duration::from_secs(5);
-    loop {
-        for (_, address) in nodes {
-            let Ok(stats) = fetch_server_stats(*address) else {
-                continue;
-            };
-            if stats.metadata_raft.voter_count == voters
-                && stats.metadata_raft.learner_count == learners
-            {
-                return Ok(());
-            }
-        }
-        if Instant::now() >= deadline {
-            return Err(BenchError::Client(format!(
-                "metadata raft membership did not reach voters={voters} learners={learners}"
-            )));
-        }
-        thread::sleep(Duration::from_millis(10));
-    }
-}
-
-fn reserve_local_addr() -> Result<SocketAddr, BenchError> {
-    let listener = TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
-    listener.local_addr().map_err(from_io)
 }
 
 fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
@@ -2655,23 +1772,6 @@ fn fetch_server_stats(address: SocketAddr) -> Result<BenchStats, BenchError> {
             atomic_apply_command_total: json_u64(body, "atomic_apply_command_total")?,
             atomic_apply_max_batch: json_u64(body, "atomic_apply_max_batch")?,
             atomic_apply_ns_total: json_u64(body, "atomic_apply_ns_total")?,
-        },
-        metadata_raft: MetadataRaftBenchStats {
-            current_term: json_u64(body, "current_term")?,
-            current_leader: json_u64_or_zero(body, "current_leader"),
-            last_log_index: json_u64_or_zero(body, "last_log_index"),
-            last_applied_index: json_u64_or_zero(body, "last_applied_index"),
-            snapshot_index: json_u64_or_zero(body, "snapshot_index"),
-            purged_index: json_u64_or_zero(body, "purged_index"),
-            millis_since_quorum_ack: json_u64_or_zero(body, "millis_since_quorum_ack"),
-            voter_count: json_u64(body, "voter_count")?,
-            learner_count: json_u64(body, "learner_count")?,
-            proposal_batch_total: json_u64(body, "proposal_batch_total")?,
-            proposal_command_total: json_u64(body, "proposal_command_total")?,
-            proposal_max_batch: json_u64(body, "proposal_max_batch")?,
-            proposal_ns_total: json_u64(body, "proposal_ns_total")?,
-            proposal_queue_wait_ns_total: json_u64(body, "proposal_queue_wait_ns_total")?,
-            proposal_queue_max_wait_ns: json_u64(body, "proposal_queue_max_wait_ns")?,
         },
         metadata_service: MetadataServiceStats {
             path_index_lookup_total: json_u64(body, "path_index_lookup_total")?,
@@ -2799,7 +1899,6 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
     let mut object_concurrency = 1_usize;
     let mut read_repeats = 1_usize;
     let mut block_cache = true;
-    let mut metadata_raft_log_sync = FileMetadataRaftLogSync::Data;
     let mut checkpoint_bytes = None;
     let mut sample_bytes = None;
     let mut keep = false;
@@ -2887,11 +1986,6 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
                 index += 1;
                 block_cache = parse_block_cache(value(&args, index, "--block-cache")?)?;
             }
-            "--metadata-raft-log-sync" => {
-                index += 1;
-                metadata_raft_log_sync =
-                    parse_metadata_raft_log_sync(value(&args, index, "--metadata-raft-log-sync")?)?;
-            }
             "--keep" => keep = true,
             "--help" | "-h" => {
                 return Err(BenchError::UnknownOption("--help".to_owned()));
@@ -2912,7 +2006,6 @@ fn parse(args: Vec<String>) -> Result<Config, BenchError> {
         object_concurrency,
         read_repeats,
         block_cache,
-        metadata_raft_log_sync,
         checkpoint_bytes,
         sample_bytes,
         keep,
@@ -2957,16 +2050,6 @@ fn parse_on_off(raw: &str) -> Result<bool, BenchError> {
     }
 }
 
-fn parse_metadata_raft_log_sync(raw: &str) -> Result<FileMetadataRaftLogSync, BenchError> {
-    match raw {
-        "data" => Ok(FileMetadataRaftLogSync::Data),
-        "none" => Ok(FileMetadataRaftLogSync::None),
-        _ => Err(BenchError::UnknownOption(format!(
-            "--metadata-raft-log-sync {raw}"
-        ))),
-    }
-}
-
 fn value<'a>(
     args: &'a [String],
     index: usize,
@@ -2990,10 +2073,6 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
     match raw {
         "all" => Ok(Workload::All),
         "metadata-smoke" => Ok(Workload::MetadataSmoke),
-        "metadata-ha-smoke" => Ok(Workload::MetadataHaSmoke),
-        "metadata-ha-fault-smoke" => Ok(Workload::MetadataHaFaultSmoke),
-        "metadata-ha-learner-read" => Ok(Workload::MetadataHaLearnerRead),
-        "metadata-ha-coalescing-smoke" => Ok(Workload::MetadataHaCoalescingSmoke),
         "mdtest-easy" => Ok(Workload::MdtestEasy),
         "mdtest-hard" => Ok(Workload::MdtestHard),
         "metadata-negative-lookup" => Ok(Workload::MetadataNegativeLookup),
@@ -3010,10 +2089,6 @@ fn parse_workload(raw: &str) -> Result<Workload, BenchError> {
 fn expand_workloads(workload: Workload) -> Vec<Workload> {
     match workload {
         Workload::All => vec![
-            Workload::MetadataHaSmoke,
-            Workload::MetadataHaFaultSmoke,
-            Workload::MetadataHaLearnerRead,
-            Workload::MetadataHaCoalescingSmoke,
             Workload::MdtestEasy,
             Workload::MdtestHard,
             Workload::MetadataNegativeLookup,
@@ -3080,10 +2155,6 @@ fn workload_name(workload: Workload) -> &'static str {
     match workload {
         Workload::All => "all",
         Workload::MetadataSmoke => "metadata-smoke",
-        Workload::MetadataHaSmoke => "metadata-ha-smoke",
-        Workload::MetadataHaFaultSmoke => "metadata-ha-fault-smoke",
-        Workload::MetadataHaLearnerRead => "metadata-ha-learner-read",
-        Workload::MetadataHaCoalescingSmoke => "metadata-ha-coalescing-smoke",
         Workload::MdtestEasy => "mdtest-easy",
         Workload::MdtestHard => "mdtest-hard",
         Workload::MetadataNegativeLookup => "metadata-negative-lookup",
@@ -3108,13 +2179,6 @@ fn object_backend_name(backend: ObjectBackendKind) -> &'static str {
     match backend {
         ObjectBackendKind::S3 => "s3",
         ObjectBackendKind::RustFs => "rustfs",
-    }
-}
-
-fn metadata_raft_log_sync_name(sync: FileMetadataRaftLogSync) -> &'static str {
-    match sync {
-        FileMetadataRaftLogSync::Data => "data",
-        FileMetadataRaftLogSync::None => "none",
     }
 }
 
@@ -3187,7 +2251,6 @@ mod tests {
         assert_eq!(config.object_backend, ObjectBackendKind::RustFs);
         assert_eq!(config.s3.bucket, "nokv");
         assert_eq!(config.s3.endpoint.as_deref(), Some("http://127.0.0.1:9000"));
-        assert_eq!(config.metadata_raft_log_sync, FileMetadataRaftLogSync::Data);
         assert!(!config.keep);
         assert!(config.root.to_string_lossy().contains("nokv-bench"));
     }
@@ -3272,36 +2335,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_metadata_raft_options() {
-        let config = parse(vec![s("--metadata-raft-log-sync"), s("none")]).unwrap();
-        assert_eq!(config.metadata_raft_log_sync, FileMetadataRaftLogSync::None);
-    }
-
-    #[test]
-    fn parse_metadata_ha_smoke_workload() {
-        let config = parse(vec![s("--workload"), s("metadata-ha-smoke")]).unwrap();
-        assert_eq!(config.workload, Workload::MetadataHaSmoke);
-    }
-
-    #[test]
-    fn parse_metadata_ha_fault_smoke_workload() {
-        let config = parse(vec![s("--workload"), s("metadata-ha-fault-smoke")]).unwrap();
-        assert_eq!(config.workload, Workload::MetadataHaFaultSmoke);
-    }
-
-    #[test]
-    fn parse_metadata_ha_learner_read_workload() {
-        let config = parse(vec![s("--workload"), s("metadata-ha-learner-read")]).unwrap();
-        assert_eq!(config.workload, Workload::MetadataHaLearnerRead);
-    }
-
-    #[test]
-    fn parse_metadata_ha_coalescing_smoke_workload() {
-        let config = parse(vec![s("--workload"), s("metadata-ha-coalescing-smoke")]).unwrap();
-        assert_eq!(config.workload, Workload::MetadataHaCoalescingSmoke);
-    }
-
-    #[test]
     fn parse_metadata_negative_lookup_workload() {
         let config = parse(vec![s("--workload"), s("metadata-negative-lookup")]).unwrap();
         assert_eq!(config.workload, Workload::MetadataNegativeLookup);
@@ -3337,7 +2370,7 @@ mod tests {
 
     #[test]
     fn stats_json_parser_reads_metadata_fields() {
-        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"coalesced_gets":45,"coalesced_get_bytes":46,"cache_hits":47,"cache_hit_bytes":48,"prefetch_enqueued":49,"prefetch_dropped":50,"prefetch_completed":51,"prefetch_failed":52,"prefetch_object_gets":53,"prefetch_object_get_bytes":54,"prefetch_cache_hits":55,"prefetch_cache_hit_bytes":56,"read_plan_cache_hits":57,"read_plan_cache_misses":58,"object_writeback_enqueued":59,"object_writeback_inline":60,"object_writeback_fallback":61,"object_writeback_completed":62,"object_writeback_failed":63,"object_writeback_staged_bytes":64,"object_writeback_uploaded_bytes":65,"object_writeback_queue_wait_ns":66,"object_writeback_queue_max_wait_ns":67,"object_writeback_upload_ns":68,"object_writeback_upload_max_ns":69,"manifest_chunks":70,"manifest_blocks":71,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_raft":{"enabled":true,"node_id":1,"current_term":20,"state":"Leader","current_leader":1,"last_log_index":21,"last_applied_index":22,"snapshot_index":23,"purged_index":24,"millis_since_quorum_ack":25,"voter_count":3,"learner_count":1,"proposal_batch_total":26,"proposal_command_total":27,"proposal_max_batch":28,"proposal_ns_total":29,"proposal_queue_wait_ns_total":30,"proposal_queue_max_wait_ns":31},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
+        let body = r#"{"object_puts":41,"object_put_bytes":42,"object_gets":43,"object_get_bytes":44,"coalesced_gets":45,"coalesced_get_bytes":46,"cache_hits":47,"cache_hit_bytes":48,"prefetch_enqueued":49,"prefetch_dropped":50,"prefetch_completed":51,"prefetch_failed":52,"prefetch_object_gets":53,"prefetch_object_get_bytes":54,"prefetch_cache_hits":55,"prefetch_cache_hit_bytes":56,"read_plan_cache_hits":57,"read_plan_cache_misses":58,"object_writeback_enqueued":59,"object_writeback_inline":60,"object_writeback_fallback":61,"object_writeback_completed":62,"object_writeback_failed":63,"object_writeback_staged_bytes":64,"object_writeback_uploaded_bytes":65,"object_writeback_queue_wait_ns":66,"object_writeback_queue_max_wait_ns":67,"object_writeback_upload_ns":68,"object_writeback_upload_max_ns":69,"manifest_chunks":70,"manifest_blocks":71,"metadata_store":{"get_total":2,"get_user_strong_total":32,"get_write_plan_local_total":33,"get_snapshot_total":34,"scan_total":3,"scan_user_strong_total":35,"scan_write_plan_local_total":36,"scan_snapshot_total":37,"scan_key_visited_total":4,"scan_key_returned_total":5,"history_lookup_total":40,"active_snapshot_pin_total":0,"commit_total":6,"dedupe_hit_total":7,"predicate_total":8,"prefix_empty_predicate_total":9,"current_put_total":10,"current_delete_total":11,"history_write_total":12,"watch_write_total":13,"dedupe_write_total":14,"commit_prepare_ns_total":15,"atomic_apply_total":16,"atomic_apply_command_total":17,"atomic_apply_max_batch":18,"atomic_apply_ns_total":19},"metadata_service":{"path_index_lookup_total":30,"path_index_hit_total":31,"path_index_miss_total":32,"path_index_stale_total":33,"path_index_scan_stale_total":34,"path_index_fallback_total":35,"create_files_batch_total":36,"create_files_entry_total":37,"create_dirs_batch_total":38,"create_dirs_entry_total":39,"read_dir_plus_total":40,"read_dir_plus_entry_total":41,"read_dir_plus_projection_hit_total":42}}"#;
 
         assert_eq!(json_u64(body, "object_put_bytes").unwrap(), 42);
         assert_eq!(json_u64(body, "object_get_bytes").unwrap(), 44);
@@ -3376,18 +2409,6 @@ mod tests {
         assert_eq!(json_u64(body, "atomic_apply_command_total").unwrap(), 17);
         assert_eq!(json_u64(body, "atomic_apply_max_batch").unwrap(), 18);
         assert_eq!(json_u64(body, "atomic_apply_ns_total").unwrap(), 19);
-        assert_eq!(json_u64(body, "current_term").unwrap(), 20);
-        assert_eq!(json_u64(body, "last_log_index").unwrap(), 21);
-        assert_eq!(json_u64(body, "last_applied_index").unwrap(), 22);
-        assert_eq!(json_u64(body, "millis_since_quorum_ack").unwrap(), 25);
-        assert_eq!(json_u64(body, "voter_count").unwrap(), 3);
-        assert_eq!(json_u64(body, "learner_count").unwrap(), 1);
-        assert_eq!(json_u64(body, "proposal_batch_total").unwrap(), 26);
-        assert_eq!(json_u64(body, "proposal_command_total").unwrap(), 27);
-        assert_eq!(json_u64(body, "proposal_max_batch").unwrap(), 28);
-        assert_eq!(json_u64(body, "proposal_ns_total").unwrap(), 29);
-        assert_eq!(json_u64(body, "proposal_queue_wait_ns_total").unwrap(), 30);
-        assert_eq!(json_u64(body, "proposal_queue_max_wait_ns").unwrap(), 31);
         assert_eq!(json_u64(body, "path_index_hit_total").unwrap(), 31);
         assert_eq!(json_u64(body, "path_index_scan_stale_total").unwrap(), 34);
         assert_eq!(json_u64(body, "create_files_batch_total").unwrap(), 36);
@@ -3435,7 +2456,6 @@ mod tests {
                     atomic_apply_max_batch: 3,
                     ..MetadataStoreStats::default()
                 },
-                metadata_raft: MetadataRaftBenchStats::default(),
                 metadata_service: MetadataServiceStats {
                     path_index_lookup_total: 4,
                     path_index_hit_total: 3,
@@ -3472,12 +2492,20 @@ mod tests {
         assert_eq!(row.object_writeback_upload_max_ns, 12);
 
         let header = csv_header();
-        let record = csv_row(&row);
+        let labels = BoundaryLabels {
+            boundary: "L1",
+            system: "nokv",
+            metadata_tier: "nokv-l1-service".to_owned(),
+            object_backend: "rustfs".to_owned(),
+            cache_state: "n/a",
+            concurrency: 1,
+            tool: "native",
+        };
+        let record = csv_row(&row, &labels);
+        assert!(header.starts_with("boundary,system,metadata_tier,"));
         assert!(header.contains("metadata_prefix_empty_predicates"));
         assert!(header.contains("metadata_history_lookups"));
         assert!(header.contains("metadata_atomic_apply_max_batch"));
-        assert!(header.contains("metadata_raft_last_applied_index"));
-        assert!(header.contains("metadata_raft_millis_since_quorum_ack"));
         assert!(header.contains("path_index_hit_rate"));
         assert!(header.contains("path_index_scan_stale"));
         assert!(header.contains("read_dir_plus_projection_hit_rate"));
@@ -3557,10 +2585,6 @@ mod tests {
         assert_eq!(
             expand_workloads(Workload::All),
             vec![
-                Workload::MetadataHaSmoke,
-                Workload::MetadataHaFaultSmoke,
-                Workload::MetadataHaLearnerRead,
-                Workload::MetadataHaCoalescingSmoke,
                 Workload::MdtestEasy,
                 Workload::MdtestHard,
                 Workload::MetadataNegativeLookup,

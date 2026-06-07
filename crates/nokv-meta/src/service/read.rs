@@ -47,6 +47,20 @@ where
             .map(|entry| entry.map(|(entry, _)| entry))
     }
 
+    /// Current record version of the `(parent, name)` dentry, or `None` when it
+    /// does not exist. This is the value an artifact-replace publish must guard
+    /// against; an open write handle that prepared a replace earlier reads it
+    /// again just before publishing so an intervening `setattr`/`update_attrs`
+    /// (which advances the dentry version) does not strand the handle's CAS.
+    pub fn current_dentry_version(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> Result<Option<u64>, MetadError> {
+        self.lookup_plus_versioned(parent, name)
+            .map(|entry| entry.map(|(_, version)| version.get()))
+    }
+
     pub fn lookup_path(&self, path: &str) -> Result<Option<DentryWithAttr>, MetadError> {
         self.lookup_path_from_at_version_for_purpose_with_index(
             InodeId::root(),

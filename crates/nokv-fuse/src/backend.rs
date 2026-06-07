@@ -37,6 +37,15 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
     type Prepared: Clone + Send + Sync + 'static;
 
     fn prepared_generation(&self, prepared: &Self::Prepared) -> u64;
+    /// Whether `prepared` is an artifact-*replace* (vs a fresh create). Only
+    /// replaces carry a dentry-version CAS guard that can be invalidated by an
+    /// intervening attribute update on the same file.
+    fn prepared_is_replace(&self, prepared: &Self::Prepared) -> bool;
+    /// Rebind the dentry-version CAS guard carried by a replace `prepared` to
+    /// `version`, leaving its pinned generation (and therefore its already
+    /// staged object keys) untouched. Used to re-sync the guard to the live
+    /// dentry version just before publishing.
+    fn rebind_prepared_dentry_version(&self, prepared: &mut Self::Prepared, version: u64);
     fn watch_subtree(&self, scope: InodeId) -> FuseBackendResult<Option<WatchCursor>>;
     fn replay_watch(
         &self,
@@ -55,6 +64,15 @@ pub(crate) trait FuseBackend: Send + Sync + 'static {
         parent: InodeId,
         name: &DentryName,
     ) -> FuseBackendResult<Option<DentryWithAttr>>;
+    /// Current record version of the `(parent, name)` dentry. Used to refresh a
+    /// write handle's prepared-replace CAS guard just before publishing, so an
+    /// intervening attribute update (which advances the dentry version) does not
+    /// strand the in-flight handle with a stale version.
+    fn current_dentry_version(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> FuseBackendResult<Option<u64>>;
     fn lookup_plus_at_snapshot(
         &self,
         snapshot_id: u64,
@@ -288,6 +306,7 @@ where
             ObjectWritebackUploader::new(
                 Arc::clone(&objects),
                 cache.clone(),
+                block_cache.clone(),
                 ObjectWritebackOptions {
                     queue_capacity: writeback.queue_capacity.max(1),
                     workers: writeback.workers.max(1),
@@ -463,6 +482,14 @@ where
         prepared.generation
     }
 
+    fn prepared_is_replace(&self, prepared: &Self::Prepared) -> bool {
+        prepared.replace
+    }
+
+    fn rebind_prepared_dentry_version(&self, prepared: &mut Self::Prepared, version: u64) {
+        prepared.dentry_version = Some(version);
+    }
+
     fn watch_subtree(&self, _scope: InodeId) -> FuseBackendResult<Option<WatchCursor>> {
         Ok(None)
     }
@@ -497,6 +524,16 @@ where
     ) -> FuseBackendResult<Option<DentryWithAttr>> {
         self.metadata
             .lookup_plus(parent, name.clone())
+            .map_err(Into::into)
+    }
+
+    fn current_dentry_version(
+        &self,
+        parent: InodeId,
+        name: &DentryName,
+    ) -> FuseBackendResult<Option<u64>> {
+        self.metadata
+            .current_dentry_version(parent, name.clone())
             .map_err(Into::into)
     }
 
@@ -840,6 +877,9 @@ where
             },
             block_index_base,
             self.upload_workers,
+            self.block_cache
+                .as_ref()
+                .map(|cache| cache as &(dyn BlockCache + Sync)),
         )
         .map_err(Into::into)
     }

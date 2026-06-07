@@ -289,6 +289,53 @@ fn chunked_ranges_put_only_dirty_blocks() {
 }
 
 #[test]
+fn write_through_populates_block_cache() {
+    let store = MemoryObjectStore::new();
+    let cache = MemoryBlockCache::new(MemoryBlockCacheOptions {
+        max_bytes: 1 << 20,
+        max_items: 64,
+        ttl: None,
+    });
+    let written = put_chunked_ranges_parallel(
+        &store,
+        &[ChunkWriteRange {
+            logical_offset: 0,
+            bytes: b"abcdefgh".to_vec(),
+        }],
+        ChunkWriteOptions {
+            manifest_id: "artifacts/checkpoint".to_owned(),
+            mount: 1,
+            inode: 2,
+            generation: 5,
+            chunk_size: 8,
+            block_size: 4,
+        },
+        0,
+        2,
+        Some(&cache),
+    )
+    .unwrap();
+    // Every uploaded block is written through to the cache (each block is its
+    // own object at offset 0), so a read-after-write is served locally instead
+    // of re-fetching from the object store.
+    for chunk in &written.chunks {
+        for block in &chunk.blocks {
+            let cached = cache
+                .get_block_range(&block.object_key, 0, block.len as usize)
+                .unwrap();
+            assert_eq!(cached.map(|bytes| bytes.len()), Some(block.len as usize));
+        }
+    }
+    assert_eq!(
+        cache
+            .get_block_range(&written.chunks[0].blocks[0].object_key, 0, 4)
+            .unwrap()
+            .as_deref(),
+        Some(&b"abcd"[..])
+    );
+}
+
+#[test]
 fn parallel_chunked_ranges_preserve_manifest_order() {
     let store = MemoryObjectStore::new();
     let written = put_chunked_ranges_parallel(
@@ -313,6 +360,7 @@ fn parallel_chunked_ranges_preserve_manifest_order() {
         },
         0,
         4,
+        None,
     )
     .unwrap();
     assert_eq!(written.object_puts, 4);
@@ -745,6 +793,7 @@ fn object_writeback_uploader_uploads_cached_ranges_and_clears_tickets() {
     let uploader = ObjectWritebackUploader::new(
         store.clone(),
         cache.clone(),
+        None,
         ObjectWritebackOptions {
             queue_capacity: 4,
             workers: 1,
@@ -810,6 +859,7 @@ fn object_writeback_uploader_keeps_cached_ranges_after_upload_failure() {
     let uploader = ObjectWritebackUploader::new(
         store.clone(),
         cache.clone(),
+        None,
         ObjectWritebackOptions {
             queue_capacity: 4,
             workers: 1,
@@ -874,6 +924,7 @@ fn object_writeback_uploader_falls_back_inline_when_queue_is_full() {
     let uploader = ObjectWritebackUploader::new(
         store.clone(),
         cache.clone(),
+        None,
         ObjectWritebackOptions {
             queue_capacity: 1,
             workers: 1,

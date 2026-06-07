@@ -448,7 +448,7 @@ where
         options: ChunkWriteOptions,
         block_index_base: u64,
     ) -> Result<ChunkedWrite, ObjectError> {
-        put_chunked_ranges_with_block_index_base(self, ranges, options, block_index_base)
+        put_chunked_ranges_with_block_index_base(self, ranges, options, block_index_base, None)
     }
 
     fn read_blocks<C>(
@@ -625,7 +625,7 @@ pub fn put_chunked_ranges<O: ObjectStore>(
     ranges: &[ChunkWriteRange],
     options: ChunkWriteOptions,
 ) -> Result<ChunkedWrite, ObjectError> {
-    put_chunked_ranges_with_block_index_base(store, ranges, options, 0)
+    put_chunked_ranges_with_block_index_base(store, ranges, options, 0, None)
 }
 
 pub fn put_chunked_ranges_parallel<O>(
@@ -634,13 +634,14 @@ pub fn put_chunked_ranges_parallel<O>(
     options: ChunkWriteOptions,
     block_index_base: u64,
     workers: usize,
+    cache: Option<&(dyn BlockCache + Sync)>,
 ) -> Result<ChunkedWrite, ObjectError>
 where
     O: ObjectStore + Sync,
 {
     options.validate()?;
     let plan = plan_chunked_range_blocks(ranges, &options, block_index_base)?;
-    let uploaded = upload_planned_blocks_parallel(store, plan.blocks, workers.max(1))?;
+    let uploaded = upload_planned_blocks_parallel(store, plan.blocks, workers.max(1), cache)?;
     finish_chunked_range_write(options, plan.max_end, uploaded)
 }
 
@@ -649,10 +650,11 @@ pub fn put_chunked_ranges_with_block_index_base<O: ObjectStore>(
     ranges: &[ChunkWriteRange],
     options: ChunkWriteOptions,
     block_index_base: u64,
+    cache: Option<&(dyn BlockCache + Sync)>,
 ) -> Result<ChunkedWrite, ObjectError> {
     options.validate()?;
     let plan = plan_chunked_range_blocks(ranges, &options, block_index_base)?;
-    let uploaded = upload_planned_blocks_sequential(store, plan.blocks)?;
+    let uploaded = upload_planned_blocks_sequential(store, plan.blocks, cache)?;
     finish_chunked_range_write(options, plan.max_end, uploaded)
 }
 
@@ -712,15 +714,17 @@ fn plan_chunked_range_blocks(
 fn upload_planned_blocks_sequential<O: ObjectStore>(
     store: &O,
     planned: Vec<PlannedBlock>,
+    cache: Option<&(dyn BlockCache + Sync)>,
 ) -> Result<Vec<UploadedBlock>, ObjectError> {
     let mut staged = Vec::new();
     let mut uploaded = Vec::with_capacity(planned.len());
     for block in planned {
-        let uploaded_block =
-            upload_planned_block(store, block).map_err(|err| ObjectError::StagedWriteFailed {
+        let uploaded_block = upload_planned_block(store, block, cache).map_err(|err| {
+            ObjectError::StagedWriteFailed {
                 source: err.to_string(),
                 staged: StagedObjectSet::new(staged.clone()),
-            })?;
+            }
+        })?;
         staged.push(uploaded_block.staged.clone());
         uploaded.push(uploaded_block);
     }
@@ -731,12 +735,13 @@ fn upload_planned_blocks_parallel<O>(
     store: &O,
     planned: Vec<PlannedBlock>,
     workers: usize,
+    cache: Option<&(dyn BlockCache + Sync)>,
 ) -> Result<Vec<UploadedBlock>, ObjectError>
 where
     O: ObjectStore + Sync,
 {
     if workers <= 1 || planned.len() <= 1 {
-        return upload_planned_blocks_sequential(store, planned);
+        return upload_planned_blocks_sequential(store, planned, cache);
     }
     let worker_count = workers.min(planned.len());
     let queue = Mutex::new(VecDeque::from(planned));
@@ -760,7 +765,7 @@ where
                 let Some(block) = next else {
                     break;
                 };
-                match upload_planned_block(store, block) {
+                match upload_planned_block(store, block, cache) {
                     Ok(block) => {
                         if let Ok(mut uploaded) = uploaded.lock() {
                             uploaded.push(block);
@@ -796,10 +801,23 @@ where
 fn upload_planned_block<O: ObjectStore>(
     store: &O,
     block: PlannedBlock,
+    cache: Option<&(dyn BlockCache + Sync)>,
 ) -> Result<UploadedBlock, ObjectError> {
     let key = ObjectKey::new(block.object_key.clone())?;
     let info = store.put(&key, &block.bytes)?;
     let len = block.bytes.len() as u64;
+    if let Some(cache) = cache {
+        // Write-through: populate the local block cache with the just-uploaded
+        // block so a read-after-write hits locally instead of re-fetching it
+        // from the object store. Each block is its own object (offset 0), so a
+        // later `get_block_range(object_key, off, len)` is covered by this
+        // whole-block entry. Best-effort: a cache failure must not fail the
+        // durable write that already landed in the object store.
+        let _ = cache.put_block(
+            block_range_cache_key(&block.object_key, 0, block.bytes.len()),
+            block.bytes.clone(),
+        );
+    }
     let stored = StoredBlock {
         object_key: block.object_key,
         logical_offset: block.logical_offset,

@@ -1,13 +1,15 @@
 use std::io::{self, Read, Write};
-use std::net::{SocketAddr, TcpStream};
+#[cfg(test)]
+use std::net::SocketAddr;
+use std::net::TcpStream;
 use std::sync::{mpsc, Arc, Mutex};
 use std::thread;
+#[cfg(test)]
 use std::time::Duration;
 
-use nokv_protocol::{
-    decode_envelope, decode_request, encode_envelope, encode_request, MetadataRpcEnvelope,
-    MetadataRpcRequest, MetadataRpcResult,
-};
+#[cfg(test)]
+use nokv_protocol::{decode_envelope, encode_request, MetadataRpcRequest};
+use nokv_protocol::{decode_request, encode_envelope, MetadataRpcEnvelope, MetadataRpcResult};
 
 use super::wire::wire_server_error;
 use crate::server::{Server, ServerError};
@@ -19,6 +21,7 @@ const MAX_FRAMED_RPC_BATCH: usize = 64;
 pub(crate) const MIN_FRAMED_RPC_WORKERS: usize = 4;
 pub(crate) const MAX_FRAMED_RPC_WORKERS: usize = 64;
 const FRAMED_RPC_QUEUE_PER_WORKER: usize = 256;
+#[cfg(test)]
 const OUTBOUND_FRAMED_RPC_TIMEOUT: Duration = Duration::from_secs(5);
 
 type RpcJob = Box<dyn FnOnce() + Send + 'static>;
@@ -106,6 +109,7 @@ pub(crate) fn handle_framed_stream_after_magic(
     }
 }
 
+#[cfg(test)]
 pub(crate) fn open_framed_rpc_stream(address: SocketAddr) -> Result<TcpStream, ServerError> {
     let mut stream = TcpStream::connect(address).map_err(ServerError::Io)?;
     stream.set_nodelay(true).map_err(ServerError::Io)?;
@@ -121,6 +125,7 @@ pub(crate) fn open_framed_rpc_stream(address: SocketAddr) -> Result<TcpStream, S
     Ok(stream)
 }
 
+#[cfg(test)]
 pub(crate) fn call_framed_rpc_on_stream(
     stream: &mut TcpStream,
     request_id: u64,
@@ -287,7 +292,6 @@ pub(crate) fn encode_server_error(err: &ServerError) -> Result<Vec<u8>, ServerEr
         result: None,
         error: Some(err.to_string()),
         error_kind: Some(wire_server_error(err)),
-        metadata_position: None,
     };
     encode_envelope(&envelope).map_err(|err| {
         ServerError::Io(io::Error::new(

@@ -1,26 +1,26 @@
-use nokv_meta::{DentryWithAttr, MetadError, PreparedArtifact, UpdateAttr, XattrSetMode};
+use nokv_meta::{
+    DentryWithAttr, MetadError, PreparedArtifact, SubtreeDelta, SubtreeDeltaKind, UpdateAttr,
+    XattrSetMode,
+};
 use nokv_object::{
     ObjectKey, ObjectReadBlock, StagedObject, StagedObjectSet, StoredBlock, StoredChunk,
 };
 use nokv_protocol::{
     MetadataProtocolError, MetadataRpcEnvelope, MetadataRpcResult, WireAdvisoryLock,
-    WireBodyReadPlan, WireDentryWithAttr, WireMetadataError, WireMetadataPosition,
-    WireObjectReadBlock, WirePreparedArtifact, WireStagedObjectSet, WireUpdateAttr,
-    WireXattrSetMode,
+    WireBodyReadPlan, WireDentryWithAttr, WireMetadataError, WireObjectReadBlock,
+    WirePreparedArtifact, WireStagedObjectSet, WireSubtreeDelta, WireSubtreeDeltaKind,
+    WireUpdateAttr, WireXattrSetMode,
 };
 use nokv_types::{DentryName, InodeId, MountId};
 
-use crate::server::{Server, ServerError};
+use crate::server::ServerError;
 
-pub(super) fn ok_envelope(server: &Server, result: MetadataRpcResult) -> MetadataRpcEnvelope {
+pub(super) fn ok_envelope(result: MetadataRpcResult) -> MetadataRpcEnvelope {
     MetadataRpcEnvelope {
         ok: true,
         result: Some(result),
         error: None,
         error_kind: None,
-        metadata_position: server
-            .metadata_raft_applied_position()
-            .map(wire_log_position),
     }
 }
 
@@ -31,7 +31,6 @@ pub(super) fn err_envelope(err: ServerError) -> MetadataRpcEnvelope {
         result: None,
         error: Some(err.to_string()),
         error_kind: Some(error_kind),
-        metadata_position: None,
     }
 }
 
@@ -44,47 +43,11 @@ pub(super) fn wire_server_error(err: &ServerError) -> WireMetadataError {
             message: err.to_string(),
         },
         ServerError::Metadata(err) => wire_metad_error(err),
-        ServerError::MetadataRaft(err) => wire_metadata_raft_error(err),
-    }
-}
-
-fn wire_metadata_raft_error(err: &nokv_cluster::MetadataRaftError) -> WireMetadataError {
-    match err {
-        nokv_cluster::MetadataRaftError::ReadNotFresh { required, applied } => {
-            WireMetadataError::ReadNotFresh {
-                required: wire_log_position(*required),
-                applied: applied.map(wire_log_position),
-            }
-        }
-        other => WireMetadataError::Metadata {
-            message: other.to_string(),
-        },
     }
 }
 
 fn wire_metad_error(err: &MetadError) -> WireMetadataError {
     match err {
-        MetadError::Metadata(nokv_meta::MetadataError::ReadNotFresh {
-            required_term,
-            required_index,
-            applied_term,
-            applied_index,
-        }) => WireMetadataError::ReadNotFresh {
-            required: WireMetadataPosition {
-                term: *required_term,
-                index: *required_index,
-            },
-            applied: match (*applied_term, *applied_index) {
-                (Some(term), Some(index)) => Some(WireMetadataPosition { term, index }),
-                _ => None,
-            },
-        },
-        MetadError::Metadata(nokv_meta::MetadataError::ForwardToLeader { leader_id, address }) => {
-            WireMetadataError::ForwardToLeader {
-                leader_id: *leader_id,
-                address: address.clone(),
-            }
-        }
         MetadError::Metadata(nokv_meta::MetadataError::PredicateFailed) => {
             WireMetadataError::PredicateFailed
         }
@@ -152,6 +115,17 @@ pub(super) fn wire_dentry(entry: &DentryWithAttr) -> WireDentryWithAttr {
             .body
             .as_ref()
             .map(nokv_protocol::WireBodyDescriptor::from_body_descriptor),
+    }
+}
+
+pub(super) fn wire_subtree_delta(delta: &SubtreeDelta) -> WireSubtreeDelta {
+    WireSubtreeDelta {
+        path: delta.path.clone(),
+        kind: match delta.kind {
+            SubtreeDeltaKind::Added => WireSubtreeDeltaKind::Added,
+            SubtreeDeltaKind::Removed => WireSubtreeDeltaKind::Removed,
+            SubtreeDeltaKind::Modified => WireSubtreeDeltaKind::Modified,
+        },
     }
 }
 
@@ -251,20 +225,4 @@ fn wire_object_read_block(block: &ObjectReadBlock) -> WireObjectReadBlock {
 
 pub(super) fn protocol_error(err: MetadataProtocolError) -> MetadError {
     MetadError::Codec(err.to_string())
-}
-
-pub(super) fn wire_log_position(position: nokv_cluster::LogPosition) -> WireMetadataPosition {
-    WireMetadataPosition {
-        term: position.term.get(),
-        index: position.index.get(),
-    }
-}
-
-pub(super) fn log_position(
-    position: WireMetadataPosition,
-) -> Result<nokv_cluster::LogPosition, ServerError> {
-    Ok(nokv_cluster::LogPosition {
-        term: nokv_cluster::LogTerm::new(position.term).map_err(ServerError::MetadataRaft)?,
-        index: nokv_cluster::LogIndex::new(position.index).map_err(ServerError::MetadataRaft)?,
-    })
 }
