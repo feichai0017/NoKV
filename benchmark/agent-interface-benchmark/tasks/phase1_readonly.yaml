@@ -61,6 +61,8 @@ tasks:
         AND e.script_path = 'train.py'
         AND m.metric_name = 'val_loss'
         AND m.value IS NOT NULL
+        AND m.value > -9.0e+999
+        AND m.value < 9.0e+999
       GROUP BY e.experiment_id
       ORDER BY min_val_loss ASC, e.experiment_id ASC
       LIMIT 5;
@@ -88,6 +90,8 @@ tasks:
           AND e.script_path = 'train.py'
           AND m.metric_name = 'val_loss'
           AND m.value IS NOT NULL
+          AND m.value > -9.0e+999
+          AND m.value < 9.0e+999
         GROUP BY e.experiment_id
       ),
       joined AS (
@@ -139,6 +143,8 @@ tasks:
           'privacy_dcr_score'
         )
         AND value IS NOT NULL
+        AND value > -9.0e+999
+        AND value < 9.0e+999
         GROUP BY experiment_id, metric_name
         HAVING step = MAX(step)
       ),

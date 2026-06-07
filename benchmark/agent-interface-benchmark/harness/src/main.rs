@@ -6382,6 +6382,42 @@ mod tests {
     }
 
     #[test]
+    fn train_lr_batch_gold_ignores_nonfinite_min_val_loss() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let finite = sample_run();
+        let mut nonfinite = sample_run();
+        nonfinite.id = "run-inf".to_owned();
+        nonfinite.metadata["id"] = json!("run-inf");
+        nonfinite.metadata_bytes = serde_json::to_vec(&nonfinite.metadata).unwrap();
+        nonfinite.metrics_bytes =
+            Some(br#"[{"step":0,"val_loss":Infinity,"timestamp":"now"}]"#.to_vec());
+        nonfinite.metrics = Some(
+            parse_metrics_bytes(
+                Path::new("/tmp/run-inf/metrics.json"),
+                nonfinite.metrics_bytes.as_ref().unwrap(),
+            )
+            .unwrap(),
+        );
+        insert_run(&conn, &finite).unwrap();
+        insert_run(&conn, &nonfinite).unwrap();
+        let task = phase1_task_set()
+            .unwrap()
+            .tasks
+            .into_iter()
+            .find(|task| task.task_id == "train_lr_batch_loss_top5")
+            .unwrap();
+
+        let rows = query_gold_rows(&conn, &task).unwrap();
+
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0]["learning_rate"], json!("0.001"));
+        assert_eq!(rows[0]["batch_size"], json!("32"));
+        assert_eq!(rows[0]["run_count"], json!(1));
+        assert_eq!(rows[0]["avg_min_val_loss"], json!(0.3));
+    }
+
+    #[test]
     fn derived_indexes_use_profile_paths() {
         let indexes = derive_indexes(&[sample_run()]).unwrap();
         assert!(indexes.files.contains_key("/index/experiments.json"));
