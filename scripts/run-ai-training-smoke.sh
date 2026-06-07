@@ -1,0 +1,91 @@
+#!/usr/bin/env bash
+#
+# Run the NoKV AI-training smoke gate against a disposable RustFS endpoint.
+#
+# This is the fast evidence gate for the current product goal: Holt-native
+# metadata reads, object-backed checkpoint publish, DLIO-style generated data,
+# and OpenRaft metadata HA/fault recovery. Each workload gets its own
+# temporary RustFS instance through scripts/run-rustfs-e2e.sh so failures are
+# isolated and logs stay easy to inspect.
+
+set -euo pipefail
+
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+PROFILE="${NOKV_AI_SMOKE_PROFILE:-smoke}"
+OBJECT_CONCURRENCY="${NOKV_AI_SMOKE_OBJECT_CONCURRENCY:-8}"
+READ_REPEATS="${NOKV_AI_SMOKE_READ_REPEATS:-1}"
+BLOCK_CACHE="${NOKV_AI_SMOKE_BLOCK_CACHE:-on}"
+
+DEFAULT_WORKLOADS=(
+    metadata-concurrent-read
+    checkpoint-publish
+    mlperf-dlio
+    metadata-ha-smoke
+    metadata-ha-fault-smoke
+    metadata-ha-learner-read
+)
+
+usage() {
+    cat <<EOF
+Usage: scripts/run-ai-training-smoke.sh [workload...]
+
+Runs the standard AI-training smoke gate. With no workload arguments, runs:
+  ${DEFAULT_WORKLOADS[*]}
+
+Use the special workload name "fuse-smoke" to run the mounted POSIX/FUSE smoke.
+Use "metadata-raft-smoke" to run the 3-voter OpenRaft process smoke. Set
+NOKV_AI_SMOKE_INCLUDE_FUSE=1 or NOKV_AI_SMOKE_INCLUDE_METADATA_RAFT_SMOKE=1 to
+append them to the default gate.
+
+Environment:
+  NOKV_AI_SMOKE_PROFILE              smoke|standard|long (default: smoke)
+  NOKV_AI_SMOKE_OBJECT_CONCURRENCY   object PUT/GET concurrency (default: 8)
+  NOKV_AI_SMOKE_READ_REPEATS         read repeats for read workloads (default: 1)
+  NOKV_AI_SMOKE_BLOCK_CACHE          on|off (default: on)
+
+All NOKV_E2E_* and RustFS override variables accepted by run-rustfs-e2e.sh
+still apply. Workload-specific command-line arguments can be passed through
+NOKV_AI_SMOKE_EXTRA_ARGS.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
+    usage
+    exit 0
+fi
+
+workloads=("$@")
+if [[ "${#workloads[@]}" -eq 0 ]]; then
+    workloads=("${DEFAULT_WORKLOADS[@]}")
+    if [[ "${NOKV_AI_SMOKE_INCLUDE_FUSE:-0}" == "1" ]]; then
+        workloads+=(fuse-smoke)
+    fi
+    if [[ "${NOKV_AI_SMOKE_INCLUDE_METADATA_RAFT_SMOKE:-0}" == "1" ]]; then
+        workloads+=(metadata-raft-smoke)
+    fi
+fi
+
+extra_args=()
+if [[ -n "${NOKV_AI_SMOKE_EXTRA_ARGS:-}" ]]; then
+    # shellcheck disable=SC2206
+    extra_args=(${NOKV_AI_SMOKE_EXTRA_ARGS})
+fi
+
+for workload in "${workloads[@]}"; do
+    echo "==> NoKV smoke workload: $workload"
+    if [[ "$workload" == "fuse-smoke" ]]; then
+        "$ROOT_DIR/scripts/run-fuse-smoke.sh"
+        continue
+    fi
+    if [[ "$workload" == "metadata-raft-smoke" ]]; then
+        "$ROOT_DIR/scripts/run-metadata-raft-smoke.sh"
+        continue
+    fi
+    NOKV_E2E_PROFILE="$PROFILE" \
+        NOKV_E2E_WORKLOAD="$workload" \
+        NOKV_E2E_OBJECT_CONCURRENCY="$OBJECT_CONCURRENCY" \
+        NOKV_E2E_READ_REPEATS="$READ_REPEATS" \
+        NOKV_E2E_BLOCK_CACHE="$BLOCK_CACHE" \
+        "$ROOT_DIR/scripts/run-rustfs-e2e.sh" "${extra_args[@]}"
+done

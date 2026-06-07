@@ -1,5 +1,5 @@
 [package]
-name = "nokvfs-bench"
+name = "nokv-bench"
 version = "0.1.0"
 publish = false
 description = "NoKV system benchmark harness for metadata and AI training workloads."
@@ -11,12 +11,13 @@ repository.workspace = true
 homepage.workspace = true
 
 [dependencies]
-nokvfs-client.workspace = true
-nokvfs-meta.workspace = true
-nokvfs-object.workspace = true
-nokvfs-server.workspace = true
-nokvfs-types.workspace = true
+nokv-client.workspace = true
+nokv-cluster.workspace = true
+nokv-meta.workspace = true
+nokv-object.workspace = true
+nokv-server.workspace = true
+nokv-types.workspace = true
 
 [[bin]]
-name = "nokv-fs-bench"
-path = "src/bin/nokv-fs-bench.rs"
+name = "nokv-bench"
+path = "src/bin/nokv-bench.rs"

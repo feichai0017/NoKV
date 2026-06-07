@@ -1,0 +1,242 @@
+use std::path::PathBuf;
+use std::time::Duration;
+
+use fuser::MountOption;
+use nokv_meta::ObjectTransferStats;
+use nokv_object::{
+    BlockCachePolicy, BlockCacheStats, FileReadPipelineOptions, ObjectPrefetchOptions,
+    ObjectPrefetchStats, ObjectWritebackStats, WritebackCacheStats,
+    DEFAULT_S3_MULTIPART_CONCURRENCY,
+};
+use nokv_types::InodeId;
+
+use crate::invalidation::FuseInvalidationOptions;
+
+const DEFAULT_WRITEBACK_CACHE_BYTES: u64 = 8 * 1024 * 1024 * 1024;
+const DEFAULT_WRITEBACK_CACHE_ITEMS: usize = 16 * 1024;
+const DEFAULT_WRITEBACK_QUEUE_CAPACITY: usize = 256;
+const DEFAULT_WRITEBACK_WORKERS: usize = DEFAULT_S3_MULTIPART_CONCURRENCY;
+
+#[derive(Clone, Debug)]
+pub struct FuseOptions {
+    pub entry_ttl: Duration,
+    pub attr_ttl: Duration,
+    pub fs_name: String,
+    pub threads: usize,
+    pub kernel_cache: bool,
+    pub direct_io: bool,
+    pub block_cache: BlockCachePolicy,
+    pub prefetch: FusePrefetchOptions,
+    pub read_pipeline: FileReadPipelineOptions,
+    pub writeback: FuseWritebackOptions,
+    pub view: FuseView,
+    pub access: FuseAccessMode,
+    pub invalidation: FuseInvalidationOptions,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FusePrefetchOptions {
+    pub enabled: bool,
+    pub queue_capacity: usize,
+    pub workers: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FuseWritebackOptions {
+    pub enabled: bool,
+    pub root: PathBuf,
+    pub max_bytes: u64,
+    pub max_items: usize,
+    pub queue_capacity: usize,
+    pub workers: usize,
+    pub upload_workers_per_request: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct FuseObjectPipelineStats {
+    pub block_cache: Option<BlockCacheStats>,
+    pub prefetch: Option<ObjectPrefetchStats>,
+    pub writeback_cache: Option<WritebackCacheStats>,
+    pub writeback: Option<ObjectWritebackStats>,
+    pub read_plan_cache_hits: u64,
+    pub read_plan_cache_misses: u64,
+}
+
+impl FuseObjectPipelineStats {
+    pub fn object_transfer_stats(&self) -> ObjectTransferStats {
+        let block_cache = self.block_cache.unwrap_or_default();
+        let prefetch = self.prefetch.unwrap_or_default();
+        let writeback = self.writeback.unwrap_or_default();
+        ObjectTransferStats {
+            object_puts: 0,
+            object_put_bytes: 0,
+            object_gets: 0,
+            object_get_bytes: 0,
+            coalesced_gets: 0,
+            coalesced_get_bytes: 0,
+            cache_hits: block_cache.hits.saturating_add(prefetch.cache_hits),
+            cache_hit_bytes: block_cache
+                .hit_bytes
+                .saturating_add(prefetch.cache_hit_bytes),
+            prefetch_enqueued: prefetch.enqueued,
+            prefetch_dropped: prefetch.dropped,
+            prefetch_completed: prefetch.completed,
+            prefetch_failed: prefetch.failed,
+            prefetch_object_gets: prefetch.object_gets,
+            prefetch_object_get_bytes: prefetch.object_get_bytes,
+            prefetch_cache_hits: prefetch.cache_hits,
+            prefetch_cache_hit_bytes: prefetch.cache_hit_bytes,
+            read_plan_cache_hits: self.read_plan_cache_hits,
+            read_plan_cache_misses: self.read_plan_cache_misses,
+            object_writeback_enqueued: writeback.enqueued,
+            object_writeback_inline: writeback.inline,
+            object_writeback_fallback: writeback.fallback,
+            object_writeback_completed: writeback.completed,
+            object_writeback_failed: writeback.failed,
+            object_writeback_staged_bytes: writeback.staged_bytes,
+            object_writeback_uploaded_bytes: writeback.uploaded_bytes,
+            object_writeback_queue_wait_ns: writeback.queue_wait_ns,
+            object_writeback_queue_max_wait_ns: writeback.queue_max_wait_ns,
+            object_writeback_upload_ns: writeback.upload_ns,
+            object_writeback_upload_max_ns: writeback.upload_max_ns,
+            manifest_chunks: 0,
+            manifest_blocks: 0,
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FuseView {
+    Live,
+    Snapshot { snapshot_id: u64, root: InodeId },
+}
+
+impl FuseView {
+    pub(super) fn root(self) -> InodeId {
+        match self {
+            Self::Live => InodeId::root(),
+            Self::Snapshot { root, .. } => root,
+        }
+    }
+
+    pub(super) fn is_read_only(self) -> bool {
+        matches!(self, Self::Snapshot { .. })
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FuseAccessMode {
+    ReadWrite,
+    ReadOnly,
+}
+
+impl FuseAccessMode {
+    pub(super) fn is_read_only(self) -> bool {
+        matches!(self, Self::ReadOnly)
+    }
+}
+
+impl Default for FuseOptions {
+    fn default() -> Self {
+        Self {
+            entry_ttl: Duration::from_secs(1),
+            attr_ttl: Duration::from_secs(1),
+            fs_name: "nokv".to_owned(),
+            threads: default_threads(),
+            kernel_cache: true,
+            direct_io: false,
+            block_cache: BlockCachePolicy::default(),
+            prefetch: FusePrefetchOptions::default(),
+            read_pipeline: FileReadPipelineOptions::default(),
+            writeback: FuseWritebackOptions::default(),
+            view: FuseView::Live,
+            access: FuseAccessMode::ReadWrite,
+            invalidation: FuseInvalidationOptions::default(),
+        }
+    }
+}
+
+impl Default for FusePrefetchOptions {
+    fn default() -> Self {
+        let defaults = ObjectPrefetchOptions::default();
+        Self {
+            enabled: true,
+            queue_capacity: defaults.queue_capacity,
+            workers: defaults.workers,
+        }
+    }
+}
+
+impl From<FusePrefetchOptions> for ObjectPrefetchOptions {
+    fn from(options: FusePrefetchOptions) -> Self {
+        Self {
+            queue_capacity: options.queue_capacity,
+            workers: options.workers,
+        }
+    }
+}
+
+impl Default for FuseWritebackOptions {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            root: std::env::temp_dir().join(format!("nokv-writeback-{}", std::process::id())),
+            max_bytes: DEFAULT_WRITEBACK_CACHE_BYTES,
+            max_items: DEFAULT_WRITEBACK_CACHE_ITEMS,
+            queue_capacity: DEFAULT_WRITEBACK_QUEUE_CAPACITY,
+            workers: DEFAULT_WRITEBACK_WORKERS,
+            upload_workers_per_request: DEFAULT_WRITEBACK_WORKERS,
+        }
+    }
+}
+
+pub(super) fn mount_options(options: &FuseOptions) -> Vec<MountOption> {
+    let mut mount_options = vec![MountOption::FSName(options.fs_name.clone())];
+    if options.access.is_read_only() || options.view.is_read_only() {
+        mount_options.push(MountOption::RO);
+    } else {
+        mount_options.push(MountOption::RW);
+    }
+    #[cfg(target_os = "macos")]
+    {
+        mount_options.push(MountOption::CUSTOM("fstypename=nokv".to_owned()));
+        mount_options.push(MountOption::CUSTOM(format!("volname={}", options.fs_name)));
+        // NoKV does not persist Finder/resource-fork metadata yet. Ask macFUSE
+        // to reject Apple sidecars instead of creating visible ._ files.
+        mount_options.push(MountOption::CUSTOM("noappledouble".to_owned()));
+        mount_options.push(MountOption::CUSTOM("noapplexattr".to_owned()));
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        mount_options.push(MountOption::Subtype("nokv".to_owned()));
+        mount_options.push(MountOption::NoAtime);
+    }
+    mount_options
+}
+
+#[cfg(target_os = "linux")]
+fn default_threads() -> usize {
+    4
+}
+
+#[cfg(not(target_os = "linux"))]
+fn default_threads() -> usize {
+    1
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct FuseStatfs {
+    pub(super) blocks: u64,
+    pub(super) bfree: u64,
+    pub(super) bavail: u64,
+    pub(super) files: u64,
+    pub(super) ffree: u64,
+    pub(super) bsize: u32,
+    pub(super) namelen: u32,
+    pub(super) frsize: u32,
+}
+
+pub(super) const STATFS_BLOCK_SIZE: u32 = 4096;
+pub(super) const STATFS_TOTAL_BYTES: u64 = 1 << 40;
+pub(super) const STATFS_TOTAL_FILES: u64 = 1 << 32;
+pub(super) const STATFS_NAME_MAX: u32 = 255;

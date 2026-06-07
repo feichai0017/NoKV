@@ -1,0 +1,27 @@
+[package]
+name = "nokv"
+version = "0.1.0"
+description = "Command line interface for NoKV filesystem metadata and FUSE operations."
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+homepage.workspace = true
+
+[dependencies]
+nokv-client.workspace = true
+nokv-cluster.workspace = true
+nokv-fuse.workspace = true
+nokv-meta.workspace = true
+nokv-object.workspace = true
+nokv-server.workspace = true
+nokv-types.workspace = true
+sha2.workspace = true
+
+[[bin]]
+name = "nokv"
+path = "src/bin/nokv.rs"
+
+[dev-dependencies]
+tempfile.workspace = true

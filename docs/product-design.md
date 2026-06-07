@@ -56,7 +56,7 @@ Holt
 ```
 
 This separation matters because the filesystem semantics must remain above the
-storage engine. The `nokvfs-meta` crate may bind those semantics to Holt. The
+storage engine. The `nokv-meta` crate may bind those semantics to Holt. The
 types, object, client, and FUSE crates must not leak Holt internals.
 
 ## Reference Shape
@@ -102,35 +102,37 @@ flowchart TB
     Metad --> Object
 ```
 
-The first implementation is a single-node `metad` server backed by Holt. The
-distributed target is metadata-shard replication with Holt as each shard's
-local state machine.
+The current implementation is a client/server `metad` path backed by Holt and
+OpenRaft. A single-node deployment is represented as a one-voter metadata
+group; local 3-voter smoke coverage exists, while production membership,
+learner read scaling, checkpoint archive, and multi-machine operations remain
+the distributed hardening work.
 
 ## Kubernetes Deployment Target
 
 The cloud-native deployment should grow into these components:
 
 ```text
-nokvfs-server
+nokv-server
   long-running metadata service, health/control plane, and future router
 
-nokvfs-csi
+nokv-csi
   Kubernetes volume lifecycle and node mount integration
 
-nokvfs-cache-agent
+nokv-cache-agent
   node-local metadata/object cache for GPU and training nodes
 
-nokvfs-gc-controller
+nokv-gc-controller
   staged object cleanup, checkpoint retention, and orphan body GC
 
-nokvfs-python
+nokv-python
   Python SDK and fsspec binding for training frameworks
 ```
 
-The current repository implements a long-running single-node `nokvfs-server`,
-framed metadata RPC for the Rust SDK and CLI, and the FUSE frontend. FUSE over
-the metadata server, CSI, Python, node-local cache, and distributed metadata
-shards remain product direction.
+The current repository implements a long-running `nokv-server`, framed
+metadata RPC for the Rust SDK and CLI, and a FUSE frontend that uses the same
+metadata client/server boundary. CSI, Python/fsspec, node-local cache, and
+production multi-node metadata operations remain product direction.
 
 ## Metadata Distribution
 

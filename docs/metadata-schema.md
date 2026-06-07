@@ -58,12 +58,12 @@ Implemented hot path records:
 - inode attributes;
 - dentry projection;
 - chunk manifest body summary plus per-chunk block descriptors;
+- derived path index for path-oriented artifact/checkpoint lookup;
 - command dedupe;
 - history records for previous values.
 
 Planned records:
 
-- path index for artifact/channel fast lookup;
 - watch log indexed by scope;
 - snapshot pins and GC floor;
 - parent index for hardlink and subtree operations.

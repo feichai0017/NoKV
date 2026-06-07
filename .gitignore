@@ -19,3 +19,4 @@ work_test/
 testdata/
 coverage.out
 *.pprof
+third_party/

@@ -18,22 +18,23 @@ condition.
 
 | Package | Owns | Must Not Do |
 | --- | --- | --- |
-| `crates/nokvfs-types/` | Storage-neutral namespace model: mount ids, inode ids, dentry names, inode attrs, body descriptors, record families, and typed watch events. | Import metadata layout, Holt, Raft, object-store clients, FUSE, protobuf, or service packages. |
-| `crates/nokvfs-protocol/` | Storage-neutral metadata RPC DTOs shared by server and service clients. | Execute metadata commands, own path resolution, import Holt, object-store clients, FUSE, metadata layout, or server/client implementations. |
-| `crates/nokvfs-meta/` | Metadata schema, Holt-friendly layout, `MetadataCommand`, Holt-backed metastore, in-process metadata service, snapshot retention pins, object-reference GC queue policy, history pruning, and service-level GC workers. | Own provider-specific object behavior, FUSE/kernel cache policy, Python bindings, CSI behavior, or wire protocol compatibility shims. |
-| `crates/nokvfs-object/` | Object-store boundary, S3-compatible backend, and in-memory test object store for file bodies. | Own namespace metadata, import Holt/FUSE/protobuf, implement metadata transactions, or expose filesystem-directory object storage as a product backend. |
-| `crates/nokvfs-client/` | Path-oriented Rust SDK over the metadata service and object backend. | Own metadata layout, bypass `nokvfs-meta`, expose object-store internals, implement FUSE/kernel cache semantics, depend on `nokvfs-fuse`, or define metadata wire formats. |
-| `crates/nokvfs-fuse/` | FUSE low-level frontend, inode mapping, kernel-facing attr conversion, range reads, and close-to-open buffered writes through `nokvfs-meta`. | Resolve paths through the SDK, own metadata layout, import Holt directly, or implement object-provider-specific behavior. |
-| `crates/nokvfs-server/` | Long-running metadata service process, startup config, background GC ownership, health/status/control HTTP, framed metadata RPC, and future network service boundary. | Own metadata semantics, durable layout, object provider internals, FUSE/kernel cache policy, or hidden compatibility shims. |
-| `crates/nokvfs-cli/` | `nokv-fs` CLI binary, command parsing, local service startup, and CLI wiring across client, FUSE, metadata, and object config. | Own metadata semantics, durable layout, object backend internals, or FUSE filesystem implementation. |
+| `crates/nokv-types/` | Storage-neutral namespace model: mount ids, inode ids, dentry names, inode attrs, body descriptors, record families, and typed watch events. | Import metadata layout, Holt, Raft, object-store clients, FUSE, protobuf, or service packages. |
+| `crates/nokv-protocol/` | Storage-neutral metadata RPC DTOs shared by server and service clients. | Execute metadata commands, own path resolution, import Holt, object-store clients, FUSE, metadata layout, or server/client implementations. |
+| `crates/nokv-meta/` | Metadata schema, Holt-friendly layout, `MetadataCommand`, Holt-backed metastore, in-process metadata service, snapshot retention pins, object-reference GC queue policy, history pruning, and service-level GC workers. | Own provider-specific object behavior, FUSE/kernel cache policy, Python bindings, CSI behavior, or wire protocol compatibility shims. |
+| `crates/nokv-object/` | Object-store boundary, S3-compatible backend, and in-memory test object store for file bodies. | Own namespace metadata, import Holt/FUSE/protobuf, implement metadata transactions, or expose filesystem-directory object storage as a product backend. |
+| `crates/nokv-client/` | Path-oriented Rust SDK over the metadata service and object backend. | Own metadata layout, bypass `nokv-meta`, expose object-store internals, implement FUSE/kernel cache semantics, depend on `nokv-fuse`, or define metadata wire formats. |
+| `crates/nokv-fuse/` | FUSE low-level frontend, inode mapping, kernel-facing attr conversion, range reads, and close-to-open buffered writes through the metadata client/server boundary. | Resolve paths through the path SDK hot path, own metadata layout, import Holt directly, open a production metadata store, or implement object-provider-specific behavior. |
+| `crates/nokv-server/` | Long-running metadata service process, startup config, background GC ownership, health/status/control HTTP, framed metadata RPC, and future network service boundary. | Own metadata semantics, durable layout, object provider internals, FUSE/kernel cache policy, or hidden compatibility shims. |
+| `crates/nokv-cluster/` | OpenRaft metadata replication boundary, semantic log entries, log positions, durable receipts, checkpoint frontiers, and cluster test harnesses. It may apply committed `MetadataCommand` batches through the storage-neutral `MetadataStore` trait. | Own filesystem semantics, import Holt/FUSE/object/provider code outside tests, define wire compatibility shims, or expose OpenRaft types outside the cluster boundary. |
+| `crates/nokv/` | `nokv` CLI binary, command parsing, local service startup, and CLI wiring across client, FUSE, metadata, and object config. | Own metadata semantics, durable layout, object backend internals, or FUSE filesystem implementation. |
 | `bench/` | System workload harnesses for metadata smoke, MLPerf Storage/DLIO-style generated training reads, checkpoint publish/read, and demo dataset shapes. | Own product APIs, metadata layout, object backend implementation, FUSE/kernel cache policy, or hidden benchmark-only behavior in product crates. |
 
 Planned package owners:
 
 | Package | Owns |
 | --- | --- |
-| `crates/nokvfs-csi/` | Kubernetes CSI integration and mount lifecycle. |
-| `crates/nokvfs-python/` | Python SDK/fsspec bindings for training workflows. |
+| `crates/nokv-csi/` | Kubernetes CSI integration and mount lifecycle. |
+| `crates/nokv-python/` | Python SDK/fsspec bindings for training workflows. |
 
 ## File Layout
 

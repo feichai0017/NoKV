@@ -24,7 +24,7 @@ is the lower-overhead path for native jobs and future Python bindings.
 ```text
 PyTorch / training process
   -> FUSE or SDK
-  -> nokvfs-meta
+  -> nokv-meta
   -> Holt metadata
   -> S3-compatible object store
 ```

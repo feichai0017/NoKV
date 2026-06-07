@@ -18,8 +18,8 @@ Before reviewing or editing a PR:
 
 Check for:
 
-- Scope drift across `nokvfs-types`, `nokvfs-meta`, `nokvfs-object`,
-  `nokvfs-client`, `nokvfs-fuse`, docs, and example files.
+- Scope drift across `nokv-types`, `nokv-meta`, `nokv-object`,
+  `nokv-client`, `nokv-fuse`, docs, and example files.
 - Missing DCO `Signed-off-by` trailers.
 - Package-boundary violations.
 - New helpers that reimplement standard library or existing repository helpers.
