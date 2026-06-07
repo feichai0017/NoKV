@@ -22,6 +22,7 @@ PROFILE="${NOKV_COMPARE_PROFILE:-smoke}"
 READ_REPEATS="${NOKV_COMPARE_READ_REPEATS:-1}"
 FSYNC="${NOKV_COMPARE_FSYNC:-0}"
 SYNC_MODE="${NOKV_COMPARE_METADATA_RAFT_SYNC:-none}"
+METADATA_MODE="${NOKV_COMPARE_METADATA_MODE:-local}"
 BUILD_RELEASE="${NOKV_COMPARE_BUILD_RELEASE:-1}"
 RESULT_CSV="${NOKV_COMPARE_RESULT_CSV:-}"
 SEQUENTIAL_MOUNTS="${NOKV_COMPARE_SEQUENTIAL_MOUNTS:-1}"
@@ -116,6 +117,7 @@ Environment:
   NOKV_COMPARE_BUILD_RELEASE=0            skip cargo release build
   NOKV_COMPARE_PROFILE                    smoke|standard|long (default: smoke)
   NOKV_COMPARE_FSYNC=1                    fsync checkpoint writes in both mounts
+  NOKV_COMPARE_METADATA_MODE              local|raft (default: local)
   NOKV_COMPARE_METADATA_RAFT_SYNC         NoKV metadata Raft log sync data|none (default: none)
   NOKV_COMPARE_RUSTFS_ADDRESS             RustFS listen address (default: 127.0.0.1:9030)
   NOKV_COMPARE_REDIS_PORT                 Redis port (default: 16430)
@@ -596,17 +598,23 @@ create_bucket "$NOKV_BUCKET"
 create_bucket "$JUICEFS_BUCKET"
 
 echo "Starting NoKV metadata server at $SERVER_ADDRESS sync=$SYNC_MODE" >&2
+NOKV_SERVER_ARGS=(
+    --server-bind "$SERVER_ADDRESS"
+    --meta "$NOKV_META_DIR"
+    --object-backend rustfs
+    --s3-endpoint "$RUSTFS_ENDPOINT"
+    --s3-bucket "$NOKV_BUCKET"
+    --s3-access-key-id "$RUSTFS_ACCESS_KEY"
+    --s3-secret-access-key "$RUSTFS_SECRET_KEY"
+    --metadata-mode "$METADATA_MODE"
+    --uid "$(id -u)"
+    --gid "$(id -g)"
+)
+if [[ "$METADATA_MODE" == "raft" ]]; then
+    NOKV_SERVER_ARGS+=(--metadata-raft-log-sync "$SYNC_MODE")
+fi
 "$NOKV_FS_BIN" \
-    --server-bind "$SERVER_ADDRESS" \
-    --meta "$NOKV_META_DIR" \
-    --object-backend rustfs \
-    --s3-endpoint "$RUSTFS_ENDPOINT" \
-    --s3-bucket "$NOKV_BUCKET" \
-    --s3-access-key-id "$RUSTFS_ACCESS_KEY" \
-    --s3-secret-access-key "$RUSTFS_SECRET_KEY" \
-    --metadata-raft-log-sync "$SYNC_MODE" \
-    --uid "$(id -u)" \
-    --gid "$(id -g)" \
+    "${NOKV_SERVER_ARGS[@]}" \
     serve >"$SERVER_LOG" 2>&1 &
 SERVER_PID=$!
 wait_for_metadata_server
