@@ -65,13 +65,12 @@ The local corpus archive path is intentionally not committed. Pass it with
 
 ## Arms
 
-The Phase 1 harness compares four read-only arms:
+The Phase 1 harness compares three read-only arms:
 
 | Arm | Surface |
 | --- | --- |
 | `sqlite_raw_v1` | Raw SQLite schema/query/blob tools plus ETL-maintained agent-index materialization tables. |
 | `sqlite_agentfs_v1` | Filesystem-shaped projection backed by SQLite. |
-| `nokv_posix_v1` | POSIX/FUSE view over NoKV. |
 | `nokv_native_v1` | NoKV product-native agent adapter. |
 
 The fixed Phase 1 tasks live in `tasks/phase1_readonly.yaml`. The rubric lives
@@ -79,15 +78,27 @@ in `rubric/phase1_readonly.yaml`.
 
 ## Valid Comparisons
 
-The benchmark has two core A/B comparisons:
+The benchmark has one core A/B comparison:
 
 - Raw SQLite tools vs NoKV Native Namespace.
-- SQLite AgentFS vs NoKV POSIX FUSE.
 
-Other cross-arm comparisons are useful only as sensitivity/context. For
-example, comparing raw SQL directly with POSIX tools can explain behavior, but
-it should not be presented as the main product claim because the surfaces expose
-different levels of structure.
+SQLite AgentFS remains useful as sensitivity/context because it isolates the
+effect of a filesystem-shaped projection backed by the same SQLite corpus. It
+should not be presented as the main product claim because it is a harness
+projection rather than the NoKV product-native surface.
+
+## Materialized Index Fairness
+
+Precomputed indexes are a normal experiment-tracking system behavior and are
+part of the intended benchmark model. They make the benchmark closer to a real
+agent workload, where agents inspect catalogs and facets instead of scanning
+all raw blobs for every question.
+
+The fairness rule is that every valid A/B comparison must expose logically
+equal introspection over the benchmarked facts. The syntax and access pattern
+can differ by surface, but the visible catalog fields, index facts, evidence
+handles, and limitations must not give one arm hidden task answers that the
+paired arm cannot discover through its own public interface.
 
 ## NoKV Native Definition
 
@@ -97,7 +108,7 @@ enforce limits, but it must not own the measured metadata semantics.
 
 Target native behavior:
 
-- `ls`/`stat` return typed directory/file cards, not POSIX-only entries.
+- `ls`/`stat` return typed directory/file cards, not flat file entries.
 - `entry_count`, `record_count`, `schema`, `sample`, and body descriptors are
   first-class fields.
 - `read` defaults to structured pagination; raw bytes require explicit
@@ -138,13 +149,6 @@ cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml
   --data-root benchmark/data/yanex-demo
 ```
 
-Optional NoKV POSIX/FUSE mount:
-
-```bash
-./benchmark/agent-interface-benchmark/scripts/mount_nokv_posix.sh \
-  benchmark/data/yanex-demo/fuse
-```
-
 ## Run Phase 1
 
 Set OpenAI credentials and model:
@@ -171,9 +175,6 @@ Run all fixed Phase 1 tasks for all arms:
   --repeats 10 \
   --output-jsonl benchmark/data/yanex-demo/results/phase1.jsonl
 ```
-
-`nokv_posix_v1` requires `--nokv-posix-root` unless the wrapper script receives a
-mounted FUSE root through the environment.
 
 ## Direct Tool Checks
 
@@ -212,5 +213,6 @@ and wall-time metrics; outperforming SQL is not the first PR gate.
 
 Useful follow-up product increments include typed facets for metric
 latest/min/max by run, params, dependencies, and richer git patch availability.
-Do not implement those semantics in the harness as benchmark-only shortcuts.
+Do not implement one-sided semantics in the harness as benchmark-only
+shortcuts.
 The harness should remain a thin adapter over `nokvfs-client` or `nokvfs-meta`.

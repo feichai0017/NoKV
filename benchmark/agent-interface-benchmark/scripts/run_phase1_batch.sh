@@ -16,7 +16,6 @@ Options:
   --max-completion-tokens N     Max completion tokens. Defaults to 4096.
   --max-turns N                 Max model/tool turns per run.
   --max-tool-calls N            Max tool calls per run.
-  --nokv-posix-root PATH        Required when running nokv_posix_v1.
   --help                        Show this help.
 EOF
 }
@@ -28,7 +27,6 @@ model="${OPENAI_MODEL:-gpt-5.5}"
 repeats=10
 max_completion_tokens=4096
 task_id=""
-nokv_posix_root=""
 max_turns=""
 max_tool_calls=""
 arms=()
@@ -71,10 +69,6 @@ while [ "$#" -gt 0 ]; do
       max_tool_calls="$2"
       shift 2
       ;;
-    --nokv-posix-root)
-      nokv_posix_root="$2"
-      shift 2
-      ;;
     --help)
       usage
       exit 0
@@ -101,9 +95,6 @@ run_one_batch() {
   local optional_args=()
   if [ -n "${task_id}" ]; then
     optional_args+=(--task-id "${task_id}")
-  fi
-  if [ -n "${nokv_posix_root}" ]; then
-    optional_args+=(--nokv-posix-root "${nokv_posix_root}")
   fi
   if [ -n "${max_turns}" ]; then
     optional_args+=(--max-turns "${max_turns}")

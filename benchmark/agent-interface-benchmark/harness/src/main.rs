@@ -6,8 +6,6 @@ use std::fmt;
 use std::fs;
 use std::io::Read;
 use std::io::Write;
-#[cfg(unix)]
-use std::os::unix::fs::MetadataExt;
 use std::path::{Path, PathBuf};
 use std::sync::{
     atomic::{AtomicBool, Ordering},
@@ -70,7 +68,7 @@ fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
         eprintln!("error: {err}");
         eprintln!(
-            "\nUsage:\n  harness prepare --archive PATH --data-root PATH [--reset] [s3 options]\n  harness nokv-register-indexes --data-root PATH [s3 options]\n  harness verify --data-root PATH [--run-id ID] [--nokv-posix-root PATH] [s3 options]\n  harness tools --arm ARM\n  harness list-tasks\n  harness show-task --task-id ID\n  harness gold --data-root PATH --task-id ID\n  harness judge --data-root PATH --arm ARM --task-id ID --answer-json PATH\n  harness run-task --data-root PATH --arm ARM --task-id ID --output-jsonl PATH [--model MODEL] [--max-completion-tokens N]\n  harness run-batch --data-root PATH --output-jsonl PATH [--repeats N|--repeat N] [--arm ARM] [--task-id ID]\n  harness sqlite-show-schema --db PATH\n  harness sqlite-query --db PATH --sql SQL\n  harness sqlite-read-blob --db PATH --blob-ref REF --offset N --limit N\n  harness agentfs-ls|agentfs-stat|agentfs-read|agentfs-grep|agentfs-find --data-root PATH --path PATH [...]\n  harness nokv-list|nokv-stat|nokv-read --data-root PATH --path PATH [...]\n"
+            "\nUsage:\n  harness prepare --archive PATH --data-root PATH [--reset] [s3 options]\n  harness nokv-register-indexes --data-root PATH [s3 options]\n  harness verify --data-root PATH [--run-id ID] [s3 options]\n  harness tools --arm ARM\n  harness list-tasks\n  harness show-task --task-id ID\n  harness gold --data-root PATH --task-id ID\n  harness judge --data-root PATH --arm ARM --task-id ID --answer-json PATH\n  harness run-task --data-root PATH --arm ARM --task-id ID --output-jsonl PATH [--model MODEL] [--max-completion-tokens N]\n  harness run-batch --data-root PATH --output-jsonl PATH [--repeats N|--repeat N] [--arm ARM] [--task-id ID]\n  harness sqlite-show-schema --db PATH\n  harness sqlite-query --db PATH --sql SQL\n  harness sqlite-read-blob --db PATH --blob-ref REF --offset N --limit N\n  harness agentfs-ls|agentfs-stat|agentfs-read|agentfs-grep|agentfs-find --data-root PATH --path PATH [...]\n  harness nokv-list|nokv-stat|nokv-read --data-root PATH --path PATH [...]\n"
         );
         std::process::exit(2);
     }
@@ -98,11 +96,6 @@ fn run(args: Vec<String>) -> Result<(), HarnessError> {
         "agentfs-read" => agentfs_read(options),
         "agentfs-grep" => agentfs_grep(options),
         "agentfs-find" => agentfs_find(options),
-        "posix-ls" => posix_ls(options),
-        "posix-stat" => posix_stat(options),
-        "posix-read" => posix_read(options),
-        "posix-grep" => posix_grep(options),
-        "posix-find" => posix_find(options),
         "nokv-list" => nokv_list(options),
         "nokv-stat" => nokv_stat(options),
         "nokv-read" => nokv_read(options),
@@ -140,7 +133,6 @@ struct Options {
     max_completion_tokens: Option<usize>,
     repeats: Option<usize>,
     run_id: Option<String>,
-    nokv_posix_root: Option<PathBuf>,
     reset: bool,
     s3: S3Options,
 }
@@ -218,7 +210,6 @@ struct LrBatchKey {
 struct LrBatchGroupSummary {
     key: LrBatchKey,
     run_count: usize,
-    avg_min_val_loss: f64,
     representative_run_id: String,
 }
 
@@ -257,7 +248,6 @@ struct VerificationReport {
     run_id_sample: String,
     sqlite: SqliteMaterializationReport,
     nokv_native: NamespaceMaterializationReport,
-    nokv_posix: Option<NamespaceMaterializationReport>,
     all_available_reads_match: bool,
 }
 
@@ -628,9 +618,6 @@ enum ArmRuntime {
     SqliteAgentFs {
         conn: Connection,
     },
-    NokvPosix {
-        root: PathBuf,
-    },
     NokvNative {
         service: Box<NoKvFs<HoltMetadataStore, S3ObjectStore>>,
     },
@@ -783,11 +770,6 @@ impl Options {
                     index += 1;
                     options.run_id = Some(value(args, index, "--run-id")?.to_owned());
                 }
-                "--nokv-posix-root" => {
-                    index += 1;
-                    options.nokv_posix_root =
-                        Some(PathBuf::from(value(args, index, "--nokv-posix-root")?));
-                }
                 "--reset" => options.reset = true,
                 "--s3-bucket" => {
                     index += 1;
@@ -892,22 +874,12 @@ fn verify(options: Options) -> Result<VerificationReport, HarnessError> {
     let sqlite = verify_sqlite_materialization(&db)?;
     let service = open_existing_nokv(&nokv_meta_path(data_root), &options.s3)?;
     let nokv_native = verify_nokv_namespace(&db, &service)?;
-    let nokv_posix = if let Some(root) = options.nokv_posix_root.as_ref() {
-        Some(verify_posix_namespace(&db, root)?)
-    } else {
-        None
-    };
-    let all_available_reads_match = sqlite.mismatches.is_empty()
-        && nokv_native.mismatches.is_empty()
-        && nokv_posix
-            .as_ref()
-            .map(|report| report.mismatches.is_empty())
-            .unwrap_or(true);
+    let all_available_reads_match =
+        sqlite.mismatches.is_empty() && nokv_native.mismatches.is_empty();
     Ok(VerificationReport {
         run_id_sample,
         sqlite,
         nokv_native,
-        nokv_posix,
         all_available_reads_match,
     })
 }
@@ -1140,42 +1112,6 @@ fn agentfs_find(options: Options) -> Result<(), HarnessError> {
     print_json(&agentfs_find_tool(&conn, &path, &pattern)?)
 }
 
-fn posix_ls(options: Options) -> Result<(), HarnessError> {
-    let root = required_posix_root(&options)?;
-    let path = required_path(&options)?;
-    print_json(&posix_list_tool(&root, &path)?)
-}
-
-fn posix_stat(options: Options) -> Result<(), HarnessError> {
-    let root = required_posix_root(&options)?;
-    let path = required_path(&options)?;
-    print_json(&posix_stat_tool(&root, &path)?)
-}
-
-fn posix_read(options: Options) -> Result<(), HarnessError> {
-    let root = required_posix_root(&options)?;
-    let path = required_path(&options)?;
-    let offset = options.offset.unwrap_or(0);
-    let limit = options
-        .limit
-        .ok_or(HarnessError::MissingOption("--limit"))?;
-    print_json(&posix_read_tool(&root, &path, offset, limit)?)
-}
-
-fn posix_grep(options: Options) -> Result<(), HarnessError> {
-    let root = required_posix_root(&options)?;
-    let path = required_path(&options)?;
-    let pattern = required_pattern(&options)?;
-    print_json(&posix_grep_tool(&root, &path, &pattern, options.recursive)?)
-}
-
-fn posix_find(options: Options) -> Result<(), HarnessError> {
-    let root = required_posix_root(&options)?;
-    let path = required_path(&options)?;
-    let pattern = required_pattern(&options)?;
-    print_json(&posix_find_tool(&root, &path, &pattern)?)
-}
-
 fn nokv_list(options: Options) -> Result<(), HarnessError> {
     let data_root = required_data_root(&options)?;
     let service = open_existing_nokv(&nokv_meta_path(&data_root), &options.s3)?;
@@ -1363,176 +1299,6 @@ fn agentfs_find_tool(
     })
 }
 
-fn posix_list_tool(root: &Path, path: &str) -> Result<ListToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let local = posix_local_path(root, &path);
-    let mut entries = Vec::new();
-    let row_limit = 1000;
-    let mut truncated = false;
-    for entry in fs::read_dir(&local).map_err(from_io)? {
-        if entries.len() == row_limit {
-            truncated = true;
-            break;
-        }
-        let entry = entry.map_err(from_io)?;
-        let name = entry.file_name().to_string_lossy().to_string();
-        let child_path = join_absolute_path(&path, &name);
-        entries.push(posix_entry(
-            &child_path,
-            &entry.metadata().map_err(from_io)?,
-        ));
-    }
-    entries.sort_by(|left, right| left.name.cmp(&right.name));
-    Ok(ListToolResult {
-        tool: "ls",
-        evidence: format!("nokv-fuse://{path}"),
-        path,
-        entries,
-        row_limit,
-        truncated,
-    })
-}
-
-fn posix_stat_tool(root: &Path, path: &str) -> Result<StatToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let metadata = fs::metadata(posix_local_path(root, &path)).map_err(from_io)?;
-    let entry = posix_entry(&path, &metadata);
-    Ok(StatToolResult {
-        tool: "stat",
-        path: entry.path,
-        evidence: entry.evidence,
-        file_type: entry.file_type,
-        size_bytes: entry.size_bytes,
-        digest: None,
-        inode: entry.inode,
-        mode: entry.mode,
-        uid: entry.uid,
-        gid: entry.gid,
-        modified_ms: entry.modified_ms,
-        generation: None,
-        body: None,
-    })
-}
-
-fn posix_read_tool(
-    root: &Path,
-    path: &str,
-    offset: u64,
-    limit: usize,
-) -> Result<ReadToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let local = posix_local_path(root, &path);
-    let content = fs::read(&local).map_err(from_io)?;
-    let range = bytes_range(&content, offset, limit)?;
-    Ok(ReadToolResult {
-        tool: "read",
-        evidence: format!("nokv-fuse://{path}"),
-        path,
-        total_size_bytes: content.len() as u64,
-        digest: None,
-        offset,
-        requested_limit: limit,
-        bytes_read: range.len(),
-        content_utf8: std::str::from_utf8(&range).ok().map(str::to_owned),
-        content_hex: bytes_hex(&range),
-        generation: None,
-        body: None,
-        generation_mismatch: None,
-    })
-}
-
-fn posix_grep_tool(
-    root: &Path,
-    path: &str,
-    pattern: &str,
-    recursive: bool,
-) -> Result<GrepToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let local = posix_local_path(root, &path);
-    let mut files = Vec::new();
-    if local.is_file() {
-        files.push(path.clone());
-    } else if recursive {
-        for entry in WalkDir::new(&local).into_iter() {
-            let entry = entry.map_err(|err| HarnessError::Io(err.to_string()))?;
-            if entry.file_type().is_file() {
-                files.push(posix_namespace_path(root, entry.path())?);
-            }
-        }
-    } else {
-        for entry in fs::read_dir(&local).map_err(from_io)? {
-            let entry = entry.map_err(from_io)?;
-            if entry.metadata().map_err(from_io)?.is_file() {
-                files.push(join_absolute_path(
-                    &path,
-                    &entry.file_name().to_string_lossy(),
-                ));
-            }
-        }
-    }
-    files.sort();
-    let file_bytes = files
-        .iter()
-        .map(|namespace_path| {
-            let bytes = fs::read(posix_local_path(root, namespace_path)).ok();
-            (namespace_path.as_str(), bytes)
-        })
-        .collect::<Vec<_>>();
-    let (matches, files_scanned, bytes_read, truncated) = grep_byte_files(
-        file_bytes
-            .iter()
-            .map(|(path, bytes)| (*path, bytes.as_deref())),
-        pattern,
-        "nokv-fuse://",
-    );
-    Ok(GrepToolResult {
-        tool: "grep",
-        path,
-        pattern: pattern.to_owned(),
-        recursive,
-        matches,
-        files_scanned,
-        bytes_read,
-        row_limit: 100,
-        truncated,
-    })
-}
-
-fn posix_find_tool(root: &Path, path: &str, pattern: &str) -> Result<FindToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let local = posix_local_path(root, &path);
-    let row_limit = 100;
-    let mut matches = Vec::new();
-    let mut truncated = false;
-    for entry in WalkDir::new(&local).into_iter() {
-        let entry = entry.map_err(|err| HarnessError::Io(err.to_string()))?;
-        let namespace_path = posix_namespace_path(root, entry.path())?;
-        if namespace_path == path {
-            continue;
-        }
-        let name = path_name(&namespace_path);
-        if wildcard_match(pattern, name) || wildcard_match(pattern, &namespace_path) {
-            if matches.len() == row_limit {
-                truncated = true;
-                break;
-            }
-            matches.push(posix_entry(
-                &namespace_path,
-                &entry.metadata().map_err(from_io)?,
-            ));
-        }
-    }
-    matches.sort_by(|left, right| left.path.cmp(&right.path));
-    Ok(FindToolResult {
-        tool: "find",
-        path,
-        pattern: pattern.to_owned(),
-        matches,
-        row_limit,
-        truncated,
-    })
-}
-
 fn nokv_list_tool(
     service: &NoKvFs<HoltMetadataStore, S3ObjectStore>,
     path: &str,
@@ -1682,13 +1448,6 @@ fn required_pattern(options: &Options) -> Result<String, HarnessError> {
         .pattern
         .clone()
         .ok_or(HarnessError::MissingOption("--pattern"))
-}
-
-fn required_posix_root(options: &Options) -> Result<PathBuf, HarnessError> {
-    options
-        .nokv_posix_root
-        .clone()
-        .ok_or(HarnessError::MissingOption("--nokv-posix-root"))
 }
 
 fn print_json(value: &impl Serialize) -> Result<(), HarnessError> {
@@ -1929,92 +1688,6 @@ fn bytes_range(content: &[u8], offset: u64, limit: usize) -> Result<Vec<u8>, Har
     Ok(content[start..end].to_vec())
 }
 
-fn posix_local_path(root: &Path, path: &str) -> PathBuf {
-    root.join(path.trim_start_matches('/'))
-}
-
-fn posix_namespace_path(root: &Path, path: &Path) -> Result<String, HarnessError> {
-    let relative = path
-        .strip_prefix(root)
-        .map_err(|err| HarnessError::Io(err.to_string()))?;
-    Ok(format!(
-        "/{}",
-        relative.to_string_lossy().replace('\\', "/")
-    ))
-}
-
-fn posix_entry(path: &str, metadata: &fs::Metadata) -> FileEntry {
-    FileEntry {
-        name: path_name(path).to_owned(),
-        path: path.to_owned(),
-        file_type: if metadata.is_dir() {
-            "directory".to_owned()
-        } else if metadata.is_file() {
-            "file".to_owned()
-        } else {
-            "other".to_owned()
-        },
-        size_bytes: metadata.is_file().then_some(metadata.len()),
-        digest: None,
-        evidence: format!("nokv-fuse://{path}"),
-        inode: posix_inode(metadata),
-        mode: posix_mode(metadata),
-        uid: posix_uid(metadata),
-        gid: posix_gid(metadata),
-        modified_ms: posix_modified_ms(metadata),
-        generation: None,
-        body: None,
-    }
-}
-
-#[cfg(unix)]
-fn posix_inode(metadata: &fs::Metadata) -> Option<u64> {
-    Some(metadata.ino())
-}
-
-#[cfg(not(unix))]
-fn posix_inode(_metadata: &fs::Metadata) -> Option<u64> {
-    None
-}
-
-#[cfg(unix)]
-fn posix_mode(metadata: &fs::Metadata) -> Option<u32> {
-    Some(metadata.mode())
-}
-
-#[cfg(not(unix))]
-fn posix_mode(_metadata: &fs::Metadata) -> Option<u32> {
-    None
-}
-
-#[cfg(unix)]
-fn posix_uid(metadata: &fs::Metadata) -> Option<u32> {
-    Some(metadata.uid())
-}
-
-#[cfg(not(unix))]
-fn posix_uid(_metadata: &fs::Metadata) -> Option<u32> {
-    None
-}
-
-#[cfg(unix)]
-fn posix_gid(metadata: &fs::Metadata) -> Option<u32> {
-    Some(metadata.gid())
-}
-
-#[cfg(not(unix))]
-fn posix_gid(_metadata: &fs::Metadata) -> Option<u32> {
-    None
-}
-
-fn posix_modified_ms(metadata: &fs::Metadata) -> Option<i64> {
-    metadata
-        .modified()
-        .ok()
-        .and_then(|time| time.duration_since(UNIX_EPOCH).ok())
-        .and_then(|duration| i64::try_from(duration.as_millis()).ok())
-}
-
 fn nokv_entry(path: &str, attr: &InodeAttr, body: Option<&BodyDescriptor>) -> FileEntry {
     FileEntry {
         name: path_name(path).to_owned(),
@@ -2106,7 +1779,7 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
                 json!({"type":"object","required":["blob_ref","offset","limit"],"properties":{"blob_ref":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}},"additionalProperties":false}),
             ),
         ],
-        "sqlite_agentfs_v1" | "nokv_posix_v1" => vec![
+        "sqlite_agentfs_v1" => vec![
             (
                 "ls",
                 "List directory entries.",
@@ -2159,12 +1832,7 @@ fn default_repeats() -> usize {
 }
 
 fn benchmark_arm_ids() -> &'static [&'static str] {
-    &[
-        "sqlite_raw_v1",
-        "nokv_native_v1",
-        "sqlite_agentfs_v1",
-        "nokv_posix_v1",
-    ]
+    &["sqlite_raw_v1", "nokv_native_v1", "sqlite_agentfs_v1"]
 }
 
 fn batch_plan(
@@ -2257,7 +1925,10 @@ fn judge(options: Options) -> Result<(), HarnessError> {
     let answer = serde_json::from_slice(&fs::read(answer_json).map_err(from_io)?)
         .map_err(|err| HarnessError::Json(err.to_string()))?;
     let nokv_for_evidence = if arm == "nokv_native_v1" {
-        Some(open_existing_nokv(&nokv_meta_path(&data_root), &options.s3)?)
+        Some(open_existing_nokv(
+            &nokv_meta_path(&data_root),
+            &options.s3,
+        )?)
     } else {
         None
     };
@@ -2299,11 +1970,6 @@ fn run_benchmark_batch(options: Options) -> Result<(), HarnessError> {
     if plan.is_empty() {
         return Err(HarnessError::Corpus(
             "batch plan is empty; check --arm, --task-id, and --repeats".to_owned(),
-        ));
-    }
-    if plan.iter().any(|item| item.arm_id == "nokv_posix_v1") && options.nokv_posix_root.is_none() {
-        return Err(HarnessError::MissingOption(
-            "--nokv-posix-root for nokv_posix_v1",
         ));
     }
     for item in &plan {
@@ -2351,7 +2017,6 @@ fn run_benchmark_task_once(
     let tool_worker = ToolWorker::start(
         arm,
         &data_root,
-        options.nokv_posix_root.as_ref(),
         &options.s3,
         &tools,
         Duration::from_millis(TOOL_CALL_TIMEOUT_MS),
@@ -2558,58 +2223,56 @@ fn run_benchmark_task_once(
         .map(Vec::len)
         .unwrap_or_default();
     let nokv_for_evidence = if arm == "nokv_native_v1" {
-        Some(open_existing_nokv(&nokv_meta_path(&data_root), &options.s3)?)
+        Some(open_existing_nokv(
+            &nokv_meta_path(&data_root),
+            &options.s3,
+        )?)
     } else {
         None
     };
-    let judge_result = match judge_answer(
-        &conn,
-        &task,
-        arm,
-        &final_answer,
-        nokv_for_evidence.as_ref(),
-    ) {
-        Ok(judge_result) => judge_result,
-        Err(err) if is_recoverable_run_judge_error(&err) => {
-            let error = err.to_string();
-            let mut derived = DerivedMetrics {
-                interface_card_tokens: estimate_tokens(arm_card),
-                task_prompt_tokens: estimate_tokens(&task.prompt),
-                wall_time_ms: completed.saturating_sub(started),
-                task_success: Some(false),
-                evidence_precision: None,
-                tool_call_count: tool_calls.len(),
-                tool_result_tokens,
-                tool_bytes_read,
-                invalid_sql_count,
-                wrong_tool_count,
-                tool_timeout_count,
-                missing_evidence_count,
-                overread_bytes: 0,
-                ..DerivedMetrics::default()
-            };
-            apply_usage_costs(&mut derived, &api_calls, &model);
-            let telemetry = BenchmarkRunTelemetry {
-                record_type: "benchmark_run".to_owned(),
-                run_id,
-                arm_id: arm.to_owned(),
-                task_id: task.task_id,
-                repeat_index,
-                model,
-                started_at_unix_ms: started,
-                completed_at_unix_ms: completed,
-                api_calls,
-                tool_calls,
-                derived_metrics: derived,
-                judge: None,
-                final_answer: Some(final_answer.clone()),
-                run_error: Some(error),
-            };
-            append_jsonl(&output_jsonl, &telemetry)?;
-            return Ok(final_answer);
-        }
-        Err(err) => return Err(err),
-    };
+    let judge_result =
+        match judge_answer(&conn, &task, arm, &final_answer, nokv_for_evidence.as_ref()) {
+            Ok(judge_result) => judge_result,
+            Err(err) if is_recoverable_run_judge_error(&err) => {
+                let error = err.to_string();
+                let mut derived = DerivedMetrics {
+                    interface_card_tokens: estimate_tokens(arm_card),
+                    task_prompt_tokens: estimate_tokens(&task.prompt),
+                    wall_time_ms: completed.saturating_sub(started),
+                    task_success: Some(false),
+                    evidence_precision: None,
+                    tool_call_count: tool_calls.len(),
+                    tool_result_tokens,
+                    tool_bytes_read,
+                    invalid_sql_count,
+                    wrong_tool_count,
+                    tool_timeout_count,
+                    missing_evidence_count,
+                    overread_bytes: 0,
+                    ..DerivedMetrics::default()
+                };
+                apply_usage_costs(&mut derived, &api_calls, &model);
+                let telemetry = BenchmarkRunTelemetry {
+                    record_type: "benchmark_run".to_owned(),
+                    run_id,
+                    arm_id: arm.to_owned(),
+                    task_id: task.task_id,
+                    repeat_index,
+                    model,
+                    started_at_unix_ms: started,
+                    completed_at_unix_ms: completed,
+                    api_calls,
+                    tool_calls,
+                    derived_metrics: derived,
+                    judge: None,
+                    final_answer: Some(final_answer.clone()),
+                    run_error: Some(error),
+                };
+                append_jsonl(&output_jsonl, &telemetry)?;
+                return Ok(final_answer);
+            }
+            Err(err) => return Err(err),
+        };
     let mut derived = DerivedMetrics {
         interface_card_tokens: estimate_tokens(arm_card),
         task_prompt_tokens: estimate_tokens(&task.prompt),
@@ -2771,7 +2434,6 @@ fn arm_card_yaml(arm: &str) -> Result<&'static str, HarnessError> {
     match arm {
         "sqlite_raw_v1" => Ok(include_str!("../../arms/sqlite_raw.yaml")),
         "sqlite_agentfs_v1" => Ok(include_str!("../../arms/sqlite_agentfs.yaml")),
-        "nokv_posix_v1" => Ok(include_str!("../../arms/nokv_posix.yaml")),
         "nokv_native_v1" => Ok(include_str!("../../arms/nokv_native.yaml")),
         other => Err(HarnessError::Corpus(format!(
             "unknown benchmark arm {other}"
@@ -2914,7 +2576,6 @@ impl ToolWorker {
     fn start(
         arm: &str,
         data_root: &Path,
-        nokv_posix_root: Option<&PathBuf>,
         s3: &S3Options,
         registry: &[ToolDefinition],
         timeout: Duration,
@@ -2922,11 +2583,10 @@ impl ToolWorker {
         let (request_tx, request_rx) = mpsc::channel::<ToolWorkerRequest>();
         let arm = arm.to_owned();
         let data_root = data_root.to_owned();
-        let nokv_posix_root = nokv_posix_root.cloned();
         let s3 = s3.clone();
         let registry = registry.to_vec();
         thread::spawn(move || {
-            let runtime = ArmRuntime::open(&arm, &data_root, nokv_posix_root.as_ref(), &s3);
+            let runtime = ArmRuntime::open(&arm, &data_root, &s3);
             match runtime {
                 Ok(mut runtime) => {
                     for request in request_rx {
@@ -2979,12 +2639,7 @@ impl ToolWorker {
 }
 
 impl ArmRuntime {
-    fn open(
-        arm: &str,
-        data_root: &Path,
-        nokv_posix_root: Option<&PathBuf>,
-        s3: &S3Options,
-    ) -> Result<Self, HarnessError> {
+    fn open(arm: &str, data_root: &Path, s3: &S3Options) -> Result<Self, HarnessError> {
         match arm {
             "sqlite_raw_v1" => {
                 ensure_sqlite_agent_index_materialization(data_root)?;
@@ -3002,11 +2657,6 @@ impl ArmRuntime {
                     rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
                 )
                 .map_err(from_sql)?,
-            }),
-            "nokv_posix_v1" => Ok(Self::NokvPosix {
-                root: nokv_posix_root
-                    .cloned()
-                    .ok_or(HarnessError::MissingOption("--nokv-posix-root"))?,
             }),
             "nokv_native_v1" => Ok(Self::NokvNative {
                 service: Box::new(open_existing_nokv(&nokv_meta_path(data_root), s3)?),
@@ -3046,7 +2696,6 @@ impl ArmRuntime {
         let result = match self {
             Self::SqliteRaw { conn } => execute_sqlite_raw_tool(conn, &call.function.name, &args),
             Self::SqliteAgentFs { conn } => execute_agentfs_tool(conn, &call.function.name, &args),
-            Self::NokvPosix { root } => execute_posix_tool(root, &call.function.name, &args),
             Self::NokvNative { service } => {
                 execute_nokv_tool(service.as_ref(), &call.function.name, &args)
             }
@@ -3124,39 +2773,15 @@ fn execute_agentfs_tool(
     }
 }
 
-fn execute_posix_tool(root: &Path, name: &str, args: &Value) -> Result<Value, HarnessError> {
-    let path = required_string_arg(args, "path")?;
-    match name {
-        "ls" => to_json_value(posix_list_tool(root, &path)?),
-        "stat" => to_json_value(posix_stat_tool(root, &path)?),
-        "read" => to_json_value(posix_read_tool(
-            root,
-            &path,
-            optional_u64_arg(args, "offset").unwrap_or(0),
-            required_usize_arg(args, "limit")?,
-        )?),
-        "grep" => to_json_value(posix_grep_tool(
-            root,
-            &path,
-            &required_string_arg(args, "pattern")?,
-            required_bool_arg(args, "recursive")?,
-        )?),
-        "find" => to_json_value(posix_find_tool(
-            root,
-            &path,
-            &required_string_arg(args, "pattern")?,
-        )?),
-        other => Err(HarnessError::Corpus(format!("unknown POSIX tool {other}"))),
-    }
-}
-
 fn execute_nokv_tool(
     service: &NoKvFs<HoltMetadataStore, S3ObjectStore>,
     name: &str,
     args: &Value,
 ) -> Result<Value, HarnessError> {
     match name {
-        "ls" | "stat" | "read" | "find" => execute_agent_tool(service, name, args).map_err(from_nokv),
+        "ls" | "stat" | "read" | "find" => {
+            execute_agent_tool(service, name, args).map_err(from_nokv)
+        }
         other => Err(HarnessError::Corpus(format!(
             "unknown NoKV native tool {other}"
         ))),
@@ -3568,7 +3193,6 @@ fn evidence_handle_supported(
                 ),
             )? > 0)
         }
-        "nokv_posix_v1" => Ok(handle.starts_with("nokv-fuse:///yanex/")),
         "nokv_native_v1" => nokv_native_evidence_supported(conn, handle, nokv_native),
         _ => Ok(false),
     }
@@ -4044,41 +3668,6 @@ fn verify_nokv_namespace(
     Ok(report)
 }
 
-fn verify_posix_namespace(
-    conn: &Connection,
-    root: &Path,
-) -> Result<NamespaceMaterializationReport, HarnessError> {
-    let files = sqlite_agentfs_files(conn)?;
-    let missing = missing_artifact_paths(conn)?;
-    let mut report = NamespaceMaterializationReport::default();
-    for (agentfs_path, bytes) in &files {
-        let path = root.join(posix_relative_path_for_agentfs(agentfs_path)?);
-        let read = fs::read(&path).map_err(from_io)?;
-        if read != *bytes {
-            report
-                .mismatches
-                .push(format!("{}: POSIX bytes differ", path.display()));
-        }
-        report.files_checked += 1;
-        if agentfs_path.starts_with("/index/") {
-            report.index_files_checked += 1;
-        } else {
-            report.run_files_checked += 1;
-        }
-    }
-    for (run_id, artifact_path) in missing {
-        let path = root.join(format!("yanex/runs/{run_id}/artifacts/{artifact_path}"));
-        if path.exists() {
-            report.mismatches.push(format!(
-                "{}: missing artifact unexpectedly exists",
-                path.display()
-            ));
-        }
-        report.missing_artifacts_checked += 1;
-    }
-    Ok(report)
-}
-
 fn sqlite_agentfs_files(conn: &Connection) -> Result<BTreeMap<String, Vec<u8>>, HarnessError> {
     let mut stmt = conn
         .prepare("SELECT path, content FROM files WHERE file_type = 'file' ORDER BY path")
@@ -4115,12 +3704,6 @@ fn nokv_path_for_agentfs(path: &str) -> Result<String, HarnessError> {
             "unsupported AgentFS file path {path}"
         )))
     }
-}
-
-fn posix_relative_path_for_agentfs(path: &str) -> Result<String, HarnessError> {
-    Ok(nokv_path_for_agentfs(path)?
-        .trim_start_matches('/')
-        .to_owned())
 }
 
 fn expected_params(bytes: &[u8]) -> Result<BTreeMap<String, String>, HarnessError> {
@@ -4818,7 +4401,6 @@ const RUN_AGENT_INDEX_SCHEMA_PROBE_SQL: &str = r#"
         group_lr_batch_batch_size,
         group_lr_batch_representative,
         group_lr_batch_run_count,
-        group_lr_batch_avg_min_val_loss,
         git_patch_file,
         git_patch_declared,
         git_patch_available,
@@ -4939,7 +4521,6 @@ fn create_agent_index_schema(conn: &Connection) -> Result<(), HarnessError> {
             group_lr_batch_batch_size TEXT,
             group_lr_batch_representative INTEGER,
             group_lr_batch_run_count INTEGER,
-            group_lr_batch_avg_min_val_loss REAL,
             git_patch_file TEXT,
             git_patch_declared INTEGER NOT NULL,
             git_patch_available INTEGER NOT NULL,
@@ -5360,7 +4941,7 @@ fn insert_agent_index_row(
         "INSERT OR REPLACE INTO run_agent_index VALUES (
             ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10,
             ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20,
-            ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29
+            ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28
         )",
         params![
             run.id,
@@ -5386,7 +4967,6 @@ fn insert_agent_index_row(
             index_string(values, "group.lr_batch.batch_size"),
             index_u64_i64(values, "group.lr_batch.representative")?,
             index_u64_i64(values, "group.lr_batch.run_count")?,
-            index_f64(values, "group.lr_batch.avg_min_val_loss"),
             index_string(values, "git.patch_file"),
             index_u64_i64(values, "git.patch_declared")?.unwrap_or(0),
             index_u64_i64(values, "git.patch_available")?.unwrap_or(0),
@@ -5436,10 +5016,7 @@ fn index_string(values: &[NamespaceIndexValue], field: &str) -> Option<String> {
     })
 }
 
-fn index_u64_i64(
-    values: &[NamespaceIndexValue],
-    field: &str,
-) -> Result<Option<i64>, HarnessError> {
+fn index_u64_i64(values: &[NamespaceIndexValue], field: &str) -> Result<Option<i64>, HarnessError> {
     values
         .iter()
         .find_map(|value| {
@@ -5591,8 +5168,6 @@ fn nokv_agent_index_fields() -> Vec<NamespaceIndexField> {
         string_index_field("group.lr_batch.batch_size", true, true),
         u64_index_field("group.lr_batch.representative", true, true),
         u64_index_field("group.lr_batch.run_count", true, true),
-        string_index_field("group.lr_batch.avg_min_val_loss", false, true),
-        u64_index_field("group.lr_batch.avg_min_val_loss_scaled", false, true),
         string_index_field("git.patch_file", true, true),
         u64_index_field("git.patch_declared", true, true),
         u64_index_field("git.patch_available", true, true),
@@ -5642,7 +5217,11 @@ fn nokv_agent_index_row_with_groups(
             "artifact.type",
             artifact_type(&artifact.relative_path),
         );
-        push_index_u64(&mut values, "artifact.size_bytes", artifact.bytes.len() as u64);
+        push_index_u64(
+            &mut values,
+            "artifact.size_bytes",
+            artifact.bytes.len() as u64,
+        );
         match artifact_name(&artifact.relative_path) {
             "stdout.txt" => stdout_size = Some(artifact.bytes.len() as u64),
             "stderr.txt" => stderr_size = Some(artifact.bytes.len() as u64),
@@ -5655,13 +5234,21 @@ fn nokv_agent_index_row_with_groups(
         "artifact.stdout_available",
         u64::from(stdout_size.is_some()),
     );
-    push_index_u64(&mut values, "artifact.stdout_size_bytes", stdout_size.unwrap_or(0));
+    push_index_u64(
+        &mut values,
+        "artifact.stdout_size_bytes",
+        stdout_size.unwrap_or(0),
+    );
     push_index_u64(
         &mut values,
         "artifact.stderr_available",
         u64::from(stderr_size.is_some()),
     );
-    push_index_u64(&mut values, "artifact.stderr_size_bytes", stderr_size.unwrap_or(0));
+    push_index_u64(
+        &mut values,
+        "artifact.stderr_size_bytes",
+        stderr_size.unwrap_or(0),
+    );
 
     push_param_index_values(&mut values, run);
     push_metric_index_values(&mut values, run);
@@ -5678,7 +5265,11 @@ fn nokv_agent_index_row_with_groups(
         "git.patch_declared",
         u64::from(patch_file.is_some()),
     );
-    push_index_u64(&mut values, "git.patch_available", u64::from(patch_available));
+    push_index_u64(
+        &mut values,
+        "git.patch_available",
+        u64::from(patch_available),
+    );
     let git_dirty = run
         .metadata
         .get("git")
@@ -5728,7 +5319,6 @@ fn train_lr_batch_groups(runs: &[CorpusRun]) -> BTreeMap<String, LrBatchGroupSum
         .map(|(key, mut values)| {
             values.sort_by(|left, right| left.0.cmp(&right.0));
             let run_count = values.len();
-            let avg_min_val_loss = values.iter().map(|(_, value)| value).sum::<f64>() / run_count as f64;
             let representative_run_id = values
                 .first()
                 .map(|(run_id, _)| run_id.clone())
@@ -5738,7 +5328,6 @@ fn train_lr_batch_groups(runs: &[CorpusRun]) -> BTreeMap<String, LrBatchGroupSum
                 LrBatchGroupSummary {
                     key,
                     run_count,
-                    avg_min_val_loss,
                     representative_run_id,
                 },
             )
@@ -5771,16 +5360,6 @@ fn push_lr_batch_group_values(
         u64::from(run.id == group.representative_run_id),
     );
     push_index_u64(values, "group.lr_batch.run_count", group.run_count as u64);
-    push_metric_value(
-        values,
-        "group.lr_batch.avg_min_val_loss",
-        group.avg_min_val_loss,
-    );
-    push_metric_scaled(
-        values,
-        "group.lr_batch.avg_min_val_loss_scaled",
-        group.avg_min_val_loss,
-    );
 }
 
 fn lr_batch_key(run: &CorpusRun) -> Option<LrBatchKey> {
@@ -5821,7 +5400,11 @@ fn push_metric_index_values(values: &mut Vec<NamespaceIndexValue>, run: &CorpusR
     for metric_name in LATEST_METRIC_INDEX_FIELDS {
         if let Some(metric) = metric_latest(run, metric_name) {
             push_metric_value(values, &format!("metric.{metric_name}.latest"), metric);
-            push_metric_scaled(values, &format!("metric.{metric_name}.latest_scaled"), metric);
+            push_metric_scaled(
+                values,
+                &format!("metric.{metric_name}.latest_scaled"),
+                metric,
+            );
         }
     }
 }
@@ -6307,10 +5890,7 @@ mod tests {
         assert!(values.contains(&("param.origami.training.learning_rate", json!("0.001"))));
         assert!(values.contains(&("param.origami.training.batch_size", json!("32"))));
         assert!(values.contains(&("metric.val_loss.min", json!("0.3"))));
-        assert!(values.contains(&(
-            "metric.val_loss.min_scaled",
-            json!(10_300_000_000_000_u64)
-        )));
+        assert!(values.contains(&("metric.val_loss.min_scaled", json!(10_300_000_000_000_u64))));
         assert!(values.contains(&("metric.utility_tstr_roc_auc.latest", json!("0.8"))));
         assert!(values.contains(&(
             "metric.utility_tstr_roc_auc.latest_scaled",
@@ -6322,7 +5902,7 @@ mod tests {
     }
 
     #[test]
-    fn nokv_agent_index_fields_expose_params_and_metric_summaries() {
+    fn nokv_agent_index_fields_expose_params_metric_and_group_discovery_summaries() {
         let field_ids = nokv_agent_index_fields()
             .into_iter()
             .map(|field| field.field.id)
@@ -6335,9 +5915,10 @@ mod tests {
         assert!(field_ids.contains("metric.utility_tstr_roc_auc.latest"));
         assert!(field_ids.contains("metric.utility_tstr_roc_auc.latest_scaled"));
         assert!(field_ids.contains("git.has_uncommitted_changes"));
-        assert!(field_ids.contains("group.lr_batch.avg_min_val_loss_scaled"));
         assert!(field_ids.contains("group.lr_batch.representative"));
         assert!(field_ids.contains("group.lr_batch.run_count"));
+        assert!(!field_ids.contains("group.lr_batch.avg_min_val_loss"));
+        assert!(!field_ids.contains("group.lr_batch.avg_min_val_loss_scaled"));
     }
 
     #[test]
@@ -6350,7 +5931,7 @@ mod tests {
     }
 
     #[test]
-    fn train_lr_batch_groups_are_projected_into_run_index_rows() {
+    fn train_lr_batch_groups_project_only_discovery_fields_into_run_index_rows() {
         let run = sample_run();
         let groups = train_lr_batch_groups(std::slice::from_ref(&run));
         let row = nokv_agent_index_row_with_groups(&run, &groups);
@@ -6368,17 +5949,15 @@ mod tests {
             })
             .collect::<Vec<_>>();
 
-        assert!(values.contains(&(
-            "group.lr_batch.key",
-            json!("lr=0.001;batch=32")
-        )));
+        assert!(values.contains(&("group.lr_batch.key", json!("lr=0.001;batch=32"))));
         assert!(values.contains(&("group.lr_batch.run_count", json!(1))));
         assert!(values.contains(&("group.lr_batch.representative", json!(1))));
-        assert!(values.contains(&("group.lr_batch.avg_min_val_loss", json!("0.3"))));
-        assert!(values.contains(&(
-            "group.lr_batch.avg_min_val_loss_scaled",
-            json!(10_300_000_000_000_u64)
-        )));
+        assert!(!values
+            .iter()
+            .any(|(field, _)| *field == "group.lr_batch.avg_min_val_loss"));
+        assert!(!values
+            .iter()
+            .any(|(field, _)| *field == "group.lr_batch.avg_min_val_loss_scaled"));
     }
 
     #[test]
@@ -6471,7 +6050,9 @@ mod tests {
             )
             .unwrap();
         assert_eq!(min_val_loss, 0.3);
-        assert!(sqlite_schema_text(&conn).unwrap().contains("run_agent_index"));
+        let schema = sqlite_schema_text(&conn).unwrap();
+        assert!(schema.contains("run_agent_index"));
+        assert!(!schema.contains("group_lr_batch_avg_min_val_loss"));
     }
 
     #[test]
@@ -6726,13 +6307,10 @@ mod tests {
             vec!["ls", "stat", "read", "grep", "find"]
         );
         assert_eq!(
-            tool_names(&tool_registry_for_arm("nokv_posix_v1").unwrap()),
-            vec!["ls", "stat", "read", "grep", "find"]
-        );
-        assert_eq!(
             tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap()),
             vec!["ls", "stat", "read", "find"]
         );
+        assert!(tool_registry_for_arm("unknown_arm_v1").is_err());
     }
 
     #[test]
@@ -6745,7 +6323,11 @@ mod tests {
             .unwrap();
         let card_names = tool_contract
             .iter()
-            .map(|item| item.get("name").and_then(serde_yaml::Value::as_str).unwrap())
+            .map(|item| {
+                item.get("name")
+                    .and_then(serde_yaml::Value::as_str)
+                    .unwrap()
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -6764,7 +6346,11 @@ mod tests {
             .unwrap();
         let card_names = tool_contract
             .iter()
-            .map(|item| item.get("name").and_then(serde_yaml::Value::as_str).unwrap())
+            .map(|item| {
+                item.get("name")
+                    .and_then(serde_yaml::Value::as_str)
+                    .unwrap()
+            })
             .collect::<Vec<_>>();
 
         assert_eq!(
@@ -6826,7 +6412,9 @@ mod tests {
         insert_run(&conn, &run).unwrap();
         insert_agentfs_run_files(&conn, &run).unwrap();
 
-        assert!(evidence_handle_supported(&conn, "sqlite_raw_v1", "sqlite://schema", None).unwrap());
+        assert!(
+            evidence_handle_supported(&conn, "sqlite_raw_v1", "sqlite://schema", None).unwrap()
+        );
         assert!(evidence_handle_supported(
             &conn,
             "nokv_native_v1",
@@ -6866,22 +6454,26 @@ mod tests {
     }
 
     #[test]
-    fn readme_documents_only_two_core_valid_ab_comparisons() {
+    fn readme_documents_one_core_valid_ab_comparison() {
         let readme = include_str!("../../README.md");
 
         assert!(readme.contains("## Valid Comparisons"));
+        assert!(readme.contains("one core A/B comparison"));
         assert!(readme.contains("Raw SQLite tools vs NoKV Native Namespace"));
-        assert!(readme.contains("SQLite AgentFS vs NoKV POSIX FUSE"));
         assert!(readme.contains("sensitivity/context"));
     }
 
     #[test]
-    fn batch_plan_defaults_to_four_arms_ten_tasks_ten_repeats() {
+    fn batch_plan_defaults_to_three_arms_ten_tasks_ten_repeats() {
         let tasks = phase1_task_set().unwrap();
         let plan = batch_plan(None, None, None, &tasks);
 
         assert_eq!(default_repeats(), 10);
-        assert_eq!(plan.len(), 4 * 10 * 10);
+        assert_eq!(plan.len(), 3 * 10 * 10);
+        assert_eq!(
+            benchmark_arm_ids(),
+            &["sqlite_raw_v1", "nokv_native_v1", "sqlite_agentfs_v1"]
+        );
         assert_eq!(plan[0].arm_id, "sqlite_raw_v1");
         assert_eq!(plan[0].task_id, "status_counts");
         assert_eq!(plan[0].repeat_index, 0);

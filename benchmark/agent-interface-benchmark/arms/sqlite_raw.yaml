@@ -85,8 +85,6 @@ materialized_view_schema_hint:
     - group.lr_batch.batch_size
     - group.lr_batch.representative
     - group.lr_batch.run_count
-    - group.lr_batch.avg_min_val_loss
-    - group.lr_batch.avg_min_val_loss_scaled
     - git.patch_file
     - git.patch_declared
     - git.patch_available
