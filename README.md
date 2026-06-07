@@ -24,6 +24,13 @@ SPDX-License-Identifier: Apache-2.0
     <a href="https://deepwiki.com/feichai0017/NoKV"><img alt="DeepWiki" src="https://img.shields.io/badge/DeepWiki-Ask-6f42c1" /></a>
   </p>
 
+  <p>
+    <a href="https://nokv.io/architecture">Docs</a> ·
+    <a href="#-quick-start">Quick Start</a> ·
+    <a href="#-headline-evidence">Benchmarks</a> ·
+    <a href="https://github.com/feichai0017/NoKV/discussions">Discussions</a>
+  </p>
+
   <h3>Recognized In The AI-Native Storage Ecosystem</h3>
 
   <table>
@@ -55,44 +62,169 @@ SPDX-License-Identifier: Apache-2.0
 ## What Is NoKV?
 
 NoKV is a Rust filesystem for AI training and agent workspaces. It keeps
-filesystem metadata in [Holt](https://crates.io/crates/holt) and stores file
-bodies in S3-compatible object storage such as RustFS, MinIO, Ceph RGW, or AWS
+namespace metadata in its own path-native engine
+([Holt](https://crates.io/crates/holt)) and stores file bodies as immutable
+blocks in S3-compatible object storage such as RustFS, MinIO, Ceph RGW, or AWS
 S3.
-
-The core split is deliberate:
 
 ```text
 FUSE / SDK / CLI
-  -> NoKV metadata service
-  -> Holt-backed inode/dentry metadata
-  -> S3-compatible object storage for file bodies
+  -> NoKV metadata service     (self-contained; no separate metadata DB to run)
+  -> Holt inode/dentry metadata
+  -> S3-compatible object store for file bodies
 ```
 
-NoKV owns namespace truth, metadata transactions, body descriptors, snapshots,
-watches, and object-reference garbage collection. Object stores own byte
-durability and replication.
+NoKV owns namespace truth, metadata transactions, snapshots, watches, and
+object-reference GC. The object store owns byte durability and replication. The
+metadata engine is built in, so local deployments operate a filesystem rather
+than a filesystem plus a separate Redis, MySQL, or TiKV cluster.
 
-## Why This Exists
+## Why NoKV
 
-AI training and agent systems often need a normal file interface while their
-real data lives in object storage. The hard part is not only moving bytes. The
-hard part is metadata:
+AI training and agent systems want a normal file interface while their real data
+lives in object storage. The hard part is not just moving bytes; it is metadata:
 
-- datasets need fast directory scans and stable snapshot views;
-- checkpoints need atomic publish and overwrite semantics;
-- artifact stores need body references, digest metadata, and cleanup of failed
-  staged uploads;
-- agent workspaces need scoped namespace views and typed change events;
-- training nodes need FUSE compatibility, but SDK paths should avoid kernel
-  overhead when possible.
+- **datasets** want fast directory scans and stable snapshot views;
+- **checkpoints** want atomic publish, where readers see a complete checkpoint
+  or the previous one, never a half-written one;
+- **artifacts** want body references, digests, and cleanup of failed staged
+  uploads;
+- **agent workspaces** want scoped namespace views and typed change events;
+- **immutable, versioned data** lets node-local caches avoid invalidating object
+  bytes after publish.
 
-NoKV turns those needs into a filesystem-shaped metadata service instead of
-forcing each application to stitch together SQL rows, object-store prefixes,
-ad hoc locks, and polling loops.
+The primary write model is write-once publish, matching how datasets,
+checkpoints, and artifacts are commonly written.
 
-## Current Status
+## 📊 Headline Evidence
 
-This repository is now the Rust NoKV product line.
+Measured local engineering baselines, not official MLPerf results. Single-node
+service numbers are release builds through the NoKV server and Holt metadata
+path. FUSE comparison numbers depend on kernel/FUSE, object backend, cache
+settings, and workload shape.
+
+| Workload | Result |
+| --- | --- |
+| Metadata create (`mdtest`, 65k records) | **~127K ops/s** (single-writer, batched service path) |
+| Same, one directory of 65k entries | Same order of throughput; path-native ART does not degrade on large directories |
+| Checkpoint publish (1 MiB blocks, concurrency 16) | **~1.1 GiB/s** in the service/object benchmark |
+| Dataset read (16 KiB samples, concurrency 16) | **~3,000 samples/s** in the service/object benchmark |
+| Resident metadata | **~1.5 KiB / file** in the measured shape |
+| Atomic checkpoint | Object bytes land first; metadata publishes a new generation atomically |
+
+Same-machine FUSE-vs-FUSE smoke against one RustFS endpoint currently shows
+NoKV behind JuiceFS on the end-to-end mounted path. That gap is expected to come
+from FUSE/RPC fixed costs and data-plane cache/writeback maturity, not from the
+Holt metadata engine alone.
+
+## NoKV vs JuiceFS
+
+NoKV follows the same high-level separation used by systems like JuiceFS and
+3FS: metadata is separate from file body storage. The difference is that NoKV
+ships its metadata engine as part of the filesystem and optimizes for
+AI-training publish/read patterns first.
+
+| | JuiceFS | NoKV |
+| --- | --- | --- |
+| Metadata engine | External DB such as Redis, MySQL, or TiKV | Built-in, path-native Holt engine |
+| Atomic checkpoint publish | POSIX rename/write semantics over the metadata engine | First-class publish-by-generation primitive |
+| Block model | Slice/block model supporting broad POSIX behavior | Immutable object blocks plus new-generation manifests |
+| AI-native primitives | Layered on top of the filesystem | Snapshots, typed watch, body descriptors, and GC floors are core metadata concepts |
+| POSIX completeness | Mature production filesystem | P0 subset implemented; still hardening compatibility gates |
+| Maturity | Production, large deployments | Young Rust implementation; local mode is usable, production HA is still in progress |
+
+NoKV is currently a usable object-backed filesystem with a local Holt metadata
+mode and an OpenRaft-backed metadata server path. It is not yet a JuiceFS/3FS
+class distributed filesystem.
+
+## 🏗️ Architecture
+
+```text
+crates/
+  nokv-types     storage-neutral namespace model types
+  nokv-protocol  framed metadata RPC DTOs and binary codec
+  nokv-meta      schema, MetadataCommand, Holt store, service core
+  nokv-object    S3-compatible object body storage helpers
+  nokv-client    Rust SDK over metadata service and object backend
+  nokv-fuse      low-level FUSE frontend
+  nokv-server    long-running metad process and framed RPC service
+  nokv-cluster   OpenRaft metadata replication boundary
+  nokv           CLI binary
+
+bench/             system workload benchmark harness
+docs/              product, architecture, layout, RustFS, and benchmark docs
+examples/          PyTorch and Kubernetes examples
+```
+
+For artifact and checkpoint publish, object bytes are uploaded first, then the
+metadata commit publishes the dentry, inode projection, and body manifest
+atomically. A crash between the two leaves orphan objects for GC, never a
+corrupt namespace. See [Architecture](https://nokv.io/architecture).
+
+## 🚦 Quick Start
+
+Build and test:
+
+```bash
+cargo test --workspace
+cargo build --release -p nokv --bin nokv
+```
+
+Start a local RustFS-compatible S3 endpoint:
+
+```bash
+rustfs server --address 127.0.0.1:9000 ./rustfs-data
+```
+
+By default NoKV expects bucket `nokv` at `http://127.0.0.1:9000` with
+development credentials `rustfsadmin` / `rustfsadmin`. See
+[docs/rustfs.md](docs/rustfs.md) for setup commands.
+
+Initialize local metadata and start a metadata server:
+
+```bash
+cargo run --release -p nokv --bin nokv -- init
+cargo run --release -p nokv --bin nokv -- serve
+```
+
+Publish and read an artifact:
+
+```bash
+cargo run --release -p nokv --bin nokv -- \
+  put-artifact /runs/1/checkpoint.bin ./checkpoint.bin
+
+cargo run --release -p nokv --bin nokv -- \
+  cat /runs/1/checkpoint.bin > restored.bin
+```
+
+Mount with FUSE:
+
+```bash
+mkdir -p /tmp/nokv-mount
+
+cargo run --release -p nokv --bin nokv -- \
+  mount /tmp/nokv-mount
+```
+
+On macOS this requires macFUSE. NoKV passes `noappledouble` and `noapplexattr`
+mount options to avoid Finder/resource-fork AppleDouble sidecars; user xattr
+roundtrip is covered by the FUSE smoke test.
+
+## 🧩 Crates
+
+| Crate | Role |
+| --- | --- |
+| [`nokv-types`](https://crates.io/crates/nokv-types) | Storage-neutral namespace model |
+| [`nokv-protocol`](https://crates.io/crates/nokv-protocol) | Framed metadata RPC DTOs and binary codec |
+| [`nokv-object`](https://crates.io/crates/nokv-object) | S3-compatible object body storage |
+| [`nokv-meta`](https://crates.io/crates/nokv-meta) | Schema, `MetadataCommand`, Holt store, service core |
+| [`nokv-client`](https://crates.io/crates/nokv-client) | Rust SDK over the metadata service |
+| [`nokv-fuse`](https://crates.io/crates/nokv-fuse) | Low-level FUSE frontend |
+| [`nokv-server`](https://crates.io/crates/nokv-server) | Long-running metad process and framed RPC |
+| [`nokv-cluster`](https://crates.io/crates/nokv-cluster) | OpenRaft metadata replication boundary |
+| [`nokv`](https://crates.io/crates/nokv) | `nokv` CLI binary |
+
+## ✅ Current Status
 
 Implemented today:
 
@@ -123,81 +255,6 @@ Not implemented yet:
 - full POSIX hardening such as ACL enforcement, broad external compatibility
   gate coverage, and mature multi-client cache coherence.
 
-So NoKV is currently a usable object-backed filesystem with an OpenRaft-backed
-metadata server path, not yet a JuiceFS/3FS-class distributed filesystem.
-
-## Repository Layout
-
-```text
-crates/
-  nokv-types     storage-neutral namespace model types
-  nokv-protocol  framed metadata RPC DTOs and binary codec
-  nokv-meta      schema, MetadataCommand, Holt store, service core
-  nokv-object    S3-compatible object body storage helpers
-  nokv-client    Rust SDK over metadata service and object backend
-  nokv-fuse      low-level FUSE frontend
-  nokv-server    long-running metad process and framed RPC service
-  nokv           CLI binary
-
-bench/             system workload benchmark harness
-docs/              product, architecture, layout, RustFS, and benchmark docs
-examples/          PyTorch and Kubernetes examples
-```
-
-## Quick Start
-
-Build and test:
-
-```bash
-cargo test --workspace
-```
-
-Build the CLI:
-
-```bash
-cargo build --release -p nokv --bin nokv
-```
-
-Initialize local metadata:
-
-```bash
-cargo run --release -p nokv --bin nokv -- init
-```
-
-Start a metadata server:
-
-```bash
-cargo run --release -p nokv --bin nokv -- serve
-```
-
-By default NoKV expects a local RustFS-compatible S3 endpoint at
-`http://127.0.0.1:9000`, bucket `nokv`, with development credentials
-`rustfsadmin` / `rustfsadmin`. See [docs/rustfs.md](docs/rustfs.md) for the
-RustFS setup commands.
-
-Publish and read an artifact:
-
-```bash
-cargo run --release -p nokv --bin nokv -- \
-  put-artifact /runs/1/checkpoint.bin ./checkpoint.bin
-
-cargo run --release -p nokv --bin nokv -- \
-  cat /runs/1/checkpoint.bin > restored.bin
-```
-
-Mount with FUSE:
-
-```bash
-mkdir -p /tmp/nokv-mount
-
-cargo run --release -p nokv --bin nokv -- \
-  mount /tmp/nokv-mount
-```
-
-On macOS this requires macFUSE. NoKV passes `noappledouble` and `noapplexattr`
-mount options to avoid Finder/resource-fork AppleDouble sidecars; user xattr
-roundtrip is covered by the FUSE smoke test.
-
 ## Benchmarks
 
 The root `bench/` crate contains system workload harnesses:
@@ -208,8 +265,6 @@ cargo run --release -p nokv-bench --bin nokv-bench -- \
   --workload all
 ```
 
-Covered workload shapes include:
-
 - `mdtest-easy` and `mdtest-hard` metadata smoke workloads;
 - `metadata-negative-lookup`, `artifact-index-lookup`, and
   `metadata-concurrent-read` Holt metadata read-path workloads;
@@ -217,8 +272,8 @@ Covered workload shapes include:
 - `training-read` dataset-shaped object reads;
 - `mlperf-dlio` generated MLPerf Storage/DLIO-style training and checkpoint
   shape;
-- `metadata-ha-smoke` and `metadata-ha-fault-smoke` OpenRaft metadata HA
-  smoke workloads.
+- `metadata-ha-smoke` and `metadata-ha-fault-smoke` OpenRaft metadata HA smoke
+  workloads.
 
 For the fast AI-training product gate, run:
 
@@ -231,6 +286,7 @@ DLIO-style object reads/writes, OpenRaft HA, and OpenRaft fault catch-up. Most
 benchmark workloads are still single-node service runs; HA workloads report
 OpenRaft state metrics separately. Training-cluster claims need separate runs
 that report replication, cache, object-store, and durability settings.
+
 Run `scripts/run-ai-training-smoke.sh fuse-smoke` when the local machine has a
 working FUSE installation and you want the mounted POSIX smoke in the same
 workflow. Run `scripts/run-ai-training-smoke.sh metadata-raft-smoke` when you
@@ -243,23 +299,7 @@ verifies that a leader-published artifact is readable through follower voters:
 scripts/run-metadata-raft-smoke.sh
 ```
 
-## Design Notes
-
-NoKV follows the same high-level separation used by systems like JuiceFS and
-3FS: metadata is separate from file body storage. The current implementation is
-still narrower:
-
-- like JuiceFS, NoKV uses inode/dentry semantics and stores file bodies outside
-  metadata;
-- like 3FS, NoKV is aimed at AI training workloads and a metadata/data split;
-- unlike those mature systems, NoKV does not yet provide production-grade
-  multi-node metadata HA, production cache coherence, or full POSIX hardening.
-
-The next major engineering steps are JuiceFS-style data-plane/cache
-optimization, POSIX compatibility gates, and production OpenRaft metadata HA
-with Holt as the shard-local state machine.
-
-## Documentation
+## 📚 Documentation
 
 - [Architecture](docs/architecture.md)
 - [Product Design](docs/product-design.md)
@@ -270,6 +310,6 @@ with Holt as the shard-local state machine.
 - [RustFS Backend](docs/rustfs.md)
 - [Benchmarks](docs/benchmarks.md)
 
-## License
+## 📄 License
 
 Apache-2.0. See [LICENSE](LICENSE).

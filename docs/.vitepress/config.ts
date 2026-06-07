@@ -16,7 +16,7 @@ export default withMermaid(
       'Rust filesystem for AI training and agent workspaces, backed by Holt metadata and S3-compatible object storage.',
     cleanUrls: true,
     lastUpdated: true,
-    appearance: 'dark',
+    appearance: true,
 
     // Source-code links in docs are absolute GitHub URLs. Keep this as a
     // narrow safety net for any future fragment-only links.
