@@ -1831,6 +1831,7 @@ mod tests {
 
     #[test]
     fn three_node_openraft_group_replicates_client_write() {
+        let _guard = openraft_cluster_test_lock();
         let cluster = TestMetadataRaftCluster::start(&[1, 2, 3]);
         let leader = cluster.wait_for_leader(None);
 
@@ -1844,6 +1845,7 @@ mod tests {
 
     #[test]
     fn three_node_openraft_group_elects_new_leader_after_leader_shutdown() {
+        let _guard = openraft_cluster_test_lock();
         let cluster = TestMetadataRaftCluster::start(&[1, 2, 3]);
         let leader = cluster.wait_for_leader(None);
 
@@ -1861,6 +1863,7 @@ mod tests {
 
     #[test]
     fn openraft_membership_adds_promotes_and_removes_nodes() {
+        let _guard = openraft_cluster_test_lock();
         let mut cluster = TestMetadataRaftCluster::start_with_voters(&[1, 2, 3, 4], &[1, 2, 3]);
         let leader = cluster.wait_for_leader(None);
         cluster.wait_for_membership_counts(3, 0);
@@ -1974,6 +1977,11 @@ mod tests {
         ids.iter()
             .map(|id| NodeId::new(*id).unwrap())
             .collect::<BTreeSet<_>>()
+    }
+
+    fn openraft_cluster_test_lock() -> std::sync::MutexGuard<'static, ()> {
+        static LOCK: Mutex<()> = Mutex::new(());
+        LOCK.lock().unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
     struct TestMetadataRaftCluster {
@@ -2111,28 +2119,54 @@ mod tests {
         fn wait_for_key_on_nodes(&self, key: &[u8], version: u64, ids: &[u64]) {
             let deadline = std::time::Instant::now() + Duration::from_secs(10);
             loop {
-                let all_visible = ids.iter().all(|id| {
-                    self.nodes
-                        .get(id)
-                        .unwrap()
-                        .get(
-                            RecordFamily::Dentry,
-                            key,
-                            Version::new(version).unwrap(),
-                            ReadPurpose::UserStrong,
-                        )
-                        .unwrap()
-                        .is_some()
-                });
+                let all_visible = ids
+                    .iter()
+                    .all(|id| self.key_visible_on_node(*id, key, version).unwrap_or(false));
                 if all_visible {
                     return;
                 }
                 assert!(
                     std::time::Instant::now() < deadline,
-                    "metadata raft key did not replicate to requested nodes"
+                    "metadata raft key did not replicate to requested nodes: {}",
+                    self.key_states(key, version, ids)
                 );
                 thread::sleep(Duration::from_millis(20));
             }
+        }
+
+        fn key_visible_on_node(
+            &self,
+            id: u64,
+            key: &[u8],
+            version: u64,
+        ) -> Result<bool, MetadataError> {
+            self.nodes
+                .get(&id)
+                .unwrap()
+                .get(
+                    RecordFamily::Dentry,
+                    key,
+                    Version::new(version).unwrap(),
+                    ReadPurpose::UserStrong,
+                )
+                .map(|value| value.is_some())
+        }
+
+        fn key_states(&self, key: &[u8], version: u64, ids: &[u64]) -> String {
+            ids.iter()
+                .map(|id| {
+                    let visible = match self.key_visible_on_node(*id, key, version) {
+                        Ok(visible) => visible.to_string(),
+                        Err(err) => format!("error={err}"),
+                    };
+                    let stats = self.nodes.get(id).unwrap().stats_handle().stats();
+                    format!(
+                        "node={id} leader={:?} state={} applied={:?} visible={visible}",
+                        stats.current_leader, stats.state, stats.last_applied_index
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
         }
 
         fn shutdown_all(&self, excluded: Option<u64>) {
