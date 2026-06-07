@@ -5,7 +5,7 @@ use std::time::Duration;
 use nokv_cluster::{FileMetadataRaftLogSync, NodeId};
 use nokv_meta::{HistoryGcOptions, ObjectGcOptions};
 use nokv_object::{MemoryObjectStore, ObjectStoreConfig, S3ObjectStoreOptions};
-use nokv_server::ServerOptions;
+use nokv_server::{MetadataMode, ServerOptions};
 use nokv_types::MountId;
 
 use crate::{ArtifactRepository, ClientError, NoKvFsClient};
@@ -27,6 +27,7 @@ fn spawn_test_server() -> SocketAddr {
         bind,
         mount: MountId::new(1).unwrap(),
         meta_path: dir.path().join("meta"),
+        metadata_mode: MetadataMode::Local,
         metadata_raft_node: NodeId::new(1).unwrap(),
         metadata_raft_voters: Vec::new(),
         metadata_raft_learners: Vec::new(),

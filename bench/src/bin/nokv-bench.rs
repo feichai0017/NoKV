@@ -25,7 +25,7 @@ use nokv_meta::{
     ObjectTransferStats, RenameReplaceResult,
 };
 use nokv_object::{ObjectStoreConfig, S3ObjectStore, S3ObjectStoreOptions};
-use nokv_server::{MetadataRaftPeerOptions, Server, ServerOptions};
+use nokv_server::{MetadataMode, MetadataRaftPeerOptions, Server, ServerOptions};
 use nokv_types::{MountId, PathMetadata};
 
 const DEFAULT_MODE_DIR: u32 = 0o755;
@@ -2338,7 +2338,7 @@ fn metadata_only_caveat(config: &Config) -> String {
     format!(
         "metadata-only on Holt metadata service, object_backend={}, {}",
         object_backend_name(config.object_backend),
-        metadata_raft_caveat(config)
+        local_metadata_caveat()
     )
 }
 
@@ -2354,7 +2354,7 @@ fn object_caveat(config: &Config, path: &str) -> String {
                 "{path}, Holt metadata service, RustFS S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}, {}",
                 config.object_concurrency,
                 config.read_repeats,
-                metadata_raft_caveat(config)
+                local_metadata_caveat()
             )
         }
         ObjectBackendKind::S3 => {
@@ -2362,17 +2362,14 @@ fn object_caveat(config: &Config, path: &str) -> String {
                 "{path}, Holt metadata service, generic S3-compatible backend over configured endpoint, object_concurrency={}, read_repeats={}, {cache}, {}",
                 config.object_concurrency,
                 config.read_repeats,
-                metadata_raft_caveat(config)
+                local_metadata_caveat()
             )
         }
     }
 }
 
-fn metadata_raft_caveat(config: &Config) -> String {
-    format!(
-        "OpenRaft metadata group sync={}",
-        metadata_raft_log_sync_name(config.metadata_raft_log_sync)
-    )
+fn local_metadata_caveat() -> &'static str {
+    "metadata_mode=local direct Holt"
 }
 
 fn client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchClient>, BenchError> {
@@ -2389,6 +2386,7 @@ fn service_client_for(config: &Config, workload: &str) -> Result<Box<dyn BenchCl
         bind,
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: meta,
+        metadata_mode: MetadataMode::Local,
         metadata_raft_node: nokv_cluster::NodeId::new(1)
             .expect("benchmark metadata raft node is non-zero"),
         metadata_raft_voters: Vec::new(),
@@ -2439,6 +2437,7 @@ fn server_options_for_node(
             })?,
         mount: MountId::new(1).expect("mount id is non-zero"),
         meta_path: node_root.join("meta"),
+        metadata_mode: MetadataMode::Raft,
         metadata_raft_node: node,
         metadata_raft_voters: cluster.voters.clone(),
         metadata_raft_learners: cluster.learners.clone(),

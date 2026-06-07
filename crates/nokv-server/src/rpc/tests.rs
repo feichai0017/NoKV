@@ -1,5 +1,6 @@
 use super::*;
-use crate::server::tests::test_server;
+use crate::server::tests::{test_options, test_server};
+use crate::MetadataMode;
 use nokv_cluster::MetadataRaftRpcClient;
 use nokv_protocol::{
     decode_envelope, encode_request, WireBlockDescriptor, WireBodyDescriptor, WireChunkManifest,
@@ -12,6 +13,14 @@ use std::net::TcpListener;
 use std::net::TcpStream;
 use std::sync::Arc;
 use std::thread;
+use tempfile::TempDir;
+
+fn raft_test_server() -> (TempDir, Server) {
+    let dir = tempfile::tempdir().unwrap();
+    let mut options = test_options(dir.path());
+    options.metadata_mode = MetadataMode::Raft;
+    (dir, Server::open(options).unwrap())
+}
 
 fn request_envelope(server: &Server, request: MetadataRpcRequest) -> MetadataRpcEnvelope {
     let body = encode_request(&request).unwrap();
@@ -285,7 +294,7 @@ fn rpc_supports_remote_fuse_advisory_locks() {
 
 #[test]
 fn rpc_accepts_metadata_raft_vote_on_store() {
-    let server = test_server();
+    let (_dir, server) = raft_test_server();
     let envelope = request_envelope(
         &server,
         MetadataRpcRequest::MetadataRaftVote {
@@ -1067,7 +1076,8 @@ fn framed_rpc_coalesces_pipelined_create_frames_into_metadata_batch() {
 
 #[test]
 fn metadata_raft_framed_rpc_client_sends_vote() {
-    let server = Arc::new(test_server());
+    let (_dir, server) = raft_test_server();
+    let server = Arc::new(server);
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();
     let server_thread = {

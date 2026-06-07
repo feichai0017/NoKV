@@ -15,10 +15,15 @@ use nokv_types::RecordFamily;
 pub(crate) type OpenRaftLoggedMetadataStore = OpenRaftMetadataStore<HoltMetadataStore>;
 
 pub(crate) enum ServerMetadataStore {
+    Direct(Box<HoltMetadataStore>),
     OpenRaft(Box<OpenRaftLoggedMetadataStore>),
 }
 
 impl ServerMetadataStore {
+    pub(crate) fn direct(store: HoltMetadataStore) -> Self {
+        Self::Direct(Box::new(store))
+    }
+
     pub(crate) fn openraft(store: OpenRaftLoggedMetadataStore) -> Self {
         Self::OpenRaft(Box::new(store))
     }
@@ -28,6 +33,7 @@ impl ServerMetadataStore {
         request: WireMetadataRaftVoteRequest,
     ) -> Result<WireMetadataRaftVoteResponse, MetadataError> {
         match self {
+            Self::Direct(_) => Err(metadata_raft_disabled_error()),
             Self::OpenRaft(store) => store.handle_vote_rpc(request),
         }
     }
@@ -37,6 +43,7 @@ impl ServerMetadataStore {
         request: WireMetadataRaftAppendEntriesRequest,
     ) -> Result<WireMetadataRaftAppendEntriesResponse, MetadataError> {
         match self {
+            Self::Direct(_) => Err(metadata_raft_disabled_error()),
             Self::OpenRaft(store) => store.handle_append_entries_rpc(request),
         }
     }
@@ -46,6 +53,7 @@ impl ServerMetadataStore {
         request: WireMetadataRaftInstallSnapshotRequest,
     ) -> Result<WireMetadataRaftInstallSnapshotResponse, MetadataError> {
         match self {
+            Self::Direct(_) => Err(metadata_raft_disabled_error()),
             Self::OpenRaft(store) => store.handle_install_snapshot_rpc(request),
         }
     }
@@ -57,6 +65,7 @@ impl ServerMetadataStore {
         blocking: bool,
     ) -> Result<LogPosition, MetadataError> {
         match self {
+            Self::Direct(_) => Err(metadata_raft_disabled_error()),
             Self::OpenRaft(store) => store.add_learner(node, address, blocking),
         }
     }
@@ -64,18 +73,21 @@ impl ServerMetadataStore {
     #[cfg(test)]
     pub(crate) fn shutdown_openraft(&self) -> Result<(), MetadataError> {
         match self {
+            Self::Direct(_) => Err(metadata_raft_disabled_error()),
             Self::OpenRaft(store) => store.shutdown(),
         }
     }
 
-    pub(crate) fn trigger_openraft_snapshot(&self) -> Result<(), MetadataError> {
+    pub(crate) fn checkpoint(&self) -> Result<(), MetadataError> {
         match self {
+            Self::Direct(store) => store.checkpoint(),
             Self::OpenRaft(store) => store.trigger_snapshot(),
         }
     }
 
     pub(crate) fn export_openraft_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError> {
         match self {
+            Self::Direct(_) => Err(metadata_raft_disabled_error()),
             Self::OpenRaft(store) => store.export_checkpoint_image(),
         }
     }
@@ -90,12 +102,14 @@ impl MetadataStore for ServerMetadataStore {
         purpose: ReadPurpose,
     ) -> Result<Option<ReadItem>, MetadataError> {
         match self {
+            Self::Direct(store) => store.get_versioned(family, key, version, purpose),
             Self::OpenRaft(store) => store.get_versioned(family, key, version, purpose),
         }
     }
 
     fn scan(&self, request: ScanRequest) -> Result<Vec<ScanItem>, MetadataError> {
         match self {
+            Self::Direct(store) => store.scan(request),
             Self::OpenRaft(store) => store.scan(request),
         }
     }
@@ -105,18 +119,21 @@ impl MetadataStore for ServerMetadataStore {
         request: DelimitedScanRequest,
     ) -> Result<Vec<DelimitedScanItem>, MetadataError> {
         match self {
+            Self::Direct(store) => store.scan_delimited(request),
             Self::OpenRaft(store) => store.scan_delimited(request),
         }
     }
 
     fn scan_keys(&self, request: KeyScanRequest) -> Result<Vec<Vec<u8>>, MetadataError> {
         match self {
+            Self::Direct(store) => store.scan_keys(request),
             Self::OpenRaft(store) => store.scan_keys(request),
         }
     }
 
     fn commit_metadata(&self, command: MetadataCommand) -> Result<CommitResult, MetadataError> {
         match self {
+            Self::Direct(store) => store.commit_metadata(command),
             Self::OpenRaft(store) => store.commit_metadata(command),
         }
     }
@@ -126,6 +143,7 @@ impl MetadataStore for ServerMetadataStore {
         commands: &[MetadataCommand],
     ) -> Vec<Result<CommitResult, MetadataError>> {
         match self {
+            Self::Direct(store) => store.commit_independent_batch(commands),
             Self::OpenRaft(store) => store.commit_independent_batch(commands),
         }
     }
@@ -135,6 +153,7 @@ impl MetadataStore for ServerMetadataStore {
         request_id: &[u8],
     ) -> Result<Option<CommitResult>, MetadataError> {
         match self {
+            Self::Direct(store) => store.committed_request_result(request_id),
             Self::OpenRaft(store) => store.committed_request_result(request_id),
         }
     }
@@ -144,6 +163,7 @@ impl MetadataStore for ServerMetadataStore {
         request: HistoryPruneRequest,
     ) -> Result<HistoryPruneOutcome, MetadataError> {
         match self {
+            Self::Direct(store) => store.prune_history(request),
             Self::OpenRaft(store) => store.prune_history(request),
         }
     }
@@ -152,7 +172,12 @@ impl MetadataStore for ServerMetadataStore {
 impl MetadataStoreStatsProvider for ServerMetadataStore {
     fn metadata_store_stats(&self) -> MetadataStoreStats {
         match self {
+            Self::Direct(store) => store.metadata_store_stats(),
             Self::OpenRaft(store) => store.metadata_store_stats(),
         }
     }
+}
+
+fn metadata_raft_disabled_error() -> MetadataError {
+    MetadataError::Backend("metadata raft is disabled in local metadata mode".to_owned())
 }

@@ -792,7 +792,7 @@ where
             };
             let mut queue_len = state.queue.len();
             let mut deadline = Instant::now() + self.coalescer.options.max_delay;
-            while !coalescer_should_flush(&state, self.coalescer.options) {
+            while queue_len > 1 && !coalescer_should_flush(&state, self.coalescer.options) {
                 let now = Instant::now();
                 if now >= deadline {
                     break;

@@ -9,7 +9,7 @@ use std::time::Duration;
 
 use nokv_cluster::{
     FileMetadataRaftLogOptions, LogIndex, LogPosition, LogTerm, MetadataRaftError,
-    MetadataRaftRpcNetworkFactory, NodeId, OpenRaftMetadataStats, OpenRaftMetadataStatsHandle,
+    MetadataRaftRpcNetworkFactory, NodeId, OpenRaftMetadataStatsHandle,
 };
 use nokv_meta::holtstore::HoltMetadataStore;
 use nokv_meta::{
@@ -19,7 +19,7 @@ use nokv_object::{ObjectError, ObjectKey, ObjectStore, S3ObjectStore};
 
 use crate::http;
 use crate::metadata::{OpenRaftLoggedMetadataStore, ServerMetadataStore};
-use crate::options::ServerOptions;
+use crate::options::{MetadataMode, ServerOptions};
 use crate::rpc;
 
 const DEFAULT_ROOT_MODE: u32 = 0o755;
@@ -28,7 +28,8 @@ const SERVER_CONNECTION_QUEUE: usize = 1024;
 
 pub struct Server {
     service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
-    metadata_raft: OpenRaftMetadataStatsHandle,
+    metadata_mode: MetadataMode,
+    metadata_raft: Option<OpenRaftMetadataStatsHandle>,
     metadata_checkpoint_archive_prefix: Option<String>,
     checkpoint_archive_objects: S3ObjectStore,
     object_gc: ObjectGcWorker,
@@ -64,51 +65,65 @@ impl Server {
         objects: S3ObjectStore,
     ) -> Result<Self, ServerError> {
         let metadata_state_path = default_metadata_state_path(&options.meta_path);
-        let metadata = HoltMetadataStore::open_raft_materialized(&metadata_state_path)
-            .map_err(MetadError::from)?;
-        let voters = metadata_raft_voters_for_options(&options)?;
-        let learners = metadata_raft_learners_for_options(&options, &voters)?;
-        validate_metadata_raft_local_node(&options, &voters, &learners)?;
-        let voter_count = voters.len();
-        let log_path = default_metadata_raft_log_path(&options.meta_path);
-        let log_options = FileMetadataRaftLogOptions {
-            sync: options.metadata_raft_log_sync,
-        };
-        let network =
-            MetadataRaftRpcNetworkFactory::new(rpc::MetadataRaftFramedRpcClient::default());
-        let bootstrap_node = metadata_raft_bootstrap_node(&voters)?;
-        let (openraft, _initialized_membership) = if options.metadata_raft_node == bootstrap_node {
-            OpenRaftLoggedMetadataStore::new_voter_group_with_file_log_and_network(
-                metadata,
-                options.metadata_raft_node,
-                log_path,
-                log_options,
-                network,
-                &voters,
-            )
-        } else {
-            OpenRaftLoggedMetadataStore::new_uninitialized_with_file_log_and_network(
-                metadata,
-                options.metadata_raft_node,
-                log_path,
-                log_options,
-                network,
-            )
-            .map(|store| (store, false))
-        }
-        .map_err(MetadError::from)?;
-        let metadata_raft = openraft.stats_handle();
-        let bootstrap_root = if voter_count == 1 {
-            openraft
-                .wait_for_current_leader(options.metadata_raft_node, Duration::from_secs(3))
-                .map_err(MetadError::from)?;
-            true
-        } else {
-            false
+        let (metadata, metadata_raft, bootstrap_root) = match options.metadata_mode {
+            MetadataMode::Local => {
+                let store =
+                    HoltMetadataStore::open_file(&metadata_state_path).map_err(MetadError::from)?;
+                (ServerMetadataStore::direct(store), None, true)
+            }
+            MetadataMode::Raft => {
+                let store = HoltMetadataStore::open_raft_materialized(&metadata_state_path)
+                    .map_err(MetadError::from)?;
+                let voters = metadata_raft_voters_for_options(&options)?;
+                let learners = metadata_raft_learners_for_options(&options, &voters)?;
+                validate_metadata_raft_local_node(&options, &voters, &learners)?;
+                let voter_count = voters.len();
+                let log_path = default_metadata_raft_log_path(&options.meta_path);
+                let log_options = FileMetadataRaftLogOptions {
+                    sync: options.metadata_raft_log_sync,
+                };
+                let network =
+                    MetadataRaftRpcNetworkFactory::new(rpc::MetadataRaftFramedRpcClient::default());
+                let bootstrap_node = metadata_raft_bootstrap_node(&voters)?;
+                let (openraft, _initialized_membership) =
+                    if options.metadata_raft_node == bootstrap_node {
+                        OpenRaftLoggedMetadataStore::new_voter_group_with_file_log_and_network(
+                            store,
+                            options.metadata_raft_node,
+                            log_path,
+                            log_options,
+                            network,
+                            &voters,
+                        )
+                    } else {
+                        OpenRaftLoggedMetadataStore::new_uninitialized_with_file_log_and_network(
+                            store,
+                            options.metadata_raft_node,
+                            log_path,
+                            log_options,
+                            network,
+                        )
+                        .map(|store| (store, false))
+                    }
+                    .map_err(MetadError::from)?;
+                let metadata_raft = openraft.stats_handle();
+                let bootstrap_root = if voter_count == 1 {
+                    openraft
+                        .wait_for_current_leader(options.metadata_raft_node, Duration::from_secs(3))
+                        .map_err(MetadError::from)?;
+                    true
+                } else {
+                    false
+                };
+                (
+                    ServerMetadataStore::openraft(openraft),
+                    Some(metadata_raft),
+                    bootstrap_root,
+                )
+            }
         };
         let metadata_checkpoint_archive_prefix = options.metadata_checkpoint_archive_prefix.clone();
         let checkpoint_archive_objects = objects.clone();
-        let metadata = ServerMetadataStore::openraft(openraft);
         let service = Arc::new(NoKvFs::open_existing(options.mount, metadata, objects)?);
         if bootstrap_root {
             service.bootstrap_root(DEFAULT_ROOT_MODE, options.uid, options.gid)?;
@@ -121,6 +136,7 @@ impl Server {
         );
         Ok(Self {
             service,
+            metadata_mode: options.metadata_mode,
             metadata_raft,
             metadata_checkpoint_archive_prefix,
             checkpoint_archive_objects,
@@ -161,7 +177,7 @@ impl Server {
     }
 
     pub(crate) fn metadata_raft_applied_position(&self) -> Option<LogPosition> {
-        let stats = self.metadata_raft.stats();
+        let stats = self.metadata_raft.as_ref()?.stats();
         let term = LogTerm::new(stats.current_term.max(1)).ok()?;
         let index = LogIndex::new(stats.last_applied_index?).ok()?;
         Some(LogPosition { term, index })
@@ -171,6 +187,9 @@ impl Server {
         &self,
         required: LogPosition,
     ) -> Result<(), ServerError> {
+        if self.metadata_raft.is_none() {
+            return Ok(());
+        }
         let applied = self.metadata_raft_applied_position();
         if applied
             .map(|position| position.index >= required.index)
@@ -212,7 +231,8 @@ impl Server {
         let object_gc = self.object_gc.state();
         let history_gc = self.history_gc.state();
         format!(
-            "{{\"ready\":true,\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"read_plan_cache_hits\":{},\"read_plan_cache_misses\":{},\"object_writeback_enqueued\":{},\"object_writeback_inline\":{},\"object_writeback_fallback\":{},\"object_writeback_completed\":{},\"object_writeback_failed\":{},\"object_writeback_staged_bytes\":{},\"object_writeback_uploaded_bytes\":{},\"object_writeback_queue_wait_ns\":{},\"object_writeback_queue_max_wait_ns\":{},\"object_writeback_upload_ns\":{},\"object_writeback_upload_max_ns\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_raft\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
+            "{{\"ready\":true,\"metadata_mode\":\"{}\",\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"read_plan_cache_hits\":{},\"read_plan_cache_misses\":{},\"object_writeback_enqueued\":{},\"object_writeback_inline\":{},\"object_writeback_fallback\":{},\"object_writeback_completed\":{},\"object_writeback_failed\":{},\"object_writeback_staged_bytes\":{},\"object_writeback_uploaded_bytes\":{},\"object_writeback_queue_wait_ns\":{},\"object_writeback_queue_max_wait_ns\":{},\"object_writeback_upload_ns\":{},\"object_writeback_upload_max_ns\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_raft\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
+            self.metadata_mode.as_str(),
             self.service.block_cache_enabled(),
             objects.object_puts,
             objects.object_put_bytes,
@@ -246,7 +266,7 @@ impl Server {
             objects.manifest_chunks,
             objects.manifest_blocks,
             metadata_store_json(&metadata),
-            metadata_raft_json(self.metadata_raft.stats()),
+            metadata_raft_json(self.metadata_mode, self.metadata_raft.as_ref()),
             metadata_service_json(&metadata_service),
             object_gc_json(&object_gc),
             history_gc_json(&history_gc),
@@ -274,9 +294,18 @@ impl Server {
     pub fn run_manual_checkpoint(&self) -> Result<String, ServerError> {
         self.service
             .metadata_store()
-            .trigger_openraft_snapshot()
+            .checkpoint()
             .map_err(|err| ServerError::Metadata(MetadError::from(err)))?;
-        let stats = self.metadata_raft.stats();
+        let stats = self.metadata_raft.as_ref().map(|handle| handle.stats());
+        if stats.is_none() {
+            return Ok(format!(
+                r#"{{"metadata_mode":"{}","metadata_raft":{},"archive":{{"enabled":false,"key":null,"bytes":0}}}}
+"#,
+                self.metadata_mode.as_str(),
+                metadata_raft_json(self.metadata_mode, None),
+            ));
+        }
+        let stats = stats.expect("checked above");
         let archive = match &self.metadata_checkpoint_archive_prefix {
             Some(prefix) => {
                 let image = self
@@ -300,8 +329,9 @@ impl Server {
             None => "{\"enabled\":false,\"key\":null,\"bytes\":0}".to_owned(),
         };
         Ok(format!(
-            r#"{{"metadata_raft":{{"node_id":{},"snapshot_index":{},"last_applied_index":{}}},"archive":{}}}
+            r#"{{"metadata_mode":"{}","metadata_raft":{{"node_id":{},"snapshot_index":{},"last_applied_index":{}}},"archive":{}}}
 "#,
+            self.metadata_mode.as_str(),
             stats.node_id,
             optional_u64_json(stats.snapshot_index),
             optional_u64_json(stats.last_applied_index),
@@ -459,9 +489,16 @@ fn metadata_checkpoint_archive_key(
     format!("{prefix}/node-{node_id}/snapshot-{snapshot_index}.nkfsc")
 }
 
-fn metadata_raft_json(stats: OpenRaftMetadataStats) -> String {
+fn metadata_raft_json(mode: MetadataMode, stats: Option<&OpenRaftMetadataStatsHandle>) -> String {
+    let Some(stats) = stats.map(OpenRaftMetadataStatsHandle::stats) else {
+        return format!(
+            "{{\"enabled\":false,\"mode\":\"{}\",\"node_id\":0,\"current_term\":0,\"state\":\"disabled\",\"current_leader\":null,\"last_log_index\":null,\"last_applied_index\":null,\"snapshot_index\":null,\"purged_index\":null,\"millis_since_quorum_ack\":null,\"voter_count\":0,\"learner_count\":0,\"proposal_batch_total\":0,\"proposal_command_total\":0,\"proposal_max_batch\":0,\"proposal_ns_total\":0,\"proposal_queue_wait_ns_total\":0,\"proposal_queue_max_wait_ns\":0}}",
+            mode.as_str()
+        );
+    };
     format!(
-        "{{\"enabled\":true,\"node_id\":{},\"current_term\":{},\"state\":\"{}\",\"current_leader\":{},\"last_log_index\":{},\"last_applied_index\":{},\"snapshot_index\":{},\"purged_index\":{},\"millis_since_quorum_ack\":{},\"voter_count\":{},\"learner_count\":{},\"proposal_batch_total\":{},\"proposal_command_total\":{},\"proposal_max_batch\":{},\"proposal_ns_total\":{},\"proposal_queue_wait_ns_total\":{},\"proposal_queue_max_wait_ns\":{}}}",
+        "{{\"enabled\":true,\"mode\":\"{}\",\"node_id\":{},\"current_term\":{},\"state\":\"{}\",\"current_leader\":{},\"last_log_index\":{},\"last_applied_index\":{},\"snapshot_index\":{},\"purged_index\":{},\"millis_since_quorum_ack\":{},\"voter_count\":{},\"learner_count\":{},\"proposal_batch_total\":{},\"proposal_command_total\":{},\"proposal_max_batch\":{},\"proposal_ns_total\":{},\"proposal_queue_wait_ns_total\":{},\"proposal_queue_max_wait_ns\":{}}}",
+        mode.as_str(),
         stats.node_id,
         stats.current_term,
         escape_json_string(&stats.state),
@@ -626,7 +663,7 @@ pub(crate) mod tests {
     use nokv_types::MountId;
     use tempfile::tempdir;
 
-    use crate::MetadataRaftPeerOptions;
+    use crate::{MetadataMode, MetadataRaftPeerOptions};
 
     fn node(raw: u64) -> NodeId {
         NodeId::new(raw).unwrap()
@@ -637,6 +674,7 @@ pub(crate) mod tests {
             bind: crate::options::DEFAULT_SERVER_BIND,
             mount: MountId::new(1).unwrap(),
             meta_path: root.join("meta"),
+            metadata_mode: MetadataMode::Local,
             metadata_raft_node: NodeId::new(1).unwrap(),
             metadata_raft_voters: Vec::new(),
             metadata_raft_learners: Vec::new(),
@@ -686,6 +724,7 @@ pub(crate) mod tests {
         let address = listener.local_addr().unwrap();
         let mut options = test_options(root);
         options.bind = address;
+        options.metadata_mode = MetadataMode::Raft;
         options.metadata_raft_node = node_id;
         options.metadata_raft_voters = voters.to_vec();
         options.metadata_raft_peers = peers;
@@ -748,9 +787,10 @@ pub(crate) mod tests {
     #[test]
     fn manual_gc_reports_empty_outcomes() {
         let server = test_server();
+        assert!(server.stats_json().contains("\"metadata_mode\":\"local\""));
         assert!(server
             .stats_json()
-            .contains("\"metadata_raft\":{\"enabled\":true,\"node_id\":1"));
+            .contains("\"metadata_raft\":{\"enabled\":false"));
         let body = server.run_manual_gc(128).unwrap();
         assert!(body.contains("\"object_gc\""));
         assert!(body.contains("\"history_gc\""));
@@ -904,7 +944,14 @@ pub(crate) mod tests {
                 if excluded == Some(*id) {
                     continue;
                 }
-                let Some(leader) = running.server.metadata_raft.stats().current_leader else {
+                let Some(leader) = running
+                    .server
+                    .metadata_raft
+                    .as_ref()
+                    .expect("OpenRaft test server has metadata raft")
+                    .stats()
+                    .current_leader
+                else {
                     continue;
                 };
                 if excluded != Some(leader) && servers.contains_key(&leader) {
@@ -960,7 +1007,12 @@ pub(crate) mod tests {
             .iter()
             .filter(|(id, _)| excluded != Some(**id))
             .map(|(id, running)| {
-                let stats = running.server.metadata_raft.stats();
+                let stats = running
+                    .server
+                    .metadata_raft
+                    .as_ref()
+                    .expect("OpenRaft test server has metadata raft")
+                    .stats();
                 running.server.refresh_metadata_view().unwrap();
                 let visible = running
                     .server

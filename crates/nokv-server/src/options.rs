@@ -14,6 +14,7 @@ pub struct ServerOptions {
     pub bind: SocketAddr,
     pub mount: MountId,
     pub meta_path: PathBuf,
+    pub metadata_mode: MetadataMode,
     pub metadata_raft_node: NodeId,
     pub metadata_raft_voters: Vec<NodeId>,
     pub metadata_raft_learners: Vec<NodeId>,
@@ -31,4 +32,19 @@ pub struct ServerOptions {
 pub struct MetadataRaftPeerOptions {
     pub node: NodeId,
     pub address: SocketAddr,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MetadataMode {
+    Local,
+    Raft,
+}
+
+impl MetadataMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Raft => "raft",
+        }
+    }
 }
