@@ -2054,6 +2054,7 @@ fn prepared_artifact_session_uploads_only_dirty_ranges_and_reuses_old_blocks() {
     let prepared = service
         .prepare_artifact_replace(InodeId::root(), name.clone())
         .unwrap();
+    let before_scan = service.metadata_store_stats();
     let replaced = service
         .publish_prepared_artifact_session(
             prepared,
@@ -2076,8 +2077,17 @@ fn prepared_artifact_session_uploads_only_dirty_ranges_and_reuses_old_blocks() {
         )
         .unwrap();
     let after = service.object_stats();
+    let after_scan = service.metadata_store_stats();
     assert_eq!(after.object_puts, before.object_puts + 1);
     assert_eq!(after.object_put_bytes, before.object_put_bytes + 3);
+    assert_eq!(
+        after_scan.scan_key_visited_total,
+        before_scan.scan_key_visited_total
+    );
+    assert_eq!(
+        after_scan.scan_key_returned_total,
+        before_scan.scan_key_returned_total
+    );
     assert_eq!(replaced.entry.attr.inode, published.attr.inode);
     assert_eq!(
         service.read_file(published.attr.inode, 0, 10).unwrap(),

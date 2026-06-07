@@ -1,5 +1,15 @@
 use super::*;
 
+struct PreparedArtifactPublish<'a> {
+    prepared: PreparedArtifact,
+    body: BodyDescriptor,
+    chunks: Vec<ChunkManifest>,
+    old_chunks: &'a [ChunkManifest],
+    mode: u32,
+    uid: u32,
+    gid: u32,
+}
+
 impl<M, O> NoKvFs<M, O>
 where
     M: MetadataStore,
@@ -11,6 +21,7 @@ where
         let StagedArtifactBody {
             body,
             chunks,
+            old_chunks: _,
             staged,
         } = self.stage_artifact_body(&request, inode, version)?;
         let now_ms = current_time_ms();
@@ -56,6 +67,7 @@ where
         let StagedArtifactBody {
             body,
             chunks,
+            old_chunks: _,
             staged,
         } = self.stage_artifact_body(&request, existing.attr.inode, version)?;
         let now_ms = current_time_ms();
@@ -78,6 +90,7 @@ where
             kind: CommandKind::ReplaceArtifact,
             projection: &projection,
             chunks: &chunks,
+            old_chunks: &[],
             dentry_version,
             old_generation,
             version,
@@ -185,6 +198,30 @@ where
         uid: u32,
         gid: u32,
     ) -> Result<RenameReplaceResult, MetadError> {
+        self.publish_prepared_artifact_impl(PreparedArtifactPublish {
+            prepared,
+            body,
+            chunks,
+            old_chunks: &[],
+            mode,
+            uid,
+            gid,
+        })
+    }
+
+    fn publish_prepared_artifact_impl(
+        &self,
+        request: PreparedArtifactPublish<'_>,
+    ) -> Result<RenameReplaceResult, MetadError> {
+        let PreparedArtifactPublish {
+            prepared,
+            body,
+            chunks,
+            old_chunks,
+            mode,
+            uid,
+            gid,
+        } = request;
         validate_prepared_artifact(&prepared, &body, &chunks)?;
         let version = Version::new(prepared.generation)?;
         let mut attr = InodeAttr {
@@ -227,6 +264,7 @@ where
                 kind: CommandKind::ReplaceArtifact,
                 projection: &projection,
                 chunks: &chunks,
+                old_chunks,
                 dentry_version: expected_dentry_version,
                 old_generation: prepared.old_generation,
                 version,
@@ -284,16 +322,18 @@ where
         let StagedArtifactBody {
             body,
             chunks,
+            old_chunks,
             staged,
         } = self.stage_artifact_session(&request, &prepared, version)?;
-        self.publish_prepared_artifact(
+        self.publish_prepared_artifact_impl(PreparedArtifactPublish {
             prepared,
             body,
             chunks,
-            request.mode,
-            request.uid,
-            request.gid,
-        )
+            old_chunks: &old_chunks,
+            mode: request.mode,
+            uid: request.uid,
+            gid: request.gid,
+        })
         .map_err(|err| MetadError::PublishArtifactFailed {
             source: Box::new(err),
             staged,
@@ -354,22 +394,8 @@ where
             ));
         }
         let version = Version::new(prepared.generation)?;
-        let old_chunks = if prepared.replace {
-            prepared
-                .old_generation
-                .map(|generation| {
-                    self.chunk_manifests_at_version(
-                        prepared.inode,
-                        generation,
-                        self.read_version()?,
-                    )
-                })
-                .transpose()?
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let chunks = merge_session_chunks(request.size, old_chunks, request.chunks)?;
+        let old_chunks = self.prepared_old_chunks(&prepared)?;
+        let chunks = merge_session_chunks(request.size, old_chunks.clone(), request.chunks)?;
         self.manifest_chunks
             .fetch_add(chunks.len() as u64, Ordering::Relaxed);
         self.manifest_blocks
@@ -384,14 +410,15 @@ where
             chunk_size: DEFAULT_CHUNK_SIZE,
             block_size: DEFAULT_BLOCK_SIZE as u64,
         };
-        self.publish_prepared_artifact(
+        self.publish_prepared_artifact_impl(PreparedArtifactPublish {
             prepared,
             body,
             chunks,
-            request.mode,
-            request.uid,
-            request.gid,
-        )
+            old_chunks: &old_chunks,
+            mode: request.mode,
+            uid: request.uid,
+            gid: request.gid,
+        })
         .map_err(|err| MetadError::PublishArtifactFailed {
             source: Box::new(err),
             staged: request.staged,
@@ -467,6 +494,7 @@ where
                 block_size: written.block_size,
             },
             chunks,
+            old_chunks: Vec::new(),
             staged,
         })
     }
@@ -504,22 +532,8 @@ where
         self.object_put_bytes
             .fetch_add(written.object_put_bytes, Ordering::Relaxed);
 
-        let old_chunks = if prepared.replace {
-            prepared
-                .old_generation
-                .map(|generation| {
-                    self.chunk_manifests_at_version(
-                        prepared.inode,
-                        generation,
-                        self.read_version()?,
-                    )
-                })
-                .transpose()?
-                .unwrap_or_default()
-        } else {
-            Vec::new()
-        };
-        let chunks = merge_session_chunks(request.size, old_chunks, written.chunks)?;
+        let old_chunks = self.prepared_old_chunks(prepared)?;
+        let chunks = merge_session_chunks(request.size, old_chunks.clone(), written.chunks)?;
         self.manifest_chunks
             .fetch_add(chunks.len() as u64, Ordering::Relaxed);
         self.manifest_blocks
@@ -536,7 +550,36 @@ where
                 block_size: DEFAULT_BLOCK_SIZE as u64,
             },
             chunks,
+            old_chunks,
             staged,
         })
+    }
+
+    fn prepared_old_chunks(
+        &self,
+        prepared: &PreparedArtifact,
+    ) -> Result<Vec<ChunkManifest>, MetadError> {
+        if !prepared.replace {
+            return Ok(Vec::new());
+        }
+        let Some(generation) = prepared.old_generation else {
+            return Ok(Vec::new());
+        };
+        let version = self.read_version()?;
+        let Some(body) = self.body_descriptor_at_version_for_purpose(
+            prepared.inode,
+            generation,
+            version,
+            ReadPurpose::WritePlanLocal,
+        )?
+        else {
+            return Ok(Vec::new());
+        };
+        self.chunk_manifests_for_body_at_version(
+            prepared.inode,
+            &body,
+            version,
+            ReadPurpose::WritePlanLocal,
+        )
     }
 }

@@ -408,6 +408,35 @@ fn slice_read_plan_leaves_sparse_holes_zero_filled() {
 }
 
 #[test]
+fn chunk_manifest_read_plan_matches_slice_read_plan() {
+    let store = MemoryObjectStore::new();
+    let write = put_chunked_object(
+        &store,
+        b"abcdefghijkl",
+        ChunkWriteOptions {
+            manifest_id: "artifacts/checkpoint".to_owned(),
+            mount: 1,
+            inode: 2,
+            generation: 3,
+            chunk_size: 8,
+            block_size: 4,
+        },
+    )
+    .unwrap();
+    let manifests = write.chunk_manifests();
+
+    let plan = plan_chunk_manifest_reads(&manifests, 2, 6).unwrap();
+    let read = read_object_blocks_with_cache(
+        &store,
+        Option::<&MemoryBlockCache>::None,
+        plan.output_len,
+        &plan.blocks,
+    )
+    .unwrap();
+    assert_eq!(read.bytes, b"cdefgh");
+}
+
+#[test]
 fn block_cache_reuses_object_reads() {
     let store = MemoryObjectStore::new();
     let key = ObjectKey::new("blocks/1/2/3/0/0").unwrap();

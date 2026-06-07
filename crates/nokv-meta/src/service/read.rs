@@ -1076,7 +1076,7 @@ where
 
         let start_chunk = offset / body.chunk_size;
         let end_chunk = (end - 1) / body.chunk_size;
-        let mut plan = Vec::new();
+        let mut manifests = Vec::new();
         for chunk_index in start_chunk..=end_chunk {
             let key = chunk_manifest_key(self.mount, inode, body.generation, chunk_index);
             let Some(value) =
@@ -1087,63 +1087,41 @@ where
             };
             let manifest = decode_chunk_manifest(&value.0)
                 .map_err(|err| MetadError::Codec(err.to_string()))?;
-            let slices = manifest
-                .slices
-                .iter()
-                .map(|slice| StoredSlice {
-                    slice_id: slice.slice_id,
-                    logical_offset: slice.logical_offset,
-                    len: slice.len,
-                    chunks: vec![StoredChunk {
-                        chunk_index: manifest.chunk_index,
-                        logical_offset: manifest.logical_offset,
-                        len: manifest.len,
-                        blocks: slice
-                            .blocks
-                            .iter()
-                            .map(|block| StoredBlock {
-                                object_key: block.object_key.clone(),
-                                logical_offset: block.logical_offset,
-                                object_offset: block.object_offset,
-                                len: block.len,
-                                digest_uri: block.digest_uri.clone(),
-                            })
-                            .collect(),
-                    }],
-                })
-                .collect::<Vec<_>>();
-            let slice_plan = plan_slice_reads(&slices, offset, len)?;
-            plan.extend(slice_plan.blocks);
+            manifests.push(manifest);
         }
-        Ok(plan)
+        let slice_plan = plan_chunk_manifest_reads(&manifests, offset, len)?;
+        Ok(slice_plan.blocks)
     }
 
-    pub(super) fn chunk_manifests_at_version(
+    pub(super) fn chunk_manifests_for_body_at_version(
         &self,
         inode: InodeId,
-        generation: u64,
+        body: &BodyDescriptor,
         version: Version,
+        purpose: ReadPurpose,
     ) -> Result<Vec<ChunkManifest>, MetadError> {
-        let rows = self.metadata.scan(ScanRequest {
-            family: RecordFamily::ChunkManifest,
-            prefix: chunk_manifest_prefix(self.mount, inode, generation),
-            start_after: None,
-            version,
-            limit: 0,
-            purpose: ReadPurpose::WritePlanLocal,
-        })?;
-        rows.into_iter()
-            .filter_map(|row| match chunk_index_from_manifest_key(&row.key) {
-                Ok(BODY_SUMMARY_CHUNK_INDEX) => None,
-                Ok(_) => Some(Ok(row)),
-                Err(err) => Some(Err(err)),
-            })
-            .map(|row| {
-                let row = row?;
-                decode_chunk_manifest(&row.value.0)
-                    .map_err(|err| MetadError::Codec(err.to_string()))
-            })
-            .collect()
+        if body.chunk_size == 0 || body.block_size == 0 {
+            return Err(ObjectError::InvalidChunkLayout.into());
+        }
+        if body.size == 0 {
+            return Ok(Vec::new());
+        }
+        let end_chunk = (body.size - 1) / body.chunk_size;
+        let mut manifests = Vec::new();
+        for chunk_index in 0..=end_chunk {
+            let key = chunk_manifest_key(self.mount, inode, body.generation, chunk_index);
+            let Some(value) =
+                self.metadata
+                    .get(RecordFamily::ChunkManifest, &key, version, purpose)?
+            else {
+                continue;
+            };
+            manifests.push(
+                decode_chunk_manifest(&value.0)
+                    .map_err(|err| MetadError::Codec(err.to_string()))?,
+            );
+        }
+        Ok(manifests)
     }
 }
 

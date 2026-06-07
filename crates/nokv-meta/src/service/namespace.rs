@@ -146,6 +146,7 @@ where
         let StagedArtifactBody {
             body,
             chunks,
+            old_chunks: _,
             staged,
         } = self.stage_artifact_body(&request, inode, version)?;
         let now_ms = current_time_ms();
@@ -365,6 +366,7 @@ where
 
         let mut body = entry.body.clone();
         let mut chunks = Vec::new();
+        let mut old_chunks = Vec::new();
         let mut old_generation = None;
         if let Some(size) = changes.size {
             if attr.file_type == FileType::Directory {
@@ -374,13 +376,19 @@ where
             old_generation = body.as_ref().map(|body| body.generation);
             let digest_uri =
                 self.resized_body_digest_uri(entry.attr.inode, body.as_ref(), size, read_version)?;
-            let old_chunks = old_generation
-                .map(|generation| {
-                    self.chunk_manifests_at_version(entry.attr.inode, generation, read_version)
+            old_chunks = body
+                .as_ref()
+                .map(|body| {
+                    self.chunk_manifests_for_body_at_version(
+                        entry.attr.inode,
+                        body,
+                        read_version,
+                        ReadPurpose::WritePlanLocal,
+                    )
                 })
                 .transpose()?
                 .unwrap_or_default();
-            chunks = merge_session_chunks(size, old_chunks, Vec::new())?;
+            chunks = merge_session_chunks(size, old_chunks.clone(), Vec::new())?;
             body = Some(BodyDescriptor {
                 producer: body
                     .as_ref()
@@ -408,6 +416,7 @@ where
             kind: CommandKind::UpdateAttr,
             projection: &projection,
             chunks: &chunks,
+            old_chunks: &old_chunks,
             dentry_version,
             old_generation,
             version,
@@ -1696,6 +1705,7 @@ where
             kind,
             projection,
             chunks,
+            old_chunks,
             dentry_version,
             old_generation,
             version,
@@ -1708,7 +1718,15 @@ where
             &projection.dentry.name,
         );
         let read_version = predecessor(version)?;
-        let linked = self.linked_dentry_projections_for_inode(inode, read_version)?;
+        let linked = if projection.attr.nlink <= 1 {
+            vec![LinkedDentryProjection {
+                key: dentry.clone(),
+                projection: projection.clone(),
+                version: dentry_version,
+            }]
+        } else {
+            self.linked_dentry_projections_for_inode(inode, read_version)?
+        };
         let mut predicates = vec![
             PredicateRef {
                 family: RecordFamily::Dentry,
@@ -1765,12 +1783,22 @@ where
         if let Some(body) = &projection.body {
             if let Some(old_generation) = old_generation {
                 let retained_object_keys = chunk_object_keys(chunks);
-                mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
-                    inode,
-                    old_generation,
-                    version,
-                    &retained_object_keys,
-                )?);
+                if old_chunks.is_empty() {
+                    mutations.extend(self.chunk_manifest_delete_and_gc_mutations(
+                        inode,
+                        old_generation,
+                        version,
+                        &retained_object_keys,
+                    )?);
+                } else {
+                    mutations.extend(self.chunk_manifest_delete_and_gc_mutations_from_manifests(
+                        inode,
+                        old_generation,
+                        old_chunks,
+                        version,
+                        &retained_object_keys,
+                    ));
+                }
             }
             mutations.push(Mutation {
                 family: RecordFamily::ChunkManifest,

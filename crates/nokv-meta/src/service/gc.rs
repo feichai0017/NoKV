@@ -169,4 +169,56 @@ where
         }
         Ok(mutations)
     }
+
+    pub(super) fn chunk_manifest_delete_and_gc_mutations_from_manifests(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        manifests: &[ChunkManifest],
+        enqueue_version: Version,
+        retained_object_keys: &HashSet<String>,
+    ) -> Vec<Mutation> {
+        let mut mutations = vec![delete_mutation(
+            RecordFamily::ChunkManifest,
+            chunk_manifest_key(self.mount, inode, generation, BODY_SUMMARY_CHUNK_INDEX),
+        )];
+        for manifest in manifests {
+            for (block_index, block) in manifest
+                .slices
+                .iter()
+                .flat_map(|slice| slice.blocks.iter())
+                .enumerate()
+            {
+                if retained_object_keys.contains(&block.object_key) {
+                    continue;
+                }
+                let record = ObjectGcRecord {
+                    inode,
+                    generation,
+                    object_key: block.object_key.clone(),
+                    size: block.len,
+                    digest_uri: block.digest_uri.clone(),
+                    enqueue_version: enqueue_version.get(),
+                };
+                mutations.push(Mutation {
+                    family: RecordFamily::Gc,
+                    key: gc_object_key(
+                        self.mount,
+                        enqueue_version.get(),
+                        inode,
+                        generation,
+                        manifest.chunk_index,
+                        block_index as u64,
+                    ),
+                    op: MutationOp::Put,
+                    value: Some(Value(encode_object_gc_record(&record))),
+                });
+            }
+            mutations.push(delete_mutation(
+                RecordFamily::ChunkManifest,
+                chunk_manifest_key(self.mount, inode, generation, manifest.chunk_index),
+            ));
+        }
+        mutations
+    }
 }

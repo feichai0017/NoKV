@@ -8,12 +8,13 @@ use nokv_meta::{
     ReadDirPlusPage, RenameReplaceResult, UpdateAttr, XattrSetMode,
 };
 use nokv_object::{
-    put_chunked_ranges_parallel, BlockCache, ChunkStore, ChunkWriteOptions, ChunkWriteRange,
-    ChunkedWrite, FileReadPipeline, FileWritePipeline, ObjectBlockCache, ObjectError,
-    ObjectPrefetchOptions, ObjectPrefetchRequest, ObjectPrefetcher, ObjectReadBlock,
-    ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey, ObjectStore, ObjectWritebackOptions,
-    ObjectWritebackRequest, ObjectWritebackUploader, PendingChunkedWrite, WritebackCache,
-    WritebackCacheOptions, WritebackUploadRange, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    chunk_manifests_from_stored_chunks, plan_chunk_manifest_reads, put_chunked_ranges_parallel,
+    BlockCache, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite, FileReadPipeline,
+    FileWritePipeline, ObjectBlockCache, ObjectError, ObjectPrefetchOptions, ObjectPrefetchRequest,
+    ObjectPrefetcher, ObjectReadBlock, ObjectReadPlan, ObjectReadPlanCache, ObjectReadPlanKey,
+    ObjectStore, ObjectWritebackOptions, ObjectWritebackRequest, ObjectWritebackUploader,
+    PendingChunkedWrite, StoredChunk, WritebackCache, WritebackCacheOptions, WritebackUploadRange,
+    DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{
     AdvisoryLock, AdvisoryLockRequest, DentryName, InodeAttr, InodeId, SpecialNodeSpec,
@@ -383,6 +384,25 @@ where
             .map_err(|err| ObjectError::Backend(format!("read plan cache lock poisoned: {err}")))?
             .insert(key, plan);
         Ok(())
+    }
+
+    fn cache_new_file_staged_read_plan(
+        &self,
+        inode: InodeId,
+        generation: u64,
+        size: u64,
+        chunks: &[StoredChunk],
+    ) -> FuseBackendResult<()> {
+        if size == 0 || chunks.is_empty() {
+            return Ok(());
+        }
+        let len = usize::try_from(size).map_err(|_| ObjectError::InvalidRange)?;
+        let manifests = chunk_manifests_from_stored_chunks(chunks);
+        let plan = plan_chunk_manifest_reads(&manifests, 0, len)?;
+        self.cache_read_body_plan(
+            ObjectReadPlanKey::new(inode.get(), generation, 0, len),
+            ObjectReadPlan::new(plan.output_len, plan.blocks),
+        )
     }
 
     fn stage_prepared_artifact_ranges_direct_pending(
@@ -960,12 +980,25 @@ where
             ));
         }
         let staged = request.staged.clone();
-        self.metadata
+        let cache_new_file_plan = !prepared.replace;
+        let cache_chunks = request.chunks.clone();
+        let cache_size = request.size;
+        let result = self
+            .metadata
             .publish_prepared_artifact_staged_session(prepared, request)
             .map_err(|err| {
                 let _ = self.objects.delete_staged(&staged);
                 FuseBackendError::from(err)
-            })
+            })?;
+        if cache_new_file_plan {
+            let _ = self.cache_new_file_staged_read_plan(
+                result.entry.attr.inode,
+                result.entry.attr.generation,
+                cache_size,
+                &cache_chunks,
+            );
+        }
+        Ok(result)
     }
 
     fn object_pipeline_stats(&self) -> FuseBackendResult<FuseObjectPipelineStats> {
@@ -1157,6 +1190,48 @@ mod tests {
                 output_offset: 0,
             }]
         );
+        let stats = backend.object_pipeline_stats().unwrap();
+        assert_eq!(stats.read_plan_cache_hits, 1);
+        assert_eq!(stats.read_plan_cache_misses, 0);
+    }
+
+    #[test]
+    fn client_backend_caches_new_file_staged_read_plan() {
+        let metadata = MetadataClient::new(MetadataClientOptions::new(SocketAddr::from((
+            [127, 0, 0, 1],
+            9,
+        ))));
+        let objects = MemoryObjectStore::new();
+        let backend =
+            ClientFuseBackend::new(metadata, objects.clone(), &FuseOptions::default()).unwrap();
+        let inode = InodeId::new(42).unwrap();
+        let write = nokv_object::put_chunked_object(
+            &objects,
+            b"abcdefghijkl",
+            ChunkWriteOptions {
+                manifest_id: "checkpoint.bin".to_owned(),
+                mount: 1,
+                inode: inode.get(),
+                generation: 7,
+                chunk_size: 8,
+                block_size: 4,
+            },
+        )
+        .unwrap();
+
+        backend
+            .cache_new_file_staged_read_plan(inode, 7, write.size, &write.chunks)
+            .unwrap();
+
+        let plan = backend.cached_read_body_plan(inode, 7, 4, 4).unwrap();
+        let read = objects
+            .read_blocks(
+                None::<&nokv_object::MemoryBlockCache>,
+                plan.output_len,
+                &plan.blocks,
+            )
+            .unwrap();
+        assert_eq!(read.bytes, b"efgh");
         let stats = backend.object_pipeline_stats().unwrap();
         assert_eq!(stats.read_plan_cache_hits, 1);
         assert_eq!(stats.read_plan_cache_misses, 0);

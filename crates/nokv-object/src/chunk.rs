@@ -359,6 +359,40 @@ pub fn plan_slice_reads(
     })
 }
 
+pub fn plan_chunk_manifest_reads(
+    manifests: &[ChunkManifest],
+    file_offset: u64,
+    len: usize,
+) -> Result<SliceReadPlan, ObjectError> {
+    let slices = manifests
+        .iter()
+        .flat_map(|manifest| {
+            manifest.slices.iter().map(move |slice| StoredSlice {
+                slice_id: slice.slice_id,
+                logical_offset: slice.logical_offset,
+                len: slice.len,
+                chunks: vec![StoredChunk {
+                    chunk_index: manifest.chunk_index,
+                    logical_offset: manifest.logical_offset,
+                    len: manifest.len,
+                    blocks: slice
+                        .blocks
+                        .iter()
+                        .map(|block| StoredBlock {
+                            object_key: block.object_key.clone(),
+                            logical_offset: block.logical_offset,
+                            object_offset: block.object_offset,
+                            len: block.len,
+                            digest_uri: block.digest_uri.clone(),
+                        })
+                        .collect(),
+                }],
+            })
+        })
+        .collect::<Vec<_>>();
+    plan_slice_reads(&slices, file_offset, len)
+}
+
 impl StagedObjectSet {
     pub fn new(objects: Vec<StagedObject>) -> Self {
         Self { objects }

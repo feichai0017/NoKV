@@ -43,9 +43,9 @@ use crate::layout::{
     watch_log_prefix, xattr_key, xattr_prefix, PATH_INDEX_DELIMITER,
 };
 use nokv_object::{
-    plan_slice_reads, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
+    plan_chunk_manifest_reads, ChunkStore, ChunkWriteOptions, ChunkWriteRange, ChunkedWrite,
     MemoryBlockCache, ObjectCleanupOutcome, ObjectError, ObjectKey, ObjectReadBlock, ObjectStore,
-    StagedObjectSet, StoredBlock, StoredChunk, StoredSlice, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
+    StagedObjectSet, StoredChunk, DEFAULT_BLOCK_SIZE, DEFAULT_CHUNK_SIZE,
 };
 use nokv_types::{
     parse_absolute_path, AdvisoryLock, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName,
@@ -124,6 +124,7 @@ struct PathIndexValidationCacheKey {
 struct StagedArtifactBody {
     body: BodyDescriptor,
     chunks: Vec<ChunkManifest>,
+    old_chunks: Vec<ChunkManifest>,
     staged: StagedObjectSet,
 }
 
@@ -131,6 +132,7 @@ struct ReplaceProjectionCommit<'a> {
     kind: CommandKind,
     projection: &'a DentryProjection,
     chunks: &'a [ChunkManifest],
+    old_chunks: &'a [ChunkManifest],
     dentry_version: Version,
     old_generation: Option<u64>,
     version: Version,
