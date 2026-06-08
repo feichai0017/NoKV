@@ -1,7 +1,8 @@
 use nokv_meta::command::{
     CommitResult, DelimitedScanItem, DelimitedScanRequest, HistoryPruneOutcome,
-    HistoryPruneRequest, KeyScanRequest, MetadataCommand, MetadataError, MetadataStore,
-    MetadataStoreStats, MetadataStoreStatsProvider, ReadItem, ReadPurpose, ScanItem, ScanRequest,
+    HistoryPruneRequest, KeyScanRequest, MetadataCheckpointStore, MetadataCommand, MetadataError,
+    MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider, ReadItem, ReadPurpose, ScanItem,
+    ScanRequest,
 };
 use nokv_meta::holtstore::HoltMetadataStore;
 use nokv_types::RecordFamily;
@@ -14,10 +15,30 @@ impl ServerMetadataStore {
     pub(crate) fn direct(store: HoltMetadataStore) -> Self {
         Self::Direct(Box::new(store))
     }
+}
 
-    pub(crate) fn checkpoint(&self) -> Result<(), MetadataError> {
+impl MetadataCheckpointStore for ServerMetadataStore {
+    fn checkpoint(&self) -> Result<(), MetadataError> {
         match self {
             Self::Direct(store) => store.checkpoint(),
+        }
+    }
+
+    fn export_checkpoint_image(&self) -> Result<Vec<u8>, MetadataError> {
+        match self {
+            Self::Direct(store) => store.export_checkpoint_image(),
+        }
+    }
+
+    fn install_checkpoint_image(&self, image: &[u8]) -> Result<(), MetadataError> {
+        match self {
+            Self::Direct(store) => store.install_checkpoint_image(image),
+        }
+    }
+
+    fn reclaim_unreachable_storage(&self) -> Result<usize, MetadataError> {
+        match self {
+            Self::Direct(store) => store.reclaim_unreachable_storage(),
         }
     }
 }

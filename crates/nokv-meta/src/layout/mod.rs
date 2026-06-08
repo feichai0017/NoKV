@@ -14,9 +14,10 @@ pub const PATH_INDEX_DELIMITER: u8 = b'/';
 
 pub use codec::{
     decode_allocator_state, decode_body_descriptor, decode_chunk_manifest,
-    decode_dentry_projection, decode_inode_attr, decode_object_gc_record, decode_snapshot_pin,
-    decode_watch_event, encode_allocator_state, encode_body_descriptor, encode_chunk_manifest,
-    encode_dentry_projection, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
+    decode_dentry_projection, decode_fork_binding, decode_fork_shadow, decode_inode_attr,
+    decode_object_gc_record, decode_snapshot_pin, decode_watch_event, encode_allocator_state,
+    encode_body_descriptor, encode_chunk_manifest, encode_dentry_projection, encode_fork_binding,
+    encode_fork_shadow, encode_inode_attr, encode_object_gc_record, encode_snapshot_pin,
     encode_watch_event, CodecError,
 };
 
@@ -151,6 +152,25 @@ pub fn snapshot_pin_key(mount: MountId, snapshot_id: u64) -> Vec<u8> {
     out
 }
 
+pub fn fork_binding_prefix(mount: MountId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH);
+    push_u64(&mut out, mount.get());
+    out
+}
+
+pub fn fork_binding_key(mount: MountId, fork_root: InodeId) -> Vec<u8> {
+    let mut out = fork_binding_prefix(mount);
+    push_u64(&mut out, fork_root.get());
+    out
+}
+
+pub fn fork_shadow_key(mount: MountId, fork_inode: InodeId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(U64_WIDTH * 2);
+    push_u64(&mut out, mount.get());
+    push_u64(&mut out, fork_inode.get());
+    out
+}
+
 pub fn gc_queue_prefix(mount: MountId) -> Vec<u8> {
     let mut out = Vec::with_capacity(U64_WIDTH);
     push_u64(&mut out, mount.get());
@@ -205,6 +225,8 @@ pub fn family_tag(family: RecordFamily) -> u8 {
         RecordFamily::CommandDedupe => 12,
         RecordFamily::History => 13,
         RecordFamily::System => 14,
+        RecordFamily::ForkBinding => 15,
+        RecordFamily::ForkShadow => 16,
     }
 }
 

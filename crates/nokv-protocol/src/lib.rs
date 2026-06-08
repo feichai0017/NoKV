@@ -265,6 +265,10 @@ pub enum MetadataRpcRequest {
     RetireSnapshot {
         snapshot_id: u64,
     },
+    RenewSnapshot {
+        snapshot_id: u64,
+        lease_ms: u64,
+    },
     ReadBodyPlan {
         inode: u64,
         generation: u64,
@@ -403,6 +407,9 @@ pub enum MetadataRpcResult {
     },
     RetiredSnapshot {
         retired: bool,
+    },
+    RenewedSnapshot {
+        renewed: bool,
     },
     CloneSubtree {
         root: u64,
@@ -602,12 +609,15 @@ pub struct WireSnapshotPin {
     pub root: u64,
     pub read_version: u64,
     pub created_version: u64,
+    pub lease_expires_unix_ms: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WireSubtreeDelta {
     pub path: String,
     pub kind: WireSubtreeDeltaKind,
+    pub digest: Option<String>,
+    pub size_delta: i64,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -845,6 +855,7 @@ impl WireSnapshotPin {
             root: snapshot.root.get(),
             read_version: snapshot.read_version,
             created_version: snapshot.created_version,
+            lease_expires_unix_ms: snapshot.lease_expires_unix_ms,
         }
     }
 
@@ -854,6 +865,7 @@ impl WireSnapshotPin {
             root: inode_id(self.root)?,
             read_version: self.read_version,
             created_version: self.created_version,
+            lease_expires_unix_ms: self.lease_expires_unix_ms,
         })
     }
 }
@@ -1040,10 +1052,14 @@ mod tests {
                     WireSubtreeDelta {
                         path: "/a".to_owned(),
                         kind: WireSubtreeDeltaKind::Modified,
+                        digest: Some("sha256:abc".to_owned()),
+                        size_delta: 12,
                     },
                     WireSubtreeDelta {
                         path: "/c".to_owned(),
                         kind: WireSubtreeDeltaKind::Added,
+                        digest: None,
+                        size_delta: -5,
                     },
                 ],
             }),

@@ -6,8 +6,11 @@
 //! boundary. It does not own Holt trees, Raft replication, FUSE, or protobuf.
 
 mod allocator;
+mod backup;
+mod checkpoint;
 mod clone;
 mod command;
+mod fsck;
 mod gc;
 mod lifecycle;
 mod lock;
@@ -18,6 +21,11 @@ mod rollback;
 mod snapshot;
 mod watch;
 mod xattr;
+
+pub use self::backup::{MetadataArchiveConfig, MetadataBackupOutcome, MetadataRestoreOutcome};
+pub use self::checkpoint::{CheckpointHandle, CheckpointShard};
+pub use self::fsck::{DanglingBlock, FsckReport};
+pub use self::snapshot::DEFAULT_SNAPSHOT_LEASE_MS;
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{BTreeMap, HashSet};
@@ -368,6 +376,13 @@ pub enum SubtreeDeltaKind {
 pub struct SubtreeDelta {
     pub path: String,
     pub kind: SubtreeDeltaKind,
+    /// Content digest (e.g. `sha256:…`) of the changed side — the `b`-side body for
+    /// `Added`/`Modified`, the `a`-side body for `Removed`. `None` for directories
+    /// or bodiless nodes. Makes the diff content-addressed, not just nominal.
+    pub digest: Option<String>,
+    /// Net byte-size change: `+size` for `Added`, `-size` for `Removed`,
+    /// `b.size - a.size` for `Modified`.
+    pub size_delta: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -412,6 +427,7 @@ pub struct NoKvFs<M, O> {
     metadata: M,
     objects: O,
     allocator_gate: Mutex<()>,
+    backup_gate: Mutex<()>,
     path_resolution_cache: Vec<Mutex<BTreeMap<PathResolutionCacheKey, InodeId>>>,
     path_index_lookup_cache:
         Vec<Mutex<BTreeMap<PathIndexLookupCacheKey, PathIndexLookupCacheValue>>>,
@@ -1131,6 +1147,7 @@ fn kind_name(kind: CommandKind) -> &'static [u8] {
         CommandKind::ReplaceArtifact => b"replace-artifact",
         CommandKind::SnapshotSubtree => b"snapshot-subtree",
         CommandKind::RetireSnapshot => b"retire-snapshot",
+        CommandKind::RenewSnapshot => b"renew-snapshot",
         CommandKind::WatchSubtree => b"watch-subtree",
         CommandKind::CleanupObjects => b"cleanup-objects",
     }

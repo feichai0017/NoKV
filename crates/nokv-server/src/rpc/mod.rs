@@ -602,6 +602,13 @@ fn execute(server: &Server, request: MetadataRpcRequest) -> Result<MetadataRpcRe
             let retired = server.service().retire_snapshot(snapshot_id)?;
             Ok(MetadataRpcResult::RetiredSnapshot { retired })
         }
+        MetadataRpcRequest::RenewSnapshot {
+            snapshot_id,
+            lease_ms,
+        } => {
+            let renewed = server.service().renew_snapshot(snapshot_id, lease_ms)?;
+            Ok(MetadataRpcResult::RenewedSnapshot { renewed })
+        }
         MetadataRpcRequest::ReadBodyPlan {
             inode,
             generation,
@@ -862,6 +869,7 @@ fn refreshes_metadata_view(request: &MetadataRpcRequest) -> bool {
         | MetadataRpcRequest::CloneSubtreePath { .. }
         | MetadataRpcRequest::RollbackSubtreePath { .. }
         | MetadataRpcRequest::RetireSnapshot { .. }
+        | MetadataRpcRequest::RenewSnapshot { .. }
         | MetadataRpcRequest::PrepareArtifact { .. }
         | MetadataRpcRequest::PrepareArtifactPath { .. }
         | MetadataRpcRequest::PublishPreparedArtifact { .. }

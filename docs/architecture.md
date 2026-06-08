@@ -108,6 +108,59 @@ production body backend is S3-compatible storage. RustFS, MinIO, Ceph RGW, and
 AWS S3 all use the same object-store boundary. See
 [Object Layout](./object-layout.md).
 
+## Metadata Disaster Recovery
+
+File bodies are durable in the object store, but the namespace that gives them
+meaning — inodes, dentries, versions, and CoW relationships — lives in the local
+Holt engine. Losing that node would lose the namespace even though every object
+survives. To close that single point of total loss, the metadata engine is
+periodically archived to the same object store.
+
+A background worker exports a Holt checkpoint image and publishes it under a
+configurable object-key prefix (`--metadata-checkpoint-archive-prefix`, on by
+default; disable with `--no-metadata-checkpoint-archive`). Publication mirrors
+the body write path — **object-first, pointer-second**:
+
+```text
+1. checkpoint image  -> {prefix}/ckpt/{seq}.image     (object-first)
+2. CURRENT manifest  -> {prefix}/CURRENT              (atomic pointer swap)
+3. prune checkpoints older than the retained window   (after the swap)
+```
+
+The single `CURRENT` object names the live checkpoint and the retained-checkpoint
+window, so retention works without an object `list`. A crash between steps 1 and
+2 leaves an orphan checkpoint object (reclaimed on a later backup), never a
+manifest that points at a missing checkpoint.
+
+Recovery runs on a replacement node with an empty metadata directory:
+
+```text
+nokv restore        # GET CURRENT -> GET checkpoint -> install into a fresh store
+nokv serve          # resume serving the recovered namespace
+```
+
+`restore` installs the checkpoint into a fresh Holt store (which must be empty — a
+checkpoint install cannot merge into a populated store) and rehydrates the
+allocator, so the recovered node both serves the prior namespace and accepts new
+writes. `nokv backup` triggers an out-of-band archive on a running server, and
+`/stats` reports the worker's `metadata_backup` state. The recovery-point
+objective is the worker interval; the bodies were always safe in the object store.
+
+## Consistency Checking
+
+`nokv fsck` verifies the live namespace against the object store: it walks every
+live file at its current body generation and confirms each referenced block
+still exists (`head`). This is the read-side complement to the object-first write
+ordering — the ordering guarantees metadata never references a missing object,
+and fsck detects any drift after the fact (an out-of-band deletion, an
+eventual-consistency anomaly in external storage, or a latent bug), reporting
+each dangling reference as `(inode, generation, object_key)`. Superseded and
+snapshot-pinned generations are not mistaken for drift (the scan uses each
+inode's current body generation), and a clone's borrowed block keys resolve
+against the source objects that still exist. Reclaiming the opposite drift —
+orphan objects written but never referenced — is a planned extension that needs
+an object-store `list`.
+
 ## Distributed Direction
 
 The planned distributed layer is not a generic KV database. It should replicate
@@ -136,5 +189,6 @@ acceptable.
 The OpenRaft v1 target remains one metadata group per mount. Cross-mount atomic
 operations are not part of the contract. Multi-node HA uses voters through
 storage-neutral transport DTOs for vote, append entries, and snapshot
-installation. Learner read scaling and object-backed checkpoint archive remain
-planned production hardening work.
+installation. Learner read scaling remains planned production hardening work;
+the object-backed metadata archive is implemented (see Metadata Disaster Recovery
+above).
