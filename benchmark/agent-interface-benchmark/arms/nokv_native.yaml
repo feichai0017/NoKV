@@ -6,26 +6,8 @@ purpose: Product-native read-only agent adapter over NoKV namespace metadata ope
 
 native_definition:
   meaning: >
-    Native means the benchmark tools call NoKV product APIs. The harness adapts
-    OpenAI tool calls into product calls, while namespace cards, list
-    pagination, recursive find, native grep, structured reads, registered
-    index catalogs, evidence handles, snapshots, and generation checks are
-    implemented by NoKV product crates.
-  product_boundary:
-    meta: >
-      nokvfs-meta owns stat_card, list_page, find_paths, grep_paths, read_page,
-      namespace cards, path-index catalog loading, index row matching, file
-      content scanning, structured record parsing, evidence construction,
-      snapshot ids, and generation validation.
-    client: >
-      nokvfs-client owns the agent JSON adapter for ls, stat, read, and find:
-      tool definitions, argument parsing, bounded limits, projected find
-      fields, and serialized tool results. grep is intentionally not routed
-      through nokvfs-client in this benchmark TDD increment.
-    harness: >
-      The benchmark harness owns only process wiring, timeout handling,
-      telemetry, conversion from OpenAI function calls to nokvfs-client agent
-      calls, and the temporary grep mapping to the product-native meta service.
+    Benchmark tools call NoKV product APIs. The harness adapts OpenAI tool calls
+    into product calls and records telemetry.
 
 data_scope:
   corpus: yanex_experiment_metadata_origami_data_gen_project
@@ -36,234 +18,69 @@ data_scope:
 common_semantics:
   paths:
     - Paths are absolute NoKV namespace paths.
-    - Use ls or stat from the entrypoint to discover corpus structure.
+    - Use ls or stat from /yanex to discover corpus structure.
     - Do not assume a path exists until a tool result returns it.
-  limits:
-    - Tool limits are one-based positive integers.
-    - The current agent adapter accepts at most 100 entries or records per ls, read, or find call.
+  pages:
+    - Tool limits are positive integers from 1 to 100.
     - Omitted limits use the adapter default.
-  cursors:
-    - Cursors are opaque strings returned by the previous page.
-    - A null next_cursor means the current page is complete.
-    - truncated=true means more results are available.
+    - Continue with next_cursor until it is null; truncated=true means more results exist.
   evidence:
-    - Directory result evidence uses nokv-native://{path}.
+    - Results include snapshot_id.
+    - Directory evidence uses nokv-native://{path}.
     - Entry and file evidence uses nokv-native://{path}@generation:{generation}.
-    - Structured read item evidence appends #item:{index} to the file evidence.
-    - Evidence is scoped to the returned snapshot_id and, for entries, the returned generation.
-  consistency:
-    - snapshot_id identifies the metadata version observed by a tool result.
-    - generation identifies the file or directory metadata generation.
-    - expected_generation on read fails when the live generation differs from the requested generation.
+    - Structured read items append #item:{index}.
+    - Use expected_generation on read when validating a cited file body.
   catalogs:
-    - Directory cards expose built-in namespace fields and any registered index fields for that directory.
-    - Built-in directory fields include path, name, kind, size_bytes, body.content_type, body.producer, and body.manifest_id.
-    - Registered index fields are discovered from card.catalog; do not use an index field that the current catalog did not expose.
-    - Indexed values are field/value pairs attached to namespace paths by a registered index.
-    - A path may carry multiple values for the same indexed field.
+    - Directory stat cards expose built-in namespace fields and registered index fields.
+    - Built-ins are path, name, kind, size_bytes, body.content_type, body.producer, and body.manifest_id.
+    - Use only field ids returned by the current catalog.
+    - Indexed values are field/value pairs on namespace paths and may repeat.
 
 tool_contract:
   - name: ls
-    purpose: Return one page of direct children for a directory path.
-    arguments:
-      path: absolute directory path
-      cursor: optional cursor from a previous ls result
-      limit: optional integer from 1 to 100
-    returns:
-      type: object
-      fields:
-        tool: ls
-        bytes_read: always 0 in the adapter result
-        path: normalized directory path
-        evidence: namespace evidence for the listed directory
-        snapshot_id: metadata snapshot id
-        entry_count: total direct child count before pagination
-        entries: compact namespace cards for direct children
-        next_cursor: cursor for the next page or null
-        truncated: whether more direct children remain
-    entry_card_fields:
-      - path
-      - name
-      - kind
-      - evidence
-      - snapshot_id
-      - inode
-      - generation
-      - size_bytes
-      - entry_count
+    purpose: Return one page of direct children for a directory.
     notes:
-      - ls does not recursively scan descendants.
-      - ls entries are compact; use stat for schema, sample, body descriptor, catalog, record_count, or indexed_values.
+      - ls is not recursive.
+      - Entries are compact; use stat for schema, sample, body descriptor, catalog, record_count, or indexed_values.
 
   - name: stat
     purpose: Return the full namespace card for one path.
-    arguments:
-      path: absolute namespace path
-    returns:
-      type: object
-      fields:
-        tool: stat
-        bytes_read: always 0 in the adapter result
-        card: full namespace card
-    card_fields:
-      - path
-      - name
-      - kind
-      - evidence
-      - snapshot_id
-      - inode
-      - generation
-      - size_bytes
-      - entry_count
-      - record_count
-      - schema
-      - sample
-      - body
-      - catalog
-      - indexed_values
-    record_count_provenance:
-      - live_namespace
-      - structured_body
-      - materialized_index
-      - approximate
     notes:
       - Directory cards expose live entry counts and query catalogs.
       - Structured file cards may expose schema, sample, and record_count for JSON, YAML, or text bodies.
-      - body is a descriptor with producer, digest_uri, size, content_type, manifest_id, generation, chunk_size, and block_size; it is not file content.
-      - indexed_values are returned only when a registered index row is attached to the exact path.
+      - body is a descriptor, not file content.
+      - record_count includes provenance such as live_namespace, structured_body, materialized_index, or approximate.
 
   - name: read
-    purpose: Read a file as structured records by default, or as raw bytes when format=bytes.
-    arguments:
-      path: absolute file path
-      format: optional structured or bytes; defaults to structured
-      cursor: optional structured-record cursor
-      offset: optional byte offset for bytes format
-      limit: optional integer from 1 to 100
-      expected_generation: optional generation guard
-    returns:
-      type: object
-      fields:
-        tool: read
-        bytes_read: adapter estimate of returned item JSON or byte count
-        path: normalized file path
-        evidence: file evidence with generation
-        snapshot_id: metadata snapshot id
-        generation: file generation actually read
-        total_size_bytes: file size
-        format: structured or bytes
-        record_type: structured record type or null
-        record_count: structured record count or null
-        cursor: input cursor
-        next_cursor: cursor for the next page or null
-        truncated: whether more records or bytes remain
-        items: structured read items
-        bytes: raw byte array when format=bytes, otherwise null
-    structured_record_types:
-      - directory_entries
-      - json_array
-      - json_object
-      - yaml_mapping
-      - text_lines
+    purpose: Read one page from a file.
     notes:
-      - Structured JSON arrays return one item per array element.
-      - Structured JSON objects and YAML mappings return sorted key/value items.
-      - Structured text returns line-numbered records.
-      - The adapter rejects large structured reads when stat reports more than 100 records; use metadata, catalog predicates, or smaller pages instead.
-      - Raw bytes require format=bytes and use offset plus limit; cursor is not used for raw bytes.
+      - read defaults to structured format; raw bytes require format=bytes.
+      - Structured file records are json_array, json_object, yaml_mapping, or text_lines.
+      - JSON objects and YAML mappings return sorted key/value items.
+      - Text returns line-numbered records.
+      - The adapter rejects structured reads when stat reports more than 100 records; use stat, find counts, or targeted reads instead.
+      - Bytes mode uses offset plus limit; cursor is for structured records.
 
   - name: find
-    purpose: Recursively find descendant paths under a directory using catalog field ids, predicates, sort keys, and optional value projection.
-    arguments:
-      path: absolute directory path
-      predicates: optional array of field/op/value predicates
-      sort: optional array of field/direction sort keys
-      fields: optional array of indexed field ids to project
-      include: optional array containing body, schema, sample, or catalog
-      cursor: optional cursor from a previous find result
-      limit: optional integer from 1 to 100
+    purpose: Recursively find descendant paths under a directory using catalog field ids.
     predicate_values:
       - Strings use eq, prefix, suffix, or contains.
       - Non-negative integers use eq, gt, gte, lt, or lte.
       - Booleans are accepted by the client adapter and converted to integer 1 or 0.
-    returns:
-      type: object
-      fields:
-        tool: find
-        bytes_read: always 0 in the adapter result
-        path: normalized search root
-        evidence: namespace evidence for the search root
-        snapshot_id: metadata snapshot id
-        match_count: total matches before pagination
-        catalog: first-match catalog when include contains catalog, otherwise null
-        matches: paginated match list
-        next_cursor: cursor for the next page or null
-        truncated: whether more matches remain
-        scanned_entries: number of descendant entries scanned
-    match_without_fields:
-      - path
-      - name
-      - kind
-      - evidence
-      - snapshot_id
-      - inode
-      - generation
-      - size_bytes
-      - entry_count
-      - indexed_values
-    match_with_fields:
-      - path
-      - values
     notes:
-      - find searches descendants of the given directory; the root path itself is not a match.
-      - Predicate and sort fields must be either built-in namespace fields or registered index fields exposed by the current catalog.
+      - The search root itself is not a match.
+      - Predicate and sort fields must be built-in namespace fields or registered index fields exposed by the current catalog.
       - Missing values do not satisfy predicates.
       - Sort values that are present order before missing values.
-      - Multiple sort keys are applied in the supplied order.
-      - With fields omitted, each match returns compact metadata plus all indexed_values attached to that path.
-      - With fields present, each match returns only path and projected values; missing projected fields are omitted, single values are scalars, and repeated values are arrays.
-      - The current JSON adapter only surfaces the catalog include at top level; use stat or read for full body, schema, or sample detail.
-
-  - name: grep
-    purpose: Search regular file contents by literal substring pattern.
-    arguments:
-      path: absolute file or directory path
-      pattern: literal case-sensitive substring
-      recursive: whether directory search scans descendant files or only immediate file children
-      cursor: optional opaque cursor from a previous grep result
-      limit: optional integer from 1 to 100
-      max_files: optional positive file scan bound
-      max_bytes: optional positive byte scan bound
-    returns:
-      type: object
-      fields:
-        tool: grep
-        path: normalized search root
-        pattern: searched literal substring
-        recursive: requested traversal mode
-        evidence: namespace evidence for the search root
-        snapshot_id: metadata snapshot id
-        matches: paginated line matches
-        files_scanned: regular files whose bytes were inspected
-        bytes_read: object bytes inspected by this call
-        next_cursor: cursor for the next page or null
-        truncated: whether more scanning remains
-    match_fields:
-      - path
-      - line_number
-      - snippet
-      - evidence
-      - generation
-    notes:
-      - grep scans file bytes; find does not.
-      - grep is literal and case-sensitive.
-      - binary files are skipped using a NUL-byte check.
-      - match evidence includes the file generation and line number.
+      - match_count is the total before pagination; scanned_entries is the descendant scan count.
+      - With fields omitted, matches return compact metadata plus indexed_values.
+      - With fields present, matches return path and projected values; missing fields are omitted, single values are scalars, and repeated values are arrays.
+      - Requested include fields body, schema, sample, and catalog are attached to each returned match.
 
 forbidden_assumptions:
-  - Do not use semantic handles outside the nokv-native evidence scheme.
-  - Do not assume two reads of the same path saw the same object unless generation matches.
+  - Do not invent field ids; discover them from the returned catalog.
+  - Do not invent evidence handles outside the nokv-native evidence scheme.
   - Do not treat a body descriptor as content.
   - Do not treat file size as record count.
+  - Do not assume two reads saw the same file body unless generation matches.
   - Do not use ad hoc helper operations outside the exposed tool registry.
-  - Do not invent field ids; discover them from the returned catalog.

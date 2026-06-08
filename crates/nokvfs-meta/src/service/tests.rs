@@ -215,6 +215,98 @@ fn namespace_list_pages_are_cursor_bounded() {
 }
 
 #[test]
+fn namespace_list_page_entries_do_not_parse_child_bodies() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let parent = service.resolve_directory_path("/runs").unwrap();
+    service
+        .publish_artifact(PublishArtifact {
+            parent,
+            name: DentryName::new(b"bad.json".to_vec()).unwrap(),
+            producer: "unit-test".to_owned(),
+            digest_uri: "sha256:test".to_owned(),
+            content_type: "application/json".to_owned(),
+            manifest_id: "runs/bad.json".to_owned(),
+            bytes: b"{not-json".to_vec(),
+            mode: 0o644,
+            uid: 1000,
+            gid: 1000,
+        })
+        .unwrap();
+
+    let before = service.object_stats();
+    let page = service
+        .list_page(
+            "/runs",
+            NamespaceListOptions {
+                limit: 10,
+                ..NamespaceListOptions::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(service.object_stats().object_gets, before.object_gets);
+    assert_eq!(page.entries.len(), 1);
+    let entry = &page.entries[0];
+    assert_eq!(entry.name, "bad.json");
+    assert_eq!(entry.record_count, None);
+    assert_eq!(entry.schema, None);
+    assert!(entry.sample.is_empty());
+    assert_eq!(entry.body, None);
+    assert!(entry.catalog.filterable.is_empty());
+    assert!(entry.catalog.sortable.is_empty());
+    assert!(entry.catalog.facetable.is_empty());
+    assert!(entry.catalog.projections.is_empty());
+    assert!(entry.indexed_values.is_empty());
+}
+
+#[test]
+fn namespace_list_page_entries_do_not_load_registered_index_values() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service
+        .create_dir_path("/runs/run-a", 0o755, 1000, 1000)
+        .unwrap();
+    service
+        .register_namespace_index(NamespaceIndexRegistration {
+            path: "/runs".to_owned(),
+            fields: vec![NamespaceIndexField {
+                field: NamespaceFindField::new("run.status"),
+                operators: vec![NamespacePredicateOp::Eq],
+                sortable: true,
+                facetable: true,
+            }],
+            rows: vec![NamespaceIndexRow {
+                path: "/runs/run-a".to_owned(),
+                values: vec![NamespaceIndexValue {
+                    field: NamespaceFindField::new("run.status"),
+                    value: NamespacePredicateValue::String("completed".to_owned()),
+                }],
+            }],
+        })
+        .unwrap();
+
+    let page = service
+        .list_page(
+            "/runs",
+            NamespaceListOptions {
+                limit: 10,
+                ..NamespaceListOptions::default()
+            },
+        )
+        .unwrap();
+
+    assert_eq!(page.entries.len(), 1);
+    let entry = &page.entries[0];
+    assert_eq!(entry.name, "run-a");
+    assert!(entry.catalog.filterable.is_empty());
+    assert!(entry.catalog.sortable.is_empty());
+    assert!(entry.catalog.facetable.is_empty());
+    assert!(entry.catalog.projections.is_empty());
+    assert!(entry.indexed_values.is_empty());
+}
+
+#[test]
 fn namespace_find_uses_declared_predicates_and_sort_fields() {
     let service = service();
     service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();

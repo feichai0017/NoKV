@@ -423,6 +423,15 @@ impl CardProjection {
         }
     }
 
+    fn list_entry() -> Self {
+        Self {
+            body: false,
+            schema: false,
+            sample: false,
+            catalog: false,
+        }
+    }
+
     fn find(includes: &[NamespaceInclude]) -> Self {
         Self {
             body: includes.contains(&NamespaceInclude::Body),
@@ -470,7 +479,6 @@ where
         let offset = parse_cursor(options.cursor.as_deref())?;
         let version = self.read_version()?;
         let parent = self.resolve_directory_path_at_version(&path, version)?;
-        let indexes = self.load_namespace_indexes_for_path(&path, version)?;
         let mut entries = self.read_dir_plus_at_version(parent, version)?;
         entries.sort_by(|left, right| {
             left.dentry
@@ -486,16 +494,15 @@ where
             .map(|entry| {
                 let name = String::from_utf8_lossy(entry.dentry.name.as_bytes()).to_string();
                 let child_path = join_card_path(&path, &name);
-                let indexed_values = indexes.rows.get(&child_path).cloned().unwrap_or_default();
                 self.card_for_entry(
                     name,
                     child_path,
                     entry,
                     CardContext {
                         version,
-                        projection: CardProjection::full(),
-                        indexed_values,
-                        indexes: Some(&indexes),
+                        projection: CardProjection::list_entry(),
+                        indexed_values: Vec::new(),
+                        indexes: None,
                     },
                 )
             })
@@ -788,7 +795,6 @@ where
         context: CardContext<'_>,
     ) -> Result<NamespaceCard, MetadError> {
         let kind = card_kind(metadata.attr.file_type);
-        let body_descriptor = metadata.body.as_ref().map(namespace_body_descriptor);
         let mut entry_count = None;
         let mut record_count = None;
         let mut schema = None;
@@ -797,10 +803,13 @@ where
             let entries = self.read_dir_plus_at_version(metadata.attr.inode, context.version)?;
             let count = entries.len();
             entry_count = Some(count);
-            record_count = Some(NamespaceRecordCount {
-                count,
-                provenance: RecordCountProvenance::LiveNamespace,
-            });
+            if context.projection.schema || context.projection.sample || context.projection.catalog
+            {
+                record_count = Some(NamespaceRecordCount {
+                    count,
+                    provenance: RecordCountProvenance::LiveNamespace,
+                });
+            }
             if context.projection.schema {
                 schema = Some(NamespaceSchema {
                     record_type: NamespaceRecordType::DirectoryEntries,
@@ -845,7 +854,11 @@ where
                 }
             }
         }
-        let body = context.projection.body.then_some(body_descriptor).flatten();
+        let body = context
+            .projection
+            .body
+            .then(|| metadata.body.as_ref().map(namespace_body_descriptor))
+            .flatten();
         let catalog = if context.projection.catalog {
             let mut catalog = namespace_query_catalog(kind.clone());
             if let Some(indexes) = context.indexes {

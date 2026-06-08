@@ -337,11 +337,7 @@ where
         cursor: optional_string_arg(args, "cursor")?,
         limit: optional_usize_arg(args, "limit")?.unwrap_or(DEFAULT_AGENT_LIMIT),
     })?;
-    Ok(find_result_json(
-        &result,
-        include.contains(&NamespaceInclude::Catalog),
-        fields.as_deref(),
-    ))
+    Ok(find_result_json(&result, &include, fields.as_deref()))
 }
 
 fn list_page_json(page: &NamespaceListPage) -> Value {
@@ -360,7 +356,7 @@ fn list_page_json(page: &NamespaceListPage) -> Value {
 
 fn find_result_json(
     result: &NamespaceFindResult,
-    include_catalog: bool,
+    includes: &[NamespaceInclude],
     fields: Option<&[String]>,
 ) -> Value {
     json!({
@@ -370,8 +366,7 @@ fn find_result_json(
         "evidence": result.evidence,
         "snapshot_id": result.snapshot_id,
         "match_count": result.match_count,
-        "catalog": include_catalog.then(|| result.matches.first().map(|card| catalog_json(&card.catalog))).flatten(),
-        "matches": result.matches.iter().map(|card| find_match_json(card, fields)).collect::<Vec<_>>(),
+        "matches": result.matches.iter().map(|card| find_match_json(card, fields, includes)).collect::<Vec<_>>(),
         "next_cursor": result.next_cursor,
         "truncated": result.truncated,
         "scanned_entries": result.scanned_entries,
@@ -437,7 +432,11 @@ fn list_entry_json(card: &NamespaceCard) -> Value {
     })
 }
 
-fn find_match_json(card: &NamespaceCard, fields: Option<&[String]>) -> Value {
+fn find_match_json(
+    card: &NamespaceCard,
+    fields: Option<&[String]>,
+    includes: &[NamespaceInclude],
+) -> Value {
     let indexed_values = card
         .indexed_values
         .iter()
@@ -449,23 +448,57 @@ fn find_match_json(card: &NamespaceCard, fields: Option<&[String]>) -> Value {
         .map(index_value_json)
         .collect::<Vec<_>>();
     if fields.is_some() {
-        return json!({
-            "path": card.path,
-            "values": projected_values_json(card, fields.unwrap_or(&[])),
-        });
+        let mut object = Map::new();
+        object.insert("path".to_owned(), json!(card.path));
+        object.insert(
+            "values".to_owned(),
+            projected_values_json(card, fields.unwrap_or(&[])),
+        );
+        append_find_match_includes(&mut object, card, includes);
+        return Value::Object(object);
     }
-    json!({
-        "path": card.path,
-        "name": card.name,
-        "kind": card_kind_name(&card.kind),
-        "evidence": card.evidence,
-        "snapshot_id": card.snapshot_id,
-        "inode": card.inode.get(),
-        "generation": card.generation,
-        "size_bytes": card.size_bytes,
-        "entry_count": card.entry_count,
-        "indexed_values": indexed_values,
-    })
+    let mut object = Map::new();
+    object.insert("path".to_owned(), json!(card.path));
+    object.insert("name".to_owned(), json!(card.name));
+    object.insert("kind".to_owned(), json!(card_kind_name(&card.kind)));
+    object.insert("evidence".to_owned(), json!(card.evidence));
+    object.insert("snapshot_id".to_owned(), json!(card.snapshot_id));
+    object.insert("inode".to_owned(), json!(card.inode.get()));
+    object.insert("generation".to_owned(), json!(card.generation));
+    object.insert("size_bytes".to_owned(), json!(card.size_bytes));
+    object.insert("entry_count".to_owned(), json!(card.entry_count));
+    object.insert("indexed_values".to_owned(), Value::Array(indexed_values));
+    append_find_match_includes(&mut object, card, includes);
+    Value::Object(object)
+}
+
+fn append_find_match_includes(
+    object: &mut Map<String, Value>,
+    card: &NamespaceCard,
+    includes: &[NamespaceInclude],
+) {
+    for include in includes {
+        match include {
+            NamespaceInclude::Body => {
+                object.insert(
+                    "body".to_owned(),
+                    card.body.as_ref().map(body_json).unwrap_or(Value::Null),
+                );
+            }
+            NamespaceInclude::Schema => {
+                object.insert(
+                    "schema".to_owned(),
+                    card.schema.as_ref().map(schema_json).unwrap_or(Value::Null),
+                );
+            }
+            NamespaceInclude::Sample => {
+                object.insert("sample".to_owned(), json!(card.sample));
+            }
+            NamespaceInclude::Catalog => {
+                object.insert("catalog".to_owned(), catalog_json(&card.catalog));
+            }
+        }
+    }
 }
 
 fn projected_values_json(card: &NamespaceCard, fields: &[String]) -> Value {
@@ -939,8 +972,17 @@ mod tests {
                 record_type: NamespaceRecordType::JsonObject,
                 fields: vec!["status".to_owned()],
             }),
-            sample: Vec::new(),
-            body: None,
+            sample: vec![r#"{"status":"completed"}"#.to_owned()],
+            body: Some(NamespaceBodyDescriptor {
+                producer: "unit-test".to_owned(),
+                digest_uri: "sha256:test".to_owned(),
+                size: 13,
+                content_type: "application/json".to_owned(),
+                manifest_id: "runs/run-1/metadata.json".to_owned(),
+                generation: 7,
+                chunk_size: 4096,
+                block_size: 4096,
+            }),
             catalog: NamespaceQueryCatalog {
                 filterable: vec![NamespaceFilterCapability {
                     field: NamespaceFindField::new("run.status"),
@@ -948,7 +990,12 @@ mod tests {
                 }],
                 sortable: vec![NamespaceSortField::new("run.status")],
                 facetable: vec![NamespaceFindField::new("run.status")],
-                projections: vec![NamespaceInclude::Catalog],
+                projections: vec![
+                    NamespaceInclude::Body,
+                    NamespaceInclude::Schema,
+                    NamespaceInclude::Sample,
+                    NamespaceInclude::Catalog,
+                ],
             },
             indexed_values: vec![NamespaceIndexValue {
                 field: NamespaceFindField::new("run.status"),
@@ -997,8 +1044,44 @@ mod tests {
             output["matches"][0]["indexed_values"][0]["field"],
             "run.status"
         );
-        assert_eq!(output["catalog"]["filterable"][0]["field"], "run.status");
-        assert!(output["matches"][0].get("catalog").is_none());
+        assert!(output.get("catalog").is_none() || output["catalog"].is_null());
+        assert_eq!(
+            output["matches"][0]["catalog"]["filterable"][0]["field"],
+            "run.status"
+        );
+    }
+
+    #[test]
+    fn find_tool_surfaces_requested_card_includes_on_each_match() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "find",
+            &json!({
+                "path": "/runs",
+                "include": ["body", "schema", "sample", "catalog"],
+                "limit": 1
+            }),
+        )
+        .unwrap();
+
+        let request = namespace.last_find.borrow().clone().unwrap();
+        assert_eq!(
+            request.include,
+            vec![
+                NamespaceInclude::Body,
+                NamespaceInclude::Schema,
+                NamespaceInclude::Sample,
+                NamespaceInclude::Catalog
+            ]
+        );
+        let match_ = &output["matches"][0];
+        assert_eq!(match_["body"]["content_type"], "application/json");
+        assert_eq!(match_["schema"]["record_type"], "json_object");
+        assert_eq!(match_["sample"][0], r#"{"status":"completed"}"#);
+        assert_eq!(match_["catalog"]["filterable"][0]["field"], "run.status");
+        assert!(output.get("catalog").is_none() || output["catalog"].is_null());
     }
 
     #[test]
@@ -1046,6 +1129,31 @@ mod tests {
         assert!(output["matches"][0].get("generation").is_none());
         assert!(output.get("catalog").is_none() || output["catalog"].is_null());
         assert!(namespace.last_find.borrow().is_some());
+    }
+
+    #[test]
+    fn find_tool_combines_field_projection_with_requested_includes() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "find",
+            &json!({
+                "path": "/runs",
+                "fields": ["run.status"],
+                "include": ["schema"],
+                "limit": 5
+            }),
+        )
+        .unwrap();
+
+        let match_ = &output["matches"][0];
+        assert_eq!(match_["path"], "/runs/run-1");
+        assert_eq!(match_["values"], json!({"run.status": "completed"}));
+        assert_eq!(match_["schema"]["record_type"], "json_object");
+        assert!(match_.get("indexed_values").is_none());
+        assert!(match_.get("name").is_none());
+        assert!(match_.get("generation").is_none());
     }
 
     #[test]

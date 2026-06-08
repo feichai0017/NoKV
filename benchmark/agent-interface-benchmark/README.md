@@ -26,15 +26,15 @@ namespace surface:
 - `nokvfs-server`: framed metadata RPC handlers for the same operations.
 
 Native grep is now implemented through `nokvfs-meta`, `nokvfs-protocol`, and
-`nokvfs-server` as a product-native file-content scan. The benchmark harness
-temporarily exposes `grep` for `nokv_native_v1` by calling the product service
-directly; the follow-up cleanup is to converge that mapping into
-`nokvfs-client` beside `ls`, `stat`, `read`, and `find`.
+`nokvfs-server` as a product-native file-content scan. The current seven-task
+Phase 1 core registry does not expose `grep` because the active task set has no
+body-inspection workload. A later body-inspection profile should expose grep
+through `nokvfs-client` beside `ls`, `stat`, `read`, and `find`.
 
 The benchmark arm named `nokv_native_v1` uses the `nokvfs-client` agent adapter
 for `ls`, `stat`, `read`, and `find`. The harness translates OpenAI tool calls
-into product API calls, but does not own the measured card, find, grep,
-structured read, index catalog, pagination, consistency, or evidence semantics.
+into product API calls, but does not own the measured card, find, structured
+read, index catalog, pagination, consistency, or evidence semantics.
 
 ## Corpus
 
@@ -85,7 +85,7 @@ rubric lives in `rubric/phase1_readonly.yaml`.
 
 ## Phase 1 Task Shape
 
-The active read-only workload is a deduplicated 10-task set:
+The active read-only workload is a deduplicated 7-task set:
 
 | Task | Shape |
 | --- | --- |
@@ -96,17 +96,6 @@ The active read-only workload is a deduplicated 10-task set:
 | `dirty_git_missing_patches` | Find dirty-git runs whose declared patch artifact is unavailable. |
 | `index_completed_consistency` | Check whether the completed-run namespace index agrees with run metadata. |
 | `stdout_availability_by_script` | Count completed runs and available `stdout.txt` artifacts by script. |
-| `stderr_dataframe_fragmentation_top10` | Inspect completed `sample_tabdiff.py` `stderr.txt` bodies for `PerformanceWarning: DataFrame is highly fragmented` and rank runs by warning count. |
-| `sample_tabdiff_checkpoint_top5` | Inspect completed `sample_tabdiff.py` `stdout.txt` bodies for `Checkpoint: best_ema_model...` lines and group parsed checkpoint filenames by run count. |
-| `eval_privacy_default_warning_counts` | Inspect completed `eval.py` `stdout.txt` bodies for `Parameter 'privacy' not found in config` warning lines and group the printed default values. |
-
-The three `body_inspection` tasks intentionally have no precomputed content
-indexes. They may use ordinary namespace metadata to locate candidate runs and
-artifacts, but the decisive facts come from runtime inspection of `stdout.txt`
-or `stderr.txt` bodies. Do not add task-specific fields to `run_agent_index`,
-generated `/index/*.json` files, or NoKV catalog cards for these facts. The raw
-SQLite arm scans `files.content`; the NoKV native arm should use
-product-native namespace body scanning such as `grep` plus targeted `read`.
 
 ## Valid Comparisons
 
