@@ -30,8 +30,11 @@ where
     /// The returned [`CloneHandle::root`] is a new namespace root that sees every
     /// file and directory the source had at clone time. File bodies are **shared,
     /// not copied**: the fork's chunk manifests reference the same object blocks
-    /// (same `blocks/{mount}/{inode}/{generation}/...` keys) as the source, so the
-    /// clone is O(metadata-size), independent of data size. Each fork node gets a
+    /// (same `blocks/{mount}/{inode}/{generation}/...` keys) as the source. The
+    /// data is therefore zero-copy and the clone is **independent of data size**;
+    /// the metadata work is **O(entries)** — one inode + one commit per descendant,
+    /// the same complexity class as any per-entry namespace copy (batching these
+    /// commits, or a lazy CoW namespace fork, is future work). Each fork node gets a
     /// fresh inode, so the fork's namespace is fully isolated: writing or deleting
     /// in the fork does not affect the source, and vice versa.
     ///
@@ -68,7 +71,8 @@ where
     /// under a fresh inode while keeping each file body's `generation`, so the new
     /// tree's chunk manifests reference the same `blocks/{mount}/{inode}/{generation}/...`
     /// object keys as the source captured at `read_version` — the bodies are shared,
-    /// not copied, making this O(metadata-size). The returned root is detached: no
+    /// not copied, so this is zero-copy in data and O(entries) in metadata (one
+    /// commit per descendant). The returned root is detached: no
     /// dentry names it yet, so the caller must link it (clone) or graft it over an
     /// existing root (rollback).
     ///
@@ -109,22 +113,19 @@ where
         self.copy_inode_xattrs(src_root, dst_root, read_version)?;
 
         // Breadth-first so a fork parent always exists before its children (the
-        // create path predicates on the parent inode existing).
+        // create path predicates on the parent inode existing). Each directory's
+        // children are materialized in a single batched commit, so a clone costs
+        // one commit per source directory rather than one per entry.
         let mut queue = vec![CloneFrame {
             src_inode: src_root,
             dst_inode: dst_root,
         }];
         while let Some(frame) = queue.pop() {
-            for child in self.list_dir_at_version(frame.src_inode, read_version, listing)? {
-                let dst_child = self.next_inode()?;
-                self.clone_child(frame.dst_inode, dst_child, &child, read_version)?;
-                self.copy_inode_xattrs(child.attr.inode, dst_child, read_version)?;
-                if child.attr.file_type == FileType::Directory {
-                    queue.push(CloneFrame {
-                        src_inode: child.attr.inode,
-                        dst_inode: dst_child,
-                    });
-                }
+            let children = self.list_dir_at_version(frame.src_inode, read_version, listing)?;
+            if !children.is_empty() {
+                let mut sub_frames =
+                    self.clone_children_into(frame.dst_inode, &children, read_version)?;
+                queue.append(&mut sub_frames);
             }
         }
 
@@ -331,6 +332,8 @@ where
                 None => deltas.push(SubtreeDelta {
                     path,
                     kind: SubtreeDeltaKind::Removed,
+                    digest: entry_digest(a_entry),
+                    size_delta: -(a_entry.attr.size as i64),
                 }),
                 Some(b_entry) => {
                     let both_dirs = a_entry.attr.file_type == FileType::Directory
@@ -347,16 +350,20 @@ where
                         deltas.push(SubtreeDelta {
                             path,
                             kind: SubtreeDeltaKind::Modified,
+                            digest: entry_digest(b_entry),
+                            size_delta: b_entry.attr.size as i64 - a_entry.attr.size as i64,
                         });
                     }
                 }
             }
         }
-        for name in b_entries.keys() {
+        for (name, b_entry) in &b_entries {
             if !a_entries.contains_key(name) {
                 deltas.push(SubtreeDelta {
                     path: child_path(prefix, name)?,
                     kind: SubtreeDeltaKind::Added,
+                    digest: entry_digest(b_entry),
+                    size_delta: b_entry.attr.size as i64,
                 });
             }
         }
@@ -401,53 +408,142 @@ where
         Ok(())
     }
 
-    /// Copy one source child into the fork under `dst_parent` as inode `dst_inode`,
-    /// keeping the file body's generation (so chunk manifests keep referencing the
-    /// source's object blocks).
-    fn clone_child(
+    /// Materialize every `child` of one source directory into the fork under
+    /// `dst_parent` in a **single batched commit**, keeping each file body's
+    /// generation (so chunk manifests keep referencing the source's object
+    /// blocks). Returns the child directories to recurse into.
+    ///
+    /// One commit for a whole directory's children rather than one per child is
+    /// what keeps clone's per-commit overhead from dominating: cost scales with the
+    /// number of *directories*, not the number of entries.
+    fn clone_children_into(
         &self,
         dst_parent: InodeId,
-        dst_inode: InodeId,
-        child: &DentryWithAttr,
-        version: Version,
-    ) -> Result<(), MetadError> {
+        children: &[DentryWithAttr],
+        read_version: Version,
+    ) -> Result<Vec<CloneFrame>, MetadError> {
         let commit_version = self.next_version()?;
-        let mut attr = child.attr.clone();
-        attr.inode = dst_inode;
-        attr.nlink = attr.file_type.initial_link_count();
+        let mut predicates = vec![PredicateRef {
+            family: RecordFamily::Inode,
+            key: inode_key(self.mount, dst_parent),
+            predicate: Predicate::Exists,
+        }];
+        let mut mutations = Vec::new();
+        let mut watch = Vec::new();
+        let mut sub_frames = Vec::new();
+        // Xattrs are copied after the batch commit (so the dst inodes exist); most
+        // entries have none, so this is usually empty.
+        let mut xattr_copies = Vec::new();
 
-        if let Some(body) = &child.body {
-            // Carry the body descriptor verbatim, including its generation: the
-            // fork's body summary and chunk manifests land under
-            // (dst_inode, body.generation) but still point at the source's blocks.
-            let chunks = self.chunk_manifests_for_body_at_version(
-                child.attr.inode,
-                body,
-                version,
-                ReadPurpose::Snapshot,
-            )?;
-            attr.generation = body.generation;
-            let projection = projection(
+        for child in children {
+            let dst_inode = self.next_inode()?;
+            let mut attr = child.attr.clone();
+            attr.inode = dst_inode;
+            attr.nlink = attr.file_type.initial_link_count();
+
+            let (body, chunks) = match &child.body {
+                Some(body) => {
+                    // Carry the body descriptor verbatim, including its generation:
+                    // the fork's chunk manifests land under (dst_inode, generation)
+                    // but still point at the source's object blocks.
+                    attr.generation = body.generation;
+                    let chunks = self.chunk_manifests_for_body_at_version(
+                        child.attr.inode,
+                        body,
+                        read_version,
+                        ReadPurpose::Snapshot,
+                    )?;
+                    (Some(body.clone()), chunks)
+                }
+                None => {
+                    attr.generation = commit_version.get();
+                    (None, Vec::new())
+                }
+            };
+
+            let proj = projection(dst_parent, child.dentry.name.clone(), attr, body);
+            let dentry = dentry_key(self.mount, dst_parent, &proj.dentry.name);
+            predicates.push(PredicateRef {
+                family: RecordFamily::Dentry,
+                key: dentry.clone(),
+                predicate: Predicate::NotExists,
+            });
+            mutations.push(Mutation {
+                family: RecordFamily::Inode,
+                key: inode_key(self.mount, dst_inode),
+                op: MutationOp::Put,
+                value: Some(Value(encode_inode_attr(&proj.attr))),
+            });
+            mutations.push(put_projection_mutation(RecordFamily::Dentry, dentry, &proj));
+            if let Some(body) = &proj.body {
+                mutations.push(Mutation {
+                    family: RecordFamily::ChunkManifest,
+                    key: chunk_manifest_key(
+                        self.mount,
+                        dst_inode,
+                        body.generation,
+                        BODY_SUMMARY_CHUNK_INDEX,
+                    ),
+                    op: MutationOp::Put,
+                    value: Some(Value(encode_body_descriptor(body))),
+                });
+                for chunk in &chunks {
+                    mutations.push(Mutation {
+                        family: RecordFamily::ChunkManifest,
+                        key: chunk_manifest_key(
+                            self.mount,
+                            dst_inode,
+                            body.generation,
+                            chunk.chunk_index,
+                        ),
+                        op: MutationOp::Put,
+                        value: Some(Value(encode_chunk_manifest(chunk))),
+                    });
+                }
+            }
+            if let Some(event) = self.watch_projection(
                 dst_parent,
-                child.dentry.name.clone(),
-                attr,
-                Some(body.clone()),
-            );
-            self.commit_create_projection_with_chunks(
-                clone_command_kind(child.attr.file_type),
-                &projection,
-                &chunks,
-                commit_version,
-            )
-        } else {
-            attr.generation = commit_version.get();
-            let projection = projection(dst_parent, child.dentry.name.clone(), attr, None);
-            self.commit_create_projection(
-                clone_command_kind(child.attr.file_type),
-                &projection,
-                commit_version,
-            )
+                WatchEvent {
+                    kind: create_watch_kind(clone_command_kind(child.attr.file_type)),
+                    parent: Some(dst_parent),
+                    name: Some(child.dentry.name.clone()),
+                    inode: dst_inode,
+                    version: commit_version.get(),
+                },
+            ) {
+                watch.push(event);
+            }
+            xattr_copies.push((child.attr.inode, dst_inode));
+            if child.attr.file_type == FileType::Directory {
+                sub_frames.push(CloneFrame {
+                    src_inode: child.attr.inode,
+                    dst_inode,
+                });
+            }
         }
+
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(
+                b"clone-subtree-batch",
+                self.mount,
+                dst_parent,
+                commit_version,
+            ),
+            kind: CommandKind::CreateFiles,
+            read_version: predecessor(commit_version)?,
+            commit_version,
+            primary_family: RecordFamily::Dentry,
+            primary_key: dentry_prefix(self.mount, dst_parent),
+            predicates,
+            mutations,
+            watch,
+        })?;
+
+        for (src, dst) in xattr_copies {
+            self.copy_inode_xattrs(src, dst, read_version)?;
+        }
+
+        Ok(sub_frames)
     }
 
     fn copy_inode_xattrs(
@@ -514,6 +610,11 @@ fn clone_command_kind(file_type: FileType) -> CommandKind {
 /// content-bearing nodes, the same size, content generation, and digest. A
 /// divergent write bumps the generation, so a rewritten file is never equivalent
 /// to its shared origin.
+/// The content digest of an entry's body, if it has one.
+fn entry_digest(entry: &DentryWithAttr) -> Option<String> {
+    entry.body.as_ref().map(|body| body.digest_uri.clone())
+}
+
 fn entries_equivalent(a: &DentryWithAttr, b: &DentryWithAttr) -> bool {
     if a.attr.file_type != b.attr.file_type {
         return false;

@@ -126,6 +126,8 @@ pub(super) fn wire_subtree_delta(delta: &SubtreeDelta) -> WireSubtreeDelta {
             SubtreeDeltaKind::Removed => WireSubtreeDeltaKind::Removed,
             SubtreeDeltaKind::Modified => WireSubtreeDeltaKind::Modified,
         },
+        digest: delta.digest.clone(),
+        size_delta: delta.size_delta,
     }
 }
 

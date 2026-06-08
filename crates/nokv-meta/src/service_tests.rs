@@ -159,8 +159,8 @@ fn artifact_request(name: DentryName, manifest_id: &str, bytes: &[u8]) -> Publis
     }
 }
 
-fn publish_path_artifact(
-    service: &NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+fn publish_path_artifact<O: ObjectStore>(
+    service: &NoKvFs<HoltMetadataStore, O>,
     path: &str,
     manifest_id: &str,
     bytes: &[u8],
@@ -3348,19 +3348,22 @@ fn clone_subtree_shares_base_blocks_diverges_on_write_and_keeps_gc_safe() {
     // 6. Diff reports exactly { modified: a, added: c }; b (shared) is not reported.
     let mut diff = service.diff_subtrees(base.attr.inode, fork.root).unwrap();
     diff.sort_by(|left, right| left.path.cmp(&right.path));
+    let summary: Vec<(&str, SubtreeDeltaKind)> =
+        diff.iter().map(|d| (d.path.as_str(), d.kind)).collect();
     assert_eq!(
-        diff,
+        summary,
         vec![
-            SubtreeDelta {
-                path: "/a".to_owned(),
-                kind: SubtreeDeltaKind::Modified,
-            },
-            SubtreeDelta {
-                path: "/c".to_owned(),
-                kind: SubtreeDeltaKind::Added,
-            },
+            ("/a", SubtreeDeltaKind::Modified),
+            ("/c", SubtreeDeltaKind::Added),
         ]
     );
+    // The enriched diff carries the changed file's content digest.
+    assert!(diff
+        .iter()
+        .find(|d| d.path == "/a")
+        .unwrap()
+        .digest
+        .is_some());
 
     // 5. GC safety: reclaim must NOT touch base blocks the fork's divergent write
     // abandoned but the base still references; they are owned by the base inode and
@@ -3458,21 +3461,17 @@ fn clone_subtree_copies_nested_dirs_and_diff_reports_removed() {
     service
         .remove_file(sub.attr.inode, &dname(b"deep"))
         .unwrap();
-    assert_eq!(
-        service.diff_subtrees(base, fork.root).unwrap(),
-        vec![SubtreeDelta {
-            path: "/sub/deep".to_owned(),
-            kind: SubtreeDeltaKind::Removed,
-        }]
-    );
-    // Reversed direction reports it as Added.
-    assert_eq!(
-        service.diff_subtrees(fork.root, base).unwrap(),
-        vec![SubtreeDelta {
-            path: "/sub/deep".to_owned(),
-            kind: SubtreeDeltaKind::Added,
-        }]
-    );
+    let removed = service.diff_subtrees(base, fork.root).unwrap();
+    assert_eq!(removed.len(), 1);
+    assert_eq!(removed[0].path, "/sub/deep");
+    assert_eq!(removed[0].kind, SubtreeDeltaKind::Removed);
+    assert_eq!(removed[0].size_delta, -(b"deep-bytes".len() as i64));
+    // Reversed direction reports it as Added, with the net size flipped.
+    let added = service.diff_subtrees(fork.root, base).unwrap();
+    assert_eq!(added.len(), 1);
+    assert_eq!(added[0].path, "/sub/deep");
+    assert_eq!(added[0].kind, SubtreeDeltaKind::Added);
+    assert_eq!(added[0].size_delta, b"deep-bytes".len() as i64);
 }
 
 #[test]
@@ -3658,4 +3657,507 @@ fn rollback_subtree_rejects_foreign_or_missing_snapshot() {
     assert!(service
         .rollback_subtree(other_root, snap.snapshot_id)
         .is_ok());
+}
+
+#[test]
+fn metadata_backup_then_restore_into_fresh_store_recovers_namespace() {
+    let (service, objects) = service_with_objects();
+    // Build a small namespace; file bodies land in the shared object store.
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/data", 0o755, 1000, 1000).unwrap();
+    publish_path_artifact(&service, "/runs/a.bin", "m-a", b"alpha-body");
+    publish_path_artifact(&service, "/data/b.bin", "m-b", b"bravo-body-2");
+    let want_runs = service.lookup_path("/runs/a.bin").unwrap();
+    let want_data = service.lookup_path("/data/b.bin").unwrap();
+    assert!(want_runs.is_some());
+
+    let config = MetadataArchiveConfig::new("meta/checkpoints", 3);
+    let backup = service.backup_metadata(&config).unwrap();
+    assert!(backup.image_bytes > 0);
+    assert!(backup.checkpoint_key.starts_with("meta/checkpoints/ckpt/"));
+
+    // Simulate total loss of the metadata node: a brand-new empty Holt store,
+    // pointed at the SAME object store (the clone shares the backing map).
+    let recovered = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        HoltMetadataStore::open_memory().unwrap(),
+        objects.clone(),
+    );
+    // The fresh node has no namespace at all (not even a root) until restore.
+    let outcome = recovered.restore_metadata(&config).unwrap();
+    assert_eq!(
+        outcome.as_ref().map(|o| o.checkpoint_key.as_str()),
+        Some(backup.checkpoint_key.as_str())
+    );
+
+    // Namespace entries (dentry + attr + body descriptor) are identical after
+    // restore, and a subsequent create allocates a fresh, non-colliding inode.
+    assert_eq!(recovered.lookup_path("/runs/a.bin").unwrap(), want_runs);
+    assert_eq!(recovered.lookup_path("/data/b.bin").unwrap(), want_data);
+    let fresh = publish_path_artifact(&recovered, "/runs/c.bin", "m-c", b"charlie");
+    assert_ne!(fresh.attr.inode, want_runs.unwrap().attr.inode);
+}
+
+#[test]
+fn restore_metadata_without_archive_returns_none() {
+    let (service, _objects) = service_with_objects();
+    let config = MetadataArchiveConfig::new("meta/empty", 3);
+    assert!(service.restore_metadata(&config).unwrap().is_none());
+}
+
+#[test]
+fn metadata_backup_retains_only_keep_last_checkpoints() {
+    let (service, objects) = service_with_objects();
+    let config = MetadataArchiveConfig::new("meta/ck", 2);
+    let b1 = service.backup_metadata(&config).unwrap();
+    let _b2 = service.backup_metadata(&config).unwrap();
+    let b3 = service.backup_metadata(&config).unwrap();
+    // keep_last=2: the third backup prunes exactly the first checkpoint object.
+    assert_eq!(b3.pruned, 1);
+    let pruned = ObjectKey::new(b1.checkpoint_key.clone()).unwrap();
+    assert!(objects.head(&pruned).unwrap().is_none());
+    let live = ObjectKey::new(b3.checkpoint_key.clone()).unwrap();
+    assert!(objects.head(&live).unwrap().is_some());
+    // Restore (into a fresh store) always selects the latest checkpoint.
+    let recovered = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        HoltMetadataStore::open_memory().unwrap(),
+        objects.clone(),
+    );
+    let restored = recovered.restore_metadata(&config).unwrap().unwrap();
+    assert_eq!(restored.checkpoint_key, b3.checkpoint_key);
+}
+
+use nokv_object::{ObjectInfo, ObjectRange};
+use std::sync::atomic::AtomicUsize;
+
+/// An [`ObjectStore`] wrapper that injects PUT failures to simulate a crash at a
+/// chosen point (e.g. after the checkpoint object is written but before the
+/// `CURRENT` pointer is swapped). Reads and deletes always pass through.
+#[derive(Clone)]
+struct FaultObjectStore {
+    inner: MemoryObjectStore,
+    fail_put_substring: Arc<Mutex<Option<String>>>,
+    injected_put_failures: Arc<AtomicUsize>,
+}
+
+impl FaultObjectStore {
+    fn new(inner: MemoryObjectStore) -> Self {
+        Self {
+            inner,
+            fail_put_substring: Arc::new(Mutex::new(None)),
+            injected_put_failures: Arc::new(AtomicUsize::new(0)),
+        }
+    }
+
+    fn fail_puts_containing(&self, substring: &str) {
+        *self.fail_put_substring.lock().unwrap() = Some(substring.to_owned());
+    }
+
+    fn clear_faults(&self) {
+        *self.fail_put_substring.lock().unwrap() = None;
+    }
+
+    fn injected_put_failures(&self) -> usize {
+        self.injected_put_failures.load(Ordering::Relaxed)
+    }
+}
+
+impl ObjectStore for FaultObjectStore {
+    fn put(&self, key: &ObjectKey, bytes: &[u8]) -> Result<ObjectInfo, ObjectError> {
+        if let Some(substring) = self.fail_put_substring.lock().unwrap().clone() {
+            if key.as_str().contains(&substring) {
+                self.injected_put_failures.fetch_add(1, Ordering::Relaxed);
+                return Err(ObjectError::Backend("injected put fault".to_owned()));
+            }
+        }
+        self.inner.put(key, bytes)
+    }
+
+    fn get(&self, key: &ObjectKey, range: Option<ObjectRange>) -> Result<Vec<u8>, ObjectError> {
+        self.inner.get(key, range)
+    }
+
+    fn head(&self, key: &ObjectKey) -> Result<Option<ObjectInfo>, ObjectError> {
+        self.inner.head(key)
+    }
+
+    fn delete(&self, key: &ObjectKey) -> Result<bool, ObjectError> {
+        self.inner.delete(key)
+    }
+}
+
+#[test]
+fn backup_archive_crash_between_checkpoint_and_pointer_is_consistent() {
+    let backing = MemoryObjectStore::new();
+    let objects = FaultObjectStore::new(backing.clone());
+    let service = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        HoltMetadataStore::open_memory().unwrap(),
+        objects.clone(),
+    );
+    service.bootstrap_root(0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    publish_path_artifact(&service, "/runs/a.bin", "m-a", b"alpha");
+
+    let config = MetadataArchiveConfig::new("meta/ck", 4);
+    // First backup completes: CURRENT -> checkpoint #1 (captures only /runs/a.bin).
+    let good = service.backup_metadata(&config).unwrap();
+
+    // Add /runs/b.bin, then crash the second backup at the pointer swap: the
+    // checkpoint object is written, but the CURRENT manifest PUT fails.
+    publish_path_artifact(&service, "/runs/b.bin", "m-b", b"bravo");
+    objects.fail_puts_containing("/CURRENT");
+    let err = service.backup_metadata(&config).unwrap_err();
+    assert!(matches!(err, MetadError::Object(_)));
+    assert_eq!(objects.injected_put_failures(), 1);
+    objects.clear_faults();
+
+    // CURRENT still names the first, complete checkpoint — never the orphaned
+    // second one. Restore into a fresh node recovers the pre-crash state.
+    let recovered = NoKvFs::new(
+        MountId::new(1).unwrap(),
+        HoltMetadataStore::open_memory().unwrap(),
+        backing.clone(),
+    );
+    let restored = recovered.restore_metadata(&config).unwrap().unwrap();
+    assert_eq!(restored.checkpoint_key, good.checkpoint_key);
+    assert!(recovered.lookup_path("/runs/a.bin").unwrap().is_some());
+    assert!(
+        recovered.lookup_path("/runs/b.bin").unwrap().is_none(),
+        "restore must not expose the torn (uncommitted) checkpoint"
+    );
+
+    // With the fault cleared, the archive recovers forward cleanly.
+    publish_path_artifact(&service, "/runs/c.bin", "m-c", b"charlie");
+    let next = service.backup_metadata(&config).unwrap();
+    assert_ne!(next.checkpoint_key, good.checkpoint_key);
+}
+
+#[test]
+fn object_gc_converges_under_create_delete_churn() {
+    let (service, objects) = service_with_objects();
+    // Churn: create many small files; delete the even rounds (their blocks must
+    // be reclaimed) and keep the odd rounds (their blocks must never be deleted).
+    let mut live_keys = Vec::new();
+    for round in 0..20u32 {
+        let name = DentryName::new(format!("churn-{round}.bin").into_bytes()).unwrap();
+        let published = service
+            .publish_artifact(artifact_request(
+                name.clone(),
+                &format!("m{round}"),
+                b"payload",
+            ))
+            .unwrap();
+        let body = published.body.clone().unwrap();
+        let key = block_key(published.attr.inode, body.generation, 0, 0);
+        if round % 2 == 0 {
+            service.remove_file(InodeId::root(), &name).unwrap();
+        } else {
+            live_keys.push(key);
+        }
+    }
+
+    // Drive GC to convergence with a small per-iteration limit so the queue is
+    // drained across several batches rather than one sweep.
+    let mut total_deleted = 0;
+    let mut guard = 0;
+    loop {
+        let outcome = service.cleanup_pending_objects(4).unwrap();
+        total_deleted += outcome.deleted;
+        if outcome.scanned == 0 {
+            break;
+        }
+        guard += 1;
+        assert!(guard < 1000, "object GC did not converge");
+    }
+
+    // Exactly the 10 deleted files were reclaimed, and the queue is now empty.
+    assert_eq!(total_deleted, 10);
+    assert_eq!(
+        service.cleanup_pending_objects(100).unwrap(),
+        PendingObjectCleanupOutcome::default()
+    );
+    // Every kept file's block survived: owns_block_object_key never over-deleted.
+    for key in &live_keys {
+        assert!(
+            objects.head(key).unwrap().is_some(),
+            "live block was wrongly GC'd: {}",
+            key.as_str()
+        );
+    }
+}
+
+#[test]
+fn fsck_detects_dangling_block_after_out_of_band_object_loss() {
+    let (service, objects) = service_with_objects();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let a = publish_path_artifact(&service, "/runs/a.bin", "m-a", b"alpha-body");
+    publish_path_artifact(&service, "/runs/b.bin", "m-b", b"bravo-body");
+
+    // A healthy namespace has no dangling references.
+    let clean = service.fsck_dangling_blocks(0).unwrap();
+    assert!(
+        clean.is_consistent(),
+        "unexpected dangling: {:?}",
+        clean.dangling
+    );
+    assert_eq!(clean.files_scanned, 2);
+    assert!(clean.blocks_checked >= 2);
+
+    // Delete one file's backing object out-of-band: drift that object-first
+    // ordering cannot prevent once the metadata is already committed.
+    let body = a.body.clone().unwrap();
+    let lost = block_key(a.attr.inode, body.generation, 0, 0);
+    assert!(objects.delete(&lost).unwrap());
+
+    // fsck flags exactly that reference, and nothing else.
+    let report = service.fsck_dangling_blocks(0).unwrap();
+    assert!(!report.is_consistent());
+    assert_eq!(report.dangling.len(), 1);
+    assert_eq!(report.dangling[0].inode, a.attr.inode.get());
+    assert_eq!(report.dangling[0].object_key, lost.as_str());
+}
+
+/// Set up `/runs/a.bin`, snapshot `/runs` with `lease_ms`, then free the block so
+/// it is GC-enqueued *after* the snapshot's read version (i.e. protected while
+/// the pin is live). Returns the freed block's object key.
+fn snapshot_then_free_block(
+    service: &NoKvFs<HoltMetadataStore, MemoryObjectStore>,
+    lease_ms: u64,
+) -> (SnapshotPin, ObjectKey) {
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    let published = publish_path_artifact(service, "/runs/a.bin", "m-a", b"payload");
+    let body = published.body.clone().unwrap();
+    let block = block_key(published.attr.inode, body.generation, 0, 0);
+    let runs = service.resolve_directory_path("/runs").unwrap();
+    let pin = service.snapshot_subtree_with_lease(runs, lease_ms).unwrap();
+    service.remove_file_path("/runs/a.bin").unwrap();
+    (pin, block)
+}
+
+#[test]
+fn expired_snapshot_pin_does_not_block_object_gc() {
+    let (service, objects) = service_with_objects();
+    // Lease of 0 ms: the pin is expired the moment GC inspects it.
+    let (_pin, block) = snapshot_then_free_block(&service, 0);
+    let cleanup = service.cleanup_pending_objects(100).unwrap();
+    assert_eq!(cleanup.blocked_by_snapshots, 0);
+    assert_eq!(cleanup.deleted, 1);
+    assert!(objects.head(&block).unwrap().is_none());
+}
+
+#[test]
+fn live_snapshot_pin_blocks_object_gc_until_retired() {
+    let (service, objects) = service_with_objects();
+    let (pin, block) = snapshot_then_free_block(&service, 3_600_000);
+
+    // A live pin protects the freed block.
+    let blocked = service.cleanup_pending_objects(100).unwrap();
+    assert_eq!(blocked.blocked_by_snapshots, 1);
+    assert_eq!(blocked.deleted, 0);
+    assert!(objects.head(&block).unwrap().is_some());
+
+    // Retiring it releases the protection.
+    assert!(service.retire_snapshot(pin.snapshot_id).unwrap());
+    let cleanup = service.cleanup_pending_objects(100).unwrap();
+    assert_eq!(cleanup.deleted, 1);
+    assert!(objects.head(&block).unwrap().is_none());
+}
+
+#[test]
+fn renew_snapshot_restores_protection_for_an_expired_lease() {
+    let (service, objects) = service_with_objects();
+    // Pin starts expired, but is renewed before any GC pass reaps it.
+    let (pin, block) = snapshot_then_free_block(&service, 0);
+    assert!(service.renew_snapshot(pin.snapshot_id, 3_600_000).unwrap());
+
+    let blocked = service.cleanup_pending_objects(100).unwrap();
+    assert_eq!(blocked.blocked_by_snapshots, 1);
+    assert!(objects.head(&block).unwrap().is_some());
+
+    // Renewing a pin that no longer exists is a no-op.
+    assert!(!service
+        .renew_snapshot(pin.snapshot_id + 9_999, 1_000)
+        .unwrap());
+}
+
+#[test]
+fn gc_reaps_expired_snapshot_pins_but_keeps_live_ones() {
+    let (service, _objects) = service_with_objects();
+    service.create_dir_path("/a", 0o755, 1000, 1000).unwrap();
+    service.create_dir_path("/b", 0o755, 1000, 1000).unwrap();
+    let a = service.resolve_directory_path("/a").unwrap();
+    let b = service.resolve_directory_path("/b").unwrap();
+    let expired = service.snapshot_subtree_with_lease(a, 0).unwrap();
+    let live = service.snapshot_subtree_with_lease(b, 3_600_000).unwrap();
+
+    // An object-GC pass reaps expired pins as housekeeping, keeping live ones.
+    service.cleanup_pending_objects(100).unwrap();
+    assert!(service.snapshot_pin(expired.snapshot_id).unwrap().is_none());
+    assert!(service.snapshot_pin(live.snapshot_id).unwrap().is_some());
+}
+
+#[test]
+fn clone_is_batched_per_dir_and_diff_is_o_tree() {
+    // Pins the measured complexity: clone is batched per source directory (one
+    // commit per directory, NOT one per entry — well below the JuiceFS-class
+    // per-entry cost), while diff still walks the whole tree (O(tree)) — a one-file
+    // change costs the same full-tree walk, so diff is not yet O(changes) (tracked
+    // future work).
+    let (service, _objects) = service_with_objects();
+    let dirs = 6usize;
+    let files = 6usize;
+    service.create_dir_path("/base", 0o755, 1000, 1000).unwrap();
+    for d in 0..dirs {
+        service
+            .create_dir_path(&format!("/base/d{d}"), 0o755, 1000, 1000)
+            .unwrap();
+        for f in 0..files {
+            publish_path_artifact(
+                &service,
+                &format!("/base/d{d}/f{f}.bin"),
+                &format!("m{d}-{f}"),
+                b"x",
+            );
+        }
+    }
+    let entries = dirs * (1 + files); // each d{d} directory + its files
+
+    // CLONE: batched per source directory — one commit per directory, NOT one per
+    // entry — so commit count stays far below the entry count.
+    let before = service.metadata_store_stats().commit_total;
+    service.clone_subtree_path_into("/base", "/fork").unwrap();
+    let clone_commits = service.metadata_store_stats().commit_total - before;
+    assert!(
+        clone_commits < entries as u64,
+        "clone batches per directory, not per entry: entries={entries} commits={clone_commits}"
+    );
+    assert!(
+        clone_commits >= dirs as u64,
+        "clone still commits at least once per directory: dirs={dirs} commits={clone_commits}"
+    );
+
+    // DIFF (clean): scans scale with the directory count → O(tree).
+    let before = service.metadata_store_stats().scan_total;
+    let clean = service.diff_subtrees_path("/base", "/fork").unwrap();
+    let scans_clean = service.metadata_store_stats().scan_total - before;
+    assert!(clean.is_empty(), "a fresh clone diffs clean: {clean:?}");
+    assert!(
+        scans_clean >= dirs as u64,
+        "diff walks every directory: dirs={dirs} scans={scans_clean}"
+    );
+
+    // DIFF after ONE change: still the full-tree walk → NOT O(changes).
+    publish_path_artifact(&service, "/fork/d0/added.bin", "m-added", b"yy");
+    let before = service.metadata_store_stats().scan_total;
+    let dirty = service.diff_subtrees_path("/base", "/fork").unwrap();
+    let scans_dirty = service.metadata_store_stats().scan_total - before;
+    assert_eq!(dirty.len(), 1);
+    assert_eq!(dirty[0].kind, SubtreeDeltaKind::Added);
+    assert!(
+        scans_dirty >= scans_clean,
+        "diff cost does not shrink with change count (O(tree), not O(changes)): \
+         clean={scans_clean} dirty={scans_dirty}"
+    );
+}
+
+#[test]
+#[ignore = "scale bench; run: cargo test -p nokv-meta --release -- --ignored bench_clone_and_diff_scale --nocapture"]
+fn bench_clone_and_diff_scale() {
+    use std::time::Instant;
+    // The constant behind the O(entries) clone / O(tree) diff, in release. Tells us
+    // whether the best-of-N demo (clone N forks of a node_modules-scale tree, diff
+    // each) is viable as-is or needs the clone-commit batching first.
+    eprintln!("\nentries     clone_ms   us/entry   diff_clean_ms   diff_1change_ms");
+    for &(dirs, files) in &[
+        (10usize, 10usize),
+        (50, 20),
+        (100, 50),
+        (200, 80),
+        (300, 100),
+    ] {
+        let entries = dirs * (1 + files);
+        let (service, _objects) = service_with_objects();
+        service.create_dir_path("/base", 0o755, 1000, 1000).unwrap();
+        for d in 0..dirs {
+            service
+                .create_dir_path(&format!("/base/d{d}"), 0o755, 1000, 1000)
+                .unwrap();
+            for f in 0..files {
+                publish_path_artifact(
+                    &service,
+                    &format!("/base/d{d}/f{f}.bin"),
+                    &format!("m{d}-{f}"),
+                    b"x",
+                );
+            }
+        }
+
+        let t = Instant::now();
+        service.clone_subtree_path_into("/base", "/fork").unwrap();
+        let clone_ms = t.elapsed().as_secs_f64() * 1000.0;
+
+        let t = Instant::now();
+        let clean = service.diff_subtrees_path("/base", "/fork").unwrap();
+        let diff_clean_ms = t.elapsed().as_secs_f64() * 1000.0;
+        assert!(clean.is_empty());
+
+        publish_path_artifact(&service, "/fork/d0/added.bin", "m-added", b"yy");
+        let t = Instant::now();
+        let dirty = service.diff_subtrees_path("/base", "/fork").unwrap();
+        let diff_1change_ms = t.elapsed().as_secs_f64() * 1000.0;
+        assert_eq!(dirty.len(), 1);
+
+        eprintln!(
+            "{entries:7}   {clone_ms:8.2}   {:8.2}   {diff_clean_ms:13.2}   {diff_1change_ms:15.2}",
+            clone_ms * 1000.0 / entries as f64
+        );
+    }
+}
+
+#[test]
+fn publish_checkpoint_is_atomic_multi_shard_and_range_readable() {
+    let (service, _objects) = service_with_objects();
+    let ckpt = service.create_dir_path("/ckpt", 0o755, 1000, 1000).unwrap();
+    let shards: Vec<CheckpointShard> = (0..5u8)
+        .map(|i| CheckpointShard {
+            name: DentryName::new(format!("shard{i}").into_bytes()).unwrap(),
+            bytes: vec![b'A' + i; 100 + 50 * i as usize],
+        })
+        .collect();
+
+    // ATOMIC: all 5 shards land together — far fewer commits than 5 separate
+    // publishes (one batched commit, not one-per-shard).
+    let before = service.metadata_store_stats().commit_total;
+    let handle = service
+        .publish_checkpoint(ckpt.attr.inode, shards, 1000, 1000)
+        .unwrap();
+    let commits = service.metadata_store_stats().commit_total - before;
+    assert_eq!(handle.shards.len(), 5);
+    assert!(
+        commits <= 2,
+        "checkpoint shards must commit atomically in one batched command, not per shard: commits={commits}"
+    );
+
+    // All shards visible after the single publish.
+    for i in 0..5u8 {
+        assert!(service
+            .lookup_path(&format!("/ckpt/shard{i}"))
+            .unwrap()
+            .is_some());
+    }
+
+    // RESHARD-ON-READ: an arbitrary byte range of a shard returns the right bytes
+    // (what a differently-parallelized restore reads — a plain range read).
+    let s1 = service.lookup_path("/ckpt/shard1").unwrap().unwrap();
+    assert_eq!(s1.attr.size, 150);
+    assert_eq!(
+        service.read_file(s1.attr.inode, 40, 60).unwrap(),
+        vec![b'B'; 60]
+    );
+
+    // CoW version pin: snapshot the checkpoint dir = a parallelism-agnostic version.
+    let pin = service.snapshot_subtree(ckpt.attr.inode).unwrap();
+    assert!(service.snapshot_pin(pin.snapshot_id).unwrap().is_some());
 }

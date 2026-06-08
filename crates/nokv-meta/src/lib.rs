@@ -5,12 +5,14 @@
 //! metadata service. It does not own object-store provider behavior, FUSE, or
 //! client path ergonomics.
 
+pub mod backup;
 pub mod command;
 pub mod gc;
 pub mod holtstore;
 pub mod layout;
 pub mod service;
 
+pub use backup::{MetadataBackupOptions, MetadataBackupWorker, MetadataBackupWorkerState};
 pub use command::{
     CommandKind, CommitResult, HistoryPruneOutcome, HistoryPruneRequest, MetadataCheckpointStore,
     MetadataCommand, MetadataError, MetadataStore, MetadataStoreStats, MetadataStoreStatsProvider,
@@ -23,9 +25,11 @@ pub use gc::{
 };
 pub use holtstore::HoltMetadataStore;
 pub use service::{
-    BodyReadPlan, CloneHandle, CreateInDirPathBatch, CreatedPreparedArtifact, DentryWithAttr,
-    MetadError, MetadataServiceStats, NoKvFs, ObjectTransferStats, PendingObjectCleanupOutcome,
-    PreparedArtifact, PublishArtifact, PublishArtifactRange, PublishArtifactSession,
-    PublishArtifactStagedSession, ReadDirPlusPage, RenameReplaceResult, SubtreeDelta,
-    SubtreeDeltaKind, UpdateAttr, XattrSetMode,
+    BodyReadPlan, CheckpointHandle, CheckpointShard, CloneHandle, CreateInDirPathBatch,
+    CreatedPreparedArtifact, DanglingBlock, DentryWithAttr, FsckReport, MetadError,
+    MetadataArchiveConfig, MetadataBackupOutcome, MetadataRestoreOutcome, MetadataServiceStats,
+    NoKvFs, ObjectTransferStats, PendingObjectCleanupOutcome, PreparedArtifact, PublishArtifact,
+    PublishArtifactRange, PublishArtifactSession, PublishArtifactStagedSession, ReadDirPlusPage,
+    RenameReplaceResult, SubtreeDelta, SubtreeDeltaKind, UpdateAttr, XattrSetMode,
+    DEFAULT_SNAPSHOT_LEASE_MS,
 };

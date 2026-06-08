@@ -1343,7 +1343,7 @@ fn service_diff_subtrees_sends_typed_rpc_and_maps_deltas() {
             }
         );
         response_body(
-            r#"{"ok":true,"result":{"type":"subtree_deltas","deltas":[{"path":"/a","kind":"modified"},{"path":"/c","kind":"added"}]}}"#,
+            r#"{"ok":true,"result":{"type":"subtree_deltas","deltas":[{"path":"/a","kind":"modified","digest":"sha256:x","size_delta":12},{"path":"/c","kind":"added","digest":null,"size_delta":-5}]}}"#,
         )
     });
     let client = MetadataClient::connect(addr);
@@ -1354,10 +1354,14 @@ fn service_diff_subtrees_sends_typed_rpc_and_maps_deltas() {
             nokv_meta::SubtreeDelta {
                 path: "/a".to_owned(),
                 kind: nokv_meta::SubtreeDeltaKind::Modified,
+                digest: Some("sha256:x".to_owned()),
+                size_delta: 12,
             },
             nokv_meta::SubtreeDelta {
                 path: "/c".to_owned(),
                 kind: nokv_meta::SubtreeDeltaKind::Added,
+                digest: None,
+                size_delta: -5,
             },
         ]
     );
@@ -1373,7 +1377,7 @@ fn service_snapshot_subtree_path_sends_typed_rpc_and_maps_outcome() {
             }
         );
         response_body(
-            r#"{"ok":true,"result":{"type":"snapshot","snapshot":{"snapshot_id":7,"root":2,"read_version":6,"created_version":7}}}"#,
+            r#"{"ok":true,"result":{"type":"snapshot","snapshot":{"snapshot_id":7,"root":2,"read_version":6,"created_version":7,"lease_expires_unix_ms":0}}}"#,
         )
     });
     let client = MetadataClient::connect(addr);

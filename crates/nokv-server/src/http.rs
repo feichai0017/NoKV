@@ -159,6 +159,14 @@ pub(crate) fn handle_parts(server: &Server, line: &str, _body: &[u8]) -> HttpRes
             Ok(body) => HttpResponse::json("200 OK", body),
             Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
         },
+        ("GET", "/backup") | ("POST", "/backup") => match server.run_manual_backup() {
+            Ok(body) => HttpResponse::json("200 OK", body),
+            Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
+        },
+        ("GET", "/fsck") | ("POST", "/fsck") => match server.run_fsck() {
+            Ok(body) => HttpResponse::json("200 OK", body),
+            Err(err) => HttpResponse::text("500 Internal Server Error", format!("{err}\n")),
+        },
         (_, "/request-too-large") => {
             HttpResponse::text("413 Payload Too Large", "request too large\n")
         }

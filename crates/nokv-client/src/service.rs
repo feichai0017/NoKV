@@ -943,6 +943,16 @@ impl MetadataClient {
         }
     }
 
+    pub fn renew_snapshot(&self, snapshot_id: u64, lease_ms: u64) -> Result<bool, ClientError> {
+        match self.call(MetadataRpcRequest::RenewSnapshot {
+            snapshot_id,
+            lease_ms,
+        })? {
+            MetadataRpcResult::RenewedSnapshot { renewed } => Ok(renewed),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
     pub fn read_body_plan(
         &self,
         inode: InodeId,

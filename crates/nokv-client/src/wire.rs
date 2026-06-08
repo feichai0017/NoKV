@@ -169,6 +169,8 @@ pub(crate) fn subtree_delta(delta: WireSubtreeDelta) -> SubtreeDelta {
             WireSubtreeDeltaKind::Removed => SubtreeDeltaKind::Removed,
             WireSubtreeDeltaKind::Modified => SubtreeDeltaKind::Modified,
         },
+        digest: delta.digest,
+        size_delta: delta.size_delta,
     }
 }
 

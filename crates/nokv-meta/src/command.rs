@@ -47,6 +47,7 @@ pub enum CommandKind {
     ReplaceArtifact,
     SnapshotSubtree,
     RetireSnapshot,
+    RenewSnapshot,
     WatchSubtree,
     CleanupObjects,
 }

@@ -14,4 +14,4 @@ mod server;
 pub use options::{
     MetadataMode, ServerOptions, DEFAULT_METADATA_CHECKPOINT_ARCHIVE_PREFIX, DEFAULT_SERVER_BIND,
 };
-pub use server::{run, Server, ServerError};
+pub use server::{restore, run, Server, ServerError};

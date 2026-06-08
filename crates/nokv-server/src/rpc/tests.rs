@@ -1452,19 +1452,22 @@ fn rpc_clone_subtree_links_navigable_fork_and_diff_tracks_divergence() {
         other => panic!("unexpected diff result: {other:?}"),
     };
     deltas.sort_by(|left, right| left.path.cmp(&right.path));
+    let summary: Vec<(&str, &nokv_protocol::WireSubtreeDeltaKind)> =
+        deltas.iter().map(|d| (d.path.as_str(), &d.kind)).collect();
     assert_eq!(
-        deltas,
+        summary,
         vec![
-            nokv_protocol::WireSubtreeDelta {
-                path: "/a".to_owned(),
-                kind: nokv_protocol::WireSubtreeDeltaKind::Modified,
-            },
-            nokv_protocol::WireSubtreeDelta {
-                path: "/b".to_owned(),
-                kind: nokv_protocol::WireSubtreeDeltaKind::Added,
-            },
+            ("/a", &nokv_protocol::WireSubtreeDeltaKind::Modified),
+            ("/b", &nokv_protocol::WireSubtreeDeltaKind::Added),
         ]
     );
+    // The enriched delta carries the changed file's content digest end-to-end.
+    assert!(deltas
+        .iter()
+        .find(|d| d.path == "/a")
+        .unwrap()
+        .digest
+        .is_some());
 }
 
 fn dir_names_sorted(server: &Server, path: &str) -> Vec<String> {

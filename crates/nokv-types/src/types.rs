@@ -42,6 +42,12 @@ pub enum RecordFamily {
     Gc,
     CommandDedupe,
     History,
+    /// Anchors a lazy copy-on-write fork: maps a fork root to the source subtree
+    /// and the frozen read version it falls through to. Keyed by fork-root inode.
+    ForkBinding,
+    /// Durable `fork_inode -> source_inode` map for a lazy fork, so a bare-inode
+    /// read of an undiverged fork inode can recover the source. Keyed by fork inode.
+    ForkShadow,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -170,6 +176,23 @@ pub struct SnapshotPin {
     pub snapshot_id: u64,
     pub root: InodeId,
     pub read_version: u64,
+    pub created_version: u64,
+    /// Wall-clock deadline (unix ms) after which this pin no longer protects its
+    /// snapshot from GC. Holders renew to extend it; an abandoned pin expires so
+    /// a crashed client can never block reclamation forever.
+    pub lease_expires_unix_ms: u64,
+}
+
+/// Anchor for a lazy copy-on-write fork (overlay/redirect-on-read clone): a
+/// writable `fork_root` that overlays `source_root` as seen at
+/// `pinned_read_version`. Undiverged reads fall through to the source at that
+/// version; the retained `snapshot_id` keeps the shared base blocks GC-protected.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct ForkBinding {
+    pub fork_root: InodeId,
+    pub source_root: InodeId,
+    pub pinned_read_version: u64,
+    pub snapshot_id: u64,
     pub created_version: u64,
 }
 

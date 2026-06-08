@@ -8,7 +8,9 @@ use std::thread;
 
 use nokv_meta::holtstore::HoltMetadataStore;
 use nokv_meta::{
-    HistoryGcWorker, HistoryGcWorkerState, MetadError, NoKvFs, ObjectGcWorker, ObjectGcWorkerState,
+    HistoryGcWorker, HistoryGcWorkerState, MetadError, MetadataArchiveConfig,
+    MetadataBackupOptions, MetadataBackupWorker, MetadataCheckpointStore, NoKvFs, ObjectGcWorker,
+    ObjectGcWorkerState,
 };
 use nokv_object::{ObjectError, S3ObjectStore};
 
@@ -20,12 +22,15 @@ use crate::rpc;
 const DEFAULT_ROOT_MODE: u32 = 0o755;
 const SERVER_CONNECTION_WORKERS: usize = 256;
 const SERVER_CONNECTION_QUEUE: usize = 1024;
+const DEFAULT_ARCHIVE_KEEP_LAST: usize = 8;
 
 pub struct Server {
     service: Arc<NoKvFs<ServerMetadataStore, S3ObjectStore>>,
     metadata_mode: MetadataMode,
     object_gc: ObjectGcWorker,
     history_gc: HistoryGcWorker,
+    metadata_backup: Option<MetadataBackupWorker>,
+    metadata_archive: Option<MetadataArchiveConfig>,
     framed_rpc_workers: rpc::RpcWorkerPool,
     #[cfg(test)]
     _test_meta_dir: Option<tempfile::TempDir>,
@@ -43,6 +48,43 @@ pub fn run(options: ServerOptions) -> Result<(), ServerError> {
     let server = Server::open(options)?;
     let listener = TcpListener::bind(bind).map_err(ServerError::Io)?;
     server.serve(listener)
+}
+
+/// Reconstruct the metadata namespace from the object-store archive into a fresh
+/// local store, without serving. Run this on a replacement node with an empty
+/// `--meta-path` before starting the server. Returns a JSON report.
+pub fn restore(options: ServerOptions) -> Result<String, ServerError> {
+    let Some(prefix) = options.metadata_checkpoint_archive_prefix.clone() else {
+        return Err(ServerError::Metadata(MetadError::InvalidPath(
+            "metadata checkpoint archive is not configured \
+             (pass --metadata-checkpoint-archive-prefix)"
+                .to_owned(),
+        )));
+    };
+    let objects = options.object.open()?;
+    let metadata_state_path = default_metadata_state_path(&options.meta_path);
+    let metadata = match options.metadata_mode {
+        MetadataMode::Local => {
+            let store =
+                HoltMetadataStore::open_file(&metadata_state_path).map_err(MetadError::from)?;
+            ServerMetadataStore::direct(store)
+        }
+    };
+    // Install into a fresh store: do NOT bootstrap_root, which would create trees
+    // the checkpoint install then collides with.
+    let service = NoKvFs::new(options.mount, metadata, objects);
+    let archive = MetadataArchiveConfig::new(prefix, DEFAULT_ARCHIVE_KEEP_LAST);
+    match service.restore_metadata(&archive)? {
+        Some(outcome) => {
+            let key = format!("\"{}\"", escape_json_string(&outcome.checkpoint_key));
+            Ok(format!(
+                r#"{{"restored":true,"checkpoint_key":{key},"image_bytes":{},"commit_version":{}}}
+"#,
+                outcome.image_bytes, outcome.commit_version,
+            ))
+        }
+        None => Ok("{\"restored\":false,\"reason\":\"no archived checkpoint found\"}\n".to_owned()),
+    }
 }
 
 impl Server {
@@ -67,6 +109,16 @@ impl Server {
         service.bootstrap_root(DEFAULT_ROOT_MODE, options.uid, options.gid)?;
         let object_gc = ObjectGcWorker::spawn(Arc::clone(&service), options.object_gc);
         let history_gc = HistoryGcWorker::spawn(Arc::clone(&service), options.history_gc);
+        let metadata_archive = options
+            .metadata_checkpoint_archive_prefix
+            .as_ref()
+            .map(|prefix| MetadataArchiveConfig::new(prefix.clone(), DEFAULT_ARCHIVE_KEEP_LAST));
+        let metadata_backup = metadata_archive.as_ref().map(|archive| {
+            let mut backup = MetadataBackupOptions::new(archive.clone());
+            // Back up on the interval, not on every boot (avoids startup stalls).
+            backup.run_immediately = false;
+            MetadataBackupWorker::spawn(Arc::clone(&service), backup)
+        });
         let framed_rpc_workers = rpc::RpcWorkerPool::new(
             rpc::default_framed_rpc_worker_count(),
             rpc::default_framed_rpc_queue_capacity(),
@@ -76,6 +128,8 @@ impl Server {
             metadata_mode: options.metadata_mode,
             object_gc,
             history_gc,
+            metadata_backup,
+            metadata_archive,
             framed_rpc_workers,
             #[cfg(test)]
             _test_meta_dir: None,
@@ -117,7 +171,7 @@ impl Server {
         let object_gc = self.object_gc.state();
         let history_gc = self.history_gc.state();
         format!(
-            "{{\"ready\":true,\"metadata_mode\":\"{}\",\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"read_plan_cache_hits\":{},\"read_plan_cache_misses\":{},\"object_writeback_enqueued\":{},\"object_writeback_inline\":{},\"object_writeback_fallback\":{},\"object_writeback_completed\":{},\"object_writeback_failed\":{},\"object_writeback_staged_bytes\":{},\"object_writeback_uploaded_bytes\":{},\"object_writeback_queue_wait_ns\":{},\"object_writeback_queue_max_wait_ns\":{},\"object_writeback_upload_ns\":{},\"object_writeback_upload_max_ns\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{}}}\n",
+            "{{\"ready\":true,\"metadata_mode\":\"{}\",\"block_cache_enabled\":{},\"object_puts\":{},\"object_put_bytes\":{},\"object_gets\":{},\"object_get_bytes\":{},\"coalesced_gets\":{},\"coalesced_get_bytes\":{},\"cache_hits\":{},\"cache_hit_bytes\":{},\"prefetch_enqueued\":{},\"prefetch_dropped\":{},\"prefetch_completed\":{},\"prefetch_failed\":{},\"prefetch_object_gets\":{},\"prefetch_object_get_bytes\":{},\"prefetch_cache_hits\":{},\"prefetch_cache_hit_bytes\":{},\"read_plan_cache_hits\":{},\"read_plan_cache_misses\":{},\"object_writeback_enqueued\":{},\"object_writeback_inline\":{},\"object_writeback_fallback\":{},\"object_writeback_completed\":{},\"object_writeback_failed\":{},\"object_writeback_staged_bytes\":{},\"object_writeback_uploaded_bytes\":{},\"object_writeback_queue_wait_ns\":{},\"object_writeback_queue_max_wait_ns\":{},\"object_writeback_upload_ns\":{},\"object_writeback_upload_max_ns\":{},\"manifest_chunks\":{},\"manifest_blocks\":{},\"metadata_store\":{},\"metadata_service\":{},\"object_gc\":{},\"history_gc\":{},\"metadata_backup\":{}}}\n",
             self.metadata_mode.as_str(),
             self.service.block_cache_enabled(),
             objects.object_puts,
@@ -155,6 +209,7 @@ impl Server {
             metadata_service_json(&metadata_service),
             object_gc_json(&object_gc),
             history_gc_json(&history_gc),
+            self.metadata_backup_json(),
         )
     }
 
@@ -186,6 +241,63 @@ impl Server {
 "#,
             self.metadata_mode.as_str(),
         ))
+    }
+
+    pub fn run_manual_backup(&self) -> Result<String, ServerError> {
+        let Some(archive) = self.metadata_archive.as_ref() else {
+            return Err(ServerError::Metadata(MetadError::InvalidPath(
+                "metadata checkpoint archive is not configured \
+                 (start the server with --metadata-checkpoint-archive-prefix)"
+                    .to_owned(),
+            )));
+        };
+        let outcome = self.service.backup_metadata(archive)?;
+        let key = format!("\"{}\"", escape_json_string(&outcome.checkpoint_key));
+        Ok(format!(
+            r#"{{"checkpoint_key":{key},"image_bytes":{},"commit_version":{},"pruned":{}}}
+"#,
+            outcome.image_bytes, outcome.commit_version, outcome.pruned,
+        ))
+    }
+
+    pub fn run_fsck(&self) -> Result<String, ServerError> {
+        let report = self.service.fsck_dangling_blocks(0)?;
+        let dangling = report
+            .dangling
+            .iter()
+            .map(|entry| {
+                format!(
+                    "{{\"inode\":{},\"generation\":{},\"object_key\":\"{}\"}}",
+                    entry.inode,
+                    entry.generation,
+                    escape_json_string(&entry.object_key)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        Ok(format!(
+            r#"{{"inodes_scanned":{},"files_scanned":{},"blocks_checked":{},"dangling_count":{},"dangling":[{}]}}
+"#,
+            report.inodes_scanned,
+            report.files_scanned,
+            report.blocks_checked,
+            report.dangling.len(),
+            dangling,
+        ))
+    }
+
+    fn metadata_backup_json(&self) -> String {
+        match &self.metadata_backup {
+            Some(worker) => {
+                let state = worker.state();
+                format!(
+                    "{{\"enabled\":true,\"iterations\":{},\"last_error\":{}}}",
+                    state.iterations,
+                    json_string_or_null(state.last_error.as_deref())
+                )
+            }
+            None => "{\"enabled\":false}".to_owned(),
+        }
     }
 }
 

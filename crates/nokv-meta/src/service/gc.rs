@@ -16,6 +16,9 @@ where
         &self,
         limit: usize,
     ) -> Result<PendingObjectCleanupOutcome, MetadError> {
+        // Reap expired snapshot pins first so the retention floor reflects only
+        // live snapshots before deciding what is reclaimable.
+        self.reclaim_expired_snapshot_pins(limit)?;
         let version = self.read_version()?;
         let rows = self.metadata.scan(ScanRequest {
             family: RecordFamily::Gc,
@@ -123,16 +126,70 @@ where
             limit: 0,
             purpose: ReadPurpose::UserStrong,
         })?;
-        rows.into_iter()
-            .map(|row| {
-                let pin = decode_snapshot_pin(&row.value.0)
-                    .map_err(|err| MetadError::Codec(err.to_string()))?;
-                Version::new(pin.read_version).map_err(MetadError::from)
-            })
-            .try_fold(None, |floor: Option<Version>, version| {
-                let version = version?;
-                Ok(Some(floor.map_or(version, |floor| floor.min(version))))
-            })
+        let now_ms = current_time_ms();
+        let mut floor: Option<Version> = None;
+        for row in rows {
+            let pin = decode_snapshot_pin(&row.value.0)
+                .map_err(|err| MetadError::Codec(err.to_string()))?;
+            if now_ms >= pin.lease_expires_unix_ms {
+                // Expired lease: this pin no longer protects its snapshot, so it
+                // must not hold the retention floor down (a crashed holder can
+                // never block GC forever).
+                continue;
+            }
+            let version = Version::new(pin.read_version)?;
+            floor = Some(floor.map_or(version, |floor| floor.min(version)));
+        }
+        Ok(floor)
+    }
+
+    /// Delete pin records whose lease has expired, returning the number reaped.
+    /// Expired pins already stop holding the retention floor (see
+    /// [`Self::history_retention_floor`]); this removes their records so they do
+    /// not accumulate.
+    pub(super) fn reclaim_expired_snapshot_pins(&self, limit: usize) -> Result<usize, MetadError> {
+        let now_ms = current_time_ms();
+        let rows = self.metadata.scan(ScanRequest {
+            family: RecordFamily::Snapshot,
+            prefix: snapshot_pin_prefix(self.mount),
+            start_after: None,
+            version: self.read_version()?,
+            limit,
+            purpose: ReadPurpose::UserStrong,
+        })?;
+        let mut expired = Vec::new();
+        for row in rows {
+            let pin = decode_snapshot_pin(&row.value.0)
+                .map_err(|err| MetadError::Codec(err.to_string()))?;
+            if now_ms >= pin.lease_expires_unix_ms {
+                expired.push(row.key);
+            }
+        }
+        if expired.is_empty() {
+            return Ok(0);
+        }
+        let removed = expired.len();
+        let commit_version = self.next_version()?;
+        self.commit_metadata(MetadataCommand {
+            request_id: request_id(
+                b"reclaim-expired-pins",
+                self.mount,
+                InodeId::root(),
+                commit_version,
+            ),
+            kind: CommandKind::RetireSnapshot,
+            read_version: predecessor(commit_version)?,
+            commit_version,
+            primary_family: RecordFamily::Snapshot,
+            primary_key: snapshot_pin_prefix(self.mount),
+            predicates: Vec::new(),
+            mutations: expired
+                .into_iter()
+                .map(|key| delete_mutation(RecordFamily::Snapshot, key))
+                .collect(),
+            watch: Vec::new(),
+        })?;
+        Ok(removed)
     }
 
     pub(super) fn chunk_manifest_delete_and_gc_mutations(

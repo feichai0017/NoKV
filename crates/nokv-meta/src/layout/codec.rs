@@ -2,8 +2,8 @@ use std::fmt;
 
 use nokv_types::{
     BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, DentryProjection, DentryRecord,
-    FileType, InodeAttr, InodeId, ObjectGcRecord, SliceManifest, SnapshotPin, WatchEvent,
-    WatchEventKind,
+    FileType, ForkBinding, InodeAttr, InodeId, ObjectGcRecord, SliceManifest, SnapshotPin,
+    WatchEvent, WatchEventKind,
 };
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -238,6 +238,7 @@ pub fn encode_snapshot_pin(pin: &SnapshotPin) -> Vec<u8> {
     push_u64(&mut out, pin.root.get());
     push_u64(&mut out, pin.read_version);
     push_u64(&mut out, pin.created_version);
+    push_u64(&mut out, pin.lease_expires_unix_ms);
     out
 }
 
@@ -248,9 +249,46 @@ pub fn decode_snapshot_pin(bytes: &[u8]) -> Result<SnapshotPin, CodecError> {
         root: inode(input.u64()?)?,
         read_version: input.u64()?,
         created_version: input.u64()?,
+        lease_expires_unix_ms: input.u64()?,
     };
     input.finish()?;
     Ok(pin)
+}
+
+pub fn encode_fork_binding(binding: &ForkBinding) -> Vec<u8> {
+    let mut out = Vec::with_capacity(40);
+    push_u64(&mut out, binding.fork_root.get());
+    push_u64(&mut out, binding.source_root.get());
+    push_u64(&mut out, binding.pinned_read_version);
+    push_u64(&mut out, binding.snapshot_id);
+    push_u64(&mut out, binding.created_version);
+    out
+}
+
+pub fn decode_fork_binding(bytes: &[u8]) -> Result<ForkBinding, CodecError> {
+    let mut input = Decoder::new(bytes);
+    let binding = ForkBinding {
+        fork_root: inode(input.u64()?)?,
+        source_root: inode(input.u64()?)?,
+        pinned_read_version: input.u64()?,
+        snapshot_id: input.u64()?,
+        created_version: input.u64()?,
+    };
+    input.finish()?;
+    Ok(binding)
+}
+
+pub fn encode_fork_shadow(source_inode: InodeId) -> Vec<u8> {
+    let mut out = Vec::with_capacity(8);
+    push_u64(&mut out, source_inode.get());
+    out
+}
+
+pub fn decode_fork_shadow(bytes: &[u8]) -> Result<InodeId, CodecError> {
+    let mut input = Decoder::new(bytes);
+    let source = inode(input.u64()?)?;
+    input.finish()?;
+    Ok(source)
 }
 
 pub fn encode_watch_event(event: &WatchEvent) -> Vec<u8> {
@@ -462,3 +500,37 @@ impl fmt::Display for CodecError {
 }
 
 impl std::error::Error for CodecError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn fork_binding_round_trips() {
+        let binding = ForkBinding {
+            fork_root: InodeId::new(42).unwrap(),
+            source_root: InodeId::new(7).unwrap(),
+            pinned_read_version: 1234,
+            snapshot_id: 5678,
+            created_version: 5679,
+        };
+        assert_eq!(
+            decode_fork_binding(&encode_fork_binding(&binding)).unwrap(),
+            binding
+        );
+        assert!(decode_fork_binding(b"short").is_err());
+        let mut extra = encode_fork_binding(&binding);
+        extra.push(0);
+        assert!(decode_fork_binding(&extra).is_err());
+    }
+
+    #[test]
+    fn fork_shadow_round_trips() {
+        let source = InodeId::new(99).unwrap();
+        assert_eq!(
+            decode_fork_shadow(&encode_fork_shadow(source)).unwrap(),
+            source
+        );
+        assert!(decode_fork_shadow(b"").is_err());
+    }
+}

@@ -15,6 +15,8 @@ pub(super) const WATCH_CURRENT_TREE: &str = "watch_current";
 pub(super) const SNAPSHOT_CURRENT_TREE: &str = "snapshot_current";
 pub(super) const GC_CURRENT_TREE: &str = "gc_current";
 pub(super) const COMMAND_DEDUPE_CURRENT_TREE: &str = "command_dedupe_current";
+pub(super) const FORK_BINDING_CURRENT_TREE: &str = "fork_binding_current";
+pub(super) const FORK_SHADOW_CURRENT_TREE: &str = "fork_shadow_current";
 pub(super) const HISTORY_TREE: &str = "history";
 pub(super) const METADATA_TREE_NAMES: &[&str] = &[
     SYSTEM_CURRENT_TREE,
@@ -30,6 +32,8 @@ pub(super) const METADATA_TREE_NAMES: &[&str] = &[
     SNAPSHOT_CURRENT_TREE,
     GC_CURRENT_TREE,
     COMMAND_DEDUPE_CURRENT_TREE,
+    FORK_BINDING_CURRENT_TREE,
+    FORK_SHADOW_CURRENT_TREE,
     HISTORY_TREE,
 ];
 
@@ -48,6 +52,8 @@ pub(super) fn current_tree_name(family: RecordFamily) -> &'static str {
         RecordFamily::Snapshot => SNAPSHOT_CURRENT_TREE,
         RecordFamily::Gc => GC_CURRENT_TREE,
         RecordFamily::CommandDedupe => COMMAND_DEDUPE_CURRENT_TREE,
+        RecordFamily::ForkBinding => FORK_BINDING_CURRENT_TREE,
+        RecordFamily::ForkShadow => FORK_SHADOW_CURRENT_TREE,
         RecordFamily::History => HISTORY_TREE,
     }
 }
@@ -55,6 +61,11 @@ pub(super) fn current_tree_name(family: RecordFamily) -> &'static str {
 pub(super) fn family_requires_history(family: RecordFamily) -> bool {
     !matches!(
         family,
-        RecordFamily::System | RecordFamily::CommandDedupe | RecordFamily::Watch | RecordFamily::Gc
+        RecordFamily::System
+            | RecordFamily::CommandDedupe
+            | RecordFamily::Watch
+            | RecordFamily::Gc
+            | RecordFamily::ForkBinding
+            | RecordFamily::ForkShadow
     )
 }

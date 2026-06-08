@@ -92,6 +92,9 @@ enum Command {
     Gc {
         limit: usize,
     },
+    Backup,
+    Restore,
+    Fsck,
     Snapshot {
         path: String,
     },
@@ -113,6 +116,10 @@ enum Command {
     },
     RetireSnapshot {
         snapshot_id: u64,
+    },
+    RenewSnapshot {
+        snapshot_id: u64,
+        lease_ms: u64,
     },
     Help,
 }
@@ -396,6 +403,38 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
             let body = control_get(&config, &format!("/gc?limit={limit}"))?;
             print!("{body}");
         }
+        Command::Backup => {
+            let body = control_get(&config, "/backup")?;
+            print!("{body}");
+        }
+        Command::Restore => {
+            let report = nokv_server::restore(ServerOptions {
+                bind: config.server_bind,
+                mount: config.mount,
+                meta_path: config.meta,
+                metadata_mode: config.metadata_mode,
+                metadata_checkpoint_archive_prefix: config.metadata_checkpoint_archive_prefix,
+                object: config.object,
+                uid: config.uid,
+                gid: config.gid,
+                object_gc: ObjectGcOptions {
+                    interval: config.object_gc_interval,
+                    limit: config.object_gc_limit,
+                    run_immediately: false,
+                },
+                history_gc: HistoryGcOptions {
+                    interval: config.history_gc_interval,
+                    limit: config.history_gc_limit,
+                    run_immediately: false,
+                },
+            })
+            .map_err(from_io)?;
+            print!("{report}");
+        }
+        Command::Fsck => {
+            let body = control_get(&config, "/fsck")?;
+            print!("{body}");
+        }
         Command::Snapshot { path } => {
             let client = open_client(&config)?;
             let snapshot = client
@@ -428,7 +467,13 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 .diff_subtrees(&a, &b)
                 .map_err(from_client)?;
             for delta in deltas {
-                println!("{}\t{}", subtree_delta_label(delta.kind), delta.path);
+                println!(
+                    "{}\t{}\t{:+}\t{}",
+                    subtree_delta_label(delta.kind),
+                    delta.path,
+                    delta.size_delta,
+                    delta.digest.as_deref().unwrap_or("-")
+                );
             }
         }
         Command::Rollback { path, snapshot_id } => {
@@ -453,6 +498,20 @@ fn run(args: Vec<String>) -> Result<(), CliError> {
                 .retire_snapshot(snapshot_id)
                 .map_err(from_client)?;
             println!("retired_snapshot id={} retired={}", snapshot_id, retired);
+        }
+        Command::RenewSnapshot {
+            snapshot_id,
+            lease_ms,
+        } => {
+            let client = open_client(&config)?;
+            let renewed = client
+                .metadata()
+                .renew_snapshot(snapshot_id, lease_ms)
+                .map_err(from_client)?;
+            println!(
+                "renewed_snapshot id={} renewed={} lease_ms={}",
+                snapshot_id, renewed, lease_ms
+            );
         }
         Command::Help => {
             print_help(&mut io::stdout()).map_err(from_io)?;
@@ -758,6 +817,9 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
             })
         }
         "serve" => exact_args(args, 1).map(|()| Command::Serve),
+        "backup" => exact_args(args, 1).map(|()| Command::Backup),
+        "restore" => exact_args(args, 1).map(|()| Command::Restore),
+        "fsck" => exact_args(args, 1).map(|()| Command::Fsck),
         "gc" => match args.len() {
             1 => Ok(Command::Gc {
                 limit: DEFAULT_GC_LIMIT,
@@ -798,6 +860,17 @@ fn parse_command(args: &[String]) -> Result<Command, CliError> {
                 snapshot_id: parse_u64(&args[1], "snapshot_id")?,
             })
         }
+        "renew-snapshot" => match args.len() {
+            2 => Ok(Command::RenewSnapshot {
+                snapshot_id: parse_u64(&args[1], "snapshot_id")?,
+                lease_ms: nokv_meta::DEFAULT_SNAPSHOT_LEASE_MS,
+            }),
+            3 => Ok(Command::RenewSnapshot {
+                snapshot_id: parse_u64(&args[1], "snapshot_id")?,
+                lease_ms: parse_u64(&args[2], "lease_ms")?,
+            }),
+            _ => Err(CliError::TooManyArguments),
+        },
         "help" => Ok(Command::Help),
         other => Err(CliError::UnknownCommand(other.to_owned())),
     }
@@ -1183,6 +1256,9 @@ Usage:\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount [--read-only] [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] mount-snapshot SNAPSHOT_ID [--no-kernel-cache] [--direct-io] [--entry-ttl-ms MS] [--attr-ttl-ms MS] [--no-writeback-cache] MOUNTPOINT\n\
   nokv [--meta PATH] [--object-backend s3|rustfs] [--mount ID] serve\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] backup\n\
+  nokv [--meta PATH] [--object-backend s3|rustfs] [--mount ID] restore\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] fsck\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] gc [LIMIT]\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] snapshot PATH\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] clone SRC_PATH DST_PATH\n\
@@ -1190,6 +1266,7 @@ Usage:\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] rollback PATH SNAPSHOT_ID\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] cat-snapshot SNAPSHOT_ID PATH\n\
   nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] retire-snapshot SNAPSHOT_ID\n\
+  nokv [--server-bind ADDR] [--object-backend s3|rustfs] [--mount ID] renew-snapshot SNAPSHOT_ID [LEASE_MS]\n\
 \n\
 Object backends:\n\
   --object-backend s3|rustfs\n\
