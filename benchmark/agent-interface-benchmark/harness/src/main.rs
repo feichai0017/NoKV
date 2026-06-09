@@ -7,6 +7,7 @@ use std::fs;
 use std::io::Read;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     mpsc, Arc,
@@ -19,12 +20,12 @@ use nokvfs_client::{
     agent_tool_definitions, execute_agent_tool, ArtifactRepository, ArtifactRepositoryOptions,
 };
 use nokvfs_meta::{
-    HoltMetadataStore, MetadataStore, NamespaceFindField, NamespaceGrepMatch, NamespaceGrepRequest,
-    NamespaceGrepResult, NamespaceIndexField, NamespaceIndexRegistration, NamespaceIndexRow,
-    NamespaceIndexValue, NamespacePredicateOp, NamespacePredicateValue, NoKvFs,
+    HoltMetadataStore, MetadError, MetadataStore, NamespaceFindField, NamespaceGrepMatch,
+    NamespaceGrepRequest, NamespaceGrepResult, NamespaceIndexField, NamespaceIndexRegistration,
+    NamespaceIndexRow, NamespaceIndexValue, NamespacePredicateOp, NamespacePredicateValue, NoKvFs,
 };
 use nokvfs_object::{ObjectStore, S3ObjectStore, S3ObjectStoreOptions};
-use nokvfs_types::{BodyDescriptor, FileType, InodeAttr, MountId};
+use nokvfs_types::{BodyDescriptor, FileType, InodeAttr, MountId, PathMetadata};
 use rusqlite::{params, Connection, OptionalExtension};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
@@ -41,7 +42,6 @@ const DEFAULT_ACCESS_KEY: &str = "rustfsadmin";
 const DEFAULT_SECRET_KEY: &str = "rustfsadmin";
 const RUNS_PREFIX: &str = "/runs";
 const NOKV_PREFIX: &str = "yanex";
-const DEFAULT_REPEATS: usize = 10;
 const METRIC_SCALE: f64 = 1_000_000_000_000.0;
 const METRIC_SORT_OFFSET: i128 = 10_000_000_000_000;
 const PARAM_INDEX_FIELDS: &[(&str, &str)] = &[
@@ -63,13 +63,15 @@ const LATEST_METRIC_INDEX_FIELDS: &[&str] = &[
 ];
 const TOOL_CALL_TIMEOUT_MS: u64 = 30_000;
 const SQLITE_PROGRESS_OPS: i32 = 1_000;
-const CHAT_COMPLETION_MAX_ATTEMPTS: usize = 10;
+const RESPONSE_MAX_ATTEMPTS: usize = 10;
+#[cfg(test)]
+const BASE_PROFILE_YAML: &str = include_str!("../../base_profile.yaml");
 
 fn main() {
     if let Err(err) = run(env::args().skip(1).collect()) {
         eprintln!("error: {err}");
         eprintln!(
-            "\nUsage:\n  harness prepare --archive PATH --data-root PATH [--reset] [s3 options]\n  harness nokv-register-indexes --data-root PATH [s3 options]\n  harness verify --data-root PATH [--run-id ID] [s3 options]\n  harness tools --arm ARM\n  harness list-tasks\n  harness show-task --task-id ID\n  harness gold --data-root PATH --task-id ID\n  harness judge --data-root PATH --arm ARM --task-id ID --answer-json PATH\n  harness run-task --data-root PATH --arm ARM --task-id ID --output-jsonl PATH [--model MODEL] [--max-completion-tokens N]\n  harness run-batch --data-root PATH --output-jsonl PATH [--repeats N|--repeat N] [--arm ARM] [--task-id ID]\n  harness sqlite-show-schema --db PATH\n  harness sqlite-query --db PATH --sql SQL\n  harness sqlite-read-blob --db PATH --blob-ref REF --offset N --limit N\n  harness agentfs-ls|agentfs-stat|agentfs-read|agentfs-grep|agentfs-find --data-root PATH --path PATH [...]\n  harness nokv-list|nokv-stat|nokv-read --data-root PATH --path PATH [...]\n"
+            "\nUsage:\n  harness prepare --archive PATH --data-root PATH [--reset] [s3 options]\n  harness nokv-register-indexes --data-root PATH [s3 options]\n  harness verify --data-root PATH [--run-id ID] [s3 options]\n  harness tools --arm ARM\n  harness list-tasks\n  harness show-task --task-id ID\n  harness gold --data-root PATH --task-id ID\n  harness judge --data-root PATH --arm ARM --task-id ID --answer-json PATH\n  harness run-task --data-root PATH --arm ARM --task-id ID --output-jsonl PATH [--base-profile PATH] [--api-surface SURFACE] [--model MODEL] [--max-completion-tokens N]\n  harness run-batch --data-root PATH --output-jsonl PATH [--base-profile PATH] [--api-surface SURFACE] [--repeats N|--repeat N] [--arm ARM] [--task-id ID]\n  harness sqlite-show-schema --db PATH\n  harness sqlite-query --db PATH --sql SQL\n  harness sqlite-read-blob --db PATH --blob-ref REF --offset N --limit N\n  harness nokv-list|nokv-stat|nokv-read --data-root PATH --path PATH [...]\n"
         );
         std::process::exit(2);
     }
@@ -92,11 +94,6 @@ fn run(args: Vec<String>) -> Result<(), HarnessError> {
         "sqlite-show-schema" => show_schema(options),
         "sqlite-query" => query_sql(options),
         "sqlite-read-blob" => read_blob(options),
-        "agentfs-ls" => agentfs_ls(options),
-        "agentfs-stat" => agentfs_stat(options),
-        "agentfs-read" => agentfs_read(options),
-        "agentfs-grep" => agentfs_grep(options),
-        "agentfs-find" => agentfs_find(options),
         "nokv-list" => nokv_list(options),
         "nokv-stat" => nokv_stat(options),
         "nokv-read" => nokv_read(options),
@@ -121,12 +118,12 @@ struct Options {
     offset: Option<u64>,
     limit: Option<usize>,
     path: Option<String>,
-    pattern: Option<String>,
-    recursive: bool,
     arm: Option<String>,
     task_id: Option<String>,
     output_jsonl: Option<PathBuf>,
     answer_json: Option<PathBuf>,
+    base_profile: Option<PathBuf>,
+    api_surface: Option<ApiSurface>,
     model: Option<String>,
     expected_generation: Option<u64>,
     max_turns: Option<usize>,
@@ -175,6 +172,62 @@ struct BenchmarkTask {
     prompt: String,
     gold_sql: String,
     expected: ExpectedSpec,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct BaseProfile {
+    api_surface: ApiSurface,
+    model: BaseProfileModel,
+    run_policy: BaseProfileRunPolicy,
+    base_system_message: String,
+    base_developer_message: String,
+}
+
+#[derive(Clone, Debug)]
+struct LoadedBaseProfile {
+    profile: BaseProfile,
+    #[cfg(test)]
+    yaml: String,
+}
+
+impl std::ops::Deref for LoadedBaseProfile {
+    type Target = BaseProfile;
+
+    fn deref(&self) -> &Self::Target {
+        &self.profile
+    }
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct BaseProfileModel {
+    temperature: Option<f64>,
+    max_completion_tokens: usize,
+    stream: bool,
+    structured_output: bool,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct BaseProfileRunPolicy {
+    stateless: bool,
+    repeats_per_arm_task: usize,
+    max_turns: usize,
+    max_tool_calls: usize,
+    tool_call_timeout_ms: u64,
+    retry_policy: String,
+    clear_messages_after_run: bool,
+    corpus_snapshot: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+struct BenchmarkRuntimeConfig {
+    model: String,
+    api_surface: ApiSurface,
+    max_turns: usize,
+    max_tool_calls: usize,
+    max_completion_tokens: usize,
+    tool_call_timeout: Duration,
+    temperature: Option<f64>,
+    response_format: Option<Value>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -261,7 +314,7 @@ struct SqliteMaterializationReport {
     raw_dependencies_checked: usize,
     raw_existing_artifacts_checked: usize,
     raw_missing_artifacts_checked: usize,
-    agentfs_files_checked: usize,
+    sqlite_files_checked: usize,
     index_files_checked: usize,
     agent_index_rows_checked: usize,
     agent_index_values_checked: usize,
@@ -308,11 +361,18 @@ struct SqliteReadBlobToolResult {
     content_hex: String,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 struct ToolDefinition {
     name: String,
     description: String,
     parameters: Value,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum ApiSurface {
+    ChatCompletions,
+    ResponsesLegacy,
+    AgentsResponsesSchemaOnce,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -395,37 +455,6 @@ struct GenerationMismatch {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct GrepToolResult {
-    tool: &'static str,
-    path: String,
-    pattern: String,
-    recursive: bool,
-    matches: Vec<GrepMatch>,
-    files_scanned: usize,
-    bytes_read: usize,
-    row_limit: usize,
-    truncated: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct GrepMatch {
-    path: String,
-    line_number: usize,
-    snippet: String,
-    evidence: String,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct FindToolResult {
-    tool: &'static str,
-    path: String,
-    pattern: String,
-    matches: Vec<FileEntry>,
-    row_limit: usize,
-    truncated: bool,
-}
-
-#[derive(Clone, Debug, Serialize)]
 struct JudgeResult {
     task_success: bool,
     evidence_precision: Option<f64>,
@@ -449,6 +478,7 @@ struct BenchmarkRunTelemetry {
     api_calls: Vec<ApiCallTelemetry>,
     tool_calls: Vec<ToolCallTelemetry>,
     derived_metrics: DerivedMetrics,
+    correctness: bool,
     judge: Option<JudgeResult>,
     final_answer: Option<Value>,
     run_error: Option<String>,
@@ -467,12 +497,16 @@ struct ToolCallStartTelemetry {
     started_at_unix_ms: u128,
 }
 
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, Serialize, Deserialize)]
 struct ApiCallTelemetry {
     request_id: Option<String>,
+    response_id: Option<String>,
     model: String,
     started_at_unix_ms: u128,
     completed_at_unix_ms: u128,
+    previous_response_id: Option<String>,
+    sent_tool_schema: bool,
+    sent_initial_instructions: bool,
     prompt_tokens: Option<u64>,
     completion_tokens: Option<u64>,
     total_tokens: Option<u64>,
@@ -480,6 +514,30 @@ struct ApiCallTelemetry {
     cached_prompt_tokens: Option<u64>,
     accepted_prediction_tokens: Option<u64>,
     rejected_prediction_tokens: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct AgentRunnerConfig {
+    run_id: String,
+    model: String,
+    endpoint: String,
+    arm: String,
+    task_id: String,
+    max_turns: usize,
+    max_completion_tokens: usize,
+    temperature: Option<f64>,
+    response_format: Option<Value>,
+    messages: Vec<ChatMessage>,
+    tool_bridge_url: String,
+    tools: Vec<ToolDefinition>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct AgentRunnerOutput {
+    final_answer: Option<Value>,
+    final_output: Option<String>,
+    run_error: Option<String>,
+    api_calls: Vec<ApiCallTelemetry>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -513,17 +571,27 @@ struct DerivedMetrics {
     tool_timeout_count: usize,
     missing_evidence_count: usize,
     overread_bytes: usize,
+    tool_schema_repeated_count: usize,
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct ChatCompletionRequest {
+struct ResponseRequest {
     model: String,
-    messages: Vec<ChatMessage>,
-    tools: Vec<OpenAiTool>,
+    input: Vec<Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    tools: Option<Vec<ResponseTool>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    previous_response_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     temperature: Option<f64>,
-    max_completion_tokens: usize,
-    response_format: Value,
+    max_output_tokens: usize,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    text: Option<ResponseTextConfig>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ResponseTextConfig {
+    format: Value,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -538,14 +606,9 @@ struct ChatMessage {
 }
 
 #[derive(Clone, Debug, Serialize)]
-struct OpenAiTool {
+struct ResponseTool {
     #[serde(rename = "type")]
     tool_type: String,
-    function: OpenAiFunctionDefinition,
-}
-
-#[derive(Clone, Debug, Serialize)]
-struct OpenAiFunctionDefinition {
     name: String,
     description: String,
     parameters: Value,
@@ -566,26 +629,26 @@ struct OpenAiToolCallFunction {
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct ChatCompletionResponse {
+struct ResponseApiResponse {
     id: Option<String>,
     model: Option<String>,
-    choices: Vec<ChatChoice>,
-    usage: Option<ChatUsage>,
+    #[serde(default)]
+    output: Vec<Value>,
+    output_text: Option<String>,
+    usage: Option<ResponseUsage>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
-struct ChatChoice {
-    message: ChatMessage,
-    finish_reason: Option<String>,
-}
-
-#[derive(Clone, Debug, Deserialize)]
-struct ChatUsage {
-    prompt_tokens: Option<u64>,
-    completion_tokens: Option<u64>,
+struct ResponseUsage {
+    #[serde(alias = "prompt_tokens")]
+    input_tokens: Option<u64>,
+    #[serde(alias = "completion_tokens")]
+    output_tokens: Option<u64>,
     total_tokens: Option<u64>,
-    prompt_tokens_details: Option<PromptTokenDetails>,
-    completion_tokens_details: Option<CompletionTokenDetails>,
+    #[serde(alias = "prompt_tokens_details")]
+    input_tokens_details: Option<PromptTokenDetails>,
+    #[serde(alias = "completion_tokens_details")]
+    output_tokens_details: Option<CompletionTokenDetails>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -616,9 +679,6 @@ enum ArmRuntime {
     SqliteRaw {
         conn: Connection,
     },
-    SqliteAgentFs {
-        conn: Connection,
-    },
     NokvNative {
         service: Box<NoKvFs<HoltMetadataStore, S3ObjectStore>>,
     },
@@ -632,6 +692,67 @@ struct ToolWorker {
 struct ToolWorkerRequest {
     call: OpenAiToolCall,
     response_tx: mpsc::Sender<ToolExecutionOutcome>,
+}
+
+struct ToolBridgeServer {
+    url: String,
+    shutdown_tx: mpsc::Sender<()>,
+    handle: Option<thread::JoinHandle<Result<ToolBridgeSnapshot, HarnessError>>>,
+}
+
+struct ToolBridgeStartConfig<'a> {
+    run_id: &'a str,
+    arm: &'a str,
+    task_id: &'a str,
+    repeat_index: usize,
+    data_root: &'a Path,
+    s3: &'a S3Options,
+    registry: &'a [ToolDefinition],
+    timeout: Duration,
+    output_jsonl: PathBuf,
+}
+
+struct ToolBridgeConnectionContext<'a> {
+    run_id: &'a str,
+    arm: &'a str,
+    task_id: &'a str,
+    repeat_index: usize,
+    output_jsonl: &'a Path,
+    tool_worker: &'a ToolWorker,
+}
+
+#[derive(Clone, Debug, Default)]
+struct ToolBridgeSnapshot {
+    tool_calls: Vec<ToolCallTelemetry>,
+    invalid_sql_count: usize,
+    wrong_tool_count: usize,
+    tool_timeout_count: usize,
+    tool_bytes_read: usize,
+    tool_result_tokens: usize,
+    fatal_error: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+struct ToolBridgeInvokeRequest {
+    run_id: String,
+    tool_name: String,
+    arguments: Value,
+}
+
+#[derive(Clone, Debug, Serialize)]
+struct ToolBridgeInvokeResponse {
+    status: String,
+    content: Value,
+    bytes_read: usize,
+    result_token_estimate: usize,
+    error: Option<String>,
+    timed_out: bool,
+    fatal_run_error: bool,
+}
+
+struct HttpRequest {
+    path: String,
+    body: Vec<u8>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -667,6 +788,50 @@ impl Default for S3Options {
             access_key_id: DEFAULT_ACCESS_KEY.to_owned(),
             secret_access_key: DEFAULT_SECRET_KEY.to_owned(),
         }
+    }
+}
+
+impl ApiSurface {
+    fn parse(value: &str) -> Result<Self, HarnessError> {
+        match value {
+            "openai_chat_completions" => Ok(Self::ChatCompletions),
+            "openai_responses" => Ok(Self::ResponsesLegacy),
+            "openai_agents_responses_schema_once" => Ok(Self::AgentsResponsesSchemaOnce),
+            other => Err(HarnessError::Corpus(format!(
+                "unknown api_surface {other}; expected openai_chat_completions or openai_agents_responses_schema_once"
+            ))),
+        }
+    }
+
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::ChatCompletions => "openai_chat_completions",
+            Self::ResponsesLegacy => "openai_responses",
+            Self::AgentsResponsesSchemaOnce => "openai_agents_responses_schema_once",
+        }
+    }
+
+    fn is_agents_schema_once(self) -> bool {
+        self == Self::AgentsResponsesSchemaOnce
+    }
+}
+
+impl<'de> Deserialize<'de> for ApiSurface {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let value = String::deserialize(deserializer)?;
+        Self::parse(&value).map_err(serde::de::Error::custom)
+    }
+}
+
+impl Serialize for ApiSurface {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serializer.serialize_str(self.as_str())
     }
 }
 
@@ -708,11 +873,6 @@ impl Options {
                     index += 1;
                     options.path = Some(value(args, index, "--path")?.to_owned());
                 }
-                "--pattern" => {
-                    index += 1;
-                    options.pattern = Some(value(args, index, "--pattern")?.to_owned());
-                }
-                "--recursive" => options.recursive = true,
                 "--arm" => {
                     index += 1;
                     options.arm = Some(value(args, index, "--arm")?.to_owned());
@@ -729,6 +889,16 @@ impl Options {
                 "--answer-json" => {
                     index += 1;
                     options.answer_json = Some(PathBuf::from(value(args, index, "--answer-json")?));
+                }
+                "--base-profile" => {
+                    index += 1;
+                    options.base_profile =
+                        Some(PathBuf::from(value(args, index, "--base-profile")?));
+                }
+                "--api-surface" => {
+                    index += 1;
+                    options.api_surface =
+                        Some(ApiSurface::parse(value(args, index, "--api-surface")?)?);
                 }
                 "--model" => {
                     index += 1;
@@ -795,6 +965,102 @@ impl Options {
         }
         Ok(options)
     }
+}
+
+impl BenchmarkRuntimeConfig {
+    fn from_options(options: &Options, profile: &BaseProfile) -> Result<Self, HarnessError> {
+        if profile.model.stream {
+            return Err(HarnessError::Corpus(
+                "base_profile.model.stream=true is not supported by this harness".to_owned(),
+            ));
+        }
+        if !profile.run_policy.stateless {
+            return Err(HarnessError::Corpus(
+                "base_profile.run_policy.stateless=false is not supported by this harness"
+                    .to_owned(),
+            ));
+        }
+        if !profile.run_policy.clear_messages_after_run {
+            return Err(HarnessError::Corpus(
+                "base_profile.run_policy.clear_messages_after_run=false is not supported by this harness"
+                    .to_owned(),
+            ));
+        }
+        if profile.run_policy.retry_policy != "no_auto_success_retry" {
+            return Err(HarnessError::Corpus(format!(
+                "base_profile.run_policy.retry_policy={} is not supported by this harness",
+                profile.run_policy.retry_policy
+            )));
+        }
+        if profile.run_policy.corpus_snapshot != "fixed_per_benchmark_batch" {
+            return Err(HarnessError::Corpus(format!(
+                "base_profile.run_policy.corpus_snapshot={} is not supported by this harness",
+                profile.run_policy.corpus_snapshot
+            )));
+        }
+        let model = options
+            .model
+            .clone()
+            .ok_or_else(|| HarnessError::Corpus("--model is required".to_owned()))?;
+        let max_turns = options.max_turns.unwrap_or(profile.run_policy.max_turns);
+        let max_tool_calls = options
+            .max_tool_calls
+            .unwrap_or(profile.run_policy.max_tool_calls);
+        let max_completion_tokens = options
+            .max_completion_tokens
+            .unwrap_or(profile.model.max_completion_tokens);
+        let response_format = profile
+            .model
+            .structured_output
+            .then(|| json!({"type": "json_object"}));
+        Ok(Self {
+            model,
+            api_surface: options.api_surface.unwrap_or(profile.api_surface),
+            max_turns,
+            max_tool_calls,
+            max_completion_tokens,
+            tool_call_timeout: Duration::from_millis(profile.run_policy.tool_call_timeout_ms),
+            temperature: profile.model.temperature,
+            response_format,
+        })
+    }
+}
+
+#[cfg(test)]
+fn base_profile() -> Result<LoadedBaseProfile, HarnessError> {
+    load_base_profile_path(&default_base_profile_path())
+}
+
+fn load_base_profile(options: &Options) -> Result<LoadedBaseProfile, HarnessError> {
+    let path = options
+        .base_profile
+        .clone()
+        .unwrap_or_else(default_base_profile_path);
+    load_base_profile_path(&path)
+}
+
+fn load_base_profile_path(path: &Path) -> Result<LoadedBaseProfile, HarnessError> {
+    let yaml = fs::read_to_string(path).map_err(from_io)?;
+    let profile = parse_base_profile_yaml(&yaml)?;
+    Ok(LoadedBaseProfile {
+        profile,
+        #[cfg(test)]
+        yaml,
+    })
+}
+
+fn parse_base_profile_yaml(yaml: &str) -> Result<BaseProfile, HarnessError> {
+    serde_yaml::from_str(yaml).map_err(|err| HarnessError::Yaml(err.to_string()))
+}
+
+fn default_base_profile_path() -> PathBuf {
+    PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../base_profile.yaml")
+}
+
+fn repeat_count_from_options(options: &Options, profile: &BaseProfile) -> usize {
+    options
+        .repeats
+        .unwrap_or(profile.run_policy.repeats_per_arm_task)
 }
 
 fn prepare(options: Options) -> Result<(), HarnessError> {
@@ -1072,47 +1338,6 @@ fn read_blob_tool(
     })
 }
 
-fn agentfs_ls(options: Options) -> Result<(), HarnessError> {
-    let conn = open_readonly_db_option(&options)?;
-    let path = required_path(&options)?;
-    print_json(&agentfs_list_tool(&conn, &path)?)
-}
-
-fn agentfs_stat(options: Options) -> Result<(), HarnessError> {
-    let conn = open_readonly_db_option(&options)?;
-    let path = required_path(&options)?;
-    print_json(&agentfs_stat_tool(&conn, &path)?)
-}
-
-fn agentfs_read(options: Options) -> Result<(), HarnessError> {
-    let conn = open_readonly_db_option(&options)?;
-    let path = required_path(&options)?;
-    let offset = options.offset.unwrap_or(0);
-    let limit = options
-        .limit
-        .ok_or(HarnessError::MissingOption("--limit"))?;
-    print_json(&agentfs_read_tool(&conn, &path, offset, limit)?)
-}
-
-fn agentfs_grep(options: Options) -> Result<(), HarnessError> {
-    let conn = open_readonly_db_option(&options)?;
-    let path = required_path(&options)?;
-    let pattern = required_pattern(&options)?;
-    print_json(&agentfs_grep_tool(
-        &conn,
-        &path,
-        &pattern,
-        options.recursive,
-    )?)
-}
-
-fn agentfs_find(options: Options) -> Result<(), HarnessError> {
-    let conn = open_readonly_db_option(&options)?;
-    let path = required_path(&options)?;
-    let pattern = required_pattern(&options)?;
-    print_json(&agentfs_find_tool(&conn, &path, &pattern)?)
-}
-
 fn nokv_list(options: Options) -> Result<(), HarnessError> {
     let data_root = required_data_root(&options)?;
     let service = open_existing_nokv(&nokv_meta_path(&data_root), &options.s3)?;
@@ -1142,162 +1367,6 @@ fn nokv_read(options: Options) -> Result<(), HarnessError> {
         limit,
         options.expected_generation,
     )?)
-}
-
-fn agentfs_list_tool(conn: &Connection, path: &str) -> Result<ListToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let rows = agentfs_file_rows(conn)?;
-    if !rows.contains_key(&path) {
-        return Err(HarnessError::Corpus(format!(
-            "{path}: AgentFS path not found"
-        )));
-    }
-    let mut entries = Vec::new();
-    let row_limit = 1000;
-    let mut truncated = false;
-    for row in rows.values() {
-        if let Some(name) = immediate_child_name(&path, &row.path) {
-            if entries.len() == row_limit {
-                truncated = true;
-                break;
-            }
-            entries.push(agentfs_entry(row, name));
-        }
-    }
-    Ok(ListToolResult {
-        tool: "ls",
-        evidence: format!("agentfs://{path}"),
-        path,
-        entries,
-        row_limit,
-        truncated,
-    })
-}
-
-fn agentfs_stat_tool(conn: &Connection, path: &str) -> Result<StatToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let row = agentfs_file_row(conn, &path)?;
-    Ok(StatToolResult {
-        tool: "stat",
-        evidence: format!("agentfs://{path}"),
-        path,
-        file_type: row.file_type,
-        size_bytes: row.size_bytes,
-        digest: row.digest,
-        inode: None,
-        mode: None,
-        uid: None,
-        gid: None,
-        modified_ms: None,
-        generation: None,
-        body: None,
-    })
-}
-
-fn agentfs_read_tool(
-    conn: &Connection,
-    path: &str,
-    offset: u64,
-    limit: usize,
-) -> Result<ReadToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let row = agentfs_file_row(conn, &path)?;
-    if row.file_type != "file" {
-        return Err(HarnessError::Corpus(format!(
-            "{path}: AgentFS path is not a file"
-        )));
-    }
-    let content = row
-        .content
-        .ok_or_else(|| HarnessError::Corpus(format!("{path}: AgentFS file has no content")))?;
-    let range = bytes_range(&content, offset, limit)?;
-    Ok(ReadToolResult {
-        tool: "read",
-        evidence: format!("agentfs://{path}"),
-        path,
-        total_size_bytes: content.len() as u64,
-        digest: row.digest,
-        offset,
-        requested_limit: limit,
-        bytes_read: range.len(),
-        content_utf8: std::str::from_utf8(&range).ok().map(str::to_owned),
-        content_hex: bytes_hex(&range),
-        generation: None,
-        body: None,
-        generation_mismatch: None,
-    })
-}
-
-fn agentfs_grep_tool(
-    conn: &Connection,
-    path: &str,
-    pattern: &str,
-    recursive: bool,
-) -> Result<GrepToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let rows = agentfs_file_rows(conn)?;
-    if !rows.contains_key(&path) {
-        return Err(HarnessError::Corpus(format!(
-            "{path}: AgentFS path not found"
-        )));
-    }
-    let files = agentfs_candidate_files(&rows, &path, recursive);
-    let (matches, files_scanned, bytes_read, truncated) = grep_byte_files(
-        files
-            .into_iter()
-            .map(|row| (row.path.as_str(), row.content.as_deref())),
-        pattern,
-        "agentfs://",
-    );
-    Ok(GrepToolResult {
-        tool: "grep",
-        path,
-        pattern: pattern.to_owned(),
-        recursive,
-        matches,
-        files_scanned,
-        bytes_read,
-        row_limit: 100,
-        truncated,
-    })
-}
-
-fn agentfs_find_tool(
-    conn: &Connection,
-    path: &str,
-    pattern: &str,
-) -> Result<FindToolResult, HarnessError> {
-    let path = normalize_absolute_path(path);
-    let rows = agentfs_file_rows(conn)?;
-    if !rows.contains_key(&path) {
-        return Err(HarnessError::Corpus(format!(
-            "{path}: AgentFS path not found"
-        )));
-    }
-    let row_limit = 100;
-    let mut matches = Vec::new();
-    let mut truncated = false;
-    for row in rows.values() {
-        if row.path == path || !is_under_path(&path, &row.path) {
-            continue;
-        }
-        let name = path_name(&row.path);
-        if wildcard_match(pattern, name) || wildcard_match(pattern, &row.path) {
-            if matches.len() == row_limit {
-                truncated = true;
-                break;
-            }
-            matches.push(agentfs_entry(row, name));
-        }
-    }
-    Ok(FindToolResult {
-        tool: "find",
-        path,
-        pattern: pattern.to_owned(),
-        matches,
-        row_limit,
-        truncated,
-    })
 }
 
 fn nokv_list_tool(
@@ -1412,24 +1481,6 @@ fn nokv_read_tool(
     })
 }
 
-#[derive(Clone, Debug)]
-struct AgentFsRow {
-    path: String,
-    file_type: String,
-    size_bytes: Option<u64>,
-    digest: Option<String>,
-    content: Option<Vec<u8>>,
-}
-
-fn open_readonly_db_option(options: &Options) -> Result<Connection, HarnessError> {
-    let db = if let Some(db) = options.db.as_ref() {
-        db.clone()
-    } else {
-        sqlite_path(&required_data_root(options)?)
-    };
-    Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY).map_err(from_sql)
-}
-
 fn required_data_root(options: &Options) -> Result<PathBuf, HarnessError> {
     options
         .data_root
@@ -1444,148 +1495,12 @@ fn required_path(options: &Options) -> Result<String, HarnessError> {
         .ok_or(HarnessError::MissingOption("--path"))
 }
 
-fn required_pattern(options: &Options) -> Result<String, HarnessError> {
-    options
-        .pattern
-        .clone()
-        .ok_or(HarnessError::MissingOption("--pattern"))
-}
-
 fn print_json(value: &impl Serialize) -> Result<(), HarnessError> {
     println!(
         "{}",
         serde_json::to_string_pretty(value).expect("tool result serializes")
     );
     Ok(())
-}
-
-fn agentfs_file_rows(conn: &Connection) -> Result<BTreeMap<String, AgentFsRow>, HarnessError> {
-    let mut stmt = conn
-        .prepare("SELECT path, file_type, size_bytes, digest, content FROM files ORDER BY path")
-        .map_err(from_sql)?;
-    let rows = stmt
-        .query_map([], |row| {
-            let path: String = row.get(0)?;
-            let size: Option<i64> = row.get(2)?;
-            let size_bytes = size.and_then(|value| u64::try_from(value).ok());
-            Ok(AgentFsRow {
-                path,
-                file_type: row.get(1)?,
-                size_bytes,
-                digest: row.get(3)?,
-                content: row.get(4)?,
-            })
-        })
-        .map_err(from_sql)?;
-    let mut out = BTreeMap::new();
-    for row in rows {
-        let row = row.map_err(from_sql)?;
-        out.insert(row.path.clone(), row);
-    }
-    Ok(out)
-}
-
-fn agentfs_file_row(conn: &Connection, path: &str) -> Result<AgentFsRow, HarnessError> {
-    let size_to_u64 = |value: Option<i64>| value.and_then(|value| u64::try_from(value).ok());
-    conn.query_row(
-        "SELECT path, file_type, size_bytes, digest, content FROM files WHERE path = ?1",
-        params![path],
-        |row| {
-            Ok(AgentFsRow {
-                path: row.get(0)?,
-                file_type: row.get(1)?,
-                size_bytes: size_to_u64(row.get(2)?),
-                digest: row.get(3)?,
-                content: row.get(4)?,
-            })
-        },
-    )
-    .optional()
-    .map_err(from_sql)?
-    .ok_or_else(|| HarnessError::Corpus(format!("{path}: AgentFS path not found")))
-}
-
-fn agentfs_entry(row: &AgentFsRow, name: &str) -> FileEntry {
-    FileEntry {
-        name: name.to_owned(),
-        path: row.path.clone(),
-        file_type: row.file_type.clone(),
-        size_bytes: row.size_bytes,
-        digest: row.digest.clone(),
-        evidence: format!("agentfs://{}", row.path),
-        inode: None,
-        mode: None,
-        uid: None,
-        gid: None,
-        modified_ms: None,
-        generation: None,
-        body: None,
-    }
-}
-
-fn agentfs_candidate_files<'a>(
-    rows: &'a BTreeMap<String, AgentFsRow>,
-    path: &str,
-    recursive: bool,
-) -> Vec<&'a AgentFsRow> {
-    let mut files = Vec::new();
-    if let Some(row) = rows.get(path) {
-        if row.file_type == "file" {
-            files.push(row);
-            return files;
-        }
-    }
-    for row in rows.values() {
-        if row.file_type != "file" {
-            continue;
-        }
-        if recursive {
-            if is_under_path(path, &row.path) {
-                files.push(row);
-            }
-        } else if immediate_child_name(path, &row.path).is_some() {
-            files.push(row);
-        }
-    }
-    files
-}
-
-fn grep_byte_files<'a>(
-    files: impl Iterator<Item = (&'a str, Option<&'a [u8]>)>,
-    pattern: &str,
-    evidence_prefix: &str,
-) -> (Vec<GrepMatch>, usize, usize, bool) {
-    let row_limit = 100;
-    let mut matches = Vec::new();
-    let mut files_scanned = 0;
-    let mut bytes_read = 0;
-    let mut truncated = false;
-    for (path, content) in files {
-        let Some(content) = content else {
-            continue;
-        };
-        if content.contains(&0) {
-            continue;
-        }
-        files_scanned += 1;
-        bytes_read += content.len();
-        let text = String::from_utf8_lossy(content);
-        for (index, line) in text.lines().enumerate() {
-            if line.contains(pattern) {
-                if matches.len() == row_limit {
-                    truncated = true;
-                    return (matches, files_scanned, bytes_read, truncated);
-                }
-                matches.push(GrepMatch {
-                    path: path.to_owned(),
-                    line_number: index + 1,
-                    snippet: line.chars().take(240).collect(),
-                    evidence: format!("{evidence_prefix}{path}#L{}", index + 1),
-                });
-            }
-        }
-    }
-    (matches, files_scanned, bytes_read, truncated)
 }
 
 fn normalize_absolute_path(path: &str) -> String {
@@ -1600,30 +1515,6 @@ fn normalize_absolute_path(path: &str) -> String {
     out
 }
 
-fn immediate_child_name<'a>(parent: &str, child: &'a str) -> Option<&'a str> {
-    if child == parent {
-        return None;
-    }
-    let rest = if parent == "/" {
-        child.strip_prefix('/')?
-    } else {
-        child.strip_prefix(&format!("{parent}/"))?
-    };
-    if rest.is_empty() || rest.contains('/') {
-        None
-    } else {
-        Some(rest)
-    }
-}
-
-fn is_under_path(parent: &str, child: &str) -> bool {
-    if parent == "/" {
-        child != "/"
-    } else {
-        child.starts_with(&format!("{parent}/"))
-    }
-}
-
 fn path_name(path: &str) -> &str {
     path.rsplit('/')
         .find(|part| !part.is_empty())
@@ -1636,57 +1527,6 @@ fn join_absolute_path(parent: &str, name: &str) -> String {
     } else {
         format!("{parent}/{name}")
     }
-}
-
-fn wildcard_match(pattern: &str, value: &str) -> bool {
-    if pattern == "*" {
-        return true;
-    }
-    if !pattern.contains('*') {
-        return value == pattern || value.contains(pattern);
-    }
-    let mut rest = value;
-    let starts_with_wildcard = pattern.starts_with('*');
-    let ends_with_wildcard = pattern.ends_with('*');
-    let parts = pattern
-        .split('*')
-        .filter(|part| !part.is_empty())
-        .collect::<Vec<_>>();
-    if parts.is_empty() {
-        return true;
-    }
-    if !starts_with_wildcard {
-        let Some(first) = parts.first() else {
-            return true;
-        };
-        if !rest.starts_with(first) {
-            return false;
-        }
-        rest = &rest[first.len()..];
-    }
-    for part in parts.iter().skip(if starts_with_wildcard { 0 } else { 1 }) {
-        let Some(index) = rest.find(part) else {
-            return false;
-        };
-        rest = &rest[index + part.len()..];
-    }
-    ends_with_wildcard
-        || parts
-            .last()
-            .map(|last| value.ends_with(last))
-            .unwrap_or(true)
-}
-
-fn bytes_range(content: &[u8], offset: u64, limit: usize) -> Result<Vec<u8>, HarnessError> {
-    let start = usize::try_from(offset).map_err(|_| HarnessError::InvalidNumber {
-        option: "--offset",
-        value: offset.to_string(),
-    })?;
-    if start >= content.len() {
-        return Ok(Vec::new());
-    }
-    let end = start.saturating_add(limit).min(content.len());
-    Ok(content[start..end].to_vec())
 }
 
 fn nokv_entry(path: &str, attr: &InodeAttr, body: Option<&BodyDescriptor>) -> FileEntry {
@@ -1781,33 +1621,6 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
                 json!({"type":"object","required":["blob_ref","offset","limit"],"properties":{"blob_ref":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}},"additionalProperties":false}),
             ),
         ],
-        "sqlite_agentfs_v1" => vec![
-            (
-                "ls",
-                "List directory entries.",
-                json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"}},"additionalProperties":false}),
-            ),
-            (
-                "stat",
-                "Return file or directory metadata without reading file content.",
-                json!({"type":"object","required":["path"],"properties":{"path":{"type":"string"}},"additionalProperties":false}),
-            ),
-            (
-                "read",
-                "Read a file byte range.",
-                json!({"type":"object","required":["path","offset","limit"],"properties":{"path":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}},"additionalProperties":false}),
-            ),
-            (
-                "grep",
-                "Search text files by substring pattern.",
-                json!({"type":"object","required":["path","pattern","recursive"],"properties":{"path":{"type":"string"},"pattern":{"type":"string"},"recursive":{"type":"boolean"}},"additionalProperties":false}),
-            ),
-            (
-                "find",
-                "Find paths by name or wildcard pattern.",
-                json!({"type":"object","required":["path","pattern"],"properties":{"path":{"type":"string"},"pattern":{"type":"string"}},"additionalProperties":false}),
-            ),
-        ],
         other => {
             return Err(HarnessError::Corpus(format!(
                 "unknown benchmark arm {other}"
@@ -1829,21 +1642,16 @@ fn phase1_task_set() -> Result<BenchmarkTaskSet, HarnessError> {
         .map_err(|err| HarnessError::Yaml(err.to_string()))
 }
 
-fn default_repeats() -> usize {
-    DEFAULT_REPEATS
-}
-
 fn benchmark_arm_ids() -> &'static [&'static str] {
-    &["sqlite_raw_v1", "nokv_native_v1", "sqlite_agentfs_v1"]
+    &["sqlite_raw_v1", "nokv_native_v1"]
 }
 
 fn batch_plan(
     arm: Option<&str>,
     task_id: Option<&str>,
-    repeats: Option<usize>,
+    repeat_count: usize,
     task_set: &BenchmarkTaskSet,
 ) -> Vec<BatchPlanItem> {
-    let repeat_count = repeats.unwrap_or_else(default_repeats);
     let arms = arm.map(|arm| vec![arm.to_owned()]).unwrap_or_else(|| {
         benchmark_arm_ids()
             .iter()
@@ -1952,7 +1760,8 @@ fn run_benchmark_task(options: Options) -> Result<(), HarnessError> {
         .task_id
         .as_deref()
         .ok_or(HarnessError::MissingOption("--task-id"))?;
-    let final_answer = run_benchmark_task_once(&options, arm, task_id, 0)?;
+    let profile = load_base_profile(&options)?;
+    let final_answer = run_benchmark_task_once(&options, &profile, arm, task_id, 0)?;
     print_json(&final_answer)
 }
 
@@ -1963,10 +1772,12 @@ fn run_benchmark_batch(options: Options) -> Result<(), HarnessError> {
         .as_ref()
         .ok_or(HarnessError::MissingOption("--output-jsonl"))?;
     let task_set = phase1_task_set()?;
+    let profile = load_base_profile(&options)?;
+    let repeat_count = repeat_count_from_options(&options, &profile);
     let plan = batch_plan(
         options.arm.as_deref(),
         options.task_id.as_deref(),
-        options.repeats,
+        repeat_count,
         &task_set,
     );
     if plan.is_empty() {
@@ -1975,18 +1786,45 @@ fn run_benchmark_batch(options: Options) -> Result<(), HarnessError> {
         ));
     }
     for item in &plan {
-        run_benchmark_task_once(&options, &item.arm_id, &item.task_id, item.repeat_index)?;
+        run_benchmark_task_once(
+            &options,
+            &profile,
+            &item.arm_id,
+            &item.task_id,
+            item.repeat_index,
+        )?;
     }
     print_json(&json!({
         "status": "completed",
         "runs": plan.len(),
-        "repeats": options.repeats.unwrap_or_else(default_repeats),
+        "repeats": repeat_count,
         "output_jsonl": options.output_jsonl.as_ref().map(|path| path.display().to_string()),
     }))
 }
 
 fn run_benchmark_task_once(
     options: &Options,
+    profile: &LoadedBaseProfile,
+    arm: &str,
+    task_id: &str,
+    repeat_index: usize,
+) -> Result<Value, HarnessError> {
+    let api_surface = options.api_surface.unwrap_or(profile.api_surface);
+    if api_surface.is_agents_schema_once() {
+        return run_benchmark_task_once_agents_schema_once(
+            options,
+            profile,
+            arm,
+            task_id,
+            repeat_index,
+        );
+    }
+    run_benchmark_task_once_legacy(options, profile, arm, task_id, repeat_index)
+}
+
+fn run_benchmark_task_once_legacy(
+    options: &Options,
+    profile: &LoadedBaseProfile,
     arm: &str,
     task_id: &str,
     repeat_index: usize,
@@ -2000,28 +1838,22 @@ fn run_benchmark_task_once(
     let tools = tool_registry_for_arm(arm)?;
     let started = now_unix_ms();
     let run_id = format!("{}-{}-r{}-{started}", arm, task.task_id, repeat_index);
-    let model = options
-        .model
-        .clone()
-        .or_else(|| env::var("OPENAI_MODEL").ok())
-        .ok_or(HarnessError::MissingOption("--model or OPENAI_MODEL"))?;
+    let runtime_config = BenchmarkRuntimeConfig::from_options(options, profile)?;
+    let model = runtime_config.model.clone();
     let api_key =
         env::var("OPENAI_API_KEY").map_err(|_| HarnessError::MissingOption("OPENAI_API_KEY"))?;
-    let endpoint = env::var("OPENAI_CHAT_COMPLETIONS_URL")
-        .unwrap_or_else(|_| "https://api.openai.com/v1/chat/completions".to_owned());
-    let max_turns = options.max_turns.unwrap_or(20);
-    let max_tool_calls = options.max_tool_calls.unwrap_or(80);
-    let max_completion_tokens = options.max_completion_tokens.unwrap_or(4096);
+    let endpoint = env::var("OPENAI_RESPONSES_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1/responses".to_owned());
     let arm_card = arm_card_yaml(arm)?;
-    let mut messages = benchmark_messages(arm_card, &task);
-    let openai_tools = openai_tools(&tools);
+    let initial_messages = benchmark_messages(profile, arm_card, &task);
+    let response_tools = response_tools(&tools);
     let client = reqwest::blocking::Client::new();
     let tool_worker = ToolWorker::start(
         arm,
         &data_root,
         &options.s3,
         &tools,
-        Duration::from_millis(TOOL_CALL_TIMEOUT_MS),
+        runtime_config.tool_call_timeout,
     );
     let mut api_calls = Vec::new();
     let mut tool_calls = Vec::new();
@@ -2031,18 +1863,24 @@ fn run_benchmark_task_once(
     let mut tool_bytes_read = 0;
     let mut tool_result_tokens = 0;
     let mut final_answer = None;
+    let mut previous_response_id: Option<String> = None;
+    let mut pending_input = response_input_messages(&initial_messages);
 
-    for _turn in 0..max_turns {
-        let request = ChatCompletionRequest {
+    for _turn in 0..runtime_config.max_turns {
+        let first_model_request = previous_response_id.is_none();
+        let request = ResponseRequest {
             model: model.clone(),
-            messages: messages.clone(),
-            tools: openai_tools.clone(),
-            temperature: None,
-            max_completion_tokens,
-            response_format: json!({"type": "json_object"}),
+            input: pending_input.clone(),
+            tools: first_model_request.then(|| response_tools.clone()),
+            previous_response_id: previous_response_id.clone(),
+            temperature: runtime_config.temperature,
+            max_output_tokens: runtime_config.max_completion_tokens,
+            text: first_model_request
+                .then(|| response_text_config(runtime_config.response_format.clone()))
+                .flatten(),
         };
         let api_started = now_unix_ms();
-        let response = match send_chat_completion(&client, &endpoint, &api_key, &request) {
+        let response = match send_model_response(&client, &endpoint, &api_key, &request) {
             Ok(response) => response,
             Err(err) if is_recoverable_run_api_error(&err) => {
                 let error = err.to_string();
@@ -2082,6 +1920,7 @@ fn run_benchmark_task_once(
                     api_calls,
                     tool_calls,
                     derived_metrics: derived,
+                    correctness: false,
                     judge: None,
                     final_answer: Some(final_answer.clone()),
                     run_error: Some(error),
@@ -2097,21 +1936,25 @@ fn run_benchmark_task_once(
             &model,
             api_started,
             api_completed,
+            request.previous_response_id.clone(),
+            request.tools.is_some(),
+            first_model_request,
         ));
-        let Some(choice) = response.choices.into_iter().next() else {
-            return Err(HarnessError::Http(
-                "OpenAI response did not include a choice".to_owned(),
-            ));
-        };
-        let message = choice.message;
-        let assistant_message = message.clone();
-        if let Some(calls) = message.tool_calls.clone() {
-            if tool_calls.len() + calls.len() > max_tool_calls {
+        let calls = response_tool_calls(&response)?;
+        if !calls.is_empty() {
+            if tool_calls.len() + calls.len() > runtime_config.max_tool_calls {
                 return Err(HarnessError::Http(format!(
-                    "tool call budget exceeded: max_tool_calls={max_tool_calls}"
+                    "tool call budget exceeded: max_tool_calls={}",
+                    runtime_config.max_tool_calls
                 )));
             }
-            messages.push(assistant_message);
+            let response_id = response.id.clone().ok_or_else(|| {
+                HarnessError::Http(
+                    "OpenAI response with tool calls did not include a continuation id".to_owned(),
+                )
+            })?;
+            previous_response_id = Some(response_id);
+            let mut tool_output_input = Vec::new();
             for call in calls {
                 let tool_started = now_unix_ms();
                 let arguments = tool_call_arguments(&call);
@@ -2183,6 +2026,7 @@ fn run_benchmark_task_once(
                         api_calls,
                         tool_calls,
                         derived_metrics: derived,
+                        correctness: false,
                         judge: None,
                         final_answer: Some(final_answer.clone()),
                         run_error: Some(error),
@@ -2190,22 +2034,15 @@ fn run_benchmark_task_once(
                     append_jsonl(&output_jsonl, &telemetry)?;
                     return Ok(final_answer);
                 }
-                messages.push(ChatMessage {
-                    role: "tool".to_owned(),
-                    content: Some(outcome.content.to_string()),
-                    tool_call_id: Some(call.id),
-                    tool_calls: None,
-                });
+                tool_output_input.push(response_function_call_output(&call.id, &outcome.content));
             }
+            pending_input = tool_output_input;
             continue;
         }
-        if let Some(content) = message.content {
+        if let Some(content) = response_final_text(&response) {
             let parsed = serde_json::from_str::<Value>(&content)
                 .map_err(|err| HarnessError::Json(format!("final answer is not JSON: {err}")))?;
             final_answer = Some(parsed);
-            break;
-        }
-        if choice.finish_reason.as_deref() == Some("stop") {
             break;
         }
     }
@@ -2266,6 +2103,7 @@ fn run_benchmark_task_once(
                     api_calls,
                     tool_calls,
                     derived_metrics: derived,
+                    correctness: false,
                     judge: None,
                     final_answer: Some(final_answer.clone()),
                     run_error: Some(error),
@@ -2304,12 +2142,276 @@ fn run_benchmark_task_once(
         api_calls,
         tool_calls,
         derived_metrics: derived,
+        correctness: judge_result.task_success,
         judge: Some(judge_result),
         final_answer: Some(final_answer.clone()),
         run_error: None,
     };
     append_jsonl(&output_jsonl, &telemetry)?;
     Ok(final_answer)
+}
+
+fn run_benchmark_task_once_agents_schema_once(
+    options: &Options,
+    profile: &LoadedBaseProfile,
+    arm: &str,
+    task_id: &str,
+    repeat_index: usize,
+) -> Result<Value, HarnessError> {
+    let data_root = required_data_root(options)?;
+    let output_jsonl = options
+        .output_jsonl
+        .clone()
+        .ok_or(HarnessError::MissingOption("--output-jsonl"))?;
+    let task = find_task(task_id)?;
+    let tools = tool_registry_for_arm(arm)?;
+    let started = now_unix_ms();
+    let run_id = format!("{}-{}-r{}-{started}", arm, task.task_id, repeat_index);
+    let runtime_config = BenchmarkRuntimeConfig::from_options(options, profile)?;
+    let model = runtime_config.model.clone();
+    let _api_key =
+        env::var("OPENAI_API_KEY").map_err(|_| HarnessError::MissingOption("OPENAI_API_KEY"))?;
+    let endpoint = env::var("OPENAI_RESPONSES_URL")
+        .unwrap_or_else(|_| "https://api.openai.com/v1/responses".to_owned());
+    let arm_card = arm_card_yaml(arm)?;
+    let messages = benchmark_messages(profile, arm_card, &task);
+    let bridge = ToolBridgeServer::start(ToolBridgeStartConfig {
+        run_id: &run_id,
+        arm,
+        task_id: &task.task_id,
+        repeat_index,
+        data_root: &data_root,
+        s3: &options.s3,
+        registry: &tools,
+        timeout: runtime_config.tool_call_timeout,
+        output_jsonl: output_jsonl.clone(),
+    })?;
+    let runner_config = AgentRunnerConfig {
+        run_id: run_id.clone(),
+        model: model.clone(),
+        endpoint,
+        arm: arm.to_owned(),
+        task_id: task.task_id.clone(),
+        max_turns: runtime_config.max_turns,
+        max_completion_tokens: runtime_config.max_completion_tokens,
+        temperature: runtime_config.temperature,
+        response_format: runtime_config.response_format.clone(),
+        messages,
+        tool_bridge_url: bridge.url().to_owned(),
+        tools,
+    };
+    let runner_output = run_python_agent_runner(&runner_config);
+    let bridge_snapshot = bridge.finish()?;
+    let runner_output = runner_output?;
+
+    let api_calls = runner_output.api_calls;
+    let completed = now_unix_ms();
+    let run_error = runner_output
+        .run_error
+        .or_else(|| bridge_snapshot.fatal_error.clone());
+    if let Some(error) = run_error {
+        let final_answer = run_error_answer(
+            &task,
+            &error,
+            bridge_snapshot.tool_call_count(),
+            bridge_snapshot.tool_bytes_read,
+        );
+        let mut derived = DerivedMetrics {
+            interface_card_tokens: estimate_tokens(arm_card),
+            task_prompt_tokens: estimate_tokens(&task.prompt),
+            wall_time_ms: completed.saturating_sub(started),
+            task_success: Some(false),
+            evidence_precision: None,
+            tool_call_count: bridge_snapshot.tool_call_count(),
+            tool_result_tokens: bridge_snapshot.tool_result_tokens,
+            tool_bytes_read: bridge_snapshot.tool_bytes_read,
+            invalid_sql_count: bridge_snapshot.invalid_sql_count,
+            wrong_tool_count: bridge_snapshot.wrong_tool_count,
+            tool_timeout_count: bridge_snapshot.tool_timeout_count,
+            missing_evidence_count: final_answer
+                .get("missing_evidence")
+                .and_then(Value::as_array)
+                .map(Vec::len)
+                .unwrap_or_default(),
+            overread_bytes: 0,
+            ..DerivedMetrics::default()
+        };
+        apply_usage_costs(&mut derived, &api_calls, &model);
+        let telemetry = BenchmarkRunTelemetry {
+            record_type: "benchmark_run".to_owned(),
+            run_id,
+            arm_id: arm.to_owned(),
+            task_id: task.task_id,
+            repeat_index,
+            model,
+            started_at_unix_ms: started,
+            completed_at_unix_ms: completed,
+            api_calls,
+            tool_calls: bridge_snapshot.tool_calls,
+            derived_metrics: derived,
+            correctness: false,
+            judge: None,
+            final_answer: Some(final_answer.clone()),
+            run_error: Some(error),
+        };
+        append_jsonl(&output_jsonl, &telemetry)?;
+        return Ok(final_answer);
+    }
+
+    let final_answer = match runner_output.final_answer {
+        Some(value) => value,
+        None => {
+            let text = runner_output.final_output.ok_or_else(|| {
+                HarnessError::Http("Agent SDK runner did not return final output".to_owned())
+            })?;
+            serde_json::from_str::<Value>(&text)
+                .map_err(|err| HarnessError::Json(format!("final answer is not JSON: {err}")))?
+        }
+    };
+    let conn = Connection::open_with_flags(
+        sqlite_path(&data_root),
+        rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+    )
+    .map_err(from_sql)?;
+    let missing_evidence_count = final_answer
+        .get("missing_evidence")
+        .and_then(Value::as_array)
+        .map(Vec::len)
+        .unwrap_or_default();
+    let nokv_for_evidence = if arm == "nokv_native_v1" {
+        Some(open_existing_nokv(
+            &nokv_meta_path(&data_root),
+            &options.s3,
+        )?)
+    } else {
+        None
+    };
+    let judge_result =
+        match judge_answer(&conn, &task, arm, &final_answer, nokv_for_evidence.as_ref()) {
+            Ok(judge_result) => judge_result,
+            Err(err) if is_recoverable_run_judge_error(&err) => {
+                let error = err.to_string();
+                let mut derived = DerivedMetrics {
+                    interface_card_tokens: estimate_tokens(arm_card),
+                    task_prompt_tokens: estimate_tokens(&task.prompt),
+                    wall_time_ms: completed.saturating_sub(started),
+                    task_success: Some(false),
+                    evidence_precision: None,
+                    tool_call_count: bridge_snapshot.tool_call_count(),
+                    tool_result_tokens: bridge_snapshot.tool_result_tokens,
+                    tool_bytes_read: bridge_snapshot.tool_bytes_read,
+                    invalid_sql_count: bridge_snapshot.invalid_sql_count,
+                    wrong_tool_count: bridge_snapshot.wrong_tool_count,
+                    tool_timeout_count: bridge_snapshot.tool_timeout_count,
+                    missing_evidence_count,
+                    overread_bytes: 0,
+                    ..DerivedMetrics::default()
+                };
+                apply_usage_costs(&mut derived, &api_calls, &model);
+                let telemetry = BenchmarkRunTelemetry {
+                    record_type: "benchmark_run".to_owned(),
+                    run_id,
+                    arm_id: arm.to_owned(),
+                    task_id: task.task_id,
+                    repeat_index,
+                    model,
+                    started_at_unix_ms: started,
+                    completed_at_unix_ms: completed,
+                    api_calls,
+                    tool_calls: bridge_snapshot.tool_calls,
+                    derived_metrics: derived,
+                    correctness: false,
+                    judge: None,
+                    final_answer: Some(final_answer.clone()),
+                    run_error: Some(error),
+                };
+                append_jsonl(&output_jsonl, &telemetry)?;
+                return Ok(final_answer);
+            }
+            Err(err) => return Err(err),
+        };
+    let mut derived = DerivedMetrics {
+        interface_card_tokens: estimate_tokens(arm_card),
+        task_prompt_tokens: estimate_tokens(&task.prompt),
+        wall_time_ms: completed.saturating_sub(started),
+        task_success: Some(judge_result.task_success),
+        evidence_precision: judge_result.evidence_precision,
+        tool_call_count: bridge_snapshot.tool_call_count(),
+        tool_result_tokens: bridge_snapshot.tool_result_tokens,
+        tool_bytes_read: bridge_snapshot.tool_bytes_read,
+        invalid_sql_count: bridge_snapshot.invalid_sql_count,
+        wrong_tool_count: bridge_snapshot.wrong_tool_count,
+        tool_timeout_count: bridge_snapshot.tool_timeout_count,
+        missing_evidence_count,
+        overread_bytes: 0,
+        ..DerivedMetrics::default()
+    };
+    apply_usage_costs(&mut derived, &api_calls, &model);
+    let telemetry = BenchmarkRunTelemetry {
+        record_type: "benchmark_run".to_owned(),
+        run_id,
+        arm_id: arm.to_owned(),
+        task_id: task.task_id,
+        repeat_index,
+        model,
+        started_at_unix_ms: started,
+        completed_at_unix_ms: completed,
+        api_calls,
+        tool_calls: bridge_snapshot.tool_calls,
+        derived_metrics: derived,
+        correctness: judge_result.task_success,
+        judge: Some(judge_result),
+        final_answer: Some(final_answer.clone()),
+        run_error: None,
+    };
+    append_jsonl(&output_jsonl, &telemetry)?;
+    Ok(final_answer)
+}
+
+fn run_python_agent_runner(config: &AgentRunnerConfig) -> Result<AgentRunnerOutput, HarnessError> {
+    let config_file = tempfile::NamedTempFile::new().map_err(from_io)?;
+    serde_json::to_writer(config_file.as_file(), config)
+        .map_err(|err| HarnessError::Json(err.to_string()))?;
+    let script = agent_runner_script_path();
+    let python = env::var("PYTHON").unwrap_or_else(|_| "python3".to_owned());
+    let harness_bin = env::var("YANEX_BENCH_HARNESS_BIN")
+        .map(PathBuf::from)
+        .or_else(|_| env::current_exe().map_err(|err| err.to_string()))
+        .map_err(HarnessError::Io)?;
+    let output = Command::new(python)
+        .arg(script)
+        .arg("run")
+        .arg("--config")
+        .arg(config_file.path())
+        .arg("--harness-bin")
+        .arg(harness_bin)
+        .arg("--arm")
+        .arg(&config.arm)
+        .output()
+        .map_err(from_io)?;
+    if !output.status.success() {
+        return Err(HarnessError::Http(format!(
+            "Agent SDK runner failed with status {}: stdout={} stderr={}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        )));
+    }
+    serde_json::from_slice(&output.stdout).map_err(|err| {
+        HarnessError::Json(format!(
+            "Agent SDK runner output parse error: {err}; stdout={}",
+            String::from_utf8_lossy(&output.stdout)
+        ))
+    })
+}
+
+fn agent_runner_script_path() -> PathBuf {
+    env::var("YANEX_BENCH_AGENT_SDK_RUNNER")
+        .map(PathBuf::from)
+        .unwrap_or_else(|_| {
+            PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("../agents_runner/openai_agents_responses_schema_once.py")
+        })
 }
 
 fn append_tool_call_start_jsonl(
@@ -2380,16 +2482,15 @@ fn estimate_tokens(text: &str) -> usize {
     text.split_whitespace().count().max(text.len() / 4)
 }
 
-fn benchmark_messages(arm_card: &str, task: &BenchmarkTask) -> Vec<ChatMessage> {
+fn benchmark_messages(
+    profile: &LoadedBaseProfile,
+    arm_card: &str,
+    task: &BenchmarkTask,
+) -> Vec<ChatMessage> {
     vec![
         ChatMessage {
             role: "system".to_owned(),
-            content: Some(format!(
-                "{}\n\nBase profile YAML:\n{}\n\nRubric YAML:\n{}",
-                base_system_message(),
-                include_str!("../../base_profile.yaml"),
-                include_str!("../../rubric/phase1_readonly.yaml")
-            )),
+            content: Some(profile.base_system_message.trim_end().to_owned()),
             tool_call_id: None,
             tool_calls: None,
         },
@@ -2397,7 +2498,7 @@ fn benchmark_messages(arm_card: &str, task: &BenchmarkTask) -> Vec<ChatMessage> 
             role: "system".to_owned(),
             content: Some(format!(
                 "{}\n\nCurrent arm card YAML:\n{}",
-                base_developer_message(),
+                profile.base_developer_message.trim_end(),
                 arm_card
             )),
             tool_call_id: None,
@@ -2415,27 +2516,9 @@ fn benchmark_messages(arm_card: &str, task: &BenchmarkTask) -> Vec<ChatMessage> 
     ]
 }
 
-fn base_system_message() -> &'static str {
-    "You are an experiment tracking analysis agent working over a Yanex experiment corpus.\n\
-You must solve the requested task using only the interface tools exposed for the current benchmark arm.\n\
-Treat every run as stateless. Do not assume memory from previous tasks, previous arms, or previous attempts.\n\
-Prefer small, evidence-directed reads. Inspect schema, listings, metadata, or summaries before reading large bodies.\n\
-Do not guess missing values. If evidence is absent, inconsistent, or ambiguous, report that explicitly.\n\
-Cite concrete evidence handles or paths for every factual claim that affects the final answer.\n\
-Keep tool use bounded and stop as soon as the answer is sufficiently supported."
-}
-
-fn base_developer_message() -> &'static str {
-    "Output exactly one JSON object matching the benchmark schema.\n\
-Do not include markdown outside the JSON object.\n\
-If the interface cannot support a requested operation, set status to \"blocked\" or \"partial\" and explain the missing capability.\n\
-Evidence handles must be stable identifiers returned by the current arm's tools."
-}
-
 fn arm_card_yaml(arm: &str) -> Result<&'static str, HarnessError> {
     match arm {
         "sqlite_raw_v1" => Ok(include_str!("../../arms/sqlite_raw.yaml")),
-        "sqlite_agentfs_v1" => Ok(include_str!("../../arms/sqlite_agentfs.yaml")),
         "nokv_native_v1" => Ok(include_str!("../../arms/nokv_native.yaml")),
         other => Err(HarnessError::Corpus(format!(
             "unknown benchmark arm {other}"
@@ -2443,27 +2526,116 @@ fn arm_card_yaml(arm: &str) -> Result<&'static str, HarnessError> {
     }
 }
 
-fn openai_tools(tools: &[ToolDefinition]) -> Vec<OpenAiTool> {
-    tools
+fn response_input_messages(messages: &[ChatMessage]) -> Vec<Value> {
+    messages
         .iter()
-        .map(|tool| OpenAiTool {
-            tool_type: "function".to_owned(),
-            function: OpenAiFunctionDefinition {
-                name: tool.name.clone(),
-                description: tool.description.clone(),
-                parameters: tool.parameters.clone(),
-            },
+        .map(|message| {
+            json!({
+                "role": message.role,
+                "content": message.content.as_deref().unwrap_or_default()
+            })
         })
         .collect()
 }
 
-fn send_chat_completion(
+fn response_function_call_output(call_id: &str, content: &Value) -> Value {
+    json!({
+        "type": "function_call_output",
+        "call_id": call_id,
+        "output": content.to_string()
+    })
+}
+
+fn response_text_config(response_format: Option<Value>) -> Option<ResponseTextConfig> {
+    response_format.map(|format| ResponseTextConfig { format })
+}
+
+fn response_tools(tools: &[ToolDefinition]) -> Vec<ResponseTool> {
+    tools
+        .iter()
+        .map(|tool| ResponseTool {
+            tool_type: "function".to_owned(),
+            name: tool.name.clone(),
+            description: tool.description.clone(),
+            parameters: tool.parameters.clone(),
+        })
+        .collect()
+}
+
+fn response_tool_calls(
+    response: &ResponseApiResponse,
+) -> Result<Vec<OpenAiToolCall>, HarnessError> {
+    let mut calls = Vec::new();
+    for item in &response.output {
+        if item.get("type").and_then(Value::as_str) != Some("function_call") {
+            continue;
+        }
+        let call_id = item
+            .get("call_id")
+            .and_then(Value::as_str)
+            .ok_or_else(|| HarnessError::Http("OpenAI function_call missing call_id".to_owned()))?;
+        let name = item
+            .get("name")
+            .and_then(Value::as_str)
+            .ok_or_else(|| HarnessError::Http("OpenAI function_call missing name".to_owned()))?;
+        let arguments = item
+            .get("arguments")
+            .and_then(Value::as_str)
+            .ok_or_else(|| {
+                HarnessError::Http("OpenAI function_call missing arguments".to_owned())
+            })?;
+        calls.push(OpenAiToolCall {
+            id: call_id.to_owned(),
+            tool_type: "function".to_owned(),
+            function: OpenAiToolCallFunction {
+                name: name.to_owned(),
+                arguments: arguments.to_owned(),
+            },
+        });
+    }
+    Ok(calls)
+}
+
+fn response_final_text(response: &ResponseApiResponse) -> Option<String> {
+    if let Some(output_text) = response.output_text.as_ref() {
+        if !output_text.is_empty() {
+            return Some(output_text.clone());
+        }
+    }
+
+    let mut text = String::new();
+    for item in &response.output {
+        if item.get("type").and_then(Value::as_str) != Some("message") {
+            continue;
+        }
+        let Some(content) = item.get("content") else {
+            continue;
+        };
+        if let Some(raw) = content.as_str() {
+            text.push_str(raw);
+            continue;
+        }
+        let Some(parts) = content.as_array() else {
+            continue;
+        };
+        for part in parts {
+            if part.get("type").and_then(Value::as_str) == Some("output_text") {
+                if let Some(part_text) = part.get("text").and_then(Value::as_str) {
+                    text.push_str(part_text);
+                }
+            }
+        }
+    }
+    (!text.is_empty()).then_some(text)
+}
+
+fn send_model_response(
     client: &reqwest::blocking::Client,
     endpoint: &str,
     api_key: &str,
-    request: &ChatCompletionRequest,
-) -> Result<ChatCompletionResponse, HarnessError> {
-    for attempt in 1..=CHAT_COMPLETION_MAX_ATTEMPTS {
+    request: &ResponseRequest,
+) -> Result<ResponseApiResponse, HarnessError> {
+    for attempt in 1..=RESPONSE_MAX_ATTEMPTS {
         let response = match client
             .post(endpoint)
             .bearer_auth(api_key)
@@ -2471,8 +2643,8 @@ fn send_chat_completion(
             .send()
         {
             Ok(response) => response,
-            Err(err) if attempt < CHAT_COMPLETION_MAX_ATTEMPTS => {
-                log_chat_completion_send_error(attempt, &err);
+            Err(err) if attempt < RESPONSE_MAX_ATTEMPTS => {
+                log_model_response_send_error(attempt, &err);
                 thread::sleep(Duration::from_millis(500 * attempt as u64));
                 if err.is_timeout() || err.is_connect() || err.is_request() {
                     continue;
@@ -2480,7 +2652,7 @@ fn send_chat_completion(
                 return Err(HarnessError::Http(err.to_string()));
             }
             Err(err) => {
-                log_chat_completion_send_error(attempt, &err);
+                log_model_response_send_error(attempt, &err);
                 return Err(HarnessError::Http(err.to_string()));
             }
         };
@@ -2489,39 +2661,37 @@ fn send_chat_completion(
             .text()
             .map_err(|err| HarnessError::Http(err.to_string()))?;
         if !status.is_success() {
-            if attempt < CHAT_COMPLETION_MAX_ATTEMPTS
+            if attempt < RESPONSE_MAX_ATTEMPTS
                 && (status.as_u16() == 429 || status.is_server_error())
             {
                 thread::sleep(Duration::from_millis(500 * attempt as u64));
                 continue;
             }
             return Err(HarnessError::Http(format!(
-                "OpenAI chat completion HTTP {status}: {text}"
+                "OpenAI response HTTP {status}: {text}"
             )));
         }
         return serde_json::from_str(&text).map_err(|err| {
-            HarnessError::Json(format!(
-                "OpenAI chat completion response parse error: {err}; {text}"
-            ))
+            HarnessError::Json(format!("OpenAI response parse error: {err}; {text}"))
         });
     }
-    unreachable!("chat completion attempts loop always returns")
+    unreachable!("response attempts loop always returns")
 }
 
-fn log_chat_completion_send_error(attempt: usize, err: &reqwest::Error) {
+fn log_model_response_send_error(attempt: usize, err: &reqwest::Error) {
     eprintln!(
         "{}",
-        chat_completion_send_error_diagnostic(attempt, CHAT_COMPLETION_MAX_ATTEMPTS, err)
+        model_response_send_error_diagnostic(attempt, RESPONSE_MAX_ATTEMPTS, err)
     );
 }
 
-fn chat_completion_send_error_diagnostic(
+fn model_response_send_error_diagnostic(
     attempt: usize,
     max_attempts: usize,
     err: &reqwest::Error,
 ) -> String {
     let mut diagnostic = format!(
-        "OpenAI chat completion send error: attempt={attempt}/{max_attempts} \
+        "OpenAI response send error: attempt={attempt}/{max_attempts} \
          is_timeout={} is_connect={} is_request={} error={err}",
         err.is_timeout(),
         err.is_connect(),
@@ -2554,39 +2724,47 @@ fn is_recoverable_run_judge_error(err: &HarnessError) -> bool {
 }
 
 fn api_call_telemetry(
-    response: &ChatCompletionResponse,
+    response: &ResponseApiResponse,
     requested_model: &str,
     started: u128,
     completed: u128,
+    previous_response_id: Option<String>,
+    sent_tool_schema: bool,
+    sent_initial_instructions: bool,
 ) -> ApiCallTelemetry {
     let usage = response.usage.as_ref();
     ApiCallTelemetry {
-        request_id: response.id.clone(),
+        request_id: None,
+        response_id: response.id.clone(),
         model: response
             .model
             .clone()
             .unwrap_or_else(|| requested_model.to_owned()),
         started_at_unix_ms: started,
         completed_at_unix_ms: completed,
-        prompt_tokens: usage.and_then(|usage| usage.prompt_tokens),
-        completion_tokens: usage.and_then(|usage| usage.completion_tokens),
+        previous_response_id,
+        sent_tool_schema,
+        sent_initial_instructions,
+        prompt_tokens: usage.and_then(|usage| usage.input_tokens),
+        completion_tokens: usage.and_then(|usage| usage.output_tokens),
         total_tokens: usage.and_then(|usage| usage.total_tokens),
         reasoning_tokens: usage
-            .and_then(|usage| usage.completion_tokens_details.as_ref())
+            .and_then(|usage| usage.output_tokens_details.as_ref())
             .and_then(|details| details.reasoning_tokens),
         cached_prompt_tokens: usage
-            .and_then(|usage| usage.prompt_tokens_details.as_ref())
+            .and_then(|usage| usage.input_tokens_details.as_ref())
             .and_then(|details| details.cached_tokens),
         accepted_prediction_tokens: usage
-            .and_then(|usage| usage.completion_tokens_details.as_ref())
+            .and_then(|usage| usage.output_tokens_details.as_ref())
             .and_then(|details| details.accepted_prediction_tokens),
         rejected_prediction_tokens: usage
-            .and_then(|usage| usage.completion_tokens_details.as_ref())
+            .and_then(|usage| usage.output_tokens_details.as_ref())
             .and_then(|details| details.rejected_prediction_tokens),
     }
 }
 
 fn apply_usage_costs(metrics: &mut DerivedMetrics, api_calls: &[ApiCallTelemetry], _model: &str) {
+    metrics.tool_schema_repeated_count = tool_schema_repeated_count(api_calls);
     let input_rate = env::var("OPENAI_INPUT_USD_PER_1M_TOKENS")
         .ok()
         .and_then(|value| value.parse::<f64>().ok());
@@ -2608,6 +2786,13 @@ fn apply_usage_costs(metrics: &mut DerivedMetrics, api_calls: &[ApiCallTelemetry
         prompt_tokens * input_rate / 1_000_000.0 + completion_tokens * output_rate / 1_000_000.0;
     metrics.execution_cost_usd = Some(cost);
     metrics.all_in_cost_usd = Some(cost);
+}
+
+fn tool_schema_repeated_count(api_calls: &[ApiCallTelemetry]) -> usize {
+    api_calls
+        .iter()
+        .filter(|call| call.previous_response_id.is_some() && call.sent_tool_schema)
+        .count()
 }
 
 impl ToolWorker {
@@ -2676,6 +2861,265 @@ impl ToolWorker {
     }
 }
 
+impl ToolBridgeServer {
+    fn start(config: ToolBridgeStartConfig<'_>) -> Result<Self, HarnessError> {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").map_err(from_io)?;
+        listener.set_nonblocking(true).map_err(from_io)?;
+        let url = format!("http://{}", listener.local_addr().map_err(from_io)?);
+        let (shutdown_tx, shutdown_rx) = mpsc::channel();
+        let run_id = config.run_id.to_owned();
+        let arm = config.arm.to_owned();
+        let task_id = config.task_id.to_owned();
+        let repeat_index = config.repeat_index;
+        let data_root = config.data_root.to_owned();
+        let s3 = config.s3.clone();
+        let registry = config.registry.to_vec();
+        let timeout = config.timeout;
+        let output_jsonl = config.output_jsonl;
+        let handle = thread::spawn(move || {
+            let tool_worker = ToolWorker::start(&arm, &data_root, &s3, &registry, timeout);
+            let mut snapshot = ToolBridgeSnapshot::default();
+            loop {
+                if shutdown_rx.try_recv().is_ok() {
+                    break;
+                }
+                match listener.accept() {
+                    Ok((mut stream, _)) => {
+                        let context = ToolBridgeConnectionContext {
+                            run_id: &run_id,
+                            arm: &arm,
+                            task_id: &task_id,
+                            repeat_index,
+                            output_jsonl: &output_jsonl,
+                            tool_worker: &tool_worker,
+                        };
+                        if let Err(err) = handle_tool_bridge_connection(
+                            &mut stream,
+                            &context,
+                            &mut snapshot,
+                        ) {
+                            let body = json!({
+                                "status": "error",
+                                "error": err.to_string(),
+                            });
+                            let _ = write_http_json_response(
+                                &mut stream,
+                                "500 Internal Server Error",
+                                &body,
+                            );
+                        }
+                    }
+                    Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {
+                        thread::sleep(Duration::from_millis(10));
+                    }
+                    Err(err) => return Err(from_io(err)),
+                }
+            }
+            Ok(snapshot)
+        });
+        Ok(Self {
+            url,
+            shutdown_tx,
+            handle: Some(handle),
+        })
+    }
+
+    fn url(&self) -> &str {
+        &self.url
+    }
+
+    fn finish(mut self) -> Result<ToolBridgeSnapshot, HarnessError> {
+        let _ = self.shutdown_tx.send(());
+        let _ = reqwest::blocking::Client::new()
+            .post(format!("{}/shutdown", self.url))
+            .send();
+        let handle = self
+            .handle
+            .take()
+            .ok_or_else(|| HarnessError::Http("tool bridge already stopped".to_owned()))?;
+        handle
+            .join()
+            .map_err(|_| HarnessError::Http("tool bridge thread panicked".to_owned()))?
+    }
+}
+
+impl Drop for ToolBridgeServer {
+    fn drop(&mut self) {
+        let _ = self.shutdown_tx.send(());
+    }
+}
+
+impl ToolBridgeSnapshot {
+    fn tool_call_count(&self) -> usize {
+        self.tool_calls.len()
+    }
+
+    fn record(&mut self, telemetry: ToolCallTelemetry, outcome: &ToolExecutionOutcome) {
+        self.invalid_sql_count += usize::from(outcome.invalid_sql);
+        self.wrong_tool_count += usize::from(outcome.wrong_tool);
+        self.tool_timeout_count += usize::from(outcome.timed_out);
+        self.tool_bytes_read += outcome.bytes_read;
+        self.tool_result_tokens += outcome.result_token_estimate;
+        if outcome.fatal_run_error {
+            self.fatal_error = Some(outcome.error.clone().unwrap_or_else(|| {
+                format!("tool {} failed with a fatal run error", telemetry.tool_name)
+            }));
+        }
+        self.tool_calls.push(telemetry);
+    }
+}
+
+fn handle_tool_bridge_connection(
+    stream: &mut std::net::TcpStream,
+    context: &ToolBridgeConnectionContext<'_>,
+    snapshot: &mut ToolBridgeSnapshot,
+) -> Result<(), HarnessError> {
+    let request = read_http_request(stream)?;
+    if request.path == "/shutdown" {
+        write_http_json_response(stream, "200 OK", &json!({"status": "ok"}))?;
+        return Ok(());
+    }
+    if request.path != "/invoke" {
+        write_http_json_response(
+            stream,
+            "404 Not Found",
+            &json!({"status": "error", "error": "unknown tool bridge path"}),
+        )?;
+        return Ok(());
+    }
+    let payload: ToolBridgeInvokeRequest =
+        serde_json::from_slice(&request.body).map_err(|err| HarnessError::Json(err.to_string()))?;
+    if payload.run_id != context.run_id {
+        write_http_json_response(
+            stream,
+            "400 Bad Request",
+            &json!({
+                "status": "error",
+                "error": format!("tool bridge run_id mismatch: expected {}, got {}", context.run_id, payload.run_id)
+            }),
+        )?;
+        return Ok(());
+    }
+    let call_id = format!("bridge-call-{}", snapshot.tool_calls.len());
+    let arguments = serde_json::to_string(&payload.arguments)
+        .map_err(|err| HarnessError::Json(err.to_string()))?;
+    let call = OpenAiToolCall {
+        id: call_id.clone(),
+        tool_type: "function".to_owned(),
+        function: OpenAiToolCallFunction {
+            name: payload.tool_name,
+            arguments,
+        },
+    };
+    let started = now_unix_ms();
+    append_tool_call_start_jsonl(
+        context.output_jsonl,
+        context.run_id,
+        context.arm,
+        context.task_id,
+        context.repeat_index,
+        &call,
+        started,
+    )?;
+    let outcome = context.tool_worker.execute_tool_call(&call);
+    let completed = now_unix_ms();
+    let telemetry = ToolCallTelemetry {
+        call_id,
+        tool_name: call.function.name.clone(),
+        arguments: tool_call_arguments(&call),
+        started_at_unix_ms: started,
+        completed_at_unix_ms: completed,
+        status: outcome.status.clone(),
+        bytes_read: outcome.bytes_read,
+        result_token_estimate: outcome.result_token_estimate,
+        error: outcome.error.clone(),
+        timed_out: outcome.timed_out,
+    };
+    let response = ToolBridgeInvokeResponse {
+        status: outcome.status.clone(),
+        content: outcome.content.clone(),
+        bytes_read: outcome.bytes_read,
+        result_token_estimate: outcome.result_token_estimate,
+        error: outcome.error.clone(),
+        timed_out: outcome.timed_out,
+        fatal_run_error: outcome.fatal_run_error,
+    };
+    snapshot.record(telemetry, &outcome);
+    write_http_json_response(stream, "200 OK", &response)
+}
+
+fn read_http_request(stream: &mut std::net::TcpStream) -> Result<HttpRequest, HarnessError> {
+    let mut bytes = Vec::new();
+    let mut buffer = [0_u8; 4096];
+    loop {
+        let read = stream.read(&mut buffer).map_err(from_io)?;
+        if read == 0 {
+            return Err(HarnessError::Http(
+                "HTTP request closed before headers completed".to_owned(),
+            ));
+        }
+        bytes.extend_from_slice(&buffer[..read]);
+        if let Some((header_end, content_length, path)) = http_body_bounds(&bytes)? {
+            let body_start = header_end + 4;
+            while bytes.len() < body_start + content_length {
+                let read = stream.read(&mut buffer).map_err(from_io)?;
+                if read == 0 {
+                    return Err(HarnessError::Http(
+                        "HTTP request closed before body completed".to_owned(),
+                    ));
+                }
+                bytes.extend_from_slice(&buffer[..read]);
+            }
+            return Ok(HttpRequest {
+                path,
+                body: bytes[body_start..body_start + content_length].to_vec(),
+            });
+        }
+    }
+}
+
+fn http_body_bounds(bytes: &[u8]) -> Result<Option<(usize, usize, String)>, HarnessError> {
+    let Some(header_end) = bytes.windows(4).position(|window| window == b"\r\n\r\n") else {
+        return Ok(None);
+    };
+    let headers = std::str::from_utf8(&bytes[..header_end])
+        .map_err(|err| HarnessError::Http(err.to_string()))?;
+    let request_line = headers
+        .lines()
+        .next()
+        .ok_or_else(|| HarnessError::Http("HTTP request missing request line".to_owned()))?;
+    let path = request_line
+        .split_whitespace()
+        .nth(1)
+        .ok_or_else(|| HarnessError::Http("HTTP request missing path".to_owned()))?
+        .to_owned();
+    let content_length = headers
+        .lines()
+        .find_map(|line| {
+            let (name, value) = line.split_once(':')?;
+            name.eq_ignore_ascii_case("content-length")
+                .then(|| value.trim().parse::<usize>())
+        })
+        .transpose()
+        .map_err(|err| HarnessError::Http(err.to_string()))?
+        .unwrap_or(0);
+    Ok(Some((header_end, content_length, path)))
+}
+
+fn write_http_json_response(
+    stream: &mut std::net::TcpStream,
+    status: &str,
+    value: &impl Serialize,
+) -> Result<(), HarnessError> {
+    let body = serde_json::to_string(value).map_err(|err| HarnessError::Json(err.to_string()))?;
+    let response = format!(
+        "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+        body.len(),
+        body
+    );
+    stream.write_all(response.as_bytes()).map_err(from_io)
+}
+
 impl ArmRuntime {
     fn open(arm: &str, data_root: &Path, s3: &S3Options) -> Result<Self, HarnessError> {
         match arm {
@@ -2689,13 +3133,6 @@ impl ArmRuntime {
                     .map_err(from_sql)?,
                 })
             }
-            "sqlite_agentfs_v1" => Ok(Self::SqliteAgentFs {
-                conn: Connection::open_with_flags(
-                    sqlite_path(data_root),
-                    rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
-                )
-                .map_err(from_sql)?,
-            }),
             "nokv_native_v1" => Ok(Self::NokvNative {
                 service: Box::new(open_existing_nokv(&nokv_meta_path(data_root), s3)?),
             }),
@@ -2733,7 +3170,6 @@ impl ArmRuntime {
         };
         let result = match self {
             Self::SqliteRaw { conn } => execute_sqlite_raw_tool(conn, &call.function.name, &args),
-            Self::SqliteAgentFs { conn } => execute_agentfs_tool(conn, &call.function.name, &args),
             Self::NokvNative { service } => {
                 execute_nokv_tool(service.as_ref(), &call.function.name, &args)
             }
@@ -2775,38 +3211,6 @@ fn execute_sqlite_raw_tool(
         }
         other => Err(HarnessError::Corpus(format!(
             "unknown sqlite raw tool {other}"
-        ))),
-    }
-}
-
-fn execute_agentfs_tool(
-    conn: &Connection,
-    name: &str,
-    args: &Value,
-) -> Result<Value, HarnessError> {
-    let path = required_string_arg(args, "path")?;
-    match name {
-        "ls" => to_json_value(agentfs_list_tool(conn, &path)?),
-        "stat" => to_json_value(agentfs_stat_tool(conn, &path)?),
-        "read" => to_json_value(agentfs_read_tool(
-            conn,
-            &path,
-            optional_u64_arg(args, "offset").unwrap_or(0),
-            required_usize_arg(args, "limit")?,
-        )?),
-        "grep" => to_json_value(agentfs_grep_tool(
-            conn,
-            &path,
-            &required_string_arg(args, "pattern")?,
-            required_bool_arg(args, "recursive")?,
-        )?),
-        "find" => to_json_value(agentfs_find_tool(
-            conn,
-            &path,
-            &required_string_arg(args, "pattern")?,
-        )?),
-        other => Err(HarnessError::Corpus(format!(
-            "unknown AgentFS tool {other}"
         ))),
     }
 }
@@ -3285,19 +3689,6 @@ fn evidence_handle_supported(
 ) -> Result<bool, HarnessError> {
     match arm {
         "sqlite_raw_v1" => sqlite_evidence_supported(conn, handle),
-        "sqlite_agentfs_v1" => {
-            let Some(path) = handle.strip_prefix("agentfs://") else {
-                return Ok(false);
-            };
-            let path = path.split('#').next().unwrap_or(path);
-            Ok(sqlite_count(
-                conn,
-                &format!(
-                    "SELECT COUNT(*) FROM files WHERE path = '{}'",
-                    escape_sql_literal(path)
-                ),
-            )? > 0)
-        }
         "nokv_native_v1" => nokv_native_evidence_supported(conn, handle, nokv_native),
         _ => Ok(false),
     }
@@ -3386,16 +3777,19 @@ struct NoKvEvidenceHandle {
     generation: Option<u64>,
 }
 
-fn nokv_native_evidence_supported(
+fn nokv_native_evidence_supported<O>(
     conn: &Connection,
     handle: &str,
-    service: Option<&NoKvFs<HoltMetadataStore, S3ObjectStore>>,
-) -> Result<bool, HarnessError> {
+    service: Option<&NoKvFs<HoltMetadataStore, O>>,
+) -> Result<bool, HarnessError>
+where
+    O: ObjectStore,
+{
     let Some(parsed) = parse_nokv_native_evidence_handle(handle) else {
         return Ok(false);
     };
     if let Some(service) = service {
-        let Some(metadata) = service.stat_path(&parsed.path).map_err(from_nokv)? else {
+        let Some(metadata) = stat_path_optional(service, &parsed.path)? else {
             return Ok(false);
         };
         return Ok(parsed
@@ -3413,6 +3807,21 @@ fn nokv_native_evidence_supported(
             escape_sql_literal(&sqlite_path)
         ),
     )? > 0)
+}
+
+fn stat_path_optional<M, O>(
+    service: &NoKvFs<M, O>,
+    path: &str,
+) -> Result<Option<PathMetadata>, HarnessError>
+where
+    M: MetadataStore,
+    O: ObjectStore,
+{
+    match service.stat_path(path) {
+        Ok(metadata) => Ok(metadata),
+        Err(MetadError::NotFound) => Ok(None),
+        Err(err) => Err(from_nokv(err)),
+    }
 }
 
 fn parse_nokv_native_evidence_handle(handle: &str) -> Option<NoKvEvidenceHandle> {
@@ -3477,9 +3886,13 @@ impl BenchmarkRunTelemetry {
             completed_at_unix_ms: 2,
             api_calls: vec![ApiCallTelemetry {
                 request_id: Some("req-test".to_owned()),
+                response_id: Some("resp-test".to_owned()),
                 model: "test-model".to_owned(),
                 started_at_unix_ms: 1,
                 completed_at_unix_ms: 2,
+                previous_response_id: None,
+                sent_tool_schema: true,
+                sent_initial_instructions: true,
                 prompt_tokens: Some(10),
                 completion_tokens: Some(5),
                 total_tokens: Some(15),
@@ -3506,6 +3919,7 @@ impl BenchmarkRunTelemetry {
                 evidence_precision: Some(1.0),
                 ..DerivedMetrics::default()
             },
+            correctness: true,
             judge: Some(JudgeResult {
                 task_success: true,
                 evidence_precision: Some(1.0),
@@ -3607,14 +4021,14 @@ fn verify_sqlite_materialization(
         ..SqliteMaterializationReport::default()
     };
 
-    let files = sqlite_agentfs_files(conn)?;
+    let files = sqlite_files(conn)?;
     for (path, bytes) in &files {
         if path.starts_with("/index/") {
             report.index_files_checked += 1;
         } else {
-            report.agentfs_files_checked += 1;
+            report.sqlite_files_checked += 1;
         }
-        if let Some((run_id, kind, artifact_path)) = parse_agentfs_run_file(path) {
+        if let Some((run_id, kind, artifact_path)) = parse_sqlite_run_file(path) {
             match kind {
                 "metadata.json" => {
                     report.raw_metadata_checked += 1;
@@ -3704,17 +4118,20 @@ fn verify_sqlite_agent_index(
     Ok(())
 }
 
-fn verify_nokv_namespace(
+fn verify_nokv_namespace<O>(
     conn: &Connection,
-    service: &NoKvFs<HoltMetadataStore, S3ObjectStore>,
-) -> Result<NamespaceMaterializationReport, HarnessError> {
-    let files = sqlite_agentfs_files(conn)?;
+    service: &NoKvFs<HoltMetadataStore, O>,
+) -> Result<NamespaceMaterializationReport, HarnessError>
+where
+    O: ObjectStore,
+{
+    let files = sqlite_files(conn)?;
     let missing = missing_artifact_paths(conn)?;
     let mut report = NamespaceMaterializationReport::default();
     let mut generations = BTreeSet::new();
-    for (agentfs_path, bytes) in &files {
-        let nokv_path = nokv_path_for_agentfs(agentfs_path)?;
-        let Some(metadata) = service.stat_path(&nokv_path).map_err(from_nokv)? else {
+    for (sqlite_file_path, bytes) in &files {
+        let nokv_path = nokv_path_for_sqlite_file(sqlite_file_path)?;
+        let Some(metadata) = stat_path_optional(service, &nokv_path)? else {
             report
                 .mismatches
                 .push(format!("{nokv_path}: missing NoKV file"));
@@ -3754,7 +4171,7 @@ fn verify_nokv_namespace(
                 .push(format!("{nokv_path}: NoKV bytes differ"));
         }
         report.files_checked += 1;
-        if agentfs_path.starts_with("/index/") {
+        if sqlite_file_path.starts_with("/index/") {
             report.index_files_checked += 1;
         } else {
             report.run_files_checked += 1;
@@ -3762,7 +4179,7 @@ fn verify_nokv_namespace(
     }
     for (run_id, artifact_path) in missing {
         let nokv_path = format!("/yanex/runs/{run_id}/artifacts/{artifact_path}");
-        if service.stat_path(&nokv_path).map_err(from_nokv)?.is_some() {
+        if stat_path_optional(service, &nokv_path)?.is_some() {
             report
                 .mismatches
                 .push(format!("{nokv_path}: missing artifact unexpectedly exists"));
@@ -3773,7 +4190,7 @@ fn verify_nokv_namespace(
     Ok(report)
 }
 
-fn sqlite_agentfs_files(conn: &Connection) -> Result<BTreeMap<String, Vec<u8>>, HarnessError> {
+fn sqlite_files(conn: &Connection) -> Result<BTreeMap<String, Vec<u8>>, HarnessError> {
     let mut stmt = conn
         .prepare("SELECT path, content FROM files WHERE file_type = 'file' ORDER BY path")
         .map_err(from_sql)?;
@@ -3790,7 +4207,7 @@ fn sqlite_agentfs_files(conn: &Connection) -> Result<BTreeMap<String, Vec<u8>>, 
     Ok(files)
 }
 
-fn parse_agentfs_run_file(path: &str) -> Option<(&str, &str, Option<&str>)> {
+fn parse_sqlite_run_file(path: &str) -> Option<(&str, &str, Option<&str>)> {
     let rest = path.strip_prefix("/runs/")?;
     let (run_id, suffix) = rest.split_once('/')?;
     if let Some(artifact_path) = suffix.strip_prefix("artifacts/") {
@@ -3799,14 +4216,14 @@ fn parse_agentfs_run_file(path: &str) -> Option<(&str, &str, Option<&str>)> {
     Some((run_id, suffix, None))
 }
 
-fn nokv_path_for_agentfs(path: &str) -> Result<String, HarnessError> {
+fn nokv_path_for_sqlite_file(path: &str) -> Result<String, HarnessError> {
     if let Some(rest) = path.strip_prefix("/runs/") {
         Ok(format!("/yanex/runs/{rest}"))
     } else if let Some(rest) = path.strip_prefix("/index/") {
         Ok(format!("/yanex/index/{rest}"))
     } else {
         Err(HarnessError::Corpus(format!(
-            "unsupported AgentFS file path {path}"
+            "unsupported SQLite file path {path}"
         )))
     }
 }
@@ -4051,10 +4468,10 @@ fn verify_missing_artifacts(
 ) -> Result<(), HarnessError> {
     for (run_id, artifact_path) in missing_artifact_paths(conn)? {
         report.raw_missing_artifacts_checked += 1;
-        let agentfs_path = format!("/runs/{run_id}/artifacts/{artifact_path}");
-        if files.contains_key(&agentfs_path) {
+        let sqlite_file_path = format!("/runs/{run_id}/artifacts/{artifact_path}");
+        if files.contains_key(&sqlite_file_path) {
             report.mismatches.push(format!(
-                "{agentfs_path}: missing artifact exists in AgentFS"
+                "{sqlite_file_path}: missing artifact exists in SQLite files"
             ));
         }
         let blob_ref = format!("artifact:{run_id}:{artifact_path}");
@@ -4418,7 +4835,7 @@ fn prepare_sqlite(
     }
     insert_agent_index_materialization(&tx, runs)?;
     for run in runs {
-        insert_agentfs_run_files(&tx, run)?;
+        insert_sqlite_run_files(&tx, run)?;
     }
     for (path, bytes) in &indexes.files {
         insert_file(&tx, path, "file", bytes)?;
@@ -4895,7 +5312,7 @@ fn git_patch_file(run: &CorpusRun) -> Option<String> {
         .map(str::to_owned)
 }
 
-fn insert_agentfs_run_files(conn: &Connection, run: &CorpusRun) -> Result<(), HarnessError> {
+fn insert_sqlite_run_files(conn: &Connection, run: &CorpusRun) -> Result<(), HarnessError> {
     insert_dir(conn, "/")?;
     insert_dir(conn, RUNS_PREFIX)?;
     let run_root = format!("{RUNS_PREFIX}/{}", run.id);
@@ -5220,10 +5637,13 @@ fn prepare_nokv(
     Ok(())
 }
 
-fn register_nokv_agent_indexes(
-    service: &NoKvFs<HoltMetadataStore, S3ObjectStore>,
+fn register_nokv_agent_indexes<O>(
+    service: &NoKvFs<HoltMetadataStore, O>,
     runs: &[CorpusRun],
-) -> Result<(), HarnessError> {
+) -> Result<(), HarnessError>
+where
+    O: ObjectStore,
+{
     let lr_batch_groups = train_lr_batch_groups(runs);
     service
         .register_namespace_index(NamespaceIndexRegistration {
@@ -5884,6 +6304,31 @@ mod tests {
     use super::*;
     use rusqlite::OptionalExtension;
 
+    static ENV_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    struct TestEnvVar {
+        key: &'static str,
+        old_value: Option<std::ffi::OsString>,
+    }
+
+    impl TestEnvVar {
+        fn set(key: &'static str, value: &str) -> Self {
+            let old_value = env::var_os(key);
+            env::set_var(key, value);
+            Self { key, old_value }
+        }
+    }
+
+    impl Drop for TestEnvVar {
+        fn drop(&mut self) {
+            if let Some(value) = &self.old_value {
+                env::set_var(self.key, value);
+            } else {
+                env::remove_var(self.key);
+            }
+        }
+    }
+
     fn sample_run() -> CorpusRun {
         let metadata_bytes = br#"{
           "id":"run-1",
@@ -5953,6 +6398,214 @@ mod tests {
                 fs::write(artifacts_dir.join(&artifact.relative_path), &artifact.bytes).unwrap();
             }
         }
+    }
+
+    fn prepare_sample_sqlite_data_root(data_root: &Path) {
+        let run = sample_run();
+        let indexes = derive_indexes(std::slice::from_ref(&run)).unwrap();
+        prepare_sqlite(&sqlite_path(data_root), &[run], &indexes).unwrap();
+    }
+
+    fn successful_status_counts_answer() -> Value {
+        json!({
+            "task_id": "status_counts",
+            "status": "success",
+            "answer": {
+                "status_counts": [{"status": "completed", "count": 1}],
+                "total_runs": 1
+            },
+            "run_ids": [],
+            "evidence": [{"handle": "sqlite://experiments/run-1", "claim": "run status source"}],
+            "missing_evidence": [],
+            "operations_summary": {"tool_call_count": 0, "bytes_read_estimate": 0},
+            "confidence": "high"
+        })
+    }
+
+    fn start_response_capture_server(
+        expected_requests: usize,
+        final_answer: Value,
+    ) -> (
+        String,
+        Arc<std::sync::Mutex<Vec<Value>>>,
+        thread::JoinHandle<()>,
+    ) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let answer_content = final_answer.to_string();
+        let handle = thread::spawn(move || {
+            for index in 0..expected_requests {
+                let (mut stream, _) = listener.accept().unwrap();
+                let body = read_http_request_body(&mut stream);
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::from_slice(&body).unwrap());
+                let response_body = json!({
+                    "id": format!("resp-unit-{index}"),
+                    "model": "unit-profile-model",
+                    "output": [{
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{
+                            "type": "output_text",
+                            "text": answer_content
+                        }]
+                    }],
+                    "usage": {
+                        "input_tokens": 10,
+                        "output_tokens": 5,
+                        "total_tokens": 15,
+                        "input_tokens_details": {"cached_tokens": 0},
+                        "output_tokens_details": {
+                            "reasoning_tokens": 0,
+                            "accepted_prediction_tokens": 0,
+                            "rejected_prediction_tokens": 0
+                        }
+                    }
+                })
+                .to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (endpoint, requests, handle)
+    }
+
+    fn start_response_capture_server_with_bodies(
+        response_bodies: Vec<Value>,
+    ) -> (
+        String,
+        Arc<std::sync::Mutex<Vec<Value>>>,
+        thread::JoinHandle<()>,
+    ) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}", listener.local_addr().unwrap());
+        let requests = Arc::new(std::sync::Mutex::new(Vec::new()));
+        let captured = Arc::clone(&requests);
+        let handle = thread::spawn(move || {
+            for response_body in response_bodies {
+                let (mut stream, _) = listener.accept().unwrap();
+                let body = read_http_request_body(&mut stream);
+                captured
+                    .lock()
+                    .unwrap()
+                    .push(serde_json::from_slice(&body).unwrap());
+                let response_body = response_body.to_string();
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{}",
+                    response_body.len(),
+                    response_body
+                );
+                stream.write_all(response.as_bytes()).unwrap();
+            }
+        });
+        (endpoint, requests, handle)
+    }
+
+    fn read_http_request_body(stream: &mut std::net::TcpStream) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        let mut buffer = [0_u8; 4096];
+        loop {
+            let read = stream.read(&mut buffer).unwrap();
+            assert_ne!(read, 0, "HTTP request closed before headers completed");
+            bytes.extend_from_slice(&buffer[..read]);
+            if let Some((header_end, content_length)) = http_body_bounds(&bytes) {
+                let body_start = header_end + 4;
+                while bytes.len() < body_start + content_length {
+                    let read = stream.read(&mut buffer).unwrap();
+                    assert_ne!(read, 0, "HTTP request closed before body completed");
+                    bytes.extend_from_slice(&buffer[..read]);
+                }
+                return bytes[body_start..body_start + content_length].to_vec();
+            }
+        }
+    }
+
+    fn http_body_bounds(bytes: &[u8]) -> Option<(usize, usize)> {
+        let header_end = bytes.windows(4).position(|window| window == b"\r\n\r\n")?;
+        let headers = std::str::from_utf8(&bytes[..header_end]).unwrap();
+        let content_length = headers
+            .lines()
+            .find_map(|line| {
+                let (name, value) = line.split_once(':')?;
+                name.eq_ignore_ascii_case("content-length")
+                    .then(|| value.trim().parse::<usize>().unwrap())
+            })
+            .unwrap();
+        Some((header_end, content_length))
+    }
+
+    fn prepare_memory_nokv(
+        runs: &[CorpusRun],
+        indexes: &DerivedIndexes,
+    ) -> NoKvFs<HoltMetadataStore, nokvfs_object::MemoryObjectStore> {
+        let service = NoKvFs::new(
+            MountId::new(1).unwrap(),
+            HoltMetadataStore::open_memory().unwrap(),
+            nokvfs_object::MemoryObjectStore::new(),
+        );
+        service
+            .bootstrap_root(DEFAULT_MODE_DIR, DEFAULT_UID, DEFAULT_GID)
+            .unwrap();
+        let repo = ArtifactRepository::with_options(
+            service,
+            ArtifactRepositoryOptions {
+                producer: "unit-test".to_owned(),
+                content_type: "application/octet-stream".to_owned(),
+                ..ArtifactRepositoryOptions::default()
+            },
+        );
+        for run in runs {
+            repo.put_bytes(
+                &format!("{NOKV_PREFIX}/runs/{}/metadata.json", run.id),
+                run.metadata_bytes.clone(),
+            )
+            .unwrap();
+            if let Some(bytes) = &run.params_bytes {
+                repo.put_bytes(
+                    &format!("{NOKV_PREFIX}/runs/{}/params.yaml", run.id),
+                    bytes.clone(),
+                )
+                .unwrap();
+            }
+            if let Some(bytes) = &run.metrics_bytes {
+                repo.put_bytes(
+                    &format!("{NOKV_PREFIX}/runs/{}/metrics.json", run.id),
+                    bytes.clone(),
+                )
+                .unwrap();
+            }
+            if let Some(bytes) = &run.dependencies_bytes {
+                repo.put_bytes(
+                    &format!("{NOKV_PREFIX}/runs/{}/dependencies.json", run.id),
+                    bytes.clone(),
+                )
+                .unwrap();
+            }
+            for artifact in &run.artifacts {
+                repo.put_bytes(
+                    &format!(
+                        "{NOKV_PREFIX}/runs/{}/artifacts/{}",
+                        run.id, artifact.relative_path
+                    ),
+                    artifact.bytes.clone(),
+                )
+                .unwrap();
+            }
+        }
+        for (path, bytes) in &indexes.files {
+            repo.put_bytes(&format!("{NOKV_PREFIX}{}", path), bytes.clone())
+                .unwrap();
+        }
+        register_nokv_agent_indexes(repo.backend(), runs).unwrap();
+        repo.into_backend()
     }
 
     #[test]
@@ -6111,14 +6764,14 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_schema_materializes_raw_and_agentfs_views() {
+    fn sqlite_schema_materializes_raw_and_sqlite_file_views() {
         let conn = Connection::open_in_memory().unwrap();
         create_schema(&conn).unwrap();
         let run = sample_run();
         let indexes = derive_indexes(std::slice::from_ref(&run)).unwrap();
         insert_run(&conn, &run).unwrap();
         insert_agent_index_materialization(&conn, std::slice::from_ref(&run)).unwrap();
-        insert_agentfs_run_files(&conn, &run).unwrap();
+        insert_sqlite_run_files(&conn, &run).unwrap();
         for (path, bytes) in indexes.files {
             insert_file(&conn, &path, "file", &bytes).unwrap();
         }
@@ -6196,7 +6849,7 @@ mod tests {
         let indexes = derive_indexes(std::slice::from_ref(&run)).unwrap();
         insert_run(&conn, &run).unwrap();
         insert_agent_index_materialization(&conn, std::slice::from_ref(&run)).unwrap();
-        insert_agentfs_run_files(&conn, &run).unwrap();
+        insert_sqlite_run_files(&conn, &run).unwrap();
         for (path, bytes) in indexes.files {
             insert_file(&conn, &path, "file", &bytes).unwrap();
         }
@@ -6210,7 +6863,7 @@ mod tests {
         assert_eq!(report.raw_metrics_checked, 4);
         assert_eq!(report.raw_dependencies_checked, 1);
         assert_eq!(report.raw_existing_artifacts_checked, 1);
-        assert_eq!(report.agentfs_files_checked, 5);
+        assert_eq!(report.sqlite_files_checked, 5);
         assert_eq!(report.index_files_checked, 5);
         assert_eq!(report.agent_index_rows_checked, 1);
         assert!(report.agent_index_values_checked > 0);
@@ -6219,6 +6872,50 @@ mod tests {
             nokv_agent_index_fields().len()
         );
         assert!(report.mismatches.is_empty(), "{:?}", report.mismatches);
+    }
+
+    #[test]
+    fn nokv_verifier_treats_missing_artifact_parent_as_absent() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let mut run = sample_run();
+        run.metadata["git"] = json!({
+            "has_uncommitted_changes": true,
+            "patch_file": "patches/missing.patch"
+        });
+        run.metadata_bytes = serde_json::to_vec(&run.metadata).unwrap();
+        let indexes = derive_indexes(std::slice::from_ref(&run)).unwrap();
+        insert_run(&conn, &run).unwrap();
+        insert_sqlite_run_files(&conn, &run).unwrap();
+        for (path, bytes) in &indexes.files {
+            insert_file(&conn, path, "file", bytes).unwrap();
+        }
+        insert_index_dirs(&conn, &indexes).unwrap();
+        let service = prepare_memory_nokv(std::slice::from_ref(&run), &indexes);
+
+        let report = verify_nokv_namespace(&conn, &service).unwrap();
+
+        assert_eq!(report.missing_artifacts_checked, 1);
+        assert!(report.mismatches.is_empty(), "{:?}", report.mismatches);
+    }
+
+    #[test]
+    fn nokv_evidence_checker_treats_missing_parent_as_unsupported() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let run = sample_run();
+        let indexes = derive_indexes(std::slice::from_ref(&run)).unwrap();
+        insert_run(&conn, &run).unwrap();
+        let service = prepare_memory_nokv(std::slice::from_ref(&run), &indexes);
+
+        let supported = nokv_native_evidence_supported(
+            &conn,
+            "nokv-native:///yanex/runs/run-1/artifacts/patches/missing.patch",
+            Some(&service),
+        )
+        .unwrap();
+
+        assert!(!supported);
     }
 
     #[test]
@@ -6363,53 +7060,10 @@ mod tests {
     }
 
     #[test]
-    fn agentfs_tools_inspect_sqlite_projection_without_raw_sql() {
-        let conn = Connection::open_in_memory().unwrap();
-        create_schema(&conn).unwrap();
-        let run = sample_run();
-        let indexes = derive_indexes(std::slice::from_ref(&run)).unwrap();
-        insert_run(&conn, &run).unwrap();
-        insert_agentfs_run_files(&conn, &run).unwrap();
-        for (path, bytes) in indexes.files {
-            insert_file(&conn, &path, "file", &bytes).unwrap();
-        }
-        insert_index_dirs(&conn, &derive_indexes(std::slice::from_ref(&run)).unwrap()).unwrap();
-
-        let list = agentfs_list_tool(&conn, "/runs/run-1").unwrap();
-        assert!(list
-            .entries
-            .iter()
-            .any(|entry| entry.name == "metadata.json"));
-        assert!(list.entries.iter().any(|entry| entry.name == "artifacts"));
-
-        let stat = agentfs_stat_tool(&conn, "/runs/run-1/metrics.json").unwrap();
-        assert_eq!(stat.file_type, "file");
-        assert_eq!(stat.evidence, "agentfs:///runs/run-1/metrics.json");
-
-        let read = agentfs_read_tool(&conn, "/runs/run-1/artifacts/stdout.txt", 1, 2).unwrap();
-        assert_eq!(read.content_utf8.as_deref(), Some("og"));
-        assert_eq!(read.bytes_read, 2);
-
-        let grep = agentfs_grep_tool(&conn, "/runs/run-1", "accuracy", true).unwrap();
-        assert_eq!(grep.matches.len(), 1);
-        assert_eq!(grep.matches[0].path, "/runs/run-1/metrics.json");
-
-        let find = agentfs_find_tool(&conn, "/", "metrics.json").unwrap();
-        assert!(find
-            .matches
-            .iter()
-            .any(|entry| entry.path == "/runs/run-1/metrics.json"));
-    }
-
-    #[test]
     fn tool_registry_exposes_only_the_selected_arm_surface() {
         assert_eq!(
             tool_names(&tool_registry_for_arm("sqlite_raw_v1").unwrap()),
             vec!["show_schema", "query_sql", "read_blob"]
-        );
-        assert_eq!(
-            tool_names(&tool_registry_for_arm("sqlite_agentfs_v1").unwrap()),
-            vec!["ls", "stat", "read", "grep", "find"]
         );
         assert_eq!(
             tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap()),
@@ -6604,7 +7258,7 @@ mod tests {
         create_schema(&conn).unwrap();
         let run = sample_run();
         insert_run(&conn, &run).unwrap();
-        insert_agentfs_run_files(&conn, &run).unwrap();
+        insert_sqlite_run_files(&conn, &run).unwrap();
 
         assert!(
             evidence_handle_supported(&conn, "sqlite_raw_v1", "sqlite://schema", None).unwrap()
@@ -6676,34 +7330,562 @@ mod tests {
         assert!(readme.contains("## Valid Comparisons"));
         assert!(readme.contains("one core A/B comparison"));
         assert!(readme.contains("Raw SQLite tools vs NoKV Native Namespace"));
-        assert!(readme.contains("sensitivity/context"));
     }
 
     #[test]
-    fn handoff_documents_native_grep_fairness_boundary() {
-        let handoff = include_str!("../../HANDOFF.md");
+    fn base_profile_drives_runtime_request_defaults() {
+        let profile = base_profile().unwrap();
+        let options = Options::parse(&["--model".to_owned(), "unit-model".to_owned()]).unwrap();
 
-        assert!(handoff.contains("Native Grep Fairness Handoff"));
-        assert!(handoff.contains("not a benchmark-only shortcut"));
-        assert!(handoff.contains("basic filesystem grep"));
-        assert!(handoff.contains("scan file bytes"));
-        assert!(handoff.contains("nokvfs-protocol"));
-        assert!(handoff.contains("nokvfs-meta"));
-        assert!(handoff.contains("nokvfs-client"));
-        assert!(handoff.contains("sqlite_agentfs_v1"));
-    }
+        let config = BenchmarkRuntimeConfig::from_options(&options, &profile).unwrap();
 
-    #[test]
-    fn batch_plan_defaults_to_three_arms_seven_tasks_ten_repeats() {
-        let tasks = phase1_task_set().unwrap();
-        let plan = batch_plan(None, None, None, &tasks);
-
-        assert_eq!(default_repeats(), 10);
-        assert_eq!(plan.len(), 3 * 7 * 10);
+        assert_eq!(config.model, "unit-model");
         assert_eq!(
-            benchmark_arm_ids(),
-            &["sqlite_raw_v1", "nokv_native_v1", "sqlite_agentfs_v1"]
+            config.api_surface,
+            ApiSurface::AgentsResponsesSchemaOnce
         );
+        assert_eq!(config.max_turns, 20);
+        assert_eq!(config.max_tool_calls, 80);
+        assert_eq!(config.max_completion_tokens, 4096);
+        assert_eq!(config.temperature, Some(1.0));
+        assert_eq!(config.tool_call_timeout, Duration::from_millis(60_000));
+        assert_eq!(config.response_format, Some(json!({"type": "json_object"})));
+    }
+
+    #[test]
+    fn base_profile_does_not_configure_model_name() {
+        let profile = base_profile().unwrap();
+
+        assert!(!profile.yaml.contains("name_env:"));
+        assert!(!profile.yaml.contains("OPENAI_MODEL"));
+    }
+
+    #[test]
+    fn runtime_config_requires_explicit_model_not_env_fallback() {
+        let _env_lock = ENV_MUTEX.lock().unwrap();
+        let _model = TestEnvVar::set("OPENAI_MODEL", "unit-env-model");
+        let profile = base_profile().unwrap();
+        let options = Options::default();
+
+        let err = BenchmarkRuntimeConfig::from_options(&options, &profile).unwrap_err();
+
+        assert_eq!(err.to_string(), "corpus error: --model is required");
+    }
+
+    #[test]
+    fn cli_runtime_options_override_base_profile_defaults() {
+        let profile = base_profile().unwrap();
+        let options = Options::parse(&[
+            "--api-surface".to_owned(),
+            "openai_chat_completions".to_owned(),
+            "--model".to_owned(),
+            "unit-model".to_owned(),
+            "--max-turns".to_owned(),
+            "3".to_owned(),
+            "--max-tool-calls".to_owned(),
+            "4".to_owned(),
+            "--max-completion-tokens".to_owned(),
+            "2048".to_owned(),
+            "--repeats".to_owned(),
+            "2".to_owned(),
+        ])
+        .unwrap();
+
+        let config = BenchmarkRuntimeConfig::from_options(&options, &profile).unwrap();
+
+        assert_eq!(config.api_surface, ApiSurface::ChatCompletions);
+        assert_eq!(config.max_turns, 3);
+        assert_eq!(config.max_tool_calls, 4);
+        assert_eq!(config.max_completion_tokens, 2048);
+        assert_eq!(
+            repeat_count_from_options(&options, &profile),
+            2,
+            "CLI repeat count should override base_profile.yaml"
+        );
+    }
+
+    #[test]
+    fn runtime_base_profile_path_overrides_default_profile_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let profile_path = dir.path().join("base_profile.yaml");
+        let profile_yaml =
+            BASE_PROFILE_YAML.replace("max_completion_tokens: 4096", "max_completion_tokens: 1234");
+        fs::write(&profile_path, &profile_yaml).unwrap();
+        let options = Options::parse(&[
+            "--base-profile".to_owned(),
+            profile_path.display().to_string(),
+            "--model".to_owned(),
+            "unit-model".to_owned(),
+        ])
+        .unwrap();
+
+        let profile = load_base_profile(&options).unwrap();
+        let config = BenchmarkRuntimeConfig::from_options(&options, &profile).unwrap();
+
+        assert_eq!(profile.yaml, profile_yaml);
+        assert_eq!(config.max_completion_tokens, 1234);
+    }
+
+    #[test]
+    fn base_profile_rejects_unsupported_stateful_runtime_policy() {
+        let profile_yaml = BASE_PROFILE_YAML
+            .replace("stateless: true", "stateless: false")
+            .replace(
+                "clear_messages_after_run: true",
+                "clear_messages_after_run: false",
+            );
+        let profile = LoadedBaseProfile {
+            profile: parse_base_profile_yaml(&profile_yaml).unwrap(),
+            yaml: profile_yaml,
+        };
+        let options = Options::parse(&["--model".to_owned(), "unit-model".to_owned()]).unwrap();
+
+        let err = BenchmarkRuntimeConfig::from_options(&options, &profile).unwrap_err();
+
+        assert!(err
+            .to_string()
+            .contains("base_profile.run_policy.stateless=false is not supported"));
+    }
+
+    #[test]
+    fn run_batch_applies_base_profile_and_restarts_messages_per_run() {
+        let _env_lock = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let data_root = dir.path().join("data");
+        let output_jsonl = dir.path().join("telemetry.jsonl");
+        prepare_sample_sqlite_data_root(&data_root);
+        let profile_path = dir.path().join("base_profile.yaml");
+        let profile_yaml = BASE_PROFILE_YAML
+            .replace("temperature: 1", "temperature: 0.7")
+            .replace("max_completion_tokens: 4096", "max_completion_tokens: 1234")
+            .replace("repeats_per_arm_task: 10", "repeats_per_arm_task: 2")
+            .replace("max_turns: 20", "max_turns: 1")
+            .replace("max_tool_calls: 80", "max_tool_calls: 7")
+            .replace(
+                "You are an experiment tracking analysis agent working over a Yanex experiment corpus.",
+                "Unit profile system marker.",
+            )
+            .replace(
+                "Output exactly one JSON object matching the benchmark schema.",
+                "Unit profile developer marker.",
+            );
+        fs::write(&profile_path, &profile_yaml).unwrap();
+        let (endpoint, requests, server) =
+            start_response_capture_server(2, successful_status_counts_answer());
+        let _api_key = TestEnvVar::set("OPENAI_API_KEY", "unit-api-key");
+        let _endpoint = TestEnvVar::set("OPENAI_RESPONSES_URL", &endpoint);
+        let options = Options::parse(&[
+            "--data-root".to_owned(),
+            data_root.display().to_string(),
+            "--output-jsonl".to_owned(),
+            output_jsonl.display().to_string(),
+            "--base-profile".to_owned(),
+            profile_path.display().to_string(),
+            "--api-surface".to_owned(),
+            "openai_chat_completions".to_owned(),
+            "--arm".to_owned(),
+            "sqlite_raw_v1".to_owned(),
+            "--task-id".to_owned(),
+            "status_counts".to_owned(),
+            "--model".to_owned(),
+            "unit-profile-model".to_owned(),
+        ])
+        .unwrap();
+
+        run_benchmark_batch(options).unwrap();
+        server.join().unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(
+            requests.len(),
+            2,
+            "profile repeats_per_arm_task should drive run count when --repeats is omitted"
+        );
+        for request in requests.iter() {
+            assert_eq!(request["model"], "unit-profile-model");
+            assert_eq!(request["temperature"], 0.7);
+            assert_eq!(request["max_output_tokens"], 1234);
+            assert_eq!(request["text"]["format"], json!({"type": "json_object"}));
+            assert!(request.get("previous_response_id").is_none());
+            let tools = request["tools"].as_array().unwrap();
+            assert!(tools.iter().any(|tool| tool["name"] == "query_sql"));
+            assert!(tools.iter().all(|tool| tool.get("function").is_none()));
+            let messages = request["input"].as_array().unwrap();
+            assert_eq!(
+                messages.len(),
+                3,
+                "each run should start from system/system/user context only"
+            );
+            assert_eq!(messages[0]["role"], "system");
+            assert_eq!(messages[1]["role"], "system");
+            assert_eq!(messages[2]["role"], "user");
+            let combined_context = messages
+                .iter()
+                .filter_map(|message| message["content"].as_str())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let first_system = messages[0]["content"].as_str().unwrap();
+            assert!(first_system.contains("Unit profile system marker."));
+            let second_system = messages[1]["content"].as_str().unwrap();
+            assert!(second_system.contains("Unit profile developer marker."));
+            assert!(second_system.contains("sqlite_raw_v1"));
+            assert!(second_system.contains("query_sql"));
+            assert!(messages[2]["content"]
+                .as_str()
+                .unwrap()
+                .contains("Task ID: status_counts"));
+            assert!(!combined_context.contains("Base profile YAML:"));
+            assert!(!combined_context.contains("Rubric YAML:"));
+            assert!(!combined_context.contains("gold_sql"));
+            assert!(!combined_context.contains("SELECT status, COUNT(*) AS count"));
+            assert!(!combined_context.contains("primary_metrics:"));
+        }
+        let telemetry = fs::read_to_string(output_jsonl).unwrap();
+        assert_eq!(telemetry.lines().count(), 2);
+        assert!(telemetry
+            .lines()
+            .all(|line| line.contains("\"task_success\":true")));
+        assert!(telemetry
+            .lines()
+            .all(|line| line.contains("\"correctness\":true")));
+    }
+
+    #[test]
+    fn run_task_omits_tool_schema_after_first_tool_turn() {
+        let _env_lock = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let data_root = dir.path().join("data");
+        let output_jsonl = dir.path().join("telemetry.jsonl");
+        prepare_sample_sqlite_data_root(&data_root);
+        let profile_path = dir.path().join("base_profile.yaml");
+        let profile_yaml = BASE_PROFILE_YAML
+            .replace("max_turns: 20", "max_turns: 2")
+            .replace("repeats_per_arm_task: 10", "repeats_per_arm_task: 1");
+        fs::write(&profile_path, &profile_yaml).unwrap();
+        let final_answer = successful_status_counts_answer();
+        let first_response = json!({
+            "id": "resp-tool-0",
+            "model": "unit-profile-model",
+            "output": [{
+                "type": "function_call",
+                "id": "fc-query-status",
+                "call_id": "call-query-status",
+                "name": "query_sql",
+                "arguments": r#"{"sql":"SELECT status, COUNT(*) AS count FROM experiments GROUP BY status ORDER BY status"}"#
+            }],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "total_tokens": 110,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0}
+            }
+        });
+        let second_response = json!({
+            "id": "resp-tool-1",
+            "model": "unit-profile-model",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": final_answer.to_string()
+                }]
+            }],
+            "usage": {
+                "input_tokens": 50,
+                "output_tokens": 10,
+                "total_tokens": 60,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0}
+            }
+        });
+        let (endpoint, requests, server) =
+            start_response_capture_server_with_bodies(vec![first_response, second_response]);
+        let _api_key = TestEnvVar::set("OPENAI_API_KEY", "unit-api-key");
+        let _endpoint = TestEnvVar::set("OPENAI_RESPONSES_URL", &endpoint);
+        let options = Options::parse(&[
+            "--data-root".to_owned(),
+            data_root.display().to_string(),
+            "--output-jsonl".to_owned(),
+            output_jsonl.display().to_string(),
+            "--base-profile".to_owned(),
+            profile_path.display().to_string(),
+            "--api-surface".to_owned(),
+            "openai_chat_completions".to_owned(),
+            "--arm".to_owned(),
+            "sqlite_raw_v1".to_owned(),
+            "--task-id".to_owned(),
+            "status_counts".to_owned(),
+            "--model".to_owned(),
+            "unit-profile-model".to_owned(),
+        ])
+        .unwrap();
+
+        run_benchmark_batch(options).unwrap();
+        server.join().unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].get("tools").is_some());
+        assert!(requests[0].get("previous_response_id").is_none());
+        assert!(
+            requests[1].get("tools").is_none(),
+            "tool schema must only be sent on the first model request in a task"
+        );
+        assert_eq!(requests[1]["previous_response_id"], "resp-tool-0");
+        let tool_outputs = requests[1]["input"].as_array().unwrap();
+        assert_eq!(tool_outputs.len(), 1);
+        assert_eq!(tool_outputs[0]["type"], "function_call_output");
+        assert_eq!(tool_outputs[0]["call_id"], "call-query-status");
+        assert!(tool_outputs[0]["output"]
+            .as_str()
+            .unwrap()
+            .contains("\"tool\":\"query_sql\""));
+    }
+
+    #[test]
+    fn agent_sdk_runner_omits_tool_schema_after_first_tool_turn() {
+        let _env_lock = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let data_root = dir.path().join("data");
+        let output_jsonl = dir.path().join("telemetry.jsonl");
+        prepare_sample_sqlite_data_root(&data_root);
+        let profile_path = dir.path().join("base_profile.yaml");
+        let profile_yaml = BASE_PROFILE_YAML
+            .replace("max_turns: 20", "max_turns: 2")
+            .replace("repeats_per_arm_task: 10", "repeats_per_arm_task: 1");
+        fs::write(&profile_path, &profile_yaml).unwrap();
+        let final_answer = successful_status_counts_answer();
+        let first_response = json!({
+            "id": "resp-agent-tool-0",
+            "model": "unit-profile-model",
+            "output": [{
+                "type": "function_call",
+                "id": "fc-query-status",
+                "call_id": "call-query-status",
+                "name": "query_sql",
+                "arguments": r#"{"sql":"SELECT status, COUNT(*) AS count FROM experiments GROUP BY status ORDER BY status"}"#
+            }],
+            "usage": {
+                "input_tokens": 100,
+                "output_tokens": 10,
+                "total_tokens": 110,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0}
+            }
+        });
+        let second_response = json!({
+            "id": "resp-agent-tool-1",
+            "model": "unit-profile-model",
+            "output": [{
+                "type": "message",
+                "role": "assistant",
+                "content": [{
+                    "type": "output_text",
+                    "text": final_answer.to_string()
+                }]
+            }],
+            "usage": {
+                "input_tokens": 50,
+                "output_tokens": 10,
+                "total_tokens": 60,
+                "input_tokens_details": {"cached_tokens": 0},
+                "output_tokens_details": {"reasoning_tokens": 0}
+            }
+        });
+        let (endpoint, requests, server) =
+            start_response_capture_server_with_bodies(vec![first_response, second_response]);
+        let _api_key = TestEnvVar::set("OPENAI_API_KEY", "unit-api-key");
+        let _endpoint = TestEnvVar::set("OPENAI_RESPONSES_URL", &endpoint);
+        let _no_sdk = TestEnvVar::set("YANEX_BENCH_AGENT_SDK_TEST_NO_SDK", "1");
+        let options = Options::parse(&[
+            "--data-root".to_owned(),
+            data_root.display().to_string(),
+            "--output-jsonl".to_owned(),
+            output_jsonl.display().to_string(),
+            "--base-profile".to_owned(),
+            profile_path.display().to_string(),
+            "--arm".to_owned(),
+            "sqlite_raw_v1".to_owned(),
+            "--task-id".to_owned(),
+            "status_counts".to_owned(),
+            "--model".to_owned(),
+            "unit-profile-model".to_owned(),
+        ])
+        .unwrap();
+
+        run_benchmark_batch(options).unwrap();
+        server.join().unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        assert!(requests[0].get("tools").is_some());
+        assert!(requests[0].get("previous_response_id").is_none());
+        assert_eq!(
+            requests[0]["text"]["format"],
+            json!({"type": "json_object"})
+        );
+        assert!(
+            requests[1].get("tools").is_none(),
+            "Agent SDK schema-once runner must not repeat tool schema"
+        );
+        assert!(
+            requests[1].get("text").is_none(),
+            "Agent SDK schema-once runner must not repeat initial structured-output config"
+        );
+        assert!(
+            requests[1].get("model").is_none(),
+            "Agent SDK schema-once continuation must not resend model configuration"
+        );
+        assert!(
+            requests[1].get("max_output_tokens").is_none(),
+            "Agent SDK schema-once continuation must only send continuation input"
+        );
+        assert!(
+            requests[1].get("temperature").is_none(),
+            "Agent SDK schema-once continuation must only send continuation input"
+        );
+        assert_eq!(requests[1]["previous_response_id"], "resp-agent-tool-0");
+        let tool_outputs = requests[1]["input"].as_array().unwrap();
+        assert_eq!(tool_outputs.len(), 1);
+        assert_eq!(tool_outputs[0]["type"], "function_call_output");
+        assert_eq!(tool_outputs[0]["call_id"], "call-query-status");
+        assert!(tool_outputs[0]["output"]
+            .as_str()
+            .unwrap()
+            .contains("\"tool\":\"query_sql\""));
+
+        let benchmark_line = fs::read_to_string(output_jsonl)
+            .unwrap()
+            .lines()
+            .find(|line| line.contains("\"record_type\":\"benchmark_run\""))
+            .unwrap()
+            .to_owned();
+        let telemetry: Value = serde_json::from_str(&benchmark_line).unwrap();
+        assert_eq!(
+            telemetry["api_calls"][0]["response_id"],
+            "resp-agent-tool-0"
+        );
+        assert_eq!(telemetry["api_calls"][0]["sent_tool_schema"], true);
+        assert_eq!(telemetry["api_calls"][0]["sent_initial_instructions"], true);
+        assert_eq!(
+            telemetry["api_calls"][1]["previous_response_id"],
+            "resp-agent-tool-0"
+        );
+        assert_eq!(telemetry["api_calls"][1]["sent_tool_schema"], false);
+        assert_eq!(
+            telemetry["api_calls"][1]["sent_initial_instructions"],
+            false
+        );
+        assert_eq!(
+            telemetry["derived_metrics"]["tool_schema_repeated_count"],
+            0
+        );
+        assert_eq!(telemetry["derived_metrics"]["tool_call_count"], 1);
+    }
+
+    #[test]
+    fn agent_sdk_runner_starts_each_repeat_without_previous_response_id() {
+        let _env_lock = ENV_MUTEX.lock().unwrap();
+        let dir = tempfile::tempdir().unwrap();
+        let data_root = dir.path().join("data");
+        let output_jsonl = dir.path().join("telemetry.jsonl");
+        prepare_sample_sqlite_data_root(&data_root);
+        let profile_path = dir.path().join("base_profile.yaml");
+        let profile_yaml = BASE_PROFILE_YAML
+            .replace("max_turns: 20", "max_turns: 1")
+            .replace("repeats_per_arm_task: 10", "repeats_per_arm_task: 2");
+        fs::write(&profile_path, &profile_yaml).unwrap();
+        let (endpoint, requests, server) =
+            start_response_capture_server(2, successful_status_counts_answer());
+        let _api_key = TestEnvVar::set("OPENAI_API_KEY", "unit-api-key");
+        let _endpoint = TestEnvVar::set("OPENAI_RESPONSES_URL", &endpoint);
+        let _no_sdk = TestEnvVar::set("YANEX_BENCH_AGENT_SDK_TEST_NO_SDK", "1");
+        let options = Options::parse(&[
+            "--data-root".to_owned(),
+            data_root.display().to_string(),
+            "--output-jsonl".to_owned(),
+            output_jsonl.display().to_string(),
+            "--base-profile".to_owned(),
+            profile_path.display().to_string(),
+            "--arm".to_owned(),
+            "sqlite_raw_v1".to_owned(),
+            "--task-id".to_owned(),
+            "status_counts".to_owned(),
+            "--model".to_owned(),
+            "unit-profile-model".to_owned(),
+        ])
+        .unwrap();
+
+        run_benchmark_batch(options).unwrap();
+        server.join().unwrap();
+
+        let requests = requests.lock().unwrap();
+        assert_eq!(requests.len(), 2);
+        for request in requests.iter() {
+            assert!(request.get("previous_response_id").is_none());
+            assert!(request.get("tools").is_some());
+            assert!(request["input"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|item| item["role"] == "system"));
+        }
+        let telemetry = fs::read_to_string(output_jsonl).unwrap();
+        let runs = telemetry
+            .lines()
+            .filter(|line| line.contains("\"record_type\":\"benchmark_run\""))
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(runs.len(), 2);
+        for run in runs {
+            assert_eq!(run["api_calls"][0]["previous_response_id"], Value::Null);
+            assert_eq!(run["api_calls"][0]["sent_tool_schema"], true);
+            assert_eq!(run["api_calls"][0]["sent_initial_instructions"], true);
+        }
+    }
+
+    #[test]
+    fn benchmark_messages_inject_profile_messages_and_current_arm_card() {
+        let profile = base_profile().unwrap();
+        let task = find_task("status_counts").unwrap();
+        let arm_card = arm_card_yaml("nokv_native_v1").unwrap();
+
+        let messages = benchmark_messages(&profile, arm_card, &task);
+
+        let system = messages[0].content.as_deref().unwrap();
+        assert!(system.contains(profile.base_system_message.trim()));
+        assert!(!system.contains("Base profile YAML:"));
+        assert!(!system.contains("Rubric YAML:"));
+        assert!(!system.contains("output_schema:"));
+        let developer = messages[1].content.as_deref().unwrap();
+        assert!(developer.contains(profile.base_developer_message.trim()));
+        assert!(developer.contains("Current arm card YAML:"));
+        assert!(developer.contains("nokv_native_v1"));
+        assert!(developer.contains("find"));
+        let user = messages[2].content.as_deref().unwrap();
+        assert!(user.contains("Task ID: status_counts"));
+        let combined_context = messages
+            .iter()
+            .filter_map(|message| message.content.as_deref())
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(!combined_context.contains("gold_sql"));
+        assert!(!combined_context.contains("SELECT status, COUNT(*) AS count"));
+        assert!(!combined_context.contains("primary_metrics:"));
+    }
+
+    #[test]
+    fn batch_plan_defaults_to_two_arms_seven_tasks_ten_repeats() {
+        let profile = base_profile().unwrap();
+        let tasks = phase1_task_set().unwrap();
+        let repeat_count = repeat_count_from_options(&Options::default(), &profile);
+        let plan = batch_plan(None, None, repeat_count, &tasks);
+
+        assert_eq!(repeat_count, 10);
+        assert_eq!(plan.len(), 2 * 7 * 10);
+        assert_eq!(benchmark_arm_ids(), &["sqlite_raw_v1", "nokv_native_v1"]);
         assert_eq!(plan[0].arm_id, "sqlite_raw_v1");
         assert_eq!(plan[0].task_id, "status_counts");
         assert_eq!(plan[0].repeat_index, 0);
@@ -6714,7 +7896,7 @@ mod tests {
     #[test]
     fn batch_plan_repeats_every_task_for_selected_arm() {
         let tasks = phase1_task_set().unwrap();
-        let plan = batch_plan(Some("nokv_native_v1"), None, Some(5), &tasks);
+        let plan = batch_plan(Some("nokv_native_v1"), None, 5, &tasks);
 
         assert_eq!(plan.len(), 7 * 5);
         assert_eq!(plan[0].task_id, "status_counts");
@@ -6781,13 +7963,44 @@ mod tests {
 
         assert_eq!(parsed["record_type"], "benchmark_run");
         assert_eq!(parsed["run_error"], Value::Null);
+        assert_eq!(parsed["api_calls"][0]["request_id"], "req-test");
+        assert_eq!(parsed["api_calls"][0]["response_id"], "resp-test");
+        assert_eq!(parsed["api_calls"][0]["previous_response_id"], Value::Null);
+        assert_eq!(parsed["api_calls"][0]["sent_tool_schema"], true);
+        assert_eq!(parsed["api_calls"][0]["sent_initial_instructions"], true);
         assert_eq!(parsed["derived_metrics"]["tool_call_count"], 1);
+        assert_eq!(parsed["derived_metrics"]["tool_schema_repeated_count"], 0);
         assert_eq!(parsed["derived_metrics"]["invalid_sql_count"], 0);
         assert_eq!(parsed["derived_metrics"]["wrong_tool_count"], 0);
         assert_eq!(parsed["derived_metrics"]["tool_timeout_count"], 0);
         assert_eq!(parsed["derived_metrics"]["missing_evidence_count"], 0);
         assert_eq!(parsed["derived_metrics"]["overread_bytes"], 0);
+        assert_eq!(parsed["correctness"], true);
         assert_eq!(parsed["judge"]["task_success"], true);
+    }
+
+    #[test]
+    fn telemetry_counts_repeated_tool_schema_only_after_continuation() {
+        let mut calls = BenchmarkRunTelemetry::sample_for_test().api_calls;
+        calls.push(ApiCallTelemetry {
+            request_id: Some("req-repeat".to_owned()),
+            response_id: Some("resp-repeat".to_owned()),
+            model: "test-model".to_owned(),
+            started_at_unix_ms: 3,
+            completed_at_unix_ms: 4,
+            previous_response_id: Some("resp-test".to_owned()),
+            sent_tool_schema: true,
+            sent_initial_instructions: false,
+            prompt_tokens: Some(1),
+            completion_tokens: Some(1),
+            total_tokens: Some(2),
+            reasoning_tokens: Some(0),
+            cached_prompt_tokens: Some(0),
+            accepted_prediction_tokens: Some(0),
+            rejected_prediction_tokens: Some(0),
+        });
+
+        assert_eq!(tool_schema_repeated_count(&calls), 1);
     }
 
     #[test]
@@ -6823,9 +8036,71 @@ mod tests {
     }
 
     #[test]
+    fn tool_bridge_server_invokes_sqlite_tool_and_records_telemetry() {
+        let dir = tempfile::tempdir().unwrap();
+        let data_root = dir.path().join("data");
+        let output_jsonl = dir.path().join("telemetry.jsonl");
+        prepare_sample_sqlite_data_root(&data_root);
+        let tools = tool_registry_for_arm("sqlite_raw_v1").unwrap();
+        let bridge = ToolBridgeServer::start(ToolBridgeStartConfig {
+            run_id: "run-bridge",
+            arm: "sqlite_raw_v1",
+            task_id: "status_counts",
+            repeat_index: 0,
+            data_root: &data_root,
+            s3: &S3Options::default(),
+            registry: &tools,
+            timeout: Duration::from_millis(5_000),
+            output_jsonl: output_jsonl.clone(),
+        })
+        .unwrap();
+
+        let response: Value = reqwest::blocking::Client::new()
+            .post(format!("{}/invoke", bridge.url()))
+            .json(&json!({
+                "run_id": "run-bridge",
+                "tool_name": "query_sql",
+                "arguments": {
+                    "sql": "SELECT status, COUNT(*) AS count FROM experiments GROUP BY status ORDER BY status"
+                }
+            }))
+            .send()
+            .unwrap()
+            .json()
+            .unwrap();
+        let conn = Connection::open_with_flags(
+            sqlite_path(&data_root),
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY,
+        )
+        .unwrap();
+        let direct = execute_sqlite_raw_tool(
+            &conn,
+            "query_sql",
+            &json!({
+                "sql": "SELECT status, COUNT(*) AS count FROM experiments GROUP BY status ORDER BY status"
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(response["status"], "success");
+        assert_eq!(response["content"], direct);
+        let snapshot = bridge.finish().unwrap();
+        assert_eq!(snapshot.tool_calls.len(), 1);
+        assert_eq!(snapshot.tool_calls[0].tool_name, "query_sql");
+        assert_eq!(snapshot.tool_calls[0].bytes_read, 0);
+        assert_eq!(snapshot.tool_call_count(), 1);
+
+        let telemetry = fs::read_to_string(output_jsonl).unwrap();
+        let first_line: Value = serde_json::from_str(telemetry.lines().next().unwrap()).unwrap();
+        assert_eq!(first_line["record_type"], "tool_call_start");
+        assert_eq!(first_line["run_id"], "run-bridge");
+        assert_eq!(first_line["tool_name"], "query_sql");
+    }
+
+    #[test]
     fn only_context_length_http_errors_are_recoverable_run_errors() {
         assert!(is_recoverable_run_api_error(&HarnessError::Http(
-            "OpenAI chat completion HTTP 400 Bad Request: context_length_exceeded".to_owned()
+            "OpenAI response HTTP 400 Bad Request: context_length_exceeded".to_owned()
         )));
         assert!(is_recoverable_run_api_error(&HarnessError::Http(
             "Input tokens exceed the configured limit of 272000 tokens".to_owned()
@@ -6834,7 +8109,7 @@ mod tests {
             "model did not produce a final JSON answer before max_turns".to_owned()
         )));
         assert!(!is_recoverable_run_api_error(&HarnessError::Http(
-            "OpenAI chat completion HTTP 500 Internal Server Error".to_owned()
+            "OpenAI response HTTP 500 Internal Server Error".to_owned()
         )));
     }
 
@@ -6845,7 +8120,7 @@ mod tests {
             .send()
             .unwrap_err();
 
-        let diagnostic = chat_completion_send_error_diagnostic(2, 3, &err);
+        let diagnostic = model_response_send_error_diagnostic(2, 3, &err);
 
         assert!(diagnostic.contains("attempt=2/3"));
         assert!(diagnostic.contains("is_timeout="));
@@ -6856,8 +8131,8 @@ mod tests {
     }
 
     #[test]
-    fn chat_completion_retry_budget_is_ten_attempts() {
-        assert_eq!(CHAT_COMPLETION_MAX_ATTEMPTS, 10);
+    fn response_retry_budget_is_ten_attempts() {
+        assert_eq!(RESPONSE_MAX_ATTEMPTS, 10);
     }
 
     #[test]

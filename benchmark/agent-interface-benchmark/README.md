@@ -36,6 +36,13 @@ for `ls`, `stat`, `read`, and `find`. The harness translates OpenAI tool calls
 into product API calls, but does not own the measured card, find, structured
 read, index catalog, pagination, consistency, or evidence semantics.
 
+The default Phase 1 API surface is `openai_agents_responses_schema_once`. The
+Rust harness still owns batch planning, local judging, telemetry JSONL, and
+NoKV/SQLite tool execution. A Python runner uses `openai-agents>=0.7.0,<0.8.0`
+for the model/tool loop and a custom Responses model wrapper that sends the full
+tool schema only on the first model request in each task/repeat. Tool calls are
+posted back to a per-run loopback bridge in the Rust harness.
+
 ## Corpus
 
 The benchmark uses a fixed Yanex experiment tracking corpus. The materialized
@@ -72,12 +79,11 @@ The local corpus archive path is intentionally not committed. Pass it with
 
 ## Arms
 
-The Phase 1 harness compares three read-only arms:
+The Phase 1 harness compares two read-only arms:
 
 | Arm | Surface |
 | --- | --- |
 | `sqlite_raw_v1` | Raw SQLite schema/query/blob tools plus ETL-maintained agent-index materialization tables. |
-| `sqlite_agentfs_v1` | Filesystem-shaped projection backed by SQLite. |
 | `nokv_native_v1` | NoKV product-native agent adapter. |
 
 The deduplicated fixed Phase 1 tasks live in `tasks/phase1_readonly.yaml`. The
@@ -102,11 +108,6 @@ The active read-only workload is a deduplicated 7-task set:
 The benchmark has one core A/B comparison:
 
 - Raw SQLite tools vs NoKV Native Namespace.
-
-SQLite AgentFS remains useful as sensitivity/context because it isolates the
-effect of a filesystem-shaped projection backed by the same SQLite corpus. It
-should not be presented as the main product claim because it is a harness
-projection rather than the NoKV product-native surface.
 
 ## Materialized Index Fairness
 
@@ -188,6 +189,28 @@ Run one task for one arm:
   --repeats 1 \
   --output-jsonl benchmark/data/yanex-demo/results/phase1.jsonl
 ```
+
+Use the legacy hand-written runner only for A/B comparison while validating the
+schema-once Agent SDK path:
+
+```bash
+./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
+  --api-surface openai_chat_completions \
+  --arm nokv_native_v1 \
+  --task-id cancelled_runs_stderr \
+  --repeats 1 \
+  --output-jsonl benchmark/data/yanex-demo/results/legacy.jsonl
+```
+
+Install runner dependencies in the Python environment used by `python3`:
+
+```bash
+python3 -m pip install -r benchmark/agent-interface-benchmark/agents_runner/requirements.txt
+```
+
+Set `YANEX_BENCH_AGENT_SDK_LIVE_PROBE=1` to make the Agent SDK runner perform a
+real schema-once Responses continuation probe before a run. Probe failure is a
+run failure; the runner does not fall back to repeating tool schemas.
 
 Run all fixed Phase 1 tasks for all arms:
 

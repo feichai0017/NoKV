@@ -1,11 +1,11 @@
 profile_id: yanex_agent_benchmark_base_v1
 version: 1
 mode: warm_interface
-api_surface: openai_chat_completions
+api_surface: openai_agents_responses_schema_once
 
 model:
-  name_env: OPENAI_MODEL
-  temperature: 0
+  temperature: 1
+  max_completion_tokens: 4096
   stream: false
   structured_output: true
 
@@ -14,7 +14,7 @@ run_policy:
   repeats_per_arm_task: 10
   max_turns: 20
   max_tool_calls: 80
-  tool_call_timeout_ms: 30000
+  tool_call_timeout_ms: 60000
   retry_policy: no_auto_success_retry
   clear_messages_after_run: true
   corpus_snapshot: fixed_per_benchmark_batch
@@ -31,6 +31,12 @@ base_system_message: |
 base_developer_message: |
   Output exactly one JSON object matching the benchmark schema.
   Do not include markdown outside the JSON object.
+  Required top-level keys: task_id, status, answer, run_ids, evidence, missing_evidence, operations_summary, confidence.
+  status must be one of "success", "partial", "failed", or "blocked".
+  evidence must be an array of objects with stable handle and claim fields.
+  missing_evidence must be an array of strings.
+  operations_summary must include tool_call_count and bytes_read_estimate.
+  confidence must be one of "high", "medium", or "low".
   If the interface cannot support a requested operation, set status to "blocked" or "partial" and explain the missing capability.
   Evidence handles must be stable identifiers returned by the current arm's tools.
 
@@ -114,6 +120,10 @@ telemetry_contract:
     - benchmark_run
   capture_per_api_call:
     - request_id
+    - response_id
+    - previous_response_id
+    - sent_tool_schema
+    - sent_initial_instructions
     - model
     - started_at
     - completed_at
@@ -145,6 +155,7 @@ telemetry_contract:
     - evidence_precision
     - invalid_sql_count
     - wrong_tool_count
+    - tool_schema_repeated_count
     - tool_timeout_count
     - missing_evidence_count
     - overread_bytes

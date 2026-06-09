@@ -9,6 +9,10 @@
 target/
 **/target/
 
+# Python cache output
+__pycache__/
+*.pyc
+
 # Docs
 docs/node_modules/
 docs/.vitepress/dist/
