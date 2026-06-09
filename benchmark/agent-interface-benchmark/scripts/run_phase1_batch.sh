@@ -161,7 +161,15 @@ if ! command -v "${cargo_bin}" >/dev/null 2>&1; then
   fi
 fi
 
-python_bin="${PYTHON:-python3}"
+default_python_bin="python3"
+local_python_bin="${repo_root}/benchmark/agent-interface-benchmark/.venv/bin/python"
+if [ -n "${PYTHON:-}" ]; then
+  python_bin="${PYTHON}"
+elif [ -x "${local_python_bin}" ]; then
+  python_bin="${local_python_bin}"
+else
+  python_bin="${default_python_bin}"
+fi
 
 profile_api_surface() {
   local profile_path="$1"

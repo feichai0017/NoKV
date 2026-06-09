@@ -12,6 +12,8 @@ target/
 # Python cache output
 __pycache__/
 *.pyc
+.venv/
+**/.venv/
 
 # Docs
 docs/node_modules/

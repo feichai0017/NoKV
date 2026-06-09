@@ -21,10 +21,12 @@ profile does not configure the model name. The script checks the model and API
 key before invoking Cargo.
 
 The default API surface uses the OpenAI Agents SDK runner. Install its Python
-dependency in the environment selected by `${PYTHON:-python3}`:
+dependency in the local benchmark virtual environment. The wrapper
+automatically uses this environment when `PYTHON` is not set:
 
 ```bash
-${PYTHON:-python3} -m pip install -r benchmark/agent-interface-benchmark/agents_runner/requirements.txt
+python3.12 -m venv benchmark/agent-interface-benchmark/.venv
+benchmark/agent-interface-benchmark/.venv/bin/python -m pip install -r benchmark/agent-interface-benchmark/agents_runner/requirements.txt
 ```
 
 If `cargo` is not on `PATH`, load the Rust environment first:
