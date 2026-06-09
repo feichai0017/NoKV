@@ -1155,17 +1155,7 @@ fn show_schema(options: Options) -> Result<(), HarnessError> {
     let db = options.db.ok_or(HarnessError::MissingOption("--db"))?;
     let conn = Connection::open_with_flags(db, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
         .map_err(from_sql)?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT sql FROM sqlite_schema WHERE type IN ('table', 'index') AND sql IS NOT NULL ORDER BY name",
-        )
-        .map_err(from_sql)?;
-    let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
-        .map_err(from_sql)?;
-    for row in rows {
-        println!("{}", row.map_err(from_sql)?);
-    }
+    print!("{}", sqlite_schema_text(&conn)?);
     Ok(())
 }
 
@@ -2893,11 +2883,9 @@ impl ToolBridgeServer {
                             output_jsonl: &output_jsonl,
                             tool_worker: &tool_worker,
                         };
-                        if let Err(err) = handle_tool_bridge_connection(
-                            &mut stream,
-                            &context,
-                            &mut snapshot,
-                        ) {
+                        if let Err(err) =
+                            handle_tool_bridge_connection(&mut stream, &context, &mut snapshot)
+                        {
                             let body = json!({
                                 "status": "error",
                                 "error": err.to_string(),
@@ -3283,18 +3271,40 @@ fn to_json_value(value: impl Serialize) -> Result<Value, HarnessError> {
 fn sqlite_schema_text(conn: &Connection) -> Result<String, HarnessError> {
     let mut stmt = conn
         .prepare(
-            "SELECT sql FROM sqlite_schema WHERE type IN ('table', 'index') AND sql IS NOT NULL ORDER BY name",
+            "SELECT tbl_name, sql FROM sqlite_schema WHERE type IN ('table', 'index') AND sql IS NOT NULL ORDER BY name",
         )
         .map_err(from_sql)?;
     let rows = stmt
-        .query_map([], |row| row.get::<_, String>(0))
+        .query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })
         .map_err(from_sql)?;
     let mut out = String::new();
     for row in rows {
-        out.push_str(&row.map_err(from_sql)?);
+        let (table_name, sql) = row.map_err(from_sql)?;
+        if !sqlite_schema_visible_table(&table_name) {
+            continue;
+        }
+        out.push_str(&sql);
         out.push('\n');
     }
     Ok(out)
+}
+
+fn sqlite_schema_visible_table(table_name: &str) -> bool {
+    matches!(
+        table_name,
+        "artifacts"
+            | "blobs"
+            | "dependencies"
+            | "experiments"
+            | "files"
+            | "git_state"
+            | "metrics"
+            | "params"
+            | "run_agent_index_catalog"
+            | "run_agent_index_values"
+    )
 }
 
 fn required_string_arg(args: &Value, name: &'static str) -> Result<String, HarnessError> {
@@ -6809,7 +6819,13 @@ mod tests {
             .unwrap();
         assert_eq!(min_val_loss, 0.3);
         let schema = sqlite_schema_text(&conn).unwrap();
-        assert!(schema.contains("run_agent_index"));
+        assert!(schema.contains("CREATE TABLE experiments"));
+        assert!(schema.contains("CREATE TABLE run_agent_index_catalog"));
+        assert!(schema.contains("CREATE TABLE run_agent_index_values"));
+        assert!(schema.contains("idx_run_agent_index_values_field_text"));
+        assert!(!schema.contains("CREATE TABLE run_agent_index ("));
+        assert!(!schema.contains("idx_run_agent_index_status_script"));
+        assert!(!schema.contains("metric_val_loss_min"));
         assert!(!schema.contains("group_lr_batch_avg_min_val_loss"));
     }
 
@@ -7193,9 +7209,12 @@ mod tests {
     fn nokv_native_arm_card_documents_filtered_facet_semantics() {
         let card_text = include_str!("../../arms/nokv_native.yaml");
 
-        assert!(card_text.contains("stat facet summaries are global to the current directory index"));
+        assert!(
+            card_text.contains("stat facet summaries are global to the current directory index")
+        );
         assert!(card_text.contains("find.match_count is the total number of paths matching the predicates, not a grouped count"));
-        assert!(card_text.contains("Requested find facets are computed after predicates and before pagination"));
+        assert!(card_text
+            .contains("Requested find facets are computed after predicates and before pagination"));
     }
 
     #[test]
@@ -7339,10 +7358,7 @@ mod tests {
         let config = BenchmarkRuntimeConfig::from_options(&options, &profile).unwrap();
 
         assert_eq!(config.model, "unit-model");
-        assert_eq!(
-            config.api_surface,
-            ApiSurface::AgentsResponsesSchemaOnce
-        );
+        assert_eq!(config.api_surface, ApiSurface::AgentsResponsesSchemaOnce);
         assert_eq!(config.max_turns, 20);
         assert_eq!(config.max_tool_calls, 80);
         assert_eq!(config.max_completion_tokens, 4096);
