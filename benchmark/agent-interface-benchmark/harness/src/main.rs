@@ -1581,10 +1581,8 @@ fn print_tool_registry(options: Options) -> Result<(), HarnessError> {
 
 fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError> {
     if arm == "nokv_native_v1" {
-        let phase1_tools = ["stat", "catalog", "aggregate", "find"];
         let tools = agent_tool_definitions()
             .into_iter()
-            .filter(|tool| phase1_tools.contains(&tool.name))
             .map(|tool| ToolDefinition {
                 name: tool.name.to_owned(),
                 description: tool.description.to_owned(),
@@ -1597,18 +1595,53 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
         "sqlite_raw_v1" => vec![
             (
                 "show_schema",
-                "Return the SQLite schema for the Yanex corpus.",
-                json!({"type":"object","properties":{},"additionalProperties":false}),
+                "Return the live SQLite schema for tables and indexes. Use this before non-trivial SQL and rely only on discovered table and column names.",
+                json!({
+                    "type": "object",
+                    "properties": {},
+                    "additionalProperties": false
+                }),
             ),
             (
                 "query_sql",
-                "Execute a read-only SQL query over Yanex relational tables.",
-                json!({"type":"object","required":["sql"],"properties":{"sql":{"type":"string"}},"additionalProperties":false}),
+                "Execute bounded read-only SQLite. Only SELECT, WITH, and EXPLAIN statements are accepted; mutations and pragmas are rejected.",
+                json!({
+                    "type": "object",
+                    "required": ["sql"],
+                    "properties": {
+                        "sql": {
+                            "type": "string",
+                            "description": "A bounded read-only SELECT, WITH, or EXPLAIN statement over schema-discovered tables and columns."
+                        }
+                    },
+                    "additionalProperties": false
+                }),
             ),
             (
                 "read_blob",
-                "Read a byte range from a blob_ref returned by SQL rows.",
-                json!({"type":"object","required":["blob_ref","offset","limit"],"properties":{"blob_ref":{"type":"string"},"offset":{"type":"integer","minimum":0},"limit":{"type":"integer","minimum":1,"maximum":65536}},"additionalProperties":false}),
+                "Read a byte range from a blob_ref returned by query_sql. Use read_blob only when body bytes are required; do not read blobs when metadata rows already answer the task.",
+                json!({
+                    "type": "object",
+                    "required": ["blob_ref", "offset", "limit"],
+                    "properties": {
+                        "blob_ref": {
+                            "type": "string",
+                            "description": "Blob reference returned by query_sql."
+                        },
+                        "offset": {
+                            "type": "integer",
+                            "minimum": 0,
+                            "description": "Zero-based byte offset."
+                        },
+                        "limit": {
+                            "type": "integer",
+                            "minimum": 1,
+                            "maximum": 65536,
+                            "description": "Maximum bytes to return from this blob range."
+                        }
+                    },
+                    "additionalProperties": false
+                }),
             ),
         ],
         other => {
@@ -2051,58 +2084,49 @@ fn run_benchmark_task_once_legacy(
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or_default();
-    let nokv_for_evidence = if arm == "nokv_native_v1" {
-        Some(open_existing_nokv(
-            &nokv_meta_path(&data_root),
-            &options.s3,
-        )?)
-    } else {
-        None
+    let judge_result = match judge_answer(&conn, &task, arm, &final_answer, None) {
+        Ok(judge_result) => judge_result,
+        Err(err) if is_recoverable_run_judge_error(&err) => {
+            let error = err.to_string();
+            let mut derived = DerivedMetrics {
+                interface_card_tokens: estimate_tokens(arm_card),
+                task_prompt_tokens: estimate_tokens(&task.prompt),
+                wall_time_ms: completed.saturating_sub(started),
+                task_success: Some(false),
+                evidence_precision: None,
+                tool_call_count: tool_calls.len(),
+                tool_result_tokens,
+                tool_bytes_read,
+                invalid_sql_count,
+                wrong_tool_count,
+                tool_timeout_count,
+                missing_evidence_count,
+                overread_bytes: 0,
+                ..DerivedMetrics::default()
+            };
+            apply_usage_costs(&mut derived, &api_calls, &model);
+            let telemetry = BenchmarkRunTelemetry {
+                record_type: "benchmark_run".to_owned(),
+                run_id,
+                arm_id: arm.to_owned(),
+                task_id: task.task_id,
+                repeat_index,
+                model,
+                started_at_unix_ms: started,
+                completed_at_unix_ms: completed,
+                api_calls,
+                tool_calls,
+                derived_metrics: derived,
+                correctness: false,
+                judge: None,
+                final_answer: Some(final_answer.clone()),
+                run_error: Some(error),
+            };
+            append_jsonl(&output_jsonl, &telemetry)?;
+            return Ok(final_answer);
+        }
+        Err(err) => return Err(err),
     };
-    let judge_result =
-        match judge_answer(&conn, &task, arm, &final_answer, nokv_for_evidence.as_ref()) {
-            Ok(judge_result) => judge_result,
-            Err(err) if is_recoverable_run_judge_error(&err) => {
-                let error = err.to_string();
-                let mut derived = DerivedMetrics {
-                    interface_card_tokens: estimate_tokens(arm_card),
-                    task_prompt_tokens: estimate_tokens(&task.prompt),
-                    wall_time_ms: completed.saturating_sub(started),
-                    task_success: Some(false),
-                    evidence_precision: None,
-                    tool_call_count: tool_calls.len(),
-                    tool_result_tokens,
-                    tool_bytes_read,
-                    invalid_sql_count,
-                    wrong_tool_count,
-                    tool_timeout_count,
-                    missing_evidence_count,
-                    overread_bytes: 0,
-                    ..DerivedMetrics::default()
-                };
-                apply_usage_costs(&mut derived, &api_calls, &model);
-                let telemetry = BenchmarkRunTelemetry {
-                    record_type: "benchmark_run".to_owned(),
-                    run_id,
-                    arm_id: arm.to_owned(),
-                    task_id: task.task_id,
-                    repeat_index,
-                    model,
-                    started_at_unix_ms: started,
-                    completed_at_unix_ms: completed,
-                    api_calls,
-                    tool_calls,
-                    derived_metrics: derived,
-                    correctness: false,
-                    judge: None,
-                    final_answer: Some(final_answer.clone()),
-                    run_error: Some(error),
-                };
-                append_jsonl(&output_jsonl, &telemetry)?;
-                return Ok(final_answer);
-            }
-            Err(err) => return Err(err),
-        };
     let mut derived = DerivedMetrics {
         interface_card_tokens: estimate_tokens(arm_card),
         task_prompt_tokens: estimate_tokens(&task.prompt),
@@ -2268,58 +2292,49 @@ fn run_benchmark_task_once_agents_schema_once(
         .and_then(Value::as_array)
         .map(Vec::len)
         .unwrap_or_default();
-    let nokv_for_evidence = if arm == "nokv_native_v1" {
-        Some(open_existing_nokv(
-            &nokv_meta_path(&data_root),
-            &options.s3,
-        )?)
-    } else {
-        None
+    let judge_result = match judge_answer(&conn, &task, arm, &final_answer, None) {
+        Ok(judge_result) => judge_result,
+        Err(err) if is_recoverable_run_judge_error(&err) => {
+            let error = err.to_string();
+            let mut derived = DerivedMetrics {
+                interface_card_tokens: estimate_tokens(arm_card),
+                task_prompt_tokens: estimate_tokens(&task.prompt),
+                wall_time_ms: completed.saturating_sub(started),
+                task_success: Some(false),
+                evidence_precision: None,
+                tool_call_count: bridge_snapshot.tool_call_count(),
+                tool_result_tokens: bridge_snapshot.tool_result_tokens,
+                tool_bytes_read: bridge_snapshot.tool_bytes_read,
+                invalid_sql_count: bridge_snapshot.invalid_sql_count,
+                wrong_tool_count: bridge_snapshot.wrong_tool_count,
+                tool_timeout_count: bridge_snapshot.tool_timeout_count,
+                missing_evidence_count,
+                overread_bytes: 0,
+                ..DerivedMetrics::default()
+            };
+            apply_usage_costs(&mut derived, &api_calls, &model);
+            let telemetry = BenchmarkRunTelemetry {
+                record_type: "benchmark_run".to_owned(),
+                run_id,
+                arm_id: arm.to_owned(),
+                task_id: task.task_id,
+                repeat_index,
+                model,
+                started_at_unix_ms: started,
+                completed_at_unix_ms: completed,
+                api_calls,
+                tool_calls: bridge_snapshot.tool_calls,
+                derived_metrics: derived,
+                correctness: false,
+                judge: None,
+                final_answer: Some(final_answer.clone()),
+                run_error: Some(error),
+            };
+            append_jsonl(&output_jsonl, &telemetry)?;
+            return Ok(final_answer);
+        }
+        Err(err) => return Err(err),
     };
-    let judge_result =
-        match judge_answer(&conn, &task, arm, &final_answer, nokv_for_evidence.as_ref()) {
-            Ok(judge_result) => judge_result,
-            Err(err) if is_recoverable_run_judge_error(&err) => {
-                let error = err.to_string();
-                let mut derived = DerivedMetrics {
-                    interface_card_tokens: estimate_tokens(arm_card),
-                    task_prompt_tokens: estimate_tokens(&task.prompt),
-                    wall_time_ms: completed.saturating_sub(started),
-                    task_success: Some(false),
-                    evidence_precision: None,
-                    tool_call_count: bridge_snapshot.tool_call_count(),
-                    tool_result_tokens: bridge_snapshot.tool_result_tokens,
-                    tool_bytes_read: bridge_snapshot.tool_bytes_read,
-                    invalid_sql_count: bridge_snapshot.invalid_sql_count,
-                    wrong_tool_count: bridge_snapshot.wrong_tool_count,
-                    tool_timeout_count: bridge_snapshot.tool_timeout_count,
-                    missing_evidence_count,
-                    overread_bytes: 0,
-                    ..DerivedMetrics::default()
-                };
-                apply_usage_costs(&mut derived, &api_calls, &model);
-                let telemetry = BenchmarkRunTelemetry {
-                    record_type: "benchmark_run".to_owned(),
-                    run_id,
-                    arm_id: arm.to_owned(),
-                    task_id: task.task_id,
-                    repeat_index,
-                    model,
-                    started_at_unix_ms: started,
-                    completed_at_unix_ms: completed,
-                    api_calls,
-                    tool_calls: bridge_snapshot.tool_calls,
-                    derived_metrics: derived,
-                    correctness: false,
-                    judge: None,
-                    final_answer: Some(final_answer.clone()),
-                    run_error: Some(error),
-                };
-                append_jsonl(&output_jsonl, &telemetry)?;
-                return Ok(final_answer);
-            }
-            Err(err) => return Err(err),
-        };
     let mut derived = DerivedMetrics {
         interface_card_tokens: estimate_tokens(arm_card),
         task_prompt_tokens: estimate_tokens(&task.prompt),
@@ -3442,17 +3457,7 @@ fn judge_answer(
     let gold_rows = query_gold_rows(conn, task)?;
     let mut mismatches = Vec::new();
     let expected_run_ids = expected_run_ids(&gold_rows, task.expected.run_id_column.as_deref());
-    let actual_run_ids = answer
-        .get("run_ids")
-        .and_then(Value::as_array)
-        .map(|values| {
-            values
-                .iter()
-                .filter_map(Value::as_str)
-                .map(str::to_owned)
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+    let actual_run_ids = actual_run_ids(answer, &task.expected);
     if !expected_run_ids.is_empty() && actual_run_ids != expected_run_ids {
         mismatches.push(format!(
             "run_ids differ; expected {:?}, got {:?}",
@@ -3460,7 +3465,7 @@ fn judge_answer(
         ));
     }
 
-    let answer_root = answer.get("answer").unwrap_or(&Value::Null);
+    let answer_root = answer;
     match task.expected.kind.as_str() {
         "status_counts" => {
             let key = task.expected.answer_key.as_deref().ok_or_else(|| {
@@ -3529,14 +3534,8 @@ fn judge_answer(
     }
 
     let (evidence_checked, evidence_supported) = evidence_support(conn, arm, answer, nokv_native)?;
-    let evidence_precision = if evidence_checked == 0 {
-        None
-    } else {
-        Some(evidence_supported as f64 / evidence_checked as f64)
-    };
-    if evidence_checked == 0 {
-        mismatches.push("answer did not include evidence handles".to_owned());
-    }
+    let evidence_precision =
+        (evidence_checked > 0).then_some(evidence_supported as f64 / evidence_checked as f64);
     Ok(JudgeResult {
         task_success: mismatches.is_empty(),
         evidence_precision,
@@ -3546,6 +3545,33 @@ fn judge_answer(
         actual_run_ids,
         mismatches,
     })
+}
+
+fn actual_run_ids(answer: &Value, expected: &ExpectedSpec) -> Vec<String> {
+    let Some(column) = expected.run_id_column.as_deref() else {
+        return Vec::new();
+    };
+    match expected.kind.as_str() {
+        "rows_exact" => expected
+            .answer_key
+            .as_deref()
+            .and_then(|key| answer.get(key))
+            .and_then(Value::as_array)
+            .into_iter()
+            .flatten()
+            .filter_map(|row| row.get(column).and_then(Value::as_str))
+            .map(str::to_owned)
+            .collect(),
+        "first_row_object" => expected
+            .answer_key
+            .as_deref()
+            .and_then(|key| answer.get(key))
+            .and_then(|object| object.get(column))
+            .and_then(Value::as_str)
+            .map(|run_id| vec![run_id.to_owned()])
+            .unwrap_or_default(),
+        _ => Vec::new(),
+    }
 }
 
 fn query_gold_rows(conn: &Connection, task: &BenchmarkTask) -> Result<Vec<Value>, HarnessError> {
@@ -3926,20 +3952,22 @@ impl BenchmarkRunTelemetry {
             derived_metrics: DerivedMetrics {
                 tool_call_count: 1,
                 task_success: Some(true),
-                evidence_precision: Some(1.0),
+                evidence_precision: None,
                 ..DerivedMetrics::default()
             },
             correctness: true,
             judge: Some(JudgeResult {
                 task_success: true,
-                evidence_precision: Some(1.0),
-                evidence_checked: 1,
-                evidence_supported: 1,
+                evidence_precision: None,
+                evidence_checked: 0,
+                evidence_supported: 0,
                 expected_run_ids: vec!["run-1".to_owned()],
                 actual_run_ids: vec!["run-1".to_owned()],
                 mismatches: Vec::new(),
             }),
-            final_answer: Some(json!({"status":"success"})),
+            final_answer: Some(
+                json!({"status_counts":[{"status":"completed","count":1}],"total_runs":1}),
+            ),
             run_error: None,
         }
     }
@@ -6440,17 +6468,8 @@ mod tests {
 
     fn successful_status_counts_answer() -> Value {
         json!({
-            "task_id": "status_counts",
-            "status": "success",
-            "answer": {
-                "status_counts": [{"status": "completed", "count": 1}],
-                "total_runs": 1
-            },
-            "run_ids": [],
-            "evidence": [{"handle": "sqlite://experiments/run-1", "claim": "run status source"}],
-            "missing_evidence": [],
-            "operations_summary": {"tool_call_count": 0, "bytes_read_estimate": 0},
-            "confidence": "high"
+            "status_counts": [{"status": "completed", "count": 1}],
+            "total_runs": 1
         })
     }
 
@@ -7098,7 +7117,7 @@ mod tests {
         );
         assert_eq!(
             tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap()),
-            vec!["stat", "catalog", "aggregate", "find"]
+            vec!["ls", "stat", "catalog", "read", "aggregate", "find"]
         );
         assert!(tool_registry_for_arm("unknown_arm_v1").is_err());
     }
@@ -7153,101 +7172,70 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_raw_arm_card_tool_names_match_registry() {
-        let card: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../arms/sqlite_raw.yaml")).unwrap();
-        let tool_contract = card
-            .get("tool_contract")
-            .and_then(serde_yaml::Value::as_sequence)
-            .unwrap();
-        let card_names = tool_contract
-            .iter()
-            .map(|item| {
-                item.get("name")
-                    .and_then(serde_yaml::Value::as_str)
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            card_names,
-            tool_names(&tool_registry_for_arm("sqlite_raw_v1").unwrap())
-        );
-    }
-
-    #[test]
-    fn nokv_native_arm_card_tool_names_match_registry() {
-        let card: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../arms/nokv_native.yaml")).unwrap();
-        let tool_contract = card
-            .get("tool_contract")
-            .and_then(serde_yaml::Value::as_sequence)
-            .unwrap();
-        let card_names = tool_contract
-            .iter()
-            .map(|item| {
-                item.get("name")
-                    .and_then(serde_yaml::Value::as_str)
-                    .unwrap()
-            })
-            .collect::<Vec<_>>();
-
-        assert_eq!(
-            card_names,
-            tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap())
-        );
-    }
-
-    #[test]
-    fn nokv_native_arm_card_is_phase1_core_task_surface() {
-        let card: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../arms/nokv_native.yaml")).unwrap();
-        let native_definition = card.get("native_definition").unwrap();
-        assert!(native_definition.get("product_boundary").is_none());
-
-        let card_text = include_str!("../../arms/nokv_native.yaml");
-        assert!(!card_text.contains("  - name: grep"));
-        assert!(!card_text.contains("grep_paths"));
-        assert!(!card_text.contains("temporary grep mapping"));
-        assert!(!card_text.contains("directory_entries"));
-    }
-
-    #[test]
-    fn nokv_native_arm_card_does_not_duplicate_tool_schema() {
-        let card_text = include_str!("../../arms/nokv_native.yaml");
-
-        assert!(!card_text.contains("\n    arguments:"));
-        assert!(!card_text.contains("\n    returns:"));
-    }
-
-    #[test]
-    fn nokv_native_arm_card_documents_filtered_facet_semantics() {
-        let card_text = include_str!("../../arms/nokv_native.yaml");
-
-        assert!(
-            card_text.contains("stat facet summaries are global to the current directory index")
-        );
-        assert!(card_text.contains("find.match_count is the total number of paths matching the predicates, not a grouped count"));
-        assert!(card_text
-            .contains("Requested find facets are computed after predicates and before pagination"));
-    }
-
-    #[test]
-    fn sqlite_raw_arm_card_requires_runtime_agent_index_field_discovery() {
-        let card: serde_yaml::Value =
-            serde_yaml::from_str(include_str!("../../arms/sqlite_raw.yaml")).unwrap();
-        let schema_hint = card.get("materialized_view_schema_hint").unwrap();
-        assert!(schema_hint.get("catalog_field_ids").is_none());
-
-        let card = include_str!("../../arms/sqlite_raw.yaml");
-        for field in nokv_agent_index_fields() {
+    fn arm_cards_are_runtime_context_not_tool_contracts() {
+        for (arm, card_text) in [
+            (
+                "nokv_native_v1",
+                include_str!("../../arms/nokv_native.yaml"),
+            ),
+            ("sqlite_raw_v1", include_str!("../../arms/sqlite_raw.yaml")),
+        ] {
+            let card: serde_yaml::Value = serde_yaml::from_str(card_text).unwrap();
             assert!(
-                !card.contains(&format!("    - {}", field.field.id)),
-                "sqlite arm card must not pre-list agent index field {}",
-                field.field.id
+                card.get("runtime_context").is_some(),
+                "{arm} card must expose runtime_context"
             );
+            assert!(
+                card.get("tool_contract").is_none(),
+                "{arm} card must not duplicate tool registry contracts"
+            );
+            assert!(
+                card.get("materialized_view_schema_hint").is_none(),
+                "{arm} card must not duplicate SQL schema discovery guidance"
+            );
+
+            let lower = card_text.to_ascii_lowercase();
+            for snippet in [
+                "benchmark",
+                "telemetry",
+                "tool calls",
+                "arguments:",
+                "returns:",
+                "find.match_count",
+                "predicate_values",
+            ] {
+                assert!(
+                    !lower.contains(snippet),
+                    "{arm} card must not contain tool or benchmark contract snippet {snippet:?}"
+                );
+            }
         }
-        assert!(card.contains("Inspect show_schema or run_agent_index_catalog"));
+    }
+
+    #[test]
+    fn sql_tool_registry_documents_task_interface_semantics() {
+        let tools = tool_registry_for_arm("sqlite_raw_v1").unwrap();
+        let show_schema = tool_definition(&tools, "show_schema");
+        let query_sql = tool_definition(&tools, "query_sql");
+        let read_blob = tool_definition(&tools, "read_blob");
+
+        assert!(show_schema.description.contains("live SQLite schema"));
+        assert!(query_sql.description.contains("Only SELECT"));
+        assert!(!query_sql.description.contains("evidence"));
+        assert!(query_sql.parameters["properties"]["sql"]["description"]
+            .as_str()
+            .unwrap()
+            .contains("read-only"));
+        assert!(read_blob
+            .description
+            .contains("blob_ref returned by query_sql"));
+        assert!(read_blob.description.contains("Use read_blob only"));
+        assert!(
+            read_blob.parameters["properties"]["blob_ref"]["description"]
+                .as_str()
+                .unwrap()
+                .contains("query_sql")
+        );
     }
 
     #[test]
@@ -7320,7 +7308,7 @@ mod tests {
     }
 
     #[test]
-    fn phase1_tasks_are_fixed_to_seven_read_only_prompts() {
+    fn phase1_tasks_are_fixed_to_ten_read_only_prompts() {
         let task_set = phase1_task_set().unwrap();
         let task_ids: Vec<&str> = task_set
             .tasks
@@ -7338,6 +7326,9 @@ mod tests {
                 "dirty_git_missing_patches",
                 "index_completed_consistency",
                 "stdout_availability_by_script",
+                "cancelled_stderr_root_cause",
+                "eval_details_worst_fidelity_field",
+                "best_eval_lineage_trace",
             ]
         );
         assert!(!task_ids.contains(&"completed_scripts_top5"));
@@ -7363,6 +7354,33 @@ mod tests {
         assert!(readme.contains("## Valid Comparisons"));
         assert!(readme.contains("one core A/B comparison"));
         assert!(readme.contains("Raw SQLite tools vs NoKV Native Namespace"));
+    }
+
+    #[test]
+    fn phase1_rubric_primary_metrics_match_summary_columns() {
+        let rubric: serde_yaml::Value =
+            serde_yaml::from_str(include_str!("../../rubric/phase1_readonly.yaml")).unwrap();
+        let primary_metrics = rubric
+            .get("primary_metrics")
+            .and_then(serde_yaml::Value::as_sequence)
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            primary_metrics,
+            vec![
+                "Arm",
+                "Correctness",
+                "Cached",
+                "Uncached",
+                "Completion",
+                "tool_call_count",
+                "wall_time_ms",
+                "total_cost",
+            ]
+        );
     }
 
     #[test]
@@ -7496,7 +7514,7 @@ mod tests {
                 "Unit profile system marker.",
             )
             .replace(
-                "Output exactly one JSON object matching the benchmark schema.",
+                "Output exactly one JSON object matching the task's required answer shape.",
                 "Unit profile developer marker.",
             );
         fs::write(&profile_path, &profile_yaml).unwrap();
@@ -7559,7 +7577,8 @@ mod tests {
             let second_system = messages[1]["content"].as_str().unwrap();
             assert!(second_system.contains("Unit profile developer marker."));
             assert!(second_system.contains("sqlite_raw_v1"));
-            assert!(second_system.contains("query_sql"));
+            assert!(second_system.contains("runtime_context"));
+            assert!(!second_system.contains("query_sql"));
             assert!(messages[2]["content"]
                 .as_str()
                 .unwrap()
@@ -7880,44 +7899,57 @@ mod tests {
     }
 
     #[test]
-    fn benchmark_messages_inject_profile_messages_and_current_arm_card() {
+    fn agent_visible_context_only_requests_task_answer() {
         let profile = base_profile().unwrap();
         let task = find_task("status_counts").unwrap();
-        let arm_card = arm_card_yaml("nokv_native_v1").unwrap();
-
-        let messages = benchmark_messages(&profile, arm_card, &task);
-
-        let system = messages[0].content.as_deref().unwrap();
-        assert!(system.contains(profile.base_system_message.trim()));
-        assert!(!system.contains("Base profile YAML:"));
-        assert!(!system.contains("Rubric YAML:"));
-        assert!(!system.contains("output_schema:"));
-        let developer = messages[1].content.as_deref().unwrap();
-        assert!(developer.contains(profile.base_developer_message.trim()));
-        assert!(developer.contains("Current arm card YAML:"));
-        assert!(developer.contains("nokv_native_v1"));
-        assert!(developer.contains("find"));
-        let user = messages[2].content.as_deref().unwrap();
-        assert!(user.contains("Task ID: status_counts"));
+        let messages = benchmark_messages(&profile, arm_card_yaml("sqlite_raw_v1").unwrap(), &task);
         let combined_context = messages
             .iter()
             .filter_map(|message| message.content.as_deref())
             .collect::<Vec<_>>()
-            .join("\n");
-        assert!(!combined_context.contains("gold_sql"));
-        assert!(!combined_context.contains("SELECT status, COUNT(*) AS count"));
-        assert!(!combined_context.contains("primary_metrics:"));
+            .join("\n")
+            .to_ascii_lowercase();
+
+        for forbidden in [
+            "evidence",
+            "missing_evidence",
+            "operations_summary",
+            "confidence",
+            "run_ids",
+            "benchmark schema",
+        ] {
+            assert!(
+                !combined_context.contains(forbidden),
+                "agent-visible context must not contain {forbidden:?}"
+            );
+        }
     }
 
     #[test]
-    fn batch_plan_defaults_to_two_arms_seven_tasks_ten_repeats() {
+    fn phase1_task_prompts_do_not_request_agent_visible_audit_fields() {
+        let task_set = phase1_task_set().unwrap();
+
+        for task in &task_set.tasks {
+            let prompt = task.prompt.to_ascii_lowercase();
+            for forbidden in ["cite evidence", "missing_evidence", "run_ids"] {
+                assert!(
+                    !prompt.contains(forbidden),
+                    "{} prompt must not request {forbidden:?}",
+                    task.task_id
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn batch_plan_defaults_to_two_arms_ten_tasks_ten_repeats() {
         let profile = base_profile().unwrap();
         let tasks = phase1_task_set().unwrap();
         let repeat_count = repeat_count_from_options(&Options::default(), &profile);
         let plan = batch_plan(None, None, repeat_count, &tasks);
 
         assert_eq!(repeat_count, 10);
-        assert_eq!(plan.len(), 2 * 7 * 10);
+        assert_eq!(plan.len(), 2 * 10 * 10);
         assert_eq!(benchmark_arm_ids(), &["sqlite_raw_v1", "nokv_native_v1"]);
         assert_eq!(plan[0].arm_id, "sqlite_raw_v1");
         assert_eq!(plan[0].task_id, "status_counts");
@@ -7931,7 +7963,7 @@ mod tests {
         let tasks = phase1_task_set().unwrap();
         let plan = batch_plan(Some("nokv_native_v1"), None, 5, &tasks);
 
-        assert_eq!(plan.len(), 7 * 5);
+        assert_eq!(plan.len(), 10 * 5);
         assert_eq!(plan[0].task_id, "status_counts");
         assert_eq!(plan[0].repeat_index, 0);
         assert_eq!(plan[4].task_id, "status_counts");
@@ -7940,6 +7972,8 @@ mod tests {
         assert_eq!(plan[5].repeat_index, 0);
         assert_eq!(plan[34].task_id, "stdout_availability_by_script");
         assert_eq!(plan[34].repeat_index, 4);
+        assert_eq!(plan[49].task_id, "best_eval_lineage_trace");
+        assert_eq!(plan[49].repeat_index, 4);
     }
 
     #[test]
@@ -7950,7 +7984,7 @@ mod tests {
     }
 
     #[test]
-    fn local_judge_checks_gold_rows_run_ids_and_evidence_prefixes() {
+    fn local_judge_checks_gold_rows_and_derives_run_ids_from_answer() {
         let conn = Connection::open_in_memory().unwrap();
         create_schema(&conn).unwrap();
         let run = sample_run();
@@ -7969,23 +8003,48 @@ mod tests {
             },
         };
         let answer = json!({
-            "task_id": "unit",
-            "status": "success",
-            "answer": {
-                "runs": [{"experiment_id": "run-1", "status": "completed"}]
-            },
-            "run_ids": ["run-1"],
-            "evidence": [{"handle": "sqlite://experiments/run-1", "claim": "status row"}],
-            "missing_evidence": [],
-            "operations_summary": {"tool_call_count": 1, "bytes_read_estimate": 0},
-            "confidence": "high"
+            "runs": [{"experiment_id": "run-1", "status": "completed"}]
         });
 
         let result = judge_answer(&conn, &task, "sqlite_raw_v1", &answer, None).unwrap();
 
         assert!(result.task_success, "{result:?}");
-        assert_eq!(result.evidence_precision, Some(1.0));
+        assert_eq!(result.evidence_precision, None);
         assert_eq!(result.expected_run_ids, vec!["run-1"]);
+        assert_eq!(result.actual_run_ids, vec!["run-1"]);
+    }
+
+    #[test]
+    fn local_judge_accepts_pure_task_answer_without_agent_audit_fields() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let run = sample_run();
+        insert_run(&conn, &run).unwrap();
+        let task = BenchmarkTask {
+            task_id: "unit".to_owned(),
+            category: "structured_analytics".to_owned(),
+            prompt: "return the run".to_owned(),
+            gold_sql: "SELECT experiment_id, status FROM experiments ORDER BY experiment_id"
+                .to_owned(),
+            expected: ExpectedSpec {
+                kind: "rows_exact".to_owned(),
+                answer_key: Some("runs".to_owned()),
+                run_id_column: Some("experiment_id".to_owned()),
+                columns: vec!["experiment_id".to_owned(), "status".to_owned()],
+            },
+        };
+        let answer = json!({
+            "runs": [{"experiment_id": "run-1", "status": "completed"}]
+        });
+
+        let result = judge_answer(&conn, &task, "sqlite_raw_v1", &answer, None).unwrap();
+
+        assert!(result.task_success, "{result:?}");
+        assert_eq!(result.evidence_precision, None);
+        assert_eq!(result.evidence_checked, 0);
+        assert_eq!(result.evidence_supported, 0);
+        assert_eq!(result.expected_run_ids, vec!["run-1"]);
+        assert_eq!(result.actual_run_ids, vec!["run-1"]);
     }
 
     #[test]
@@ -8180,5 +8239,12 @@ mod tests {
 
     fn tool_names(tools: &[ToolDefinition]) -> Vec<&str> {
         tools.iter().map(|tool| tool.name.as_str()).collect()
+    }
+
+    fn tool_definition<'a>(tools: &'a [ToolDefinition], name: &str) -> &'a ToolDefinition {
+        tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("{name} tool must be registered"))
     }
 }

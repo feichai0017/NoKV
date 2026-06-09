@@ -2,8 +2,8 @@
 
 This directory contains the experimental Yanex agent-interface benchmark
 harness. It compares how different agent-facing surfaces affect correctness,
-evidence quality, token cost, tool calls, and bytes read over the same fixed
-Yanex experiment corpus.
+token cost, tool calls, and bytes read over the same fixed Yanex experiment
+corpus.
 
 This is not a storage-engine throughput benchmark. The product benchmark for
 metadata, training-read, and checkpoint workloads lives in the root `bench/`
@@ -26,16 +26,15 @@ namespace surface:
 - `nokvfs-server`: framed metadata RPC handlers for the same operations.
 
 Native grep is now implemented through `nokvfs-meta`, `nokvfs-protocol`, and
-`nokvfs-server` as a product-native file-content scan. The current seven-task
-Phase 1 core registry exposes only `stat`, `catalog`, `aggregate`, and `find`
-because the active task set has no body-inspection workload. A later
-body-inspection profile should expose `read` and `grep` through `nokvfs-client`
-beside any navigation tools needed for body inspection.
+`nokvfs-server` as a product-native file-content scan. The current ten-task
+Phase 1 registry exposes `ls`, `stat`, `catalog`, `read`, `aggregate`, and
+`find`. The body-inspection and lineage tasks exercise `read` beside the
+navigation and indexed-summary tools needed to locate artifacts.
 
 The benchmark arm named `nokv_native_v1` uses the `nokvfs-client` agent adapter
 with the Phase 1 tool profile above. The harness translates OpenAI tool calls
 into product API calls, but does not own the measured card, find, index catalog,
-aggregation, pagination, consistency, or evidence semantics.
+aggregation, pagination, or consistency semantics.
 
 The default Phase 1 API surface is `openai_agents_responses_schema_once`. The
 Rust harness still owns batch planning, local judging, telemetry JSONL, and
@@ -93,7 +92,7 @@ rubric lives in `rubric/phase1_readonly.yaml`.
 
 ## Phase 1 Task Shape
 
-The active read-only workload is a deduplicated 7-task set:
+The active read-only workload is a deduplicated 10-task set:
 
 | Task | Shape |
 | --- | --- |
@@ -104,6 +103,9 @@ The active read-only workload is a deduplicated 7-task set:
 | `dirty_git_missing_patches` | Find dirty-git runs whose declared patch artifact is unavailable. |
 | `index_completed_consistency` | Check whether the completed-run namespace index agrees with run metadata. |
 | `stdout_availability_by_script` | Count completed runs and available `stdout.txt` artifacts by script. |
+| `cancelled_stderr_root_cause` | Locate the largest stderr body among non-completed runs and extract the terminal root-cause token. |
+| `eval_details_worst_fidelity_field` | Inspect `evaluation_details.json` for a target eval run and identify the lowest `fidelity.field_scores` field. |
+| `best_eval_lineage_trace` | Trace the best completed eval run through its samples dependency to the model dependency. |
 
 ## Valid Comparisons
 
@@ -120,9 +122,9 @@ all raw blobs for every question.
 
 The fairness rule is that every valid A/B comparison must expose logically
 equal introspection over the benchmarked facts. The syntax and access pattern
-can differ by surface, but the visible catalog fields, index facts, evidence
-handles, and limitations must not give one arm hidden task answers that the
-paired arm cannot discover through its own public interface.
+can differ by surface, but the visible catalog fields, index facts, and
+limitations must not give one arm hidden task answers that the paired arm
+cannot discover through its own public interface.
 
 ## NoKV Native Definition
 
@@ -146,8 +148,8 @@ Target native behavior:
   discovery without requiring a full stat card.
 - `aggregate(path, predicates, group_by, measures, sort, limit)` provides
   compact summaries over indexed namespace facts.
-- every result includes evidence, snapshot/generation identity, truncation
-  state, and `next_cursor` when more results exist.
+- every result includes snapshot/generation identity, truncation state, and
+  `next_cursor` when more results exist.
 - `record_count` includes provenance: live namespace, structured body,
   materialized index, or approximate.
 
@@ -262,8 +264,8 @@ cargo run --manifest-path benchmark/agent-interface-benchmark/harness/Cargo.toml
 
 The next benchmark-specific PR should run the full `sqlite_raw_v1` vs
 `nokv_native_v1` Phase 1 batch and use the metric output to decide the next
-NoKV API increment. V1 must produce correctness, evidence, token, tool, bytes,
-and wall-time metrics; outperforming SQL is not the first PR gate.
+NoKV API increment. V1 must produce correctness, token, tool, bytes, and
+wall-time metrics; outperforming SQL is not the first PR gate.
 
 Useful follow-up product increments include typed facets for metric
 latest/min/max by run, params, dependencies, and richer git patch availability.

@@ -12,7 +12,7 @@ tasks:
         "status_counts": [{"status": string, "count": integer}],
         "total_runs": integer
       }
-      Sort status_counts by descending count, then status ascending. Cite evidence for the counts.
+      Sort status_counts by descending count, then status ascending.
     gold_sql: |
       SELECT status, COUNT(*) AS count
       FROM experiments
@@ -32,7 +32,7 @@ tasks:
       {
         "groups": [{"learning_rate": string, "batch_size": string, "run_count": integer, "avg_min_val_loss": number}]
       }
-      Sort by avg_min_val_loss ascending, then learning_rate ascending, then batch_size ascending. Cite evidence for params, metrics, and completed train.py filtering.
+      Sort by avg_min_val_loss ascending, then learning_rate ascending, then batch_size ascending.
     gold_sql: |
       WITH run_min AS (
         SELECT e.experiment_id, MIN(m.value) AS min_val_loss
@@ -67,7 +67,7 @@ tasks:
       answer_key: groups
       columns: [learning_rate, batch_size, run_count, avg_min_val_loss]
   - task_id: eval_best_utility_tstr
-    category: exploratory_evidence
+    category: exploratory_analysis
     prompt: |
       Find the completed eval.py run with the highest utility_tstr_roc_auc. Return that run and the related utility_trtr_roc_auc, fidelity, detection_roc_auc, and privacy_dcr_score values when present.
 
@@ -82,7 +82,7 @@ tasks:
           "privacy_dcr_score": number|null
         }
       }
-      Include run_ids with the selected experiment_id. Cite metric evidence for every returned metric.
+      Use null for related metric values that are not present.
     gold_sql: |
       WITH latest AS (
         SELECT experiment_id, metric_name, value
@@ -134,7 +134,7 @@ tasks:
         - detection_roc_auc
         - privacy_dcr_score
   - task_id: cancelled_runs_stderr
-    category: exploratory_evidence
+    category: exploratory_analysis
     prompt: |
       Find all non-completed runs. For each one, report the run status and stderr.txt size when stderr.txt exists.
 
@@ -142,7 +142,7 @@ tasks:
       {
         "runs": [{"experiment_id": string, "status": string, "stderr_size_bytes": integer|null}]
       }
-      Sort by experiment_id ascending. Include run_ids in the same order. Cite metadata and stderr artifact/path evidence.
+      Sort by experiment_id ascending.
     gold_sql: |
       SELECT e.experiment_id, e.status, a.size_bytes AS stderr_size_bytes
       FROM experiments e
@@ -157,7 +157,7 @@ tasks:
       run_id_column: experiment_id
       columns: [experiment_id, status, stderr_size_bytes]
   - task_id: dirty_git_missing_patches
-    category: exploratory_evidence
+    category: exploratory_analysis
     prompt: |
       Identify dirty-git runs whose declared git patch artifact is unavailable. Return up to 10 such runs.
 
@@ -165,7 +165,7 @@ tasks:
       {
         "runs": [{"experiment_id": string, "patch_file": string, "artifact_exists": boolean}]
       }
-      Sort by experiment_id ascending. Include run_ids in the same order. If there are none, return an empty array and explain the absence in missing_evidence. Cite git state and artifact evidence.
+      Sort by experiment_id ascending. If there are none, return an empty array.
     gold_sql: |
       SELECT g.experiment_id, g.patch_file, COALESCE(a."exists", 0) AS artifact_exists
       FROM git_state g
@@ -182,7 +182,7 @@ tasks:
       run_id_column: experiment_id
       columns: [experiment_id, patch_file, artifact_exists]
   - task_id: index_completed_consistency
-    category: namespace_evidence
+    category: namespace_consistency
     prompt: |
       Verify that the completed-run index count matches the completed count from run metadata.
 
@@ -192,7 +192,7 @@ tasks:
         "index_completed_count": integer,
         "consistent": boolean
       }
-      Cite evidence for both the run metadata/source count and the completed index.
+      Return consistent=true only when the two counts match.
     gold_sql: |
       SELECT
         (SELECT COUNT(*) FROM experiments WHERE status = 'completed') AS metadata_completed_count,
@@ -203,7 +203,7 @@ tasks:
       answer_key: null
       columns: [metadata_completed_count, completed_index_file_count, completed_index_json]
   - task_id: stdout_availability_by_script
-    category: namespace_evidence
+    category: namespace_analysis
     prompt: |
       For each script name, count completed runs and count how many of those runs have stdout.txt available.
 
@@ -211,7 +211,7 @@ tasks:
       {
         "scripts": [{"script": string, "completed_runs": integer, "stdout_available": integer}]
       }
-      Sort by completed_runs descending, then script ascending. Cite evidence for run metadata and stdout artifact availability.
+      Sort by completed_runs descending, then script ascending.
     gold_sql: |
       SELECT
         e.script_path AS script,
@@ -227,3 +227,166 @@ tasks:
       kind: rows_exact
       answer_key: scripts
       columns: [script, completed_runs, stdout_available]
+  - task_id: cancelled_stderr_root_cause
+    category: body_inspection
+    prompt: |
+      Find the non-completed run with the largest available stderr.txt artifact. Read the stderr body and return the terminal root-cause token.
+
+      Required answer shape:
+      {
+        "root_cause": {
+          "experiment_id": string,
+          "status": string,
+          "stderr_size_bytes": integer,
+          "root_cause": string
+        }
+      }
+      Sort candidate runs by stderr_size_bytes descending, then experiment_id ascending before choosing. The root_cause value must be the exact exception or interruption token at the end of stderr, not a prose explanation.
+    gold_sql: |
+      WITH candidates AS (
+        SELECT
+          e.experiment_id,
+          e.status,
+          a.size_bytes AS stderr_size_bytes,
+          CAST(b.content AS TEXT) AS stderr_text
+        FROM experiments e
+        JOIN artifacts a ON a.experiment_id = e.experiment_id
+          AND a.artifact_path = 'stderr.txt'
+          AND a."exists" = 1
+        JOIN blobs b ON b.blob_ref = a.blob_ref
+        WHERE e.status != 'completed'
+      )
+      SELECT
+        experiment_id,
+        status,
+        stderr_size_bytes,
+        CASE
+          WHEN instr(stderr_text, 'KeyboardInterrupt') > 0 THEN 'KeyboardInterrupt'
+          ELSE trim(substr(stderr_text, -120))
+        END AS root_cause
+      FROM candidates
+      ORDER BY stderr_size_bytes DESC, experiment_id ASC
+      LIMIT 1;
+    expected:
+      kind: first_row_object
+      answer_key: root_cause
+      run_id_column: experiment_id
+      columns: [experiment_id, status, stderr_size_bytes, root_cause]
+  - task_id: eval_details_worst_fidelity_field
+    category: body_inspection
+    prompt: |
+      Inspect the evaluation_details.json artifact for eval.py run 00023013. In fidelity.field_scores, find the field with the lowest score.
+
+      Required answer shape:
+      {
+        "worst_field": {
+          "experiment_id": string,
+          "artifact_path": string,
+          "field_name": string,
+          "field_score": number
+        }
+      }
+      Return artifact_path as artifacts/evaluation_details.json.
+    gold_sql: |
+      WITH artifact AS (
+        SELECT
+          e.experiment_id,
+          'artifacts/' || a.artifact_path AS artifact_path,
+          CAST(b.content AS TEXT) AS details_json
+        FROM experiments e
+        JOIN artifacts a ON a.experiment_id = e.experiment_id
+          AND a.artifact_path = 'evaluation_details.json'
+          AND a."exists" = 1
+        JOIN blobs b ON b.blob_ref = a.blob_ref
+        WHERE e.experiment_id = '00023013'
+          AND e.script_path = 'eval.py'
+      )
+      SELECT
+        artifact.experiment_id,
+        artifact.artifact_path,
+        field_scores.key AS field_name,
+        CAST(field_scores.value AS REAL) AS field_score
+      FROM artifact
+      JOIN json_each(artifact.details_json, '$.fidelity.field_scores') AS field_scores
+      ORDER BY field_score ASC, field_name ASC
+      LIMIT 1;
+    expected:
+      kind: first_row_object
+      answer_key: worst_field
+      run_id_column: experiment_id
+      columns: [experiment_id, artifact_path, field_name, field_score]
+  - task_id: best_eval_lineage_trace
+    category: lineage_trace
+    prompt: |
+      Find the completed eval.py run with the highest latest utility_tstr_roc_auc. Trace its lineage through the samples dependency to the model dependency used by that sample run.
+
+      Required answer shape:
+      {
+        "lineage": {
+          "eval_experiment_id": string,
+          "sample_experiment_id": string,
+          "model_experiment_id": string,
+          "sample_status_at_resolution": string|null,
+          "model_status_at_resolution": string|null,
+          "utility_tstr_roc_auc": number
+        }
+      }
+      Break ties on the eval run by experiment_id ascending.
+    gold_sql: |
+      WITH latest AS (
+        SELECT experiment_id, metric_name, value, step
+        FROM metrics
+        WHERE metric_name = 'utility_tstr_roc_auc'
+          AND value IS NOT NULL
+          AND value > -9.0e+999
+          AND value < 9.0e+999
+        GROUP BY experiment_id, metric_name
+        HAVING step = MAX(step)
+      ),
+      best_eval AS (
+        SELECT e.experiment_id, latest.value AS utility_tstr_roc_auc
+        FROM experiments e
+        JOIN latest ON latest.experiment_id = e.experiment_id
+        WHERE e.status = 'completed'
+          AND e.script_path = 'eval.py'
+        ORDER BY latest.value DESC, e.experiment_id ASC
+        LIMIT 1
+      ),
+      sample_dep AS (
+        SELECT
+          d.experiment_id AS eval_experiment_id,
+          d.dependency_experiment_id AS sample_experiment_id,
+          d.status_at_resolution AS sample_status_at_resolution
+        FROM dependencies d
+        JOIN best_eval ON best_eval.experiment_id = d.experiment_id
+        WHERE d.relation = 'samples'
+      ),
+      model_dep AS (
+        SELECT
+          d.experiment_id AS sample_experiment_id,
+          d.dependency_experiment_id AS model_experiment_id,
+          d.status_at_resolution AS model_status_at_resolution
+        FROM dependencies d
+        JOIN sample_dep ON sample_dep.sample_experiment_id = d.experiment_id
+        WHERE d.relation = 'model'
+      )
+      SELECT
+        best_eval.experiment_id AS eval_experiment_id,
+        sample_dep.sample_experiment_id,
+        model_dep.model_experiment_id,
+        sample_dep.sample_status_at_resolution,
+        model_dep.model_status_at_resolution,
+        best_eval.utility_tstr_roc_auc
+      FROM best_eval
+      JOIN sample_dep ON sample_dep.eval_experiment_id = best_eval.experiment_id
+      JOIN model_dep ON model_dep.sample_experiment_id = sample_dep.sample_experiment_id;
+    expected:
+      kind: first_row_object
+      answer_key: lineage
+      columns:
+        - eval_experiment_id
+        - sample_experiment_id
+        - model_experiment_id
+        - sample_status_at_resolution
+        - model_status_at_resolution
+        - utility_tstr_roc_auc

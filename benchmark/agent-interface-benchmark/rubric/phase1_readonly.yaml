@@ -2,28 +2,35 @@ rubric_id: yanex_phase1_readonly_rubric_v1
 version: 1
 scope: read_only_agent_interface
 primary_metrics:
-  - task_success
-  - evidence_precision
-  - total_tokens
-  - reasoning_tokens
-  - tool_result_tokens
+  - Arm
+  - Correctness
+  - Cached
+  - Uncached
+  - Completion
   - tool_call_count
   - wall_time_ms
+  - total_cost
 correctness:
-  task_success:
-    description: true only when the answer JSON matches the deterministic gold facts for the task within numeric tolerance and required run_ids are present in the expected order.
+  Correctness:
+    description: true only when the answer JSON matches the deterministic gold facts for the task within numeric tolerance.
     numeric_tolerance_absolute: 1.0e-9
     numeric_tolerance_relative: 1.0e-6
   partial_success:
     description: reserved for future aggregate reporting; the local judge reports failed when required gold fields are absent or materially wrong.
-evidence:
-  evidence_precision:
-    description: fraction of submitted evidence handles that resolve to a legal artifact, row, path, or NoKV namespace entry for the current arm.
-  missing_evidence:
-    description: agents must explicitly report absent or unsupported evidence instead of inventing values.
+token_accounting:
+  Cached:
+    description: cached prompt tokens summed across model API calls.
+  Uncached:
+    description: prompt tokens minus cached prompt tokens, summed across model API calls.
+  Completion:
+    description: completion tokens summed across model API calls.
 efficiency:
+  Arm:
+    description: benchmark arm identifier.
+  total_cost:
+    description: total USD cost for the run when pricing environment variables are configured.
   overread_bytes:
-    description: bytes read beyond the task's expected evidence need; current MVP records read bytes and leaves task-specific overread budgets at zero unless configured.
+    description: bytes read beyond the task's expected data need; current MVP records read bytes and leaves task-specific overread budgets at zero unless configured.
   invalid_sql_count:
     description: number of rejected SQL statements in the raw SQLite arm.
   wrong_tool_count:

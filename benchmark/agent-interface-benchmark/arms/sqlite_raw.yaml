@@ -2,65 +2,19 @@ arm_id: sqlite_raw_v1
 version: 1
 interface_name: Raw SQLite
 mode: warm_interface
-purpose: Baseline relational interface over the fixed Yanex corpus materialized in SQLite.
+purpose: Read-only relational access over the current experiment corpus.
 
-data_scope:
-  corpus: yanex_experiment_metadata_origami_data_gen_project
-  visibility: sqlite_tables
-  mutation: read_only_for_benchmark
-
-tool_contract:
-  - name: show_schema
-    purpose: Return the SQLite schema for tables and indexes.
-    arguments: {}
-    returns: SQL DDL text and a schema evidence handle.
-  - name: query_sql
-    purpose: Execute a bounded read-only SQL query.
-    arguments:
-      sql: string
-    returns: Rows with stable evidence handles when the result contains known Yanex identifiers or blob refs.
-    constraints:
-      - Only SELECT, WITH, and EXPLAIN statements are allowed.
-      - Mutations and pragmas are rejected.
-  - name: read_blob
-    purpose: Read a byte range from a blob_ref returned by SQL rows.
-    arguments:
-      blob_ref: string
-      offset: integer
-      limit: integer
-    returns: Byte range and blob evidence.
-
-evidence_conventions:
-  schema: sqlite://schema
-  experiment: sqlite://experiments/{experiment_id}
-  param: sqlite://params/{experiment_id}/{param_path}
-  metric: sqlite://metrics/{experiment_id}/{metric_name}/{step}
-  artifact: sqlite://artifacts/{experiment_id}/{artifact_path}
-  git_state: sqlite://git_state/{experiment_id}
-  blob: sqlite://blobs/{blob_ref}
-
-materialized_view_schema_hint:
-  description: Raw SQLite exposes base Yanex tables plus ETL-maintained agent-index materialization tables over the same corpus facts.
-  discovery: Inspect show_schema or run_agent_index_catalog at runtime to discover materialized field columns and capabilities.
-  tables:
-    run_agent_index:
-      purpose: one row per run with commonly queried run, artifact, metric, parameter, git, and group summaries.
-      primary_key: experiment_id
-    run_agent_index_values:
-      purpose: entity-attribute-value rows using the same catalog field ids as the NoKV native find index.
-      columns: [experiment_id, field, value_kind, value_text, value_u64]
-    run_agent_index_catalog:
-      purpose: field capability table declaring value kind, sortable/facetable flags, and supported operators.
-
-interface_guidance:
-  - Inspect the schema before writing non-trivial SQL.
-  - Inspect show_schema or run_agent_index_catalog before using materialized agent-index fields.
-  - Prefer aggregate SQL for structured analytics.
-  - Use run_agent_index or run_agent_index_values when the materialized schema directly covers the needed read-only fact.
-  - Use read_blob only when task evidence requires artifact body bytes.
-  - Cite row and blob evidence handles returned by query_sql/read_blob.
-
-forbidden_assumptions:
-  - Do not mutate the database.
-  - Do not invent evidence handles that are not supported by returned rows.
-  - Do not read blobs when metadata rows already answer the task.
+runtime_context:
+  surface: sqlite_database
+  access: read_only
+  schema_discovery:
+    - Inspect the live schema before writing non-trivial SQL.
+    - Use discovered table and column names; do not assume undocumented schema fields.
+  query_safety:
+    - Use bounded read-only SQL.
+    - Do not mutate the database.
+  blob_reads:
+    - Read blobs only from blob_ref values returned by query results.
+    - Do not read blob bodies when metadata rows already answer the task.
+  notice:
+    - For metric REAL columns, non-finite values may be stored as SQLite +/-Inf and value_json may contain "Infinity"; when a task requires finite metrics, filter with value > -9.0e+999 AND value < 9.0e+999, or an equivalent finite numeric bound.

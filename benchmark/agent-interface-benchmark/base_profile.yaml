@@ -22,97 +22,16 @@ run_policy:
 base_system_message: |
   You are an experiment tracking analysis agent working over a Yanex experiment corpus.
   You must solve the requested task using only the interface tools exposed for the current benchmark arm.
-  Treat every run as stateless. Do not assume memory from previous tasks, previous arms, or previous attempts.
-  Prefer small, evidence-directed reads. Inspect schema, listings, metadata, or summaries before reading large bodies.
-  Do not guess missing values. If evidence is absent, inconsistent, or ambiguous, report that explicitly.
-  Cite concrete evidence handles or paths for every factual claim that affects the final answer.
-  Keep tool use bounded and stop as soon as the answer is sufficiently supported.
+
 
 base_developer_message: |
-  Output exactly one JSON object matching the benchmark schema.
+  Output exactly one JSON object matching the task's required answer shape.
   Do not include markdown outside the JSON object.
-  Required top-level keys: task_id, status, answer, run_ids, evidence, missing_evidence, operations_summary, confidence.
-  status must be one of "success", "partial", "failed", or "blocked".
-  evidence must be an array of objects with stable handle and claim fields.
-  missing_evidence must be an array of strings.
-  operations_summary must include tool_call_count and bytes_read_estimate.
-  confidence must be one of "high", "medium", or "low".
-  If the interface cannot support a requested operation, set status to "blocked" or "partial" and explain the missing capability.
-  Evidence handles must be stable identifiers returned by the current arm's tools.
+
 
 output_schema:
   type: object
-  required:
-    - task_id
-    - status
-    - answer
-    - evidence
-    - missing_evidence
-    - operations_summary
-    - confidence
-  properties:
-    task_id:
-      type: string
-    status:
-      type: string
-      enum:
-        - success
-        - partial
-        - failed
-        - blocked
-    answer:
-      type:
-        - object
-        - array
-        - string
-        - number
-        - boolean
-        - "null"
-    run_ids:
-      type: array
-      items:
-        type: string
-    evidence:
-      type: array
-      items:
-        type: object
-        required:
-          - handle
-          - claim
-        properties:
-          type:
-            type: string
-          handle:
-            type: string
-          value:
-            type:
-              - string
-              - number
-              - boolean
-              - object
-              - array
-              - "null"
-          claim:
-            type: string
-    missing_evidence:
-      type: array
-      items:
-        type: string
-    operations_summary:
-      type: object
-      properties:
-        tool_call_count:
-          type: integer
-        bytes_read_estimate:
-          type: integer
-        notes:
-          type: string
-    confidence:
-      type: string
-      enum:
-        - high
-        - medium
-        - low
+  additionalProperties: true
 
 telemetry_contract:
   record_types:
@@ -152,10 +71,8 @@ telemetry_contract:
     - all_in_cost_usd
     - wall_time_ms
     - task_success
-    - evidence_precision
     - invalid_sql_count
     - wrong_tool_count
     - tool_schema_repeated_count
     - tool_timeout_count
-    - missing_evidence_count
     - overread_bytes

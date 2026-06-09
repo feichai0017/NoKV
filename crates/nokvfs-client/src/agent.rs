@@ -175,7 +175,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
     vec![
         AgentToolDefinition {
             name: "ls",
-            description: "List one namespace page under a path.",
+            description: "List one page of direct children for a directory. ls is not recursive and returns compact entries; use stat when a full namespace card, catalog, indexed values, or body descriptor is needed.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -189,7 +189,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "stat",
-            description: "Return a namespace card for one path.",
+            description: "Return the namespace card for one path, including counts, catalog, indexed values, schema/sample summaries, and body descriptor when present. The body descriptor is not file content; use read for bytes or structured records.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -201,7 +201,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "catalog",
-            description: "Return compact catalog field capabilities for choosing indexed fields before find or aggregate.",
+            description: "Discover compact catalog field ids and capabilities for the current path before choosing find predicates, aggregate group_by fields, measures, sort fields, projections, or facets. If the current catalog is empty, returns catalog_empty and child_catalogs for direct child search roots.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -215,7 +215,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "read",
-            description: "Read a structured page by default, or raw bytes when format is bytes.",
+            description: "Read a file body page. Structured mode is the default for JSON, YAML, and text bodies and uses cursor pagination; bytes mode uses offset ranges. Pass expected_generation when reading body evidence from a previously cited card.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -225,14 +225,18 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                     "cursor": {"type": ["string", "null"]},
                     "offset": {"type": "integer", "minimum": 0},
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_PAGE_LIMIT},
-                    "expected_generation": {"type": ["integer", "null"], "minimum": 1}
+                    "expected_generation": {
+                        "type": ["integer", "null"],
+                        "minimum": 1,
+                        "description": "Optional generation from prior evidence; read reports a generation mismatch instead of reading stale evidence."
+                    }
                 },
                 "additionalProperties": false
             }),
         },
         AgentToolDefinition {
             name: "aggregate",
-            description: "Use for counts, grouped summaries, averages, minima, maxima, and ranked summaries over catalog-indexed namespace fields.",
+            description: "Compute compact summaries over matching namespace paths using catalog field ids. Supports count, sum, avg, min, and max, optional group_by partitions, predicate filters, and sorting; use find, stat, or read when individual paths or file body evidence is required.",
             parameters: json!({
                 "type": "object",
                 "required": ["path", "measures"],
@@ -242,6 +246,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                         "type": "array",
                         "items": {
                             "type": "object",
+                            "description": "Predicate over a catalog field id. exists and not_exists omit value; in requires an array value; all other operators require a scalar value.",
                             "required": ["field", "op"],
                             "properties": {
                                 "field": {"type": "string"},
@@ -274,6 +279,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                         "type": "array",
                         "items": {
                             "type": "object",
+                            "description": "Aggregate measure. count may omit field to count matching paths; non-count measures require a numeric field and ignore missing or non-numeric values.",
                             "required": ["name", "op"],
                             "properties": {
                                 "name": {"type": "string"},
@@ -303,7 +309,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         AgentToolDefinition {
             name: "find",
             description:
-                "Find paths using catalog field ids; returns match_count and optional predicate-filtered facets.",
+                "Recursively find descendant paths under a directory using catalog field ids. match_count is the total matches before pagination, limit only controls returned matches, requested facets are computed after predicates, and exists and not_exists omit value.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -313,6 +319,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                         "type": "array",
                         "items": {
                             "type": "object",
+                            "description": "Predicate over a catalog field id. exists and not_exists omit value; in requires an array value; all other operators require a scalar value.",
                             "required": ["field", "op"],
                             "properties": {
                                 "field": {"type": "string"},
@@ -355,6 +362,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                     },
                     "fields": {
                         "type": "array",
+                        "description": "Catalog field ids to project into values and field_values with source evidence on each match.",
                         "items": {"type": "string"}
                     },
                     "facets": {
@@ -1739,6 +1747,47 @@ mod tests {
         }
     }
 
+    fn tool_definition<'a>(
+        tools: &'a [AgentToolDefinition],
+        name: &str,
+    ) -> &'a AgentToolDefinition {
+        tools
+            .iter()
+            .find(|tool| tool.name == name)
+            .unwrap_or_else(|| panic!("{name} tool must be registered"))
+    }
+
+    fn assert_tool_description_contains(
+        tools: &[AgentToolDefinition],
+        name: &str,
+        expected: &[&str],
+    ) {
+        let description = tool_definition(tools, name).description;
+        let normalized_description = description.to_ascii_lowercase();
+        for snippet in expected {
+            let normalized_snippet = snippet.to_ascii_lowercase();
+            assert!(
+                normalized_description.contains(&normalized_snippet),
+                "{name} description must contain {snippet:?}; got {description:?}"
+            );
+        }
+    }
+
+    fn assert_schema_description_contains(schema: &Value, expected: &[&str]) {
+        let description = schema
+            .get("description")
+            .and_then(Value::as_str)
+            .unwrap_or_default();
+        let normalized_description = description.to_ascii_lowercase();
+        for snippet in expected {
+            let normalized_snippet = snippet.to_ascii_lowercase();
+            assert!(
+                normalized_description.contains(&normalized_snippet),
+                "schema description must contain {snippet:?}; got {description:?}"
+            );
+        }
+    }
+
     fn empty_catalog() -> NamespaceQueryCatalog {
         NamespaceQueryCatalog {
             filterable: Vec::new(),
@@ -1896,6 +1945,75 @@ mod tests {
             json!(["body", "schema", "sample"]).as_array().unwrap()
         );
         assert_eq!(find.parameters["properties"]["limit"]["maximum"], 10);
+    }
+
+    #[test]
+    fn agent_tool_registry_documents_stable_api_semantics() {
+        let tools = agent_tool_definitions();
+
+        assert_tool_description_contains(
+            &tools,
+            "ls",
+            &["direct children", "not recursive", "compact"],
+        );
+        assert_tool_description_contains(
+            &tools,
+            "stat",
+            &["namespace card", "body descriptor", "not file content"],
+        );
+        assert_tool_description_contains(
+            &tools,
+            "catalog",
+            &["discover", "field ids", "child_catalogs"],
+        );
+        assert_tool_description_contains(
+            &tools,
+            "read",
+            &["structured", "bytes", "expected_generation"],
+        );
+        assert_tool_description_contains(
+            &tools,
+            "aggregate",
+            &[
+                "catalog field ids",
+                "count, sum, avg, min, and max",
+                "individual paths",
+            ],
+        );
+        assert_tool_description_contains(
+            &tools,
+            "find",
+            &[
+                "catalog field ids",
+                "match_count",
+                "exists and not_exists omit value",
+            ],
+        );
+    }
+
+    #[test]
+    fn agent_tool_parameter_schemas_document_argument_contracts() {
+        let tools = agent_tool_definitions();
+        let find = tool_definition(&tools, "find");
+        let aggregate = tool_definition(&tools, "aggregate");
+        let read = tool_definition(&tools, "read");
+
+        assert_schema_description_contains(
+            &find.parameters["properties"]["predicates"]["items"],
+            &["exists and not_exists omit value", "in requires an array"],
+        );
+        assert_schema_description_contains(
+            &find.parameters["properties"]["fields"],
+            &["project", "field_values"],
+        );
+        assert_schema_description_contains(
+            &aggregate.parameters["properties"]["measures"]["items"],
+            &["count may omit field", "non-count measures require"],
+        );
+        assert_schema_description_contains(
+            &read.parameters["properties"]["expected_generation"],
+            &["generation", "evidence"],
+        );
     }
 
     #[test]

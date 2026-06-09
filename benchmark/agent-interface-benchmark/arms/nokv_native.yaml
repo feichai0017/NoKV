@@ -2,101 +2,21 @@ arm_id: nokv_native_v1
 version: 1
 interface_name: NoKV Product Native Agent API
 mode: warm_interface
-purpose: Product-native read-only agent adapter over NoKV namespace metadata operations.
+purpose: Product-native read-only namespace access.
 
-native_definition:
-  meaning: >
-    Benchmark tools call NoKV product APIs. The harness adapts OpenAI tool calls
-    into product calls and records telemetry.
-
-data_scope:
-  corpus: yanex_experiment_metadata_origami_data_gen_project
+runtime_context:
+  surface: nokv_native_namespace
   entrypoint: /yanex
-  visibility: nokv_native_namespace
-  mutation: read_only_for_benchmark
-
-common_semantics:
-  paths:
+  access: read_only
+  path_model:
     - Paths are absolute NoKV namespace paths.
-    - Use stat or catalog from /yanex to discover corpus structure and indexed fields.
-    - Do not assume a path exists until a tool result returns it.
-  pages:
-    - find limits are positive integers from 1 to 10.
-    - aggregate limits are positive integers from 1 to 100.
-    - Omitted limits use the adapter default.
-    - Continue with next_cursor until it is null; truncated=true means more results exist.
-  evidence:
-    - Results include snapshot_id.
-    - Directory evidence uses nokv-native://{path}.
-    - Entry and file evidence uses nokv-native://{path}@generation:{generation}.
-    - Body-inspection profiles expose read with expected_generation when validating cited file bodies.
-  catalogs:
-    - Directory stat cards expose built-in namespace fields and registered index fields.
-    - The catalog tool returns the same query capability catalog without the full stat card.
-    - Built-ins are path, name, kind, size_bytes, body.content_type, body.producer, and body.manifest_id.
-    - Use only field ids returned by the current catalog.
-    - Prefer catalog-discovered indexed fields for field facts; built-in name/kind/path fields describe namespace entries only.
-    - Indexed values are field/value pairs on namespace paths and may repeat.
-    - stat facet summaries are global to the current directory index; they are not filtered by later find predicates.
-    - Facet summaries expose discovered values and counts for low-cardinality facetable fields.
-    - Facet summaries are capped and report distinct_count plus truncated.
-
-tool_contract:
-  - name: stat
-    purpose: Return the full namespace card for one path.
-    notes:
-      - Directory cards expose live entry counts and query catalogs.
-      - Query catalogs may expose facet summaries with value counts for facetable fields.
-      - Structured file cards may expose schema, sample, and record_count for JSON, YAML, or text bodies.
-      - body is a descriptor, not file content.
-      - record_count includes provenance such as live_namespace, structured_body, materialized_index, or approximate.
-
-  - name: catalog
-    purpose: Return compact query capabilities for one path.
-    notes:
-      - catalog exposes filterable, sortable, facetable, projection, and optional facet summary metadata.
-      - field_prefix can narrow the returned catalog by field id prefix or field id fragment.
-      - include_facets=false omits facet value summaries when only field capabilities are needed.
-      - If the current path has no catalog fields, catalog may return child_catalogs for direct child directories; child_catalogs are search-root candidates and are not narrowed by field_prefix.
-      - catalog does not return body descriptors, samples, indexed values, or child entries.
-
-  - name: aggregate
-    purpose: Aggregate indexed namespace matches using catalog field ids.
-    notes:
-      - Use aggregate for counts, grouped summaries, averages, minima, maxima, and ranked summaries over catalog-indexed fields.
-      - Use catalog first when selecting group_by, measure, sort, or predicate fields for domain facts.
-      - aggregate accepts the same predicate grammar as find.
-      - aggregate echoes predicates; an empty predicate list means the result covers every matching indexed path in the search root.
-      - group_by fields partition matching paths by indexed or built-in field values.
-      - measures support count, sum, avg, min, and max over indexed numeric fields; count without a field counts every matching path, while count with a field counts present field values.
-      - When non-count numeric measures are requested, paths missing those measure fields are excluded from that aggregate result.
-      - Numeric measures use finite f64 or integer indexed values and ignore non-numeric values.
-      - sort orders aggregate groups by measure names or group_by field ids.
-      - Each group includes root evidence, projected key field evidence, and a bounded sample of matching path evidence.
-      - aggregate is for compact index-level summaries; use find or stat for individual path cards, and use a body-inspection profile when file body reads are required.
-
-  - name: find
-    purpose: Recursively find descendant paths under a directory using catalog field ids.
-    predicate_values:
-      - Strings use eq, ne, in, prefix, suffix, contains, exists, or not_exists.
-      - Numeric values use eq, ne, in, gt, gte, lt, lte, exists, or not_exists.
-      - Booleans are accepted by the client adapter and converted to integer 1 or 0.
-    notes:
-      - The search root itself is not a match.
-      - Predicate and sort fields must be built-in namespace fields or registered index fields exposed by the current catalog.
-      - Missing values do not satisfy predicates.
-      - Sort values that are present order before missing values.
-      - find.match_count is the total number of paths matching the predicates, not a grouped count; scanned_entries is the descendant scan count.
-      - Requested find facets are computed after predicates and before pagination.
-      - With fields omitted, matches return compact metadata plus indexed_values.
-      - With fields present, matches return path, evidence, snapshot_id, generation, projected values, and field_values with value, evidence, source_path, and source_kind; missing fields are omitted, single values are scalars, and repeated values are arrays.
-      - Requested include fields body, schema, and sample are attached to each returned match.
-      - Use catalog or stat on the search root to discover fields; find results do not repeat catalogs per match.
-
-forbidden_assumptions:
-  - Do not invent field ids; discover them from the returned catalog.
-  - Do not invent evidence handles outside the nokv-native evidence scheme.
-  - Do not treat a body descriptor as content.
-  - Do not treat file size as record count.
-  - Do not assume two reads saw the same file body unless generation matches.
-  - Do not use ad hoc helper operations outside the exposed tool registry.
+    - Start at /yanex and discover child search roots from returned cards or catalogs.
+    - Do not assume a path exists until a returned result names it.
+  field_discovery:
+    - Use only field ids returned by stat or catalog for the current search root.
+    - If a catalog is empty, use returned child_catalogs as candidate search roots.
+  safety:
+    - Do not invent field ids or paths.
+    - Do not treat body descriptors as file content.
+    - Do not treat file size as record count.
+    - Do not assume two file reads saw the same body unless generation matches.
