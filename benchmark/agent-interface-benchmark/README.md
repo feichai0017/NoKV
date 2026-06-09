@@ -22,7 +22,7 @@ namespace surface:
 - `nokvfs-protocol`: `StatCard`, `ListPage`, `FindPaths`, `GrepPaths`, and
   `ReadPage` RPC DTOs;
 - `nokvfs-client`: SDK methods plus the product-native agent adapter exposing
-  `ls`, `stat`, `read`, and `find`;
+  `ls`, `stat`, `catalog`, `read`, `find`, and `aggregate`;
 - `nokvfs-server`: framed metadata RPC handlers for the same operations.
 
 Native grep is now implemented through `nokvfs-meta`, `nokvfs-protocol`, and
@@ -32,9 +32,9 @@ body-inspection workload. A later body-inspection profile should expose grep
 through `nokvfs-client` beside `ls`, `stat`, `read`, and `find`.
 
 The benchmark arm named `nokv_native_v1` uses the `nokvfs-client` agent adapter
-for `ls`, `stat`, `read`, and `find`. The harness translates OpenAI tool calls
+for `ls`, `stat`, `catalog`, `read`, `find`, and `aggregate`. The harness translates OpenAI tool calls
 into product API calls, but does not own the measured card, find, structured
-read, index catalog, pagination, consistency, or evidence semantics.
+read, index catalog, aggregation, pagination, consistency, or evidence semantics.
 
 The default Phase 1 API surface is `openai_agents_responses_schema_once`. The
 Rust harness still owns batch planning, local judging, telemetry JSONL, and
@@ -141,6 +141,10 @@ Target native behavior:
 - `find(path, filter, sort, limit, cursor, include)` is the core exploration
   primitive.
 - `find` uses a constrained predicate grammar declared by stat/catalog cards.
+- `catalog(path, field_prefix, include_facets)` provides compact field
+  discovery without requiring a full stat card.
+- `aggregate(path, predicates, group_by, measures, sort, limit)` provides
+  compact summaries over indexed namespace facts.
 - every result includes evidence, snapshot/generation identity, truncation
   state, and `next_cursor` when more results exist.
 - `record_count` includes provenance: live namespace, structured body,

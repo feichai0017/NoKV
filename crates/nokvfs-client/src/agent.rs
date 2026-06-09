@@ -10,6 +10,8 @@ use nokvfs_meta::{
 };
 use nokvfs_object::ObjectStore;
 use serde_json::{json, Map, Value};
+use std::cmp::Ordering;
+use std::collections::BTreeMap;
 
 use crate::{ClientError, MetadataClient, NoKvFsClient};
 
@@ -17,6 +19,61 @@ const DEFAULT_AGENT_PAGE_LIMIT: usize = 100;
 const MAX_AGENT_PAGE_LIMIT: usize = 100;
 const DEFAULT_AGENT_FIND_LIMIT: usize = 10;
 const MAX_AGENT_FIND_LIMIT: usize = 10;
+const DEFAULT_AGENT_AGGREGATE_LIMIT: usize = 20;
+const MAX_AGENT_AGGREGATE_LIMIT: usize = 100;
+const AGENT_AGGREGATE_FIND_PAGE_LIMIT: usize = 1000;
+const MAX_AGENT_AGGREGATE_ROWS: usize = 10_000;
+const MAX_AGENT_AGGREGATE_SAMPLE_MATCHES: usize = 3;
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AggregateMeasure {
+    name: String,
+    op: AggregateOp,
+    field: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum AggregateOp {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct AggregateSort {
+    field: String,
+    direction: NamespaceSortDirection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct AggregateGroupKey(Vec<Option<NamespacePredicateValue>>);
+
+#[derive(Clone, Debug)]
+struct AggregateGroup {
+    key_values: Vec<Option<NamespacePredicateValue>>,
+    measures: Vec<AggregateAccumulator>,
+    sample_matches: Vec<AggregateSample>,
+}
+
+#[derive(Clone, Debug)]
+struct AggregateAccumulator {
+    op: AggregateOp,
+    count: usize,
+    sum: f64,
+    all_integral: bool,
+    integral_sum: u128,
+    min: Option<f64>,
+    max: Option<f64>,
+}
+
+#[derive(Clone, Debug)]
+struct AggregateSample {
+    path: String,
+    evidence: String,
+    generation: u64,
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentToolDefinition {
@@ -169,6 +226,20 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
             }),
         },
         AgentToolDefinition {
+            name: "catalog",
+            description: "Return compact catalog field capabilities for choosing indexed fields before find or aggregate.",
+            parameters: json!({
+                "type": "object",
+                "required": ["path"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "field_prefix": {"type": ["string", "null"]},
+                    "include_facets": {"type": "boolean"}
+                },
+                "additionalProperties": false
+            }),
+        },
+        AgentToolDefinition {
             name: "read",
             description: "Read a structured page by default, or raw bytes when format is bytes.",
             parameters: json!({
@@ -181,6 +252,64 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                     "offset": {"type": "integer", "minimum": 0},
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_PAGE_LIMIT},
                     "expected_generation": {"type": ["integer", "null"], "minimum": 1}
+                },
+                "additionalProperties": false
+            }),
+        },
+        AgentToolDefinition {
+            name: "aggregate",
+            description: "Use for counts, grouped summaries, averages, minima, maxima, and ranked summaries over catalog-indexed namespace fields.",
+            parameters: json!({
+                "type": "object",
+                "required": ["path", "measures"],
+                "properties": {
+                    "path": {"type": "string"},
+                    "predicates": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["field", "op", "value"],
+                            "properties": {
+                                "field": {"type": "string"},
+                                "op": {
+                                    "type": "string",
+                                    "enum": ["eq", "prefix", "suffix", "contains", "gt", "gte", "lt", "lte"]
+                                },
+                                "value": {"type": ["string", "integer", "boolean"], "minimum": 0}
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "group_by": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "measures": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["name", "op"],
+                            "properties": {
+                                "name": {"type": "string"},
+                                "op": {"type": "string", "enum": ["count", "sum", "avg", "min", "max"]},
+                                "field": {"type": ["string", "null"]}
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "sort": {
+                        "type": "array",
+                        "items": {
+                            "type": "object",
+                            "required": ["field"],
+                            "properties": {
+                                "field": {"type": "string"},
+                                "direction": {"type": "string", "enum": ["asc", "desc"]}
+                            },
+                            "additionalProperties": false
+                        }
+                    },
+                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_AGGREGATE_LIMIT}
                 },
                 "additionalProperties": false
             }),
@@ -250,8 +379,10 @@ where
     match name {
         "ls" => execute_ls(namespace, args),
         "stat" => execute_stat(namespace, args),
+        "catalog" => execute_catalog(namespace, args),
         "read" => execute_read(namespace, args),
         "find" => execute_find(namespace, args),
+        "aggregate" => execute_aggregate(namespace, args),
         other => Err(ClientError::Protocol(format!("unknown agent tool {other}"))),
     }
 }
@@ -283,6 +414,36 @@ where
         "tool": "stat",
         "bytes_read": 0,
         "card": card_json(&card),
+    }))
+}
+
+fn execute_catalog<T>(namespace: &T, args: &Value) -> Result<Value, ClientError>
+where
+    T: AgentNamespace + ?Sized,
+{
+    let path = required_string_arg(args, "path")?;
+    let field_prefix = optional_string_arg(args, "field_prefix")?;
+    let include_facets = optional_bool_arg(args, "include_facets")?.unwrap_or(true);
+    let card = namespace
+        .agent_stat_card(path)?
+        .ok_or_else(|| ClientError::NotFound(path.to_owned()))?;
+    let catalog = filtered_catalog(&card.catalog, field_prefix.as_deref(), include_facets);
+    let catalog_empty = catalog_is_empty(&catalog);
+    let child_catalogs = if catalog_empty {
+        child_catalogs(namespace, &card.path, include_facets)?
+    } else {
+        Vec::new()
+    };
+    Ok(json!({
+        "tool": "catalog",
+        "bytes_read": 0,
+        "path": card.path,
+        "evidence": card.evidence,
+        "snapshot_id": card.snapshot_id,
+        "catalog_empty": catalog_empty,
+        "scope_note": "catalogs are scoped to the path; call catalog on the directory you will search",
+        "catalog": catalog_json(&catalog),
+        "child_catalogs": child_catalogs,
     }))
 }
 
@@ -347,6 +508,129 @@ where
             .unwrap_or(DEFAULT_AGENT_FIND_LIMIT),
     })?;
     Ok(find_result_json(&result, &include, fields.as_deref()))
+}
+
+fn execute_aggregate<T>(namespace: &T, args: &Value) -> Result<Value, ClientError>
+where
+    T: AgentNamespace + ?Sized,
+{
+    let path = required_string_arg(args, "path")?;
+    let predicates = predicates_arg(args)?;
+    let group_by = group_by_arg(args)?;
+    let measures = aggregate_measures_arg(args)?;
+    let required_fields = aggregate_required_fields(&measures);
+    let sort = aggregate_sort_arg(args)?;
+    let limit = optional_bounded_usize_arg(args, "limit", MAX_AGENT_AGGREGATE_LIMIT)?
+        .unwrap_or(DEFAULT_AGENT_AGGREGATE_LIMIT);
+
+    let mut cursor = None;
+    let mut input_match_count = 0_usize;
+    let mut row_count = 0_usize;
+    let mut scanned_entries = 0_usize;
+    let mut evidence = None;
+    let mut snapshot_id = None;
+    let mut groups = BTreeMap::<AggregateGroupKey, AggregateGroup>::new();
+
+    loop {
+        let result = namespace.agent_find_paths(NamespaceFindRequest {
+            path: path.to_owned(),
+            predicates: predicates.clone(),
+            sort: Vec::new(),
+            include: Vec::new(),
+            facets: Vec::new(),
+            cursor,
+            limit: AGENT_AGGREGATE_FIND_PAGE_LIMIT,
+        })?;
+        evidence.get_or_insert_with(|| result.evidence.clone());
+        snapshot_id.get_or_insert(result.snapshot_id);
+        scanned_entries = scanned_entries.max(result.scanned_entries);
+
+        for card in &result.matches {
+            input_match_count = input_match_count.saturating_add(1);
+            if input_match_count > MAX_AGENT_AGGREGATE_ROWS {
+                return Err(ClientError::Protocol(format!(
+                    "aggregate input exceeded {MAX_AGENT_AGGREGATE_ROWS} rows; add predicates"
+                )));
+            }
+            let key_values = group_by
+                .iter()
+                .map(|field| card_field_value(card, field))
+                .collect::<Vec<_>>();
+            if !group_by.is_empty() && key_values.iter().any(Option::is_none) {
+                continue;
+            }
+            if required_fields
+                .iter()
+                .any(|field| card_field_value(card, field).is_none())
+            {
+                continue;
+            }
+            row_count = row_count.saturating_add(1);
+            let key = AggregateGroupKey(key_values.clone());
+            let group = groups.entry(key).or_insert_with(|| AggregateGroup {
+                key_values,
+                measures: measures
+                    .iter()
+                    .map(|measure| AggregateAccumulator::new(measure.op))
+                    .collect(),
+                sample_matches: Vec::new(),
+            });
+            for (measure, accumulator) in measures.iter().zip(group.measures.iter_mut()) {
+                if matches!(measure.op, AggregateOp::Count) && measure.field.is_none() {
+                    accumulator.observe_count();
+                    continue;
+                }
+                let value = measure
+                    .field
+                    .as_deref()
+                    .and_then(|field| card_field_value(card, field));
+                accumulator.observe(value.as_ref());
+            }
+            if group.sample_matches.len() < MAX_AGENT_AGGREGATE_SAMPLE_MATCHES {
+                group.sample_matches.push(AggregateSample {
+                    path: card.path.clone(),
+                    evidence: card.evidence.clone(),
+                    generation: card.generation,
+                });
+            }
+        }
+
+        if !result.truncated {
+            break;
+        }
+        let Some(next_cursor) = result.next_cursor else {
+            return Err(ClientError::Protocol(
+                "aggregate find page was truncated without next_cursor".to_owned(),
+            ));
+        };
+        cursor = Some(next_cursor);
+    }
+
+    let mut groups = groups.into_values().collect::<Vec<_>>();
+    sort_aggregate_groups(&mut groups, &group_by, &measures, &sort);
+    let group_count = groups.len();
+    let truncated = group_count > limit;
+    let output_groups = groups
+        .iter()
+        .take(limit)
+        .map(|group| aggregate_group_json(group, &group_by, &measures, evidence.as_deref()))
+        .collect::<Vec<_>>();
+
+    Ok(json!({
+        "tool": "aggregate",
+        "bytes_read": 0,
+        "path": path,
+        "evidence": evidence,
+        "snapshot_id": snapshot_id,
+        "predicates": predicates.iter().map(predicate_json).collect::<Vec<_>>(),
+        "scope_note": predicates.is_empty().then_some("no predicates were applied; use predicates to apply field constraints before grouping"),
+        "input_match_count": input_match_count,
+        "row_count": row_count,
+        "group_count": group_count,
+        "groups": output_groups,
+        "truncated": truncated,
+        "scanned_entries": scanned_entries,
+    }))
 }
 
 fn list_page_json(page: &NamespaceListPage) -> Value {
@@ -460,6 +744,9 @@ fn find_match_json(
     if fields.is_some() {
         let mut object = Map::new();
         object.insert("path".to_owned(), json!(card.path));
+        object.insert("evidence".to_owned(), json!(card.evidence));
+        object.insert("snapshot_id".to_owned(), json!(card.snapshot_id));
+        object.insert("generation".to_owned(), json!(card.generation));
         object.insert(
             "values".to_owned(),
             projected_values_json(card, fields.unwrap_or(&[])),
@@ -608,6 +895,14 @@ fn index_value_json(value: &NamespaceIndexValue) -> Value {
     })
 }
 
+fn predicate_json(predicate: &NamespacePredicate) -> Value {
+    json!({
+        "field": predicate.field.id,
+        "op": predicate_op_name(&predicate.op),
+        "value": predicate_value_json(&predicate.value),
+    })
+}
+
 fn predicate_value_json(value: &NamespacePredicateValue) -> Value {
     match value {
         NamespacePredicateValue::String(value) => json!(value),
@@ -649,6 +944,19 @@ fn optional_string_arg(args: &Value, name: &'static str) -> Result<Option<String
         .as_str()
         .map(|value| Some(value.to_owned()))
         .ok_or_else(|| ClientError::Protocol(format!("{name} must be a string or null")))
+}
+
+fn optional_bool_arg(args: &Value, name: &'static str) -> Result<Option<bool>, ClientError> {
+    let Some(value) = object_args(args)?.get(name) else {
+        return Ok(None);
+    };
+    if value.is_null() {
+        return Ok(None);
+    }
+    value
+        .as_bool()
+        .map(Some)
+        .ok_or_else(|| ClientError::Protocol(format!("{name} must be a boolean or null")))
 }
 
 fn optional_u64_arg(args: &Value, name: &'static str) -> Result<Option<u64>, ClientError> {
@@ -824,6 +1132,464 @@ fn facets_arg(args: &Value) -> Result<Vec<NamespaceFindField>, ClientError> {
         .collect()
 }
 
+fn group_by_arg(args: &Value) -> Result<Vec<String>, ClientError> {
+    let Some(value) = object_args(args)?.get("group_by") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    value
+        .as_array()
+        .ok_or_else(|| ClientError::Protocol("group_by must be an array".to_owned()))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(str::to_owned)
+                .ok_or_else(|| ClientError::Protocol("group_by entries must be strings".to_owned()))
+        })
+        .collect()
+}
+
+fn aggregate_measures_arg(args: &Value) -> Result<Vec<AggregateMeasure>, ClientError> {
+    let value = object_args(args)?
+        .get("measures")
+        .ok_or_else(|| ClientError::Protocol("missing array argument measures".to_owned()))?;
+    let measures = value
+        .as_array()
+        .ok_or_else(|| ClientError::Protocol("measures must be an array".to_owned()))?;
+    if measures.is_empty() {
+        return Err(ClientError::Protocol(
+            "measures must contain at least one measure".to_owned(),
+        ));
+    }
+    measures
+        .iter()
+        .map(|value| {
+            let object = value
+                .as_object()
+                .ok_or_else(|| ClientError::Protocol("measure must be an object".to_owned()))?;
+            let name = string_property(object, "name")?.to_owned();
+            if name.is_empty() {
+                return Err(ClientError::Protocol(
+                    "measure name must not be empty".to_owned(),
+                ));
+            }
+            let op = aggregate_op_arg(string_property(object, "op")?)?;
+            let field = object
+                .get("field")
+                .and_then(|value| (!value.is_null()).then_some(value))
+                .map(|value| {
+                    value.as_str().map(str::to_owned).ok_or_else(|| {
+                        ClientError::Protocol("measure field must be a string or null".to_owned())
+                    })
+                })
+                .transpose()?;
+            if !matches!(op, AggregateOp::Count) && field.is_none() {
+                return Err(ClientError::Protocol(format!(
+                    "measure {name} with op {} requires field",
+                    aggregate_op_name(op)
+                )));
+            }
+            Ok(AggregateMeasure { name, op, field })
+        })
+        .collect()
+}
+
+fn aggregate_op_arg(op: &str) -> Result<AggregateOp, ClientError> {
+    match op {
+        "count" => Ok(AggregateOp::Count),
+        "sum" => Ok(AggregateOp::Sum),
+        "avg" => Ok(AggregateOp::Avg),
+        "min" => Ok(AggregateOp::Min),
+        "max" => Ok(AggregateOp::Max),
+        other => Err(ClientError::Protocol(format!(
+            "unsupported aggregate op {other}"
+        ))),
+    }
+}
+
+fn aggregate_required_fields(measures: &[AggregateMeasure]) -> Vec<String> {
+    let mut fields = Vec::new();
+    for measure in measures {
+        if matches!(measure.op, AggregateOp::Count) {
+            continue;
+        }
+        let Some(field) = &measure.field else {
+            continue;
+        };
+        if !fields.contains(field) {
+            fields.push(field.clone());
+        }
+    }
+    fields
+}
+
+fn aggregate_sort_arg(args: &Value) -> Result<Vec<AggregateSort>, ClientError> {
+    let Some(value) = object_args(args)?.get("sort") else {
+        return Ok(Vec::new());
+    };
+    let sort = value
+        .as_array()
+        .ok_or_else(|| ClientError::Protocol("sort must be an array".to_owned()))?;
+    sort.iter()
+        .map(|value| {
+            let object = value
+                .as_object()
+                .ok_or_else(|| ClientError::Protocol("sort item must be an object".to_owned()))?;
+            let field = string_property(object, "field")?.to_owned();
+            let direction = object
+                .get("direction")
+                .and_then(Value::as_str)
+                .unwrap_or("asc");
+            Ok(AggregateSort {
+                field,
+                direction: match direction {
+                    "asc" => NamespaceSortDirection::Asc,
+                    "desc" => NamespaceSortDirection::Desc,
+                    other => {
+                        return Err(ClientError::Protocol(format!(
+                            "unsupported sort direction {other}"
+                        )))
+                    }
+                },
+            })
+        })
+        .collect()
+}
+
+fn filtered_catalog(
+    catalog: &NamespaceQueryCatalog,
+    field_prefix: Option<&str>,
+    include_facets: bool,
+) -> NamespaceQueryCatalog {
+    NamespaceQueryCatalog {
+        filterable: catalog
+            .filterable
+            .iter()
+            .filter(|capability| field_matches_prefix(capability.field.id.as_str(), field_prefix))
+            .cloned()
+            .collect(),
+        sortable: catalog
+            .sortable
+            .iter()
+            .filter(|field| field_matches_prefix(field.id.as_str(), field_prefix))
+            .cloned()
+            .collect(),
+        facetable: catalog
+            .facetable
+            .iter()
+            .filter(|field| field_matches_prefix(field.id.as_str(), field_prefix))
+            .cloned()
+            .collect(),
+        facets: if include_facets {
+            catalog
+                .facets
+                .iter()
+                .filter(|facet| field_matches_prefix(facet.field.id.as_str(), field_prefix))
+                .cloned()
+                .collect()
+        } else {
+            Vec::new()
+        },
+        projections: catalog.projections.clone(),
+    }
+}
+
+fn catalog_is_empty(catalog: &NamespaceQueryCatalog) -> bool {
+    catalog.filterable.is_empty() && catalog.sortable.is_empty() && catalog.facetable.is_empty()
+}
+
+fn child_catalogs<T>(
+    namespace: &T,
+    path: &str,
+    include_facets: bool,
+) -> Result<Vec<Value>, ClientError>
+where
+    T: AgentNamespace + ?Sized,
+{
+    let page = namespace.agent_list_page(
+        path,
+        NamespaceListOptions {
+            cursor: None,
+            limit: 20,
+        },
+    )?;
+    let mut children = Vec::new();
+    for entry in page.entries {
+        if !matches!(entry.kind, NamespaceCardKind::Directory) {
+            continue;
+        }
+        let Some(card) = namespace.agent_stat_card(&entry.path)? else {
+            continue;
+        };
+        let catalog = filtered_catalog(&card.catalog, None, include_facets);
+        if catalog_is_empty(&catalog) {
+            continue;
+        }
+        children.push(json!({
+            "path": card.path,
+            "evidence": card.evidence,
+            "snapshot_id": card.snapshot_id,
+            "catalog": catalog_json(&catalog),
+        }));
+        if children.len() == 5 {
+            break;
+        }
+    }
+    Ok(children)
+}
+
+fn field_matches_prefix(field: &str, prefix: Option<&str>) -> bool {
+    prefix
+        .map(|prefix| field.starts_with(prefix) || field.contains(prefix))
+        .unwrap_or(true)
+}
+
+fn card_field_value(card: &NamespaceCard, field: &str) -> Option<NamespacePredicateValue> {
+    match field {
+        "path" => Some(NamespacePredicateValue::String(card.path.clone())),
+        "name" => Some(NamespacePredicateValue::String(card.name.clone())),
+        "kind" => Some(NamespacePredicateValue::String(
+            card_kind_name(&card.kind).to_owned(),
+        )),
+        "size_bytes" => card.size_bytes.map(NamespacePredicateValue::U64),
+        "body.content_type" => card
+            .body
+            .as_ref()
+            .map(|body| NamespacePredicateValue::String(body.content_type.clone())),
+        "body.producer" => card
+            .body
+            .as_ref()
+            .map(|body| NamespacePredicateValue::String(body.producer.clone())),
+        "body.manifest_id" => card
+            .body
+            .as_ref()
+            .map(|body| NamespacePredicateValue::String(body.manifest_id.clone())),
+        _ => card
+            .indexed_values
+            .iter()
+            .find_map(|value| (value.field.id == field).then_some(value.value.clone())),
+    }
+}
+
+impl AggregateAccumulator {
+    fn new(op: AggregateOp) -> Self {
+        Self {
+            op,
+            count: 0,
+            sum: 0.0,
+            all_integral: true,
+            integral_sum: 0,
+            min: None,
+            max: None,
+        }
+    }
+
+    fn observe_count(&mut self) {
+        self.count = self.count.saturating_add(1);
+    }
+
+    fn observe(&mut self, value: Option<&NamespacePredicateValue>) {
+        match self.op {
+            AggregateOp::Count => {
+                if value.is_some() {
+                    self.count = self.count.saturating_add(1);
+                }
+            }
+            AggregateOp::Sum | AggregateOp::Avg | AggregateOp::Min | AggregateOp::Max => {
+                let Some((number, integral)) = value.and_then(numeric_predicate_value) else {
+                    return;
+                };
+                self.count = self.count.saturating_add(1);
+                self.sum += number;
+                if let Some(integer) = integral {
+                    self.integral_sum = self.integral_sum.saturating_add(integer as u128);
+                } else {
+                    self.all_integral = false;
+                }
+                self.min = Some(
+                    self.min
+                        .map(|current| current.min(number))
+                        .unwrap_or(number),
+                );
+                self.max = Some(
+                    self.max
+                        .map(|current| current.max(number))
+                        .unwrap_or(number),
+                );
+            }
+        }
+    }
+
+    fn json_value(&self) -> Value {
+        match self.op {
+            AggregateOp::Count => json!(self.count),
+            AggregateOp::Sum => {
+                if self.all_integral {
+                    u64::try_from(self.integral_sum)
+                        .map(Value::from)
+                        .unwrap_or_else(|_| finite_number_json(self.sum))
+                } else {
+                    finite_number_json(self.sum)
+                }
+            }
+            AggregateOp::Avg => {
+                if self.count == 0 {
+                    Value::Null
+                } else {
+                    finite_number_json(self.sum / self.count as f64)
+                }
+            }
+            AggregateOp::Min => self.min.map(finite_number_json).unwrap_or(Value::Null),
+            AggregateOp::Max => self.max.map(finite_number_json).unwrap_or(Value::Null),
+        }
+    }
+}
+
+fn numeric_predicate_value(value: &NamespacePredicateValue) -> Option<(f64, Option<u64>)> {
+    match value {
+        NamespacePredicateValue::U64(value) => Some((*value as f64, Some(*value))),
+        NamespacePredicateValue::String(value) => parse_number_string(value).and_then(|number| {
+            if !number.is_finite() {
+                return None;
+            }
+            let integral = (number.fract() == 0.0 && number >= 0.0)
+                .then(|| u64::try_from(number as u128).ok())
+                .flatten();
+            Some((number, integral))
+        }),
+    }
+}
+
+fn parse_number_string(value: &str) -> Option<f64> {
+    value.parse::<f64>().ok().or_else(|| {
+        serde_json::from_str::<Value>(value)
+            .ok()
+            .and_then(|value| value.as_f64())
+    })
+}
+
+fn finite_number_json(value: f64) -> Value {
+    if !value.is_finite() {
+        return Value::Null;
+    }
+    let rounded = (value * 1_000_000_000_000.0).round() / 1_000_000_000_000.0;
+    json!(rounded)
+}
+
+fn sort_aggregate_groups(
+    groups: &mut [AggregateGroup],
+    group_by: &[String],
+    measures: &[AggregateMeasure],
+    sort: &[AggregateSort],
+) {
+    groups.sort_by(|left, right| {
+        for sort_key in sort {
+            let ordering =
+                aggregate_sort_value(left, group_by, measures, &sort_key.field).cmp_sort_value(
+                    &aggregate_sort_value(right, group_by, measures, &sort_key.field),
+                );
+            let ordering = match sort_key.direction {
+                NamespaceSortDirection::Asc => ordering,
+                NamespaceSortDirection::Desc => ordering.reverse(),
+            };
+            if ordering != Ordering::Equal {
+                return ordering;
+            }
+        }
+        left.key_values.cmp(&right.key_values)
+    });
+}
+
+fn aggregate_sort_value(
+    group: &AggregateGroup,
+    group_by: &[String],
+    measures: &[AggregateMeasure],
+    field: &str,
+) -> Value {
+    if let Some(index) = group_by.iter().position(|group_field| group_field == field) {
+        return group
+            .key_values
+            .get(index)
+            .and_then(|value| value.as_ref())
+            .map(predicate_value_json)
+            .unwrap_or(Value::Null);
+    }
+    if let Some(index) = measures.iter().position(|measure| measure.name == field) {
+        return group.measures[index].json_value();
+    }
+    Value::Null
+}
+
+trait AggregateSortValue {
+    fn cmp_sort_value(&self, other: &Self) -> Ordering;
+}
+
+impl AggregateSortValue for Value {
+    fn cmp_sort_value(&self, other: &Self) -> Ordering {
+        match (self, other) {
+            (Value::Null, Value::Null) => Ordering::Equal,
+            (Value::Null, _) => Ordering::Greater,
+            (_, Value::Null) => Ordering::Less,
+            (Value::Number(left), Value::Number(right)) => left
+                .as_f64()
+                .partial_cmp(&right.as_f64())
+                .unwrap_or(Ordering::Equal),
+            (Value::String(left), Value::String(right)) => left.cmp(right),
+            (Value::Bool(left), Value::Bool(right)) => left.cmp(right),
+            _ => self.to_string().cmp(&other.to_string()),
+        }
+    }
+}
+
+fn aggregate_group_json(
+    group: &AggregateGroup,
+    group_by: &[String],
+    measures: &[AggregateMeasure],
+    evidence: Option<&str>,
+) -> Value {
+    let key = group_by
+        .iter()
+        .zip(&group.key_values)
+        .filter_map(|(field, value)| {
+            value
+                .as_ref()
+                .map(|value| (field.clone(), predicate_value_json(value)))
+        })
+        .collect::<Map<_, _>>();
+    let values = measures
+        .iter()
+        .zip(&group.measures)
+        .map(|(measure, accumulator)| (measure.name.clone(), accumulator.json_value()))
+        .collect::<Map<_, _>>();
+    json!({
+        "key": key,
+        "values": values,
+        "evidence": evidence,
+        "sample_matches": group.sample_matches.iter().map(aggregate_sample_json).collect::<Vec<_>>(),
+    })
+}
+
+fn aggregate_sample_json(sample: &AggregateSample) -> Value {
+    json!({
+        "path": sample.path,
+        "evidence": sample.evidence,
+        "generation": sample.generation,
+    })
+}
+
+fn aggregate_op_name(op: AggregateOp) -> &'static str {
+    match op {
+        AggregateOp::Count => "count",
+        AggregateOp::Sum => "sum",
+        AggregateOp::Avg => "avg",
+        AggregateOp::Min => "min",
+        AggregateOp::Max => "max",
+    }
+}
+
 fn string_property<'a>(
     object: &'a Map<String, Value>,
     name: &'static str,
@@ -923,6 +1689,9 @@ mod tests {
         last_find: RefCell<Option<NamespaceFindRequest>>,
         read_calls: RefCell<usize>,
         record_count: usize,
+        find_matches: Vec<NamespaceCard>,
+        stat_cards: BTreeMap<String, NamespaceCard>,
+        list_entries: Vec<NamespaceCard>,
     }
 
     impl FakeNamespace {
@@ -931,6 +1700,9 @@ mod tests {
                 last_find: RefCell::new(None),
                 read_calls: RefCell::new(0),
                 record_count: 1,
+                find_matches: vec![sample_card("/runs/run-1", 1)],
+                stat_cards: BTreeMap::new(),
+                list_entries: vec![sample_card("/runs/run-1", 1)],
             }
         }
 
@@ -939,13 +1711,58 @@ mod tests {
                 last_find: RefCell::new(None),
                 read_calls: RefCell::new(0),
                 record_count,
+                find_matches: vec![sample_card("/runs/run-1", record_count)],
+                stat_cards: BTreeMap::new(),
+                list_entries: vec![sample_card("/runs/run-1", record_count)],
+            }
+        }
+
+        fn with_find_matches(find_matches: Vec<NamespaceCard>) -> Self {
+            Self {
+                last_find: RefCell::new(None),
+                read_calls: RefCell::new(0),
+                record_count: 1,
+                find_matches,
+                stat_cards: BTreeMap::new(),
+                list_entries: vec![sample_card("/runs/run-1", 1)],
+            }
+        }
+
+        fn with_root_child_catalog() -> Self {
+            let mut root = sample_card("/yanex", 1);
+            root.kind = NamespaceCardKind::Directory;
+            root.catalog = empty_catalog();
+            let mut runs = sample_card("/yanex/runs", 1);
+            runs.kind = NamespaceCardKind::Directory;
+            runs.catalog.filterable.push(NamespaceFilterCapability {
+                field: NamespaceFindField::new("run.script"),
+                operators: vec![NamespacePredicateOp::Eq],
+            });
+            runs.catalog
+                .sortable
+                .push(NamespaceSortField::new("run.script"));
+            let mut stat_cards = BTreeMap::new();
+            stat_cards.insert(root.path.clone(), root);
+            stat_cards.insert(runs.path.clone(), runs.clone());
+            Self {
+                last_find: RefCell::new(None),
+                read_calls: RefCell::new(0),
+                record_count: 1,
+                find_matches: vec![sample_card("/yanex/runs/run-1", 1)],
+                stat_cards,
+                list_entries: vec![runs],
             }
         }
     }
 
     impl AgentNamespace for FakeNamespace {
         fn agent_stat_card(&self, path: &str) -> Result<Option<NamespaceCard>, ClientError> {
-            Ok(Some(sample_card(path, self.record_count)))
+            Ok(Some(
+                self.stat_cards
+                    .get(path)
+                    .cloned()
+                    .unwrap_or_else(|| sample_card(path, self.record_count)),
+            ))
         }
 
         fn agent_list_page(
@@ -957,8 +1774,8 @@ mod tests {
                 path: path.to_owned(),
                 evidence: "nokv-native:///runs".to_owned(),
                 snapshot_id: Some(9),
-                entry_count: 1,
-                entries: vec![sample_card("/runs/run-1", self.record_count)],
+                entry_count: self.list_entries.len(),
+                entries: self.list_entries.clone(),
                 next_cursor: None,
                 truncated: false,
             })
@@ -969,12 +1786,13 @@ mod tests {
             request: NamespaceFindRequest,
         ) -> Result<NamespaceFindResult, ClientError> {
             self.last_find.replace(Some(request));
+            let matches = self.find_matches.clone();
             Ok(NamespaceFindResult {
                 path: "/runs".to_owned(),
                 evidence: "nokv-native:///runs".to_owned(),
                 snapshot_id: Some(9),
-                match_count: 1,
-                matches: vec![sample_card("/runs/run-1", self.record_count)],
+                match_count: matches.len(),
+                matches,
                 facets: vec![NamespaceFacetSummary {
                     field: NamespaceFindField::new("run.script"),
                     values: vec![NamespaceFacetValue {
@@ -1016,6 +1834,40 @@ mod tests {
                 }],
                 bytes: None,
             })
+        }
+    }
+
+    fn sample_card_with_values(
+        path: &str,
+        indexed_values: Vec<NamespaceIndexValue>,
+    ) -> NamespaceCard {
+        NamespaceCard {
+            indexed_values,
+            ..sample_card(path, 1)
+        }
+    }
+
+    fn empty_catalog() -> NamespaceQueryCatalog {
+        NamespaceQueryCatalog {
+            filterable: Vec::new(),
+            sortable: Vec::new(),
+            facetable: Vec::new(),
+            facets: Vec::new(),
+            projections: Vec::new(),
+        }
+    }
+
+    fn index_string(field: &str, value: &str) -> NamespaceIndexValue {
+        NamespaceIndexValue {
+            field: NamespaceFindField::new(field),
+            value: NamespacePredicateValue::String(value.to_owned()),
+        }
+    }
+
+    fn index_u64(field: &str, value: u64) -> NamespaceIndexValue {
+        NamespaceIndexValue {
+            field: NamespaceFindField::new(field),
+            value: NamespacePredicateValue::U64(value),
         }
     }
 
@@ -1086,7 +1938,10 @@ mod tests {
             .map(|tool| tool.name)
             .collect::<Vec<_>>();
 
-        assert_eq!(names, vec!["ls", "stat", "read", "find"]);
+        assert_eq!(
+            names,
+            vec!["ls", "stat", "catalog", "read", "aggregate", "find"]
+        );
     }
 
     #[test]
@@ -1136,6 +1991,82 @@ mod tests {
                 "distinct_count": 1,
                 "truncated": false
             })
+        );
+    }
+
+    #[test]
+    fn catalog_tool_returns_compact_filtered_catalog() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "catalog",
+            &json!({
+                "path": "/runs",
+                "field_prefix": "run.",
+                "include_facets": false
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(output["tool"], "catalog");
+        assert_eq!(output["path"], "/runs");
+        assert_eq!(output["evidence"], "nokv-native:///runs@generation:7");
+        assert_eq!(output["catalog"]["filterable"][0]["field"], "run.status");
+        assert_eq!(output["catalog"]["sortable"], json!(["run.status"]));
+        assert_eq!(output["catalog"]["facetable"], json!(["run.status"]));
+        assert_eq!(output["catalog"]["facets"], json!([]));
+        assert!(output.get("card").is_none());
+        assert!(output.get("body").is_none());
+    }
+
+    #[test]
+    fn catalog_tool_matches_field_prefix_inside_field_ids() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "catalog",
+            &json!({
+                "path": "/runs",
+                "field_prefix": "status",
+                "include_facets": false
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(output["catalog"]["filterable"][0]["field"], "run.status");
+        assert_eq!(output["catalog"]["sortable"], json!(["run.status"]));
+    }
+
+    #[test]
+    fn catalog_tool_suggests_child_catalogs_when_current_scope_is_empty() {
+        let namespace = FakeNamespace::with_root_child_catalog();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "catalog",
+            &json!({
+                "path": "/yanex",
+                "field_prefix": "status",
+                "include_facets": false
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(output["catalog_empty"], true);
+        assert_eq!(output["child_catalogs"][0]["path"], "/yanex/runs");
+        assert_eq!(
+            output["child_catalogs"][0]["catalog"]["filterable"][0]["field"],
+            "run.status"
+        );
+        assert_eq!(
+            output["child_catalogs"][0]["catalog"]["filterable"][1]["field"],
+            "run.script"
+        );
+        assert_eq!(
+            output["scope_note"],
+            "catalogs are scoped to the path; call catalog on the directory you will search"
         );
     }
 
@@ -1335,7 +2266,12 @@ mod tests {
         assert_eq!(output["matches"][0]["values"], json!({}));
         assert!(output["matches"][0].get("indexed_values").is_none());
         assert!(output["matches"][0].get("name").is_none());
-        assert!(output["matches"][0].get("generation").is_none());
+        assert_eq!(
+            output["matches"][0]["evidence"],
+            "nokv-native:///runs/run-1@generation:7"
+        );
+        assert_eq!(output["matches"][0]["snapshot_id"], 9);
+        assert_eq!(output["matches"][0]["generation"], 7);
         assert!(output.get("catalog").is_none() || output["catalog"].is_null());
         assert!(namespace.last_find.borrow().is_some());
     }
@@ -1362,7 +2298,96 @@ mod tests {
         assert_eq!(match_["schema"]["record_type"], "json_object");
         assert!(match_.get("indexed_values").is_none());
         assert!(match_.get("name").is_none());
-        assert!(match_.get("generation").is_none());
+        assert_eq!(match_["evidence"], "nokv-native:///runs/run-1@generation:7");
+        assert_eq!(match_["generation"], 7);
+    }
+
+    #[test]
+    fn aggregate_tool_groups_and_sorts_indexed_values() {
+        let namespace = FakeNamespace::with_find_matches(vec![
+            sample_card_with_values(
+                "/runs/run-1",
+                vec![
+                    index_string("run.status", "completed"),
+                    index_string("run.script", "train.py"),
+                    index_string("param.lr", "0.001"),
+                    index_string("metric.val_loss.min", "0.4"),
+                    index_u64("artifact.stdout_available", 1),
+                ],
+            ),
+            sample_card_with_values(
+                "/runs/run-2",
+                vec![
+                    index_string("run.status", "completed"),
+                    index_string("run.script", "train.py"),
+                    index_string("param.lr", "0.001"),
+                    index_string("metric.val_loss.min", "0.2"),
+                    index_u64("artifact.stdout_available", 0),
+                ],
+            ),
+            sample_card_with_values(
+                "/runs/run-3",
+                vec![
+                    index_string("run.status", "completed"),
+                    index_string("run.script", "train.py"),
+                    index_string("param.lr", "0.002"),
+                    index_string("metric.val_loss.min", "0.9"),
+                    index_u64("artifact.stdout_available", 1),
+                ],
+            ),
+            sample_card_with_values(
+                "/runs/run-4",
+                vec![
+                    index_string("run.status", "completed"),
+                    index_string("run.script", "train.py"),
+                    index_string("param.lr", "0.001"),
+                    index_u64("artifact.stdout_available", 1),
+                ],
+            ),
+            sample_card_with_values(
+                "/runs/run-3/metadata.json",
+                vec![index_string("run.status.detail", "not-a-group-key")],
+            ),
+        ]);
+
+        let output = execute_agent_tool(
+            &namespace,
+            "aggregate",
+            &json!({
+                "path": "/runs",
+                "predicates": [{"field": "run.status", "op": "eq", "value": "completed"}],
+                "group_by": ["param.lr"],
+                "measures": [
+                    {"name": "run_count", "op": "count", "field": "metric.val_loss.min"},
+                    {"name": "avg_min_val_loss", "op": "avg", "field": "metric.val_loss.min"},
+                    {"name": "stdout_available", "op": "sum", "field": "artifact.stdout_available"}
+                ],
+                "sort": [{"field": "avg_min_val_loss", "direction": "asc"}],
+                "limit": 5
+            }),
+        )
+        .unwrap();
+
+        let request = namespace.last_find.borrow().clone().unwrap();
+        assert_eq!(request.predicates[0].field.id, "run.status");
+        assert_eq!(output["tool"], "aggregate");
+        assert_eq!(
+            output["predicates"],
+            json!([{"field": "run.status", "op": "eq", "value": "completed"}])
+        );
+        assert_eq!(output["scope_note"], Value::Null);
+        assert_eq!(output["input_match_count"], 5);
+        assert_eq!(output["row_count"], 3);
+        assert_eq!(output["group_count"], 2);
+        assert_eq!(output["groups"][0]["key"], json!({"param.lr": "0.001"}));
+        assert_eq!(output["groups"][0]["values"]["run_count"], 2);
+        assert_eq!(output["groups"][0]["values"]["avg_min_val_loss"], 0.3);
+        assert_eq!(output["groups"][0]["values"]["stdout_available"], 1);
+        assert_eq!(output["groups"][0]["evidence"], "nokv-native:///runs");
+        assert_eq!(
+            output["groups"][0]["sample_matches"][0]["evidence"],
+            "nokv-native:///runs/run-1@generation:7"
+        );
     }
 
     #[test]

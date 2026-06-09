@@ -3221,7 +3221,7 @@ fn execute_nokv_tool(
     args: &Value,
 ) -> Result<Value, HarnessError> {
     match name {
-        "ls" | "stat" | "read" | "find" => {
+        "ls" | "stat" | "catalog" | "read" | "find" | "aggregate" => {
             execute_agent_tool(service, name, args).map_err(from_nokv)
         }
         "grep" => execute_nokv_grep_tool(service, args),
@@ -7067,7 +7067,7 @@ mod tests {
         );
         assert_eq!(
             tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap()),
-            vec!["ls", "stat", "read", "find"]
+            vec!["ls", "stat", "catalog", "read", "aggregate", "find"]
         );
         assert!(tool_registry_for_arm("unknown_arm_v1").is_err());
     }
