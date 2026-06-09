@@ -18,19 +18,18 @@ data_scope:
 common_semantics:
   paths:
     - Paths are absolute NoKV namespace paths.
-    - Use ls or stat from /yanex to discover corpus structure.
+    - Use stat or catalog from /yanex to discover corpus structure and indexed fields.
     - Do not assume a path exists until a tool result returns it.
   pages:
-    - ls and read limits are positive integers from 1 to 100.
     - find limits are positive integers from 1 to 10.
+    - aggregate limits are positive integers from 1 to 100.
     - Omitted limits use the adapter default.
     - Continue with next_cursor until it is null; truncated=true means more results exist.
   evidence:
     - Results include snapshot_id.
     - Directory evidence uses nokv-native://{path}.
     - Entry and file evidence uses nokv-native://{path}@generation:{generation}.
-    - Structured read items append #item:{index}.
-    - Use expected_generation on read when validating a cited file body.
+    - Body-inspection profiles expose read with expected_generation when validating cited file bodies.
   catalogs:
     - Directory stat cards expose built-in namespace fields and registered index fields.
     - The catalog tool returns the same query capability catalog without the full stat card.
@@ -43,12 +42,6 @@ common_semantics:
     - Facet summaries are capped and report distinct_count plus truncated.
 
 tool_contract:
-  - name: ls
-    purpose: Return one page of direct children for a directory.
-    notes:
-      - ls is not recursive.
-      - Entries are compact; use stat for schema, sample, body descriptor, catalog, record_count, or indexed_values.
-
   - name: stat
     purpose: Return the full namespace card for one path.
     notes:
@@ -67,16 +60,6 @@ tool_contract:
       - If the current path has no catalog fields, catalog may return child_catalogs for direct child directories; child_catalogs are search-root candidates and are not narrowed by field_prefix.
       - catalog does not return body descriptors, samples, indexed values, or child entries.
 
-  - name: read
-    purpose: Read one page from a file.
-    notes:
-      - read defaults to structured format; raw bytes require format=bytes.
-      - Structured file records are json_array, json_object, yaml_mapping, or text_lines.
-      - JSON objects and YAML mappings return sorted key/value items.
-      - Text returns line-numbered records.
-      - The adapter rejects structured reads when stat reports more than 100 records; use stat, find counts, or targeted reads instead.
-      - Bytes mode uses offset plus limit; cursor is for structured records.
-
   - name: aggregate
     purpose: Aggregate indexed namespace matches using catalog field ids.
     notes:
@@ -87,16 +70,16 @@ tool_contract:
       - group_by fields partition matching paths by indexed or built-in field values.
       - measures support count, sum, avg, min, and max over indexed numeric fields; count without a field counts every matching path, while count with a field counts present field values.
       - When non-count numeric measures are requested, paths missing those measure fields are excluded from that aggregate result.
-      - Numeric measures ignore non-numeric values.
+      - Numeric measures use finite f64 or integer indexed values and ignore non-numeric values.
       - sort orders aggregate groups by measure names or group_by field ids.
-      - Each group includes root evidence plus a bounded sample of matching path evidence.
-      - aggregate is for compact index-level summaries; use find, stat, or read when individual path bodies or per-path cards are required.
+      - Each group includes root evidence, projected key field evidence, and a bounded sample of matching path evidence.
+      - aggregate is for compact index-level summaries; use find or stat for individual path cards, and use a body-inspection profile when file body reads are required.
 
   - name: find
     purpose: Recursively find descendant paths under a directory using catalog field ids.
     predicate_values:
-      - Strings use eq, prefix, suffix, or contains.
-      - Non-negative integers use eq, gt, gte, lt, or lte.
+      - Strings use eq, ne, in, prefix, suffix, contains, exists, or not_exists.
+      - Numeric values use eq, ne, in, gt, gte, lt, lte, exists, or not_exists.
       - Booleans are accepted by the client adapter and converted to integer 1 or 0.
     notes:
       - The search root itself is not a match.
@@ -106,7 +89,7 @@ tool_contract:
       - find.match_count is the total number of paths matching the predicates, not a grouped count; scanned_entries is the descendant scan count.
       - Requested find facets are computed after predicates and before pagination.
       - With fields omitted, matches return compact metadata plus indexed_values.
-      - With fields present, matches return path, evidence, snapshot_id, generation, and projected values; missing fields are omitted, single values are scalars, and repeated values are arrays.
+      - With fields present, matches return path, evidence, snapshot_id, generation, projected values, and field_values with value, evidence, source_path, and source_kind; missing fields are omitted, single values are scalars, and repeated values are arrays.
       - Requested include fields body, schema, and sample are attached to each returned match.
       - Use catalog or stat on the search root to discover fields; find results do not repeat catalogs per match.
 

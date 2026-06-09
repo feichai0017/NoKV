@@ -1,4 +1,5 @@
 use super::*;
+use std::cmp::Ordering as CmpOrdering;
 
 const DEFAULT_PAGE_LIMIT: usize = 100;
 const DEFAULT_SAMPLE_LIMIT: usize = 3;
@@ -192,6 +193,8 @@ impl NamespaceFindField {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NamespacePredicateOp {
     Eq,
+    NotEqual,
+    In,
     Prefix,
     Suffix,
     Contains,
@@ -199,19 +202,60 @@ pub enum NamespacePredicateOp {
     GreaterThanOrEqual,
     LessThan,
     LessThanOrEqual,
+    Exists,
+    NotExists,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Clone, Debug)]
 pub enum NamespacePredicateValue {
     String(String),
     U64(u64),
+    F64(f64),
+    List(Vec<NamespacePredicateValue>),
+}
+
+impl PartialEq for NamespacePredicateValue {
+    fn eq(&self, other: &Self) -> bool {
+        self.cmp(other) == CmpOrdering::Equal
+    }
+}
+
+impl Eq for NamespacePredicateValue {}
+
+impl PartialOrd for NamespacePredicateValue {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for NamespacePredicateValue {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        predicate_value_rank(self)
+            .cmp(&predicate_value_rank(other))
+            .then_with(|| match (self, other) {
+                (Self::String(left), Self::String(right)) => left.cmp(right),
+                (Self::U64(left), Self::U64(right)) => left.cmp(right),
+                (Self::F64(left), Self::F64(right)) => left.total_cmp(right),
+                (Self::List(left), Self::List(right)) => left.cmp(right),
+                _ => CmpOrdering::Equal,
+            })
+    }
+}
+
+fn predicate_value_rank(value: &NamespacePredicateValue) -> u8 {
+    match value {
+        NamespacePredicateValue::String(_) => 0,
+        NamespacePredicateValue::U64(_) => 1,
+        NamespacePredicateValue::F64(_) => 2,
+        NamespacePredicateValue::List(_) => 3,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NamespacePredicate {
     pub field: NamespaceFindField,
     pub op: NamespacePredicateOp,
-    pub value: NamespacePredicateValue,
+    pub value: Option<NamespacePredicateValue>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -269,6 +313,115 @@ pub struct NamespaceFindResult {
     pub matches: Vec<NamespaceCard>,
     pub facets: Vec<NamespaceFacetSummary>,
     pub next_cursor: Option<String>,
+    pub truncated: bool,
+    pub scanned_entries: usize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NamespaceFieldSourceKind {
+    Namespace,
+    MaterializedIndex,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceFieldSource {
+    pub evidence: String,
+    pub source_path: String,
+    pub source_kind: NamespaceFieldSourceKind,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceFieldValue {
+    pub field: NamespaceFindField,
+    pub value: NamespacePredicateValue,
+    pub source: NamespaceFieldSource,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum NamespaceAggregateOp {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceAggregateMeasure {
+    pub name: String,
+    pub op: NamespaceAggregateOp,
+    pub field: Option<NamespaceFindField>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceAggregateSort {
+    pub field: String,
+    pub direction: NamespaceSortDirection,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceAggregateRequest {
+    pub path: String,
+    pub predicates: Vec<NamespacePredicate>,
+    pub group_by: Vec<NamespaceFindField>,
+    pub measures: Vec<NamespaceAggregateMeasure>,
+    pub sort: Vec<NamespaceAggregateSort>,
+    pub limit: usize,
+}
+
+#[derive(Clone, Debug)]
+pub enum NamespaceAggregateValue {
+    U64(u64),
+    F64(f64),
+    Null,
+}
+
+impl PartialEq for NamespaceAggregateValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::U64(left), Self::U64(right)) => left == right,
+            (Self::F64(left), Self::F64(right)) => left.total_cmp(right) == CmpOrdering::Equal,
+            (Self::Null, Self::Null) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for NamespaceAggregateValue {}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceAggregateOutputMeasure {
+    pub name: String,
+    pub op: NamespaceAggregateOp,
+    pub field: Option<NamespaceFindField>,
+    pub value: NamespaceAggregateValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceAggregateSample {
+    pub path: String,
+    pub evidence: String,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceAggregateGroup {
+    pub key: Vec<NamespaceFieldValue>,
+    pub measures: Vec<NamespaceAggregateOutputMeasure>,
+    pub evidence: String,
+    pub sample_matches: Vec<NamespaceAggregateSample>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceAggregateResult {
+    pub path: String,
+    pub evidence: String,
+    pub snapshot_id: Option<u64>,
+    pub predicates: Vec<NamespacePredicate>,
+    pub input_match_count: usize,
+    pub row_count: usize,
+    pub group_count: usize,
+    pub groups: Vec<NamespaceAggregateGroup>,
     pub truncated: bool,
     pub scanned_entries: usize,
 }
@@ -423,6 +576,25 @@ struct CardContext<'a> {
 struct LoadedNamespaceIndex {
     fields: Vec<NamespaceIndexField>,
     rows: BTreeMap<String, Vec<NamespaceIndexValue>>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+struct AggregateGroupKey(Vec<NamespacePredicateValue>);
+
+#[derive(Clone, Debug)]
+struct AggregateBuilder {
+    key: Vec<NamespaceFieldValue>,
+    measures: Vec<AggregateAccumulator>,
+    sample_matches: Vec<NamespaceAggregateSample>,
+}
+
+#[derive(Clone, Debug)]
+struct AggregateAccumulator {
+    op: NamespaceAggregateOp,
+    count: usize,
+    sum: f64,
+    min: Option<f64>,
+    max: Option<f64>,
 }
 
 #[derive(Clone, Debug)]
@@ -598,6 +770,105 @@ where
         })
     }
 
+    pub fn aggregate_paths(
+        &self,
+        request: NamespaceAggregateRequest,
+    ) -> Result<NamespaceAggregateResult, MetadError> {
+        validate_aggregate_request(&request)?;
+        let root = normalize_card_path(&request.path)?;
+        let limit = bounded_limit(request.limit)?;
+        let version = self.read_version()?;
+        let root_inode = self.resolve_directory_path_at_version(&root, version)?;
+        let indexes = self.load_namespace_indexes_for_path(&root, version)?;
+        let mut entries = Vec::new();
+        self.collect_entries(&root, root_inode, version, &mut entries)?;
+        let scanned_entries = entries.len();
+        let mut input_match_count = 0_usize;
+        let mut row_count = 0_usize;
+        let mut groups = BTreeMap::<AggregateGroupKey, AggregateBuilder>::new();
+
+        for entry in entries {
+            let indexed_values = indexes.rows.get(&entry.path).cloned().unwrap_or_default();
+            if !matches_predicates(&entry, &indexed_values, &request.predicates) {
+                continue;
+            }
+            input_match_count = input_match_count.saturating_add(1);
+            let key_values = request
+                .group_by
+                .iter()
+                .map(|field| first_field_value(&entry, &indexed_values, field))
+                .collect::<Vec<_>>();
+            if !request.group_by.is_empty() && key_values.iter().any(Option::is_none) {
+                continue;
+            }
+            if request
+                .measures
+                .iter()
+                .any(|measure| aggregate_measure_requires_field(measure, &entry, &indexed_values))
+            {
+                continue;
+            }
+
+            row_count = row_count.saturating_add(1);
+            let key = AggregateGroupKey(
+                key_values
+                    .iter()
+                    .filter_map(|value| value.as_ref().map(|value| value.value.clone()))
+                    .collect(),
+            );
+            let group = groups.entry(key).or_insert_with(|| AggregateBuilder {
+                key: key_values.into_iter().flatten().collect(),
+                measures: request
+                    .measures
+                    .iter()
+                    .map(|measure| AggregateAccumulator::new(measure.op.clone()))
+                    .collect(),
+                sample_matches: Vec::new(),
+            });
+            for (measure, accumulator) in request.measures.iter().zip(group.measures.iter_mut()) {
+                if measure.op == NamespaceAggregateOp::Count && measure.field.is_none() {
+                    accumulator.observe_count();
+                    continue;
+                }
+                let value = measure
+                    .field
+                    .as_ref()
+                    .and_then(|field| first_field_value(&entry, &indexed_values, field))
+                    .map(|value| value.value);
+                accumulator.observe(value.as_ref());
+            }
+            if group.sample_matches.len() < DEFAULT_SAMPLE_LIMIT {
+                group.sample_matches.push(NamespaceAggregateSample {
+                    path: entry.path.clone(),
+                    evidence: namespace_evidence(&entry.path, Some(entry.entry.attr.generation)),
+                    generation: entry.entry.attr.generation,
+                });
+            }
+        }
+
+        let mut output_groups = groups
+            .into_values()
+            .map(|group| aggregate_group_result(group, &request.measures, &root))
+            .collect::<Vec<_>>();
+        sort_namespace_aggregate_groups(&mut output_groups, &request);
+        let group_count = output_groups.len();
+        let truncated = group_count > limit;
+        output_groups.truncate(limit);
+
+        Ok(NamespaceAggregateResult {
+            path: root.clone(),
+            evidence: namespace_evidence(&root, None),
+            snapshot_id: Some(version.get()),
+            predicates: request.predicates,
+            input_match_count,
+            row_count,
+            group_count,
+            groups: output_groups,
+            truncated,
+            scanned_entries,
+        })
+    }
+
     pub fn grep_paths(
         &self,
         request: NamespaceGrepRequest,
@@ -762,6 +1033,7 @@ where
 
         for row in registration.rows {
             let row_path = normalize_card_path(&row.path)?;
+            validate_index_values(&row.values)?;
             let record = path_index_row_record(&row_path, row.values);
             mutations.push(Mutation {
                 family: RecordFamily::PathIndex,
@@ -1195,6 +1467,53 @@ fn validate_find_request(request: &NamespaceFindRequest) -> Result<(), MetadErro
     Ok(())
 }
 
+fn validate_aggregate_request(request: &NamespaceAggregateRequest) -> Result<(), MetadError> {
+    bounded_limit(request.limit)?;
+    for predicate in &request.predicates {
+        validate_predicate(predicate)?;
+    }
+    if request.measures.is_empty() {
+        return Err(MetadError::InvalidQuery(
+            "aggregate measures must not be empty".to_owned(),
+        ));
+    }
+    for measure in &request.measures {
+        if measure.name.is_empty() {
+            return Err(MetadError::InvalidQuery(
+                "aggregate measure name must not be empty".to_owned(),
+            ));
+        }
+        if measure.op != NamespaceAggregateOp::Count && measure.field.is_none() {
+            return Err(MetadError::InvalidQuery(format!(
+                "aggregate measure {} requires a field",
+                measure.name
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_index_values(values: &[NamespaceIndexValue]) -> Result<(), MetadError> {
+    for value in values {
+        match &value.value {
+            NamespacePredicateValue::F64(raw) if !raw.is_finite() => {
+                return Err(MetadError::InvalidQuery(format!(
+                    "index field {} contains non-finite f64",
+                    value.field.id
+                )));
+            }
+            NamespacePredicateValue::List(_) => {
+                return Err(MetadError::InvalidQuery(format!(
+                    "index field {} contains predicate-only list value",
+                    value.field.id
+                )));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn validate_grep_request(request: &NamespaceGrepRequest) -> Result<(), MetadError> {
     bounded_limit(request.limit)?;
     if let Some(max_files) = request.max_files {
@@ -1253,9 +1572,13 @@ fn string_filter_capability(field: NamespaceFindField) -> NamespaceFilterCapabil
         field,
         operators: vec![
             NamespacePredicateOp::Eq,
+            NamespacePredicateOp::NotEqual,
+            NamespacePredicateOp::In,
             NamespacePredicateOp::Prefix,
             NamespacePredicateOp::Suffix,
             NamespacePredicateOp::Contains,
+            NamespacePredicateOp::Exists,
+            NamespacePredicateOp::NotExists,
         ],
     }
 }
@@ -1265,22 +1588,57 @@ fn numeric_filter_capability(field: NamespaceFindField) -> NamespaceFilterCapabi
         field,
         operators: vec![
             NamespacePredicateOp::Eq,
+            NamespacePredicateOp::NotEqual,
+            NamespacePredicateOp::In,
             NamespacePredicateOp::GreaterThan,
             NamespacePredicateOp::GreaterThanOrEqual,
             NamespacePredicateOp::LessThan,
             NamespacePredicateOp::LessThanOrEqual,
+            NamespacePredicateOp::Exists,
+            NamespacePredicateOp::NotExists,
         ],
     }
 }
 
 fn validate_predicate(predicate: &NamespacePredicate) -> Result<(), MetadError> {
-    match &predicate.value {
-        NamespacePredicateValue::String(_) if string_operator(&predicate.op) => Ok(()),
-        NamespacePredicateValue::U64(_) if numeric_operator(&predicate.op) => Ok(()),
+    match (&predicate.op, &predicate.value) {
+        (NamespacePredicateOp::Exists | NamespacePredicateOp::NotExists, None) => Ok(()),
+        (NamespacePredicateOp::In, Some(NamespacePredicateValue::List(values))) => {
+            if values.is_empty()
+                || values
+                    .iter()
+                    .any(|value| !valid_scalar_predicate_value(value))
+            {
+                return Err(MetadError::InvalidQuery(format!(
+                    "unsupported predicate {:?} {:?} {:?}",
+                    predicate.field, predicate.op, predicate.value
+                )));
+            }
+            Ok(())
+        }
+        (NamespacePredicateOp::Eq | NamespacePredicateOp::NotEqual, Some(value))
+            if valid_scalar_predicate_value(value) =>
+        {
+            Ok(())
+        }
+        (_, Some(NamespacePredicateValue::String(_))) if string_operator(&predicate.op) => Ok(()),
+        (_, Some(value))
+            if numeric_operator(&predicate.op) && numeric_predicate_value(value).is_some() =>
+        {
+            Ok(())
+        }
         _ => Err(MetadError::InvalidQuery(format!(
             "unsupported predicate {:?} {:?} {:?}",
             predicate.field, predicate.op, predicate.value
         ))),
+    }
+}
+
+fn valid_scalar_predicate_value(value: &NamespacePredicateValue) -> bool {
+    match value {
+        NamespacePredicateValue::F64(value) => value.is_finite(),
+        NamespacePredicateValue::List(_) => false,
+        NamespacePredicateValue::String(_) | NamespacePredicateValue::U64(_) => true,
     }
 }
 
@@ -1299,73 +1657,64 @@ fn matches_predicate(
     indexed_values: &[NamespaceIndexValue],
     predicate: &NamespacePredicate,
 ) -> bool {
-    match &predicate.value {
-        NamespacePredicateValue::String(expected) => {
-            string_fields(entry, indexed_values, predicate)
-                .iter()
-                .any(|actual| matches_string(actual, &predicate.op, expected))
+    let values = field_values_for_entry(entry, indexed_values, &predicate.field);
+    match predicate.op {
+        NamespacePredicateOp::Exists => !values.is_empty(),
+        NamespacePredicateOp::NotExists => values.is_empty(),
+        NamespacePredicateOp::In => {
+            let Some(NamespacePredicateValue::List(expected)) = &predicate.value else {
+                return false;
+            };
+            values.iter().any(|actual| {
+                expected
+                    .iter()
+                    .any(|expected| predicate_values_equal(&actual.value, expected))
+            })
         }
-        NamespacePredicateValue::U64(expected) => u64_fields(entry, indexed_values, predicate)
-            .iter()
-            .any(|actual| matches_u64(*actual, &predicate.op, *expected)),
-    }
-}
-
-fn string_fields(
-    entry: &TraversalEntry,
-    indexed_values: &[NamespaceIndexValue],
-    predicate: &NamespacePredicate,
-) -> Vec<String> {
-    match predicate.field.as_str() {
-        "path" => vec![entry.path.clone()],
-        "name" => vec![entry.name.clone()],
-        "kind" => vec![file_type_label(entry.entry.attr.file_type).to_owned()],
-        "body.content_type" => entry
-            .entry
-            .body
-            .as_ref()
-            .map(|body| vec![body.content_type.clone()])
-            .unwrap_or_default(),
-        "body.producer" => entry
-            .entry
-            .body
-            .as_ref()
-            .map(|body| vec![body.producer.clone()])
-            .unwrap_or_default(),
-        "body.manifest_id" => entry
-            .entry
-            .body
-            .as_ref()
-            .map(|body| vec![body.manifest_id.clone()])
-            .unwrap_or_default(),
-        _ => indexed_values
-            .iter()
-            .filter_map(|value| {
-                (value.field == predicate.field).then_some(match &value.value {
-                    NamespacePredicateValue::String(value) => Some(value.clone()),
-                    NamespacePredicateValue::U64(_) => None,
-                })?
+        NamespacePredicateOp::NotEqual => {
+            let Some(expected) = &predicate.value else {
+                return false;
+            };
+            !values.is_empty()
+                && values
+                    .iter()
+                    .all(|actual| !predicate_values_equal(&actual.value, expected))
+        }
+        NamespacePredicateOp::Eq => {
+            let Some(expected) = &predicate.value else {
+                return false;
+            };
+            values
+                .iter()
+                .any(|actual| predicate_values_equal(&actual.value, expected))
+        }
+        NamespacePredicateOp::Prefix
+        | NamespacePredicateOp::Suffix
+        | NamespacePredicateOp::Contains => {
+            let Some(NamespacePredicateValue::String(expected)) = &predicate.value else {
+                return false;
+            };
+            values.iter().any(|actual| {
+                matches!(
+                    &actual.value,
+                    NamespacePredicateValue::String(value)
+                        if matches_string(value, &predicate.op, expected)
+                )
             })
-            .collect(),
-    }
-}
-
-fn u64_fields(
-    entry: &TraversalEntry,
-    indexed_values: &[NamespaceIndexValue],
-    predicate: &NamespacePredicate,
-) -> Vec<u64> {
-    match predicate.field.as_str() {
-        "size_bytes" => vec![entry.entry.attr.size],
-        _ => indexed_values
-            .iter()
-            .filter_map(|value| {
-                (value.field == predicate.field).then_some(match &value.value {
-                    NamespacePredicateValue::U64(value) => Some(*value),
-                    NamespacePredicateValue::String(_) => None,
-                })?
+        }
+        NamespacePredicateOp::GreaterThan
+        | NamespacePredicateOp::GreaterThanOrEqual
+        | NamespacePredicateOp::LessThan
+        | NamespacePredicateOp::LessThanOrEqual => {
+            let Some(expected) = predicate.value.as_ref().and_then(numeric_predicate_value) else {
+                return false;
+            };
+            values.iter().any(|actual| {
+                numeric_predicate_value(&actual.value)
+                    .map(|actual| matches_number(actual, &predicate.op, expected))
+                    .unwrap_or(false)
             })
-            .collect(),
+        }
     }
 }
 
@@ -1379,14 +1728,335 @@ fn matches_string(actual: &str, op: &NamespacePredicateOp, expected: &str) -> bo
     }
 }
 
-fn matches_u64(actual: u64, op: &NamespacePredicateOp, expected: u64) -> bool {
+fn matches_number(actual: f64, op: &NamespacePredicateOp, expected: f64) -> bool {
     match op {
-        NamespacePredicateOp::Eq => actual == expected,
         NamespacePredicateOp::GreaterThan => actual > expected,
         NamespacePredicateOp::GreaterThanOrEqual => actual >= expected,
         NamespacePredicateOp::LessThan => actual < expected,
         NamespacePredicateOp::LessThanOrEqual => actual <= expected,
         _ => false,
+    }
+}
+
+fn first_field_value(
+    entry: &TraversalEntry,
+    indexed_values: &[NamespaceIndexValue],
+    field: &NamespaceFindField,
+) -> Option<NamespaceFieldValue> {
+    field_values_for_entry(entry, indexed_values, field)
+        .into_iter()
+        .next()
+}
+
+fn field_values_for_entry(
+    entry: &TraversalEntry,
+    indexed_values: &[NamespaceIndexValue],
+    field: &NamespaceFindField,
+) -> Vec<NamespaceFieldValue> {
+    let namespace_source = || NamespaceFieldSource {
+        evidence: namespace_evidence(&entry.path, Some(entry.entry.attr.generation)),
+        source_path: entry.path.clone(),
+        source_kind: NamespaceFieldSourceKind::Namespace,
+    };
+    let materialized_source = || NamespaceFieldSource {
+        evidence: namespace_evidence(&entry.path, Some(entry.entry.attr.generation)),
+        source_path: entry.path.clone(),
+        source_kind: NamespaceFieldSourceKind::MaterializedIndex,
+    };
+    match field.as_str() {
+        "path" => vec![NamespaceFieldValue {
+            field: field.clone(),
+            value: NamespacePredicateValue::String(entry.path.clone()),
+            source: namespace_source(),
+        }],
+        "name" => vec![NamespaceFieldValue {
+            field: field.clone(),
+            value: NamespacePredicateValue::String(entry.name.clone()),
+            source: namespace_source(),
+        }],
+        "kind" => vec![NamespaceFieldValue {
+            field: field.clone(),
+            value: NamespacePredicateValue::String(
+                file_type_label(entry.entry.attr.file_type).to_owned(),
+            ),
+            source: namespace_source(),
+        }],
+        "size_bytes" => vec![NamespaceFieldValue {
+            field: field.clone(),
+            value: NamespacePredicateValue::U64(entry.entry.attr.size),
+            source: namespace_source(),
+        }],
+        "body.content_type" => entry
+            .entry
+            .body
+            .as_ref()
+            .map(|body| NamespaceFieldValue {
+                field: field.clone(),
+                value: NamespacePredicateValue::String(body.content_type.clone()),
+                source: namespace_source(),
+            })
+            .into_iter()
+            .collect(),
+        "body.producer" => entry
+            .entry
+            .body
+            .as_ref()
+            .map(|body| NamespaceFieldValue {
+                field: field.clone(),
+                value: NamespacePredicateValue::String(body.producer.clone()),
+                source: namespace_source(),
+            })
+            .into_iter()
+            .collect(),
+        "body.manifest_id" => entry
+            .entry
+            .body
+            .as_ref()
+            .map(|body| NamespaceFieldValue {
+                field: field.clone(),
+                value: NamespacePredicateValue::String(body.manifest_id.clone()),
+                source: namespace_source(),
+            })
+            .into_iter()
+            .collect(),
+        _ => indexed_values
+            .iter()
+            .filter(|value| value.field == *field)
+            .map(|value| NamespaceFieldValue {
+                field: value.field.clone(),
+                value: value.value.clone(),
+                source: materialized_source(),
+            })
+            .collect(),
+    }
+}
+
+fn predicate_values_equal(
+    actual: &NamespacePredicateValue,
+    expected: &NamespacePredicateValue,
+) -> bool {
+    if let (Some(actual), Some(expected)) = (
+        numeric_predicate_value(actual),
+        numeric_predicate_value(expected),
+    ) {
+        return actual.total_cmp(&expected) == CmpOrdering::Equal;
+    }
+    actual == expected
+}
+
+fn numeric_predicate_value(value: &NamespacePredicateValue) -> Option<f64> {
+    match value {
+        NamespacePredicateValue::U64(value) => Some(*value as f64),
+        NamespacePredicateValue::F64(value) if value.is_finite() => Some(*value),
+        NamespacePredicateValue::String(value) => parse_number_string(value),
+        NamespacePredicateValue::List(_) | NamespacePredicateValue::F64(_) => None,
+    }
+}
+
+fn parse_number_string(value: &str) -> Option<f64> {
+    let number = value.parse::<f64>().ok().or_else(|| {
+        serde_json::from_str::<serde_json::Value>(value)
+            .ok()
+            .and_then(|value| value.as_f64())
+    })?;
+    number.is_finite().then_some(number)
+}
+
+impl AggregateAccumulator {
+    fn new(op: NamespaceAggregateOp) -> Self {
+        Self {
+            op,
+            count: 0,
+            sum: 0.0,
+            min: None,
+            max: None,
+        }
+    }
+
+    fn observe_count(&mut self) {
+        self.count = self.count.saturating_add(1);
+    }
+
+    fn observe(&mut self, value: Option<&NamespacePredicateValue>) {
+        match self.op {
+            NamespaceAggregateOp::Count => {
+                if value.is_some() {
+                    self.observe_count();
+                }
+            }
+            NamespaceAggregateOp::Sum
+            | NamespaceAggregateOp::Avg
+            | NamespaceAggregateOp::Min
+            | NamespaceAggregateOp::Max => {
+                let Some(value) = value.and_then(numeric_predicate_value) else {
+                    return;
+                };
+                self.count = self.count.saturating_add(1);
+                self.sum += value;
+                self.min = Some(self.min.map(|current| current.min(value)).unwrap_or(value));
+                self.max = Some(self.max.map(|current| current.max(value)).unwrap_or(value));
+            }
+        }
+    }
+
+    fn value(&self) -> NamespaceAggregateValue {
+        match self.op {
+            NamespaceAggregateOp::Count => NamespaceAggregateValue::U64(self.count as u64),
+            NamespaceAggregateOp::Sum => NamespaceAggregateValue::F64(self.sum),
+            NamespaceAggregateOp::Avg => {
+                if self.count == 0 {
+                    NamespaceAggregateValue::Null
+                } else {
+                    NamespaceAggregateValue::F64(self.sum / self.count as f64)
+                }
+            }
+            NamespaceAggregateOp::Min => self
+                .min
+                .map(NamespaceAggregateValue::F64)
+                .unwrap_or(NamespaceAggregateValue::Null),
+            NamespaceAggregateOp::Max => self
+                .max
+                .map(NamespaceAggregateValue::F64)
+                .unwrap_or(NamespaceAggregateValue::Null),
+        }
+    }
+}
+
+fn aggregate_measure_requires_field(
+    measure: &NamespaceAggregateMeasure,
+    entry: &TraversalEntry,
+    indexed_values: &[NamespaceIndexValue],
+) -> bool {
+    if measure.op == NamespaceAggregateOp::Count {
+        return false;
+    }
+    measure
+        .field
+        .as_ref()
+        .and_then(|field| first_field_value(entry, indexed_values, field))
+        .is_none()
+}
+
+fn aggregate_group_result(
+    group: AggregateBuilder,
+    measures: &[NamespaceAggregateMeasure],
+    root: &str,
+) -> NamespaceAggregateGroup {
+    NamespaceAggregateGroup {
+        key: group.key,
+        measures: measures
+            .iter()
+            .zip(group.measures)
+            .map(|(measure, accumulator)| NamespaceAggregateOutputMeasure {
+                name: measure.name.clone(),
+                op: measure.op.clone(),
+                field: measure.field.clone(),
+                value: accumulator.value(),
+            })
+            .collect(),
+        evidence: namespace_evidence(root, None),
+        sample_matches: group.sample_matches,
+    }
+}
+
+fn sort_namespace_aggregate_groups(
+    groups: &mut [NamespaceAggregateGroup],
+    request: &NamespaceAggregateRequest,
+) {
+    groups.sort_by(|left, right| {
+        for sort in &request.sort {
+            let ordering = aggregate_sort_value(left, &sort.field)
+                .cmp(&aggregate_sort_value(right, &sort.field));
+            let ordering = match sort.direction {
+                NamespaceSortDirection::Asc => ordering,
+                NamespaceSortDirection::Desc => ordering.reverse(),
+            };
+            if ordering != CmpOrdering::Equal {
+                return ordering;
+            }
+        }
+        left.key
+            .iter()
+            .map(|value| &value.value)
+            .cmp(right.key.iter().map(|value| &value.value))
+    });
+}
+
+fn aggregate_sort_value(group: &NamespaceAggregateGroup, field: &str) -> AggregateSortValue {
+    if let Some(value) = group.key.iter().find(|value| value.field.id == field) {
+        return AggregateSortValue::Predicate(value.value.clone());
+    }
+    if let Some(measure) = group.measures.iter().find(|measure| measure.name == field) {
+        return AggregateSortValue::Aggregate(measure.value.clone());
+    }
+    AggregateSortValue::Null
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum AggregateSortValue {
+    Predicate(NamespacePredicateValue),
+    Aggregate(NamespaceAggregateValue),
+    Null,
+}
+
+impl Ord for AggregateSortValue {
+    fn cmp(&self, other: &Self) -> CmpOrdering {
+        match (self, other) {
+            (Self::Null, Self::Null) => CmpOrdering::Equal,
+            (Self::Null, _) => CmpOrdering::Greater,
+            (_, Self::Null) => CmpOrdering::Less,
+            (Self::Predicate(left), Self::Predicate(right)) => left.cmp(right),
+            (Self::Aggregate(left), Self::Aggregate(right)) => {
+                compare_aggregate_values(left, right)
+            }
+            (Self::Predicate(left), Self::Aggregate(right)) => {
+                compare_predicate_to_aggregate(left, right)
+            }
+            (Self::Aggregate(left), Self::Predicate(right)) => {
+                compare_predicate_to_aggregate(right, left).reverse()
+            }
+        }
+    }
+}
+
+impl PartialOrd for AggregateSortValue {
+    fn partial_cmp(&self, other: &Self) -> Option<CmpOrdering> {
+        Some(self.cmp(other))
+    }
+}
+
+fn compare_aggregate_values(
+    left: &NamespaceAggregateValue,
+    right: &NamespaceAggregateValue,
+) -> CmpOrdering {
+    match (left, right) {
+        (NamespaceAggregateValue::Null, NamespaceAggregateValue::Null) => CmpOrdering::Equal,
+        (NamespaceAggregateValue::Null, _) => CmpOrdering::Greater,
+        (_, NamespaceAggregateValue::Null) => CmpOrdering::Less,
+        (NamespaceAggregateValue::U64(left), NamespaceAggregateValue::U64(right)) => {
+            left.cmp(right)
+        }
+        (NamespaceAggregateValue::F64(left), NamespaceAggregateValue::F64(right)) => {
+            left.total_cmp(right)
+        }
+        (NamespaceAggregateValue::U64(left), NamespaceAggregateValue::F64(right)) => {
+            (*left as f64).total_cmp(right)
+        }
+        (NamespaceAggregateValue::F64(left), NamespaceAggregateValue::U64(right)) => {
+            left.total_cmp(&(*right as f64))
+        }
+    }
+}
+
+fn compare_predicate_to_aggregate(
+    left: &NamespacePredicateValue,
+    right: &NamespaceAggregateValue,
+) -> CmpOrdering {
+    match (numeric_predicate_value(left), right) {
+        (Some(left), NamespaceAggregateValue::F64(right)) => left.total_cmp(right),
+        (Some(left), NamespaceAggregateValue::U64(right)) => left.total_cmp(&(*right as f64)),
+        (_, NamespaceAggregateValue::Null) => CmpOrdering::Less,
+        _ => CmpOrdering::Equal,
     }
 }
 
@@ -1441,8 +2111,7 @@ fn apply_sort_direction(
 fn string_operator(op: &NamespacePredicateOp) -> bool {
     matches!(
         op,
-        NamespacePredicateOp::Eq
-            | NamespacePredicateOp::Prefix
+        NamespacePredicateOp::Prefix
             | NamespacePredicateOp::Suffix
             | NamespacePredicateOp::Contains
     )
@@ -1451,8 +2120,7 @@ fn string_operator(op: &NamespacePredicateOp) -> bool {
 fn numeric_operator(op: &NamespacePredicateOp) -> bool {
     matches!(
         op,
-        NamespacePredicateOp::Eq
-            | NamespacePredicateOp::GreaterThan
+        NamespacePredicateOp::GreaterThan
             | NamespacePredicateOp::GreaterThanOrEqual
             | NamespacePredicateOp::LessThan
             | NamespacePredicateOp::LessThanOrEqual
@@ -1622,6 +2290,8 @@ fn namespace_index_field_from_record(record: PathIndexFieldRecord) -> NamespaceI
 fn namespace_predicate_op_from_name(name: &str) -> Option<NamespacePredicateOp> {
     Some(match name {
         "eq" => NamespacePredicateOp::Eq,
+        "ne" | "not_equal" => NamespacePredicateOp::NotEqual,
+        "in" => NamespacePredicateOp::In,
         "prefix" => NamespacePredicateOp::Prefix,
         "suffix" => NamespacePredicateOp::Suffix,
         "contains" => NamespacePredicateOp::Contains,
@@ -1629,6 +2299,8 @@ fn namespace_predicate_op_from_name(name: &str) -> Option<NamespacePredicateOp> 
         "greater_than_or_equal" => NamespacePredicateOp::GreaterThanOrEqual,
         "less_than" => NamespacePredicateOp::LessThan,
         "less_than_or_equal" => NamespacePredicateOp::LessThanOrEqual,
+        "exists" => NamespacePredicateOp::Exists,
+        "not_exists" => NamespacePredicateOp::NotExists,
         _ => return None,
     })
 }
@@ -1636,6 +2308,8 @@ fn namespace_predicate_op_from_name(name: &str) -> Option<NamespacePredicateOp> 
 fn namespace_predicate_op_name(op: &NamespacePredicateOp) -> String {
     match op {
         NamespacePredicateOp::Eq => "eq",
+        NamespacePredicateOp::NotEqual => "ne",
+        NamespacePredicateOp::In => "in",
         NamespacePredicateOp::Prefix => "prefix",
         NamespacePredicateOp::Suffix => "suffix",
         NamespacePredicateOp::Contains => "contains",
@@ -1643,6 +2317,8 @@ fn namespace_predicate_op_name(op: &NamespacePredicateOp) -> String {
         NamespacePredicateOp::GreaterThanOrEqual => "greater_than_or_equal",
         NamespacePredicateOp::LessThan => "less_than",
         NamespacePredicateOp::LessThanOrEqual => "less_than_or_equal",
+        NamespacePredicateOp::Exists => "exists",
+        NamespacePredicateOp::NotExists => "not_exists",
     }
     .to_owned()
 }
@@ -1685,6 +2361,10 @@ fn path_index_value_record(value: NamespacePredicateValue) -> PathIndexValueReco
     match value {
         NamespacePredicateValue::String(value) => PathIndexValueRecord::String(value),
         NamespacePredicateValue::U64(value) => PathIndexValueRecord::U64(value),
+        NamespacePredicateValue::F64(value) => PathIndexValueRecord::F64(value),
+        NamespacePredicateValue::List(_) => {
+            unreachable!("list predicate values cannot be registered as index values")
+        }
     }
 }
 
@@ -1692,6 +2372,7 @@ fn namespace_value_from_record(value: PathIndexValueRecord) -> NamespacePredicat
     match value {
         PathIndexValueRecord::String(value) => NamespacePredicateValue::String(value),
         PathIndexValueRecord::U64(value) => NamespacePredicateValue::U64(value),
+        PathIndexValueRecord::F64(value) => NamespacePredicateValue::F64(value),
     }
 }
 

@@ -338,7 +338,7 @@ fn namespace_find_uses_declared_predicates_and_sort_fields() {
             predicates: vec![NamespacePredicate {
                 field: NamespaceFindField::name(),
                 op: NamespacePredicateOp::Suffix,
-                value: NamespacePredicateValue::String("stderr.txt".to_owned()),
+                value: Some(NamespacePredicateValue::String("stderr.txt".to_owned())),
             }],
             sort: vec![NamespaceSort {
                 field: NamespaceSortField::size_bytes(),
@@ -365,7 +365,7 @@ fn namespace_find_uses_declared_predicates_and_sort_fields() {
         predicates: vec![NamespacePredicate {
             field: NamespaceFindField::body_content_type(),
             op: NamespacePredicateOp::GreaterThan,
-            value: NamespacePredicateValue::String("text/plain".to_owned()),
+            value: Some(NamespacePredicateValue::String("text/plain".to_owned())),
         }],
         sort: Vec::new(),
         include: Vec::new(),
@@ -607,7 +607,7 @@ fn namespace_find_uses_catalog_field_ids_and_registered_index_values() {
             predicates: vec![NamespacePredicate {
                 field: NamespaceFindField::new("run.status"),
                 op: NamespacePredicateOp::Eq,
-                value: NamespacePredicateValue::String("completed".to_owned()),
+                value: Some(NamespacePredicateValue::String("completed".to_owned())),
             }],
             sort: vec![NamespaceSort {
                 field: NamespaceSortField::new("run.script"),
@@ -717,7 +717,7 @@ fn namespace_find_returns_requested_facets_after_predicates_before_pagination() 
             predicates: vec![NamespacePredicate {
                 field: NamespaceFindField::new("run.status"),
                 op: NamespacePredicateOp::Eq,
-                value: NamespacePredicateValue::String("completed".to_owned()),
+                value: Some(NamespacePredicateValue::String("completed".to_owned())),
             }],
             sort: vec![],
             include: vec![],
@@ -808,7 +808,7 @@ fn namespace_find_sorts_missing_index_values_last() {
         .register_namespace_index(NamespaceIndexRegistration {
             path: "/runs".to_owned(),
             fields: vec![NamespaceIndexField {
-                field: NamespaceFindField::new("metric.val_loss.min_scaled"),
+                field: NamespaceFindField::new("metric.val_loss.min"),
                 operators: vec![NamespacePredicateOp::GreaterThanOrEqual],
                 sortable: true,
                 facetable: false,
@@ -817,8 +817,8 @@ fn namespace_find_sorts_missing_index_values_last() {
                 NamespaceIndexRow {
                     path: "/runs/with-metric".to_owned(),
                     values: vec![NamespaceIndexValue {
-                        field: NamespaceFindField::new("metric.val_loss.min_scaled"),
-                        value: NamespacePredicateValue::U64(3),
+                        field: NamespaceFindField::new("metric.val_loss.min"),
+                        value: NamespacePredicateValue::F64(0.3),
                     }],
                 },
                 NamespaceIndexRow {
@@ -834,7 +834,7 @@ fn namespace_find_sorts_missing_index_values_last() {
             path: "/runs".to_owned(),
             predicates: Vec::new(),
             sort: vec![NamespaceSort {
-                field: NamespaceSortField::new("metric.val_loss.min_scaled"),
+                field: NamespaceSortField::new("metric.val_loss.min"),
                 direction: NamespaceSortDirection::Asc,
             }],
             include: Vec::new(),
@@ -850,7 +850,7 @@ fn namespace_find_sorts_missing_index_values_last() {
             path: "/runs".to_owned(),
             predicates: Vec::new(),
             sort: vec![NamespaceSort {
-                field: NamespaceSortField::new("metric.val_loss.min_scaled"),
+                field: NamespaceSortField::new("metric.val_loss.min"),
                 direction: NamespaceSortDirection::Desc,
             }],
             include: Vec::new(),
@@ -861,6 +861,370 @@ fn namespace_find_sorts_missing_index_values_last() {
         .unwrap();
     assert_eq!(descending.matches[0].path, "/runs/with-metric");
     assert_eq!(descending.matches[1].path, "/runs/missing-metric");
+}
+
+#[test]
+fn namespace_find_supports_f64_predicates_and_existence_operators() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    for run_id in ["run-a", "run-b", "run-c", "run-d"] {
+        service
+            .create_dir_path(&format!("/runs/{run_id}"), 0o755, 1000, 1000)
+            .unwrap();
+    }
+
+    service
+        .register_namespace_index(NamespaceIndexRegistration {
+            path: "/runs".to_owned(),
+            fields: vec![
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("run.status"),
+                    operators: vec![
+                        NamespacePredicateOp::Eq,
+                        NamespacePredicateOp::NotEqual,
+                        NamespacePredicateOp::In,
+                    ],
+                    sortable: true,
+                    facetable: true,
+                },
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("metric.val_loss.min"),
+                    operators: vec![
+                        NamespacePredicateOp::LessThan,
+                        NamespacePredicateOp::GreaterThanOrEqual,
+                    ],
+                    sortable: true,
+                    facetable: false,
+                },
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("artifact.stderr.path"),
+                    operators: vec![
+                        NamespacePredicateOp::Exists,
+                        NamespacePredicateOp::NotExists,
+                    ],
+                    sortable: false,
+                    facetable: false,
+                },
+            ],
+            rows: vec![
+                NamespaceIndexRow {
+                    path: "/runs/run-a".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("completed".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("metric.val_loss.min"),
+                            value: NamespacePredicateValue::F64(0.21),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("artifact.stderr.path"),
+                            value: NamespacePredicateValue::String("stderr.txt".to_owned()),
+                        },
+                    ],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/run-b".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("cancelled".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("metric.val_loss.min"),
+                            value: NamespacePredicateValue::F64(0.35),
+                        },
+                    ],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/run-c".to_owned(),
+                    values: vec![NamespaceIndexValue {
+                        field: NamespaceFindField::new("run.status"),
+                        value: NamespacePredicateValue::String("completed".to_owned()),
+                    }],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/run-d".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("failed".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("metric.val_loss.min"),
+                            value: NamespacePredicateValue::F64(0.10),
+                        },
+                    ],
+                },
+            ],
+        })
+        .unwrap();
+
+    let stderr_low_loss = service
+        .find_paths(NamespaceFindRequest {
+            path: "/runs".to_owned(),
+            predicates: vec![
+                NamespacePredicate {
+                    field: NamespaceFindField::new("run.status"),
+                    op: NamespacePredicateOp::NotEqual,
+                    value: Some(NamespacePredicateValue::String("cancelled".to_owned())),
+                },
+                NamespacePredicate {
+                    field: NamespaceFindField::new("metric.val_loss.min"),
+                    op: NamespacePredicateOp::LessThan,
+                    value: Some(NamespacePredicateValue::F64(0.3)),
+                },
+                NamespacePredicate {
+                    field: NamespaceFindField::new("artifact.stderr.path"),
+                    op: NamespacePredicateOp::Exists,
+                    value: None,
+                },
+            ],
+            sort: Vec::new(),
+            include: Vec::new(),
+            facets: Vec::new(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(stderr_low_loss.match_count, 1);
+    assert_eq!(stderr_low_loss.matches[0].path, "/runs/run-a");
+
+    let no_stderr_completed_or_failed = service
+        .find_paths(NamespaceFindRequest {
+            path: "/runs".to_owned(),
+            predicates: vec![
+                NamespacePredicate {
+                    field: NamespaceFindField::new("run.status"),
+                    op: NamespacePredicateOp::In,
+                    value: Some(NamespacePredicateValue::List(vec![
+                        NamespacePredicateValue::String("completed".to_owned()),
+                        NamespacePredicateValue::String("failed".to_owned()),
+                    ])),
+                },
+                NamespacePredicate {
+                    field: NamespaceFindField::new("artifact.stderr.path"),
+                    op: NamespacePredicateOp::NotExists,
+                    value: None,
+                },
+            ],
+            sort: vec![NamespaceSort {
+                field: NamespaceSortField::name(),
+                direction: NamespaceSortDirection::Asc,
+            }],
+            include: Vec::new(),
+            facets: Vec::new(),
+            cursor: None,
+            limit: 10,
+        })
+        .unwrap();
+    assert_eq!(no_stderr_completed_or_failed.match_count, 2);
+    assert_eq!(no_stderr_completed_or_failed.matches[0].path, "/runs/run-c");
+    assert_eq!(no_stderr_completed_or_failed.matches[1].path, "/runs/run-d");
+
+    let invalid = service.find_paths(NamespaceFindRequest {
+        path: "/runs".to_owned(),
+        predicates: vec![NamespacePredicate {
+            field: NamespaceFindField::new("metric.val_loss.min"),
+            op: NamespacePredicateOp::Eq,
+            value: Some(NamespacePredicateValue::F64(f64::NAN)),
+        }],
+        sort: Vec::new(),
+        include: Vec::new(),
+        facets: Vec::new(),
+        cursor: None,
+        limit: 10,
+    });
+    assert!(matches!(invalid, Err(MetadError::InvalidQuery(_))));
+}
+
+#[test]
+fn namespace_aggregate_groups_f64_metrics_with_field_provenance() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    for run_id in ["run-a", "run-b", "run-c", "run-d"] {
+        service
+            .create_dir_path(&format!("/runs/{run_id}"), 0o755, 1000, 1000)
+            .unwrap();
+    }
+
+    service
+        .register_namespace_index(NamespaceIndexRegistration {
+            path: "/runs".to_owned(),
+            fields: vec![
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("run.status"),
+                    operators: vec![NamespacePredicateOp::Eq],
+                    sortable: false,
+                    facetable: true,
+                },
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("param.lr"),
+                    operators: vec![NamespacePredicateOp::Eq],
+                    sortable: true,
+                    facetable: true,
+                },
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("metric.val_loss.min"),
+                    operators: vec![NamespacePredicateOp::GreaterThanOrEqual],
+                    sortable: true,
+                    facetable: false,
+                },
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("artifact.stdout_available"),
+                    operators: vec![NamespacePredicateOp::Eq],
+                    sortable: true,
+                    facetable: false,
+                },
+            ],
+            rows: vec![
+                NamespaceIndexRow {
+                    path: "/runs/run-a".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("completed".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("param.lr"),
+                            value: NamespacePredicateValue::String("0.001".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("metric.val_loss.min"),
+                            value: NamespacePredicateValue::F64(0.4),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("artifact.stdout_available"),
+                            value: NamespacePredicateValue::U64(1),
+                        },
+                    ],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/run-b".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("completed".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("param.lr"),
+                            value: NamespacePredicateValue::String("0.001".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("metric.val_loss.min"),
+                            value: NamespacePredicateValue::F64(0.2),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("artifact.stdout_available"),
+                            value: NamespacePredicateValue::U64(0),
+                        },
+                    ],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/run-c".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("completed".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("param.lr"),
+                            value: NamespacePredicateValue::String("0.002".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("metric.val_loss.min"),
+                            value: NamespacePredicateValue::F64(0.9),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("artifact.stdout_available"),
+                            value: NamespacePredicateValue::U64(1),
+                        },
+                    ],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/run-d".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("completed".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("param.lr"),
+                            value: NamespacePredicateValue::String("0.001".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("artifact.stdout_available"),
+                            value: NamespacePredicateValue::U64(1),
+                        },
+                    ],
+                },
+            ],
+        })
+        .unwrap();
+
+    let result = service
+        .aggregate_paths(NamespaceAggregateRequest {
+            path: "/runs".to_owned(),
+            predicates: vec![NamespacePredicate {
+                field: NamespaceFindField::new("run.status"),
+                op: NamespacePredicateOp::Eq,
+                value: Some(NamespacePredicateValue::String("completed".to_owned())),
+            }],
+            group_by: vec![NamespaceFindField::new("param.lr")],
+            measures: vec![
+                NamespaceAggregateMeasure {
+                    name: "run_count".to_owned(),
+                    op: NamespaceAggregateOp::Count,
+                    field: Some(NamespaceFindField::new("metric.val_loss.min")),
+                },
+                NamespaceAggregateMeasure {
+                    name: "avg_min_val_loss".to_owned(),
+                    op: NamespaceAggregateOp::Avg,
+                    field: Some(NamespaceFindField::new("metric.val_loss.min")),
+                },
+                NamespaceAggregateMeasure {
+                    name: "stdout_available".to_owned(),
+                    op: NamespaceAggregateOp::Sum,
+                    field: Some(NamespaceFindField::new("artifact.stdout_available")),
+                },
+            ],
+            sort: vec![NamespaceAggregateSort {
+                field: "avg_min_val_loss".to_owned(),
+                direction: NamespaceSortDirection::Asc,
+            }],
+            limit: 10,
+        })
+        .unwrap();
+
+    assert_eq!(result.input_match_count, 4);
+    assert_eq!(result.row_count, 3);
+    assert_eq!(result.group_count, 2);
+    assert_eq!(
+        result.groups[0].key[0].field,
+        NamespaceFindField::new("param.lr")
+    );
+    assert_eq!(
+        result.groups[0].key[0].value,
+        NamespacePredicateValue::String("0.001".to_owned())
+    );
+    assert_eq!(
+        result.groups[0].key[0].source.source_kind,
+        NamespaceFieldSourceKind::MaterializedIndex
+    );
+    assert_eq!(result.groups[0].sample_matches[0].path, "/runs/run-a");
+    assert_eq!(
+        result.groups[0].measures[0].value,
+        NamespaceAggregateValue::U64(2)
+    );
+    let NamespaceAggregateValue::F64(avg) = result.groups[0].measures[1].value else {
+        panic!("avg_min_val_loss must be a f64 aggregate value");
+    };
+    assert!((avg - 0.3).abs() < 0.000_000_000_001);
+    assert_eq!(
+        result.groups[0].measures[2].value,
+        NamespaceAggregateValue::F64(1.0)
+    );
 }
 
 #[test]

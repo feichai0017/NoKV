@@ -7,14 +7,17 @@ use std::time::Duration;
 use std::{collections::HashMap, io};
 
 use nokvfs_meta::{
-    DentryWithAttr, NamespaceCard, NamespaceCardKind, NamespaceFacetSummary, NamespaceFacetValue,
-    NamespaceFilterCapability, NamespaceFindField, NamespaceFindRequest, NamespaceFindResult,
-    NamespaceInclude, NamespaceIndexValue, NamespaceListOptions, NamespaceListPage,
-    NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue, NamespaceQueryCatalog,
-    NamespaceReadFormat, NamespaceReadItem, NamespaceReadOptions, NamespaceReadPage,
-    NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
-    NamespaceSortDirection, NamespaceSortField, ObjectTransferStats, RecordCountProvenance,
-    RenameReplaceResult,
+    DentryWithAttr, NamespaceAggregateGroup, NamespaceAggregateMeasure, NamespaceAggregateOp,
+    NamespaceAggregateOutputMeasure, NamespaceAggregateRequest, NamespaceAggregateResult,
+    NamespaceAggregateSample, NamespaceAggregateSort, NamespaceAggregateValue, NamespaceCard,
+    NamespaceCardKind, NamespaceFacetSummary, NamespaceFacetValue, NamespaceFieldSource,
+    NamespaceFieldSourceKind, NamespaceFieldValue, NamespaceFilterCapability, NamespaceFindField,
+    NamespaceFindRequest, NamespaceFindResult, NamespaceInclude, NamespaceIndexValue,
+    NamespaceListOptions, NamespaceListPage, NamespacePredicate, NamespacePredicateOp,
+    NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem,
+    NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType,
+    NamespaceSchema, NamespaceSort, NamespaceSortDirection, NamespaceSortField,
+    ObjectTransferStats, RecordCountProvenance, RenameReplaceResult,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
@@ -24,15 +27,20 @@ use nokvfs_object::{
 use nokvfs_protocol::{
     decode_envelope, encode_request, MetadataProtocolError, MetadataRpcEnvelope,
     MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest,
-    WireDentryWithAttr, WireMetadataError, WireNamespaceCard, WireNamespaceCardKind,
-    WireNamespaceFacetSummary, WireNamespaceFacetValue, WireNamespaceFilterCapability,
-    WireNamespaceFindField, WireNamespaceFindRequest, WireNamespaceFindResult,
-    WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage, WireNamespacePredicate,
-    WireNamespacePredicateOp, WireNamespacePredicateValue, WireNamespaceQueryCatalog,
-    WireNamespaceReadFormat, WireNamespaceReadItem, WireNamespaceReadOptions,
-    WireNamespaceReadPage, WireNamespaceRecordCount, WireNamespaceRecordType, WireNamespaceSchema,
-    WireNamespaceSort, WireNamespaceSortDirection, WireNamespaceSortField, WireObjectReadBlock,
-    WirePathMetadata, WirePreparedArtifact, WireRecordCountProvenance,
+    WireDentryWithAttr, WireMetadataError, WireNamespaceAggregateGroup,
+    WireNamespaceAggregateMeasure, WireNamespaceAggregateOp, WireNamespaceAggregateOutputMeasure,
+    WireNamespaceAggregateRequest, WireNamespaceAggregateResult, WireNamespaceAggregateSample,
+    WireNamespaceAggregateSort, WireNamespaceAggregateValue, WireNamespaceCard,
+    WireNamespaceCardKind, WireNamespaceFacetSummary, WireNamespaceFacetValue,
+    WireNamespaceFieldSource, WireNamespaceFieldSourceKind, WireNamespaceFieldValue,
+    WireNamespaceFilterCapability, WireNamespaceFindField, WireNamespaceFindRequest,
+    WireNamespaceFindResult, WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage,
+    WireNamespacePredicate, WireNamespacePredicateOp, WireNamespacePredicateValue,
+    WireNamespaceQueryCatalog, WireNamespaceReadFormat, WireNamespaceReadItem,
+    WireNamespaceReadOptions, WireNamespaceReadPage, WireNamespaceRecordCount,
+    WireNamespaceRecordType, WireNamespaceSchema, WireNamespaceSort, WireNamespaceSortDirection,
+    WireNamespaceSortField, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireRecordCountProvenance,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
@@ -230,6 +238,13 @@ where
         request: NamespaceFindRequest,
     ) -> Result<NamespaceFindResult, ClientError> {
         self.metadata.find_paths(request)
+    }
+
+    pub fn aggregate_paths(
+        &self,
+        request: NamespaceAggregateRequest,
+    ) -> Result<NamespaceAggregateResult, ClientError> {
+        self.metadata.aggregate_paths(request)
     }
 
     pub fn read_page(
@@ -583,6 +598,20 @@ impl MetadataClient {
             request: Box::new(wire_namespace_find_request(&request)?),
         })? {
             MetadataRpcResult::NamespaceFindResult { result } => namespace_find_result(*result),
+            other => Err(unexpected_result(other)),
+        }
+    }
+
+    pub fn aggregate_paths(
+        &self,
+        request: NamespaceAggregateRequest,
+    ) -> Result<NamespaceAggregateResult, ClientError> {
+        match self.call(MetadataRpcRequest::AggregatePaths {
+            request: Box::new(wire_namespace_aggregate_request(&request)?),
+        })? {
+            MetadataRpcResult::NamespaceAggregateResult { result } => {
+                namespace_aggregate_result(*result)
+            }
             other => Err(unexpected_result(other)),
         }
     }
@@ -1187,6 +1216,8 @@ fn namespace_find_field(field: WireNamespaceFindField) -> NamespaceFindField {
 fn namespace_predicate_op(op: WireNamespacePredicateOp) -> NamespacePredicateOp {
     match op {
         WireNamespacePredicateOp::Eq => NamespacePredicateOp::Eq,
+        WireNamespacePredicateOp::NotEqual => NamespacePredicateOp::NotEqual,
+        WireNamespacePredicateOp::In => NamespacePredicateOp::In,
         WireNamespacePredicateOp::Prefix => NamespacePredicateOp::Prefix,
         WireNamespacePredicateOp::Suffix => NamespacePredicateOp::Suffix,
         WireNamespacePredicateOp::Contains => NamespacePredicateOp::Contains,
@@ -1194,6 +1225,16 @@ fn namespace_predicate_op(op: WireNamespacePredicateOp) -> NamespacePredicateOp 
         WireNamespacePredicateOp::GreaterThanOrEqual => NamespacePredicateOp::GreaterThanOrEqual,
         WireNamespacePredicateOp::LessThan => NamespacePredicateOp::LessThan,
         WireNamespacePredicateOp::LessThanOrEqual => NamespacePredicateOp::LessThanOrEqual,
+        WireNamespacePredicateOp::Exists => NamespacePredicateOp::Exists,
+        WireNamespacePredicateOp::NotExists => NamespacePredicateOp::NotExists,
+    }
+}
+
+fn namespace_predicate(predicate: WireNamespacePredicate) -> NamespacePredicate {
+    NamespacePredicate {
+        field: namespace_find_field(predicate.field),
+        op: namespace_predicate_op(predicate.op),
+        value: predicate.value.map(namespace_predicate_value),
     }
 }
 
@@ -1212,6 +1253,10 @@ fn namespace_predicate_value(value: WireNamespacePredicateValue) -> NamespacePre
     match value {
         WireNamespacePredicateValue::String(value) => NamespacePredicateValue::String(value),
         WireNamespacePredicateValue::U64(value) => NamespacePredicateValue::U64(value),
+        WireNamespacePredicateValue::F64(value) => NamespacePredicateValue::F64(value),
+        WireNamespacePredicateValue::List(values) => NamespacePredicateValue::List(
+            values.into_iter().map(namespace_predicate_value).collect(),
+        ),
     }
 }
 
@@ -1257,6 +1302,116 @@ fn namespace_find_result(
             ClientError::Protocol("scanned_entries exceeds platform limit".to_owned())
         })?,
     })
+}
+
+fn namespace_aggregate_result(
+    result: WireNamespaceAggregateResult,
+) -> Result<NamespaceAggregateResult, ClientError> {
+    Ok(NamespaceAggregateResult {
+        path: result.path,
+        evidence: result.evidence,
+        snapshot_id: result.snapshot_id,
+        predicates: result
+            .predicates
+            .into_iter()
+            .map(namespace_predicate)
+            .collect(),
+        input_match_count: usize::try_from(result.input_match_count).map_err(|_| {
+            ClientError::Protocol("aggregate input_match_count exceeds platform limit".to_owned())
+        })?,
+        row_count: usize::try_from(result.row_count).map_err(|_| {
+            ClientError::Protocol("aggregate row_count exceeds platform limit".to_owned())
+        })?,
+        group_count: usize::try_from(result.group_count).map_err(|_| {
+            ClientError::Protocol("aggregate group_count exceeds platform limit".to_owned())
+        })?,
+        groups: result
+            .groups
+            .into_iter()
+            .map(namespace_aggregate_group)
+            .collect::<Result<Vec<_>, _>>()?,
+        truncated: result.truncated,
+        scanned_entries: usize::try_from(result.scanned_entries).map_err(|_| {
+            ClientError::Protocol("aggregate scanned_entries exceeds platform limit".to_owned())
+        })?,
+    })
+}
+
+fn namespace_aggregate_group(
+    group: WireNamespaceAggregateGroup,
+) -> Result<NamespaceAggregateGroup, ClientError> {
+    Ok(NamespaceAggregateGroup {
+        key: group.key.into_iter().map(namespace_field_value).collect(),
+        measures: group
+            .measures
+            .into_iter()
+            .map(namespace_aggregate_output_measure)
+            .collect(),
+        evidence: group.evidence,
+        sample_matches: group
+            .sample_matches
+            .into_iter()
+            .map(namespace_aggregate_sample)
+            .collect(),
+    })
+}
+
+fn namespace_field_value(value: WireNamespaceFieldValue) -> NamespaceFieldValue {
+    NamespaceFieldValue {
+        field: namespace_find_field(value.field),
+        value: namespace_predicate_value(value.value),
+        source: namespace_field_source(value.source),
+    }
+}
+
+fn namespace_field_source(source: WireNamespaceFieldSource) -> NamespaceFieldSource {
+    NamespaceFieldSource {
+        evidence: source.evidence,
+        source_path: source.source_path,
+        source_kind: match source.source_kind {
+            WireNamespaceFieldSourceKind::Namespace => NamespaceFieldSourceKind::Namespace,
+            WireNamespaceFieldSourceKind::MaterializedIndex => {
+                NamespaceFieldSourceKind::MaterializedIndex
+            }
+        },
+    }
+}
+
+fn namespace_aggregate_output_measure(
+    measure: WireNamespaceAggregateOutputMeasure,
+) -> NamespaceAggregateOutputMeasure {
+    NamespaceAggregateOutputMeasure {
+        name: measure.name,
+        op: namespace_aggregate_op(measure.op),
+        field: measure.field.map(namespace_find_field),
+        value: namespace_aggregate_value(measure.value),
+    }
+}
+
+fn namespace_aggregate_sample(sample: WireNamespaceAggregateSample) -> NamespaceAggregateSample {
+    NamespaceAggregateSample {
+        path: sample.path,
+        evidence: sample.evidence,
+        generation: sample.generation,
+    }
+}
+
+fn namespace_aggregate_value(value: WireNamespaceAggregateValue) -> NamespaceAggregateValue {
+    match value {
+        WireNamespaceAggregateValue::U64(value) => NamespaceAggregateValue::U64(value),
+        WireNamespaceAggregateValue::F64(value) => NamespaceAggregateValue::F64(value),
+        WireNamespaceAggregateValue::Null => NamespaceAggregateValue::Null,
+    }
+}
+
+fn namespace_aggregate_op(op: WireNamespaceAggregateOp) -> NamespaceAggregateOp {
+    match op {
+        WireNamespaceAggregateOp::Count => NamespaceAggregateOp::Count,
+        WireNamespaceAggregateOp::Sum => NamespaceAggregateOp::Sum,
+        WireNamespaceAggregateOp::Avg => NamespaceAggregateOp::Avg,
+        WireNamespaceAggregateOp::Min => NamespaceAggregateOp::Min,
+        WireNamespaceAggregateOp::Max => NamespaceAggregateOp::Max,
+    }
 }
 
 fn namespace_read_page(page: WireNamespaceReadPage) -> Result<NamespaceReadPage, ClientError> {
@@ -1322,6 +1477,68 @@ fn wire_namespace_find_request(
     })
 }
 
+fn wire_namespace_aggregate_request(
+    request: &NamespaceAggregateRequest,
+) -> Result<WireNamespaceAggregateRequest, ClientError> {
+    Ok(WireNamespaceAggregateRequest {
+        path: request.path.clone(),
+        predicates: request
+            .predicates
+            .iter()
+            .map(wire_namespace_predicate)
+            .collect(),
+        group_by: request
+            .group_by
+            .iter()
+            .map(|field| WireNamespaceFindField {
+                id: field.id.clone(),
+            })
+            .collect(),
+        measures: request
+            .measures
+            .iter()
+            .map(wire_namespace_aggregate_measure)
+            .collect(),
+        sort: request
+            .sort
+            .iter()
+            .map(wire_namespace_aggregate_sort)
+            .collect(),
+        limit: u64::try_from(request.limit).map_err(|_| {
+            ClientError::Protocol("namespace aggregate limit exceeds u64".to_owned())
+        })?,
+    })
+}
+
+fn wire_namespace_aggregate_measure(
+    measure: &NamespaceAggregateMeasure,
+) -> WireNamespaceAggregateMeasure {
+    WireNamespaceAggregateMeasure {
+        name: measure.name.clone(),
+        op: wire_namespace_aggregate_op(&measure.op),
+        field: measure.field.as_ref().map(|field| WireNamespaceFindField {
+            id: field.id.clone(),
+        }),
+    }
+}
+
+fn wire_namespace_aggregate_sort(sort: &NamespaceAggregateSort) -> WireNamespaceAggregateSort {
+    WireNamespaceAggregateSort {
+        field: sort.field.clone(),
+        direction: wire_namespace_sort_direction(&sort.direction),
+    }
+}
+
+fn wire_namespace_aggregate_op(op: &NamespaceAggregateOp) -> WireNamespaceAggregateOp {
+    match op {
+        NamespaceAggregateOp::Count => WireNamespaceAggregateOp::Count,
+        NamespaceAggregateOp::Sum => WireNamespaceAggregateOp::Sum,
+        NamespaceAggregateOp::Avg => WireNamespaceAggregateOp::Avg,
+        NamespaceAggregateOp::Min => WireNamespaceAggregateOp::Min,
+        NamespaceAggregateOp::Max => WireNamespaceAggregateOp::Max,
+    }
+}
+
 fn wire_namespace_include(include: &NamespaceInclude) -> WireNamespaceInclude {
     match include {
         NamespaceInclude::Body => WireNamespaceInclude::Body,
@@ -1336,24 +1553,38 @@ fn wire_namespace_predicate(predicate: &NamespacePredicate) -> WireNamespacePred
         field: WireNamespaceFindField {
             id: predicate.field.id.clone(),
         },
-        op: match predicate.op {
-            NamespacePredicateOp::Eq => WireNamespacePredicateOp::Eq,
-            NamespacePredicateOp::Prefix => WireNamespacePredicateOp::Prefix,
-            NamespacePredicateOp::Suffix => WireNamespacePredicateOp::Suffix,
-            NamespacePredicateOp::Contains => WireNamespacePredicateOp::Contains,
-            NamespacePredicateOp::GreaterThan => WireNamespacePredicateOp::GreaterThan,
-            NamespacePredicateOp::GreaterThanOrEqual => {
-                WireNamespacePredicateOp::GreaterThanOrEqual
-            }
-            NamespacePredicateOp::LessThan => WireNamespacePredicateOp::LessThan,
-            NamespacePredicateOp::LessThanOrEqual => WireNamespacePredicateOp::LessThanOrEqual,
-        },
-        value: match &predicate.value {
-            NamespacePredicateValue::String(value) => {
-                WireNamespacePredicateValue::String(value.clone())
-            }
-            NamespacePredicateValue::U64(value) => WireNamespacePredicateValue::U64(*value),
-        },
+        op: wire_namespace_predicate_op(&predicate.op),
+        value: predicate.value.as_ref().map(wire_namespace_predicate_value),
+    }
+}
+
+fn wire_namespace_predicate_op(op: &NamespacePredicateOp) -> WireNamespacePredicateOp {
+    match op {
+        NamespacePredicateOp::Eq => WireNamespacePredicateOp::Eq,
+        NamespacePredicateOp::NotEqual => WireNamespacePredicateOp::NotEqual,
+        NamespacePredicateOp::In => WireNamespacePredicateOp::In,
+        NamespacePredicateOp::Prefix => WireNamespacePredicateOp::Prefix,
+        NamespacePredicateOp::Suffix => WireNamespacePredicateOp::Suffix,
+        NamespacePredicateOp::Contains => WireNamespacePredicateOp::Contains,
+        NamespacePredicateOp::GreaterThan => WireNamespacePredicateOp::GreaterThan,
+        NamespacePredicateOp::GreaterThanOrEqual => WireNamespacePredicateOp::GreaterThanOrEqual,
+        NamespacePredicateOp::LessThan => WireNamespacePredicateOp::LessThan,
+        NamespacePredicateOp::LessThanOrEqual => WireNamespacePredicateOp::LessThanOrEqual,
+        NamespacePredicateOp::Exists => WireNamespacePredicateOp::Exists,
+        NamespacePredicateOp::NotExists => WireNamespacePredicateOp::NotExists,
+    }
+}
+
+fn wire_namespace_predicate_value(value: &NamespacePredicateValue) -> WireNamespacePredicateValue {
+    match value {
+        NamespacePredicateValue::String(value) => {
+            WireNamespacePredicateValue::String(value.clone())
+        }
+        NamespacePredicateValue::U64(value) => WireNamespacePredicateValue::U64(*value),
+        NamespacePredicateValue::F64(value) => WireNamespacePredicateValue::F64(*value),
+        NamespacePredicateValue::List(values) => WireNamespacePredicateValue::List(
+            values.iter().map(wire_namespace_predicate_value).collect(),
+        ),
     }
 }
 
@@ -1362,10 +1593,14 @@ fn wire_namespace_sort(sort: &NamespaceSort) -> WireNamespaceSort {
         field: WireNamespaceSortField {
             id: sort.field.id.clone(),
         },
-        direction: match sort.direction {
-            NamespaceSortDirection::Asc => WireNamespaceSortDirection::Asc,
-            NamespaceSortDirection::Desc => WireNamespaceSortDirection::Desc,
-        },
+        direction: wire_namespace_sort_direction(&sort.direction),
+    }
+}
+
+fn wire_namespace_sort_direction(direction: &NamespaceSortDirection) -> WireNamespaceSortDirection {
+    match direction {
+        NamespaceSortDirection::Asc => WireNamespaceSortDirection::Asc,
+        NamespaceSortDirection::Desc => WireNamespaceSortDirection::Desc,
     }
 }
 
@@ -2029,7 +2264,7 @@ mod tests {
                 predicates: vec![NamespacePredicate {
                     field: NamespaceFindField::name(),
                     op: NamespacePredicateOp::Suffix,
-                    value: NamespacePredicateValue::String("stderr.txt".to_owned()),
+                    value: Some(NamespacePredicateValue::String("stderr.txt".to_owned())),
                 }],
                 sort: Vec::new(),
                 include: vec![NamespaceInclude::Body],

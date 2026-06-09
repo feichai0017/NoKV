@@ -18,23 +18,24 @@ The current NoKV product crates now expose the intended low-level native
 namespace surface:
 
 - `nokvfs-meta`: `stat_card`, `list_page`, `find_paths`, `grep_paths`, and
-  `read_page`;
-- `nokvfs-protocol`: `StatCard`, `ListPage`, `FindPaths`, `GrepPaths`, and
-  `ReadPage` RPC DTOs;
+  `read_page`, plus native indexed `aggregate_paths`;
+- `nokvfs-protocol`: `StatCard`, `ListPage`, `FindPaths`, `AggregatePaths`,
+  `GrepPaths`, and `ReadPage` RPC DTOs;
 - `nokvfs-client`: SDK methods plus the product-native agent adapter exposing
   `ls`, `stat`, `catalog`, `read`, `find`, and `aggregate`;
 - `nokvfs-server`: framed metadata RPC handlers for the same operations.
 
 Native grep is now implemented through `nokvfs-meta`, `nokvfs-protocol`, and
 `nokvfs-server` as a product-native file-content scan. The current seven-task
-Phase 1 core registry does not expose `grep` because the active task set has no
-body-inspection workload. A later body-inspection profile should expose grep
-through `nokvfs-client` beside `ls`, `stat`, `read`, and `find`.
+Phase 1 core registry exposes only `stat`, `catalog`, `aggregate`, and `find`
+because the active task set has no body-inspection workload. A later
+body-inspection profile should expose `read` and `grep` through `nokvfs-client`
+beside any navigation tools needed for body inspection.
 
 The benchmark arm named `nokv_native_v1` uses the `nokvfs-client` agent adapter
-for `ls`, `stat`, `catalog`, `read`, `find`, and `aggregate`. The harness translates OpenAI tool calls
-into product API calls, but does not own the measured card, find, structured
-read, index catalog, aggregation, pagination, consistency, or evidence semantics.
+with the Phase 1 tool profile above. The harness translates OpenAI tool calls
+into product API calls, but does not own the measured card, find, index catalog,
+aggregation, pagination, consistency, or evidence semantics.
 
 The default Phase 1 API surface is `openai_agents_responses_schema_once`. The
 Rust harness still owns batch planning, local judging, telemetry JSONL, and

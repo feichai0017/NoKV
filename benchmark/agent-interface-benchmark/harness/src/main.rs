@@ -42,8 +42,6 @@ const DEFAULT_ACCESS_KEY: &str = "rustfsadmin";
 const DEFAULT_SECRET_KEY: &str = "rustfsadmin";
 const RUNS_PREFIX: &str = "/runs";
 const NOKV_PREFIX: &str = "yanex";
-const METRIC_SCALE: f64 = 1_000_000_000_000.0;
-const METRIC_SORT_OFFSET: i128 = 10_000_000_000_000;
 const PARAM_INDEX_FIELDS: &[(&str, &str)] = &[
     (
         "origami.training.learning_rate",
@@ -1583,8 +1581,10 @@ fn print_tool_registry(options: Options) -> Result<(), HarnessError> {
 
 fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError> {
     if arm == "nokv_native_v1" {
+        let phase1_tools = ["stat", "catalog", "aggregate", "find"];
         let tools = agent_tool_definitions()
             .into_iter()
+            .filter(|tool| phase1_tools.contains(&tool.name))
             .map(|tool| ToolDefinition {
                 name: tool.name.to_owned(),
                 description: tool.description.to_owned(),
@@ -5065,6 +5065,7 @@ fn create_agent_index_schema(conn: &Connection) -> Result<(), HarnessError> {
             value_kind TEXT NOT NULL,
             value_text TEXT NOT NULL,
             value_u64 INTEGER,
+            value_f64 REAL,
             PRIMARY KEY (experiment_id, field, value_kind, value_text)
         );
         CREATE TABLE IF NOT EXISTS run_agent_index_catalog (
@@ -5078,6 +5079,7 @@ fn create_agent_index_schema(conn: &Connection) -> Result<(), HarnessError> {
         CREATE INDEX IF NOT EXISTS idx_run_agent_index_val_loss ON run_agent_index(metric_val_loss_min);
         CREATE INDEX IF NOT EXISTS idx_run_agent_index_values_field_text ON run_agent_index_values(field, value_text);
         CREATE INDEX IF NOT EXISTS idx_run_agent_index_values_field_u64 ON run_agent_index_values(field, value_u64);
+        CREATE INDEX IF NOT EXISTS idx_run_agent_index_values_field_f64 ON run_agent_index_values(field, value_f64);
         "#,
     )
     .map_err(from_sql)
@@ -5086,6 +5088,7 @@ fn create_agent_index_schema(conn: &Connection) -> Result<(), HarnessError> {
 fn drop_agent_index_schema(conn: &Connection) -> Result<(), HarnessError> {
     conn.execute_batch(
         r#"
+        DROP INDEX IF EXISTS idx_run_agent_index_values_field_f64;
         DROP INDEX IF EXISTS idx_run_agent_index_values_field_u64;
         DROP INDEX IF EXISTS idx_run_agent_index_values_field_text;
         DROP INDEX IF EXISTS idx_run_agent_index_val_loss;
@@ -5452,7 +5455,7 @@ fn insert_agent_index_row(
         match &value.value {
             NamespacePredicateValue::String(value_text) => {
                 conn.execute(
-                    "INSERT OR IGNORE INTO run_agent_index_values VALUES (?1, ?2, 'string', ?3, NULL)",
+                    "INSERT OR IGNORE INTO run_agent_index_values VALUES (?1, ?2, 'string', ?3, NULL, NULL)",
                     params![run.id, value.field.id, value_text],
                 )
                 .map_err(from_sql)?;
@@ -5460,10 +5463,22 @@ fn insert_agent_index_row(
             NamespacePredicateValue::U64(raw_value) => {
                 let value_i64 = u64_to_i64(*raw_value, "run_agent_index_values.value_u64")?;
                 conn.execute(
-                    "INSERT OR IGNORE INTO run_agent_index_values VALUES (?1, ?2, 'u64', ?3, ?4)",
+                    "INSERT OR IGNORE INTO run_agent_index_values VALUES (?1, ?2, 'u64', ?3, ?4, NULL)",
                     params![run.id, value.field.id, raw_value.to_string(), value_i64],
                 )
                 .map_err(from_sql)?;
+            }
+            NamespacePredicateValue::F64(raw_value) => {
+                conn.execute(
+                    "INSERT OR IGNORE INTO run_agent_index_values VALUES (?1, ?2, 'f64', ?3, NULL, ?4)",
+                    params![run.id, value.field.id, raw_value.to_string(), raw_value],
+                )
+                .map_err(from_sql)?;
+            }
+            NamespacePredicateValue::List(_) => {
+                return Err(HarnessError::Corpus(
+                    "run_agent_index_values does not support list index values".to_owned(),
+                ));
             }
         }
     }
@@ -5513,6 +5528,8 @@ fn insert_agent_index_row(
 fn benchmark_predicate_op_name(op: &NamespacePredicateOp) -> &'static str {
     match op {
         NamespacePredicateOp::Eq => "eq",
+        NamespacePredicateOp::NotEqual => "ne",
+        NamespacePredicateOp::In => "in",
         NamespacePredicateOp::Prefix => "prefix",
         NamespacePredicateOp::Suffix => "suffix",
         NamespacePredicateOp::Contains => "contains",
@@ -5520,10 +5537,15 @@ fn benchmark_predicate_op_name(op: &NamespacePredicateOp) -> &'static str {
         NamespacePredicateOp::GreaterThanOrEqual => "gte",
         NamespacePredicateOp::LessThan => "lt",
         NamespacePredicateOp::LessThanOrEqual => "lte",
+        NamespacePredicateOp::Exists => "exists",
+        NamespacePredicateOp::NotExists => "not_exists",
     }
 }
 
 fn benchmark_index_value_kind(field: &NamespaceIndexField) -> &'static str {
+    if field.field.id.starts_with("metric.") {
+        return "f64";
+    }
     if field.operators.iter().any(|op| {
         matches!(
             op,
@@ -5543,7 +5565,9 @@ fn index_string(values: &[NamespaceIndexValue], field: &str) -> Option<String> {
     values.iter().find_map(|value| {
         (value.field.id == field).then_some(match &value.value {
             NamespacePredicateValue::String(value) => Some(value.clone()),
-            NamespacePredicateValue::U64(_) => None,
+            NamespacePredicateValue::U64(_)
+            | NamespacePredicateValue::F64(_)
+            | NamespacePredicateValue::List(_) => None,
         })?
     })
 }
@@ -5553,7 +5577,9 @@ fn index_u64_i64(values: &[NamespaceIndexValue], field: &str) -> Result<Option<i
         .iter()
         .find_map(|value| {
             (value.field.id == field).then_some(match &value.value {
-                NamespacePredicateValue::String(_) => None,
+                NamespacePredicateValue::String(_)
+                | NamespacePredicateValue::F64(_)
+                | NamespacePredicateValue::List(_) => None,
                 NamespacePredicateValue::U64(value) => Some(*value),
             })?
         })
@@ -5562,7 +5588,14 @@ fn index_u64_i64(values: &[NamespaceIndexValue], field: &str) -> Result<Option<i
 }
 
 fn index_f64(values: &[NamespaceIndexValue], field: &str) -> Option<f64> {
-    index_string(values, field).and_then(|value| value.parse::<f64>().ok())
+    values.iter().find_map(|value| {
+        (value.field.id == field).then_some(match &value.value {
+            NamespacePredicateValue::F64(value) => Some(*value),
+            NamespacePredicateValue::String(_)
+            | NamespacePredicateValue::U64(_)
+            | NamespacePredicateValue::List(_) => None,
+        })?
+    })
 }
 
 fn u64_to_i64(value: u64, field: &str) -> Result<i64, HarnessError> {
@@ -5686,18 +5719,12 @@ fn nokv_agent_index_fields() -> Vec<NamespaceIndexField> {
         u64_index_field("artifact.stderr_size_bytes", false, true),
         string_index_field("param.origami.training.learning_rate", true, true),
         string_index_field("param.origami.training.batch_size", true, true),
-        string_index_field("metric.val_loss.min", false, true),
-        u64_index_field("metric.val_loss.min_scaled", false, true),
-        string_index_field("metric.utility_tstr_roc_auc.latest", false, true),
-        u64_index_field("metric.utility_tstr_roc_auc.latest_scaled", false, true),
-        string_index_field("metric.utility_trtr_roc_auc.latest", false, true),
-        u64_index_field("metric.utility_trtr_roc_auc.latest_scaled", false, true),
-        string_index_field("metric.fidelity.latest", false, true),
-        u64_index_field("metric.fidelity.latest_scaled", false, true),
-        string_index_field("metric.detection_roc_auc.latest", false, true),
-        u64_index_field("metric.detection_roc_auc.latest_scaled", false, true),
-        string_index_field("metric.privacy_dcr_score.latest", false, true),
-        u64_index_field("metric.privacy_dcr_score.latest_scaled", false, true),
+        f64_index_field("metric.val_loss.min", false, true),
+        f64_index_field("metric.utility_tstr_roc_auc.latest", false, true),
+        f64_index_field("metric.utility_trtr_roc_auc.latest", false, true),
+        f64_index_field("metric.fidelity.latest", false, true),
+        f64_index_field("metric.detection_roc_auc.latest", false, true),
+        f64_index_field("metric.privacy_dcr_score.latest", false, true),
         string_index_field("group.lr_batch.key", true, true),
         string_index_field("group.lr_batch.learning_rate", true, true),
         string_index_field("group.lr_batch.batch_size", true, true),
@@ -5707,12 +5734,7 @@ fn nokv_agent_index_fields() -> Vec<NamespaceIndexField> {
         u64_index_field("git.patch_declared", true, true),
         u64_index_field("git.patch_available", true, true),
         u64_index_field("git.dirty", true, true),
-        NamespaceIndexField {
-            field: NamespaceFindField::new("git.has_uncommitted_changes"),
-            operators: vec![NamespacePredicateOp::Eq],
-            sortable: true,
-            facetable: true,
-        },
+        u64_index_field("git.has_uncommitted_changes", true, true),
     ]
 }
 
@@ -5816,11 +5838,6 @@ fn nokv_agent_index_row_with_groups(
         &mut values,
         "git.has_uncommitted_changes",
         u64::from(git_dirty),
-    );
-    push_index_string(
-        &mut values,
-        "git.has_uncommitted_changes",
-        if git_dirty { "true" } else { "false" },
     );
 
     NamespaceIndexRow {
@@ -5930,16 +5947,10 @@ fn param_index_value(run: &CorpusRun, param_path: &str) -> Option<String> {
 fn push_metric_index_values(values: &mut Vec<NamespaceIndexValue>, run: &CorpusRun) {
     if let Some(metric) = metric_min(run, "val_loss") {
         push_metric_value(values, "metric.val_loss.min", metric);
-        push_metric_scaled(values, "metric.val_loss.min_scaled", metric);
     }
     for metric_name in LATEST_METRIC_INDEX_FIELDS {
         if let Some(metric) = metric_latest(run, metric_name) {
             push_metric_value(values, &format!("metric.{metric_name}.latest"), metric);
-            push_metric_scaled(
-                values,
-                &format!("metric.{metric_name}.latest_scaled"),
-                metric,
-            );
         }
     }
 }
@@ -5972,28 +5983,12 @@ fn metric_records(run: &CorpusRun) -> impl Iterator<Item = &serde_json::Map<Stri
 }
 
 fn push_metric_value(values: &mut Vec<NamespaceIndexValue>, field: &str, value: f64) {
-    push_index_string(values, field, &metric_value_string(value));
-}
-
-fn push_metric_scaled(values: &mut Vec<NamespaceIndexValue>, field: &str, value: f64) {
-    if let Some(scaled) = scaled_metric_value(value) {
+    if value.is_finite() {
         values.push(NamespaceIndexValue {
             field: NamespaceFindField::new(field),
-            value: NamespacePredicateValue::U64(scaled),
+            value: NamespacePredicateValue::F64(value),
         });
     }
-}
-
-fn metric_value_string(value: f64) -> String {
-    serde_json::to_string(&value).expect("finite metric serializes")
-}
-
-fn scaled_metric_value(value: f64) -> Option<u64> {
-    if !value.is_finite() {
-        return None;
-    }
-    let scaled = (value * METRIC_SCALE).round() as i128 + METRIC_SORT_OFFSET;
-    u64::try_from(scaled).ok()
 }
 
 fn string_index_field(id: &'static str, facetable: bool, sortable: bool) -> NamespaceIndexField {
@@ -6001,9 +5996,13 @@ fn string_index_field(id: &'static str, facetable: bool, sortable: bool) -> Name
         field: NamespaceFindField::new(id),
         operators: vec![
             NamespacePredicateOp::Eq,
+            NamespacePredicateOp::NotEqual,
+            NamespacePredicateOp::In,
             NamespacePredicateOp::Prefix,
             NamespacePredicateOp::Suffix,
             NamespacePredicateOp::Contains,
+            NamespacePredicateOp::Exists,
+            NamespacePredicateOp::NotExists,
         ],
         sortable,
         facetable,
@@ -6015,10 +6014,33 @@ fn u64_index_field(id: &'static str, facetable: bool, sortable: bool) -> Namespa
         field: NamespaceFindField::new(id),
         operators: vec![
             NamespacePredicateOp::Eq,
+            NamespacePredicateOp::NotEqual,
+            NamespacePredicateOp::In,
             NamespacePredicateOp::GreaterThan,
             NamespacePredicateOp::GreaterThanOrEqual,
             NamespacePredicateOp::LessThan,
             NamespacePredicateOp::LessThanOrEqual,
+            NamespacePredicateOp::Exists,
+            NamespacePredicateOp::NotExists,
+        ],
+        sortable,
+        facetable,
+    }
+}
+
+fn f64_index_field(id: &'static str, facetable: bool, sortable: bool) -> NamespaceIndexField {
+    NamespaceIndexField {
+        field: NamespaceFindField::new(id),
+        operators: vec![
+            NamespacePredicateOp::Eq,
+            NamespacePredicateOp::NotEqual,
+            NamespacePredicateOp::In,
+            NamespacePredicateOp::GreaterThan,
+            NamespacePredicateOp::GreaterThanOrEqual,
+            NamespacePredicateOp::LessThan,
+            NamespacePredicateOp::LessThanOrEqual,
+            NamespacePredicateOp::Exists,
+            NamespacePredicateOp::NotExists,
         ],
         sortable,
         facetable,
@@ -6644,6 +6666,11 @@ mod tests {
                     match &value.value {
                         NamespacePredicateValue::String(value) => json!(value),
                         NamespacePredicateValue::U64(value) => json!(value),
+                        NamespacePredicateValue::F64(value) => json!(value),
+                        NamespacePredicateValue::List(value) => json!(value
+                            .iter()
+                            .map(|item| format!("{item:?}"))
+                            .collect::<Vec<_>>()),
                     },
                 )
             })
@@ -6657,14 +6684,8 @@ mod tests {
         assert!(values.contains(&("artifact.stdout_available", json!(1))));
         assert!(values.contains(&("param.origami.training.learning_rate", json!("0.001"))));
         assert!(values.contains(&("param.origami.training.batch_size", json!("32"))));
-        assert!(values.contains(&("metric.val_loss.min", json!("0.3"))));
-        assert!(values.contains(&("metric.val_loss.min_scaled", json!(10_300_000_000_000_u64))));
-        assert!(values.contains(&("metric.utility_tstr_roc_auc.latest", json!("0.8"))));
-        assert!(values.contains(&(
-            "metric.utility_tstr_roc_auc.latest_scaled",
-            json!(10_800_000_000_000_u64)
-        )));
-        assert!(values.contains(&("git.has_uncommitted_changes", json!("true"))));
+        assert!(values.contains(&("metric.val_loss.min", json!(0.3))));
+        assert!(values.contains(&("metric.utility_tstr_roc_auc.latest", json!(0.8))));
         assert!(values.contains(&("git.has_uncommitted_changes", json!(1))));
         assert!(values.contains(&("git.patch_available", json!(0))));
     }
@@ -6679,23 +6700,12 @@ mod tests {
         assert!(field_ids.contains("param.origami.training.learning_rate"));
         assert!(field_ids.contains("param.origami.training.batch_size"));
         assert!(field_ids.contains("metric.val_loss.min"));
-        assert!(field_ids.contains("metric.val_loss.min_scaled"));
         assert!(field_ids.contains("metric.utility_tstr_roc_auc.latest"));
-        assert!(field_ids.contains("metric.utility_tstr_roc_auc.latest_scaled"));
         assert!(field_ids.contains("git.has_uncommitted_changes"));
         assert!(field_ids.contains("group.lr_batch.representative"));
         assert!(field_ids.contains("group.lr_batch.run_count"));
         assert!(!field_ids.contains("group.lr_batch.avg_min_val_loss"));
         assert!(!field_ids.contains("group.lr_batch.avg_min_val_loss_scaled"));
-    }
-
-    #[test]
-    fn scaled_metric_values_preserve_negative_ordering() {
-        let negative = scaled_metric_value(-0.4).unwrap();
-        let positive = scaled_metric_value(0.3).unwrap();
-
-        assert!(negative < positive);
-        assert_eq!(scaled_metric_value(-10.1), None);
     }
 
     #[test]
@@ -6712,6 +6722,11 @@ mod tests {
                     match &value.value {
                         NamespacePredicateValue::String(value) => json!(value),
                         NamespacePredicateValue::U64(value) => json!(value),
+                        NamespacePredicateValue::F64(value) => json!(value),
+                        NamespacePredicateValue::List(value) => json!(value
+                            .iter()
+                            .map(|item| format!("{item:?}"))
+                            .collect::<Vec<_>>()),
                     },
                 )
             })
@@ -7083,7 +7098,7 @@ mod tests {
         );
         assert_eq!(
             tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap()),
-            vec!["ls", "stat", "catalog", "read", "aggregate", "find"]
+            vec!["stat", "catalog", "aggregate", "find"]
         );
         assert!(tool_registry_for_arm("unknown_arm_v1").is_err());
     }

@@ -15,6 +15,7 @@ pub enum CodecError {
     InvalidName(String),
     InvalidUtf8,
     TrailingBytes,
+    InvalidFloat,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -38,11 +39,27 @@ pub struct PathIndexRowRecord {
     pub values: Vec<(String, PathIndexValueRecord)>,
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub enum PathIndexValueRecord {
     String(String),
     U64(u64),
+    F64(f64),
 }
+
+impl PartialEq for PathIndexValueRecord {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::String(left), Self::String(right)) => left == right,
+            (Self::U64(left), Self::U64(right)) => left == right,
+            (Self::F64(left), Self::F64(right)) => {
+                left.total_cmp(right) == std::cmp::Ordering::Equal
+            }
+            _ => false,
+        }
+    }
+}
+
+impl Eq for PathIndexValueRecord {}
 
 pub fn encode_allocator_state(last_commit_version: u64, next_inode: u64) -> Vec<u8> {
     let mut out = Vec::with_capacity(16);
@@ -363,6 +380,10 @@ pub fn encode_path_index_row(record: &PathIndexRowRecord) -> Vec<u8> {
                 out.push(2);
                 push_u64(&mut out, *value);
             }
+            PathIndexValueRecord::F64(value) => {
+                out.push(3);
+                push_u64(&mut out, value.to_bits());
+            }
         }
     }
     out
@@ -378,6 +399,13 @@ pub fn decode_path_index_row(bytes: &[u8]) -> Result<PathIndexRowRecord, CodecEr
         let value = match input.u8()? {
             1 => PathIndexValueRecord::String(input.string()?),
             2 => PathIndexValueRecord::U64(input.u64()?),
+            3 => {
+                let value = f64::from_bits(input.u64()?);
+                if !value.is_finite() {
+                    return Err(CodecError::InvalidFloat);
+                }
+                PathIndexValueRecord::F64(value)
+            }
             tag => return Err(CodecError::InvalidOptionTag(tag)),
         };
         values.push((field, value));
@@ -545,6 +573,7 @@ impl fmt::Display for CodecError {
             Self::InvalidName(err) => write!(f, "invalid dentry name: {err}"),
             Self::InvalidUtf8 => write!(f, "encoded metadata string is not UTF-8"),
             Self::TrailingBytes => write!(f, "encoded metadata value has trailing bytes"),
+            Self::InvalidFloat => write!(f, "encoded metadata float is not finite"),
         }
     }
 }

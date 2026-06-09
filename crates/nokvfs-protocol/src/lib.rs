@@ -55,6 +55,9 @@ pub enum MetadataRpcRequest {
     FindPaths {
         request: Box<WireNamespaceFindRequest>,
     },
+    AggregatePaths {
+        request: Box<WireNamespaceAggregateRequest>,
+    },
     GrepPaths {
         request: Box<WireNamespaceGrepRequest>,
     },
@@ -236,6 +239,9 @@ pub enum MetadataRpcResult {
     NamespaceFindResult {
         result: Box<WireNamespaceFindResult>,
     },
+    NamespaceAggregateResult {
+        result: Box<WireNamespaceAggregateResult>,
+    },
     NamespaceGrepResult {
         result: Box<WireNamespaceGrepResult>,
     },
@@ -393,6 +399,8 @@ pub struct WireNamespaceFindField {
 #[serde(rename_all = "snake_case")]
 pub enum WireNamespacePredicateOp {
     Eq,
+    NotEqual,
+    In,
     Prefix,
     Suffix,
     Contains,
@@ -400,20 +408,41 @@ pub enum WireNamespacePredicateOp {
     GreaterThanOrEqual,
     LessThan,
     LessThanOrEqual,
+    Exists,
+    NotExists,
 }
 
-#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "type", content = "value", rename_all = "snake_case")]
 pub enum WireNamespacePredicateValue {
     String(String),
     U64(u64),
+    F64(f64),
+    List(Vec<WireNamespacePredicateValue>),
 }
+
+impl PartialEq for WireNamespacePredicateValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::String(left), Self::String(right)) => left == right,
+            (Self::U64(left), Self::U64(right)) => left == right,
+            (Self::F64(left), Self::F64(right)) => {
+                left.total_cmp(right) == std::cmp::Ordering::Equal
+            }
+            (Self::List(left), Self::List(right)) => left == right,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for WireNamespacePredicateValue {}
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
 pub struct WireNamespacePredicate {
     pub field: WireNamespaceFindField,
     pub op: WireNamespacePredicateOp,
-    pub value: WireNamespacePredicateValue,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value: Option<WireNamespacePredicateValue>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -463,6 +492,120 @@ pub struct WireNamespaceFindResult {
     #[serde(default)]
     pub facets: Vec<WireNamespaceFacetSummary>,
     pub next_cursor: Option<String>,
+    pub truncated: bool,
+    pub scanned_entries: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespaceFieldSourceKind {
+    Namespace,
+    MaterializedIndex,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceFieldSource {
+    pub evidence: String,
+    pub source_path: String,
+    pub source_kind: WireNamespaceFieldSourceKind,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceFieldValue {
+    pub field: WireNamespaceFindField,
+    pub value: WireNamespacePredicateValue,
+    pub source: WireNamespaceFieldSource,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WireNamespaceAggregateOp {
+    Count,
+    Sum,
+    Avg,
+    Min,
+    Max,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceAggregateMeasure {
+    pub name: String,
+    pub op: WireNamespaceAggregateOp,
+    pub field: Option<WireNamespaceFindField>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceAggregateSort {
+    pub field: String,
+    pub direction: WireNamespaceSortDirection,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceAggregateRequest {
+    pub path: String,
+    pub predicates: Vec<WireNamespacePredicate>,
+    pub group_by: Vec<WireNamespaceFindField>,
+    pub measures: Vec<WireNamespaceAggregateMeasure>,
+    pub sort: Vec<WireNamespaceAggregateSort>,
+    pub limit: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "snake_case")]
+pub enum WireNamespaceAggregateValue {
+    U64(u64),
+    F64(f64),
+    Null,
+}
+
+impl PartialEq for WireNamespaceAggregateValue {
+    fn eq(&self, other: &Self) -> bool {
+        match (self, other) {
+            (Self::U64(left), Self::U64(right)) => left == right,
+            (Self::F64(left), Self::F64(right)) => {
+                left.total_cmp(right) == std::cmp::Ordering::Equal
+            }
+            (Self::Null, Self::Null) => true,
+            _ => false,
+        }
+    }
+}
+
+impl Eq for WireNamespaceAggregateValue {}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceAggregateOutputMeasure {
+    pub name: String,
+    pub op: WireNamespaceAggregateOp,
+    pub field: Option<WireNamespaceFindField>,
+    pub value: WireNamespaceAggregateValue,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceAggregateSample {
+    pub path: String,
+    pub evidence: String,
+    pub generation: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceAggregateGroup {
+    pub key: Vec<WireNamespaceFieldValue>,
+    pub measures: Vec<WireNamespaceAggregateOutputMeasure>,
+    pub evidence: String,
+    pub sample_matches: Vec<WireNamespaceAggregateSample>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceAggregateResult {
+    pub path: String,
+    pub evidence: String,
+    pub snapshot_id: Option<u64>,
+    pub predicates: Vec<WireNamespacePredicate>,
+    pub input_match_count: u64,
+    pub row_count: u64,
+    pub group_count: u64,
+    pub groups: Vec<WireNamespaceAggregateGroup>,
     pub truncated: bool,
     pub scanned_entries: u64,
 }
