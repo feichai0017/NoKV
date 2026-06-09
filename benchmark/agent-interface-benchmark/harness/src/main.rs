@@ -7199,31 +7199,21 @@ mod tests {
     }
 
     #[test]
-    fn sqlite_raw_arm_card_lists_agent_index_materialized_fields() {
+    fn sqlite_raw_arm_card_requires_runtime_agent_index_field_discovery() {
         let card: serde_yaml::Value =
             serde_yaml::from_str(include_str!("../../arms/sqlite_raw.yaml")).unwrap();
-        let hinted = card
-            .get("materialized_view_schema_hint")
-            .and_then(|value| value.get("catalog_field_ids"))
-            .and_then(serde_yaml::Value::as_sequence)
-            .unwrap()
-            .iter()
-            .map(|value| value.as_str().unwrap().to_owned())
-            .collect::<BTreeSet<_>>();
-        let actual = nokv_agent_index_fields()
-            .into_iter()
-            .map(|field| field.field.id)
-            .collect::<BTreeSet<_>>();
+        let schema_hint = card.get("materialized_view_schema_hint").unwrap();
+        assert!(schema_hint.get("catalog_field_ids").is_none());
 
-        assert_eq!(hinted, actual);
-    }
-
-    #[test]
-    fn sqlite_raw_arm_card_marks_group_fields_as_discovery_only() {
         let card = include_str!("../../arms/sqlite_raw.yaml");
-
-        assert!(card.contains("group fields are discovery fields only"));
-        assert!(card.contains("do not infer unlisted derived fields"));
+        for field in nokv_agent_index_fields() {
+            assert!(
+                !card.contains(&format!("    - {}", field.field.id)),
+                "sqlite arm card must not pre-list agent index field {}",
+                field.field.id
+            );
+        }
+        assert!(card.contains("Inspect show_schema or run_agent_index_catalog"));
     }
 
     #[test]

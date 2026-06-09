@@ -41,6 +41,7 @@ evidence_conventions:
 
 materialized_view_schema_hint:
   description: Raw SQLite exposes base Yanex tables plus ETL-maintained agent-index materialization tables over the same corpus facts.
+  discovery: Inspect show_schema or run_agent_index_catalog at runtime to discover materialized field columns and capabilities.
   tables:
     run_agent_index:
       purpose: one row per run with commonly queried run, artifact, metric, parameter, git, and group summaries.
@@ -50,52 +51,12 @@ materialized_view_schema_hint:
       columns: [experiment_id, field, value_kind, value_text, value_u64]
     run_agent_index_catalog:
       purpose: field capability table declaring value kind, sortable/facetable flags, and supported operators.
-  catalog_field_ids:
-    - run.id
-    - run.name
-    - run.status
-    - run.project
-    - run.script
-    - run.tag
-    - artifact.path
-    - artifact.name
-    - artifact.type
-    - artifact.count
-    - artifact.size_bytes
-    - artifact.stdout_available
-    - artifact.stdout_size_bytes
-    - artifact.stderr_available
-    - artifact.stderr_size_bytes
-    - param.origami.training.learning_rate
-    - param.origami.training.batch_size
-    - metric.val_loss.min
-    - metric.val_loss.min_scaled
-    - metric.utility_tstr_roc_auc.latest
-    - metric.utility_tstr_roc_auc.latest_scaled
-    - metric.utility_trtr_roc_auc.latest
-    - metric.utility_trtr_roc_auc.latest_scaled
-    - metric.fidelity.latest
-    - metric.fidelity.latest_scaled
-    - metric.detection_roc_auc.latest
-    - metric.detection_roc_auc.latest_scaled
-    - metric.privacy_dcr_score.latest
-    - metric.privacy_dcr_score.latest_scaled
-    - group.lr_batch.key
-    - group.lr_batch.learning_rate
-    - group.lr_batch.batch_size
-    - group.lr_batch.representative
-    - group.lr_batch.run_count
-    - git.patch_file
-    - git.patch_declared
-    - git.patch_available
-    - git.dirty
-    - git.has_uncommitted_changes
 
 interface_guidance:
   - Inspect the schema before writing non-trivial SQL.
+  - Inspect show_schema or run_agent_index_catalog before using materialized agent-index fields.
   - Prefer aggregate SQL for structured analytics.
   - Use run_agent_index or run_agent_index_values when the materialized schema directly covers the needed read-only fact.
-  - run_agent_index group fields are discovery fields only; do not infer unlisted derived fields.
   - Use read_blob only when task evidence requires artifact body bytes.
   - Cite row and blob evidence handles returned by query_sql/read_blob.
 
