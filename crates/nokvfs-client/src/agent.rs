@@ -188,7 +188,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         AgentToolDefinition {
             name: "find",
             description:
-                "Find paths using catalog field ids; returns match_count, so use limit 1 for counts.",
+                "Find paths using catalog field ids; returns match_count and optional predicate-filtered facets.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -227,6 +227,10 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                         "items": {"type": "string", "enum": ["body", "schema", "sample"]}
                     },
                     "fields": {
+                        "type": "array",
+                        "items": {"type": "string"}
+                    },
+                    "facets": {
                         "type": "array",
                         "items": {"type": "string"}
                     },
@@ -337,6 +341,7 @@ where
         predicates: predicates_arg(args)?,
         sort: sort_arg(args)?,
         include: include.clone(),
+        facets: facets_arg(args)?,
         cursor: optional_string_arg(args, "cursor")?,
         limit: optional_bounded_usize_arg(args, "limit", MAX_AGENT_FIND_LIMIT)?
             .unwrap_or(DEFAULT_AGENT_FIND_LIMIT),
@@ -371,6 +376,7 @@ fn find_result_json(
         "snapshot_id": result.snapshot_id,
         "match_count": result.match_count,
         "matches": result.matches.iter().map(|card| find_match_json(card, fields, includes)).collect::<Vec<_>>(),
+        "facets": result.facets.iter().map(facet_summary_json).collect::<Vec<_>>(),
         "next_cursor": result.next_cursor,
         "truncated": result.truncated,
         "scanned_entries": result.scanned_entries,
@@ -798,6 +804,26 @@ fn fields_arg(args: &Value) -> Result<Option<Vec<String>>, ClientError> {
     Ok(Some(fields))
 }
 
+fn facets_arg(args: &Value) -> Result<Vec<NamespaceFindField>, ClientError> {
+    let Some(value) = object_args(args)?.get("facets") else {
+        return Ok(Vec::new());
+    };
+    if value.is_null() {
+        return Ok(Vec::new());
+    }
+    value
+        .as_array()
+        .ok_or_else(|| ClientError::Protocol("facets must be an array".to_owned()))?
+        .iter()
+        .map(|value| {
+            value
+                .as_str()
+                .map(NamespaceFindField::new)
+                .ok_or_else(|| ClientError::Protocol("facets entries must be strings".to_owned()))
+        })
+        .collect()
+}
+
 fn string_property<'a>(
     object: &'a Map<String, Value>,
     name: &'static str,
@@ -949,6 +975,15 @@ mod tests {
                 snapshot_id: Some(9),
                 match_count: 1,
                 matches: vec![sample_card("/runs/run-1", self.record_count)],
+                facets: vec![NamespaceFacetSummary {
+                    field: NamespaceFindField::new("run.script"),
+                    values: vec![NamespaceFacetValue {
+                        value: NamespacePredicateValue::String("train.py".to_owned()),
+                        count: 1,
+                    }],
+                    distinct_count: 1,
+                    truncated: false,
+                }],
                 next_cursor: None,
                 truncated: false,
                 scanned_entries: 1,
@@ -1135,6 +1170,35 @@ mod tests {
         );
         assert!(output.get("catalog").is_none() || output["catalog"].is_null());
         assert!(output["matches"][0].get("catalog").is_none());
+    }
+
+    #[test]
+    fn find_tool_requests_and_returns_filtered_facets() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "find",
+            &json!({
+                "path": "/runs",
+                "predicates": [{"field": "run.status", "op": "eq", "value": "completed"}],
+                "facets": ["run.script"],
+                "limit": 1
+            }),
+        )
+        .unwrap();
+
+        let request = namespace.last_find.borrow().clone().unwrap();
+        assert_eq!(request.facets, vec![NamespaceFindField::new("run.script")]);
+        assert_eq!(
+            output["facets"],
+            json!([{
+                "field": "run.script",
+                "values": [{"value": "train.py", "count": 1}],
+                "distinct_count": 1,
+                "truncated": false
+            }])
+        );
     }
 
     #[test]

@@ -1,7 +1,10 @@
 import unittest
 import importlib.metadata
+import json
+import urllib.error
 from pathlib import Path
 import sys
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import openai_agents_responses_schema_once as runner
@@ -17,6 +20,20 @@ class FakeTool:
         "additionalProperties": False,
     }
     strict_json_schema = True
+
+
+class FakeBridgeResponse:
+    def __init__(self, body: dict) -> None:
+        self.body = json.dumps(body).encode("utf-8")
+
+    def __enter__(self) -> "FakeBridgeResponse":
+        return self
+
+    def __exit__(self, exc_type, exc, traceback) -> None:
+        pass
+
+    def read(self) -> bytes:
+        return self.body
 
 
 class OpenAiAgentsVersionTest(unittest.TestCase):
@@ -82,6 +99,46 @@ class OpenAiAgentsVersionTest(unittest.TestCase):
         self.assertNotIn("text", request)
         self.assertNotIn("temperature", request)
         self.assertNotIn("max_output_tokens", request)
+
+    def test_tool_bridge_retries_connection_reset(self) -> None:
+        attempts = 0
+
+        def fake_urlopen(request, timeout):  # type: ignore[no-untyped-def]
+            nonlocal attempts
+            attempts += 1
+            if attempts == 1:
+                raise urllib.error.URLError(
+                    ConnectionResetError(54, "Connection reset by peer")
+                )
+            return FakeBridgeResponse({"status": "success", "content": {"ok": True}})
+
+        with mock.patch.object(runner.urllib.request, "urlopen", side_effect=fake_urlopen):
+            with mock.patch.object(runner.time, "sleep") as sleep:
+                response = runner.post_tool_bridge(
+                    "http://127.0.0.1:12345",
+                    "run-1",
+                    "stat",
+                    {"path": "/yanex/runs"},
+                    attempts=2,
+                    retry_sleep_seconds=0,
+                )
+
+        self.assertEqual(response["content"], {"ok": True})
+        self.assertEqual(attempts, 2)
+        sleep.assert_called_once()
+
+    def test_tool_bridge_error_message_includes_arguments(self) -> None:
+        error = urllib.error.URLError(ConnectionResetError(54, "Connection reset by peer"))
+
+        message = runner.tool_bridge_error_message(
+            "stat",
+            {"path": "/yanex/runs/02b8a944/artifacts/git_diff.patch"},
+            error,
+        )
+
+        self.assertIn("Error running tool stat", message)
+        self.assertIn("/yanex/runs/02b8a944/artifacts/git_diff.patch", message)
+        self.assertIn("Connection reset by peer", message)
 
 
 if __name__ == "__main__":

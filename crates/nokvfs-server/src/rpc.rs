@@ -1091,6 +1091,11 @@ fn wire_namespace_find_result(
         snapshot_id: result.snapshot_id,
         match_count: result.match_count as u64,
         matches: result.matches.iter().map(wire_namespace_card).collect(),
+        facets: result
+            .facets
+            .iter()
+            .map(wire_namespace_facet_summary)
+            .collect(),
         next_cursor: result.next_cursor.clone(),
         truncated: result.truncated,
         scanned_entries: result.scanned_entries as u64,
@@ -1178,6 +1183,11 @@ fn namespace_find_request(
             .include
             .into_iter()
             .map(namespace_include)
+            .collect::<Vec<_>>(),
+        facets: request
+            .facets
+            .into_iter()
+            .map(namespace_find_field)
             .collect::<Vec<_>>(),
         cursor: request.cursor,
         limit: usize::try_from(request.limit).map_err(|_| {

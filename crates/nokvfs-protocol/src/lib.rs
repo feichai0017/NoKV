@@ -447,6 +447,8 @@ pub struct WireNamespaceFindRequest {
     pub predicates: Vec<WireNamespacePredicate>,
     pub sort: Vec<WireNamespaceSort>,
     pub include: Vec<WireNamespaceInclude>,
+    #[serde(default)]
+    pub facets: Vec<WireNamespaceFindField>,
     pub cursor: Option<String>,
     pub limit: u64,
 }
@@ -458,6 +460,8 @@ pub struct WireNamespaceFindResult {
     pub snapshot_id: Option<u64>,
     pub match_count: u64,
     pub matches: Vec<WireNamespaceCard>,
+    #[serde(default)]
+    pub facets: Vec<WireNamespaceFacetSummary>,
     pub next_cursor: Option<String>,
     pub truncated: bool,
     pub scanned_entries: u64,

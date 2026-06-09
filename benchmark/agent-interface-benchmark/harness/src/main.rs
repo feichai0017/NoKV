@@ -7190,6 +7190,15 @@ mod tests {
     }
 
     #[test]
+    fn nokv_native_arm_card_documents_filtered_facet_semantics() {
+        let card_text = include_str!("../../arms/nokv_native.yaml");
+
+        assert!(card_text.contains("stat facet summaries are global to the current directory index"));
+        assert!(card_text.contains("find.match_count is the total number of paths matching the predicates, not a grouped count"));
+        assert!(card_text.contains("Requested find facets are computed after predicates and before pagination"));
+    }
+
+    #[test]
     fn sqlite_raw_arm_card_lists_agent_index_materialized_fields() {
         let card: serde_yaml::Value =
             serde_yaml::from_str(include_str!("../../arms/sqlite_raw.yaml")).unwrap();

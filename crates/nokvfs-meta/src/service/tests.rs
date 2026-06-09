@@ -345,6 +345,7 @@ fn namespace_find_uses_declared_predicates_and_sort_fields() {
                 direction: NamespaceSortDirection::Desc,
             }],
             include: Vec::new(),
+            facets: Vec::new(),
             limit: 1,
             cursor: None,
         })
@@ -368,6 +369,7 @@ fn namespace_find_uses_declared_predicates_and_sort_fields() {
         }],
         sort: Vec::new(),
         include: Vec::new(),
+        facets: Vec::new(),
         limit: 10,
         cursor: None,
     });
@@ -612,6 +614,7 @@ fn namespace_find_uses_catalog_field_ids_and_registered_index_values() {
                 direction: NamespaceSortDirection::Asc,
             }],
             include: Vec::new(),
+            facets: Vec::new(),
             limit: 10,
             cursor: None,
         })
@@ -635,6 +638,115 @@ fn namespace_find_uses_catalog_field_ids_and_registered_index_values() {
         ]
     );
     assert_eq!(run_b.attr.file_type, FileType::Directory);
+}
+
+#[test]
+fn namespace_find_returns_requested_facets_after_predicates_before_pagination() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    for run_id in ["run-a", "run-b", "run-c"] {
+        service
+            .create_dir_path(&format!("/runs/{run_id}"), 0o755, 1000, 1000)
+            .unwrap();
+    }
+
+    service
+        .register_namespace_index(NamespaceIndexRegistration {
+            path: "/runs".to_owned(),
+            fields: vec![
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("run.status"),
+                    operators: vec![NamespacePredicateOp::Eq],
+                    sortable: true,
+                    facetable: true,
+                },
+                NamespaceIndexField {
+                    field: NamespaceFindField::new("run.script"),
+                    operators: vec![NamespacePredicateOp::Eq],
+                    sortable: true,
+                    facetable: true,
+                },
+            ],
+            rows: vec![
+                NamespaceIndexRow {
+                    path: "/runs/run-a".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("completed".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.script"),
+                            value: NamespacePredicateValue::String("train.py".to_owned()),
+                        },
+                    ],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/run-b".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("completed".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.script"),
+                            value: NamespacePredicateValue::String("eval.py".to_owned()),
+                        },
+                    ],
+                },
+                NamespaceIndexRow {
+                    path: "/runs/run-c".to_owned(),
+                    values: vec![
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.status"),
+                            value: NamespacePredicateValue::String("cancelled".to_owned()),
+                        },
+                        NamespaceIndexValue {
+                            field: NamespaceFindField::new("run.script"),
+                            value: NamespacePredicateValue::String("train.py".to_owned()),
+                        },
+                    ],
+                },
+            ],
+        })
+        .unwrap();
+
+    let result = service
+        .find_paths(NamespaceFindRequest {
+            path: "/runs".to_owned(),
+            predicates: vec![NamespacePredicate {
+                field: NamespaceFindField::new("run.status"),
+                op: NamespacePredicateOp::Eq,
+                value: NamespacePredicateValue::String("completed".to_owned()),
+            }],
+            sort: vec![],
+            include: vec![],
+            facets: vec![NamespaceFindField::new("run.script")],
+            cursor: None,
+            limit: 1,
+        })
+        .unwrap();
+
+    assert_eq!(result.match_count, 2);
+    assert_eq!(result.matches.len(), 1);
+    assert_eq!(
+        result.facets,
+        vec![NamespaceFacetSummary {
+            field: NamespaceFindField::new("run.script"),
+            values: vec![
+                NamespaceFacetValue {
+                    value: NamespacePredicateValue::String("eval.py".to_owned()),
+                    count: 1,
+                },
+                NamespaceFacetValue {
+                    value: NamespacePredicateValue::String("train.py".to_owned()),
+                    count: 1,
+                },
+            ],
+            distinct_count: 2,
+            truncated: false,
+        }]
+    );
 }
 
 #[test]
@@ -726,6 +838,7 @@ fn namespace_find_sorts_missing_index_values_last() {
                 direction: NamespaceSortDirection::Asc,
             }],
             include: Vec::new(),
+            facets: Vec::new(),
             limit: 1,
             cursor: None,
         })
@@ -741,6 +854,7 @@ fn namespace_find_sorts_missing_index_values_last() {
                 direction: NamespaceSortDirection::Desc,
             }],
             include: Vec::new(),
+            facets: Vec::new(),
             limit: 2,
             cursor: None,
         })

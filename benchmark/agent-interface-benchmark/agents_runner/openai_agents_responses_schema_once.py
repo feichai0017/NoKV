@@ -12,6 +12,7 @@ import re
 import subprocess
 import sys
 import time
+import http.client
 import urllib.error
 import urllib.request
 from dataclasses import dataclass, field
@@ -29,6 +30,8 @@ class RunnerContractError(RuntimeError):
 
 
 OPENAI_AGENTS_REQUIREMENT = "openai-agents>=0.7.0,<0.8.0"
+TOOL_BRIDGE_ATTEMPTS = 3
+TOOL_BRIDGE_RETRY_SLEEP_SECONDS = 0.05
 
 
 def openai_agents_version_supported(version: str) -> bool:
@@ -335,19 +338,21 @@ def make_function_tools(tool_specs: list[dict[str, Any]], config: dict[str, Any]
     from agents import FunctionTool
 
     tools = []
+    bridge_lock = asyncio.Lock()
     for spec in tool_specs:
         name = spec["name"]
 
         async def invoke_tool(ctx: Any, args: str, tool_name: str = name) -> str:
             del ctx
             arguments = json.loads(args) if args else {}
-            response = await asyncio.to_thread(
-                post_tool_bridge,
-                config["tool_bridge_url"],
-                config["run_id"],
-                tool_name,
-                arguments,
-            )
+            async with bridge_lock:
+                response = await asyncio.to_thread(
+                    post_tool_bridge,
+                    config["tool_bridge_url"],
+                    config["run_id"],
+                    tool_name,
+                    arguments,
+                )
             if response.get("fatal_run_error"):
                 raise RuntimeError(response.get("error") or f"tool {tool_name} failed")
             return json.dumps(response["content"], separators=(",", ":"))
@@ -368,6 +373,9 @@ def post_tool_bridge(
     run_id: str,
     tool_name: str,
     arguments: dict[str, Any],
+    *,
+    attempts: int = TOOL_BRIDGE_ATTEMPTS,
+    retry_sleep_seconds: float = TOOL_BRIDGE_RETRY_SLEEP_SECONDS,
 ) -> dict[str, Any]:
     payload = json.dumps(
         {"run_id": run_id, "tool_name": tool_name, "arguments": arguments},
@@ -379,8 +387,43 @@ def post_tool_bridge(
         method="POST",
         headers={"content-type": "application/json"},
     )
-    with urllib.request.urlopen(request, timeout=120) as response:
-        return json.loads(response.read())
+    if attempts < 1:
+        raise ValueError("attempts must be at least 1")
+    for attempt in range(attempts):
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                return json.loads(response.read())
+        except urllib.error.HTTPError:
+            raise
+        except Exception as exc:
+            if attempt + 1 >= attempts or not retryable_tool_bridge_error(exc):
+                raise RuntimeError(tool_bridge_error_message(tool_name, arguments, exc)) from exc
+            time.sleep(retry_sleep_seconds)
+    raise AssertionError("tool bridge retry loop exhausted")
+
+
+def retryable_tool_bridge_error(exc: BaseException) -> bool:
+    retryable = (
+        ConnectionAbortedError,
+        ConnectionResetError,
+        ConnectionRefusedError,
+        TimeoutError,
+        http.client.RemoteDisconnected,
+    )
+    if isinstance(exc, retryable):
+        return True
+    if isinstance(exc, urllib.error.URLError):
+        return isinstance(exc.reason, retryable)
+    return False
+
+
+def tool_bridge_error_message(
+    tool_name: str,
+    arguments: dict[str, Any],
+    exc: BaseException,
+) -> str:
+    argument_text = json.dumps(arguments, ensure_ascii=False, sort_keys=True)
+    return f"Error running tool {tool_name} with arguments {argument_text}: {exc}"
 
 
 async def run_with_agents_sdk(config: dict[str, Any], harness_bin: str, arm: str) -> dict[str, Any]:

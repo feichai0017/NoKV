@@ -1246,6 +1246,11 @@ fn namespace_find_result(
             .into_iter()
             .map(namespace_card)
             .collect::<Result<Vec<_>, _>>()?,
+        facets: result
+            .facets
+            .into_iter()
+            .map(namespace_facet_summary)
+            .collect::<Result<Vec<_>, _>>()?,
         next_cursor: result.next_cursor,
         truncated: result.truncated,
         scanned_entries: usize::try_from(result.scanned_entries).map_err(|_| {
@@ -1304,6 +1309,13 @@ fn wire_namespace_find_request(
             .collect(),
         sort: request.sort.iter().map(wire_namespace_sort).collect(),
         include: request.include.iter().map(wire_namespace_include).collect(),
+        facets: request
+            .facets
+            .iter()
+            .map(|field| WireNamespaceFindField {
+                id: field.id.clone(),
+            })
+            .collect(),
         cursor: request.cursor.clone(),
         limit: u64::try_from(request.limit)
             .map_err(|_| ClientError::Protocol("namespace find limit exceeds u64".to_owned()))?,
@@ -2021,6 +2033,7 @@ mod tests {
                 }],
                 sort: Vec::new(),
                 include: vec![NamespaceInclude::Body],
+                facets: Vec::new(),
                 cursor: None,
                 limit: 5,
             })

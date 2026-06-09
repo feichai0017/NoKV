@@ -36,6 +36,7 @@ common_semantics:
     - Built-ins are path, name, kind, size_bytes, body.content_type, body.producer, and body.manifest_id.
     - Use only field ids returned by the current catalog.
     - Indexed values are field/value pairs on namespace paths and may repeat.
+    - stat facet summaries are global to the current directory index; they are not filtered by later find predicates.
     - Facet summaries expose discovered values and counts for low-cardinality facetable fields.
     - Facet summaries are capped and report distinct_count plus truncated.
 
@@ -76,7 +77,8 @@ tool_contract:
       - Predicate and sort fields must be built-in namespace fields or registered index fields exposed by the current catalog.
       - Missing values do not satisfy predicates.
       - Sort values that are present order before missing values.
-      - match_count is the total before pagination; scanned_entries is the descendant scan count.
+      - find.match_count is the total number of paths matching the predicates, not a grouped count; scanned_entries is the descendant scan count.
+      - Requested find facets are computed after predicates and before pagination.
       - With fields omitted, matches return compact metadata plus indexed_values.
       - With fields present, matches return path and projected values; missing fields are omitted, single values are scalars, and repeated values are arrays.
       - Requested include fields body, schema, and sample are attached to each returned match.

@@ -255,6 +255,7 @@ pub struct NamespaceFindRequest {
     pub predicates: Vec<NamespacePredicate>,
     pub sort: Vec<NamespaceSort>,
     pub include: Vec<NamespaceInclude>,
+    pub facets: Vec<NamespaceFindField>,
     pub cursor: Option<String>,
     pub limit: usize,
 }
@@ -266,6 +267,7 @@ pub struct NamespaceFindResult {
     pub snapshot_id: Option<u64>,
     pub match_count: usize,
     pub matches: Vec<NamespaceCard>,
+    pub facets: Vec<NamespaceFacetSummary>,
     pub next_cursor: Option<String>,
     pub truncated: bool,
     pub scanned_entries: usize,
@@ -574,6 +576,7 @@ where
             })
             .collect::<Result<Vec<_>, _>>()?;
         apply_sort(&mut cards, &request.sort);
+        let facets = filtered_facet_summaries(&cards, &request.facets, DEFAULT_FACET_VALUE_LIMIT);
         let total_matches = cards.len();
         let matches = cards
             .into_iter()
@@ -588,6 +591,7 @@ where
             snapshot_id: Some(version.get()),
             match_count: total_matches,
             matches,
+            facets,
             next_cursor: truncated.then(|| next_offset.to_string()),
             truncated,
             scanned_entries,
@@ -1501,29 +1505,105 @@ fn facet_summaries(indexes: &LoadedNamespaceIndex, limit: usize) -> Vec<Namespac
                     }
                 }
             }
-            if counts.is_empty() {
-                return None;
-            }
-            let distinct_count = counts.len();
-            let mut values = counts
-                .into_iter()
-                .map(|(value, count)| NamespaceFacetValue { value, count })
-                .collect::<Vec<_>>();
-            values.sort_by(|left, right| {
-                right
-                    .count
-                    .cmp(&left.count)
-                    .then_with(|| left.value.cmp(&right.value))
-            });
-            values.truncate(limit);
-            Some(NamespaceFacetSummary {
-                field: field.field.clone(),
-                values,
-                distinct_count,
-                truncated: distinct_count > limit,
-            })
+            facet_summary_from_counts(field.field.clone(), counts, limit)
         })
         .collect()
+}
+
+fn filtered_facet_summaries(
+    cards: &[NamespaceCard],
+    fields: &[NamespaceFindField],
+    limit: usize,
+) -> Vec<NamespaceFacetSummary> {
+    fields
+        .iter()
+        .filter_map(|field| {
+            let mut counts = BTreeMap::<NamespacePredicateValue, usize>::new();
+            for card in cards {
+                for value in card_facet_values(card, field) {
+                    *counts.entry(value).or_default() += 1;
+                }
+            }
+            facet_summary_from_counts(field.clone(), counts, limit)
+        })
+        .collect()
+}
+
+fn facet_summary_from_counts(
+    field: NamespaceFindField,
+    counts: BTreeMap<NamespacePredicateValue, usize>,
+    limit: usize,
+) -> Option<NamespaceFacetSummary> {
+    if counts.is_empty() {
+        return None;
+    }
+    let distinct_count = counts.len();
+    let mut values = counts
+        .into_iter()
+        .map(|(value, count)| NamespaceFacetValue { value, count })
+        .collect::<Vec<_>>();
+    values.sort_by(|left, right| {
+        right
+            .count
+            .cmp(&left.count)
+            .then_with(|| left.value.cmp(&right.value))
+    });
+    values.truncate(limit);
+    Some(NamespaceFacetSummary {
+        field,
+        values,
+        distinct_count,
+        truncated: distinct_count > limit,
+    })
+}
+
+fn card_facet_values(
+    card: &NamespaceCard,
+    field: &NamespaceFindField,
+) -> Vec<NamespacePredicateValue> {
+    match field.as_str() {
+        "path" => vec![NamespacePredicateValue::String(card.path.clone())],
+        "name" => vec![NamespacePredicateValue::String(card.name.clone())],
+        "kind" => vec![NamespacePredicateValue::String(
+            card_kind_label(&card.kind).to_owned(),
+        )],
+        "size_bytes" => card
+            .size_bytes
+            .map(NamespacePredicateValue::U64)
+            .into_iter()
+            .collect(),
+        "body.content_type" => card
+            .body
+            .as_ref()
+            .map(|body| NamespacePredicateValue::String(body.content_type.clone()))
+            .into_iter()
+            .collect(),
+        "body.producer" => card
+            .body
+            .as_ref()
+            .map(|body| NamespacePredicateValue::String(body.producer.clone()))
+            .into_iter()
+            .collect(),
+        "body.manifest_id" => card
+            .body
+            .as_ref()
+            .map(|body| NamespacePredicateValue::String(body.manifest_id.clone()))
+            .into_iter()
+            .collect(),
+        _ => card
+            .indexed_values
+            .iter()
+            .filter_map(|value| (value.field == *field).then_some(value.value.clone()))
+            .collect(),
+    }
+}
+
+fn card_kind_label(kind: &NamespaceCardKind) -> &'static str {
+    match kind {
+        NamespaceCardKind::Directory => "directory",
+        NamespaceCardKind::File => "file",
+        NamespaceCardKind::Symlink => "symlink",
+    }
 }
 
 fn namespace_index_field_from_record(record: PathIndexFieldRecord) -> NamespaceIndexField {
