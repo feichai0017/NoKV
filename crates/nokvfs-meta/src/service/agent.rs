@@ -2,6 +2,7 @@ use super::*;
 
 const DEFAULT_PAGE_LIMIT: usize = 100;
 const DEFAULT_SAMPLE_LIMIT: usize = 3;
+const DEFAULT_FACET_VALUE_LIMIT: usize = 10;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum NamespaceCardKind {
@@ -70,6 +71,7 @@ pub struct NamespaceQueryCatalog {
     pub filterable: Vec<NamespaceFilterCapability>,
     pub sortable: Vec<NamespaceSortField>,
     pub facetable: Vec<NamespaceFindField>,
+    pub facets: Vec<NamespaceFacetSummary>,
     pub projections: Vec<NamespaceInclude>,
 }
 
@@ -79,9 +81,24 @@ impl NamespaceQueryCatalog {
             filterable: Vec::new(),
             sortable: Vec::new(),
             facetable: Vec::new(),
+            facets: Vec::new(),
             projections: Vec::new(),
         }
     }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceFacetSummary {
+    pub field: NamespaceFindField,
+    pub values: Vec<NamespaceFacetValue>,
+    pub distinct_count: usize,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NamespaceFacetValue {
+    pub value: NamespacePredicateValue,
+    pub count: usize,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1217,6 +1234,7 @@ fn namespace_query_catalog(kind: NamespaceCardKind) -> NamespaceQueryCatalog {
             NamespaceFindField::body_content_type(),
             NamespaceFindField::body_producer(),
         ],
+        facets: Vec::new(),
         projections: vec![
             NamespaceInclude::Body,
             NamespaceInclude::Schema,
@@ -1466,6 +1484,46 @@ fn merge_index_catalog(catalog: &mut NamespaceQueryCatalog, indexes: &LoadedName
             catalog.facetable.push(field.field.clone());
         }
     }
+    catalog.facets = facet_summaries(indexes, DEFAULT_FACET_VALUE_LIMIT);
+}
+
+fn facet_summaries(indexes: &LoadedNamespaceIndex, limit: usize) -> Vec<NamespaceFacetSummary> {
+    indexes
+        .fields
+        .iter()
+        .filter(|field| field.facetable)
+        .filter_map(|field| {
+            let mut counts = BTreeMap::<NamespacePredicateValue, usize>::new();
+            for values in indexes.rows.values() {
+                for value in values {
+                    if value.field == field.field {
+                        *counts.entry(value.value.clone()).or_default() += 1;
+                    }
+                }
+            }
+            if counts.is_empty() {
+                return None;
+            }
+            let distinct_count = counts.len();
+            let mut values = counts
+                .into_iter()
+                .map(|(value, count)| NamespaceFacetValue { value, count })
+                .collect::<Vec<_>>();
+            values.sort_by(|left, right| {
+                right
+                    .count
+                    .cmp(&left.count)
+                    .then_with(|| left.value.cmp(&right.value))
+            });
+            values.truncate(limit);
+            Some(NamespaceFacetSummary {
+                field: field.field.clone(),
+                values,
+                distinct_count,
+                truncated: distinct_count > limit,
+            })
+        })
+        .collect()
 }
 
 fn namespace_index_field_from_record(record: PathIndexFieldRecord) -> NamespaceIndexField {

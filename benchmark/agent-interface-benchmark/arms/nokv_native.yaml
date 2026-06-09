@@ -21,7 +21,8 @@ common_semantics:
     - Use ls or stat from /yanex to discover corpus structure.
     - Do not assume a path exists until a tool result returns it.
   pages:
-    - Tool limits are positive integers from 1 to 100.
+    - ls and read limits are positive integers from 1 to 100.
+    - find limits are positive integers from 1 to 10.
     - Omitted limits use the adapter default.
     - Continue with next_cursor until it is null; truncated=true means more results exist.
   evidence:
@@ -35,6 +36,8 @@ common_semantics:
     - Built-ins are path, name, kind, size_bytes, body.content_type, body.producer, and body.manifest_id.
     - Use only field ids returned by the current catalog.
     - Indexed values are field/value pairs on namespace paths and may repeat.
+    - Facet summaries expose discovered values and counts for low-cardinality facetable fields.
+    - Facet summaries are capped and report distinct_count plus truncated.
 
 tool_contract:
   - name: ls
@@ -47,6 +50,7 @@ tool_contract:
     purpose: Return the full namespace card for one path.
     notes:
       - Directory cards expose live entry counts and query catalogs.
+      - Query catalogs may expose facet summaries with value counts for facetable fields.
       - Structured file cards may expose schema, sample, and record_count for JSON, YAML, or text bodies.
       - body is a descriptor, not file content.
       - record_count includes provenance such as live_namespace, structured_body, materialized_index, or approximate.
@@ -75,7 +79,8 @@ tool_contract:
       - match_count is the total before pagination; scanned_entries is the descendant scan count.
       - With fields omitted, matches return compact metadata plus indexed_values.
       - With fields present, matches return path and projected values; missing fields are omitted, single values are scalars, and repeated values are arrays.
-      - Requested include fields body, schema, sample, and catalog are attached to each returned match.
+      - Requested include fields body, schema, and sample are attached to each returned match.
+      - Use stat on the search root to discover catalog fields; find results do not repeat catalogs per match.
 
 forbidden_assumptions:
   - Do not invent field ids; discover them from the returned catalog.

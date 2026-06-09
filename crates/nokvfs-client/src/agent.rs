@@ -1,19 +1,22 @@
 use nokvfs_meta::{
     MetadataStore, NamespaceBodyDescriptor, NamespaceCard, NamespaceCardKind,
-    NamespaceFilterCapability, NamespaceFindField, NamespaceFindRequest, NamespaceFindResult,
-    NamespaceInclude, NamespaceIndexValue, NamespaceListOptions, NamespaceListPage,
-    NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue, NamespaceQueryCatalog,
-    NamespaceReadFormat, NamespaceReadItem, NamespaceReadOptions, NamespaceReadPage,
-    NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
-    NamespaceSortDirection, NamespaceSortField, NoKvFs, RecordCountProvenance,
+    NamespaceFacetSummary, NamespaceFacetValue, NamespaceFilterCapability, NamespaceFindField,
+    NamespaceFindRequest, NamespaceFindResult, NamespaceInclude, NamespaceIndexValue,
+    NamespaceListOptions, NamespaceListPage, NamespacePredicate, NamespacePredicateOp,
+    NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem,
+    NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType,
+    NamespaceSchema, NamespaceSort, NamespaceSortDirection, NamespaceSortField, NoKvFs,
+    RecordCountProvenance,
 };
 use nokvfs_object::ObjectStore;
 use serde_json::{json, Map, Value};
 
 use crate::{ClientError, MetadataClient, NoKvFsClient};
 
-const DEFAULT_AGENT_LIMIT: usize = 100;
+const DEFAULT_AGENT_PAGE_LIMIT: usize = 100;
 const MAX_AGENT_PAGE_LIMIT: usize = 100;
+const DEFAULT_AGENT_FIND_LIMIT: usize = 10;
+const MAX_AGENT_FIND_LIMIT: usize = 10;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentToolDefinition {
@@ -221,14 +224,14 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                     },
                     "include": {
                         "type": "array",
-                        "items": {"type": "string", "enum": ["body", "schema", "sample", "catalog"]}
+                        "items": {"type": "string", "enum": ["body", "schema", "sample"]}
                     },
                     "fields": {
                         "type": "array",
                         "items": {"type": "string"}
                     },
                     "cursor": {"type": ["string", "null"]},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_PAGE_LIMIT}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_FIND_LIMIT}
                 },
                 "additionalProperties": false
             }),
@@ -258,7 +261,7 @@ where
         path,
         NamespaceListOptions {
             cursor: optional_string_arg(args, "cursor")?,
-            limit: optional_usize_arg(args, "limit")?.unwrap_or(DEFAULT_AGENT_LIMIT),
+            limit: optional_usize_arg(args, "limit")?.unwrap_or(DEFAULT_AGENT_PAGE_LIMIT),
         },
     )?;
     Ok(list_page_json(&page))
@@ -288,7 +291,7 @@ where
         format: read_format_arg(args)?,
         cursor: optional_string_arg(args, "cursor")?,
         offset: optional_u64_arg(args, "offset")?.unwrap_or(0),
-        limit: optional_usize_arg(args, "limit")?.unwrap_or(DEFAULT_AGENT_LIMIT),
+        limit: optional_usize_arg(args, "limit")?.unwrap_or(DEFAULT_AGENT_PAGE_LIMIT),
         expected_generation: optional_u64_arg(args, "expected_generation")?,
     };
     guard_large_structured_pagination(namespace, path, &options)?;
@@ -335,7 +338,8 @@ where
         sort: sort_arg(args)?,
         include: include.clone(),
         cursor: optional_string_arg(args, "cursor")?,
-        limit: optional_usize_arg(args, "limit")?.unwrap_or(DEFAULT_AGENT_LIMIT),
+        limit: optional_bounded_usize_arg(args, "limit", MAX_AGENT_FIND_LIMIT)?
+            .unwrap_or(DEFAULT_AGENT_FIND_LIMIT),
     })?;
     Ok(find_result_json(&result, &include, fields.as_deref()))
 }
@@ -560,7 +564,27 @@ fn catalog_json(catalog: &NamespaceQueryCatalog) -> Value {
         "filterable": catalog.filterable.iter().map(filter_capability_json).collect::<Vec<_>>(),
         "sortable": catalog.sortable.iter().map(|field| field.id.clone()).collect::<Vec<_>>(),
         "facetable": catalog.facetable.iter().map(|field| field.id.clone()).collect::<Vec<_>>(),
-        "projections": catalog.projections.iter().map(include_name).collect::<Vec<_>>(),
+        "facets": catalog.facets.iter().map(facet_summary_json).collect::<Vec<_>>(),
+        "projections": catalog.projections.iter()
+            .filter(|include| !matches!(include, NamespaceInclude::Catalog))
+            .map(include_name)
+            .collect::<Vec<_>>(),
+    })
+}
+
+fn facet_summary_json(facet: &NamespaceFacetSummary) -> Value {
+    json!({
+        "field": facet.field.id,
+        "values": facet.values.iter().map(facet_value_json).collect::<Vec<_>>(),
+        "distinct_count": facet.distinct_count,
+        "truncated": facet.truncated,
+    })
+}
+
+fn facet_value_json(value: &NamespaceFacetValue) -> Value {
+    json!({
+        "value": predicate_value_json(&value.value),
+        "count": value.count,
     })
 }
 
@@ -635,13 +659,21 @@ fn optional_u64_arg(args: &Value, name: &'static str) -> Result<Option<u64>, Cli
 }
 
 fn optional_usize_arg(args: &Value, name: &'static str) -> Result<Option<usize>, ClientError> {
+    optional_bounded_usize_arg(args, name, MAX_AGENT_PAGE_LIMIT)
+}
+
+fn optional_bounded_usize_arg(
+    args: &Value,
+    name: &'static str,
+    max: usize,
+) -> Result<Option<usize>, ClientError> {
     optional_u64_arg(args, name)?
         .map(|value| {
             let value = usize::try_from(value)
                 .map_err(|_| ClientError::Protocol(format!("{name} exceeds platform limit")))?;
-            if value == 0 || value > MAX_AGENT_PAGE_LIMIT {
+            if value == 0 || value > max {
                 return Err(ClientError::Protocol(format!(
-                    "{name} must be between 1 and {MAX_AGENT_PAGE_LIMIT}"
+                    "{name} must be between 1 and {max}"
                 )));
             }
             Ok(value)
@@ -737,7 +769,6 @@ fn include_arg(args: &Value) -> Result<Vec<NamespaceInclude>, ClientError> {
                 "body" => Ok(NamespaceInclude::Body),
                 "schema" => Ok(NamespaceInclude::Schema),
                 "sample" => Ok(NamespaceInclude::Sample),
-                "catalog" => Ok(NamespaceInclude::Catalog),
                 other => Err(ClientError::Protocol(format!(
                     "unsupported include projection {other}"
                 ))),
@@ -990,6 +1021,15 @@ mod tests {
                 }],
                 sortable: vec![NamespaceSortField::new("run.status")],
                 facetable: vec![NamespaceFindField::new("run.status")],
+                facets: vec![NamespaceFacetSummary {
+                    field: NamespaceFindField::new("run.status"),
+                    values: vec![NamespaceFacetValue {
+                        value: NamespacePredicateValue::String("completed".to_owned()),
+                        count: 1,
+                    }],
+                    distinct_count: 1,
+                    truncated: false,
+                }],
                 projections: vec![
                     NamespaceInclude::Body,
                     NamespaceInclude::Schema,
@@ -1015,6 +1055,56 @@ mod tests {
     }
 
     #[test]
+    fn find_tool_schema_excludes_catalog_include_and_caps_limit_at_ten() {
+        let tools = agent_tool_definitions();
+        let find = tools
+            .iter()
+            .find(|tool| tool.name == "find")
+            .expect("find tool must be registered");
+
+        let include_enum = find.parameters["properties"]["include"]["items"]["enum"]
+            .as_array()
+            .expect("include enum must be present");
+        assert_eq!(
+            include_enum.as_slice(),
+            json!(["body", "schema", "sample"]).as_array().unwrap()
+        );
+        assert_eq!(find.parameters["properties"]["limit"]["maximum"], 10);
+    }
+
+    #[test]
+    fn stat_tool_exposes_catalog_without_advertising_catalog_find_include() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "stat",
+            &json!({
+                "path": "/runs",
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(
+            output["card"]["catalog"]["filterable"][0]["field"],
+            "run.status"
+        );
+        assert_eq!(
+            output["card"]["catalog"]["projections"],
+            json!(["body", "schema", "sample"])
+        );
+        assert_eq!(
+            output["card"]["catalog"]["facets"][0],
+            json!({
+                "field": "run.status",
+                "values": [{"value": "completed", "count": 1}],
+                "distinct_count": 1,
+                "truncated": false
+            })
+        );
+    }
+
+    #[test]
     fn find_tool_translates_catalog_field_ids() {
         let namespace = FakeNamespace::new();
 
@@ -1025,7 +1115,6 @@ mod tests {
                 "path": "/runs",
                 "predicates": [{"field": "run.status", "op": "eq", "value": "completed"}],
                 "sort": [{"field": "run.status", "direction": "desc"}],
-                "include": ["catalog"],
                 "limit": 5
             }),
         )
@@ -1038,17 +1127,14 @@ mod tests {
             NamespacePredicateValue::String("completed".to_owned())
         );
         assert_eq!(request.sort[0].field.id, "run.status");
-        assert_eq!(request.include, vec![NamespaceInclude::Catalog]);
+        assert_eq!(request.include, Vec::<NamespaceInclude>::new());
         assert_eq!(output["match_count"], 1);
         assert_eq!(
             output["matches"][0]["indexed_values"][0]["field"],
             "run.status"
         );
         assert!(output.get("catalog").is_none() || output["catalog"].is_null());
-        assert_eq!(
-            output["matches"][0]["catalog"]["filterable"][0]["field"],
-            "run.status"
-        );
+        assert!(output["matches"][0].get("catalog").is_none());
     }
 
     #[test]
@@ -1060,7 +1146,7 @@ mod tests {
             "find",
             &json!({
                 "path": "/runs",
-                "include": ["body", "schema", "sample", "catalog"],
+                "include": ["body", "schema", "sample"],
                 "limit": 1
             }),
         )
@@ -1073,15 +1159,74 @@ mod tests {
                 NamespaceInclude::Body,
                 NamespaceInclude::Schema,
                 NamespaceInclude::Sample,
-                NamespaceInclude::Catalog
             ]
         );
         let match_ = &output["matches"][0];
         assert_eq!(match_["body"]["content_type"], "application/json");
         assert_eq!(match_["schema"]["record_type"], "json_object");
         assert_eq!(match_["sample"][0], r#"{"status":"completed"}"#);
-        assert_eq!(match_["catalog"]["filterable"][0]["field"], "run.status");
+        assert!(match_.get("catalog").is_none());
         assert!(output.get("catalog").is_none() || output["catalog"].is_null());
+    }
+
+    #[test]
+    fn find_tool_rejects_catalog_include() {
+        let namespace = FakeNamespace::new();
+
+        let err = execute_agent_tool(
+            &namespace,
+            "find",
+            &json!({
+                "path": "/runs",
+                "include": ["catalog"],
+                "limit": 1
+            }),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ClientError::Protocol(ref message) if message.contains("unsupported include projection catalog")),
+            "unexpected error: {err:?}"
+        );
+        assert!(namespace.last_find.borrow().is_none());
+    }
+
+    #[test]
+    fn find_tool_defaults_to_limit_ten() {
+        let namespace = FakeNamespace::new();
+
+        execute_agent_tool(
+            &namespace,
+            "find",
+            &json!({
+                "path": "/runs",
+            }),
+        )
+        .unwrap();
+
+        let request = namespace.last_find.borrow().clone().unwrap();
+        assert_eq!(request.limit, 10);
+    }
+
+    #[test]
+    fn find_tool_rejects_limit_above_ten() {
+        let namespace = FakeNamespace::new();
+
+        let err = execute_agent_tool(
+            &namespace,
+            "find",
+            &json!({
+                "path": "/runs",
+                "limit": 11
+            }),
+        )
+        .unwrap_err();
+
+        assert!(
+            matches!(err, ClientError::Protocol(ref message) if message.contains("limit must be between 1 and 10")),
+            "unexpected error: {err:?}"
+        );
+        assert!(namespace.last_find.borrow().is_none());
     }
 
     #[test]

@@ -4,27 +4,29 @@ use std::sync::{mpsc, Arc, Mutex, OnceLock};
 use std::thread;
 
 use nokvfs_meta::{
-    DentryWithAttr, MetadError, NamespaceCard, NamespaceCardKind, NamespaceFilterCapability,
-    NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceGrepMatch,
-    NamespaceGrepRequest, NamespaceGrepResult, NamespaceInclude, NamespaceIndexValue,
-    NamespaceListPage, NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue,
-    NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadOptions, NamespaceReadPage,
-    NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
-    NamespaceSortDirection, NamespaceSortField, PreparedArtifact, RecordCountProvenance,
+    DentryWithAttr, MetadError, NamespaceCard, NamespaceCardKind, NamespaceFacetSummary,
+    NamespaceFacetValue, NamespaceFilterCapability, NamespaceFindField, NamespaceFindRequest,
+    NamespaceFindResult, NamespaceGrepMatch, NamespaceGrepRequest, NamespaceGrepResult,
+    NamespaceInclude, NamespaceIndexValue, NamespaceListPage, NamespacePredicate,
+    NamespacePredicateOp, NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat,
+    NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType,
+    NamespaceSchema, NamespaceSort, NamespaceSortDirection, NamespaceSortField, PreparedArtifact,
+    RecordCountProvenance,
 };
 use nokvfs_object::ObjectReadBlock;
 use nokvfs_protocol::{
     decode_request, encode_envelope, MetadataProtocolError, MetadataRpcEnvelope,
     MetadataRpcRequest, MetadataRpcResult, WireBodyReadPlan, WireDentryWithAttr, WireMetadataError,
-    WireNamespaceCard, WireNamespaceCardKind, WireNamespaceFilterCapability,
-    WireNamespaceFindField, WireNamespaceFindRequest, WireNamespaceFindResult,
-    WireNamespaceGrepMatch, WireNamespaceGrepRequest, WireNamespaceGrepResult,
-    WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage, WireNamespacePredicate,
-    WireNamespacePredicateOp, WireNamespacePredicateValue, WireNamespaceQueryCatalog,
-    WireNamespaceReadFormat, WireNamespaceReadItem, WireNamespaceReadOptions,
-    WireNamespaceReadPage, WireNamespaceRecordCount, WireNamespaceRecordType, WireNamespaceSchema,
-    WireNamespaceSort, WireNamespaceSortDirection, WireNamespaceSortField, WireObjectReadBlock,
-    WirePathMetadata, WirePreparedArtifact, WireRecordCountProvenance,
+    WireNamespaceCard, WireNamespaceCardKind, WireNamespaceFacetSummary, WireNamespaceFacetValue,
+    WireNamespaceFilterCapability, WireNamespaceFindField, WireNamespaceFindRequest,
+    WireNamespaceFindResult, WireNamespaceGrepMatch, WireNamespaceGrepRequest,
+    WireNamespaceGrepResult, WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage,
+    WireNamespacePredicate, WireNamespacePredicateOp, WireNamespacePredicateValue,
+    WireNamespaceQueryCatalog, WireNamespaceReadFormat, WireNamespaceReadItem,
+    WireNamespaceReadOptions, WireNamespaceReadPage, WireNamespaceRecordCount,
+    WireNamespaceRecordType, WireNamespaceSchema, WireNamespaceSort, WireNamespaceSortDirection,
+    WireNamespaceSortField, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
+    WireRecordCountProvenance,
 };
 use nokvfs_types::{DentryName, InodeId, MountId};
 
@@ -970,11 +972,36 @@ fn wire_namespace_query_catalog(catalog: &NamespaceQueryCatalog) -> WireNamespac
             .iter()
             .map(wire_namespace_find_field)
             .collect(),
+        facets: catalog
+            .facets
+            .iter()
+            .map(wire_namespace_facet_summary)
+            .collect(),
         projections: catalog
             .projections
             .iter()
             .map(wire_namespace_include)
             .collect(),
+    }
+}
+
+fn wire_namespace_facet_summary(facet: &NamespaceFacetSummary) -> WireNamespaceFacetSummary {
+    WireNamespaceFacetSummary {
+        field: wire_namespace_find_field(&facet.field),
+        values: facet
+            .values
+            .iter()
+            .map(wire_namespace_facet_value)
+            .collect(),
+        distinct_count: facet.distinct_count as u64,
+        truncated: facet.truncated,
+    }
+}
+
+fn wire_namespace_facet_value(value: &NamespaceFacetValue) -> WireNamespaceFacetValue {
+    WireNamespaceFacetValue {
+        value: wire_namespace_predicate_value(&value.value),
+        count: value.count as u64,
     }
 }
 

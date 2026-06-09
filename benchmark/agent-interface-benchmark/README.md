@@ -39,8 +39,9 @@ read, index catalog, pagination, consistency, or evidence semantics.
 The default Phase 1 API surface is `openai_agents_responses_schema_once`. The
 Rust harness still owns batch planning, local judging, telemetry JSONL, and
 NoKV/SQLite tool execution. A Python runner uses `openai-agents>=0.7.0,<0.8.0`
-for the model/tool loop and a custom Responses model wrapper that sends the full
-tool schema only on the first model request in each task/repeat. Tool calls are
+for the model/tool loop and a custom Responses model wrapper. Continuation
+requests keep the same tool schemas available so the model can make additional
+tool calls after observing tool outputs. Tool calls are
 posted back to a per-run loopback bridge in the Rust harness.
 
 ## Corpus
@@ -133,6 +134,8 @@ Target native behavior:
 - `ls`/`stat` return typed directory/file cards, not flat file entries.
 - `entry_count`, `record_count`, `schema`, `sample`, and body descriptors are
   first-class fields.
+- `stat` catalogs expose facetable fields and bounded facet summaries when the
+  native index has value counts.
 - `read` defaults to structured pagination; raw bytes require explicit
   `format = "bytes"`.
 - `find(path, filter, sort, limit, cursor, include)` is the core exploration
@@ -212,7 +215,7 @@ benchmark/agent-interface-benchmark/.venv/bin/python -m pip install -r benchmark
 
 Set `YANEX_BENCH_AGENT_SDK_LIVE_PROBE=1` to make the Agent SDK runner perform a
 real schema-once Responses continuation probe before a run. Probe failure is a
-run failure; the runner does not fall back to repeating tool schemas.
+run failure.
 
 Run all fixed Phase 1 tasks for all arms:
 

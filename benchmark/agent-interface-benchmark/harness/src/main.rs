@@ -7645,7 +7645,7 @@ mod tests {
     }
 
     #[test]
-    fn agent_sdk_runner_omits_tool_schema_after_first_tool_turn() {
+    fn agent_sdk_runner_keeps_tools_available_after_first_tool_turn() {
         let _env_lock = ENV_MUTEX.lock().unwrap();
         let dir = tempfile::tempdir().unwrap();
         let data_root = dir.path().join("data");
@@ -7726,25 +7726,28 @@ mod tests {
             requests[0]["text"]["format"],
             json!({"type": "json_object"})
         );
+        let continuation_tools = requests[1]["tools"].as_array().unwrap();
         assert!(
-            requests[1].get("tools").is_none(),
-            "Agent SDK schema-once runner must not repeat tool schema"
+            continuation_tools
+                .iter()
+                .any(|tool| tool["name"] == "query_sql"),
+            "Agent SDK continuation must keep tools available for additional calls"
         );
         assert!(
             requests[1].get("text").is_none(),
             "Agent SDK schema-once runner must not repeat initial structured-output config"
         );
-        assert!(
-            requests[1].get("model").is_none(),
-            "Agent SDK schema-once continuation must not resend model configuration"
+        assert_eq!(
+            requests[1]["model"], "unit-profile-model",
+            "Agent SDK schema-once continuation must include the Responses API required model"
         );
         assert!(
             requests[1].get("max_output_tokens").is_none(),
-            "Agent SDK schema-once continuation must only send continuation input"
+            "Agent SDK continuation must not repeat max_output_tokens"
         );
         assert!(
             requests[1].get("temperature").is_none(),
-            "Agent SDK schema-once continuation must only send continuation input"
+            "Agent SDK continuation must not repeat temperature"
         );
         assert_eq!(requests[1]["previous_response_id"], "resp-agent-tool-0");
         let tool_outputs = requests[1]["input"].as_array().unwrap();
@@ -7773,14 +7776,14 @@ mod tests {
             telemetry["api_calls"][1]["previous_response_id"],
             "resp-agent-tool-0"
         );
-        assert_eq!(telemetry["api_calls"][1]["sent_tool_schema"], false);
+        assert_eq!(telemetry["api_calls"][1]["sent_tool_schema"], true);
         assert_eq!(
             telemetry["api_calls"][1]["sent_initial_instructions"],
             false
         );
         assert_eq!(
             telemetry["derived_metrics"]["tool_schema_repeated_count"],
-            0
+            1
         );
         assert_eq!(telemetry["derived_metrics"]["tool_call_count"], 1);
     }

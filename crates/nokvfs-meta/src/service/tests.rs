@@ -577,6 +577,27 @@ fn namespace_find_uses_catalog_field_ids_and_registered_index_values() {
         .catalog
         .facetable
         .contains(&NamespaceFindField::new("run.script")));
+    let status_facet = card
+        .catalog
+        .facets
+        .iter()
+        .find(|facet| facet.field == NamespaceFindField::new("run.status"))
+        .expect("run.status facet summary must be available");
+    assert_eq!(status_facet.distinct_count, 2);
+    assert!(!status_facet.truncated);
+    assert_eq!(
+        status_facet.values,
+        vec![
+            NamespaceFacetValue {
+                value: NamespacePredicateValue::String("cancelled".to_owned()),
+                count: 1,
+            },
+            NamespaceFacetValue {
+                value: NamespacePredicateValue::String("completed".to_owned()),
+                count: 1,
+            },
+        ]
+    );
 
     let result = service
         .find_paths(NamespaceFindRequest {
@@ -614,6 +635,50 @@ fn namespace_find_uses_catalog_field_ids_and_registered_index_values() {
         ]
     );
     assert_eq!(run_b.attr.file_type, FileType::Directory);
+}
+
+#[test]
+fn namespace_stat_caps_high_cardinality_facet_summaries() {
+    let service = service();
+    service.create_dir_path("/runs", 0o755, 1000, 1000).unwrap();
+    for index in 0..12 {
+        service
+            .create_dir_path(&format!("/runs/run-{index:02}"), 0o755, 1000, 1000)
+            .unwrap();
+    }
+
+    service
+        .register_namespace_index(NamespaceIndexRegistration {
+            path: "/runs".to_owned(),
+            fields: vec![NamespaceIndexField {
+                field: NamespaceFindField::new("run.id"),
+                operators: vec![NamespacePredicateOp::Eq],
+                sortable: true,
+                facetable: true,
+            }],
+            rows: (0..12)
+                .map(|index| NamespaceIndexRow {
+                    path: format!("/runs/run-{index:02}"),
+                    values: vec![NamespaceIndexValue {
+                        field: NamespaceFindField::new("run.id"),
+                        value: NamespacePredicateValue::String(format!("run-{index:02}")),
+                    }],
+                })
+                .collect(),
+        })
+        .unwrap();
+
+    let card = service.stat_card("/runs").unwrap().unwrap();
+    let run_id_facet = card
+        .catalog
+        .facets
+        .iter()
+        .find(|facet| facet.field == NamespaceFindField::new("run.id"))
+        .expect("run.id facet summary must be available");
+
+    assert_eq!(run_id_facet.distinct_count, 12);
+    assert_eq!(run_id_facet.values.len(), 10);
+    assert!(run_id_facet.truncated);
 }
 
 #[test]

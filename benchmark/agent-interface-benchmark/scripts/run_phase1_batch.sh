@@ -424,7 +424,7 @@ run_one_batch() {
     optional_args+=(--max-tool-calls "${max_tool_calls}")
   fi
 
-  "${cargo_bin}" run --manifest-path "${repo_root}/benchmark/agent-interface-benchmark/harness/Cargo.toml" -- run-batch \
+  PYTHON="${python_bin}" "${cargo_bin}" run --manifest-path "${repo_root}/benchmark/agent-interface-benchmark/harness/Cargo.toml" -- run-batch \
     --data-root "${data_root}" \
     "${arm_arg[@]}" \
     ${optional_args+"${optional_args[@]}"} \

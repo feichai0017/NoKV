@@ -54,14 +54,15 @@ use nokvfs_types::{
 use sha2::{Digest, Sha256};
 
 pub use agent::{
-    NamespaceBodyDescriptor, NamespaceCard, NamespaceCardKind, NamespaceFilterCapability,
-    NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceGrepMatch,
-    NamespaceGrepRequest, NamespaceGrepResult, NamespaceInclude, NamespaceIndexField,
-    NamespaceIndexRegistration, NamespaceIndexRow, NamespaceIndexValue, NamespaceListOptions,
-    NamespaceListPage, NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue,
-    NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem, NamespaceReadOptions,
-    NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
-    NamespaceSortDirection, NamespaceSortField, RecordCountProvenance,
+    NamespaceBodyDescriptor, NamespaceCard, NamespaceCardKind, NamespaceFacetSummary,
+    NamespaceFacetValue, NamespaceFilterCapability, NamespaceFindField, NamespaceFindRequest,
+    NamespaceFindResult, NamespaceGrepMatch, NamespaceGrepRequest, NamespaceGrepResult,
+    NamespaceInclude, NamespaceIndexField, NamespaceIndexRegistration, NamespaceIndexRow,
+    NamespaceIndexValue, NamespaceListOptions, NamespaceListPage, NamespacePredicate,
+    NamespacePredicateOp, NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat,
+    NamespaceReadItem, NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount,
+    NamespaceRecordType, NamespaceSchema, NamespaceSort, NamespaceSortDirection,
+    NamespaceSortField, RecordCountProvenance,
 };
 
 const BODY_SUMMARY_CHUNK_INDEX: u64 = u64::MAX;

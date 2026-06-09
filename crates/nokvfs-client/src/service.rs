@@ -7,13 +7,14 @@ use std::time::Duration;
 use std::{collections::HashMap, io};
 
 use nokvfs_meta::{
-    DentryWithAttr, NamespaceCard, NamespaceCardKind, NamespaceFilterCapability,
-    NamespaceFindField, NamespaceFindRequest, NamespaceFindResult, NamespaceInclude,
-    NamespaceIndexValue, NamespaceListOptions, NamespaceListPage, NamespacePredicate,
-    NamespacePredicateOp, NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat,
-    NamespaceReadItem, NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount,
-    NamespaceRecordType, NamespaceSchema, NamespaceSort, NamespaceSortDirection,
-    NamespaceSortField, ObjectTransferStats, RecordCountProvenance, RenameReplaceResult,
+    DentryWithAttr, NamespaceCard, NamespaceCardKind, NamespaceFacetSummary, NamespaceFacetValue,
+    NamespaceFilterCapability, NamespaceFindField, NamespaceFindRequest, NamespaceFindResult,
+    NamespaceInclude, NamespaceIndexValue, NamespaceListOptions, NamespaceListPage,
+    NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue, NamespaceQueryCatalog,
+    NamespaceReadFormat, NamespaceReadItem, NamespaceReadOptions, NamespaceReadPage,
+    NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
+    NamespaceSortDirection, NamespaceSortField, ObjectTransferStats, RecordCountProvenance,
+    RenameReplaceResult,
 };
 use nokvfs_object::{
     delete_staged_objects, put_chunked_object, read_object_blocks, ChunkWriteOptions,
@@ -24,14 +25,14 @@ use nokvfs_protocol::{
     decode_envelope, encode_request, MetadataProtocolError, MetadataRpcEnvelope,
     MetadataRpcRequest, MetadataRpcResult, WireBodyDescriptor, WireBodyReadPlan, WireChunkManifest,
     WireDentryWithAttr, WireMetadataError, WireNamespaceCard, WireNamespaceCardKind,
-    WireNamespaceFilterCapability, WireNamespaceFindField, WireNamespaceFindRequest,
-    WireNamespaceFindResult, WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage,
-    WireNamespacePredicate, WireNamespacePredicateOp, WireNamespacePredicateValue,
-    WireNamespaceQueryCatalog, WireNamespaceReadFormat, WireNamespaceReadItem,
-    WireNamespaceReadOptions, WireNamespaceReadPage, WireNamespaceRecordCount,
-    WireNamespaceRecordType, WireNamespaceSchema, WireNamespaceSort, WireNamespaceSortDirection,
-    WireNamespaceSortField, WireObjectReadBlock, WirePathMetadata, WirePreparedArtifact,
-    WireRecordCountProvenance,
+    WireNamespaceFacetSummary, WireNamespaceFacetValue, WireNamespaceFilterCapability,
+    WireNamespaceFindField, WireNamespaceFindRequest, WireNamespaceFindResult,
+    WireNamespaceInclude, WireNamespaceIndexValue, WireNamespaceListPage, WireNamespacePredicate,
+    WireNamespacePredicateOp, WireNamespacePredicateValue, WireNamespaceQueryCatalog,
+    WireNamespaceReadFormat, WireNamespaceReadItem, WireNamespaceReadOptions,
+    WireNamespaceReadPage, WireNamespaceRecordCount, WireNamespaceRecordType, WireNamespaceSchema,
+    WireNamespaceSort, WireNamespaceSortDirection, WireNamespaceSortField, WireObjectReadBlock,
+    WirePathMetadata, WirePreparedArtifact, WireRecordCountProvenance,
 };
 use nokvfs_types::{
     parse_absolute_path, BlockDescriptor, BodyDescriptor, ChunkManifest, DentryName, FileType,
@@ -1055,7 +1056,7 @@ fn namespace_card(card: WireNamespaceCard) -> Result<NamespaceCard, ClientError>
                 block_size: body.block_size,
             }
         }),
-        catalog: namespace_query_catalog(card.catalog),
+        catalog: namespace_query_catalog(card.catalog)?,
         indexed_values: card
             .indexed_values
             .into_iter()
@@ -1098,8 +1099,10 @@ fn namespace_record_type(record_type: WireNamespaceRecordType) -> NamespaceRecor
     }
 }
 
-fn namespace_query_catalog(catalog: WireNamespaceQueryCatalog) -> NamespaceQueryCatalog {
-    NamespaceQueryCatalog {
+fn namespace_query_catalog(
+    catalog: WireNamespaceQueryCatalog,
+) -> Result<NamespaceQueryCatalog, ClientError> {
+    Ok(NamespaceQueryCatalog {
         filterable: catalog
             .filterable
             .into_iter()
@@ -1115,12 +1118,44 @@ fn namespace_query_catalog(catalog: WireNamespaceQueryCatalog) -> NamespaceQuery
             .into_iter()
             .map(namespace_find_field)
             .collect(),
+        facets: catalog
+            .facets
+            .into_iter()
+            .map(namespace_facet_summary)
+            .collect::<Result<Vec<_>, _>>()?,
         projections: catalog
             .projections
             .into_iter()
             .map(namespace_include)
             .collect(),
-    }
+    })
+}
+
+fn namespace_facet_summary(
+    facet: WireNamespaceFacetSummary,
+) -> Result<NamespaceFacetSummary, ClientError> {
+    Ok(NamespaceFacetSummary {
+        field: namespace_find_field(facet.field),
+        values: facet
+            .values
+            .into_iter()
+            .map(namespace_facet_value)
+            .collect::<Result<Vec<_>, _>>()?,
+        distinct_count: usize::try_from(facet.distinct_count).map_err(|_| {
+            ClientError::Protocol("facet distinct_count exceeds platform limit".to_owned())
+        })?,
+        truncated: facet.truncated,
+    })
+}
+
+fn namespace_facet_value(
+    value: WireNamespaceFacetValue,
+) -> Result<NamespaceFacetValue, ClientError> {
+    Ok(NamespaceFacetValue {
+        value: namespace_predicate_value(value.value),
+        count: usize::try_from(value.count)
+            .map_err(|_| ClientError::Protocol("facet count exceeds platform limit".to_owned()))?,
+    })
 }
 
 fn namespace_filter_capability(
@@ -1922,7 +1957,7 @@ mod tests {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"namespace_card","card":{"path":"/index.json","name":"index.json","kind":"file","evidence":"nokv-native:///index.json@generation:7","snapshot_id":9,"inode":42,"generation":7,"size_bytes":13,"entry_count":null,"record_count":{"count":3,"provenance":"structured_body"},"schema":{"record_type":"json_array","fields":[]},"sample":["\"a\""],"body":null,"catalog":{"filterable":[],"sortable":[],"facetable":[],"projections":[]},"indexed_values":[]}}}"#,
+                    r#"{"ok":true,"result":{"type":"namespace_card","card":{"path":"/index.json","name":"index.json","kind":"file","evidence":"nokv-native:///index.json@generation:7","snapshot_id":9,"inode":42,"generation":7,"size_bytes":13,"entry_count":null,"record_count":{"count":3,"provenance":"structured_body"},"schema":{"record_type":"json_array","fields":[]},"sample":["\"a\""],"body":null,"catalog":{"filterable":[],"sortable":[],"facetable":[],"facets":[],"projections":[]},"indexed_values":[]}}}"#,
                 ),
             )
             .unwrap();
@@ -1943,7 +1978,7 @@ mod tests {
                 request_id,
                 flags,
                 &response_body(
-                    r#"{"ok":true,"result":{"type":"namespace_find_result","result":{"path":"/runs","evidence":"nokv-native:///runs","snapshot_id":9,"match_count":1,"matches":[{"path":"/runs/a.stderr.txt","name":"a.stderr.txt","kind":"file","evidence":"nokv-native:///runs/a.stderr.txt@generation:7","snapshot_id":9,"inode":43,"generation":7,"size_bytes":10,"entry_count":null,"record_count":null,"schema":null,"sample":[],"body":null,"catalog":{"filterable":[],"sortable":[],"facetable":[],"projections":[]},"indexed_values":[]}],"next_cursor":null,"truncated":false,"scanned_entries":2}}}"#,
+                    r#"{"ok":true,"result":{"type":"namespace_find_result","result":{"path":"/runs","evidence":"nokv-native:///runs","snapshot_id":9,"match_count":1,"matches":[{"path":"/runs/a.stderr.txt","name":"a.stderr.txt","kind":"file","evidence":"nokv-native:///runs/a.stderr.txt@generation:7","snapshot_id":9,"inode":43,"generation":7,"size_bytes":10,"entry_count":null,"record_count":null,"schema":null,"sample":[],"body":null,"catalog":{"filterable":[],"sortable":[],"facetable":[],"facets":[],"projections":[]},"indexed_values":[]}],"next_cursor":null,"truncated":false,"scanned_entries":2}}}"#,
                 ),
             )
             .unwrap();

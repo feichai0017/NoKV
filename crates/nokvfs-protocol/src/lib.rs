@@ -335,7 +335,22 @@ pub struct WireNamespaceQueryCatalog {
     pub filterable: Vec<WireNamespaceFilterCapability>,
     pub sortable: Vec<WireNamespaceSortField>,
     pub facetable: Vec<WireNamespaceFindField>,
+    pub facets: Vec<WireNamespaceFacetSummary>,
     pub projections: Vec<WireNamespaceInclude>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceFacetSummary {
+    pub field: WireNamespaceFindField,
+    pub values: Vec<WireNamespaceFacetValue>,
+    pub distinct_count: u64,
+    pub truncated: bool,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
+pub struct WireNamespaceFacetValue {
+    pub value: WireNamespacePredicateValue,
+    pub count: u64,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]

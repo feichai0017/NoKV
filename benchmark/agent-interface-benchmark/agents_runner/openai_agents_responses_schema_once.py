@@ -17,6 +17,12 @@ import urllib.request
 from dataclasses import dataclass, field
 from typing import Any
 
+try:
+    from agents.models.interface import Model as AgentsModelBase
+except ModuleNotFoundError:
+    class AgentsModelBase:  # type: ignore[no-redef]
+        pass
+
 
 class RunnerContractError(RuntimeError):
     pass
@@ -68,7 +74,7 @@ class RecordedApiCall:
 
 
 @dataclass
-class SchemaOnceResponsesModel:
+class SchemaOnceResponsesModel(AgentsModelBase):
     model: str
     endpoint: str
     api_key: str
@@ -138,10 +144,12 @@ class SchemaOnceResponsesModel:
             return request
 
         request = {
+            "model": self.model,
             "previous_response_id": previous_response_id,
             "input": normalized_input,
+            "tools": serialize_tools(tools),
         }
-        assert_continuation_request_is_schema_once(request)
+        assert_continuation_request_preserves_tools(request)
         return request
 
     def send_request(self, request: dict[str, Any]) -> tuple[dict[str, Any], str | None, int, int]:
@@ -241,17 +249,19 @@ def serialize_tools(tools: list[Any]) -> list[dict[str, Any]]:
     return serialized
 
 
-def assert_continuation_request_is_schema_once(request: dict[str, Any]) -> None:
-    forbidden = {"tools", "instructions", "model", "max_output_tokens", "temperature", "text"}
+def assert_continuation_request_preserves_tools(request: dict[str, Any]) -> None:
+    forbidden = {"instructions", "max_output_tokens", "temperature", "text"}
     present = sorted(forbidden.intersection(request))
     if present:
         raise RunnerContractError(
-            "schema-once continuation serialized repeated fields: " + ", ".join(present)
+            "continuation serialized repeated initial fields: " + ", ".join(present)
         )
     if "previous_response_id" not in request:
-        raise RunnerContractError("schema-once continuation missing previous_response_id")
+        raise RunnerContractError("continuation missing previous_response_id")
+    if "tools" not in request:
+        raise RunnerContractError("continuation missing tools")
     if input_contains_initial_instructions(request.get("input")):
-        raise RunnerContractError("schema-once continuation repeated initial instructions")
+        raise RunnerContractError("continuation repeated initial instructions")
 
 
 def input_contains_initial_instructions(input_items: Any) -> bool:
@@ -463,6 +473,7 @@ def run_live_probe(config: dict[str, Any]) -> None:
     if not calls:
         raise RunnerContractError("live schema-once probe did not receive a function call")
     second_request = {
+        "model": config["model"],
         "previous_response_id": first_response["id"],
         "input": [
             {
@@ -471,8 +482,9 @@ def run_live_probe(config: dict[str, Any]) -> None:
                 "output": json.dumps({"ok": True}, separators=(",", ":")),
             }
         ],
+        "tools": [probe_tool],
     }
-    assert_continuation_request_is_schema_once(second_request)
+    assert_continuation_request_preserves_tools(second_request)
     send_probe_request(config["endpoint"], api_key, second_request)
 
 
