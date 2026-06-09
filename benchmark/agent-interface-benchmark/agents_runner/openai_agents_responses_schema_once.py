@@ -5,8 +5,10 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import importlib.metadata
 import json
 import os
+import re
 import subprocess
 import sys
 import time
@@ -18,6 +20,32 @@ from typing import Any
 
 class RunnerContractError(RuntimeError):
     pass
+
+
+OPENAI_AGENTS_REQUIREMENT = "openai-agents>=0.7.0,<0.8.0"
+
+
+def openai_agents_version_supported(version: str) -> bool:
+    match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
+    if match is None:
+        return False
+    major, minor, patch = (int(part) for part in match.groups())
+    return (major, minor, patch) >= (0, 7, 0) and (major, minor, patch) < (0, 8, 0)
+
+
+def require_supported_openai_agents() -> None:
+    try:
+        version = importlib.metadata.version("openai-agents")
+    except importlib.metadata.PackageNotFoundError as exc:
+        raise RuntimeError(
+            f"{OPENAI_AGENTS_REQUIREMENT} is required for "
+            "openai_agents_responses_schema_once"
+        ) from exc
+    if not openai_agents_version_supported(version):
+        raise RuntimeError(
+            f"{OPENAI_AGENTS_REQUIREMENT} is required for "
+            f"openai_agents_responses_schema_once; installed openai-agents=={version}"
+        )
 
 
 @dataclass
@@ -346,12 +374,15 @@ def post_tool_bridge(
 
 
 async def run_with_agents_sdk(config: dict[str, Any], harness_bin: str, arm: str) -> dict[str, Any]:
+    require_supported_openai_agents()
     try:
         from agents import Agent, ModelSettings, Runner, set_tracing_disabled
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "openai-agents>=0.7.0,<0.8.0 is required for "
-            "openai_agents_responses_schema_once"
+            f"{OPENAI_AGENTS_REQUIREMENT} is required for "
+            "openai_agents_responses_schema_once; install with "
+            "python3 -m pip install -r "
+            "benchmark/agent-interface-benchmark/agents_runner/requirements.txt"
         ) from exc
 
     set_tracing_disabled(True)
