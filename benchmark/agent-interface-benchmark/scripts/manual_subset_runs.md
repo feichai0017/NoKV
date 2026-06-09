@@ -20,6 +20,13 @@ then `YANEX_BENCH_MODEL`, then `OPENAI_MODEL`, and finally `gpt-5.5`. The base
 profile does not configure the model name. The script checks the model and API
 key before invoking Cargo.
 
+The default API surface uses the OpenAI Agents SDK runner. Install its Python
+dependency in the environment selected by `${PYTHON:-python3}`:
+
+```bash
+${PYTHON:-python3} -m pip install -r benchmark/agent-interface-benchmark/agents_runner/requirements.txt
+```
+
 If `cargo` is not on `PATH`, load the Rust environment first:
 
 ```bash
@@ -59,6 +66,7 @@ The benchmark is controlled by these axes:
 - `--output-jsonl PATH`: append telemetry records to this JSONL. Omit it to
   use `${DATA_ROOT}/results/YYYYMMDD/phase1-${timestamp}.jsonl`.
 - `--base-profile PATH`: use a non-default runtime profile.
+- `--api-surface SURFACE`: override the profile API surface.
 - `--model MODEL`: override the script-level model default.
 - `--max-completion-tokens N`: override profile completion budget.
 - `--max-turns N`: override profile model/tool turn budget.

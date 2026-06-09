@@ -161,15 +161,78 @@ if ! command -v "${cargo_bin}" >/dev/null 2>&1; then
   fi
 fi
 
+python_bin="${PYTHON:-python3}"
+
+profile_api_surface() {
+  local profile_path="$1"
+  awk -F: '
+    /^[[:space:]]*api_surface[[:space:]]*:/ {
+      value=$2
+      sub(/^[[:space:]]*/, "", value)
+      sub(/[[:space:]]*$/, "", value)
+      print value
+      exit
+    }
+  ' "${profile_path}"
+}
+
+require_agents_runner_dependencies() {
+  if [ "${active_api_surface}" != "openai_agents_responses_schema_once" ]; then
+    return 0
+  fi
+  if ! command -v "${python_bin}" >/dev/null 2>&1; then
+    echo "python is required for ${active_api_surface}: ${python_bin} was not found" >&2
+    exit 127
+  fi
+  if ! "${python_bin}" - <<'PY'; then
+import importlib.metadata
+import re
+import sys
+
+requirement = "openai-agents>=0.7.0,<0.8.0"
+try:
+    version = importlib.metadata.version("openai-agents")
+except importlib.metadata.PackageNotFoundError:
+    print(
+        f"{requirement} is required for openai_agents_responses_schema_once",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+match = re.match(r"^(\d+)\.(\d+)\.(\d+)", version)
+supported = False
+if match is not None:
+    parsed = tuple(int(part) for part in match.groups())
+    supported = (0, 7, 0) <= parsed < (0, 8, 0)
+if not supported:
+    print(
+        f"{requirement} is required for openai_agents_responses_schema_once; "
+        f"installed openai-agents=={version}",
+        file=sys.stderr,
+    )
+    sys.exit(1)
+PY
+    echo "Install with:" >&2
+    echo "  ${python_bin} -m pip install -r ${repo_root}/benchmark/agent-interface-benchmark/agents_runner/requirements.txt" >&2
+    exit 2
+  fi
+}
+
+active_api_surface="${api_surface:-$(profile_api_surface "${active_base_profile}")}"
+if [ -z "${active_api_surface}" ]; then
+  echo "api_surface is required: pass --api-surface or set api_surface in ${active_base_profile}" >&2
+  exit 2
+fi
+require_agents_runner_dependencies
+
 start_live_monitor() {
   if [ "${live_log}" = "0" ]; then
     return 0
   fi
-  if ! command -v python3 >/dev/null 2>&1; then
-    echo "live log disabled: python3 was not found" >&2
+  if ! command -v "${python_bin}" >/dev/null 2>&1; then
+    echo "live log disabled: ${python_bin} was not found" >&2
     return 0
   fi
-  python3 -u - "${output_jsonl}" <<'PY' &
+  "${python_bin}" -u - "${output_jsonl}" <<'PY' &
 import json
 import os
 import sys
@@ -374,7 +437,7 @@ Paths
 Runtime
   profile     ${active_base_profile}
   model       ${model}
-  api_surface ${api_surface:-profile}
+  api_surface ${active_api_surface}
   max_tokens  ${max_completion_tokens:-profile}
   live_log    ${live_log}
 

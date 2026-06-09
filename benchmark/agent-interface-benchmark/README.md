@@ -202,10 +202,10 @@ schema-once Agent SDK path:
   --output-jsonl benchmark/data/yanex-demo/results/legacy.jsonl
 ```
 
-Install runner dependencies in the Python environment used by `python3`:
+Install runner dependencies in the Python environment used by `${PYTHON:-python3}`:
 
 ```bash
-python3 -m pip install -r benchmark/agent-interface-benchmark/agents_runner/requirements.txt
+${PYTHON:-python3} -m pip install -r benchmark/agent-interface-benchmark/agents_runner/requirements.txt
 ```
 
 Set `YANEX_BENCH_AGENT_SDK_LIVE_PROBE=1` to make the Agent SDK runner perform a
