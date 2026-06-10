@@ -135,23 +135,22 @@ enforce limits, but it must not own the measured metadata semantics.
 Target native behavior:
 
 - `ls`/`stat` return typed directory/file cards, not flat file entries.
-- `entry_count`, `record_count`, `schema`, `sample`, and body descriptors are
-  first-class fields.
-- `stat` catalogs expose facetable fields and bounded facet summaries when the
-  native index has value counts.
+- `entry_count`, `record_count`, `schema`, `sample`, compact body descriptors,
+  catalog fields, and indexed values are available through `stat`.
+- `stat` cards avoid evidence, snapshot, generation, and storage-internal body
+  fields in the agent-visible payload.
 - `read` defaults to structured pagination; raw bytes require explicit
   `format = "bytes"`.
-- `find(path, filter, sort, limit, cursor, include)` is the core exploration
-  primitive.
+- `find(path, predicates, sort, fields, facets, cursor, limit)` searches paths
+  and projects indexed field values; body/schema/sample inspection uses `stat`
+  or `read`.
 - `find` uses a constrained predicate grammar declared by stat/catalog cards.
 - `catalog(path, field_prefix, include_facets)` provides compact field
-  discovery without requiring a full stat card.
+  discovery without requiring a full stat card; facets are opt-in.
 - `aggregate(path, predicates, group_by, measures, sort, limit)` provides
   compact summaries over indexed namespace facts.
-- every result includes snapshot/generation identity, truncation state, and
-  `next_cursor` when more results exist.
-- `record_count` includes provenance: live namespace, structured body,
-  materialized index, or approximate.
+- paginated results include truncation state and `next_cursor` when more
+  results exist.
 
 Generated `/index/*.json` files must not become hidden answer files. They can
 support facet-count tasks, but they are not a substitute for product-level

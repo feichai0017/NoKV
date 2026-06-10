@@ -15,8 +15,14 @@ runtime_context:
   field_discovery:
     - Use only field ids returned by stat or catalog for the current search root.
     - If a catalog is empty, use returned child_catalogs as candidate search roots.
+  tool_roles:
+    - Use ls to discover direct child paths.
+    - Use stat to inspect one path's compact card, including body, schema, sample, catalog, and indexed values.
+    - Use catalog to discover fields for find and aggregate.
+    - Use find to search paths and project indexed fields.
+    - Use aggregate for counts, groups, and summary measures.
+    - Use read only when the task requires actual file body content.
   safety:
     - Do not invent field ids or paths.
     - Do not treat body descriptors as file content.
     - Do not treat file size as record count.
-    - Do not assume two file reads saw the same body unless generation matches.

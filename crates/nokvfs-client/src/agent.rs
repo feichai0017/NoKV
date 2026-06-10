@@ -1,15 +1,13 @@
 use nokvfs_meta::{
     MetadataStore, NamespaceAggregateGroup, NamespaceAggregateMeasure, NamespaceAggregateOp,
-    NamespaceAggregateOutputMeasure, NamespaceAggregateRequest, NamespaceAggregateResult,
-    NamespaceAggregateSort, NamespaceAggregateValue, NamespaceBodyDescriptor, NamespaceCard,
-    NamespaceCardKind, NamespaceFacetSummary, NamespaceFacetValue, NamespaceFieldSource,
-    NamespaceFieldSourceKind, NamespaceFieldValue, NamespaceFilterCapability, NamespaceFindField,
-    NamespaceFindRequest, NamespaceFindResult, NamespaceInclude, NamespaceIndexValue,
-    NamespaceListOptions, NamespaceListPage, NamespacePredicate, NamespacePredicateOp,
-    NamespacePredicateValue, NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem,
-    NamespaceReadOptions, NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType,
-    NamespaceSchema, NamespaceSort, NamespaceSortDirection, NamespaceSortField, NoKvFs,
-    RecordCountProvenance,
+    NamespaceAggregateRequest, NamespaceAggregateResult, NamespaceAggregateSort,
+    NamespaceAggregateValue, NamespaceBodyDescriptor, NamespaceCard, NamespaceCardKind,
+    NamespaceFacetSummary, NamespaceFacetValue, NamespaceFilterCapability, NamespaceFindField,
+    NamespaceFindRequest, NamespaceFindResult, NamespaceIndexValue, NamespaceListOptions,
+    NamespaceListPage, NamespacePredicate, NamespacePredicateOp, NamespacePredicateValue,
+    NamespaceQueryCatalog, NamespaceReadFormat, NamespaceReadItem, NamespaceReadOptions,
+    NamespaceReadPage, NamespaceRecordCount, NamespaceRecordType, NamespaceSchema, NamespaceSort,
+    NamespaceSortDirection, NamespaceSortField, NoKvFs,
 };
 use nokvfs_object::ObjectStore;
 use serde_json::{json, Map, Value};
@@ -175,7 +173,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
     vec![
         AgentToolDefinition {
             name: "ls",
-            description: "List one page of direct children for a directory. ls is not recursive and returns compact entries; use stat when a full namespace card, catalog, indexed values, or body descriptor is needed.",
+            description: "List direct children to discover paths. Not recursive; use stat for one path details.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -189,7 +187,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "stat",
-            description: "Return the namespace card for one path, including counts, catalog, indexed values, schema/sample summaries, and body descriptor when present. The body descriptor is not file content; use read for bytes or structured records.",
+            description: "Inspect a single path compact card: counts, body, schema, sample, catalog, and indexed values. Use read for file body content.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -201,7 +199,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "catalog",
-            description: "Discover compact catalog field ids and capabilities for the current path before choosing find predicates, aggregate group_by fields, measures, sort fields, projections, or facets. If the current catalog is empty, returns catalog_empty and child_catalogs for direct child search roots.",
+            description: "Discover field ids for find predicates, projections, sort, facets, and aggregate group or measure fields.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -215,7 +213,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         },
         AgentToolDefinition {
             name: "read",
-            description: "Read a file body page. Structured mode is the default for JSON, YAML, and text bodies and uses cursor pagination; bytes mode uses offset ranges. Pass expected_generation when reading body evidence from a previously cited card.",
+            description: "Read file body content. Structured mode returns JSON, YAML, or text records; bytes mode returns byte ranges.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -225,18 +223,13 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                     "cursor": {"type": ["string", "null"]},
                     "offset": {"type": "integer", "minimum": 0},
                     "limit": {"type": "integer", "minimum": 1, "maximum": MAX_AGENT_PAGE_LIMIT},
-                    "expected_generation": {
-                        "type": ["integer", "null"],
-                        "minimum": 1,
-                        "description": "Optional generation from prior evidence; read reports a generation mismatch instead of reading stale evidence."
-                    }
                 },
                 "additionalProperties": false
             }),
         },
         AgentToolDefinition {
             name: "aggregate",
-            description: "Compute compact summaries over matching namespace paths using catalog field ids. Supports count, sum, avg, min, and max, optional group_by partitions, predicate filters, and sorting; use find, stat, or read when individual paths or file body evidence is required.",
+            description: "Compute summary rows using catalog field ids: count, sum, avg, min, max, group, filter, and sort.",
             parameters: json!({
                 "type": "object",
                 "required": ["path", "measures"],
@@ -246,7 +239,6 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "description": "Predicate over a catalog field id. exists and not_exists omit value; in requires an array value; all other operators require a scalar value.",
                             "required": ["field", "op"],
                             "properties": {
                                 "field": {"type": "string"},
@@ -279,7 +271,6 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "description": "Aggregate measure. count may omit field to count matching paths; non-count measures require a numeric field and ignore missing or non-numeric values.",
                             "required": ["name", "op"],
                             "properties": {
                                 "name": {"type": "string"},
@@ -309,7 +300,7 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
         AgentToolDefinition {
             name: "find",
             description:
-                "Recursively find descendant paths under a directory using catalog field ids. match_count is the total matches before pagination, limit only controls returned matches, requested facets are computed after predicates, and exists and not_exists omit value.",
+                "Search paths with catalog field predicates and project fields. Use read for body content and stat for schema or sample.",
             parameters: json!({
                 "type": "object",
                 "required": ["path"],
@@ -319,7 +310,6 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                         "type": "array",
                         "items": {
                             "type": "object",
-                            "description": "Predicate over a catalog field id. exists and not_exists omit value; in requires an array value; all other operators require a scalar value.",
                             "required": ["field", "op"],
                             "properties": {
                                 "field": {"type": "string"},
@@ -356,13 +346,8 @@ pub fn agent_tool_definitions() -> Vec<AgentToolDefinition> {
                             "additionalProperties": false
                         }
                     },
-                    "include": {
-                        "type": "array",
-                        "items": {"type": "string", "enum": ["body", "schema", "sample"]}
-                    },
                     "fields": {
                         "type": "array",
-                        "description": "Catalog field ids to project into values and field_values with source evidence on each match.",
                         "items": {"type": "string"}
                     },
                     "facets": {
@@ -417,8 +402,6 @@ where
         .agent_stat_card(path)?
         .ok_or_else(|| ClientError::NotFound(path.to_owned()))?;
     Ok(json!({
-        "tool": "stat",
-        "bytes_read": 0,
         "card": card_json(&card),
     }))
 }
@@ -429,7 +412,7 @@ where
 {
     let path = required_string_arg(args, "path")?;
     let field_prefix = optional_string_arg(args, "field_prefix")?;
-    let include_facets = optional_bool_arg(args, "include_facets")?.unwrap_or(true);
+    let include_facets = optional_bool_arg(args, "include_facets")?.unwrap_or(false);
     let card = namespace
         .agent_stat_card(path)?
         .ok_or_else(|| ClientError::NotFound(path.to_owned()))?;
@@ -441,13 +424,8 @@ where
         Vec::new()
     };
     Ok(json!({
-        "tool": "catalog",
-        "bytes_read": 0,
         "path": card.path,
-        "evidence": card.evidence,
-        "snapshot_id": card.snapshot_id,
         "catalog_empty": catalog_empty,
-        "scope_note": "catalogs are scoped to the path; call catalog on the directory you will search",
         "catalog": catalog_json(&catalog),
         "child_catalogs": child_catalogs,
     }))
@@ -463,7 +441,7 @@ where
         cursor: optional_string_arg(args, "cursor")?,
         offset: optional_u64_arg(args, "offset")?.unwrap_or(0),
         limit: optional_usize_arg(args, "limit")?.unwrap_or(DEFAULT_AGENT_PAGE_LIMIT),
-        expected_generation: optional_u64_arg(args, "expected_generation")?,
+        expected_generation: None,
     };
     guard_large_structured_pagination(namespace, path, &options)?;
     let page = namespace.agent_read_page(path, options)?;
@@ -501,19 +479,19 @@ where
     T: AgentNamespace + ?Sized,
 {
     let path = required_string_arg(args, "path")?;
-    let include = include_arg(args)?;
     let fields = fields_arg(args)?;
+    reject_unsupported_find_arguments(args)?;
     let result = namespace.agent_find_paths(NamespaceFindRequest {
         path: path.to_owned(),
         predicates: predicates_arg(args)?,
         sort: sort_arg(args)?,
-        include: include.clone(),
+        include: Vec::new(),
         facets: facets_arg(args)?,
         cursor: optional_string_arg(args, "cursor")?,
         limit: optional_bounded_usize_arg(args, "limit", MAX_AGENT_FIND_LIMIT)?
             .unwrap_or(DEFAULT_AGENT_FIND_LIMIT),
     })?;
-    Ok(find_result_json(&result, &include, fields.as_deref()))
+    Ok(find_result_json(&result, fields.as_deref()))
 }
 
 fn execute_aggregate<T>(namespace: &T, args: &Value) -> Result<Value, ClientError>
@@ -540,11 +518,7 @@ where
 
 fn list_page_json(page: &NamespaceListPage) -> Value {
     json!({
-        "tool": "ls",
-        "bytes_read": 0,
         "path": page.path,
-        "evidence": page.evidence,
-        "snapshot_id": page.snapshot_id,
         "entry_count": page.entry_count,
         "entries": page.entries.iter().map(list_entry_json).collect::<Vec<_>>(),
         "next_cursor": page.next_cursor,
@@ -552,39 +526,20 @@ fn list_page_json(page: &NamespaceListPage) -> Value {
     })
 }
 
-fn find_result_json(
-    result: &NamespaceFindResult,
-    includes: &[NamespaceInclude],
-    fields: Option<&[String]>,
-) -> Value {
+fn find_result_json(result: &NamespaceFindResult, fields: Option<&[String]>) -> Value {
     json!({
-        "tool": "find",
-        "bytes_read": 0,
         "path": result.path,
-        "evidence": result.evidence,
-        "snapshot_id": result.snapshot_id,
         "match_count": result.match_count,
-        "matches": result.matches.iter().map(|card| find_match_json(card, fields, includes)).collect::<Vec<_>>(),
+        "matches": result.matches.iter().map(|card| find_match_json(card, fields)).collect::<Vec<_>>(),
         "facets": result.facets.iter().map(facet_summary_json).collect::<Vec<_>>(),
         "next_cursor": result.next_cursor,
         "truncated": result.truncated,
-        "scanned_entries": result.scanned_entries,
     })
 }
 
 fn read_page_json(page: &NamespaceReadPage) -> Value {
-    let bytes_read = page
-        .bytes
-        .as_ref()
-        .map(|bytes| bytes.len())
-        .unwrap_or_else(|| page.items.iter().map(|item| item.value_json.len()).sum());
     json!({
-        "tool": "read",
-        "bytes_read": bytes_read,
         "path": page.path,
-        "evidence": page.evidence,
-        "snapshot_id": page.snapshot_id,
-        "generation": page.generation,
         "total_size_bytes": page.total_size_bytes,
         "format": read_format_name(&page.format),
         "record_type": page.record_type.as_ref().map(record_type_name),
@@ -602,10 +557,6 @@ fn card_json(card: &NamespaceCard) -> Value {
         "path": card.path,
         "name": card.name,
         "kind": card_kind_name(&card.kind),
-        "evidence": card.evidence,
-        "snapshot_id": card.snapshot_id,
-        "inode": card.inode.get(),
-        "generation": card.generation,
         "size_bytes": card.size_bytes,
         "entry_count": card.entry_count,
         "record_count": card.record_count.as_ref().map(record_count_json),
@@ -622,97 +573,32 @@ fn list_entry_json(card: &NamespaceCard) -> Value {
         "path": card.path,
         "name": card.name,
         "kind": card_kind_name(&card.kind),
-        "evidence": card.evidence,
-        "snapshot_id": card.snapshot_id,
-        "inode": card.inode.get(),
-        "generation": card.generation,
         "size_bytes": card.size_bytes,
         "entry_count": card.entry_count,
     })
 }
 
-fn find_match_json(
-    card: &NamespaceCard,
-    fields: Option<&[String]>,
-    includes: &[NamespaceInclude],
-) -> Value {
-    let indexed_values = card
-        .indexed_values
-        .iter()
-        .filter(|value| {
-            fields
-                .map(|fields| fields.iter().any(|field| field == &value.field.id))
-                .unwrap_or(true)
-        })
-        .map(index_value_json)
-        .collect::<Vec<_>>();
+fn find_match_json(card: &NamespaceCard, fields: Option<&[String]>) -> Value {
     if fields.is_some() {
         let mut object = Map::new();
         object.insert("path".to_owned(), json!(card.path));
-        object.insert("evidence".to_owned(), json!(card.evidence));
-        object.insert("snapshot_id".to_owned(), json!(card.snapshot_id));
-        object.insert("generation".to_owned(), json!(card.generation));
         object.insert(
             "values".to_owned(),
             projected_values_json(card, fields.unwrap_or(&[])),
         );
-        object.insert(
-            "field_values".to_owned(),
-            projected_field_values_json(card, fields.unwrap_or(&[])),
-        );
-        append_find_match_includes(&mut object, card, includes);
         return Value::Object(object);
     }
     let mut object = Map::new();
     object.insert("path".to_owned(), json!(card.path));
-    object.insert("name".to_owned(), json!(card.name));
-    object.insert("kind".to_owned(), json!(card_kind_name(&card.kind)));
-    object.insert("evidence".to_owned(), json!(card.evidence));
-    object.insert("snapshot_id".to_owned(), json!(card.snapshot_id));
-    object.insert("inode".to_owned(), json!(card.inode.get()));
-    object.insert("generation".to_owned(), json!(card.generation));
-    object.insert("size_bytes".to_owned(), json!(card.size_bytes));
-    object.insert("entry_count".to_owned(), json!(card.entry_count));
-    object.insert("indexed_values".to_owned(), Value::Array(indexed_values));
-    append_find_match_includes(&mut object, card, includes);
     Value::Object(object)
-}
-
-fn append_find_match_includes(
-    object: &mut Map<String, Value>,
-    card: &NamespaceCard,
-    includes: &[NamespaceInclude],
-) {
-    for include in includes {
-        match include {
-            NamespaceInclude::Body => {
-                object.insert(
-                    "body".to_owned(),
-                    card.body.as_ref().map(body_json).unwrap_or(Value::Null),
-                );
-            }
-            NamespaceInclude::Schema => {
-                object.insert(
-                    "schema".to_owned(),
-                    card.schema.as_ref().map(schema_json).unwrap_or(Value::Null),
-                );
-            }
-            NamespaceInclude::Sample => {
-                object.insert("sample".to_owned(), json!(card.sample));
-            }
-            NamespaceInclude::Catalog => {
-                object.insert("catalog".to_owned(), catalog_json(&card.catalog));
-            }
-        }
-    }
 }
 
 fn projected_values_json(card: &NamespaceCard, fields: &[String]) -> Value {
     let mut output = Map::new();
     for field in fields {
-        let values = projected_field_values(card, field)
+        let values = projected_predicate_values(card, field)
             .into_iter()
-            .map(|value| predicate_value_json(&value.value))
+            .map(|value| predicate_value_json(&value))
             .collect::<Vec<_>>();
         match values.as_slice() {
             [] => {}
@@ -727,99 +613,41 @@ fn projected_values_json(card: &NamespaceCard, fields: &[String]) -> Value {
     Value::Object(output)
 }
 
-fn projected_field_values_json(card: &NamespaceCard, fields: &[String]) -> Value {
-    let mut output = Map::new();
-    for field in fields {
-        let values = projected_field_values(card, field)
-            .into_iter()
-            .map(|value| namespace_field_value_json(&value))
-            .collect::<Vec<_>>();
-        match values.as_slice() {
-            [] => {}
-            [value] => {
-                output.insert(field.clone(), value.clone());
-            }
-            _ => {
-                output.insert(field.clone(), Value::Array(values));
-            }
-        }
-    }
-    Value::Object(output)
-}
-
-fn projected_field_values(card: &NamespaceCard, field: &str) -> Vec<NamespaceFieldValue> {
-    let field_id = NamespaceFindField::new(field);
-    let namespace_source = || NamespaceFieldSource {
-        evidence: card.evidence.clone(),
-        source_path: card.path.clone(),
-        source_kind: NamespaceFieldSourceKind::Namespace,
-    };
-    let materialized_source = || NamespaceFieldSource {
-        evidence: card.evidence.clone(),
-        source_path: card.path.clone(),
-        source_kind: NamespaceFieldSourceKind::MaterializedIndex,
-    };
-    let value = |value| NamespaceFieldValue {
-        field: field_id.clone(),
-        value,
-        source: namespace_source(),
-    };
+fn projected_predicate_values(card: &NamespaceCard, field: &str) -> Vec<NamespacePredicateValue> {
     match field {
-        "path" => vec![value(NamespacePredicateValue::String(card.path.clone()))],
-        "name" => vec![value(NamespacePredicateValue::String(card.name.clone()))],
-        "kind" => vec![value(NamespacePredicateValue::String(
+        "path" => vec![NamespacePredicateValue::String(card.path.clone())],
+        "name" => vec![NamespacePredicateValue::String(card.name.clone())],
+        "kind" => vec![NamespacePredicateValue::String(
             card_kind_name(&card.kind).to_owned(),
-        ))],
+        )],
         "size_bytes" => card
             .size_bytes
             .map(NamespacePredicateValue::U64)
-            .map(value)
             .into_iter()
             .collect(),
         "body.content_type" => card
             .body
             .as_ref()
             .map(|body| NamespacePredicateValue::String(body.content_type.clone()))
-            .map(value)
             .into_iter()
             .collect(),
         "body.producer" => card
             .body
             .as_ref()
             .map(|body| NamespacePredicateValue::String(body.producer.clone()))
-            .map(value)
-            .into_iter()
-            .collect(),
-        "body.manifest_id" => card
-            .body
-            .as_ref()
-            .map(|body| NamespacePredicateValue::String(body.manifest_id.clone()))
-            .map(value)
             .into_iter()
             .collect(),
         _ => card
             .indexed_values
             .iter()
             .filter(|value| value.field.id == field)
-            .map(|value| NamespaceFieldValue {
-                field: value.field.clone(),
-                value: value.value.clone(),
-                source: materialized_source(),
-            })
+            .map(|value| value.value.clone())
             .collect(),
     }
 }
 
 fn record_count_json(count: &NamespaceRecordCount) -> Value {
-    json!({
-        "count": count.count,
-        "provenance": match count.provenance {
-            RecordCountProvenance::LiveNamespace => "live_namespace",
-            RecordCountProvenance::StructuredBody => "structured_body",
-            RecordCountProvenance::MaterializedIndex => "materialized_index",
-            RecordCountProvenance::Approximate => "approximate",
-        }
-    })
+    json!(count.count)
 }
 
 fn schema_json(schema: &NamespaceSchema) -> Value {
@@ -832,13 +660,8 @@ fn schema_json(schema: &NamespaceSchema) -> Value {
 fn body_json(body: &NamespaceBodyDescriptor) -> Value {
     json!({
         "producer": body.producer,
-        "digest_uri": body.digest_uri,
         "size": body.size,
         "content_type": body.content_type,
-        "manifest_id": body.manifest_id,
-        "generation": body.generation,
-        "chunk_size": body.chunk_size,
-        "block_size": body.block_size,
     })
 }
 
@@ -848,10 +671,6 @@ fn catalog_json(catalog: &NamespaceQueryCatalog) -> Value {
         "sortable": catalog.sortable.iter().map(|field| field.id.clone()).collect::<Vec<_>>(),
         "facetable": catalog.facetable.iter().map(|field| field.id.clone()).collect::<Vec<_>>(),
         "facets": catalog.facets.iter().map(facet_summary_json).collect::<Vec<_>>(),
-        "projections": catalog.projections.iter()
-            .filter(|include| !matches!(include, NamespaceInclude::Catalog))
-            .map(include_name)
-            .collect::<Vec<_>>(),
     })
 }
 
@@ -885,16 +704,6 @@ fn index_value_json(value: &NamespaceIndexValue) -> Value {
     })
 }
 
-fn predicate_json(predicate: &NamespacePredicate) -> Value {
-    let mut object = Map::new();
-    object.insert("field".to_owned(), json!(predicate.field.id));
-    object.insert("op".to_owned(), json!(predicate_op_name(&predicate.op)));
-    if let Some(value) = &predicate.value {
-        object.insert("value".to_owned(), predicate_value_json(value));
-    }
-    Value::Object(object)
-}
-
 fn predicate_value_json(value: &NamespacePredicateValue) -> Value {
     match value {
         NamespacePredicateValue::String(value) => json!(value),
@@ -909,19 +718,12 @@ fn predicate_value_json(value: &NamespacePredicateValue) -> Value {
 
 fn aggregate_result_json(result: &NamespaceAggregateResult) -> Value {
     json!({
-        "tool": "aggregate",
-        "bytes_read": 0,
         "path": result.path,
-        "evidence": result.evidence,
-        "snapshot_id": result.snapshot_id,
-        "predicates": result.predicates.iter().map(predicate_json).collect::<Vec<_>>(),
-        "scope_note": Value::Null,
         "input_match_count": result.input_match_count,
         "row_count": result.row_count,
         "group_count": result.group_count,
         "groups": result.groups.iter().map(aggregate_group_json).collect::<Vec<_>>(),
         "truncated": result.truncated,
-        "scanned_entries": result.scanned_entries,
     })
 }
 
@@ -938,20 +740,7 @@ fn aggregate_group_json(group: &NamespaceAggregateGroup) -> Value {
         .collect::<Map<_, _>>();
     json!({
         "key": key,
-        "key_fields": group.key.iter().map(namespace_field_value_json).collect::<Vec<_>>(),
         "values": values,
-        "measures": group.measures.iter().map(aggregate_output_measure_json).collect::<Vec<_>>(),
-        "evidence": group.evidence,
-        "sample_matches": group.sample_matches.iter().map(aggregate_sample_json).collect::<Vec<_>>(),
-    })
-}
-
-fn aggregate_output_measure_json(measure: &NamespaceAggregateOutputMeasure) -> Value {
-    json!({
-        "name": measure.name,
-        "op": aggregate_op_name(&measure.op),
-        "field": measure.field.as_ref().map(|field| field.id.clone()),
-        "value": aggregate_value_json(&measure.value),
     })
 }
 
@@ -963,38 +752,12 @@ fn aggregate_value_json(value: &NamespaceAggregateValue) -> Value {
     }
 }
 
-fn namespace_field_value_json(value: &NamespaceFieldValue) -> Value {
-    json!({
-        "field": value.field.id,
-        "value": predicate_value_json(&value.value),
-        "evidence": value.source.evidence,
-        "source_path": value.source.source_path,
-        "source_kind": field_source_kind_name(&value.source.source_kind),
-    })
-}
-
-fn field_source_kind_name(kind: &NamespaceFieldSourceKind) -> &'static str {
-    match kind {
-        NamespaceFieldSourceKind::Namespace => "namespace",
-        NamespaceFieldSourceKind::MaterializedIndex => "materialized_index",
-    }
-}
-
-fn aggregate_sample_json(sample: &nokvfs_meta::NamespaceAggregateSample) -> Value {
-    json!({
-        "path": sample.path,
-        "evidence": sample.evidence,
-        "generation": sample.generation,
-    })
-}
-
 fn read_item_json(item: &NamespaceReadItem) -> Value {
     let value = serde_json::from_str::<Value>(&item.value_json)
         .unwrap_or_else(|_| Value::String(item.value_json.clone()));
     json!({
         "index": item.index,
         "value": value,
-        "evidence": item.evidence,
     })
 }
 
@@ -1172,31 +935,14 @@ fn sort_item_arg(value: &Value) -> Result<NamespaceSort, ClientError> {
     })
 }
 
-fn include_arg(args: &Value) -> Result<Vec<NamespaceInclude>, ClientError> {
-    let Some(value) = object_args(args)?.get("include") else {
-        return Ok(Vec::new());
-    };
-    let includes = value
-        .as_array()
-        .ok_or_else(|| ClientError::Protocol("include must be an array".to_owned()))?;
-    includes
-        .iter()
-        .map(|value| {
-            let Some(include) = value.as_str() else {
-                return Err(ClientError::Protocol(
-                    "include entries must be strings".to_owned(),
-                ));
-            };
-            match include {
-                "body" => Ok(NamespaceInclude::Body),
-                "schema" => Ok(NamespaceInclude::Schema),
-                "sample" => Ok(NamespaceInclude::Sample),
-                other => Err(ClientError::Protocol(format!(
-                    "unsupported include projection {other}"
-                ))),
-            }
-        })
-        .collect()
+fn reject_unsupported_find_arguments(args: &Value) -> Result<(), ClientError> {
+    if object_args(args)?.contains_key("include") {
+        return Err(ClientError::Protocol(
+            "unsupported argument include; use stat for schema or sample and read for body content"
+                .to_owned(),
+        ));
+    }
+    Ok(())
 }
 
 fn fields_arg(args: &Value) -> Result<Option<Vec<String>>, ClientError> {
@@ -1426,8 +1172,6 @@ where
         }
         children.push(json!({
             "path": card.path,
-            "evidence": card.evidence,
-            "snapshot_id": card.snapshot_id,
             "catalog": catalog_json(&catalog),
         }));
         if children.len() == 5 {
@@ -1540,15 +1284,6 @@ fn read_format_name(format: &NamespaceReadFormat) -> &'static str {
     }
 }
 
-fn include_name(include: &NamespaceInclude) -> &'static str {
-    match include {
-        NamespaceInclude::Body => "body",
-        NamespaceInclude::Schema => "schema",
-        NamespaceInclude::Sample => "sample",
-        NamespaceInclude::Catalog => "catalog",
-    }
-}
-
 fn predicate_op_name(op: &NamespacePredicateOp) -> &'static str {
     match op {
         NamespacePredicateOp::Eq => "eq",
@@ -1569,7 +1304,10 @@ fn predicate_op_name(op: &NamespacePredicateOp) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use nokvfs_meta::NamespaceRecordCount;
+    use nokvfs_meta::{
+        NamespaceAggregateOutputMeasure, NamespaceFieldSource, NamespaceFieldSourceKind,
+        NamespaceFieldValue, NamespaceInclude, NamespaceRecordCount, RecordCountProvenance,
+    };
     use nokvfs_types::InodeId;
     use std::cell::RefCell;
     use std::collections::BTreeMap;
@@ -1773,18 +1511,67 @@ mod tests {
         }
     }
 
-    fn assert_schema_description_contains(schema: &Value, expected: &[&str]) {
-        let description = schema
-            .get("description")
-            .and_then(Value::as_str)
-            .unwrap_or_default();
-        let normalized_description = description.to_ascii_lowercase();
-        for snippet in expected {
-            let normalized_snippet = snippet.to_ascii_lowercase();
-            assert!(
-                normalized_description.contains(&normalized_snippet),
-                "schema description must contain {snippet:?}; got {description:?}"
-            );
+    fn assert_json_lacks_agent_noise(value: &Value) {
+        const FORBIDDEN_KEYS: &[&str] = &[
+            "tool",
+            "bytes_read",
+            "evidence",
+            "snapshot_id",
+            "generation",
+            "field_values",
+            "source_path",
+            "source_kind",
+            "key_fields",
+            "measures",
+            "sample_matches",
+            "scope_note",
+            "predicates",
+            "scanned_entries",
+            "digest_uri",
+            "manifest_id",
+            "chunk_size",
+            "block_size",
+            "inode",
+            "provenance",
+        ];
+        match value {
+            Value::Object(object) => {
+                for forbidden in FORBIDDEN_KEYS {
+                    assert!(
+                        !object.contains_key(*forbidden),
+                        "agent output must not contain noisy key {forbidden:?}: {value}"
+                    );
+                }
+                for child in object.values() {
+                    assert_json_lacks_agent_noise(child);
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    assert_json_lacks_agent_noise(child);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    fn assert_schema_lacks_nested_descriptions(value: &Value) {
+        match value {
+            Value::Object(object) => {
+                assert!(
+                    !object.contains_key("description"),
+                    "tool parameter schema must not contain nested descriptions: {value}"
+                );
+                for child in object.values() {
+                    assert_schema_lacks_nested_descriptions(child);
+                }
+            }
+            Value::Array(values) => {
+                for child in values {
+                    assert_schema_lacks_nested_descriptions(child);
+                }
+            }
+            _ => {}
         }
     }
 
@@ -1930,20 +1717,14 @@ mod tests {
     }
 
     #[test]
-    fn find_tool_schema_excludes_catalog_include_and_caps_limit_at_ten() {
+    fn find_tool_schema_excludes_include_and_caps_limit_at_ten() {
         let tools = agent_tool_definitions();
         let find = tools
             .iter()
             .find(|tool| tool.name == "find")
             .expect("find tool must be registered");
 
-        let include_enum = find.parameters["properties"]["include"]["items"]["enum"]
-            .as_array()
-            .expect("include enum must be present");
-        assert_eq!(
-            include_enum.as_slice(),
-            json!(["body", "schema", "sample"]).as_array().unwrap()
-        );
+        assert!(find.parameters["properties"].get("include").is_none());
         assert_eq!(find.parameters["properties"]["limit"]["maximum"], 10);
     }
 
@@ -1951,73 +1732,50 @@ mod tests {
     fn agent_tool_registry_documents_stable_api_semantics() {
         let tools = agent_tool_definitions();
 
-        assert_tool_description_contains(
-            &tools,
-            "ls",
-            &["direct children", "not recursive", "compact"],
-        );
+        assert_tool_description_contains(&tools, "ls", &["direct children", "discover paths"]);
         assert_tool_description_contains(
             &tools,
             "stat",
-            &["namespace card", "body descriptor", "not file content"],
+            &[
+                "single path",
+                "compact card",
+                "body",
+                "schema",
+                "sample",
+                "catalog",
+            ],
         );
-        assert_tool_description_contains(
-            &tools,
-            "catalog",
-            &["discover", "field ids", "child_catalogs"],
-        );
-        assert_tool_description_contains(
-            &tools,
-            "read",
-            &["structured", "bytes", "expected_generation"],
-        );
+        assert_tool_description_contains(&tools, "catalog", &["field ids", "find", "aggregate"]);
+        assert_tool_description_contains(&tools, "read", &["file body", "json", "yaml", "text"]);
         assert_tool_description_contains(
             &tools,
             "aggregate",
-            &[
-                "catalog field ids",
-                "count, sum, avg, min, and max",
-                "individual paths",
-            ],
+            &["catalog field ids", "count", "group", "summary"],
         );
         assert_tool_description_contains(
             &tools,
             "find",
-            &[
-                "catalog field ids",
-                "match_count",
-                "exists and not_exists omit value",
-            ],
+            &["search paths", "project fields", "read"],
         );
     }
 
     #[test]
-    fn agent_tool_parameter_schemas_document_argument_contracts() {
+    fn agent_tool_parameter_schemas_are_token_compact() {
         let tools = agent_tool_definitions();
         let find = tool_definition(&tools, "find");
-        let aggregate = tool_definition(&tools, "aggregate");
         let read = tool_definition(&tools, "read");
 
-        assert_schema_description_contains(
-            &find.parameters["properties"]["predicates"]["items"],
-            &["exists and not_exists omit value", "in requires an array"],
-        );
-        assert_schema_description_contains(
-            &find.parameters["properties"]["fields"],
-            &["project", "field_values"],
-        );
-        assert_schema_description_contains(
-            &aggregate.parameters["properties"]["measures"]["items"],
-            &["count may omit field", "non-count measures require"],
-        );
-        assert_schema_description_contains(
-            &read.parameters["properties"]["expected_generation"],
-            &["generation", "evidence"],
-        );
+        for tool in &tools {
+            assert_schema_lacks_nested_descriptions(&tool.parameters);
+        }
+        assert!(find.parameters["properties"].get("include").is_none());
+        assert!(read.parameters["properties"]
+            .get("expected_generation")
+            .is_none());
     }
 
     #[test]
-    fn stat_tool_exposes_catalog_without_advertising_catalog_find_include() {
+    fn stat_tool_returns_compact_card_without_agent_noise() {
         let namespace = FakeNamespace::new();
 
         let output = execute_agent_tool(
@@ -2029,14 +1787,21 @@ mod tests {
         )
         .unwrap();
 
+        assert_json_lacks_agent_noise(&output);
+        assert_eq!(output["card"]["path"], "/runs");
+        assert_eq!(
+            output["card"]["body"],
+            json!({
+                "producer": "unit-test",
+                "size": 13,
+                "content_type": "application/json"
+            })
+        );
         assert_eq!(
             output["card"]["catalog"]["filterable"][0]["field"],
             "run.status"
         );
-        assert_eq!(
-            output["card"]["catalog"]["projections"],
-            json!(["body", "schema", "sample"])
-        );
+        assert!(output["card"]["catalog"].get("projections").is_none());
         assert_eq!(
             output["card"]["catalog"]["facets"][0],
             json!({
@@ -2046,6 +1811,7 @@ mod tests {
                 "truncated": false
             })
         );
+        assert_eq!(output["card"]["record_count"], 1);
     }
 
     #[test]
@@ -2063,9 +1829,8 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(output["tool"], "catalog");
+        assert_json_lacks_agent_noise(&output);
         assert_eq!(output["path"], "/runs");
-        assert_eq!(output["evidence"], "nokv-native:///runs@generation:7");
         assert_eq!(output["catalog"]["filterable"][0]["field"], "run.status");
         assert_eq!(output["catalog"]["sortable"], json!(["run.status"]));
         assert_eq!(output["catalog"]["facetable"], json!(["run.status"]));
@@ -2118,10 +1883,7 @@ mod tests {
             output["child_catalogs"][0]["catalog"]["filterable"][1]["field"],
             "run.script"
         );
-        assert_eq!(
-            output["scope_note"],
-            "catalogs are scoped to the path; call catalog on the directory you will search"
-        );
+        assert_json_lacks_agent_noise(&output);
     }
 
     #[test]
@@ -2149,12 +1911,10 @@ mod tests {
         assert_eq!(request.sort[0].field.id, "run.status");
         assert_eq!(request.include, Vec::<NamespaceInclude>::new());
         assert_eq!(output["match_count"], 1);
-        assert_eq!(
-            output["matches"][0]["indexed_values"][0]["field"],
-            "run.status"
-        );
+        assert_eq!(output["matches"][0], json!({"path": "/runs/run-1"}));
         assert!(output.get("catalog").is_none() || output["catalog"].is_null());
         assert!(output["matches"][0].get("catalog").is_none());
+        assert_json_lacks_agent_noise(&output);
     }
 
     #[test]
@@ -2187,10 +1947,10 @@ mod tests {
     }
 
     #[test]
-    fn find_tool_surfaces_requested_card_includes_on_each_match() {
+    fn find_tool_schema_rejects_body_schema_sample_includes() {
         let namespace = FakeNamespace::new();
 
-        let output = execute_agent_tool(
+        let err = execute_agent_tool(
             &namespace,
             "find",
             &json!({
@@ -2199,23 +1959,13 @@ mod tests {
                 "limit": 1
             }),
         )
-        .unwrap();
+        .unwrap_err();
 
-        let request = namespace.last_find.borrow().clone().unwrap();
-        assert_eq!(
-            request.include,
-            vec![
-                NamespaceInclude::Body,
-                NamespaceInclude::Schema,
-                NamespaceInclude::Sample,
-            ]
+        assert!(
+            matches!(err, ClientError::Protocol(ref message) if message.contains("unsupported argument include")),
+            "unexpected error: {err:?}"
         );
-        let match_ = &output["matches"][0];
-        assert_eq!(match_["body"]["content_type"], "application/json");
-        assert_eq!(match_["schema"]["record_type"], "json_object");
-        assert_eq!(match_["sample"][0], r#"{"status":"completed"}"#);
-        assert!(match_.get("catalog").is_none());
-        assert!(output.get("catalog").is_none() || output["catalog"].is_null());
+        assert!(namespace.last_find.borrow().is_none());
     }
 
     #[test]
@@ -2234,7 +1984,7 @@ mod tests {
         .unwrap_err();
 
         assert!(
-            matches!(err, ClientError::Protocol(ref message) if message.contains("unsupported include projection catalog")),
+            matches!(err, ClientError::Protocol(ref message) if message.contains("unsupported argument include")),
             "unexpected error: {err:?}"
         );
         assert!(namespace.last_find.borrow().is_none());
@@ -2323,18 +2073,13 @@ mod tests {
         assert_eq!(output["matches"][0]["values"], json!({}));
         assert!(output["matches"][0].get("indexed_values").is_none());
         assert!(output["matches"][0].get("name").is_none());
-        assert_eq!(
-            output["matches"][0]["evidence"],
-            "nokv-native:///runs/run-1@generation:7"
-        );
-        assert_eq!(output["matches"][0]["snapshot_id"], 9);
-        assert_eq!(output["matches"][0]["generation"], 7);
         assert!(output.get("catalog").is_none() || output["catalog"].is_null());
         assert!(namespace.last_find.borrow().is_some());
+        assert_json_lacks_agent_noise(&output);
     }
 
     #[test]
-    fn find_tool_combines_field_projection_with_requested_includes() {
+    fn find_tool_projects_requested_fields_without_sources() {
         let namespace = FakeNamespace::new();
 
         let output = execute_agent_tool(
@@ -2343,7 +2088,6 @@ mod tests {
             &json!({
                 "path": "/runs",
                 "fields": ["run.status"],
-                "include": ["schema"],
                 "limit": 5
             }),
         )
@@ -2352,21 +2096,30 @@ mod tests {
         let match_ = &output["matches"][0];
         assert_eq!(match_["path"], "/runs/run-1");
         assert_eq!(match_["values"], json!({"run.status": "completed"}));
-        assert_eq!(
-            match_["field_values"]["run.status"],
-            json!({
-                "field": "run.status",
-                "value": "completed",
-                "evidence": "nokv-native:///runs/run-1@generation:7",
-                "source_path": "/runs/run-1",
-                "source_kind": "materialized_index"
-            })
-        );
-        assert_eq!(match_["schema"]["record_type"], "json_object");
         assert!(match_.get("indexed_values").is_none());
         assert!(match_.get("name").is_none());
-        assert_eq!(match_["evidence"], "nokv-native:///runs/run-1@generation:7");
-        assert_eq!(match_["generation"], 7);
+        assert_json_lacks_agent_noise(&output);
+    }
+
+    #[test]
+    fn find_tool_does_not_project_storage_internal_body_fields() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "find",
+            &json!({
+                "path": "/runs",
+                "fields": ["body.manifest_id"],
+                "limit": 5
+            }),
+        )
+        .unwrap();
+
+        let match_ = &output["matches"][0];
+        assert_eq!(match_["path"], "/runs/run-1");
+        assert_eq!(match_["values"], json!({}));
+        assert_json_lacks_agent_noise(&output);
     }
 
     #[test]
@@ -2394,34 +2147,14 @@ mod tests {
         let request = namespace.last_aggregate.borrow().clone().unwrap();
         assert_eq!(request.predicates[0].field.id, "run.status");
         assert!(namespace.last_find.borrow().is_none());
-        assert_eq!(output["tool"], "aggregate");
-        assert_eq!(
-            output["predicates"],
-            json!([{"field": "run.status", "op": "eq", "value": "completed"}])
-        );
-        assert_eq!(output["scope_note"], Value::Null);
         assert_eq!(output["input_match_count"], 5);
         assert_eq!(output["row_count"], 3);
         assert_eq!(output["group_count"], 2);
         assert_eq!(output["groups"][0]["key"], json!({"param.lr": "0.001"}));
-        assert_eq!(
-            output["groups"][0]["key_fields"][0],
-            json!({
-                "field": "param.lr",
-                "value": "0.001",
-                "evidence": "nokv-native:///runs/run-1@generation:7",
-                "source_path": "/runs/run-1",
-                "source_kind": "materialized_index"
-            })
-        );
         assert_eq!(output["groups"][0]["values"]["run_count"], 2);
         assert_eq!(output["groups"][0]["values"]["avg_min_val_loss"], 0.3);
         assert_eq!(output["groups"][0]["values"]["stdout_available"], 1);
-        assert_eq!(output["groups"][0]["evidence"], "nokv-native:///runs");
-        assert_eq!(
-            output["groups"][0]["sample_matches"][0]["evidence"],
-            "nokv-native:///runs/run-1@generation:7"
-        );
+        assert_json_lacks_agent_noise(&output);
     }
 
     #[test]
@@ -2442,6 +2175,28 @@ mod tests {
         assert!(output["entries"][0].get("record_count").is_none());
         assert!(output["entries"][0].get("sample").is_none());
         assert!(output["entries"][0].get("catalog").is_none());
+        assert_json_lacks_agent_noise(&output);
+    }
+
+    #[test]
+    fn read_tool_returns_body_content_without_evidence_noise() {
+        let namespace = FakeNamespace::new();
+
+        let output = execute_agent_tool(
+            &namespace,
+            "read",
+            &json!({
+                "path": "/runs/run-1/metadata.json",
+                "format": "structured",
+                "limit": 10
+            }),
+        )
+        .unwrap();
+
+        assert_eq!(output["path"], "/runs/run-1/metadata.json");
+        assert_eq!(output["items"][0]["index"], 0);
+        assert_eq!(output["items"][0]["value"]["status"], "completed");
+        assert_json_lacks_agent_noise(&output);
     }
 
     #[test]
