@@ -24,7 +24,8 @@ runtime_context:
     - Trust returned results; do not re-verify find matches with per-run stat or read, and do not re-read bodies to confirm grep matches.
     - Issue independent calls together in one turn instead of one per turn, for example one scoped grep per run across a known cohort.
     - Plan for few turns; a typical question resolves with one catalog call, one find or aggregate call, and scoped greps only when log body text is needed.
-    - Use ls to discover direct child paths and stat for one path's compact card.
+    - Use ls to discover direct child paths and stat for one path's compact card. Do not ls large directories such as the runs root; resolve runs with find instead.
+    - For top-N or ranking questions, sort by the ranking field with a small limit in a single find or aggregate call; the first page is authoritative.
     - Use read only when the task requires file body content that grep cannot return as matching lines.
   safety:
     - Do not invent field ids or paths.
