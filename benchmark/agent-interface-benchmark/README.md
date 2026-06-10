@@ -85,7 +85,7 @@ The Phase 1 harness compares two read-only arms:
 
 | Arm | Surface |
 | --- | --- |
-| `sqlite_raw_v1` | Raw SQLite schema/query/blob tools plus ETL-maintained agent-index materialization tables. |
+| `sqlite_raw_v1` | Raw SQLite schema/query/blob tools (including line-oriented `grep_blob`) plus ETL-maintained agent-index materialization tables. |
 | `nokv_native_v1` | NoKV product-native agent adapter. |
 
 The fixed Phase 1 tasks live in `tasks/phase1_readonly.yaml`. The rubric
@@ -164,6 +164,10 @@ Start RustFS:
 ./benchmark/agent-interface-benchmark/scripts/start_rustfs.sh
 ```
 
+Always prepare from a clean slate with `--reset` before measuring; `verify`
+checks that the agent-visible NoKV catalog matches the registered index
+fields and fails on stale fields from older encoders.
+
 Prepare the fixed corpus:
 
 ```bash
@@ -194,7 +198,7 @@ Run one task for one arm:
 ```bash
 ./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
   --arm nokv_native_v1 \
-  --task-id cancelled_runs_stderr \
+  --task-id cancelled_train_interrupt_triage \
   --repeats 1 \
   --output-jsonl benchmark/data/yanex-demo/results/phase1.jsonl
 ```
@@ -206,7 +210,7 @@ schema-once Agent SDK path:
 ./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
   --api-surface openai_chat_completions \
   --arm nokv_native_v1 \
-  --task-id cancelled_runs_stderr \
+  --task-id cancelled_train_interrupt_triage \
   --repeats 1 \
   --output-jsonl benchmark/data/yanex-demo/results/legacy.jsonl
 ```

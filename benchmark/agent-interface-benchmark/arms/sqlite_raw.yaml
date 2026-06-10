@@ -15,6 +15,7 @@ runtime_context:
     - Do not mutate the database.
   blob_reads:
     - Read blobs only from blob_ref values returned by query results.
-    - Do not read blob bodies when metadata rows already answer the task.
+    - Use grep_blob to search a blob's text for a case-insensitive literal substring; it returns matching lines with line numbers.
+    - Use read_blob only when raw byte ranges are required; do not read blob bodies when metadata rows already answer the task.
   notice:
     - For metric REAL columns, non-finite values may be stored as SQLite +/-Inf and value_json may contain "Infinity"; when a task requires finite metrics, filter with value > -9.0e+999 AND value < 9.0e+999, or an equivalent finite numeric bound.

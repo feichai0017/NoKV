@@ -47,7 +47,7 @@ chmod +x "${fake_cargo}"
     "${script_under_test}" \
       --data-root "${repo_root}/data" \
       --arm nokv_native_v1 \
-      --task-id status_counts \
+      --task-id train_top_configs_report \
       --repeats 1 \
       --model unit-model \
       --no-live-log

@@ -129,7 +129,7 @@ Disable live logs when needed:
 ./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm nokv_native_v1 \
-  --task-id status_counts \
+  --task-id train_top_configs_report \
   --repeats 1 \
   --no-live-log
 ```
@@ -142,7 +142,7 @@ Run one task on one arm:
 ./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm nokv_native_v1 \
-  --task-id status_counts \
+  --task-id train_top_configs_report \
   --repeats 1
 ```
 
@@ -153,7 +153,7 @@ Run one task on two arms:
   --data-root "${DATA_ROOT}" \
   --arm sqlite_raw_v1 \
   --arm nokv_native_v1 \
-  --task-id status_counts \
+  --task-id train_top_configs_report \
   --repeats 1
 ```
 
@@ -182,7 +182,7 @@ Run with explicit runtime overrides:
 ./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm nokv_native_v1 \
-  --task-id status_counts \
+  --task-id train_top_configs_report \
   --repeats 1 \
   --model "${OPENAI_MODEL}" \
   --max-completion-tokens 4096 \
@@ -197,7 +197,7 @@ Run with an alternate profile:
   --data-root "${DATA_ROOT}" \
   --base-profile /path/to/base_profile.yaml \
   --arm nokv_native_v1 \
-  --task-id status_counts
+  --task-id train_top_configs_report
 ```
 
 ## Sensitivity Runs
@@ -209,7 +209,7 @@ example, a completion-budget sensitivity run should use its own JSONL:
 ./benchmark/agent-interface-benchmark/scripts/run_phase1_batch.sh \
   --data-root "${DATA_ROOT}" \
   --arm nokv_native_v1 \
-  --task-id status_counts \
+  --task-id train_top_configs_report \
   --repeats 1 \
   --max-completion-tokens 2048 \
   --output-jsonl "${DATA_ROOT}/results/phase1-max-tokens-2048-$(date +%Y%m%d-%H%M%S).jsonl"

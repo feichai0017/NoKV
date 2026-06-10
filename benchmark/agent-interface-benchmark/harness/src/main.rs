@@ -327,6 +327,7 @@ struct SqliteMaterializationReport {
 #[derive(Clone, Debug, Default, Serialize)]
 struct NamespaceMaterializationReport {
     files_checked: usize,
+    agent_catalog_fields_checked: usize,
     run_files_checked: usize,
     index_files_checked: usize,
     missing_artifacts_checked: usize,
@@ -1671,6 +1672,27 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
                     "additionalProperties": false
                 }),
             ),
+            (
+                "grep_blob",
+                "Search a blob's text for a case-insensitive literal substring and return matching lines with line numbers. Prefer grep_blob over read_blob when only matching lines are needed.",
+                json!({
+                    "type": "object",
+                    "required": ["blob_ref", "pattern"],
+                    "properties": {
+                        "blob_ref": {
+                            "type": "string",
+                            "description": "Blob reference returned by query_sql."
+                        },
+                        "pattern": {
+                            "type": "string",
+                            "description": "Case-insensitive literal substring to match against each text line."
+                        },
+                        "cursor": {"type": ["string", "null"]},
+                        "limit": {"type": "integer", "minimum": 1, "maximum": 100}
+                    },
+                    "additionalProperties": false
+                }),
+            ),
         ],
         other => {
             return Err(HarnessError::Corpus(format!(
@@ -2807,16 +2829,26 @@ fn apply_usage_costs(metrics: &mut DerivedMetrics, api_calls: &[ApiCallTelemetry
     let (Some(input_rate), Some(output_rate)) = (input_rate, output_rate) else {
         return;
     };
+    let cached_rate = env::var("OPENAI_CACHED_INPUT_USD_PER_1M_TOKENS")
+        .ok()
+        .and_then(|value| value.parse::<f64>().ok())
+        .unwrap_or(input_rate);
     let prompt_tokens = api_calls
         .iter()
         .filter_map(|call| call.prompt_tokens)
+        .sum::<u64>() as f64;
+    let cached_tokens = api_calls
+        .iter()
+        .filter_map(|call| call.cached_prompt_tokens)
         .sum::<u64>() as f64;
     let completion_tokens = api_calls
         .iter()
         .filter_map(|call| call.completion_tokens)
         .sum::<u64>() as f64;
-    let cost =
-        prompt_tokens * input_rate / 1_000_000.0 + completion_tokens * output_rate / 1_000_000.0;
+    let uncached_tokens = (prompt_tokens - cached_tokens).max(0.0);
+    let cost = uncached_tokens * input_rate / 1_000_000.0
+        + cached_tokens * cached_rate / 1_000_000.0
+        + completion_tokens * output_rate / 1_000_000.0;
     metrics.execution_cost_usd = Some(cost);
     metrics.all_in_cost_usd = Some(cost);
 }
@@ -2918,6 +2950,11 @@ impl ToolBridgeServer {
                 }
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // BSD-style platforms let accepted sockets inherit the
+                        // listener's non-blocking flag; an early read would then
+                        // fail with WouldBlock before the request body arrives.
+                        let _ = stream.set_nonblocking(false);
+                        let _ = stream.set_read_timeout(Some(Duration::from_secs(30)));
                         let context = ToolBridgeConnectionContext {
                             run_id: &run_id,
                             arm: &arm,
@@ -3246,6 +3283,13 @@ fn execute_sqlite_raw_tool(
             let limit = required_usize_arg(args, "limit")?;
             to_json_value(read_blob_tool(conn, &blob_ref, offset, limit)?)
         }
+        "grep_blob" => {
+            let blob_ref = required_string_arg(args, "blob_ref")?;
+            let pattern = required_string_arg(args, "pattern")?;
+            let cursor = optional_string_arg(args, "cursor");
+            let limit = optional_usize_arg(args, "limit")?.unwrap_or(100).clamp(1, 100);
+            grep_blob_tool(conn, &blob_ref, &pattern, cursor.as_deref(), limit)
+        }
         other => Err(HarnessError::Corpus(format!(
             "unknown sqlite raw tool {other}"
         ))),
@@ -3357,6 +3401,59 @@ fn sqlite_schema_visible_table(table_name: &str) -> bool {
             | "run_agent_index_catalog"
             | "run_agent_index_values"
     )
+}
+
+fn grep_blob_tool(
+    conn: &Connection,
+    blob_ref: &str,
+    pattern: &str,
+    cursor: Option<&str>,
+    limit: usize,
+) -> Result<Value, HarnessError> {
+    let bytes = query_single_blob(
+        conn,
+        "SELECT content FROM blobs WHERE blob_ref = ?1",
+        blob_ref,
+    )?;
+    if bytes.contains(&0) {
+        return Err(HarnessError::Corpus(format!(
+            "blob {blob_ref} is not text; use read_blob for binary content"
+        )));
+    }
+    let start_line = match cursor {
+        Some(cursor) => cursor.parse::<usize>().map_err(|_| {
+            HarnessError::Corpus(format!("invalid grep_blob cursor {cursor}"))
+        })?,
+        None => 0,
+    };
+    let pattern_lower = pattern.to_lowercase();
+    let text = String::from_utf8_lossy(&bytes);
+    let mut matches = Vec::new();
+    let mut next_cursor = None;
+    for (line_index, line) in text.lines().enumerate().skip(start_line) {
+        if !line.to_lowercase().contains(&pattern_lower) {
+            continue;
+        }
+        if matches.len() == limit {
+            next_cursor = Some(line_index.to_string());
+            break;
+        }
+        matches.push(json!({
+            "line_number": line_index + 1,
+            "snippet": line.chars().take(240).collect::<String>(),
+            "evidence": format!("sqlite://blobs/{blob_ref}#L{}", line_index + 1),
+        }));
+    }
+    Ok(json!({
+        "tool": "grep_blob",
+        "blob_ref": blob_ref,
+        "pattern": pattern,
+        "total_size_bytes": bytes.len(),
+        "bytes_read": bytes.len(),
+        "matches": matches,
+        "truncated": next_cursor.is_some(),
+        "next_cursor": next_cursor,
+    }))
 }
 
 fn required_string_arg(args: &Value, name: &'static str) -> Result<String, HarnessError> {
@@ -3970,6 +4067,7 @@ fn sqlite_evidence_supported(conn: &Connection, handle: &str) -> Result<bool, Ha
         )? > 0);
     }
     if let Some(blob_ref) = handle.strip_prefix("sqlite://blobs/") {
+        let blob_ref = blob_ref.split('#').next().unwrap_or(blob_ref);
         return Ok(sqlite_count(
             conn,
             &format!(
@@ -4448,7 +4546,61 @@ where
         report.missing_artifacts_checked += 1;
     }
     report.metadata_generations_observed = generations.len();
+    verify_nokv_agent_catalog(service, &mut report)?;
     Ok(report)
+}
+
+fn verify_nokv_agent_catalog<O>(
+    service: &NoKvFs<HoltMetadataStore, O>,
+    report: &mut NamespaceMaterializationReport,
+) -> Result<(), HarnessError>
+where
+    O: ObjectStore,
+{
+    const INDEX_FIELD_PREFIXES: [&str; 6] =
+        ["run.", "artifact.", "param.", "metric.", "group.", "git."];
+    let expected = nokv_agent_index_fields()
+        .iter()
+        .map(|field| field.field.id.clone())
+        .collect::<BTreeSet<_>>();
+    let catalog = execute_agent_tool(
+        service,
+        "catalog",
+        &json!({"path": format!("/{NOKV_PREFIX}/runs"), "include_facets": false}),
+    )
+    .map_err(from_nokv)?;
+    let mut actual = BTreeSet::new();
+    for group in catalog["catalog"]["filterable"]
+        .as_array()
+        .into_iter()
+        .flatten()
+    {
+        for field in group["fields"].as_array().into_iter().flatten() {
+            if let Some(id) = field.as_str() {
+                actual.insert(id.to_owned());
+            }
+        }
+    }
+    for field in &expected {
+        report.agent_catalog_fields_checked += 1;
+        if !actual.contains(field) {
+            report
+                .mismatches
+                .push(format!("agent catalog misses registered index field {field}"));
+        }
+    }
+    for field in &actual {
+        if INDEX_FIELD_PREFIXES
+            .iter()
+            .any(|prefix| field.starts_with(prefix))
+            && !expected.contains(field)
+        {
+            report.mismatches.push(format!(
+                "agent catalog exposes stale index field {field}; rerun prepare --reset or nokv-register-indexes"
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn sqlite_files(conn: &Connection) -> Result<BTreeMap<String, Vec<u8>>, HarnessError> {
@@ -7339,7 +7491,7 @@ mod tests {
     fn tool_registry_exposes_only_the_selected_arm_surface() {
         assert_eq!(
             tool_names(&tool_registry_for_arm("sqlite_raw_v1").unwrap()),
-            vec!["show_schema", "query_sql", "read_blob"]
+            vec!["show_schema", "query_sql", "read_blob", "grep_blob"]
         );
         assert_eq!(
             tool_names(&tool_registry_for_arm("nokv_native_v1").unwrap()),
@@ -8217,6 +8369,42 @@ mod tests {
 
         assert!(tool_names.contains("grep"));
         assert!(!tool_names.contains("research_audit"));
+    }
+
+    #[test]
+    fn grep_blob_tool_returns_case_insensitive_line_matches() {
+        let conn = Connection::open_in_memory().unwrap();
+        create_schema(&conn).unwrap();
+        let mut run = sample_run();
+        run.artifacts = vec![CorpusFile {
+            relative_path: "stderr.txt".to_owned(),
+            bytes: b"Traceback\n  File \"train.py\", line 10\nKeyboardInterrupt\n".to_vec(),
+        }];
+        insert_run(&conn, &run).unwrap();
+        let blob_ref: String = conn
+            .query_row(
+                "SELECT blob_ref FROM artifacts WHERE artifact_path = 'stderr.txt'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+
+        let result = execute_sqlite_raw_tool(
+            &conn,
+            "grep_blob",
+            &json!({"blob_ref": blob_ref, "pattern": "keyboardinterrupt"}),
+        )
+        .unwrap();
+
+        let matches = result["matches"].as_array().unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0]["line_number"], 3);
+        assert_eq!(matches[0]["snippet"], "KeyboardInterrupt");
+        assert_eq!(result["truncated"], false);
+        let evidence = matches[0]["evidence"].as_str().unwrap().to_owned();
+        assert!(evidence.starts_with("sqlite://blobs/"));
+        assert!(evidence.ends_with("#L3"));
+        assert!(evidence_handle_supported(&conn, "sqlite_raw_v1", &evidence, None).unwrap());
     }
 
     #[test]
