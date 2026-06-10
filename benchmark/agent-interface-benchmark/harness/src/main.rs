@@ -1612,9 +1612,7 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
                     "pattern": {"type": "string"},
                     "recursive": {"type": "boolean"},
                     "cursor": {"type": ["string", "null"]},
-                    "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-                    "max_files": {"type": ["integer", "null"], "minimum": 1},
-                    "max_bytes": {"type": ["integer", "null"], "minimum": 1}
+                    "limit": {"type": "integer", "minimum": 1, "maximum": 100}
                 },
                 "additionalProperties": false
             }),
@@ -2931,15 +2929,21 @@ impl ToolBridgeServer {
                         if let Err(err) =
                             handle_tool_bridge_connection(&mut stream, &context, &mut snapshot)
                         {
-                            let body = json!({
-                                "status": "error",
-                                "error": err.to_string(),
-                            });
-                            let _ = write_http_json_response(
-                                &mut stream,
-                                "500 Internal Server Error",
-                                &body,
+                            let outcome = tool_error_outcome(
+                                format!("tool bridge error: {err}"),
+                                false,
+                                false,
                             );
+                            let response = ToolBridgeInvokeResponse {
+                                status: outcome.status.clone(),
+                                content: outcome.content.clone(),
+                                bytes_read: outcome.bytes_read,
+                                result_token_estimate: outcome.result_token_estimate,
+                                error: outcome.error.clone(),
+                                timed_out: outcome.timed_out,
+                                fatal_run_error: outcome.fatal_run_error,
+                            };
+                            let _ = write_http_json_response(&mut stream, "200 OK", &response);
                         }
                     }
                     Err(err) if err.kind() == std::io::ErrorKind::WouldBlock => {

@@ -18,9 +18,10 @@ runtime_context:
   tool_roles:
     - Resolve run cohorts, statuses, scripts, params, metrics, artifacts, and git facts with catalog plus find or aggregate first; these indexed fields answer run-level questions without body access.
     - Use catalog to discover field ids; request facets only when value distributions are needed.
-    - Use find to search paths, filter on indexed fields, sort, and project values.
+    - Use find to search paths, filter on indexed fields, sort, and project values. Push predicates, sort, and limit into the call; do not paginate results to sort or rank on the client.
     - Use aggregate for counts, groups, and summary measures.
-    - Use grep only for text that lives inside log or artifact bodies. grep matches a case-insensitive literal substring and returns matching lines with line numbers; scope it to one run directory or file once the cohort is known.
+    - Use grep only for text that lives inside log or artifact bodies. grep matches a case-insensitive literal substring and returns every matching line with its line number; scope it to one run directory or file once the cohort is known.
+    - Trust returned results; do not re-verify find matches with per-run stat or read, and do not re-read bodies to confirm grep matches.
     - Use ls to discover direct child paths and stat for one path's compact card.
     - Use read only when the task requires file body content that grep cannot return as matching lines.
   safety:
