@@ -1603,7 +1603,7 @@ fn tool_registry_for_arm(arm: &str) -> Result<Vec<ToolDefinition>, HarnessError>
             .collect::<Vec<_>>();
         tools.push(ToolDefinition {
             name: "grep".to_owned(),
-            description: "Search file bodies under a namespace path and return matching line snippets with paths. Use grep when a task asks about body text without needing full file reads.".to_owned(),
+            description: "Search file bodies for a case-insensitive literal substring and return matching lines with line numbers. Scope path to one run directory or file when known; use for log body text, not for run metadata fields.".to_owned(),
             parameters: json!({
                 "type": "object",
                 "required": ["path", "pattern", "recursive"],

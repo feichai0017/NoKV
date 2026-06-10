@@ -426,7 +426,7 @@ run_one_batch() {
 
   PYTHON="${python_bin}" "${cargo_bin}" run --manifest-path "${repo_root}/benchmark/agent-interface-benchmark/harness/Cargo.toml" -- run-batch \
     --data-root "${data_root}" \
-    "${arm_arg[@]}" \
+    ${arm_arg+"${arm_arg[@]}"} \
     ${optional_args+"${optional_args[@]}"} \
     --output-jsonl "${output_jsonl}"
 }

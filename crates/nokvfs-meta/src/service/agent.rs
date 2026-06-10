@@ -882,6 +882,7 @@ where
             .stat_path_from_at_version(InodeId::root(), &root, version)?
             .ok_or(MetadError::NotFound)?;
         let candidates = self.grep_candidates(&root, metadata, request.recursive, version)?;
+        let pattern_lower = request.pattern.to_lowercase();
         let mut matches = Vec::new();
         let mut files_scanned = 0_usize;
         let mut files_scanned_this_call = 0_usize;
@@ -936,7 +937,7 @@ where
             };
             let text = String::from_utf8_lossy(&bytes);
             for (line_index, line) in text.lines().enumerate().skip(start_line) {
-                if !line.contains(&request.pattern) {
+                if !line.to_lowercase().contains(&pattern_lower) {
                     continue;
                 }
                 if matches.len() == limit {
