@@ -146,7 +146,7 @@ tasks:
           "model_parameters": integer
         }]
       }
-      Sort by experiment_id ascending. checkpoint_file is the bare checkpoint file name. model_parameters is an integer without separators.
+      Sort by experiment_id ascending. experiment_id is the short run id that names the run directory, not the human-readable run name. checkpoint_file is the bare checkpoint file name. model_parameters is an integer without separators.
     expected:
       kind: rows_exact
       answer_key: runs
