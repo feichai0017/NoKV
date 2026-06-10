@@ -3313,7 +3313,6 @@ fn nokv_grep_match_json(match_: &NamespaceGrepMatch) -> Value {
         "line_number": match_.line_number,
         "snippet": match_.snippet,
         "evidence": match_.evidence,
-        "generation": match_.generation,
     })
 }
 

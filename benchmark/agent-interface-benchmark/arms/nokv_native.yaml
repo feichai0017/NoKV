@@ -10,8 +10,9 @@ runtime_context:
   access: read_only
   path_model:
     - Paths are absolute NoKV namespace paths.
-    - Start at /yanex and discover child search roots from returned cards or catalogs.
-    - Do not assume a path exists until a returned result names it.
+    - Runs live under /yanex/runs; each run directory holds its run files and an artifacts/ subdirectory with log and output files such as stdout.txt and stderr.txt.
+    - Derived read-only indexes live under /yanex/index.
+    - For paths outside this documented layout, discover children from returned cards or catalogs before use.
   field_discovery:
     - Use only field ids returned by stat or catalog for the current search root.
     - If a catalog is empty, use returned child_catalogs as candidate search roots.
@@ -22,6 +23,8 @@ runtime_context:
     - Use aggregate for counts, groups, and summary measures.
     - Use grep only for text that lives inside log or artifact bodies. grep matches a case-insensitive literal substring and returns every matching line with its line number; scope it to one run directory or file once the cohort is known.
     - Trust returned results; do not re-verify find matches with per-run stat or read, and do not re-read bodies to confirm grep matches.
+    - Issue independent calls together in one turn instead of one per turn, for example one scoped grep per run across a known cohort.
+    - Plan for few turns; a typical question resolves with one catalog call, one find or aggregate call, and scoped greps only when log body text is needed.
     - Use ls to discover direct child paths and stat for one path's compact card.
     - Use read only when the task requires file body content that grep cannot return as matching lines.
   safety:

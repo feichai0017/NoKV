@@ -667,11 +667,30 @@ fn body_json(body: &NamespaceBodyDescriptor) -> Value {
 
 fn catalog_json(catalog: &NamespaceQueryCatalog) -> Value {
     json!({
-        "filterable": catalog.filterable.iter().map(filter_capability_json).collect::<Vec<_>>(),
+        "filterable": grouped_filterable_json(&catalog.filterable),
         "sortable": catalog.sortable.iter().map(|field| field.id.clone()).collect::<Vec<_>>(),
         "facetable": catalog.facetable.iter().map(|field| field.id.clone()).collect::<Vec<_>>(),
         "facets": catalog.facets.iter().map(facet_summary_json).collect::<Vec<_>>(),
     })
+}
+
+fn grouped_filterable_json(capabilities: &[NamespaceFilterCapability]) -> Vec<Value> {
+    let mut groups: Vec<(Vec<&'static str>, Vec<String>)> = Vec::new();
+    for capability in capabilities {
+        let operators = capability
+            .operators
+            .iter()
+            .map(predicate_op_name)
+            .collect::<Vec<_>>();
+        match groups.iter_mut().find(|(group, _)| *group == operators) {
+            Some((_, fields)) => fields.push(capability.field.id.clone()),
+            None => groups.push((operators, vec![capability.field.id.clone()])),
+        }
+    }
+    groups
+        .into_iter()
+        .map(|(operators, fields)| json!({"operators": operators, "fields": fields}))
+        .collect()
 }
 
 fn facet_summary_json(facet: &NamespaceFacetSummary) -> Value {
@@ -687,13 +706,6 @@ fn facet_value_json(value: &NamespaceFacetValue) -> Value {
     json!({
         "value": predicate_value_json(&value.value),
         "count": value.count,
-    })
-}
-
-fn filter_capability_json(capability: &NamespaceFilterCapability) -> Value {
-    json!({
-        "field": capability.field.id,
-        "operators": capability.operators.iter().map(predicate_op_name).collect::<Vec<_>>(),
     })
 }
 
@@ -1798,7 +1810,7 @@ mod tests {
             })
         );
         assert_eq!(
-            output["card"]["catalog"]["filterable"][0]["field"],
+            output["card"]["catalog"]["filterable"][0]["fields"][0],
             "run.status"
         );
         assert!(output["card"]["catalog"].get("projections").is_none());
@@ -1831,7 +1843,10 @@ mod tests {
 
         assert_json_lacks_agent_noise(&output);
         assert_eq!(output["path"], "/runs");
-        assert_eq!(output["catalog"]["filterable"][0]["field"], "run.status");
+        assert_eq!(
+            output["catalog"]["filterable"][0]["fields"],
+            json!(["run.status"])
+        );
         assert_eq!(output["catalog"]["sortable"], json!(["run.status"]));
         assert_eq!(output["catalog"]["facetable"], json!(["run.status"]));
         assert_eq!(output["catalog"]["facets"], json!([]));
@@ -1854,7 +1869,10 @@ mod tests {
         )
         .unwrap();
 
-        assert_eq!(output["catalog"]["filterable"][0]["field"], "run.status");
+        assert_eq!(
+            output["catalog"]["filterable"][0]["fields"][0],
+            "run.status"
+        );
         assert_eq!(output["catalog"]["sortable"], json!(["run.status"]));
     }
 
@@ -1875,14 +1893,15 @@ mod tests {
 
         assert_eq!(output["catalog_empty"], true);
         assert_eq!(output["child_catalogs"][0]["path"], "/yanex/runs");
-        assert_eq!(
-            output["child_catalogs"][0]["catalog"]["filterable"][0]["field"],
-            "run.status"
-        );
-        assert_eq!(
-            output["child_catalogs"][0]["catalog"]["filterable"][1]["field"],
-            "run.script"
-        );
+        let child_filterable = &output["child_catalogs"][0]["catalog"]["filterable"];
+        let child_fields = child_filterable
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|group| group["fields"].as_array().unwrap().clone())
+            .collect::<Vec<_>>();
+        assert!(child_fields.contains(&json!("run.status")));
+        assert!(child_fields.contains(&json!("run.script")));
         assert_json_lacks_agent_noise(&output);
     }
 
