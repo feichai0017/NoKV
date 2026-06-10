@@ -877,15 +877,9 @@ fn predicate_arg(value: &Value) -> Result<NamespacePredicate, ClientError> {
     let op = predicate_op_arg(op)?;
     let raw_value = object.get("value").filter(|value| !value.is_null());
     let value = match op {
-        NamespacePredicateOp::Exists | NamespacePredicateOp::NotExists => {
-            if raw_value.is_some() {
-                return Err(ClientError::Protocol(format!(
-                    "predicate op {} must not include value",
-                    predicate_op_name(&op)
-                )));
-            }
-            None
-        }
+        // Tolerate a stray value on existence checks; agents commonly pass
+        // {"op": "exists", "value": true} and the value carries no meaning.
+        NamespacePredicateOp::Exists | NamespacePredicateOp::NotExists => None,
         NamespacePredicateOp::In => {
             let value = raw_value.ok_or_else(|| {
                 ClientError::Protocol("predicate op in requires array value".to_owned())

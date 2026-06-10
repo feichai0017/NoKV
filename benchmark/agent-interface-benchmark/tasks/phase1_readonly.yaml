@@ -5,7 +5,7 @@ tasks:
   - task_id: train_top_configs_report
     category: sweep_summary
     prompt: |
-      You are summarizing our origami training sweep for the team. Among completed train.py runs, find the 5 runs with the lowest minimum val_loss; ignore non-finite val_loss values. For each run report its learning rate, batch size, minimum val_loss, stdout.txt size in bytes, and whether the run had a dirty git state.
+      You are summarizing our origami training sweep for the team. Among completed train.py runs, find the 5 runs with the lowest minimum val_loss; ignore non-finite val_loss values (NaN or infinite recordings). Negative val_loss values are valid measurements. For each run report its learning rate, batch size, minimum val_loss, stdout.txt size in bytes, and whether the run had a dirty git state.
 
       Required answer shape:
       {
