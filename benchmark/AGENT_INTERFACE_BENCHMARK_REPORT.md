@@ -15,7 +15,9 @@ state, and raw stdout/stderr logs):
 
 The agent model is `gpt-5.4-mini`, 10 repeats per arm/task pair
 (2 batches x 5 repeats, 100 runs total), identical prompts, judged against
-deterministic gold facts that neither arm can see.
+deterministic gold facts that neither arm can see. Every run is a fully
+stateless episode: the agent starts from a cleared context each time and
+carries nothing over from previous tasks or repeats.
 
 | Set mean (per 5-task pass) | Raw SQLite | NoKV namespace | SQLite / NoKV |
 | --- | --- | --- | --- |
@@ -136,6 +138,13 @@ with where agent workloads are actually heading.
 
 ## Fairness Posture
 
+- The harness guarantees stateless episodes. It refuses to run unless the
+  profile sets `stateless: true` and `clear_messages_after_run: true`; each
+  run launches a fresh agent-runner process whose conversation is rebuilt
+  from only the base system message, the arm card, and the task prompt, with
+  no `previous_response_id` chaining across runs (test-asserted per repeat).
+  The per-run tool bridge also rejects calls carrying another run's id, so
+  neither conversation state nor tool state can leak between runs.
 - Both arms expose a case-insensitive, line-oriented body search with line
   numbers: NoKV `grep` (namespace-recursive) and SQLite `grep_blob`
   (per blob handle). The residual difference is the surface itself, not a
